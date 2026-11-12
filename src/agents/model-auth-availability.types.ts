@@ -79,6 +79,11 @@ export type CreateModelAuthAvailabilityResolverParams = {
   syntheticAuthProviderRefs?: readonly string[];
   metadataSnapshot?: PluginMetadataSnapshot;
   externalCliProviderIds?: readonly string[];
+  /**
+   * Whether the loaded provider plugin owns OAuth refresh for this provider. Lets an expired
+   * plugin-owned OAuth profile with refresh material stay runnable, matching the runtime refresh path.
+   */
+  canRefreshProviderOAuth?: (provider: string) => boolean;
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
   preparedRuntimeAuthStore?: AuthProfileStore;
   preparedRuntimeAuthModes?: PreparedAgentCredentialModes;

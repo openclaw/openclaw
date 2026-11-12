@@ -84,6 +84,12 @@ Tool availability is filtered through the same policy chain used by Gateway agen
 
 If a tool is not allowed by policy, the endpoint returns **404**.
 
+### Configured MCP tools
+
+Tools from configured MCP servers (`mcp.servers` and enabled bundle plugins) are invocable by their agent-facing name, `<server>__<tool>`, for example `granola__list_meetings`. They pass through the same policy chain and `gateway.tools` deny list as Gateway tools; use `tools.deny: ["<server>__<tool>"]` or `["<server>__*"]` to block them.
+
+Each call connects only the server that owns the name, on a private MCP runtime that closes when the call finishes. It does not reuse or warm the session's agent runtime, so each call pays the server's connect-and-list cost. Requester-scoped servers (`oauth.identity: "per-requester"`) are not available here because the call carries no verified sender. If the owning server cannot connect or list its tools, the endpoint returns **500** with the server's diagnostic instead of **404**.
+
 Important boundary notes:
 
 - Exec approvals are operator guardrails, not a separate authorization boundary for this HTTP endpoint. If a tool is reachable here via Gateway auth + tool policy, `/tools/invoke` does not add an extra per-call approval prompt.

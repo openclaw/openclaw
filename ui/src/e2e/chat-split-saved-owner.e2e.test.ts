@@ -25,7 +25,7 @@ const savedLayout: ChatSplitLayout = {
 
 async function expectUnbound(cell: Locator) {
   expect(await cell.locator("openclaw-chat-pane").count()).toBe(0);
-  expect(await cell.textContent()).toContain("Choose a conversation");
+  expect(await cell.textContent()).toContain("Choose a session");
 }
 
 const paneKeys = (panes: Locator) =>

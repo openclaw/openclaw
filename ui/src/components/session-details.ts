@@ -45,9 +45,12 @@ export function createSessionDetails<Scope extends DetailScope>(options: {
     loading = false;
   };
   const reset = () => {
+    const hadBinding = activeBinding !== undefined;
     release();
     setReceipt(null);
-    rowChanged();
+    if (hadBinding) {
+      rowChanged();
+    }
   };
   // This primitive releases its observation synchronously, including during held reads.
   onCleanup(release);

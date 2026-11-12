@@ -6,19 +6,28 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
 import { FsSafeError, root as fsSafeRoot, type OpenResult } from "../infra/fs-safe.js";
 import { decodeUtf8Input } from "../infra/utf8-input.js";
+import { inspectTemplateBundledPlugin } from "./bundled-plugin-metadata.js";
+import { inspectTemplateBundledSkill } from "./bundled-skill-metadata.js";
+import { snapshotTemplateDependencyDirectory } from "./dependency-directory.js";
+import { templateDependencyInventory } from "./dependency-inventory.js";
 import { digestTemplateBytes } from "./digest.js";
-import { readTemplateOpenClawProfile } from "./openclaw-profile.js";
-import { isCanonicalClawHubPackageName, isExactSemVer } from "./schema-portability.js";
+import {
+  isCanonicalClawHubPackageName,
+  isExactSemVer,
+  isSafeTemplateRelativePath,
+} from "./schema-portability.js";
 import { templateManifestWorkspaceConflictsWithPath, parseTemplateManifest } from "./schema.js";
 import { templateWorkspaceSourceFailure } from "./source-diagnostics.js";
 import {
   MAX_TEMPLATE_MANIFEST_BYTES,
+  MAX_TEMPLATE_DIRECTORY_BYTES,
+  MAX_TEMPLATE_DIRECTORY_ENTRIES,
   MAX_MANAGED_FILE_BYTES,
   MAX_MANAGED_WORKSPACE_BYTES,
 } from "./source-limits.js";
 import type {
   TemplateDiagnostic,
-  TemplateManifest,
+  TemplateBundledSourceSnapshot,
   TemplateReadResult,
   TemplateSourceIdentity,
   TemplateWorkspaceSourceSnapshot,
@@ -36,7 +45,6 @@ type ResolvedTemplateSource = Omit<
   "integrity" | "integrityKind" | "byteLength"
 > & {
   packageJsonRaw?: Buffer;
-  manifestFormatPath: string;
 };
 
 const TEMPLATE_MARKDOWN_FILENAME = "CLAW.md";
@@ -79,10 +87,7 @@ function workspaceSourceDiagnostic(error: unknown, sourcePath: string): Template
   return fileDiagnostic(code, message, "$.workspace");
 }
 
-function parsePackageJson(
-  value: unknown,
-  allowPublishedLegacyClawSelector: boolean,
-): PackageJson | undefined {
+function parsePackageJson(value: unknown): PackageJson | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
@@ -91,23 +96,18 @@ function parsePackageJson(
   if (!isRecord(openclaw)) {
     return undefined;
   }
-  const canonical = Object.hasOwn(openclaw, "template");
-  const legacy = Object.hasOwn(openclaw, "claw");
-  if (canonical && legacy) {
+  if (Object.hasOwn(openclaw, "claw")) {
     return undefined;
   }
-  const template = canonical
-    ? openclaw.template
-    : allowPublishedLegacyClawSelector && legacy && openclaw.claw === TEMPLATE_MARKDOWN_FILENAME
-      ? TEMPLATE_MARKDOWN_FILENAME
-      : undefined;
+  const template = openclaw.template;
   if (
     typeof record.name !== "string" ||
     !isCanonicalClawHubPackageName(record.name) ||
     typeof record.version !== "string" ||
     !isExactSemVer(record.version) ||
     typeof template !== "string" ||
-    template.trim() === ""
+    !isSafeTemplateRelativePath(template) ||
+    template.split("/").at(-1) !== TEMPLATE_MARKDOWN_FILENAME
   ) {
     return undefined;
   }
@@ -139,15 +139,16 @@ export function parseTemplateMarkdown(
   } catch {
     return fileFailure("invalid_template_markdown_utf8", `${path} must contain valid UTF-8.`);
   }
-  const parsed = parseTemplateYaml(frontmatter, path, "frontmatter");
+  const parsed = parseTemplateYaml(frontmatter, path);
   return parsed.ok ? { ...parsed, body } : parsed;
 }
 
-function parseTemplateManifestDocument(
+function parseTemplateDocument(
   raw: Buffer,
   path: string,
+  format: "json" | "markdown",
 ): { ok: true; value: unknown; body?: Buffer } | { ok: false; diagnostics: TemplateDiagnostic[] } {
-  if (basename(path).toLowerCase() === TEMPLATE_MARKDOWN_FILENAME.toLowerCase()) {
+  if (format === "markdown") {
     return parseTemplateMarkdown(raw, path);
   }
   try {
@@ -161,7 +162,7 @@ async function readTemplateDocument(
   path: string,
   code: string,
   maxBytes: number,
-  manifestFormatPath = path,
+  format: "json" | "markdown",
 ): Promise<
   | { ok: true; raw: Buffer; value: unknown; body?: Buffer }
   | { ok: false; diagnostics: TemplateDiagnostic[] }
@@ -179,13 +180,12 @@ async function readTemplateDocument(
         : `Could not read ${path}: ${(error as Error).message}`,
     );
   }
-  const parsed = parseTemplateManifestDocument(raw, manifestFormatPath);
+  const parsed = parseTemplateDocument(raw, path, format);
   return parsed.ok ? { ...parsed, raw } : parsed;
 }
 
 async function resolvePackageSource(
   packageRoot: string,
-  allowPublishedLegacyClawSelector: boolean,
 ): Promise<
   { ok: true; source: ResolvedTemplateSource } | { ok: false; diagnostics: TemplateDiagnostic[] }
 > {
@@ -198,19 +198,17 @@ async function resolvePackageSource(
     packageJsonPath,
     "package_read_failed",
     MAX_TEMPLATE_PACKAGE_JSON_BYTES,
+    "json",
   );
   if (!packageJsonResult.ok) {
     return packageJsonResult;
   }
-  const packageJson = parsePackageJson(packageJsonResult.value, allowPublishedLegacyClawSelector);
+  const packageJson = parsePackageJson(packageJsonResult.value);
   if (!packageJson) {
     return fileFailure(
       "invalid_package_metadata",
-      "package.json must declare non-empty name, version, and openclaw.template fields.",
+      "package.json must declare a valid name, version, and openclaw.template naming a safe package-relative CLAW.md without the obsolete openclaw.claw field.",
     );
-  }
-  if (isAbsolute(packageJson.openclaw.template)) {
-    return fileFailure("manifest_escapes_package", "openclaw.template must be package-relative.");
   }
   const declaredManifestPath = resolve(packageRootReal, packageJson.openclaw.template);
   const manifestPath = await realpath(declaredManifestPath).catch(() => undefined);
@@ -229,14 +227,12 @@ async function resolvePackageSource(
       packageRoot: packageRootReal,
       manifestPath,
       packageJsonRaw: packageJsonResult.raw,
-      manifestFormatPath: declaredManifestPath,
     },
   };
 }
 
 async function resolveSource(
   path: string,
-  allowPublishedLegacyClawSelector: boolean,
 ): Promise<
   { ok: true; source: ResolvedTemplateSource } | { ok: false; diagnostics: TemplateDiagnostic[] }
 > {
@@ -251,48 +247,36 @@ async function resolveSource(
       !(await sourceRoot.exists("package.json")) &&
       (await sourceRoot.exists(TEMPLATE_MARKDOWN_FILENAME))
     ) {
-      return resolveSource(
-        resolve(inputPath, TEMPLATE_MARKDOWN_FILENAME),
-        allowPublishedLegacyClawSelector,
-      );
+      return resolveSource(resolve(inputPath, TEMPLATE_MARKDOWN_FILENAME));
     }
-    return resolvePackageSource(inputPath, allowPublishedLegacyClawSelector);
+    return resolvePackageSource(inputPath);
   }
   if (!inputStat.isFile()) {
     return fileFailure("unsupported_source", "Template source must be a file or directory.");
   }
 
+  if (basename(inputPath) !== TEMPLATE_MARKDOWN_FILENAME) {
+    return fileFailure(
+      "unsupported_manifest_format",
+      "Template manifests must be named CLAW.md and contain YAML frontmatter; JSON manifests are not supported.",
+    );
+  }
   const manifestPath = await realpath(inputPath);
   const packageRoot = await realpath(dirname(manifestPath));
   return {
     ok: true,
     source: {
       kind: "development",
-      name: `local:${basename(manifestPath).replace(/\.json$/i, "")}`,
+      name: `local:${basename(inputPath)}`,
       version: "0.0.0-development",
       packageRoot,
       manifestPath,
-      manifestFormatPath: inputPath,
     },
   };
 }
 
-export async function readTemplateManifestFile(
-  path: string,
-  options: {
-    /** Only the verified immutable registry-artifact owner enables this historical selector. */
-    allowPublishedLegacyClawSelector?: boolean;
-    allowLegacyDynamicToolProfile?: boolean;
-    authorizeLegacyLocalUpdateHostSettings?: (params: {
-      manifest: TemplateManifest;
-      source: Pick<
-        TemplateSourceIdentity,
-        "kind" | "name" | "version" | "packageRoot" | "manifestPath"
-      >;
-    }) => boolean | Promise<boolean>;
-  } = {},
-): Promise<TemplateReadResult> {
-  const sourceResult = await resolveSource(path, options.allowPublishedLegacyClawSelector === true);
+export async function readTemplateManifestFile(path: string): Promise<TemplateReadResult> {
+  const sourceResult = await resolveSource(path);
   if (!sourceResult.ok) {
     return sourceResult;
   }
@@ -300,7 +284,7 @@ export async function readTemplateManifestFile(
     sourceResult.source.manifestPath,
     "read_failed",
     MAX_TEMPLATE_MANIFEST_BYTES,
-    sourceResult.source.manifestFormatPath,
+    "markdown",
   );
   if (!manifestResult.ok) {
     return manifestResult;
@@ -318,28 +302,13 @@ export async function readTemplateManifestFile(
       "$.workspace",
     );
   }
-  const legacyAuthorizationContext = {
-    manifest: parsed.manifest,
-    source: {
-      kind: sourceResult.source.kind,
-      name: sourceResult.source.name,
-      version: sourceResult.source.version,
-      packageRoot: sourceResult.source.packageRoot,
-      manifestPath: sourceResult.source.manifestPath,
-    },
-  };
-  const allowLegacyDynamicToolProfile = options.allowLegacyDynamicToolProfile === true;
-  const allowLegacyLocalUpdateHostSettings = options.authorizeLegacyLocalUpdateHostSettings
-    ? await options.authorizeLegacyLocalUpdateHostSettings(legacyAuthorizationContext)
-    : false;
-  const profile = await readTemplateOpenClawProfile({
-    packageRoot: sourceResult.source.packageRoot,
-    metadata: parsed.manifest.metadata,
-    ...(allowLegacyDynamicToolProfile ? { allowLegacyDynamicToolProfile: true } : {}),
-    ...(allowLegacyLocalUpdateHostSettings ? { allowLegacyLocalUpdateHostSettings: true } : {}),
-  });
-  if (!profile.ok) {
-    return profile;
+  const packageFiles = await fsSafeRoot(sourceResult.source.packageRoot);
+  if (await packageFiles.exists("profiles")) {
+    return fileFailure(
+      "retired_template_configuration",
+      "Move supported settings from profiles into CLAW.md agent, and plugin references into plugins; remove the profiles directory and keep schemaVersion: 1.",
+      "$.profiles",
+    );
   }
   const resolvedSource = sourceResult.source;
   const hash = createHash("sha256");
@@ -353,18 +322,8 @@ export async function readTemplateManifestFile(
     digest: digestTemplateBytes(bytes),
   });
   const manifestSnapshot = snapshotFile(manifestResult.raw);
-  const profileSnapshot =
-    profile.raw && profile.path
-      ? {
-          sourcePath: profile.path.replaceAll("\\", "/"),
-          ...snapshotFile(profile.raw),
-        }
-      : undefined;
   add("canonical-source", Buffer.from(resolvedSource.manifestPath, "utf8"));
   add("manifest", manifestResult.raw);
-  if (profile.raw && profile.path) {
-    add(`profile:${profile.path.replaceAll("\\", "/")}`, profile.raw);
-  }
 
   if (resolvedSource.kind === "package") {
     const packageJson = resolvedSource.packageJsonRaw;
@@ -487,6 +446,50 @@ export async function readTemplateManifestFile(
   } finally {
     await Promise.all(openedSources.map(({ opened }) => opened[Symbol.asyncDispose]()));
   }
+  const bundledSources: TemplateBundledSourceSnapshot[] = [];
+  let bundledByteLength = 0;
+  let bundledFileCount = 0;
+  for (const dependency of templateDependencyInventory(parsed.manifest)) {
+    if (dependency.source !== "bundled") {
+      continue;
+    }
+    try {
+      const snapshot = await snapshotTemplateDependencyDirectory({
+        rootDir: resolvedSource.packageRoot,
+        path: dependency.path,
+      });
+      const identity =
+        dependency.kind === "skill"
+          ? inspectTemplateBundledSkill(resolvedSource.packageRoot, dependency.path, snapshot)
+          : await inspectTemplateBundledPlugin(
+              resolvedSource.packageRoot,
+              dependency.path,
+              snapshot,
+            );
+      bundledSources.push({
+        kind: dependency.kind,
+        path: dependency.path,
+        snapshot,
+        ...(identity ? { name: identity.name } : {}),
+      });
+      add(`bundled:${dependency.path}`, Buffer.from(snapshot.digest));
+      byteLength += snapshot.byteLength;
+      bundledByteLength += snapshot.byteLength;
+      bundledFileCount += snapshot.files.length;
+      if (bundledFileCount > MAX_TEMPLATE_DIRECTORY_ENTRIES) {
+        throw new Error("Bundled dependencies exceed their aggregate file limit.");
+      }
+      if (bundledByteLength > MAX_TEMPLATE_DIRECTORY_BYTES) {
+        throw new Error("Bundled dependencies exceed their aggregate byte limit.");
+      }
+    } catch (error) {
+      return fileFailure(
+        "bundled_dependency_invalid",
+        error instanceof Error ? error.message : String(error),
+        dependency.kind === "skill" ? "$.skills" : "$.plugins",
+      );
+    }
+  }
   const source: TemplateSourceIdentity = {
     kind: resolvedSource.kind,
     name: resolvedSource.name,
@@ -502,14 +505,13 @@ export async function readTemplateManifestFile(
     manifest: parsed.manifest,
     ...(hasMarkdownBody ? { templateMarkdownBody: manifestResult.body } : {}),
     ...(packageBootstrap ? { packageBootstrap } : {}),
-    ...(profile.profile ? { openClawProfile: profile.profile } : {}),
     source,
     snapshot: {
       manifest: manifestSnapshot,
-      ...(profileSnapshot ? { openClawProfile: profileSnapshot } : {}),
+      bundledSources,
       workspaceSources,
       ...(packageBootstrap ? { packageBootstrap } : {}),
     },
-    diagnostics: [...parsed.diagnostics, ...(profile.diagnostics ?? [])],
+    diagnostics: parsed.diagnostics,
   };
 }

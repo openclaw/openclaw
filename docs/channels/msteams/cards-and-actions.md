@@ -167,5 +167,6 @@ Without the `user:` prefix, names default to group or team resolution. Always us
 
 ## Proactive messaging
 
-- Proactive messages are only possible **after** a user has interacted, because OpenClaw stores conversation references at that point.
+- Channel and group chat sends need a stored conversation reference, which OpenClaw saves when the bot receives a message there.
+- A DM to `user:<aad-object-id>` works once the user has the app installed: OpenClaw opens the personal chat on first send and stores it. Installing the app in personal scope also stores the reference.
 - See [/gateway/configuration](/gateway/configuration) for `dmPolicy` and allowlist gating.

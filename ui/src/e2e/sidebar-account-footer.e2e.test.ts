@@ -76,6 +76,65 @@ suite.define(() => {
       expect(await fallback.isVisible()).toBe(false);
     });
   });
+  it("fits the phone identity menu on one label axis while the photo loads", async () => {
+    const phone = { viewport: { width: 390, height: 664 }, hasTouch: true };
+    await suite.withPage(phone, async ({ page }) => {
+      let photo: Route | undefined;
+      await page.route("**/api/users/riley/avatar*", (route) => {
+        photo = route;
+      });
+      await installMockGateway(page, {
+        presenceUsers: [
+          {
+            self: true,
+            id: "riley",
+            name: "Riley Morgan",
+            email: "riley@example.test",
+            avatarUrl: "/api/users/riley/avatar?v=slow",
+          },
+        ],
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.locator(".mobile-nav-toggle:visible").first().tap();
+      const card = page.locator(".sidebar-identity-card:visible").first();
+      await expect.poll(async () => (await card.boundingBox())?.x).toBeGreaterThanOrEqual(0);
+      await card.tap();
+      const menu = page.locator(".oc-menu.sidebar-identity-menu");
+      const avatar = menu.locator(".sidebar-identity-menu__avatar .viewer-avatar");
+      try {
+        await expect.poll(() => avatar.getAttribute("data-avatar-state")).toBe("pending");
+        const fallback = avatar.locator(".viewer-avatar__fallback");
+        expect(await fallback.isVisible()).toBe(true);
+        expect(await fallback.textContent()).toBe("RM");
+        const layout = await menu.evaluate((element) => {
+          const start = (selector: string) =>
+            element.querySelector(selector)!.getBoundingClientRect().left;
+          const text = element.querySelector<HTMLElement>(
+            ".sidebar-identity-menu__help .sidebar-customize-menu__text",
+          )!;
+          return {
+            overflow: element.scrollHeight - element.clientHeight,
+            help: start(".sidebar-identity-menu__help .sidebar-customize-menu__text"),
+            helpClipped: text.scrollWidth > text.clientWidth,
+            name: start(".sidebar-identity-menu__name"),
+            settings: start('[data-value="command:settings"] .sidebar-customize-menu__text'),
+            avatarEnd: element
+              .querySelector(".sidebar-identity-menu__avatar .viewer-avatar")!
+              .getBoundingClientRect().right,
+          };
+        });
+        expect(layout.overflow).toBe(0);
+        expect(layout.helpClipped).toBe(false);
+        expect(layout.help).toBe(layout.settings);
+        expect(layout.name).toBe(layout.settings);
+        expect(layout.avatarEnd).toBeLessThan(layout.name);
+      } finally {
+        await photo?.fulfill({ contentType: "image/svg+xml", body: avatarSvg });
+      }
+      await expect.poll(() => avatar.getAttribute("data-avatar-state")).toBe("loaded");
+    });
+  });
+
   it("keeps account identity and sidebar geometry through disconnect and recovery", async () => {
     const rows = [
       "Museum itinerary",

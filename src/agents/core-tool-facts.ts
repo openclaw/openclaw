@@ -19,6 +19,8 @@ type CoreToolFacts = {
   factoryFamily?: CoreToolFactoryFamily;
   // Recorded-call replay and blind attempt retry have distinct audited allowlists.
   replay?: "both" | "blind" | "recorded";
+  // Present only on runs whose owner granted it; absence is not a policy mistake.
+  runGranted?: true;
 };
 
 export type CoreToolDefinition = CoreToolFacts & {
@@ -143,7 +145,9 @@ export const CORE_TOOL_DEFINITIONS = [
     ["update_goal"],
     ["progress_card"],
     ["ask_user", { profiles: ["coding", "messaging"] }],
-    ["skill_workshop", { executionLocation: "gateway" }],
+    // Owned by the skill-workshop plugin; listed for profile and group membership.
+    ["skill_workshop", { executionLocation: "gateway", factoryFamily: undefined }],
+    ["skill_library", { executionLocation: "gateway", runGranted: true }],
     ["skills_search", { factoryFamily: undefined, replay: "blind" }],
     ["skills_read", { factoryFamily: undefined, replay: "blind" }],
   ]),
@@ -291,4 +295,9 @@ export function resolveCoreToolProfiles(toolId: string): ToolProfileId[] {
 /** Returns true when a tool id is a known core tool. */
 export function isKnownCoreToolId(toolId: string): boolean {
   return CORE_TOOL_BY_ID.has(toolId);
+}
+
+/** Core tools that only exist on runs whose owner granted them, such as `skill_library`. */
+export function isRunGrantedCoreToolId(toolId: string): boolean {
+  return CORE_TOOL_BY_ID.get(toolId)?.runGranted === true;
 }

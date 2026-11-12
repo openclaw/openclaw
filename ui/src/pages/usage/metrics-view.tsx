@@ -14,7 +14,6 @@ export function UsageMosaic(props: {
   const state = createMemo(() => {
     const timeZone = props.timeZone;
     const selectedHours = props.selectedHours;
-    const onSelectHour = props.onSelectHour;
     const stats = {
       hasData: props.overview?.hasTimelineData ?? false,
       totalTokens: props.overview?.hourTokens.reduce((sum, value) => sum + value, 0) ?? 0,
@@ -48,7 +47,7 @@ export function UsageMosaic(props: {
       selected: selectedHours.includes(hour),
     }));
 
-    return { stats, timeZone, weekdays, hours, onSelectHour, tint };
+    return { stats, timeZone, weekdays, hours, tint };
   });
   return (
     <SettingsSection
@@ -120,7 +119,7 @@ export function UsageMosaic(props: {
                       aria-label={hour().title}
                       aria-pressed={hour().selected ? "true" : "false"}
                       onClick={(event: MouseEvent) =>
-                        state().onSelectHour(hour().hour, event.shiftKey)
+                        props.onSelectHour(hour().hour, event.shiftKey)
                       }
                     >
                       <span

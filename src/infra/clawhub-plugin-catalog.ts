@@ -416,15 +416,20 @@ export async function fetchClawHubPluginCatalog(
       }),
     };
   }
+  const curatedCategory = (params.intent ?? "all") === "all" && Boolean(params.category);
   const value = await fetchClawHubJson<unknown>({
     ...shared,
+    // Curated discovery shares the public CDN snapshot, just like the overview.
+    skipAuth:
+      params.skipAuth ??
+      (curatedCategory && !params.token && isDefaultClawHubBaseUrl(params.baseUrl)),
     path: "/api/v1/plugins",
     search: {
       category: params.category,
       cursor: params.cursor,
       featured: params.intent === "featured" ? "true" : undefined,
       isOfficial: params.officialOnly || params.intent === "official" ? "true" : undefined,
-      curated: (params.intent ?? "all") === "all" && params.category ? "true" : undefined,
+      curated: curatedCategory ? "true" : undefined,
       sort:
         params.intent === "featured"
           ? undefined

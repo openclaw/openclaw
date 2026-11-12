@@ -423,7 +423,7 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
   const skills = Object.freeze({
     list: (offset = 0) => request("skillsList", [offset]),
     search: (query, limit) => request("skillsSearch", limit === undefined ? [query] : [query, limit]),
-    read: (name) => request("skillsRead", [name]),
+    read: (name, relativePath) => request("skillsRead", relativePath === undefined ? [name] : [name, relativePath]),
   });
 
   const results = Object.freeze({
@@ -554,7 +554,10 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
       describe: {
         value: isMcp
           ? () => request("namespace", [binding.namespaceId, [path[0], "$api"], [path.slice(1).join("."), { schema: true }]])
-          : () => request("describe", [callableName]),
+          : (options) => request("describe", [
+              callableName,
+              options?.includeRarelyNeededOutputSchema === true ? "outputSchema" : undefined,
+            ]),
         enumerable: true,
       },
       toJSON: { value: () => {

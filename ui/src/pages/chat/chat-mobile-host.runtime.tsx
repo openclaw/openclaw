@@ -336,11 +336,13 @@ export function MobileHostChrome(
     };
   });
   const ScrollFades = () => {
-    onSettled(() =>
-      props.view.mobileScrollFades?.connect((ports) =>
-        createMobileSheetScrollFadeConnection(ports, props.readShell()),
-      ),
-    );
+    onSettled(() => {
+      const shell = props.readShell();
+      const initialPresentation = props.view.visualPresentation;
+      return props.view.mobileScrollFades?.connect((ports) =>
+        createMobileSheetScrollFadeConnection(ports, shell, initialPresentation),
+      );
+    });
     return undefined;
   };
   return (
@@ -496,7 +498,10 @@ export function MobileHostChrome(
 export function MobileHostPage(props: MobileHostViewProps) {
   const detailsChild = () => Boolean(props.view.mobileHost?.destination.page);
   const mobileVisible = () =>
-    Boolean(props.view.mobileHost?.open && !props.view.mobileHost.suspended);
+    Boolean(
+      (props.view.mobileHost?.open || props.view.mobileHost?.exiting) &&
+      !props.view.mobileHost.suspended,
+    );
   return (
     <Show
       when={

@@ -251,8 +251,10 @@ it.each(["displaced", "replacement", "both", "unreadable"] as const)(
       fs.writeFileSync(path.join(family, "displaced"), "incomplete database");
     }
     const before = snapshot();
-    await expect(admitUpdateCommandRun({ env: process.env, opts: {}, root })).rejects.toThrow(
-      "Interrupted shared-database publication is read-only while full-state recovery is deferred",
+    const refusal = admitUpdateCommandRun({ env: process.env, opts: {}, root });
+    await expect(refusal).rejects.toThrow(`Interrupted shared-database publication left ${family}`);
+    await expect(refusal).rejects.toThrow(
+      "https://docs.openclaw.ai/cli/update/repair-and-recovery#interrupted-state-restore",
     );
     expect(fs.existsSync(file)).toBe(false);
     expect(snapshot()).toEqual(before);

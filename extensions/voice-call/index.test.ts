@@ -422,6 +422,21 @@ it("does not expose requester session identity to the model", () => {
   expect(JSON.stringify(setup().tool().parameters)).not.toContain("requesterSessionKey");
 });
 
+it("tells the initiating model where to put an ongoing call task", () => {
+  expect(setup().tool().parameters).toMatchObject({
+    anyOf: expect.arrayContaining([
+      expect.objectContaining({
+        properties: expect.objectContaining({
+          action: expect.objectContaining({ const: "initiate_call" }),
+          message: expect.objectContaining({
+            description: expect.stringContaining("put the ongoing task in brief.task"),
+          }),
+        }),
+      }),
+    ]),
+  });
+});
+
 it.each([true, false])("tool get_status uses persisted fallback (found=%s)", async (found) => {
   runtimeStub.manager.getCallFromMemoryOrStore = vi.fn(async () =>
     found ? completedCall() : undefined,

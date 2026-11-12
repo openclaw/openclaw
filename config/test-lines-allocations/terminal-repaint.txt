@@ -1,0 +1,2 @@
+96
+# Composer updates skip full repaint; active close repaints only a surviving replacement without moving focus.

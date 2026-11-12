@@ -71,6 +71,7 @@ export function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProp
       totals: null,
       aggregates: null,
       costDaily: [],
+      readChartSnapshot: () => null,
       cacheRefresh: "complete",
       providerUsage: [],
       providerUsageStalled: false,

@@ -1,8 +1,10 @@
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { runWithSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
+import { withSqliteDatabaseWriteScope } from "../infra/sqlite-database-admission.js";
 import { runSqliteSingleStatementSync } from "../infra/sqlite-transaction.js";
 import type { DB } from "./openclaw-state-db.generated.js";
+import { stateLeaseWriteScope } from "./openclaw-state-lease-store.js";
 import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease.types.js";
 
 export type StateLeaseRenewalOutcome = { expiresAt: number | undefined } | { error: unknown };
@@ -88,7 +90,11 @@ export function createStateLeaseRenewalScheduler(db: EngineConnection) {
           )
           .returning(["scope", "lease_key", "owner", "expires_at"]);
         const renew = () =>
-          runSqliteSingleStatementSync(db, () => executeSqliteQuerySync(db, query).rows);
+          withSqliteDatabaseWriteScope(
+            db,
+            due.map((entry) => stateLeaseWriteScope(entry.identity)),
+            () => runSqliteSingleStatementSync(db, () => executeSqliteQuerySync(db, query).rows),
+          );
         const rows = isPostgresSqlConnection(db)
           ? renew()
           : runWithSqliteBusyTimeout(db, 0, renew, { lockFailureReporting: "suppress" });

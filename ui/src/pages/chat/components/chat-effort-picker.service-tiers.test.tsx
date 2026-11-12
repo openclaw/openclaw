@@ -66,23 +66,23 @@ it("keeps Ultrafast selectable while showing and clearing a provider downgrade",
   await openPicker();
   const ultrafast = show("ultrafast", [observation]);
   expect([ultrafast.disabled, ultrafast.getAttribute("aria-checked")]).toEqual([false, "true"]);
-  expect(summary().title).toContain("Ultrafast requested, currently served as priority");
+  expect(summary().title).toContain("Running at priority. Ultrafast isn’t available right now.");
 
   show("ultrafast", [{ requestedTier: "ultrafast" }]);
-  expect(summary().title).toContain("Ultrafast requested, currently unavailable");
+  expect(summary().title).toContain("Ultrafast isn’t available right now.");
 
   show(true, [observation]).click();
   expect(onFastModeSelect).toHaveBeenCalledWith("ultrafast", "tier-observation");
-  expect(summary().title).not.toContain("requested");
+  expect(summary().title).not.toContain("available right now");
 
   const independent = [
     { requestedTier: "priority", responseTier: "fast" },
     { requestedTier: "ultrafast", responseTier: "fast" },
   ];
   show(true, independent);
-  expect(summary().title).toContain("Fast requested, currently served as fast");
+  expect(summary().title).toContain("Running at fast. Fast isn’t available right now.");
   show("ultrafast", independent);
-  expect(summary().title).toContain("Ultrafast requested, currently served as fast");
+  expect(summary().title).toContain("Running at fast. Ultrafast isn’t available right now.");
 
   expect(show("ultrafast").getAttribute("aria-checked")).toBe("true");
   expect(summary().title).toBe("Speed: Ultrafast");

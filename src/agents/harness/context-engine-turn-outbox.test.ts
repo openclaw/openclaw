@@ -66,6 +66,7 @@ const runtimeContext = {
   modelId: "claude-sonnet-4-6",
   tokenBudget: 180_000,
   modelContextWindow: 200_000,
+  promptCache: { lastCallUsage: { input: 1_200, cacheRead: 150_000, total: 151_200 } },
 };
 type TurnPayload = Parameters<typeof enqueueContextEngineTurnCommit>[0]["payload"];
 
@@ -215,6 +216,7 @@ describe("context-engine turn outbox", () => {
           sessionIdUsed: target.sessionId,
           sessionKey: target.sessionKey,
           sessionFile: target.storePath,
+          runtimeContext: { promptCache: runtimeContext.promptCache },
           turnCandidate: {
             admission,
             terminalEntryId: appended.entryId,
@@ -234,6 +236,8 @@ describe("context-engine turn outbox", () => {
           { role: "user", content: "current" },
           message,
         ]);
+        const { promptCache } = runtimeContext;
+        expect(commitTurn.mock.calls[0]![0].runtimeContext).toMatchObject({ promptCache });
         expect(warn).not.toHaveBeenCalled();
       } else {
         expect(commitTurn).not.toHaveBeenCalled();
@@ -452,6 +456,32 @@ describe("context-engine turn outbox", () => {
     expect(readPayload(database, currentAdmission.logicalTurnId)).toMatchObject({
       state: "admitted",
     });
+  });
+
+  it("leaves non-ready session heads queued without spinning or overtaking them", async () => {
+    const commitTurn = createCommitTurn();
+    const { database, enqueue, drain } = outboxFixture(commitTurn, false);
+    for (const sessionId of ["admitted", "accepted"]) {
+      const payload = createPayload(database.path, `${sessionId}:head`, sessionId);
+      enqueueContextEngineTurnIntent({
+        database,
+        engineId: "test",
+        admission: payload.boundary.admission,
+      });
+      if (sessionId === "accepted") {
+        acceptContextEngineTurnIntent({ database, engineId: "test", boundary: payload.boundary });
+      }
+      enqueue(`${sessionId}:tail`, sessionId);
+    }
+    const before = database.db.prepare("SELECT * FROM context_engine_turn_outbox").all();
+    const store = openContextEngineTurnOutboxWorkerStore({ agentId: "main", path: database.path });
+    const read = vi.spyOn(store, "readNextPending");
+
+    expect(await drain({ store })).toEqual({ pending: true });
+
+    expect(read).not.toHaveBeenCalled();
+    expect(commitTurn).not.toHaveBeenCalled();
+    expect(database.db.prepare("SELECT * FROM context_engine_turn_outbox").all()).toEqual(before);
   });
 
   it("does not let later same-session turns overtake a failed commit", async () => {

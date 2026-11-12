@@ -1,5 +1,5 @@
-import { spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { spawnSync, type StdioOptions } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
 import {
   closeSync,
   cpSync,
@@ -79,6 +79,34 @@ export function copyPrWrapperSources(destination: string): string[] {
   return components;
 }
 
+export function copyPrRoutingWrapperSources(destination: string): string[] {
+  // Routing, review artifacts, and supervision use tooling; app-import fixtures keep the full inventory.
+  // Keep the local-check component for the unanchored fixture's trust-drift assertions.
+  const components = [
+    "package.json",
+    "scripts/lib/plain-gh.sh",
+    "scripts/lib/plain-gh.mjs",
+    "scripts/lib/direct-run.mjs",
+    "scripts/lib/record-shared.mjs",
+    "scripts/lib/managed-child-process.mts",
+    "scripts/lib/managed-cleanup-handoff.mts",
+    "scripts/windows-cmd-helpers.mjs",
+    "scripts/lib/vitest-resource-ownership.mts",
+    "scripts/lib/windows-taskkill.mjs",
+    "scripts/lib/local-check-runtime.mts",
+  ];
+  const sources = ["scripts/pr", "scripts/pr-lib", ...components];
+  mkdirSync(join(destination, "scripts/lib"), { recursive: true });
+  for (const component of sources) {
+    cpSync(component, join(destination, component), { recursive: true });
+  }
+  writeFileSync(
+    join(destination, "scripts/pr-lib/wrapper-components.txt"),
+    `${components.join("\n")}\n`,
+  );
+  return sources;
+}
+
 export function linkPrWrapperDependencies(destination: string): void {
   // Fixture initialization may repeat; stale-base squash merges have reintroduced
   // duplicate initialization twice.
@@ -92,6 +120,7 @@ export function linkPrWrapperDependencies(destination: string): void {
     "acorn",
     "chalk",
     "commander",
+    "croner",
     "dotenv",
     "execa",
     "hosted-git-info",
@@ -111,6 +140,7 @@ export function linkPrWrapperDependencies(destination: string): void {
     "typebox",
     "typescript",
     "undici",
+    "ws",
     "yaml",
     "zod",
   ]) {
@@ -143,6 +173,32 @@ export function linkPrWrapperDependencies(destination: string): void {
   }
 }
 
+export function anchoredStdio(
+  fd: number | "ignore",
+  stdin: "ignore" | "pipe" = "ignore",
+): Exclude<StdioOptions, string> {
+  return [stdin, "pipe", "pipe", ...Array<"ignore">(6).fill("ignore"), fd];
+}
+
+// Preserve the creator's directory descriptor through real child-process owner calls.
+export function runWithPrAnchor(
+  anchor: string,
+  args: string[],
+  options: { env: NodeJS.ProcessEnv; cwd?: string; input?: string; runtime?: string },
+) {
+  const { runtime = requireNodeTool("node"), ...spawnOptions } = options;
+  const fd = openSync(anchor, "r");
+  try {
+    return spawnSync(runtime, args, {
+      ...spawnOptions,
+      encoding: "utf8",
+      stdio: anchoredStdio(fd, options.input === undefined ? "ignore" : "pipe"),
+    });
+  } finally {
+    closeSync(fd);
+  }
+}
+
 // Fixture readiness and settlement come from the real producer/creator owners,
 // never handcrafted ledger rows. The child receives only its own directory FD.
 export function createSettledPrCacheEntry(
@@ -156,48 +212,31 @@ export function createSettledPrCacheEntry(
   mkdirSync(anchor, { mode: 0o700 });
   const stage = mkdtempSync(join(cache, `install-${process.pid}-`));
   const entry = join(cache, key);
-  const fd = openSync(anchor, "r");
-  try {
-    const source = pathToFileURL(resolve("scripts/pr-lib/cache-lifetime.mjs")).href;
-    const result = spawnSync(
-      runtime,
-      [
-        "--input-type=module",
-        "-e",
-        `
+  const source = pathToFileURL(resolve("scripts/pr-lib/cache-lifetime.mjs")).href;
+  const result = runWithPrAnchor(
+    anchor,
+    [
+      "--input-type=module",
+      "-e",
+      `
 import { rmSync } from "node:fs";
 import { claimCreatedAnchor, publishDependencyCache, retireAnchorDependencies, withDependencyCacheLock } from ${JSON.stringify(source)};
 const anchor = claimCreatedAnchor(process.argv[1], process.ppid);
 withDependencyCacheLock(process.argv[2], lock => publishDependencyCache(lock, process.argv[3], process.argv[4], anchor));
 retireAnchorDependencies(anchor, () => rmSync(anchor.path, { recursive: true }));
 `,
-        anchor,
-        cache,
-        stage,
-        entry,
-      ],
-      {
-        env: { ...process.env, HOME: home },
-        encoding: "utf8",
-        stdio: [
-          "ignore",
-          "pipe",
-          "pipe",
-          "ignore",
-          "ignore",
-          "ignore",
-          "ignore",
-          "ignore",
-          "ignore",
-          fd,
-        ],
-      },
-    );
-    if (result.status !== 0) {
-      throw new Error(result.stderr || "Fixture cache publication failed");
-    }
-  } finally {
-    closeSync(fd);
+      anchor,
+      cache,
+      stage,
+      entry,
+    ],
+    {
+      env: { ...process.env, HOME: home },
+      runtime,
+    },
+  );
+  if (result.status !== 0) {
+    throw new Error(result.stderr || "Fixture cache publication failed");
   }
   return entry;
 }
@@ -222,4 +261,32 @@ export function readPrCacheState(entry: string) {
   } finally {
     db.close();
   }
+}
+
+export function prDirectoryIdentity(
+  path: string,
+  keys: ReadonlyArray<"dev" | "ino" | "uid" | "gid" | "mode"> = ["dev", "ino", "uid", "mode"],
+) {
+  const stat = lstatSync(path, { bigint: true });
+  return Object.fromEntries(keys.map((key) => [key, String(stat[key])]));
+}
+
+export function readPrCacheRows(db: DatabaseSync) {
+  const rows = (sql: string) => db.prepare(sql).all();
+  return {
+    owner: rows("SELECT * FROM owner ORDER BY id"),
+    installations: rows("SELECT * FROM installations ORDER BY key"),
+    holds: rows("SELECT * FROM holds ORDER BY entry_key, anchor_path, anchor_dev, anchor_ino"),
+  };
+}
+
+export function sealPrDependencyPlan(
+  home: string,
+  bytes: string,
+  confirmation = "--confirmed-no-running-tools",
+) {
+  const path = join(home, "release.json");
+  writeFileSync(path, bytes);
+  const seal = createHash("sha256").update(bytes).digest("hex");
+  return [path, "--plan-sha256", seal, confirmation];
 }

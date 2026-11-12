@@ -8,15 +8,8 @@ import { Value } from "typebox/value";
 import { afterEach, assert, expect, it, vi } from "vitest";
 import { SessionGitHubReadinessResultSchema } from "../../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import * as identity from "../../agents/github-tool-identity.js";
-import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
-import * as gatewayTransport from "../../agents/tools/gateway.js";
-import { createGitHubPublishTool } from "../../agents/tools/github-publish-tool.js";
-import { runGit } from "../../agents/worktrees/git.js";
-import { insertRegistryWorktree, updateRegistryWorktree } from "../../agents/worktrees/registry.js";
+import { updateRegistryWorktree } from "../../agents/worktrees/registry.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
-import { makeWorktreeRecord } from "../../agents/worktrees/service.test-support.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import {
@@ -33,11 +26,11 @@ import {
 } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { OpenClawSchema } from "../../config/zod-schema.js";
+import * as sqliteBackup from "../../infra/sqlite-backup.js";
 import { resolvePrivateSqliteSnapshotStagingRoot } from "../../infra/sqlite-private-directory.js";
 import { SQLITE_SNAPSHOT_PREFIX } from "../../infra/sqlite-snapshot-retirement.js";
 import { inspectDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import * as workerCpu from "../../infra/worker-cpu.js";
-import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { holdStateRead } from "../../state/github-publication-fixtures.test-support.js";
 import { repositoryRow } from "../../state/github-publication.worker.test-support.js";
 import {
@@ -62,7 +55,6 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
-import * as oauth from "../github-oauth-lifecycle.js";
 import { digestGitHubPublicationRequest } from "../github-publication-receipt.js";
 import {
   claimGitHubPublicationExecutionFixture,
@@ -70,66 +62,28 @@ import {
   insertRepositoryGitHubPublicationFixture,
 } from "../github-publication-store.test-support.js";
 import { insertGitHubPublicationRequest } from "../github-publication-store.worker.js";
-import * as publicationTarget from "../github-publication-target.js";
-import { createGitHubPublicationCoordinator } from "../github-publication.js";
 import { repositoryGitHubPublicationDigest } from "../github-repository-publication.kernel.js";
 import { operatorSessionCap } from "../operator-role-policy.js";
 import { handleGatewayRequest } from "../server-methods.js";
-import { createContext } from "../server-plugin-in-process-dispatch.test-support.js";
-import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
+import { sessionKey, sessionId, type ReadFixture } from "./sessions-github-read.test-support.js";
 import {
-  sessionKey,
-  sessionId,
-  withReadFixture,
-  type ReadFixture,
-} from "./sessions-github-read.test-support.js";
+  bind,
+  fixture,
+  git,
+  githubOrigin,
+  temporary,
+  tool,
+} from "./sessions-github-readiness.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
-const temporary = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
-const githubOrigin = "https://github.com/example/project.git";
 const unbound = {
   policy: { read: "admitted", write: "unknown" },
   custody: { kind: "unbound_workspace" },
   target: { kind: "unknown", reason: "not-qualified" },
   request: { kind: "none", selection: "current" },
+  remedies: [],
 };
-
-async function fixture(
-  run: (f: ReadFixture) => Promise<void>,
-  options: Parameters<typeof withReadFixture>[1] = {},
-) {
-  await withReadFixture(async (f) => {
-    Object.assign(f.context, createContext([], f.context.getRuntimeConfig));
-    const service = createGitHubPublicationCoordinator({
-      placements: createWorkerSessionPlacementStore(),
-      getCommittedRuntimeConfig: f.context.getRuntimeConfig,
-    });
-    f.context.githubPublicationService = service;
-    const forbidden = () => {
-      throw new Error("Readiness attempted an external effect or credential preparation");
-    };
-    const effects = [
-      vi.spyOn(service, "requestForSessionV2").mockImplementation(forbidden),
-      vi.spyOn(service, "preparePersonalStatus").mockImplementation(forbidden),
-      vi.spyOn(service, "personalPending").mockImplementation(forbidden),
-      vi.spyOn(identity, "prepareGitHubPublicationIdentity").mockImplementation(forbidden),
-      vi.spyOn(identity, "prepareGitHubPublicationOptionsIdentity").mockImplementation(forbidden),
-      vi.spyOn(oauth, "requestCurrentGitHubOAuthRefresh").mockImplementation(forbidden),
-      vi.spyOn(publicationTarget, "prepareGitHubPublicationTarget").mockImplementation(forbidden),
-      vi.spyOn(gatewayTransport, "callGatewayTool").mockImplementation(forbidden),
-    ];
-    try {
-      await run(f);
-    } finally {
-      for (const effect of effects) {
-        expect(effect).not.toHaveBeenCalled();
-        effect.mockRestore();
-      }
-      expect(f.personalConnectionStatus).not.toHaveBeenCalled();
-    }
-  }, options);
-}
 
 async function call(f: ReadFixture, params: Record<string, unknown> = {}, internal = false) {
   const respond = vi.fn<GatewayRequestHandlerOptions["respond"]>();
@@ -154,50 +108,7 @@ async function observe(f: ReadFixture, params: Record<string, unknown> = {}, int
   assert(Value.Check(SessionGitHubReadinessResultSchema, value), JSON.stringify(value));
   return value;
 }
-async function tool(f: ReadFixture, input: Record<string, unknown>) {
-  const publisher = createGitHubPublishTool();
-  // Fixture precondition: supplied arguments satisfy the schema before direct execution.
-  expect(Value.Check(publisher.parameters, input)).toBe(true);
-  return withPluginRuntimeGatewayRequestScope(
-    { context: f.context, client: f.client, isWebchatConnect: () => false },
-    () =>
-      withGatewayToolCallerIdentity(
-        { agentId: "main", sessionKey, gatewayContextResolver: () => f.context },
-        () => publisher.execute("readiness-observation", input),
-      ),
-  );
-}
-async function git(root: string, ...args: string[]) {
-  const result = await runGit(root, args);
-  assert(result.code === 0, result.stderr);
-  return result.stdout.trim();
-}
-async function bind(origin = githubOrigin) {
-  const root = await fs.realpath(temporary.make("readiness-git-"));
-  await git(root, "init", "--initial-branch=feature");
-  await git(root, "config", "user.name", "Publication Fixture");
-  await git(root, "config", "user.email", "publication@example.invalid");
-  await git(root, "config", "commit.gpgsign", "false");
-  await git(root, "commit", "--allow-empty", "-m", "fixture");
-  if (origin) {
-    await git(root, "remote", "add", "origin", origin);
-  }
-  const repository = await managedWorktrees.resolveRepositoryIdentity(root);
-  const worktree = makeWorktreeRecord(repository.repoRoot, randomUUID(), {
-    path: root,
-    repoFingerprint: repository.fingerprint,
-    branch: "feature",
-    ownerId: sessionKey,
-  });
-  await insertRegistryWorktree(process.env, worktree);
-  await upsertSessionEntryCore(
-    { agentId: "main", sessionKey },
-    {
-      worktree: { id: worktree.id, branch: worktree.branch, repoRoot: worktree.repoRoot },
-    },
-  );
-  return worktree;
-}
+
 function seed(worktree: Awaited<ReturnType<typeof bind>>, key = sessionKey) {
   ensureGitHubPublicationSchema(openOpenClawStateDatabase().db);
   const requestId = randomUUID();
@@ -249,7 +160,7 @@ async function cold() {
   await closeStateDatabaseForTest();
 }
 
-it("observes an unbound source through the validated publisher and registered Gateway", async () => {
+it("observes an unbound source without requiring a different bound session", async () => {
   await fixture(async (f) => {
     expect((await tool(f, { action: "readiness" })).details).toMatchObject(unbound);
   });
@@ -261,27 +172,60 @@ it("registers a separate source-qualified read for broad and internal operators"
     }
   });
 });
-it("qualifies real managed Git, retains cached freshness, and never stages files", async () => {
-  await fixture(async (f) => {
-    const worktree = await bind();
-    await fs.writeFile(path.join(worktree.path, "unpublished.txt"), "preserve me");
-    const head = await git(worktree.path, "rev-parse", "HEAD");
-    const status = await git(worktree.path, "status", "--porcelain");
-    const first = await observe(f);
-    expect(first).toMatchObject({
-      custody: { kind: "qualified", source: "worktree" },
-      target: { kind: "supported", basis: "registered-repository", freshness: "observed" },
+it.each(["github.com", "github.example.test"])(
+  "qualifies real managed Git for %s without cross-host cache reuse or file staging",
+  async (host) => {
+    await fixture(async (f) => {
+      const config = f.context.getRuntimeConfig();
+      const selectHost = (selected: string) => {
+        const next = {
+          ...config,
+          gateway: {
+            ...config.gateway,
+            github: {
+              ...config.gateway?.github,
+              host: selected,
+              apiBaseUrl:
+                selected === "github.com" ? "https://api.github.com" : `https://${selected}/api/v3`,
+            },
+          },
+        };
+        expect(OpenClawSchema.safeParse(next).success).toBe(true);
+        setRuntimeConfigSnapshot(next);
+      };
+      selectHost(host);
+      const worktree = await bind(`https://${host}/example/project.git`);
+      await fs.writeFile(path.join(worktree.path, "unpublished.txt"), "preserve me");
+      const head = await git(worktree.path, "rev-parse", "HEAD");
+      const status = await git(worktree.path, "status", "--porcelain");
+      openOpenClawStateDatabase();
+      const backups = vi.spyOn(sqliteBackup, "backupNodeSqliteDatabase");
+      const repositoryReads = vi.spyOn(managedWorktrees, "resolveRepositoryIdentity");
+      const first = await observe(f);
+      expect(first).toMatchObject({
+        custody: { kind: "qualified", source: "worktree" },
+        target: { kind: "supported", basis: "registered-repository", freshness: "observed" },
+      });
+      expect(repositoryReads).toHaveBeenCalledTimes(1);
+      expect((await observe(f)).target).toMatchObject({ freshness: "cached" });
+      expect(repositoryReads).toHaveBeenCalledTimes(1);
+      selectHost(host === "github.com" ? "github.example.test" : "github.com");
+      expect((await observe(f)).target).toEqual({ kind: "unsupported" });
+      expect(repositoryReads).toHaveBeenCalledTimes(2);
+      selectHost(host);
+      expect((await observe(f)).target).toMatchObject({ kind: "supported", freshness: "cached" });
+      expect(repositoryReads).toHaveBeenCalledTimes(2);
+      expect(backups).not.toHaveBeenCalled();
+      expect(await git(worktree.path, "rev-parse", "HEAD")).toBe(head);
+      expect(await git(worktree.path, "status", "--porcelain")).toBe(status);
+      expect(await fs.readFile(path.join(worktree.path, "unpublished.txt"), "utf8")).toBe(
+        "preserve me",
+      );
+      await updateRegistryWorktree(process.env, worktree.id, { removedAt: 2 });
+      expect((await observe(f)).custody).toEqual({ kind: "changed" });
     });
-    expect((await observe(f)).target).toMatchObject({ freshness: "cached" });
-    expect(await git(worktree.path, "rev-parse", "HEAD")).toBe(head);
-    expect(await git(worktree.path, "status", "--porcelain")).toBe(status);
-    expect(await fs.readFile(path.join(worktree.path, "unpublished.txt"), "utf8")).toBe(
-      "preserve me",
-    );
-    await updateRegistryWorktree(process.env, worktree.id, { removedAt: 2 });
-    expect((await observe(f)).custody).toEqual({ kind: "changed" });
-  });
-});
+  },
+);
 it.each(["", "https://example.test/project.git"])(
   "distinguishes an unsupported origin %s from unbound custody",
   async (origin) => {
@@ -392,6 +336,7 @@ it("observes repository-only shared receipts while personal receipts remain priv
       };
       personal.request_digest = repositoryGitHubPublicationDigest(personal);
       insertRepositoryGitHubPublicationFixture(personal, () => {});
+      const backups = vi.spyOn(sqliteBackup, "backupNodeSqliteDatabase");
       expect(await observe(f)).toMatchObject({
         custody: { kind: "qualified", source: "repository" },
         target: { kind: "supported", basis: "repository-url" },
@@ -409,6 +354,7 @@ it("observes repository-only shared receipts while personal receipts remain priv
         reason: "not-observable",
         selectedRequestId: personal.request_id,
       });
+      expect(backups).not.toHaveBeenCalled();
     },
     { personal: true },
   );

@@ -15,6 +15,7 @@ import {
 } from "../agent-tools.before-tool-call.diagnostics.js";
 import type {
   CliCompactionDelta,
+  CliOutput,
   CliStreamingDelta,
   CliThinkingDelta,
   CliThinkingProgress,
@@ -28,10 +29,11 @@ import { extractToolErrorMessage, prepareToolResult } from "../embedded-agent-to
 import { runAgentHarnessAfterToolCallHook } from "../harness/hook-helpers.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { resolveCliToolTerminalReason } from "../run-termination.js";
+import { stripOpenClawMcpToolPrefix } from "../tool-display-call.js";
 import { isToolResultError } from "../tool-result-error.js";
 import { cliAssistantItemId } from "./assistant-identity.js";
 import type { CliToolTracking } from "./execute-tool-tracking.js";
-import { normalizeCliToolName, stripOpenClawMcpToolPrefix } from "./tool-policy.js";
+import { normalizeCliToolName } from "./tool-policy.js";
 import { recordCliTrajectoryEvent } from "./trajectory.js";
 import type { PreparedCliRunContext } from "./types.js";
 
@@ -68,6 +70,8 @@ export function createCliEventHandlers(params: {
   };
   let observedCliActivity = false;
   let compactionActive = false;
+  // One owner for native compaction facts: the published end event, the run's count, and its sizes.
+  let nativeCompaction: NonNullable<CliOutput["nativeCompaction"]> | undefined;
   let onCompactionActiveChange: (() => void) | undefined;
   const signaledPhases = new Set<"tool_execution_started" | "assistant_output_started">();
   const signalExecutionPhase = (phase: "tool_execution_started" | "assistant_output_started") => {
@@ -433,6 +437,18 @@ export function createCliEventHandlers(params: {
   };
   const emitCliCompaction = (event: CliCompactionDelta) => {
     observedCliActivity = true;
+    // Claude Code resends its `compacting` status every 30 s while one compaction
+    // runs. The activity above feeds the watchdog; publish only the first start.
+    if (event.phase === "start" && compactionActive) {
+      return;
+    }
+    if (event.phase === "end" && event.completed) {
+      nativeCompaction = {
+        compactionCount: (nativeCompaction?.compactionCount ?? 0) + 1,
+        ...(event.tokensBefore !== undefined ? { compactionTokensBefore: event.tokensBefore } : {}),
+        ...(event.tokensAfter !== undefined ? { compactionTokensAfter: event.tokensAfter } : {}),
+      };
+    }
     // Native compaction is silent but busy: the no-output watchdog reads this
     // between phase boundaries, so an end event must always clear the flag,
     // even for a failed compaction (`completed: false`).
@@ -598,6 +614,7 @@ export function createCliEventHandlers(params: {
       return tool !== undefined && isClaudeForegroundAgentToolName(tool.toolName);
     },
     getToolSummary,
+    getNativeCompaction: () => nativeCompaction,
   };
 }
 

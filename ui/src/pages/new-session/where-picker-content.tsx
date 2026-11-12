@@ -1,7 +1,18 @@
-import { action, createMemo, createOptimistic, For, Loading, onSettled, Show } from "solid-js";
-import { resolveCloudProfileIconData } from "../../components/provider-icon-data.ts";
+import {
+  action,
+  createMemo,
+  createOptimistic,
+  createSignal,
+  For,
+  Loading,
+  onSettled,
+  Show,
+} from "solid-js";
+import { resolveCloudProfileIconData } from "../../components/cloud-profile-icon-data.ts";
+import { CloudProfileIcon } from "../../components/solid/cloud-profile-icon.tsx";
+import { HeaderSearch } from "../../components/solid/header-search.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
-import { CloudProfileIcon } from "../../components/solid/provider-icon.tsx";
+import { MenuHeading } from "../../components/solid/menu-heading.tsx";
 import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
 import { prettifyPlatform } from "../../lib/platform-label.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -46,35 +57,39 @@ function EnvironmentHeading(props: {
   onAction: (() => void) | undefined;
 }) {
   return (
-    <div class="new-session-page__environment-heading new-session-page__devices-heading">
-      <span>{props.label}</span>
-      <Show when={props.onAction}>
-        <button
-          type="button"
-          class="new-session-page__connect-device"
-          data-action={props.action}
-          aria-label={t(
-            props.action === "connect-machine"
-              ? "newSession.connectMachine"
-              : "newSession.manageCloudWorkers",
-          )}
-          disabled={props.disabled}
-          ref={nativeListener("click", () => props.onAction?.())}
-        >
-          <ConnectDeviceIcon />
-        </button>
-      </Show>
-    </div>
+    <MenuHeading
+      class="new-session-page__environment-heading"
+      label={props.label}
+      trailing={
+        <Show when={props.onAction}>
+          <button
+            type="button"
+            class="new-session-page__connect-device"
+            data-action={props.action}
+            aria-label={t(
+              props.action === "connect-machine"
+                ? "newSession.connectMachine"
+                : "newSession.manageCloudWorkers",
+            )}
+            disabled={props.disabled}
+            ref={nativeListener("click", () => props.onAction?.())}
+          >
+            <ConnectDeviceIcon />
+          </button>
+        </Show>
+      }
+    />
   );
 }
 
 export function WherePickerContent(
   props: Omit<WhereChipProps, "ref"> & {
-    onReady: (search: HTMLInputElement) => void;
+    onReady: (search: HTMLElement) => void;
   },
 ) {
-  let search!: HTMLInputElement;
+  let search!: HTMLElement;
   onSettled(() => props.onReady(search));
+  const [searching, setSearching] = createSignal(false);
   const [saving, setSaving] = createOptimistic(false);
   const presentAdoption = action(function* (request: SuggestedProfileAdoption) {
     if (request.isCurrent()) {
@@ -107,9 +122,12 @@ export function WherePickerContent(
   const cloudProfilesRead = createMemo(() => cloudProfilesCompletion().promise?.then(() => null));
   const view = createMemo(() => {
     const localName = props.params.gateway.gatewayName.trim() || t("newSession.local");
-    const query = props.params.place.browser.environmentQuery.trim().toLocaleLowerCase();
+    const query = props.params.place.browser.environmentQuery
+      .trim()
+      .toLocaleLowerCase()
+      .normalize("NFC");
     const matches = (...values: (string | undefined)[]) =>
-      values.some((value) => value?.toLocaleLowerCase().includes(query));
+      values.some((value) => value?.toLocaleLowerCase().normalize("NFC").includes(query));
     const showLocal = matches(
       t("newSession.local"),
       t("newSession.gatewayHost"),
@@ -219,27 +237,18 @@ export function WherePickerContent(
   return (
     <div class="new-session-page__environment-layout">
       <div class="new-session-page__picker-root new-session-page__environment-picker">
-        <label class="new-session-page__environment-search">
-          <span aria-hidden="true">
-            <Icon name="search" />
-          </span>
-          <input
-            ref={(element) => {
-              search = element;
-            }}
-            type="search"
-            autofocus
-            aria-label={t("newSession.environmentSearchPlaceholder")}
-            placeholder={t("newSession.environmentSearchPlaceholder")}
-            value={props.params.place.browser.environmentQuery}
-            disabled={busy()}
-            onInput={(event: Event) => {
-              if (event.currentTarget instanceof HTMLInputElement) {
-                props.params.place.browser.changeEnvironmentQuery(event.currentTarget.value);
-              }
-            }}
-          />
-        </label>
+        <HeaderSearch
+          title={t("newSession.where")}
+          label={t("newSession.environmentSearchPlaceholder")}
+          query={props.params.place.browser.environmentQuery}
+          open={searching() || Boolean(props.params.place.browser.environmentQuery)}
+          disabled={busy()}
+          toggleRef={(element) => {
+            search = element;
+          }}
+          onOpenChange={setSearching}
+          onQueryChange={(query) => props.params.place.browser.changeEnvironmentQuery(query)}
+        />
         <div class="new-session-page__environment-list">
           <Show when={view().showLocal || view().devices.length || view().showAuto}>
             <EnvironmentHeading
@@ -343,9 +352,10 @@ export function WherePickerContent(
             {cloudProfilesRead()}
           </Loading>
           {view().hosted.length || view().showHostedSetup ? (
-            <div class="new-session-page__environment-heading">
-              <span>{t("newSession.hosted")}</span>
-            </div>
+            <MenuHeading
+              class="new-session-page__environment-heading"
+              label={t("newSession.hosted")}
+            />
           ) : undefined}
           {
             <For each={view().hosted} keyed={(entry) => entry.id}>

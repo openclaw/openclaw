@@ -56,18 +56,21 @@ it("accepts custom-site Persian and Thai navigation without a host whitelist", (
   expect(result.status, result.stderr).toBe(0);
 });
 
-it("parses roots and output options", () => {
+it.each([
+  { value: " 007 ", maxErrors: 7 },
+  { value: String(Number.MAX_SAFE_INTEGER), maxErrors: Number.MAX_SAFE_INTEGER },
+])("parses roots and output options with max-errors $value", ({ value, maxErrors }) => {
   expect(
-    parseArgs(["docs", "README.md", "--json-out", "report.json", "--max-errors", "7"]),
+    parseArgs(["docs", "README.md", "--json-out", "report.json", "--max-errors", value]),
   ).toEqual({
     roots: ["docs", "README.md"],
     jsonOut: "report.json",
-    maxErrors: 7,
+    maxErrors,
   });
 });
 
 it("rejects malformed max error limits", () => {
-  for (const value of ["2x", "0"]) {
+  for (const value of ["2x", "0", "9007199254740992", "1e3", "2.5"]) {
     expect(() => parseArgs(["--max-errors", value])).toThrow(
       "--max-errors must be a positive integer",
     );

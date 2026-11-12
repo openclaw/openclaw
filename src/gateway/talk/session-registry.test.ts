@@ -1,10 +1,13 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { runWithProcessCleanupBudget } from "../../process/supervisor/cleanup-budget.js";
+import { GatewayRetainedWorkScope, getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { drainGlobalSingletonLifecycleState as drain } from "../../shared/global-singleton.js";
 import * as database from "../../state/openclaw-state-db.js";
 import { captureClientVoiceSessionSettlement } from "../../talk/client-voice-session-lifecycle.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { isGatewayCleanupRetainedError } from "../server-shutdown.js";
 import {
   cleanupTalkConnection as disconnect,
   prepareTalkConnectionClose as prepareClose,
@@ -52,51 +55,77 @@ it.each(["reopened", "revoked"])("drains cleanup with %s admission", (admission)
     }
   }),
 );
-it("replaces relay callbacks and retries failures without blocking sibling cleanup", () => {
-  const replaced = vi.fn();
-  const transcription = vi.fn();
-  const realtime = vi.fn().mockImplementationOnce(() => {
-    throw new Error("realtime cleanup failed");
-  });
-
-  register("conn-dedupe", "realtime-relay", replaced);
-  register("conn-dedupe", "realtime-relay", realtime);
-  register("conn-dedupe", "transcription-relay", transcription);
-
-  disconnect("conn-dedupe", log);
-  expect(replaced).not.toHaveBeenCalled();
-  expect(transcription).toHaveBeenCalledOnce();
-  expect(log.warn).toHaveBeenCalledExactlyOnceWith(
-    expect.stringContaining("realtime cleanup failed"),
-  );
-  disconnect("conn-dedupe", log);
-  expect(realtime).toHaveBeenCalledTimes(2);
-  expect(transcription).toHaveBeenCalledOnce();
-});
-
-it("retains failed async cleanup for shutdown retry without replacing its owner", async () => {
-  const first = createDeferred();
-  const retry = createDeferred();
-  const cleanup = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(retry.promise);
-  register("conn-async-retry", "browser-control", cleanup);
-  disconnect("conn-async-retry", log);
-  disconnect("conn-async-retry", log);
-  expect(cleanup).toHaveBeenCalledOnce();
-  first.reject(new Error("physical cleanup failed"));
-  await first.promise.catch(() => undefined);
-  const drained = vi.fn();
-  const drains = [1, 2].map(() => drain("restart").then(drained));
-  try {
+it.each(["sync", "abort", "ignore"])("retries failed cleanup and drains %s settlement", (mode) =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const first = createDeferred();
+    const retry = createDeferred();
+    let signal: AbortSignal | undefined;
+    const fail = () => {
+      throw new Error("cleanup failed");
+    };
+    const cleanup = vi
+      .fn()
+      .mockImplementationOnce(mode === "sync" ? fail : () => first.promise)
+      .mockImplementation(() => {
+        signal = getAsyncWorkSignal();
+        if (mode === "abort") {
+          signal!.addEventListener("abort", () => retry.resolve(), { once: true });
+        }
+        return retry.promise;
+      });
+    const replaced = vi.fn();
+    const sibling = vi.fn();
+    register("retry", "realtime-relay", replaced);
+    register("retry", "realtime-relay", cleanup);
+    register("retry", "transcription-relay", sibling);
+    disconnect("retry", log);
+    expect(replaced).not.toHaveBeenCalled();
+    expect(sibling).toHaveBeenCalledOnce();
+    if (mode !== "sync") {
+      disconnect("retry", log);
+      expect(cleanup).toHaveBeenCalledOnce();
+      first.reject(new Error("cleanup failed"));
+      await first.promise.catch(() => undefined);
+    }
+    const close = prepareClose([{ connId: "retry" }], log);
+    const generic = new GatewayRetainedWorkScope();
+    const genericWork = createDeferred();
+    void generic.scope.track(() => genericWork.promise);
+    const genericDrain = generic.retainGateway().drain();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const result = vi.fn();
+    const drains = [
+      runWithProcessCleanupBudget({ deadline: performance.now() + 4_000, warn: log.warn }, () =>
+        close.drain(),
+      ),
+      drain("restart"),
+      drain("restart"),
+    ];
+    const joined = Promise.all(drains).then(
+      () => result("settled"),
+      (error: unknown) => result(isGatewayCleanupRetainedError(error) ? "retained" : error),
+    );
+    try {
+      expect(cleanup).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(signal?.aborted).toBe(false);
+      expect(result).not.toHaveBeenCalled();
+      if (mode === "sync") {
+        retry.resolve();
+      }
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(generic.scope.signal.aborted).toBe(false);
+      expect(result).toHaveBeenCalledWith(mode === "ignore" ? "retained" : "settled");
+      expect(signal?.aborted).toBe(true);
+      expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("cleanup failed"));
+    } finally {
+      retry.resolve();
+      genericWork.resolve();
+      await Promise.allSettled([...drains, genericDrain, joined]);
+      vi.useRealTimers();
+    }
+    disconnect("retry", log);
     expect(cleanup).toHaveBeenCalledTimes(2);
-    await Promise.resolve();
-    expect(drained).not.toHaveBeenCalled();
-    retry.resolve();
-    await Promise.all(drains);
-    disconnect("conn-async-retry", log);
-    expect(cleanup).toHaveBeenCalledTimes(2);
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("physical cleanup failed"));
-  } finally {
-    retry.resolve();
-    await Promise.all(drains);
-  }
-});
+    expect(sibling).toHaveBeenCalledOnce();
+  }),
+);

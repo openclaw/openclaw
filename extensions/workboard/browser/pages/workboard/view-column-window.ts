@@ -208,7 +208,14 @@ export function createWorkboardColumnWindow(input: {
       let element: HTMLDivElement;
       onSettled(() => {
         viewport = element;
-        captureAnchor(element.scrollTop);
+        const initialLayout = input.layout();
+        const gap = Number.parseFloat(getComputedStyle(element).rowGap) || 0;
+        // Remounts keep the previous size so settlement can invalidate old measurements.
+        if (view().width === 0) {
+          measuredLayout = initialLayout;
+          publishViewport(element.scrollTop, element.clientHeight, element.clientWidth, gap);
+        }
+        captureAnchor(element.scrollTop, describePositions(initialLayout, gap));
         observeViewport = () => {
           if (observer) {
             return;
@@ -278,6 +285,14 @@ export function createWorkboardColumnWindow(input: {
     rowRef() {
       let element: HTMLDivElement;
       onSettled(() => {
+        const id = element.dataset.cardId;
+        const initialHeight = element.getBoundingClientRect().height;
+        if (active() && id && initialHeight > 0) {
+          const layout = input.layout();
+          measuredLayout ??= layout;
+          measured.set(id, { layout, height: initialHeight });
+          setMeasureRevision((value) => value + 1);
+        }
         observer?.observe(element);
         return () => observer?.unobserve(element);
       });

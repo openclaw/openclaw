@@ -45,6 +45,7 @@ import {
   captureGatewayToolCallerAssertion,
   createAdmittedGatewayToolCallerIdentity,
   getGatewayToolCallerIdentity,
+  resolveGatewayToolOperatorSelection,
   withGatewayToolCallerIdentity,
 } from "./gateway-caller-context.js";
 import { createGitHubPublishTool } from "./github-publish-tool.js";
@@ -154,6 +155,19 @@ it.for([
               : { sessionKey, action: "prepare_pr" },
           );
           expect(getGatewayToolCallerIdentity()?.workspacePrAdoptionSessionId).toBe(sessionId);
+          if (localPublication) {
+            expect(getGatewayToolCallerIdentity()?.workspacePublicationRunId).toBe(runId);
+            expect(getGatewayToolCallerIdentity()?.workspacePublicationPolicy).toEqual({
+              allow: ["github_publish", "read"],
+              deny: ["exec"],
+              permissionMode: "guarded",
+            });
+          }
+          if (!localPublication) {
+            const selected = resolveGatewayToolOperatorSelection();
+            expect(selected.operatorAuthority).toMatchObject({ profileId, scopes });
+            selected.assertCurrent();
+          }
           expect(getSessionControllerEntryForOperation(operation).successorBarrier).toBeDefined();
           order.push("prepare");
           if (outcome === "failed") {
@@ -338,6 +352,9 @@ it.for([
               createGitHubPublishTool({
                 sessionId,
                 runId,
+                inheritedToolAllowlist: ["github_publish", "read"],
+                inheritedToolDenylist: ["exec"],
+                sessionPermissionPolicy: { root: state.workspaceDir, mode: "guarded" },
                 // An ordinary local Docker conversation, as the visibility rule admits.
                 sandbox: localPublication
                   ? undefined

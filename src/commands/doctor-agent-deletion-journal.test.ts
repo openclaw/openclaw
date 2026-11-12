@@ -506,7 +506,8 @@ it.each([
     );
     expect(fs.existsSync(mainPath)).toBe(false);
     expect(
-      detectSharedAuthStoreMigration({ stateDir, env, doctorOnlyStateMigrations: true }).held,
+      (await detectSharedAuthStoreMigration({ stateDir, env, doctorOnlyStateMigrations: true }))
+        .held,
     ).not.toBe(true);
     if (location === "configured-new-owner") {
       cfg.agents = { entries: { main: { agentDir: customAgentDirectory } } };

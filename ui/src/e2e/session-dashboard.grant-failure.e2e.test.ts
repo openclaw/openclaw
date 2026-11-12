@@ -68,7 +68,7 @@ suite.define(() => {
       });
       const toast = page.locator("openclaw-toast-host .app-toast");
       await toast.waitFor();
-      expect(await toast.textContent()).toContain("Could not allow widget access. Try again.");
+      expect(await toast.textContent()).toContain("Couldn’t allow widget access. Try again.");
       expect(await toast.textContent()).not.toContain("internal capability service detail");
       await expect.poll(() => allow.isEnabled()).toBe(true);
       expect(await reject.isEnabled()).toBe(true);

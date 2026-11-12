@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, it, vi, type TestContext } from "vitest";
 import * as managedChild from "../../scripts/lib/managed-child-process.mts";
 import { resolveVitestCliEntry } from "../../scripts/lib/vitest-build-prerequisites.mts";
-import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
+import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-node-args.mts";
 import { createVitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
 import { resolveVitestSpawnParams, spawnWatchedVitestProcess } from "../../scripts/run-vitest.mts";
 import { forceKillVitestProcessGroup } from "../../scripts/vitest-process-group.mts";

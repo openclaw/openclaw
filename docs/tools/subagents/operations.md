@@ -102,10 +102,14 @@ short notice to the requester session. If that session is unavailable, the failu
 is logged without retrying the wake. Retained wakes converge on their next
 attempt; no manual database edits are needed.
 
-A crash or `SIGKILL` does not write a shutdown marker, so it resumes neither the
-parent nor its children. Their stored transcripts and task records remain available
-for inspection. Send a new message to continue. Reversible suspension does not
-mark or cancel children. See [Restart recovery](/gateway/restart-recovery).
+A crash or `SIGKILL` cannot write a shutdown marker. Startup can still resume an
+eligible root requester from its persisted run identity in the immediately preceding
+Gateway lifetime. Children do not resume independently. Inspect their saved work
+before sending a fresh instruction to the same retained child session. A stopped
+execution is not a yielded pause, and a replacement does not inherit workspace or
+publication ownership. If the root cannot resume, send a new message to continue.
+Reversible suspension does not mark or cancel children.
+See [Restart recovery](/gateway/restart-recovery).
 
 Registry hydration, resource cleanup, and normal retention remain separate from
 execution resumption. Persisted records alone do not prove a live executor, grant

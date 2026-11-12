@@ -17,8 +17,9 @@ import {
 import "./new-session-page-entry.ts";
 import { createNewSessionRouteData as routeData } from "./location.test-support.ts";
 import { NewSessionPageOwner, type PageHost } from "./new-session-page-owner.ts";
+import * as targetControls from "./target-controls-view.tsx";
 
-async function mountSessionDraft() {
+async function mountSessionDraft(agents = [{ id: "main", name: "Assistant" }]) {
   vi.stubGlobal("requestIdleCallback", (callback: IdleRequestCallback) => {
     queueMicrotask(() => callback({ didTimeout: false, timeRemaining: () => 50 }));
     return 1;
@@ -71,7 +72,7 @@ async function mountSessionDraft() {
           defaultId: "main",
           mainKey: "main",
           scope: "per-sender",
-          agents: [{ id: "main", name: "Assistant" }],
+          agents,
         };
       }
       if (method === "models.list") {
@@ -145,6 +146,35 @@ async function mountSessionDraft() {
   };
   return { context, page, recent, pin, describe, defaults, pet };
 }
+
+it("retains the welcome agent selector across draft publications and removes it for catalog targets", async () => {
+  const renderSelector = vi.spyOn(targetControls, "AgentSelect");
+  const { page } = await mountSessionDraft([
+    { id: "main", name: "Assistant" },
+    { id: "research", name: "Research" },
+  ]);
+  const selector = () => page.querySelector(".agent-chat__welcome-name openclaw-agent-select");
+  await waitForSolid(() => expect(selector()).not.toBeNull());
+  expect(renderSelector).toHaveBeenCalledOnce();
+  const initial = selector();
+  const input = page.querySelector<HTMLTextAreaElement>("textarea")!;
+  input.value = "Keep this unsent draft";
+  input.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true }));
+  await page.updateComplete;
+  expect(selector()).toBe(initial);
+  expect(renderSelector).toHaveBeenCalledOnce();
+  expect(input.value).toBe("Keep this unsent draft");
+
+  page.data = { ...routeData("main"), catalogId: "catalog-agent" };
+  await waitForSolid(() => expect(selector()).toBeNull());
+  const heading = page.querySelector(".agent-chat__welcome-identity-copy h2");
+  expect(heading).not.toBeNull();
+  expect(heading?.classList).not.toContain("sr-only");
+  page.data = routeData("main");
+  await waitForSolid(() => expect(selector()).not.toBeNull());
+  expect(selector()).not.toBe(initial);
+  expect(renderSelector).toHaveBeenCalledTimes(2);
+});
 
 it("keeps pin detail enrichment out of composer preparation while live recents update", async () => {
   const { context, page, recent, pin, describe } = await mountSessionDraft();

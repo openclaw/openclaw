@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { listenLoopback } from "../../../test/helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesSse } from "../../../test/helpers/openai-responses-sse.js";
 import { streamOpenAIResponses } from "../../ai/src/providers/openai-responses.js";
@@ -9,14 +9,18 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../ai/src/utils/system-prompt-c
 import {
   captureAgentLoop,
   config,
+  createTurnSequenceStream,
   makeAssistantMessage,
+  makeCall,
+  makeTool,
   model as baseModel,
   reply,
   user,
 } from "./agent-loop.test-support.js";
 import { Agent } from "./agent.js";
-import type { Model } from "./llm.js";
-import type { AgentEvent } from "./types.js";
+import { setInternalBeforeRequest } from "./internal-hooks.js";
+import type { Message, Model } from "./llm.js";
+import type { AgentEvent, AgentMessage } from "./types.js";
 
 // Closing snapshots hide aliased text-delta doubling; inspect live updates through real SSE.
 
@@ -170,4 +174,73 @@ it("openai-responses live message updates grow strictly, never doubling the open
   } finally {
     server.close();
   }
+});
+
+describe("Agent next-turn preparation", () => {
+  const model = baseModel;
+
+  it.each([false, true])(
+    "adopts committed messages at request boundaries without persistence events (abort=%s)",
+    async (abortContinuation) => {
+      const initial = makeAssistantMessage([{ type: "text", text: "initial background result" }]);
+      const continuation = makeAssistantMessage([
+        { type: "text", text: "later background result" },
+      ]);
+      let pending: AgentMessage[] | undefined = [initial];
+      const requests: Message[][] = [];
+      const events: AgentEvent[] = [];
+      const tool = {
+        ...makeTool("lookup"),
+        execute: async () => {
+          pending = [continuation];
+          return { content: [{ type: "text" as const, text: "lookup result" }], details: {} };
+        },
+      };
+      const agent = new Agent({
+        initialState: { model, tools: [tool] },
+        streamFn: createTurnSequenceStream(
+          [
+            [makeCall("lookup")],
+            [{ type: "text", text: "lookup complete" }],
+            [{ type: "text", text: "follow-up complete" }],
+          ],
+          requests,
+        ),
+        prepareNextTurn: () => ({ model: { ...model, id: "next-model" } }),
+      });
+      agent.subscribe((event) => void events.push(event));
+      setInternalBeforeRequest(agent, async () => {
+        const messages = pending;
+        pending = undefined;
+        if (abortContinuation && messages?.includes(continuation)) {
+          agent.abort();
+        }
+        return messages;
+      });
+
+      await agent.prompt("run lookup");
+      expect(requests).toHaveLength(abortContinuation ? 1 : 2);
+      expect(requests[0]?.at(-1)).toEqual(initial);
+      if (!abortContinuation) {
+        expect(requests[1]?.at(-1)).toEqual(continuation);
+      }
+      expect(events.at(-1)).toMatchObject({
+        type: "agent_end",
+        messages: expect.arrayContaining([initial, continuation]),
+      });
+      expect(
+        events.some(
+          (event) =>
+            event.type === "message_end" &&
+            (event.message === initial || event.message === continuation),
+        ),
+      ).toBe(false);
+
+      await agent.prompt("follow up");
+      for (const artifact of [initial, continuation]) {
+        expect(requests.at(-1)?.filter((message) => message === artifact)).toHaveLength(1);
+        expect(agent.state.messages.filter((message) => message === artifact)).toHaveLength(1);
+      }
+    },
+  );
 });

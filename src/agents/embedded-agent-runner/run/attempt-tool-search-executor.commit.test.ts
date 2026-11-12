@@ -111,3 +111,42 @@ it.each(["accepted", "rejected", "superseded"] as const)(
     }
   },
 );
+
+it("reads back nested activity that a hidden coordination turn stored without display", async () => {
+  const manager = SessionManager.inMemory();
+  const append = manager.appendMessageAsync.bind(manager);
+  // Child coordination turns persist every run row with display:false.
+  vi.spyOn(manager, "appendMessageAsync").mockImplementation(async (message, ...rest) =>
+    append({ ...message, display: false } as typeof message, ...rest),
+  );
+  const { subscription } = createSubscribedSessionHarness({ runId: "hidden-run" });
+  const nestedToolActivityState = { scopeId: "scope", successfulToolNames: new Set<string>() };
+  const executor = createSubscribedToolSearchExecutor({
+    attempt: { runId: "hidden-run", sessionKey: "key" },
+    runSignal: new AbortController().signal,
+    sessionManager: manager,
+    subscription,
+    isCurrent: () => true,
+    isReplaySafeTool: () => false,
+    nestedToolActivityState,
+  });
+  try {
+    await executor({
+      tool: {
+        ...createStubTool("sessions_send"),
+        execute: async () => ({ content: [{ type: "text" as const, text: "sent" }], details: {} }),
+      },
+      toolName: "sessions_send",
+      source: "openclaw",
+      sourceName: "core",
+      toolCallId: "nested-send",
+      input: { sessionKey: "agent:main:child", message: "ACK" },
+      acceptResultBeforeProjection: async (result) => result,
+    });
+    expect(await readAttemptNestedToolActivity(manager, nestedToolActivityState)).toMatchObject([
+      { details: { toolCallId: "nested-send", toolName: "sessions_send" } },
+    ]);
+  } finally {
+    subscription.unsubscribe();
+  }
+});

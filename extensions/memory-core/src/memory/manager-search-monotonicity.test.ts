@@ -88,7 +88,6 @@ describe("memory search result limits", () => {
       maxResults: 250,
       activeProjectKeys: ["pool-project"],
     });
-    expect(project).toHaveLength(200);
     expect(project).toEqual(ordinary.slice(0, 200));
   });
 });

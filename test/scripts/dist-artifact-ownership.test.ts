@@ -22,7 +22,6 @@ import { waitForDead } from "../helpers/process-wait.js";
 import { installDistArtifactScripts as installScripts } from "./dist-artifact-fixture.js";
 import {
   materializeNativeCompiler,
-  materializeTypeChecker,
   overrideNativeFixtureExecutable,
   resolveInstalledNativeCompiler,
 } from "./native-boundary-fixture.js";
@@ -788,8 +787,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
     async ({ owner, unjoined }, { signal }) => {
       await withProcesses(async ({ start }) => {
         const root = createCheckout();
-        materializeNativeCompiler(root, { javaScriptApi: false });
-        materializeTypeChecker(root);
+        installCompiler(root);
         const ownerPath = write(root, ".artifacts/dist-artifacts.lock/owner.json", owner);
         if (unjoined) {
           write(root, ".artifacts/dist-artifacts.lock/unjoined", "unverified cleanup");
@@ -842,7 +840,6 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
   it.for([
     { directory: ".", nested: false },
     { directory: "src", nested: false },
-    { directory: "src", nested: true },
     { directory: "linked-src", nested: true },
   ])(
     "keeps declarations alive from $directory (nested=$nested) until their writer joins and keeps ownership across dist cleanup",

@@ -9,7 +9,7 @@ import {
   readDeferredPluginMigrations,
   recordDeferredPluginMigrations,
 } from "../infra/deferred-plugin-migrations.js";
-import { databaseIdentity } from "../infra/deferred-plugin-session-verification.js";
+import { databaseIdentity } from "../infra/deferred-plugin-session-source-read.js";
 import * as directoryDurability from "../infra/directory-durability.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";

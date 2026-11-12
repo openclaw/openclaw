@@ -52,6 +52,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     import("./plugins-control-ui.js").then((module) => module.pluginsControlUiHandlers),
   cron: () => import("./cron.js").then((module) => module.cronHandlers),
   devices: () => import("./devices.js").then((module) => module.deviceHandlers),
+  "device-pair-code": () =>
+    import("./device-pair-code.js").then((module) => module.devicePairCodeHandlers),
   "device-pair-setup": () =>
     import("./device-pair-setup.js").then((module) => module.devicePairSetupHandlers),
   diagnostics: () => import("./diagnostics.js").then((module) => module.diagnosticsHandlers),
@@ -67,6 +69,7 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   "memory-search": () => import("./memory-search.js").then((module) => module.memorySearchHandlers),
   mentions: () => import("./mentions.js").then((module) => module.mentionHandlers),
   terminal: () => import("./terminal.js").then((module) => module.terminalHandlers),
+  "openclaw-id": () => import("./openclaw-id.js").then((module) => module.openclawIdHandlers),
   transcripts: () => import("./transcripts.js").then((module) => module.transcriptsHandlers),
   "ui-command": () => import("./ui-command.js").then((module) => module.uiCommandHandlers),
   themes: () => import("./themes.js").then((module) => module.themeHandlers),
@@ -77,6 +80,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   "mcp-events": () => import("./mcp-events.js").then((module) => module.mcpEventsHandlers),
   "mcp-auth-login": () =>
     import("./mcp-auth-login.js").then((module) => module.mcpAuthLoginHandlers),
+  "mcp-auth-logout": () =>
+    import("./mcp-auth-logout.js").then((module) => module.mcpAuthLogoutHandlers),
   "models-auth-order": () =>
     import("./models-auth-order.js").then((module) => module.modelsAuthOrderHandlers),
   models: () => import("./models.js").then((module) => module.modelsHandlers),

@@ -1,5 +1,7 @@
 import type { JSX } from "@solidjs/web";
+import { t } from "../../../i18n/index.ts";
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
+import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
 import {
   normalizeRoleForGrouping,
   resolveMessageRole,
@@ -23,7 +25,6 @@ import type { RenderMessageGroupOptions } from "./chat-message-group-options.ts"
 import {
   FULL_MESSAGE_RETRY_REVISION_LIMIT,
   hasMessageActionButtons,
-  prepareChatMessageRender,
   resolveMessageActionDetails,
 } from "./chat-message-markdown-view.tsx";
 import {
@@ -36,6 +37,8 @@ import { NO_REPLY_LINE, resolveGroupReplyLine } from "./chat-reply-attribution.t
 
 export type NativeMessageGroupOptions = Omit<RenderMessageGroupOptions, "frameContent"> & {
   frameContent?: JSX.Element[];
+  frameHeader?: boolean;
+  frameFooter?: boolean;
 };
 
 export type GroupMessage = MessageGroupData["messages"][number];
@@ -59,11 +62,13 @@ export function prepareGroupMessage(
   });
   const fullMessage = details?.fullMessage;
   if (fullMessage) {
-    const { messageId, state: expansion } = fullMessage;
+    const { messageId } = fullMessage;
+    const expansion = opts.getAssistantMessageExpansion?.(messageId);
     // Retry transient failures on later renders, bounded so a dead loader cannot hot-loop.
     if (
-      !expansion ||
-      (expansion.status === "error" && expansion.revision < FULL_MESSAGE_RETRY_REVISION_LIMIT)
+      opts.loadFullAssistantMessage &&
+      (!expansion ||
+        (expansion.status === "error" && expansion.revision < FULL_MESSAGE_RETRY_REVISION_LIMIT))
     ) {
       opts.onToggleAssistantMessageExpanded?.(messageId);
     }
@@ -119,6 +124,14 @@ export function resolveFileLinkOwnerOptions(
             )),
       }
     : options;
+  if (
+    group.senderSession &&
+    (sourceSessionKey !== options.sessionKey ||
+      (group.senderSession.agentId && group.senderSession.agentId !== options.agentId))
+  ) {
+    // Files search belongs to the current pane, unlike source-bound direct file references.
+    return { ...owned, onFindWorkspaceFile: undefined };
+  }
   return owned;
 }
 
@@ -132,7 +145,7 @@ export function prepareMessageGroupFrame(
   const sourceOnly = isSourceOnlyUserGroup(group);
   const showAvatar =
     normalizedRole !== "user" || Boolean(group.sender || group.senderLabel?.trim());
-  const assistantName = opts.assistantName ?? "Assistant";
+  const assistantName = opts.assistantName ?? t("chat.messages.agentName");
   const isOwnGroup = isOwnSenderGroup(group, opts.userId);
   const isPeerGroup =
     normalizedRole === "user" && Boolean(opts.userId && group.sender) && !isOwnGroup;
@@ -174,6 +187,10 @@ export function prepareMessageGroupFrame(
         : "other";
   const avatarPlacement = opts.avatarPlacement ?? "gutter";
   const meta = extractGroupMeta(group, opts.contextWindow ?? null);
+  const turnDurationMs =
+    normalizedRole === "assistant" && !group.isStreaming && group.runId && !forwardedSource
+      ? opts.turnDurations?.get(group.runId)
+      : undefined;
 
   const ownsRunFrame = opts.frameContent !== undefined;
   // Tool activity and live narration are blocks of the turn whose answer follows:
@@ -197,15 +214,18 @@ export function prepareMessageGroupFrame(
   // Footer copy stays available (e.g. a commentary search hit); reply was already dropped for non-owners.
   const footerActionDetails = preparedMessages.at(-1)?.actions ?? null;
   const footerActionMessageKey = actionOwners.at(-1)?.key;
+  const pendingSteer =
+    normalizedRole === "user" ? opts.pendingSteer?.(group.messages.at(-1)?.message) : undefined;
   const hasUserFooterActions =
     normalizedRole === "user" &&
     ((opts.onRewind && !opts.rewindDisabled) || hasMessageActionButtons(footerActionDetails, opts));
   // Source sessions share stable sender hues; the shared participant palette owns contrast
-  // in each theme. Own and unattributed messages keep the theme-derived accent skin.
+  // in each theme. Only peers (left side) take their identity hue: a right-side user turn is
+  // the viewer's, so it keeps the accent skin even when the viewer has no profile to match.
   const senderHue =
     isForwarded && sourceSessionKey
       ? resolveIdentityHue({ id: sourceSessionKey })
-      : normalizedRole === "user" && group.sender && !isOwnGroup
+      : isPeerGroup && group.sender
         ? resolveIdentityHue(group.sender)
         : null;
   const pendingSend = readPendingSendStatus(group.messages.at(-1)?.message);
@@ -224,6 +244,7 @@ export function prepareMessageGroupFrame(
     (isPeerGroup || Boolean(preparedMessages[lastMessageIndex]?.source.displayMarkdown));
   const hasAvatar =
     showAvatar &&
+    opts.frameHeader !== false &&
     !isTurnBlock &&
     avatarPlacement === "gutter" &&
     (isForwarded || normalizedRole !== "assistant" || opts.showAssistantAvatar !== false);
@@ -244,6 +265,11 @@ export function prepareMessageGroupFrame(
     who,
     avatarPlacement,
     meta,
+    turnDurationMs,
+    footerTimestamp:
+      normalizedRole === "user"
+        ? (preparedMessages.at(-1)?.source.normalizedMessage.timestamp ?? group.timestamp)
+        : group.timestamp,
     ownsRunFrame,
     isTurnBlock,
     preparedMessages,
@@ -251,6 +277,10 @@ export function prepareMessageGroupFrame(
     footerActionDetails,
     footerActionMessageKey,
     hasUserFooterActions,
+    // An undelivered steer's footer slot holds only its steer row; identity, time and
+    // actions follow delivery.
+    pendingSteer,
+    statusFooter: Boolean(sendStatus || pendingSteer),
     sendStatus,
     inlineUserAvatar,
     hasAvatar,
@@ -265,6 +295,7 @@ export function prepareMessageGroupFrame(
         "chat-group--forwarded": isForwarded,
         "chat-group--sender-tint": senderHue !== null,
         "chat-group--reply": holdsReplyRow,
+        "chat-group--frame-fragment": opts.frameFooter === false,
       },
     ],
     senderHue,

@@ -400,7 +400,7 @@ describe("combined security review entry point", () => {
           enforcement.reviews.findLast(
             (entry) => entry.body?.context === "openclaw/dependency-review",
           )?.body?.state,
-        ).toBe("failure");
+        ).toBe("pending");
         expect(enforcement.stdout).toContain("Automatic lockfile cleanup is best effort.");
       } else {
         expect(cleanup.combined.at(-1)).toBe("failure");
@@ -678,7 +678,7 @@ describe("combined security review entry point", () => {
     "preserves publication recovery when reporting an inconsistent diff: $failure.httpError",
     ({ failure, minimumDelay }) => {
       const result = evaluate({
-        [statusPath]: { responses: [{}, {}, failure, {}] },
+        [statusPath]: { responses: [{}, {}, {}, failure, {}] },
         [`GET ${pullPath}/files`]: { responses: [files.slice(0, 1), files] },
       });
       expectReview(result, "success");
@@ -781,7 +781,7 @@ describe("combined security review entry point", () => {
       result.reviews.findLast(
         (entry) => entry.body?.context === "openclaw/security-sensitive-review",
       )?.body?.state,
-    ).toBe("failure");
+    ).toBe("pending");
   });
 
   it("recovers rate-limited notice writes instead of treating them as missing permissions", () => {
@@ -816,6 +816,39 @@ describe("combined security review entry point", () => {
     const result = evaluate({ [route]: failure }, "enforce", Date.parse(deadline));
     expectReview(result, false, 1, []);
     expect(result.stderr).toContain("recovery budget exhausted");
+  });
+
+  it("settles pending statuses after read recovery is exhausted", () => {
+    const result = evaluate(
+      { [rolePath]: { requestTimeout: "fetch" } },
+      "enforce",
+      Date.parse("2026-01-02T00:00:30Z"),
+    );
+    expectReview(result, "failure", 1, []);
+    expect(
+      result.reviews.findLast((entry) => entry.body?.context === "openclaw/dependency-review")?.body
+        ?.state,
+    ).toBe("failure");
+    expect(result.stderr).toContain("recovery budget exhausted");
+  });
+
+  it("preserves a second guard read timeout after an earlier guard error", () => {
+    const result = evaluate(
+      {
+        [rolePath]: {
+          responses: [{ httpError: 403 }, { requestTimeout: "fetch" }],
+        },
+      },
+      "enforce",
+      Date.parse("2026-01-02T00:00:30Z"),
+    );
+    expectReview(result, "failure", 1, []);
+    for (const context of ["openclaw/dependency-review", "openclaw/security-sensitive-review"]) {
+      expect(result.reviews.findLast((entry) => entry.body?.context === context)?.body?.state).toBe(
+        "failure",
+      );
+    }
+    expect(result.stderr).toContain("exceeded timeout");
   });
 
   it.each([rolePath, statusPath, historyPath])(
@@ -891,8 +924,10 @@ describe("combined security review entry point", () => {
       expectReview(result, false, 1);
       expect(result.stderr).toContain("capacity is nearly exhausted");
       expect(
-        result.requests.findLast((entry) => entry.body?.context === context)?.body?.state,
-      ).toBe("failure");
+        result.requests.filter(
+          (entry) => entry.body?.context === context && entry.body?.state === "failure",
+        ),
+      ).toHaveLength(1);
     },
   );
 
@@ -933,7 +968,7 @@ describe("combined security review entry point", () => {
       for (const context of ["openclaw/dependency-review", "openclaw/security-sensitive-review"]) {
         expect(
           result.reviews.findLast((entry) => entry.body?.context === context)?.body?.state,
-        ).toBe("failure");
+        ).toBe("pending");
       }
       const notices = result.requests.map((entry) => entry.body?.body ?? "").join("\n");
       expect(notices).toContain("/allow-dependencies-change");
@@ -1426,6 +1461,10 @@ describe("combined security review entry point", () => {
     expectReview(result, false, 1);
     expect(result.stderr).toContain("Fixture API failure");
     expect(
+      result.reviews.findLast((entry) => entry.body?.context === "openclaw/dependency-review")?.body
+        ?.state,
+    ).toBe("failure");
+    expect(
       result.requests.some((entry) =>
         entry.body?.body?.includes("/allow-security-sensitive-change"),
       ),
@@ -1445,7 +1484,7 @@ describe("combined security review entry point", () => {
     expect(notices.map((entry) => entry.body?.body).join("\n")).toContain(
       "/allow-security-sensitive-change",
     );
-    expect(result.reviews.every((entry) => entry.body?.state === "failure")).toBe(true);
+    expect(result.reviews.every((entry) => entry.body?.state === "pending")).toBe(true);
     const approved = evaluate({
       [rolePath]: { role_name: "write" },
       "GET /repos/openclaw/openclaw/collaborators/reviewer/permission": { role_name: "maintain" },
@@ -1481,7 +1520,15 @@ describe("combined security review entry point", () => {
         ],
       },
     });
-    expectReview(result, false);
+    expectReview(result, "failure");
+    expect(
+      ["openclaw/dependency-review", "openclaw/security-sensitive-review"]
+        .map(
+          (context) =>
+            result.reviews.findLast((entry) => entry.body?.context === context)?.body?.state,
+        )
+        .toSorted((left, right) => String(left).localeCompare(String(right))),
+    ).toEqual(["pending", "success"]);
     expect(result.stdout).toContain("approval changed");
   });
 

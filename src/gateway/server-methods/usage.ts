@@ -51,6 +51,7 @@ import type { GatewayRequestHandlers } from "./types.js";
 import { formatDateLabel, resolveDayBucket } from "./usage-date-range.js";
 import {
   createUsageOverviewReporter,
+  prepareUsageOverviewUsage,
   withVisibleUsageOverviewRows,
 } from "./usage-overview-report.js";
 import {
@@ -284,7 +285,6 @@ export const usageHandlers: GatewayRequestHandlers = {
                 startMs,
                 endMs,
                 visibilityFilter,
-                ...(p.projection === "overview" ? { statistics: false as const } : {}),
               }),
             () => [],
           );
@@ -370,6 +370,19 @@ export const usageHandlers: GatewayRequestHandlers = {
               hasContextWeight: Boolean(merged.contextWeight),
               contextWeight: includeContextWeight ? (merged.contextWeight ?? null) : undefined,
             });
+          }
+
+          // Prepare reusable cohorts only once the overview is fully summarized.
+          if (overviewSummaries && !summarizing) {
+            await budget.read(
+              () =>
+                prepareUsageOverviewUsage({
+                  usage: overviewSummaries.usage,
+                  rows: sessions.filter((row) => !creatorKey || row.creatorKey === creatorKey),
+                  dayBucket: resolveUsageCostWorkerDayBucket(dayBucket),
+                }),
+              () => undefined,
+            );
           }
 
           return {
@@ -620,10 +633,15 @@ export const usageHandlers: GatewayRequestHandlers = {
               aggregates: accumulator.finish(),
             };
       }
-      const creatorOptions = new Map<string, SessionUsageCreator>();
+      const creatorOptions = new Map<string, SessionUsageCreator & { sessionCount: number }>();
       for (const row of visible) {
         if (row.creatorKey) {
-          creatorOptions.set(row.creatorKey, { key: row.creatorKey, actor: row.createdActor });
+          const option = creatorOptions.get(row.creatorKey);
+          creatorOptions.set(row.creatorKey, {
+            key: row.creatorKey,
+            actor: row.createdActor,
+            sessionCount: (option?.sessionCount ?? 0) + 1,
+          });
         }
       }
       const partial = budget.exhausted()

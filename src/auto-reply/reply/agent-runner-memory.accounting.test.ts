@@ -40,7 +40,11 @@ beforeEach(() => {
 });
 afterEach(() => clearMemoryPluginState());
 
-function runAccounting(kind: "memory" | "compaction", assertCurrent?: () => void) {
+function runAccounting(
+  kind: "memory" | "compaction",
+  assertCurrent?: () => void,
+  alreadyFlushed = false,
+) {
   const followupRun = createTestFollowupRun();
   if (assertCurrent) {
     followupRun.operatorAuthority = createAdmittedRunOperatorAuthority({
@@ -58,6 +62,7 @@ function runAccounting(kind: "memory" | "compaction", assertCurrent?: () => void
       totalTokens: 10000,
       totalTokensFresh: false,
       totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+      memoryFlush: alreadyFlushed ? { kind: "succeeded" as const, compactionCount: 0 } : undefined,
       transcriptByteCompactionLatch:
         kind === "compaction"
           ? { sessionId: "session", activeBytes: 3000, maxBytes: 1000 }
@@ -119,10 +124,13 @@ it.each(["memory", "compaction"] as const)(
   },
 );
 
-it("keeps failed memory accounting conservative without a native retry", async () => {
+it.each([
+  { state: "unavailable accounting", alreadyFlushed: false, reads: 1 },
+  { state: "already flushed", alreadyFlushed: true, reads: 0 },
+])("skips memory flush with $state without retrying history", async ({ alreadyFlushed, reads }) => {
   accounting.mockRejectedValue(new Error("accounting worker unavailable"));
-  const result = await runAccounting("memory");
-  expect(accounting).toHaveBeenCalledOnce();
+  const result = await runAccounting("memory", undefined, alreadyFlushed);
+  expect(accounting).toHaveBeenCalledTimes(reads);
   expect(result).toMatchObject({ outcome: "skipped" });
   expect(flush).not.toHaveBeenCalled();
   expect(runEntry).not.toHaveBeenCalled();

@@ -496,6 +496,9 @@ export async function runSessionEntryWorkerMutation<T>(
       try {
         if (receipt) {
           lifecycle.onResult?.(completed?.value);
+          if (!unknown) {
+            lifecycle.onCommittedEntries?.(receipt.current, receipt.patchDiffBaselines);
+          }
           lifecycle.onLifecycleCommitted?.(receipt.pendingArchiveRecovery);
         }
       } finally {
@@ -658,6 +661,10 @@ export async function commitSessionEntryReplacementsInWorker(
           lifecycle.beforeCommit?.(candidate.publication, operation),
         async onCommitted(candidate, published, identity, context) {
           try {
+            lifecycle.onCommittedEntries?.(
+              candidate.publication.current,
+              candidate.publication.patchDiffBaselines,
+            );
             lifecycle.onLifecycleCommitted?.(candidate.publication.pendingArchiveRecovery);
           } finally {
             if (published) {

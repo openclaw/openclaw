@@ -93,6 +93,7 @@ suite.define(() => {
       const surface = page.locator(".oc-popover.new-session-page__where-popover");
       const option = surface.locator('[data-value="runtime:agentsapi"]');
       await option.waitFor();
+      await surface.locator(".header-search__toggle").click();
       await surface.getByRole("searchbox").fill("Agents API");
       expect(await option.isVisible()).toBe(true);
       await option.focus();
@@ -145,6 +146,7 @@ suite.define(() => {
       await page.locator(".new-session-page__message").waitFor();
       await openEnvironmentPicker(page);
       const picker = page.locator(".oc-popover.new-session-page__where-popover");
+      await picker.locator(".header-search__toggle").click();
       await picker.getByRole("searchbox").fill("Agents API");
       await picker.getByRole("status").waitFor();
       await gateway.resolveDeferred("models.list", { models: models(false) });

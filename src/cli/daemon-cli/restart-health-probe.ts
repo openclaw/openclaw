@@ -461,17 +461,20 @@ export async function resolveGatewayRestartProbeContext(
   env: NodeJS.ProcessEnv | undefined,
   explicitAuth?: GatewayRestartProbeAuth,
   signal?: AbortSignal,
+  config?: OpenClawConfig,
 ): Promise<GatewayRestartProbeContext> {
   signal?.throwIfAborted();
   const mergedEnv: NodeJS.ProcessEnv = { ...process.env, ...env };
-  const cfg = await createConfigIO({
-    env: mergedEnv,
-    observe: false,
-    pluginValidation: "skip",
-    suppressFutureVersionWarning: true,
-  })
-    .readBestEffortConfig()
-    .catch((): OpenClawConfig => ({}));
+  const cfg =
+    config ??
+    (await createConfigIO({
+      env: mergedEnv,
+      observe: false,
+      pluginValidation: "skip",
+      suppressFutureVersionWarning: true,
+    })
+      .readBestEffortConfig()
+      .catch((): OpenClawConfig => ({})));
   signal?.throwIfAborted();
   const resolved = await resolveGatewayProbeAuthSafeWithSecretInputs({
     cfg,

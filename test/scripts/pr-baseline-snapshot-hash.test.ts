@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   createCapturedHashProbe,
@@ -59,7 +60,7 @@ describePosix("captured baseline hash stdin", () => {
     head = fixture.incoming;
     const probe = createCapturedHashProbe(root);
     scratch = probe.scratch;
-    node = spawnSync("which", ["node"], { encoding: "utf8" }).stdout.trim();
+    node = requireNodeTool("node");
     env = { ...fixture.env, ...probe.env };
   });
 

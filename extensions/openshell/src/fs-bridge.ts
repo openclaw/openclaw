@@ -278,7 +278,9 @@ export class OpenShellFsBridge implements SandboxFsBridge {
   private resolveTarget(params: { filePath: string; cwd?: string }): ResolvedMountPath {
     const workspaceRoot = path.resolve(this.sandbox.workspaceDir);
     const workspaceContainerRoot = this.sandbox.containerWorkdir.replace(/\\/g, "/");
-    const input = params.filePath.trim();
+    // The caller's whitespace is part of the filesystem identity; only the
+    // invocation base goes through the trimming resolver.
+    const input = params.filePath;
 
     const containerMounts = this.containerMounts();
     const resolveContainerTarget = (containerPath: string): ResolvedMountPath | undefined => {

@@ -29,6 +29,7 @@ export type CompactionAccountingTarget = Readonly<
 /** Ordered producer observations; unknown context never borrows an older request's usage. */
 export type EmbeddedContextAccountingEvent = Readonly<
   | { kind: "compaction"; tokensAfter: number | undefined }
+  | { kind: "request"; contextTokens: number }
   | { kind: "model"; contextTokens: number | undefined; successful: boolean }
 >;
 

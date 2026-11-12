@@ -109,15 +109,58 @@ scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery \
 - Failed/timed-out merge response may mean merged. Reconcile remote state + ancestry before retry. Verify commit on current main; draft/pending/local summary ≠ landed.
 - Closeout only from persistent checkout after owning session exits/releases cwd. Child cwd change never moves parent agent/shell. Never remove any live-cwd worktree/subdirectory. Native cleanup refuses observed holders; never bypass with raw `git worktree remove`, `rm`, custom script. Own session holds cwd → report retained path, defer closeout.
 - Outcome + verification complete → remove task-owned test logs, receipts, proof archives, scratch, `.crabbox` outputs, task archives under `.local`/temp. Published PR proof needs no local duplicate.
-- Remaining finished worktrees: ownership/holder check + advertised native closeout. No archive/export/evidence handoff/replacement cleanup receipt required. Native finalized-task option for disposable-proof refusal only; preserve guard refusals.
+- Remaining finished worktrees: ownership/holder check + native closeout. Use the finalized-task mode for explicitly owned custom worktrees and disposable proof; preserve guard refusals. No archive/export/evidence handoff/replacement cleanup receipt required.
+- Custom task worktrees and root artifacts use the explicit finalized-task mode below. The already-authorized owning task supplies completion intent and exact selections; no renewed operator approval. Re-inventory purposes and consumers first; names alone do not establish ownership.
 - Preserve unrelated/unknown files, deliverables, explicit retention, unfinished source/necessary recovery state, active owners, credentials, agent state, shared dependencies. Never force removal, clear locks, sign off for another owner. Report `removed` only after path + registration absent; else path + exact blocker.
-- Reconciled merge with completion pending: ownership cleanup first, then current receipt OID:
-
-```bash
-git rev-parse refs/openclaw/pr-merge-outcomes/<PR>
-scripts/pr merge-complete <PR> <OUTCOME_OID> --confirmed-operator-completion
-```
+- Reconciled merge with completion pending: follow [delayed completion](https://docs.openclaw.ai/reference/scripts/merge-recovery#delayed-completion). Use the persistent checkout as cwd and an absolute, qualified wrapper for the retained workflow. The persistent checkout's own wrapper may be stale. This explicit closeout schedules no background retry. Resolve advanced/inaccessible remote branches separately without deleting them by name. An unresolved completion-comment attempt stays inspection-only until its marker is reconciled.
 
 - Revalidates historical merge; native worktree, PR-owned local branches, remote head branch must be absent. Never merges/deletes resources. From `merged`, may post first completion comment; uncertain comment attempt → marker lookup only, never another POST. Missing/ambiguous marker stays pending; reread OID after every transition.
 - First admin comment requires retained prior-CI evidence. Before cleanup requirement: verify landed historical parent against retained admission main. Comment labels audit reconstructed after merge, not original at-landing audit; preserve historical CI qualification, never claim current-head success. Other admin receipts need owner review of original audit/completion record.
 - Final narrative: failure, owning repair, proof/limits, human credit, linked final state; material tradeoffs/uncertainty, no mandatory essay.
+
+### Close an explicitly selected finalized task
+
+Run from the persistent checkout after owners have released the selected paths:
+
+```bash
+scripts/pr gc --pr <PR> --finalized-task <codex-thread-id> --expected-head <full-head-sha> \
+  --worktree .worktrees/<task-name> \
+  --artifact .worktrees/<task-name>/.artifacts \
+  --artifact .worktrees/<task-name>/.crabbox \
+  --artifact .worktrees/<task-name>/node_modules \
+  --artifact .artifacts/<task-proof-directory> --dry-run
+# Inspect the selections, then repeat without --dry-run.
+```
+
+Paths are absolute or relative to the physical canonical repository root.
+`--worktree` selects one immediate child of `.worktrees`, with its exact expected
+HEAD. Repeat `--artifact` for each independently owned directory or symlink below
+that worktree or the canonical `.artifacts` directory. The `.artifacts` parent,
+credential directories, tracked source, symlink ancestors, and overlapping
+selections are refused. Artifact-only closeout can omit `--worktree`. Selected
+symlinks are unlinked without following their targets.
+
+The command verifies repository identity, merged PR and expected PR HEAD, Git
+registration/backlinks, tracked changes, ignored and untracked contents, known
+session references, process holders, and native operation state. Explicitly
+selected directories authorize recursive deletion. Every unselected ignored or
+untracked entry prevents worktree removal, including `.env` files and dependency
+links. Shared dependency consumers and native Codex-managed worktrees are
+preserved; use the managing owner's closeout for managed resources.
+
+The existing Codex control socket supplies metadata-only session evidence. No
+server is started and no turns are read. Loaded idle sessions count as live
+owners; unloaded historical metadata does not. The finalizing task must release
+its cwd and attachments too. Add `--known-thread <id>` for additional known
+sessions; select `--codex-socket <path>` for an independent daemon. Unavailable
+known owners or incomplete metadata/pagination block removal. This is scoped
+evidence from the responding daemon, not a host-wide census.
+
+Dry-run performs no deletion or operation-lock mutation and describes the selected
+deletions. Execution rechecks relevant conditions and reports each removed or
+already absent artifact before native worktree removal. Partial failures preserve
+remaining resources and can be retried with the same selection. Branches and
+remote resources are untouched. External merges without native merge operations
+need no receipt. Existing native intent, completion, capture, and transition
+recovery belong to their existing owners; finalization never resolves uncertainty
+or manufactures an outcome.

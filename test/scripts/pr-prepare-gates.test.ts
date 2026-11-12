@@ -1,5 +1,13 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  constants,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { afterAll, afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -10,6 +18,8 @@ import {
 } from "./pr-prepare.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const retryTemplates = useAutoCleanupTempDirTracker(afterAll);
+let retryTemplate: { repoDir: string; headSha: string } | undefined;
 const createPublisher = createPublisherRepoFactory({
   cases: tempDirs,
   templates: useAutoCleanupTempDirTracker(afterAll),
@@ -21,8 +31,8 @@ function fixtureGit(cwd: string, args: string[]) {
   return result.stdout.trim();
 }
 
-function initRepo() {
-  const repoDir = join(tempDirs.make("openclaw-pr-gates-"), "repo");
+function initRepo(dirs = tempDirs) {
+  const repoDir = join(dirs.make("openclaw-pr-gates-"), "repo");
   mkdirSync(repoDir);
   const git = (...args: string[]) => fixtureGit(repoDir, args);
   git("init", "-q", "-b", "main");
@@ -43,10 +53,29 @@ function commitFile(repoDir: string, path: string, text: string, message = "chan
 }
 
 function makeRetryRepo() {
-  const { repoDir, git } = initRepo();
-  git("commit", "-q", "--allow-empty", "-m", "retry head");
-  const headSha = git("rev-parse", "HEAD");
-  return { repoDir, headSha };
+  if (!retryTemplate) {
+    const { repoDir, git } = initRepo(retryTemplates);
+    // Keep the pristine seed unchanged while each case copies its private Git state.
+    git(
+      "-c",
+      "maintenance.auto=false",
+      "-c",
+      "gc.auto=0",
+      "commit",
+      "-q",
+      "--allow-empty",
+      "-m",
+      "retry head",
+    );
+    retryTemplate = { repoDir, headSha: git("rev-parse", "HEAD") };
+  }
+  const repoDir = join(tempDirs.make("openclaw-pr-gates-"), "repo");
+  // Cases mutate private refs, indexes, objects and gate receipts.
+  cpSync(retryTemplate.repoDir, repoDir, {
+    recursive: true,
+    mode: constants.COPYFILE_FICLONE,
+  });
+  return { repoDir, headSha: retryTemplate.headSha };
 }
 
 function changePlan(base: string, files = "''", docsOnly = false, changelogUpdate = false) {
@@ -151,7 +180,7 @@ function runBuildGate(
     [
       `enter_worktree() { PR_MAIN_SHA=${headSha}; }`,
       "checkout_prep_branch() { :; }",
-      "prepare_local_gate_workspace() { :; }",
+      'bootstrap_deps_if_needed() { test "${OPENCLAW_BUNDLED_PLUGINS_DIR-}" = "$PWD/extensions"; }',
       changePlan(headSha),
       "run_quiet_logged() {",
       '  local label="$1"; shift 2',
@@ -166,6 +195,7 @@ function runBuildGate(
       cwd: repoDir,
       env: {
         OPENCLAW_PR_GATES_REMOTE: "local",
+        OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
         OPENCLAW_BUILD_PRIVATE_QA: options.qa,
         OPENCLAW_VITEST_MAX_WORKERS: options.workers,
       },
@@ -500,6 +530,7 @@ it("does not derive recent-parent evidence for a runtime commit", () => {
   );
 
   expect(result.status).toBe(0);
+  expect(result.stdout).toContain(`ARG:--sha\nARG:${currentHead}\n`);
   expect(result.stdout).not.toContain("ARG:--recent-sha");
 });
 it.each(["docs", "hosted", "github"])(
@@ -627,18 +658,3 @@ it.each(["foreign PR", "foreign branch", "different tree", "unpublished fixup"])
     expect(f.read("prep.env")).toBe(retained);
   },
 );
-
-it("pins the worktree before dependency bootstrap", () => {
-  const result = runGatesBash(
-    [
-      "events=$(mktemp)",
-      'pin_worktree_bundled_plugins_dir() { echo pin >> "$events"; }',
-      'bootstrap_deps_if_needed() { echo bootstrap >> "$events"; }',
-      "prepare_local_gate_workspace",
-      'cat "$events"',
-    ].join("\n"),
-  );
-
-  expect(result.status).toBe(0);
-  expect(result.stdout.trim().split("\n")).toEqual(["pin", "bootstrap"]);
-});

@@ -88,9 +88,11 @@ describe.each(["startup", "repair"] as const)("%s consent inventory", (first) =>
   async function converge(
     cfg: Parameters<typeof runDoctorPluginConvergence>[0]["cfg"],
     env: NodeJS.ProcessEnv,
+    changed = false,
   ) {
     if (first === "startup") {
       expect(await runDoctorPluginConvergence({ cfg, env })).toEqual({
+        ...(changed ? { changed: true } : {}),
         quarantinedPlugins: [],
       });
     } else {
@@ -135,7 +137,7 @@ describe.each(["startup", "repair"] as const)("%s consent inventory", (first) =>
       expect(listOfficialExternalPluginCatalogEntries().length).toBeGreaterThan(0);
       for (let start = 0; start < 2; start += 1) {
         await withPluginCache(createPluginCache(), async () => {
-          await converge(cfg, env);
+          await converge(cfg, env, retained && start === 0);
           const repair = await runPostCorePluginConvergence({ cfg, env });
           expect(repair.warnings).toEqual([]);
           expect(repair.installRecords).toEqual({});
@@ -220,7 +222,7 @@ describe.each(["startup", "repair"] as const)("%s consent inventory", (first) =>
         };
       });
       await withPluginCache(createPluginCache(), async () => {
-        await converge(cfg, env);
+        await converge(cfg, env, true);
       });
       await withPluginCache(createPluginCache(), async () => {
         const repair = await runPostCorePluginConvergence({ cfg, env });

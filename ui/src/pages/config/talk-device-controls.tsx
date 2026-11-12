@@ -14,6 +14,7 @@ import type {
   NativeDeviceSettingsCapability,
   NativeDeviceSettingsSnapshot,
 } from "../../app/native-device-settings.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsToggleRow } from "../../components/solid/settings-ui.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -44,19 +45,23 @@ type VoiceControlProps = {
 
 export function voiceControlErrorFallback(retry: () => void) {
   return (error: () => unknown, reset: () => void) => (
-    <div class="callout danger" role="alert">
+    <InlineAlert
+      tone="danger"
+      action={
+        <button
+          class="btn btn--sm"
+          type="button"
+          onClick={() => {
+            retry();
+            reset();
+          }}
+        >
+          {t("common.retry")}
+        </button>
+      }
+    >
       {formatUiError(error())}
-      <button
-        class="btn btn--sm"
-        type="button"
-        onClick={() => {
-          retry();
-          reset();
-        }}
-      >
-        {t("common.retry")}
-      </button>
-    </div>
+    </InlineAlert>
   );
 }
 

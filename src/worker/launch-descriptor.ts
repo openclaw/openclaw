@@ -24,6 +24,7 @@ import {
   WorkerTranscriptUserMessageSchema,
   WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH,
   WORKER_LOCAL_INFERENCE_PROTOCOL_FEATURE,
+  WORKER_LOCAL_MCP_PROTOCOL_FEATURE,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type {
   WorkerInferenceModelRef,
@@ -124,10 +125,25 @@ const ToolAuthoritySchema = workerProtocolObject({
     .array(Identifier)
     .max(256)
     .refine((names) => new Set(names).size === names.length),
+  // The supervisor resolves these opaque handles within this launch only.
+  mcpTools: z
+    .array(
+      workerProtocolObject({
+        id: Identifier,
+        server: z.string().min(1),
+        tool: z.string().min(1),
+        allowElicitation: z.literal(true).optional(),
+      }),
+    )
+    .min(1)
+    .max(256)
+    .refine((tools) => new Set(tools.map((entry) => entry.id)).size === tools.length)
+    .optional(),
   // Legacy absence denies execution; workers never reconstruct permissive policy.
   exec: ExecAuthoritySchema.optional(),
-}).transform(({ exec, ...authority }) => ({
+}).transform(({ exec, mcpTools, ...authority }) => ({
   ...authority,
+  ...(mcpTools === undefined ? {} : { mcpTools }),
   ...(exec === undefined ? {} : { exec }),
 }));
 const BrowserLaunchSchema = workerProtocolObject({
@@ -297,6 +313,10 @@ function validateWorkerLaunchPlan(candidate: WorkerLaunchPlan): WorkerLaunchPlan
     !Value.Check(WorkerConnectRequestFrameSchema, frame) ||
     candidate.admission.sessionId === null ||
     candidate.admission.ownerEpoch < 1 ||
+    (candidate.assignment.toolAuthority.mcpTools &&
+      !candidate.admission.handshake.protocolFeatures.includes(
+        WORKER_LOCAL_MCP_PROTOCOL_FEATURE,
+      )) ||
     (candidate.assignment.inference === "runtime-local" &&
       !candidate.admission.handshake.protocolFeatures.includes(
         WORKER_LOCAL_INFERENCE_PROTOCOL_FEATURE,

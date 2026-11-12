@@ -65,12 +65,15 @@ it.each([
   };
   const bind = vi.fn(async (request: { assertCurrent: () => void }) => {
     request.assertCurrent();
+    if (scenario === "reopened store") {
+      expect(request).not.toHaveProperty("readNativeCredential");
+      expect(request).not.toHaveProperty("retainCredentialCleanup");
+    }
     identityCurrent = scenario !== "identity replaced";
     return prepared;
   });
   const access = createWorkerEnvironmentAccess({
     store: fixture.store,
-    getCleanupError: () => undefined,
     readStartStatus: () => undefined,
     getConfig: () => fixture.config,
     projectNamespace: "gateway",
@@ -93,6 +96,8 @@ it.each([
     sessionId: "session:repository",
     sessionKey: "agent:main:session:repository",
     signal: fixture.abort.signal,
+    readNativeCredential: async () => "synthetic-host-only-credential",
+    retainCredentialCleanup: () => {},
     assertCurrent: () => assert(callerCurrent, new Error("Dispatch caller retired")),
   });
   if (scenario === "reopened store") {

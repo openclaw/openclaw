@@ -1,6 +1,5 @@
 // Applies plugin middleware to agent tool results at runtime boundaries.
 import type {
-  AgentToolResultMiddleware,
   AgentToolResultMiddlewareOptions,
   AgentToolResultMiddlewareRuntime,
   AgentToolResultMiddlewareScope,
@@ -109,12 +108,12 @@ export function getAgentToolResultMiddlewareMatcherScope(
   return createPluginToolMatcherScope(matchers);
 }
 
-export function listAgentToolResultMiddlewares(
+export function listAgentToolResultMiddlewareRegistrations(
   runtime: AgentToolResultMiddlewareRuntime,
-): AgentToolResultMiddleware[] {
+): PluginAgentToolResultMiddlewareRegistration[] {
   return (
-    getActivePluginRegistry()
-      ?.agentToolResultMiddlewares?.filter((entry) => entry.runtimes.includes(runtime))
-      .map((entry) => entry.handler) ?? []
+    getActivePluginRegistry()?.agentToolResultMiddlewares?.filter((entry) =>
+      entry.runtimes.includes(runtime),
+    ) ?? []
   );
 }

@@ -173,6 +173,7 @@ export class TerminalSessionManager {
       backend = request.createBackend
         ? await request.createBackend()
         : await spawn({
+            executionIntent: "gateway-internal",
             file: request.shell,
             args: request.args,
             cwd: request.cwd,

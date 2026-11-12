@@ -104,7 +104,7 @@ export async function approveDevicePairing(
       },
     );
     return publishApproval(requestId, result, baseDir);
-  });
+  }, "devicePairing.approve");
 }
 
 export async function approveBootstrapDevicePairing(
@@ -133,5 +133,5 @@ export async function approveBootstrapDevicePairing(
       },
     );
     return publishApproval(requestId, result, baseDir);
-  });
+  }, "devicePairing.approveBootstrap");
 }

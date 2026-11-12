@@ -1,0 +1,2 @@
+153
+# Claude Code version learned from Anthropic rejections: transport retry, cross-restart persistence, and Claude 5 output caps.

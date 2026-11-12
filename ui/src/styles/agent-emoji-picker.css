@@ -33,6 +33,4 @@ openclaw-agent-emoji-picker {
 .agent-emoji-picker__popover {
   width: min(306px, calc(100vw - 24px));
   padding: 12px;
-  border: 1px solid var(--overlay-border);
-  box-shadow: var(--overlay-shadow);
 }

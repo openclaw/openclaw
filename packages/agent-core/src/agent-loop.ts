@@ -3,6 +3,7 @@ import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion"
 import { createStreamedSteeringConfig, getSteeringAtCheckpoint } from "./agent-loop-steering.js";
 import {
   prepareToolCallExecution,
+  prepareResolvedToolCall,
   launchParallelToolCalls,
   type ToolPlanState,
   type FinalizedToolCallEntry,
@@ -33,9 +34,11 @@ import {
 } from "./errors.js";
 import {
   commitInternalToolTurnInput,
+  getInternalBeforeRequest,
   getInternalToolTurnInputScope,
   getInternalSteeringQueueObserver,
   takeInternalToolBatchLifecycle,
+  type InternalBeforeRequestHook,
   type InternalToolBatchLifecycle,
 } from "./internal-hooks.js";
 import { isOpenClawSystemUpdateMessage, orderSystemUpdateMessages } from "./operator-messages.js";
@@ -54,9 +57,7 @@ import {
   completeStartedToolCall,
   finalizeToolCallOutcome,
   finalizeExecutedToolCall,
-  immediateToolArgumentValidationError,
   immediateToolCallError,
-  immediateToolPreparationError,
   hidesToolCallFromChannelProgress,
   type ResolvedToolCallOutcome,
   type FinalizedToolCallOutcome,
@@ -80,7 +81,6 @@ import type {
   ToolLoopRecoveryState,
   ToolLoopWarning,
 } from "./types.js";
-import { validateToolArguments } from "./validation.js";
 
 /** Callback used by synchronous loop runners to publish agent lifecycle events. */
 export type { AgentEventSink } from "./agent-stream-response.js";
@@ -137,6 +137,7 @@ export async function runAgentLoop(
     streamFn,
     runtime,
     promptContext,
+    getInternalBeforeRequest(config),
   );
 }
 
@@ -172,6 +173,7 @@ async function runLoop(
   streamFn?: StreamFn,
   runtime?: AgentCoreStreamRuntimeDeps,
   initialPromptContext: AgentMessage[] = [],
+  beforeRequest?: InternalBeforeRequestHook,
 ): Promise<AgentMessage[]> {
   let config = initialConfig;
   let promptContext = initialPromptContext;
@@ -297,6 +299,17 @@ async function runLoop(
         }
       }
 
+      if (beforeRequest) {
+        const requestMessages = await beforeRequest(signal);
+        if (requestMessages?.length) {
+          state.context.messages.push(...requestMessages);
+          newMessages.push(...requestMessages);
+        }
+        if (await stopIfAborted()) {
+          return newMessages;
+        }
+      }
+
       const toolPlan: ToolPlanState = { executionStarted: false };
       const streamedSteering = createStreamedSteeringConfig(config);
       const streamed = await streamAgentResponse(
@@ -305,8 +318,8 @@ async function runLoop(
         signal,
         emit,
         newMessages,
-        async (assistantMessage, toolCalls, executionSignal, toolEmit, scheduling) => {
-          const batch = await executeToolCalls(
+        (assistantMessage, toolCalls, executionSignal, toolEmit, scheduling) =>
+          executeToolCalls(
             state.context,
             assistantMessage,
             streamedSteering.config,
@@ -318,9 +331,7 @@ async function runLoop(
             scheduling,
             scheduling.hasUnobservedAsyncToolResults,
             runtime?.isLocalError,
-          );
-          return batch;
-        },
+          ),
         (message) => withAssistantTurnTaint(message, turnTainted),
         streamFn,
         runtime,
@@ -933,6 +944,7 @@ async function prepareToolCallEntry(
     batch.signal,
     batch.emit,
     batch.isLocalError,
+    batch.config.toolInterruptions,
   );
   return execution.kind === "immediate"
     ? await finalizeExecutedToolCall(batch, preparation, execution.outcome, preparation.args)
@@ -1042,26 +1054,7 @@ async function validateToolCallForBatchAdmission(
     return immediateToolCallError(`Tool ${toolCall.name} not found`);
   }
 
-  let preparedToolCall: AgentToolCall;
-  try {
-    const preparedArguments = tool.prepareArguments
-      ? tool.prepareArguments(toolCall.arguments)
-      : toolCall.arguments;
-    preparedToolCall =
-      preparedArguments === toolCall.arguments
-        ? toolCall
-        : { ...toolCall, arguments: preparedArguments as Record<string, unknown> };
-  } catch (error) {
-    return immediateToolPreparationError(error);
-  }
-
-  let validatedArgs: unknown;
-  try {
-    validatedArgs = validateToolArguments(tool, preparedToolCall);
-  } catch (error) {
-    return immediateToolArgumentValidationError(error);
-  }
-  return { kind: "prepared", toolCall, tool, args: validatedArgs };
+  return prepareResolvedToolCall(tool, toolCall);
 }
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

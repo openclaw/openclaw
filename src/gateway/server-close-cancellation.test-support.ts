@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import type { ReplyOperation } from "../sessions/session-controller.contracts.js";
@@ -46,6 +46,29 @@ export function registerGatewayCancellationTests({
     })();
     expect(order).toEqual(["marker", "source", "received", "hook"]);
     expect(source.input.abortSignal.aborted).toBe(true);
+  });
+
+  it("aborts roots before joining slow subagent settlement", async () => {
+    const { source } = await createSource("root-before-subagent");
+    const childSettled = createDeferredCore();
+    const markers = vi.fn(async () => {});
+    vi.useFakeTimers();
+    const closing = createClose({
+      persistRunningSessionsForRestart: markers,
+      terminateRunningSubagentsForShutdown: () => childSettled.promise,
+    })({ reason: "gateway restarting", restartExpectedMs: 123 });
+    void closing.catch(() => {});
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(markers).toHaveBeenCalledOnce();
+      expect(source.input.abortSignal.aborted).toBe(true);
+      childSettled.resolve();
+      await expect(closing).resolves.toMatchObject({ warnings: [] });
+    } finally {
+      childSettled.resolve();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await closing.catch(() => {});
+    }
   });
 
   it.each([false, true])(

@@ -1,0 +1,4 @@
+# Remaining main debt after funding #191326's full 350 lines: 6 lines.
+# Since 6ab90a6b65a0 (342-line debt): #196135 +4, #196167 -1, #195933 -7,
+# #194840 +6, #193841 +8, #196129 +4 = +14; full #191326 credit restores 8.
+6

@@ -445,3 +445,26 @@ it("keeps the first usage alias label and the last alias payload", () => {
     },
   ]);
 });
+
+it("uses Gateway presentation ahead of auth and usage labels, retaining provider keys", () => {
+  const providerId = "rtx-pro-workstation";
+  const providerIcon = { source: "asset", url: "/provider-icon/opaque-version" } as const;
+  const cards = buildModelProviderCards({
+    authStatus: { ts: 1, providers: [provider(providerId, { displayName: "Auth label" })] },
+    models: [
+      model("local-model", { provider: providerId, providerName: "Workstation", providerIcon }),
+    ],
+    configProviders: [{ key: providerId, hasApiKey: false }],
+    providerPresentations: { [providerId]: { providerName: "Workstation", providerIcon } },
+    providerUsage: null,
+  });
+  expect(cards).toHaveLength(1);
+  expect(cards[0]).toMatchObject({
+    id: providerId,
+    configKey: providerId,
+    displayName: "Workstation",
+    providerName: "Workstation",
+    providerIcon,
+    modelCount: 1,
+  });
+});

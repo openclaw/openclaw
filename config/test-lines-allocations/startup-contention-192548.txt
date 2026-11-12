@@ -1,0 +1,5 @@
+# 683 net regression-test lines for PR #192548.
+# Covers real native SQLite lease contention/cancellation/ownership, safe-copy
+# fallback and metadata/authority, bounded committed-pack consolidation, and
+# startup timing that excludes model execution. Existing shared scalar unchanged.
+683
