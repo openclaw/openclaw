@@ -44,16 +44,36 @@ struct OnboardingPageTests {
     }
 
     @Test
-    func `joining a claw with chat finishes straight into its dashboard`() {
+    func `joining a claw with chat closes setup before switching the primary, then opens the dashboard`() async {
+        var events: [String] = []
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+            MacOpenClawIDJoinCompletion.finishWithChat(
+                claw: "claw.example",
+                markOnboardingComplete: { events.append("complete") },
+                closeOnboarding: { events.append("close") },
+                selectPrimary: { events.append("primary:\($0)") },
+                openDashboard: {
+                    events.append("dashboard")
+                    done.resume()
+                })
+        }
+        #expect(events == ["complete", "close", "primary:claw.example", "dashboard"])
+    }
+
+    @Test
+    func `a finished join is not reset when the primary connection changes under setup`() async {
+        // Regression: switching the primary mid-join used to cancel the join and return setup
+        // to the location page with a local Gateway preselected.
         let state = AppState(preview: true)
-        var handoffs: [OnboardingDashboardHandoff] = []
-        let view = OnboardingView(
-            state: state,
-            openClawIDService: NodeCompletionFixture(),
-            dashboardHandoffOpener: { handoffs.append($0) })
-        view.finishJoinedClaw()
-        view.finishJoinedClaw()
-        #expect(handoffs == [.dashboard])
+        state.connectionMode = .unconfigured
+        let view = OnboardingView(state: state, openClawIDService: JoinedWithChatFixture())
+        await view.beginNodeInvitation()?.value
+        await view.openClawID.perform(.checkApproval)?.value
+        #expect(view.openClawID.step == .connected(claw: "claw.example"))
+        view.finishState.didFinish = true
+        state.connectionMode = .remote
+        view.handleConnectionModeChange(updatePageMonitoring: { _ in })
+        #expect(view.openClawID.step == .connected(claw: "claw.example"))
         #expect(!view.finish())
     }
 
@@ -92,6 +112,21 @@ private struct NodeCompletionFixture: OnboardingOpenClawIDService {
 
     func perform(_: OnboardingOpenClawIDAction) async throws -> OnboardingOpenClawIDStep {
         .nodeConnection(claw: "node-fixture", connected: true)
+    }
+
+    func cancel() {}
+}
+
+@MainActor
+private struct JoinedWithChatFixture: OnboardingOpenClawIDService {
+    let unavailableReason: String? = nil
+
+    func start(_: OnboardingOpenClawIDIntent) async throws -> OnboardingOpenClawIDStep {
+        .nodeInvitation
+    }
+
+    func perform(_: OnboardingOpenClawIDAction) async throws -> OnboardingOpenClawIDStep {
+        .connected(claw: "claw.example")
     }
 
     func cancel() {}

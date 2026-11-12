@@ -39,9 +39,9 @@ final class OnboardingNodeInvitationService: OnboardingOpenClawIDService {
             install: { await Self.installApprovedMac($0, chatGranted: $1) })
     }
 
-    /// Makes the approved claw this Mac's working setup: node route, the bundled runtime node
-    /// commands execute with and, when the owner granted chat, the primary chat/dashboard
-    /// connection over the operator key. A node-only approval leaves the primary connection alone.
+    /// Installs the approved node route and the bundled runtime node commands execute with.
+    /// The primary chat/dashboard connection is switched by MacOpenClawIDJoinCompletion after
+    /// the presenting window finishes, so a setup window never reacts to it mid-join.
     private static func installApprovedMac(_ target: MacNodeOpenClawIDTarget, chatGranted: Bool) async {
         MacOpenClawIDOperatorRoute.shared.stop()
         MacNodeModeCoordinator.shared.selectOpenClawIDTarget(target, operatorRequested: chatGranted)
@@ -51,12 +51,6 @@ final class OnboardingNodeInvitationService: OnboardingOpenClawIDService {
             // started a local Gateway, which is what prepares it otherwise.
             _ = try? await BundledRuntime.seed()
         }
-        guard chatGranted else { return }
-        let state = AppStateStore.shared
-        state.remoteTransport = .direct
-        state.remoteUrl = "wss://\(target.hostname)"
-        state.connectionMode = .remote
-        await GatewayEndpointStore.shared.refresh()
     }
 
     init(

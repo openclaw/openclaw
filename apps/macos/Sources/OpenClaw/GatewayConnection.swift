@@ -266,6 +266,13 @@ actor GatewayConnection: Observable {
         didSet { self.publishConnectedServerLease() }
     }
 
+    /// Whether the connected Gateway granted `scope` (admin grants all). A hello without a scope
+    /// list predates scope reporting and is treated as granting it, as before.
+    func grantsScope(_ scope: String) -> Bool {
+        guard let scopes = self.lastSnapshot?.advertisedOperatorScopes() else { return true }
+        return scopes.contains(scope) || scopes.contains("operator.admin")
+    }
+
     nonisolated var connectedEndpointRevision: UInt64? {
         guard case let .connected(connection) = self.connectionPublication.value else { return nil }
         return connection.lease.endpointRevision

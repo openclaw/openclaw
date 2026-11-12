@@ -40,9 +40,9 @@ final class MacOpenClawIDJoinController: NSWindowController, NSWindowDelegate {
         window.delegate = self
         window.contentViewController = NSHostingController(rootView: MacOpenClawIDJoinView(
             model: model,
-            onConnected: { [weak self] in
+            onConnected: { [weak self] claw in
                 self?.close()
-                AppNavigationActions.openDashboard()
+                MacOpenClawIDJoinCompletion.finishWithChat(claw: claw)
             }))
         self.window = window
         window.center()
@@ -63,12 +63,42 @@ final class MacOpenClawIDJoinController: NSWindowController, NSWindowDelegate {
 
 private struct MacOpenClawIDJoinView: View {
     @Bindable var model: OnboardingOpenClawIDModel
-    let onConnected: () -> Void
+    let onConnected: (String) -> Void
 
     var body: some View {
         OnboardingOpenClawIDView(model: self.model)
             .onChange(of: self.model.step) { _, step in
-                if case .connected = step { self.onConnected() }
+                if case let .connected(claw) = step { self.onConnected(claw) }
             }
+    }
+}
+
+/// One owner for what a successful join with chat means, whichever window started it: the claw
+/// becomes this Mac's Gateway and first-run setup is complete, so no setup window stays open on a
+/// page that would pick a local Gateway. Setup closes before the primary connection changes, so
+/// it never reacts to that change; then the claw's dashboard opens.
+@MainActor
+enum MacOpenClawIDJoinCompletion {
+    static func finishWithChat(
+        claw: String,
+        markOnboardingComplete: () -> Void = { OnboardingController.markComplete() },
+        closeOnboarding: () -> Void = { OnboardingController.shared.close() },
+        selectPrimary: (String) -> Void = Self.selectPrimary,
+        openDashboard: @escaping () -> Void = { AppNavigationActions.openDashboard() })
+    {
+        markOnboardingComplete()
+        closeOnboarding()
+        selectPrimary(claw)
+        Task {
+            await GatewayEndpointStore.shared.refresh()
+            openDashboard()
+        }
+    }
+
+    private static func selectPrimary(_ claw: String) {
+        let state = AppStateStore.shared
+        state.remoteTransport = .direct
+        state.remoteUrl = "wss://\(claw)"
+        state.connectionMode = .remote
     }
 }

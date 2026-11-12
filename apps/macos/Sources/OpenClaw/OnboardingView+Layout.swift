@@ -45,9 +45,9 @@ extension OnboardingView {
         }
         .onChange(of: self.openClawID.step) { _, step in
             // One approval leaves the Mac working: go straight into the claw's dashboard.
-            guard case .connected = step else { return }
+            guard case let .connected(claw) = step else { return }
             self.showOpenClawID = false
-            self.finishJoinedClaw()
+            self.finishJoinedClaw(claw)
         }
         .onAppear {
             self.onboardingDidAppear()
@@ -111,6 +111,8 @@ extension OnboardingView {
     }
 
     func handleConnectionModeChange(updatePageMonitoring: ((Int) -> Void)? = nil) {
+        // A finished setup (such as a joined claw) owns the new connection; nothing to reset.
+        guard !self.finishState.didFinish else { return }
         self.resetGatewayBoundAIState()
         let oldActive = self.activePageIndex
         self.reconcilePageForModeChange(previousActivePageIndex: oldActive)
