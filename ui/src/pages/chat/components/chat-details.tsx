@@ -8,6 +8,7 @@ import {
   onSettled,
   type Element,
 } from "solid-js";
+import { loadSettings, patchSettings } from "../../../app/settings.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MenuHandle } from "../../../components/solid/menu.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
@@ -109,7 +110,9 @@ export function ChatDetails(props: ChatDetailsViewProps) {
       intent:
         previous?.presentation === current && (presented || previous.intent !== "open")
           ? previous.intent
-          : "auto",
+          : loadSettings().chatDetailsCollapsed === true
+            ? "closed"
+            : "auto",
     };
   });
   const intent = () => choice().intent;
@@ -119,6 +122,10 @@ export function ChatDetails(props: ChatDetailsViewProps) {
   const setIntent = (nextIntent: "auto" | "open" | "closed", manual = false) => {
     manualChange = manual && (nextIntent === "open") !== opened();
     setChoice((previous) => ({ ...previous, intent: nextIntent }));
+    // A manual open/close is a durable preference; presentation-driven resets are not.
+    if (manual && !props.mobileHost) {
+      patchSettings({ chatDetailsCollapsed: nextIntent === "closed" });
+    }
   };
   // Seed once; data publications must not replace subsequently measured geometry.
   const [wideEnough, setWideEnough] = createSignal<boolean>(
