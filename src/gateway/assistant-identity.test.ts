@@ -76,25 +76,6 @@ it.each([
   });
 });
 
-it("falls back to the configured agent name before the default name", async () => {
-  // Template Add records only `name`: no identity block and no IDENTITY.md.
-  const read = vi.spyOn(identityFiles, "loadAgentIdentityFromWorkspaceAsync");
-  read.mockResolvedValue(null);
-  const entry: Pick<AgentConfig, "name" | "identity"> = { name: "Incident Lead" };
-  const params = { cfg: { agents: { entries: { main: entry } } }, workspaceDir: "/w" };
-  expect(await resolveAssistantIdentity(params)).toMatchObject({ name: "Incident Lead" });
-  expect(await resolveAssistantIdentityName(params)).toEqual({ agentId: "main", name: entry.name });
-  entry.name = "Renamed";
-  expect(await resolveAssistantIdentity(params)).toMatchObject({
-    name: "Renamed",
-    nameSource: "agent",
-  });
-  read.mockResolvedValue({ name: "Workspace" });
-  expect(await resolveAssistantIdentity(params)).toMatchObject({ name: "Workspace" });
-  entry.identity = { name: "Configured" };
-  expect(await resolveAssistantIdentity(params)).toMatchObject({ name: "Configured" });
-});
-
 it("drops sentence-like avatar placeholders", async () => {
   const cfg = configured({ avatar: "workspace-relative path, http(s) URL, or data URI" });
   expect((await resolve(cfg)).avatar).toBe(DEFAULT_ASSISTANT_IDENTITY.avatar);
@@ -113,8 +94,7 @@ it("does not leave a lone surrogate when truncating an overlong name", async () 
     const resolveName = async (name: string) =>
       (await resolver({ cfg: configured({ name }), workspaceDir: "" })).name;
     const prefix = "x".repeat(49);
-    const name = await resolveName(`${prefix}🚀suffix`);
-    expect(name).toBe(prefix);
+    expect(await resolveName(`${prefix}🚀suffix`)).toBe(prefix);
     expect(await resolveName(`${"x".repeat(48)}🚀suffix`)).toBe(`${"x".repeat(48)}🚀`);
   }
 });
@@ -122,22 +102,23 @@ it("does not leave a lone surrogate when truncating an overlong name", async () 
 it("refreshes prepared identities after workspace replacement and config changes", async () => {
   await withTestDir({ prefix: "openclaw-assistant-prepared-" }, async (workspace) => {
     const file = path.join(workspace, "IDENTITY.md");
-    await fs.writeFile(file, "- Name: First\n");
     const identity: NonNullable<AgentConfig["identity"]> = { emoji: "🦞" };
-    const cfg: OpenClawConfig = { agents: { entries: { main: { workspace, identity } } } };
-    const params = { cfg, agentId: "main" };
+    const main = { workspace, identity, name: "Display" };
+    const params = { cfg: { agents: { entries: { main } } }, agentId: "main" };
     const read = () => resolveAssistantIdentity(params);
     const expectName = async (name: string) => {
       expect(await resolveAssistantIdentityName(params)).toEqual({ agentId: "main", name });
     };
+    expect(await read()).toMatchObject({ name: "Display", nameSource: "agent" });
+    main.name = "Renamed";
+    await expectName("Renamed");
+    await fs.writeFile(file, "- Name: First\n");
     const first = await read();
     expect(first).toMatchObject({ name: "First", nameSource: "workspace" });
-    await expectName("First");
     expect(await read()).toBe(first);
     await fs.writeFile(`${file}.replacement`, "- Name: Other\n");
     await fs.rename(`${file}.replacement`, file);
     expect(await read()).toMatchObject({ name: "Other" });
-    expect(await read()).not.toBe(first);
     await expectName("Other");
     identity.name = "Configured";
     expect(await read()).toMatchObject({ name: "Configured", nameSource: "agent" });
