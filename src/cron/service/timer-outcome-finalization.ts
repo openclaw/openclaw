@@ -41,7 +41,7 @@ export async function finalizeCompletedCronRunOutcomes(
     captureOpenClawStateWorkerContext();
   const storeKey = cronStoreKey(state.deps.storePath);
   const canPublish = (outcome: TimedCronRunOutcome) =>
-    !(state.stopped && opts?.discardWhenStopped) &&
+    !(state.stopped && !state.handedOver && opts?.discardWhenStopped) &&
     isCronActiveJobMarkerCurrent(outcome.activeJobMarker);
   const finalized: TimedCronRunOutcome[] = [];
   let committedSuccessfully = false;

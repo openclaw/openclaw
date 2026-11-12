@@ -46,10 +46,10 @@ async function recoveryStore(jobs: CronJob[]) {
     storePath,
     storeKey,
     context,
-    recover: () =>
+    recover: (liveReceiptIds?: string[]) =>
       executeOpenClawStateWorker(context, {
         type: "cron.recoverRuns",
-        input: { storeKey, nowMs: now + 1_000 },
+        input: { storeKey, nowMs: now + 1_000, liveReceiptIds },
       }),
     request: (
       entry: CronJob,
@@ -147,7 +147,12 @@ describe("worker-owned startup recovery", () => {
   it("records an interrupted one-shot durably and never replays its uncertain payload", async () => {
     const entry = job("one-shot", { schedule: { kind: "at", at: new Date(now).toISOString() } });
     const store = await recoveryStore([entry]);
-    await activateManual(store, entry, "acknowledged-manual-run");
+    const receipt = await activateManual(store, entry, "acknowledged-manual-run");
+    // A cron reload's replacement leaves a run its predecessor still holds alone.
+    expect((await store.recover([receipt.receiptId])).interruptedRuns).toEqual([]);
+    expect((await loadCronStore(store.storePath)).jobs[0]?.state.runningReceiptId).toBe(
+      receipt.receiptId,
+    );
     const runCommandJob = vi.fn();
     const onEvent = vi.fn();
     const state = createCronServiceState({

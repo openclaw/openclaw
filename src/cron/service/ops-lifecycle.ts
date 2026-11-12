@@ -41,6 +41,7 @@ export async function start(state: CronServiceState): Promise<void> {
 export function stop(state: CronServiceState) {
   state.lifecycleGeneration += 1;
   state.stopped = true;
+  state.handedOver = false;
   state.schedulerStarted = false;
   state.schedulerDrain = Promise.allSettled([
     state.schedulerDrain,
@@ -56,6 +57,12 @@ export function stop(state: CronServiceState) {
       state.deps.log.warn({ errors }, "cron: shutdown left work for recovery");
     }
   });
+}
+
+/** A reload's replacement takes over scheduling; runs already executing here still publish. */
+export function handOver(state: CronServiceState) {
+  stop(state);
+  state.handedOver = true;
 }
 
 export function pauseScheduling(state: CronServiceState) {

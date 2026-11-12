@@ -1167,16 +1167,17 @@ export function buildGatewayCronService(params: {
   };
   registerSessionAutomationSource(automationSource, automationEpoch);
   const stopCron = cron.stop.bind(cron);
-  const stopCronLifecycle = (preserveExitWatchers = false) => {
+  const stopCronLifecycle = (handover = false) => {
     settleExitWatcherHandoff(false);
     try {
-      stopCron();
-      if (preserveExitWatchers) {
+      if (handover) {
+        cron.handOver();
         // A committed replacement owns these children; fence this scheduler
         // without terminating the adopted manager.
         exitWatchersStopped = true;
         exitWatcherGeneration += 1;
       } else {
+        stopCron();
         stopExitWatchers();
       }
       systemJobs.stop();
@@ -1192,11 +1193,9 @@ export function buildGatewayCronService(params: {
       unregisterSessionAutomationSource(automationSource);
     }
   };
-  cron.stop = () => {
+  cron.stop = () => stopCronLifecycle();
+  cron.stopAndDrain = async () => {
     stopCronLifecycle();
-  };
-  const stopAndDrainCron = async (preserveExitWatchers = false) => {
-    stopCronLifecycle(preserveExitWatchers);
     await drainGatewayCron({
       settlements: [
         cron.waitForIdle(),
@@ -1207,7 +1206,6 @@ export function buildGatewayCronService(params: {
       logger: cronLogger,
     });
   };
-  cron.stopAndDrain = () => stopAndDrainCron();
   const systemJobs = createGatewayCronSystemJobReconciler({
     cron,
     scheduler: params.scheduler,
@@ -1289,8 +1287,10 @@ export function buildGatewayCronService(params: {
         exitWatchers = watchers;
         return watchers.updateHandlers(exitWatcherHandlers);
       },
+      // A reload lets runs still executing here finish instead of aborting them.
       stopOwner: async () => {
-        await stopAndDrainCron(true);
+        stopCronLifecycle(true);
+        await Promise.all([systemJobs.drain(), stopStreamWatchers()]);
       },
     }),
     reconcileExitWatchers,
