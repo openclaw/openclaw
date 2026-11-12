@@ -124,7 +124,7 @@ choose based on model access, hosted plugins, usage tracking, and permissions.
       <Step title="Use the standard OpenAI model route">
         <a id="use-the-canonical-openai-model-route" />
         ```bash
-        openclaw config set agents.defaults.model.primary openai/gpt-6-astra
+        openclaw config set agents.defaults.model.primary openai/gpt-6.1-sol
         ```
 
         No runtime config is required for this exact official HTTPS native
@@ -146,10 +146,10 @@ choose based on model access, hosted plugins, usage tracking, and permissions.
 
     | Model ref                | Runtime policy or route facts                                 | Route                                                    | Auth                                               |
     | ------------------------ | ------------------------------------------------------------- | -------------------------------------------------------- | -------------------------------------------------- |
-    | `openai/gpt-6-astra`     | unset/`auto`, exact official HTTPS native route, no request override | Codex may be selected                                    | Codex sign-in, or an ordered `openai` auth profile |
+    | `openai/gpt-6.1-sol`     | unset/`auto`, exact official HTTPS native route, no request override | Codex may be selected                                    | Codex sign-in, or an ordered `openai` auth profile |
     | `openai/gpt-5.6-terra`   | unset/`auto`, exact official HTTPS native route, no request override | Codex may be selected                                    | Codex sign-in when the catalog exposes Terra       |
     | `openai/gpt-5.6-luna`    | unset/`auto`, exact official HTTPS native route, no request override | Codex may be selected                                    | Codex sign-in when the catalog exposes Luna        |
-    | `openai/gpt-6-astra`     | provider/model `agentRuntime.id: "openclaw"`                  | OpenClaw embedded runtime, internal Codex-auth transport | Selected `openai` OAuth profile                    |
+    | `openai/gpt-6.1-sol`     | provider/model `agentRuntime.id: "openclaw"`                  | OpenClaw embedded runtime, internal Codex-auth transport | Selected `openai` OAuth profile                    |
     | `openai/gpt-5.5`         | explicit provider/model `agentRuntime.id`                     | Selected agent runtime                                   | Selected OpenAI auth profile                       |
     | `openai/*`               | authored Completions, custom, or request override | OpenClaw embedded runtime                                | Credential requirement remains route-specific      |
     | `openai/*`               | plaintext official HTTP endpoint                  | Rejected                                                 | Credential is not sent                              |
@@ -157,9 +157,10 @@ choose based on model access, hosted plugins, usage tracking, and permissions.
     | `codex-cli/gpt-5.5`      | repaired by doctor                                            | Rewritten to `openai/gpt-5.5`                            | Codex app-server auth                              |
 
     <Warning>
-    Fresh subscription-backed setup uses exact `openai/gpt-6-astra`; the
-    native Codex catalog may also expose exact Terra or Luna refs. If the
-    account does not expose Astra, select an available model explicitly. Older
+    Fresh subscription-backed setup uses `openai/gpt-6.1-sol`. Existing
+    explicit model selections are unchanged. The native Codex catalog may
+    also expose Astra, Terra, or Luna. If the account does not expose
+    GPT-6.1 Sol, select an available model explicitly. Older
     Codex GPT refs are legacy OpenClaw routes, not the native Codex runtime
     path; run `openclaw doctor --fix` to migrate them without upgrading an
     existing explicit GPT-5.5 selection. `gpt-5.3-codex-spark` stays limited
@@ -179,7 +180,7 @@ choose based on model access, hosted plugins, usage tracking, and permissions.
       plugins: { entries: { codex: { enabled: true } } },
       agents: {
         defaults: {
-          model: { primary: "openai/gpt-6-astra" },
+          model: { primary: "openai/gpt-6.1-sol" },
         },
       },
     }
@@ -194,7 +195,7 @@ choose based on model access, hosted plugins, usage tracking, and permissions.
       plugins: { entries: { codex: { enabled: true } } },
       agents: {
         defaults: {
-          model: { primary: "openai/gpt-6-astra" },
+          model: { primary: "openai/gpt-6.1-sol" },
         },
       },
       auth: {

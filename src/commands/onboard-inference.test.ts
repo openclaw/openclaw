@@ -89,6 +89,7 @@ describe("detectInferenceBackends", () => {
         { kind: "claude-cli", detail: "installed; login status unverified" },
         {
           kind: "codex-cli",
+          modelRef: "openai/gpt-6.1-sol",
           detail: stored
             ? "installed; stored credentials found; login status unverified"
             : "installed; login status unverified",
@@ -216,7 +217,7 @@ describe("detectInferenceBackends", () => {
     expect(candidates[1]?.modelRef).toBe("openai/gpt-6-astra");
     expect(candidates[2]?.modelRef).toBe(ANTHROPIC_API_DEFAULT_MODEL_REF);
     expect(candidates[3]?.modelRef).toBe(CLAUDE_CLI_DEFAULT_MODEL_REF);
-    expect(candidates[4]?.modelRef).toBe("openai/gpt-6-astra");
+    expect(candidates[4]?.modelRef).toBe("openai/gpt-6.1-sol");
   });
 
   it("keeps an Anthropic environment key ahead of unknown Claude status", async () => {
