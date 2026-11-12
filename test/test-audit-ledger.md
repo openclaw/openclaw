@@ -576,6 +576,28 @@ Extension-test typecheck, typed lint, formatting, diff and both line-budget chec
 passed. Hosted CI and landing remain pending. These are correctness timings,
 not a speedup claim; real recorder/SDK export proof retains its existing compiler setup.
 
+### CLI source-helper multiplicity
+
+At `df5a2f36076fe50335487abc806d70d6fbfe3cfc`, removed the repeated-import
+multiplicity case: one declaration/case and 16 test lines. The sole consumer,
+command secret-resolution coverage, uses membership and regex predicates across
+17 cases and never counts occurrences. Keep the re-export/runtime traversal
+case, the helper and its visited-module guard unchanged. The retired fixture
+contains no cycle and does not prove termination.
+
+The unchanged 19-case baseline passed in 9.28 seconds wall time. Duplicating
+nested source failed only the retired case; the keeper and all 17 consumer cases
+passed. Omitting runtime traversal failed the keeper on its missing marker.
+Both mutations were restored byte for byte. The final 18 cases passed in 6.48
+seconds; these single runs do not establish a speedup. Actual routing uses
+unit-fast for the consumer and CLI for the helper.
+
+Independent preservation review and full local ClawSweeper review of
+`86b364415dd872e4aca25f3ff3a31d46a5eec091` found no actionable issues. Targeted
+CLI-test typecheck, typed lint, formatting and diff checks passed. Production
+and support line counts are unchanged. Full dead-code scans and hosted/landing
+outcomes are tracked in [PR #197639](https://github.com/openclaw/openclaw/pull/197639).
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Pending: Twitch settled flag; it needs current-source and runtime keeper qualification.
