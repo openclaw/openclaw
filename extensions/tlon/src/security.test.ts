@@ -55,6 +55,15 @@ it.each([
   [[["@ALL uppercase"], [zod, ", hi"], [{ bold: [zod] }, " hi"], [{ strike: [zod] }, "?"]], true],
   [[["nimbus, hello"], ["say ", { italics: [zod] }, "."], ["Are you there, ", zod, "?"]], true],
   [[[{ "inline-code": "a`b" }, " ", zod, " hi ", { "inline-code": "c" }]], true],
+  [
+    [
+      ["nimbus: hello"],
+      ["nimbus; hello"],
+      [{ bold: ["nimbus"] }, " hi"],
+      [{ italics: ["nimbus"] }, "?"],
+    ],
+    true,
+  ],
   [[["~zod-extra"], ["my~zodfriend"], [{ "inline-code": "ping ~zod, now" }], ["nimbusy"]], false],
   [[["https://tlon.io/~zod"], ["prenimbus"], [], { block: { code: { code: "~zod, hi" } } }], false],
 ] as const)("detects mentions in Story %j", (stories, expected) => {
