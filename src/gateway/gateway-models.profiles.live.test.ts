@@ -3560,7 +3560,7 @@ async function verifyGatewayUltraSubagentHandoff(params: {
   sessionKey: string;
   thinkingLevel: string;
 }): Promise<void> {
-  const { listSubagentRunsForRequester } =
+  const { getSubagentRunByChildSessionKey, listSubagentRunsForRequester } =
     await import("../agents/subagents/registry/subagent-registry.test-helpers.js");
   const existingRunIds = new Set(
     listSubagentRunsForRequester(params.sessionKey).map((entry) => entry.runId),
@@ -3626,7 +3626,10 @@ async function verifyGatewayUltraSubagentHandoff(params: {
     );
   }
   expect(run?.execution.outcome?.status).toBe("ok");
-  expect(run?.completion?.resultText).toContain(childToken);
+  // Settled resident rows retain lifecycle metadata, not their durable completion payload.
+  const completedRun = run ? await getSubagentRunByChildSessionKey(run.childSessionKey) : null;
+  expect(completedRun?.runId).toBe(run?.runId);
+  expect(completedRun?.completion?.resultText).toContain(childToken);
   expect(run?.delivery?.status).toBe("delivered");
   expect(run?.childSessionKey).toContain(":subagent:");
   expect(run?.model).toBe(params.modelKey);
@@ -5166,14 +5169,9 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
           }
         : {}),
     };
-    if (ultraCandidates.length > 0) {
-      await import("../agents/ai-transport-runtime-host.js");
-      ultraWireCapture = startOpenAIUltraWireCapture(
-        ultraCandidates.map((candidate) =>
-          resolveOpenAIUltraUpstreamBaseUrl({ candidate, cfg: sanitizedCfg }),
-        ),
-      );
-    }
+    const ultraWireBaseUrls = ultraCandidates.map((candidate) =>
+      resolveOpenAIUltraUpstreamBaseUrl({ candidate, cfg: sanitizedCfg }),
+    );
     const nextCfg = buildLiveGatewayConfig({
       cfg: sanitizedCfg,
       candidates: params.candidates.map(({ model }) => model),
@@ -5218,7 +5216,11 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
         }),
         `${params.label}: gateway-connect`,
       );
-      if (ultraWireCapture) {
+      if (ultraWireBaseUrls.length > 0) {
+        // Install the final, lazily loaded transport owner after Gateway startup,
+        // before wrapping it; otherwise startup replaces the capture.
+        await import("../agents/ai-transport-runtime-host.js");
+        ultraWireCapture = startOpenAIUltraWireCapture(ultraWireBaseUrls);
         openAIUltraRunsByClient.set(client, new Map());
       }
     } catch (error) {
