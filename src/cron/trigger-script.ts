@@ -100,7 +100,6 @@ import type {
   CronTriggerFailureCode,
 } from "./types.js";
 
-const MAX_CONCURRENT_TRIGGER_EVALS = 3;
 const MAX_CACHED_TRIGGER_RUNTIMES = 128;
 const HEADLESS_TRIGGER_WALL_CLOCK_MS = 30_000;
 const HEADLESS_TRIGGER_TOOL_BUDGET = 5;
@@ -110,8 +109,6 @@ const MIN_TRIGGER_PREPARATION_TIMEOUT_MS = 120_000;
 // Holds a finished evaluation for MCP teardown at most this long; a hung connect or shutdown
 // keeps retiring as tracked work instead of holding the result and trigger slot.
 const CRON_SCRIPT_MCP_CLEANUP_GRACE_MS = 1_000;
-
-let activeTriggerEvaluations = 0;
 
 // Compile-time sync with the leaf contract in ./types.ts: a new code-mode
 // failure code must be added to CronTriggerFailureCode or this line errors.
@@ -699,21 +696,13 @@ export function createCronScriptRuntime(deps: CronTriggerEvaluatorDeps) {
   const run = createCronCodeModeRunner(deps);
   return {
     evaluateTrigger: async (params: CronScriptInvocation): Promise<CronTriggerEvaluationResult> => {
-      if (activeTriggerEvaluations >= MAX_CONCURRENT_TRIGGER_EVALS) {
-        return { kind: "busy" };
-      }
-      activeTriggerEvaluations += 1;
-      try {
-        const outcome = await run({
-          ...params,
-          wallClockMs: HEADLESS_TRIGGER_WALL_CLOCK_MS,
-          maxToolCalls: HEADLESS_TRIGGER_TOOL_BUDGET,
-          label: "cron trigger evaluation",
-        });
-        return outcome.kind === "completed" ? parseTriggerResult(outcome.result) : outcome;
-      } finally {
-        activeTriggerEvaluations -= 1;
-      }
+      const outcome = await run({
+        ...params,
+        wallClockMs: HEADLESS_TRIGGER_WALL_CLOCK_MS,
+        maxToolCalls: HEADLESS_TRIGGER_TOOL_BUDGET,
+        label: "cron trigger evaluation",
+      });
+      return outcome.kind === "completed" ? parseTriggerResult(outcome.result) : outcome;
     },
     executePayload: async (
       params: Parameters<NonNullable<CronServiceDeps["runScriptJob"]>>[0],

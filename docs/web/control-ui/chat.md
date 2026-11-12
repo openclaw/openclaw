@@ -84,6 +84,11 @@ shows the tool label instead of leaving the text blank. Activity summaries stay
 dimmed until hover or keyboard focus brightens their text, without an icon tooltip;
 screen readers retain the exact tool identity. Expanding an activity group keeps the individual tool details
 and outcomes available. Completed group summaries retain their operation counts.
+The **Worked for** summary and reply metadata use the same saved elapsed time,
+from the initiating message to the last recorded output for that run. This includes
+request preparation and waiting, not just model execution. Starting another turn
+or reloading the same complete history does not switch the timing source. If either
+saved endpoint is unavailable, the elapsed duration is omitted.
 Tool Search calls use the called tool's name, icon, and input details in tool rows
 and activity summaries. Built-in tools use semantic icons, including an envelope
 for messages, a calendar clock for scheduled jobs, and an image for image generation.

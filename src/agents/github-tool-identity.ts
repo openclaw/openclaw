@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
-import { root as fsRoot } from "@openclaw/fs-safe/root";
 import type {
   GitHubIdentityFacts,
   ToolsGitHubStatusResult,
@@ -46,7 +45,7 @@ import {
   type PreparedGitHubReadIdentity,
   type PreparedGitHubSourceReadIdentity,
 } from "./github-read-identity.js";
-import { managedGitHubHosts, type GitHubToolAccount } from "./github-tool-account.js";
+import type { GitHubToolAccount } from "./github-tool-account.js";
 import {
   githubCredentialEnvironmentExclusions,
   managedGitHubIdentityEnvironment,
@@ -61,10 +60,7 @@ import type {
   PreparedGitHubToolEnvironment,
   SharedGitHubIdentityPreparation,
 } from "./github-tool-identity.types.js";
-import {
-  isPrivateManagedGitHubProfile,
-  writeManagedGitHubProfileFiles,
-} from "./github-tool-profile-files.js";
+import { isPrivateManagedGitHubProfile } from "./github-tool-profile-files.js";
 import { resolveManagedGitHubProfileDir } from "./github-tool-profile-path.js";
 
 export {
@@ -631,24 +627,17 @@ export async function refreshManagedGitHubProfile(params: {
   if (account.accountId !== params.expectedAccountId) {
     throw new GitHubAccountMismatchError("GitHub OAuth refresh returned a different account.");
   }
-  const targetHosts = path.join(params.profileDir, "hosts.yml");
-  const targetStat = await fs.lstat(targetHosts);
-  if (!targetStat.isFile() || targetStat.isSymbolicLink()) {
-    throw new Error("The configured GitHub identity profile is unavailable.");
-  }
-  const profile = await fsRoot(params.profileDir);
   await params.prepareEffect?.();
-  params.assertCurrent?.();
-  await profile.write(
-    "hosts.yml",
-    managedGitHubHosts({ login: account.login, token: credential }),
+  await runGitWorkerOperation(
     {
-      mode: 0o600,
-      mkdir: false,
-      durable: false,
-      mutationSymlinks: "reject",
-      assertBeforeMutation: params.assertCurrent,
+      type: "github.profile-refresh",
+      input: {
+        profileDir: params.profileDir,
+        identity: { login: account.login, token: credential },
+        nativeMode: getFsSafeNativeConfig().mode,
+      },
     },
+    { assertCurrent: params.assertCurrent },
   );
   clearNativeGitHubTokenCache();
   params.assertCurrent?.();
@@ -674,9 +663,13 @@ export async function installManagedGitHubProfile(params: {
   let committed = false;
   try {
     const { account, credential } = await verifyManagedGitHubCredential(params.token);
-    await writeManagedGitHubProfileFiles(stagedProfile, {
-      login: account.login,
-      token: credential,
+    await runGitWorkerOperation({
+      type: "github.profile-stage",
+      input: {
+        profileDir: stagedProfile,
+        identity: { login: account.login, token: credential },
+        nativeMode: getFsSafeNativeConfig().mode,
+      },
     });
     await params.prepareEffect?.();
     params.assertCurrent?.();
