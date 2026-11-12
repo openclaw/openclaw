@@ -188,6 +188,9 @@ it.skipIf(!connection)(
           nodeExecutable,
           timeoutMs: 30_000,
           nodeArgs: [
+            // Compiled CLI fixtures still discover source plugins and their native SDK imports.
+            "--import",
+            pathToFileURL(path.resolve("scripts/tsx.mjs")).href,
             ...resolveRuntimeWorkerArgv(
               resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli),
               nodeExecutable,
@@ -205,11 +208,13 @@ it.skipIf(!connection)(
             VITEST: undefined,
             VITEST_POOL_ID: undefined,
             VITEST_WORKER_ID: undefined,
+            OPENCLAW_DEBUG: "1",
             OPENCLAW_NO_RESPAWN: "1",
             OPENCLAW_HIDE_BANNER: "1",
           },
         });
         const output = `${result.stdout}\n${result.stderr}`;
+        expect(output).not.toContain("Unable to load host Plugin SDK natively");
         expect(result, output).toMatchObject({ code: 78, signal: null });
         expect(output).toContain("openclaw doctor --fix");
         expect(output).toContain("Pinned channels.msteams.legacyWebhook");
