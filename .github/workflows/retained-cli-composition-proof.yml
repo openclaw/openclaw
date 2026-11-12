@@ -1,111 +1,113 @@
-name: Required Backports Generated Patch
+name: Required Backports Paired UI Proof
 
 on:
   workflow_dispatch:
-    inputs:
-      target_ref:
-        description: Reviewed four-backport candidate full commit SHA (not a branch or tag)
-        required: true
-        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: required-backports-generated-patch-${{ inputs.target_ref }}
+  group: required-backports-paired-ui-f38131f934b45447558cf6f431353a49656198d5
   cancel-in-progress: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  BASE_SHA: 89f5912fbe1d26ad81758d6f07e116b39a4e45f9
-  EXPECTED_PATHS_SHA256: d3e7d95f86730273c8d8df822b34488842f92ba09c18d333cd72397a8abb870c
 
 jobs:
-  generate:
+  portrait-touch:
     if: github.repository == 'openclaw/openclaw'
+    name: Portrait touch (${{ matrix.label }})
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - label: before
+            sha: 89f5912fbe1d26ad81758d6f07e116b39a4e45f9
+            test_sha: b4999cd03a9a124066a851d1618157c141d165572a6ec3d4493d0c9eb87d293e
+            css_sha: 6cfd21b495b4df7e46da69e934e5b09c2ed6eb9be0b330dbc2d1d6ebc06ab13b
+          - label: after
+            sha: f38131f934b45447558cf6f431353a49656198d5
+            test_sha: 4d5d772bb25738cd92249065d3a9a8c53eb4397997219f4a15b457990f1f63bb
+            css_sha: 73d55a0019288b29c5a13b25ca0b55730f6c84289747ce357ed4388619b35e9e
     steps:
-      - name: Require exact candidate identity
-        env:
-          TARGET_SHA: ${{ inputs.target_ref }}
-        run: |
-          [[ "$TARGET_SHA" =~ ^[a-f0-9]{40}$ ]] || exit 1
-
-      - name: Checkout reviewed candidate
+      - name: Checkout exact source, separate from workflow tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.target_ref }}
-          fetch-depth: 0
+          ref: ${{ matrix.sha }}
+          fetch-depth: 1
           persist-credentials: false
 
-      - name: Verify bounded source and record identity
-        id: source
+      - name: Verify source and install identical evidence overlay
+        id: prepare
         env:
-          TARGET_SHA: ${{ inputs.target_ref }}
+          SOURCE_SHA: ${{ matrix.sha }}
+          LABEL: ${{ matrix.label }}
+          EXPECTED_TEST_SHA: ${{ matrix.test_sha }}
+          EXPECTED_CSS_SHA: ${{ matrix.css_sha }}
           WORKFLOW_SHA: ${{ github.workflow_sha }}
+          OVERLAY_B64: LS0tIGEvdWkvc3JjL2UyZS9zZXNzaW9uLW1hbmFnZW1lbnQudHJhaWxpbmctc3RhdGUuZTJlLnRlc3QudHMKKysrIGIvdWkvc3JjL2UyZS9zZXNzaW9uLW1hbmFnZW1lbnQudHJhaWxpbmctc3RhdGUuZTJlLnRlc3QudHMKQEAgLTEyLDYgKzEyLDcgQEAKICAgY3JlYXRlU2Vzc2lvbk1hbmFnZW1lbnRFMmVTdWl0ZSwKICAgaW5zdGFsbE1vY2tHYXRld2F5LAogICBzZXNzaW9uc0xpc3RSZXNwb25zZSwKKyAgd2FpdEZvck1vYmlsZVNpZGViYXJEcmF3ZXJPcGVuLAogfSBmcm9tICIuL3Nlc3Npb24tbWFuYWdlbWVudC50ZXN0LXN1cHBvcnQudHMiOwogCiBjb25zdCBzdWl0ZSA9IGNyZWF0ZVNlc3Npb25NYW5hZ2VtZW50RTJlU3VpdGUoKTsKQEAgLTI1Myw2ICsyNTQsOTMgQEAKICAgICAgIGF3YWl0IGNvbnRleHQuY2xvc2UoKTsKICAgICB9CiAgIH0pOworCisgIGl0LmVhY2goWyJyb290IiwgImNoaWxkIl0gYXMgY29uc3QpKAorICAgICJjYXB0dXJlcyBwb3J0cmFpdCB0b3VjaCBuYXZpZ2F0aW9uIGJlZm9yZSB0YXBwaW5nIHRoZSAlcyBsb25nLXRpdGxlIHNlc3Npb24iLAorICAgIGFzeW5jICh0YXJnZXRLaW5kKSA9PiB7CisgICAgICBjb25zdCBtYWluS2V5ID0gImFnZW50Om1haW46bWFpbiI7CisgICAgICBjb25zdCBwYXJlbnRLZXkgPSAiYWdlbnQ6bWFpbjp0b3VjaC1wcm9vZi1wYXJlbnQiOworICAgICAgY29uc3QgY2hpbGRLZXkgPSAiYWdlbnQ6bWFpbjp0b3VjaC1wcm9vZi1jaGlsZCI7CisgICAgICBjb25zdCBiYXNlVGltZSA9IERhdGUucGFyc2UoIjIwMjYtMDctMDFUMTY6MDA6MDAuMDAwWiIpOworICAgICAgY29uc3QgbWFpbiA9IHNlc3Npb25Sb3cobWFpbktleSwgIk1haW4iLCBiYXNlVGltZSk7CisgICAgICBjb25zdCBwYXJlbnQgPSBzZXNzaW9uUm93KAorICAgICAgICBwYXJlbnRLZXksCisgICAgICAgICJBIGRlbGliZXJhdGVseSBsb25nIHBhcmVudCBzZXNzaW9uIHRpdGxlIGZvciBwb3J0cmFpdCB0b3VjaCBuYXZpZ2F0aW9uIiwKKyAgICAgICAgYmFzZVRpbWUgLSAxXzAwMCwKKyAgICAgICAgeworICAgICAgICAgIGNoaWxkU2Vzc2lvbnM6IFtjaGlsZEtleV0sCisgICAgICAgICAgZm9ya1NvdXJjZTogeyBzZXNzaW9uS2V5OiBtYWluS2V5LCBzZXNzaW9uSWQ6ICJzb3VyY2Utc2Vzc2lvbiIgfSwKKyAgICAgICAgfSwKKyAgICAgICk7CisgICAgICBjb25zdCBjaGlsZCA9IHNlc3Npb25Sb3coCisgICAgICAgIGNoaWxkS2V5LAorICAgICAgICAiQSBkZWxpYmVyYXRlbHkgbG9uZyBjaGlsZCBzZXNzaW9uIHRpdGxlIGZvciBwb3J0cmFpdCB0b3VjaCBuYXZpZ2F0aW9uIiwKKyAgICAgICAgYmFzZVRpbWUgLSAyXzAwMCwKKyAgICAgICAgeyBwYXJlbnRTZXNzaW9uS2V5OiBwYXJlbnRLZXksIHNwYXduZWRCeTogcGFyZW50S2V5IH0sCisgICAgICApOworICAgICAgY29uc3QgY29udGV4dCA9IGF3YWl0IHN1aXRlLmJyb3dzZXIubmV3Q29udGV4dCh7CisgICAgICAgIGhhc1RvdWNoOiB0cnVlLAorICAgICAgICBjb2xvclNjaGVtZTogImRhcmsiLAorICAgICAgICBsb2NhbGU6ICJlbi1VUyIsCisgICAgICAgIHNlcnZpY2VXb3JrZXJzOiAiYmxvY2siLAorICAgICAgICB2aWV3cG9ydDogeyB3aWR0aDogMzkwLCBoZWlnaHQ6IDg0NCB9LAorICAgICAgfSk7CisgICAgICBjb25zdCBwYWdlID0gYXdhaXQgY29udGV4dC5uZXdQYWdlKCk7CisgICAgICBhd2FpdCBpbnN0YWxsTW9ja0dhdGV3YXkocGFnZSwgeworICAgICAgICBtYWluU2Vzc2lvbktleTogbWFpbktleSwKKyAgICAgICAgc2Vzc2lvbktleTogbWFpbktleSwKKyAgICAgICAgc2Vzc2lvbnM6IFttYWluLCBwYXJlbnQsIGNoaWxkXSwKKyAgICAgICAgbWV0aG9kUmVzcG9uc2VzOiB7CisgICAgICAgICAgInNlc3Npb25zLmxpc3QiOiB7CisgICAgICAgICAgICBjYXNlczogWworICAgICAgICAgICAgICB7IG1hdGNoOiB7IHNwYXduZWRCeTogcGFyZW50S2V5IH0sIHJlc3BvbnNlOiBzZXNzaW9uc0xpc3RSZXNwb25zZShbY2hpbGRdKSB9LAorICAgICAgICAgICAgICB7IHJlc3BvbnNlOiBzZXNzaW9uc0xpc3RSZXNwb25zZShbbWFpbiwgcGFyZW50XSkgfSwKKyAgICAgICAgICAgIF0sCisgICAgICAgICAgfSwKKyAgICAgICAgfSwKKyAgICAgIH0pOworCisgICAgICB0cnkgeworICAgICAgICBhd2FpdCBwYWdlLmdvdG8oY29udHJvbFVpU2Vzc2lvblVybChzdWl0ZS5zZXJ2ZXIuYmFzZVVybCwgbWFpbktleSkpOworICAgICAgICBhd2FpdCBwYWdlCisgICAgICAgICAgLmxvY2F0b3IoIi50b3BiYXItbmF2LXRvZ2dsZTp2aXNpYmxlLCAuY2hhdC1wYW5lX19uYXYtdG9nZ2xlOnZpc2libGUiKQorICAgICAgICAgIC5maXJzdCgpCisgICAgICAgICAgLnRhcCgpOworICAgICAgICBhd2FpdCB3YWl0Rm9yTW9iaWxlU2lkZWJhckRyYXdlck9wZW4ocGFnZSk7CisgICAgICAgIGNvbnN0IHNpZGViYXIgPSBwYWdlLmxvY2F0b3IoIi5zaWRlYmFyLXNlc3Npb24tY29udGVudCIpOworICAgICAgICBjb25zdCBwYXJlbnRSb3cgPSBzaWRlYmFyLmxvY2F0b3IoJ1tkYXRhLXNlc3Npb24ta2V5PSInICsgcGFyZW50S2V5ICsgJyJdJyk7CisgICAgICAgIGF3YWl0IHBhcmVudFJvdy53YWl0Rm9yKHsgc3RhdGU6ICJ2aXNpYmxlIiwgdGltZW91dDogMTBfMDAwIH0pOworICAgICAgICBhd2FpdCBwYXJlbnRSb3cubG9jYXRvcigiW2RhdGEtY2hpbGQtc2Vzc2lvbi10b2dnbGVdIikudGFwKCk7CisgICAgICAgIGNvbnN0IGNoaWxkUm93ID0gc2lkZWJhci5sb2NhdG9yKCdbZGF0YS1zZXNzaW9uLWtleT0iJyArIGNoaWxkS2V5ICsgJyJdJyk7CisgICAgICAgIGF3YWl0IGNoaWxkUm93LndhaXRGb3IoeyBzdGF0ZTogInZpc2libGUiLCB0aW1lb3V0OiAxMF8wMDAgfSk7CisgICAgICAgIGF3YWl0IGV4cGVjdC5wb2xsKCgpID0+IGNoaWxkUm93LmdldEF0dHJpYnV0ZSgiY2xhc3MiKSkudG9Db250YWluKCJzaWRlYmFyLXJlY2VudC1zZXNzaW9uLS1jaGlsZCIpOworICAgICAgICBhd2FpdCBleHBlY3QKKyAgICAgICAgICAucG9sbCgoKSA9PiBwYXJlbnRSb3cubG9jYXRvcigiW2RhdGEtY2hpbGQtc2Vzc2lvbi10b2dnbGVdIikuZ2V0QXR0cmlidXRlKCJhcmlhLWV4cGFuZGVkIikpCisgICAgICAgICAgLnRvQmUoInRydWUiKTsKKyAgICAgICAgYXdhaXQgcGFnZS5ldmFsdWF0ZSgoKSA9PiBkb2N1bWVudC5mb250cy5yZWFkeSk7CisKKyAgICAgICAgLy8gQ2FwdHVyZSBiZWZvcmUgZ2VvbWV0cnkvdGFwIGFzc2VydGlvbnMgc28gdGhlIHVuZml4ZWQgcmV2aXNpb24gcmV0YWlucyBpdHMgZmFpbHVyZSBzdGF0ZS4KKyAgICAgICAgYXdhaXQgY2FwdHVyZVVpUHJvb2YoCisgICAgICAgICAgc3VpdGUsCisgICAgICAgICAgcGFnZSwKKyAgICAgICAgICAidG91Y2gtIiArIHRhcmdldEtpbmQgKyAiLTM5MHg4NDQtYmVmb3JlLXRhcC5wbmciLAorICAgICAgICAgIHBhZ2UubG9jYXRvcigiLnNoZWxsLW5hdiIpLAorICAgICAgICAgIFtwYXJlbnRSb3csIGNoaWxkUm93XSwKKyAgICAgICAgKTsKKyAgICAgICAgY29uc3QgdGFyZ2V0S2V5ID0gdGFyZ2V0S2luZCA9PT0gInJvb3QiID8gcGFyZW50S2V5IDogY2hpbGRLZXk7CisgICAgICAgIGNvbnN0IHJvdyA9IHRhcmdldEtpbmQgPT09ICJyb290IiA/IHBhcmVudFJvdyA6IGNoaWxkUm93OworICAgICAgICBjb25zdCBuYW1lQm91bmRzID0gYXdhaXQgcm93LmxvY2F0b3IoIi5zaWRlYmFyLXJlY2VudC1zZXNzaW9uX19uYW1lIikuYm91bmRpbmdCb3goKTsKKyAgICAgICAgZXhwZWN0KG5hbWVCb3VuZHMpLm5vdC50b0JlTnVsbCgpOworICAgICAgICBleHBlY3QobmFtZUJvdW5kcyEud2lkdGgpLnRvQmVHcmVhdGVyVGhhbigwKTsKKyAgICAgICAgYXdhaXQgcm93LmxvY2F0b3IoIi5zaWRlYmFyLXJlY2VudC1zZXNzaW9uX19saW5rIikudGFwKCk7CisgICAgICAgIGF3YWl0IGV4cGVjdAorICAgICAgICAgIC5wb2xsKCgpID0+IG5ldyBVUkwocGFnZS51cmwoKSkucGF0aG5hbWUpCisgICAgICAgICAgLnRvQmUobmV3IFVSTChjb250cm9sVWlTZXNzaW9uVXJsKHN1aXRlLnNlcnZlci5iYXNlVXJsLCB0YXJnZXRLZXkpKS5wYXRobmFtZSk7CisgICAgICB9IGZpbmFsbHkgeworICAgICAgICBhd2FpdCBjb250ZXh0LmNsb3NlKCk7CisgICAgICB9CisgICAgfSwKKyAgKTsKIAogICBpdCgia2VlcHMgZm9yayBwcm92ZW5hbmNlIGluIHRoZSB0aXRsZSBhYm92ZSBhbHdheXMtdmlzaWJsZSB0b3VjaCBhY3Rpb25zIiwgYXN5bmMgKCkgPT4gewogICAgIGNvbnN0IGNvbnRleHQgPSBhd2FpdCBzdWl0ZS5icm93c2VyLm5ld0NvbnRleHQoewo=
+          PAYLOAD_B64: IyEvdXNyL2Jpbi9lbnYgYmFzaAojIFJ1biBvbmx5IHRocm91Z2ggdGhpcyBjaGVja291dCdzIHNjcmlwdHMvY3JhYmJveC13cmFwcGVyLm1qcy4Kc2V0IC1ldW8gcGlwZWZhaWwKbGFiZWw9JDEKc291cmNlX3JldmlzaW9uPSQyCmV4cGVjdGVkX3Rlc3Rfc2hhPSQzCmV4cGVjdGVkX2Nzc19zaGE9JDQKW1sgIiRsYWJlbCIgPT0gYmVmb3JlIHx8ICIkbGFiZWwiID09IGFmdGVyIF1dCltbICIkc291cmNlX3JldmlzaW9uIiA9fiBeW2EtZjAtOV17NDB9JCBdXQpbWyAiJGV4cGVjdGVkX3Rlc3Rfc2hhIiA9fiBeW2EtZjAtOV17NjR9JCBdXQpbWyAiJGV4cGVjdGVkX2Nzc19zaGEiID1+IF5bYS1mMC05XXs2NH0kIF1dCmNkICIkKGdpdCByZXYtcGFyc2UgLS1zaG93LXRvcGxldmVsKSIKdGVzdF9wYXRoPXVpL3NyYy9lMmUvc2Vzc2lvbi1tYW5hZ2VtZW50LnRyYWlsaW5nLXN0YXRlLmUyZS50ZXN0LnRzCmNzc19wYXRoPXVpL3NyYy9zdHlsZXMvbGF5b3V0LmNzcwpwcmludGYgJyVzICAlc1xuJXMgICVzXG4nICIkZXhwZWN0ZWRfdGVzdF9zaGEiICIkdGVzdF9wYXRoIiAiJGV4cGVjdGVkX2Nzc19zaGEiICIkY3NzX3BhdGgiIHwgc2hhMjU2c3VtIC0tY2hlY2sgLS1zdHJpY3QKbWtkaXIgLXAgLmFydGlmYWN0cy91aS10b3VjaC1wcm9vZgphcnRpZmFjdF9yb290PSQobWt0ZW1wIC1kICIkUFdELy5hcnRpZmFjdHMvdWktdG91Y2gtcHJvb2YvJGxhYmVsLlhYWFhYWFhYIikKZXhwb3J0IENJPTEgT1BFTkNMQVdfQ0FQVFVSRV9VSV9QUk9PRj0xCmV4cG9ydCBPUEVOQ0xBV19VSV9FMkVfQVJUSUZBQ1RfRElSPSIkYXJ0aWZhY3Rfcm9vdC9zY3JlZW5zaG90cyIKdW5zZXQgT1BFTkNMQVdfVUlfRTJFX0FMTE9XX01JU1NJTkdfQ0hST01JVU0gT1BFTkNMQVdfVUlfRTJFX1JFQ09SRF9WSURFTwp7CiAgcHJpbnRmICdsYWJlbD0lc1xucmVxdWVzdGVkX3NvdXJjZV9yZXZpc2lvbj0lc1xuZXhlY3V0aW9uX2N3ZD0lc1xuJyAiJGxhYmVsIiAiJHNvdXJjZV9yZXZpc2lvbiIgIiRQV0QiCiAgIyBIRUFEIGlzIHRoZSB3cmFwcGVyJ3MgdmVyaWZpZWQgc291cmNlLWNhcHN1bGUgdHJhbnNwb3J0IGNvbW1pdCwgbm90IG5lY2Vzc2FyaWx5IHNvdXJjZV9yZXZpc2lvbi4KICBwcmludGYgJ2V4ZWN1dGlvbl9oZWFkPSVzXG4nICIkKGdpdCByZXYtcGFyc2UgSEVBRCkiCiAgc2hhMjU2c3VtICIkdGVzdF9wYXRoIiAiJGNzc19wYXRoIgp9ID4gIiRhcnRpZmFjdF9yb290L2lkZW50aXR5LnR4dCIKcHJpbnRmICclc1xuJyAncG5wbSB0ZXN0OnVpOmUyZSB1aS9zcmMvZTJlL3Nlc3Npb24tbWFuYWdlbWVudC50cmFpbGluZy1zdGF0ZS5lMmUudGVzdC50cyAtdCAiY2FwdHVyZXMgcG9ydHJhaXQgdG91Y2ggbmF2aWdhdGlvbiInID4gIiRhcnRpZmFjdF9yb290L2NvbW1hbmQudHh0IgojIENhbm9uaWNhbCBlbnRyeSBwb2ludCBvd25zIENocm9taXVtIGluc3RhbGxhdGlvbiBhbmQgYnVuZGxlZC1VSSBnbG9iYWwgc2V0dXAuCiMgUHJlc2VydmUgdGhlIHJlYWwgZXhpdCBjb2RlOyBmYWlsdXJlIHNjcmVlbnNob3RzIGFyZSBldmlkZW5jZSwgbm90IHBhc3NpbmcgcHJvb2YuCmlmIHBucG0gdGVzdDp1aTplMmUgIiR0ZXN0X3BhdGgiIC10ICdjYXB0dXJlcyBwb3J0cmFpdCB0b3VjaCBuYXZpZ2F0aW9uJyA+ICIkYXJ0aWZhY3Rfcm9vdC90ZXN0LmxvZyIgMj4mMTsgdGhlbgogIHRlc3Rfc3RhdHVzPTAKZWxzZQogIHRlc3Rfc3RhdHVzPSQ/CmZpCmNhdCAiJGFydGlmYWN0X3Jvb3QvdGVzdC5sb2ciCmFydGlmYWN0X3N0YXR1cz0wCmZvciBuYW1lIGluIHRvdWNoLXJvb3QtMzkweDg0NC1iZWZvcmUtdGFwLnBuZyB0b3VjaC1jaGlsZC0zOTB4ODQ0LWJlZm9yZS10YXAucG5nOyBkbwogIGNvdW50PSQoZmluZCAiJGFydGlmYWN0X3Jvb3QiIC10eXBlIGYgLW5hbWUgIiRuYW1lIiB8IHdjIC1sKQogIGlmIFtbICIkY291bnQiIC1uZSAxIF1dOyB0aGVuCiAgICBwcmludGYgJ0V4cGVjdGVkIG9uZSAlcywgZm91bmQgJXNcbicgIiRuYW1lIiAiJGNvdW50IiA+JjIKICAgIGFydGlmYWN0X3N0YXR1cz0xCiAgZmkKZG9uZQpwcmludGYgJ3Rlc3RfZXhpdD0lc1xuYXJ0aWZhY3RfaW52ZW50b3J5X2V4aXQ9JXNcbicgIiR0ZXN0X3N0YXR1cyIgIiRhcnRpZmFjdF9zdGF0dXMiID4gIiRhcnRpZmFjdF9yb290L291dGNvbWUudHh0IgooY2QgIiRhcnRpZmFjdF9yb290IiAmJiBmaW5kIC4gLXR5cGUgZiAhIC1uYW1lIFNIQTI1NlNVTVMgLXByaW50MCB8IHNvcnQgLXogfCB4YXJncyAtMCBzaGEyNTZzdW0gPiBTSEEyNTZTVU1TKQpwcmludGYgJ1VJIHByb29mIGFydGlmYWN0czogJXNcbicgIiRhcnRpZmFjdF9yb290IgppZiBbWyAiJHRlc3Rfc3RhdHVzIiAtbmUgMCBdXTsgdGhlbgogIGV4aXQgIiR0ZXN0X3N0YXR1cyIKZmkKZXhpdCAiJGFydGlmYWN0X3N0YXR1cyIK
         run: |
           set -euo pipefail
-          [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]]
+          [[ "$(git rev-parse HEAD)" == "$SOURCE_SHA" ]]
           [[ -z "$(git status --porcelain)" ]]
-          git merge-base --is-ancestor "$BASE_SHA" HEAD
-          mkdir -p "$RUNNER_TEMP/backport-generated"
-          git diff --name-only "$BASE_SHA" HEAD | LC_ALL=C sort > "$RUNNER_TEMP/backport-generated/source-paths.txt"
-          echo "$EXPECTED_PATHS_SHA256  $RUNNER_TEMP/backport-generated/source-paths.txt" | sha256sum -c -
-          git diff --binary "$BASE_SHA" HEAD > "$RUNNER_TEMP/backport-generated/source.patch"
-          printf 'base=%s\ncandidate=%s\nworkflow=%s\nrun=%s\nattempt=%s\n' \
-            "$BASE_SHA" "$TARGET_SHA" "$WORKFLOW_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" \
-            > "$RUNNER_TEMP/backport-generated/identity.txt"
+          printf '%s' "$OVERLAY_B64" | base64 --decode > "$RUNNER_TEMP/ui-evidence.patch"
+          printf '%s' "$PAYLOAD_B64" | base64 --decode > "$RUNNER_TEMP/ui-evidence-payload.sh"
+          printf '%s  %s\n' \
+            b8d2d678edab65c5505f89127eb389aaded06eed652324b1ef761bda39389e11 "$RUNNER_TEMP/ui-evidence.patch" \
+            fae851dbf11ce13e935f47dc639b58db732e99ecbc473e5857cd5b28cc44d539 "$RUNNER_TEMP/ui-evidence-payload.sh" | sha256sum --check --strict
+          git apply --check "$RUNNER_TEMP/ui-evidence.patch"
+          git apply "$RUNNER_TEMP/ui-evidence.patch"
+          [[ "$(git diff --name-only)" == ui/src/e2e/session-management.trailing-state.e2e.test.ts ]]
+          git diff --check
+          printf '%s  %s\n' \
+            "$EXPECTED_TEST_SHA" ui/src/e2e/session-management.trailing-state.e2e.test.ts \
+            "$EXPECTED_CSS_SHA" ui/src/styles/layout.css | sha256sum --check --strict
+          mkdir -p .artifacts/ui-touch-proof
+          printf 'label=%s\nsource=%s\nworkflow=%s\nrun=%s\nattempt=%s\n' \
+            "$LABEL" "$SOURCE_SHA" "$WORKFLOW_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" \
+            > .artifacts/ui-touch-proof/workflow-identity.txt
+          sha256sum "$RUNNER_TEMP/ui-evidence.patch" "$RUNNER_TEMP/ui-evidence-payload.sh" \
+            > .artifacts/ui-touch-proof/tooling-hashes.txt
 
       - name: Setup canonical Node environment
+        id: setup
         uses: ./.github/actions/setup-node-env
         with:
           cache-mode: restore
           install-bun: "false"
 
-      - name: Generate canonical config docs and format only the reviewed scope
+      - name: Capture and test portrait root and child navigation
+        id: proof
+        env:
+          LABEL: ${{ matrix.label }}
+          SOURCE_SHA: ${{ matrix.sha }}
+          EXPECTED_TEST_SHA: ${{ matrix.test_sha }}
+          EXPECTED_CSS_SHA: ${{ matrix.css_sha }}
+        run: |
+          bash "$RUNNER_TEMP/ui-evidence-payload.sh" \
+            "$LABEL" "$SOURCE_SHA" "$EXPECTED_TEST_SHA" "$EXPECTED_CSS_SHA"
+
+      - name: Record outcomes without converting a failed proof to success
+        if: ${{ always() && steps.prepare.outcome == 'success' }}
+        env:
+          SETUP_OUTCOME: ${{ steps.setup.outcome }}
+          PROOF_OUTCOME: ${{ steps.proof.outcome }}
         run: |
           set -euo pipefail
-          out="$RUNNER_TEMP/backport-generated"
-          pnpm config:docs:gen
-          git diff --binary HEAD -- docs/.generated/config-baseline.counts.json docs/.generated/config-baseline.sha256 > "$out/config-docs.patch"
-          mapfile -t paths < "$out/source-paths.txt"
-          pnpm format --no-error-on-unmatched-pattern -- "${paths[@]}" \
-            docs/.generated/config-baseline.counts.json docs/.generated/config-baseline.sha256
+          out=.artifacts/ui-touch-proof
+          printf 'setup=%s\nproof=%s\n' "$SETUP_OUTCOME" "$PROOF_OUTCOME" > "$out/step-outcomes.txt"
+          (cd "$out" && find . -type f ! -name SHA256SUMS.workflow -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > SHA256SUMS.workflow)
 
-      - name: Export generated delta and content hashes
-        if: ${{ !cancelled() && steps.source.outcome == 'success' }}
-        run: |
-          set -euo pipefail
-          out="$RUNNER_TEMP/backport-generated"
-          [[ -f "$out/source.patch" ]]
-          git diff --binary HEAD > "$out/generated-format.patch"
-          cp docs/.generated/config-baseline.counts.json docs/.generated/config-baseline.sha256 "$out/"
-          { cat "$out/source-paths.txt"; printf '%s\n' docs/.generated/config-baseline.counts.json docs/.generated/config-baseline.sha256; } | LC_ALL=C sort -u > "$out/allowed-output-paths.txt"
-          git diff --name-only HEAD | LC_ALL=C sort > "$out/generated-paths.txt"
-          comm -23 "$out/generated-paths.txt" "$out/allowed-output-paths.txt" > "$out/unexpected-paths.txt"
-          [[ ! -s "$out/unexpected-paths.txt" ]]
-          (cd "$out" && sha256sum source.patch config-docs.patch generated-format.patch config-baseline.counts.json config-baseline.sha256 > SHA256SUMS)
-
-      - name: Verify generated baseline and scoped formatting
-        run: |
-          set -euo pipefail
-          pnpm config:docs:check
-          mapfile -t paths < "$RUNNER_TEMP/backport-generated/source-paths.txt"
-          pnpm format:check --no-error-on-unmatched-pattern -- "${paths[@]}" \
-            docs/.generated/config-baseline.counts.json docs/.generated/config-baseline.sha256
-          git diff --check
-
-      - name: Record owner-selected check plan for next exact candidate
-        run: |
-          pnpm check:changed --base "$BASE_SHA" --head HEAD --dry-run \
-            > "$RUNNER_TEMP/backport-generated/check-plan.log" 2>&1
-
-      - name: Upload generated patch for review, never commit or publish it
-        if: ${{ always() && steps.source.outcome == 'success' }}
+      - name: Upload actual screenshots and diagnostics even on base failure
+        if: ${{ always() && steps.prepare.outcome == 'success' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: required-backports-generated-${{ inputs.target_ref }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/backport-generated/
+          name: required-backports-ui-${{ matrix.label }}-${{ matrix.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/ui-touch-proof/
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
