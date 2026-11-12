@@ -120,10 +120,9 @@ default so a hung callback cannot retain the serialized delivery lane.
 
 `before_prompt_build` is the one modifying hook whose losses are reported to the
 agent. When a contribution never reaches the prompt — the handler threw, it ran
-past its budget, the chain was skipped because a nested prompt build re-entered
-assembly, or the dispatch itself rejected before any handler ran — OpenClaw adds
-a short `<dropped_plugin_context>` block to the turn's `appendContext`, naming
-the plugin and the reason. Without it an agent cannot tell "this plugin had
+past its budget, or the dispatch itself rejected before any handler ran —
+OpenClaw adds a short `<dropped_plugin_context>` block to the turn's
+`appendContext`, naming the plugin and the reason. Without it an agent cannot tell "this plugin had
 nothing to add" from "this plugin's context was lost", so it reasons over a
 prompt that only looks complete. Both prompt-build phases report, including the
 authority-scoped phase that runs after the turn's tool surface is final.
@@ -139,9 +138,9 @@ bounded so a warning cannot distort the prompt it is warning about: identical
 plugin/reason pairs collapse, at most five entries are listed with a `+N more`
 remainder, the whole marker is capped at 640 bytes, and plugin ids are truncated
 and restricted to an identifier charset so plugin-authored text cannot break the
-marker's frame or address the model directly. Policy is unchanged — the
-re-entrancy guard still guards, budgets still expire, fail-open is still
-fail-open, and surviving handlers' contributions still land.
+marker's frame or address the model directly. Policy is unchanged — budgets
+still expire, fail-open is still fail-open, and surviving handlers'
+contributions still land.
 
 ## Hook catalog
 
