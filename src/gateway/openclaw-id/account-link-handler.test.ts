@@ -11,12 +11,23 @@ const OPENCLAW_ID = { enabled: true, issuerUrl: ISSUER, clientId: "control-ui" }
 const store = vi.hoisted(() => ({
   link: vi.fn(async () => ({ ok: true as const })),
   unlink: vi.fn(async () => ({ unlinked: true })),
-  linkOf: vi.fn(async () => ({ accountId: "acct-owner", email: "josh@id.test" })),
+  linksOf: vi.fn(async () => [{ accountId: "acct-other", email: "josh@id.test" }]),
+}));
+// mock-isolation: the personal-profile authority owner has its own tests; here it admits the
+// caller's own profile, and the handler adds the route and Labs checks around it.
+vi.mock("../server-methods/personal-profile-authorization.js", () => ({
+  preparePersonalProfileAction: vi.fn(
+    async (opts: { client: { authenticatedUserProfile: { profileId: string } } }) => ({
+      owner: opts.client.authenticatedUserProfile.profileId,
+      signal: new AbortController().signal,
+      assertCurrent: () => {},
+    }),
+  ),
 }));
 vi.mock("../../state/user-profile-openclaw-id.js", () => ({
   linkCanonicalOpenClawIdUserProfile: store.link,
   unlinkCanonicalOpenClawIdUserProfile: store.unlink,
-  readOpenClawIdLinkOfProfile: store.linkOf,
+  readOpenClawIdLinksOfProfile: store.linksOf,
 }));
 
 function idToken(claims: Record<string, unknown>) {
@@ -74,6 +85,8 @@ afterAll(() => {
   vi.unstubAllGlobals();
 });
 
+const config = { gateway: { openclawId: { ...OPENCLAW_ID } } };
+
 async function call(client: unknown, params: Record<string, unknown>) {
   let reply: { ok: boolean; payload?: unknown; code?: string } | undefined;
   await handlers["openclawId.account"]!({
@@ -82,7 +95,7 @@ async function call(client: unknown, params: Record<string, unknown>) {
     respond: (ok: boolean, payload?: unknown, error?: { details?: { code?: string } }) => {
       reply = { ok, payload, code: error?.details?.code };
     },
-    context: { getRuntimeConfig: () => ({ gateway: { openclawId: OPENCLAW_ID } }) },
+    context: { getRuntimeConfig: () => config },
   } as unknown as GatewayRequestHandlerOptions);
   return reply!;
 }
@@ -99,11 +112,22 @@ describe("openclawId.account linking", () => {
       ok: true,
       payload: { account: { sub: "acct-owner" }, link: "linked" },
     });
-    expect(store.link).toHaveBeenCalledExactlyOnceWith({
-      profileId: "profile-josh",
-      accountId: "acct-owner",
-      email: "josh@id.test",
-    });
+    expect(store.link).toHaveBeenCalledExactlyOnceWith(
+      { profileId: "profile-josh", accountId: "acct-owner", email: "josh@id.test" },
+      { assertCurrent: expect.any(Function) },
+    );
+    // The write's commit check fails once Labs turns off or the connection's profile changes.
+    const [, { assertCurrent }] = store.link.mock.calls[0] as unknown as [
+      unknown,
+      { assertCurrent: () => void },
+    ];
+    expect(() => assertCurrent()).not.toThrow();
+    config.gateway.openclawId.enabled = false;
+    expect(() => assertCurrent()).toThrow("this connection changed");
+    config.gateway.openclawId.enabled = true;
+    personal.authenticatedUserProfile.profileId = "someone-else";
+    expect(() => assertCurrent()).toThrow("this connection changed");
+    personal.authenticatedUserProfile.profileId = "profile-josh";
   });
 
   it("signs in without linking unless asked, and reports and removes only the caller's link", async () => {
@@ -119,11 +143,14 @@ describe("openclawId.account linking", () => {
     expect(store.link).not.toHaveBeenCalled();
     expect(await call(personal, { action: "link_status" })).toMatchObject({
       ok: true,
-      payload: { linked: { email: "josh@id.test", owner: false } },
+      payload: { linked: [{ email: "josh@id.test", owner: false }] },
     });
-    expect(store.linkOf).toHaveBeenCalledWith("profile-josh");
+    expect(store.linksOf).toHaveBeenCalledWith("profile-josh");
     expect(await call(personal, { action: "unlink" })).toMatchObject({ ok: true });
-    expect(store.unlink).toHaveBeenCalledWith({ profileId: "profile-josh" });
+    expect(store.unlink).toHaveBeenCalledWith(
+      { profileId: "profile-josh" },
+      { assertCurrent: expect.any(Function) },
+    );
   });
 
   it("refuses link status and unlink without a personal connection", async () => {

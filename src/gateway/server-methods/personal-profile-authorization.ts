@@ -44,17 +44,20 @@ export function currentPersonalProfileClient(
   }
   const cfg = context.getRuntimeConfig();
   const profileId = typeof owner === "string" ? owner : owner?.profileId;
+  // An owner device attributed to its linked profile keeps owner authority (OCF-510).
   const policy =
-    typeof owner === "object"
-      ? resolveOperatorRolePolicyForAssignment(
-          owner.profileId,
-          owner.role,
-          cfg,
-          owner.githubLogin ?? null,
-        )
-      : profileId
-        ? resolveOperatorRolePolicyForProfile(profileId, cfg)
-        : resolveOperatorRolePolicy(client, cfg);
+    client.internal?.openclawIdPrincipal?.kind === "owner"
+      ? undefined
+      : typeof owner === "object"
+        ? resolveOperatorRolePolicyForAssignment(
+            owner.profileId,
+            owner.role,
+            cfg,
+            owner.githubLogin ?? null,
+          )
+        : profileId
+          ? resolveOperatorRolePolicyForProfile(profileId, cfg)
+          : resolveOperatorRolePolicy(client, cfg);
   const granted = client.connect.scopes ?? [];
   const scopes = policy ? intersectOperatorScopes(granted, policy.scopes) : granted;
   if (

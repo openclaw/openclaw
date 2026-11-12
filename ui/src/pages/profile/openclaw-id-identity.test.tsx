@@ -35,13 +35,13 @@ function mount(request: GatewayBrowserClient["request"]) {
 }
 
 it("shows the linked account with its claw role and unlinks it", async () => {
-  let linked: { email: string; owner: boolean } | null = { email: "josh@id.test", owner: true };
+  let linked: Array<{ email: string; owner: boolean }> = [{ email: "josh@id.test", owner: true }];
   const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
     if (method === "openclawId.status") {
       return status("device");
     }
     if (params?.action === "unlink") {
-      linked = null;
+      linked = [];
       return { unlinked: true };
     }
     return { linked };
@@ -62,7 +62,7 @@ it.each([
   ["the Labs switch off", status("device", "off")],
 ])("is absent on %s", async (_name, current) => {
   const request = vi.fn(async (method: string) =>
-    method === "openclawId.status" ? current : { linked: null },
+    method === "openclawId.status" ? current : { linked: [] },
   ) as unknown as GatewayBrowserClient["request"];
   const view = mount(request);
   await waitForSolid(() => expect(request).toHaveBeenCalledWith("openclawId.status", {}));

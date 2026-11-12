@@ -126,25 +126,26 @@ export function readOpenClawIdLinkedProfileInDatabase(
   });
 }
 
-/** The OCID account linked to a profile, or null when it has none. */
-export function readOpenClawIdLinkOfProfileInDatabase(
+/** The OCID accounts linked to a profile (several after a merge), oldest first. */
+export function readOpenClawIdLinksOfProfileInDatabase(
   db: EngineConnection,
   profileId: string,
-): { accountId: string; email: string | null } | null {
+): Array<{ accountId: string; email: string | null }> {
   if (!tableExists(db, "user_profile_identities")) {
-    return null;
+    return [];
   }
-  const identity = executeSqliteQuerySync(
+  return executeSqliteQuerySync(
     db,
     userProfilesDb(db)
       .selectFrom("user_profile_identities")
       .select(["subject", "verified_email_json"])
       .where("provider", "=", openClawIdProfileProvider)
-      .where("profile_id", "=", profileId),
-  ).rows[0];
-  return identity
-    ? { accountId: identity.subject, email: readDisplayEmail(identity.verified_email_json) }
-    : null;
+      .where("profile_id", "=", profileId)
+      .orderBy("created_at"),
+  ).rows.map((identity) => ({
+    accountId: identity.subject,
+    email: readDisplayEmail(identity.verified_email_json),
+  }));
 }
 
 export const openClawIdUserProfileReadOperations = {
@@ -156,8 +157,8 @@ export const openClawIdUserProfileReadOperations = {
     type: "userProfiles.openClawId.linkedProfile" as const,
     profile: readOpenClawIdLinkedProfileInDatabase(db, accountId),
   }),
-  "userProfiles.openClawId.linkOf": ({ profileId }: { profileId: string }, db) => ({
-    type: "userProfiles.openClawId.linkOf" as const,
-    link: readOpenClawIdLinkOfProfileInDatabase(db, profileId),
+  "userProfiles.openClawId.linksOf": ({ profileId }: { profileId: string }, db) => ({
+    type: "userProfiles.openClawId.linksOf" as const,
+    links: readOpenClawIdLinksOfProfileInDatabase(db, profileId),
   }),
 } satisfies WorkerOperationHandlers<EngineConnection>;

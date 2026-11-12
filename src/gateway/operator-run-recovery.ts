@@ -34,7 +34,7 @@ import {
 import {
   isOpenClawIdTunnelPrincipalCurrent,
   onOpenClawIdTunnelPrincipalsChanged,
-  openclawIdTunnelRolePolicy,
+  openclawIdSubjectRolePolicy,
   prepareOpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
 import {
@@ -159,7 +159,6 @@ async function restoreGatewayOperatorSnapshot(params: {
       subscriptions.push(() => ingress.signal.removeEventListener("abort", revoke));
     }
     const principal = snapshot.openclawIdPrincipal;
-    const membershipPolicy = openclawIdTunnelRolePolicy(principal);
     if (principal) {
       await prepareOpenClawIdTunnelPrincipal(principal);
     }
@@ -213,13 +212,14 @@ async function restoreGatewayOperatorSnapshot(params: {
           !isOperatorRoleSourcePolicyCurrent(
             snapshot.rolePolicy,
             sourceRolePolicy(
-              membershipPolicy ??
+              openclawIdSubjectRolePolicy(principal, () =>
                 resolveOperatorRolePolicyForAssignment(
                   snapshot.profileId,
                   snapshot.assignedRole,
                   cfg,
                   snapshot.githubLogin,
                 ),
+              ),
             ),
             snapshot.scopes,
           )) ||

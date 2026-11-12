@@ -3,7 +3,7 @@
 // signing in there proves both sides on one connection, so the Gateway links that account to
 // this profile with no picker. Owner devices of a linked account then arrive as this person.
 // Linking grants nothing; owner authority still comes from each device's certificate.
-import { createSignal, onSettled, Show } from "solid-js";
+import { createSignal, For, onSettled, Show } from "solid-js";
 import { clawNameFromHostname } from "../../components/openclaw-id/claw-name.ts";
 import { SettingsRow, SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { registerProfileEnglish } from "../../i18n/locales/en-profile.ts";
@@ -21,7 +21,7 @@ type Link = { email: string | null; owner: boolean };
 export function OpenClawIdIdentity() {
   const context = useApplication();
   // undefined while loading or unavailable: the row is absent until it can act.
-  const [state, setState] = createSignal<{ link: Link | null; claw: string | null }>();
+  const [state, setState] = createSignal<{ links: Link[]; claw: string | null }>();
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
   const client = () => context.gateway.snapshot.client;
@@ -36,11 +36,11 @@ export function OpenClawIdIdentity() {
       setState(undefined);
       return;
     }
-    const { linked } = await current.request<{ linked: Link | null }>("openclawId.account", {
+    const { linked } = await current.request<{ linked: Link[] }>("openclawId.account", {
       action: "link_status",
     });
     setState({
-      link: linked,
+      links: linked,
       claw: status.link.hostname ? clawNameFromHostname(status.link.hostname) : null,
     });
   };
@@ -67,9 +67,7 @@ export function OpenClawIdIdentity() {
       const outcome = await linkOpenClawIdToProfile(current);
       if (outcome === "linked_elsewhere") {
         setError(t("profilePage.openclawId.linkedElsewhere"));
-      } else if (outcome === "profile_linked") {
-        setError(t("profilePage.openclawId.profileLinked"));
-      } else if (outcome === "owner_profile") {
+      } else if (outcome === "owner_profile" || outcome === "profile_changed") {
         setError(t("profilePage.openclawId.failed"));
       }
     });
@@ -77,6 +75,10 @@ export function OpenClawIdIdentity() {
     run(async () => {
       await client()?.request("openclawId.account", { action: "unlink" });
     });
+  const label = (linked: Link, claw: string | null) => {
+    const email = linked.email ?? t("profilePage.openclawId.title");
+    return linked.owner && claw ? t("profilePage.openclawId.ownerOf", { email, claw }) : email;
+  };
   onSettled(() => {
     void load().catch(() => setState(undefined));
   });
@@ -88,26 +90,23 @@ export function OpenClawIdIdentity() {
             title={t("profilePage.openclawId.title")}
             description={
               <Show
-                when={current().link}
+                when={current().links.length > 0}
                 fallback={
                   <SettingsStatus kind="muted" label={t("profilePage.openclawId.notLinked")} />
                 }
               >
-                {(linked) => (
-                  <span class="identity-account">
-                    {linked().owner && current().claw
-                      ? t("profilePage.openclawId.ownerOf", {
-                          email: linked().email ?? t("profilePage.openclawId.title"),
-                          claw: current().claw!,
-                        })
-                      : (linked().email ?? t("profilePage.openclawId.title"))}
-                  </span>
-                )}
+                <span class="identity-emails">
+                  <For each={current().links}>
+                    {(linked) => (
+                      <span class="identity-account">{label(linked, current().claw)}</span>
+                    )}
+                  </For>
+                </span>
               </Show>
             }
             control={
               <Show
-                when={current().link}
+                when={current().links.length > 0}
                 fallback={
                   <button
                     class="btn btn--sm"

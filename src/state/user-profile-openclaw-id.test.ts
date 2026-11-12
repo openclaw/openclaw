@@ -5,7 +5,7 @@ import {
   ensureCanonicalUserProfileForOpenClawIdIdentity as ensureIdentity,
   linkCanonicalOpenClawIdUserProfile as link,
   readOpenClawIdLinkedProfile,
-  readOpenClawIdLinkOfProfile,
+  readOpenClawIdLinksOfProfile,
   readOpenClawIdUserProfiles,
   unlinkCanonicalOpenClawIdUserProfile as unlink,
 } from "./user-profile-openclaw-id.js";
@@ -122,16 +122,13 @@ it("links one OCID account to one personal profile, carried by merge and removed
   expect(
     await link({ profileId: person.id, accountId: "acct-josh", email: "josh@id.test" }, options),
   ).toEqual({ ok: true });
-  // Idempotent for the same profile; refused for another profile or another account.
+  // Idempotent for the same profile; refused for another profile.
   expect(
     await link({ profileId: person.id, accountId: "acct-josh", email: null }, options),
   ).toEqual({ ok: true });
   expect(await link({ profileId: other.id, accountId: "acct-josh", email: null }, options)).toEqual(
     { ok: false, code: "linked_elsewhere" },
   );
-  expect(
-    await link({ profileId: person.id, accountId: "acct-else", email: null }, options),
-  ).toEqual({ ok: false, code: "profile_linked" });
   expect(
     await link({ profileId: owner.id, accountId: "acct-owner", email: null }, options),
   ).toEqual({ ok: false, code: "owner_profile" });
@@ -144,17 +141,25 @@ it("links one OCID account to one personal profile, carried by merge and removed
   expect(await readOpenClawIdLinkedProfile("acct-josh", options)).toMatchObject({
     profileId: person.id,
   });
-  expect(await readOpenClawIdLinkOfProfile(person.id, options)).toEqual({
-    accountId: "acct-josh",
-    email: "josh@id.test",
-  });
+  expect(await readOpenClawIdLinksOfProfile(person.id, options)).toEqual([
+    { accountId: "acct-josh", email: "josh@id.test" },
+  ]);
   // Membership-style ensure reuses the linked profile rather than creating another.
   expect((await ensureIdentity({ accountId: "acct-josh" }, options)).id).toBe(person.id);
 
+  // Merging linked profiles keeps every account; status lists them and unlink removes them all.
+  await link({ profileId: other.id, accountId: "acct-second", email: "second@id.test" }, options);
   await mergeCanonicalUserProfiles(person.id, other.id, options);
+  expect(
+    (await readOpenClawIdLinksOfProfile(other.id, options)).map((l) => l.accountId).toSorted(),
+  ).toEqual(["acct-josh", "acct-second"]);
   expect(await readOpenClawIdLinkedProfile("acct-josh", options)).toMatchObject({
     profileId: other.id,
   });
+  // A link proven for a profile that was merged away meanwhile is not redirected.
+  expect(
+    await link({ profileId: person.id, accountId: "acct-third", email: null }, options),
+  ).toEqual({ ok: false, code: "profile_changed" });
   expect(await unlink({ profileId: other.id }, options)).toEqual({ unlinked: true });
   expect(await readOpenClawIdLinkedProfile("acct-josh", options)).toBeNull();
   expect(await unlink({ profileId: other.id }, options)).toEqual({ unlinked: false });

@@ -37,15 +37,15 @@ export async function readOpenClawIdLinkedProfile(
   return reply?.profile ?? null;
 }
 
-/** The OCID account linked to a profile, or null when it has none. */
-export async function readOpenClawIdLinkOfProfile(
+/** The OCID accounts linked to a profile (several after a merge), oldest first. */
+export async function readOpenClawIdLinksOfProfile(
   profileId: string,
   options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> = {},
-): Promise<{ accountId: string; email: string | null } | null> {
+): Promise<Array<{ accountId: string; email: string | null }>> {
   const reply = await executeExistingOpenClawStateRead(
     options,
-    { type: "userProfiles.openClawId.linkOf", input: { profileId } },
+    { type: "userProfiles.openClawId.linksOf", input: { profileId } },
     { current: true },
   );
-  return reply?.link ?? null;
+  return reply?.links ?? [];
 }

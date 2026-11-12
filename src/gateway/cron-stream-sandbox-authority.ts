@@ -33,6 +33,7 @@ import { prepareUserProfileIdentity } from "../state/user-profile-list.js";
 import {
   isOpenClawIdTunnelPrincipalCurrent,
   onOpenClawIdTunnelPrincipalsChanged,
+  openclawIdSubjectRolePolicy,
   openclawIdTunnelRolePolicy,
   prepareOpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
@@ -93,13 +94,14 @@ export async function prepareCronStreamSandboxAuthority(params: {
   const originalRole = operator
     ? structuredClone(
         sourceRolePolicy(
-          membershipPolicy ??
+          openclawIdSubjectRolePolicy(principal, () =>
             resolveOperatorRolePolicyForAssignment(
               operator.profileId,
               operator.assignedRole,
               config,
               operator.githubLogin,
             ),
+          ),
         ),
       )
     : undefined;
@@ -248,13 +250,14 @@ export async function prepareCronStreamSandboxAuthority(params: {
     }
     const identity = profile?.readCurrentFacts(emailBindingIds);
     const role = operator
-      ? (membershipPolicy ??
-        resolveOperatorRolePolicyForAssignment(
-          operator.profileId,
-          operator.assignedRole,
-          currentConfig,
-          identity ? (identity.profile.githubLogin ?? null) : operator.githubLogin,
-        ))
+      ? openclawIdSubjectRolePolicy(principal, () =>
+          resolveOperatorRolePolicyForAssignment(
+            operator.profileId,
+            operator.assignedRole,
+            currentConfig,
+            identity ? (identity.profile.githubLogin ?? null) : operator.githubLogin,
+          ),
+        )
       : undefined;
     if (operator) {
       if (
