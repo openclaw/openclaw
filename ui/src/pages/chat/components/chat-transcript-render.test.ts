@@ -514,14 +514,12 @@ describe("chat transcript rendering", () => {
     expect(container.querySelector(".chat-work-group")).not.toBeNull();
     expect(container.querySelector("openclaw-browser-tab-card")).toBeNull();
     expect(capture).not.toHaveBeenCalled();
-    requireElement<HTMLButtonElement>(container, ".chat-work-group button").click();
+    requireElement(container, ".chat-work-group button").click();
     await waitForSolid(() =>
-      expect(requireElement<HTMLButtonElement>(container, ".chat-tool-msg-summary").disabled).toBe(
-        false,
-      ),
+      expect(requireElement(container, ".chat-tool-msg-summary").matches(":disabled")).toBe(false),
     );
     expect(container.querySelector("openclaw-browser-tab-card")).toBeNull();
-    requireElement<HTMLButtonElement>(container, ".chat-tool-msg-summary").click();
+    requireElement(container, ".chat-tool-msg-summary").click();
     await waitForSolid(() =>
       expect(container.querySelector(".chat-tool-msg-body")?.textContent).toContain("Opened"),
     );

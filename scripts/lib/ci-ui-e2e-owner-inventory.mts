@@ -359,6 +359,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["chat"],
     ["ui/src/lib/chat/tool-cards.ts"],
   ),
+  pageWatch("ui/src/e2e/chat-browser-tool-previews.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/browser-talk-microphone-lifetime.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/browser-talk-ordering.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/browser-talk-start-stop.e2e.test.ts", ["chat", "config"]),
