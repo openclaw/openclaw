@@ -13,7 +13,7 @@ import {
 } from "./plugin-module-loader-cache.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import {
-  resolvePluginRootPublicSurfacePath,
+  resolvePluginRootPublicSurfaceLocation,
   resolveRetainedDoctorPath,
 } from "./public-surface-runtime.js";
 
@@ -77,15 +77,14 @@ export function loadPluginPublicArtifactModuleSync<T extends object>(params: {
   artifactBasename: string;
   origin?: "bundled" | "global";
 }): T {
-  const modulePath = resolvePluginRootPublicSurfacePath(params);
-  if (!modulePath) {
+  const location = resolvePluginRootPublicSurfaceLocation(params);
+  if (!location) {
     throw new MissingPublicSurfaceError(
       `Unable to resolve plugin public surface ${params.pluginRoot}/${params.artifactBasename}`,
     );
   }
   return loadValidatedPublicSurfaceModule({
-    modulePath,
-    boundaryRoot: params.pluginRoot,
+    ...location,
     surfaceLabel: `plugin public surface ${params.artifactBasename}`,
     origin: params.origin ?? "global",
   }) as T;
@@ -113,16 +112,15 @@ export function loadBundledPluginPublicArtifactModuleFromCandidatesSync<T extend
         ? { modulePath, boundaryRoot: params.retainedAt, origin: "bundled" }
         : null;
     } else if (params.owner) {
-      const modulePath = resolvePluginRootPublicSurfacePath({
+      const resolved = resolvePluginRootPublicSurfaceLocation({
         pluginRoot: params.owner.rootDir,
         pluginId: params.owner.id,
         entrySource: params.owner.source,
         artifactBasename,
       });
-      location = modulePath
+      location = resolved
         ? {
-            modulePath,
-            boundaryRoot: params.owner.rootDir,
+            ...resolved,
             pluginId: params.owner.id,
             origin: params.owner.origin,
           }

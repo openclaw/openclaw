@@ -249,6 +249,7 @@ extension SettingsProTab {
     func syncAfterOnboardingReset() {
         self.invalidateGatewaySetupAttempt()
         self.setupStatusText = nil
+        self.setupCode = ""
         self.stagedGatewaySetupLink = nil
         self.gatewayAuthFields.pendingOverride = nil
         self.syncSettingsState()
@@ -404,6 +405,8 @@ extension SettingsProTab {
                 self.handleScannedGatewayLink(link)
             case let .setupCode(code):
                 self.handleScannedSetupCode(code)
+            case .espDevice:
+                return
             }
         }
         if delivery == nil {
@@ -666,8 +669,10 @@ extension SettingsProTab {
 
     func title(for route: SettingsRoute) -> String {
         switch route {
+        case .deviceSettings: String(localized: "Device Settings")
         case .gateway: String(localized: "Gateway")
         case .appleWatch: String(localized: "Apple Watch")
+        case .espSetup: String(localized: "ESP device setup")
         case .approvals: String(localized: "Approvals")
         case .diagnostics: String(localized: "Diagnostics")
         case .licenses: String(localized: "Licenses")
@@ -731,17 +736,12 @@ extension SettingsProTab {
             return problem.localizedMessage
         }
         let trimmedSetup = self.setupStatusText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let gatewayStatus = self.appModel.gatewayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let friendly = self.friendlyGatewayMessage(from: gatewayStatus) { return friendly }
+        // An idle gateway adds nothing unless an action left a notice.
+        let source = GatewayStatusBuilder.source(for: self.appModel.connection.node, appModel: self.appModel)
+        let gatewayStatus = source == .phase(.idle) ? nil : source.statusText
         if let friendly = self.friendlyGatewayMessage(from: trimmedSetup) { return friendly }
-        if self.isTransientSetupStatus(trimmedSetup),
-           !gatewayStatus.isEmpty,
-           gatewayStatus != "Offline"
-        {
-            return gatewayStatus
-        }
+        if self.isTransientSetupStatus(trimmedSetup), let gatewayStatus { return gatewayStatus }
         if !trimmedSetup.isEmpty { return trimmedSetup }
-        if gatewayStatus.isEmpty || gatewayStatus == "Offline" { return nil }
         return gatewayStatus
     }
 
@@ -833,7 +833,7 @@ extension SettingsProTab {
         }
         let connected = self.gatewayConnected
         return (
-            connected ? String(localized: "Connected") : self.appModel.gatewayDisplayStatusText,
+            self.appModel.gatewayDisplayStatusText,
             connected ? String(localized: "online") : String(localized: "offline"),
             connected ? OpenClawBrand.ok : .secondary)
     }

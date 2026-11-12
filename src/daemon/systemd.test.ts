@@ -560,7 +560,7 @@ describe("system-scope gateway unit detection (openclaw#87577)", () => {
       expect(requireFirstWrite(write)).toContain("Restarted systemd service");
     } else {
       await expect(operation).rejects.toThrow(
-        /openclaw\.service is a system-scope unit \(\/etc\/systemd\/system\/openclaw\.service\); run `sudo systemctl restart openclaw\.service`/,
+        /openclaw\.service is a system-scope unit; run `sudo systemctl restart openclaw\.service` to restart it \(\/etc\/systemd\/system\/openclaw\.service\)/,
       );
       expect(execFileMock).not.toHaveBeenCalled();
       expect(write).not.toHaveBeenCalled();
@@ -1982,7 +1982,7 @@ describe("systemd service control", () => {
     vi.spyOn(os, "userInfo").mockImplementationOnce(() => {
       throw new Error("no user info");
     });
-    execFileMock.mockResolvedValueOnce(failure("Failed to connect to bus"));
+    execFileMock.mockResolvedValue(failure("Failed to connect to bus"));
     const operation = stopSystemdService({
       stdout: captureOutput().stdout,
       env: { HOME: MANAGED_HOME, USER: "", LOGNAME: "" },

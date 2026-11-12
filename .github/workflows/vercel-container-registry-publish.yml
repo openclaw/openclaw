@@ -247,6 +247,25 @@ jobs:
             --promote-aliases \
             "${browser_args[@]}"
 
+      - name: Verify complete cross-registry readback
+        id: registry_readback
+        env:
+          INCLUDE_BROWSER: ${{ inputs.include_browser }}
+          TARGET_IMAGE: ${{ vars.VERCEL_VCR_IMAGE }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          browser_args=()
+          if [[ "${INCLUDE_BROWSER}" == "true" ]]; then
+            browser_args+=(--include-browser)
+          fi
+          node scripts/container-registry-readback.mjs \
+            --version "${VERSION}" \
+            --docker-image "ghcr.io/${GITHUB_REPOSITORY}" \
+            --docker-image "docker.io/openclaw/openclaw" \
+            --vercel-image "${TARGET_IMAGE}" \
+            "${browser_args[@]}"
+
       - name: Summarize Vercel publication
         if: ${{ always() }}
         env:
@@ -254,6 +273,7 @@ jobs:
           COPY_OUTCOME: ${{ steps.copy_images.outcome }}
           INCLUDE_BROWSER: ${{ inputs.include_browser }}
           PROMOTE_OUTCOME: ${{ steps.promote_aliases.outcome }}
+          READBACK_OUTCOME: ${{ steps.registry_readback.outcome }}
           SMOKE_OUTCOME: ${{ steps.sandbox_smoke.outcome }}
           TARGET_IMAGE: ${{ vars.VERCEL_VCR_IMAGE }}
           VERSION: ${{ inputs.version }}
@@ -263,7 +283,7 @@ jobs:
             variants="${variants}, browser"
           fi
           status="passed"
-          if [[ "${COPY_OUTCOME}" != "success" || "${SMOKE_OUTCOME}" != "success" || "${PROMOTE_OUTCOME}" != "success" ]]; then
+          if [[ "${COPY_OUTCOME}" != "success" || "${SMOKE_OUTCOME}" != "success" || "${PROMOTE_OUTCOME}" != "success" || "${READBACK_OUTCOME}" != "success" ]]; then
             status="failed"
             if [[ "${ADVISORY}" == "true" ]]; then
               status="failed (non-blocking)"
@@ -279,4 +299,5 @@ jobs:
             echo "- Copy: ${COPY_OUTCOME}"
             echo "- Sandbox smoke: ${SMOKE_OUTCOME}"
             echo "- Alias promotion: ${PROMOTE_OUTCOME}"
+            echo "- Cross-registry readback: ${READBACK_OUTCOME}"
           } >> "${GITHUB_STEP_SUMMARY}"

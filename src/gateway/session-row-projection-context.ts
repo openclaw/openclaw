@@ -8,6 +8,7 @@ import {
   readAgentRunIndexVersion,
 } from "../infra/agent-run-registry.js";
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
+import { captureModelCostPricing } from "../utils/usage-format.js";
 import { createSessionIdentityProjection } from "./session-identity-projection.js";
 import * as records from "./session-row-projection-record.js";
 import { buildSessionSwarmSummary } from "./session-swarm-summary.js";
@@ -21,7 +22,14 @@ import {
 import { refreshSessionRowProfiles, replaceSessionRowFacts } from "./session-utils-row.js";
 
 /** Registry and display facts have their own lifecycle, independent of stored row acquisition. */
-export function createSessionRowProjectionContext(subagents: SubagentSessionListReadView) {
+export function createSessionRowProjectionContext(
+  subagents: SubagentSessionListReadView,
+  owner: {
+    state: () => { cfg: records.Inputs["cfg"]; epoch: number; disposed: boolean };
+    prepareRegistry: () => Promise<void> | undefined;
+    invalidateChildren?: (key?: string) => void;
+  },
+) {
   let preparedEpoch = -1;
   let registryRevision: number | undefined = getSubagentRegistryPublicationRevision();
   let registrySnapshot = subagents.snapshotIdentity();
@@ -30,6 +38,7 @@ export function createSessionRowProjectionContext(subagents: SubagentSessionList
   let subagentRevision = 0;
   let parentRevision = 0;
   let modelFactsDirty = false;
+  let pricingConfig: records.Inputs["cfg"] | undefined;
   let rosterConfig: records.Inputs["cfg"] | undefined;
   let configuredAgentIds: ReadonlySet<string> = new Set();
   const identityProjection = createSessionIdentityProjection();
@@ -63,7 +72,7 @@ export function createSessionRowProjectionContext(subagents: SubagentSessionList
     const previousIndexRevision = subagentIndex.revision;
     const subagentRuns = subagentIndex.read(now);
     const subagentChanged = previousIndexRevision !== subagentIndex.revision;
-    if (subagentChanged || registryRevision === undefined) {
+    if (registryRevision === undefined) {
       subagentRevision++;
     }
     // Keep maps local to this projection; independent builders still own fresh indexes.
@@ -81,6 +90,7 @@ export function createSessionRowProjectionContext(subagents: SubagentSessionList
             projectedAgentRuns,
             projectedSubagentActivity,
             userProfileIdentityById: current.userProfileIdentityById,
+            modelCostPricing: current.modelCostPricing,
           }),
           identityProjection,
         }
@@ -99,9 +109,37 @@ export function createSessionRowProjectionContext(subagents: SubagentSessionList
   }
   return {
     dispose: subagentIndex.dispose,
+    prepareRuntimeFacts: (): Promise<void> | undefined => {
+      const { cfg, epoch, disposed } = owner.state();
+      if (disposed) {
+        return undefined;
+      }
+      const pending = !subagents.snapshotIdentity() ? subagents.prepare() : owner.prepareRegistry();
+      if (pending) {
+        return pending;
+      }
+      if (current.modelCostPricing && pricingConfig === cfg) {
+        return undefined;
+      }
+      return captureModelCostPricing(cfg).then((pricing) => {
+        const latest = owner.state();
+        if (!latest.disposed && latest.cfg === cfg && latest.epoch === epoch) {
+          current.modelCostPricing = pricing;
+          pricingConfig = cfg;
+        }
+      });
+    },
+    adoptPresentationConfig(rows: Iterable<records.Row>, cfg: records.Inputs["cfg"]) {
+      // Display commits replace config ownership without rebuilding facts or waiting for readers.
+      for (const row of rows) {
+        if (row.materialized && row.materialized.source.cfg !== cfg) {
+          row.materialized = replaceSessionRowFacts(row.materialized, undefined, { cfg });
+        }
+      }
+    },
     readPrepared(epoch: number): SessionListRowContext | undefined {
       return preparedEpoch === epoch &&
-        parentRevision === subagentRevision &&
+        parentRevision === subagentIndex.revision &&
         agentRunRevision === readAgentRunIndexVersion() &&
         registryRevision === getSubagentRegistryPublicationRevision() &&
         registrySnapshot === subagents.snapshotIdentity()
@@ -159,6 +197,7 @@ export function createSessionRowProjectionContext(subagents: SubagentSessionList
           registryRevision = undefined;
       }
       modelFactsDirty = true;
+      current.modelCostPricing = undefined;
       return false;
     },
     prepare(
@@ -178,14 +217,32 @@ export function createSessionRowProjectionContext(subagents: SubagentSessionList
         }
         rosterConfig = cfg;
       }
-      const broad = registryRevision === undefined;
+      const broad =
+        registryRevision === undefined || registrySnapshot !== subagents.snapshotIdentity();
       prepare(epoch);
-      if (parentRevision === subagentRevision) {
+      if (!broad && parentRevision === subagentIndex.revision) {
         return;
       }
+      const invalidatePresentation = (row: records.Row | undefined) => {
+        if (row) {
+          row.subagentRevision = undefined;
+        }
+      };
+      for (const key of subagentIndex.changedSwarmRequesters) {
+        for (const row of matching({ key })) {
+          invalidatePresentation(row);
+        }
+      }
+      if (broad) {
+        owner.invalidateChildren?.();
+      }
       for (const key of broad
-        ? current.subagentRunsByChildSessionKey.keys()
+        ? new Set([
+            ...subagentIndex.changedChildren,
+            ...current.subagentRunsByChildSessionKey.keys(),
+          ])
         : subagentIndex.changedChildren) {
+        owner.invalidateChildren?.(key);
         for (const row of matching({ key })) {
           if (!row.storedEntry) {
             continue;
@@ -198,11 +255,19 @@ export function createSessionRowProjectionContext(subagents: SubagentSessionList
             referenced,
           );
           if (row.parents !== parents) {
+            // Only a changed relationship invalidates child lists. Run progress and
+            // unrelated publications must not rebuild every resident row's children.
+            for (const ref of row.parents) {
+              invalidatePresentation(referenced(ref));
+            }
+            for (const ref of parents) {
+              invalidatePresentation(referenced(ref));
+            }
             put({ ...row, parents });
           }
         }
       }
-      parentRevision = subagentRevision;
+      parentRevision = subagentIndex.revision;
     },
     preparePresentation(
       row: records.MaterializedRow,

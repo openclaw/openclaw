@@ -245,7 +245,7 @@ describe("runBrowserProxyCommand", () => {
   });
 
   it("retains staged copies when the timeout wins before dispatch settles", async () => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(0);
+    const now = vi.spyOn(performance, "now").mockReturnValue(0);
     uploads.stageBrowserProxyUploadRequest.mockResolvedValueOnce(stagedReportUpload);
     routes.dispatch.mockImplementationOnce(() => new Promise(() => {}));
     dispatchResult({ running: true, cdpReady: true, cdpHttp: true });
@@ -275,7 +275,7 @@ describe("runBrowserProxyCommand", () => {
 
   it("does not dispatch after upload staging exhausts the proxy deadline", async () => {
     let nowMs = 1_000;
-    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    const nowSpy = vi.spyOn(performance, "now").mockImplementation(() => nowMs);
     uploads.stageBrowserProxyUploadRequest.mockImplementationOnce(async () => {
       nowMs += 10;
       return stagedReportUpload;
@@ -289,6 +289,54 @@ describe("runBrowserProxyCommand", () => {
 
     expect(routes.dispatch).not.toHaveBeenCalled();
     expect(uploads.discardStagedBrowserProxyUpload).toHaveBeenCalledWith(stagedReportUpload);
+  });
+
+  it("keeps the proxy budget when the wall clock jumps during upload staging", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    try {
+      vi.setSystemTime(1_000_000);
+      uploads.stageBrowserProxyUploadRequest.mockImplementationOnce(async () => {
+        vi.setSystemTime(1_000_000 + 3_600_000);
+        return stagedReportUpload;
+      });
+      routes.dispatch.mockResolvedValueOnce(okResponse);
+
+      await expect(uploadRequest(5)).resolves.toBe(okPayload);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(routes.dispatch).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the proxy budget when the wall clock rolls back during upload staging", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    try {
+      vi.setSystemTime(1_000_000);
+      uploads.stageBrowserProxyUploadRequest.mockImplementationOnce(async () => {
+        vi.setSystemTime(1_000_000 - 3_600_000);
+        return stagedReportUpload;
+      });
+      routes.dispatch.mockImplementationOnce(() => new Promise(() => {}));
+
+      const settled = uploadRequest(5).then(
+        () => "resolved",
+        (error: unknown) => String(error),
+      );
+      await vi.advanceTimersByTimeAsync(50);
+
+      await expect(Promise.race([settled, Promise.resolve("pending")])).resolves.toContain(
+        "browser proxy timed out",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // The timeout fallback re-dispatches a status probe, so "the dispatcher ran" alone
+    // would pass without the real request; assert the first dispatch target instead.
+    expect(firstBrowserDispatchRequest(routes.dispatch.mock.calls).path).toBe(
+      "/hooks/file-chooser",
+    );
   });
 
   it("aborts upload staging when it reaches the proxy deadline", async () => {

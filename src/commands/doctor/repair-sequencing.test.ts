@@ -11,6 +11,14 @@ import { mocks } from "./repair-sequencing-mocks.test-support.js";
 import { runDoctorRepairSequence } from "./repair-sequencing.js";
 import { registerSharedRuntimeReaderDoctorTests } from "./repair-sequencing.shared-runtime.test-support.js";
 
+const hasDeferredRetirement = vi.hoisted(() => vi.fn(() => false));
+// mock-isolation: Sequencing fixtures own the deferred receipt; never read or write the process update ledger.
+vi.mock(import("../../infra/update-deferred-model-retirement.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  hasDeferredUpdateModelRetirement: hasDeferredRetirement,
+  recordUpdateModelRetirement: vi.fn(),
+}));
+
 function runRepairs(
   cfg: OpenClawConfig = {},
   options: Omit<Parameters<typeof runDoctorRepairSequence>[0], "state" | "doctorFixCommand"> & {
@@ -88,7 +96,8 @@ function expectPreservedPlugins(params: unknown, id: string) {
 describe("doctor repair sequencing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.applyPluginAutoEnable.mockImplementation(unchangedConfig);
+    hasDeferredRetirement.mockReturnValue(false);
+    mocks.applyPluginAutoEnableAsync.mockImplementation(unchangedConfig);
     mocks.materializePluginAutoEnableCandidates.mockImplementation(unchangedConfig);
     mocks.ensureAuthProfileStore.mockReturnValue({ profiles: {}, usageStats: {} });
     mocks.evaluateStoredCredentialEligibility.mockReturnValue({ eligible: true, reasonCode: "ok" });
@@ -129,18 +138,42 @@ describe("doctor repair sequencing", () => {
 
   registerSharedRuntimeReaderDoctorTests();
 
+  it.each<[string, Record<string, unknown>, string[]]>([
+    ["retirement", {}, []],
+    ["custom-command", { appServer: { command: "/synthetic/codex" } }, []],
+    [
+      "inline-command",
+      { appServer: { command: "node --bad-inline-arg" } },
+      ["warning-notes", "warning-notes.codex-routes"],
+    ],
+    ["computer-use", { computerUse: { enabled: true } }, []],
+    ["service-tier", {}, ["pending-changes"]],
+    ["uncertain-retirement", {}, ["model-repair-warnings"]],
+  ])("proves retirement-only from recorded work: %s", async (kind, config, blockers) => {
+    hasDeferredRetirement.mockReturnValue(true);
+    const cfg: OpenClawConfig = { plugins: { entries: { codex: { config } } } };
+    if (kind === "service-tier") {
+      const model = "openai/gpt-5.6-sol";
+      const entry = {
+        agentRuntime: { id: "codex" },
+        params: { fastMode: true, serviceTier: "priority" },
+      } as const;
+      cfg.agents = { defaults: { model, models: { [model]: entry } } };
+    }
+    mocks.repairStaleAgentModelRefs.mockReturnValueOnce({
+      ...mutation({}, "Retired model"),
+      warnings: kind === "uncertain-retirement" ? ["Catalog unavailable"] : [],
+    });
+    const result = await runRepairs(cfg);
+    expect(result.modelRetirementBlockers).toEqual(
+      blockers.map((why) => `model-retirement.${why}`),
+    );
+  });
+
   it.each([
-    {
-      name: "Tailscale profile identity migration",
-      repair: mocks.migrateLegacyTailscaleProfileIdentities,
-      options: {},
-    },
-    {
-      name: "merged gateway owner profile repair",
-      repair: mocks.repairMergedGatewayOwnerProfile,
-      options: { shouldRepair: true },
-    },
-  ])("reports the doctor-only $name", async ({ repair, options }) => {
+    [mocks.migrateLegacyTailscaleProfileIdentities, {}],
+    [mocks.repairMergedGatewayOwnerProfile, { shouldRepair: true }],
+  ] as const)("reports doctor-only identity repair %#", async (repair, options) => {
     const env = { OPENCLAW_STATE_DIR: "/tmp/openclaw-doctor-test" };
     repair.mockReturnValue({
       repaired: true,
@@ -305,14 +338,15 @@ describe("doctor repair sequencing", () => {
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValueOnce(
       installedPlugin("brave", "@openclaw/brave-plugin"),
     );
-    mocks.applyPluginAutoEnable.mockImplementationOnce(({ config }: { config: OpenClawConfig }) =>
-      mutation(
-        {
-          ...config,
-          plugins: { allow: ["telegram", "brave"], entries: { brave: { enabled: true } } },
-        },
-        "brave web search provider selected, enabled automatically.",
-      ),
+    mocks.applyPluginAutoEnableAsync.mockImplementationOnce(
+      ({ config }: { config: OpenClawConfig }) =>
+        mutation(
+          {
+            ...config,
+            plugins: { allow: ["telegram", "brave"], entries: { brave: { enabled: true } } },
+          },
+          "brave web search provider selected, enabled automatically.",
+        ),
     );
 
     const result = await runRepairs({
@@ -350,7 +384,7 @@ describe("doctor repair sequencing", () => {
       },
     });
 
-    expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith(
+    expect(mocks.applyPluginAutoEnableAsync).toHaveBeenCalledWith(
       expect.objectContaining({ manifestRegistry }),
     );
   });
@@ -527,30 +561,12 @@ describe("doctor repair sequencing", () => {
     expect(result.state.candidate.agents?.defaults?.model).toBe(`${workspaceProvider}/model`);
   });
 
-  it("moves legacy Codex routes to canonical OpenAI before missing plugin install repair", async () => {
-    mocks.repairMissingConfiguredPluginInstalls.mockImplementationOnce(
-      async (params: { cfg: OpenClawConfig }) => {
-        expect(params.cfg.agents?.defaults?.model).toBe("openai/gpt-5.5");
-        expect(params.cfg.agents?.defaults).not.toHaveProperty("agentRuntime");
-        return { changes: [], warnings: [] };
-      },
-    );
-
-    const result = await runRepairs(
-      { agents: { defaults: { model: "openai-codex/gpt-5.5" } } },
-      { env: {} },
-    );
-
-    expect(result.state.pendingChanges).toBe(true);
-    expect(result.state.candidate.agents?.defaults?.model).toBe("openai/gpt-5.5");
-    expect(result.state.candidate.agents?.defaults).not.toHaveProperty("agentRuntime");
-  });
-
   it("repairs #94184 stale Codex model-map refs before missing plugin install repair", async () => {
     mocks.repairMissingConfiguredPluginInstalls.mockImplementationOnce(
       async (params: { cfg: OpenClawConfig }) => {
         expect(params.cfg.plugins?.entries?.codex?.enabled).toBe(true);
         expect(params.cfg.agents?.defaults?.model).toBe("openai/gpt-5.5");
+        expect(params.cfg.agents?.defaults).not.toHaveProperty("agentRuntime");
         expect(params.cfg.agents?.defaults?.models?.["openai/gpt-5.5"]?.agentRuntime).toEqual({
           id: "codex",
         });
@@ -583,6 +599,7 @@ describe("doctor repair sequencing", () => {
     expect(result.state.candidate.plugins?.allow).toEqual(["openai", "codex"]);
     expect(result.state.candidate.plugins?.entries?.codex?.enabled).toBe(true);
     expect(result.state.candidate.agents?.defaults?.model).toBe("openai/gpt-5.5");
+    expect(result.state.candidate.agents?.defaults).not.toHaveProperty("agentRuntime");
     expect(
       result.state.candidate.agents?.defaults?.models?.["openai-codex/gpt-5.5"],
     ).toBeUndefined();

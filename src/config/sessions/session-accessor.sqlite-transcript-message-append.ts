@@ -17,6 +17,7 @@ import {
 import { readTranscriptIdentityByEventId } from "./session-accessor.sqlite-read.js";
 import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import {
+  createTranscriptMessageAppendMetadataFromWrites,
   readActiveTranscriptEntryAnchorInTransaction,
   readTranscriptMessageAppendMetadataInTransaction,
   readTranscriptMessageAppendMetadataBatchInTransaction,
@@ -43,7 +44,13 @@ import {
 } from "./session-accessor.sqlite-transcript-store.js";
 import type { SessionTranscriptTurnMessageAppend } from "./session-accessor.types.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
+import { applySessionMentionInvitationsInTransaction } from "./session-mention-invitation.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
+import type {
+  SessionMentionInvitationCommit,
+  PreparedSessionMentionInvitation,
+  SessionMentionInvitation,
+} from "./session-sharing-authority.types.js";
 import {
   readTranscriptAppendPostimage,
   retainTranscriptAppendPostimage,
@@ -51,7 +58,7 @@ import {
 import type { SessionTranscriptAuthority } from "./session-transcript-authority.types.js";
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
-import { normalizeTranscriptJsonValue } from "./transcript-json.js";
+import { normalizeTranscriptJsonValue } from "./transcript-json-normalize.js";
 import { messagesMatchForIdempotentReplay } from "./transcript-message-equality.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 
@@ -59,6 +66,7 @@ export type { PreparedTranscriptMessageAppend } from "./session-accessor.sqlite-
 
 type TranscriptMessageCommit<TMessage> = {
   result: TranscriptMessageAppendResult<TMessage>;
+  membershipChanged?: boolean;
   visibleTailEntryId?: string;
 };
 
@@ -196,7 +204,8 @@ export function appendFreshLinearTranscriptMessagesInTransaction(
         append.workerPreparation !== undefined ||
         append.preparation !== undefined ||
         append.prepareMessageAfterIdempotencyCheck !== undefined ||
-        append.beforeFreshMessageCommit !== undefined,
+        append.beforeFreshMessageCommit !== undefined ||
+        append.mentionInvitation !== undefined,
     )
   ) {
     return undefined;
@@ -205,15 +214,21 @@ export function appendFreshLinearTranscriptMessagesInTransaction(
   if (new Set(eventIds).size !== eventIds.length) {
     return undefined;
   }
-  // The batch's one identity probe precedes all effects. Replays retain the ordered appender.
+  // Only caller-supplied identities need probing; this call just minted the other UUIDs.
   const batch = createTranscriptAppendBatch(
     database,
     resolved,
-    messages.map((append, index) => ({
-      type: "message",
-      id: eventIds[index]!,
-      message: append.message,
-    })),
+    messages.flatMap((append, index) =>
+      append.eventId === undefined
+        ? []
+        : [
+            {
+              type: "message",
+              id: eventIds[index]!,
+              message: append.message,
+            },
+          ],
+    ),
     projection ?? {},
   );
   if (batch.cursor.batch?.knownEventIds.size) {
@@ -231,6 +246,8 @@ export function appendFreshLinearTranscriptMessagesInTransaction(
     },
   };
   let completed = false;
+  let version: SessionTranscriptContextVersion | undefined;
+  const positions: { seq: number; messagePosition: number }[] = [];
   try {
     for (const [index, append] of messages.entries()) {
       const committed = appendTranscriptMessageInTransaction(
@@ -245,6 +262,11 @@ export function appendFreshLinearTranscriptMessagesInTransaction(
         throw new Error("Fresh transcript turn reused an existing event identity");
       }
       commits.push(committed);
+      const postimage = context.cursor.appendToIndex?.readPostimage();
+      const seq = context.cursor.nextSeq === undefined ? undefined : context.cursor.nextSeq - 1;
+      if (seq !== undefined && postimage?.state.indexedSeq === seq) {
+        positions.push({ seq, messagePosition: postimage.state.activeMessageCount - 1 });
+      }
       const assistant = context.cursor.rowTranscript?.lastAssistantMessage;
       // Disk rows keep the per-message sentinel; the one publication carries
       // the assistant fact from earlier messages in this same transaction.
@@ -258,7 +280,7 @@ export function appendFreshLinearTranscriptMessagesInTransaction(
     }
     completed = true;
   } finally {
-    batch.settle(completed, commits.length, projectionNeedsRebuild, {
+    version = batch.settle(completed, commits.length, projectionNeedsRebuild, {
       steps: commits.length,
       adjustedTime,
       publicationAssistant,
@@ -267,11 +289,29 @@ export function appendFreshLinearTranscriptMessagesInTransaction(
   if (projectionNeedsRebuild) {
     projection?.onProjectionReconcileNeeded?.();
   }
-  const metadata = readTranscriptMessageAppendMetadataBatchInTransaction(
-    database,
-    resolved,
-    commits.map(({ result }) => result),
-  );
+  const postimage = context.cursor.appendToIndex?.readPostimage();
+  const metadata =
+    !projectionNeedsRebuild &&
+    version?.generation &&
+    version.rawSeq !== null &&
+    postimage?.flushed &&
+    postimage.state.indexedSeq === version.rawSeq &&
+    positions.length === commits.length
+      ? createTranscriptMessageAppendMetadataFromWrites(
+          database,
+          resolved,
+          commits.map(({ result }, index) => ({
+            ...result,
+            parentId: result.effectiveParentId ?? null,
+            ...positions[index]!,
+          })),
+          { ...version, generation: version.generation, rawSeq: version.rawSeq },
+        )
+      : readTranscriptMessageAppendMetadataBatchInTransaction(
+          database,
+          resolved,
+          commits.map(({ result }) => result),
+        );
   for (const committed of commits) {
     const facts = metadata.get(committed.result.messageId);
     if (facts?.anchor) {
@@ -296,12 +336,15 @@ export function appendTranscriptMessageInTransaction<TMessage>(
   database: OpenClawAgentDatabase,
   resolved: ResolvedTranscriptScope,
   options: TranscriptMessageAppendOptions<TMessage> & {
+    mentionInvitation?: SessionMentionInvitation;
+    prepareMentionInvitation?: (message: unknown) => PreparedSessionMentionInvitation | undefined;
     appendMode?: "side";
     supersedesEntryId?: string;
   },
   preparedMessage?: PreparedTranscriptMessageAppend<TMessage>,
   projection?: { scheduleProjectionReconcile?: boolean; onProjectionReconcileNeeded?: () => void },
   turn?: TranscriptMessageTurnContext,
+  deferMentionInvitations?: (commit: SessionMentionInvitationCommit) => void,
 ): TranscriptMessageCommit<TMessage> | undefined {
   const pending = resolveSessionPendingInputAppend(database, resolved, options.message);
   // Accepted input already owns its hook and normalization decision. A host-prepared
@@ -413,6 +456,10 @@ export function appendTranscriptMessageInTransaction<TMessage>(
     pending && !pending.alreadyPromoted ? pending.inputId : (options.eventId ?? randomUUID());
   const now = options.now ?? Date.now();
   const finalMessage = pending ? prepared : serializeForStorage(prepared);
+  const preparedInvitation = !pending
+    ? options.prepareMentionInvitation?.(finalMessage)
+    : undefined;
+  preparedInvitation?.assertCurrent();
   if (!pending) {
     // Accepted custody and replay retain their original decision. Fresh input
     // must still belong to its captured owner before any transcript write.
@@ -421,7 +468,7 @@ export function appendTranscriptMessageInTransaction<TMessage>(
   const cursor: TranscriptAppendCursor | undefined =
     turn?.cursor ?? (readSessionActorTransactionState(database, resolved) ? undefined : {});
   if (cursor && !cursor.initialized && !cursor.initialState) {
-    cursor.initialState = readTranscriptAppendStateInTransaction(database, resolved);
+    cursor.initialState = readTranscriptAppendStateInTransaction(database, resolved, true);
   }
   if (!turn?.headerEnsured) {
     ensureTranscriptHeader(database, resolved, options.cwd, projection, cursor);
@@ -430,11 +477,21 @@ export function appendTranscriptMessageInTransaction<TMessage>(
     }
   }
   if (turn && turn.parentId === undefined) {
-    turn.parentId = resolveTranscriptMessageAppendParent(database, resolved.sessionId, options);
+    turn.parentId = resolveTranscriptMessageAppendParent(
+      database,
+      resolved.sessionId,
+      options,
+      cursor?.initialState?.parent,
+    );
   }
   const parentId = turn
     ? turn.parentId
-    : resolveTranscriptMessageAppendParent(database, resolved.sessionId, options);
+    : resolveTranscriptMessageAppendParent(
+        database,
+        resolved.sessionId,
+        options,
+        cursor?.initialState?.parent,
+      );
   const event = createTranscriptMessageEvent({
     messageId,
     parentId: parentId ?? null,
@@ -492,6 +549,32 @@ export function appendTranscriptMessageInTransaction<TMessage>(
     storagePreparation?.persistedMessage ??
     // SAFETY: Receipt custody comes from this event's exact committed JSON after storage normalization.
     (JSON.parse(appended) as typeof event).message;
+  const invitations = pending
+    ? pending.mentionInvitations
+    : options.mentionInvitation
+      ? [options.mentionInvitation]
+      : preparedInvitation
+        ? [preparedInvitation.invitation]
+        : undefined;
+  let membershipChanged = false;
+  if (invitations?.length) {
+    // Capture this append before a first-session batch advances its raw tail.
+    // Raw identity remains available while the display projection is dirty.
+    const { generation, rawSeq } = readTranscriptContextVersionInTransaction(
+      database,
+      resolved.sessionId,
+    );
+    if (generation === null || rawSeq === null) {
+      throw new Error("Mention invitation lost its original transcript identity");
+    }
+    const commit = { message: persistedMessage, invitations, source: { generation, rawSeq } };
+    if (deferMentionInvitations) {
+      // The first-turn owner creates the session row later in this same transaction.
+      deferMentionInvitations(commit);
+    } else {
+      membershipChanged = applySessionMentionInvitationsInTransaction(database, resolved, commit);
+    }
+  }
   if (turn) {
     turn.parentId = messageId;
   }
@@ -520,6 +603,7 @@ export function appendTranscriptMessageInTransaction<TMessage>(
         message: persistedMessage,
         messageId,
       },
+      membershipChanged,
       ...(metadata?.visibleTailEntryId !== undefined
         ? { visibleTailEntryId: metadata.visibleTailEntryId }
         : {}),

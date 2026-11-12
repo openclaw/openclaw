@@ -11,20 +11,13 @@ export function writeGeneratedOutput(params: {
   repoRoot: string;
 }) {
   const outputPath = path.resolve(params.repoRoot, params.outputPath);
-  const current = readIfExists(outputPath);
-  const changed = current !== params.next;
-
-  if (params.check) {
-    return {
-      changed,
-      wrote: false,
-      outputPath,
-    };
-  }
+  const changed = params.check
+    ? readIfExists(outputPath) !== params.next
+    : writeTextFileIfChanged(outputPath, params.next);
 
   return {
     changed,
-    wrote: writeTextFileIfChanged(outputPath, params.next),
+    wrote: !params.check && changed,
     outputPath,
   };
 }

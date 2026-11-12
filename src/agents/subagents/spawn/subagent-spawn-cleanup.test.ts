@@ -33,7 +33,7 @@ function terminate(options: Partial<Parameters<typeof terminateAcceptedCollector
 
 function setupCleanup(dispatchSessionMethod: () => Promise<unknown>) {
   const context = Object.assign({} as GatewayRequestContext, {
-    recoveryRuntime: { dispatchSessionMethod },
+    lifecycleRuntime: { dispatchSessionMethod },
   });
   const target = captureSessionTarget({
     storeScope: "/synthetic/spawn-cleanup.db",

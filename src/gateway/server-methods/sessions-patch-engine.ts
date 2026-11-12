@@ -124,7 +124,11 @@ export async function executeSessionPatchMutations(params: {
     length: params.targets.length,
   });
   for (const [index, { input, key, requestedAgent, resolved }] of discovery.value.entries()) {
-    const unreadAckError = validateSessionUnreadAck(params.patch, input);
+    // Commit guards are core control state; construct the protocol patch from
+    // its public identity fields so closures can never reach hooks or entries.
+    const { commitGuard: _commitGuard, ...identity } = input;
+    const fullPatch: SessionsPatchParams = { ...params.patch, ...identity };
+    const unreadAckError = validateSessionUnreadAck(fullPatch, input);
     if (unreadAckError) {
       outcomes[index] = invalidSessionRequest(unreadAckError);
       continue;
@@ -160,10 +164,6 @@ export async function executeSessionPatchMutations(params: {
       outcomes[index] = invalidSessionRequest(missingHarnessSessionError);
       continue;
     }
-    // Commit guards are core control state; construct the protocol patch from
-    // its public identity fields so closures can never reach hooks or entries.
-    const { commitGuard: _commitGuard, ...identity } = input;
-    const fullPatch: SessionsPatchParams = { ...params.patch, ...identity };
     const expectationError =
       sessionPatchExpectations.resolveSessionPatchExpectationError(fullPatch);
     if (expectationError) {
@@ -463,6 +463,7 @@ export async function executeSessionPatchMutations(params: {
                           entry: projected.entry,
                           expectedEntry: existingEntry,
                           callerCanConsent: callerIsAdmin,
+                          operatorAuthority,
                           catalog: (await catalogs.available(target.targetAgentId))?.entries,
                           validateModelSelection: projected.validateModelSelection,
                           placement: { context: params.context, sessionKey: primaryKey },
@@ -615,7 +616,7 @@ export async function executeSessionPatchMutations(params: {
                 };
                 const applyGroup = createSessionPatchGroupWriter({
                   store: groupStore,
-                  patch: first.fullPatch,
+                  targets: group,
                   project: projectGroup,
                   timing: groupTiming,
                 });

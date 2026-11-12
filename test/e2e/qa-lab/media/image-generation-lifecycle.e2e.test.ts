@@ -156,6 +156,7 @@ describe("image generation task lifecycle through QA-channel", () => {
     expect(runningReceipt).toEqual(expect.any(String));
     expect(imageProvider.requests).toHaveLength(1);
     expect(await readImageTaskStatus(gateway)).toContain(runningReceipt);
+    const completionLogMark = gateway.markLogs();
     imageProvider.release();
     await waitFor(() => {
       const completions = state
@@ -174,8 +175,10 @@ describe("image generation task lifecycle through QA-channel", () => {
       expect(completions).toHaveLength(1);
     }, 90_000);
 
+    let completionRequests: MockOpenAiRequestSnapshot[] = [];
     const completionReentry = await waitFor(async () => {
-      const request = (await readMockRequests(mock.baseUrl)).find(
+      completionRequests = await readMockRequests(mock.baseUrl);
+      const request = completionRequests.find(
         (snapshot) =>
           snapshot.allInputText.includes("[Inter-session message]") &&
           snapshot.allInputText.includes("sourceTool=image_generate"),
@@ -184,6 +187,23 @@ describe("image generation task lifecycle through QA-channel", () => {
         throw new Error("image completion did not re-enter the agent session");
       }
       return request;
+    }).catch((cause: unknown) => {
+      const requests = completionRequests.map((request) => ({
+        cursor: request.cursor,
+        sessionId: request.sessionId,
+        kind: request.requestKind,
+        outcome: request.outcome,
+        errorCode: request.errorCode,
+        plannedTool: request.plannedToolName,
+        runtimeEvent: request.allInputText.includes("Continue the OpenClaw runtime event."),
+        interSession: request.allInputText.includes("[Inter-session message]"),
+        imageSource: request.allInputText.includes("sourceTool=image_generate"),
+        internalChannel: request.allInputText.includes("sourceChannel=internal"),
+      }));
+      throw new Error(
+        `Image completion requests: ${JSON.stringify(requests)}\n${gateway.readLogsSince(completionLogMark)}`,
+        { cause },
+      );
     });
     expect(completionReentry.allInputText).toContain("sourceChannel=internal");
 

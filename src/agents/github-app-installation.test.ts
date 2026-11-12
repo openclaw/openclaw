@@ -1,7 +1,14 @@
 import { generateKeyPairSync } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createNodeWorkerRepositoryPreparation } from "../gateway/worker-environments/node-worker-repository-preparation.js";
+import { NodeWorkerWorkspaceRuntime } from "../node-host/node-worker-workspace.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import { prepareAppGitHubIdentity } from "./github-app-identity.js";
 import type { GitHubAppSelection } from "./github-credential-reader.js";
 import {
@@ -73,7 +80,7 @@ beforeEach(() => {
   vi.setSystemTime(new Date("2026-10-10T10:00:00Z"));
   overrides = {};
   fetcher = vi.fn(async (url: string, init: RequestInit) => {
-    const path = url.slice(apiBaseUrl.length);
+    const endpoint = url.slice(apiBaseUrl.length);
     const bodies: Record<string, unknown> = {
       "/app": { id: 101, slug: "factory", permissions },
       "/app/installations/202": installation,
@@ -91,11 +98,11 @@ beforeEach(() => {
     if (init.method === "DELETE") {
       return new Response(null, { status: 204 });
     }
-    const body = bodies[path];
+    const body = bodies[endpoint];
     if (!body) {
       throw new Error("Unexpected endpoint");
     }
-    return Response.json(overrides[path] ?? body);
+    return Response.json(overrides[endpoint] ?? body);
   });
   vi.stubGlobal("fetch", fetcher);
   vi.stubEnv("FACTORY_AUTH_MODE", undefined);
@@ -166,3 +173,138 @@ it("retains request-owned App cleanup and retires reads when the selected App ch
   expect(fetcher.mock.calls.at(-1)?.[1].method).toBe("DELETE");
   await expect(identity.start(() => "closed read")).rejects.toThrow("changed");
 });
+
+it("rechecks the repository policy owner after metadata waits before issuing a token", async () => {
+  vi.stubEnv("FACTORY_AUTH_MODE", "github");
+  let current = true;
+  const nativeFetch = fetcher.getMockImplementation()!;
+  fetcher.mockImplementation(async (url, init) => {
+    const response = await nativeFetch(url, init);
+    if (url.endsWith("/app")) {
+      current = false;
+    }
+    return response;
+  });
+  const readNativeCredential = Object.assign(async () => undefined, {
+    assertCurrent() {
+      if (!current) {
+        throw new Error("repository policy revoked");
+      }
+    },
+  });
+  await expect(prepareRead({ allowAppInstallation: true, readNativeCredential })).rejects.toThrow(
+    "repository policy revoked",
+  );
+  expect(fetcher.mock.calls.some(([url]) => url.endsWith("/access_tokens"))).toBe(false);
+});
+
+const checkoutDirs = useAutoCleanupTempDirTracker(afterEach);
+it.each(["allowed", "forbidden", "revoked-after-seed"] as const)(
+  "checks repository policy at real local worker Git effects: %s",
+  async (scenario) => {
+    vi.useRealTimers();
+    overrides["/app/installations/202/access_tokens"] = {
+      token: "synthetic-installation",
+      expires_at: new Date(Date.now() + 3600000).toISOString(),
+      permissions,
+    };
+    const root = await fs.realpath(checkoutDirs.make("repository-policy-effect-"));
+    const origin = path.join(root, "origin");
+    await fs.mkdir(origin);
+    const git = async (...args: string[]) => {
+      const result = await runCommandWithTimeout(["git", "-C", origin, ...args], {
+        timeoutMs: 10000,
+        baseEnv: {
+          PATH: process.env.PATH,
+          HOME: root,
+          GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+          GIT_CONFIG_NOSYSTEM: "1",
+        },
+      });
+      expect(result.code, result.stderr).toBe(0);
+      return result.stdout.trim();
+    };
+    await git("init", "--quiet");
+    await fs.writeFile(path.join(origin, "tracked.txt"), "authorized source\n");
+    await git("add", ".");
+    await git(
+      "-c",
+      "user.name=Authority Test",
+      "-c",
+      "user.email=authority@example.invalid",
+      "-c",
+      "commit.gpgsign=false",
+      "commit",
+      "--quiet",
+      "-m",
+      "source",
+    );
+    const commit = await git("rev-parse", "HEAD");
+    let current = scenario !== "forbidden";
+    const readNativeCredential = Object.assign(async () => undefined, {
+      assertCurrent() {
+        if (!current) {
+          throw new Error("repository policy revoked");
+        }
+      },
+    });
+    const commands: string[] = [];
+    await fs.mkdir(path.join(root, "node-home"), { recursive: true, mode: 0o700 });
+    const runtime = new NodeWorkerWorkspaceRuntime({
+      root: path.join(root, "node-state"),
+      env: { PATH: process.env.PATH, HOME: path.join(root, "node-home") },
+    });
+    let identity: Awaited<ReturnType<typeof prepareRead>> | undefined;
+    const checkout = async () => {
+      const admitted = await prepareRead({ allowAppInstallation: true, readNativeCredential });
+      identity = admitted;
+      const repository = createNodeWorkerRepositoryPreparation(async (command) => {
+        command.assertCurrent?.();
+        commands.push(command.seed ? "seed" : command.argv.includes("clone") ? "clone" : "git");
+        const result = await runtime.exec({
+          gatewayNamespace: "authority-proof",
+          environmentId: "worker",
+          sessionId: "session",
+          generation: 1,
+          argv: [...command.argv],
+          input: command.input,
+          seed: command.seed,
+          resetWorkspace: command.resetWorkspace,
+          timeoutMs: command.timeoutMs,
+        });
+        if (scenario === "revoked-after-seed" && command.seed?.action === "apply") {
+          current = false;
+        }
+        return result;
+      }, admitted.assertSelected);
+      return await admitted.start(() =>
+        repository.prepareRepository({
+          origin: pathToFileURL(origin).href,
+          commit,
+          gitToken: admitted.token,
+        }),
+      );
+    };
+    try {
+      if (scenario === "allowed") {
+        const result = await checkout();
+        expect(result.kind).toBe("prepared");
+        if (result.kind !== "prepared") {
+          throw new Error("Local worker checkout failed");
+        }
+        expect(
+          await fs.readFile(path.join(result.result.remoteWorkspaceDir, "tracked.txt"), "utf8"),
+        ).toBe("authorized source\n");
+        expect(commands).toContain("clone");
+        expect(
+          await fs.readFile(path.join(result.result.remoteWorkspaceDir, ".git", "config"), "utf8"),
+        ).not.toContain("synthetic-installation");
+      } else {
+        await expect(checkout()).rejects.toThrow("repository policy revoked");
+        expect(commands).toEqual(scenario === "forbidden" ? [] : ["seed"]);
+      }
+    } finally {
+      await identity?.revoke?.();
+    }
+  },
+);

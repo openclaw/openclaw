@@ -11,7 +11,8 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { PLUGIN_COMMAND_DISPATCH } from "openclaw/plugin-sdk/plugin-command-runtime";
 import { isFastModeAutoProgressPayload } from "openclaw/plugin-sdk/reply-payload";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
+import { resolveTelegramBotLoopProtection } from "./bot-loop-protection.js";
 import { sendPayload } from "./bot-message-dispatch-delivery.js";
 import {
   beginDraftQueuedFollowup,
@@ -119,6 +120,12 @@ export async function runTelegramDispatchTurn(turn: Turn) {
           },
           ctxPayload: context.ctxPayload,
           record: context.turn.record,
+          botLoopProtection: resolveTelegramBotLoopProtection({
+            cfg: turn.cfg,
+            accountId: context.route.accountId,
+            msg: context.msg,
+            botUserId: context.primaryCtx.me?.id,
+          }),
           dispatchReplyFromConfig: turn.opts.dispatchReplyFromConfig,
           delivery: {
             // Delivery owns its full draft mutation, including native questions and receipts.
@@ -156,9 +163,11 @@ export async function runTelegramDispatchTurn(turn: Turn) {
             onPreparedAgentRunStart: ({ runId }) => {
               turn.transcriptMirrorRunId = runId;
             },
-            ...(context.ctxPayload.CommandSource === "native"
-              ? { [PLUGIN_COMMAND_DISPATCH]: { kind: "non-plugin" as const } }
-              : {}),
+            ...(context.pluginCommandDispatch
+              ? { [PLUGIN_COMMAND_DISPATCH]: context.pluginCommandDispatch }
+              : context.ctxPayload.CommandSource === "native"
+                ? { [PLUGIN_COMMAND_DISPATCH]: { kind: "non-plugin" as const } }
+                : {}),
             groupThreadReplyFormatter: formatTelegramGroupThreadReply,
             skillFilter: context.skillFilter,
             disableBlockStreaming: turn.disableBlockStreaming,
@@ -334,6 +343,18 @@ export async function runTelegramDispatchTurn(turn: Turn) {
       },
     });
     if (!turnResult.dispatched) {
+      if (
+        turnResult.admission.kind === "drop" &&
+        turnResult.admission.reason === "bot-loop-protection"
+      ) {
+        // Core reports this drop only to a turn log callback, which Telegram does not pass.
+        // Without this line an over-budget bot pair reads as lost delivery.
+        turn.runtime.log?.(
+          warn(
+            `telegram: bot-loop protection dropped message ${context.msg.message_id} from bot ${context.msg.from?.id} in chat ${context.chatId} (account ${context.route.accountId})`,
+          ),
+        );
+      }
       return false;
     }
     // Dispatch custody prevents replay, but only provider acceptance proves visibility.

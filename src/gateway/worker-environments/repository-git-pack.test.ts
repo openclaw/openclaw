@@ -12,83 +12,90 @@ import {
   assertNoCredentialFiles,
   fixture,
 } from "./repository-git-pack.test-support.js";
+import { workerProjectSeedKey } from "./workspace-git-base.js";
 import { MAX_WORKSPACE_INVENTORY_TOTAL_BYTES } from "./workspace-inventory-limits.js";
 
 describe("private repository preparation", () => {
-  it("fetches only the pinned tree under its selected identity without inherited credentials or hooks", async () => {
-    const f = await fixture();
-    const poisonHome = path.join(f.root, "unrelated-home");
-    const trace = path.join(f.root, "trace");
-    await fs.mkdir(poisonHome);
-    await fs.writeFile(path.join(poisonHome, ".netrc"), "default login unrelated password wrong\n");
-    await fs.writeFile(
-      path.join(poisonHome, ".gitconfig"),
-      "[http]\nextraHeader = Authorization: Basic unrelated\n[trace2]\neventTarget = " +
-        trace +
-        "\n",
-    );
-    for (const [name, value] of Object.entries({
-      HOME: poisonHome,
-      GIT_CONFIG_PARAMETERS: "'http.extraHeader=Authorization: Basic unrelated'",
-      GIT_DIR: "/missing/git-dir",
-      GIT_OBJECT_DIRECTORY: "/missing/objects",
-      GIT_ALTERNATE_OBJECT_DIRECTORIES: "/missing/alternates",
-      GIT_EXEC_PATH: "/missing/git-exec",
-      GIT_TRACE: trace,
-      GIT_TRACE_CURL: trace,
-      GIT_TRACE2_EVENT: trace,
-      GIT_ASKPASS: "/missing/askpass",
-      GITHUB_TOKEN: "unrelated-account",
-    })) {
-      vi.stubEnv(name, value);
-    }
-    // A new base entry must not collide with the authenticated fetch's header.
-    const originalEnvironment = worktreeGit.gitEnvironment;
-    const environment = vi
-      .spyOn(worktreeGit, "gitEnvironment")
-      .mockImplementation((...args) =>
-        appendGitConfig(originalEnvironment(...args), [["test.additional", "present"]]),
+  it.each([undefined, "0".repeat(40)])(
+    "fetches only the pinned tree without inherited credentials or hooks (retained %s)",
+    async (retainedCommit) => {
+      const f = await fixture();
+      const poisonHome = path.join(f.root, "unrelated-home");
+      const trace = path.join(f.root, "trace");
+      await fs.mkdir(poisonHome);
+      await fs.writeFile(
+        path.join(poisonHome, ".netrc"),
+        "default login unrelated password wrong\n",
       );
-    const pack = await f.preparePack();
-    environment.mockRestore();
-    const policy = gitMaintenanceEnvironment();
-    const policyKeys = Object.entries(policy)
-      .filter(([key]) => key.startsWith("GIT_CONFIG_KEY_"))
-      .map(([, value]) => value);
-    expect(f.fetches[0]?.configCount).toBe(policyKeys.length + 4);
-    expect(f.fetches[0]?.configKeys).toEqual(
-      expect.arrayContaining([
-        ...policyKeys,
-        "core.hooksPath",
-        "core.fsmonitor",
-        "test.additional",
-        `http.${URL}.extraHeader`,
-      ]),
-    );
-    vi.unstubAllEnvs();
-    expect(f.requests.length).toBeGreaterThan(0);
-    expect(f.requests.every((authorization) => authorization === AUTHORIZATION)).toBe(true);
-    expect(JSON.stringify(f.fetches)).not.toContain(TOKEN);
-    expect(JSON.stringify(f.fetches)).not.toContain(AUTHORIZATION.slice(6));
-    expect(await fs.stat(trace).catch(() => undefined)).toBeUndefined();
-    await assertNoCredentialFiles(f.scratch);
-    const unpacked = path.join(f.root, "unpacked");
-    await fs.mkdir(unpacked);
-    await requireGit(unpacked, ["init", "--quiet"]);
-    await requireGit(unpacked, ["index-pack", "--stdin"], { input: await fs.readFile(pack) });
-    expect(await requireGit(unpacked, ["show", `${f.baseCommit}:input.txt`])).toBe(
-      "pinned private content",
-    );
-    for (const absent of [f.ancestor, f.oldBlob, f.later]) {
-      expect((await runGit(unpacked, ["cat-file", "-e", absent])).code).not.toBe(0);
-    }
-    expect(
-      await fs.readdir(path.join(f.scratch, "repository.git", "hooks")).catch(() => []),
-    ).toEqual([]);
-    expect(
-      await fs.stat(path.join(f.scratch, "repository.git", "input.txt")).catch(() => undefined),
-    ).toBeUndefined();
-  });
+      await fs.writeFile(
+        path.join(poisonHome, ".gitconfig"),
+        "[http]\nextraHeader = Authorization: Basic unrelated\n[trace2]\neventTarget = " +
+          trace +
+          "\n",
+      );
+      for (const [name, value] of Object.entries({
+        HOME: poisonHome,
+        GIT_CONFIG_PARAMETERS: "'http.extraHeader=Authorization: Basic unrelated'",
+        GIT_DIR: "/missing/git-dir",
+        GIT_OBJECT_DIRECTORY: "/missing/objects",
+        GIT_ALTERNATE_OBJECT_DIRECTORIES: "/missing/alternates",
+        GIT_EXEC_PATH: "/missing/git-exec",
+        GIT_TRACE: trace,
+        GIT_TRACE_CURL: trace,
+        GIT_TRACE2_EVENT: trace,
+        GIT_ASKPASS: "/missing/askpass",
+        GITHUB_TOKEN: "unrelated-account",
+      })) {
+        vi.stubEnv(name, value);
+      }
+      // A new base entry must not collide with the authenticated fetch's header.
+      const originalEnvironment = worktreeGit.gitEnvironment;
+      const environment = vi
+        .spyOn(worktreeGit, "gitEnvironment")
+        .mockImplementation((...args) =>
+          appendGitConfig(originalEnvironment(...args), [["test.additional", "present"]]),
+        );
+      const pack = await f.preparePack(undefined, undefined, retainedCommit);
+      environment.mockRestore();
+      const policy = gitMaintenanceEnvironment();
+      const policyKeys = Object.entries(policy)
+        .filter(([key]) => key.startsWith("GIT_CONFIG_KEY_"))
+        .map(([, value]) => value);
+      expect(f.fetches[0]?.configCount).toBe(policyKeys.length + 4);
+      expect(f.fetches[0]?.configKeys).toEqual(
+        expect.arrayContaining([
+          ...policyKeys,
+          "core.hooksPath",
+          "core.fsmonitor",
+          "test.additional",
+          `http.${URL}.extraHeader`,
+        ]),
+      );
+      vi.unstubAllEnvs();
+      expect(f.requests.length).toBeGreaterThan(0);
+      expect(f.requests.every((authorization) => authorization === AUTHORIZATION)).toBe(true);
+      expect(JSON.stringify(f.fetches)).not.toContain(TOKEN);
+      expect(JSON.stringify(f.fetches)).not.toContain(AUTHORIZATION.slice(6));
+      expect(await fs.stat(trace).catch(() => undefined)).toBeUndefined();
+      await assertNoCredentialFiles(f.scratch);
+      const unpacked = path.join(f.root, "unpacked");
+      await fs.mkdir(unpacked);
+      await requireGit(unpacked, ["init", "--quiet"]);
+      await requireGit(unpacked, ["index-pack", "--stdin"], { input: await fs.readFile(pack) });
+      expect(await requireGit(unpacked, ["show", `${f.baseCommit}:input.txt`])).toBe(
+        "pinned private content",
+      );
+      for (const absent of [f.ancestor, f.oldBlob, f.later]) {
+        expect((await runGit(unpacked, ["cat-file", "-e", absent])).code).not.toBe(0);
+      }
+      expect(
+        await fs.readdir(path.join(f.scratch, "repository.git", "hooks")).catch(() => []),
+      ).toEqual([]);
+      expect(
+        await fs.stat(path.join(f.scratch, "repository.git", "input.txt")).catch(() => undefined),
+      ).toBeUndefined();
+    },
+  );
 
   it("discards failed authenticated Git diagnostics including encoded credentials", async () => {
     const f = await fixture();
@@ -128,10 +135,11 @@ describe("private repository preparation", () => {
     await assertNoCredentialFiles(f.scratch);
   });
 
-  it("imports, builds and reuses a private prepared workspace without remote credentials", async () => {
-    const f = await fixture();
+  it("imports, builds and refreshes a private prepared workspace with a thin pack and no remote credentials", async () => {
+    const f = await fixture({ bulk: true });
     const first = f.operation();
     const second = f.operation();
+    const refresh = f.operation(undefined, undefined, f.later);
     try {
       const result = await first.project.prepare(f.transport);
       const prepared = result.preparedWorkspace!;
@@ -143,12 +151,36 @@ describe("private repository preparation", () => {
       expect((await second.project.prepare(f.transport)).preparedWorkspace).toEqual(prepared);
       expect(await fs.readFile(path.join(prepared.homeDir, "count"), "utf8")).toBe("setup\n");
       expect(f.fetches).toHaveLength(1);
+      const seed = (baseCommit: string) =>
+        path.join(
+          f.home,
+          ".openclaw-worker/git-seeds/gateway",
+          workerProjectSeedKey({ key: f.project.key, baseCommit }),
+        );
+      const seedInode = (await fs.stat(path.join(seed(f.baseCommit), "bulk.bin"))).ino;
+      const workspaceInode = (await fs.stat(path.join(prepared.workspaceDir, "bulk.bin"))).ino;
+      const updated = (await refresh.project.prepare(f.transport)).preparedWorkspace!;
+      expect(updated.workspaceDir).toBe(prepared.workspaceDir);
+      expect(await fs.readFile(path.join(updated.workspaceDir, "build/result"), "utf8")).toBe(
+        "later private content\n",
+      );
+      expect(f.fetches).toHaveLength(2);
+      expect(f.fetches[1]?.argv).toEqual(expect.arrayContaining([f.baseCommit, f.later]));
+      expect(f.uploadBytes).toHaveLength(2);
+      expect(f.uploadBytes[0]).toBeGreaterThan(128 * 1024);
+      expect(f.uploadBytes[1]).toBeLessThan(f.uploadBytes[0]! / 100);
+      expect((await fs.stat(path.join(seed(f.later), "bulk.bin"))).ino).toBe(seedInode);
+      expect((await fs.stat(path.join(updated.workspaceDir, "bulk.bin"))).ino).toBe(workspaceInode);
+      expect(await requireGit(seed(f.later), ["remote", "get-url", "origin"])).toBe(URL);
+      await requireGit(seed(f.later), ["diff-files", "--quiet"]);
+      await requireGit(updated.workspaceDir, ["diff-files", "--quiet"]);
       expect(f.scripts.join("\n")).not.toContain(TOKEN);
       expect(f.scripts.join("\n")).not.toContain(AUTHORIZATION.slice(6));
       await assertNoCredentialFiles(f.home);
     } finally {
       first.close();
       second.close();
+      refresh.close();
     }
   });
 

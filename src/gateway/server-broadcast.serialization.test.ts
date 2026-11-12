@@ -307,6 +307,7 @@ describe("broadcast serialization failures", () => {
     broadcast("sessions.changed", { reason: "delete" });
     broadcast("users.prefs.changed", { profileId: "other", keys: ["ui.theme"] });
     broadcast("mentions.changed", { gatewayInstanceId: "gateway", revision: 1 });
+    broadcast("projects.checkoutOptions.changed", { projectId: "project" });
     broadcast("chat.metadata.changed", { content: "Hidden content" });
     broadcastToConnIds("sessions.changed", dynamic, recipients);
     expect(scoped.socket.send).not.toHaveBeenCalled();
@@ -323,12 +324,64 @@ describe("broadcast serialization failures", () => {
       { gatewayInstanceId: "gateway", revision: 1 },
       recipients,
     );
+    broadcastToConnIds("projects.checkoutOptions.changed", { projectId: "project" }, recipients);
     expect(frameSummaries(scoped)).toEqual([
       { event: "chat.metadata.changed", seq: 1 },
       { event: "sessions.changed", seq: 2 },
       { event: "users.prefs.changed", seq: 3 },
       { event: "mentions.changed", seq: 4 },
+      { event: "projects.checkoutOptions.changed", seq: 5 },
     ]);
+  });
+
+  it.each(["operator.sessions.read", "operator.sessions.write"])(
+    "delivers bounded mention invalidations only to targeted %s clients",
+    (scope) => {
+      const recipient = makeClient("recipient");
+      const other = makeClient("other");
+      recipient.client.connect.scopes = [scope];
+      other.client.connect.scopes = [scope];
+      const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({
+        clients: new GatewayClientRegistry([recipient.client, other.client]),
+      });
+      const payload = { gatewayInstanceId: "gateway", revision: 1 };
+      const recipients = new Set([recipient.client.connId]);
+
+      broadcast("mentions.changed", payload);
+      broadcastToConnIds("mentions.changed", { ...payload, content: "Hidden" }, recipients);
+      expect(recipient.socket.send).not.toHaveBeenCalled();
+      broadcastToConnIds("mentions.changed", payload, recipients);
+
+      expect(frameSummaries(recipient)).toEqual([{ event: "mentions.changed", seq: 1 }]);
+      expect(other.socket.send).not.toHaveBeenCalled();
+    },
+  );
+
+  it("delivers mention failures only to the targeted sender with current session access", () => {
+    const sender = makeClient("sender");
+    const other = makeClient("other");
+    for (const peer of [sender, other]) {
+      peer.client.connect.scopes = ["operator.sessions.read"];
+    }
+    let allowed = true;
+    const { broadcastToConnIds } = broadcaster([sender, other], {
+      canReceiveSessionEvent: (_client, keys) =>
+        allowed && keys.every((key) => key === "agent:main:visible"),
+    });
+    const recipients = new Set([sender.client.connId]);
+    const payload = {
+      sessionKey: "agent:main:visible",
+      errorMessage: "Your message was posted, but mention notifications could not be delivered.",
+    };
+    broadcastToConnIds("mentions.failed", payload, recipients);
+    expect(frameSummaries(sender)).toEqual([{ event: "mentions.failed", seq: 1 }]);
+    expect(other.socket.send).not.toHaveBeenCalled();
+
+    allowed = false;
+    broadcastToConnIds("mentions.failed", payload, recipients);
+    broadcastToConnIds("mentions.failed", { errorMessage: payload.errorMessage }, recipients);
+    expect(sender.socket.send).toHaveBeenCalledOnce();
+    expect(other.socket.send).not.toHaveBeenCalled();
   });
 
   it.each(["suppressed snapshot", "unprepared presence", "circular payload"] as const)(

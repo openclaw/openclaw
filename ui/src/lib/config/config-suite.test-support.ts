@@ -85,16 +85,39 @@ export function configServerTransport(
 ) {
   const transport = new GatewayProtocolClient<Record<string, never>>({
     createRequestId,
-    createSocket: (handlers) => ({
-      isOpen: () => true,
-      close: () => undefined,
-      send: (data) => {
-        const frame = JSON.parse(data) as ConfigRequestFrame;
-        void reply(frame).then((response) =>
-          handlers.message(JSON.stringify({ type: "res", id: frame.id, ...response })),
+    createSocket: (handlers) => {
+      void Promise.resolve().then(() => {
+        handlers.open();
+        handlers.message(
+          JSON.stringify({
+            type: "event",
+            event: "connect.challenge",
+            payload: { nonce: "fixture" },
+          }),
         );
-      },
-    }),
+      });
+      return {
+        isOpen: () => true,
+        close: () => undefined,
+        send: (data) => {
+          const frame = JSON.parse(data) as ConfigRequestFrame;
+          if (frame.method === "connect") {
+            handlers.message(
+              JSON.stringify({
+                type: "res",
+                id: frame.id,
+                ok: true,
+                payload: { type: "hello-ok" },
+              }),
+            );
+            return;
+          }
+          void reply(frame).then((response) =>
+            handlers.message(JSON.stringify({ type: "res", id: frame.id, ...response })),
+          );
+        },
+      };
+    },
     createRequestError: (error) =>
       new GatewayRequestError({
         code: error.code ?? "UNAVAILABLE",

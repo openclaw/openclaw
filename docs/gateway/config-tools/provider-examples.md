@@ -254,3 +254,80 @@ Worked `models.providers` configurations. For what each field means, see [Custom
 
   </Accordion>
 </AccordionGroup>
+
+## Route interactive and background requests to different URLs
+
+Some gateways expose separate URLs for interactive traffic and background or delegated work while serving the same model.
+You can represent those routes as two custom providers without changing the runtime model or adding automatic task classification.
+
+1. Copy the provider entry under a second provider id and change only the `baseUrl`.
+   Keep the same authentication, API transport, model id, capabilities, context limits, and token limits unless the gateway actually differs.
+2. Use the interactive provider as the default model and the background provider as the sub-agent model.
+3. Copy the exact model's generation settings to the second fully qualified model key.
+   Give the interactive entry the picker alias and omit it on the background entry to avoid assigning the same shortcut name to both routes. Both provider-qualified model entries can still appear separately in model pickers.
+
+```json5
+{
+  models: {
+    mode: "merge",
+    providers: {
+      "acme-interactive": {
+        baseUrl: "https://interactive.example/v1",
+        apiKey: "${ACME_API_KEY}",
+        api: "openai-completions",
+        models: [
+          {
+            id: "acme-model",
+            name: "Acme model",
+            input: ["text", "image"],
+            contextWindow: 131072,
+            maxTokens: 16384,
+          },
+        ],
+      },
+      "acme-background": {
+        baseUrl: "https://background.example/v1",
+        apiKey: "${ACME_API_KEY}",
+        api: "openai-completions",
+        models: [
+          {
+            id: "acme-model",
+            name: "Acme model (background)",
+            input: ["text", "image"],
+            contextWindow: 131072,
+            maxTokens: 16384,
+          },
+        ],
+      },
+    },
+  },
+  agents: {
+    defaults: {
+      model: {
+        primary: "acme-interactive/acme-model",
+        fallbacks: ["acme-background/acme-model"],
+      },
+      subagents: {
+        model: {
+          primary: "acme-background/acme-model",
+          fallbacks: ["acme-interactive/acme-model"],
+        },
+      },
+      models: {
+        "acme-interactive/acme-model": {
+          alias: "Acme model",
+          params: { temperature: 0.2 },
+        },
+        "acme-background/acme-model": {
+          params: { temperature: 0.2 },
+        },
+      },
+    },
+  },
+}
+```
+
+The model reference used for a sub-agent is selected in this order: an explicit spawn choice, the per-agent sub-agent model, then `agents.defaults.subagents.model`.
+For cron or automation jobs, set the model and fallback list explicitly when the job must use the background route, for example `openclaw automations add ... --model acme-background/acme-model --fallbacks acme-interactive/acme-model`.
+When the API transport is unchanged, an existing non-empty `models.json` `baseUrl` takes precedence over the matching config entry, so update that file or remove the override when changing routes.
+See [Sub-agents](/tools/subagents), [Model configuration](/gateway/config-agents/models), [Custom providers and base URLs](/gateway/config-tools/custom-providers), and [Automation payloads](/automation/cron-jobs/payloads) for the detailed selection and precedence rules.

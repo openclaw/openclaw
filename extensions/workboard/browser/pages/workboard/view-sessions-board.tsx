@@ -11,7 +11,7 @@ import { formatDateTimeMs } from "../../lib/format.ts";
 import { workboardBoardName } from "../../lib/workboard/board-presentation.ts";
 import { agentDisplayName } from "./agent-filter.ts";
 import type { SessionsBoardController } from "./sessions-board-controller.ts";
-import { cardRelativeTime } from "./view-card-time.tsx";
+import { RelativeTime } from "./view-card-time.tsx";
 import { boardScrollEdgesRef } from "./view-scroll-fade.ts";
 import { SessionStatusBadge, type SessionStatusPresentation } from "./view-session-status.tsx";
 
@@ -344,7 +344,7 @@ export function SessionsBoard(props: SessionsBoardProps) {
                             class="workboard-session-tile__time"
                             title={formatDateTimeMs(session().lastActivityAt)}
                           >
-                            {cardRelativeTime(session().lastActivityAt, Date.now())}
+                            <RelativeTime timestamp={session().lastActivityAt} now={Date.now()} />
                           </span>
                         </div>
                       )}

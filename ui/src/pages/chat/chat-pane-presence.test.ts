@@ -124,7 +124,7 @@ it.each([
 );
 
 it("refreshes fallback identity, retains it through reconnect, and follows authoritative replacement", async () => {
-  const { pane, publishGateway, update } = await createPane([self("self")]);
+  const { pane, context, publishGateway, update } = await createPane([self("self")]);
   await publishPresence(pane, [self("Updated self", "/self-v2.png")]);
   expect(update).toHaveBeenCalledOnce();
   expect(pane.chatProps).toMatchObject({ userName: "Updated self", userAvatar: "/self-v2.png" });
@@ -152,4 +152,10 @@ it("refreshes fallback identity, retains it through reconnect, and follows autho
 
   await publishGateway({ selfUser: null });
   expect(pane.chatProps?.userName).not.toBe("Blair");
+  const owner = pane as unknown as TestChatPane;
+  const accepted = withSelf(person("Blair"));
+  owner.context = { ...context, gateway: { ...context.gateway, readPresence: () => accepted } };
+  owner.connectedClient = null;
+  owner.applyGatewaySnapshot(context.gateway.snapshot);
+  expect(pane.presence.snapshot).toEqual({ presence: accepted });
 });

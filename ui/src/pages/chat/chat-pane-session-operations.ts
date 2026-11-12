@@ -17,8 +17,11 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { resolveChatAgentId } from "./chat-agent-id.ts";
+import type {
+  HeaderMenuAction,
+  HeaderSessionOperation,
+} from "./chat-pane-session-menu-contract.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import type { HeaderMenuAction } from "./components/chat-header-session-menu.ts";
 
 function headerSessionMetadataPatch(
   action: Extract<
@@ -47,28 +50,6 @@ type HeaderSessionRenameAttempt = {
   isCurrent(): boolean;
   publishError(error: unknown): void;
 };
-
-type HeaderSessionOperation = Exclude<
-  HeaderMenuAction,
-  {
-    kind:
-      | "move-session"
-      | "stop-cloud-worker"
-      | "open-in"
-      | "copy-session-id"
-      | "copy-session-link"
-      | "copy-session-preview-link"
-      | "copy-markdown"
-      | "open-new-tab"
-      | "open-new-window"
-      | "split-right"
-      | "split-below"
-      | "continue-in-terminal"
-      | "toggle-pin"
-      | "new-group"
-      | "plugin";
-  }
->;
 
 export async function runHeaderSessionOperation(
   action: HeaderSessionOperation,
@@ -127,7 +108,7 @@ export async function runHeaderSessionOperation(
     );
     const resolvedRow = currentRow ?? (session.sessionId ? row : null);
     if (!resolvedRow && notify) {
-      showToast({ message: t("common.refresh") });
+      showToast({ severity: undefined, message: t("common.refresh") });
     }
     return resolvedRow ? toActionSession(resolvedRow) : null;
   };
@@ -136,7 +117,7 @@ export async function runHeaderSessionOperation(
     assignSessionCategory,
     assignSessionOwner,
     deleteSession,
-    forkSession,
+    createChildSession,
     patchSession,
     promoteSession,
     renameSession,
@@ -276,8 +257,7 @@ export async function runHeaderSessionOperation(
       await assignSessionOwner(host, session, action.owner, scope);
       break;
     case "fork":
-      await forkSession(host, session, scope);
-      break;
+      return createChildSession(host, session, scope, { fork: true, title: action.title });
     case "move-to-top-level":
       await promoteSession(host, session, scope);
       break;

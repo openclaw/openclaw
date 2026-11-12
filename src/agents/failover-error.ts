@@ -13,6 +13,8 @@ import { isAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js
 import { copyErrorDiagnostic } from "../infra/error-diagnostics.js";
 import { collectErrorGraphCandidates, readErrorName } from "../infra/errors.js";
 import { isLocalStorageOutcomeError } from "../infra/sqlite-error-diagnostics.js";
+import { SkillResourceDeliveryLimitError } from "../skills/runtime/resource-delivery-error.js";
+import { readAgentTerminalSnapshot, withAgentTerminalSnapshot } from "./agent-terminal-snapshot.js";
 import { failoverReasonFromClassification } from "./failover/classification-rules.js";
 import {
   classifyFailoverSignal,
@@ -33,6 +35,7 @@ import { resolveExecutionApprovalFailureMessage } from "./failover/message-patte
 import type { FailoverClassification, FailoverReason, FailoverSignal } from "./failover/signal.js";
 import { renderRateLimitRetryExhaustion } from "./failover/user-copy.js";
 import {
+  AgentHarnessModelRequestPolicyError,
   AgentHarnessSessionSupersededError,
   isAgentHarnessPreflightError,
 } from "./harness/errors.js";
@@ -65,8 +68,10 @@ const RUNTIME_COORDINATION_ERROR_NAMES = new Set([
   "WorkerWorkspaceReconciliationError",
   "ActiveTurnClaimError",
   "CliHistoryOwnerChangedError",
+  "SessionEntryChangedDuringReadError",
   "SessionTranscriptReadFenceError",
   "SqliteWorkerError",
+  "SessionCapabilityMetadataChangedError",
 ]);
 
 export { recordModelFallbackStop } from "./model-fallback-stop.js";
@@ -178,6 +183,7 @@ function normalizeFailoverStatus(status: number | undefined, code?: string): num
 const FAILOVER_STATUS = new Map<FailoverReason, number>([
   ["billing", 402],
   ["server_error", 500],
+  ["route_unavailable", 503],
   ["rate_limit", 429],
   ["overloaded", 503],
   ["auth", 401],
@@ -309,6 +315,7 @@ function hasRuntimeCoordinationFailure(err: unknown): boolean {
   }
   return collectErrorGraphCandidates(err, resolveNestedErrors).some(
     (candidate) =>
+      candidate instanceof SkillResourceDeliveryLimitError ||
       isSessionWorkStartInvalidatedError(candidate) ||
       RUNTIME_COORDINATION_ERROR_NAMES.has(readErrorName(candidate)) ||
       resolveExecutionApprovalFailureMessage(readDirectErrorMessage(candidate)) !== undefined,
@@ -484,7 +491,13 @@ export function resolveFailoverClassificationFromError(
 ): FailoverClassification | null {
   // A direct preflight owns the refusal; its cause is diagnostic, not a failed
   // provider attempt that may rotate credentials or replay the turn.
-  if (isAgentHarnessPreflightError(err) || findLocalWorkerTaskFailure(err)) {
+  if (
+    isAgentHarnessPreflightError(err) ||
+    findLocalWorkerTaskFailure(err) ||
+    collectErrorGraphCandidates(err, resolveNestedErrors).some(
+      (candidate) => candidate instanceof AgentHarnessModelRequestPolicyError,
+    )
+  ) {
     return null;
   }
   // Local coordination codes such as SQLite "overloaded" are not provider signals.
@@ -649,7 +662,7 @@ export function coerceToFailoverError(
         },
       );
       copyErrorDiagnostic(err, enriched);
-      return enriched;
+      return withAgentTerminalSnapshot(enriched, readAgentTerminalSnapshot(err));
     }
     return err;
   }
@@ -667,24 +680,27 @@ export function coerceToFailoverError(
   const shouldSuspend =
     Boolean(context?.sessionId) && (reason === "rate_limit" || reason === "billing");
 
-  return new FailoverError(
-    renderRateLimitRetryExhaustion(context?.rateLimitRetriesExhausted) ?? message,
-    {
-      reason,
-      rateLimitRetriesExhausted: context?.rateLimitRetriesExhausted,
-      provider: context?.provider ?? signal.provider,
-      model: context?.model,
-      profileId: context?.profileId,
-      authMode: context?.authMode,
-      sessionId: context?.sessionId,
-      lane: context?.lane,
-      status,
-      code,
-      rawError: message,
-      cause: err instanceof Error ? err : undefined,
-      timeout: context?.timeout,
-      suspend: shouldSuspend,
-    },
+  return withAgentTerminalSnapshot(
+    new FailoverError(
+      renderRateLimitRetryExhaustion(context?.rateLimitRetriesExhausted) ?? message,
+      {
+        reason,
+        rateLimitRetriesExhausted: context?.rateLimitRetriesExhausted,
+        provider: context?.provider ?? signal.provider,
+        model: context?.model,
+        profileId: context?.profileId,
+        authMode: context?.authMode,
+        sessionId: context?.sessionId,
+        lane: context?.lane,
+        status,
+        code,
+        rawError: message,
+        cause: err instanceof Error ? err : undefined,
+        timeout: context?.timeout,
+        suspend: shouldSuspend,
+      },
+    ),
+    readAgentTerminalSnapshot(err),
   );
 }
 

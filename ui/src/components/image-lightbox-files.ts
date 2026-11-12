@@ -1,4 +1,5 @@
 import { BROWSER_IMAGE_MIME_TYPES } from "../../../src/shared/browser-image-mime-types.js";
+import { downloadBlobFile } from "../lib/download.ts";
 import { downloadImageBlob } from "../lib/image-download.ts";
 import { resolveSafeExternalUrl } from "../lib/open-external-url.ts";
 
@@ -60,7 +61,13 @@ export async function downloadLightboxImage(
         }
         return response.blob();
       });
-  if (!BROWSER_IMAGE_MIME_TYPES.has(mimeTypeEssence(blob.type))) {
+  const mimeType = mimeTypeEssence(blob.type);
+  if (mimeType === "image/svg+xml") {
+    // Preserve the original file without creating an active SVG download URL.
+    downloadBlobFile(title, new Blob([blob], { type: "application/octet-stream" }), 30_000);
+    return;
+  }
+  if (!BROWSER_IMAGE_MIME_TYPES.has(mimeType)) {
     throw new Error("Unsupported image download");
   }
   downloadImageBlob(blob, title);

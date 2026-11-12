@@ -71,6 +71,7 @@ const mocks = vi.hoisted(() => {
     activeRuntime: {
       invoke: vi.fn(async () => {}),
       handleInput: vi.fn(),
+      setLocalMcpAllowed: vi.fn(),
       cancel: vi.fn(),
       cancelAll: vi.fn(async () => {}),
       tryPauseForUpdate: vi.fn(async () => true),
@@ -134,15 +135,20 @@ vi.mock("../infra/machine-model.js", () => ({
   resolveMachineModelIdentifier: vi.fn(() => "TestMachine1,1"),
 }));
 
+// mock-isolation: runner fixtures supply synthetic binary paths without inspecting the host PATH.
 vi.mock("../infra/executable-path.js", () => ({
-  resolveExecutableFromPathEnv: vi.fn((bin: string) => mocks.resolvedExecutables.get(bin) ?? null),
+  resolveExecutableFromPathEnvAsync: vi.fn(async (bin: string) =>
+    mocks.resolvedExecutables.get(bin),
+  ),
 }));
 
 // mock-isolation: Keep host PATH mutation outside the isolated runner fixture.
 vi.mock("../infra/path-env.js", () => ({ ensureOpenClawCliOnPath: vi.fn() }));
 
+// mock-isolation: runner suites drive config through fixtures; SQLite persistence has its own suite.
 vi.mock("./config.js", () => ({
   configureNodeHost: mocks.configureNodeHost,
+  refreshNodeHostOpenClawIdTarget: vi.fn(),
   loadNodeHostConfig: mocks.loadNodeHostConfig,
 }));
 
@@ -259,6 +265,7 @@ export function resetRunnerTestState() {
     },
   ];
   vi.clearAllMocks();
+  mocks.startGatewayClientWhenEventLoopReady.mockReset().mockResolvedValue(mocks.readiness(false));
   mocks.loadNodeHostConfig.mockReset().mockResolvedValue(null);
   mocks.loadDeviceAuthTokenReadOnly.mockReset().mockResolvedValue(null);
   mocks.loadDeviceIdentityIfPresent.mockReset().mockResolvedValue(null);
@@ -267,24 +274,21 @@ export function resetRunnerTestState() {
 
 export { loadResumableNodeHostGateway, mocks, runNodeHost, startNodeHostMcpManager };
 
-export function readyNodeHost() {
-  mocks.startGatewayClientWhenEventLoopReady.mockResolvedValueOnce(mocks.readiness(true));
-}
-
 export async function withReadyNodeHost(
   runTest: (host: {
-    running: Promise<void>;
+    running: ReturnType<typeof runNodeHost>;
     stop: () => (() => void) | undefined;
     client: (typeof mocks.capturedGatewayClients)[number];
     options: GatewayClientOptions;
   }) => Promise<void>,
   options: Partial<Parameters<typeof runNodeHost>[0]> = {},
   beforeStop?: () => void,
+  start = runNodeHost,
 ) {
-  readyNodeHost();
+  mocks.startGatewayClientWhenEventLoopReady.mockResolvedValueOnce(mocks.readiness(true));
   const on = vi.spyOn(process, "on");
   const previousExitCode = process.exitCode;
-  const running = runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789, ...options });
+  const running = start({ gatewayHost: "127.0.0.1", gatewayPort: 18789, ...options });
   const stop = () => {
     const listener = on.mock.calls.find(([event]) => event === "SIGTERM")?.[1];
     listener?.("SIGTERM");

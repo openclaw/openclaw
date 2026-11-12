@@ -311,10 +311,12 @@ it
     const scopeSuffix = `${process.pid}-${Date.now()}`;
     const scopeKey = `session:openshell-e2e-deny:${scopeSuffix}`;
     const testRunId = `${process.pid.toString(36)}${Date.now().toString(36)}`;
+    const imageTag = `openclaw-openshell-e2e:${testRunId}`;
     const openShellWorkspace = `oc-w-${testRunId.slice(-14)}`;
     let hostPolicyServer: Awaited<ReturnType<typeof startHostPolicyServer>> | undefined;
     let mirrorSocketServer: net.Server | undefined;
     let workspaceCreated = false;
+    let imageBuilt = false;
     const defaults = createOpenShellBackendSandboxConfig();
     const sandboxCfg = {
       ...defaults,
@@ -332,7 +334,7 @@ it
       command: OPENCLAW_OPENSHELL_COMMAND,
       gateway: gatewayName,
       workspace: openShellWorkspace,
-      from: dockerfilePath,
+      from: imageTag,
       mode: "remote",
       autoProviders: false,
       policy: denyPolicyPath,
@@ -417,6 +419,8 @@ it
         await fs.mkdir(protectedPath, { recursive: true });
         await fs.writeFile(path.join(protectedPath, "host-only.txt"), "private\n", "utf8");
       }
+      await fs.mkdir(path.join(mirrorWorkspaceDir, "nested-repo/.git"), { recursive: true });
+      await writeFile(mirrorWorkspaceDir, "nested-repo/.git/host-only.txt", "private\n");
       const hostLinkTarget = path.join(rootDir, "host-link-target.txt");
       await fs.writeFile(hostLinkTarget, "host-only-link-target\n");
       const hostLinks = [
@@ -444,6 +448,12 @@ it
       socketServer.listen(mirrorSocketPath);
       await once(socketServer, "listening");
       await fs.writeFile(dockerfilePath, CUSTOM_IMAGE_DOCKERFILE, "utf8");
+      await runCommand({
+        command: "docker",
+        args: ["build", "--tag", imageTag, dockerfileDir],
+        timeoutMs: 5 * 60_000,
+      });
+      imageBuilt = true;
       const policyPort = hostPolicyServer.port;
       const writePolicy = (file: string, binaryPath: string) =>
         fs.writeFile(
@@ -501,17 +511,44 @@ it
       expect(verifyResult.stdout.replace(/\r?\n$/, "")).toContain("Host ");
 
       const policyRequest = `curl --fail --silent --show-error --max-time 15 "http://host.openshell.internal:${hostPolicyServer.port}/policy-test"`;
+      const allowedGetResult = await exec(allowBackend, policyRequest);
+      expect(allowedGetResult.code).toBe(0);
+      expect(allowedGetResult.stdout).toContain('"message":"hello-from-host"');
+
+      // v0.1.3 rejects unauthorized binaries at TCP admission, before any HTTP response.
       const blockedGetResult = await exec(backend, policyRequest, { allowFailure: true });
-      expect(blockedGetResult.code).not.toBe(0);
-      expect(`${blockedGetResult.stdout}\n${blockedGetResult.stderr}`).toMatch(/403|deny/i);
+      expect(blockedGetResult.code).toBe(7);
+      expect(blockedGetResult.stdout).not.toContain('"message":"hello-from-host"');
 
       const mirrorExecResult = await exec(
         mirrorBackend,
-        "pwd && cat mirror-seed.txt && test ! -e .git && test ! -e hooks && test ! -e git-hooks",
+        "pwd && cat mirror-seed.txt && test ! -e .git && test ! -e hooks && test ! -e git-hooks && test ! -e nested-repo/.git",
         { timeoutMs: 2 * 60_000 },
       );
       expect(mirrorExecResult.stdout).toContain("/sandbox/project");
       expect(mirrorExecResult.stdout).toContain("mirror-from-local");
+      await exec(
+        mirrorBackend,
+        "mkdir -p nested-repo/.git fresh-repo/.git spaced && printf sandbox > nested-repo/.git/config && printf sandbox > fresh-repo/.git/config && printf ordinary > 'spaced/ .git '",
+      );
+      await expectFile(mirrorWorkspaceDir, "nested-repo/.git/host-only.txt", "private\n");
+      await expectFile(mirrorWorkspaceDir, "spaced/ .git ", "ordinary");
+      await expect(
+        fs.lstat(path.join(mirrorWorkspaceDir, "nested-repo/.git/config")),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await expect(
+        fs.lstat(path.join(mirrorWorkspaceDir, "fresh-repo/.git")),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await exec(mirrorBackend, "rm -rf nested-repo");
+      await expectFile(mirrorWorkspaceDir, "nested-repo/.git/host-only.txt", "private\n");
+      await expect(
+        exec(mirrorBackend, "rm -rf nested-repo && printf collision > nested-repo"),
+      ).rejects.toThrow(/download the sandbox file directly/u);
+      await expectFile(mirrorWorkspaceDir, "nested-repo/.git/host-only.txt", "private\n");
       expect((await fs.lstat(mirrorFifoPath)).isFIFO()).toBe(true);
       expect((await fs.lstat(mirrorSocketPath)).isSocket()).toBe(true);
       if (stressMode === "mirror") {
@@ -555,10 +592,6 @@ it
       });
       await expectFile(mirrorWorkspaceDir, "nested/mirror-note.txt", "mirror-write\n");
       await expectExec(mirrorBackend, "cat nested/mirror-note.txt", "mirror-write\n");
-
-      const allowedGetResult = await exec(allowBackend, policyRequest);
-      expect(allowedGetResult.code).toBe(0);
-      expect(allowedGetResult.stdout).toContain('"message":"hello-from-host"');
 
       const overlappingExec = await prepareExec(
         mirrorBackend,
@@ -647,6 +680,15 @@ it
           const socketServer = mirrorSocketServer;
           if (socketServer) {
             await closeServer(socketServer);
+          }
+        },
+        async () => {
+          if (imageBuilt) {
+            await runCommand({
+              command: "docker",
+              args: ["image", "rm", imageTag],
+              timeoutMs: 30_000,
+            });
           }
         },
         () => hostPolicyServer?.close(),

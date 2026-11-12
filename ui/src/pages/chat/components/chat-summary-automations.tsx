@@ -15,6 +15,7 @@ import { pathForRoute } from "../../../app-route-paths.ts";
 import { gatewayPresentationScope } from "../../../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { Tooltip } from "../../../components/solid/tooltip.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { isCronInventoryInvalidation } from "../../../lib/cron/inventory-connection.ts";
 import { loadCompactCronJobsPage, retireCronJobsRequest } from "../../../lib/cron/jobs.ts";
@@ -30,10 +31,12 @@ import { listen } from "../../../lib/reactive/listener.ts";
 import { resolveUiConversationIdentity } from "../../../lib/sessions/session-key.ts";
 import { HoverMarquee } from "../../../lib/solid/hover-marquee.tsx";
 import "../../../styles/chat/summary-automations.css";
+import type { DetailsAutomation, DetailsSnapshotPatch } from "../chat-details-snapshot.ts";
+import type { ChatDetailsSnapshot } from "../session-details-snapshot-schema.ts";
 import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
-import { SessionAutomationResult } from "./session-automation-result.tsx";
 import { createSessionAutomationSchedule } from "./session-automation-schedule-loader.ts";
+import { sessionAutomationNextRun } from "./session-automation-schedule-non-cron.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -62,6 +65,7 @@ export function createSessionAutomationInventory(
   const sessionKey = createMemo(() => props.sessionKey);
   const presented = createMemo(() => props.presented);
   const binding = createMemo(() => ({ source: gateway(), key: sessionKey() }));
+  let loadedBinding: ReturnType<typeof binding> | undefined;
   const [revision, setRevision] = createSignal(0);
   const publish = () => setRevision((value) => value + 1);
   // The loader owns synchronous request state; Solid only observes its revision.
@@ -110,6 +114,7 @@ export function createSessionAutomationInventory(
   };
 
   function reset(source: ApplicationGateway | undefined, key: string, retain = false) {
+    loadedBinding = binding();
     retry.reset();
     retryPending = false;
     retireCronJobsRequest(cron);
@@ -300,10 +305,11 @@ export function createSessionAutomationInventory(
     total: () => state().cronJobsTotal,
     hasMore: () => state().cronJobsHasMore,
     loading: () => state().cronLoading || state().cronJobsLoadingMore,
-    loaded: () => state().cronJobsSnapshotRevision !== null,
+    loaded: () => state().cronJobsSnapshotRevision !== null && binding() === loadedBinding,
     connected: () => scope().connected,
     available: () => readable() && Boolean(state().cronSessionFilter),
     readable,
+    denied: () => state().cronJobsReadDenied === true,
     error: () => state().cronJobsError !== null,
     read,
     refresh: () => load({ refresh: true }),
@@ -343,6 +349,8 @@ export function SessionAutomationRead(props: {
 }
 
 export type ChatSummaryAutomationsProps = SessionAutomationInventoryProps & {
+  cached?: ChatDetailsSnapshot["automations"];
+  onDetailsSnapshot?: (patch: DetailsSnapshotPatch) => void;
   /** Reset local reveal/focus intent without retiring the logical inventory. */
   presentationIdentity?: object;
   /** Supplied only by the native desktop Details composition. */
@@ -373,10 +381,49 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
     sessionKey();
     return 10;
   });
-  const jobs = () => inventory.jobs().slice(0, shown());
   const formatSchedule = createSessionAutomationSchedule();
+  const cached = () =>
+    !inventory.loaded() &&
+    !inventory.denied() &&
+    (!props.gateway?.snapshot.hello || inventory.readable())
+      ? props.cached
+      : undefined;
+  const pending = () => (cached() ? inventory.loading() : isPending(inventory.read));
+  // Closing the row DOM must not erase the bounded offline preview.
+  const jobs = createMemo<DetailsAutomation[]>(() =>
+    inventory.loaded()
+      ? inventory
+          .jobs()
+          .slice(0, props.desktop && !props.desktop.expanded ? 10 : shown())
+          .map((job) => ({
+            id: job.id,
+            name: job.name,
+            disabled: !job.enabled || undefined,
+            autoDisabled: job.autoDisabled ? true : undefined,
+            running:
+              job.runningAtMs === undefined
+                ? undefined
+                : (inventory.connected() && job.enabled && !job.autoDisabled) || undefined,
+            state: jobState(job),
+            nextRunAtMs: job.enabled && !job.autoDisabled ? job.nextRunAtMs : null,
+          }))
+      : (cached()?.rows ?? []),
+  );
   const hasCachedRows = () => inventory.jobs().length > shown();
-  const more = () => hasCachedRows() || (inventory.hasMore() && !inventory.error());
+  const unavailable = () => inventory.error() || inventory.loading() || !inventory.connected();
+  const more = () =>
+    cached()?.more ?? (hasCachedRows() || (inventory.hasMore() && !inventory.error()));
+  const receipt = createMemo(() =>
+    inventory.loaded() && props.onDetailsSnapshot
+      ? {
+          write: props.onDetailsSnapshot,
+          automations: {
+            rows: jobs().slice(0, 10),
+            more: inventory.jobs().length > 10 || inventory.hasMore(),
+          },
+        }
+      : undefined,
+  );
 
   async function reveal(button: HTMLButtonElement) {
     const key = props.sessionKey;
@@ -386,12 +433,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
     const count = shown() + 10;
     // Revealing retained rows needs no network request, even during a failed refresh.
     if (!hasCachedRows()) {
-      if (
-        inventory.error() ||
-        inventory.loading() ||
-        !inventory.connected() ||
-        !inventory.hasMore()
-      ) {
+      if (unavailable() || !inventory.hasMore()) {
         return;
       }
       await inventory.loadMore();
@@ -498,86 +540,81 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
       </div>
     );
   const content = () => (
-    <div class="chat-summary__automations" aria-busy={isPending(inventory.read) ? "true" : "false"}>
-      <For each={jobs()} keyed={(job) => job.id}>
+    <div class="chat-summary__automations" aria-busy={pending() ? "true" : "false"}>
+      <For each={props.desktop && !props.desktop.expanded ? [] : jobs()} keyed={(job) => job.id}>
         {(job) => {
           let row: HTMLAnchorElement | undefined;
           const search = () => `?${new URLSearchParams({ job: job().id })}`;
-          const running = () =>
-            inventory.connected() &&
-            job().enabled &&
-            !job().autoDisabled &&
-            job().runningAtMs !== undefined;
-          const state = createMemo(() => jobState(job()));
-          const metadataTitle = () => {
-            const value = job();
-            const timezone = value.schedule?.kind === "cron" ? value.schedule.tz : undefined;
-            return timezone ? `${state()} (${timezone})` : props.desktop ? undefined : state();
+          const running = () => job().running;
+          const state = () => job().state;
+          // Older cached snapshots lack nextRunAtMs; show no tooltip rather than guess.
+          const nextRun = () => {
+            const at = job().nextRunAtMs;
+            return at === undefined ? undefined : sessionAutomationNextRun(at);
           };
           return (
-            <a
-              ref={[
-                (element) => {
-                  row = element;
-                },
-                elementRef(registerJobLink(job().id)),
-              ]}
-              class="chat-summary__automation"
-              href={`${pathForRoute("cron", context?.basePath ?? "")}${search()}`}
-              title={props.desktop ? undefined : job().name.trim() || job().id}
-              onClick={(event) => {
-                if (shouldHandleNavigationClick(event) && (props.onNavigate || context)) {
-                  event.preventDefault();
-                  if (props.onNavigate) {
-                    props.onNavigate(job().id);
-                  } else {
-                    context?.navigate("cron", { search: search() });
+            <Tooltip content={nextRun()} disabled={nextRun() === undefined}>
+              <a
+                ref={[
+                  (element) => {
+                    row = element;
+                  },
+                  elementRef(registerJobLink(job().id)),
+                ]}
+                class="chat-summary__automation"
+                href={`${pathForRoute("cron", context?.basePath ?? "")}${search()}`}
+                onClick={(event) => {
+                  if (shouldHandleNavigationClick(event) && (props.onNavigate || context)) {
+                    event.preventDefault();
+                    if (props.onNavigate) {
+                      props.onNavigate(job().id);
+                    } else {
+                      context?.navigate("cron", { search: search() });
+                    }
                   }
-                }
-              }}
-            >
-              <span class="chat-summary__automation-icon" aria-hidden="true">
-                <Icon name="clock" />
-                {!job().enabled && !job().autoDisabled && (
-                  <span class="chat-summary__automation-paused">
-                    <Icon name="pause" />
-                  </span>
-                )}
-                {job().autoDisabled && <span class="chat-summary__automation-attention" />}
-              </span>
-              <span class="chat-summary__automation-copy">
-                <span class="chat-summary__automation-heading">
-                  <HoverMarquee
-                    class="chat-summary__automation-title"
-                    content={job().name.trim() || job().id}
-                    options={{ host: () => row }}
-                  />
-                  {state() && (
-                    <span
-                      class={[
-                        "chat-summary__automation-state",
-                        { "is-attention": Boolean(job().autoDisabled) },
-                      ]}
-                      title={metadataTitle()}
-                    >
-                      {running() ? (
-                        <>
-                          <span class="session-run-spinner" aria-hidden="true" />
-                          <span class="sr-only">{state()}</span>
-                        </>
-                      ) : (
-                        <HoverMarquee
-                          class="chat-summary__automation-metadata"
-                          content={state()}
-                          options={{ host: () => row, stationary: true }}
-                        />
-                      )}
+                }}
+              >
+                <span class="chat-summary__automation-icon" aria-hidden="true">
+                  <Icon name="clock" />
+                  {job().disabled && !job().autoDisabled && (
+                    <span class="chat-summary__automation-paused">
+                      <Icon name="pause" />
                     </span>
                   )}
+                  {job().autoDisabled && <span class="chat-summary__automation-attention" />}
                 </span>
-                <SessionAutomationResult job={job()} />
-              </span>
-            </a>
+                <span class="chat-summary__automation-copy">
+                  <span class="chat-summary__automation-heading">
+                    <HoverMarquee
+                      class="chat-summary__automation-title"
+                      content={job().name.trim() || job().id}
+                      options={{ host: () => row }}
+                    />
+                    {state() && (
+                      <span
+                        class={[
+                          "chat-summary__automation-state",
+                          { "is-attention": Boolean(job().autoDisabled) },
+                        ]}
+                      >
+                        {running() ? (
+                          <>
+                            <span class="session-run-spinner" aria-hidden="true" />
+                            <span class="sr-only">{state()}</span>
+                          </>
+                        ) : (
+                          <HoverMarquee
+                            class="chat-summary__automation-metadata"
+                            content={state()}
+                            options={{ host: () => row, stationary: true }}
+                          />
+                        )}
+                      </span>
+                    )}
+                  </span>
+                </span>
+              </a>
+            </Tooltip>
           );
         }}
       </For>
@@ -585,7 +622,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
         <button
           type="button"
           class="chat-summary__automation-more"
-          disabled={!hasCachedRows() && (isPending(inventory.read) || !inventory.connected())}
+          aria-disabled={!hasCachedRows() && unavailable() ? "true" : undefined}
           onClick={(event) => void reveal(event.currentTarget)}
         >
           {t("chat.sessionDetails.automationShowMore")}
@@ -597,8 +634,14 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
     <openclaw-chat-summary-automations ref={(element) => (host = element)}>
       {inventory.lifecycle}
       <ChatLazyBoundary>
-        <Show when={inventory.readable()}>
-          <Show when={inventory.jobs().length > 0}>
+        <Show when={receipt()} keyed>
+          {(value) => {
+            onSettled(() => value.write({ automations: value.automations }));
+            return null;
+          }}
+        </Show>
+        <Show when={inventory.readable() || cached()}>
+          <Show when={inventory.jobs().length > 0 || (cached()?.rows.length ?? 0) > 0}>
             <Show
               when={props.desktop}
               fallback={

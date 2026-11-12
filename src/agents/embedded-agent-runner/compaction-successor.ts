@@ -3,7 +3,6 @@ import {
   buildSessionEndHookPayload,
   buildSessionStartHookPayload,
 } from "../../auto-reply/reply/session-hooks.js";
-import { projectRestartRecoveryCompaction } from "../../config/sessions/harness-completion-compaction.js";
 import {
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
@@ -244,7 +243,6 @@ export async function acceptCompactionSuccessor(params: {
         requireCompactionWriterEntry(entry, expected);
         return {
           sessionId: successor.sessionId,
-          ...projectRestartRecoveryCompaction(entry, successor.sessionId),
         };
       },
       {

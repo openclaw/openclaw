@@ -121,6 +121,42 @@ function getApiClientForReference(
     : app.api.fromServiceUrl({ serviceUrl: ref.serviceUrl });
 }
 
+export async function getMSTeamsTeamDetailsWithReference(
+  app: MSTeamsApp,
+  source: MSTeamsSdkReferenceSource,
+  teamId: string,
+  options?: MSTeamsProactiveOptions & MSTeamsSendHandoff,
+): Promise<{ aadGroupId?: string }> {
+  // Metadata reads carry cancellation through token preparation without marking a send.
+  return withMSTeamsConnectorHandoff(
+    { assertDirectAdapterHandoff: options?.assertDirectAdapterHandoff },
+    async (handoff) => {
+      const api = getApiClientForReference(app, buildSdkConversationReference(source, options));
+      assertMSTeamsSendHandoff(handoff);
+      return api.teams.getById(teamId);
+    },
+  );
+}
+
+/** Opens (or returns) the bot's personal chat with a user who has the app installed. */
+export async function createMSTeamsPersonalConversation(
+  app: MSTeamsApp,
+  params: { serviceUrl: string; userId: string; tenantId: string },
+  options: Pick<MSTeamsSendHandoff, "assertDirectAdapterHandoff">,
+): Promise<{ id: string }> {
+  // Opening the chat is not a message dispatch: authority is checked after token
+  // preparation and at HTTP submit, without marking the send dispatched.
+  return withMSTeamsConnectorHandoff(options, async (handoff) => {
+    assertMSTeamsSendHandoff(handoff);
+    return app.api.fromServiceUrl({ serviceUrl: params.serviceUrl }).conversations.create({
+      isGroup: false,
+      members: [{ id: params.userId }],
+      tenantId: params.tenantId,
+      channelData: { tenant: { id: params.tenantId } },
+    });
+  });
+}
+
 export async function sendMSTeamsActivityWithReference(
   app: MSTeamsApp,
   source: MSTeamsSdkReferenceSource,

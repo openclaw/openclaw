@@ -7,6 +7,9 @@ vi.mock("./send.js", () => ({ sendReactionNextcloudTalk }));
 const { nextcloudTalkMessageActions: actions } = await import("./message-actions.js");
 const configured = { baseUrl: "https://nc.example.com", botSecret: "bot-secret" };
 const unconfigured = { baseUrl: "", botSecret: "" };
+const disabled = { ...configured, enabled: false };
+const missingSecret = { ...configured, botSecret: "" };
+const missingBaseUrl = { ...configured, baseUrl: "" };
 const config = (work: NextcloudTalkAccountConfig = configured): CoreConfig => ({
   channels: { "nextcloud-talk": { defaultAccount: "work", accounts: { work } } },
 });
@@ -22,6 +25,14 @@ beforeEach(() => {
 
 it("returns null when no account is configured", () => {
   expect(actions.describeMessageTool?.({ cfg: config(unconfigured) })).toBeNull();
+});
+
+it.each([
+  ["disabled account", disabled],
+  ["missing secret", missingSecret],
+  ["missing base URL", missingBaseUrl],
+] as const)("returns null for %s", (_name, account) => {
+  expect(actions.describeMessageTool?.({ cfg: config(account), accountId: "work" })).toBeNull();
 });
 
 it("scopes discovery to a specific account instead of another configured account", () => {
@@ -40,13 +51,10 @@ it("scopes discovery to a specific account instead of another configured account
 });
 
 it.each([
-  [
-    "disabled account",
-    { ...configured, enabled: false },
-    reaction,
-    /is disabled or not configured/,
-  ],
+  ["disabled account", disabled, reaction, /is disabled or not configured/],
   ["unconfigured account", unconfigured, reaction, /is disabled or not configured/],
+  ["missing secret", missingSecret, reaction, /is disabled or not configured/],
+  ["missing base URL", missingBaseUrl, reaction, /is disabled or not configured/],
   ["missing id", configured, { to: reaction.to, emoji: reaction.emoji }, /messageId required/],
   ["removal", configured, { ...reaction, remove: true }, /removal is not supported/],
 ] as const)("rejects %s before reaching the sender", async (_name, account, params, error) => {

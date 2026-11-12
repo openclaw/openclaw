@@ -47,10 +47,12 @@ import {
   isStreamingJsonParseError,
   renderRateLimitOrOverloadedCopy,
 } from "../failover/user-copy.js";
+import { MODEL_REQUEST_POLICY_DENIED_TEXT } from "../harness/errors.js";
 import {
   formatSandboxToolPolicyBlockedMessage,
   type resolveSandboxRuntimeStatus,
 } from "../sandbox/runtime-status.js";
+import { readRepeatedToolErrorSummary } from "../tool-error-summary.js";
 import { buildAssistantFailoverSignal } from "./assistant-message-failures.js";
 import { classifyProviderRuntimeFailureKind } from "./provider-runtime-failure.js";
 const log = createSubsystemLogger("errors");
@@ -319,7 +321,7 @@ export function formatUserFacingAssistantErrorText(
     return REPETITIVE_OUTPUT_ERROR_MESSAGE;
   }
   if (msg.errorCode === REPEATED_TOOL_ERROR_CODE) {
-    return REPEATED_TOOL_ERROR_MESSAGE;
+    return readRepeatedToolErrorSummary(msg.errorMessage) ?? REPEATED_TOOL_ERROR_MESSAGE;
   }
   const modelLoadCopy = renderModelLoadFailureCopy(msg);
   if (modelLoadCopy) {
@@ -331,6 +333,9 @@ export function formatUserFacingAssistantErrorText(
     return `⚠️ ${approvalMessage}`;
   }
   const facts = classifyAssistantErrorFacts(msg, opts);
+  if (!facts.storageFailure && rawError === MODEL_REQUEST_POLICY_DENIED_TEXT) {
+    return MODEL_REQUEST_POLICY_DENIED_TEXT;
+  }
   const friendlyError = formatAssistantErrorText(msg, opts, facts);
   const rawPassthrough = isRawAssistantErrorPassthrough({ friendlyError, rawError });
   const schemaFriendlyError =

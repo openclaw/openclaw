@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { diagnosticLogger } from "../logging/diagnostic-runtime.js";
 import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
 import type {
@@ -9,6 +10,7 @@ import type {
 } from "./embedded-agent-runner/run/types.js";
 import { markFallbackCandidateSkipped } from "./fallback-skip-cache.js";
 import { resetFallbackSkipCacheForTest } from "./fallback-skip-cache.test-support.js";
+import { AgentHarnessModelRequestPolicyError } from "./harness/errors.js";
 import type { ModelFallbackStepFields } from "./model-fallback-observation.js";
 import { createFallbackE2eMocks } from "./model-fallback.e2e.test-support.js";
 import { createModelFallbackAttemptMocks } from "./model-fallback.run-embedded.attempts.test-support.js";
@@ -194,6 +196,28 @@ function expectProviderAttemptCounts(expected: { openai: number; groq: number })
 }
 
 describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
+  it("does not rotate credentials or run a second model after a confirmed deployment denial", async () => {
+    await withModelFallbackWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeFallbackMultiProfileAuthStore(agentDir);
+      const denial = new AgentHarnessModelRequestPolicyError();
+      mockPrimaryFailureThenFallbackSuccess(() =>
+        makeEmbeddedRunnerAttempt({
+          terminal: { kind: "failed", source: "prompt", error: denial },
+        }),
+      );
+      await expect(
+        runEmbeddedFallback({ agentDir, workspaceDir }, "request-policy-denial"),
+      ).rejects.toBe(denial);
+      expectProviderAttemptCounts({ openai: 1, groq: 0 });
+      const stats = await readFallbackUsageStats(agentDir);
+      expect(stats["openai:p1"]?.cooldownUntil).toBeUndefined();
+      expect(stats["openai:p1"]?.failureCounts).toBeUndefined();
+      expect(denial.message).toBe(
+        "The deployment rejected this model request. Ask the administrator to check the model access policy and request settings.",
+      );
+    });
+  });
+
   it.each([
     { name: "prompt failure", phase: "prompt", fallback: true, promptFailure: true },
     { name: "aborted assistant", phase: "prompt", fallback: true },
@@ -314,14 +338,10 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
 
   it("keeps fallback enabled for auto-selected routes and traces the winning execution", async () => {
     await withDefaultAuth(async ({ agentDir, workspaceDir }) => {
-      const observedModelRoutingProvenance: Array<{
-        stage: "initial" | "fallback";
-        fallbackReason?: string;
-      }> = [];
+      using diagnostics = vi.spyOn(diagnosticLogger, "error").mockImplementation(() => {});
       mockPrimaryOverloadedThenFallbackSuccess();
       const { decisionWork, result } = await captureRoutingDecisionWork(() =>
         runEmbeddedEntryFallback({ agentDir, workspaceDir }, "execution-trace-fallback", {
-          onModelRoutingProvenance: (value) => observedModelRoutingProvenance.push(value),
           fallbacksOverride: ["groq/mock-2"],
           modelFallbackAvailability: {
             kind: "active",
@@ -362,10 +382,10 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
           decision: { reasonCode: "overloaded" },
         },
       ]);
-      expect(observedModelRoutingProvenance).toMatchObject([
-        { stage: "initial" },
-        { stage: "fallback", fallbackReason: "overloaded" },
-      ]);
+      expect(diagnostics).not.toHaveBeenCalledWith(
+        expect.stringContaining("lane task error:"),
+        expect.any(Object),
+      );
     });
   });
 

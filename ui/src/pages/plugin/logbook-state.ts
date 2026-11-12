@@ -2,6 +2,7 @@ import { onSettled } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { projectMutableSource } from "../../lib/reactive/projection.ts";
+import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import type {
   LogbookStatusPayload,
   LogbookTimelinePayload,
@@ -57,6 +58,9 @@ export function createLogbook(initialClient: GatewayBrowserClient | null) {
     state.askAnswer = null;
   }
 
+  let loadGeneration = 0;
+  let timelineCompletion: Promise<void> = Promise.resolve();
+
   async function load(opts?: { day?: string; today?: boolean; silent?: boolean }) {
     const current = client;
     if (!current) {
@@ -71,19 +75,45 @@ export function createLogbook(initialClient: GatewayBrowserClient | null) {
       dayPinned = false;
     }
     const requestedDay = state.day;
+    const generation = ++loadGeneration;
+    const ready = Promise.withResolvers<void>();
+    timelineCompletion = ready.promise;
+    const pinnedTimeline = dayPinned && state.status !== null;
     if (!opts?.silent) {
       state.loading = true;
       state.error = null;
       notify();
     }
     try {
-      const [status, timeline] = await Promise.all([
+      const [statusResult, timelineResult] = await Promise.allSettled([
         current.request<LogbookStatusPayload>("logbook.status", {}),
-        current.request<LogbookTimelinePayload>("logbook.timeline", { day: requestedDay }),
+        current
+          .request<LogbookTimelinePayload>("logbook.timeline", { day: requestedDay })
+          .then((result) => {
+            if (
+              pinnedTimeline &&
+              client === current &&
+              generation === loadGeneration &&
+              state.day === requestedDay
+            ) {
+              state.timeline = result;
+              ready.resolve();
+              notify();
+            }
+            return result;
+          }),
       ]);
-      if (client !== current || state.day !== requestedDay) {
+      if (client !== current || generation !== loadGeneration || state.day !== requestedDay) {
         return;
       }
+      if (statusResult.status === "rejected") {
+        throw statusResult.reason;
+      }
+      if (timelineResult.status === "rejected") {
+        throw timelineResult.reason;
+      }
+      const status = statusResult.value;
+      const timeline = timelineResult.value;
       state.status = status;
       // Follow the capture host's day until the user explicitly selects one.
       if (!dayPinned && status.today !== state.day) {
@@ -91,7 +121,7 @@ export function createLogbook(initialClient: GatewayBrowserClient | null) {
         const todayTimeline = await current.request<LogbookTimelinePayload>("logbook.timeline", {
           day: status.today,
         });
-        if (client !== current || state.day !== status.today) {
+        if (client !== current || generation !== loadGeneration || state.day !== status.today) {
           return;
         }
         state.timeline = todayTimeline;
@@ -100,11 +130,12 @@ export function createLogbook(initialClient: GatewayBrowserClient | null) {
       }
       state.error = null;
     } catch (error) {
-      if (client === current) {
+      if (client === current && generation === loadGeneration) {
         state.error = formatUiError(error);
       }
     } finally {
-      if (client === current) {
+      ready.resolve();
+      if (client === current && generation === loadGeneration) {
         state.loading = false;
         notify();
         drainRefresh();
@@ -166,14 +197,15 @@ export function createLogbook(initialClient: GatewayBrowserClient | null) {
     })();
   }
 
-  // PluginPage remounts this model for each connection; polling shares the analysis refresh owner.
+  const poll = useVisiblePoll(POLL_INTERVAL_MS, () => void refreshSilently());
+  // PluginPage remounts this model for each connection; abandoned renders must not poll.
   onSettled(() => {
-    const pollTimer = client
-      ? setInterval(() => void refreshSilently(), POLL_INTERVAL_MS)
-      : undefined;
+    if (client) {
+      poll.start();
+    }
     return () => {
       dayLifetime.resolve();
-      clearInterval(pollTimer);
+      poll.stop();
       client = null;
       backgroundRefreshQueued = false;
     };
@@ -190,6 +222,9 @@ export function createLogbook(initialClient: GatewayBrowserClient | null) {
       return projection.read();
     },
     load,
+    get timelineRead() {
+      return timelineCompletion;
+    },
     loadFrame(frameId: number): Promise<string | undefined> {
       const current = client;
       if (!current || state.framePreviewFailed.has(frameId)) {

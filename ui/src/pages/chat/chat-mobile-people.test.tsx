@@ -60,7 +60,8 @@ it("projects native identities and mentions through the People body without send
   const release = mentions.activate();
   onTestFinished(release);
   const shared = access.request();
-  expect(composer.request).toHaveBeenCalledTimes(1);
+  await vi.dynamicImportSettled();
+  await vi.waitFor(() => expect(composer.request).toHaveBeenCalledTimes(1));
   pending.resolve(people);
   const read = await shared;
   await vi.advanceTimersByTimeAsync(0);

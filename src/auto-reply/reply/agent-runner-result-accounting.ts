@@ -15,6 +15,10 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { isCurrentSessionControllerOperation } from "../../sessions/session-controller.identity.js";
 import { MODEL_FALLBACK_NOTICE_KIND } from "../../shared/model-fallback-notice.js";
+import {
+  captureModelCostPricing,
+  estimateAggregateUsageCostAsync,
+} from "../../utils/usage-format.js";
 import { resolveFallbackTransition } from "../fallback-state.js";
 import { normalizeVerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
@@ -69,6 +73,9 @@ export async function accountAgentTurnCompaction(params: {
   const authorize = () => isCurrentSessionControllerOperation(operation);
   let count: number | undefined;
   for (const fact of params.compaction?.durable ?? []) {
+    if (fact.count === 0) {
+      continue;
+    }
     const persistedCount = await incrementCompactionCount({
       ...fact.target,
       sessionStore: params.sessionStore,
@@ -122,9 +129,11 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     return entry;
   };
   const latestCompaction = execution.compaction?.durable.at(-1);
-  const currentContextSnapshot = execution.compaction
-    ? (latestCompaction?.currentContextSnapshot ?? { tokens: undefined })
-    : undefined;
+  const currentContextSnapshot = latestCompaction
+    ? latestCompaction.currentContextSnapshot
+    : execution.compaction
+      ? { tokens: undefined }
+      : undefined;
   const expectedSession = latestCompaction?.target ?? {
     sessionId: activeSessionEntry?.sessionId ?? followupRun.run.sessionId,
     lifecycleRevision: activeSessionEntry?.lifecycleRevision,
@@ -182,9 +191,15 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
   const ctxTokens = runResult.meta?.agentMeta?.contextTokens;
   const compactions = runResult.meta?.agentMeta?.compactionCount;
   const lastCallUsage = runResult.meta?.agentMeta?.lastCallUsage;
+  let pricing: ReturnType<typeof captureModelCostPricing> | undefined;
+  const preparePricing = () => (pricing ??= captureModelCostPricing(cfg, followupRun.run.agentDir));
+  const turnUsd = await estimateAggregateUsageCostAsync({
+    usage,
+    prepareCost: async () => (await preparePricing()).resolve(providerUsed, modelUsed),
+  });
   const replyUsageState = buildReplyUsageState({
     config: cfg,
-    agentDir: followupRun.run.agentDir,
+    turnUsd,
     provider: providerUsed,
     model: modelUsed,
     fallbackExhausted,
@@ -397,8 +412,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
   }
   const hadPendingLiveModelSwitch = activeSessionEntry?.liveModelSwitchPending === true;
   const usageParams = {
-    cfg,
-    agentDir: followupRun.run.agentDir,
+    estimatedCostUsd: turnUsd,
     usage,
     lastCallUsage,
     currentContextSnapshot,
@@ -428,7 +442,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
         return prepared
           ? {
               kind: "usage",
-              update: { ...prepared.update, estimatedCostUsd: prepared.estimateCost(entry) },
+              update: prepared,
               updatedAt: entry.updatedAt,
             }
           : undefined;
@@ -480,6 +494,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     promptTokens,
     providerUsed,
     replyUsageState,
+    preparePricing,
     runId,
     runResult,
     selectedModel,

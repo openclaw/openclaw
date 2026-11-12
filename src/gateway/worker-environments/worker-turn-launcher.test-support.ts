@@ -1,15 +1,17 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { vi } from "vitest";
+import { expect, onTestFinished, vi } from "vitest";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
 import type { AgentRunTerminalReplySnapshot } from "../../agents/agent-run-terminal-reply.types.js";
+import * as elicitation from "../../agents/mcp-client-elicitation.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { CORE_WORKER_LAUNCH_TOOL_NAMES } from "../../agents/tool-catalog.js";
+import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { readTranscriptStorageRows } from "../../config/sessions/session-accessor.sqlite-read.js";
@@ -34,6 +36,11 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import type { WorkerComputerLaunchDescriptor } from "../../worker/launch-descriptor.js";
+import {
+  publishNodeSessionPluginTools,
+  removeConnectedNodePluginTools,
+} from "../node-plugin-tool-snapshot.js";
+import { makeNodeSession } from "../node-registry.test-helpers.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store-worker.js";
 import { resolveCanonicalSessionEntryFromStoreKeys } from "../session-utils-store.js";
 import type { MintedWorkerCredential } from "./credential.js";
@@ -539,6 +546,9 @@ export function unusedEnvironments(): WorkerTurnEnvironmentService {
   const unexpectedAsync = async () => unexpected();
   return {
     get: vi.fn(() => undefined),
+    ensureRetainedRunning: vi.fn(unexpectedAsync),
+    // Launcher-only fixtures assume a recognized lease; the service suite owns provider outcomes.
+    inspectTurnLease: vi.fn(async () => {}),
     createGatewayTools: prepareGatewayTools,
     resolveSshIdentity: vi.fn(unexpectedAsync),
     acquireTurnCredential: vi.fn(unexpectedAsync),
@@ -602,6 +612,45 @@ export function turn(runId = "run-worker-turn", executionIdentity = false) {
     modelHasVision: true,
     config,
   };
+}
+
+export function registerWorkerMcpTestTools() {
+  for (const [nodeId, names] of [
+    ["local-node", ["local_search", "local_action", "local_denied"]],
+    ["other-node", ["remote_search"]],
+  ] as const) {
+    const node = makeNodeSession(nodeId, {
+      commands: ["mcp.tools.call.v1"],
+      declaredNodePluginTools: names.map((name) => ({
+        pluginId: "node-mcp",
+        name,
+        description: name,
+        parameters: {
+          type: "object",
+          properties: name === "local_action" ? { action: { type: "string" } } : {},
+        },
+        command: "mcp.tools.call.v1",
+        mcp: { server: "workspace", tool: name },
+      })),
+    });
+    publishNodeSessionPluginTools(node, undefined, []);
+    onTestFinished(() => removeConnectedNodePluginTools(nodeId));
+  }
+}
+
+export function mockWorkerMcpQuestionAnswer(input: ReturnType<typeof turn>) {
+  return vi
+    .spyOn(elicitation, "createMcpClientElicitationHandler")
+    .mockImplementation(({ assertCurrent }) => async () => {
+      assertCurrent();
+      expect(getGatewayToolCallerIdentity()).toMatchObject({
+        sessionKey: input.sessionKey,
+        agentId: input.agentId,
+        turnSourceThreadId: input.currentThreadTs,
+        workerTurnClaim: { runId: input.runId },
+      });
+      return { action: "accept" };
+    });
 }
 
 export async function withWorkerCompactionAdoption<T>(

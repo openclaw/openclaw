@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { WorkerDesktopEndpoint } from "../../plugins/types.js";
+import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -9,7 +11,10 @@ import {
 import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import { REQUEST, seedActivePlacement } from "./placement-dispatch-test-fixtures.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
-import { createEnvironmentStoreFixture } from "./placement-test-fixtures.js";
+import {
+  createEnvironmentStoreFixture,
+  writePlacementEnvironmentFixture,
+} from "./placement-test-fixtures.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
 
@@ -219,6 +224,80 @@ describe("worker environment runtime refresh", () => {
       const before = snapshot(placements);
       await expect(store.refreshBootstrapReceipt(input)).rejects.toThrow();
       expect(snapshot(placements)).toEqual(before);
+    },
+  );
+
+  it.each(["original", "mirror", "profile", "replacement-disk"] as const)(
+    "native runtime refresh validates the %s Move result independently of the host gate",
+    async (scenario) => {
+      const { owner, environment, placements, placement, input } = await seedRefresh("attached");
+      const resourceReceipt = {
+        version: 1 as const,
+        leaseId: environment.leaseId!,
+        identity: { disk: "original" },
+      };
+      writePlacementEnvironmentFixture(database, {
+        ...environment,
+        resourceReceipt: {
+          ...resourceReceipt,
+          identity: { disk: scenario === "replacement-disk" ? "replacement" : "original" },
+        },
+      });
+      await placements.beginPlacementMove({
+        sessionId,
+        source: { ...owner, generation: placement!.generation },
+        target:
+          scenario === "profile"
+            ? { kind: "profile", profileId: "another-profile" }
+            : { kind: "gateway" },
+      });
+      const claim = await placements.claimReclaimWorkspaceResult({
+        ...REQUEST,
+        claimId: "reclaim-native-move",
+        runId: "reclaim-native-move",
+        owner: { kind: "worker", ...owner },
+      });
+      await placements.handoffWorkspaceResultRecovery(claim);
+      // Synthetic accepted rows isolate the native writer; the public Move test proves acceptance.
+      if (scenario !== "mirror") {
+        executeSqliteQuerySync(
+          database.db,
+          getNodeSqliteKysely<StateDatabase>(database.db)
+            .updateTable("worker_workspace_pending_results")
+            .set({
+              repository_workspace_id: "repository-native-move",
+              repository_disk_authority_json: JSON.stringify({ environmentId, resourceReceipt }),
+            })
+            .where("session_id", "=", sessionId),
+        );
+      }
+      const [pending] = await placements.listPendingWorkspaceResultsAsync();
+      const before = snapshot(placements);
+      const refresh = store.refreshBootstrapReceipt({
+        ...input,
+        expectedState: "attached",
+        expectedPlacementGeneration: claim.placementGeneration,
+        expectedReclaimResult: pending,
+      });
+      if (scenario === "original") {
+        await expect(refresh).resolves.toMatchObject({ bootstrapReceipt: replacement });
+        expect(placements.get(sessionId)).toMatchObject({
+          state: "draining",
+          activeOwnerEpoch: owner.ownerEpoch,
+          remoteWorkspaceDir: placement!.remoteWorkspaceDir,
+          workerBundleHash: replacement.bundleHash,
+          turnClaim: { claimId: claim.claimId, runId: claim.runId },
+        });
+        expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([pending]);
+      } else {
+        await expect(refresh).rejects.toThrow(
+          scenario === "replacement-disk"
+            ? "disk is missing or changed"
+            : "original disk Move result",
+        );
+        expect(snapshot(placements)).toEqual(before);
+      }
+      expect(store.getCredential(environmentId)).toBeUndefined();
     },
   );
 

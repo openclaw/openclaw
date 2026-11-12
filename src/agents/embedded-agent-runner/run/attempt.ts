@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getRuntimeConfigSnapshot } from "../../../config/config.js";
 import {
   assertContextEngineHostSupport,
@@ -10,6 +11,10 @@ import { getAsyncWorkSignal } from "../../../shared/async-work-scope.js";
 import { createStageTimingTracker } from "../../../shared/stage-timing.js";
 import { clearToolActivityRun } from "../../../shared/tool-activity-heartbeat.js";
 import {
+  hasCompletionMessageSessionSpawn,
+  mergeAcceptedSessionSpawnsForRun,
+} from "../../accepted-session-spawn.js";
+import {
   bindOperatorModelExecution,
   readRunOperatorAuthority,
   resolveAdmittedRunActiveAssertion,
@@ -20,6 +25,7 @@ import {
   projectAgentRunAttemptTerminal,
 } from "../../agent-run-terminal-outcome.js";
 import { resolveAgentDir } from "../../agent-scope.js";
+import { captureAgentPluginRuntimeRefresh } from "../../plugin-runtime-refresh.js";
 import { recordAgentCleanupFailure, runOwnedAgentCleanup } from "../../run-cleanup-timeout.js";
 import { withRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js";
 import {
@@ -50,6 +56,7 @@ import {
   startEmbeddedAttemptDiagnostics,
   type EmitDiagnosticRunCompleted,
 } from "./attempt-setup.js";
+import { logEmbeddedRunStageSummary } from "./attempt-stage-timing.js";
 import { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt-prepare.js";
 import { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
 import { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
@@ -248,11 +255,18 @@ async function runEmbeddedAttemptOwned(
         attempt: params,
         setup,
         markCoreToolStage: (name) => corePluginToolStages.mark(name),
-        onYield: (message, acknowledgment, messageWaitRegistered) => {
+        onYield: (message, acknowledgment, messageWaitRegistered, options) => {
+          conditionalYield = yieldDetected
+            ? conditionalYield && options?.conditional === true
+            : options?.conditional === true;
           yieldDetected = true;
           yieldMessage = message;
           yieldAcknowledgment = acknowledgment;
           yieldMessageWaitRegistered = messageWaitRegistered;
+          if (options?.terminal) {
+            runAbortController.abort(options.terminal);
+            abortTerminalYield?.(options.terminal);
+          }
         },
         runAbortController,
         runTrace,
@@ -285,10 +299,13 @@ async function runEmbeddedAttemptOwned(
       }),
     );
     let yieldDetected = false;
+    let conditionalYield = false;
+    const runtimeRefresh = captureAgentPluginRuntimeRefresh();
     let yieldMessage: string | null = null;
     let yieldAcknowledgment: string | undefined;
     let yieldMessageWaitRegistered: boolean | undefined;
     let yieldAbortSettled: Promise<void> | null = null;
+    let abortTerminalYield: ((reason: unknown) => void) | undefined;
     const preparedBundleTools = await prepare("attempt.bundle-tools", () =>
       prepStages.measure("bundle-tools", () =>
         prepareEmbeddedAttemptBundleTools({
@@ -320,6 +337,14 @@ async function runEmbeddedAttemptOwned(
     );
     // Close the inclusive checkpoint; the owner spans exclude preparation admission.
     prepStages.mark("tool-preparation");
+    corePluginToolStages.mark("bootstrap-bundle-catalog");
+    logEmbeddedRunStageSummary(
+      corePluginToolStages.snapshot(),
+      log,
+      () =>
+        `[trace:embedded-run] tool preparation completed: runId=${params.runId} sessionId=${params.sessionId}`,
+      { totalThresholdMs: 5_001, stageThresholdMs: Number.POSITIVE_INFINITY },
+    );
     const { effectiveTools, toolSearch, toolSearchRunPlan, deferredDirectoryToolsCallable } =
       preparedToolCatalog;
     toolSearchCatalogApplied = toolSearch.catalogRegistered;
@@ -367,12 +392,47 @@ async function runEmbeddedAttemptOwned(
           externalAbortController,
           resources: sessionResources.resources,
           onSessionYieldReady: ({ abortActiveSession, activeSession }) => {
+            abortTerminalYield = (reason) => {
+              yieldAbortSettled = abortActiveSession(reason);
+            };
             unsubscribeYieldTurnEnd = activeSession.agent.subscribe((event) => {
               if (
                 event.type !== "turn_end" ||
                 !yieldDetected ||
                 runAbortController.signal.aborted
               ) {
+                return;
+              }
+              if (
+                conditionalYield &&
+                ((event.message.role === "assistant" &&
+                  event.message.content.some(
+                    (part) => part.type === "toolCall" && part.async === true,
+                  )) ||
+                  runtimeRefresh.requestSource() === "tool" ||
+                  (params.admittedRunContext &&
+                    hasCompletionMessageSessionSpawn(
+                      mergeAcceptedSessionSpawnsForRun(
+                        params.admittedRunContext.operationalRunInstance,
+                      ),
+                    )) ||
+                  event.toolResults.some(
+                    (result) =>
+                      preparedSessionRuntime.agentSession.codeModeExecToolNames?.has(
+                        result.toolName,
+                      ) &&
+                      isRecord(result.details) &&
+                      result.details.status === "waiting",
+                  ))
+              ) {
+                // A handoff never claims spawned children's terminal delivery. Existing
+                // completion obligations, async calls and tool refreshes keep the turn; the handoff
+                // still starts only after this logical reply's ownerSettlement.
+                yieldDetected = false;
+                conditionalYield = false;
+                yieldMessage = null;
+                yieldAcknowledgment = undefined;
+                yieldMessageWaitRegistered = undefined;
                 return;
               }
               // Keep sibling execution and authority live until their results settle.
@@ -385,6 +445,11 @@ async function runEmbeddedAttemptOwned(
         }),
       );
       const promptToolPolicy = createPromptBuildToolPolicy({
+        diagnosticIdentity: {
+          agentId: sessionAgentId,
+          sessionKey: params.sessionKey,
+          sessionId: params.sessionId,
+        },
         session: preparedSessionRuntime.agentSession.activeSession,
         effectiveTools,
         uncompactedEffectiveTools,
@@ -393,7 +458,7 @@ async function runEmbeddedAttemptOwned(
         codeModeControlsEnabled: preparedToolBase.codeModeControlsEnabledForRun,
         onApplied: (surface) => {
           const allowedNames = new Set([
-            ...surface.activeToolNames,
+            ...surface.callableToolNames,
             ...surface.uncompactedEffectiveTools.map((tool) => tool.name),
           ]);
           preparedToolCatalog.applyPromptToolPolicy(allowedNames);
@@ -475,6 +540,8 @@ async function runEmbeddedAttemptOwned(
         ...executionResult,
         codeModeEngaged: codeModeControlsEnabledForRun,
         providerRetryMaxRetries: providerRetry.maxRetries,
+        providerRequestTimeoutExplicit:
+          providerRetry.timeoutMs !== undefined || params.model.requestTimeoutMs !== undefined,
         providerRetryMaxDelayMs: providerRetry.maxRetryDelayMs,
         ...(catalogSession
           ? {
@@ -518,6 +585,10 @@ async function runEmbeddedAttemptOwned(
       externalAbortController.throwIfFired();
     } catch (abortError) {
       error = abortError;
+    }
+    // Preparation can fail before execution records a terminal outcome.
+    if (executionState.terminal.kind === "ok") {
+      executionState.terminal = { kind: "failed", source: "precheck", error };
     }
     const terminalOutcome = buildAgentRunTerminalOutcomeFromAttempt({
       terminal: executionState.terminal,

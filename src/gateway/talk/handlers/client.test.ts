@@ -634,20 +634,33 @@ it("keeps the active selection when a pending same-id browser candidate fails", 
   expect(() => control?.bindControl?.({ sendUserMessage: vi.fn() })).not.toThrow();
 });
 
-it("cancels a public provider that resolves after its browser disconnects without creating a chat", async () => {
-  const created = createDeferred<typeof browserSession>();
+it("cancels a public provider that resolves after its browser disconnects without creating a chat", async ({
+  signal,
+}) => {
+  const created = createEnteredGate();
   const fixture = browserFixture(true);
   const { cancelBrowserSession, createBrowserSession, respond, create } = fixture;
-  createBrowserSession.mockReturnValueOnce(created.promise);
+  createBrowserSession.mockImplementationOnce(async () => {
+    await created.wait();
+    return browserSession;
+  });
   const pendingSessionKey = "agent:main:pending-voice";
   const starting = create({ sessionKey: pendingSessionKey, model: "gpt-live-test" });
-  await vi.waitFor(() => expect(createBrowserSession).toHaveBeenCalledOnce());
-  const runAgentConsult = createBrowserSession.mock.calls[0]?.[0].runAgentConsult;
   try {
+    await withinTest(
+      awaitGateBeforeSettlement(
+        created.entered,
+        starting,
+        "Talk creation settled before entering the browser provider",
+      ),
+      signal,
+    );
+    expect(createBrowserSession).toHaveBeenCalledOnce();
+    const runAgentConsult = createBrowserSession.mock.calls[0]?.[0].runAgentConsult;
     await expect(runAgentConsult!({ prompt: "Too early" })).rejects.toThrow(/not active/);
     disconnect(fixture);
   } finally {
-    created.resolve(browserSession);
+    created.release();
     await starting;
   }
   expectErrorResponse(respond, expect.stringMatching(/closed|disconnected/));

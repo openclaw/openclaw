@@ -187,6 +187,7 @@ const nativeScripts = [
   "scripts/lib/ios-fastlane.sh",
   "scripts/lib/mac-app-bundle.sh",
   "scripts/lib/mac-disk-image.sh",
+  "scripts/lib/mac-pnpm.sh",
   "scripts/lib/mac-swift-build.sh",
   "scripts/lib/restart-mac-gateway.sh",
   "scripts/lib/swift-toolchain.sh",

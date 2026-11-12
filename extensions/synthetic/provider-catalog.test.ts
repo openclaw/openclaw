@@ -7,11 +7,9 @@ import { SYNTHETIC_BASE_URL } from "./models.js";
 import { buildSyntheticProvider } from "./provider-catalog.js";
 
 const fetchGuard = vi.hoisted(() => vi.fn());
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
   fetchWithSsrFGuard: fetchGuard,
-  ssrfPolicyFromHttpBaseUrlAllowedHostname: (baseUrl: string) => ({
-    allowedHostnames: [new URL(baseUrl).hostname],
-  }),
 }));
 
 const endpoint = "https://api.synthetic.new/openai/v1/models";
@@ -79,7 +77,7 @@ it("discovers new models and refreshes known metadata without changing the infer
           compat: { supportsTools: true },
         },
         { id: "hf:zai-org/GLM-5.2", input: ["text"], contextWindow: 262144, maxTokens: 65536 },
-        { id: "syn:small:vision", reasoning: false, input: ["text", "image"], maxTokens: 8192 },
+        { id: "syn:small:vision", reasoning: false, input: ["text", "image"], maxTokens: 32_768 },
       ],
     },
   });

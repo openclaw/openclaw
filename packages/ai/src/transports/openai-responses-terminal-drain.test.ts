@@ -1,3 +1,4 @@
+import { createHook } from "node:async_hooks";
 import type { Model } from "@openclaw/llm-core";
 import OpenAI from "openai";
 import { Stream } from "openai/core/streaming";
@@ -109,31 +110,54 @@ describe("Responses SSE decoding", () => {
       }
       return match;
     });
+    let promises = 0;
+    const hook = createHook({
+      init(_id, type) {
+        if (type === "PROMISE") {
+          promises++;
+        }
+      },
+    });
     const events = [];
-    for await (const event of stream) {
-      events.push(event);
+    hook.enable();
+    try {
+      for await (const event of stream) {
+        events.push(event);
+      }
+    } finally {
+      hook.disable();
+      scan.mockRestore();
     }
-    scan.mockRestore();
+    if (!process.versions.bun) {
+      expect(promises).toBeGreaterThan(expected.length);
+      // The HTTP source, error observer, recovery owner and consumer need about nine
+      // promises/event. A forwarding generator for error observation adds another one.
+      expect(promises).toBeLessThan(expected.length * 10);
+    }
     expect(events).toEqual(expected);
     expect(delimiterMatches).toBe(0);
     expect(decode.mock.calls.length).toBeLessThanOrEqual(chunks.length + 1);
   });
 
-  it("does not materialize ignored SSE field values", async () => {
+  it("does not materialize ignored SSE values or intermediate pending suffixes", async () => {
     const ignored = "unused-metadata-".repeat(64);
-    const wire = `id: ${ignored}\nretry: 100\ndata: {"delta":"kept"}\n\ndata: [DONE]\n\n`;
-    const { stream } = await openFixtureStream([new TextEncoder().encode(wire)]);
+    const pending = 'data: {"delta":"café 🌊"}\r';
+    const wire = `id: ${ignored}\nretry: 100\ndata: {"delta":"kept"}\n\n${pending}`;
+    const { stream } = await openFixtureStream([
+      new TextEncoder().encode(wire),
+      new TextEncoder().encode("\n\r\ndata: [DONE]\n\n"),
+    ]);
     // oxlint-disable-next-line typescript/unbound-method -- Preserve native slice and its string receiver.
     const slice = String.prototype.slice;
-    let ignoredValues = 0;
+    let redundantSlices = 0;
     const slicing = vi.spyOn(String.prototype, "slice").mockImplementation(function (
       this: string,
       start,
       end,
     ) {
       const value = slice.call(this, start, end);
-      if (value === ignored) {
-        ignoredValues++;
+      if (value === ignored || value === pending) {
+        redundantSlices++;
       }
       return value;
     });
@@ -145,8 +169,8 @@ describe("Responses SSE decoding", () => {
     } finally {
       slicing.mockRestore();
     }
-    expect(events).toEqual([{ delta: "kept" }]);
-    expect(ignoredValues).toBe(0);
+    expect(events).toEqual([{ delta: "kept" }, { delta: "café 🌊" }]);
+    expect(redundantSlices).toBe(0);
   });
 
   it("keeps delimiter scan input linear for a large event split across small chunks", async () => {

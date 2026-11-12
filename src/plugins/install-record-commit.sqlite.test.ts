@@ -2,12 +2,12 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -20,6 +20,7 @@ import { writePersistedInstalledPluginIndexInstallRecordsWithLease } from "./ins
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
+import { pluginProcessRuntimeEntrypoints } from "./process-runtime.test-support.js";
 
 afterEach(closeOpenClawStateDatabaseForTest);
 
@@ -31,13 +32,9 @@ function pathRecord(id: string) {
 function runChild(scriptPath: string, stateDir: string, id: string) {
   const enteredPath = path.join(stateDir, `${id}-entered`);
   const releasePath = path.join(stateDir, `${id}-release`);
-  const child = spawn(
-    process.execPath,
-    ["--import", "tsx", scriptPath, stateDir, id, enteredPath, releasePath],
-    {
-      stdio: ["ignore", "pipe", "pipe", "ipc"],
-    },
-  );
+  const child = spawn(process.execPath, [scriptPath, stateDir, id, enteredPath, releasePath], {
+    stdio: ["ignore", "pipe", "pipe", "ipc"],
+  });
   let output = "";
   expectDefined(child.stdout, "piped child stdout").on("data", (chunk) => (output += chunk));
   expectDefined(child.stderr, "piped child stderr").on("data", (chunk) => (output += chunk));
@@ -174,11 +171,11 @@ describe("plugin install record commit rollback", () => {
     onTestFinished,
   }) => {
     const run = withOpenClawTestState({ label: "plugin-record-failing-commits" }, async (state) => {
-      const commitModuleUrl = pathToFileURL(
-        path.resolve("src/plugins/install-record-commit.ts"),
+      const commitModuleUrl = resolveRuntimeWorkerUrl(
+        pluginProcessRuntimeEntrypoints.installRecordCommit,
       ).href;
       const childScript = await state.writeText(
-        "fail-config-commit.mts",
+        "fail-config-commit.mjs",
         `
           import fs from "node:fs";
           import { setTimeout as delay } from "node:timers/promises";

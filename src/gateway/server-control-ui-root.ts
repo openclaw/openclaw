@@ -19,13 +19,13 @@ import {
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveRuntimeServiceBuildId } from "../version.js";
-import type {
-  ControlUiFileRead,
-  ControlUiFileSnapshot,
-  ControlUiPreparedFile,
-  ControlUiRootAsset,
+import {
+  isControlUiCompressibleAsset,
+  type ControlUiFileRead,
+  type ControlUiFileSnapshot,
+  type ControlUiPreparedFile,
+  type ControlUiRootAsset,
 } from "./control-ui-file.js";
-import { isControlUiCompressibleAsset } from "./control-ui-static.js";
 
 export type ControlUiRootState =
   | {
@@ -97,7 +97,7 @@ export function readControlUiRootAsset(
   owner.controller.signal.throwIfAborted();
   const preferences =
     root.kind === "bundled" &&
-    fileRel.startsWith("assets/") &&
+    (fileRel === "sw.js" || fileRel.startsWith("assets/")) &&
     isControlUiCompressibleAsset(fileRel)
       ? encodings
       : (["identity"] as const);

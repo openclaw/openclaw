@@ -1,7 +1,7 @@
 /** Final persistence, telemetry, and delivery for an isolated cron run. */
 import { asPositiveFiniteNumber as resolvePositiveContextTokens } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { hasAcceptedSessionSpawn } from "../../agents/accepted-session-spawn.js";
+import { hasOwedSessionSpawn } from "../../agents/accepted-session-spawn.js";
 import {
   CODE_MODE_MCP_CATALOG_MISS_MESSAGE,
   isEmbeddedRunTerminalToolFailure,
@@ -148,13 +148,15 @@ export async function finalizeCronRun(params: {
     prepared.cronSession.sessionEntry.contextTokens = contextTokens;
     prepared.cronSession.sessionEntry.contextTokensSource = contextTokensSource;
   }
-  if (hasNonzeroUsage(usage) || hasNonzeroUsage(finalRunResult.meta?.agentMeta?.usage)) {
-    const totalTokens = deriveSessionTotalTokens({
-      usage: lastCallUsage,
-      contextTokens,
-      promptTokens,
-    });
-    if (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0) {
+  if (
+    execution.currentContextSnapshot ||
+    hasNonzeroUsage(usage) ||
+    hasNonzeroUsage(finalRunResult.meta?.agentMeta?.usage)
+  ) {
+    const totalTokens = execution.currentContextSnapshot
+      ? execution.currentContextSnapshot.tokens
+      : deriveSessionTotalTokens({ lastCallUsage, contextTokens, promptTokens });
+    if (totalTokens !== undefined) {
       prepared.cronSession.sessionEntry.totalTokens = totalTokens;
       prepared.cronSession.sessionEntry.totalTokensFresh = true;
       prepared.cronSession.sessionEntry.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
@@ -162,6 +164,9 @@ export async function finalizeCronRun(params: {
       prepared.cronSession.sessionEntry.totalTokens = undefined;
       prepared.cronSession.sessionEntry.totalTokensFresh = false;
       prepared.cronSession.sessionEntry.totalTokensVersion = undefined;
+    }
+    if (prepared.runSessionKey === prepared.agentSessionKey) {
+      prepared.cronSession.contextTotalsAccounted = true;
     }
   }
   const telemetry: CronRunTelemetry = {
@@ -257,6 +262,18 @@ export async function finalizeCronRun(params: {
         : { summary, outputText };
     return prepared.withRunSession({
       status: failure || hasFatalErrorPayload ? "error" : "ok",
+      ...(useRunFailure &&
+      !hasTerminalToolFailure &&
+      !pendingPresentationWarningError &&
+      finalRunResult.meta?.aborted !== true
+        ? {
+            agentTerminal: hasFatalStructuredErrorPayload
+              ? cronPayloadOutcome.agentTerminal
+              : finalRunResult.meta?.failureSignal === undefined && finalRunResult.meta?.error
+                ? finalRunResult.meta.agentTerminal
+                : undefined,
+          }
+        : {}),
       ...(failure
         ? { error: failure.error, ...(failure.errorKind ? { errorKind: failure.errorKind } : {}) }
         : hasFatalErrorPayload
@@ -303,7 +320,8 @@ export async function finalizeCronRun(params: {
       ...telemetry,
     });
   };
-  const acceptedSessionSpawn = hasAcceptedSessionSpawn(finalRunResult.acceptedSessionSpawns);
+  // Only a child that owes this run a completion or awaits collection makes it a handoff.
+  const acceptedSessionSpawn = hasOwedSessionSpawn(finalRunResult.acceptedSessionSpawns);
   const quietResponse = !hasFatalErrorPayload && deliveryDisposition.kind !== "visible";
   const spawnOnlyHandoff =
     acceptedSessionSpawn &&
@@ -401,6 +419,7 @@ export async function finalizeCronRun(params: {
       deliveryResult.deliveryAttempted &&
       !sourceDeliveryOutcome.satisfiesSourceDelivery,
     delivered: deliveryResult.delivered,
+    receipts: deliveryResult.deliveryReceipts,
   });
   if (!deliveryResult.disposition) {
     summary = deliveryResult.summary;

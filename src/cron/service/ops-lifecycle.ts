@@ -103,9 +103,11 @@ export async function start(state: CronServiceState): Promise<void> {
 export function stop(state: CronServiceState) {
   state.lifecycleGeneration += 1;
   state.stopped = true;
+  state.handedOver = false;
   mutationSubscriptions.get(state)?.();
   mutationSubscriptions.delete(state);
   state.schedulerStarted = false;
+  state.liveSinceMs = undefined;
   state.schedulerDrain = Promise.allSettled([
     state.schedulerDrain,
     stopCronScheduler(state),
@@ -122,6 +124,12 @@ export function stop(state: CronServiceState) {
   });
 }
 
+/** A reload's replacement takes over scheduling; runs already executing here still publish. */
+export function handOver(state: CronServiceState) {
+  stop(state);
+  state.handedOver = true;
+}
+
 export function pauseScheduling(state: CronServiceState) {
   state.schedulingPaused = true;
   refreshCronScheduler(state);
@@ -134,6 +142,8 @@ export function resumeScheduling(state: CronServiceState) {
   state.schedulingPaused = false;
   if (state.schedulerStarted) {
     refreshCronScheduler(state);
-    void drainCronRunQueue(state);
+    void drainCronRunQueue(state).catch((error: unknown) =>
+      state.deps.log.warn({ err: String(error) }, "cron: queue drain delayed"),
+    );
   }
 }

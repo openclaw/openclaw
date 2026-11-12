@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import {
+  buildCompactionDividerItem,
   clearWorkingProgress,
   resetWorkingProgress,
   resolveTurnRecap,
@@ -26,6 +27,21 @@ const send = (
   sendState,
   sendAttempts: 1,
   ...(sendError ? { sendError } : {}),
+});
+
+describe("compaction savings", () => {
+  it.each([
+    [900_000, 24_700, "saved 875.3k tokens (97.3%)"],
+    [1_000, 0, "saved 1k tokens (100%)"],
+    [10_000, 9_990, "saved 10 tokens (0.1%)"],
+    [1_000, undefined, undefined],
+    [1_000, -10, undefined],
+    [0, 0, undefined],
+    [1_000, 1_100, undefined],
+    [Number.POSITIVE_INFINITY, 10, undefined],
+  ])("reports the reduction from %s to %s tokens", (tokensBefore, tokensAfter, metric) => {
+    expect(buildCompactionDividerItem({ tokensBefore, tokensAfter }, 1_000, 0).metric).toBe(metric);
+  });
 });
 
 describe("resolveWorkingProgress", () => {
@@ -127,6 +143,47 @@ describe("resolveWorkingProgress", () => {
         ],
       ),
     ).toMatchObject({ runId: "second-run", startedAt: 60_300 });
+  });
+
+  it("bounds working timing while keeping a recently read run across session churn", () => {
+    const retired = "agent:main:retired";
+    resolveWorkingProgress(retired, "retired-run", 1_000, [], [], []);
+    const current = progress("current-run", 2_000, [], [], []);
+    for (let index = 0; index < 40; index++) {
+      resolveWorkingProgress(`agent:main:other-${index}`, `run-${index}`, 3_000, [], [], []);
+      if (index % 5 === 0) {
+        expect(progress("current-run", 9_000, [], [], [])).toEqual(current);
+      }
+    }
+    expect(progress("current-run", 9_000, [], [], [])).toEqual(current);
+    expect(resolveWorkingProgress(retired, "retired-run", 9_000, [], [], [])).toMatchObject({
+      runId: "retired-run",
+      startedAt: 9_000,
+    });
+  });
+
+  it("bounds idle cutoffs while preserving a recently read session's stale-activity barrier", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(30_000);
+    const retired = "agent:main:retired";
+    clearWorkingProgress(retired);
+    clearWorkingProgress(SESSION);
+    vi.setSystemTime(60_000);
+    const stale = [{ runId: "stale-run", ts: 1_000 }];
+    for (let index = 0; index < 40; index++) {
+      clearWorkingProgress(`agent:main:other-${index}`);
+      if (index % 5 === 0) {
+        expect(progress(null, null, [], stale, [])).toMatchObject({
+          runId: null,
+          startedAt: 60_000,
+        });
+      }
+    }
+    expect(progress(null, null, [], stale, [])).toMatchObject({ runId: null, startedAt: 60_000 });
+    expect(resolveWorkingProgress(retired, null, null, [], stale, [])).toMatchObject({
+      runId: "stale-run",
+      startedAt: 1_000,
+    });
   });
 });
 

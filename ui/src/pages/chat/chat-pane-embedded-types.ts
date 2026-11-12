@@ -11,8 +11,8 @@ import type { HostDesktopRuntimeConfig } from "../../components/desktop/host-des
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import type { PresentationValue } from "../../lib/presentation.ts";
 import type { ControlUiRegistration } from "../../plugins/control-ui-capability.ts";
+import type { ChatBoardPanelSource, ChatDiscussionPanelSource } from "./chat-pane-panel-source.ts";
 import type { PaneSessionChangeOptions } from "./chat-pane-shared.ts";
-import type { ChatBoardPanel } from "./chat-pane-surfaces.tsx";
 import type {
   ChatSessionCompanionModelSelection,
   ChatSessionCompanionThread,
@@ -31,7 +31,6 @@ import type {
   ChatDetailPanelProps,
   SessionWorkspaceProps,
 } from "./components/chat-sidebar-view-types.ts";
-import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.tsx";
 import type { SidebarSlotId } from "./sidebar-layout-types.ts";
 
 export type ChatDetailSlotProps = {
@@ -39,6 +38,7 @@ export type ChatDetailSlotProps = {
   presentation?: "desktop" | "mobile";
   fileBack?: ChatDetailPanelProps["fileBack"];
   fileWorkspace?: ChatDetailPanelProps["fileWorkspace"];
+  onBrowseFiles?: ChatDetailPanelProps["onBrowseFiles"];
   onOpenMobilePage?: SessionDiffProps["onOpenMobilePage"];
   filePresentation?: ChatDetailPanelProps["filePresentation"];
   onFileInteraction?: ChatDetailPanelProps["onFileInteraction"];
@@ -95,7 +95,7 @@ export type SidebarPanelDefinitionParams = {
   onDesktopFocusTargetChange: (
     target: Extract<ControlUiFocusBuildTarget, { kind: "desktop" }>,
   ) => void;
-  dashboard: Parameters<typeof ChatBoardPanel>[0] | null;
+  dashboard: ChatBoardPanelSource | null;
   workspace: SessionWorkspaceProps | undefined;
   workspacePresented?: PresentationValue;
   detail: Omit<ChatDetailSlotProps, "content">;
@@ -111,7 +111,7 @@ export type SidebarPanelDefinitionParams = {
   onCompanionAttachmentsChange?: (attachments: ChatAttachment[]) => boolean | void;
   connected: boolean;
   onClearCompanion: () => Promise<boolean>;
-  discussion: SessionDiscussionPanelConfig | null;
+  discussion: ChatDiscussionPanelSource | null;
   discussionAvailable: boolean;
   discussionOpenUrl: string | null;
   discussionSourceGeneration: number;

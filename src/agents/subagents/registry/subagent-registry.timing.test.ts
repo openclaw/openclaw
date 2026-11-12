@@ -1,11 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import "./subagent-registry.mocks.shared.js";
 import "./subagent-registry.persistence.mocks.test-support.js";
+// Preserve the fixture's announcement mock before registry consumers.
+// oxfmt-ignore
+import { announceSpy as announce, useSubagentPersistenceFixture } from "./subagent-registry.persistence-fixture.test-support.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
-import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/config.js";
 import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { callGateway } from "../../../gateway/call.js";
 import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
@@ -13,60 +14,19 @@ import { onAgentEvent } from "../../../infra/agent-events.js";
 import { flushLogger, setLoggerOverride } from "../../../logging/logger.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "../../../state/openclaw-agent-write-admission-state.js";
-import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
-import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
-import {
-  cleanupSubagentRegistryPersistenceTest,
-  readSubagentSessionStore,
-  settleSubagentRegistryPersistenceWork,
-} from "./subagent-registry.persistence.test-support.js";
-import {
-  registerSubagentRun,
-  resetSubagentRegistryForTests,
-} from "./subagent-registry.test-helpers.js";
+import { readSubagentSessionStore } from "./subagent-registry.persistence.test-support.js";
+import { registerSubagentRun } from "./subagent-registry.test-helpers.js";
 
-const { announce } = vi.hoisted(() => ({ announce: vi.fn(async () => "delivered" as const) }));
-vi.mock("../announce/subagent-announce.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../announce/subagent-announce.js")>()),
-  runSubagentAnnounceFlow: announce,
-  captureSubagentCompletionReply: vi.fn(async () => undefined),
-}));
-
-const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-let stateDir: string;
-let logFile: string;
-let settleRootWork: ReturnType<typeof observeRootWork>;
-
-beforeEach(() => {
-  setRuntimeConfigSnapshot({});
-  stateDir = tempDirs.make("openclaw-subagent-timing-reproduction-");
-  setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-  logFile = path.join(stateDir, "reproduction.log");
-  setLoggerOverride({ level: "warn", file: logFile, consoleLevel: "silent" });
-  announce.mockClear();
-  vi.mocked(callGateway).mockReset();
-  vi.mocked(onAgentEvent)
-    .mockReset()
-    .mockReturnValue(() => undefined);
-  settleRootWork = observeRootWork();
-});
-
-afterEach(async () => {
-  await cleanupSubagentRegistryPersistenceTest({
-    stateDir,
-    resetRegistry: () => resetSubagentRegistryForTests({ persist: false }),
-    settleOwnedWork: () => settleRootWork(),
-  });
-  setLoggerOverride(null);
-  clearRuntimeConfigSnapshot();
-  envSnapshot.restore();
-});
+const fixture = useSubagentPersistenceFixture();
 
 it("persists overlapping completion timing without warnings or duplicate announcements", async ({
   signal,
 }) => {
+  await fixture.allocateStateDir();
+  const logFile = path.join(fixture.stateDir, "reproduction.log");
+  setLoggerOverride({ level: "warn", file: logFile, consoleLevel: "silent" });
+  onTestFinished(() => setLoggerOverride(null));
   const runId = "timing-repro-overlap";
   const childSessionKey = "agent:main:subagent:overlap";
   const requesterSessionKey = "agent:main:main";
@@ -178,7 +138,7 @@ it("persists overlapping completion timing without warnings or duplicate announc
     released.resolve();
     await blocker;
   }
-  await settleSubagentRegistryPersistenceWork(() => settleRootWork(true));
+  await fixture.settle();
   const session = (await readSubagentSessionStore(storePath))[childSessionKey];
   expect(session).toMatchObject({ status: "done", startedAt, endedAt, runtimeMs: 500 });
   expect(readRun()).toMatchObject({

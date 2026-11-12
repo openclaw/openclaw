@@ -42,10 +42,14 @@ export function createKnowledgeMemoryRuntime(stores: Stores): MemoryProviderRunt
   return {
     async open({ agentId, context, purpose }) {
       // A lease keeps the principal and service incarnation it was opened with.
-      const incarnation = stores.incarnation,
-        pinned = pinPrincipal(
-          memoryPrincipal(context, agentId, stores.policy.operatorRead, purpose),
-        );
+      // Grants load with the registry, so a cold lease waits for it before
+      // pinning; otherwise a granted conversation would pin its own partition.
+      const incarnation = stores.incarnation;
+      await stores.ensure();
+      stores.assertLive(incarnation);
+      const pinned = pinPrincipal(
+        memoryPrincipal(context, agentId, stores.policy.operatorRead, purpose, stores.grantFor),
+      );
       // Host readiness leases may validate storage but never release its content.
       const assertContentAccess = () => {
         if (pinned.principal.healthOnly) {
@@ -197,7 +201,7 @@ export function createKnowledgeMemoryRuntime(stores: Stores): MemoryProviderRunt
                           { id: h.record.id, revision: h.citation.revision, hash: h.citation.hash },
                           vaultId,
                         ),
-                        excerpt: `${h.record.title}\n${attribution(h.assertionOrigin, h.attribution)}\n${h.snippet.matchLocated === false ? "Opening excerpt (not the match location):\n" : ""}${h.snippet.text}`,
+                        excerpt: `${h.record.title}\n${h.via ? `Replaces ${h.via.title} (${h.via.id} revision ${h.via.revision}), which matched the query.\n` : ""}${attribution(h.assertionOrigin, h.attribution)}\n${h.snippet.matchLocated === false ? "Opening excerpt (not the match location):\n" : ""}${h.snippet.text}`,
                       },
                       h.score === null ? {} : { score: h.score },
                       {
@@ -278,8 +282,10 @@ export function createKnowledgeMemoryRuntime(stores: Stores): MemoryProviderRunt
                     warning: "Automatic recall uses only owner-approved private records.",
                   };
                 }
-                if (!pinned.principal.ownerPrivate) {
-                  throw new Error("Automatic recall requires an owner-private memory audience.");
+                if (!pinned.principal.sessionPrivate) {
+                  throw new Error(
+                    "Automatic recall requires an owner-private memory audience or an owner read grant.",
+                  );
                 }
                 if (request.kind !== "trigger" && request.kind !== "project") {
                   throw new Error("Knowledge candidates kind must be trigger or project.");

@@ -89,10 +89,14 @@ describe("confirmed visible message ownership", () => {
     async ({ payload, expectedText }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         const { params, storePath } = setup();
-        const input = { ...params, payload };
+        const assertDirectAdapterHandoff = vi.fn(() => {
+          throw new Error("Transport authority revoked after delivery acceptance");
+        });
+        const input = { ...params, payload, assertDirectAdapterHandoff };
         const first = await commitConfirmedVisibleMessage(input);
         expect(first).toMatchObject({ ok: true });
         expect(await commitConfirmedVisibleMessage(input)).toEqual(first);
+        expect(assertDirectAdapterHandoff).not.toHaveBeenCalled();
         const entry = loadSessionEntryReadOnly({ sessionKey: route.sessionKey, storePath });
         expect(entry).toBeDefined();
         const events = await loadTranscriptEvents({
@@ -113,7 +117,7 @@ describe("confirmed visible message ownership", () => {
     },
   );
 
-  it("records a confirmed document send without a failure while retaining its managed image", async () => {
+  it("records confirmed document and local audio sends without a failure while retaining its managed image", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const { params, storePath } = setup();
       const documentPath = path.join(state.workspaceDir, "report.pdf");
@@ -130,7 +134,7 @@ describe("confirmed visible message ownership", () => {
         payload: {
           text: "Quarterly report",
           mediaUrl: documentPath,
-          mediaUrls: [documentPath, imagePath],
+          mediaUrls: [documentPath, imagePath, path.join(state.workspaceDir, "voice.ogg")],
         },
       };
       expect(await commitConfirmedVisibleMessage(input)).toMatchObject({ ok: true });
@@ -147,11 +151,11 @@ describe("confirmed visible message ownership", () => {
         .filter(Boolean);
       expect(messages).toHaveLength(1);
       expect(messages[0]?.content).toEqual([
-        { type: "text", text: "Quarterly report\nreport.pdf, chart.png" },
+        { type: "text", text: "Quarterly report\nreport.pdf, chart.png, voice.ogg" },
       ]);
       const display = readAssistantDisplayContent(messages[0]);
       expect(display).toEqual([
-        { type: "text", text: "Quarterly report\nreport.pdf" },
+        { type: "text", text: "Quarterly report\nreport.pdf, voice.ogg" },
         {
           type: "image",
           artifactId: expect.any(String),
@@ -163,10 +167,10 @@ describe("confirmed visible message ownership", () => {
           height: 2,
           sizeBytes: expect.any(Number),
         },
-        {
-          type: "attachment",
-          attachment: { kind: "document", label: "report.pdf", mimeType: "application/pdf" },
-        },
+        ...[
+          { kind: "document", label: "report.pdf", mimeType: "application/pdf" },
+          { kind: "audio", label: "voice.ogg", mimeType: "audio/ogg" },
+        ].map((attachment) => ({ type: "attachment", attachment })),
       ]);
       expect(JSON.stringify(messages)).not.toContain(state.workspaceDir);
     });

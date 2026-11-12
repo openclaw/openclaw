@@ -20,6 +20,11 @@ it.each<[string, Record<string, string>]>([
     "  metadata: {openclaw: {emoji: lobster}} # display metadata",
     { metadata: '{"openclaw":{"emoji":"lobster"}}' },
   ],
+  [
+    "metadata: {openclaw: {emoji: lobster}} # display metadata",
+    { metadata: '{"openclaw":{"emoji":"lobster"}}' },
+  ],
+  ["metadata: {openclaw:{emoji:'lobster'}}", { metadata: "{openclaw:{emoji:'lobster'}}" }],
   ["metadata: {a: 1,\n  b: 2}", { metadata: '{"a":1,"b":2}' }],
   [
     "enabled: true\nretries: 3\ntags:\n  - alpha\n  - beta\nmetadata:\n  openclaw:\n    events:\n      - command:new",

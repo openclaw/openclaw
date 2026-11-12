@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, type Locator } from "playwright/test";
 import { it } from "vitest";
+import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
@@ -377,6 +378,7 @@ suite.define(() => {
       );
       const typingRow = page.locator('[data-virtual-row-key="presence:typing"]');
       const previewBubble = typingRow.locator(".agent-chat__typing-preview-text");
+      const caret = previewBubble.locator(".agent-chat__typing-caret");
 
       await page.clock.install();
       const ownerTyping = (preview?: string) => typingEvent(gateway, preview ? { preview } : {});
@@ -387,7 +389,11 @@ suite.define(() => {
       const typingAvatar = typingRow.locator(
         ".chat-message-avatar-anchor > :is(.chat-avatar, .chat-avatar-slot)",
       );
-      await expect(typingAvatar).toBeVisible();
+      const typingInitials = typingRow.locator(
+        ".chat-message-avatar-anchor .chat-avatar--sender-initials",
+      );
+      await expect(typingInitials).toBeVisible();
+      await expect(typingInitials).toHaveText("O");
       await expect(typingAvatar).toHaveCSS("position", "absolute");
 
       const draft = "yea, cool. Live drafts stream into the bubble now.";
@@ -398,15 +404,16 @@ suite.define(() => {
         await expect(previewBubble).toHaveText(visible);
       }
       await expect(typingRow.locator(".agent-chat__typing-preview-label")).toHaveText("Owner");
-      await expect(typingRow.locator(".agent-chat__typing-state")).toHaveText("is typing...");
+      await expect(typingRow.locator(".agent-chat__typing-state")).toHaveText("is typing…");
       await expect(typingRow.locator(".agent-chat__typing-bubble")).toHaveCount(0);
+      expect(await afterAnimation(caret)).not.toBe("none");
       const activeBox = await previewBubble.boundingBox();
       await page.clock.runFor(10_000);
       await expect(previewBubble).toHaveText(draft);
       await expect(typingRow.locator(".agent-chat__typing-state")).toHaveText("Draft");
       await expect(typingRow.locator(".sr-only")).toBeEmpty();
       expect(await previewBubble.boundingBox()).toEqual(activeBox);
-      expect(await afterAnimation(previewBubble)).toBe("none");
+      expect(await afterAnimation(caret)).toBe("none");
 
       await typingEvent(gateway, {
         actor: { type: "human", id: "zoe", label: "Zoe" },
@@ -446,10 +453,11 @@ suite.define(() => {
           await previewBubble.evaluate((element) => element.scrollWidth <= element.clientWidth),
         ).toBe(true);
       }
+      expect(await afterAnimation(caret)).not.toBe("none");
       await page.emulateMedia({ reducedMotion: "reduce" });
       await ownerTyping("مسودة لم ترسل بعد 👋");
       await expect(previewBubble).toHaveCSS("direction", "rtl");
-      expect(await afterAnimation(previewBubble)).toBe("none");
+      expect(await afterAnimation(caret)).toBe("none");
       await page.setViewportSize({ width: 1180, height: 760 });
       await page.evaluate(() => {
         document.documentElement.dataset.theme = "light";
@@ -457,13 +465,7 @@ suite.define(() => {
       });
       await ownerTyping(draft);
       await expect(previewBubble).toHaveText(draft);
-      await expect
-        .poll(() =>
-          typingRow
-            .locator(".chat-group")
-            .evaluate((row) => Number.parseFloat(getComputedStyle(row).gridTemplateColumns)),
-        )
-        .toBeGreaterThan(0);
+      await waitForLayoutSettled(page, '[data-virtual-row-key="presence:typing"] .chat-group');
       const beforeSend = await bubbleGeometry(previewBubble);
       await gateway.emitGatewayEvent("session.message", {
         sessionKey: "main",
@@ -477,6 +479,7 @@ suite.define(() => {
       await expect(typingRow).toHaveCount(0);
       const sentText = page.locator(".chat-group--peer .chat-text").filter({ hasText: draft });
       await expect(sentText).toHaveCount(1);
+      await waitForLayoutSettled(page, ".chat-group--peer .chat-text");
       const afterSend = await bubbleGeometry(sentText);
       expect(afterSend).toMatchObject({
         padding: beforeSend.padding,

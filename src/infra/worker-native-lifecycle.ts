@@ -12,6 +12,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { captureSqliteWorkerEnvironmentData } from "./bun-sqlite-library.js";
+import { materializeErrorStack } from "./error-graph-internal.js";
 import { runWithMainThreadTask } from "./main-thread-stall.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import {
@@ -46,6 +47,8 @@ type NativeRuntime = NativeWorkerRuntime & {
 
 export type RetainedNativeWorkerSource = {
   readonly hasActiveWorkers: boolean;
+  /** File paths of live workers; `undefined` when a worker's code has no path. */
+  activeWorkerPaths(): (string | undefined)[];
   create(
     filename: string | URL,
     options?: WorkerOptions,
@@ -222,6 +225,7 @@ function nativeRuntime(source: NativeSource): NativeRuntime {
           return Promise.reject(new Error("Native worker execution owners have not joined"));
         }
         runtime.failure ??= new Error("Native worker lifetime owner is closing");
+        materializeErrorStack(runtime.failure);
         terminateOwner();
         return ownerJoined.promise;
       },
@@ -231,6 +235,7 @@ function nativeRuntime(source: NativeSource): NativeRuntime {
         return;
       }
       runtime.failure = toErrorObject(error, "Native worker lifetime owner failed");
+      materializeErrorStack(runtime.failure);
       for (const handle of handles.values()) {
         handle.ownerFailed(runtime.failure);
       }
@@ -251,6 +256,7 @@ function nativeRuntime(source: NativeSource): NativeRuntime {
       // observes Bun's own parent-side join after its close callback returns.
       setImmediate(() => {
         const error = runtime.failure ?? new Error("Native worker lifetime owner exited");
+        materializeErrorStack(error);
         runtime.failure = error;
         source.closing = true;
         for (const handle of handles.values()) {
@@ -294,6 +300,9 @@ export function captureRetainedNativeWorkerSource(options?: {
     get hasActiveWorkers() {
       return Boolean(source.runtime?.handles.size);
     },
+    activeWorkerPaths() {
+      return [...(source.runtime?.handles.values() ?? [])].map((worker) => worker.sourcePath);
+    },
     async retireIdleBroker() {
       await source.brokerClose;
       if (source.hasActiveWorkers) {
@@ -307,17 +316,22 @@ export function captureRetainedNativeWorkerSource(options?: {
     },
     close() {
       return (closingOwners ??= Promise.resolve().then(async () => {
-        const results = await Promise.allSettled([...owners.values()].map((close) => close()));
-        const errors = nativeCleanupFailures(results);
-        if (errors.length) {
-          throw new AggregateError(errors, "Native worker execution owner cleanup failed");
+        try {
+          const results = await Promise.allSettled([...owners.values()].map((close) => close()));
+          const errors = nativeCleanupFailures(results);
+          if (errors.length) {
+            throw new AggregateError(errors, "Native worker execution owner cleanup failed");
+          }
+          source.closing = true;
+          await source.runtime?.close();
+          await source.brokerClose;
+          await source.broker?.close();
+          forgetNativeSource(source);
+          owners.clear();
+        } catch (error) {
+          materializeErrorStack(error);
+          throw error;
         }
-        source.closing = true;
-        await source.runtime?.close();
-        await source.brokerClose;
-        await source.broker?.close();
-        forgetNativeSource(source);
-        owners.clear();
       }));
     },
     create(filename, workerOptions, resource, taskPorts) {

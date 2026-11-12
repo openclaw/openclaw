@@ -2,6 +2,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import * as ts from "typescript/ast";
 import {
+  bindingScope,
   isTest,
   PLUGIN_UI_SOURCE_ROOTS,
   readInventorySources,
@@ -195,30 +196,6 @@ type SolidImport = { kind: "namespace" } | { kind: "member"; name: string };
 // Resolve only actual Solid imports; owner methods and shadowed local names are unrelated.
 function solidImportResolver(tree: ts.SourceFile) {
   const scopes = new WeakMap<ts.Node, Map<string, SolidImport | null>>();
-  const scopeFor = (node: ts.Node, functionOnly = false): ts.Node => {
-    for (let scope = node.parent; scope; scope = scope.parent) {
-      if (
-        ts.isSourceFile(scope) ||
-        ts.isFunctionLikeDeclaration(scope) ||
-        ts.isClassStaticBlockDeclaration(scope)
-      ) {
-        return scope;
-      }
-      if (
-        !functionOnly &&
-        (ts.isBlock(scope) ||
-          ts.isModuleBlock(scope) ||
-          ts.isCaseBlock(scope) ||
-          ts.isCatchClause(scope) ||
-          ts.isForStatement(scope) ||
-          ts.isForInStatement(scope) ||
-          ts.isForOfStatement(scope))
-      ) {
-        return scope;
-      }
-    }
-    return tree;
-  };
   const bind = (scope: ts.Node, name: string, imported: SolidImport | null = null) => {
     let names = scopes.get(scope);
     if (!names) {
@@ -247,15 +224,15 @@ function solidImportResolver(tree: ts.SourceFile) {
         node.importClause?.phaseModifier !== ts.SyntaxKind.TypeKeyword;
       const clause = node.importClause;
       if (clause?.name) {
-        bind(scopeFor(node), clause.name.text);
+        bind(bindingScope(node, tree), clause.name.text);
       }
       const bindings = clause?.namedBindings;
       if (bindings && ts.isNamespaceImport(bindings)) {
-        bind(scopeFor(node), bindings.name.text, solid ? { kind: "namespace" } : null);
+        bind(bindingScope(node, tree), bindings.name.text, solid ? { kind: "namespace" } : null);
       } else if (bindings && ts.isNamedImports(bindings)) {
         for (const binding of bindings.elements) {
           bind(
-            scopeFor(node),
+            bindingScope(node, tree),
             binding.name.text,
             solid && !binding.isTypeOnly
               ? { kind: "member", name: (binding.propertyName ?? binding.name).text }
@@ -268,7 +245,7 @@ function solidImportResolver(tree: ts.SourceFile) {
       const isVar =
         ts.isVariableDeclarationList(node.parent) &&
         !(node.parent.flags & ts.NodeFlags.BlockScoped);
-      bindPattern(scopeFor(node, isVar), node.name);
+      bindPattern(bindingScope(node, tree, isVar), node.name);
     }
     if (ts.isFunctionLikeDeclaration(node)) {
       for (const parameter of node.parameters) {
@@ -276,7 +253,7 @@ function solidImportResolver(tree: ts.SourceFile) {
       }
     }
     if ((ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node)) && node.name) {
-      bind(scopeFor(node), node.name.text);
+      bind(bindingScope(node, tree), node.name.text);
     }
     if ((ts.isFunctionExpression(node) || ts.isClassExpression(node)) && node.name) {
       bind(node, node.name.text);

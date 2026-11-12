@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { materializeMissingBundledDependencies } from "../../scripts/lib/package-bundled-links.mts";
@@ -11,24 +12,24 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 // Match the real npm toolchain probe budget in the package E2E fixture.
 const PACK_TIMEOUT_MS = 30_000;
 
-async function fixture() {
+async function fixture(name = "fixture-bundle") {
   const root = tempDirs.make("openclaw-bundle-links-");
   const source = path.join(root, "checkout");
   const store = path.join(root, "store");
   const packed = path.join(root, "package");
   const modules = path.join(source, "node_modules");
-  const bundle = path.join(modules, "fixture-bundle");
-  const destination = path.join(packed, "node_modules", "fixture-bundle");
+  const bundle = path.join(modules, name);
+  const destination = path.join(packed, "node_modules", name);
   await fs.mkdir(modules, { recursive: true });
   await fs.mkdir(store);
   await fs.mkdir(packed);
-  const manifest = JSON.stringify({ name: "fixture-bundle", version: "1.0.0" });
+  const manifest = JSON.stringify({ name, version: "1.0.0" });
   const payload = "#!/usr/bin/env node\nconsole.log('patched payload');\n";
   await fs.writeFile(path.join(store, "package.json"), manifest);
   await fs.writeFile(path.join(store, "cli.js"), payload, { mode: 0o755 });
   await fs.writeFile(
     path.join(packed, "package.json"),
-    '{"bundleDependencies":["fixture-bundle"]}',
+    JSON.stringify({ bundleDependencies: [name] }),
   );
   // The final packed manifest owns declarations, even after source restoration.
   await fs.writeFile(path.join(source, "package.json"), "{}");
@@ -54,7 +55,7 @@ async function fixture() {
     expect(await fs.readFile(path.join(store, "cli.js"), "utf8")).toBe(payload);
     expect((await fs.stat(path.join(store, "cli.js"))).mode).toBe(originalCliMode);
     expect(await fs.readlink(path.join(modules, "unbundled"))).toBe(link);
-    expect((await fs.readdir(modules)).toSorted()).toEqual(["fixture-bundle", "unbundled"]);
+    expect((await fs.readdir(modules)).toSorted()).toEqual([name, "unbundled"]);
   };
   return {
     source,
@@ -71,6 +72,40 @@ async function fixture() {
 }
 
 describe("bundled dependency links", () => {
+  it("stages a builtin-name npm package cycle once and runs it from the relocated archive", async () => {
+    const f = await fixture("string_decoder");
+    const helper = path.join(f.store, "node_modules", "fixture-helper");
+    await fs.mkdir(path.join(helper, "node_modules"), { recursive: true });
+    await f.writeManifest(f.store, {
+      name: "string_decoder",
+      version: "1.1.1",
+      main: "index.js",
+      dependencies: { "fixture-helper": "1.0.0" },
+    });
+    await fs.writeFile(
+      path.join(f.store, "index.js"),
+      'exports.label = "npm decoder"; exports.run = () => require("fixture-helper");',
+    );
+    await f.writeManifest(helper, {
+      name: "fixture-helper",
+      version: "1.0.0",
+      main: "index.js",
+      dependencies: { string_decoder: "1.1.1" },
+    });
+    await fs.writeFile(
+      path.join(helper, "index.js"),
+      'module.exports = require("string_decoder/").label + ":helper";',
+    );
+    await fs.symlink(f.store, path.join(helper, "node_modules", "string_decoder"), "junction");
+    await f.stage();
+    const require = createRequire(path.join(f.destination, "package.json"));
+    expect(require("./").run()).toBe("npm decoder:helper");
+    await expect(
+      fs.stat(path.join(f.destination, "node_modules/fixture-helper/node_modules/string_decoder")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await f.assertSourceUnchanged();
+  });
+
   it.each([true, false])(
     "respects publishable file selection with files allowlist=%s",
     async (allowlist) => {

@@ -252,6 +252,32 @@ it.each(["callback", "local-executor"] as const)(
   },
 );
 
+it.each([true, false])(
+  "keeps a prefixed configured owner current when plugins await Doctor migrations: %s",
+  async (pendingOnly) => {
+    await writeConfig({ commands: { ownerAllowFrom: ["telegram:owner"] } });
+    const registry = createTestPluginRegistry().registry;
+    registry.plugins.push(createPluginRecord({ id: "telegram", status: "error" }));
+    registry.diagnostics.push({
+      level: "error",
+      pluginId: "telegram",
+      message: "pending",
+      ...(pendingOnly ? { code: "plugin-state-migration" as const } : {}),
+    });
+    const { PluginLoadFailureError } = await import("../plugins/loader-shared.js");
+    const error = new PluginLoadFailureError(registry, registry.plugins);
+    vi.mocked(ensureCliPluginRegistryLoaded).mockRejectedValueOnce(error);
+    const authority = await authorityFor({ channel: "telegram", senderId: "owner" });
+    if (!pendingOnly) {
+      expect(() => authority.isCurrent()).toThrow(error);
+      return;
+    }
+    expect(authority.isCurrent()).toBe(true);
+    await writeConfig({ commands: { ownerAllowFrom: ["telegram:other"] } });
+    expect(authority.isCurrent()).toBe(false);
+  },
+);
+
 it.each(["registry", "config preparation", "config recheck"])(
   "reports %s failure, not revocation",
   async (failure) => {

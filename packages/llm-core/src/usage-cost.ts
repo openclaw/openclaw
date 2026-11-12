@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   ModelCostConfig,
   ModelCostRates,
@@ -111,4 +112,28 @@ export function calculateUsageCost(
   };
   cost.total = cost.input + cost.output + cost.cacheRead + cost.cacheWrite;
   return cost;
+}
+
+/** Provider-reported token counts for one embedding request. */
+export type EmbeddingUsage = {
+  promptTokens: number;
+  totalTokens: number;
+};
+
+export function extractEmbeddingUsage(payload: unknown): EmbeddingUsage | undefined {
+  const usage = asOptionalRecord(asOptionalRecord(payload)?.usage);
+  const promptTokens = normalizeUsageCount(usage?.prompt_tokens);
+  const totalTokens = normalizeUsageCount(usage?.total_tokens);
+  if (promptTokens === undefined && totalTokens === undefined) {
+    return undefined;
+  }
+  // Embeddings bill input tokens only; providers may report just one of these fields.
+  return {
+    promptTokens: promptTokens ?? totalTokens ?? 0,
+    totalTokens: totalTokens ?? promptTokens ?? 0,
+  };
+}
+
+function normalizeUsageCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }

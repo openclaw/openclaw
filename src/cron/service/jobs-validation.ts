@@ -168,7 +168,9 @@ export function assertTriggerSupport(
     job.schedule.kind !== "cron" &&
     job.schedule.kind !== "stream"
   ) {
-    throw new Error("cron triggers require an every, cron, or stream schedule");
+    throw new Error(
+      `cron triggers require an every, cron, or stream schedule; schedule.kind="${job.schedule.kind}" cannot include trigger. Remove trigger for a one-time reminder, or use a recurring every/cron schedule. No changes were saved. Retry with corrected arguments; do not report success unless the retry succeeds. If you cannot retry, tell the user the reminder was not saved.`,
+    );
   }
   const minIntervalMs = resolveCronTriggerMinIntervalMs();
   if (job.schedule.kind === "every" && job.schedule.everyMs < minIntervalMs) {

@@ -131,6 +131,10 @@ struct OpenClawApp: App {
                 }
                 .keyboardShortcut("r", modifiers: .command)
 
+                Button("Systems") {
+                    AppNavigationActions.openSelectedWebRoute(DashboardRouteMap.systemsPagePath)
+                }
+
                 Divider()
 
                 if self.state.nativeExperienceEnabled {
@@ -344,9 +348,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let root = DeviceIdentityStore.stateDirectoryURL
                 let executionRoot = OpenClawPaths.stateDirURL
                 if BundledRuntime.isBundledApp {
-                    try await ClientCredentialStartup.prepare(
-                        executionRoot: executionRoot,
-                        configURL: OpenClawPaths.configURL)
+                    let prepare = {
+                        try await ClientCredentialStartup.prepare(
+                            executionRoot: executionRoot,
+                            configURL: OpenClawPaths.configURL)
+                    }
+                    if let replacement = await StaleGatewayServiceReplacement.detect() {
+                        self.credentialLogger
+                            .info("Replacing the previous build's Gateway service before credential preparation")
+                        if let error = try await replacement.run(prepareCredentials: prepare) {
+                            self.credentialLogger
+                                .error("Stale Gateway service replacement failed: \(error, privacy: .public)")
+                        }
+                    } else {
+                        try await prepare()
+                    }
                 }
                 try Task.checkCancellation()
                 // Independent native identities retain their native import owner.
@@ -561,21 +577,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func scheduleFirstRunOnboardingIfNeeded() async {
-        if await OnboardingController.shared.startFirstRunIfFresh() {
-            return
-        }
-        let connectionMode = AppStateStore.shared.connectionMode
-        let onboardingSeen = AppStateStore.shared.onboardingSeen
-        if connectionMode != .unconfigured, onboardingSeen {
-            OnboardingController.markComplete()
-            return
-        }
-        let seenVersion = AppDefaults.standard.integer(forKey: onboardingVersionKey)
-        let shouldShow = seenVersion < currentOnboardingVersion || !AppStateStore.shared.onboardingSeen
-        guard shouldShow else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-            guard !AppStateStore.shared.onboardingSeen else { return }
-            OnboardingController.shared.show()
-        }
+        OnboardingFirstRun.presentIfNeeded(
+            connectionMode: AppStateStore.shared.connectionMode,
+            onboardingSeen: AppStateStore.shared.onboardingSeen,
+            onboardingVersion: AppDefaults.standard.integer(forKey: onboardingVersionKey),
+            markComplete: { OnboardingController.markComplete() },
+            show: {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                    guard !AppStateStore.shared.onboardingSeen else { return }
+                    OnboardingController.shared.show()
+                }
+            })
     }
 }

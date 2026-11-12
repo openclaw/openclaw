@@ -30,7 +30,8 @@ let processNamespace: { platform: NodeJS.Platform; value: ProcessNamespace | nul
 export function readGatewayLockProcessNamespace(): ProcessNamespace | null {
   if (
     processNamespace?.platform === process.platform &&
-    (processNamespace.value !== null || process.platform !== "linux")
+    (processNamespace.value !== null ||
+      (process.platform !== "linux" && process.platform !== "android"))
   ) {
     return processNamespace.value;
   }
@@ -49,7 +50,7 @@ export function readGatewayLockProcessNamespace(): ProcessNamespace | null {
           }
         : {}),
     });
-    processNamespace = { platform: value.platform, value };
+    processNamespace = { platform: process.platform, value };
     return value;
   } catch {
     processNamespace = { platform: process.platform, value: null };
@@ -91,7 +92,7 @@ export function describeGatewayLockHolder(
 export class GatewayLockNamespaceError extends Error {
   constructor(holder: GatewayLockHolder, lockPath?: string) {
     super(
-      `cannot verify Gateway ownership from this process; heartbeat age does not prove that the holder stopped. ${describeGatewayLockHolder(holder, lockPath)}`,
+      `cannot verify Gateway ownership from this process${lockPath ? ` at ${lockPath}` : ""}; heartbeat age does not prove that the holder stopped. ${describeGatewayLockHolder(holder, lockPath)}`,
     );
     this.name = "GatewayLockNamespaceError";
   }

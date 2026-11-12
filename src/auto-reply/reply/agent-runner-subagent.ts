@@ -4,7 +4,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 
-/** Human replies and operator recovery inherit the retained child's native custody. */
+/**
+ * Human replies inherit the retained child's native custody. A tool handoff result
+ * continues the task whose own run handed off; other internal turns stay separate follow-ups.
+ */
 export async function prepareReplySubagentContinuation(
   turn: AgentTurnParams,
   runId: string,
@@ -13,13 +16,13 @@ export async function prepareReplySubagentContinuation(
 ): Promise<void> {
   const entry = turn.getActiveSessionEntry();
   const provenance = turn.followupRun.run.inputProvenance;
-  const operatorRecovery =
-    provenance?.kind === "internal_system" &&
-    provenance.sourceTool === "sessions.recover" &&
-    provenance.sourceSessionKey === turn.sessionKey;
+  const handoffRunId =
+    provenance?.kind === "internal_system" && provenance.sourceTool === "tool_handoff"
+      ? provenance.runId
+      : undefined;
   if (
     !turn.sessionKey ||
-    (provenance && provenance.kind !== "external_user" && !operatorRecovery) ||
+    (provenance && provenance.kind !== "external_user" && !handoffRunId) ||
     !(entry?.spawnedBy || entry?.subagentRole || (entry?.spawnDepth ?? 0) > 0)
   ) {
     return;
@@ -37,7 +40,9 @@ export async function prepareReplySubagentContinuation(
   await reactivateCompletedSubagentSession({
     sessionKey: turn.sessionKey,
     runId,
-    ...(operatorRecovery ? {} : { task: turn.followupRun.prompt }),
+    // Handoff results continue the original task rather than restating it.
+    ...(handoffRunId ? {} : { task: turn.followupRun.prompt }),
+    ...(handoffRunId ? { pausedRunId: handoffRunId } : {}),
     gatewayContextResolver:
       readChannelContextGatewayContextResolver(turn.sessionCtx) ??
       getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext,

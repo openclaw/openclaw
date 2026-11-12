@@ -7,7 +7,10 @@ import { writeOpenAiResponsesSse, writeOpenAiResponsesText } from "./openai-resp
 import { createDeferred, withinTest } from "./promise.js";
 import { runQaGatewayFixture } from "./qa-gateway-cleanup.js";
 
-export async function startGatewayRestartProvider(signal: AbortSignal) {
+export async function startGatewayRestartProvider(
+  signal: AbortSignal,
+  expected = { held: 6, execs: 2 },
+) {
   const ready = createDeferred();
   void ready.promise.catch(() => {});
   const recoveryReleased = createDeferred();
@@ -122,7 +125,7 @@ export async function startGatewayRestartProvider(signal: AbortSignal) {
         }
       }
     }
-    if (index < 2 && outputs.length === 0 && !issuedExecs.has(index)) {
+    if (index < expected.execs && outputs.length === 0 && !issuedExecs.has(index)) {
       issuedExecs.add(index);
       // Replace the shell so the returned PID also owns the long-lived fixture process.
       const args = JSON.stringify({ command: "exec sleep 3600", background: true });
@@ -155,10 +158,10 @@ export async function startGatewayRestartProvider(signal: AbortSignal) {
       return;
     }
     held.add(index);
-    if (held.size === 6 && processes.size === 2) {
+    if (held.size === expected.held && processes.size === expected.execs) {
       ready.resolve();
     }
-    // Keep only the six execution calls unanswered; housekeeping must still settle.
+    // Keep only the selected execution calls unanswered; housekeeping must still settle.
   }
 
   const reservation = await reserveTestPortListener({

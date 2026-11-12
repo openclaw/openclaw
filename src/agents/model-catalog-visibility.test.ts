@@ -278,7 +278,7 @@ describe("resolveLogicalVisibleModelCatalog", () => {
     ]);
   });
 
-  it("keeps deprecated configured primary and alias-key rows visible", async () => {
+  it("keeps a deprecated configured primary visible but not alias-only map rows", async () => {
     const catalog: ModelCatalogEntry[] = [
       { provider: "demo", id: "primary", name: "Primary", status: "deprecated" },
       { provider: "demo", id: "alias-key", name: "Alias Key", status: "deprecated" },
@@ -312,7 +312,20 @@ describe("resolveLogicalVisibleModelCatalog", () => {
       policy,
     });
 
-    expect(result.map((entry) => entry.id).toSorted()).toEqual(["alias-key", "primary"]);
+    // Aliases and per-model params are metadata; only selected models are pinned.
+    expect(result.map((entry) => entry.id).toSorted()).toEqual(["primary"]);
+  });
+
+  it("never lists typed-only rows as chat choices under any allowlist", async () => {
+    const catalog = [row("demo", "chat"), row("demo", "typed", { inference: { chat: false } })];
+    for (const models of [undefined, { "demo/*": {} }, { "demo/typed": {}, "demo/new": {} }]) {
+      const cfg = { agents: { defaults: { models } } } as OpenClawConfig;
+      for (const view of ["default", "configured", "all"] as const) {
+        const ids = (await visible(catalog, { cfg, view })).map(({ id }) => id);
+        expect(ids).not.toContain("typed");
+        expect(ids).toContain(models?.["demo/new"] && view !== "all" ? "new" : "chat");
+      }
+    }
   });
 
   it("dedupes physical routes after selected-route projection in the default view", async () => {
