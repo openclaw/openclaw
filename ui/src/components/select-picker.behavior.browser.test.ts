@@ -68,14 +68,7 @@ async function mount(overrides: Partial<PickerParams<PickerOption>> = {}) {
     trigger.click();
     await picker.updateComplete;
   };
-  const openSearch = async () => {
-    if (!picker.querySelector("input")) {
-      picker.querySelector<HTMLButtonElement>(".header-search__toggle")!.click();
-      await picker.updateComplete;
-    }
-  };
   const search = async (value: string) => {
-    await openSearch();
     const input = picker.querySelector<HTMLInputElement>("input")!;
     input.value = value;
     input.dispatchEvent(new InputEvent("input", { bubbles: true }));
@@ -95,7 +88,7 @@ async function mount(overrides: Partial<PickerParams<PickerOption>> = {}) {
     await picker.updateComplete;
     return event;
   };
-  return { params, picker, trigger, open, openSearch, search, rows, key, update, container };
+  return { params, picker, trigger, open, search, rows, key, update, container };
 }
 
 describe("Picker", () => {
@@ -209,7 +202,6 @@ describe("Picker", () => {
       searchable: "always",
     });
     await p.open();
-    await p.openSearch();
     const search = p.picker.querySelector<HTMLInputElement>("input")!;
     for (const value of ["content", "trigger"]) {
       const row = p.rows().find((option) => option.dataset.value === value)!;
@@ -314,7 +306,6 @@ describe("Picker", () => {
     });
     p.container.style.width = "420px";
     await p.open();
-    await p.openSearch();
     const input = p.picker.querySelector<HTMLInputElement>("input")!;
     const viewport = p.picker.querySelector<HTMLElement>(".picker-select__options")!;
     const active = () => document.getElementById(input.getAttribute("aria-activedescendant")!);
@@ -349,8 +340,11 @@ describe("Picker", () => {
     await expectActive("model-999", 1000);
     await listKey("Home");
     await expectActive("model-0", 1);
+    // A printable key on the list moves into the search field instead of row typeahead.
+    viewport.focus();
     await listKey("z");
-    await expectActive("model-999", 1000);
+    expect(document.activeElement).toBe(input);
+    await expectActive("model-0", 1);
     expect(p.params.onChange).not.toHaveBeenCalled();
     await p.search("Model 0998");
     await expectActive("model-998", 1, 1);
@@ -475,16 +469,16 @@ describe("Picker", () => {
     expect(p.rows().map((row) => row.dataset.value)).toEqual(["fixture/aurora-large"]);
     expect(p.trigger.textContent).toContain("Anchor");
     expect(p.params.onChange).not.toHaveBeenCalled();
-    await p.search("");
+    // Escape clears the query first and keeps the field; an empty field leaves Escape to the picker.
+    p.picker.querySelector<HTMLInputElement>("input")!.focus();
+    await p.key("Escape");
+    expect(p.picker.querySelector<HTMLInputElement>("input")!.value).toBe("");
     expect(p.rows()).toHaveLength(9);
     expect(p.rows()[0]?.textContent).toContain("Fixture provider");
-    await p.key("Escape");
-    expect(p.picker.querySelector("input")).toBeNull();
     await p.key("Escape");
     expect(document.activeElement).toBe(p.trigger);
     expect(p.params.onChange).not.toHaveBeenCalled();
     await p.open();
-    await p.openSearch();
     expect(p.picker.querySelector<HTMLInputElement>("input")!.value).toBe("");
     expect(p.rows()).toHaveLength(9);
   });

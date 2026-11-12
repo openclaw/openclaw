@@ -44,6 +44,7 @@ export function prepareCronRunAdmission(params: {
   runId: string;
   sessionId?: string;
   sessionKey: string;
+  sourceReplySessionKey?: string;
   jobId: string;
   deliveryAttemptFence: CronCompletionDeliveryFence | null;
   channelRequester?: CronAuthenticatedChannelRequester;
@@ -121,6 +122,7 @@ export function prepareCronRunAdmission(params: {
         agentId: params.agentId,
         runId,
         sessionKey: params.sessionKey,
+        sourceReplySessionKey: params.sourceReplySessionKey,
         sessionId: params.sessionId,
         requesterAccountId:
           scheduledMessageAuthority && scheduledToolPolicy?.mode === "account"

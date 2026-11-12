@@ -34,6 +34,7 @@ import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { UsageCacheStatus } from "../infra/session-cost-usage.types.js";
 import {
+  hasKnownPricing,
   modelCatalogPricingFingerprint,
   prepareModelPricingContext,
   resolveModelPricing,
@@ -248,17 +249,30 @@ export async function captureModelCostPricing(
   };
 }
 
-/**
- * Resolves local models.json first, then authored overrides over effective catalog prices.
- * Complete direct prices need no plugin normalization or provider discovery.
- */
-export async function resolveModelCostConfig(params: {
+type ModelCostLookup = {
   provider?: string;
   model?: string;
   config?: OpenClawConfig;
   agentDir?: string;
   allowPluginNormalization?: boolean;
-}): Promise<ModelCostConfig | undefined> {
+};
+
+/**
+ * Resolves local models.json first, then authored overrides over effective catalog prices.
+ * Complete direct prices need no plugin normalization or provider discovery.
+ */
+export function resolveModelCostConfig(
+  params: ModelCostLookup & { runtimeCost: RawModelCostConfig },
+): Promise<RawModelCostConfig | undefined>;
+export function resolveModelCostConfig(
+  params: ModelCostLookup,
+): Promise<ModelCostConfig | undefined>;
+export async function resolveModelCostConfig(
+  params: ModelCostLookup & {
+    /** Already resolved runtime row; retain its authored-provider override rules before discovery. */
+    runtimeCost?: RawModelCostConfig;
+  },
+): Promise<RawModelCostConfig | undefined> {
   const provider = normalizeProviderId(normalizeOptionalString(params.provider) ?? "");
   const model = normalizeOptionalString(params.model);
   if (!provider || !model) {
@@ -268,12 +282,25 @@ export async function resolveModelCostConfig(params: {
     resolveCostAgentDir(params.config, params.agentDir),
   );
   const key = normalizeRawModelKey(provider, model);
-  const local = getModelsJsonCostIndex(modelsProviders).get(key);
+  const localIndex = getModelsJsonCostIndex(modelsProviders);
+  const source = params.config ? projectConfigOntoRuntimeSourceSnapshot(params.config) : undefined;
+  const authoredIndex = getProviderCostIndex(source?.models?.providers);
+  if (
+    params.runtimeCost &&
+    hasKnownPricing(params.runtimeCost) &&
+    [authoredIndex, localIndex].some((index) =>
+      [...index].some(
+        ([modelKey, cost]) => modelKey.startsWith(`${provider}/`) && hasModelCostRates(cost),
+      ),
+    )
+  ) {
+    return params.runtimeCost;
+  }
+  const local = localIndex.get(key);
   if (hasModelCostRates(local)) {
     return normalizeModelCostConfig(local);
   }
-  const source = params.config ? projectConfigOntoRuntimeSourceSnapshot(params.config) : undefined;
-  const authored = getProviderCostIndex(source?.models?.providers).get(key);
+  const authored = authoredIndex.get(key);
   if (hasCompleteModelCost(authored)) {
     return normalizeModelCostConfig(authored);
   }

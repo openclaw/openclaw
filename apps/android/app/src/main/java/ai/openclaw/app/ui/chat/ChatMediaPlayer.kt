@@ -532,7 +532,7 @@ private fun MediaPlaybackPresentation.AudioPlayerSurface(
           color = ClawTheme.colors.primary,
           contentColor = ClawTheme.colors.primaryText,
         ) {
-          Box(modifier = Modifier.size(34.dp), contentAlignment = Alignment.Center) {
+          Box(modifier = Modifier.size(ClawTheme.spacing.touchTarget), contentAlignment = Alignment.Center) {
             if (loading) {
               CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
             } else {
@@ -550,6 +550,8 @@ private fun MediaPlaybackPresentation.AudioPlayerSurface(
             text = content.fileName?.takeIf { it.isNotBlank() && !isGeneratedVoiceNoteName(it) } ?: nativeString("Voice note"),
             style = ClawTheme.type.body,
             color = ClawTheme.colors.text,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
           )
           MediaPlaybackStatus()
         }

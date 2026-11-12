@@ -74,6 +74,7 @@ import { log } from "./logger.js";
 import { createEmbeddedAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import { runPreparedEmbeddedLoop } from "./run-loop.js";
 import { createEmbeddedRunStageSummaryEmitter } from "./run/attempt-stage-timing.js";
+import { publishClaimedSessionWriter } from "./run/compaction-accounting-bridge.js";
 import { withExecutionPhaseDiagnostics } from "./run/execution-phase-diagnostics.js";
 import type {
   RunEmbeddedAgentInternalParams,
@@ -192,6 +193,7 @@ async function runEmbeddedAgentForSession(
         // Native preparation must consume the claim's postimage, not the pre-queue row.
         sessionAdmission = { ...sessionAdmission, entry };
       }
+      publishClaimedSessionWriter(params.onCompactionAccounting, runSessionTarget, entry);
     },
   });
   const { enqueueGlobal, enqueueSession, noteLaneTaskProgress, throwIfAborted } = laneController;
