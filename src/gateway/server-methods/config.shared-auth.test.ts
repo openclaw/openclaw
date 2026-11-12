@@ -219,9 +219,9 @@ describe("config shared auth disconnects", () => {
       await flushConfigHandlerMicrotasks();
 
       expect(respond).toHaveBeenCalledWith(
-        claimed || method === "config.set",
-        claimed || method === "config.set" ? expect.objectContaining({ ok: true }) : undefined,
-        claimed || method === "config.set"
+        claimed,
+        claimed ? expect.objectContaining({ ok: true }) : undefined,
+        claimed
           ? undefined
           : expect.objectContaining({ message: expect.stringContaining("unclaimed") }),
       );

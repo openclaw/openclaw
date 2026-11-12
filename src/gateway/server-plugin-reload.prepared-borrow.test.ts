@@ -282,22 +282,25 @@ describe("prepared Gateway plugin borrowing", () => {
           );
         };
         const executeProbe = async (lease: PreparedModelRuntimeLease) => {
-          const tool = withPluginRuntimeRegistryScope(registryOwner.registry, () =>
-            resolveOpenClawPluginToolsForOptions({
-              resolvedConfig: config,
-              options: {
-                config,
-                workspaceDir: state.workspaceDir,
-                agentSessionKey: "agent:main:main",
-                senderIsOwner: true,
-                preparedModelRuntime: lease.snapshot,
-                pluginToolAllowlist: [toolName],
-                assertInvocationCurrent: () => {},
-              },
-            }),
-          ).find(({ name }) => name === toolName);
-          assert(tool, "the Gateway plugin tool must resolve for the prepared turn");
-          return await tool.execute("borrow-probe", {});
+          assert(lease.run, "the prepared turn must own an execution scope");
+          return await lease.run(async () => {
+            const tool = withPluginRuntimeRegistryScope(registryOwner.registry, () =>
+              resolveOpenClawPluginToolsForOptions({
+                resolvedConfig: config,
+                options: {
+                  config,
+                  workspaceDir: state.workspaceDir,
+                  agentSessionKey: "agent:main:main",
+                  senderIsOwner: true,
+                  preparedModelRuntime: lease.snapshot,
+                  pluginToolAllowlist: [toolName],
+                  assertInvocationCurrent: () => {},
+                },
+              }),
+            ).find(({ name }) => name === toolName);
+            assert(tool, "the Gateway plugin tool must resolve for the prepared turn");
+            return await tool.execute("borrow-probe", {});
+          });
         };
         let preflightPrepared = false;
         const reloadPlugins: GatewayReloadHandlerParams["reloadPlugins"] = (params) =>

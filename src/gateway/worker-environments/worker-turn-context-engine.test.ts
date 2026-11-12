@@ -43,9 +43,14 @@ describe("worker context engine", () => {
   afterEach(cleanupWorkerTurnLauncherTest);
   afterEach(resetGlobalHookRunner);
 
-  it.each(["direct", "outer"] as const)(
-    "runs the selected context engine through worker preparation and %s-owned settlement",
-    async (owner) => {
+  it.each([
+    { owner: "direct", preAdmitted: false },
+    { owner: "outer", preAdmitted: false },
+    { owner: "direct", preAdmitted: true },
+    { owner: "outer", preAdmitted: true },
+  ] as const)(
+    "runs the selected context engine through worker preparation and $owner-owned settlement (pre-admitted=$preAdmitted)",
+    async ({ owner, preAdmitted }) => {
       let phase = "seed";
       let reported = false;
       const events: string[] = [];
@@ -87,6 +92,9 @@ describe("worker context engine", () => {
         target: { ...sessionTarget, sessionEntry: undefined },
         input: { text: input.prompt },
       });
+      if (preAdmitted) {
+        await recorder.persistApproved();
+      }
       let claim: WorkerSessionTurnClaim | undefined;
       const maintenanceObservations: Array<{ cwd: string; content: string; claimLive: boolean }> =
         [];
@@ -259,7 +267,10 @@ describe("worker context engine", () => {
         expect(assemble).toHaveBeenCalledOnce();
         const admission = recorder.getAdmissionReceipt();
         expect(admission).toBeDefined();
-        expect(fences).toEqual([admission, admission]);
+        // Recorder-owned input is approved after prompt safety checks; only an already
+        // admitted input needs a fence while bootstrap and assembly read history.
+        const expectedFence = preAdmitted ? admission : undefined;
+        expect(fences).toEqual([expectedFence, expectedFence]);
         expect(bootstrap.mock.calls[0]?.[0].runtimeSettings).toMatchObject({
           model: { provider: "openai", resolved: input.model },
           limits: { promptTokenBudget: 32_768 },
