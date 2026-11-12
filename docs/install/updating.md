@@ -1233,6 +1233,23 @@ Paths carried over solely from the old definition still pass the existing safety
 filters. If the definition cannot be preserved, reconciliation requires manual repair.
 Deployment-owned definitions retain their existing installation owner.
 
+If a service override keeps the Gateway on a different installation, only that
+installation is updated. Your shell CLI stays unchanged and may no longer support
+the shared config or plugins. Use the Gateway's CLI, or update your shell CLI to
+the same version.
+
+Reinstalling cannot replace a custom launcher override. Doctor reports this even
+when it cannot begin repairs. To change a systemd `ExecStart` override:
+
+1. Run `openclaw gateway status --deep` to find the service.
+2. Inspect it with `systemctl --user cat openclaw-gateway.service`.
+3. Update or remove the launcher override, keeping unrelated settings.
+4. Run `systemctl --user daemon-reload`. If needed, reinstall from the CLI you
+   want the Gateway to use, then check its launcher and health with `openclaw gateway status --deep`.
+
+For system services, omit `--user`; for profiles, use the reported unit name.
+These warnings require an updated CLI; an older updater still uses its old routing.
+
 An owned managed **Bun** Gateway at a different package root uses the existing
 service-root update route: only the Gateway installation advances, and the
 invoking CLI installation stays unchanged. The updater validates the service's
