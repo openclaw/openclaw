@@ -45,6 +45,7 @@ import { Session } from "node:inspector/promises";
 import os from "node:os";
 import path from "node:path";
 import { monitorEventLoopDelay } from "node:perf_hooks";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { getHeapStatistics } from "node:v8";
@@ -286,7 +287,7 @@ if (values["psi-trace"]) {
   assert.equal(process.platform, "linux", "PSI trace requires Linux; no platform spoofing");
   for (let flush = 0; flush < 2; flush++) {
     if (flush) {
-      await new Promise((resolve) => setTimeout(resolve, 30_000));
+      await delay(30_000);
       fs.writeFileSync(path.join(output, "setup-complete"), "synthetic preparation complete\n");
     }
     const started = performance.now();

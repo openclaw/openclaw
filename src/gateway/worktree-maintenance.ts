@@ -236,19 +236,16 @@ export function startWorktreeMaintenance(params: {
             current.startedAt = scheduler.now();
             let batchStartedAt = scheduler.now();
             let batchItems = 0;
-            const waitForIo = async () => {
-              while (await hasIoPressure()) {
-                assertCurrent();
-                await pause(PRESSURE_BACKOFF_MS);
-              }
-              assertCurrent();
-            };
             const beforeRemoval = async () => {
               assertCurrent();
               if (scheduler.now() < nextRemovalAt) {
                 await pause(nextRemovalAt - scheduler.now());
               }
-              await waitForIo();
+              while (await hasIoPressure()) {
+                assertCurrent();
+                await pause(PRESSURE_BACKOFF_MS);
+              }
+              assertCurrent();
               nextRemovalAt = scheduler.now() + REMOVAL_INTERVAL_MS;
               batchStartedAt = scheduler.now();
               batchItems = 0;
