@@ -36,6 +36,7 @@ import {
 } from "./lib/vitest-outcome.mts";
 import {
   MAX_CI_VITEST_PLAN_CONCURRENCY,
+  resolveCiNodeTestResources,
   resolveCiVitestPlanConcurrency,
   runVitestPlans,
 } from "./lib/vitest-plan-scheduling.mts";
@@ -604,6 +605,23 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
       const value = parseJsonEnv(env, VITEST_EXTRA_ARGS_ENV_KEY, []);
       return isStringArray(value) ? value : [];
     });
+  // Invalid job settings must fail before runtime builds acquire artifact ownership.
+  // Historical targets use a workflow-owned adapter. Their Node
+  // contract must not import current target discovery or runtime policy code.
+  const runtimePolicy = baseEnv.OPENCLAW_CI_TEST_RUNTIME_POLICY?.trim() || "node";
+  const runtimeOwner =
+    runtimePolicy === "node" ? undefined : await import("./lib/ci-test-runtime.mts");
+  const policy = runtimeOwner?.resolveCiTestRuntimePolicy(baseEnv) ?? "node";
+  // Respect serial timing-sensitive bins and never clone cache slots that
+  // cannot receive a plan.
+  const requestedConcurrency =
+    options.concurrency === undefined
+      ? readPositiveEnvInt(
+          "OPENCLAW_NODE_TEST_PLAN_CONCURRENCY",
+          baseEnv,
+          MAX_CI_VITEST_PLAN_CONCURRENCY,
+        )
+      : parsePositiveInt(options.concurrency, "Shard plan concurrency");
   const preparedBuildEnv: NodeJS.ProcessEnv = {};
   if (
     fileURLToPath(import.meta.url) === join(process.cwd(), "scripts/ci-run-node-test-shard.mts")
@@ -679,26 +697,13 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
       }
     }
   }
-  // Historical targets use a workflow-owned adapter. Their Node
-  // contract must not import current target discovery or runtime policy code.
-  const runtimePolicy = baseEnv.OPENCLAW_CI_TEST_RUNTIME_POLICY?.trim() || "node";
-  const runtimeOwner =
-    runtimePolicy === "node" ? undefined : await import("./lib/ci-test-runtime.mts");
-  const policy = runtimeOwner?.resolveCiTestRuntimePolicy(baseEnv) ?? "node";
-  // Respect serial timing-sensitive bins and never clone cache slots that
-  // cannot receive a plan.
-  const requestedConcurrency =
-    options.concurrency === undefined
-      ? readPositiveEnvInt(
-          "OPENCLAW_NODE_TEST_PLAN_CONCURRENCY",
-          baseEnv,
-          MAX_CI_VITEST_PLAN_CONCURRENCY,
-        )
-      : parsePositiveInt(options.concurrency, "Shard plan concurrency");
   const ci = isCiLikeEnv(baseEnv);
   const continueOnFailure = shouldContinueVitestFailures(baseEnv);
-  const hostResources = ci
+  const actualHostResources = ci
     ? { logicalCpuCount: os.availableParallelism(), totalMemoryBytes: os.totalmem() }
+    : null;
+  const hostResources = actualHostResources
+    ? resolveCiNodeTestResources(actualHostResources, baseEnv.OPENCLAW_NODE_TEST_CPU_BUDGET)
     : null;
   const exclusive = (entry: ShardPlan) =>
     entry.kind === "group" && entry.plan.configs.some(isExclusiveCiTestConfig);
@@ -857,8 +862,11 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
       : undefined;
     if (hostResources) {
       console.log(
-        `[shard:resources] logicalCpuCount=${hostResources.logicalCpuCount} totalMemoryBytes=${hostResources.totalMemoryBytes} requested plans=${requestedConcurrency} admitted plans=${concurrency}`,
+        `[shard:resources] logicalCpuCount=${actualHostResources!.logicalCpuCount} totalMemoryBytes=${hostResources.totalMemoryBytes} requested plans=${requestedConcurrency} admitted plans=${concurrency}`,
       );
+      if (baseEnv.OPENCLAW_NODE_TEST_CPU_BUDGET) {
+        console.log(`[shard:cpu-budget] logicalCpuCount=${hostResources.logicalCpuCount}`);
+      }
       reportCiResourceSnapshot("start");
     }
     const clonedCacheSlots = clonePersistentCacheSlots(persistentCacheRoot, concurrency, policy);

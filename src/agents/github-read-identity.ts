@@ -27,10 +27,35 @@ const nativeTokens = createStaleWhileRevalidateCache<string | undefined>({
   cacheable: (token) => token !== undefined,
 });
 
+type NativeGitHubConfiguration = "configured" | "unconfigured" | "unknown";
+let nativeConfiguration: { host: string; state: NativeGitHubConfiguration } | undefined;
+
+/** Gateway-process selection only; caller environment overlays never share this fact. */
+export function readNativeGitHubConfiguration(host: string): NativeGitHubConfiguration {
+  return nativeConfiguration?.host === host ? nativeConfiguration.state : "unknown";
+}
+
+/** The GitHub lifecycle samples local configuration off the turn path, without API verification. */
+export async function refreshNativeGitHubConfiguration(): Promise<void> {
+  const host = resolveGitHubHost();
+  const current = { host, state: readNativeGitHubConfiguration(host) };
+  nativeConfiguration = current;
+  let state: NativeGitHubConfiguration = "unknown";
+  try {
+    state = (await readNativeGitHubToken({}, true, host)) ? "configured" : "unconfigured";
+  } catch {
+    // Rejected, locked, offline, or unreadable accounts are not proof of absence.
+  }
+  if (nativeConfiguration === current) {
+    current.state = state;
+  }
+}
+
 export const githubIdentityChanges: { onChange?: () => void } = {};
 
 export function clearNativeGitHubTokenCache(): void {
   nativeTokens.clear();
+  nativeConfiguration = undefined;
   try {
     githubIdentityChanges.onChange?.();
   } catch {

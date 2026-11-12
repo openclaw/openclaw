@@ -1,0 +1,3 @@
+# Regression proving an Anthropic OAuth token stored as an api_key profile reaches Claude Code on
+# its OAuth descriptor instead of failing as "Invalid API key" (#197169). Exact net test growth.
+4

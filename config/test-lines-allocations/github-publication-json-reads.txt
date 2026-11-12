@@ -1,2 +1,0 @@
-48
-# Protect optional lookup, strict preflight failure, and rejection-time authority precedence.

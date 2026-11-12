@@ -14,6 +14,7 @@ import {
   type GitHubIdentityScope,
   type GitHubOAuthRecord,
 } from "../agents/github-oauth-records.js";
+import { refreshNativeGitHubConfiguration } from "../agents/github-read-identity.js";
 import type { GitHubToolAccount } from "../agents/github-tool-account.js";
 import {
   GitHubAccountMismatchError,
@@ -161,6 +162,25 @@ export function configuredOAuthIdentities(config: OpenClawConfig): ConfiguredOAu
     }
     return identities;
   });
+}
+
+/** No native process discovery is needed when every agent selects a managed identity. */
+export async function maintainNativeGitHubConfig(
+  config: OpenClawConfig,
+  nextMaintenanceAtMs: number,
+): Promise<number> {
+  if (
+    config.tools?.github ||
+    !withAgentRosterFactsBatch(config, () =>
+      listAgentIds(config).some(
+        (agentId) => !resolveConfiguredGitHubToolIdentity({ config, agentId, scope: "agent" }),
+      ),
+    )
+  ) {
+    return nextMaintenanceAtMs;
+  }
+  await refreshNativeGitHubConfiguration();
+  return Math.min(nextMaintenanceAtMs, Date.now() + MAINTENANCE_INTERVAL_MS);
 }
 
 export function nextGitHubOAuthMaintenanceAtMs(

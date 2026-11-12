@@ -71,6 +71,7 @@ import {
   EXTRA_LARGE_NODE_TEST_RUNNER,
   TOOLING_CONFIG,
   TOOLING_LARGE_CAPACITY_TEST_FILES,
+  routeBoatNodeTestJobs,
   resolveCompactNodeTestRunner,
   resolveSelectedNodeTestRunner,
 } from "./ci-node-test-capacity.mts";
@@ -152,6 +153,7 @@ export type NodeTestShard = Omit<
   groups?: NodeTestShardGroup[];
   timeoutMinutes?: number;
   planConcurrency?: number;
+  cpuBudget?: number;
   predictedSeconds?: number;
   predictedTestSeconds?: number;
 };
@@ -3146,6 +3148,20 @@ export function createNodeTestShardBundles(options?: NodeTestPlanOptions): NodeT
 export function createNodeTestShardBundles(
   options: NodeTestPlanOptions = {},
 ): NodeTestShard[] | CompactNodeTestShard[] {
+  if (options.runnerBackend === "boat") {
+    const jobs = createNodeTestShardBundles({ ...options, runnerBackend: "hybrid" });
+    const compact = options.compactMode !== undefined || options.compact === true;
+    return routeBoatNodeTestJobs(
+      jobs,
+      compact
+        ? Math.min(
+            COMPACT_NODE_TEST_JOB_CAP,
+            (options.compactNodeJobCap ?? COMPACT_NODE_TEST_JOB_CAP) +
+              jobs.filter((job) => job.requiresDist).length,
+          )
+        : undefined,
+    );
+  }
   const compactMode =
     options.compactMode ?? (options.compact === true ? "pull-request" : undefined);
   if (compactMode !== undefined) {
@@ -4209,6 +4225,13 @@ export function createSelectedNodeTestShardBundles(
       preparedTestPlans?: ReadonlyMap<string, ReturnType<typeof buildVitestRunPlans>>;
     } = {},
 ): CompactNodeTestShard[] | null {
+  if (options.runnerBackend === "boat") {
+    const selected = createSelectedNodeTestShardBundles(targets, {
+      ...options,
+      runnerBackend: "hybrid",
+    });
+    return selected && routeBoatNodeTestJobs(selected, COMPACT_NODE_TEST_JOB_CAP);
+  }
   if (options.runnerBackend === "runson") {
     const selected = createSelectedNodeTestShardBundles(targets, {
       ...options,

@@ -46,6 +46,8 @@ type SettingsRowProps = {
   title: JSX.Element;
   description?: JSX.Element;
   control?: JSX.Element;
+  /** Preserve the control box while an initial read has no accepted value. */
+  controlPending?: boolean;
   carapace?: boolean;
   stacked?: boolean;
   stackedOnNarrow?: boolean;
@@ -252,7 +254,18 @@ export function SettingsRow(props: SettingsRowProps & { role?: "alert" | "status
         carapace={props.carapace}
       />
       <Show when={control() !== undefined && control() !== null && control() !== false}>
-        <div class={["settings-row__control", { "oc-settings-row-control": props.carapace }]}>
+        <div
+          class={[
+            "settings-row__control",
+            {
+              "oc-settings-row-control": props.carapace,
+              "settings-row__control--pending": props.controlPending,
+              skeleton: props.controlPending,
+            },
+          ]}
+          aria-busy={props.controlPending ? "true" : undefined}
+          inert={props.controlPending}
+        >
           {control()}
         </div>
       </Show>
@@ -294,6 +307,7 @@ export function SettingsToggleRow(
     description?: JSX.Element;
     /** Secondary actions beside the switch, such as opening related settings. */
     actions?: JSX.Element;
+    controlClass?: string;
   },
 ) {
   const titleId = nextSettingsRadioName();
@@ -317,7 +331,7 @@ export function SettingsToggleRow(
     >
       {props.icon}
       <SettingsRowText id={titleId} title={props.title} description={props.description} />
-      <div class="settings-row__control">
+      <div class={["settings-row__control", props.controlClass]}>
         {props.actions}
         <Switch
           {...props}

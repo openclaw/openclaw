@@ -9,6 +9,7 @@ import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import { createCacheTrace } from "../../cache-trace.js";
 import { bindCodeModeSessionStore } from "../../code-mode-session-store.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
+import { readGitHubPublicationToolSelection } from "../../github-tool-identity-config.js";
 import { getOpenClawSystemUpdateKind } from "../../internal-runtime-context.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
@@ -25,6 +26,7 @@ import {
   buildSystemPromptRouteKey,
   prepareSessionSystemPrompt,
   prepareSessionToolSurface,
+  prepareSessionPublicationToolListing,
   retireSessionSystemPrompt,
 } from "../session-prompt-state.js";
 import { restoreCacheTtlToolResultProjections } from "../tool-result-truncation.js";
@@ -97,12 +99,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     sandboxSessionKey,
     sessionAgentId,
   } = input.setup;
-  const {
-    catalogToolHookContext,
-    deferredDirectoryToolsCallable,
-    effectiveTools,
-    toolSearchRunPlan,
-  } = input.toolCatalog;
+  const { catalogToolHookContext, effectiveTools, toolSearchRunPlan } = input.toolCatalog;
   const { clientTools, uncompactedEffectiveTools } = input.bundleTools;
   const {
     codeModeControlsEnabledForRun,
@@ -112,8 +109,8 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     toolSearchCatalogRef,
     toolSearchRuntimeConfig,
   } = toolBase;
-  const { systemPromptReport, systemPromptText } = input.systemPrompt;
-  const effectiveToolCount = effectiveTools.length;
+  const { systemPromptReport } = input.systemPrompt;
+  let systemPromptText = input.systemPrompt.systemPromptText;
   const sessionPreparation = {
     attempt,
     assertCurrent: () => {
@@ -136,6 +133,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
         runAbortSignal,
         onSessionManagerCreated: (manager) => {
           resources.sessionManager = manager;
+          resources.ownsSessionManager = manager !== attempt.sessionManager;
         },
         replayAllowedToolNames: toolSearchRunPlan.replayAllowedToolNames,
         resolveActiveContextEnginePluginId: input.resolveActiveContextEnginePluginId,
@@ -187,6 +185,37 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   ) {
     await retireSystemPromptUpdates();
   }
+  const toolPolicyDigest = sha256Hex(
+    stableStringify([
+      attempt.config?.tools,
+      attempt.config?.agents?.entries?.[sessionAgentId]?.tools,
+      attempt.config?.plugins,
+      attempt.config?.desktop,
+      readGitHubPublicationToolSelection(attempt.config ?? {}),
+    ]),
+  );
+  if (usesSystemPromptSeries) {
+    const changed = await input.toolCatalog.installToolListingPin((tools, refresh) =>
+      prepareSessionPublicationToolListing({
+        state: sessionPromptState,
+        routeKey: promptRouteKey,
+        toolPolicy: toolPolicyDigest,
+        getEntries: () => sessionManager[sessionManagerReadTranscriptBranch](),
+        historyBoundaryCount: sessionManager.getBoundaryCount(),
+        tools,
+        refresh,
+      }),
+    );
+    if (changed) {
+      const prepare = input.systemPrompt.prepareToolPrompt;
+      if (!prepare) {
+        throw new Error("Restoring a session tool listing requires prompt preparation support.");
+      }
+      const refresh = await prepare(effectiveTools);
+      systemPromptText = refresh(systemPromptText);
+    }
+  }
+  const effectiveToolCount = effectiveTools.length;
   let freshSystemPrompt = systemPromptText;
   let projectedSystemPrompt: string | undefined;
   const prepareSystemPromptUpdate =
@@ -223,14 +252,6 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
 
   // Every turn of the session sends the pinned tool definitions, on any route. A tool
   // policy change starts a new pin, so configured removals leave the provider request.
-  const toolPolicyDigest = sha256Hex(
-    stableStringify([
-      attempt.config?.tools,
-      attempt.config?.agents?.entries?.[sessionAgentId]?.tools,
-      attempt.config?.plugins,
-      attempt.config?.desktop,
-    ]),
-  );
   const pinTools = usesSystemPromptSeries
     ? (tools: AnyAgentTool[]) => {
         const pending = sessionPromptState.pendingToolSurface;
@@ -270,7 +291,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
               catalogToolHookContext,
               clientTools,
               codeModeControlsEnabledForRun,
-              deferredDirectoryToolsCallable,
+              deferredDirectoryToolsCallable: input.toolCatalog.deferredDirectoryToolsCallable,
               effectiveTools,
               pinTools,
               replaySafetyOptions,

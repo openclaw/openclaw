@@ -49,6 +49,14 @@ const runtimeOnlyUnitFiles = new Set([
   "src/commands/doctor-plugin-package-consent.test.ts",
   "src/config/io.load-async.test.ts",
   "src/cron/session-run.session-model-strictness.integration.test.ts",
+  "src/flows/doctor-health.managed-admission.test.ts",
+  "src/flows/doctor-health.managed-approvals.test.ts",
+  "src/flows/doctor-health.managed-settlement.test.ts",
+  "src/flows/doctor-health.migration-refusal.test.ts",
+  "src/flows/doctor-health.nocow.test.ts",
+  "src/flows/doctor-health.plugin-load.test.ts",
+  "src/flows/doctor-health.readonly-config.test.ts",
+  "src/flows/doctor-health.readonly-filesystem.test.ts",
   "src/flows/doctor-health.update-schema.test.ts",
   "src/gateway/client-callsites.guard.test.ts",
   "src/gateway/server-methods/session-catalog-privacy.test.ts",
@@ -102,11 +110,16 @@ const toolingOnlyUnitFiles = new Set([
   "test/extension-test-boundary.test.ts",
   "test/plugin-extension-import-boundary.test.ts",
   "test/scripts/vitest-prebuilt-ai.test.ts",
+  "test/scripts/check-database-worker-ratchet.test.ts",
   "test/scripts/ci-changed-build-selection.test.ts",
+  "test/scripts/ci-changed-node-test-plan.config-fallback.test.ts",
+  "test/scripts/ci-changed-node-test-plan.dependency-hubs.test.ts",
   "test/scripts/ci-changed-node-test-plan.integration.test.ts",
   "test/scripts/ci-workflow-cost.test.ts",
   "test/scripts/ci-ui-e2e-selection.test.ts",
+  "test/scripts/database-worker-compat.test.ts",
   "test/scripts/eager-import-closure.test.ts",
+  "test/scripts/personal-credential-writer-guard.test.ts",
   "test/scripts/pr-wrapper-source-closure.test.ts",
   "test/scripts/update-restart-module-outcome.test.ts",
   "test/scripts/vitest-isolated.test.ts",
@@ -240,6 +253,7 @@ export function shouldUseRuntimeOnlyVitestWorkers(
       config === "test/vitest/vitest.plugins.config.ts" ||
       config === "test/vitest/vitest.tooling.config.ts" ||
       config === "test/vitest/vitest.tooling-isolated.config.ts" ||
+      config === "test/vitest/vitest.unit.config.ts" ||
       config === "test/vitest/vitest.unit-fast.config.ts" ||
       config === "test/vitest/vitest.unit-fast-isolated.config.ts" ||
       config === "test/vitest/vitest.gateway-client.config.ts" ||
@@ -295,6 +309,9 @@ export function shouldPrepareVitestCoreWorkers(
   }
   const configs = [config];
   const workers = [
+    ...(includesRuntimeConfig(configs, "test/vitest/vitest.unit-fast.config.ts")
+      ? ["src/agents/sessions/windows-git-bash-path.test.ts"]
+      : []),
     ...(includesRuntimeConfig(configs, "test/vitest/vitest.infra.config.ts")
       ? databaseWorkerCoreTestFiles
       : []),

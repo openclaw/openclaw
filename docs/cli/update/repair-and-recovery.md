@@ -467,9 +467,11 @@ checkout before settling that recovery. A changed link or occupied path keeps
 recovery intact; this path does not reclaim cancelled update custody through
 the link.
 
-For private retained package trees, recovery ignores widened group/other permission
-bits while verifying the package, then restores owner-only access and reports one
-warning. This includes POSIX ACL access masks introduced by recursive `setfacl`.
+For retained package contents, recovery ignores group/other permission drift
+while verifying the package. It clears group/other write access, including
+POSIX ACL write masks, but preserves read/execute access so a non-root service
+can still run a root-owned global npm installation after rollback. Private
+activation anchors, controls, helpers, and journals remain owner-only.
 File contents, ownership, identity, owner permissions, and symlink targets must
 still match. If the filesystem prevents tightening permissions, recovery warns
 and continues with the verified package. Older fingerprints that included public

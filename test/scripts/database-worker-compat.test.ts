@@ -806,9 +806,14 @@ export function ${first}() { return read(); }`,
       "graph-classification",
       "close",
     ]);
-    expect(scan("readKernel(); missing(() => readKernel());").operations.has(kernelFile)).toBe(
+    expect(scan("readKernel(); missing(() => ({ readKernel }));").operations.has(kernelFile)).toBe(
       false,
     );
+    expect(
+      [...counts.keys()].some(
+        (node) => node.parent && ts.isShorthandPropertyAssignment(node.parent),
+      ),
+    ).toBe(false);
     expect(
       [...counts.keys()].filter((node) => node.getText() === "readKernel").length,
     ).toBeGreaterThan(1);
@@ -820,7 +825,7 @@ export function ${first}() { return read(); }`,
         [legacyFile, legacy],
         ...consumers.map((file): [string, string] => [
           file,
-          `import { ${first} } from './plugin-sdk/sqlite-runtime-legacy.js'; ${first}();`,
+          `import { ${first} } from './plugin-sdk/sqlite-runtime-legacy.js'; ${first}(); missing.${first}();`,
         ]),
       ]),
       undefined,
@@ -840,7 +845,14 @@ export function ${first}() { return read(); }`,
     ]);
     expect(batches.every((nodes) => nodes.length <= 256)).toBe(true);
     expect(
-      batches.some((nodes) => new Set(nodes.map((node) => node.getSourceFile().fileName)).size > 1),
+      batches.some(
+        (nodes) =>
+          new Set(
+            nodes
+              .filter(ts.isPropertyAccessExpression)
+              .map((node) => node.getSourceFile().fileName),
+          ).size > 1,
+      ),
     ).toBe(true);
     expect([...counts.values()]).toEqual([...counts.values()].map(() => 1));
   } finally {

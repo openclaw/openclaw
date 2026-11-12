@@ -1,2 +1,0 @@
-# Wait for persisted Talk titles instead of control-request settlement.
-2
