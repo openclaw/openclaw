@@ -51,7 +51,7 @@ function ApprovalRow(props: {
               device: props.request.label,
               claw: props.claw,
               surface:
-                [...tools().caps, ...tools().commands].join(", ") ||
+                [...new Set([...tools().caps, ...tools().commands])].join(", ") ||
                 t("openclawId.approvalNoTools"),
             })}
           </p>
