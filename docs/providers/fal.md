@@ -273,6 +273,10 @@ The bundled `fal` video-generation provider defaults to
 The bundled `fal` plugin also registers a music-generation provider for the
 shared `music_generate` tool.
 
+Generated audio downloads, including redirects, use public-network destination
+checks. Custom relays must return public audio URLs; private or internal asset
+URLs are rejected.
+
 | Capability    | Value                                                                                                                    |
 | ------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | Default model | `fal/fal-ai/minimax-music/v2.6`                                                                                          |
