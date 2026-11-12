@@ -64,6 +64,7 @@ extension OpenClawChatViewModel {
                 else { return }
                 self.agentCatalog = catalog
                 self.isLoadingAgents = false
+                self.syncComposerDraftKey()
             }
         } catch {
             guard generation == self.agentCatalogGeneration,
