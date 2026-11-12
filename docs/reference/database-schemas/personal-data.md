@@ -127,7 +127,10 @@ is known; text typed earlier is appended to the stored draft when it loads, and
 until then it stays in memory, including across session switches.
 Text saves wait for a short typing pause and never rewrite attachment blobs;
 iOS saves immediately when the app moves to the background and macOS before it
-quits. Attachments are written as they are added or removed. Sending clears the draft:
+quits. Attachments are written as they are added or removed. If a save fails,
+the text stays in memory, including across session switches, and the next save
+retries it; an attachment that could not be saved keeps the chat from switching
+until it is saved, sent or removed. Sending clears the draft:
 a queued send clears it in the same transaction that queues the message, and
 a live send clears it immediately. Two windows editing one session's draft
 keep the last write.

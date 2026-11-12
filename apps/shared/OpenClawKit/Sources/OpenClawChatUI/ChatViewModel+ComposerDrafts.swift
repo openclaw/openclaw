@@ -2,8 +2,8 @@ import Foundation
 
 /// Durable drafts: the client-state store owns each session's draft, and
 /// `input`/`attachments` buffer only the visible key. Text with no stored
-/// draft yet (no store, key unresolved, load pending or unreadable) stays in
-/// `draftsBySession` for this launch.
+/// draft (no store, key unresolved, load pending or unreadable, or a save
+/// that failed) stays in `draftsBySession` for this launch.
 extension OpenClawChatViewModel {
     static let composerDraftSaveDelay: Duration = .milliseconds(300)
 
@@ -14,7 +14,11 @@ extension OpenClawChatViewModel {
         /// A send captured before its draft loaded owns that text until it settles.
         var send: Task<Void, Never>?
         var savedRevision: UInt64?
-        var attachmentPositions: [OpenClawPendingAttachment.ID: Int] = [:]
+        /// Switch-away saves still in flight or failed; their text stays in `draftsBySession`.
+        var unsavedDraftRevisions: [String: UInt64] = [:]
+        /// Restored text newer than the stored row, which it replaces when the load lands.
+        var replacesStoredDraftKey: String?
+        var insertingAttachmentIDs: Set<OpenClawPendingAttachment.ID> = []
         var isApplying = false
     }
 
@@ -55,17 +59,29 @@ extension OpenClawChatViewModel {
               key != self.composerDraftKey, key != self.composerDraftSync.loadingKey
         else { return }
         if self.composerDraftKey != nil {
+            // An unsaved attachment keeps the current draft until it is stored or removed.
+            guard !self.isAttachmentOwnerPinned else { return }
             self.unbindComposerDraft()
         }
         self.loadComposerDraft(key: key)
     }
 
-    /// Writes the visible draft to its key and empties the composer.
+    /// Starts saving the visible draft to its key and empties the composer.
+    /// Until that save lands, this launch keeps the text as if no draft were stored.
     func unbindComposerDraft() {
-        self.flushComposerDraftText()
+        if let pending = self.saveVisibleComposerDraft() {
+            if pending.text.isEmpty {
+                self.draftsBySession.removeValue(forKey: pending.key)
+            } else {
+                self.draftsBySession[pending.key] = pending.text
+            }
+            self.composerDraftSync.unsavedDraftRevisions[pending.key] = pending.revision
+        }
+        self.composerDraftSync.saveTimer?.cancel()
         self.cancelComposerDraftLoad()
         self.composerDraftSync.savedRevision = nil
-        self.composerDraftSync.attachmentPositions = [:]
+        self.composerDraftAttachmentPositions = [:]
+        self.composerDraftSync.insertingAttachmentIDs = []
         self.composerDraftKey = nil
         self.applyComposerDraft(text: "", attachments: [])
     }
@@ -76,21 +92,41 @@ extension OpenClawChatViewModel {
         self.composerDraftSync.loadingKey = nil
     }
 
-    /// Saves now instead of after the typing pause, e.g. when iOS backgrounds the app.
+    /// Saves now instead of after the typing pause, e.g. when iOS backgrounds
+    /// the app, and retries attachments whose earlier save failed.
     public func flushComposerDraftText() {
+        self.saveVisibleComposerDraft()
+        guard let key = self.composerDraftKey, !self.isTransportDetached else { return }
+        for attachment in self.attachments where self.composerDraftAttachmentPositions[attachment.id] == nil {
+            self.persistComposerDraftAttachment(attachment, key: key)
+        }
+    }
+
+    /// Nil when the stored text is already current. A failed save leaves the
+    /// saved revision behind, so the next flush, background or quit retries it.
+    @discardableResult
+    private func saveVisibleComposerDraft() -> (key: String, text: String, revision: UInt64)? {
         self.composerDraftSync.saveTimer?.cancel()
         self.composerDraftSync.saveTimer = nil
         guard let store = self.composerDraftStore, let key = self.composerDraftKey, !self.isTransportDetached
-        else { return }
+        else { return nil }
         let revision = self.composerRevisionsBySession[key, default: 0]
-        guard self.composerDraftSync.savedRevision != revision else { return }
-        self.composerDraftSync.savedRevision = revision
+        guard self.composerDraftSync.savedRevision != revision else { return nil }
         // The draft beneath recall mode, never a recalled history entry.
         let text = (self.inputHistoriesBySession[key] ?? ChatInputHistory())
             .draftForSessionSwitch(currentDraft: self.input)
-        self.chainComposerDraftWrite {
-            await store.saveComposerDraftText(key: key, text: text, revision: revision)
+        self.chainComposerDraftWrite { [weak self] in
+            guard await store.saveComposerDraftText(key: key, text: text, revision: revision), let self
+            else { return }
+            if self.composerDraftKey == key {
+                self.composerDraftSync.savedRevision = revision
+            }
+            if self.composerDraftSync.unsavedDraftRevisions[key] == revision {
+                self.composerDraftSync.unsavedDraftRevisions[key] = nil
+                self.draftsBySession.removeValue(forKey: key)
+            }
         }
+        return (key, text, revision)
     }
 
     /// Saves now and waits until the write lands, e.g. before macOS quits.
@@ -123,14 +159,14 @@ extension OpenClawChatViewModel {
         return OpenClawChatComposerDraftConsumption(
             draftKey: key,
             revision: revision,
-            attachmentPositions: attachments.compactMap { self.composerDraftSync.attachmentPositions[$0.id] })
+            attachmentPositions: attachments.compactMap { self.composerDraftAttachmentPositions[$0.id] })
     }
 
     /// The enqueue transaction already removed the attachments it consumed.
     func noteComposerDraftConsumed(_ consumption: OpenClawChatComposerDraftConsumption) {
         guard self.composerDraftKey == consumption.draftKey else { return }
         let consumed = Set(consumption.attachmentPositions)
-        self.composerDraftSync.attachmentPositions = self.composerDraftSync.attachmentPositions
+        self.composerDraftAttachmentPositions = self.composerDraftAttachmentPositions
             .filter { !consumed.contains($0.value) }
     }
 
@@ -140,7 +176,7 @@ extension OpenClawChatViewModel {
         else { return }
         let currentIDs = Set(self.attachments.map(\.id))
         for attachment in previous where !currentIDs.contains(attachment.id) {
-            guard let position = self.composerDraftSync.attachmentPositions.removeValue(forKey: attachment.id)
+            guard let position = self.composerDraftAttachmentPositions.removeValue(forKey: attachment.id)
             else { continue }
             self.chainComposerDraftWrite {
                 await store.deleteComposerDraftAttachment(key: key, position: position)
@@ -153,7 +189,9 @@ extension OpenClawChatViewModel {
     }
 
     private func persistComposerDraftAttachment(_ attachment: OpenClawPendingAttachment, key: String) {
-        guard let store = self.composerDraftStore else { return }
+        guard let store = self.composerDraftStore,
+              self.composerDraftSync.insertingAttachmentIDs.insert(attachment.id).inserted
+        else { return }
         let stored = OpenClawChatOutboxAttachment(
             type: attachment.type,
             mimeType: attachment.mimeType,
@@ -166,10 +204,12 @@ extension OpenClawChatViewModel {
             let result = await store.insertComposerDraftAttachment(key: key, attachment: stored, revision: revision)
             // After a switch the row stays with the draft it was added to.
             guard let self, self.composerDraftKey == key else { return }
+            self.composerDraftSync.insertingAttachmentIDs.remove(id)
             switch result {
             case let .inserted(position):
                 if self.attachments.contains(where: { $0.id == id }) {
-                    self.composerDraftSync.attachmentPositions[id] = position
+                    self.composerDraftAttachmentPositions[id] = position
+                    self.applyDeferredExternalStateIfReady()
                 } else {
                     await store.deleteComposerDraftAttachment(key: key, position: position)
                 }
@@ -177,8 +217,12 @@ extension OpenClawChatViewModel {
                 self.attachments.removeAll { $0.id == id }
                 self.errorText = String(format: String(localized: "Too large to send: %@"), stored.fileName)
             case .unavailable:
-                // Storage errors are logged by the store; the attachment stays for this launch.
-                break
+                // Without a stored position the attachment pins this chat; the next flush retries it.
+                guard self.attachments.contains(where: { $0.id == id }) else { return }
+                self.errorText = String(
+                    format: String(
+                        localized: "Could not save %@ with this draft. Send or remove it before switching chats."),
+                    stored.fileName)
             }
         }
     }
@@ -207,13 +251,20 @@ extension OpenClawChatViewModel {
     }
 
     /// Input typed (or seeded by the presenter) before the load landed is
-    /// appended to the stored draft, never overwritten by it.
+    /// appended to the stored draft, never overwritten by it. Text restored
+    /// from a switch-away save is newer than the row, so it replaces the row.
     private func applyLoadedComposerDraft(_ draft: OpenClawChatComposerDraft, key: String) {
         var history = self.inputHistoriesBySession[key] ?? ChatInputHistory()
         let typed = history.draftForSessionSwitch(currentDraft: self.input)
-        let text = typed.isEmpty || typed == draft.text
-            ? draft.text
-            : draft.text.isEmpty ? typed : draft.text + "\n\n" + typed
+        let replacesStoredText = self.composerDraftSync.replacesStoredDraftKey == key
+        self.composerDraftSync.replacesStoredDraftKey = nil
+        let text = if replacesStoredText {
+            typed
+        } else if typed.isEmpty || typed == draft.text {
+            draft.text
+        } else {
+            draft.text.isEmpty ? typed : draft.text + "\n\n" + typed
+        }
         // Seeding from the row keeps a detached or recreated model's late
         // clear from deleting text saved after it.
         var revision = max(self.composerRevisionsBySession[key, default: 0], draft.revision)
@@ -235,7 +286,7 @@ extension OpenClawChatViewModel {
             return attachment
         }
         let typedAttachments = self.attachments
-        self.composerDraftSync.attachmentPositions = positions
+        self.composerDraftAttachmentPositions = positions
         self.composerDraftKey = key
         if text != typed {
             history.resetNavigation()

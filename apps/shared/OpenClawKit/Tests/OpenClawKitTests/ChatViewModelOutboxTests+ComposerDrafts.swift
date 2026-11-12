@@ -32,6 +32,18 @@ private func saveDraftThroughComposer(_ text: String, in store: OpenClawChatSQLi
     await settleComposerDraft(writer)
 }
 
+/// SQLite rejects inserts into `table` on the store's own connection until the trigger is dropped.
+private func setDraftWritesFail(_ fail: Bool, table: String, in databases: OpenClawClientDatabases) async throws {
+    try await databases.stateQueue.write { db in
+        try db.execute(sql: fail
+            ? """
+            CREATE TEMP TRIGGER fail_\(table) BEFORE INSERT ON main.\(table)
+            BEGIN SELECT RAISE(ABORT, 'draft write failed'); END
+            """
+            : "DROP TRIGGER temp.fail_\(table)")
+    }
+}
+
 extension ChatViewModelOutboxTests {
     @Test @MainActor func `draft and attachment survive a rebuilt view model over the same database`() async throws {
         let (store, databases, databaseDirectory) = try makeOutboxStore()
@@ -212,5 +224,71 @@ extension ChatViewModelOutboxTests {
         await settleComposerDraft(vm)
         #expect(vm.input == "caption for main")
         #expect(vm.attachments.map(\.fileName) == ["main.png"])
+    }
+
+    @Test @MainActor func `a failed text save is retried by the next flush`() async throws {
+        let (store, databases, databaseDirectory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
+        let vm = await composerDraftModel(store)
+        defer { vm.detachTransport() }
+        await settleComposerDraft(vm)
+        try await setDraftWritesFail(true, table: "composer_drafts", in: databases)
+        vm.input = "typed while storage failed"
+        vm.flushComposerDraftText()
+        await settleComposerDraft(vm)
+        #expect(await store.loadComposerDraft(key: "agent:main:main") == .empty)
+
+        try await setDraftWritesFail(false, table: "composer_drafts", in: databases)
+        vm.flushComposerDraftText()
+        await settleComposerDraft(vm)
+        #expect(await store.loadComposerDraft(key: "agent:main:main")?.text == "typed while storage failed")
+    }
+
+    @Test @MainActor func `a failed text save survives a switch away and back`() async throws {
+        let (store, databases, databaseDirectory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
+        let vm = await composerDraftModel(store)
+        defer { vm.detachTransport() }
+        await settleComposerDraft(vm)
+        vm.input = "first version"
+        vm.flushComposerDraftText()
+        await settleComposerDraft(vm)
+        try await setDraftWritesFail(true, table: "composer_drafts", in: databases)
+        vm.input = "second version"
+
+        vm.switchSession(to: "agent:main:other")
+        await settleComposerDraft(vm)
+        #expect(vm.input.isEmpty)
+        try await setDraftWritesFail(false, table: "composer_drafts", in: databases)
+        vm.switchSession(to: "main")
+        await settleComposerDraft(vm)
+
+        // Newer than the stored row, so it replaces it instead of being appended.
+        #expect(vm.input == "second version")
+        #expect(await store.loadComposerDraft(key: "agent:main:main")?.text == "second version")
+    }
+
+    @Test @MainActor func `a failed attachment save keeps the attachment and blocks a switch`() async throws {
+        let (store, databases, databaseDirectory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
+        let vm = await composerDraftModel(store)
+        defer { vm.detachTransport() }
+        await settleComposerDraft(vm)
+        try await setDraftWritesFail(true, table: "composer_draft_attachments", in: databases)
+        vm.attachments.append(OpenClawPendingAttachment(
+            url: nil, data: Data([3]), fileName: "photo.png", mimeType: "image/png", preview: nil))
+        await settleComposerDraft(vm)
+        #expect(vm.errorText == "Could not save photo.png with this draft. Send or remove it before switching chats.")
+
+        vm.switchSession(to: "agent:main:other")
+        #expect(vm.sessionKey == "main")
+        #expect(vm.attachments.map(\.fileName) == ["photo.png"])
+
+        try await setDraftWritesFail(false, table: "composer_draft_attachments", in: databases)
+        vm.flushComposerDraftText()
+        await settleComposerDraft(vm)
+        vm.switchSession(to: "agent:main:other")
+        #expect(vm.sessionKey == "agent:main:other")
+        #expect(await store.loadComposerDraft(key: "agent:main:main")?.attachments.count == 1)
     }
 }

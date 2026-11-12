@@ -112,12 +112,12 @@ extension OpenClawChatViewModel {
     }
 
     /// True while replacing this model could move an attachment across chats.
-    /// Attachments in a loaded durable draft belong to that session's draft instead.
+    /// An attachment saved in its session's durable draft belongs to that draft instead.
     public var isAttachmentOwnerPinned: Bool {
         attachmentOwnerIsActive() ||
             isSendingAttachmentDraft ||
             attachmentStagingCount > 0 ||
-            (!attachments.isEmpty && composerDraftKey == nil)
+            attachments.contains { composerDraftAttachmentPositions[$0.id] == nil }
     }
 
     func canCreateSessionForImmediateSwitch() -> Bool {

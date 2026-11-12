@@ -333,6 +333,14 @@ extension OpenClawChatViewModel {
         } else {
             // Text with no stored draft yet stays in memory for this launch.
             self.cancelComposerDraftLoad()
+            if self.composerDraftSync.replacesStoredDraftKey == currentKey {
+                // Restored after a failed save and not yet stored; it still replaces the row.
+                self.composerDraftSync.replacesStoredDraftKey = nil
+                self.composerDraftSync.unsavedDraftRevisions[currentKey] = self.composerRevisionsBySession[
+                    currentKey,
+                    default: 0,
+                ]
+            }
             let currentHistory = self.inputHistoriesBySession[currentKey] ?? ChatInputHistory()
             let draft = currentHistory.draftForSessionSwitch(currentDraft: self.input)
             if draft.isEmpty {
@@ -357,7 +365,11 @@ extension OpenClawChatViewModel {
             self.applyRecalledInput(self.draftsBySession[key] ?? "", advancesRevision: false)
             return
         }
-        // The load gate appends text kept in memory before this key had a stored draft.
+        // The load gate appends text kept in memory before this key had a stored
+        // draft; text from an unsaved switch-away replaces the stored row.
+        if self.composerDraftSync.unsavedDraftRevisions.removeValue(forKey: key) != nil {
+            self.composerDraftSync.replacesStoredDraftKey = key
+        }
         self.applyRecalledInput(self.draftsBySession.removeValue(forKey: key) ?? "", advancesRevision: false)
         self.syncComposerDraftKey()
     }

@@ -120,11 +120,12 @@ extension OpenClawChatViewModel {
         guard !self.matchesWebConversationContext(context) else { return false }
         // Web-originated routes report their destination before native selection restores its draft.
         let key = self.composerSessionKey(for: context.sessionKey, agentID: context.agentId)
+        // A switch-away save that lands releases its in-memory copy.
+        await self.composerDraftWrites?.value
         if self.draftsBySession[key]?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
             return true
         }
         guard let store = self.composerDraftStore else { return false }
-        await self.composerDraftWrites?.value
         guard let draft = await store.loadComposerDraft(key: key) else { return true }
         return !draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draft.attachments.isEmpty
     }

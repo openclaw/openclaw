@@ -247,6 +247,8 @@ public final class OpenClawChatViewModel {
     let composerDraftStore: OpenClawChatSQLiteTranscriptCache?
     /// Key of the stored draft now buffered in `input`/`attachments`; nil while unresolved or loading.
     var composerDraftKey: String?
+    /// Stored position of each composer attachment; one without a position still pins this model.
+    var composerDraftAttachmentPositions: [OpenClawPendingAttachment.ID: Int] = [:]
     @ObservationIgnored
     var composerDraftSync = ComposerDraftSync()
     @ObservationIgnored

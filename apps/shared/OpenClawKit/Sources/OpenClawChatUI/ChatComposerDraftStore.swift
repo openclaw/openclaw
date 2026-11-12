@@ -104,7 +104,9 @@ extension OpenClawChatSQLiteTranscriptCache {
 
     /// Touches `composer_drafts` only; attachment blobs are never rewritten.
     /// Two composers on one key (macOS windows) are last writer wins.
-    func saveComposerDraftText(key: String, text: String, revision: UInt64) async {
+    /// False means the row was not written, so the caller still owns the text.
+    @discardableResult
+    func saveComposerDraftText(key: String, text: String, revision: UInt64) async -> Bool {
         await self.writeComposerDraft("text save") { db, gatewayID in
             try db.execute(
                 sql: """
@@ -223,17 +225,20 @@ extension OpenClawChatSQLiteTranscriptCache {
         try self.deleteEmptyComposerDraft(db, gatewayID: gatewayID, key: consumption.draftKey)
     }
 
+    @discardableResult
     private func writeComposerDraft(
         _ operation: StaticString,
-        _ write: @escaping @Sendable (Database, String) throws -> Void) async
+        _ write: @escaping @Sendable (Database, String) throws -> Void) async -> Bool
     {
-        guard !self.isRetired else { return }
+        guard !self.isRetired else { return false }
         let gatewayID = self.gatewayID
         do {
             try await self.databases.stateQueue.write { db in try write(db, gatewayID) }
+            return true
         } catch {
             draftLogger.error(
                 "composer draft \(operation, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+            return false
         }
     }
 
