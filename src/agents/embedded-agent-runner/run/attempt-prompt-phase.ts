@@ -5,7 +5,6 @@ import {
   setAgentRunAttemptTerminalFailure,
   type AgentRunAttemptFailureSource,
 } from "../../agent-run-terminal-outcome.js";
-import { SAFETY_MARGIN } from "../../compaction-planning.js";
 import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
 import {
   buildAgentRunBlockedUserMessage,
@@ -20,7 +19,10 @@ import {
   createCompactionRequestBudget,
   type CompactionRequestBudget,
 } from "../../sessions/compaction/request-budget.js";
-import { createFixedRequestTokenEstimator } from "../../sessions/context-token-pressure.js";
+import {
+  SAFETY_MARGIN,
+  createFixedRequestTokenEstimator,
+} from "../../sessions/context-token-pressure.js";
 import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
 import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
 import { log } from "../logger.js";

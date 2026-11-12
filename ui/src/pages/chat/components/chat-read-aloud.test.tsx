@@ -129,9 +129,14 @@ it("keeps native transcript speech with its current application context", async 
     transcript,
     messages: [{ role: "assistant", content: speechText }],
   };
+  // Exercise cold transcript admission after its synchronous preparation budget expires.
+  let clock = 0;
+  const now = vi.spyOn(performance, "now").mockImplementation(() => (clock += 20));
   const container = renderChatView(props);
+  now.mockRestore();
   const action = (name: string) =>
     container.querySelector<HTMLButtonElement>(`button[aria-label="${name}"]`);
+  await waitForSolid(() => expect(action("Read aloud")).not.toBeNull());
   const thread = container.querySelector(".chat-thread-inner");
   const button = action("Read aloud")!;
   button.click();

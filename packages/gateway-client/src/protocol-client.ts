@@ -281,7 +281,7 @@ export class GatewayProtocolClient<TPlan> {
           this.invoke("close", () => this.opts.onClose?.(context, decision));
           // A close callback can reconnect synchronously and already own the next socket or retry.
           if (decision.retry && !this.stopped && !this.socket && !this.reconnectSignal) {
-            const error = context.connectFailure?.error;
+            const error = decision.pendingError ?? context.connectFailure?.error;
             // Apply server timing only after adapter policy admits retry; a hint
             // must never turn terminal authentication failures into reconnects.
             const retryAfterMs =

@@ -67,7 +67,6 @@ suite.define(() =>
 
       await ui.button(page, "Filters").click();
       const filters = page.locator(".sessions-filter-popover:popover-open");
-      await filters.locator(".header-search__toggle").click();
       const rosterFilter = filters.getByRole("searchbox");
       await rosterFilter.fill("Research");
       await gateway.waitForRequest("sessions.list", { match: { search: "Research" } });
@@ -84,7 +83,6 @@ suite.define(() =>
       await captureUiProof(page, "01-session-filter.png");
       await rosterFilter.fill("");
       await mainRow.waitFor({ state: "visible" });
-      await page.keyboard.press("Escape");
       await page.keyboard.press("Escape");
 
       const transcriptSearch = page.getByRole("search", { name: "Search transcripts" });

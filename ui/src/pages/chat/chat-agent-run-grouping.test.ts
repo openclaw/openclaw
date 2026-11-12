@@ -76,7 +76,7 @@ function requireFrame(
 }
 
 describe("coalesceAgentRunFrames", () => {
-  it.each(["interrupted", "silent-terminal"] as const)(
+  it.each(["interrupted", "yielded", "silent-terminal"] as const)(
     "classifies a persisted tool-use tail as %s without inventing a final answer",
     (state) => {
       const runId = "run-tail";
@@ -93,7 +93,7 @@ describe("coalesceAgentRunFrames", () => {
               ...commentary.messages.map(({ message }) => message),
               ...(state === "silent-terminal" ? [terminal] : []),
             ],
-            activeRunId: null,
+            session: { lastRunId: runId, abortedLastRun: state === "interrupted" },
           },
         )[1],
       );

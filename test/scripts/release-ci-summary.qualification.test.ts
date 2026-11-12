@@ -213,7 +213,10 @@ describe("candidate-owned publish consumer chain", () => {
       f.parent.conclusion = parentConclusion;
       const client = {
         ...f.client,
-        getRunView: (id: string) => ({ ...f.client.getRunView(id), conclusion: parentConclusion }),
+        getRunView: async (id: string) => ({
+          ...(await f.client.getRunView(id)),
+          conclusion: parentConclusion,
+        }),
         getRun: async (id: string) => {
           const run = await f.client.getRun(id);
           return id === planned.runId ? { ...run, conclusion: "failure" } : run;
@@ -629,6 +632,15 @@ describe("candidate-owned publish consumer chain", () => {
       },
       {
         ...f.client,
+        verifyRetainedPublicationArtifacts() {
+          throw new Error("Qualification fixture does not recover publication artifacts");
+        },
+        downloadArtifactArchive() {
+          throw new Error("Qualification fixture does not download artifact archives");
+        },
+        getRunArtifacts() {
+          throw new Error("Qualification fixture does not list run artifacts");
+        },
         loadManifest: () => {
           manifestReads += 1;
           return f.client.loadManifest();
@@ -697,6 +709,15 @@ describe("candidate-owned publish consumer chain", () => {
         },
         {
           ...f.client,
+          verifyRetainedPublicationArtifacts() {
+            throw new Error("Qualification fixture does not recover publication artifacts");
+          },
+          downloadArtifactArchive() {
+            throw new Error("Qualification fixture does not download artifact archives");
+          },
+          getRunArtifacts() {
+            throw new Error("Qualification fixture does not list run artifacts");
+          },
           loadManifest: () => {
             manifestReads += 1;
             return f.client.loadManifest();

@@ -1,0 +1,2 @@
+# PostgreSQL conformance regression proving a resumed database port stays refused when owner admission rejects its verified copy (#194518).
+49

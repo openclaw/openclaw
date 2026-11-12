@@ -53,6 +53,21 @@ backup.
 
 ## Update implementation contract
 
+Lazy SQLite schema catalogs load through the retained updater's module loader.
+An updater that first needs a catalog after Git activation therefore reads its
+own generation, not the candidate's replacement JSON. This fix must be present
+in the running updater; a newer candidate cannot repair an older updater's
+filesystem-based loader. If an older Git updater fails with a catalog `tables`
+TypeError after activation, preserve its recovery artifacts and use the
+[manual source update procedure](/install/updating/update-methods#source-checkout-servers-reference-script)
+to install a corrected updater before retrying.
+
+After candidate Doctor migrates runtime-pin metadata, activation reads that
+completed intent before rebinding the managed Gateway. Missing metadata at the
+start of an update no longer forces a restart of the old installation against
+newly migrated state. Existing native definition and runtime-intent checks still
+protect operator changes. This requires the installed updater to contain the fix.
+
 Private plugin projection materializes eligible external data-suffixed file links
 at their logical in-package filenames before recording the final code-link
 inventory. Both the alias and its inventoried canonical target must have one of
@@ -801,6 +816,15 @@ Before Doctor admits the installed updater's database capture, plugin rollback
 journal discovery preserves the original SQLite WAL/SHM family. Older updaters
 can then verify their physical fingerprints without a false source-change refusal.
 
+Plugin rollback reservation acquires its lease against the existing shared-state
+schema, then database capture records the settled reservation writes. Credential
+migration remains owned by candidate Doctor's backed-up maintenance.
+Starting or restarting an unchanged service does not require migrating runtime-pin
+metadata; definition rewrites still preserve existing runtime intent.
+Failed split-install activation also keeps recovery results valid when restoring
+the original service is unverified. These fixes must be in the installed updater;
+downloading a candidate cannot change the older driver's reservation or reporting.
+
 After Doctor backs up and admits shared-state maintenance reads, native Codex
 assignment detection reads one database transaction snapshot. Lease renewals and
 other maintenance writes can continue without requiring the database files to
@@ -1207,7 +1231,30 @@ a stopped service stays stopped until repaired. On Linux, regeneration preserves
 the order of retained `PATH` entries and prepends newly added managed entries.
 Paths carried over solely from the old definition still pass the existing safety
 filters. If the definition cannot be preserved, reconciliation requires manual repair.
+Named environment-only overrides do not prevent this convergence: the updater
+rewrites the managed base definition and leaves the operator's drop-ins in place,
+including when restoring the original service after a failed update. Launcher
+overrides, environment resets, and overrides that cannot be fully inspected keep
+the service-root update route. The installed updater must contain this selection
+fix; downloading a newer candidate cannot change an older updater's initial target.
 Deployment-owned definitions retain their existing installation owner.
+
+If a service override keeps the Gateway on a different installation, only that
+installation is updated. Your shell CLI stays unchanged and may no longer support
+the shared config or plugins. Use the Gateway's CLI, or update your shell CLI to
+the same version.
+
+Reinstalling cannot replace a custom launcher override. Doctor reports this even
+when it cannot begin repairs. To change a systemd `ExecStart` override:
+
+1. Run `openclaw gateway status --deep` to find the service.
+2. Inspect it with `systemctl --user cat openclaw-gateway.service`.
+3. Update or remove the launcher override, keeping unrelated settings.
+4. Run `systemctl --user daemon-reload`. If needed, reinstall from the CLI you
+   want the Gateway to use, then check its launcher and health with `openclaw gateway status --deep`.
+
+For system services, omit `--user`; for profiles, use the reported unit name.
+These warnings require an updated CLI; an older updater still uses its old routing.
 
 An owned managed **Bun** Gateway at a different package root uses the existing
 service-root update route: only the Gateway installation advances, and the

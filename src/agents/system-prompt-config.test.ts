@@ -13,6 +13,7 @@ import * as preparedModelCatalog from "./prepared-model-catalog.js";
 import { prepareConfiguredModelAliases } from "./prepared-model-runtime.configured-completion.js";
 import { AuthStorage, ModelRegistry } from "./sessions/index.js";
 import { buildConfiguredAgentSystemPrompt } from "./system-prompt-config.js";
+import { buildAgentHarnessBasePrompt } from "./system-prompt-harness-base.js";
 import * as systemPrompt from "./system-prompt.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
@@ -118,6 +119,42 @@ function reasoningConfig(
 }
 
 describe("buildConfiguredAgentSystemPrompt", () => {
+  it.each([
+    ["OpenClaw", true],
+    ["crestodian", true],
+    ["main", true],
+    ["openclaw", false],
+  ] as const)(
+    "explains only configured reserved-ID collisions in both prompt surfaces (%s, configured=%s)",
+    async (id, configured) => {
+      const config: OpenClawConfig = {
+        agents: {
+          entries: configured
+            ? { [id]: { name: "OpenClaw", tools: { alsoAllow: ["openclaw"] } } }
+            : {},
+        },
+        tools: { exec: { mode: "full" } },
+      };
+      const prompts = [
+        await buildPrompt({ config, agentId: id, toolNames: ["exec"] }),
+        buildAgentHarnessBasePrompt({ config, toolNames: ["exec"] }),
+      ];
+      for (const prompt of prompts) {
+        expect(prompt.includes("reserved for the system agent")).toBe(configured && id !== "main");
+        if (configured && id !== "main") {
+          expect(prompt).toContain(`Agent id "${id.toLowerCase()}" is reserved`);
+          expect(prompt).toContain("preserving its workspace, sessions, bindings, and credentials");
+          expect(prompt).toContain(
+            "Full Access or a tool allowlist does not resolve this collision",
+          );
+        }
+        expect(prompt).toContain("not a free-form substitute for the missing setup tool");
+        expect(prompt).toContain("setup or repair on another host");
+        expect(prompt).toContain("remote task on local agent-ID migration");
+      }
+    },
+  );
+
   it.each<[string, string, OpenClawConfig, boolean]>([
     ["disabled routes", "discord", reasoningConfig(false, false), false],
     ["channel disables native", "discord", reasoningConfig(false, true, false), false],

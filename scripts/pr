@@ -220,6 +220,7 @@ pr_preflight_baseline_arguments "$@" || { echo "Invalid baseline admission optio
 # Parse before source selection, then parse normally again before taking a lock.
 PR_WORKFLOW_RECOVERY_OUTCOME=""
 PR_WORKFLOW_RECOVERY_HEAD=""
+PR_WORKFLOW_RECOVERY_ACTION=merge
 PR_WORKFLOW_ADMISSION=0
 # This one producer invocation uses authenticated current-main code; the retained
 # workflow binding stays unchanged until an independently reviewed successor.
@@ -252,13 +253,16 @@ pr_read_current_workflow_request() {
     PR_WORKFLOW_RECOVERY_OUTCOME="$3"
     shift 4
   fi
-  local admin=false confirmed=false body=false current=false
+  local admin=false confirmed=false body=false current=false cancel=false
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --current-workflow) [ "$current" = false ] || return 2; current=true; shift ;;
       --replacement-head)
         [ "$PR_WORKFLOW_ADMISSION" = 0 ] && [ -z "$PR_WORKFLOW_RECOVERY_HEAD" ] && [[ "${2-}" =~ ^[0-9a-f]{40}$ ]] || return 2
         PR_WORKFLOW_RECOVERY_HEAD="$2"; shift 2 ;;
+      --cancel-auto)
+        [ "$PR_WORKFLOW_ADMISSION" = 0 ] && [ "$cancel" = false ] || return 2
+        cancel=true; PR_WORKFLOW_RECOVERY_ACTION=cancel-auto; shift ;;
       --body-file) [ "$body" = false ] && [ -n "${2-}" ] || return 2; body=true; shift 2 ;;
       --admin-evidence) [ "$admin" = false ] && [ -n "${2-}" ] || return 2; admin=true; shift 2 ;;
       --confirmed-operator-admin) [ "$confirmed" = false ] || return 2; confirmed=true; shift ;;
@@ -266,10 +270,14 @@ pr_read_current_workflow_request() {
     esac
   done
   [ "$current" = true ] && [ "$admin" = "$confirmed" ] &&
-    { [ -n "$PR_WORKFLOW_RECOVERY_HEAD" ] || [ "$admin" = true ]; }
+    if [ "$cancel" = true ]; then
+      [ -z "$PR_WORKFLOW_RECOVERY_HEAD" ] && [ "$admin" = false ] && [ "$body" = false ]
+    else
+      [ -n "$PR_WORKFLOW_RECOVERY_HEAD" ] || [ "$admin" = true ]
+    fi
 }
 pr_read_current_workflow_request "$@" || {
-  echo "--current-workflow requires confirmed merge-recover with an exact outcome, or merge-run with --admin-evidence and --confirmed-operator-admin." >&2
+  echo "--current-workflow requires confirmed merge-recover with an exact outcome and --replacement-head, --cancel-auto, or admin evidence; or merge-run with --admin-evidence and --confirmed-operator-admin." >&2
   exit 2
 }
 
@@ -410,9 +418,9 @@ try {
       requireAdmission(source, anchor);
       return request;
     };
-    const requireRecovery = (source, outcome, replacementHead, anchor = "refs/remotes/origin/main") => {
+    const requireRecovery = (source, outcome, replacementHead, anchor = "refs/remotes/origin/main", action = "merge") => {
       requireCurrent(source, anchor);
-      if (!oid.test(outcome) || (replacementHead !== "" && !oid.test(replacementHead))) throw new Error("Invalid recovery identity");
+      if (!["merge", "cancel-auto"].includes(action) || !oid.test(outcome) || (replacementHead !== "" && !oid.test(replacementHead))) throw new Error("Invalid recovery identity");
       const outcomeRef = `refs/openclaw/pr-merge-outcomes/${revision}`;
       const symbolic = spawnSync(binary, ["-C", repository, "symbolic-ref", "--quiet", outcomeRef], { stdio: "ignore" });
       if (symbolic.error || symbolic.signal || symbolic.status !== 1 ||
@@ -420,18 +428,21 @@ try {
         throw new Error("Current workflow recovery outcome changed");
       }
       const record = JSON.parse(run(["show", `${outcome}:outcome.json`]));
-      const cancelledAuto = replacementHead !== "" && record.route === "auto" &&
+      // Empty-head auto selection only reaches retirement: the CLI and merge
+      // owner reject replacement/admission flags paired with --cancel-auto.
+      const retiringAuto = action === "cancel-auto" && replacementHead === "" && record.route === "auto";
+      const cancelledAuto = action === "merge" && replacementHead !== "" && record.route === "auto" &&
         record.cancellation?.state === "confirmed";
       // This admits current trusted code, not another dispatch. The existing
       // provider-rejection owner must still qualify exact HTTP 405 capture bytes
       // and revalidate the unchanged head and live admin authority before writing.
-      const rejectedAdmin = replacementHead === "" && record.route === "admin" &&
+      const rejectedAdmin = action === "merge" && replacementHead === "" && record.route === "admin" &&
         record.accepted === false &&
         record.priorCiAdmin?.dispatchTransport === "rest";
       if (record.version !== 1 || record.pr !== Number(revision) ||
           record.base !== "main" || record.phase !== "intent" ||
-          record.method !== "squash" || record.landed !== null || !(cancelledAuto || rejectedAdmin)) {
-        throw new Error("Current workflow recovery requires a confirmed cancelled nonqueue auto outcome or an unaccepted same-head REST admin intent");
+          record.method !== "squash" || record.landed !== null || !(retiringAuto || cancelledAuto || rejectedAdmin)) {
+        throw new Error("Current workflow recovery requires nonqueue auto retirement, confirmed cancelled auto replacement, or an unaccepted same-head REST admin intent");
       }
     };
     if (operation === "workflow-history") {
@@ -492,27 +503,27 @@ try {
       const selecting = operation.endsWith("-select");
       const source = selecting ? run(["rev-parse", "--verify", `${anchor}^{commit}`]) : paths[3];
       if (operation.startsWith("workflow-admission-")) requireAdmission(source, anchor);
-      else requireRecovery(source, outcome, replacementHead, anchor);
+      else requireRecovery(source, outcome, replacementHead, anchor, paths[4] ?? "merge");
       process.stdout.write(selecting ? `${current.oid}\t${source}\n` :
         JSON.stringify({ binding: current.oid, from: current.source, to: source }));
     } else if (operation === "workflow-read" || operation === "workflow-inspect") {
       if (current && operation === "workflow-read") requireSource(current.source);
       if (current) process.stdout.write(`${current.oid}\t${current.source}\n`);
     } else if (operation === "workflow-context-write") {
-      const [source, binding, creator, bootstrapFlag, outcome = "", replacementHead = "", admission = "0", successor = ""] = paths;
+      const [source, binding, creator, bootstrapFlag, outcome = "", replacementHead = "", admission = "0", successor = "", action = "merge"] = paths;
       const bootstrap = bootstrapFlag === "1";
       if (successor) {
         if (bootstrap || outcome || admission !== "0") throw new Error("Conflicting workflow successor selection");
         requireSuccessor(source, successor);
       } else if (isCurrentAdmission(admission)) requireAdmission(source);
-      else if (outcome) requireRecovery(source, outcome, replacementHead);
+      else if (outcome) requireRecovery(source, outcome, replacementHead, undefined, action);
       if (!oid.test(source) || (current?.oid ?? "") !== binding || !successor && !isCurrentAdmission(admission) && !outcome && !bootstrap && current && current.source !== source ||
           !/^[1-9][0-9]*$/.test(creator)) throw new Error("Workflow selection changed before handoff");
       if (bootstrap) {
         if (source !== run(["rev-parse", "--verify", "HEAD^{commit}"])) throw new Error("Canonical bootstrap changed");
       } else requireSource(source);
       process.stdout.write(JSON.stringify({ version: 1, owner, repository: identity, pr: revision, source, binding, creator, bootstrap,
-        ...(outcome ? { recovery: { outcome, replacementHead } } : {}), ...(isCurrentAdmission(admission) ? { admission: admission === "1" ? true : admission } : {}),
+        ...(outcome ? { recovery: { outcome, replacementHead, action } } : {}), ...(isCurrentAdmission(admission) ? { admission: admission === "1" ? true : admission } : {}),
         ...(successor ? { successor: JSON.parse(successor) } : {}) }));
     } else if (operation === "workflow-context-read") {
       const held = fstatSync(8);
@@ -523,7 +534,7 @@ try {
       const bytes = Buffer.alloc(held.size);
       if (readSync(8, bytes, 0, bytes.length, 0) !== bytes.length) throw new Error("Incomplete workflow selection");
       const selection = JSON.parse(bytes.toString("utf8"));
-      const [creator, supervisor, outcome = "", replacementHead = "", admission = "0", successor = ""] = paths;
+      const [creator, supervisor, outcome = "", replacementHead = "", admission = "0", successor = "", action = "merge"] = paths;
       if (successor) {
         if (JSON.stringify(selection.successor) !== successor || selection.bootstrap || outcome || admission !== "0") {
           throw new Error("Workflow successor selection changed across handoff");
@@ -535,10 +546,10 @@ try {
         requireAdmission(selection.source);
       }
       if (outcome) {
-        if (JSON.stringify(selection.recovery) !== JSON.stringify({ outcome, replacementHead }) || selection.bootstrap) {
+        if (JSON.stringify(selection.recovery) !== JSON.stringify({ outcome, replacementHead, action }) || selection.bootstrap) {
           throw new Error("Workflow recovery selection changed across handoff");
         }
-        requireRecovery(selection.source, outcome, replacementHead);
+        requireRecovery(selection.source, outcome, replacementHead, undefined, action);
       }
       const supervised = selection.creator === supervisor && process.env.OPENCLAW_PR_DEDICATED_PROCESS_GROUP === "1" &&
         process.env.OPENCLAW_PR_LOCK_NOTIFY_FD === "3" && process.env.OPENCLAW_PR_LOCK_SUPERVISOR_PID === supervisor;
@@ -578,12 +589,12 @@ try {
       }
       process.stdout.write(selected);
     } else if (operation === "workflow-admit") {
-      const [source, expected, anchor = "refs/remotes/origin/main", outcome = "", replacementHead = "", admission = "0", successor = ""] = paths;
+      const [source, expected, anchor = "refs/remotes/origin/main", outcome = "", replacementHead = "", admission = "0", successor = "", action = "merge"] = paths;
       if (successor) {
         if (outcome || admission !== "0") throw new Error("Conflicting workflow successor admission");
         requireSuccessor(source, successor, anchor);
       } else if (isCurrentAdmission(admission)) requireAdmission(source, anchor);
-      else if (outcome) requireRecovery(source, outcome, replacementHead, anchor);
+      else if (outcome) requireRecovery(source, outcome, replacementHead, anchor, action);
       if (!oid.test(source) || (current?.oid ?? "") !== expected || !successor && !isCurrentAdmission(admission) && !outcome && current && current.source !== source) {
         throw new Error("Workflow binding changed before admission");
       }
@@ -729,7 +740,7 @@ pr_read_workflow_binding() {
   PR_WORKFLOW_PR="$2"
   if [ -n "${OPENCLAW_PR_WORKFLOW_CONTEXT:-}" ]; then
     binding=$(pr_batch_wrapper_git workflow-context-read "$canonical_repo_root" "$PR_WORKFLOW_PR" "$$" "$PPID" \
-      "$PR_WORKFLOW_RECOVERY_OUTCOME" "$PR_WORKFLOW_RECOVERY_HEAD" "${PR_WORKFLOW_ADMISSION:-0}" "${PR_WORKFLOW_SUCCESSOR:-}") || return 1
+      "$PR_WORKFLOW_RECOVERY_OUTCOME" "$PR_WORKFLOW_RECOVERY_HEAD" "${PR_WORKFLOW_ADMISSION:-0}" "${PR_WORKFLOW_SUCCESSOR:-}" "${PR_WORKFLOW_RECOVERY_ACTION:-merge}") || return 1
     IFS=$'\t' read -r PR_WORKFLOW_BINDING_OID PR_WORKFLOW_SOURCE_REVISION PR_WORKFLOW_BOOTSTRAP <<< "$binding"
   else
     if [ -n "${PR_WORKFLOW_SUCCESSOR:-}" ]; then
@@ -741,7 +752,7 @@ pr_read_workflow_binding() {
       local selection_mode=workflow-recovery-select
       [ "${PR_WORKFLOW_ADMISSION:-0}" = 0 ] || selection_mode=workflow-admission-select
       binding=$(pr_batch_wrapper_git "$selection_mode" "$canonical_repo_root" "$PR_WORKFLOW_PR" \
-        "$PR_WORKFLOW_RECOVERY_OUTCOME" "$PR_WORKFLOW_RECOVERY_HEAD") || return 1
+        "$PR_WORKFLOW_RECOVERY_OUTCOME" "$PR_WORKFLOW_RECOVERY_HEAD" "$PR_WORKFLOW_TRUST_ANCHOR" "" "${PR_WORKFLOW_RECOVERY_ACTION:-merge}") || return 1
       IFS=$'\t' read -r PR_WORKFLOW_BINDING_OID PR_WORKFLOW_SOURCE_REVISION <<< "$binding"
       return 0
     fi
@@ -787,7 +798,7 @@ hold_pr_workflow_selection() {
   context=$(mktemp "${TMPDIR:-/tmp}/openclaw-pr-selection.XXXXXX") || return 1
   if ! pr_batch_wrapper_git workflow-context-write "$canonical_repo_root" "$PR_WORKFLOW_PR" \
     "$1" "$PR_WORKFLOW_BINDING_OID" "$$" "$PR_WORKFLOW_BOOTSTRAP" \
-    "$PR_WORKFLOW_RECOVERY_OUTCOME" "$PR_WORKFLOW_RECOVERY_HEAD" "${PR_WORKFLOW_ADMISSION:-0}" "${PR_WORKFLOW_SUCCESSOR:-}" > "$context" || ! chmod 400 "$context"; then
+    "$PR_WORKFLOW_RECOVERY_OUTCOME" "$PR_WORKFLOW_RECOVERY_HEAD" "${PR_WORKFLOW_ADMISSION:-0}" "${PR_WORKFLOW_SUCCESSOR:-}" "${PR_WORKFLOW_RECOVERY_ACTION:-merge}" > "$context" || ! chmod 400 "$context"; then
     rm -f "$context"
     return 1
   fi
@@ -840,10 +851,10 @@ admit_pr_workflow_binding() {
   mark_pr_operation_side_effects_started || return 1
   PR_WORKFLOW_BINDING_OID=$(pr_batch_wrapper_git workflow-admit "$canonical_repo_root" "$1" \
     "$PR_WORKFLOW_SOURCE_REVISION" "$PR_WORKFLOW_BINDING_OID" "$PR_WORKFLOW_TRUST_ANCHOR" \
-    "$PR_WORKFLOW_RECOVERY_OUTCOME" "$PR_WORKFLOW_RECOVERY_HEAD" "${PR_WORKFLOW_ADMISSION:-0}" "${PR_WORKFLOW_SUCCESSOR:-}") || return 1
+    "$PR_WORKFLOW_RECOVERY_OUTCOME" "$PR_WORKFLOW_RECOVERY_HEAD" "${PR_WORKFLOW_ADMISSION:-0}" "${PR_WORKFLOW_SUCCESSOR:-}" "${PR_WORKFLOW_RECOVERY_ACTION:-merge}") || return 1
   if [ -n "$PR_WORKFLOW_RECOVERY_OUTCOME" ]; then
     PR_WORKFLOW_RECOVERY_PROVENANCE=$(pr_batch_wrapper_git workflow-recovery-provenance "$canonical_repo_root" "$1" \
-      "$PR_WORKFLOW_RECOVERY_OUTCOME" "$PR_WORKFLOW_RECOVERY_HEAD" "$PR_WORKFLOW_TRUST_ANCHOR" "$PR_WORKFLOW_SOURCE_REVISION") || return 1
+      "$PR_WORKFLOW_RECOVERY_OUTCOME" "$PR_WORKFLOW_RECOVERY_HEAD" "$PR_WORKFLOW_TRUST_ANCHOR" "$PR_WORKFLOW_SOURCE_REVISION" "${PR_WORKFLOW_RECOVERY_ACTION:-merge}") || return 1
   fi
   if [ "${PR_WORKFLOW_ADMISSION:-0}" = 1 ]; then
     PR_WORKFLOW_ADMISSION_PROVENANCE=$(pr_batch_wrapper_git workflow-admission-provenance "$canonical_repo_root" "$1" \
@@ -864,6 +875,7 @@ admit_pr_workflow_binding() {
 pr_bootstrap_anchor="" pr_bootstrap_root="" pr_bootstrap_revision=""
 pr_bootstrap_components=(scripts/pr scripts/pr-lib/wrapper-components.txt
   scripts/pr-lib/cache-lifetime.mjs scripts/pr-lib/materialized-anchor.mjs
+  scripts/pr-lib/cache-lifetime-process.py scripts/pr-lib/dependency-lifetime-inherit.cjs
   scripts/pr-lib/git-invocation.mjs scripts/pr-lib/materialize-dependencies.mjs
   scripts/pr-lib/dependency-inputs.json scripts/windows-cmd-helpers.mjs)
 
@@ -930,11 +942,35 @@ pr_retire_created_anchor() {
 
 # Keep dependency sourcing independent of wrapper selection. In particular, an
 # older anchor still supplies its own package/version policy to this bootstrap.
+pr_start_dependency_lifetime() {
+  case "$requested_subcommand" in workspace | dependency-cache-recover | dependency-hold-release) return 0 ;; esac
+  if [ -n "${OPENCLAW_PR_LIFETIME_FILE:-}" ]; then return; fi
+  OPENCLAW_PR_LIFETIME_FILE=$(node "$pr_bootstrap_root/scripts/pr-lib/cache-lifetime.mjs" create-lifetime "$pr_bootstrap_anchor" "$$") || return 1
+  export OPENCLAW_PR_LIFETIME_FILE
+  exec 7<> "$OPENCLAW_PR_LIFETIME_FILE"
+  python3 -I -B "$pr_bootstrap_root/scripts/pr-lib/cache-lifetime-process.py" shared 7 || return 1
+  node "$pr_bootstrap_root/scripts/pr-lib/cache-lifetime.mjs" register-lifetime "$pr_bootstrap_anchor" "$$" || return 1
+  local preload
+  preload=$(node -p 'JSON.stringify(process.argv[1])' "$pr_bootstrap_root/scripts/pr-lib/dependency-lifetime-inherit.cjs") || return 1
+  export NODE_OPTIONS="${NODE_OPTIONS:-} --require $preload"
+}
+
+pr_collect_dependencies() {
+  [ "${OPENCLAW_PR_CACHE_COLLECTION_PID:-}" != "$$" ] || return 0
+  # Recovery must retain its target and lock-recover needs no Node toolchain.
+  case "$requested_subcommand" in
+    workspace | *-recover | dependency-hold-release) ;;
+    *) node "$1" collect ;;
+  esac
+  export OPENCLAW_PR_CACHE_COLLECTION_PID="$$"
+}
+
 pr_materialize_dependencies() {
   # Discovery and cache recovery use built-ins only. Recovery still authenticates
   # the complete official-main source closure before it can open the ledger.
   case "$requested_subcommand" in workspace | dependency-cache-recover | dependency-hold-release) return 0 ;; esac
   pr_verify_bootstrap || { echo "Refusing unauthenticated parent dependency helpers." >&2; return 1; }
+  pr_collect_dependencies "$pr_bootstrap_root/scripts/pr-lib/cache-lifetime.mjs"
   node --input-type=module - "$1" "$canonical_repo_root" "$2" "${3:-${PR_WORKFLOW_SOURCE_REVISION:-}}" "$pr_bootstrap_root/scripts/pr-lib/cache-lifetime.mjs" <<'EOF_TOOLING'
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -951,7 +987,7 @@ function repository(url, root) {
   return `${parsed.hostname.toLowerCase()}/${parsed.pathname.replace(/^\/|\/$/g, "").replace(/\.git$/, "").toLowerCase()}`;
 }
 
-const { claimCreatedAnchor, collectUnusedDependencyCaches, dependencyCacheRoot, holdDependencyCache, publishDependencyCache, privateDependencyDonor, withDependencyCacheLock } = await import((await import("node:url")).pathToFileURL(process.argv[6]));
+const { claimCreatedAnchor, dependencyCacheRoot, holdDependencyCache, publishDependencyCache, stageDependencyCache, sweepDependencyCaches, privateDependencyDonor, withDependencyCacheLock } = await import((await import("node:url")).pathToFileURL(process.argv[6]));
 const { bindGitInvocation } = await import((await import("node:url")).pathToFileURL(join(dirname(process.argv[6]), "git-invocation.mjs")));
 
 function dependencyKey(rows, tree, audit) {
@@ -984,6 +1020,10 @@ function dependencyKey(rows, tree, audit) {
 }
 
 function materializeDependencies(owner, canonicalPath, destination, revision) {
+  if (process.env.OPENCLAW_PR_CACHE_COLLECTION_PID !== String(process.ppid)) {
+    try { sweepDependencyCaches(); }
+    catch (error) { console.error(`Warning: retaining PR dependency cache entries: ${error.message}`); }
+  }
   const canonical = realpathSync(canonicalPath);
   destination = resolve(destination);
   const gitBinary = process.env.OPENCLAW_PR_GIT;
@@ -1060,7 +1100,7 @@ function materializeDependencies(owner, canonicalPath, destination, revision) {
   const anchor = claimCreatedAnchor(dirname(destination), process.ppid);
   const use = (lock) => holdDependencyCache(lock, entry, anchor);
   if (!withDependencyCacheLock(cache, use)) {
-    const stage = mkdtempSync(join(cache, `install-${process.ppid}-`));
+    const stage = withDependencyCacheLock(cache, lock => stageDependencyCache(lock, entry, anchor));
     try {
       const archive = join(stage, ".pr-source.tar");
       git(canonical, ["archive", "--format=tar", `--output=${archive}`, revision]);
@@ -1117,10 +1157,6 @@ function materializeDependencies(owner, canonicalPath, destination, revision) {
   // helper must never keep the global metadata mutex across process execution.
   if (!materialize(entry, destination)) throw new Error("Cached dependencies do not match the trust anchor.");
   console.error(`Using frozen scripts/pr dependency installation: ${entry}`);
-  try {
-    const retired = withDependencyCacheLock(cache, (lock) => collectUnusedDependencyCaches(lock, entry));
-    for (const path of retired) rmSync(path, { recursive: true });
-  } catch (error) { console.error(`Warning: retaining PR dependency cache entries: ${error.message}`); }
 }
 
 try {
@@ -1163,6 +1199,7 @@ if [ -n "${OPENCLAW_PR_ANCHOR_REPO_ROOT:-}" ]; then
   pr_prepare_bootstrap "$script_parent_dir/.." || exit 1
   if [ "${OPENCLAW_PR_ANCHOR_CREATOR_PID:-}" = "$$" ] && [ "${OPENCLAW_PR_ANCHOR_FD:-}" = 9 ]; then
     trap 'pr_retire_created_anchor "$pr_bootstrap_anchor" || true' EXIT
+    pr_start_dependency_lifetime || exit 1
   fi
   # Older parents pin only their own dependency set. The anchored child owns
   # completing its installation before any loader, supervisor, or lock starts.
@@ -1295,6 +1332,7 @@ elif common_git_dir=$(pr_git -C "$script_parent_dir" rev-parse --path-format=abs
           exec 9< "$anchor_exec_dir"
           pr_prepare_bootstrap "$anchor_exec_dir" "$anchor_commit" || exit 1
           trap 'pr_retire_created_anchor "$anchor_exec_dir" || true' EXIT
+          pr_start_dependency_lifetime || exit 1
           pr_batch_wrapper_git bootstrap-disjoint "$anchor_git_root" "$anchor_commit" \
             "${anchor_components[@]}" || exit 1
           anchor_extraction_valid=0
@@ -1382,6 +1420,10 @@ fi
 # Keep the verified owner available after cleanup removes a linked wrapper.
 canonical_repo_root="$(cd "$canonical_repo_root" && pwd -P)"
 readonly canonical_repo_root
+
+# Ordinary installed-checkout runs also drain abandoned cache work. Recovery and
+# read-only discovery retain their independent, non-mutating bootstrap contract.
+pr_collect_dependencies "$script_parent_dir/pr-lib/cache-lifetime.mjs"
 
 if is_dependency_recovery_command; then
   if [ "$requested_subcommand" = dependency-cache-recover ]; then
@@ -1560,8 +1602,8 @@ Usage:
     Paired admin flags permit an explicitly selected head after confirmed auto cancellation, including the retained SHA.
     They also permit same-head recovery without --replacement-head for the complete known prior-CI REST base-modified HTTP 405 rejection.
     This reruns current admin admission and retains the original captures; other admin failures remain fenced.
-    --current-workflow explicitly selects current official main for either cancelled-auto replacement or
-    same-head qualified HTTP 405 admin recovery; the retained binding remains unchanged.
+    --current-workflow explicitly selects current official main for cancelled-auto replacement,
+    same-head qualified HTTP 405 admin recovery, or --cancel-auto retirement; the retained binding remains unchanged.
     --replacement-head <SHA> --auto-merge retires an unaccepted prior-CI REST admin intent fenced by a different
     exact current head, then requests ordinary current-head auto-merge. It requires exact-head github_pending
     preparation and all normal required-check gates; it never reuses prior admin evidence.

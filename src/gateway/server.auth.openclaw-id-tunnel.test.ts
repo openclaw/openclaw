@@ -9,10 +9,13 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vit
 import type { WebSocket } from "ws";
 import { writeConfigFile } from "../config/config.js";
 import { issueDeviceBootstrapToken } from "../infra/device-bootstrap.js";
+import { revokeDeviceToken } from "../infra/device-pairing-tokens.js";
 import {
+  getPairedDevice,
   listDevicePairing,
   rejectDevicePairing,
   removePairedDevice,
+  requestDevicePairing,
 } from "../infra/device-pairing.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { CONTROL_UI_OWNER_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
@@ -105,6 +108,11 @@ beforeAll(async () => {
     record: async (deviceId, role, peerKey) => {
       bindings.set(`${deviceId}:${role}`, peerKey);
     },
+    forget: async (tokens) => {
+      for (const token of tokens) {
+        bindings.delete(`${token.deviceId}:${token.role}`);
+      }
+    },
     reportMismatch: () => {},
   });
 });
@@ -129,7 +137,12 @@ beforeEach(async () => {
 
 async function connectTunnel(
   peerKey: string | undefined,
-  options: { token?: string; bootstrapToken?: string } = {},
+  options: {
+    token?: string;
+    bootstrapToken?: string;
+    identityPath?: string;
+    scopes?: string[];
+  } = {},
 ) {
   const ws: WebSocket = await openWs(started!.port, {
     origin: BROWSER_ORIGIN,
@@ -137,8 +150,9 @@ async function connectTunnel(
   });
   const res = await connectReq(ws, {
     client: CONTROL_UI_CLIENT,
-    scopes: CONTROL_UI_SCOPES,
-    deviceIdentityPath: makeIdentityPath(`openclaw-tunnel-${randomUUID()}.sqlite`),
+    scopes: options.scopes ?? CONTROL_UI_SCOPES,
+    deviceIdentityPath:
+      options.identityPath ?? makeIdentityPath(`openclaw-tunnel-${randomUUID()}.sqlite`),
     ...(options.token ? { token: options.token } : { skipDefaultAuth: true }),
     ...(options.bootstrapToken ? { bootstrapToken: options.bootstrapToken } : {}),
     browserOrigin: BROWSER_ORIGIN,
@@ -146,7 +160,12 @@ async function connectTunnel(
   return { ws, res };
 }
 
-type HelloAuth = { method?: string; scopes?: string[]; roleAllowsAdmin?: boolean };
+type HelloAuth = {
+  method?: string;
+  scopes?: string[];
+  roleAllowsAdmin?: boolean;
+  deviceToken?: string;
+};
 
 function helloAuth(res: Awaited<ReturnType<typeof connectReq>>): HelloAuth | undefined {
   return (res.payload as { auth?: HelloAuth } | undefined)?.auth;
@@ -249,6 +268,83 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
     }
   });
 
+  test.each(["removed", "reassigned"] as const)(
+    "a tokenless browser is Access-managed and loses RPC access when its peer is %s",
+    async (change) => {
+      const original = expectDefined(PRINCIPALS[OPERATOR_KEY], "operator principal");
+      const gateway = {
+        auth: { mode: "token" as const, token: TOKEN },
+        controlUi: { allowedOrigins: [BROWSER_ORIGIN] },
+      };
+      await writeConfigFile({
+        gateway: {
+          ...gateway,
+          openclawId: { enabled: true },
+          roles: {
+            default: "member",
+            definitions: {
+              member: {
+                sessions: { others: "none" },
+                agents: "*",
+                scopes: ["operator.read", "operator.write"],
+              },
+            },
+          },
+        },
+      });
+      let browser: WebSocket | undefined;
+      let admin: WebSocket | undefined;
+      try {
+        const connected = await connectTunnel(OPERATOR_KEY);
+        browser = connected.ws;
+        expect(connected.res.ok, JSON.stringify(connected.res.error)).toBe(true);
+        expect(helloAuth(connected.res)?.deviceToken).toBeUndefined();
+        expect(grantedScopes(connected.res)).toEqual([
+          "operator.approvals",
+          "operator.questions",
+          "operator.read",
+          "operator.talk",
+          "operator.write",
+        ]);
+        const deviceId = expectDefined(
+          (await listDevicePairing()).paired[0]?.deviceId,
+          "browser pairing",
+        );
+        const owner = await connectTunnel(undefined, { token: TOKEN });
+        admin = owner.ws;
+        expect(owner.res.ok).toBe(true);
+        const list = await rpcReq<{ paired: Array<{ deviceId: string; managedBy?: string }> }>(
+          admin,
+          "device.pair.list",
+          {},
+        );
+        expect(list.payload?.paired.find((entry) => entry.deviceId === deviceId)?.managedBy).toBe(
+          "openclaw-id",
+        );
+        expect((await rpcReq(browser, "health", {})).ok).toBe(true);
+        expect((await rpcReq(browser, "exec.approvals.get", {})).ok).toBe(false);
+        if (change === "removed") {
+          delete PRINCIPALS[OPERATOR_KEY];
+        } else {
+          PRINCIPALS[OPERATOR_KEY] = {
+            ...original,
+            kind: "member",
+            accountId: "acct_reassigned",
+            role: "operator",
+          };
+        }
+        await expect(rpcReq(browser, "health", {})).rejects.toThrow(
+          /closed 4001.*membership changed/,
+        );
+      } finally {
+        PRINCIPALS[OPERATOR_KEY] = original;
+        browser?.close();
+        admin?.close();
+        await writeConfigFile({ gateway });
+      }
+    },
+  );
+
   test("a viewer member reads but is refused chat.send", async () => {
     const { ws, res } = await connectTunnel(VIEWER_KEY);
     try {
@@ -289,6 +385,80 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
     }
   });
 
+  // OCF-495: remote sign-out revokes the browser's tokens but keeps its device approved.
+  async function pairThenSignOut(peerKey: string, scopes = CONTROL_UI_SCOPES) {
+    const identityPath = makeIdentityPath(`openclaw-tunnel-signout-${randomUUID()}.sqlite`);
+    const first = await connectTunnel(peerKey, { identityPath, scopes });
+    first.ws.close();
+    expect(first.res.ok).toBe(true);
+    const deviceId = expectDefined(
+      (await listDevicePairing()).paired.find((entry) => entry.publicKey)?.deviceId,
+      "paired device",
+    );
+    expect(await revokeDeviceToken({ deviceId, role: "operator" })).toMatchObject({ ok: true });
+    return { identityPath, deviceId };
+  }
+
+  test.each([
+    { who: "owner", peerKey: OWNER_KEY },
+    { who: "operator member", peerKey: OPERATOR_KEY },
+  ])("a signed-out $who browser reconnects with its approved access", async ({ peerKey }) => {
+    const { identityPath, deviceId } = await pairThenSignOut(peerKey);
+    const approvedScopes = (await getPairedDevice(deviceId))?.approvedScopes;
+    const again = await connectTunnel(peerKey, { identityPath });
+    try {
+      expect(again.res.ok, JSON.stringify(again.res.error)).toBe(true);
+      expect((await listDevicePairing()).pending).toEqual([]);
+      expect((await getPairedDevice(deviceId))?.approvedScopes).toEqual(approvedScopes);
+    } finally {
+      again.ws.close();
+    }
+  });
+
+  test("a signed-out browser asking for more than it was approved still needs approval", async () => {
+    const { identityPath } = await pairThenSignOut(OWNER_KEY, ["operator.read"]);
+    const again = await connectTunnel(OWNER_KEY, { identityPath });
+    try {
+      expect(again.res.ok).toBe(false);
+      expect((await listDevicePairing()).pending).toEqual([
+        expect.objectContaining({ role: "operator", isRepair: true }),
+      ]);
+    } finally {
+      again.ws.close();
+    }
+  });
+
+  test("a signed-out browser asking for fewer scopes reconnects with only those", async () => {
+    const { identityPath, deviceId } = await pairThenSignOut(OWNER_KEY);
+    const again = await connectTunnel(OWNER_KEY, { identityPath, scopes: ["operator.read"] });
+    try {
+      expect(again.res.ok, JSON.stringify(again.res.error)).toBe(true);
+      expect(grantedScopes(again.res)).toEqual(["operator.read"]);
+      expect((await getPairedDevice(deviceId))?.tokens?.operator?.scopes).toEqual([
+        "operator.read",
+      ]);
+    } finally {
+      again.ws.close();
+    }
+  });
+
+  test("a restore merged with a pending new role names that role and waits", async () => {
+    const { identityPath, deviceId } = await pairThenSignOut(OWNER_KEY);
+    const paired = expectDefined(await getPairedDevice(deviceId), "paired device");
+    await requestDevicePairing({ deviceId, publicKey: paired.publicKey, role: "node", scopes: [] });
+    const again = await connectTunnel(OWNER_KEY, { identityPath });
+    try {
+      expect(again.res.ok).toBe(false);
+      expect(again.res.error?.details).toMatchObject({
+        reason: "role-upgrade",
+        requestedRole: "node",
+        approvedRoles: ["operator"],
+      });
+    } finally {
+      again.ws.close();
+    }
+  });
+
   test("a key the authority no longer admits is refused", async () => {
     const { ws, res } = await connectTunnel(REMOVED_KEY);
     try {
@@ -312,6 +482,74 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
       expect(missing.res.ok).toBe(false);
     } finally {
       missing.ws.close();
+    }
+  });
+
+  // Josh (2026-11-08): OpenClaw ID browsers are managed on the Access page, not as devices.
+  test("an OpenClaw ID browser is listed as managed by Access and refuses device removal", async () => {
+    const gateway = {
+      auth: { mode: "token" as const, token: TOKEN },
+      controlUi: { allowedOrigins: [BROWSER_ORIGIN] },
+    };
+    const browserIdentity = makeIdentityPath(`openclaw-tunnel-managed-${randomUUID()}.sqlite`);
+    const tunnel = await connectTunnel(OWNER_KEY, { identityPath: browserIdentity });
+    tunnel.ws.close();
+    const other = await connectTunnel(undefined, { token: TOKEN });
+    other.ws.close();
+    const before = new Set((await listDevicePairing()).paired.map((d) => d.deviceId));
+    const admin = await connectTunnel(undefined, { token: TOKEN });
+    try {
+      await writeConfigFile({ gateway: { ...gateway, openclawId: { enabled: true } } });
+      const list = await rpcReq<{ paired: Array<{ deviceId: string; managedBy?: string }> }>(
+        admin.ws,
+        "device.pair.list",
+        {},
+      );
+      const managed = list.payload?.paired.filter((d) => d.managedBy === "openclaw-id") ?? [];
+      expect(managed).toHaveLength(1);
+      expect(list.payload?.paired).toHaveLength(3);
+      const deviceId = managed[0]!.deviceId;
+      for (const [method, params] of [
+        ["device.pair.remove", { deviceId }],
+        ["device.token.revoke", { deviceId, role: "operator" }],
+      ] as const) {
+        const refused = await rpcReq(admin.ws, method, params);
+        expect(refused.ok).toBe(false);
+        expect(refused.error?.message).toBe(
+          "This browser connects through OpenClaw ID. Manage access on the Access page.",
+        );
+      }
+      expect((await getPairedDevice(deviceId))?.tokens?.operator?.revokedAtMs).toBeUndefined();
+      // Sign-out revokes the token and keeps its binding: still an OpenClaw ID browser.
+      await revokeDeviceToken({ deviceId, role: "operator" });
+      const signedOut = await rpcReq(admin.ws, "device.pair.remove", { deviceId });
+      expect(signedOut.error?.message).toMatch(/^This browser connects through OpenClaw ID/);
+      // Any other device keeps main's behavior.
+      const otherId = list.payload!.paired.find(
+        (d) => !d.managedBy && before.has(d.deviceId),
+      )!.deviceId;
+      expect((await rpcReq(admin.ws, "device.pair.remove", { deviceId: otherId })).ok).toBe(true);
+      // With OpenClaw ID off there is no Access page, so the browser is an ordinary device again.
+      await writeConfigFile({ gateway });
+      expect((await rpcReq(admin.ws, "device.pair.remove", { deviceId })).ok).toBe(true);
+      // The deleted pairing's binding goes with it: the same identity, paired again on
+      // ordinary ingress, starts as an ordinary device.
+      const reused = await connectTunnel(undefined, {
+        token: TOKEN,
+        identityPath: browserIdentity,
+      });
+      reused.ws.close();
+      expect(reused.res.ok).toBe(true);
+      await writeConfigFile({ gateway: { ...gateway, openclawId: { enabled: true } } });
+      const relisted = await rpcReq<{ paired: Array<{ managedBy?: string }> }>(
+        admin.ws,
+        "device.pair.list",
+        {},
+      );
+      expect(relisted.payload?.paired.some((d) => d.managedBy)).toBe(false);
+    } finally {
+      admin.ws.close();
+      await writeConfigFile({ gateway });
     }
   });
 

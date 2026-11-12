@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EmbeddedContextFile } from "../embedded-agent-helpers/context-file.js";
 import { canonicalizeSessionEntry } from "../sessions/session-manager-persistence-entry.js";
 import type { SessionEntry } from "../sessions/session-manager-types.js";
+import * as promptPool from "../sessions/system-prompt-pool.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import { createComputerTool } from "../tools/computer-tool.js";
 import { buildAttemptSystemPrompt } from "./run/attempt-system-prompt.js";
@@ -231,6 +232,10 @@ describe("system prompt series", () => {
     const updated = project(second);
     expect(updated.systemPrompt).toBe(first);
     expect(updated.update?.content).toBe(`${updateHeading}## Changed\n\ud801`);
+    const pool = vi.spyOn(promptPool, "shareSystemPromptPrefix");
+    expect(project(second).update).toBeUndefined();
+    expect(pool).not.toHaveBeenCalled();
+    pool.mockRestore();
     expect(project(second, [], "other-route").systemPrompt).toBe(second);
   });
 

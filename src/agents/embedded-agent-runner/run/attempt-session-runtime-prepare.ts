@@ -136,6 +136,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
         runAbortSignal,
         onSessionManagerCreated: (manager) => {
           resources.sessionManager = manager;
+          resources.ownsSessionManager = manager !== attempt.sessionManager;
         },
         replayAllowedToolNames: toolSearchRunPlan.replayAllowedToolNames,
         resolveActiveContextEnginePluginId: input.resolveActiveContextEnginePluginId,
