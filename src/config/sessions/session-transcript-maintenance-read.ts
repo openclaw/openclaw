@@ -180,13 +180,13 @@ export function readSessionTranscriptMaintenance(
                       eb("event_json", "is", null),
                       eb("navigation_json", "is not", null),
                       eb(envelopeMembers, "=", 2),
-                      eb(jsonPathValue(database.db, navigation, eb.lit("$.type")), "=", "message"),
-                      eb(jsonType(database.db, navigation, eb.lit("$.message")), "=", "object"),
+                      eb(jsonPathValue(database.db, navigation, eb.val("$.type")), "=", "message"),
+                      eb(jsonType(database.db, navigation, eb.val("$.message")), "=", "object"),
                     ]),
                   )
                   .then(
                     eb(
-                      jsonLastStringValue(database.db, eb.fn.coalesce(model, eb.lit("{}")), [
+                      jsonLastStringValue(database.db, eb.fn.coalesce(model, eb.val("{}")), [
                         "message",
                         "customType",
                       ]),
