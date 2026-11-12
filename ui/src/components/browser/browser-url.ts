@@ -59,3 +59,13 @@ export function resolveBrowserAddressInput(raw: string): string | null {
   }
   return search;
 }
+
+/**
+ * The address a bare name such as "devbox" or "devbox/path" opened before
+ * address-bar search: text the URL-only normalizer accepts but the resolver
+ * now searches. The address bar offers it as a "Go to" option.
+ */
+export function bareNameAddress(raw: string): string | null {
+  const url = normalizeBrowserUrlDraft(raw);
+  return url && url !== resolveBrowserAddressInput(raw) ? url : null;
+}

@@ -16,7 +16,11 @@ import {
   flushBrowserResponses as flush,
   type BrowserRequestEnvelope,
 } from "./browser-panel-controller-test-support.ts";
-import { normalizeBrowserUrlDraft, resolveBrowserAddressInput } from "./browser-url.ts";
+import {
+  bareNameAddress,
+  normalizeBrowserUrlDraft,
+  resolveBrowserAddressInput,
+} from "./browser-url.ts";
 import { createBrowserPageClient } from "./test-helpers/browser-page.ts";
 
 type Panel = HTMLElementTagNameMap["openclaw-browser-panel"];
@@ -102,6 +106,15 @@ describe("Browser panel", () => {
     expect(resolveBrowserAddressInput("[::1]:3000")).toBe("https://[::1]:3000/");
     expect(resolveBrowserAddressInput("javascript:alert(1)")).toBeNull();
     expect(resolveBrowserAddressInput("   ")).toBeNull();
+  });
+
+  it("offers the old address only for bare names that now search", () => {
+    expect(bareNameAddress("devbox")).toBe("https://devbox/");
+    expect(bareNameAddress("devbox/wiki")).toBe("https://devbox/wiki");
+    expect(bareNameAddress("example.com")).toBeNull();
+    expect(bareNameAddress("devbox:8080")).toBeNull();
+    expect(bareNameAddress("openclaw docs")).toBeNull();
+    expect(bareNameAddress("javascript:alert(1)")).toBeNull();
   });
 
   it("keeps opening addresses whose path or query has spaces, or an explicit default port", () => {

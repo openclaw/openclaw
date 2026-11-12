@@ -21,6 +21,7 @@ import { Menu, type MenuItem } from "../solid/menu.tsx";
 import { PanelIconButton } from "../solid/panel-icon-button.tsx";
 import { StrokeIcon } from "../solid/stroke-icon.tsx";
 import type { BrowserPanel } from "./browser-panel-owner.ts";
+import { bareNameAddress } from "./browser-url.ts";
 
 registerEnglishCatalog(registerBrowserEnglish);
 
@@ -54,6 +55,10 @@ export function BrowserToolbar(
     () =>
       Boolean(props.controller.urlDraft.trim()) &&
       (props.controller.pendingNewTab || props.controller.urlDraft !== activeUrl()),
+  );
+  // A bare name ("devbox") searches; this keeps the address it used to open one pick away.
+  const bareAddress = createMemo(() =>
+    addressEdited() ? bareNameAddress(props.controller.urlDraft) : null,
   );
   function commitAddress(): boolean {
     const committed = props.controller.commitUrlDraft();
@@ -340,6 +345,24 @@ export function BrowserToolbar(
           <div id={hintId} class="bp-toolbar-hint" role="alert">
             {t("browser.addressUnsupported")}
           </div>
+        </Show>
+        <Show when={bareAddress()} keyed>
+          {(url) => (
+            <button
+              type="button"
+              class="bp-toolbar-go"
+              // Keep focus in the field so the option stays open while it is clicked.
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={(event) => {
+                props.controller.urlDraftEditing = false;
+                props.controller.commitUrlDraft(url);
+                event.currentTarget.blur();
+                props.controller.addressInput?.blur();
+              }}
+            >
+              {t("browser.goToAddress", { url })}
+            </button>
+          )}
         </Show>
       </div>
       <div

@@ -79,8 +79,10 @@ The panel's address bar opens web addresses and searches everything else.
 An `http(s)://` URL, or a host with a dot, a port, `localhost` or an IPv6
 address, opens as an address, even when its path or query contains spaces.
 Other text, such as words with spaces or a single word like `openclaw`,
-opens a Google search. None of the browsers the panel drives exposes its own
-default search engine to OpenClaw. Addresses without a scheme open over
+opens a Google search. For a single name such as `devbox`, the address bar
+also offers **Go to `https://devbox/`** to open it as an address instead. None
+of the browsers the panel drives exposes its own default search engine to
+OpenClaw. Addresses without a scheme open over
 `https://`; other schemes such as `javascript:` or `file:` are not opened,
 and the address bar says so.
 

@@ -86,6 +86,7 @@ const enBrowser = {
     noChatTarget: "Open a chat session first so the annotation has somewhere to go.",
     annotationLimitReached:
       "Remove a browser annotation before retrying (maximum 4 cards and 8,000 characters of generated context).",
+    goToAddress: "Go to {url}",
     addressUnsupported: "Only web addresses (http or https) or search text can be opened here.",
     inspectUnavailable: "Element inspection is disabled (browser.evaluateEnabled=false).",
     annotationSent: "Annotation added to the chat composer.",
