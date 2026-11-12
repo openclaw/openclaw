@@ -1,8 +1,11 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/config.js";
+import { prepareDecisionProviderReload } from "../decisions/provider-reload.js";
 import { evaluateDecisionV2InRegistry } from "../decisions/runtime.js";
 import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
+import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolveDefaultAgentId } from "./agent-scope.js";
@@ -75,18 +78,17 @@ it("routes the selected Gemini Decision model through the registered Google plug
             purpose: "google-route-fixture",
             rubricVersion: "1",
           });
-          const outcome = await withGuardedFetchRequestAuthority(undefined, () =>
-            evaluateDecisionV2InRegistry(
-              {
-                state: { type: "text", text: "Checkout is failing for all customers." },
-                questions: {
-                  urgent: { type: "boolean", instructions: "Does this need incident response?" },
-                },
+          const batch = {
+            state: { type: "text" as const, text: "Checkout is failing for all customers." },
+            questions: {
+              urgent: {
+                type: "boolean" as const,
+                instructions: "Does this need incident response?",
               },
-              options,
-              registry,
-              config,
-            ),
+            },
+          };
+          const outcome = await withGuardedFetchRequestAuthority(undefined, () =>
+            evaluateDecisionV2InRegistry(batch, options, registry, config),
           );
           expect(outcome, JSON.stringify(outcome)).toMatchObject({
             status: "ok",
@@ -112,6 +114,50 @@ it("routes the selected Gemini Decision model through the registered Google plug
           // Google's published Decision rate: $0.10 per million input tokens, no output charge.
           expect(events[0]?.costUsd).toBeCloseTo((21 * 0.1) / 1_000_000, 12);
           expect(registry.decisionProviders[0]?.host.inspect(config).activeRequests).toBe(0);
+
+          // Authority revoked after preparation must stop the real guarded dispatch.
+          const host = registry.decisionProviders.find(
+            (entry) => entry.host.provider.id === "google",
+          )!.host;
+          const evaluate = host.provider.evaluate.bind(host.provider);
+          const evaluateWithRevocation = async (revoke: () => void) => {
+            let revoked = false;
+            const spy = vi.spyOn(host.provider, "evaluate").mockImplementationOnce((...args) => {
+              // Guarded fetch yields while preparing its dispatcher, before beforeRequest.
+              queueMicrotask(() => {
+                revoked = true;
+                revoke();
+              });
+              return evaluate(...args);
+            });
+            const denied = await withGuardedFetchRequestAuthority(undefined, () =>
+              evaluateDecisionV2InRegistry(batch, options, registry, config),
+            );
+            spy.mockRestore();
+            expect(revoked).toBe(true);
+            return denied;
+          };
+          const cases = {
+            selection: () =>
+              setRuntimeConfigSnapshot({
+                ...config,
+                agents: { defaults: { ...config.agents!.defaults, decisionModel: "" } },
+              }),
+            credentials: () => {
+              clearSecretsRuntimeSnapshot();
+              setRuntimeConfigSnapshot(config);
+            },
+            generation: () => prepareDecisionProviderReload(registry, new Set(["google"])),
+          };
+          for (const [name, revoke] of Object.entries(cases)) {
+            expect(await evaluateWithRevocation(revoke), name).toEqual(
+              harness.unavailable("retiring"),
+            );
+            setRuntimeConfigSnapshot(config);
+          }
+          // Only the allowed control reached the transport boundary.
+          expect(requests).toHaveLength(1);
+          expect(events).toHaveLength(1);
         });
       } finally {
         await resetPreparedModelRuntimeSnapshotsForTest();
