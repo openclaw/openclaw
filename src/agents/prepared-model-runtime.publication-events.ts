@@ -141,7 +141,10 @@ export function createCatalogAttemptReporter(
         enumerable: true,
         configurable: true,
         get: () => {
-          const failed = [...attempt.failedProviders.provider, ...attempt.failedProviders.native];
+          // Undefined entries record failures before a provider scope starts;
+          // they cannot be attributed to a provider outcome.
+          const failed = [...attempt.failedProviders.provider, ...attempt.failedProviders.native]
+            .filter((provider): provider is string => provider !== undefined);
           if (!failed.length) {
             return ownOutcomes;
           }
