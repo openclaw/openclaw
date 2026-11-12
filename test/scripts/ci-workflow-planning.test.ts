@@ -2745,7 +2745,7 @@ describe("ci workflow guards", () => {
         includeReleaseOnlyRuntimeTests: false,
         includePrExemptRuntimeTests: true,
       });
-      expect(readJsonOutput(qualified.outputs, "node_test_matrix").include).toEqual([
+      expect(readJsonOutput(qualified.outputs, "checks_node_core_nondist_matrix").include).toEqual([
         expect.objectContaining({ test_runtime_policy: "bun-all" }),
       ]);
       expect(qualified.outputs.docs_only).toBe("false");
