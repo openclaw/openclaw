@@ -608,3 +608,94 @@ it("backs off one deferred occurrence through restart and runs it once when admi
   expect(scheduler.tick(atMs + 2_000, atMs + 2_000 - now).launches).toEqual([]);
   expect(scheduler.receipts()).toHaveLength(1);
 });
+
+const skipMissedSnapshot = {
+  ...snapshot,
+  config: { ...snapshot.config, cronConfig: { skipMissedJobs: true } },
+};
+const skipLog = "cron: skipped missed slots (cron.skipMissedJobs)";
+
+it.each([
+  ["cron", 3_000],
+  ["cron", 30_000],
+  ["every", 3_000],
+] as const)("runs a due %s slot when the tick is %sms late with skipMissedJobs", (kind, lateMs) => {
+  const due = now + minute;
+  const late = job(`late-${kind}`, due, {
+    ...(kind === "cron"
+      ? { schedule: { kind: "cron" as const, expr: "* * * * *", tz: "UTC", staggerMs: 0 } }
+      : {}),
+    state: { nextRunAtMs: due, lastRunAtMs: now, lastRunStatus: "ok", lastDurationMs: 1_000 },
+  });
+  const scheduler = storedScheduler(`late-tick-${kind}-${lateMs}`, [late]);
+  expect(scheduler.start(now, { snapshot: skipMissedSnapshot }).accepted).toEqual([]);
+  // Wall and monotonic time advance together: the tick is late, nothing jumped.
+  const tick = scheduler.tick(due + lateMs, minute + lateMs);
+  expect(tick.accepted.map(({ job: entry }) => entry.id)).toEqual([`late-${kind}`]);
+  expect(tick.launches.map(({ job: entry }) => entry.id)).toEqual([`late-${kind}`]);
+  expect(tick.logs.map(({ message }) => message)).not.toContain(skipLog);
+});
+
+it("still skips a slot missed across a forward clock jump with skipMissedJobs", () => {
+  const due = now + minute;
+  const jumped = job("jumped", due, {
+    schedule: { kind: "cron", expr: "* * * * *", tz: "UTC", staggerMs: 0 },
+    state: { nextRunAtMs: due, lastRunAtMs: now, lastRunStatus: "ok", lastDurationMs: 1_000 },
+  });
+  const scheduler = storedScheduler("jump-skip", [jumped]);
+  expect(scheduler.start(now, { snapshot: skipMissedSnapshot }).accepted).toEqual([]);
+  // Wall time moved 30 minutes while monotonic time moved 1 minute (suspend or clock step).
+  const jumpedAtMs = now + 31 * minute;
+  const tick = scheduler.tick(jumpedAtMs, minute);
+  expect(tick.accepted).toEqual([]);
+  expect(scheduler.read()[0]?.state.nextRunAtMs).toBe(now + 32 * minute);
+  expect(tick.logs).toContainEqual(
+    expect.objectContaining({
+      message: skipLog,
+      fields: { jobIds: ["jumped"], reason: "clock-jump" },
+    }),
+  );
+  // The next ordinary tick is back to normal: the following slot runs.
+  const next = scheduler.tick(now + 32 * minute, 2 * minute);
+  expect(next.accepted.map(({ job: entry }) => entry.id)).toEqual(["jumped"]);
+});
+
+it("logs a slot missed while the Gateway was down as a startup skip", () => {
+  const due = now - 10 * minute;
+  const down = job("down", due, {
+    schedule: { kind: "cron", expr: "* * * * *", tz: "UTC", staggerMs: 0 },
+    state: { nextRunAtMs: due, lastRunAtMs: due - minute, lastRunStatus: "ok" },
+  });
+  const scheduler = storedScheduler("startup-skip", [down]);
+  const started = scheduler.start(now, { snapshot: skipMissedSnapshot });
+  expect(started.accepted).toEqual([]);
+  expect(scheduler.read()[0]?.state.nextRunAtMs).toBe(now + minute);
+  expect(started.logs).toContainEqual(
+    expect.objectContaining({ message: skipLog, fields: { jobIds: ["down"], reason: "startup" } }),
+  );
+});
+
+it("does not report an earlier missed slot again on every late tick", () => {
+  const due = now + minute;
+  const late = job("late", due, {
+    schedule: { kind: "cron", expr: "* * * * *", tz: "UTC", staggerMs: 0 },
+    state: { nextRunAtMs: due, lastRunAtMs: now, lastRunStatus: "ok", lastDurationMs: 1_000 },
+  });
+  // Hourly job whose 11:00 and 12:00 slots were already passed over before this
+  // Gateway started; its next slot (13:00) is in the future.
+  const stale = job("stale", now + 60 * minute, {
+    schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC", staggerMs: 0 },
+    state: {
+      nextRunAtMs: now + 60 * minute,
+      lastRunAtMs: now - 90 * minute,
+      lastRunStatus: "ok",
+      lastDurationMs: 1_000,
+    },
+  });
+  const scheduler = storedScheduler("late-tick-stale", [late, stale]);
+  scheduler.start(now, { snapshot: skipMissedSnapshot });
+  const tick = scheduler.tick(due + 3_000, minute + 3_000);
+  expect(tick.accepted.map(({ job: entry }) => entry.id)).toEqual(["late"]);
+  expect(tick.logs.map(({ message }) => message)).not.toContain(skipLog);
+  expect(scheduler.job("stale").state.nextRunAtMs).toBe(now + 60 * minute);
+});
