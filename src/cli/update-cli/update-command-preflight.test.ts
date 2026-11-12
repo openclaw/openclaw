@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import { Command } from "commander";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -135,11 +136,27 @@ const rehearsalStep: UpdateStepResult = {
   exitCode: 0,
 };
 
-async function rehearse(request: unknown, requestPath = path.join(home, "request.json")) {
+type ReceiptAnswer = (seq: number, updater: PassThrough) => void;
+const commits: ReceiptAnswer = (seq, updater) =>
+  void updater.write(`${JSON.stringify({ seq, ok: true })}\n`);
+
+/** Runs the command against a fixture updater that answers each receipt on stdin. */
+async function rehearse(
+  request: unknown,
+  requestPath = path.join(home, "request.json"),
+  answer = commits,
+) {
   await fs.writeFile(path.join(home, "request.json"), JSON.stringify(request));
+  const updater = new PassThrough();
+  // The command only reads lines from stdin; a pipe is what the real updater provides.
+  vi.spyOn(process, "stdin", "get").mockReturnValue(updater as unknown as typeof process.stdin);
   const receipts: unknown[] = [];
   vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
-    receipts.push(parseUpdateRehearsalEventLine(String(chunk).trimEnd()));
+    const event = parseUpdateRehearsalEventLine(String(chunk).trimEnd());
+    receipts.push(event);
+    if (event && "seq" in event) {
+      answer(event.seq, updater);
+    }
     return true;
   });
   const program = new Command().exitOverride();
@@ -186,8 +203,8 @@ it.each([
       }),
     );
     expect(receipts).toEqual([
-      { type: "progress", step: rehearsalProgress },
-      { type: "step", step: rehearsalStep },
+      { type: "progress", seq: 1, step: rehearsalProgress },
+      { type: "step", seq: 2, step: rehearsalStep },
     ]);
     expect(defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith({ protocol: 1, result });
     expect(process.exitCode).toBe(code);
@@ -219,6 +236,36 @@ it.each([
       protocol: 1,
       error: "rehearsal-execution-failed",
     });
+    expect(process.exitCode).toBe(2);
+  },
+);
+
+it.each([
+  [
+    "refuses a receipt",
+    ((seq, updater) =>
+      void updater.write(`${JSON.stringify({ seq, ok: false })}\n`)) as ReceiptAnswer,
+    "refused a rehearsal receipt",
+  ],
+  [
+    "stops answering",
+    ((_seq, updater) => void updater.end()) as ReceiptAnswer,
+    "stopped answering rehearsal receipts",
+  ],
+] as const)(
+  "does not start the announced check when the updater %s",
+  async (_name, answer, message) => {
+    const check = vi.fn();
+    canary.mockImplementation(async (params: UpdateCandidateCanaryParams) => {
+      await params.onProgress?.(rehearsalProgress);
+      check();
+      return { status: "ok", phase: "readiness", durationMs: 1, logTail: [], steps: [] };
+    });
+
+    await rehearse({ protocol: 1, config: {} }, undefined, answer);
+
+    expect(check).not.toHaveBeenCalled();
+    expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining(message));
     expect(process.exitCode).toBe(2);
   },
 );

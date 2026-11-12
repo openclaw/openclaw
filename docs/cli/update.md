@@ -784,7 +784,18 @@ update or service authority, rejects inherited authority variables, and touches
 copied state only. The previous Gateway keeps serving throughout.
 
 The candidate reports each check to the updater as it starts and finishes, and
-the updater records those steps in the run history as before. Stdout carries one
+the updater records those steps in the run history as before. The candidate
+waits for the updater's answer to each report on its stdin before it continues,
+so no check starts or completes ahead of a recorded step. If the updater cannot
+record a step, or stops answering, the candidate stops before the announced
+check.
+
+Each check runs in its own process group. The candidate reports those processes
+to the updater, and the updater stops any that are still running after the
+candidate exits, crashes, or is forced to stop. A process is signalled only
+while it still has the start time it had when it was reported.
+
+Stdout carries one
 JSON document with `protocol: 1` and the rehearsal result. Exit `0` means the
 checks passed and `3` means the candidate refuses the update; a refusal is
 binding. The candidate refuses only when its Doctor rehearsal or its private
@@ -797,8 +808,9 @@ The updater runs its own rehearsal instead when the target lacks the marker, or
 when the candidate exits with any other status, returns an invalid or
 contradictory document, or stays silent for 15 minutes. The candidate sends a
 heartbeat every 15 seconds, so that limit detects a dead or blocked candidate
-process and does not bound slow checks. The update output names the fallback
-reason. An explicit `--timeout` still ends the rehearsal.
+process and does not bound slow checks. The update output says when the
+candidate ran its own checks, and names the reason when the updater took them
+back. An explicit `--timeout` still ends the rehearsal.
 
 Both the installed updater and the candidate must support this. An older
 installed updater ignores the marker and runs its own rehearsal with its own

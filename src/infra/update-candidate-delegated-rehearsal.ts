@@ -1,8 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";
+import { signalProcessTree } from "../process/kill-tree.js";
+import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { tryReadJson } from "./json-files.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 import { createUpdateCandidateInspectionEnv } from "./update-candidate-admission.js";
@@ -12,6 +15,7 @@ import type {
 } from "./update-candidate-canary-commands.js";
 import { launchCanary, terminateCanary, waitBounded } from "./update-candidate-canary-process.js";
 import {
+  formatUpdateRehearsalReceiptAnswer,
   parseUpdateRehearsalEventLine,
   parseUpdateRehearsalResult,
   UPDATE_REHEARSAL_EVENT_PREFIX,
@@ -27,6 +31,45 @@ const REHEARSAL_STALL_MS = 15 * 60_000;
 const REHEARSAL_CLEANUP_MS = 2_000;
 /** A cancelled candidate removes its own temporary state copies before it is forced to stop. */
 const REHEARSAL_CANCEL_GRACE_MS = 5 * 60_000;
+const PROCESS_IDENTITY_TIMEOUT_MS = 1_000;
+
+/**
+ * Stop checks the candidate left running. Each check runs in its own process group, so
+ * stopping the candidate does not reach them. A process is signalled only while it still
+ * has the start time it had when the candidate reported it.
+ */
+async function stopAbandonedChecks(checks: ReadonlyMap<number, number | null>): Promise<void> {
+  const alive = () =>
+    [...checks].flatMap(([pid, startedAt]) =>
+      startedAt !== null &&
+      getFileLockProcessStartTime(pid, process.env, PROCESS_IDENTITY_TIMEOUT_MS) === startedAt
+        ? [pid]
+        : [],
+    );
+  const signal = (kind: "SIGTERM" | "SIGKILL", pids: number[]) =>
+    Promise.all(
+      pids.map(
+        (pid) =>
+          new Promise<void>((resolve) => {
+            signalProcessTree(pid, kind, {
+              detached: process.platform !== "win32",
+              onComplete: resolve,
+            });
+          }),
+      ),
+    );
+  let remaining = alive();
+  if (remaining.length === 0) {
+    return;
+  }
+  await signal("SIGTERM", remaining);
+  const deadline = Date.now() + REHEARSAL_CLEANUP_MS;
+  while (remaining.length > 0 && Date.now() < deadline) {
+    await sleep(100);
+    remaining = alive();
+  }
+  await signal("SIGKILL", remaining);
+}
 
 export type DelegatedUpdateCandidateRehearsal =
   | { owner: "candidate"; result: CanaryResult }
@@ -80,6 +123,12 @@ export async function runDelegatedUpdateCandidateRehearsal(
       let relay = Promise.resolve();
       let relayFailure: { error: unknown } | undefined;
       const relayAbort = new AbortController();
+      // Reported check process -> its start time when reported.
+      const checks = new Map<number, number | null>();
+      const answer = (seq: number, ok: boolean) => {
+        // A candidate that is already gone needs no answer.
+        running.child.stdin?.write(formatUpdateRehearsalReceiptAnswer({ seq, ok }), () => {});
+      };
       const running = launchCanary({
         assertCurrent: params.assertCurrent,
         target: { kind: "cli", entryPath: entry },
@@ -93,6 +142,7 @@ export async function runDelegatedUpdateCandidateRehearsal(
         nodeRunner: params.nodeRunner,
         stateDir: params.stateDir,
         capture: () => {},
+        stdin: "pipe",
         hidesLine: (line) => line.startsWith(UPDATE_REHEARSAL_EVENT_PREFIX),
         onLine: (line) => {
           lastActivityAt = Date.now();
@@ -100,9 +150,22 @@ export async function runDelegatedUpdateCandidateRehearsal(
           if (!event || event.type === "heartbeat") {
             return;
           }
-          // Receipts keep the candidate's order; a refused receipt ends the rehearsal.
+          if (event.type === "process") {
+            checks.set(
+              event.pid,
+              getFileLockProcessStartTime(event.pid, process.env, PROCESS_IDENTITY_TIMEOUT_MS),
+            );
+            return;
+          }
+          if (event.type === "process-closed") {
+            checks.delete(event.pid);
+            return;
+          }
+          // The candidate waits for each answer, so it never runs ahead of a committed
+          // receipt. A refused receipt ends the rehearsal.
           relay = relay.then(async () => {
             if (relayFailure) {
+              answer(event.seq, false);
               return;
             }
             try {
@@ -110,13 +173,17 @@ export async function runDelegatedUpdateCandidateRehearsal(
               await (event.type === "progress"
                 ? params.onProgress?.(event.step)
                 : params.onStep?.(event.step));
+              answer(event.seq, true);
             } catch (error) {
               relayFailure = { error };
+              answer(event.seq, false);
               relayAbort.abort();
             }
           });
         },
       });
+      // A candidate that exits early closes this pipe; that is not the updater's failure.
+      running.child.stdin?.on("error", () => {});
       const signal = params.signal
         ? AbortSignal.any([params.signal, relayAbort.signal])
         : relayAbort.signal;
@@ -138,6 +205,8 @@ export async function runDelegatedUpdateCandidateRehearsal(
           await waitBounded(running.closed, REHEARSAL_CANCEL_GRACE_MS);
         }
         await terminateCanary(running.child, running.closed, Date.now() + REHEARSAL_CLEANUP_MS);
+        running.child.stdin?.end();
+        await stopAbandonedChecks(checks);
       }
       await relay;
       if (relayFailure) {

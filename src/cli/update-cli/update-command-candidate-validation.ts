@@ -166,6 +166,9 @@ export async function validateUpdateCandidateWithProgress(
         const validate = async () => {
           const delegated = await runDelegatedUpdateCandidateRehearsal(rehearsal);
           if (delegated.owner === "candidate") {
+            defaultRuntime[execution.opts.json ? "error" : "log"](
+              "The candidate release ran its own update checks.",
+            );
             return delegated.result;
           }
           if (delegated.fallbackReason !== "unsupported-target") {

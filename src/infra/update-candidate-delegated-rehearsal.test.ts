@@ -3,6 +3,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -30,6 +31,8 @@ let child: ChildProcess;
 let observed: { args: string[]; env: NodeJS.ProcessEnv; request: unknown; mode: number };
 let requestPath: string;
 let spawned: ReturnType<typeof createDeferredCore<void>>;
+/** Receipt answers the updater wrote to the candidate's stdin. */
+let answers: unknown[];
 /** What the fixture candidate does once started; `pending` leaves it running. */
 let fixture: { code: number | null; stdout: string; events?: string; pending?: boolean };
 
@@ -89,11 +92,14 @@ beforeEach(async () => {
   await setMarker(1);
   fixture = { code: 0, stdout: document() };
   spawned = createDeferredCore();
+  answers = [];
   mocks.spawn.mockImplementation((_command: string, args: string[], options: SpawnOptions) => {
     child = new ChildProcess();
     Object.defineProperty(child, "pid", { value: 654 });
     child.stdout = new PassThrough();
     child.stderr = new PassThrough();
+    child.stdin = new PassThrough();
+    child.stdin.on("data", (line) => answers.push(JSON.parse(String(line))));
     requestPath = args[args.indexOf("--request") + 1]!;
     observed = {
       args: args.slice(args.indexOf("update")),
@@ -141,9 +147,9 @@ it.each([undefined, 2, "1"])(
 
 it("relays the candidate's receipts in order and returns its result", async () => {
   const received: unknown[] = [];
-  fixture.events = `${lines({ type: "progress", step: progress })}plain diagnostic\n${lines(
+  fixture.events = `${lines({ type: "progress", seq: 1, step: progress })}plain diagnostic\n${lines(
     { type: "heartbeat" },
-    { type: "step", step: startup },
+    { type: "step", seq: 2, step: startup },
   )}`;
   const result = await run({
     sourceBundledPlugins: { packageRoot: "/serving/openclaw" },
@@ -177,6 +183,27 @@ it("relays the candidate's receipts in order and returns its result", async () =
   });
   expect(observed.env).not.toHaveProperty("OPENCLAW_UPDATE_RUN_HANDOFF");
   await expect(fs.access(requestPath)).rejects.toMatchObject({ code: "ENOENT" });
+  expect(answers).toEqual([
+    { seq: 1, ok: true },
+    { seq: 2, ok: true },
+  ]);
+});
+
+it("answers a receipt only after the updater has committed it", async () => {
+  const committed = createDeferredCore<void>();
+  fixture.pending = true;
+  const result = run({ onProgress: () => committed.promise });
+  await spawned.promise;
+  child.stderr?.emit("data", lines({ type: "progress", seq: 1, step: progress }));
+  await nextTurn();
+  // The candidate is still waiting, so its check has not started.
+  expect(answers).toEqual([]);
+  committed.resolve();
+  await nextTurn();
+  expect(answers).toEqual([{ seq: 1, ok: true }]);
+  child.stdout?.emit("data", document());
+  child.emit("close", 0);
+  await expect(result).resolves.toMatchObject({ owner: "candidate" });
 });
 
 it("treats a candidate refusal as binding", async () => {
@@ -223,11 +250,16 @@ it("ends the rehearsal when the updater cannot record a receipt", async () => {
   const stop = exitsOnRequest();
   child.stderr?.emit(
     "data",
-    lines({ type: "progress", step: progress }, { type: "step", step: startup }),
+    lines({ type: "progress", seq: 1, step: progress }, { type: "step", seq: 2, step: startup }),
   );
   await expect(result).rejects.toBe(failure);
   expect(stop).toHaveBeenCalledExactlyOnceWith("SIGTERM");
   expect(onStep).not.toHaveBeenCalled();
+  // The candidate is told, so it stops instead of starting the next check.
+  expect(answers).toEqual([
+    { seq: 1, ok: false },
+    { seq: 2, ok: false },
+  ]);
 });
 
 it("stops waiting only after the candidate has been silent, however long its checks run", async () => {

@@ -81,15 +81,27 @@ const stepResultSchema = z.object({
   snapshotCapacity: UpdateSnapshotCapacitySchema.optional(),
 }) satisfies z.ZodType<UpdateStepResult>;
 
+const receiptSeq = z.number().int().positive();
+const processId = z.number().int().positive();
 const eventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("heartbeat") }),
-  z.object({ type: z.literal("progress"), step: UpdateRunStepSchema }),
-  z.object({ type: z.literal("step"), step: stepResultSchema }),
+  // Receipts: the candidate waits for the updater's answer before it continues.
+  z.object({ type: z.literal("progress"), seq: receiptSeq, step: UpdateRunStepSchema }),
+  z.object({ type: z.literal("step"), seq: receiptSeq, step: stepResultSchema }),
+  // Custody: the updater stops any check the candidate leaves running.
+  z.object({ type: z.literal("process"), pid: processId }),
+  z.object({ type: z.literal("process-closed"), pid: processId }),
 ]);
 export type UpdateRehearsalEvent =
   | { type: "heartbeat" }
-  | { type: "progress"; step: UpdateRunStep }
-  | { type: "step"; step: UpdateStepResult };
+  | { type: "progress"; seq: number; step: UpdateRunStep }
+  | { type: "step"; seq: number; step: UpdateStepResult }
+  | { type: "process"; pid: number }
+  | { type: "process-closed"; pid: number };
+
+const receiptAnswerSchema = z.object({ seq: receiptSeq, ok: z.boolean() });
+/** The updater's answer to one receipt, written to the candidate's stdin. */
+export type UpdateRehearsalReceiptAnswer = z.infer<typeof receiptAnswerSchema>;
 
 const resultFields = {
   phase: z.enum([
@@ -152,6 +164,23 @@ export function parseUpdateRehearsalEventLine(line: string): UpdateRehearsalEven
 
 export function formatUpdateRehearsalEventLine(event: UpdateRehearsalEvent): string {
   return `${UPDATE_REHEARSAL_EVENT_PREFIX}${JSON.stringify(event)}\n`;
+}
+
+export function formatUpdateRehearsalReceiptAnswer(answer: UpdateRehearsalReceiptAnswer): string {
+  return `${JSON.stringify(answer)}\n`;
+}
+
+export function parseUpdateRehearsalReceiptAnswer(
+  line: string,
+): UpdateRehearsalReceiptAnswer | null {
+  let value: unknown;
+  try {
+    value = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  const parsed = receiptAnswerSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
 }
 
 /** Unknown fields are dropped; an unknown phase, reason, or step shape is not a result. */
