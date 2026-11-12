@@ -411,7 +411,12 @@ export function buildChannelProgressDraftLineForEntry(
     ...options,
     commandText: options?.commandText ?? resolveChannelStreamingPreviewCommandText(entry),
   });
-  if (line?.toolName && input.event === "item" && line.label === input.title?.trim()) {
+  if (
+    line?.toolName &&
+    input.event === "item" &&
+    !isCommandProgressItem(input) &&
+    line.label === input.title?.trim()
+  ) {
     const labelChars = Array.from(line.label).length;
     const surroundingChars = Array.from(line.text).length - labelChars;
     const labelLimit = Math.max(
