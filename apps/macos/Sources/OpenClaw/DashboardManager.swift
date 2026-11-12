@@ -1184,12 +1184,13 @@ extension DashboardManager {
         return ControlUIDocumentHost(
             url: configuration.url,
             auth: configuration.auth,
-            websiteDataStore: store?.dataStore ?? self.websiteDataStore,
+            websiteDataStore: configuration.operatorDataStore ?? store?.dataStore ?? self.websiteDataStore,
             tlsParams: configuration.tlsParams,
             browserSessionLease: store?.lease(for: configuration.browserSession),
             nativeAuthProvider: configuration.nativeAuthProvider,
             legacyNativeCredentials: configuration.legacyNativeCredentials)
         {
+            if let rule = configuration.operatorCookieRule { $0.add(rule) }
             installCapabilities($0, configuration.url)
         }
     }
@@ -1208,6 +1209,7 @@ extension DashboardManager {
             auth: configuration.auth,
             websiteDataStore: configuration.operatorDataStore ?? browserStore?.dataStore ?? self.websiteDataStore,
             isolatesReadingTabs: configuration.operatorDataStore != nil,
+            cookieRule: configuration.operatorCookieRule,
             updater: self.updater,
             updateBridgeEnabled: primaryLocal && Self.updateBridgeEnabled(mode: configuration.mode),
             tlsParams: configuration.tlsParams,

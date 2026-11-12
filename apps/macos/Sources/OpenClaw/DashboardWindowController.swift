@@ -137,6 +137,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         auth: DashboardWindowAuth,
         websiteDataStore: WKWebsiteDataStore,
         isolatesReadingTabs: Bool = false,
+        cookieRule: WKContentRuleList? = nil,
         updater: UpdaterProviding? = nil,
         updateBridgeEnabled: Bool = true,
         tlsParams: GatewayTLSParams? = nil,
@@ -168,6 +169,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             tlsParams: tlsParams,
             browserSessionLease: browserSessionLease)
         { controller in
+            if let cookieRule { controller.add(cookieRule) }
             for name in [
                 Self.linkMessageHandlerName,
                 Self.notificationsMessageHandlerName,

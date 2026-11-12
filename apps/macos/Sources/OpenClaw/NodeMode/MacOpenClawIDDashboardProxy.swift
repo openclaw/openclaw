@@ -165,6 +165,12 @@ final class MacOpenClawIDDashboardProxy: Sendable {
     /// to the Gateway as coming from the claw's own origin, without the proxy cookie.
     private func admit(_ request: MacNodeOpenClawIDBridgeRequest) -> MacNodeOpenClawIDBridgeRequest? {
         guard request.values("host") == [self.host] else { return nil }
+        // Only the dashboard's own documents may drive the proxy: refuse cross-origin requests
+        // and WebSocket upgrades from any other page, even one that is same-site on loopback.
+        let ownOrigin = "http://\(self.host)"
+        guard request.values("origin").allSatisfy({ $0 == ownOrigin }),
+              request.values("sec-fetch-site").allSatisfy({ $0 == "same-origin" || $0 == "none" })
+        else { return nil }
         let pairs = request.values("cookie").flatMap { $0.split(separator: ";") }
             .map { $0.trimmingCharacters(in: .whitespaces) }
         let presented = pairs.filter { $0.hasPrefix(Self.cookieName + "=") }
@@ -198,6 +204,17 @@ final class MacOpenClawIDDashboardProxy: Sendable {
             upstream.addValue(pair[1], forHTTPHeaderField: pair[0])
         }
         return upstream
+    }
+
+    /// WebKit content rules that strip cookies from every request except this proxy's origin.
+    static func cookieRules(for baseURL: URL) throws -> String {
+        guard let port = baseURL.port else { throw MacNodeOpenClawIDBridgeError.unavailable }
+        let rules: [[String: Any]] = [
+            ["trigger": ["url-filter": ".*"], "action": ["type": "block-cookies"]],
+        ] + ["http", "ws"].map { scheme in
+            ["trigger": ["url-filter": "^\(scheme)://127\\.0\\.0\\.1:\(port)/"], "action": ["type": "ignore-previous-rules"]]
+        }
+        return try String(bytes: JSONSerialization.data(withJSONObject: rules), encoding: .utf8)!
     }
 
     private static func constantTimeEqual(_ left: String, _ right: String) -> Bool {

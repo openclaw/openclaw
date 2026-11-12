@@ -27,6 +27,8 @@ extension DashboardManager {
         var nativeAuthProvider: DashboardNativeGatewayAuth.Provider?
         /// Set for the OpenClaw ID operator proxy: the only store holding its cookie.
         var operatorDataStore: WKWebsiteDataStore?
+        /// Blocks cookies on every request but the proxy's own origin, including subframes.
+        var operatorCookieRule: WKContentRuleList?
     }
 
     struct SupersededDashboardPresentation: Error {}
@@ -265,7 +267,13 @@ extension DashboardManager {
         // Cookies ignore ports, so the proxy cookie lives only in a store that loads nothing else:
         // other loopback servers, the local Gateway and reading tabs never receive it.
         let operatorDataStore = operatorDashboard.map { _ in self.operatorDashboardStore }
+        var operatorCookieRule: WKContentRuleList?
         if let operatorDashboard, let operatorDataStore {
+            // A frame from another loopback port is still same-site; the rule keeps the cookie
+            // on requests to the proxy's exact HTTP and WebSocket origin only.
+            operatorCookieRule = try await WKContentRuleListStore.default().compileContentRuleList(
+                forIdentifier: "openclaw.ocid-operator-cookie-origin",
+                encodedContentRuleList: MacOpenClawIDDashboardProxy.cookieRules(for: operatorDashboard.url))
             await operatorDataStore.httpCookieStore.setCookie(operatorDashboard.cookie)
         }
         try browserSession?.validate(for: url)
@@ -302,7 +310,8 @@ extension DashboardManager {
             legacyNativeCredentials: legacyCredentials,
             nativeAuthProvider: auth.usesNativeDevice ? self
                 .nativeAuthProvider(target: target, endpoint: endpoint) : nil,
-            operatorDataStore: operatorDataStore), endpoint)
+            operatorDataStore: operatorDataStore,
+            operatorCookieRule: operatorCookieRule), endpoint)
     }
 
     func nativeAuthProvider(
