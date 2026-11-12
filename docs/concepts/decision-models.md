@@ -351,12 +351,11 @@ For portable rubrics, use at most 16 questions, 2–64 Choice alternatives, 2–
 meaningful Score anchors, explicit true/false descriptions, and concise evidence.
 Provider limits differ:
 
-| Provider    | Choice alternatives | Score levels | Additional limits                                                                    |
-| ----------- | ------------------- | ------------ | ------------------------------------------------------------------------------------ |
-| Google      | 2–255               | 2–255        | 262,144-token context across state and questions; question IDs at most 64 characters |
-| ONNX        | 2–64                | 2–64         | Up to 32 questions; 512 tokens per encoded input; one MiB of compiled batch inputs   |
-| SubQ        | 2–255               | 2–10         | Up to 16 questions; text/JSON state; question IDs at most 100 characters             |
-| TypeSafe AI | 2–255               | 2–10         | Subject to the host's batch limits and the vendor input contract                     |
+| Provider    | Choice alternatives | Score levels | Additional limits                                                                  |
+| ----------- | ------------------- | ------------ | ---------------------------------------------------------------------------------- |
+| ONNX        | 2–64                | 2–64         | Up to 32 questions; 512 tokens per encoded input; one MiB of compiled batch inputs |
+| SubQ        | 2–255               | 2–10         | Up to 16 questions; text/JSON state; question IDs at most 100 characters           |
+| TypeSafe AI | 2–255               | 2–10         | Subject to the host's batch limits and the vendor input contract                   |
 
 The host bounds JSON evidence to one MiB, 20,000 nodes, and depth 32. V1 accepts
 up to 256 questions; V2 accepts up to 400, subject to the selected provider's limit.

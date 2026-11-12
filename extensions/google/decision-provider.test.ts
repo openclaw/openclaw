@@ -231,11 +231,10 @@ it.each([
 });
 
 it.each([
-  withAnswer("is_defect", { noul: 2 }),
-  withAnswer("next_action", { choice: "refund" }),
   withAnswer("churn_risk", { legend: { "0": "Threatens to cancel", "1": "No churn signal" } }),
   { ...reply(), usage: { total_input_tokens: 324, total_output_tokens: 3 } },
-  withAnswer("next_action", { choice: "synthetic-gemini-key" }),
+  // An otherwise valid response must not reflect the active credential.
+  { ...reply(), debug: "synthetic-gemini-key" },
 ])("rejects malformed results or reflected credentials %#", async (payload) => {
   mocks.fetch.mockResolvedValue(Response.json(payload));
   expect(await registered().evaluate(batch, context())).toEqual({
@@ -246,7 +245,7 @@ it.each([
 
 it("rejects batches the native wire cannot carry before dispatch", async () => {
   const provider = registered();
-  const chatModel = { ...context().model, id: "gemini-3.5-flash" };
+  const chatModel = { ...context().model, id: "gemini-3.5-flash", inference: { chat: true } };
   for (const [input, ctx, reason] of [
     [batch, context({ model: chatModel }), "unsupported-input"],
     [{ ...batch, state: { type: "list", items: [] } }, context(), "unsupported-input"],

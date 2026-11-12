@@ -7,11 +7,6 @@ import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const GOOGLE_VERTEX_BASE_URL = "https://{location}-aiplatform.googleapis.com";
 const declaredCatalog = manifest.modelCatalog.providers.google;
-export const GOOGLE_GEMINI_DECISION_MODEL_IDS: ReadonlySet<string> = new Set(
-  declaredCatalog.models
-    .filter((model) => model.inference?.chat === false)
-    .map((model) => model.id),
-);
 // Decision-only rows have no conversational token budget or chat transport.
 export const GOOGLE_GEMINI_MANIFEST_PROVIDER = buildManifestModelProviderConfig({
   providerId: "google",

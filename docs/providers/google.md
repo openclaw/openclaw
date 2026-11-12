@@ -201,10 +201,9 @@ as generated output or disable the existing retry deadline.
 
 ## Decision models
 
-The bundled `google` plugin supports the Gemini Decisions API through
-OpenClaw's [Decision model role](/concepts/decision-models). Configure
-`GEMINI_API_KEY`, `GOOGLE_API_KEY`, or a `google` API-key auth profile, then
-select `google/gemini-decision-1` in the Decision picker or set:
+The `google` plugin serves `google/gemini-decision-1` through the Gemini
+Decisions API as a [Decision model](/concepts/decision-models). With a Gemini
+API key configured, select it in the Decision picker or set:
 
 ```json5
 {
@@ -212,33 +211,15 @@ select `google/gemini-decision-1` in the Decision picker or set:
 }
 ```
 
-Gemini Decision is a typed-only model. It stays out of the chat model pickers,
-and selecting it does not replace the primary chat model or enable automatic
-Decision assistance. Requests go to `POST /v1beta/decisions` on the Gemini
-Developer API; Vertex AI and other base URLs do not serve this endpoint.
-
-Boolean questions map to native `noul` questions, and their `true` and `false`
-criteria become `true_description` and `false_description`. Choice questions
-keep their labels; a `null` description marks a self-explanatory option. Score
-levels use zero-based rubric positions. The model never sees question keys, so
-write the full question in its instructions. When a Choice or Score question
-omits instructions, OpenClaw asks Gemini which option or level best fits the
-input. A Boolean question needs instructions or true/false criteria. Question
-keys must match
-`[A-Za-z0-9_-]`, up to 64 characters. OpenClaw returns `unsupported-input` for
-any other request without calling the API.
-
-The adapter accepts text, JSON, or one inline PNG, JPEG, or WebP image up to
-4 MiB, with optional text. OpenClaw serializes JSON state as text, as Google
-recommends. It does not send audio, video, PDF, or remote URLs. Choice and Score
-questions take 2 to 255 options. Probabilities, fractional scores, confidence,
-and input token usage are preserved. The API reports zero output tokens.
-
-Gemini returns HTTP 400 for limit, key-validation, and input-safety rejections.
-OpenClaw reports these as `unsupported-input`. Usage is priced at Google's
-published Decision rate of $0.10 per million input tokens, with no output-token
-charge. Evaluations send the supplied evidence to Google and use your Gemini
-API billing.
+It is typed-only: it stays out of the chat model pickers and runs only on the
+Gemini Developer API, not Vertex AI. It accepts text, JSON (sent as text), or
+one inline PNG, JPEG, or WebP image up to 4 MiB, with Boolean, Choice, and
+Score questions of 2 to 255 options. Question keys must match `[A-Za-z0-9_-]`,
+up to 64 characters. Gemini requires instructions, so Choice and Score questions
+without them ask which option or level best fits the input; Boolean questions
+need instructions or true/false criteria. Gemini's HTTP 400 limit and safety
+rejections return `unsupported-input`. Usage is priced at $0.10 per million
+input tokens, with no output-token charge.
 
 ## Web search
 

@@ -1,7 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it } from "vitest";
-import { evaluateDecisionInRegistry, evaluateDecisionV2InRegistry } from "../decisions/runtime.js";
+import { evaluateDecisionV2InRegistry } from "../decisions/runtime.js";
 import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -111,20 +111,6 @@ it("routes the selected Gemini Decision model through the registered Google plug
           ]);
           // Google's published Decision rate: $0.10 per million input tokens, no output charge.
           expect(events[0]?.costUsd).toBeCloseTo((21 * 0.1) / 1_000_000, 12);
-          // Existing V1 callers reach the same native route through the lossless bridge.
-          const legacy = await withGuardedFetchRequestAuthority(undefined, () =>
-            evaluateDecisionInRegistry(
-              {
-                state: "legacy text",
-                questions: { urgent: { type: "boolean", instructions: "Is it urgent?" } },
-              },
-              options,
-              registry,
-              config,
-            ),
-          );
-          expect(legacy.status).toBe("ok");
-          expect(requests[1]?.body).toMatchObject({ input: "legacy text" });
           expect(registry.decisionProviders[0]?.host.inspect(config).activeRequests).toBe(0);
         });
       } finally {

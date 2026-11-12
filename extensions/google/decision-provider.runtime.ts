@@ -21,72 +21,6 @@ import {
   supportsGeminiDecisionBatch,
 } from "./decision-codec.js";
 import { resolveGoogleGenerativeAiHttpRequestConfig } from "./http-request.js";
-import { GOOGLE_GEMINI_DECISION_MODEL_IDS } from "./provider-catalog.js";
-
-type GeminiDecisionBatch = Parameters<typeof encodeGeminiDecisionRequest>[0];
-
-type GeminiDecisionExecution = Pick<
-  DecisionProviderContextV2,
-  "signal" | "deadlineMonotonicMs" | "isAdmissible"
-> & {
-  modelId: string;
-  apiKey: string;
-  capabilities: Parameters<typeof decodeGeminiDecisionResult>[3];
-  prepareTransport: () => ReturnType<typeof resolveGoogleGenerativeAiHttpRequestConfig> & {
-    preparedRequest: ReturnType<typeof getModelProviderRequestTransport>;
-    configuredHeaderNames: string[];
-  };
-};
-
-export async function evaluateGeminiDecision(
-  batch: DecisionBatchV2,
-  context: DecisionProviderContextV2,
-): Promise<ProviderDecisionOutcomeV2> {
-  context.signal.throwIfAborted();
-  if (
-    context.model.provider !== "google" ||
-    !GOOGLE_GEMINI_DECISION_MODEL_IDS.has(context.model.id) ||
-    (context.reasoning !== undefined && context.reasoning !== "auto") ||
-    !supportsGeminiDecisionBatch(batch)
-  ) {
-    return { status: "unavailable", reason: "unsupported-input" };
-  }
-  const apiKey = context.auth.apiKey;
-  if (!apiKey) {
-    return { status: "unavailable", reason: "credentials-unavailable" };
-  }
-  return executeGeminiDecision(batch, {
-    modelId: context.model.id,
-    apiKey,
-    capabilities: context.model.inference?.decision,
-    signal: context.signal,
-    deadlineMonotonicMs: context.deadlineMonotonicMs,
-    isAdmissible: context.isAdmissible,
-    prepareTransport: () => {
-      const preparedRequest = getModelProviderRequestTransport(context.model);
-      // Rejects non-AI Studio hosts: the Decisions API exists only on the Gemini Developer API.
-      const requestConfig = resolveGoogleGenerativeAiHttpRequestConfig({
-        apiKey,
-        baseUrl: context.model.baseUrl,
-        headers: context.model.headers,
-        request: preparedRequest
-          ? {
-              proxy: preparedRequest.proxy,
-              tls: preparedRequest.tls,
-              allowPrivateNetwork: preparedRequest.allowPrivateNetwork,
-            }
-          : undefined,
-        capability: "other",
-        transport: "http",
-      });
-      return {
-        ...requestConfig,
-        preparedRequest,
-        configuredHeaderNames: Object.keys(context.model.headers ?? {}),
-      };
-    },
-  });
-}
 
 function unavailableForStatus(response: Response): ProviderDecisionOutcomeV2 {
   const seconds = parseRetryAfterHeaderSeconds(response.headers.get("retry-after"));
@@ -105,43 +39,64 @@ function unavailableForStatus(response: Response): ProviderDecisionOutcomeV2 {
   };
 }
 
-async function executeGeminiDecision(
-  batch: GeminiDecisionBatch,
-  execution: GeminiDecisionExecution,
+export async function evaluateGeminiDecision(
+  batch: DecisionBatchV2,
+  context: DecisionProviderContextV2,
 ): Promise<ProviderDecisionOutcomeV2> {
-  const timeoutMs = execution.deadlineMonotonicMs - performance.now();
+  context.signal.throwIfAborted();
+  const capabilities = context.model.inference?.decision;
+  if (
+    context.model.provider !== "google" ||
+    capabilities?.protocol !== "gemini-decisions" ||
+    (context.reasoning !== undefined && context.reasoning !== "auto") ||
+    !supportsGeminiDecisionBatch(batch)
+  ) {
+    return { status: "unavailable", reason: "unsupported-input" };
+  }
+  const apiKey = context.auth.apiKey;
+  if (!apiKey) {
+    return { status: "unavailable", reason: "credentials-unavailable" };
+  }
+  const timeoutMs = context.deadlineMonotonicMs - performance.now();
   if (timeoutMs <= 0) {
     return { status: "unavailable", reason: "transport" };
   }
   const { signal: timeoutSignal, cleanup } = buildTimeoutAbortSignal({
-    signal: execution.signal,
+    signal: context.signal,
     timeoutMs,
     operation: "Gemini decision",
   });
-  const signal = timeoutSignal ?? execution.signal;
+  const signal = timeoutSignal ?? context.signal;
   let admissionError: { error: unknown } | undefined;
   const assertActive = () => {
     signal.throwIfAborted();
     let admitted: boolean;
     try {
-      admitted = execution.isAdmissible();
+      admitted = context.isAdmissible();
     } catch (error) {
       admissionError = { error };
       throw error;
     }
-    if (!admitted || performance.now() >= execution.deadlineMonotonicMs) {
+    if (!admitted || performance.now() >= context.deadlineMonotonicMs) {
       throw new Error("Gemini decision is no longer admitted.");
     }
   };
   try {
-    const {
-      baseUrl,
-      headers,
-      dispatcherPolicy,
-      allowPrivateNetwork,
-      preparedRequest,
-      configuredHeaderNames,
-    } = execution.prepareTransport();
+    const preparedRequest = getModelProviderRequestTransport(context.model);
+    // Rejects non-AI Studio hosts: the Decisions API exists only on the Gemini Developer API.
+    const { baseUrl, headers, dispatcherPolicy, allowPrivateNetwork } =
+      resolveGoogleGenerativeAiHttpRequestConfig({
+        apiKey,
+        baseUrl: context.model.baseUrl,
+        headers: context.model.headers,
+        request: preparedRequest && {
+          proxy: preparedRequest.proxy,
+          tls: preparedRequest.tls,
+          allowPrivateNetwork: preparedRequest.allowPrivateNetwork,
+        },
+        capability: "other",
+        transport: "http",
+      });
     const url = baseUrl.replace(/\/+$/u, "") + "/decisions";
     const request = {
       url,
@@ -150,11 +105,7 @@ async function executeGeminiDecision(
       maxRedirects: 0,
       dispatcherPolicy,
       policy: { allowPrivateNetwork },
-      init: {
-        method: "POST",
-        headers,
-        body: encodeGeminiDecisionRequest(batch, execution.modelId),
-      },
+      init: { method: "POST", headers, body: encodeGeminiDecisionRequest(batch, context.model.id) },
     };
     const { response, release } = await fetchWithProviderHttpGuard(
       !dispatcherPolicy && shouldUseEnvHttpProxyForUrl(url)
@@ -179,24 +130,25 @@ async function executeGeminiDecision(
       }
       assertActive();
       const serialized = JSON.stringify(payload);
+      const apiKeyHeader = headers.has("x-goog-api-key");
       if (
-        serialized.includes(execution.apiKey) ||
+        serialized.includes(apiKey) ||
         createProviderCredentialMatcher({
           headers,
           request: preparedRequest,
-          configuredHeaderNames,
-          defaultAuthHeader: headers.has("x-goog-api-key") ? "x-goog-api-key" : "Authorization",
-          defaultAuthPrefix: headers.has("x-goog-api-key") ? "" : "Bearer ",
+          configuredHeaderNames: Object.keys(context.model.headers ?? {}),
+          defaultAuthHeader: apiKeyHeader ? "x-goog-api-key" : "Authorization",
+          defaultAuthPrefix: apiKeyHeader ? "" : "Bearer ",
         })(serialized)
       ) {
         return { status: "unavailable", reason: "invalid-response" };
       }
-      return decodeGeminiDecisionResult(batch, payload, execution.modelId, execution.capabilities);
+      return decodeGeminiDecisionResult(batch, payload, context.model.id, capabilities);
     } finally {
       await release();
     }
   } catch {
-    execution.signal.throwIfAborted();
+    context.signal.throwIfAborted();
     if (admissionError) {
       throw admissionError.error;
     }
