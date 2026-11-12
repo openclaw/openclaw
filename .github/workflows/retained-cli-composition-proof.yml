@@ -2,6 +2,10 @@ name: Compiler Delegation Targeted Proof
 on:
   workflow_dispatch:
     inputs:
+      format_only:
+        description: Emit canonical formatting for the two pinned repair heads only
+        type: boolean
+        default: false
       target_ref:
         description: Exact reviewed compiler-delegation commit (bind CANDIDATE_SHA first)
         required: true
@@ -23,6 +27,7 @@ env:
   WORKFLOW_PATH: .github/workflows/retained-cli-composition-proof.yml
 jobs:
   tests:
+    if: ${{ !inputs.format_only }}
     strategy:
       fail-fast: false
       max-parallel: 2
@@ -219,6 +224,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
   types:
+    if: ${{ !inputs.format_only }}
     strategy:
       fail-fast: false
       max-parallel: 3
@@ -255,6 +261,7 @@ jobs:
       - *hashes
       - *upload
   static:
+    if: ${{ !inputs.format_only }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
@@ -322,3 +329,78 @@ jobs:
           test "${parity_status[1]}" -eq 0
       - *hashes
       - *upload
+
+  repair-format:
+    if: ${{ inputs.format_only }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - label: compiler
+            source: 0a1ec3a4b70f377c3d966cc7fb3be99709d868ff
+            files: test/scripts/changed-lanes.test.ts test/scripts/ci-workflow-manifest.test-support.ts
+          - label: windows
+            source: cbb97e8939d86db83be4b7670704fb4b1ac21068
+            files: scripts/diagnostics/windows-link-service.mjs
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ matrix.source }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Bind exact input
+        env:
+          SOURCE: ${{ matrix.source }}
+          FILES: ${{ matrix.files }}
+          REQUEST: ${{ inputs.target_ref }}
+          WORKFLOW: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          test "$REQUEST" = 0a1ec3a4b70f377c3d966cc7fb3be99709d868ff
+          test "$(git rev-parse HEAD)" = "$SOURCE"
+          test -z "$(git status --porcelain)"
+          mkdir -p .artifacts/repair-format
+          printf 'source=%s\nworkflow=%s\nrun=%s\nattempt=%s\n' "$SOURCE" "$WORKFLOW" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > .artifacts/repair-format/identity.txt
+          printf '%s\n' $FILES > .artifacts/repair-format/selected.txt
+          sha256sum $FILES > .artifacts/repair-format/before.sha256
+      - uses: ./.github/actions/setup-node-env
+        with:
+          semantic-checks: "true"
+          install-bun: "false"
+          cache-mode: restore
+      - uses: ./.github/actions/setup-test-bun
+      - name: Format and verify parity
+        env:
+          OPENCLAW_FORMAT_TOOL: oxfmt
+        run: |
+          set -euo pipefail
+          evidence=.artifacts/repair-format
+          mapfile -t files < "$evidence/selected.txt"
+          git diff --quiet
+          node scripts/run-format.mts --write "${files[@]}" 2>&1 | tee "$evidence/write.log"
+          node scripts/run-format.mts --check "${files[@]}" 2>&1 | tee "$evidence/parity.log"
+          git diff --name-only | sort > "$evidence/changed.txt"
+          sort "$evidence/selected.txt" > "$evidence/allowed.txt"
+          test -z "$(comm -23 "$evidence/changed.txt" "$evidence/allowed.txt")"
+          git diff --check
+          git diff --binary --full-index > "$evidence/formatter.patch"
+          sha256sum "${files[@]}" > "$evidence/after.sha256"
+          mkdir -p "$evidence/formatted-source"
+          cp --parents -- "${files[@]}" "$evidence/formatted-source/"
+          printf 'write=passed\nparity=passed\n' > "$evidence/result.txt"
+      - name: Hash evidence
+        if: always()
+        run: |
+          if test -d .artifacts/repair-format; then
+            (cd .artifacts/repair-format && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 -r sha256sum > SHA256SUMS)
+          fi
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: repair-format-${{ matrix.label }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/repair-format/
+          if-no-files-found: error
+          retention-days: 14
