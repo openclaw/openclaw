@@ -6,11 +6,11 @@ name: Release runtime custody and input fixture recovery proof
         required: true
         type: string
         description: Exact frozen candidate SHA; prerequisite diagnostic, not final FRV
-        default: 0825476ef97a33cf908fff0869907c44355c4d63
+        default: 39790f9682ffa8d1afb25df1a30e616c5fcb7d4e
 permissions:
   contents: read
 concurrency:
-  group: release-114-custody-recovery-0825476ef97a33cf908fff0869907c44355c4d63
+  group: release-114-custody-recovery-39790f9682ffa8d1afb25df1a30e616c5fcb7d4e
   cancel-in-progress: false
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
@@ -21,8 +21,8 @@ env:
   PREREQUISITE_PARENT: 258908e6b943c0197bca8d0306dbbbbf503bcb22
   CAPACITY_PROOF_SHA: 7af9ee549e45948707162d9d8cfa8c068a084fe6
   PREREQUISITE_PATCH_SHA256: 5d8f8bb9a93331eb4a01ca2aefcf2d655dd0e36821f44353663e62d2751f7dc5
-  CANDIDATE_SHA: 0825476ef97a33cf908fff0869907c44355c4d63
-  SOURCE_TREE: 100340d3b761d67e0e26a0d9b4790d9934d7d074
+  CANDIDATE_SHA: 39790f9682ffa8d1afb25df1a30e616c5fcb7d4e
+  SOURCE_TREE: fc7ef8c1fc13f0865c9c0c3029eee93ceb7f9746
   PATHS_SHA256: 3cf57f4e09f1fcd9a5ef0f22ea38449996ba570cfc2f52f14b129ab864a63851
   TRUSTED_P: 68aff7f864148760c3800c95435cc36ddaa91654
 jobs:
