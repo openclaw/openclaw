@@ -1477,6 +1477,7 @@ src/infra/worker-diagnostic-script.ts
 src/infra/worker-idle-gc.ts
 src/infra/worker-memory.ts
 src/infra/worker-message-metrics.ts
+src/infra/worker-fs-safe.ts
 src/infra/worker-native-error.ts
 src/infra/worker-native-handle.ts
 src/infra/worker-native-lifecycle.ts
