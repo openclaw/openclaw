@@ -122,8 +122,7 @@ describe("registerCodexSessionCli", () => {
       expect(output).toContain("Build Codex fleet sessions\\n");
       expect(output).toContain("/Users/test/Projects/openclaw");
       expect(output).toContain("branch codex/codex-session-fleet");
-      expect(output).toContain("source vscode");
-      expect(output).toContain("provider openai");
+      expect(output).toContain("source vscode · provider openai");
       expect(output).toContain(
         "repeat the same filters with --host 'gateway:local' --cursor 'gateway-next'",
       );
@@ -144,7 +143,10 @@ describe("registerCodexSessionCli", () => {
 
     it("prints no session list that lands after Ctrl+C", async () => {
       const work = new AsyncWorkScope();
-      callGatewayFromCli.mockImplementation(() => work.beginClose());
+      callGatewayFromCli.mockImplementation(async () => {
+        work.beginClose();
+        return gatewayCatalog(catalog.hosts);
+      });
       expect(await work.run(() => runCli(["sessions"], { json: true }))).toBe("");
     });
   });
@@ -153,7 +155,6 @@ describe("registerCodexSessionCli", () => {
     it.each([false, true])("continues a Gateway-local thread (JSON=%s)", async (json) => {
       const sessionKey = "harness:codex:supervision:branch\u001b[2J";
       callGatewayFromCli.mockResolvedValueOnce({ sessionKey, ignored: true });
-
       const output = await runCli(["continue", "thread-1"], {
         agent: "JarVis",
         host: "gateway:local:source-a",
@@ -172,7 +173,6 @@ describe("registerCodexSessionCli", () => {
         expect(JSON.parse(output)).toEqual({ sessionKey });
       } else {
         expect(output).toBe("OpenClaw session: harness:codex:supervision:branch\n");
-        expect(output).not.toContain("\u001b");
       }
     });
   });
