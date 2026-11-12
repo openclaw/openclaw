@@ -28,6 +28,7 @@ import {
 import type { MentionCommittedInput } from "./mention-inbox.types.js";
 import {
   authorizeGatewaySessionCreation,
+  resolveAdministratorMemberRolePolicy,
   resolveOperatorRolePolicyForProfile,
 } from "./operator-role-policy.js";
 import { ADMIN_SCOPE, READ_SCOPE, SESSION_READ_SCOPE } from "./operator-scopes.js";
@@ -55,7 +56,11 @@ type MentionTarget = {
   sessionKey?: string;
   entry: Pick<SessionEntry, "createdActor" | "visibility" | "incognito">;
 };
-type MentionReader = { profile: MentionProfile; canRead: (target: MentionTarget) => boolean };
+type MentionReader = {
+  profile: MentionProfile;
+  administratorMemberPolicy: ReturnType<typeof resolveAdministratorMemberRolePolicy>;
+  canRead: (target: MentionTarget) => boolean;
+};
 type MentionRanking = {
   participants: readonly SessionParticipantRecord[];
   members: ReadonlySet<string>;
@@ -156,7 +161,9 @@ export function createHumanMentionPolicy(params: {
     if (!profile) {
       return err(authenticatedProfileUnavailableError());
     }
-    const policy = resolveOperatorRolePolicyForProfile(profile.profileId, cfg);
+    const administratorMemberPolicy = resolveAdministratorMemberRolePolicy(client, cfg);
+    const policy =
+      administratorMemberPolicy ?? resolveOperatorRolePolicyForProfile(profile.profileId, cfg);
     if (policy && !operatorScopeSatisfied(SESSION_READ_SCOPE, policy.scopes)) {
       return err(errorShape(ErrorCodes.FORBIDDEN, "Your operator role cannot read mentions."));
     }
@@ -168,11 +175,17 @@ export function createHumanMentionPolicy(params: {
       cfg,
       client: {
         connect: { ...client.connect, scopes: admin ? [ADMIN_SCOPE] : [SESSION_READ_SCOPE] },
-        internal: { operatorRoleActor: { kind: "operator", profileId: profile.profileId } },
+        internal: {
+          operatorRoleActor: { kind: "operator", profileId: profile.profileId },
+          ...(administratorMemberPolicy
+            ? { openclawIdPrincipal: client.internal?.openclawIdPrincipal }
+            : {}),
+        },
       },
     });
     return ok({
       profile,
+      administratorMemberPolicy,
       canRead: (target) => entryFilter?.(target.sessionKey, target.entry) ?? true,
     });
   }
@@ -239,11 +252,16 @@ export function createHumanMentionPolicy(params: {
     if (!agent.ok) {
       return err(agent.error);
     }
-    const creationError = authorizeGatewaySessionCreation({
-      cfg,
-      profileId: requester.profile.profileId,
-      agentId: agent.agentId,
-    });
+    const creationError = authorizeGatewaySessionCreation(
+      {
+        cfg,
+        profileId: requester.profile.profileId,
+        agentId: agent.agentId,
+      },
+      requester.administratorMemberPolicy
+        ? { policy: requester.administratorMemberPolicy }
+        : undefined,
+    );
     if (creationError) {
       return err(creationError);
     }

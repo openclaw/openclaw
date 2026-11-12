@@ -426,6 +426,28 @@ viewable shared sessions, and `sandbox: "required"`. Operator remains the defaul
 invite role. These are editable definitions; custom member roles may
 include `operator.admin` and pairing scopes with no built-in ceiling.
 
+A member granted `operator.admin` is a Gateway administrator, not the shared Gateway
+owner. Through that member connection they can edit Gateway config, role definitions,
+and the OpenClaw ID enable/disable switch; manage profiles, model accounts, devices,
+nodes, plugins, secrets, approvals, automations, sessions, and environments; and use
+the administrator update and restart APIs. A separate named-role profile assignment
+is not required. Their own profile remains the actor, and the Control UI does not
+show a limited-access notice for an administrator grant. Existing per-feature
+requirements, including agent and sandbox restrictions, still apply.
+
+Membership changes, invitations, approvals of members or owner devices, and node
+admission still require an authorized owner-device signature. The owner roster and
+Discovery publication remain owner-device surfaces. Root/recovery ceremonies remain
+local-owner operations: editing the OpenClaw ID config switch does not implement
+remote linking or the remote **Make reachable** flow. Administrator scope is not an
+owner signing key.
+
+Queued GitHub publication retains the initiating member device's attested membership
+source and checks it again before later writes, including after recovery. Removal,
+role changes, or a definition that no longer permits the request stop later writes;
+a new access-policy requirement cannot replace the original grant. Nonadministrator
+members retain their existing publication restrictions.
+
 A member's sandbox requirement comes from the membership definition, even when
 `gateway.roles.default` is absent or their profile has a different named role
 through another sign-in. New sessions record that requirement before execution;
