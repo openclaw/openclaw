@@ -21,7 +21,6 @@ import {
 import { importSqliteSessionRows } from "../../src/config/sessions/session-accessor.sqlite-import.test-support.js";
 import { SESSION_ARCHIVE_ZSTD_SUFFIX } from "../../src/config/sessions/transcript-file-names.js";
 import type { SessionEntry } from "../../src/config/sessions/types.js";
-import { isGatewayProtocolResponseError } from "../../src/gateway/client.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
@@ -41,6 +40,10 @@ import {
 import { withinTest } from "./promise.js";
 import { runQaGatewayFixture } from "./qa-gateway-cleanup.js";
 import { readSessionArchiveText } from "./session-archive.js";
+import {
+  acceptSupersededHistoryRead,
+  deleteAfterLifecycleRace,
+} from "./sqlite-flip-proof-races.js";
 import { stopChildProcess } from "./stop-child-process.js";
 
 type DoctorMode = "fix" | "import" | "inspect" | "validate" | "restore";
@@ -1634,7 +1637,16 @@ async function runConcurrentMultiClientLifecycle(
         .catch(acceptSupersededHistoryRead);
       const deleteRequests = [
         deleteHistoryPromise,
-        deleteSession(primaryClient, context.concurrentDeleteSessionKey),
+        deleteAfterLifecycleRace({
+          key: context.concurrentDeleteSessionKey,
+          remove: () =>
+            primaryClient.request("sessions.delete", {
+              key: context.concurrentDeleteSessionKey,
+              deleteTranscript: true,
+              expectedSessionId: "sqlite-concurrent-delete",
+            }),
+          settle: () => waitForAgentRunSettled(historyClient, deleteRunId),
+        }),
       ];
       const joinDeleteRequests = ownProofCleanup(context, async () => {
         await Promise.allSettled(deleteRequests);
@@ -1654,20 +1666,6 @@ async function runConcurrentMultiClientLifecycle(
       }
     }, disconnectLifecycleClient);
   }, disconnectHistoryClient);
-}
-
-function acceptSupersededHistoryRead(error: unknown): void {
-  if (
-    isGatewayProtocolResponseError(error) &&
-    error.code === "UNAVAILABLE" &&
-    error.retryable &&
-    error.message === "session changed while reading history; reload the conversation" &&
-    asRecord(error.details)?.method === "chat.history" &&
-    error.responsePayload === undefined
-  ) {
-    return;
-  }
-  throw error;
 }
 
 async function resetSession(client: GatewayClient, key: string): Promise<string> {

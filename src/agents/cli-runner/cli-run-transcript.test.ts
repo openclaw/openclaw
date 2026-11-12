@@ -124,10 +124,10 @@ it.each([false, true])("persists CLI usage with separate turn total=%s", async (
   const pricedRunParams = {
     ...runParams,
     provider: turnTotal ? "claude-cli" : "codex-cli",
-    // The synthetic model has no vendor catalog price: the other turn stays unpriced, never $0.
+    // Only Claude is priced; an unknown fixture model must remain unpriced, never $0.
     config: sourcePricing("claude-cli", "claude-opus-4-8", rates),
   };
-  const modelId = turnTotal ? "claude-opus-4-8" : "unpriced-cli-test-model";
+  const modelId = turnTotal ? "claude-opus-4-8" : "fixture-unpriced-model";
   const cacheUsage = { input: 4418, output: 5, cacheWrite: 36955, cacheWrite1h: 36955 };
   const priced = buildCliAssistantTranscriptUsage({
     runParams: pricedRunParams,
