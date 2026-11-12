@@ -1,0 +1,3 @@
+# Real authenticated chat.send regression for incidental-mention silence,
+# preserving human-only routing, notifications, and internal-result recovery.
+25

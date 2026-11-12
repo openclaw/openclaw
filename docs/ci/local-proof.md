@@ -147,6 +147,22 @@ Missing active translations or resources, active placeholder drift, invalid
 artifact syntax, and other generated-output differences remain blocking. Generator sync
 and the standalone Android and Apple checks retain their strict behavior.
 
+### Delegating changed compilers in CI
+
+`check:changed --delegate-compilers` retains the selected formatting, lint, guards,
+owner tests, and graph-boundary check. The changed-check planner exposes the removed
+compiler work as `delegatedTypeGraphs`; it does not infer compiler commands from
+printed output. Narrow core-test checks keep their shared boundary inventory inline.
+The aggregate `tsgo:all` project-reference build also stays inline.
+
+A CI caller must give `ci-check-plan` the same exact changed paths and base commit,
+with `typeGraphBoundaryOwner: "changed-check"`, then execute every returned type row
+through the native compiler runner. Pass those paths explicitly to `check:changed`
+so both planners use the same scope rather than a separate trivia-filtered diff.
+Keep noncompiler checks in the changed-check lane; do not also select a native lint
+lane. Compiler jobs and the changed-check job are all required for success. Omitting
+compiler jobs is not successful changed-file proof. The default CLI is unchanged.
+
 ### Opt-in compiler evidence
 
 Keep `pnpm check:timed` (or `check:changed --timed`) for stage timings and
