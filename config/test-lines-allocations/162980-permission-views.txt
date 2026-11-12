@@ -9,6 +9,6 @@
 # query disclosure retention and desktop/theme/phone long-label boundary proof.
 # Includes canonical self-profile ownership in the shared test Gateway and
 # exact self-mention response/privacy assertions; production behavior unchanged.
-# Includes 12 LF for the direct production-HTTP fixture and its no-full-harness
-# regression; temporary setup instrumentation and its 77 LF allocation retired.
-1078
+# Includes 26 LF for the direct production-HTTP fixture, its no-full-harness
+# and HTTP-owner readiness regressions; the 77 LF diagnostic allocation is retired.
+1092

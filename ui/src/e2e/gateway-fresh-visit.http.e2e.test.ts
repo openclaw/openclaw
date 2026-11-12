@@ -9,13 +9,24 @@ import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-scr
 import { buildProductionControlUiE2e, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
+const startup = vi.hoisted(() => ({ starting: true }));
+
 // mock-isolation: Loading this unused test harness is the regression; no exports are consumed.
 vi.mock("../../../src/gateway/server-http.test-harness.ts", () => {
   throw new Error("Fresh HTTP fixture loaded the unnecessary full Gateway test harness");
 });
 
+vi.mock("../../../src/gateway/control-ui.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../src/gateway/control-ui.ts")>();
+  if (!startup.starting) {
+    throw new Error(
+      "The Control UI HTTP owner must initialize before this fixture declares startup complete",
+    );
+  }
+  return actual;
+});
+
 const runtime = createDeferred();
-let starting = true;
 let requests = 0;
 // This suite exercises the asset-free fallback, not the preferred Web UI lane.
 const controlUiRoot: ControlUiRootState = { kind: "missing" };
@@ -60,6 +71,9 @@ const suite = createControlUiE2eSuite({
       async () => {
         await state.writeConfig(config);
         configRuntime.setRuntimeConfigSnapshot(config, config);
+        // A ready fixture must not spend browser recovery deadlines initializing its HTTP owner.
+        const { getControlUiModule } = await import("../../../src/gateway/server-http-modules.ts");
+        await getControlUiModule();
         const server = http.createGatewayHttpServer({
           clients: new Set(),
           handleHooksRequest: async () => false,
@@ -71,7 +85,7 @@ const suite = createControlUiE2eSuite({
           controlUiBasePath: "/console",
           controlUiRoot,
           getStartup: () =>
-            starting
+            startup.starting
               ? { ok: false, status: "starting", uptimeMs: 1, pendingReason: "startup-sidecars" }
               : { ok: true, status: "started", uptimeMs: 2 },
           waitForRequestRuntime: () => runtime.promise,
@@ -175,14 +189,14 @@ suite.define(() => {
           await expect.poll(() => requests).toBeGreaterThan(beforeRetry);
           expect(page.url()).toBe(target);
           Object.assign(controlUiRoot, { kind: "resolved", path: currentUiRoot });
-          starting = false;
+          startup.starting = false;
           runtime.resolve();
           await expect
             .poll(() => page.locator("#openclaw-maintenance").count(), { timeout: 20_000 })
             .toBe(0);
           expect(page.url()).toBe(target);
         } finally {
-          starting = false;
+          startup.starting = false;
           runtime.resolve();
           await page.clock.resume();
           await navigation;
@@ -193,7 +207,7 @@ suite.define(() => {
 
   it("does not call an unknown app-bundle failure an update or restart", async () => {
     Object.assign(controlUiRoot, { kind: "resolved", path: currentUiRoot });
-    starting = false;
+    startup.starting = false;
     runtime.resolve();
     await suite.withPage(
       { viewport: { width: 1280, height: 900 }, serviceWorkers: "block" },
