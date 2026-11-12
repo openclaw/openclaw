@@ -13,8 +13,9 @@ and outbound token when OpenClaw should initiate messages to it.
 Agent Card discovery is public. Limit `channels.a2a.exposeAgents` if only selected
 agents should be advertised.
 
-Peers can submit text tasks, not operator slash commands. Streaming, file
-transfer, and task cancellation are not supported.
+Peers can submit text tasks and cancel their own independently running or queued
+tasks. Cancellation completes only after the native owner settles the original
+input. Operator slash commands, streaming, and file transfer are not supported.
 
 See the [A2A guide](https://docs.openclaw.ai/channels/a2a) for configuration,
 authentication, and task polling.

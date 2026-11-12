@@ -1,12 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { A2aTaskStore } from "./task-store.js";
-import { createTerminalStoreFixture } from "./task-store.test-support.js";
+import {
+  createPendingStoreFixture,
+  createTerminalStoreFixture,
+} from "./task-store.test-support.js";
 
 describe("A2A task store", () => {
   let store: A2aTaskStore;
   const create = (message: string, owner = "alice") => store.create(`ctx-${owner}`, owner, message);
   beforeEach(() => {
-    store = new A2aTaskStore(createTerminalStoreFixture());
+    store = new A2aTaskStore(createTerminalStoreFixture(), createPendingStoreFixture());
   });
   afterEach(async () => {
     await store.stop();
@@ -40,7 +43,7 @@ describe("A2A task store", () => {
 
   it("fails outstanding HTTP waits on shutdown", async () => {
     const task = create("shutdown");
-    store.start(task.id);
+    await store.start(task.id);
     const waiting = store.wait(task, 120_000);
 
     await store.stop();
@@ -52,7 +55,7 @@ describe("A2A task store", () => {
   it("keeps a later observer waiting after a sibling times out", async () => {
     vi.useFakeTimers();
     const task = create("observers");
-    store.start(task.id);
+    await store.start(task.id);
     const first = store.wait(task, 10);
     await vi.advanceTimersByTimeAsync(5);
     const second = store.wait(task, 20);
@@ -102,22 +105,82 @@ describe("A2A task store", () => {
 });
 
 describe("A2A terminal recovery", () => {
+  it.each([false, true])(
+    "does not let stale pending cleanup replace a reused message ID (completed: %s)",
+    async (completed) => {
+      const clock = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+      try {
+        const durable = createTerminalStoreFixture();
+        const pending = createPendingStoreFixture();
+        vi.spyOn(pending, "delete").mockRejectedValueOnce(new Error("cleanup unavailable"));
+        const store = new A2aTaskStore(durable, pending);
+        const old = store.create("ctx", "alice", "reused");
+        await store.start(old.id);
+        await store.complete(old.id, "expired answer");
+        clock.mockReturnValue(1_800_000_000_000 + 24 * 60 * 60 * 1000);
+        const current = store.create("ctx", "alice", "reused");
+        await store.start(current.id);
+        if (completed) {
+          await store.complete(current.id, "current answer");
+        }
+        const reopened = new A2aTaskStore(durable, pending);
+        await reopened.restore();
+        expect(reopened.create("ctx", "alice", "reused").id).toBe(current.id);
+        expect(reopened.get(old.id, "alice")).toBeUndefined();
+        expect(reopened.get(current.id, "alice")?.status.state).toBe(
+          completed ? "TASK_STATE_COMPLETED" : "TASK_STATE_FAILED",
+        );
+        if (completed) {
+          expect(reopened.get(current.id, "alice")?.artifacts).toEqual(current.artifacts);
+        }
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
+
+  it("fences an uncertain admission until restart without dispatching a retry", async () => {
+    const durable = createTerminalStoreFixture();
+    const pending = createPendingStoreFixture();
+    const register = pending.register;
+    const admission = vi.spyOn(pending, "register").mockImplementation(async (...args) => {
+      await register(...args);
+      throw new Error("admission acknowledgement lost");
+    });
+    const store = new A2aTaskStore(durable, pending);
+    const task = store.create("ctx", "alice", "uncertain");
+    await expect(store.start(task.id)).rejects.toThrow("admission acknowledgement lost");
+    const replay = store.create("ctx", "alice", "uncertain");
+    expect(replay.id).toBe(task.id);
+    await expect(store.start(replay.id)).rejects.toThrow("admission acknowledgement lost");
+    await expect(store.stop()).rejects.toThrow("admission acknowledgement lost");
+    expect(admission).toHaveBeenCalledOnce();
+    expect(durable.rows.size).toBe(0);
+    const reopened = new A2aTaskStore(durable, pending);
+    await reopened.restore();
+    expect(reopened.get(task.id, "alice")?.status.state).toBe("TASK_STATE_FAILED");
+    expect(await reopened.start(task.id)).toBeUndefined();
+  });
+
   it("restores terminal results and peer-scoped deduplication without reviving active inference", async () => {
     const durable = createTerminalStoreFixture();
-    const first = new A2aTaskStore(durable);
+    const pending = createPendingStoreFixture();
+    const first = new A2aTaskStore(durable, pending);
     const completed = first.create("ctx", "alice", "done");
     const failed = first.create("ctx", "alice", "failed");
     const active = first.create("ctx", "alice", "active");
-    first.start(active.id);
+    await first.start(active.id);
     await first.complete(completed.id, "answer");
     await first.fail(failed.id, "provider failed");
 
-    const reopened = new A2aTaskStore(durable);
+    const reopened = new A2aTaskStore(durable, pending);
     await reopened.restore();
     expect(reopened.get(completed.id, "alice")).toEqual(completed);
     expect(reopened.get(failed.id, "alice")).toEqual(failed);
     expect(reopened.get(completed.id, "bob")).toBeUndefined();
-    expect(reopened.get(active.id, "alice")).toBeUndefined();
+    expect(reopened.get(active.id, "alice")?.status.state).toBe("TASK_STATE_FAILED");
+    expect(reopened.create("ctx", "alice", "active").id).toBe(active.id);
+    expect(await reopened.start(active.id)).toBeUndefined();
     expect(reopened.create("different-context", "alice", "done").id).toBe(completed.id);
     expect(reopened.create("ctx", "bob", "done").id).not.toBe(completed.id);
   });
@@ -126,7 +189,7 @@ describe("A2A terminal recovery", () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
     try {
       const durable = createTerminalStoreFixture();
-      const first = new A2aTaskStore(durable);
+      const first = new A2aTaskStore(durable, createPendingStoreFixture());
       const tasks = Array.from({ length: 501 }, (_, index) =>
         first.create("ctx", "alice", `${index}`),
       );
@@ -134,13 +197,13 @@ describe("A2A terminal recovery", () => {
       for (const task of tasks.toReversed()) {
         await first.complete(task.id, task.id);
       }
-      const reopened = new A2aTaskStore(durable);
+      const reopened = new A2aTaskStore(durable, createPendingStoreFixture());
       await reopened.restore();
       expect(reopened.get(tasks[500]!.id, "alice")).toBeUndefined();
       expect(reopened.get(tasks[499]!.id, "alice")).toBeDefined();
       expect(reopened.get(tasks[0]!.id, "alice")).toBeDefined();
       clock.mockReturnValue(1_800_000_000_000 + 24 * 60 * 60 * 1000);
-      const expired = new A2aTaskStore(durable);
+      const expired = new A2aTaskStore(durable, createPendingStoreFixture());
       await expired.restore();
       expect(expired.get(tasks[0]!.id, "alice")).toBeUndefined();
     } finally {
@@ -159,9 +222,9 @@ describe("A2A terminal recovery", () => {
       await gate;
       await register(...args);
     };
-    const store = new A2aTaskStore(durable);
+    const store = new A2aTaskStore(durable, createPendingStoreFixture());
     const task = store.create("ctx", "alice", "stalled");
-    store.start(task.id);
+    await store.start(task.id);
     const waiting = store.wait(task, 120_000);
     const completed = store.complete(task.id, "answer");
     const stopped = vi.fn();
@@ -174,7 +237,7 @@ describe("A2A terminal recovery", () => {
     await expect(completed).resolves.toMatchObject({ status: { state: "TASK_STATE_COMPLETED" } });
     await expect(waiting).resolves.toMatchObject({ status: { state: "TASK_STATE_COMPLETED" } });
     await stopping;
-    const reopened = new A2aTaskStore(durable);
+    const reopened = new A2aTaskStore(durable, createPendingStoreFixture());
     await reopened.restore();
     expect(reopened.get(task.id, "alice")?.artifacts[0]?.parts).toEqual([{ text: "answer" }]);
   });
@@ -187,27 +250,29 @@ describe("A2A terminal recovery", () => {
       durable.rows.set(key, { key, value: structuredClone(value), createdAt: Date.now() });
       throw new Error("acknowledgement lost");
     });
-    const store = new A2aTaskStore(durable);
+    const store = new A2aTaskStore(durable, createPendingStoreFixture());
     const task = store.create("ctx", "alice", "ambiguous");
     await expect(store.complete(task.id, "real answer")).rejects.toThrow("acknowledgement lost");
     await expect(store.fail(task.id, "synthetic failure")).rejects.toThrow("acknowledgement lost");
     await expect(store.stop()).rejects.toThrow("acknowledgement lost");
     expect(register).toHaveBeenCalledTimes(1);
-    const reopened = new A2aTaskStore(durable);
+    const reopened = new A2aTaskStore(durable, createPendingStoreFixture());
     await reopened.restore();
     expect(reopened.get(task.id, "alice")?.status.state).toBe("TASK_STATE_COMPLETED");
   });
 
   it("refuses persisted nonterminal or unknown states before accepting reads", async () => {
     const durable = createTerminalStoreFixture();
-    const first = new A2aTaskStore(durable);
+    const first = new A2aTaskStore(durable, createPendingStoreFixture());
     const task = first.create("ctx", "alice", "invalid");
     await first.complete(task.id, "answer");
     for (const state of ["TASK_STATE_WORKING", "unknown"]) {
       for (const row of durable.rows.values()) {
         Reflect.set(row.value.task.status, "state", state);
       }
-      await expect(new A2aTaskStore(durable).restore()).rejects.toThrow("Invalid persisted");
+      await expect(
+        new A2aTaskStore(durable, createPendingStoreFixture()).restore(),
+      ).rejects.toThrow("Invalid persisted");
     }
   });
 });

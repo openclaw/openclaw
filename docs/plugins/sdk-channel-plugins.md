@@ -486,6 +486,24 @@ when initialization must finish before the child runs.
       observer. Human-facing channels should continue to
       deliver useful host notices.
 
+      `replyOptions.onReplySourceCancellation(cancel)` receives a host-issued
+      capability for that exact inbound source. It accepts no session or run ID.
+      Pass the requesting channel's synchronous live authority check to `await cancel(assertCurrent)`.
+      The host rechecks that same guard at native withdrawal or abort, after any caller waits.
+      It returns `true` only after the owner accepts cancellation
+      and the source's producer and cleanup have settled. A `false` result means
+      the source cannot be canceled independently, for example after completion,
+      during native input injection, or after collection into a shared run.
+      A rejected promise is an unconfirmed outcome, not proof of cancellation.
+      Keep this capability with the admitted task, authorize the caller before
+      invoking it, and publish cancellation only after a `true` result. Do not
+      wait on that request from source completion callbacks: they may be part of
+      the settlement it is awaiting. Channels requiring independent task control
+      should use an `exclusive` adoption lifecycle for each task so collect mode
+      cannot combine their execution ownership. This mode is for channels that
+      own durable ingress custody, such as A2A's accepted task records.
+      Cancellation does not undo external effects that already happened.
+
       `replyOptions.onFollowupQueueDisposition` reports terminal queue-cap rejection
       (`queue-cap` or `queue-cap-new`) and eviction (`queue-cap-old`) for the original
       source. These messages will not run, so channels should finalize their status

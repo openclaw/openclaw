@@ -170,6 +170,7 @@ function prepareParticipant(
         ...original,
         abortSignal: signals.length > 1 ? AbortSignal.any(signals) : signals[0],
         turnAdoptionLifecycle: undefined,
+        onReplySourceCancellation: undefined,
         replyConversation: undefined,
         expectedExistingSessionId: undefined,
         newlyCreatedSessionId: undefined,

@@ -118,9 +118,22 @@ curl http://127.0.0.1:18789/a2a/v1 \
   }'
 ```
 
-The task transitions from `TASK_STATE_WORKING` to `TASK_STATE_COMPLETED`, `TASK_STATE_FAILED`, or `TASK_STATE_REJECTED`. Older clients can use `tasks/get` as a compatibility alias.
+The task transitions from `TASK_STATE_WORKING` to `TASK_STATE_COMPLETED`, `TASK_STATE_FAILED`, `TASK_STATE_CANCELED`, or `TASK_STATE_REJECTED`. Older clients can use `tasks/get` as a compatibility alias.
 
-`CancelTask` is refused with JSON-RPC error `-32004` rather than acknowledged. A dispatched agent run has no plugin API for stopping it, so reporting `TASK_STATE_CANCELED` would tell the peer the work stopped while the run kept using tools. Refusing keeps the reported state honest.
+## Cancel a task
+
+Send `CancelTask` (or `tasks/cancel`) with the same `{ "id": "<task-id>" }` params
+and the owning peer's credentials. The Gateway withdraws that task's queued input
+or stops its independently owned active turn. It returns `TASK_STATE_CANCELED`
+only after the execution owner confirms cancellation and its cleanup settles.
+Other tasks in the same context keep their queue order and are not canceled.
+
+Unknown, expired, and other peers' task IDs return `-32001`. Tasks without an
+independent live cancellation source, including completed tasks and inputs already
+injected into a shared run, return `-32002` (`TaskNotCancelableError`). Repeating a
+successful cancellation returns the retained canceled task. Replaying its original
+message ID also returns that task without another execution. Cancellation does not
+undo tool calls or external effects that already happened.
 
 ## Configure outbound peers
 
@@ -149,8 +162,9 @@ Agent replies, including queued followups, deliver only terminal reply content t
 Host status notices, including metadata-only diagnostics, and run-failure messages are not
 forwarded as new peer messages or task artifacts. A failed agent run instead marks its
 originating task `TASK_STATE_FAILED` with the reason `Agent run failed`, including when the
-run was queued. If collect mode combines requests, a failed run marks every originating
-task failed. This does not change error reporting on human-facing channels.
+run was queued. A2A tasks retain separate adoption identities even in collect mode,
+so each task owns its execution and cancellation. This does not change collection
+or error reporting on human-facing channels.
 
 ## Configuration reference
 
@@ -184,6 +198,8 @@ Agent Card discovery is intentionally public: anyone who can reach the gateway c
 
 Every JSON-RPC request requires a configured peer bearer token. There is no unauthenticated mode. Each authenticated peer is also the sender identity used for normal OpenClaw channel ingress policy. Use different high-entropy tokens for each peer, keep tokens out of source control, and rotate tokens by updating the gateway environment and restarting.
 
+Peer credentials are rechecked against the active runtime configuration after request and storage waits, before dispatch, and before returning task results. Removing the account or peer, disabling A2A, or rotating its token blocks the old credential when that configuration is activated. An admitted task that loses authorization before dispatch keeps its original ID and becomes rejected; retrying its message ID does not start new work.
+
 A2A peers send tasks, not user commands. Messages beginning with `/` are rejected with `TASK_STATE_REJECTED` and an explanation. Command-like text inside an ordinary task stays literal. It cannot change session settings or resolve approvals. This also applies when the peer sets the protocol message role to `ROLE_USER`: that field does not authenticate a human user.
 
 Ordinary tasks retain the tools and permissions of their routed agent. Work requiring approval still needs an authorized operator's decision through a supported user channel or the Control UI. Existing integrations that sent slash commands over A2A must use plain-text tasks for agent work and an authorized user surface for commands. There is no peer command opt-in.
@@ -196,7 +212,7 @@ Outbound destinations come only from operator-configured peer URLs. Inbound call
 
 ## A2A 1.0 limitations
 
-The current plugin supports text messages and structured JSON data parts, which are appended as compact JSON text. File URL and raw binary parts are ignored. Streaming, server-sent events, push notifications, task cancellation, task listing, extended Agent Cards, and multi-tenant routing are not supported.
+The current plugin supports text messages and structured JSON data parts, which are appended as compact JSON text. File URL and raw binary parts are ignored. Streaming, server-sent events, push notifications, task listing, extended Agent Cards, and multi-tenant routing are not supported.
 
 The Agent Card advertises `pushNotifications: false`. Push notification configuration methods return JSON-RPC error `-32003` (`PushNotificationNotSupportedError`), as required by the [A2A 1.0 specification](https://a2a-protocol.org/v1.0.0/specification/#334-capability-validation). Other recognized unsupported methods return `-32004`; unknown method names return `-32601`.
 
@@ -208,7 +224,9 @@ reply text completes without an artifact; stopping the channel fails unfinished 
 
 Completed and other terminal tasks are persisted per account before they are returned to peers. They survive Gateway restarts for up to 24 hours from their original completion time, with a maximum of 500 retained entries in finish order. Peer ownership and message deduplication survive with each retained task. Active inference is not resumed after a restart; stopping the channel records unfinished tasks as failed.
 
-A definite storage validation refusal (for example, a result exceeding the plugin-state size limit) becomes a visible failed task whose status explains that it will not survive a restart; any completed artifact remains available until the process stops or retention expires. An uncertain write acknowledgement is not replaced with a synthetic failure, because the original result may already have committed.
+Before dispatching a new task or returning it to a peer, the plugin persists its identity and message deduplication key. Pending records do not expire or evict one another; at 500 outstanding records per account, new admissions fail until records are settled. On restart, an unfinished record becomes a failed task with its original ID and an explicit warning that external effects may have occurred. Replaying its `messageId` returns that task while its recovered terminal result is retained. Inspect external effects before deciding to submit new work with a new message ID. This does not resume inference or guarantee exactly-once external effects, and cannot recover tasks already lost by an older Gateway.
+
+A definite storage validation refusal (for example, a result exceeding the plugin-state size limit) becomes a visible failed task whose status explains that its outcome may be unknown after restart; any completed artifact remains available until the process stops or retention expires. Its pending record remains for recovery. An uncertain write acknowledgement is not replaced with a synthetic failure, because the original result may already have committed. Pending records are deleted only after a terminal result commits. If that cleanup fails, the known result remains available and an error is logged; a later restart retries cleanup or conservatively reports an unknown outcome if the terminal result has already expired. Such pending records continue to consume admission capacity.
 
 ## Related
 

@@ -452,6 +452,33 @@ export function cancelCapturedSessionControllerSource(
   });
 }
 
+/** Cancel one independently owned source and join its actual producer and cleanup. */
+export async function cancelSessionControllerSource(
+  input: SessionControllerInput,
+  assertCurrent: () => void,
+): Promise<boolean> {
+  assertCurrent();
+  // An injected/collected turn no longer has independently stoppable execution.
+  if (input.injection || (input.claim && input.claim.inputs.length !== 1)) {
+    return false;
+  }
+  const result = cancelCapturedSessionControllerSource(
+    captureSessionControllerStop({ inputs: [input] }),
+    { assertCurrent },
+  );
+  if (!result.abortedInputs.includes(input)) {
+    return false;
+  }
+  await result.settled;
+  if (result.failures.length) {
+    throw new AggregateError(
+      result.failures.map(({ error }) => error),
+      "Source cancellation failed",
+    );
+  }
+  return true;
+}
+
 function resolveStopOutcome(
   result: SessionControllerStopResult,
   external: SessionStopTargetStatus,

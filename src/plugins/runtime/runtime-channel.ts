@@ -141,7 +141,23 @@ function bindChannelCallbacks<T extends object>(callbacks: T, consumer: PluginIn
       }),
   });
 }
-type ChannelDeliveryCustody = { deferred: boolean };
+type ChannelDeliveryCustody = {
+  deferred: boolean;
+  dispatchDone: boolean;
+  settled: boolean;
+  pendingCancellations: number;
+};
+function releaseChannelDeliveryConsumer(
+  consumer: PluginInstanceConsumer | undefined,
+  custody: ChannelDeliveryCustody,
+): void {
+  if (
+    custody.pendingCancellations === 0 &&
+    (custody.deferred ? custody.settled : custody.dispatchDone)
+  ) {
+    consumer?.release();
+  }
+}
 function bindChannelAdoption(
   source: TurnAdoptionLifecycle | undefined,
   consumer: PluginInstanceConsumer,
@@ -161,9 +177,8 @@ function bindChannelAdoption(
       try {
         await source?.onSettled?.();
       } finally {
-        if (custody.deferred) {
-          consumer.release();
-        }
+        custody.settled = true;
+        releaseChannelDeliveryConsumer(consumer, custody);
       }
     },
   };
@@ -183,6 +198,25 @@ function bindChannelDelivery<
     // Queued observers and source delivery outlive dispatch; settlement releases both.
     adoption = bindChannelAdoption(source, consumer, custody);
     replyOptions = { ...replyOptions, turnAdoptionLifecycle: adoption };
+  }
+  const onSourceCancellation = replyOptions?.onReplySourceCancellation;
+  if (consumer && custody && onSourceCancellation) {
+    replyOptions = {
+      ...replyOptions,
+      onReplySourceCancellation: (cancel) =>
+        onSourceCancellation(
+          consumer.wrap(async (assertCurrent) => {
+            // Abort can return dispatch before native cleanup invokes its channel callbacks.
+            custody.pendingCancellations++;
+            try {
+              return await cancel(assertCurrent);
+            } finally {
+              custody.pendingCancellations--;
+              releaseChannelDeliveryConsumer(consumer, custody);
+            }
+          }),
+        ),
+    };
   }
   return consumer
     ? {
@@ -208,13 +242,17 @@ async function withChannelDeliveryCustody<T, R>(
     undefined,
     generation?.plugins.includes(owner.record) ? generation : owner.registry,
   );
-  const custody: ChannelDeliveryCustody = { deferred: false };
+  const custody: ChannelDeliveryCustody = {
+    deferred: false,
+    dispatchDone: false,
+    settled: false,
+    pendingCancellations: 0,
+  };
   try {
     return await dispatch(params, consumer, custody);
   } finally {
-    if (!custody.deferred) {
-      consumer?.release();
-    }
+    custody.dispatchDone = true;
+    releaseChannelDeliveryConsumer(consumer, custody);
   }
 }
 const dispatchAssembledChannelTurn: PluginRuntime["channel"]["inbound"]["dispatchReply"] = (

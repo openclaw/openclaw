@@ -16,6 +16,10 @@ import { createEnteredGate as createGate } from "../../agents/entered-gate.test-
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
 import { resolveReplyCompletion } from "../../agents/reply-completion.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
+import { PluginInstance } from "../../plugins/plugin-instance.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { createRuntimeChannel } from "../../plugins/runtime/runtime-channel.js";
+import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import {
   interruptSessionControllerEffects,
   isSessionControllerWorkActive,
@@ -39,6 +43,7 @@ import {
   createDispatcher,
   createHookCtx,
   emptyConfig,
+  diagnosticMocks,
   hookMocks,
   mockSessionStorePath,
   sessionStoreMocks,
@@ -121,6 +126,73 @@ describe("dispatchReplyFromConfig owner settlement", () => {
     resetSessionControllerForTest();
     resetInboundDedupe();
     clearAgentHarnesses();
+  });
+
+  it("retains the channel consumer through aborted native source cleanup", async () => {
+    const registry = createEmptyPluginRegistry();
+    const record = createPluginRecord({ id: "discord" });
+    registry.plugins.push(record);
+    const owner = new PluginInstance("discord", { record, registry });
+    const channel = createRuntimeChannel({ dispatchReplyFromConfig });
+    const started = createDeferred();
+    const finish = createDeferred();
+    const settled = vi.fn();
+    let cancel: ((assertCurrent: () => void) => Promise<boolean>) | undefined;
+    const sessionKey = "agent:main:discord:direct:cancel-consumer";
+    const dispatch = owner.run(() =>
+      channel.inbound.dispatch({
+        cfg: emptyConfig,
+        channel: "discord",
+        route: { agentId: "main", sessionKey },
+        ctxPayload: buildTestCtx({
+          Provider: "discord",
+          Surface: "discord",
+          SessionKey: sessionKey,
+        }),
+        delivery: { deliver: async () => {} },
+        replyOptions: {
+          onReplySourceCancellation: (handle) => {
+            cancel = handle;
+          },
+          turnAdoptionLifecycle: { admission: "exclusive", onAdopted() {}, onSettled: settled },
+        },
+        replyResolver: async (_ctx, options) => {
+          await options?.turnAdoptionLifecycle?.onAdopted();
+          started.resolve();
+          try {
+            await finish.promise;
+            options?.abortSignal?.throwIfAborted();
+            return undefined;
+          } finally {
+            await options?.turnAdoptionLifecycle?.onSettled?.();
+          }
+        },
+      }),
+    );
+    void dispatch.catch(() => {});
+    let canceled: Promise<boolean> | undefined;
+    try {
+      await started.promise;
+      canceled = cancel!(() => {});
+      void canceled.catch(() => {});
+      await vi.waitFor(() =>
+        expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
+          expect.objectContaining({ reason: "reply_operation_aborted" }),
+        ),
+      );
+      await nextTurn();
+      expect(owner.hasRetainedConsumers).toBe(true);
+      expect(settled).not.toHaveBeenCalled();
+      finish.resolve();
+      await expect(canceled).resolves.toBe(true);
+      await dispatch;
+      expect(settled).toHaveBeenCalledOnce();
+      expect(owner.hasRetainedConsumers).toBe(false);
+    } finally {
+      finish.resolve();
+      await Promise.allSettled([dispatch, canceled]);
+      await owner.dispose();
+    }
   });
 
   it("allows final delivery to await a visible successor after producer handoff", async ({

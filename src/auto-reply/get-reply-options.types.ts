@@ -235,6 +235,13 @@ export type GetReplyOptions = {
   ) => unknown;
   /** Reports the terminal agent-run classification to the shared dispatch owner. */
   onAgentRunTerminalOutcome?: (outcome: "completed" | "failed") => void;
+  /**
+   * Receives cancellation bound to this exact source, never a session-wide Stop.
+   * Resolves true only after accepted cancellation and producer/cleanup settlement.
+   * Requires the requesting channel's synchronous live guard at the native effect.
+   * Shared, injected, finalizing, and retired sources may refuse with false.
+   */
+  onReplySourceCancellation?: (cancel: (assertCurrent: () => void) => Promise<boolean>) => void;
   /** Retains source-owned delivery when this turn is queued behind an active run. */
   onQueuedFollowupReplyBatch?: QueuedFollowupReplyDelivery;
   /** Reports terminal queue-cap rejection or eviction when no agent run will report an outcome. */
