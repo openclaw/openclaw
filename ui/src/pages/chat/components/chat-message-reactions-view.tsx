@@ -1,4 +1,6 @@
+import type { JSX } from "@solidjs/web";
 import { createSignal, Errored, For, lazy, Loading, Show, onSettled } from "solid-js";
+import type { MessageReactionSummary } from "../../../../../packages/gateway-protocol/src/index.js";
 import { isReactionEmoji } from "../../../../../packages/gateway-protocol/src/reaction-emoji.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
@@ -46,8 +48,15 @@ export function MessageReactionPicker(props: {
   onSelect?: (emoji: string, remove: boolean) => void;
   activeEmoji: ReadonlySet<string>;
   placement: MessageReactionPlacement;
-  compact?: boolean;
   class?: string;
+  /** A message's reaction summary: it replaces the add icon as this picker's trigger. */
+  summary?: JSX.Element;
+  /** The summary's accessible name, and the hover content naming who reacted. */
+  summaryLabel?: string;
+  summaryDetails?: JSX.Element;
+  /** Existing reactions lead the palette, so any of them toggles in place. */
+  reactions?: readonly MessageReactionSummary[];
+  disabled?: boolean;
 }) {
   let host!: HTMLElement;
   const [activated, setActivated] = createSignal(false);
@@ -131,20 +140,17 @@ export function MessageReactionPicker(props: {
     }
   };
   return (
-    <openclaw-message-reaction-picker
-      ref={(element) => (host = element)}
-      class={props.class}
-      compact={props.compact}
-    >
-      <openclaw-tooltip prop:content={t("chat.reactions.add")}>
+    <openclaw-message-reaction-picker ref={(element) => (host = element)} class={props.class}>
+      <openclaw-tooltip prop:content={props.summary ? "" : t("chat.reactions.add")}>
         <button
           ref={(element) => {
             trigger = element;
           }}
           id={triggerId}
-          class="trigger"
+          class={["trigger", { "chat-reaction-tab": Boolean(props.summary) }]}
           type="button"
-          aria-label={t("chat.reactions.add")}
+          disabled={props.disabled}
+          aria-label={props.summaryLabel ?? t("chat.reactions.add")}
           aria-haspopup="dialog"
           aria-expanded="false"
           onClick={() => {
@@ -155,12 +161,22 @@ export function MessageReactionPicker(props: {
             }
           }}
         >
-          <StrokeIcon aria-hidden="true">
-            <path d="M21 11.5a9 9 0 1 1-8.5-8.5" />
-            <path d="M8 14s1.5 2 4 2 4-2 4-2M16 5h6M19 2v6" />
-            <path d="M9 9h.01M15 9h.01" />
-          </StrokeIcon>
+          <Show
+            when={props.summary}
+            fallback={
+              <StrokeIcon aria-hidden="true">
+                <path d="M21 11.5a9 9 0 1 1-8.5-8.5" />
+                <path d="M8 14s1.5 2 4 2 4-2 4-2M16 5h6M19 2v6" />
+                <path d="M9 9h.01M15 9h.01" />
+              </StrokeIcon>
+            }
+          >
+            {props.summary}
+          </Show>
         </button>
+        <Show when={props.summaryDetails}>
+          <div slot="content">{props.summaryDetails}</div>
+        </Show>
       </openclaw-tooltip>
       <Show when={activated()}>
         <Popover
@@ -180,6 +196,24 @@ export function MessageReactionPicker(props: {
           placement={props.placement}
           label={t("chat.reactions.add")}
         >
+          <Show when={!custom() && props.reactions?.length}>
+            <div class="current" role="group" aria-label={t("chat.reactions.current")}>
+              <For each={props.reactions} keyed={(reaction) => reaction.emoji}>
+                {(reaction) => (
+                  <button
+                    class="chat-reaction-chip"
+                    type="button"
+                    aria-label={`${reaction().emoji} ${reaction().count}`}
+                    aria-pressed={props.activeEmoji.has(reaction().emoji) ? "true" : "false"}
+                    onClick={() => select(reaction().emoji)}
+                  >
+                    <span class="chat-reaction-chip__emoji">{reaction().emoji}</span>
+                    {reaction().count}
+                  </button>
+                )}
+              </For>
+            </div>
+          </Show>
           <Show
             when={custom()}
             fallback={
