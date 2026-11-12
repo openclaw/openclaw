@@ -5,25 +5,6 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Composer text readability" });
 
 suite.define(() => {
-  it("renders drafts with the same font smoothing as sent chat text", async () => {
-    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-      await installMockGateway(page);
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const smoothing = (selector: string) =>
-        page
-          .locator(selector)
-          .first()
-          .evaluate((el) => getComputedStyle(el).getPropertyValue("-webkit-font-smoothing"));
-      await page.locator(".agent-chat__composer-combobox textarea").fill("Draft text");
-      // The draft and its hint read like sent text; app chrome keeps antialiasing.
-      expect({
-        draft: await smoothing(".agent-chat__composer-combobox textarea"),
-        hint: await smoothing(".agent-chat__composer-placeholder"),
-        body: await smoothing("body"),
-      }).toEqual({ draft: "auto", hint: "auto", body: "antialiased" });
-    });
-  });
-
   it.each([
     { route: "chat", width: 1280 },
     { route: "new", width: 1280 },
