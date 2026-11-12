@@ -211,7 +211,7 @@ export async function scribes(ui: Page, n: number, target: HTMLElement) {
       : detectSources(host, agentId).catch(() => ({})),
   ]);
   const snapshots = loaded;
-  settleUpdates(ui, snapshots);
+  settleUpdates(ui, agentId, snapshots);
   watchUpdates(ui);
   if (host.connection.canWrite) {
     await Promise.all(
@@ -527,7 +527,7 @@ function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[], detection
           await repairScribe(host, snapshot, job, agentId);
           // Restoring an archived conversation needs no turn; every other repair is one.
           if (!(status === "missing" && session?.archived)) {
-            markUpdating(ui, job);
+            markUpdating(ui, job, agentId);
           }
         },
         status === "missing" && session?.archived

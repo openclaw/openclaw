@@ -474,12 +474,15 @@ it("asks an earlier scribe's conversation to update it once and offers an edited
     )
     .replace("; Timelines retired and left; pages reviewed, changed and left unchanged", "");
   const legacy = { ...reviewJob, sessionKey: "s-review", payload: { kind: "agentTurn" } };
-  const unedited = fixture({
-    sessions: reviewSession,
-    jobs: [{ ...legacy, payload: { kind: "agentTurn", message: earlier } }],
-  });
+  const legacyJob = { ...legacy, payload: { kind: "agentTurn", message: earlier } };
+  const unedited = fixture({ sessions: reviewSession, jobs: [legacyJob] });
   await unedited.render();
   await unedited.render();
+  // The turn's first write (the target) is not the whole update: still updating, not asked again.
+  Object.assign(legacyJob, { configRevision: "rev-8", sessionTarget: "current" });
+  expect((await unedited.render()).querySelector(".scribe-row")?.textContent).toContain(
+    "Updating…",
+  );
   const sent = unedited.calls.filter(([method]) => method === "chat.send");
   // A turn in the conversation re-declares the automation; the page never edits it directly.
   expect(unedited.calls.some(([method]) => method === "cron.update")).toBe(false);
@@ -492,6 +495,14 @@ it("asks an earlier scribe's conversation to update it once and offers an edited
   expect(prompt).toMatch(/^Update the Knowledge scribe "Knowledge Consolidation"/);
   expect(prompt).toContain("Leave `enabled` out");
   expect(prompt.endsWith(`\`\`\`text\n${runMessage}\n\`\`\``)).toBe(true);
+  Object.assign(legacyJob, {
+    configRevision: "rev-9",
+    payload: { kind: "agentTurn", message: runMessage },
+  });
+  expect((await unedited.render()).querySelector(".scribe-row")?.textContent).not.toContain(
+    "Updating…",
+  );
+  expect(unedited.ui.announce).toHaveBeenCalledWith("Knowledge Consolidation: updated.");
   unedited.page.remove();
 
   const differing = `${earlier}\nAlso tidy page titles.`;
@@ -534,6 +545,16 @@ it("asks an earlier scribe's conversation to update it once and offers an edited
   view = await render();
   expect(view.querySelector(".scribe-update")?.textContent).toMatch(/^Updating Knowledge/);
   expect(events.has("cron.inventory.changed")).toBe(true);
+  // Another agent's read leaves this pending update alone.
+  ui.viewedAgent = () => "other";
+  await render();
+  ui.viewedAgent = () => "main";
+  expect((await render()).querySelector(".scribe-update")?.textContent).toMatch(/^Updating/);
+  // A closed page stops watching at its next tick.
+  ui.s.disposed = true;
+  events.get("cron.inventory.changed")!();
+  expect(events.has("cron.inventory.changed")).toBe(false);
+  ui.s.disposed = false;
   Object.assign(job, {
     configRevision: "rev-8",
     payload: { kind: "agentTurn", message: runMessage },

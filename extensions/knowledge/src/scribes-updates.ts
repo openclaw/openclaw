@@ -18,10 +18,17 @@ const updatesAsked = new Set<string>();
  * The page shows them as updating and reloads until the revision changes; after
  * `UPDATE_WAIT_MS` it says the automation did not change instead.
  */
-type UpdateEntry = { revision: string | undefined; since: number; late?: boolean };
+type UpdateEntry = {
+  agentId: string;
+  revision: string | undefined;
+  since: number;
+  /** Whether a read shows the change landed; a turn can write more than once. */
+  applied: (snapshot: ScribeSnapshot) => boolean;
+  late?: boolean;
+};
 const updates = new WeakMap<
   object,
-  { pending: Map<string, UpdateEntry>; watch?: { stop: () => void } }
+  { pending: Map<string, UpdateEntry>; watch?: { ui: Page; stop: () => void } }
 >();
 const UPDATE_WAIT_MS = 3 * 60_000;
 const updatesOf = (ui: Page) => {
@@ -43,22 +50,43 @@ const updatesOf = (ui: Page) => {
 export async function update(ui: Page, snapshot: ScribeSnapshot, agentId: string) {
   const { job } = snapshot;
   const asked = job && `${job.id}:${job.configRevision ?? ""}`;
-  if (!job || !asked || updatesAsked.has(asked) || !needsUpdate(snapshot)) {
+  // An update still landing may write the automation more than once; don't ask again meanwhile.
+  const landing = job && updatesOf(ui).pending.get(job.id);
+  if (
+    !job ||
+    !asked ||
+    updatesAsked.has(asked) ||
+    (landing && !landing.late) ||
+    !needsUpdate(snapshot)
+  ) {
     return;
   }
   updatesAsked.add(asked);
   try {
     await updateScribe(ui.s.context.host, snapshot, job, agentId);
-    markUpdating(ui, job);
+    markUpdating(ui, job, agentId, (next) => !needsUpdate(next));
     ui.announce(`${snapshot.scribe.title}: updating for this version of Knowledge…`);
   } catch (error) {
     ui.announce(`${snapshot.scribe.title}: the update was not sent. ${ui.errorText(error)}`);
   }
 }
 
-/** Show `job` as updating until its revision changes, and watch for that. */
-export function markUpdating(ui: Page, job: ScribeJob) {
-  updatesOf(ui).pending.set(job.id, { revision: job.configRevision, since: Date.now() });
+/**
+ * Show `job` as updating until its revision changes and `applied` holds for the new read, and
+ * watch for that.
+ */
+export function markUpdating(
+  ui: Page,
+  job: ScribeJob,
+  agentId: string,
+  applied: UpdateEntry["applied"] = () => true,
+) {
+  updatesOf(ui).pending.set(job.id, {
+    agentId,
+    revision: job.configRevision,
+    since: Date.now(),
+    applied,
+  });
   watchUpdates(ui);
 }
 
@@ -66,11 +94,18 @@ export function markUpdating(ui: Page, job: ScribeJob) {
  * Settle updating automations against a fresh read: a new revision means the turn applied it;
  * one past the wait stays marked late, with a message, until the owner acts again.
  */
-export function settleUpdates(ui: Page, snapshots: ScribeSnapshot[]) {
+export function settleUpdates(ui: Page, agentId: string, snapshots: ScribeSnapshot[]) {
   const { pending } = updatesOf(ui);
   for (const [jobId, entry] of pending) {
+    // Another agent's scribes aren't in this read; they settle when that agent is viewed.
+    if (entry.agentId !== agentId) {
+      continue;
+    }
     const snapshot = snapshots.find((candidate) => candidate.job?.id === jobId);
-    if (!snapshot?.job || snapshot.job.configRevision !== entry.revision) {
+    if (
+      !snapshot?.job ||
+      (snapshot.job.configRevision !== entry.revision && entry.applied(snapshot))
+    ) {
       pending.delete(jobId);
       if (snapshot?.job) {
         ui.announce(`${snapshot.scribe.title}: updated.`);
@@ -100,11 +135,13 @@ export function watchUpdates(ui: Page) {
     stop();
     return;
   }
-  if (state.watch) {
+  // A watch left by a closed page belongs to it; this page takes over.
+  if (state.watch?.ui === ui) {
     return;
   }
+  stop();
   const reload = () => {
-    if (ui.s.tab !== "scribes" || !waiting()) {
+    if (ui.s.disposed || ui.s.tab !== "scribes" || !waiting()) {
       stop();
       return;
     }
@@ -113,6 +150,7 @@ export function watchUpdates(ui: Page) {
   const stopEvents = ui.s.context.host.onEvent("cron.inventory.changed", reload);
   const poll = setInterval(reload, 10_000);
   state.watch = {
+    ui,
     stop: () => {
       stopEvents();
       clearInterval(poll);
@@ -165,7 +203,7 @@ export function updateNotice(
         "Replace with new",
         async () => {
           await updateScribe(ui.s.context.host, snapshot, job, agentId, next);
-          markUpdating(ui, job);
+          markUpdating(ui, job, agentId, (read) => read.job?.payload?.message === next);
           ui.announce(`${scribe.title}: replacing the run message…`);
           void ui.load();
         },
