@@ -270,11 +270,8 @@ function openDeferredNativeHookRelayBridgeRequest(
   };
 }
 
-type NativeHookRelaySharedStateForTests = {
-  relays: Map<string, unknown>;
-  pendingPermissionApprovals: Map<string, unknown>;
-  permissionAllowAlwaysApprovals: Map<string, unknown>;
-};
+type NativeHookRelaySharedStateForTests =
+  import("./native-hook-relay-contexts.js").NativeHookRelaySharedState;
 
 function getNativeHookRelaySharedStateForTests(): NativeHookRelaySharedStateForTests {
   // Native relay state is intentionally shared on globalThis so duplicate
@@ -2427,10 +2424,13 @@ describe("native hook relay registry", () => {
     expect(getNativeHookRelaySharedStateForTests().pendingPermissionApprovals.size).toBe(1);
 
     const duplicateSecondApproval = invokeRelay(relayId, "permission_request", payload);
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    await vi.waitFor(() => expect(approvalRequester).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() =>
+      expect(
+        [...getNativeHookRelaySharedStateForTests().pendingPermissionApprovals.values()][0]
+          ?.waiters,
+      ).toBe(2),
+    );
+    expect(approvalRequester).toHaveBeenCalledTimes(2);
 
     resolvers[1]?.("allow");
     await expect(Promise.all([secondApproval, duplicateSecondApproval])).resolves.toHaveLength(2);
