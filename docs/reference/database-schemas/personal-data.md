@@ -130,7 +130,7 @@ The shared `openclaw_id_node_targets` table has these columns:
 - `claw_id TEXT NOT NULL`, `root_fingerprint TEXT NOT NULL`
 - `binding_sequence INTEGER NOT NULL`
 - `snapshot_sequence INTEGER NOT NULL`, `snapshot_issued_at INTEGER NOT NULL`
-- `snapshot_binding_sequence INTEGER NOT NULL`
+- `snapshot_binding_sequence INTEGER NOT NULL`, nullable `snapshot_gateway_key TEXT`
 
 The `openclaw_id_node_enrollments` table contains non-null `TEXT` columns:
 `hostname`, `enrollment_id`, `discovery_origin`, `relay_url`, `server_key`,

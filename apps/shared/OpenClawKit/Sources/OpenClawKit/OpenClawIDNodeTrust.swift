@@ -2,6 +2,9 @@ import CryptoKit
 import Foundation
 
 /// Public high-water facts retained by the application's existing native state owner.
+/// `bindingSequence` is the pin: the highest R-signed binding verified. The snapshot order is kept
+/// per K_gw (`snapshotGatewayKey`), and `snapshotBindingSequence` is only ever a verified binding's
+/// seq (J5). A state without a key was stored before per-key order; load it through `clampedLegacy`.
 public struct OpenClawIDNodeTrustState: Codable, Sendable, Equatable {
     public let clawID: String
     public let rootFingerprint: String
@@ -9,8 +12,8 @@ public struct OpenClawIDNodeTrustState: Codable, Sendable, Equatable {
     public let snapshotSequence: Int64
     public let snapshotIssuedAt: Int64
     public let snapshotBindingSequence: Int64
+    public let snapshotGatewayKey: String?
 
-    // periphery:ignore - Mac app wiring consumes this OpenClaw ID node API (#196759).
     /// Restores public state; verification rechecks scope and refuses any rollback.
     public init(
         clawID: String,
@@ -18,7 +21,8 @@ public struct OpenClawIDNodeTrustState: Codable, Sendable, Equatable {
         bindingSequence: Int64,
         snapshotSequence: Int64,
         snapshotIssuedAt: Int64,
-        snapshotBindingSequence: Int64)
+        snapshotBindingSequence: Int64,
+        snapshotGatewayKey: String? = nil)
     {
         self.clawID = clawID
         self.rootFingerprint = rootFingerprint
@@ -26,6 +30,27 @@ public struct OpenClawIDNodeTrustState: Codable, Sendable, Equatable {
         self.snapshotSequence = snapshotSequence
         self.snapshotIssuedAt = snapshotIssuedAt
         self.snapshotBindingSequence = snapshotBindingSequence
+        self.snapshotGatewayKey = snapshotGatewayKey
+    }
+
+    /// A keyless state's snapshot binding_seq may be a K_gw-signed claim, so it is capped at the pin,
+    /// and its order cannot be attributed to a key, so it is dropped. Kept, a retired key's inflated
+    /// order would refuse the replacement key for good. Accepted edge case: right after loading,
+    /// older snapshots of the current key are not refused as replays until a newer one is stored.
+    public func clampedLegacy() -> Self {
+        guard self.snapshotGatewayKey == nil else { return self }
+        return .init(
+            clawID: self.clawID,
+            rootFingerprint: self.rootFingerprint,
+            bindingSequence: self.bindingSequence,
+            snapshotSequence: 0,
+            snapshotIssuedAt: 0,
+            snapshotBindingSequence: min(self.snapshotBindingSequence, self.bindingSequence))
+    }
+
+    /// Whether this state orders snapshots of `gatewayKey` (a keyless legacy state counts as any key's).
+    func orders(_ gatewayKey: String?) -> Bool {
+        (self.snapshotGatewayKey ?? gatewayKey) == gatewayKey
     }
 }
 
@@ -166,7 +191,8 @@ public enum OpenClawIDNodeTrust {
             snapshotSequence: previous?.snapshotSequence ?? 0,
             snapshotIssuedAt: previous?.snapshotIssuedAt ?? 0,
             snapshotBindingSequence: previous?
-                .snapshotBindingSequence ?? bindingSequence)
+                .snapshotBindingSequence ?? bindingSequence,
+            snapshotGatewayKey: previous?.snapshotGatewayKey)
         do {
             let snapshot = try envelope(response["snapshot"]!, type: "MembershipSnapshot", signer: gateway)
             let fields = try validateSnapshot(snapshot)
@@ -174,8 +200,6 @@ public enum OpenClawIDNodeTrust {
             let sequence = try fields["seq"]!.number()
             let issued = try fields["issued_at"]!.number()
             let snapshotBinding = try fields["binding_seq"]!.number(minimum: 1)
-            // A Gateway key alone cannot retire a root-signed binding: refuse without retaining
-            // any of this snapshot's facts, but keep the verified binding pin.
             if snapshotBinding > bindingSequence {
                 return .init(observation: pinned, verdict: .failure(.rollback))
             }
@@ -185,7 +209,8 @@ public enum OpenClawIDNodeTrust {
                 bindingSequence: bindingSequence,
                 snapshotSequence: sequence,
                 snapshotIssuedAt: issued,
-                snapshotBindingSequence: snapshotBinding)
+                snapshotBindingSequence: bindingSequence,
+                snapshotGatewayKey: gateway)
             // Future evidence may refuse a dial, but must never poison durable high-water state.
             let observation = issued <= now + 300 ? try self.mergeObservation(candidate, with: previous) : pinned
             let refusal: OpenClawIDNodeEnrollmentError? = if (previous?.snapshotBindingSequence ?? 0) >
@@ -194,7 +219,7 @@ public enum OpenClawIDNodeTrust {
                 .rollback
             } else if issued > now + 300 || issued < now - 10800 {
                 .staleSnapshot
-            } else if let previous, olderSnapshot(candidate, than: previous) {
+            } else if let previous, previous.orders(gateway), olderSnapshot(candidate, than: previous) {
                 .rollback
             } else if snapshotBinding < bindingSequence {
                 .rollback
@@ -220,8 +245,9 @@ public enum OpenClawIDNodeTrust {
         }
     }
 
-    /// Merges an observation inside the state owner's transaction: pin never decreases, and the
-    /// newest snapshot is selected by seq then issued_at (including a refused/stale observation).
+    /// Merges an observation inside the state owner's transaction: pin never decreases. Snapshot order
+    /// is per K_gw: for the same key the newest by seq then issued_at wins (including a refused/stale
+    /// observation); a new key's order replaces it only under a newer verified binding (a re-bind).
     /// Binding retirement is an independent high-water fact, never erased by newer membership.
     public static func mergeObservation(
         _ candidate: OpenClawIDNodeTrustState,
@@ -231,14 +257,19 @@ public enum OpenClawIDNodeTrust {
         guard candidate.clawID == current.clawID, candidate.rootFingerprint == current.rootFingerprint else {
             throw OpenClawIDNodeEnrollmentError.rootMismatch
         }
-        let newest = self.olderSnapshot(current, than: candidate) ? candidate : current
+        let sameKey = current.orders(candidate.snapshotGatewayKey)
+        let newest = sameKey
+            ? (olderSnapshot(current, than: candidate) ? candidate : current)
+            : (candidate.snapshotBindingSequence > current.snapshotBindingSequence ? candidate : current)
         return .init(
             clawID: candidate.clawID,
             rootFingerprint: candidate.rootFingerprint,
             bindingSequence: max(candidate.bindingSequence, current.bindingSequence),
             snapshotSequence: newest.snapshotSequence,
             snapshotIssuedAt: newest.snapshotIssuedAt,
-            snapshotBindingSequence: max(candidate.snapshotBindingSequence, current.snapshotBindingSequence))
+            snapshotBindingSequence: max(candidate.snapshotBindingSequence, current.snapshotBindingSequence),
+            snapshotGatewayKey: sameKey ? (candidate.snapshotGatewayKey ?? current.snapshotGatewayKey)
+                : newest.snapshotGatewayKey)
     }
 
     private static func olderSnapshot(
@@ -259,11 +290,11 @@ public enum OpenClawIDNodeTrust {
         guard candidate.clawID == current.clawID, candidate.rootFingerprint == current.rootFingerprint else {
             throw OpenClawIDNodeEnrollmentError.rootMismatch
         }
+        let ordered = current.orders(candidate.snapshotGatewayKey)
+            ? !self.olderSnapshot(candidate, than: current)
+            : candidate.snapshotBindingSequence > current.snapshotBindingSequence
         guard candidate.bindingSequence >= current.bindingSequence,
-              candidate.bindingSequence >= current.snapshotBindingSequence,
-              candidate.snapshotSequence > current.snapshotSequence ||
-              (candidate.snapshotSequence == current.snapshotSequence && candidate.snapshotIssuedAt >= current
-                  .snapshotIssuedAt)
+              candidate.bindingSequence >= current.snapshotBindingSequence, ordered
         else { throw OpenClawIDNodeEnrollmentError.rollback }
     }
 
