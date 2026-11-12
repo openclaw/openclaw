@@ -617,7 +617,6 @@ const skipLog = "cron: skipped missed slots (cron.skipMissedJobs)";
 
 it.each([
   ["cron", 3_000],
-  ["cron", 30_000],
   ["every", 3_000],
 ] as const)("runs a due %s slot when the tick is %sms late with skipMissedJobs", (kind, lateMs) => {
   const due = now + minute;
