@@ -253,7 +253,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/gateway/server-methods/chat-send-commentary-media.test.ts",
   "src/agents/model-auth.profiles.test.ts",
   // Native credential fixtures need the host's exclusive offline writer custody.
-  "test/decision-levanto-admission.integration.test.ts",
   "test/decision-baseten-admission.integration.test.ts",
   "src/agents/agent-model-discovery.auth.test.ts",
   "src/agents/auth-profiles/session-override.model-endpoint.test.ts",
@@ -1270,6 +1269,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/prepared-model-catalog-worker.config.integration.test.ts",
   "src/agents/prepared-model-catalog-worker.custody.integration.test.ts",
   "src/agents/prepared-model-catalog-worker.registration-facts.integration.test.ts",
+  "src/agents/prepared-model-catalog-worker.restart.integration.test.ts",
   "src/agents/prepared-model-catalog-worker.directory.test.ts",
   "src/agents/prepared-model-catalog-worker.directory.integration.test.ts",
   "src/agents/prepared-model-catalog-worker.heap.integration.test.ts",
@@ -1390,6 +1390,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/plugin-state/plugin-state-operation.test.ts",
   "src/plugin-state/plugin-state-worker.test.ts",
   "src/plugin-state/plugin-state-publication.test.ts",
+  "src/plugin-state/plugin-state-publication.reconciliation.test.ts",
   "src/plugin-state/plugin-state-native-binding-facts.test.ts",
   "src/plugin-state/plugin-state-guard.test.ts",
   "test/visitor-access-revocation.test.ts",

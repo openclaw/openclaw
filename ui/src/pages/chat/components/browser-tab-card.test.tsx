@@ -18,6 +18,7 @@ import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createInitializationContext } from "../chat-application-context.test-support.ts";
 import { groupMessages } from "../chat-thread-grouping.ts";
 import { BrowserTabCardHost } from "./browser-tab-card.tsx";
+import * as inlineCommandPresentation from "./chat-inline-command-presentation.tsx";
 import { ActivityGroup } from "./chat-message-group-view.tsx";
 import { WorkGroupSummary } from "./chat-work-group-summary.tsx";
 
@@ -34,7 +35,12 @@ const cards = new Map<
   }
 >();
 
-async function drawGroup(host: HTMLElement, props: ActivityProps, context?: ApplicationContext) {
+async function drawGroup(
+  host: HTMLElement,
+  props: ActivityProps,
+  context?: ApplicationContext,
+  waitForPreview = true,
+) {
   const view = activityGroups.get(host);
   if (view) {
     view.update(props);
@@ -55,7 +61,11 @@ async function drawGroup(host: HTMLElement, props: ActivityProps, context?: Appl
       ),
     );
   }
-  await waitForSolid(() => expect(host.querySelector("openclaw-browser-tab-card")).not.toBeNull());
+  if (waitForPreview) {
+    await waitForSolid(() =>
+      expect(host.querySelector("openclaw-browser-tab-card")).not.toBeNull(),
+    );
+  }
 }
 
 function updateCard(element: HTMLElement, patch: Partial<CardProps>) {
@@ -737,6 +747,86 @@ describe("browser tab card", () => {
       });
       await vi.waitFor(() => expect(gateway.request).toHaveBeenCalledTimes(2));
       await vi.waitFor(() => expect(next[0]?.querySelector("img")).not.toBeNull());
+    },
+  );
+
+  it("reveals a bubble browser preview through its segment disclosure after an inline command", async () => {
+    const gateway = gatewayContext();
+    const host = container();
+    const messages = [
+      {
+        role: "assistant",
+        toolCallId: "command",
+        content: [
+          {
+            type: "toolCall",
+            id: "command",
+            name: "exec",
+            arguments: { command: "printf checked" },
+          },
+        ],
+      },
+      browserResult("browser", "tab-1", "https://example.com"),
+    ];
+    const expanded = new Set<string>();
+    const props: ActivityProps = {
+      groups: [browserResultGroup(messages)],
+      presentation: "standalone",
+      options: {
+        showReasoning: false,
+        inlineCommands: inlineCommandPresentation,
+        bubbleMode: true,
+        isToolMessageExpanded: (id) => expanded.has(id),
+        onToggleToolMessageExpanded: (id) => {
+          expanded.add(id);
+        },
+      },
+    };
+    await drawGroup(host, props, gateway.context, false);
+    await waitForSolid(() =>
+      expect(host.querySelector(".chat-activity-group__summary")).not.toBeNull(),
+    );
+    expect(host.querySelector("openclaw-browser-tab-card")).toBeNull();
+    host.querySelector<HTMLButtonElement>(".chat-activity-group__summary")!.click();
+    await drawGroup(host, { ...props, options: { ...props.options } }, gateway.context);
+    expect(host.querySelectorAll("openclaw-browser-tab-card")).toHaveLength(1);
+  });
+
+  it.each(["https://example.com/new", "about:blank"])(
+    "deduplicates browser previews across inline command segments (%s)",
+    async (latestUrl) => {
+      const gateway = gatewayContext();
+      const messages = [
+        browserResult("old", "tab-1", "https://example.com/old"),
+        {
+          role: "assistant",
+          toolCallId: "command",
+          content: [
+            {
+              type: "toolCall",
+              id: "command",
+              name: "exec",
+              arguments: { command: "printf checked" },
+            },
+          ],
+        },
+        browserResult("new", "tab-1", latestUrl),
+        browserResult("other", "tab-2", "https://example.com/other"),
+      ];
+      const host = container();
+      await drawGroup(
+        host,
+        {
+          groups: [browserResultGroup(messages)],
+          options: { showReasoning: false, inlineCommands: inlineCommandPresentation },
+          presentation: "standalone",
+        },
+        gateway.context,
+      );
+      const elements = [...host.querySelectorAll("openclaw-browser-tab-card")];
+      expect(elements.map((element) => element.querySelector(".title")?.textContent)).toEqual(
+        latestUrl === "about:blank" ? ["other"] : ["new", "other"],
+      );
     },
   );
 

@@ -68,7 +68,7 @@ it.each(["ready", "busy", "failed"] as const)(
       const readHistory = historyPages.readChatHistoryPage;
       let observedDuringRead = false;
       const read = vi.spyOn(historyPages, "readChatHistoryPage").mockImplementation((...args) => {
-        observedDuringRead = subscribers.get(scope.sessionKey).has(client.connId);
+        observedDuringRead = subscribers.getLiveToolOutput(scope.sessionKey).has(client.connId);
         if (outcome !== "ready") {
           throw new WorkerTaskError(
             "synthetic history failure",
@@ -88,6 +88,7 @@ it.each(["ready", "busy", "failed"] as const)(
             params: {
               key: scope.sessionKey,
               subscriptionId: "foreground",
+              includeLiveToolOutput: true,
               initialHistory: { limit: 80, maxBytes: 256 * 1024, toolResultMaxChars: 2_000 },
             },
           },
@@ -124,8 +125,10 @@ it.each(["ready", "busy", "failed"] as const)(
           undefined,
         );
         expect(subscribers.get(scope.sessionKey)).toEqual(new Set([client.connId]));
+        expect(subscribers.getLiveToolOutput(scope.sessionKey)).toEqual(new Set([client.connId]));
         subscribers.unsubscribe(client.connId, scope.sessionKey, "foreground");
         expect(subscribers.get(scope.sessionKey).size).toBe(0);
+        expect(subscribers.getLiveToolOutput(scope.sessionKey).size).toBe(0);
       } finally {
         read.mockRestore();
         await disposeSessionReadContexts();

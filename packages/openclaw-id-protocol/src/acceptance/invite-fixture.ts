@@ -1,4 +1,4 @@
-// Shared setup for invite acceptance tests: device-1 registers an operator invite for Bob.
+// Shared setup for invite acceptance tests: device-1 registers an invite for Bob.
 import { registerInvite } from "../authority/apply.js";
 import {
   computeRedemptionProof,
@@ -7,13 +7,14 @@ import {
   type AssertedIdentity,
 } from "../invites.js";
 import { signStatement } from "../statements/envelope.js";
+import type { MemberRole } from "../statements/types.js";
 import { buildWorld, WORLD_NOW } from "../testing/world.js";
 
 /** Invite id used by the fixture. */
 export const FIXTURE_INVITE_ID = "1e".repeat(16);
 
 /** A world with a registered invite, plus Bob's signed redemption request. */
-export async function inviteFixture() {
+export async function inviteFixture(role: MemberRole = "operator") {
   const world = await buildWorld();
   const secret = new Uint8Array(32).fill(9);
   const proofKey = await deriveInviteProofKey(secret);
@@ -22,7 +23,7 @@ export async function inviteFixture() {
     {
       claw_id: world.state.claw_id,
       invite_id: FIXTURE_INVITE_ID,
-      role: "operator",
+      role,
       audience: { kind: "email", value: "bob@example.com" },
       label: "Bob",
       created_at: WORLD_NOW - 60,

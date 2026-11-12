@@ -38,6 +38,9 @@ export async function runVitestShutdownCommand({
                 new URL("../../scripts/lib/vitest-worker-bootstrap.mts", import.meta.url),
               ),
               workerRun.descriptor.directory,
+              ...(workerRun.descriptor.preset && workerRun.descriptor.preset !== "full"
+                ? [`--worker-preset=${workerRun.descriptor.preset}`]
+                : []),
               ...(options.args ?? []),
             ]
           : (options.args ?? [])),
