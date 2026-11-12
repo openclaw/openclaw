@@ -61,6 +61,12 @@ export function markdownTableCopyText(table: HTMLTableElement): string {
           const walker = cell.ownerDocument.createTreeWalker(
             cell,
             NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
+            {
+              acceptNode: (node) =>
+                node instanceof Element && node.classList.contains("katex-mathml")
+                  ? NodeFilter.FILTER_REJECT
+                  : NodeFilter.FILTER_ACCEPT,
+            },
           );
           let text = "";
           for (let node = walker.nextNode(); node; node = walker.nextNode()) {
