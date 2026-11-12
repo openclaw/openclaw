@@ -119,6 +119,39 @@ export class MessageInjectionPolicyMismatchError extends Error {
   }
 }
 
+export type ReplyMessageInjectionOutcome =
+  | { status: "indeterminate"; errorMessage: string }
+  | { status: "accepted" }
+  /** Terminal authority failure; the separately recorded acceptance stays unchanged. */
+  | { status: "failed"; error: Error }
+  | {
+      status: "rejected";
+      reason: ReplyMessageInjectionRejectionReason;
+      runtimeReason?: MessageInjectionRuntimeReason;
+      errorMessage?: string;
+    };
+
+export type ReplyMessageInjectionRejectionReason =
+  | "no_active_run"
+  | "not_running"
+  | "stale_run"
+  | "injection_unavailable"
+  | "guarded_injection_unsupported"
+  | "requester_origin_mismatch"
+  | "audio_input_unsupported"
+  | "collaborative_steering_disabled"
+  | ReplyBackendQueueMessageMismatch
+  | "runtime_rejected";
+
+export type ReplyBackendQueueMessageMismatch =
+  | "transcript_commit_wait_unsupported"
+  | "input_visibility_mismatch"
+  | "tool_authority_mismatch"
+  | "image_input_unsupported"
+  | "source_reply_delivery_mode_mismatch"
+  | "reply_expectation_mismatch"
+  | "task_suggestion_delivery_mode_mismatch";
+
 export type MessageInjectionRuntimeReason =
   | "transcript_commit_timeout"
   | "tool_boundary_timeout"

@@ -14,9 +14,9 @@ import type { OutboundPayloadPlan } from "../infra/outbound/reply-payload-parts.
 import type { ImageContent } from "../llm/types.js";
 import type { MediaFact } from "../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
-import type { ReplyMessageInjectionOutcome } from "../sessions/session-controller.contracts.js";
 import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.types.js";
 import type { ReplyPayload } from "./reply-payload.js";
+import type { ReplyMessageInjectionOutcome } from "./reply/message-injection-authority.js";
 import type { FollowupQueueDisposition } from "./reply/queue-policy.js";
 import type { TypingController } from "./reply/typing.js";
 import type { SourceReplyDeliveryMode } from "./source-reply-delivery-mode.types.js";
