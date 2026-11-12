@@ -13,7 +13,10 @@ import { GatewayServiceStopUnsafeError } from "../../daemon/service-inspection-e
 import type { GatewayServiceState } from "../../daemon/service-types.js";
 import type { CallGatewayCliOptions } from "../../gateway/call.js";
 import { GATEWAY_STALE_INSTALL_CLOSE_REASON } from "../../gateway/stale-install.js";
-import { createGatewayCloseTransportError } from "../../gateway/transport-error.js";
+import {
+  createGatewayCloseTransportError,
+  createGatewayTimeoutTransportError,
+} from "../../gateway/transport-error.js";
 import type { PortUsage } from "../../infra/ports-types.js";
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 
@@ -420,6 +423,79 @@ it.each(["ready", "draining"] as const)(
     expect(f.events.indexOf("handoff")).toBeLessThan(f.events.indexOf("stop"));
     expect(f.events[1]).toBe(`observe:${phase}`);
     expect(f.stop).toHaveBeenCalledOnce();
+  },
+);
+
+it("allows a 24-second handoff without extending other RPC timeouts", async () => {
+  const f = fixture({ observations: [ready()] });
+  const original = mocks.call.getMockImplementation()!;
+  mocks.call.mockImplementation((request: CallGatewayCliOptions) => {
+    if (request.method !== "gateway.suspend.handoff") {
+      return original(request);
+    }
+    return new Promise((resolve, reject) => {
+      const deadline = setTimeout(
+        () => reject(new Error("transport deadline")),
+        request.timeoutMs ?? undefined,
+      );
+      setTimeout(() => {
+        clearTimeout(deadline);
+        resolve(original(request));
+      }, 24_000);
+    });
+  });
+  const running = withGatewayMaintenanceDrain(
+    { ...f.params, drainPolicy: "interrupt-after-drain" },
+    f.stop,
+  );
+  await vi.advanceTimersByTimeAsync(24_000);
+  await expect(running).resolves.toBe("stopped");
+  expect(f.events).not.toContain("resume");
+  for (const [request] of mocks.call.mock.calls) {
+    expect(request.timeoutMs).toBe(request.method === "gateway.suspend.handoff" ? 30_000 : 10_000);
+  }
+});
+
+it.each(["timeout", "terminal-refusal"] as const)(
+  "preserves a %s handoff error without replaying the stop", async (reason) => {
+    const f = fixture({ observations: [ready()] });
+    const terminalPersistence = { count: 1, oldestAgeMs: 25_000, runIds: ["fixture-run"] };
+    const failure =
+      reason === "timeout"
+        ? createGatewayTimeoutTransportError({
+            timeoutMs: 30_000,
+            requestDispatched: true,
+            connectionDetails: {
+              url: "ws://127.0.0.1:18789",
+              urlSource: "local loopback",
+              message: "Gateway target: ws://127.0.0.1:18789",
+            },
+          })
+        : new GatewayProtocolRequestError({
+            code: "UNAVAILABLE",
+            message: "terminal persistence pending",
+            details: { terminalPersistence },
+          });
+    const original = mocks.call.getMockImplementation()!;
+    mocks.call.mockImplementation((request: CallGatewayCliOptions) => {
+      if (request.method === "gateway.suspend.handoff") {
+        throw failure;
+      }
+      return original(request);
+    });
+    await expect(
+      withGatewayMaintenanceDrain(
+        { ...f.params, drainPolicy: "interrupt-after-drain" },
+        f.stop,
+      ),
+    ).rejects.toBe(failure);
+    expect(
+      mocks.call.mock.calls.filter(([request]) => request.method === "gateway.suspend.handoff"),
+    ).toHaveLength(1);
+    expect(f.events).not.toContain("stop");
+    if (reason === "terminal-refusal") {
+      expect(failure).toMatchObject({ details: { terminalPersistence } });
+    }
   },
 );
 

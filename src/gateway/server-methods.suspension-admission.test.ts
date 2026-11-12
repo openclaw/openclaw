@@ -2,6 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
+import { createGatewayHostLifecycle } from "../cli/gateway-cli/host-lifecycle.js";
 import {
   resetGatewaySuspendCoordinatorForLifecycleRestart,
   resumeGatewaySuspend,
@@ -10,6 +11,7 @@ import {
   beginGatewayRestartSignalAdmission,
   captureGatewayRootWorkAdmissionContinuationScope,
   getActiveGatewayRootWorkCount,
+  isGatewayRestartDraining,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
   retainGatewayRootWorkAdmissionContinuation,
@@ -17,6 +19,7 @@ import {
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
 import { getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
+import { getGatewayProcessInstanceId } from "./process-instance.js";
 import { createPluginGatewayMethodDescriptor } from "./methods/descriptor.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { runWithGatewayRequestEnvelope, type handleGatewayRequest } from "./server-methods.js";
@@ -164,6 +167,90 @@ describe("gateway request suspension admission", () => {
     );
     expect(handler).not.toHaveBeenCalled();
   });
+
+  it.each(["settles", "pending", "revoked", "resumed"] as const)(
+    "checks live handoff authority through terminal settlement: %s",
+    async (outcome) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance", "Date"] });
+      const logGateway = { warn: vi.fn(), info: vi.fn() };
+      const commitStop = vi.fn(() => markGatewayRestartDraining());
+      const host = createGatewayHostLifecycle({
+        processOwner: { ownsProcessLifecycle: true, supervisor: "external" },
+        isCurrent: () => true,
+        isServing: () => true,
+        acceptStop: () => {},
+        commitExternalStop: commitStop,
+      });
+      const context = {
+        getRuntimeConfig: () => ({}),
+        cron: { pauseScheduling: vi.fn(), resumeScheduling: vi.fn() },
+        hostLifecycle: host.capability,
+        logGateway,
+        chatAbortControllers: new Map(),
+        chatQueuedTurns: new Map(),
+      } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"];
+      const prepare = dispatch({
+        method: "gateway.suspend.prepare", core: true, scope: "operator.admin", context,
+        handler: suspendHandlers["gateway.suspend.prepare"]!,
+        requestParams: { requestId: "late-terminal-write", drain: true },
+      });
+      await prepare.request;
+      const { suspensionId } = expectDefined(prepare.respond.mock.calls[0], "prepare receipt")[1] as { suspensionId: string };
+      for (let index = 0; index < 10; index++) {
+        context.chatAbortControllers.set("run-" + index + "\n" + "x".repeat(300), {
+          controller: new AbortController(), sessionKey: "private-session-" + index,
+          registrationCleanupRequested: true, controlUiVisible: true,
+          projectSessionTerminalPending: true, projectSessionTerminalObservedAt: Date.now() - 1_000,
+        } as Parameters<typeof context.chatAbortControllers.set>[1]);
+      }
+      const scopes = ["operator.admin"];
+      const handoff = dispatch({
+        method: "gateway.suspend.handoff", core: true, scope: "operator.admin", context,
+        handler: suspendHandlers["gateway.suspend.handoff"]!, clientScopes: scopes,
+        requestParams: {
+          suspensionId, commit: true,
+          target: { pid: process.pid, processInstanceId: getGatewayProcessInstanceId() },
+        },
+      });
+      try {
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(handoff.respond).not.toHaveBeenCalled();
+        if (outcome === "revoked") {
+          scopes.splice(0, 1, "operator.read");
+        }
+        if (outcome === "resumed") {
+          resumeGatewaySuspend(suspensionId);
+        } else if (outcome !== "pending") {
+          context.chatAbortControllers.clear();
+        }
+        await vi.advanceTimersByTimeAsync(outcome === "pending" ? 24_000 : 250);
+        await handoff.request;
+        if (outcome === "settles") {
+          expect(handoff.respond).toHaveBeenCalledWith(true, expect.objectContaining({ status: "committed" }));
+          expect(commitStop).toHaveBeenCalledOnce();
+        } else {
+          expect(commitStop).not.toHaveBeenCalled();
+          expect(isGatewayRestartDraining()).toBe(false);
+          expect(handoff.respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining({
+            code: outcome === "revoked" ? "FORBIDDEN" : "UNAVAILABLE",
+          }));
+          if (outcome === "pending") {
+            const error = expectDefined(handoff.respond.mock.calls[0], "refusal")[2];
+            expect(error.details.terminalPersistence).toMatchObject({ count: 10, oldestAgeMs: 26_000 });
+            expect(error.details.terminalPersistence.runIds).toHaveLength(8);
+            expect(JSON.stringify(error)).not.toContain("private-session");
+            expect(error.details.terminalPersistence.runIds.every((id: string) =>
+              id.length <= 256 && !/\p{Cc}/u.test(id),
+            )).toBe(true);
+            expect(logGateway.warn).toHaveBeenCalledWith(expect.stringContaining(error.message));
+          }
+        }
+      } finally {
+        context.chatAbortControllers.clear();
+        await host.retire();
+      }
+    },
+  );
 
   registerSuspensionHandoffAuthorizationTests();
 

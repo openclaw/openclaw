@@ -8,13 +8,14 @@ import {
   validateGatewaySuspendHandoffParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
-  armGatewaySuspendHandoff,
   getGatewaySuspendStatus,
   prepareGatewaySuspend,
+  requestGatewaySuspendHandoff,
   resumeGatewaySuspend,
 } from "../../infra/gateway-suspend-coordinator.js";
 import { getGatewayProcessInstanceId } from "../process-instance.js";
 import { createGatewayServerActiveWorkInspectors } from "../server-active-work.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestContext } from "./shared-types.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
@@ -59,7 +60,8 @@ function respondSuspendStatus(
 }
 
 export const suspendHandlers: GatewayRequestHandlers = {
-  "gateway.suspend.handoff": ({ respond, params, context }) => {
+  "gateway.suspend.handoff": async (options) => {
+    const { respond, params, context } = options;
     if (!validateGatewaySuspendHandoffParams(params)) {
       respond(false, undefined, invalidParams("gateway.suspend.handoff"));
       return;
@@ -84,13 +86,20 @@ export const suspendHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const result = armGatewaySuspendHandoff({
+    const result = await requestGatewaySuspendHandoff({
       suspensionId: params.suspensionId.trim(),
       owner,
       commit: params.commit,
+      assertCurrent: readGatewayRequestMutationAuthority(options).assertCurrent,
+      signal: options.signal,
     });
     if (!result.ok) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, result.error));
+      context.logGateway.warn("gateway.suspend.handoff refused: " + result.error.message);
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, result.error.message, { details: result.error.details }),
+      );
       return;
     }
     respond(true, result.value);

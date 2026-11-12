@@ -175,8 +175,8 @@ export async function withGatewayMaintenanceDrain<T>(
       localPortOverride: port,
       ignoreEnvUrlOverride: true,
       tlsFingerprint: target.tlsFingerprint,
-      // The deadline bounds deferral, not the final RPC needed to observe custody.
-      timeoutMs: 10_000,
+      // One 25-second terminal-settlement attempt has a five-second transport margin.
+      timeoutMs: method === "gateway.suspend.handoff" ? 30_000 : 10_000,
       onHelloOk: (hello) => {
         observedBootId = hello.server.bootId;
       },

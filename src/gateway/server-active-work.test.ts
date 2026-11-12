@@ -78,6 +78,29 @@ describe("gateway server active work inspectors", () => {
     );
   });
 
+  it("bounds and redacts terminal diagnostics without exposing session keys", () => {
+    const now = Date.now();
+    const context = {
+      cron: {}, chatQueuedTurns: new Map(),
+      chatAbortControllers: new Map(Array.from({ length: 10 }, (_, index) => [
+        index === 0 ? "run-0 password=synthetic-secret" : "run-" + index + "\n" + "x".repeat(300),
+        {
+          controller: controller(), sessionKey: "private-session-" + index,
+          projectSessionTerminalPending: true, projectSessionTerminalObservedAt: now - index * 1_000,
+        },
+      ])),
+    } as unknown as Parameters<typeof createGatewayServerActiveWorkInspectors>[0];
+    const diagnostics = createGatewayServerActiveWorkInspectors(context).getTerminalPersistenceDiagnostics?.();
+    expect(diagnostics?.oldestAgeMs).toBeGreaterThanOrEqual(9_000);
+    expect(diagnostics?.runIds).toHaveLength(8);
+    expect(diagnostics?.runIds.every((id) => id.length <= 256 && !/\p{Cc}/u.test(id))).toBe(true);
+    expect(JSON.stringify(diagnostics)).not.toContain("synthetic-secret");
+    expect(JSON.stringify(diagnostics)).not.toContain("private-session");
+    const first = context.chatAbortControllers.values().next().value!;
+    first.projectSessionTerminalObservedAt = undefined;
+    expect(createGatewayServerActiveWorkInspectors(context).getTerminalPersistenceDiagnostics?.().oldestAgeMs).toBeNull();
+  });
+
   it("drops the raw terminal-session blocker count during an agent session drain", async () => {
     const drainingPty = makeFakePty();
     const persistentPty = makeFakePty();

@@ -2,6 +2,7 @@
 import { getActiveCronJobCount } from "../cron/active-jobs.js";
 import { getSuspensionVisibleCronTaskRunCount } from "../cron/service/active-run-cancellation.js";
 import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 
@@ -38,6 +39,30 @@ export function createGatewayServerActiveWorkInspectors(
     getTerminalPersistence: () =>
       Array.from(context.chatAbortControllers.values()).filter(hasTerminalPersistence).length,
     getTerminalPersistenceHolders: () => holders(hasTerminalPersistence),
+    getTerminalPersistenceDiagnostics: () => {
+      const pending = Array.from(context.chatAbortControllers).filter(([, entry]) =>
+        hasTerminalPersistence(entry),
+      );
+      const now = Date.now();
+      let oldestAgeMs: number | null = 0;
+      for (const [, entry] of pending) {
+        const observedAt = entry.projectSessionTerminalObservedAt;
+        if (observedAt === undefined) {
+          oldestAgeMs = null;
+          break;
+        }
+        oldestAgeMs = Math.max(oldestAgeMs, now - observedAt);
+      }
+      return {
+        oldestAgeMs,
+        // Diagnostics leave the process here: omit session keys and redact before truncation.
+        runIds: pending.slice(0, 8).map(([runId]) =>
+          redactSensitiveText(runId, { mode: "tools" })
+            .replace(/\p{Cc}/gu, " ")
+            .slice(0, 256),
+        ),
+      };
+    },
     getTerminalSessions: () => context.terminalSessions?.size ?? 0,
   };
 }

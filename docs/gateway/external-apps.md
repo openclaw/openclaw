@@ -182,7 +182,16 @@ together with `expiresAtMs`, `retryAfterMs`, `activeCount`, and `blockers`.
 Each status call immediately returns a fresh active-work snapshot, including
 pending protected lifecycle or final-chat writes. Polling never waits for those
 writes, cancels work, releases custody, or renews the lease. The handoff owner
-checks write custody again before authorizing a stop.
+checks write custody again before authorizing a stop. If a final chat write arrives
+late, a drain handoff waits up to 25 seconds for terminal persistence to settle.
+Each attempt also ends at the current lease's wall-clock or monotonic expiry,
+whichever comes first. Renewing the 120-second lease does not extend the
+25-second attempt. Freeze handoffs remain immediate, including refusals.
+Unsettled writes return `UNAVAILABLE` with bounded diagnostics in the refusal
+message, Gateway log, and RPC error `details.terminalPersistence`: pending count,
+oldest observed terminal-event age in milliseconds (`null` when unavailable),
+and up to eight redacted run IDs capped at 256 characters each. Session keys and
+message content are omitted.
 Once every blocker has finished, the same lease transitions to
 `{"status":"ready","expiresAtMs":...}`.
 Status preserves the original response shape by default for published validators.
@@ -223,8 +232,9 @@ Terminal commands and scrollback are not recovered after restart; see
 
 An external deployment controller that explicitly authorizes interrupting
 remaining work can instead call `gateway.suspend.handoff` after its own graceful
-drain budget. The target must match the `pid` and `processInstanceId` obtained from
-`system.info` before suspension. This arms
+drain budget. Allow at least 30 seconds for the handoff response (for the generic
+CLI RPC command, pass `--timeout 30000`). The target must match the `pid` and
+`processInstanceId` obtained from `system.info` before suspension. This arms
 restart cleanup for that exact lease and host iteration's next `SIGTERM`; it
 does not send a signal or create a successor. The controller still owns the
 native service restart. A successful response is
