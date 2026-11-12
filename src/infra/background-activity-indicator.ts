@@ -11,7 +11,7 @@
  * "this turn is over", but it leaves no signal at all for legitimate work
  * that outlives the turn. This module is that second signal. It reuses the
  * same reusable channel typing primitive (`createTypingCallbacks` over the
- * channel's `heartbeat.sendTyping` adapter) but always through a *fresh* instance
+ * channel's `heartbeat.sendTypingGuarded`/`sendTyping` adapter) but always through a *fresh* instance
  * per activation, never the turn-bound controller's instance, so the two
  * can never observe or fight each other: each session key here owns its own
  * independent start/stop lifecycle, keyed apart from any turn-bound state.
@@ -25,44 +25,22 @@ const DEFAULT_BACKGROUND_ACTIVITY_TYPING_INTERVAL_SECONDS = 6;
 
 type BackgroundActivityChannelPlugin = Pick<ChannelPlugin, "heartbeat">;
 
-/** Typing start/stop/keepalive callbacks for one session's delivery target. */
-function createBackgroundActivityTypingCallbacks(params: {
-  cfg: OpenClawConfig;
-  target: {
-    channel: string;
-    to: string;
-    accountId?: string | null;
-    threadId?: string | number | null;
-  };
+type BackgroundActivityRoute = {
+  channel: string;
+  to: string;
+  accountId?: string | null;
+  threadId?: string | number | null;
   plugin: BackgroundActivityChannelPlugin;
-  typingIntervalSeconds?: number;
-  log?: (message: string) => void;
-}): TypingCallbacks | undefined {
-  const sendTyping = params.plugin.heartbeat?.sendTyping;
-  if (!sendTyping) {
-    return undefined;
-  }
-  const clearTyping = params.plugin.heartbeat?.clearTyping;
-  const intervalSeconds =
-    typeof params.typingIntervalSeconds === "number" && params.typingIntervalSeconds > 0
-      ? params.typingIntervalSeconds
-      : DEFAULT_BACKGROUND_ACTIVITY_TYPING_INTERVAL_SECONDS;
-  const target = {
-    cfg: params.cfg,
-    to: params.target.to,
-    ...(params.target.accountId !== undefined ? { accountId: params.target.accountId } : {}),
-    ...(params.target.threadId !== undefined ? { threadId: params.target.threadId } : {}),
-  };
-  return createTypingCallbacks({
-    start: async () => sendTyping(target),
-    ...(clearTyping ? { stop: async () => clearTyping(target) } : {}),
-    keepaliveIntervalMs: intervalSeconds * 1000,
-    onStartError: (err) => {
-      params.log?.(
-        `background activity typing failed for ${params.target.channel}: ${String(err)}`,
-      );
-    },
-  });
+};
+
+function isSameRoute(a: BackgroundActivityRoute, b: BackgroundActivityRoute): boolean {
+  return (
+    a.plugin === b.plugin &&
+    a.channel === b.channel &&
+    a.to === b.to &&
+    (a.accountId ?? null) === (b.accountId ?? null) &&
+    (a.threadId ?? null) === (b.threadId ?? null)
+  );
 }
 
 /** Poll cadence for re-evaluating which sessions still have armed background work.
@@ -86,7 +64,7 @@ export type BackgroundActivityChannelTarget = {
   resolveDelivery: (
     sessionKey: string,
   ) => DeliveryContext | undefined | Promise<DeliveryContext | undefined>;
-  /** Resolve the loaded channel plugin providing `heartbeat.sendTyping`/`clearTyping`. */
+  /** Resolve the loaded channel plugin providing `heartbeat.sendTyping(Guarded)`/`clearTyping`. */
   resolveChannelPlugin: (
     channel: string,
   ) =>
@@ -117,6 +95,8 @@ export type BackgroundActivityIndicator = {
   isActiveForSession: (sessionKey: string) => boolean;
 };
 
+type ActiveSession = { controller: AbortController; callbacks?: TypingCallbacks };
+
 async function resolveList(
   value: readonly string[] | Promise<readonly string[]>,
 ): Promise<readonly string[]> {
@@ -128,72 +108,143 @@ export function createBackgroundActivityIndicator(
   options: BackgroundActivityIndicatorOptions,
 ): BackgroundActivityIndicator {
   const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_BACKGROUND_ACTIVITY_POLL_MS;
-  const active = new Map<string, { onCleanup?: () => void }>();
+  const active = new Map<string, ActiveSession>();
   let timer: ReturnType<typeof setInterval> | undefined;
   let tickInFlight: Promise<void> | undefined;
+  // Bumped by stop(). A pass that began under an older generation must not
+  // register anything once its awaits settle: the instance it served is gone.
+  let generation = 0;
 
   const stopSession = (sessionKey: string) => {
-    const callbacks = active.get(sessionKey);
-    if (!callbacks) {
+    const session = active.get(sessionKey);
+    if (!session) {
       return;
     }
     active.delete(sessionKey);
+    session.controller.abort();
     try {
-      callbacks.onCleanup?.();
+      session.callbacks?.onCleanup?.();
     } catch (error) {
       options.onError?.(error, { sessionKey });
     }
   };
 
-  const startSession = async (sessionKey: string): Promise<void> => {
-    if (active.has(sessionKey)) {
-      return;
-    }
-    if (options.target.isTypingEnabled && !options.target.isTypingEnabled(sessionKey)) {
-      return;
+  const isTypingEnabled = (sessionKey: string) =>
+    !options.target.isTypingEnabled || options.target.isTypingEnabled(sessionKey);
+
+  /** The session's route as of now; undefined when it must not show typing. */
+  const resolveRoute = async (sessionKey: string): Promise<BackgroundActivityRoute | undefined> => {
+    if (!isTypingEnabled(sessionKey)) {
+      return undefined;
     }
     const delivery = await options.target.resolveDelivery(sessionKey);
     const channel = delivery?.channel?.trim();
     const to = delivery?.to?.trim();
     if (!channel || !to) {
-      return;
+      return undefined;
     }
     const plugin = await options.target.resolveChannelPlugin(channel);
-    if (active.has(sessionKey)) {
-      // A concurrent tick already started this session while the plugin
-      // resolved; never register a second, orphaned TypingCallbacks instance.
-      return;
-    }
-    if (!plugin?.heartbeat?.sendTyping) {
+    if (!plugin?.heartbeat?.sendTypingGuarded && !plugin?.heartbeat?.sendTyping) {
       // No channel-level typing primitive to drive; this session cannot show
       // a background-activity signal at all. Not an error -- most channels
       // (and some accounts) simply do not implement typing.
+      return undefined;
+    }
+    return { channel, to, accountId: delivery?.accountId, threadId: delivery?.threadId, plugin };
+  };
+
+  const startSession = async (sessionKey: string, isCurrentPass: () => boolean): Promise<void> => {
+    if (active.has(sessionKey)) {
       return;
     }
-    const callbacks = createBackgroundActivityTypingCallbacks({
-      cfg: options.target.getConfig(),
-      target: {
-        channel,
-        to,
-        accountId: delivery?.accountId,
-        threadId: delivery?.threadId,
-      },
-      plugin,
-      typingIntervalSeconds: options.target.typingIntervalSeconds?.(sessionKey),
-      log: options.target.log,
+    const route = await resolveRoute(sessionKey);
+    // stop() or a concurrent pass may have run while the route resolved; never
+    // register for a retired instance or a second, orphaned TypingCallbacks.
+    if (!route || !isCurrentPass() || active.has(sessionKey)) {
+      return;
+    }
+    const session: ActiveSession = { controller: new AbortController() };
+    // Everything that can be checked without waiting: this exact activation is
+    // still the registered one, the instance still serves, typing is still on.
+    const isSessionCurrent = () =>
+      active.get(sessionKey) === session &&
+      !session.controller.signal.aborted &&
+      options.isAvailable() &&
+      isTypingEnabled(sessionKey);
+    const retire = () => {
+      if (active.get(sessionKey) === session) {
+        stopSession(sessionKey);
+      }
+    };
+    const target = (cfg: OpenClawConfig) => ({
+      cfg,
+      to: route.to,
+      ...(route.accountId !== undefined ? { accountId: route.accountId } : {}),
+      ...(route.threadId !== undefined ? { threadId: route.threadId } : {}),
     });
-    if (!callbacks) {
-      return;
-    }
-    active.set(sessionKey, callbacks);
+    const intervalSeconds = options.target.typingIntervalSeconds?.(sessionKey);
+    session.callbacks = createTypingCallbacks({
+      // Runs for the first send and every keepalive: nothing captured at
+      // activation is trusted, so an opt-out or re-route takes effect on the
+      // next send rather than whenever the session next disarms.
+      start: async () => {
+        if (!isSessionCurrent()) {
+          retire();
+          return;
+        }
+        const current = await resolveRoute(sessionKey);
+        if (!isSessionCurrent() || !current || !isSameRoute(current, route)) {
+          // The next poll re-activates against the new route, if there is one.
+          retire();
+          return;
+        }
+        const heartbeat = route.plugin.heartbeat;
+        if (heartbeat?.sendTypingGuarded) {
+          // Channels that own guarded typing re-check after their own transport waits.
+          await heartbeat.sendTypingGuarded({
+            ...target(options.target.getConfig()),
+            signal: session.controller.signal,
+            assertPlatformSendAuthorized: () => {
+              if (!isSessionCurrent()) {
+                retire();
+                throw new Error("background activity typing is no longer current");
+              }
+            },
+          });
+          return;
+        }
+        await heartbeat?.sendTyping?.(target(options.target.getConfig()));
+      },
+      ...(route.plugin.heartbeat?.clearTyping
+        ? {
+            stop: async () =>
+              route.plugin.heartbeat?.clearTyping?.(target(options.target.getConfig())),
+          }
+        : {}),
+      keepaliveIntervalMs:
+        (typeof intervalSeconds === "number" && intervalSeconds > 0
+          ? intervalSeconds
+          : DEFAULT_BACKGROUND_ACTIVITY_TYPING_INTERVAL_SECONDS) * 1000,
+      onStartError: (err) => {
+        if (session.controller.signal.aborted) {
+          return;
+        }
+        options.target.log?.(
+          `background activity typing failed for ${route.channel}: ${String(err)}`,
+        );
+      },
+    });
+    active.set(sessionKey, session);
     try {
-      await callbacks.onReplyStart();
+      await session.callbacks.onReplyStart();
     } catch (error) {
       options.onError?.(error, { sessionKey });
     }
   };
 
   const runTick = async () => {
+    const passGeneration = generation;
+    const isCurrentPass = () => passGeneration === generation && options.isAvailable();
     if (!options.isAvailable()) {
       for (const sessionKey of active.keys()) {
         stopSession(sessionKey);
@@ -204,6 +255,9 @@ export function createBackgroundActivityIndicator(
       resolveList(options.sources.listArmedSubagentWaitSessionKeys()),
       resolveList(options.sources.listArmedCronWakeSessionKeys()),
     ]);
+    if (!isCurrentPass()) {
+      return;
+    }
     const armed = new Set<string>();
     for (const sessionKey of subagentKeys) {
       if (sessionKey.trim()) {
@@ -222,7 +276,7 @@ export function createBackgroundActivityIndicator(
     }
     await Promise.all(
       [...armed].map((sessionKey) =>
-        startSession(sessionKey).catch((error: unknown) => {
+        startSession(sessionKey, isCurrentPass).catch((error: unknown) => {
           // One session's resolution failure (e.g. a throwing plugin lookup)
           // must never block or fail the others in the same batch.
           options.onError?.(error, { sessionKey });
@@ -254,6 +308,7 @@ export function createBackgroundActivityIndicator(
   };
 
   const stop = () => {
+    generation += 1;
     if (timer) {
       clearInterval(timer);
       timer = undefined;

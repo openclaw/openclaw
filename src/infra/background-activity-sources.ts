@@ -12,14 +12,17 @@
  *   both an open execution (`endedAt` unset) *and* a live, currently
  *   registered `agent-run-registry` context/owner/lease for that exact
  *   run's `lifecycleGeneration` -- so an orphaned or merely-claimed wait
- *   (the "hollow wait" failure mode) does not count.
+ *   (the "hollow wait" failure mode) does not count. The run must also owe
+ *   its requester a completion (`expectsCompletionMessage`), and must not
+ *   already be owned by detached lifecycle typing (`startSubagentTyping`).
  * - Cron/automation wake: `GatewayCronServiceContract.list()` (src/cron/
- *   service-contract.ts), filtered to jobs with a defined, not-too-stale
- *   `state.nextRunAtMs`, resolved to session keys via
+ *   service-contract.ts), filtered to jobs that are running now or whose
+ *   `state.nextRunAtMs` is imminent, resolved to session keys via
  *   `resolveCronJobSessionBindings` (src/cron/job-session-bindings.ts).
  */
 import { resolveAgentConfig } from "../agents/agent-scope-config.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
+import { resolveSubagentLifecycleTypingOwner } from "../agents/subagents/registry/subagent-registry-typing-owner.js";
 import { isSubagentRunLive } from "../agents/subagents/registry/subagent-run-liveness.js";
 import { extractDeliveryInfo } from "../config/sessions/delivery-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -33,12 +36,26 @@ import { resolveSessionStoreIdentity } from "../gateway/session-store-key.js";
  * just triggered can lag the fire itself by a few seconds. */
 const CRON_WAKE_PAST_DUE_GRACE_MS = 30_000;
 
+/** How far ahead a scheduled fire counts as "about to happen". A daily or
+ * weekly job is idle between fires, not working; only the last stretch
+ * before a fire (a few indicator polls) is worth signalling. */
+const CRON_WAKE_IMMINENT_WINDOW_MS = 60_000;
+
 /** Session (requester) keys with a live subagent run their parent is genuinely awaiting. */
 export function listArmedSubagentWaitSessionKeys(): string[] {
   const keys = new Set<string>();
   for (const entry of subagentRuns.values()) {
     const requesterSessionKey = entry.requesterSessionKey?.trim();
-    if (requesterSessionKey && isSubagentRunLive(entry)) {
+    if (
+      requesterSessionKey &&
+      // A run that owes its requester nothing (e.g. a plugin child registered
+      // without a requester) is not something that session is waiting on.
+      entry.expectsCompletionMessage === true &&
+      isSubagentRunLive(entry) &&
+      // Detached lifecycle typing already owns this run's signal, with its own
+      // requester/route currency checks. Never run a second keepalive beside it.
+      !resolveSubagentLifecycleTypingOwner(entry)
+    ) {
       keys.add(requesterSessionKey);
     }
   }
@@ -46,11 +63,18 @@ export function listArmedSubagentWaitSessionKeys(): string[] {
 }
 
 function hasArmedCronWake(job: Pick<CronJob, "state">, now: number): boolean {
+  if (typeof job.state.runningAtMs === "number") {
+    return true;
+  }
   const nextRunAtMs = job.state.nextRunAtMs;
-  return typeof nextRunAtMs === "number" && nextRunAtMs >= now - CRON_WAKE_PAST_DUE_GRACE_MS;
+  return (
+    typeof nextRunAtMs === "number" &&
+    nextRunAtMs >= now - CRON_WAKE_PAST_DUE_GRACE_MS &&
+    nextRunAtMs <= now + CRON_WAKE_IMMINENT_WINDOW_MS
+  );
 }
 
-/** Session keys bound to an enabled automation/cron job with a pending scheduled fire. */
+/** Session keys bound to an enabled automation/cron job that is running or about to fire. */
 export async function listArmedCronWakeSessionKeys(params: {
   cron: Pick<GatewayCronServiceContract, "list" | "getDefaultAgentId">;
   cfg: OpenClawConfig;

@@ -10,6 +10,9 @@ import { subagentRuns } from "../agents/subagents/registry/subagent-registry-mem
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CronJob } from "../cron/types.js";
+import { createMockGatewayLifecycleRuntime } from "../gateway/server-lifecycle-runtime.test-support.js";
+import { createContext } from "../gateway/server-plugin-in-process-dispatch.test-support.js";
+import { bindGatewayContextResolver } from "../plugins/runtime/gateway-context-binding.js";
 import { claimAgentRunContext, resetAgentRunRegistryForTest } from "./agent-run-registry.js";
 import {
   listArmedCronWakeSessionKeys,
@@ -32,6 +35,7 @@ describe("listArmedSubagentWaitSessionKeys", () => {
       cleanup: "keep",
       createdAt: Date.now(),
       execution: { status: "running" },
+      expectsCompletionMessage: true,
       ...overrides,
     } as SubagentRunRecord;
   }
@@ -68,6 +72,52 @@ describe("listArmedSubagentWaitSessionKeys", () => {
 
     expect(listArmedSubagentWaitSessionKeys()).not.toContain("agent:main:ended-requester");
   });
+
+  it("excludes a live run that owes its requester no completion", () => {
+    // A plugin child registered without a requester is filed under the owner
+    // main session with expectsCompletionMessage: false; nothing returns there.
+    const entry = fakeRun({
+      runId: "run-quiet",
+      requesterSessionKey: "agent:main:quiet-requester",
+      expectsCompletionMessage: false,
+    });
+    subagentRuns.set(entry.runId, entry);
+    claimAgentRunContext(entry.runId, {}, { trackOwner: true });
+
+    expect(listArmedSubagentWaitSessionKeys()).not.toContain("agent:main:quiet-requester");
+  });
+
+  it("leaves a run to detached lifecycle typing when that already owns its signal", () => {
+    const owned = {
+      requesterOrigin: { channel: "telegram", to: "-100123" },
+      completionRequesterSessionId: "parent-session",
+      requesterAgentId: "main",
+      requesterStorePath: "/tmp/sessions.json",
+    } satisfies Partial<SubagentRunRecord>;
+    const lifecycleTyped = fakeRun({
+      ...owned,
+      runId: "run-lifecycle-typed",
+      requesterSessionKey: "agent:main:telegram:owned",
+    });
+    // Same record shape, but no gateway runtime offering startTyping: lifecycle
+    // typing cannot own it, so the indicator still does.
+    const unowned = fakeRun({
+      ...owned,
+      runId: "run-unowned",
+      requesterSessionKey: "agent:main:telegram:unowned",
+    });
+    const context = createContext();
+    context.lifecycleRuntime = createMockGatewayLifecycleRuntime({ startTyping: () => () => {} });
+    bindGatewayContextResolver(lifecycleTyped, () => context);
+    for (const entry of [lifecycleTyped, unowned]) {
+      subagentRuns.set(entry.runId, entry);
+      claimAgentRunContext(entry.runId, {}, { trackOwner: true });
+    }
+
+    const keys = listArmedSubagentWaitSessionKeys();
+    expect(keys).not.toContain("agent:main:telegram:owned");
+    expect(keys).toContain("agent:main:telegram:unowned");
+  });
 });
 
 describe("listArmedCronWakeSessionKeys", () => {
@@ -96,7 +146,7 @@ describe("listArmedCronWakeSessionKeys", () => {
     };
   }
 
-  it("includes a session bound to an enabled job with a pending future fire", async () => {
+  it("includes a session bound to an enabled job with an imminent fire", async () => {
     const now = Date.parse("2026-09-17T00:00:00Z");
     const job = fakeJob({
       id: "armed-job",
@@ -130,5 +180,19 @@ describe("listArmedCronWakeSessionKeys", () => {
     });
     const keys = await listArmedCronWakeSessionKeys({ cron: fakeCron([job]), cfg, now });
     expect(keys).not.toContain("agent:cronowner3:main");
+  });
+
+  it("excludes a daily job between fires and includes it again while it runs", async () => {
+    const now = Date.parse("2026-09-17T00:00:00Z");
+    const nextRunAtMs = now + 6 * 60 * 60_000;
+    const idle = fakeJob({ id: "daily-idle", agentId: "daily", state: { nextRunAtMs } });
+    const running = fakeJob({
+      id: "daily-running",
+      agentId: "dailyrun",
+      state: { nextRunAtMs, runningAtMs: now - 5 * 60_000 },
+    });
+    const keys = await listArmedCronWakeSessionKeys({ cron: fakeCron([idle, running]), cfg, now });
+    expect(keys).not.toContain("agent:daily:main");
+    expect(keys).toContain("agent:dailyrun:main");
   });
 });
