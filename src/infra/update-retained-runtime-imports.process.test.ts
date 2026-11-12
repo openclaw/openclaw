@@ -172,7 +172,33 @@ for (const runtime of ["node", "bun", "node-short-path", "node-junction"] as con
         runtime !== "bun"
           ? spawnNodeEvalSync(source, {
               ...options,
-              imports: [new URL("../../scripts/tsx.mjs", import.meta.url).href],
+              // Preserve the synthetic install alias, not the checkout's pnpm
+              // tooling symlinks, whose dependencies live at their physical paths.
+              imports: [
+                ...(runtime === "node-junction"
+                  ? [
+                      `data:text/javascript,${encodeURIComponent(`
+                        import fs from "node:fs";
+                        import { registerHooks } from "node:module";
+                        import path from "node:path";
+                        import { fileURLToPath, pathToFileURL } from "node:url";
+                        const checkout = fileURLToPath(${JSON.stringify(new URL("../../", import.meta.url).href)});
+                        registerHooks({
+                          resolve(specifier, context, nextResolve) {
+                            const result = nextResolve(specifier, context);
+                            if (!result.url.startsWith("file:")) return result;
+                            const filename = fileURLToPath(result.url);
+                            if (!filename.startsWith(checkout) || !filename.split(path.sep).includes("node_modules")) return result;
+                            const url = new URL(result.url);
+                            url.pathname = pathToFileURL(fs.realpathSync(filename)).pathname;
+                            return { ...result, url: url.href };
+                          }
+                        });
+                      `)}`,
+                    ]
+                  : []),
+                new URL("../../scripts/tsx.mjs", import.meta.url).href,
+              ],
             })
           : spawnSync("bun", ["--eval", source], options);
       if (process.env.OPENCLAW_RETAINED_ALIAS_DIAGNOSTICS === "1") {

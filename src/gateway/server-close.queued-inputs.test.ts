@@ -274,10 +274,12 @@ it.for(["restart", "stop"] as const)(
         expect(await retry.request("chat.send", request)).toMatchObject({ runId });
         await withinTest(consumed.promise, signal);
         await withinTest(
-          getSessionWorkAdmissionRelease({
-            scope: fixture.scope.storePath,
-            identities: [sessionKey, sessionId],
-          }),
+          Promise.resolve(
+            getSessionWorkAdmissionRelease({
+              scope: fixture.scope.storePath,
+              identities: [sessionKey, sessionId],
+            }),
+          ),
           signal,
         );
         expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });

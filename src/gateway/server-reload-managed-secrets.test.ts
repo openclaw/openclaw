@@ -12,6 +12,7 @@ import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source
 import {
   attachRuntimeConfigWriteApplication,
   createRuntimeConfigWriteApplication,
+  type RuntimeConfigWriteApplicationStatus,
 } from "../config/runtime-write-application.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -279,7 +280,7 @@ describe("managed reload authored source", () => {
     expect(refresh).toHaveBeenCalledOnce();
 
     const application = createRuntimeConfigWriteApplication();
-    const settled: string[] = [];
+    const settled: RuntimeConfigWriteApplicationStatus[] = [];
     void application.result.then((status) => settled.push(status));
     harness.emitWrite(
       attachRuntimeConfigWriteApplication(

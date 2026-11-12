@@ -266,7 +266,7 @@ describe("public Gateway close operator observer lifetime", () => {
               .mockImplementation(async (params) => {
                 markerEntered.resolve();
                 await releaseMarker.promise;
-                await markRestart(params);
+                return await markRestart(params);
               })
           : undefined;
       const readPending = devicePairing.getPendingDevicePairing;

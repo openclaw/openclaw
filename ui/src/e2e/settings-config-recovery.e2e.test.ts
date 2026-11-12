@@ -74,7 +74,7 @@ suite.define(() => {
       await gateway.setOnline(true);
       await expect.poll(() => prefix.inputValue()).toBe("saved deferred");
       await expect.poll(() => indicator.textContent()).toContain("Saved; waiting to apply");
-      expect((await gateway.findRequests("config.set")).length).toBe(1);
+      expect(await gateway.getRequests("config.set")).toHaveLength(1);
       // The reconnect read can carry a new public token for the same saved document.
       await gateway.setMethodResponse("config.get", {
         ...saved, hash: "applied-deferred", configRevisionHash: "applied-deferred",
@@ -83,7 +83,7 @@ suite.define(() => {
       await gateway.setOnline(false);
       await gateway.setOnline(true);
       await expect.poll(() => indicator.textContent()).not.toContain("Saved; waiting to apply");
-      expect((await gateway.findRequests("config.set")).length).toBe(1);
+      expect(await gateway.getRequests("config.set")).toHaveLength(1);
     });
   });
 

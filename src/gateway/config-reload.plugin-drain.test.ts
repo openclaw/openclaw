@@ -95,11 +95,13 @@ describe("plugin drain recovery", () => {
       const cleanup = createDeferredCore();
       let cleanupPending = true;
       let writerActive = true;
-      const writerScope = vi.fn(async <T>(run: () => Promise<T>) => {
+      const writerScope = vi.fn(() => {
         expect(writerActive).toBe(true);
+      });
+      const application = createRuntimeConfigWriteApplication(async (run) => {
+        writerScope();
         return run();
       });
-      const application = createRuntimeConfigWriteApplication(writerScope);
       const harness = createReloaderHarness(async () => makeSnapshot({ config, hash: "saved" }), {
         initialConfig,
         onHotReload: async () => {

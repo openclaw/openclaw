@@ -279,7 +279,9 @@ describe("config application settlement", () => {
           }),
         }),
       );
-      expect(harness.respond.mock.calls[0]?.[2]?.message).not.toContain("[object Object]");
+      expect(harness.respond.mock.calls[0]?.[2]).toEqual(
+        expect.objectContaining({ message: expect.not.stringContaining("[object Object]") }),
+      );
       expect(queueFollowUp).toHaveBeenCalledOnce();
     },
   );

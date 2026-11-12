@@ -15,6 +15,7 @@ import {
   type MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
+import type { MemoryIndexEntry } from "./manager-index-preparation.js";
 import {
   MEMORY_INDEX_PROVENANCE_VERSION,
   resolveConfiguredScopeHash,
@@ -22,15 +23,6 @@ import {
 } from "./manager-reindex-state.js";
 import { hasTargetedSessionSyncParams } from "./manager-sync-control.js";
 import { MemorySyncTestHarness } from "./manager-sync-ops.test-support.js";
-
-type MemoryIndexEntry = {
-  path: string;
-  absPath: string;
-  mtimeMs: number;
-  size: number;
-  hash: string;
-  content?: string;
-};
 
 type SyncParams = {
   reason?: string;

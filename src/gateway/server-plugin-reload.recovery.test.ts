@@ -211,6 +211,7 @@ it.each(["retained work", "handoff work", "prior cleanup"] as const)(
       prepareConfigEffects,
       checkpoint: async () => {
         if (++checkpoints === 5 && busy === "handoff work") {
+          assert(instance);
           releaseWork = instance.retainWork();
         }
       },

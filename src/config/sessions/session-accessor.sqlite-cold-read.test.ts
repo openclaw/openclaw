@@ -95,14 +95,14 @@ async function createHotRaceSeed(state: OpenClawTestState) {
       type: "message",
       id: "user",
       parentId: null,
-      timestamp: 1,
+      timestamp: "1970-01-01T00:00:00.001Z",
       message: { role: "user", content: "Original question" },
     },
     {
       type: "message",
       id: "answer",
       parentId: "user",
-      timestamp: 2,
+      timestamp: "1970-01-01T00:00:00.002Z",
       message: { role: "assistant", content: "Original answer" },
     },
   ]);

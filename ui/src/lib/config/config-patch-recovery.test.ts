@@ -160,16 +160,7 @@ describe("config patch recovery", () => {
       const server = createPersistedFailureTransport({
         method, failureDetails: (ack) => ({ persistedConfig: ack, application }),
       });
-      let applied = false;
-      const request: GatewayBrowserClient["request"] = async (nextMethod, params) => {
-        const response = await server.request(nextMethod, params);
-        if (nextMethod === "config.get" && applied) {
-          const snapshot = response as ConfigSnapshot;
-          return { ...snapshot, appliedConfigHash: snapshot.configRevisionHash } as typeof response;
-        }
-        return response;
-      };
-      const { runtimeConfig, publish } = createRecoveryCapability(request);
+      const { runtimeConfig, publish } = createRecoveryCapability(server.request);
       try {
         await runtimeConfig.ensureLoaded();
         if (method === "config.set") {
@@ -195,7 +186,7 @@ describe("config patch recovery", () => {
         expect(runtimeConfig.state.configAutoSaveStatus).toBe("deferred");
         expect(runtimeConfig.state.lastError).toContain(application.reason);
         // Simulate the runtime owner applying the saved revision, not another client write.
-        applied = true;
+        server.store.markApplied();
         await runtimeConfig.refresh();
         expect(runtimeConfig.state.configNeedsApply).toBe(false);
         expect(runtimeConfig.state.configDeferredApplication).toBeNull();

@@ -47,7 +47,7 @@ it("exports every medium transcript through the production 512 MiB worker", asyn
           for (const line of update.page.lines) {
             count.first ||= line.slice(0, 64);
             count.last = line.slice(-64);
-            count.words += [...line.matchAll(/(?:synthetic|detail)/g)].length;
+            count.words += [...line.matchAll(/\b(?:synthetic|detail)\b/g)].length;
           }
         }
       },

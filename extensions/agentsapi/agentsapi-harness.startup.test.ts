@@ -162,8 +162,10 @@ it.each([
           replayMetadata: { hadPotentialSideEffects: submitted },
         });
         if (!active && !shorter) {
-          expect(outcome.terminal).toMatchObject({
-            error: { message: expect.stringContaining("Inspect the native session or use /reset") },
+          expect(outcome).toMatchObject({
+            terminal: {
+              error: { message: expect.stringContaining("Inspect the native session or use /reset") },
+            },
           });
         }
         expect(cancel).toHaveBeenCalledTimes(submitted ? 1 : 0);
