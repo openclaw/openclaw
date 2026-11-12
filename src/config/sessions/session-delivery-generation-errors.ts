@@ -23,3 +23,18 @@ export const isSessionDeliveryGenerationRevokedError = (error: unknown) =>
   isRecord(error) && error.code === "SESSION_DELIVERY_GENERATION_REVOKED";
 export const isSessionDeliveryGenerationUnavailableError = (error: unknown) =>
   isRecord(error) && error.code === "SESSION_DELIVERY_GENERATION_UNAVAILABLE";
+
+/** Walks wrapper causes; revocation wins because a fresh lease cannot restore that generation. */
+export function classifySessionDeliveryGenerationRefusal(
+  error: unknown,
+): "unavailable" | "revoked" | undefined {
+  let refusal: "unavailable" | undefined;
+  for (let current = error, depth = 0; isRecord(current) && depth < 8; depth++) {
+    if (isSessionDeliveryGenerationRevokedError(current)) {
+      return "revoked";
+    }
+    refusal ??= isSessionDeliveryGenerationUnavailableError(current) ? "unavailable" : undefined;
+    current = current.cause;
+  }
+  return refusal;
+}
