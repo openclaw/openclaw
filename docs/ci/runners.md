@@ -536,6 +536,17 @@ A maintainer can dispatch `ci.yml` with `runner_backend=boat`,
 current same-repository PR head. The workflow branch and revision must match
 that head. Existing maintainer and exact-head admission applies.
 
+To qualify merged main, dispatch `ci.yml` from `main` with `runner_backend=boat`,
+`ci_shape=main`, `validation_tier=main`, `release_gate=false`,
+`release_scope=full`, `include_android=true`, and an empty `test_runtime_policy`.
+Leave `pull_request_number` empty and set `target_ref` to the full SHA of the
+main revision running the workflow. This route requires the canonical repository, branch
+ref, matching checkout/workflow/target SHA, and a maintainer actor. It selects
+scheduled-main coverage, including Bun, all platform families and full tooling,
+within the existing 77-row Node cap, even for docs-only or empty change sets.
+The dispatch actor supplies author provenance; only `vincentkoc` as both actor
+and starter can allocate Boat runners. It does not change the repository backend.
+
 `OPENCLAW_CI_RUNNER_BACKEND=boat` uses the existing hybrid logical plan. Only
 same-repository first attempts authored and started by `vincentkoc` may allocate
 Boat runners. Other authors, starters, forks, and retries use GitHub-hosted
@@ -612,7 +623,7 @@ untrusted or unrelated targets cannot use this override.
 
 For a main-shaped measurement, set `ci_shape=main` with the same exact-head
 PR admission and choose `runner_backend=hybrid` or `runson`. This uses push
-coverage, the 70-row Node cap, Node runtime, and ordinary main proof/native
+coverage, the 70-row Node cap, daily Bun runtime, and ordinary main proof/native
 selection. It omits PR extension fallback and the two cron comparison controls;
 it does not add full-manual release-only work. Raw GitHub event/ref still own
 trust, concurrency, cache publication and provenance. The initial preflight is
