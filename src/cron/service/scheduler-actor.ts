@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
+import { setTimeout as delay } from "node:timers/promises";
 import { BroadcastChannel } from "node:worker_threads";
-import { isAbortError } from "../../infra/abort-signal.js";
+import { isAbortError, waitForAbortSignal } from "../../infra/abort-signal.js";
 import {
   beginGatewayRootWorkAdmissionWhenOpen,
   GatewayDrainingError,
@@ -46,10 +47,10 @@ type ActorConnection = {
   pending: Promise<void>;
   refreshAfter?: Promise<unknown>;
   nativeLost?: boolean;
-  recovery?: Promise<void>;
 };
 
 const connections = new WeakMap<CronServiceState, ActorConnection>();
+const recoveries = new WeakSet<CronServiceState>();
 
 function executeScheduler(
   state: CronServiceState,
@@ -245,42 +246,67 @@ export async function startCronScheduler(
   }
 }
 
-function recoverCronScheduler(state: CronServiceState, connection: ActorConnection): void {
-  if (connection.recovery || state.schedulingPaused) {
+function recoverCronScheduler(state: CronServiceState): void {
+  if (recoveries.has(state) || state.schedulingPaused) {
     return;
   }
+  recoveries.add(state);
   const generation = state.lifecycleGeneration;
-  const current = () =>
-    connections.get(state) === connection &&
-    !state.stopped &&
-    !state.schedulingPaused &&
-    !state.schedulerScope.signal.aborted &&
-    state.lifecycleGeneration === generation;
   const recovery = runInDetachedAsyncContext(async () => {
-    const run = async () => {
-      await state.op;
-      if (!current()) {
+    // Other borrowers keep a dead store published until they settle, so a
+    // replacement can lose its worker at once; retry until a live store answers.
+    for (let retryMs = 250; ; retryMs = Math.min(retryMs * 2, 30_000)) {
+      const lost = connections.get(state);
+      const current = () =>
+        lost?.nativeLost === true &&
+        connections.get(state) === lost &&
+        !state.stopped &&
+        !state.schedulingPaused &&
+        !state.schedulerScope.signal.aborted &&
+        state.lifecycleGeneration === generation;
+      if (!lost || !current()) {
         return;
       }
-      // Keep the retired slot while paused; resume can request the same recovery.
-      // Join native settlement and host publication before registering another actor.
-      await closeConnection(state, connection, true, true);
-      if (!current()) {
-        return;
+      const run = async () => {
+        await state.op;
+        if (!current()) {
+          return;
+        }
+        // Keep the retired slot while paused; resume can request the same recovery.
+        // Join native settlement and host publication before registering another actor.
+        await closeConnection(state, lost, true, true);
+        if (!current()) {
+          return;
+        }
+        lost.assertCurrent();
+        connections.delete(state);
+        try {
+          await startCronScheduler(state, new Set());
+        } catch (error) {
+          // Failed startup removed its own connection; keep the lost slot for the next attempt.
+          if (!connections.has(state)) {
+            connections.set(state, lost);
+          }
+          state.deps.log.warn({ err: String(error) }, "cron: worker recovery failed");
+          return;
+        }
+        state.deps.log.info({}, "cron: scheduler reconnected after native worker loss");
+      };
+      await (state.deps.runSchedulerOwned ? state.deps.runSchedulerOwned(run) : run());
+      if (current()) {
+        await waitForAbortSignal(
+          state.schedulerScope.signal,
+          delay(retryMs, undefined, { ref: false }),
+        );
       }
-      connection.assertCurrent();
-      connections.delete(state);
-      await startCronScheduler(state, new Set());
-      state.deps.log.info({}, "cron: scheduler reconnected after native worker loss");
-    };
-    await (state.deps.runSchedulerOwned ? state.deps.runSchedulerOwned(run) : run());
-  }).catch((error: unknown) => {
-    state.deps.log.warn({ err: String(error) }, "cron: worker recovery failed");
-  });
-  connection.recovery = recovery;
-  void recovery.finally(() => {
-    connection.recovery = undefined;
-  });
+    }
+  })
+    .catch((error: unknown) => {
+      state.deps.log.warn({ err: String(error) }, "cron: worker recovery failed");
+    })
+    .finally(() => {
+      recoveries.delete(state);
+    });
   state.schedulerDrain = Promise.all([state.schedulerDrain, recovery]).then(() => undefined);
 }
 
@@ -358,7 +384,7 @@ export function refreshCronScheduler(state: CronServiceState): void {
     return;
   }
   if (connection.nativeLost) {
-    recoverCronScheduler(state, connection);
+    recoverCronScheduler(state);
     return;
   }
   const operation = state.op;
