@@ -17,9 +17,13 @@ import time
 DAY_SECONDS = 24 * 60 * 60
 
 
-def matches(value, expected):
+def identity(value):
+    return {key: str(getattr(value, "st_" + key)) for key in ("dev", "ino", "uid", "mode")}
+
+
+def matches(value, expected, persisted=False):
     return all(str(getattr(value, "st_" + key)) == str(expected[key])
-               for key in ("dev", "ino", "uid", "mode"))
+               for key in (("ino", "uid", "mode") if persisted else ("dev", "ino", "uid", "mode")))
 
 
 def physical(path):
@@ -157,12 +161,12 @@ def retire(candidate, scan, now):
         if lease is not None:
             value = physical(lease["path"])
             lease_file(value)
-            if not matches(value, lease):
+            if not matches(value, lease, persisted=True):
                 raise ValueError("changed-lease")
             lease_fd = os.open(lease["path"], os.O_RDWR | os.O_NOFOLLOW)
             held = os.fstat(lease_fd)
             lease_file(held)
-            if not matches(held, lease):
+            if not matches(held, identity(value)):
                 raise ValueError("changed-lease")
             fcntl.flock(lease_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         try:
@@ -172,7 +176,7 @@ def retire(candidate, scan, now):
         if value is not None and (
                 not stat.S_ISDIR(value.st_mode) or value.st_uid != os.getuid()
                 or stat.S_IMODE(value.st_mode) != 0o700
-                or not matches(value, candidate["identity"])):
+                or not matches(value, candidate["identity"], persisted=True)):
             raise ValueError("changed-directory")
         if lease is None and pending is None:
             if scan is None:
@@ -201,7 +205,7 @@ def retire(candidate, scan, now):
             if not math.isfinite(modified) or now - modified <= DAY_SECONDS:
                 raise ValueError("recent-directory")
         if value is not None:
-            if not matches(physical(path), candidate["identity"]):
+            if not matches(physical(path), identity(value)):
                 raise ValueError("changed-directory")
             # rmtree unlinks child symlinks; it never traverses their targets.
             shutil.rmtree(path)

@@ -395,6 +395,29 @@ function finishedHold() {
 }
 
 describePosix("operator dependency hold release", () => {
+  it.each([false, true])("releases mixed-device holds with distinct entries=%s", (distinct) => {
+    const f = finishedHold();
+    if (distinct) {
+      expect(hold(f, entry(f.cache, "b".repeat(64))).status).toBe(0);
+    }
+    const db = new DatabaseSync(join(f.cache, "lifetime.sqlite"));
+    try {
+      db.exec(
+        "INSERT INTO holds SELECT entry_key, anchor_path, CAST(anchor_dev AS INTEGER) + 1, anchor_ino, anchor_uid, anchor_mode FROM holds",
+      );
+    } finally {
+      db.close();
+    }
+    const { plan, args } = reviewHolds(f);
+    expect(plan.anchors, JSON.stringify(plan)).toHaveLength(1);
+    expect(plan.anchors[0].holds).toHaveLength(distinct ? 2 : 1);
+    const result = releaseCommand(f, args);
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout).retained).toEqual([]);
+    expect(existsSync(f.anchor)).toBe(false);
+    expect(readPrCacheState(f.installation)).toMatchObject({ settled: true, anchors: [] });
+  });
+
   it("releases a missing anchor, selects by --anchor, and settles only on the last hold", () => {
     const f = finishedHold();
     const missing = `${f.anchor}.missing`;
@@ -604,9 +627,8 @@ describePosix("PR cache identity recovery", () => {
     const f = recoveryFixture(true);
     expect(f.plan.before.holds).toHaveLength(12);
     expect(f.plan.before.installations.filter((row) => row.settled === 1)).toHaveLength(3);
-    const refused = child(f, "withDependencyCacheLock(cache, () => {});");
-    expect(refused.status).not.toBe(0);
-    expect(refused.stderr).toContain("ledger owner differs");
+    const admitted = child(f, "withDependencyCacheLock(cache, () => {});");
+    expect(admitted.status, admitted.stderr).toBe(0);
     const recovered = f.recover();
     expect(recovered.status, recovered.stderr).toBe(0);
     expect(JSON.parse(recovered.stdout).state).toBe("recovered");

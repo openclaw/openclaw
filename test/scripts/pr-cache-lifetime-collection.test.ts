@@ -275,7 +275,7 @@ await import(${JSON.stringify(source)});
     },
   );
 
-  it.each(["hold", "zero-hold"])(
+  it.each(["hold", "zero-hold", "renumbered"])(
     "protects a lazy %s reader after its creator is killed until the last child exits",
     (phase) => {
       const f = fixture();
@@ -289,7 +289,7 @@ import { claimCreatedAnchor, stageDependencyCache, publishDependencyCache, withD
 const anchor = claimCreatedAnchor(process.env.ANCHOR, Number(process.env.CREATOR));
 const cache = process.env.CACHE, entry = cache + "/" + "a".repeat(64);
 let packagePath = anchor.path + "/package";
-if (${JSON.stringify(phase)} === "hold") {
+if (${JSON.stringify(phase)} !== "zero-hold") {
 const stage = withDependencyCacheLock(cache, lock => stageDependencyCache(lock, entry, anchor));
 writeFileSync(stage + "/package", "still readable");
 withDependencyCacheLock(cache, lock => publishDependencyCache(lock, stage, entry, anchor));
@@ -335,6 +335,18 @@ try:
     anchor = home + "/openclaw-pr-anchor-v3." + str(child.pid) + ".live"
     with sqlite3.connect(cache+"/lifetime.sqlite") as db:
         lease = db.execute("SELECT lease_path FROM operation_lifetimes").fetchone()[0]
+        if phase == "renumbered":
+            old_device = str(os.stat(cache).st_dev + 1)
+            db.execute("UPDATE owner SET cache_dev = ?, db_dev = ?", (old_device, old_device))
+            db.execute("UPDATE installations SET dev = ?", (old_device,))
+            db.execute("UPDATE operation_lifetimes SET dev = ?, anchor_dev = ?", (old_device, old_device))
+            # Keep a second recorded-device key to ensure no hold takes a legacy route.
+            db.execute("INSERT INTO holds SELECT entry_key, anchor_path, ?, anchor_ino, anchor_uid, anchor_mode FROM holds", (old_device,))
+            retired_lease = lease + ".retired"
+            os.close(os.open(retired_lease, os.O_CREAT | os.O_RDWR, 0o600))
+            stat = os.stat(retired_lease)
+            db.execute("INSERT INTO operation_lifetimes SELECT anchor_path, ?, anchor_ino, anchor_uid, anchor_mode, ?, ?, ?, ?, ?, 1 FROM operation_lifetimes",
+                       (str(int(old_device) + 1), retired_lease, str(stat.st_dev), str(stat.st_ino), str(stat.st_uid), str(stat.st_mode)))
     child.kill()
     child.wait()
     subprocess.run([node,"--input-type=module","-e",collector,cache],env=env,pass_fds=ancestors,check=True)
@@ -342,7 +354,7 @@ try:
     os.write(write_fd,b"r")
     assert child.stdout.readline().strip() == "still readable"
     with sqlite3.connect(cache+"/lifetime.sqlite") as db:
-        assert db.execute("SELECT count(*) FROM holds").fetchone()[0] == (1 if phase == "hold" else 0)
+        assert db.execute("SELECT count(*) FROM holds").fetchone()[0] == (0 if phase == "zero-hold" else 2 if phase == "renumbered" else 1)
     os.write(write_fd,b"q")
     with open(lease,"r+") as unlocked:
         fcntl.flock(unlocked,fcntl.LOCK_EX)
@@ -392,6 +404,18 @@ process.kill(process.pid, "SIGKILL");`,
       true,
     );
     expect(result.signal, result.stderr).toBe("SIGKILL");
+    const db = new DatabaseSync(join(f.cache, "lifetime.sqlite"));
+    try {
+      db.exec(`
+        UPDATE owner SET cache_dev = CAST(cache_dev AS INTEGER) + 1, db_dev = CAST(db_dev AS INTEGER) + 1;
+        UPDATE installations SET dev = CAST(dev AS INTEGER) + 1;
+        UPDATE holds SET anchor_dev = CAST(anchor_dev AS INTEGER) + 1;
+        UPDATE operation_lifetimes SET dev = CAST(dev AS INTEGER) + 1, anchor_dev = CAST(anchor_dev AS INTEGER) + 1;
+        UPDATE dependency_transitions SET dev = CAST(dev AS INTEGER) + 1, anchor_dev = CAST(anchor_dev AS INTEGER) + 1;
+      `);
+    } finally {
+      db.close();
+    }
     sweep(f.cache);
     expect(existsSync(f.anchor)).toBe(false);
     expect(transitions(f.cache)).toEqual([]);
