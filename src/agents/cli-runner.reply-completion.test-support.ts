@@ -390,6 +390,7 @@ export function registerCliReplyCompletionTests({
       messageChannel: "webchat",
       messageProvider: "webchat",
       sourceReplyDeliveryMode: "message_tool_only",
+      terminalReplyExpectation: "result-required",
     });
     context.backendResolved.config.output = "jsonl";
     const tool = createMessageTool({
