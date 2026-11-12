@@ -911,6 +911,19 @@ server.listen(port, "127.0.0.1", () => {
     expect(source).toContain("Date.now() + 2000");
   });
 
+  it("keeps Control UI preparation opt-in and waits through its final phase", () => {
+    const selectedCase = resolveBenchCase("controlUiPostReady");
+    const root = tempDirs.make("openclaw-control-ui-post-ready-bench-test-");
+    const config = readConfig(root, selectedCase);
+
+    expect(testing.parseOptions([]).cases.some((entry) => entry.id === selectedCase.id)).toBe(
+      false,
+    );
+    expect(selectedCase.completionTracePhase).toBe("post-ready.gateway-data.plugins");
+    expect(config.gateway?.controlUi?.enabled).toBe(true);
+    expect(validateConfigObject(config).ok).toBe(true);
+  });
+
   it("builds a valid large plugin-model startup case", () => {
     const root = tempDirs.make("openclaw-large-plugin-model-bench-test-");
     const selectedCase = resolveBenchCase("largePluginModelConfig");

@@ -272,6 +272,16 @@ const GATEWAY_CASES: readonly GatewayBenchCase[] = [
     config: BASE_CONFIG,
   },
   {
+    id: "controlUiPostReady",
+    name: "gateway with Control UI through post-ready preparation",
+    runByDefault: false,
+    completionTracePhase: "post-ready.gateway-data.plugins",
+    config: {
+      ...BASE_CONFIG,
+      gateway: { ...BASE_CONFIG.gateway, controlUi: { enabled: true } },
+    },
+  },
+  {
     id: "pluginMetadataMaintenance",
     name: "gateway through post-ready plugin metadata refresh",
     runByDefault: false,
