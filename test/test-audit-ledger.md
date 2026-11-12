@@ -578,14 +578,24 @@ not a speedup claim; real recorder/SDK export proof retains its existing compile
 
 ### CLI source-helper multiplicity
 
-At `df5a2f36076fe50335487abc806d70d6fbfe3cfc`, the helper has two cases:
-retain traversal through re-export shims and lazy runtime modules; retire the
-repeated-import case if qualification confirms it only pins concatenated-source
-multiplicity. The sole consumer, command secret-resolution coverage, uses
-membership and regex predicates across 17 cases and never counts occurrences.
-The deleted case does not exercise cycle termination. Keep the helper and its
-visited-module guard unchanged. Baseline, mutation controls, focused validation,
-independent review and hosted CI remain pending; no test is removed yet.
+At `df5a2f36076fe50335487abc806d70d6fbfe3cfc`, removed the repeated-import
+multiplicity case: one declaration/case and 16 test lines. The sole consumer,
+command secret-resolution coverage, uses membership and regex predicates across
+17 cases and never counts occurrences. Keep the re-export/runtime traversal
+case, the helper and its visited-module guard unchanged. The retired fixture
+contains no cycle and does not prove termination.
+
+The unchanged 19-case baseline passed in 9.28 seconds wall time. Duplicating
+nested source failed only the retired case; the keeper and all 17 consumer cases
+passed. Omitting runtime traversal failed the keeper on its missing marker.
+Both mutations were restored byte for byte. The final 18 cases passed in 6.48
+seconds; these single runs do not establish a speedup. Actual routing uses
+unit-fast for the consumer and CLI for the helper.
+
+Independent preservation review found no lost contract. Targeted CLI-test
+typecheck, typed lint, formatting and diff checks passed. Full dead-code scans,
+local ClawSweeper review, hosted CI and landing remain pending. Production and
+support line counts are unchanged.
 
 ## Pending qualification and proof repairs
 
