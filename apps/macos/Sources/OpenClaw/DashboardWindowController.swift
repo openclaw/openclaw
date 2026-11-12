@@ -394,7 +394,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         if shouldReload {
             self.refreshNativeScripts()
             let route = restoringRoute
-                .flatMap { ControlUIDocumentHost.isTrustedLinkSource($0, dashboardURL: url) ? $0 : nil }
+                .flatMap { WebChatRoute.recoveryDocumentURL(for: $0, baseURL: url) }
             self.load(route ?? url)
         }
         self.requestBrowserProfileImportOfferIfNeeded()
@@ -504,7 +504,13 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         if self.isShowingFailurePage {
             DashboardManager.shared.recoverDashboard(self)
         } else if self.isTrustedDashboardDocument {
-            self.webView.reload()
+            if let url = self.webView.url,
+               let recovery = WebChatRoute.recoveryDocumentURL(for: url, baseURL: self.currentURL), recovery != url
+            {
+                self.load(recovery)
+            } else {
+                self.webView.reload()
+            }
         }
     }
 
@@ -853,7 +859,8 @@ extension DashboardWindowController {
         guard self.documentHost.browserSession != nil else {
             // Chrome and WebKit have separate cookies. Identity redirects must
             // return to this WebKit store, retaining the requested chat route.
-            self.load(url)
+            guard let recovery = WebChatRoute.recoveryDocumentURL(for: url, baseURL: self.currentURL) else { return }
+            self.load(recovery)
             return
         }
         guard case let .profile(id) = target else { return }

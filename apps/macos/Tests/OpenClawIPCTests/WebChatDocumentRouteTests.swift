@@ -4,6 +4,62 @@ import Testing
 
 struct WebChatDocumentRouteTests {
     @Test(arguments: ["", "/control", "/control/"])
+    @MainActor
+    func `recovery keeps the mounted private return path query and outer hash`(_ mount: String) throws {
+        let base = try #require(URL(string: "https://gateway.invalid\(mount)"))
+        let prefix = mount.isEmpty ? "" : "/control"
+        let path = prefix + "/chat/main/~key/topic%2F%2B?draft=C%2B%2B+draft&dashboard=expanded"
+        let route = try #require(URL(string: "https://gateway.invalid" + path + "#token=synthetic%2Btoken"))
+        let url = try #require(WebChatRoute.recoveryDocumentURL(for: route, baseURL: base))
+        let entry = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
+        #expect(entry.path == prefix + "/__openclaw__/session-entry")
+        let search = try #require(entry.percentEncodedQuery).replacingOccurrences(of: "+", with: "%20")
+        #expect(URLComponents(string: "?" + search)?.queryItems == [.init(name: "path", value: path)])
+        #expect(entry.percentEncodedFragment == "token=synthetic%2Btoken")
+    }
+
+    @Test(arguments: [
+        "https://foreign.invalid/control/chat/main",
+        "http://gateway.invalid/control/chat/main",
+        "https://gateway.invalid:444/control/chat/main",
+        "https://gateway.invalid/other/chat/main",
+        "https://gateway.invalid/controller/chat/main",
+        "https://user:password@gateway.invalid/control/chat/main",
+    ])
+    @MainActor
+    func `recovery rejects foreign origins mounts and URL credentials`(_ route: String) throws {
+        let base = try #require(URL(string: "https://gateway.invalid/control/"))
+        let url = try #require(URL(string: route))
+        #expect(WebChatRoute.recoveryDocumentURL(for: url, baseURL: base) == nil)
+    }
+
+    @Test
+    @MainActor
+    func `recovery copies only approved return hints and leaves other dashboard documents alone`() throws {
+        let base = try #require(URL(string: "https://gateway.invalid/control/"))
+        let route = try #require(URL(string: "https://gateway.invalid/control/chat/main?" +
+                "token=secret&password=secret&path=https%3A%2F%2Fforeign.invalid&draft=first&draft=second&" +
+                "dashboard=invalid&openclaw_mount_recovery=12&__openclawSessionFacePreference=1&" +
+                "__openclawComposerFocus=1&__openclawSessionKey=agent%3Amain%3Aproof"))
+        let url = try #require(WebChatRoute.recoveryDocumentURL(for: route, baseURL: base))
+        #expect(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems == [
+            .init(
+                name: "path", value: "/control/chat/main?openclaw_mount_recovery=12&" +
+                    "__openclawSessionFacePreference=1&__openclawComposerFocus=1&" +
+                    "__openclawSessionKey=agent%3Amain%3Aproof"),
+        ])
+        let emptyDraft = try #require(URL(string: "https://gateway.invalid/control/chat/main?draft"))
+        let emptyDraftEntry = try #require(WebChatRoute.recoveryDocumentURL(for: emptyDraft, baseURL: base))
+        #expect(URLComponents(url: emptyDraftEntry, resolvingAgainstBaseURL: false)?.queryItems == [
+            .init(name: "path", value: "/control/chat/main?draft"),
+        ])
+        for path in ["/settings", "/canvas/fixture", "/share/fixture", "/chatty/main"] {
+            let document = try #require(URL(string: "https://gateway.invalid/control" + path))
+            #expect(WebChatRoute.recoveryDocumentURL(for: document, baseURL: base) == document)
+        }
+    }
+
+    @Test(arguments: ["", "/control", "/control/"])
     func `native documents enter the private app shell while navigation stays canonical`(_ mount: String) throws {
         let base = try #require(URL(string: "https://gateway.invalid\(mount)"))
         let url = try #require(WebChatRoute.documentURL(
