@@ -7,6 +7,7 @@ import {
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { collectForRetentionCheck } from "../test-utils/retention.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
 import type { GatewayClient } from "./server-methods/types.js";
@@ -103,6 +104,7 @@ it("retains nested publication facts across real transcript writes without hidin
           includeLastMessage: true,
         }).row!;
         return {
+          delivery,
           row,
           fields: prepareSessionRowDeltaFields(row, common),
         };
@@ -114,9 +116,11 @@ it("retains nested publication facts across real transcript writes without hidin
       expect(rows.every(({ row }) => row.toolOverrides === common.toolOverrides)).toBe(true);
       return rows;
     };
-    let previous = await read();
-    expect(previous.map(({ row }) => row.activitySummary?.canEnsure)).toEqual([true, true, false]);
+    // The first delivery owns the weak fingerprint sample throughout this reuse proof.
+    const initial = await read();
+    let previous = initial;
     for (let update = 0; update < 3; update++) {
+      await collectForRetentionCheck("session-row-fingerprint-sample", 1);
       clock.mockReturnValue(Date.now() + 1);
       await append();
       vi.mocked(hash).mockClear();
@@ -137,6 +141,11 @@ it("retains nested publication facts across real transcript writes without hidin
       });
       previous = current;
     }
+    expect(initial.map(({ delivery }) => delivery.payload)).toMatchObject(
+      [true, true, false].map((canEnsure) => ({
+        session: { full: { activitySummary: { canEnsure } } },
+      })),
+    );
     const replacement = { mcpToolsDeny: { synthetic: ["replacement-tool"] } };
     await updateSessionEntry(target, () => ({ toolOverrides: replacement }), {
       skipMaintenance: true,

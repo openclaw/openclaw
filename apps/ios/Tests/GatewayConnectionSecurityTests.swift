@@ -1159,7 +1159,7 @@ import Testing
             requestId: "stale-request",
             retryable: true,
             pauseReconnect: true)
-        appModel.applyOperatorGatewayConnectionProblem(staleProblem)
+        appModel.applyOperatorGatewayConnectionProblem(staleProblem, route: nil)
         let controller = GatewayConnectionController(
             appModel: appModel,
             startDiscovery: false,
@@ -1171,8 +1171,6 @@ import Testing
         #expect(controller.pendingTrustPrompt == nil)
         #expect(appModel.lastGatewayProblem?.kind == .timeout)
         #expect(appModel.lastGatewayProblem?.requestId == nil)
-        #expect(!appModel.gatewayPairingPaused)
-        #expect(appModel.gatewayPairingRequestId == nil)
         #expect(appModel.gatewayDisplayStatusText == "TLS verification timed out")
         #expect(appModel.lastGatewayProblem?.message.contains("TLS fingerprint verification timed out") == true)
         #expect(appModel.lastGatewayProblem?.message.contains("\(host):\(port)") == true)

@@ -363,7 +363,7 @@ async function evaluateSystemRunPolicyPhase(
     : baseSecurity;
   const ask = fallbackRequest ? "off" : effectivePolicy.ask;
   const autoAllowSkills = approvals.agent.autoAllowSkills;
-  const { safeBins, safeBinProfiles, trustedSafeBinDirs } = resolveExecSafeBinRuntimePolicy({
+  const { safeBins, safeBinProfiles, trustedSafeBinDirs } = await resolveExecSafeBinRuntimePolicy({
     global: cfg.tools?.exec,
     local: agentExec,
     onWarning: warnWritableTrustedDirOnce,

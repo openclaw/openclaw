@@ -2,6 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, onTestFinished } from "vitest";
+import { defaultPayload } from "../infra/gateway-state-owner-record.js";
+import {
+  acquireGatewayStateOwner,
+  captureGatewayStateOwner,
+} from "../infra/gateway-state-owner.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -207,21 +212,33 @@ it.each([
   await expect(read(dir)).rejects.toThrow("workspace attestation hash row is invalid");
 });
 
-it("refuses retired ownership before deleting state", async () => {
+it("refuses a retired Gateway's pending deletion and lets its successor delete state", async () => {
+  const databasePath = resolveOpenClawStateSqlitePath(testState.env);
+  const payload = { ...defaultPayload(databasePath), role: "gateway" as const };
+  const owner = acquireGatewayStateOwner({ databasePath, payload });
+  onTestFinished(() => owner.release());
+  const captured = captureGatewayStateOwner(databasePath)!;
   await seed();
   await attest(1_000, [["AGENTS.md", "a".repeat(64)]]);
   const before = await read(dir);
   const filePath = path.join(dir, "AGENTS.md");
   writeWorkspaceFileCache({ filePath, content: "cached", identity: "identity" });
-  const retired = new Error("workspace owner retired");
-  const assertCurrent = () => {
-    throw retired;
-  };
-  await expect(
-    deleteWorkspaceState(prepareWorkspaceStateDeletion(dir), { assertCurrent }),
-  ).rejects.toBe(retired);
+  const pending = deleteWorkspaceState(prepareWorkspaceStateDeletion(dir), captured);
+  owner.release();
+  const successor = acquireGatewayStateOwner({ databasePath, payload });
+  onTestFinished(() => successor.release());
+  await expect(pending).rejects.toMatchObject({
+    name: "GatewayStateOwnerContentionError",
+    databasePath,
+  });
   expect(await read(dir)).toEqual(before);
   expect(readWorkspaceFileCache(filePath, "identity")).toBe("cached");
+  await deleteWorkspaceState(
+    prepareWorkspaceStateDeletion(dir),
+    captureGatewayStateOwner(databasePath)!,
+  );
+  expect((await read(dir, { readOnly: true })).setupExists).toBe(false);
+  expect(readWorkspaceFileCache(filePath, "identity")).toBeUndefined();
 });
 
 it("registers and retires aliases in the captured caller-selected state database", async () => {

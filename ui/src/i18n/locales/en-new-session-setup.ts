@@ -190,7 +190,6 @@ const enNewSessionSetup = {
     checkoutRemoteLocked: "Paired and cloud devices use a worktree",
     local: "This computer",
     folderPlaceholder: "Agent workspace",
-    projects: "Projects",
     localProjects: "Local projects",
     openProject: "Open project",
     openLocalFolder: "Open a local folder",
@@ -209,6 +208,7 @@ const enNewSessionSetup = {
     noAdditionalGithubProjects: "No additional GitHub repositories",
     projectsAdminHint: "Admins can register projects from Browse folders",
     projectSearchPlaceholder: "Search projects or paste a Git URL",
+    searchProjects: "Search projects",
     searchGithub: "Search GitHub",
     githubTokenHint:
       "No GitHub account is configured for the Control UI or Gateway. Only public GitHub results are shown.",

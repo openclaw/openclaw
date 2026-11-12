@@ -305,6 +305,7 @@ describe("hosted model pricing", () => {
           { external, authoritative: false, passthroughSources: [], priceAs: "anthropic" },
         ],
       ]),
+      vendorKeys: new Map(),
       fingerprint: "price-as-exclusions",
     });
     const key = "claude-cli/claude-opus-5-5";
@@ -313,6 +314,24 @@ describe("hosted model pricing", () => {
     expect(resolveModelPricing(contextFor({}, true), key)).toEqual(rates);
     expect(resolveModelPricing(contextFor({}, false), key)).toBeUndefined();
     expect(resolveModelPricing(contextFor(privateEndpoint, true), key)).toBeUndefined();
+  });
+
+  it("prices a proxy serving a vendor's exact model id at the vendor's rate", async () => {
+    const agentDir = tempDirs.make("openclaw-vendor-price-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", agentDir);
+    const ids = ["claude-opus-5-5", "claude-opus-5-5-unpublished"].map((id) => ({ id, name: id }));
+    const [config, local] = [
+      configFor(hostedUrl, ids, "proxy"),
+      configFor(privateUrl, ids, "proxy"),
+    ];
+    await prepareCatalog({});
+    await Promise.all([prepareModelPricingContext(config), prepareModelPricingContext(local)]);
+    const anthropic = costFor(config, "claude-opus-5-5", agentDir, "anthropic");
+    expect(anthropic).toMatchObject({ input: 4, output: 20 });
+    expect(costFor(config, "claude-opus-5-5", agentDir, "proxy")).toEqual(anthropic);
+    // Only an id the vendor publishes inherits its price; a local server never does.
+    expect(costFor(config, "claude-opus-5-5-unpublished", agentDir, "proxy")).toBeUndefined();
+    expect(costFor(local, "claude-opus-5-5", agentDir, "proxy")).toBeUndefined();
   });
 
   it("keeps a priceAs provider's own price ahead of its target's", async () => {
@@ -494,6 +513,18 @@ describe("hosted model pricing", () => {
       catalogRefresh: { enabled: false },
     };
     expect(costFor(disabled, "gpt-external", agentDir)).toBeUndefined();
+  });
+
+  it("fingerprints vendor ownership of unpriced rows", async () => {
+    const proxy = configFor(hostedUrl, [{ id: "vendor-owned", name: "Vendor owned" }], "proxy");
+    const withVendorRow = async (models: unknown[]) => {
+      await prepareCatalog({ minVersion: "2026.7.0", providers: { anthropic: { models } } });
+      return resolveModelPricingContext(proxy).fingerprint;
+    };
+    // An unpriced vendor row moves no price table, but it decides who prices the proxy row.
+    expect(await withVendorRow([{ id: "vendor-owned", pricing: { status: "unknown" } }])).not.toBe(
+      await withVendorRow([]),
+    );
   });
 
   it("fingerprints provider overlays without explicit model rows", () => {

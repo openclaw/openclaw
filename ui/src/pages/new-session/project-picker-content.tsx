@@ -4,7 +4,6 @@ import {
   affects,
   createMemo,
   createOptimistic,
-  createSignal,
   Errored,
   For,
   Loading,
@@ -85,7 +84,6 @@ export function ProjectPickerContent(props: ProjectChipProps) {
       setRemoving(false);
     }
   };
-  const [projectSearching, setProjectSearching] = createSignal<boolean | undefined>(undefined);
   const applyFolder = (folder: string) => {
     if (!props.params.place.browser.browserNodeId) {
       props.params.place.applyFolder(folder);
@@ -334,19 +332,12 @@ export function ProjectPickerContent(props: ProjectChipProps) {
           </Show>
           <HeaderSearch
             class="new-session-page__project-search"
-            typeToSearchWhenOpen
-            title={t("newSession.projects")}
             label={t("newSession.projectSearchPlaceholder")}
             query={props.params.place.browser.projectQuery}
-            open={(projectSearching() ?? true) || Boolean(props.params.place.browser.projectQuery)}
+            autofocus="popover"
             disabled={props.params.submitting || props.params.pendingPlacement}
             inputProps={{ onCompositionEnd: recordCompositionEnd }}
-            onOpenChange={(open) => {
-              // Passive dismissal restores automatic search; an explicit collapse remains a choice.
-              setProjectSearching(
-                !open && !props.params.place.browser.popoverOpen("project") ? undefined : open,
-              );
-            }}
+            inputRef={(node) => props.focus && (props.focus.search = node)}
             onQueryChange={(query) => props.params.place.browser.changeProjectQuery(query)}
             onInputKeyDown={(event) => {
               if (event.key !== "Enter" || isComposingKeyboardEvent(event)) {

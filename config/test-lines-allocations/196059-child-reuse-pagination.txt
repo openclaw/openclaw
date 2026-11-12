@@ -1,4 +1,0 @@
-50
-# Exact own net regression-test LF growth for PR #196059, including formatting.
-# Preserve 262-job partial-page HTTP 502 restart and immediate HTTP 403 rejection
-# through the existing child-evidence consumer and canonical job ordering.

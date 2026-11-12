@@ -7,9 +7,12 @@ description: Incrementally ingest enumerable external sources into Knowledge wit
 
 Use this for bounded collections such as chat channels, issue streams, feeds, or
 mailboxes where later runs can overlap prior coverage. Read
-[shared conventions](references/conventions.md),
-[publication](references/publication.md), and the
-[manifest protocol](references/source-manifest.md). After acquisition, route
+[setup](references/setup.md), [sources](references/sources.md) and the
+[manifest protocol](references/source-manifest.md) first; read
+[publish](references/publish.md) before writing the source pages,
+[recovery](references/recovery.md) for any uncertain write and
+[verify](references/verify.md) for readback. Don't reread them after compaction
+unless you are about to use them. After acquisition, route
 documents and conversations through `knowledge-ingest`, which uses
 `knowledge-entities` for entity enrichment. Route meetings through
 `knowledge-meeting-ingest`. This skill owns source identity and coverage; the
@@ -32,7 +35,7 @@ For creating recurring ingestion jobs, use `knowledge-automation` first.
 2. Acquire a bounded export with an approved reader. For Discrawl, run `scripts/discrawl-normalize.mjs` with its configured read-only archive, exact channel ID when known, and `[since,before)` RFC3339 bounds. The normalized payload includes stable author IDs plus archive-observed display fields. Preserve the raw JSONL, and create a separate line-stable readable transcript when human review or line citations are needed.
 3. Generate a deterministic manifest with `scripts/source-manifest.mjs snapshot`. Attach it before publishing the snapshot page; record the returned SHA-256.
 4. Download all overlapping prior manifests and run `scripts/source-manifest.mjs plan`. Inspect covered/uncovered intervals and the added/changed/deleted/unchanged/unresolved lists.
-5. Test 3–5 substantive items or discussions, then ingest through `knowledge-ingest` (or `knowledge-meeting-ingest` for meetings). For chat, group related messages with their reply context; use `knowledge-entities` to enrich relevant people, companies, projects and concepts from their contributions. Carry supported developments into State, dated claims and source notes, not only a channel digest. Use stable external IDs in source citations and the retained snapshot as a dependency. Reuse its originals rather than uploading one copy per discussion.
+5. Test 3–5 substantive items or discussions, then ingest through `knowledge-ingest` (or `knowledge-meeting-ingest` for meetings). For chat, group related messages with their reply context; use `knowledge-entities` to enrich relevant people, companies, projects and concepts from their contributions. Carry supported developments into the State of the most specific existing page, rewritten in place, plus dated claims and source notes; not only a channel digest, and never a section per run or per channel. Use stable external IDs in source citations and the retained snapshot as a dependency. Reuse its originals rather than uploading one copy per discussion.
 6. Publish or update derived records, then publish the snapshot page. A snapshot is `complete` only when acquisition and manifest creation covered the declared interval; derived extraction may still be partial and must be reported as such.
 7. Read back the canonical page, snapshot page, attachment, derived records, and source-dependent connections. Verify hashes and exact coverage.
 

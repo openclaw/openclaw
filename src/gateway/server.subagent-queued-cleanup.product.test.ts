@@ -207,6 +207,7 @@ it("bounds public child Stop while yielded queued-input cleanup remains pending"
           error: { message: expect.stringMatching(/execution cleanup remains pending/i) },
         },
       });
+      vi.useRealTimers();
       releaseCleanup.resolve();
       await releaseFinished.promise;
       // Repeated Stop observes durable cancellation without dispatching queued input.

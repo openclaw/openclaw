@@ -92,7 +92,7 @@ it("waits for startup progress rather than claiming preparation before the first
 
 it.each(["submitting", "sending", "waiting-model"] as const)(
   "awaits %s without Stop",
-  (sendState) => {
+  async (sendState) => {
     const container = renderChatView({
       runActive: false,
       canAbort: false,
@@ -101,7 +101,7 @@ it.each(["submitting", "sending", "waiting-model"] as const)(
         { id: "pending-send", sessionKey: "main", text: "Continue", createdAt: 1, sendState },
       ],
     });
-    expect(workingStatus(container)).toContain("Working…");
+    await waitForSolid(() => expect(workingStatus(container)).toContain("Working…"));
     expect(container.querySelector(".chat-send-btn--stop")).toBeNull();
   },
 );

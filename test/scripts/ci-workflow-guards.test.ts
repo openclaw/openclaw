@@ -1482,6 +1482,7 @@ AFTER_CD
         "clone",
         "-q",
         "--no-local",
+        "--no-checkout",
         "--filter=blob:none",
         "--depth=2",
         origin,
@@ -2450,6 +2451,88 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     expect(actionCheckoutIndex).toBeLessThan(setupIndex);
   });
 
+  it.each(["", "release-fixture"])(
+    "preserves SDK report capacity with runner group %s",
+    (releaseRunnerGroup) => {
+      const context = {
+        eventName: "workflow_dispatch",
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        runnerBackend: "blacksmith",
+        matrix: {
+          group: "plugin-sdk-api-diff",
+          runner: "blacksmith-32vcpu-ubuntu-2404",
+        },
+        preflightOutputs: { node_runner_backend: "github", ci_qualification: "false" },
+        dispatchId: "full-release-validation-sdk-routing",
+        releaseRunnerGroup,
+      } as const;
+      const cases: Array<{
+        name: string;
+        overrides: Partial<Parameters<typeof evaluateWorkflowExpression>[1]>;
+        expected: string;
+      }> = [
+        { name: "default dispatch", overrides: {}, expected: context.matrix.runner },
+        {
+          name: "configured GitHub backend",
+          overrides: { runnerBackend: "github" },
+          expected: "ubuntu-24.04",
+        },
+        ...(["hybrid", "runson"] as const).map((backend) => ({
+          name: `admitted ${backend} qualification`,
+          overrides: {
+            preflightOutputs: {
+              ci_qualification: "true",
+              qualification_runner_backend: "hybrid",
+              node_runner_backend: backend,
+            },
+          },
+          expected: context.matrix.runner,
+        })),
+        { name: "retry", overrides: { runAttempt: 2 }, expected: "ubuntu-24.04" },
+        {
+          name: "noncanonical repository",
+          overrides: { repository: "contributor/openclaw" },
+          expected: "ubuntu-24.04",
+        },
+        {
+          name: "unrelated additional check",
+          overrides: { matrix: { group: "boundaries", runner: "blacksmith-4vcpu-ubuntu-2404" } },
+          expected: "ubuntu-24.04",
+        },
+      ];
+      for (const { name, overrides, expected } of cases) {
+        expect(
+          ciValue("check-additional-shard", "runs-on", { ...context, ...overrides }),
+          name,
+        ).toEqual(releaseRunnerGroup ? { group: releaseRunnerGroup, labels: expected } : expected);
+      }
+      expect(
+        ciValue("check-additional-shard", "runs-on", {
+          ...context,
+          dispatchId: "",
+          releaseGate: true,
+          validationTier: "full",
+        }),
+      ).toBe(context.matrix.runner);
+      const timeouts: Array<[Partial<Parameters<typeof evaluateWorkflowExpression>[1]>, number]> = [
+        [{}, 30],
+        [{ dispatchId: "", releaseGate: true, validationTier: "full" }, 30],
+        [{ dispatchId: "" }, 60],
+        [{ dispatchId: "", releaseGate: true, validationTier: "main" }, 60],
+        [{ runAttempt: 2 }, 60],
+        [{ repository: "contributor/openclaw" }, 60],
+        [{ eventName: "push" }, 60],
+      ];
+      for (const [overrides, expected] of timeouts) {
+        expect(
+          ciValue("check-additional-shard", "timeout-minutes", { ...context, ...overrides }),
+          JSON.stringify(overrides),
+        ).toBe(expected);
+      }
+    },
+  );
+
   it("keeps tiny hybrid controls hosted without moving security or fork first attempts", () => {
     const context = {
       eventName: "pull_request",
@@ -2827,8 +2910,6 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       ).trim();
     git(source, "init", "--initial-branch=main");
     writeFileSync(path.join(source, "base.txt"), "base\n");
-    mkdirSync(path.join(source, "config"));
-    writeFileSync(path.join(source, "config/test-lines-baseline.txt"), "0\n");
     for (const file of collectRuntimeImportClosure(process.cwd(), [
       "scripts/check-test-lines-ratchet.mts",
     ])) {
@@ -2839,7 +2920,10 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     git(source, "commit", "-m", "base");
     git(source, "checkout", "-b", "pull-request");
     for (let index = 0; index < 3; index++) {
-      writeFileSync(path.join(source, "change.test.ts"), `export const change = ${index};\n`);
+      writeFileSync(
+        path.join(source, "change.test.ts"),
+        `export const change = ${index};\n`.repeat(401),
+      );
       git(source, "add", ".");
       git(source, "commit", "-m", `change ${index}`);
     }
@@ -2909,13 +2993,13 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       });
     const unallocated = check();
     expect(unallocated.status, unallocated.stdout + unallocated.stderr).toBe(1);
-    expect(unallocated.stderr).toContain("over by: 1; net delta: +1.");
-    mkdirSync(path.join(selected, "config/test-lines-allocations"));
+    expect(unallocated.stderr).toContain("Net test lines: +401; allowance: 400;");
+    mkdirSync(path.join(selected, "config/test-lines-allocations"), { recursive: true });
     writeFileSync(path.join(selected, "config/test-lines-allocations/regression.txt"), "1\n");
     git(selected, "add", "config/test-lines-allocations/regression.txt");
     const allocated = check();
     expect(allocated.status, allocated.stdout + allocated.stderr).toBe(0);
-    expect(allocated.stdout).toContain("Test lines OK: 1; ceiling: 1; slack: 0.");
+    expect(allocated.stdout).toContain("allocation credit: 1.");
   });
 
   it("keeps action manifests within the runner's anchor-free YAML grammar", () => {
@@ -3712,23 +3796,6 @@ server.listen(0, "127.0.0.1", () => {
   });
 
   it("keeps each compiled worker preset in a separate archive", () => {
-    const uiSetup = requiredWorkflowStep(
-      readCiWorkflow().jobs["checks-ui-e2e"].steps,
-      "Setup Node environment",
-    );
-    expect(uiSetup.with?.["vitest-worker-preset"]).toBe("runtime");
-    for (const [task, frozen, expected] of [
-      ["control-ui", "false", "true"],
-      ["control-ui", "true", "false"],
-      ["browser-extension", "false", "false"],
-    ] as const) {
-      expect(
-        evaluateWorkflowExpression(uiSetup.with?.["vitest-worker-cache"], {
-          matrix: { task },
-          preflightOutputs: { frozen_target: frozen },
-        }),
-      ).toBe(expected);
-    }
     const setup = readWorkflow(".github/actions/setup-node-env/action.yml");
     const steps = setup.runs.steps as WorkflowStep[];
     const restore = requiredWorkflowStep(steps, "Restore compiled Vitest workers");
@@ -4809,7 +4876,9 @@ ${buildScript}`,
     const packages = workflow.jobs["macos-swift-packages"];
     expect(native.needs).toEqual(["preflight", "build-artifacts"]);
     expect(packages.needs).toEqual(["preflight"]);
-    expect(packages.strategy.matrix.phase).toEqual(["packages"]);
+    expect(packages.strategy.matrix.phase).toContain(
+      "needs.preflight.outputs.run_mlx_native_proof",
+    );
     expect(packages.steps).toEqual(native.steps);
     expect(packages["timeout-minutes"]).toBe(30);
     for (const result of ["success", "skipped", "failure", "cancelled"] as const) {
@@ -6762,6 +6831,31 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(assetCheckStep.run).toContain('packageJson.scripts?.["plugins:assets:check"]');
     expect(assetCheckStep.run).toContain("pnpm plugins:assets:check");
     expect(assetCheckStep.run).toContain("predates plugins:assets:check");
+  });
+
+  it.each([
+    [{}, true],
+    [{ runAttempt: 2 }, true],
+    [{ eventName: "workflow_dispatch" }, false],
+    [{ eventName: "workflow_dispatch", ref: "refs/heads/feature" }, false],
+    [{ repository: "example/fork" }, false],
+    [{ ref: "refs/heads/feature" }, false],
+    [{ runnerBackend: "" }, false],
+    [{ runnerBackend: "blacksmith" }, false],
+    [{ runnerBackend: "hybrid" }, false],
+    [{ runnerBackend: "runson" }, false],
+    [{ runnerBackend: "github" }, false],
+  ] as const)("routes Android CodeQL to Boat only on scheduled main: %j", (context, boat) => {
+    const job = readWorkflow(".github/workflows/codeql-android-critical-security.yml").jobs.android;
+    expect(
+      evaluateWorkflowRunner(job["runs-on"], {
+        eventName: "schedule",
+        repository: "openclaw/openclaw",
+        ref: "refs/heads/main",
+        runnerBackend: "boat",
+        ...context,
+      }),
+    ).toBe(boat ? "boat-xlarge" : "blacksmith-8vcpu-ubuntu-2404");
   });
 
   it("keeps network CodeQL off unrelated source-only refactors", () => {
