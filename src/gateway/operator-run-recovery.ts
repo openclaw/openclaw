@@ -289,9 +289,12 @@ async function restoreGatewayOperatorSnapshot(params: {
       const revision = profileIdentity.readCurrentRevision(snapshot.aliasBindingIds);
       if (!profileFacts || revision !== profileRevision) {
         const profile = profileIdentity.readCurrentFacts(snapshot.aliasBindingIds).profile;
+        // A current owner certificate, not the linked person's stored role, bounds owner work.
+        const ownerCertificate =
+          principal?.kind === "owner" && isOpenClawIdTunnelPrincipalCurrent(principal);
         if (
           profile.profileId !== snapshot.profileId ||
-          profile.assignedRole !== snapshot.assignedRole ||
+          (!ownerCertificate && profile.assignedRole !== snapshot.assignedRole) ||
           (profile.githubLogin ?? null) !== snapshot.githubLogin ||
           githubAccountIds?.some((accountId) => !profile.githubAccountIds?.includes(accountId))
         ) {

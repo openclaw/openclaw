@@ -627,8 +627,12 @@ export async function captureGatewayOperatorRunAuthority(input: {
     assertCapturedRoleCurrent = () => {
       const current = assertProfileCurrent();
       const policy = resolveCurrentRole();
+      // A current owner certificate, not the linked person's stored role, bounds owner work.
+      const ownerCertificate =
+        openclawIdPrincipal?.kind === "owner" &&
+        isOpenClawIdTunnelPrincipalCurrent(openclawIdPrincipal);
       if (
-        current.assignedRole !== capturedAssignedRole ||
+        (!ownerCertificate && current.assignedRole !== capturedAssignedRole) ||
         !isOperatorRoleSourcePolicyCurrent(capturedSourcePolicy, sourceRolePolicy(policy), scopes)
       ) {
         throw new Error("Your operator role changed; reconnect before continuing.");

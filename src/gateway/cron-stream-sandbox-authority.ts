@@ -260,10 +260,13 @@ export async function prepareCronStreamSandboxAuthority(params: {
         )
       : undefined;
     if (operator) {
+      // A current owner certificate, not the linked person's stored role, bounds owner work.
+      const ownerCertificate =
+        principal?.kind === "owner" && isOpenClawIdTunnelPrincipalCurrent(principal);
       if (
         (profile &&
           (identity?.profile.profileId !== operator.profileId ||
-            identity.profile.assignedRole !== operator.assignedRole ||
+            (!ownerCertificate && identity.profile.assignedRole !== operator.assignedRole) ||
             (identity.profile.githubLogin ?? null) !== operator.githubLogin)) ||
         !isDeepStrictEqual(sourceRolePolicy(role), originalRole) ||
         (role &&

@@ -13,9 +13,10 @@ const store = vi.hoisted(() => ({
   unlink: vi.fn(async () => ({ unlinked: true })),
   linksOf: vi.fn(async () => [{ accountId: "acct-other", email: "josh@id.test" }]),
 }));
-// mock-isolation: the personal-profile authority owner has its own tests; here it admits the
-// caller's own profile, and the handler adds the route and Labs checks around it.
-vi.mock("../server-methods/personal-profile-authorization.js", () => ({
+// The personal-profile authority owner has its own tests; here it admits the caller's own
+// profile, and the handler adds the route and Labs checks around it.
+vi.mock("../server-methods/personal-profile-authorization.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../server-methods/personal-profile-authorization.js")>()),
   preparePersonalProfileAction: vi.fn(
     async (opts: { client: { authenticatedUserProfile: { profileId: string } } }) => ({
       owner: opts.client.authenticatedUserProfile.profileId,
@@ -24,7 +25,8 @@ vi.mock("../server-methods/personal-profile-authorization.js", () => ({
     }),
   ),
 }));
-vi.mock("../../state/user-profile-openclaw-id.js", () => ({
+vi.mock("../../state/user-profile-openclaw-id.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/user-profile-openclaw-id.js")>()),
   linkCanonicalOpenClawIdUserProfile: store.link,
   unlinkCanonicalOpenClawIdUserProfile: store.unlink,
   readOpenClawIdLinksOfProfile: store.linksOf,
