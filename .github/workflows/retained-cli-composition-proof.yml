@@ -1,4 +1,4 @@
-name: Release locale generated-evidence recovery
+name: Release canonical locale translation repair
 'on':
   workflow_dispatch:
     inputs:
@@ -20,9 +20,9 @@ env:
   PREREQUISITE_PARENT: 258908e6b943c0197bca8d0306dbbbbf503bcb22
   CAPACITY_PROOF_SHA: 7af9ee549e45948707162d9d8cfa8c068a084fe6
   PREREQUISITE_PATCH_SHA256: 5d8f8bb9a93331eb4a01ca2aefcf2d655dd0e36821f44353663e62d2751f7dc5
-  CANDIDATE_SHA: db633cbcc3c95a0ce67b5bf12e2fdcc7b0c4d618
-  SOURCE_TREE: 51e674cbb705bdd672b3fc619ea6b0fe868a626c
-  PATHS_SHA256: 852f8bc68d54b761dd85a9835c9b12bdf3ddd73217e1464e6a94a07798ddbd88
+  CANDIDATE_SHA: 915956a6d60f4cf67099b47286ebafaf0cd11cff
+  SOURCE_TREE: f3866ec8fa1dfa83d090bf93504ef13dc6bf335e
+  PATHS_SHA256: 64cad89471288e6b5a8064919010f3d98cd9d1fee1fefb734382f4c8cb97b2ae
   TRUSTED_P: 68aff7f864148760c3800c95435cc36ddaa91654
 jobs:
   locale-recovery:
@@ -70,11 +70,13 @@ jobs:
         > .artifacts/final-ci/identity.txt
 
         '
+      id: bind
     - uses: ./.github/actions/setup-node-env
       with:
         semantic-checks: 'true'
         install-bun: 'false'
         cache-mode: restore
+      id: setup
     - uses: ./.github/actions/setup-test-bun
     - uses: ./.github/actions/setup-ripgrep
     - name: Record all original locale check results
@@ -94,46 +96,25 @@ jobs:
         '' "$status" > .artifacts/locale/original-checks-exit.txt
 
         exit "$status"'
-    - name: Generate canonical locale repair evidence without provider credentials
-      if: always()
-      run: 'set -uo pipefail
-
-        mkdir -p .artifacts/locale
-
-        set +e
-
-        pnpm ui:i18n:sync 2>&1 | tee .artifacts/locale/sync.log
-
-        sync_status=${PIPESTATUS[0]}
-
-        printf ''%s
-
-        '' "$sync_status" > .artifacts/locale/sync-exit.txt
-
-        bash scripts/ci-collect-checks.sh ''pnpm ui:i18n:check'' ''pnpm native:i18n:check'' ''pnpm ui:i18n:verify'' ''pnpm
-        native:i18n:verify'' 2>&1 | tee .artifacts/locale/generated-checks.log
-
-        check_status=${PIPESTATUS[0]}
-
-        printf ''%s
-
-        '' "$check_status" > .artifacts/locale/generated-checks-exit.txt
-
-        set -e
-
-        git diff --binary --full-index > .artifacts/locale/generated.patch
-
-        git diff --name-only > .artifacts/locale/changed-paths.txt
-
-        git status --porcelain > .artifacts/locale/status.txt
-
-        git diff --check
-
-        git diff --name-only -z | tar --null -T - -cf .artifacts/locale/generated-files.tar
-
-        find .artifacts -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > .artifacts/SHA256SUMS
-
-        exit "$sync_status"'
+    - name: Generate canonical translations using existing locale provider configuration
+      if: always() && steps.bind.outcome == 'success' && steps.setup.outcome == 'success'
+      run: "set -uo pipefail\nmkdir -p .artifacts/locale\nif [[ -z \"${OPENAI_API_KEY}\" || -z \"${OPENCLAW_CONTROL_UI_I18N_MODEL}\"\
+        \ || -z \"${OPENCLAW_I18N_FALLBACK_MODEL}\" ]]; then\n  echo 'Existing translation API key and private primary/fallback\
+        \ model settings are required.' >&2\n  exit 1\nfi\nset -uo pipefail\nmkdir -p .artifacts/locale\nset +e\npnpm ui:i18n:sync\
+        \ 2>&1 | tee .artifacts/locale/sync.log\nsync_status=${PIPESTATUS[0]}\nprintf '%s\n' \"$sync_status\" > .artifacts/locale/sync-exit.txt\n\
+        bash scripts/ci-collect-checks.sh 'pnpm ui:i18n:check' 'pnpm native:i18n:check' 'pnpm ui:i18n:verify' 'pnpm native:i18n:verify'\
+        \ 2>&1 | tee .artifacts/locale/generated-checks.log\ncheck_status=${PIPESTATUS[0]}\nprintf '%s\n' \"$check_status\"\
+        \ > .artifacts/locale/generated-checks-exit.txt\nset -e\ngit diff --binary --full-index > .artifacts/locale/generated.patch\n\
+        git diff --name-only > .artifacts/locale/changed-paths.txt\ngit status --porcelain > .artifacts/locale/status.txt\n\
+        git diff --check\ngit diff --name-only -z | tar --null -T - -cf .artifacts/locale/generated-files.tar\nfind .artifacts\
+        \ -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > .artifacts/SHA256SUMS\nexit \"$sync_status\""
+      env:
+        OPENAI_API_KEY: ${{ secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
+        OPENCLAW_CONTROL_UI_I18N_PROVIDER: openai
+        OPENCLAW_CONTROL_UI_I18N_MODEL: ${{ secrets.OPENCLAW_I18N_MODEL }}
+        OPENCLAW_I18N_FALLBACK_MODEL: ${{ secrets.OPENCLAW_I18N_FALLBACK_MODEL }}
+        OPENCLAW_CONTROL_UI_I18N_THINKING: low
+        OPENCLAW_CONTROL_UI_I18N_AUTH_OPTIONAL: '0'
     - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
       if: always()
       with:
