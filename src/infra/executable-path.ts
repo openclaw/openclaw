@@ -212,20 +212,22 @@ export function resolveExecutable(cmd: string): string {
   const envPath = resolveEnvironmentValue(process.env, "PATH") ?? "";
   const entries = envPath.split(";").filter(Boolean);
   const extensions = resolveWindowsExecutableExtensions(cmd, process.env);
-  const matches: string[] = [];
   for (const entry of entries) {
+    const matches: string[] = [];
     for (const ext of extensions) {
       const candidate = path.join(entry, cmd + ext);
       if (isExecutableFile(candidate, { env: process.env })) {
         matches.push(candidate);
       }
     }
+    if (matches.length > 0) {
+      return (
+        matches.find((match) => normalizeLowercaseStringOrEmpty(path.extname(match)) === ".cmd") ??
+        matches.find((match) => normalizeLowercaseStringOrEmpty(path.extname(match)) === ".exe") ??
+        matches[0]!
+      );
+    }
   }
 
-  return (
-    matches.find((match) => normalizeLowercaseStringOrEmpty(path.extname(match)) === ".cmd") ??
-    matches.find((match) => normalizeLowercaseStringOrEmpty(path.extname(match)) === ".exe") ??
-    matches[0] ??
-    cmd
-  );
+  return cmd;
 }

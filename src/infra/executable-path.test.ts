@@ -412,6 +412,22 @@ describe("resolveExecutable", () => {
     },
   );
 
+  it("keeps an earlier PATH install ahead of a later batch wrapper", async () => {
+    await withMockedPlatform("win32", async () => {
+      await withTestDir({ prefix: "openclaw-exec-priority-" }, async (base) => {
+        const first = path.join(base, "first");
+        const later = path.join(base, "later");
+        await fs.mkdir(first);
+        await fs.mkdir(later);
+        await fs.writeFile(path.join(first, "gcloud.exe"), "first install");
+        await fs.writeFile(path.join(later, "gcloud.cmd"), "later install");
+        withEnv({ PATH: `${first};${later}`, PATHEXT: ".EXE;.CMD" }, () => {
+          expect(resolveExecutable("gcloud")).toBe(path.join(first, "gcloud.exe"));
+        });
+      });
+    });
+  });
+
   it("returns original cmd when no PATH match exists on Windows", () => {
     withMockedPlatform("win32", () => {
       expect(resolveExecutable("gog")).toBe("gog");
