@@ -25,7 +25,7 @@ type CronRetryHintInput = {
 // "500 Internal Server Error" / "502 Bad Gateway" / "5xx" still classify while
 // incidental numbers in longer messages do not.
 const SERVER_ERROR_PATTERN =
-  /\b(?:https?|status(?:[ _]code)?|response(?:[ _]code)?|http(?:[ _]status)?)\b[\s:=#"']{0,4}5\d{2}\b|\b5\d{2}\b[\s:)\].,-]*(?:internal server error|server error|bad gateway|service unavailable|gateway time-?out)\b|\binternal server error\b|\bbad gateway\b|\bservice unavailable\b|\bgateway time-?out\b|\b5xx\b|^\s*5\d{2}\s*$/i;
+  /\b(?:https?(?:\/\d(?:\.\d)?)?|status(?:[ _]code)?|response(?:[ _]code)?|http(?:[ _]status)?)\b[\s:=#"']{0,4}5\d{2}\b|\b5\d{2}\b[\s:)\].,-]*(?:internal server error|server error|bad gateway|service unavailable|gateway time-?out)\b|\binternal server error\b|\bbad gateway\b|\bservice unavailable\b|\bgateway time-?out\b|\b5xx\b|^\s*5\d{2}\s*$/i;
 
 // Numeric ids, process exit codes, and Cloudflare provider names are not HTTP
 // throttling signals; require status/API-error context or actual limit wording.
