@@ -1,0 +1,2 @@
+# Suspended descendants do not delay parent delivery or retry bookkeeping; retain durable rows and active grandchildren.
+83

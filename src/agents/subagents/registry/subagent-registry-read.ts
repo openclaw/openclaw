@@ -106,6 +106,7 @@ export function getSubagentSessionListRunByChildSessionKey(
 export async function countPendingDescendantRuns(
   rootSessionKey: string,
   assertCurrent: () => void,
+  options?: { excludeSuspendedDelivery?: boolean },
 ): Promise<number> {
   assertCurrent();
   const count = await withSubagentRunReadSnapshot(
@@ -122,7 +123,7 @@ export async function countPendingDescendantRuns(
     },
     (_selection, runs) => {
       assertCurrent();
-      return countPendingDescendantRunsFromRuns(new Map(runs), rootSessionKey);
+      return countPendingDescendantRunsFromRuns(new Map(runs), rootSessionKey, options);
     },
     { sessionKeys: [rootSessionKey], descendants: true },
   );

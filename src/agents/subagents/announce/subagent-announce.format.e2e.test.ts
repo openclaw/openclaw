@@ -110,7 +110,9 @@ const { subagentRegistryMock } = vi.hoisted(() => ({
     shouldIgnorePostCompletionAnnounceForSession: vi.fn(
       (_sessionKey: string, _childAgentId?: string) => false,
     ),
-    countPendingDescendantRuns: vi.fn((_sessionKey: string) => 0),
+    countPendingDescendantRuns: vi.fn(
+      (_sessionKey: string, _assert?: unknown, _options?: { excludeSuspendedDelivery?: boolean }) => 0,
+    ),
     latestRunForChild: vi.fn((_childSessionKey: string): MockSubagentRun | undefined => undefined),
     listSubagentRunsForRequester: vi.fn(
       (_sessionKey: string, _scope?: { requesterRunId?: string }): MockSubagentRun[] => [],
@@ -1805,7 +1807,10 @@ describe("subagent announce formatting", () => {
     expect(sendSpy).not.toHaveBeenCalled();
   });
 
-  it("bubbles child announce to parent requester when requester subagent session is missing", async () => {
+  it("bubbles completion past a missing requester without deleting suspended descendants", async () => {
+    subagentRegistryMock.countPendingDescendantRuns.mockImplementation(
+      (_key, _assert, options) => (options?.excludeSuspendedDelivery ? 0 : 1),
+    );
     subagentRegistryMock.isSubagentSessionRunActive.mockReturnValue(false);
     subagentRegistryMock.resolveRequesterForChildSession.mockReturnValue({
       requesterSessionKey: "agent:main:main",
@@ -1819,10 +1824,14 @@ describe("subagent announce formatting", () => {
       ...defaultOutcomeAnnounce,
       childSessionKey: "agent:main:subagent:leaf",
       childRunId: "run-leaf",
+      childAgentId: "main",
+      childSessionIdentity: { sessionId: "leaf-session", lifecycleRevision: "leaf-revision" },
       requesterSessionKey: "agent:main:subagent:orchestrator",
+      cleanup: "delete",
     });
 
     expect(didAnnounce).toBe("delivered");
+    expect(sessionsDeleteSpy).not.toHaveBeenCalled();
     const call = getAgentCall();
     expect(call.params?.sessionKey).toBe("agent:main:main");
     expect(call.params?.deliver).toBe(true);

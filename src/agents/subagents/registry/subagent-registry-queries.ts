@@ -592,8 +592,12 @@ export function countActiveDescendantRunsFromRuns(
 export function countPendingDescendantRunsFromRuns(
   runs: Map<string, SubagentRunRecord>,
   rootSessionKey: string,
+  options?: { excludeSuspendedDelivery?: boolean },
 ): number {
-  return buildSubagentRunReadIndexFromRuns({ runs }).countPendingDescendantRuns(rootSessionKey);
+  return buildSubagentRunReadIndexFromRuns({ runs }).countPendingDescendantRuns(
+    rootSessionKey,
+    options,
+  );
 }
 
 /**

@@ -15,6 +15,7 @@ import {
 } from "./subagent-registry-persistence.js";
 import { getLatestSubagentRunByChildSessionKeyFromRuns } from "./subagent-registry-queries.js";
 import type { SubagentRunReadScope } from "./subagent-registry-read-snapshot.js";
+import { countPendingDescendantRuns } from "./subagent-registry-read.js";
 import {
   loadSubagentRegistryFromSqlite,
   persistRegistryFixture,
@@ -73,6 +74,41 @@ afterEach(async () => {
 });
 
 describe("prepared subagent publication ownership", () => {
+  it("excludes only suspended persisted descendants from completion readiness", async () => {
+    const suspended = {
+      ...run("suspended"),
+      execution: { status: "terminal" as const, endedAt: 200 },
+      delivery: { status: "suspended" as const, suspendedAt: 300 },
+    };
+    const grandchild = {
+      ...run("grandchild"),
+      childSessionKey: "agent:main:subagent:grandchild",
+      requesterSessionKey: suspended.childSessionKey,
+    };
+    saveSubagentRegistryToSqlite(new Map([[suspended.runId, suspended]]));
+    const root = suspended.requesterSessionKey;
+    const assertCurrent = () => {};
+    expect(subagentRuns.size).toBe(0);
+    expect(await countPendingDescendantRuns(root, assertCurrent)).toBe(1);
+    expect(
+      await countPendingDescendantRuns(root, assertCurrent, { excludeSuspendedDelivery: true }),
+    ).toBe(0);
+    persistRegistryFixture(
+      new Map<string, SubagentRunRecord>([
+        [suspended.runId, suspended],
+        [grandchild.runId, grandchild],
+      ]),
+    );
+    expect(
+      await countPendingDescendantRuns(root, assertCurrent, { excludeSuspendedDelivery: true }),
+    ).toBe(1);
+    expect(await countPendingDescendantRuns(root, assertCurrent)).toBe(2);
+    expect(loadSubagentRegistryFromSqlite().get(suspended.runId)).toMatchObject({
+      delivery: { status: "suspended" },
+    });
+    expect(loadSubagentRegistryFromSqlite().get(suspended.runId)?.cleanupCompletedAt).toBeUndefined();
+  });
+
   it.each(["run", "session"] as const)(
     "copies only the selected %s from 5,000 retained records",
     async (kind) => {
