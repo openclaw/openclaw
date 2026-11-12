@@ -1,6 +1,7 @@
 import {
   embeddedAgentLog,
   emitAgentEvent as emitGlobalAgentEvent,
+  formatSubagentProgressReference,
   projectAgentActivityItem,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   type ToolProgressDetailMode,
@@ -457,6 +458,12 @@ export class CodexEventProjection {
       return;
     }
     const subagent = activity || item.type === "collabAgentToolCall";
+    const references = activity
+      ? [readString(item, "agentThreadId")]
+      : Array.isArray(item.receiverThreadIds)
+        ? item.receiverThreadIds.filter((id): id is string => typeof id === "string")
+        : [];
+    const reference = references.map(formatSubagentProgressReference).filter(Boolean).join(", ");
     const kind = subagent ? "tool" : itemKind(item);
     if (!kind) {
       return;
@@ -483,6 +490,7 @@ export class CodexEventProjection {
                 : itemStatus(item);
     const meta = subagent
       ? [
+          reference,
           interaction ? "message sent" : activity ? subagentStatus : status,
           readString(item, activity ? "agentPath" : "tool"),
         ]

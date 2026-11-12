@@ -45,6 +45,22 @@ describe("tool display details", () => {
     });
   });
 
+  it("shortens only subagent progress references, retaining labels and full diagnostics", () => {
+    for (const [id, suffix] of [
+      ["00000000-0000-4000-8000-000000002633", "…2633"],
+      ["00000000-0000-4000-8000-00000000a4f0", "…a4f0"],
+    ]) {
+      const args = { sessionKey: `agent:demo:subagent:${id}`, label: "Check streaming" };
+      const display = resolveToolDisplay({ name: "sessions_send", args });
+      expect(display.progress).toEqual({
+        label: "Send to session",
+        detail: `Check streaming ${suffix}`,
+      });
+      expect(display.detail).toContain(args.sessionKey);
+      expect(args.sessionKey).toBe(`agent:demo:subagent:${id}`);
+    }
+  });
+
   it("keeps sessions_yield private context out of tool status", () => {
     const display = resolveToolDisplay({
       name: "sessions_yield",
