@@ -1,4 +1,3 @@
-import { loadGetReplyFromConfigRuntime } from "../auto-reply/reply/dispatch-from-config.runtime-loaders.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { type InternalHookSelection, resolveInternalHookSelection } from "../hooks/configured.js";
@@ -170,8 +169,10 @@ export async function startGatewaySidecars(params: {
     })(),
     // Readiness owns process-stable request imports so the first turn and connection do not.
     measureStartup(params.startupTrace, "sidecars.reply-runtime", async () => {
-      const { prewarmConfigDrivenReplyRuntime } = await loadGetReplyFromConfigRuntime();
-      await prewarmConfigDrivenReplyRuntime();
+      // The dispatch facade also loads channel reply resolution, which agent RPCs do not need.
+      const { prewarmReplyRunRuntimes } =
+        await import("../auto-reply/reply/get-reply-run-helpers.js");
+      await prewarmReplyRunRuntimes();
     }),
     measureStartup(
       params.startupTrace,

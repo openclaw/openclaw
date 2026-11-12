@@ -176,10 +176,14 @@ vi.mock("../agents/prepared-model-runtime.js", () => ({
 }));
 
 // mock-isolation: Observe reply prewarming without dispatching turns or loading a native agent runtime.
-vi.mock("../auto-reply/reply/get-reply-from-config.runtime.js", () => ({
-  getReplyFromConfig: vi.fn(),
-  prewarmConfigDrivenReplyRuntime: postAttachMocks.prewarmConfigDrivenReplyRuntime,
+vi.mock("../auto-reply/reply/get-reply-run-helpers.js", () => ({
+  prewarmReplyRunRuntimes: postAttachMocks.prewarmConfigDrivenReplyRuntime,
 }));
+
+// Agent RPC startup must not load the channel reply resolver just to prewarm shared runtimes.
+vi.mock("../auto-reply/reply/get-reply-from-config.runtime.js", () => {
+  throw new Error("channel reply resolver loaded during Gateway startup");
+});
 
 // mock-isolation: Startup owns the import, not WebSocket request execution.
 vi.mock("./server/ws-connection/message-handler.js", () => ({

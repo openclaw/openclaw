@@ -334,6 +334,12 @@ vi.mock("/src/auto-reply/reply/get-reply-from-config.runtime.js", () => ({
     gatewayTestHoisted.getReplyFromConfig(...args),
   prewarmConfigDrivenReplyRuntime: vi.fn(async () => {}),
 }));
+vi.mock("../auto-reply/reply/get-reply-run-helpers.js", () => ({
+  prewarmReplyRunRuntimes: vi.fn(async () => {}),
+}));
+vi.mock("/src/auto-reply/reply/get-reply-run-helpers.js", () => ({
+  prewarmReplyRunRuntimes: vi.fn(async () => {}),
+}));
 vi.mock("../cli/deps.js", async () => {
   const actual = await vi.importActual<typeof import("../cli/deps.js")>("../cli/deps.js");
   const base = actual.createDefaultDeps();
