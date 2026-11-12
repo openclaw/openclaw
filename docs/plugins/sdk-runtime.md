@@ -158,10 +158,18 @@ Start a normal parent turn
 in the current runtime before requesting a fork. The native hook relay must be
 enabled and available; otherwise the request fails closed.
 The built-in `openclaw` runtime builds the fork request when `forkSession` is
-called. Normal model turns do not serialize or retain fork snapshots, copy
-published messages, or schedule fork expiry timers. Active forks read the running
-session's current context; completed sessions are reconstructed from the persisted
-model context, including compaction and the pinned system prompt and tool schemas.
+called. Normal model turns do not serialize fork snapshots, copy published
+messages, or schedule fork expiry timers; a running attempt keeps its last prepared
+provider request, without copying its items, until the run settles. A fork of a
+running session replays that request's instructions, tool schemas, and input items
+unchanged, then appends its own items rebuilt from the current context, on every
+provider API that supports forks. Rebuilt history can differ from what the parent sent (runtime-context
+order, rewritten tool-call IDs), so the replay keeps the fork on the parent's cached
+prefix. The fork sends its rebuilt request instead when the parent request holds an
+item the rebuilt context lacks, or is a continuation that carries only its delta.
+Active forks read the running session's current context; completed sessions are
+reconstructed from the persisted model context, including compaction and the pinned
+system prompt and tool schemas.
 Sessions with history can be forked after a restart without sending another normal
 message first. Routes without a persisted prompt pin rebuild their configured
 system prompt at fork time.

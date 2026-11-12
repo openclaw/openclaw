@@ -1,2 +1,0 @@
-# Warm canonical borrow no-fs regression, replacement and fresh alias boundary coverage.
-20

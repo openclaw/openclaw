@@ -1,5 +1,5 @@
 import { createSignal, flush } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { allMutationObserverOptions } from "../test-helpers/dom-probe.ts";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
@@ -550,22 +550,57 @@ describe("Picker", () => {
     expect(p.rows()).toHaveLength(8);
   });
 
-  it("announces no matches and leaves composition and text editing keys alone", async () => {
-    const p = await mount();
-    await p.open();
-    await p.search("not-present");
-    expect(p.rows()).toHaveLength(0);
-    expect(p.picker.querySelector<HTMLElement>('[role="status"]')!.hidden).toBe(false);
-    expect(p.picker.querySelector('[role="status"]')!.textContent?.trim()).toBe("No matches");
-    expect((await p.key(" ")).defaultPrevented).toBe(false);
-    expect((await p.key("Home")).defaultPrevented).toBe(false);
-    expect((await p.key("Enter", { isComposing: true })).defaultPrevented).toBe(false);
-    expect(p.params.onChange).not.toHaveBeenCalled();
-    const shortcut = vi.fn();
-    p.container.addEventListener("keydown", shortcut);
-    await p.key("x");
-    expect(shortcut).not.toHaveBeenCalled();
-  });
+  it.each(["flat", "grouped", "windowed", "page"])(
+    "keeps no-match feedback at the list origin and leaves editing keys alone (%s)",
+    async (presentation) => {
+      const { page } = await import("vitest/browser");
+      const initialViewport = { width: innerWidth, height: innerHeight };
+      onTestFinished(() => page.viewport(initialViewport.width, initialViewport.height));
+      await page.viewport(390, 844);
+      const p = await mount({
+        sheet: presentation === "page",
+        groupBy: presentation === "grouped" ? () => ({ id: "models", label: "Models" }) : undefined,
+        options:
+          presentation === "windowed"
+            ? [
+                ...options,
+                ...Array.from({ length: 101 }, (_, i) => ({
+                  value: `extra-${i}`,
+                  label: `Extra ${i}`,
+                })),
+              ]
+            : options,
+        windowed: presentation === "windowed" ? () => "" : undefined,
+      });
+      p.container.style.cssText = "position:relative;height:700px";
+      await p.open();
+      const menu = p.picker.querySelector<HTMLElement>(".picker-select__menu")!;
+      await expect.element(menu).toBeVisible();
+      await Promise.all(menu.getAnimations().map((animation) => animation.finished));
+      await p.search("Aurora Large");
+      await expect.poll(() => p.rows().length).toBe(1);
+      const resultTop = p.picker
+        .querySelector(".picker-select__options")!
+        .getBoundingClientRect().top;
+      const sheetHeight = menu.getBoundingClientRect().height;
+      await p.search("not-present");
+      expect(p.rows()).toHaveLength(0);
+      expect(p.picker.querySelector<HTMLElement>('[role="status"]')!.hidden).toBe(false);
+      expect(p.picker.querySelector('[role="status"]')!.textContent?.trim()).toBe("No matches");
+      await expect
+        .poll(() => p.picker.querySelector('[role="status"]')!.getBoundingClientRect().top)
+        .toBeCloseTo(resultTop, 0);
+      expect(menu.getBoundingClientRect().height).toBeCloseTo(sheetHeight, 0);
+      expect((await p.key(" ")).defaultPrevented).toBe(false);
+      expect((await p.key("Home")).defaultPrevented).toBe(false);
+      expect((await p.key("Enter", { isComposing: true })).defaultPrevented).toBe(false);
+      expect(p.params.onChange).not.toHaveBeenCalled();
+      const shortcut = vi.fn();
+      p.container.addEventListener("keydown", shortcut);
+      await p.key("x");
+      expect(shortcut).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps short menus compact, supports typeahead, and retains empty/unknown values", async () => {
     const p = await mount({

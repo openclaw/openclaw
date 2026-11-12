@@ -413,7 +413,8 @@ openclaw-select-picker {
   overscroll-behavior: contain;
 }
 
-.picker-select--sheet .picker-select__options:has(+ .picker-select__empty:not([hidden])) {
+:is(.picker-select--sheet, .picker-select__menu--phone-sheet)
+  .picker-select__options:has(+ .picker-select__empty:not([hidden])) {
   flex: none;
 }
 
