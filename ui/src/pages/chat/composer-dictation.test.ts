@@ -331,23 +331,27 @@ describe("ComposerDictationOwner", () => {
     await waitForFast(() => expectClosed("dictation-1", true));
   });
 
-  it.each(["hidden", "blur"])("keeps the dictated text when the window goes %s", async (event) => {
-    const { controller, onCommit } = createHarness();
-    await startDirect(controller);
-    transcript("five minutes of speech");
-    emit({ type: "partial", text: "and more" });
-    if (event === "hidden") {
-      vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
-      document.dispatchEvent(new Event("visibilitychange"));
-    } else {
-      window.dispatchEvent(new Event("blur"));
-    }
-    emit({ type: "close", reason: "completed" });
-    await waitForFast(() =>
-      expect(onCommit).toHaveBeenCalledExactlyOnceWith("five minutes of speech and more", true),
-    );
-    expect(controller.active).toBe(false);
-  });
+  it.each(["hidden", "blur", "blur then hidden"])(
+    "keeps the dictated text when the window goes %s",
+    async (event) => {
+      const { controller, onCommit } = createHarness();
+      await startDirect(controller);
+      transcript("five minutes of speech");
+      emit({ type: "partial", text: "and more" });
+      if (event !== "hidden") {
+        window.dispatchEvent(new Event("blur"));
+      }
+      if (event !== "blur") {
+        vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+        document.dispatchEvent(new Event("visibilitychange"));
+      }
+      emit({ type: "close", reason: "completed" });
+      await waitForFast(() =>
+        expect(onCommit).toHaveBeenCalledExactlyOnceWith("five minutes of speech and more", true),
+      );
+      expect(controller.active).toBe(false);
+    },
+  );
 
   it.each([false, true])("Read aloud replaces dictation (finalizing: %s)", async (finalizing) => {
     const stopTrack = captureStop();
