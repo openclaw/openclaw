@@ -66,6 +66,18 @@ struct OnboardingFirstRunTests {
             mode: .local, remoteUrl: "wss://claw.example", serves: serves))
     }
 
+    @Test func `superseded dashboard open reads as reconnecting with OpenClaw ID guidance`() {
+        // Regression: a joined Mac showed "Swift.CancellationError error 1" and SSH tunnel advice.
+        let superseded = DashboardManager.failureCopy(error: CancellationError(), joinedClaw: true)
+        #expect(superseded.title == "Reconnecting to the Gateway")
+        #expect(!superseded.message.contains("CancellationError"))
+        #expect(!superseded.detail.contains("Reset Remote Tunnel"))
+        #expect(superseded.detail.contains("OpenClaw ID"))
+        let failed = DashboardManager.failureCopy(error: URLError(.timedOut), joinedClaw: false)
+        #expect(failed.title == "Dashboard unavailable")
+        #expect(failed.detail.contains("Reset Remote Tunnel"))
+    }
+
     @Test func `joined claw onboarding has no AI setup or Gateway search page`() {
         let view = (ai: 3, find: 4)
         let order = OnboardingView.pageOrder(for: .remote, requiresCLIInstall: false, joinedClaw: true)
