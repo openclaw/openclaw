@@ -728,6 +728,13 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     getErrorText() {
       return parseErrorText || turnBudget.errorText(sawTerminalResult) || null;
     },
+    /**
+     * A refusal no later record can lift. A spent Claude turn budget is not one:
+     * its terminal result can still arrive, so the run must be left running.
+     */
+    getUnrecoverableErrorText() {
+      return parseErrorText || null;
+    },
     /** Non-null when a budget was spent but the finished turn was still recovered. */
     getOutputTruncationText() {
       return turnBudget.truncationText(sawTerminalResult);

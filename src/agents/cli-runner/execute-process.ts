@@ -257,7 +257,9 @@ export async function executeCliProcess(params: {
       appendCapturedOutput(stdoutCapture, chunk, CLI_RUNNER_OUTPUT_PARSE_BYTES, "head");
     }
     streamingParser?.push(chunk);
-    if (streamingParser?.getErrorText()) {
+    // A spent turn budget keeps the CLI running: the parser still watches for
+    // the terminal result, so only a refusal it cannot recover from stops it.
+    if (streamingParser?.getUnrecoverableErrorText()) {
       stopForParserRefusal?.();
     }
   };
@@ -333,7 +335,7 @@ export async function executeCliProcess(params: {
         noOutputTimeoutMs: params.noOutputTimeoutMs,
         consumeStdout: (chunk) => {
           consumeStdout(chunk);
-          const errorText = streamingParser?.getErrorText();
+          const errorText = streamingParser?.getUnrecoverableErrorText();
           if (errorText) {
             throw createCliFailoverError(errorText, "format", failoverContext);
           }
@@ -461,7 +463,7 @@ export async function executeCliProcess(params: {
           managedRun.cancel("manual-cancel");
         };
         // Output can arrive before the managed run handle is available.
-        if (streamingParser?.getErrorText()) {
+        if (streamingParser?.getUnrecoverableErrorText()) {
           stopForParserRefusal();
         }
         const detachReplyBackend = attachCliReplyBackend(runParams, stopForParserRefusal);
