@@ -35,7 +35,9 @@ export async function prepareNodeWorkerFilesystem(params: {
   if (!packageRoot) {
     throw new Error("Cannot locate the node runtime for filesystem isolation");
   }
-  const sharedTempRoot = fs.realpathSync.native(resolvePreferredOpenClawTmpDir());
+  const sharedTempRoot = fs.realpathSync.native(
+    resolvePreferredOpenClawTmpDir({ purpose: "worker" }),
+  );
   if (
     [hostHome, hostRoot, packageRoot, sharedTempRoot].some((root) => isPathInside(workspace, root))
   ) {

@@ -22,8 +22,8 @@ export type ResolvePreferredOpenClawTmpDirOptions = {
   mkdirSync?: (path: string, opts: { recursive: boolean; mode?: number }) => void;
   platform?: NodeJS.Platform;
   preferredDir?: string;
-  /** Coordination addresses must stay shared across profiles and updater versions. */
-  purpose?: "workspace" | "coordination";
+  /** Coordination stays shared; worker roots cannot rely on the node's ancestry exception. */
+  purpose?: "workspace" | "coordination" | "worker";
   tmpdir?: () => string;
   warn?: (message: string) => void;
 };
@@ -76,6 +76,7 @@ function assertSafeTempAncestors(
   for (let directory = path.dirname(canonicalRoot); ; directory = path.dirname(directory)) {
     const stat = lstat(directory);
     const trustedAncestor =
+      options.purpose !== "worker" &&
       getNodeTrustedWritableAncestors()?.includes(directory) &&
       stat.isDirectory() &&
       !stat.isSymbolicLink();

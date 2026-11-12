@@ -478,6 +478,12 @@ after their extinction. An abrupt node-host exit can leave temporary directories
 remove them only after its worker processes have exited. Worker-local inference
 is supported without a nested container.
 
+Worker scratch must also pass ancestry checks without the node's writable-ancestor
+exception. The node selects a strictly admitted temp root (normally `/tmp/openclaw`)
+before launching the worker. If neither the preferred root nor private state
+fallback qualifies, launch fails; provide a safe temp root instead of forwarding
+the node's exception to the child.
+
 This mode restricts filesystem access, not network access, signals, or all file
 metadata operations. It does not revoke inherited file descriptors or confine
 other node processes. Deployments using trusted writable ancestors must still
