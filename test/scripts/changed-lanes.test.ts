@@ -477,14 +477,12 @@ describe("scripts/changed-lanes", () => {
         failureCode === 23 ? [{ bin: "pnpm", args: ["tsgo:core:test"] }] : [],
       );
     } else {
-      const auditOwners = [
+      const auditOwners = new Set([
         "check:coercion-helpers",
         "check:deprecated-api-usage",
         "scripts/check-deadcode-exports.mts",
-      ];
-      const broadAudits = starts.filter(({ args }) =>
-        args.some((arg) => auditOwners.includes(arg)),
-      );
+      ]);
+      const broadAudits = starts.filter(({ args }) => args.some((arg) => auditOwners.has(arg)));
       expect(broadAudits).toHaveLength(3);
       const lastTypecheck = starts.findLastIndex(({ args }) => args[0]?.startsWith("tsgo:"));
       for (const audit of broadAudits) {
