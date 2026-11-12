@@ -173,11 +173,17 @@ async function proveDefaultTargets(): Promise<void> {
 await runWithWorkerStartObserver(
   (script) => starts.push(script),
   async () => {
-    setLoggerOverride({
+    applyLoggingConfig({
       level: "info",
       file: path.join(directory, isMainThread ? "warm.log" : "nested.log"),
     });
+    const sourceMapPolicy = process.env.TSLOG_SOURCE_MAPS;
     getLogger().info("warm transport");
+    assert.equal(
+      process.env.TSLOG_SOURCE_MAPS,
+      sourceMapPolicy,
+      "Logger construction must preserve the environment captured by runtime workers",
+    );
     await fileLogTransport.flush();
     if (!isMainThread) {
       assert.deepEqual(starts, [], "Worker logging must not start another logging worker");
