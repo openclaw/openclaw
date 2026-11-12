@@ -485,11 +485,18 @@ it.each(["text", "voice", "photo", "untranscribed voice"] as const)(
       ]);
       const sessionKey = harness.replySpy.mock.calls[0]?.[0].SessionKey;
       assert(sessionKey, "Expected the first topic turn to reach the model");
-      // The controlled model substitutes for the engine that persists first-turn completion.
+      // Wait for the asynchronous title write and keep the existing lifecycle: replacing
+      // the session ID here would simulate a reset, not first-turn completion.
+      const storePath = resolveStorePath(undefined, { agentId: "main" });
+      await vi.waitFor(() => {
+        expect(getSessionEntry({ storePath, sessionKey })?.topicName).toBe("Invoice review");
+      });
+      const entry = getSessionEntry({ storePath, sessionKey });
+      assert(entry, "Expected the topic session to exist");
       await upsertSessionEntry({
-        storePath: resolveStorePath(undefined, { agentId: "main" }),
+        storePath,
         sessionKey,
-        entry: { sessionId: "delivered-dm-topic", updatedAt: Date.now(), systemSent: true },
+        entry: { ...entry, updatedAt: Date.now(), systemSent: true },
       });
       await handleMessage(bot, 2701, topicMessage("Continue the same topic"));
       expect(generated).toHaveBeenCalledTimes(1);
