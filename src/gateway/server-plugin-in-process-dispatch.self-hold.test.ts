@@ -17,6 +17,7 @@ import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispa
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 
 const startTurn = vi.hoisted(() => vi.fn());
+// mock-isolation: Avoid real turn admission and session writes while testing dispatch ownership.
 vi.mock("./agent-turn/agent-turn-service.js", () => ({
   createAgentTurnService: () => ({ startTurn }),
 }));

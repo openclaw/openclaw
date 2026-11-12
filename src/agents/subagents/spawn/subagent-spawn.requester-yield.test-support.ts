@@ -147,10 +147,14 @@ export function registerYieldedRequesterBatchCase(
             );
             if (actor === "revoke-after-yield") {
               const attempt = {
-                ...params,
+                runId: params.runId,
                 admittedRunContext: admitted,
                 agentId: "main",
                 config: bound.cfg,
+                sessionId: params.sessionId,
+                sessionKey: params.sessionKey,
+                workspaceDir: params.workspaceDir,
+                abortSignal: params.abortSignal,
               };
               const host = createAgentHarnessHostCapabilities({
                 pluginId: "yield-authority-fixture",
