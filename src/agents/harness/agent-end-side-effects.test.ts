@@ -25,6 +25,7 @@ import {
 import { bindAgentHarnessHookMessages, takeHookMessageLoader } from "./lifecycle-hook-messages.js";
 
 vi.mock("./lifecycle-hook-helpers.js", () => ({
+  getAgentHarnessHookRunner: () => ({ hasHooks: () => true }),
   awaitAgentHarnessAgentEndHook: vi.fn(),
   runAgentHarnessAgentEndHook: vi.fn(),
 }));

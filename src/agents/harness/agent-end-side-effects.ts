@@ -12,6 +12,7 @@ import {
 } from "../sessions/session-manager-message-anchor.js";
 import {
   awaitAgentHarnessAgentEndHook,
+  getAgentHarnessHookRunner,
   runAgentHarnessAgentEndHook,
 } from "./lifecycle-hook-helpers.js";
 import { bindAgentHarnessHookMessages, takeHookMessageLoader } from "./lifecycle-hook-messages.js";
@@ -170,11 +171,25 @@ export function runAgentEndSideEffects(params: AgentEndSideEffectsParams): void 
   runAgentHarnessAgentEndHook(withCompletedTurn(prepared, readCompletedTurnNative(prepared)));
 }
 
-/** Keep the turn lease through anchor preparation, then start plugin hooks without waiting. */
+/** Keep the turn lease through terminal preparation, then start plugin hooks without waiting. */
 export async function runAgentEndSideEffectsAsync(
   params: AgentEndSideEffectsParams,
 ): Promise<void> {
-  runAgentHarnessAgentEndHook(await prepareWithCompletedTurn(params));
+  const prepared = await prepareWithCompletedTurn(params);
+  const loadMessages = takeHookMessageLoader(prepared.event);
+  const hookRunner = prepared.hookRunner ?? getAgentHarnessHookRunner();
+  if (!hookRunner?.hasHooks("agent_end")) {
+    return;
+  }
+  try {
+    // Hydration may read nested tool activity; finish it before the turn closes admission.
+    if (loadMessages) {
+      prepared.event = { ...prepared.event, messages: await loadMessages() };
+    }
+    runAgentHarnessAgentEndHook({ ...prepared, hookRunner });
+  } catch (error) {
+    warnSideEffectFailure(error);
+  }
 }
 
 /** Runs agent-end side effects and waits for plugin/core completion. */
