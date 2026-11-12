@@ -8,6 +8,7 @@ import { assignSessionOwner, patchSessionEntryCore } from "../config/sessions/se
 import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
 import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import {
   cleanupStore,
@@ -279,6 +280,27 @@ describe("sessionsCommand", () => {
       );
     },
   );
+
+  it("does not warn or print sessions after an interrupted Gateway catalog read", async () => {
+    const store = await writeSession("interrupted-catalog", {
+      modelProvider: "ollama",
+      model: "qwen3:4b",
+    });
+    configureModels("ollama/qwen3:4b", {}, undefined, store);
+    catalogState.readActiveGatewayLockIdentity.mockResolvedValue(gatewayOwner);
+    const work = new AsyncWorkScope();
+    catalogState.callGateway.mockImplementation(async (options) => {
+      work.beginClose();
+      options.signal?.throwIfAborted();
+      return { models: [] };
+    });
+    const { runtime, logs, errors } = makeRuntime();
+
+    await work.run(() => sessionsCommand({ json: true }, runtime));
+
+    expect(logs).toEqual([]);
+    expect(errors).toEqual([]);
+  });
 
   it.each(["absent", "unreachable", "uninspectable", "other-workspace"])(
     "preserves verified capacity for auto runtime when the Gateway is %s",
