@@ -82,9 +82,8 @@ function producerRunMetadata(
   _platform: "iOS" | "macOS",
   source: ProducerEvent = sourceEvents.report,
 ) {
-  const workflow = readWorkflow(MACOS_PRODUCER_WORKFLOW_PATH);
   const github = {
-    workflow: workflow.name,
+    workflow: producerWorkflow.name,
     event_name: source.eventName,
     event:
       source.eventName === "pull_request"
@@ -100,12 +99,12 @@ function producerRunMetadata(
   };
   // These expressions use only typed booleans, strings, equality, and &&/||,
   // whose semantics match JavaScript for the explicit event contexts below.
-  const display_title = workflow["run-name"].replace(
+  const display_title = producerWorkflow["run-name"].replace(
     /\$\{\{([\s\S]*?)\}\}/gu,
     (_match, expression: string) =>
       String(compileFunction(`return (${expression});`, ["github"])(github)),
   );
-  return { name: workflow.name, event: source.eventName, display_title };
+  return { name: producerWorkflow.name, event: source.eventName, display_title };
 }
 
 const commenterScript = readWorkflow(WORKFLOW_PATH).jobs?.comment?.steps?.find(
@@ -475,8 +474,7 @@ const findingArchive = reportZip(
 
 describe("iOS Periphery comment workflow", () => {
   it("scopes the report artifact to the workflow attempt", () => {
-    const workflow = readWorkflow(MACOS_PRODUCER_WORKFLOW_PATH);
-    const upload = workflow.jobs?.["ios-index"]?.steps?.find(
+    const upload = producerWorkflow.jobs?.["ios-index"]?.steps?.find(
       (step) => step.name === "Upload iOS app report",
     );
 
@@ -654,7 +652,7 @@ describe("iOS Periphery comment workflow", () => {
 
 describe("Periphery publication admission", () => {
   const platform = "iOS";
-  const name = readWorkflow(MACOS_PRODUCER_WORKFLOW_PATH).name;
+  const name = producerWorkflow.name;
   const report = producerRunMetadata(platform);
   const passive = producerRunMetadata(platform, sourceEvents.passive);
   const draft = producerRunMetadata(platform, sourceEvents.draft);
