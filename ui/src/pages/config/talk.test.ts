@@ -337,7 +337,7 @@ it.each([
   },
 );
 
-it("reports a missing key for the chosen speech-to-text provider and links to Models", async () => {
+it("reports the chosen speech-to-text provider as not ready and links to Models", async () => {
   const navigate = vi.fn();
   const { page } = createTalkMutationHarness({
     navigate,
@@ -371,7 +371,7 @@ it("reports a missing key for the chosen speech-to-text provider and links to Mo
   };
   await waitForSolid(() =>
     expect(page.textContent).toContain(
-      t("talkPage.transcription.keyMissingDescription", { provider: "OpenRouter" }),
+      t("talkPage.transcription.providerNotReadyDescription", { provider: "OpenRouter" }),
     ),
   );
   const open = [...page.querySelectorAll("button")].find(
@@ -379,6 +379,34 @@ it("reports a missing key for the chosen speech-to-text provider and links to Mo
   );
   open!.click();
   expect(navigate).toHaveBeenCalledWith("model-providers", { search: "?provider=openrouter" });
+});
+
+it("does not call an unavailable speech-to-text provider a missing key", async () => {
+  const { page } = createTalkMutationHarness({
+    navigate: vi.fn(),
+    catalogRequest: (_index, catalog) => ({
+      ...catalog,
+      transcription: {
+        ready: false,
+        providers: [{ id: "anthropic", label: "Anthropic", configured: false }],
+      },
+    }),
+  });
+  page.configObject = {
+    ...page.configObject,
+    tools: {
+      media: {
+        models: [{ provider: "anthropic", model: "claude-opus-5-5", capabilities: ["audio"] }],
+        audio: { preferredModel: "anthropic/claude-opus-5-5" },
+      },
+    },
+  };
+  await waitForSolid(() =>
+    expect(page.textContent).toContain(
+      t("talkPage.transcription.providerNotReadyDescription", { provider: "Anthropic" }),
+    ),
+  );
+  expect(page.textContent).not.toContain("No Anthropic key");
 });
 
 it("rejects a malformed custom speech-to-text model without changing the preference", async () => {

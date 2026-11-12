@@ -139,14 +139,17 @@ function TranscriptionStatusRow(props: {
       };
     }
     const provider = chosenProvider(catalog, props.selection);
+    // `configured: false` covers a missing credential and a provider with no
+    // transcription support alike; the catalog carries no reason, so the copy
+    // names both instead of diagnosing a missing key.
     if (provider && !provider.configured) {
       return {
         kind: "warn" as const,
-        label: t("talkPage.transcription.keyMissing"),
-        description: t("talkPage.transcription.keyMissingDescription", {
+        label: t("talkPage.transcription.providerNotReady"),
+        description: t("talkPage.transcription.providerNotReadyDescription", {
           provider: provider.label,
         }),
-        missingKeyProvider: provider.id,
+        notReadyProvider: provider.id,
       };
     }
     return {
@@ -157,9 +160,9 @@ function TranscriptionStatusRow(props: {
         : t("talkPage.transcription.noProvider"),
     };
   };
-  const missingKeyProvider = () => {
+  const notReadyProvider = () => {
     const current = status();
-    return "missingKeyProvider" in current ? current.missingKeyProvider : null;
+    return "notReadyProvider" in current ? current.notReadyProvider : null;
   };
   return (
     <SettingsRow
@@ -168,12 +171,12 @@ function TranscriptionStatusRow(props: {
       control={
         <>
           <SettingsStatus kind={status().kind} label={status().label} />
-          {missingKeyProvider() && (
+          {notReadyProvider() && (
             <button
               type="button"
               class="btn"
               onClick={() =>
-                navigateToModelProvider(context, props.selection.talkAgentId, missingKeyProvider()!)
+                navigateToModelProvider(context, props.selection.talkAgentId, notReadyProvider()!)
               }
             >
               {t("talkPage.transcription.openModels")}

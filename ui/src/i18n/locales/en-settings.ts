@@ -448,9 +448,9 @@ const enSettings = {
         "“{value}” isn’t a provider/model reference, so it wasn’t saved. Use provider/model, for example openrouter/openai/whisper-large-v3-turbo.",
       automatic: "Automatic",
       custom: "Other model (provider/model)",
-      keyMissing: "Key needed",
-      keyMissingDescription:
-        "No {provider} key is set up. Provider keys are added on Settings → Models.",
+      providerNotReady: "Not ready",
+      providerNotReadyDescription:
+        "{provider} can’t transcribe yet. It may need a key, which is added on Settings → Models, or it may not support speech to text.",
       openModels: "Open Models",
     },
   },
