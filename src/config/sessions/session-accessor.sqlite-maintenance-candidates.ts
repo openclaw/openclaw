@@ -136,6 +136,7 @@ export function readSessionMaintenanceCapCandidates(params: {
   overflow: number;
   readPreserveKeys: () => ReadonlySet<string> | undefined;
   preserveRecentMs?: number | null;
+  deferArchiving?: boolean;
 }): { store: Record<string, SessionEntry>; durableNoCandidates: boolean } {
   if (params.overflow <= 0) {
     return { store: {}, durableNoCandidates: false };
@@ -202,6 +203,7 @@ export function readSessionMaintenanceCapCandidates(params: {
         entry,
         preserveKeys: params.readPreserveKeys(),
         preserveRecentMs: params.preserveRecentMs,
+        deferArchiving: params.deferArchiving,
       })
     ) {
       continue;

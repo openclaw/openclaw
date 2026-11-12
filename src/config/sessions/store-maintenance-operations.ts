@@ -99,7 +99,7 @@ export async function applyFileBackedSessionStoreMaintenance(
   const maintenance = params.maintenanceConfig
     ? normalizeResolvedMaintenanceConfigInput(params.maintenanceConfig)
     : resolveMaintenanceConfig();
-  const preserveSessionKeys = await collectSessionMaintenancePreserveKeysForStore({
+  const protection = await collectSessionMaintenancePreserveKeysForStore({
     storePath: params.storePath,
     store: params.store,
   });
@@ -110,7 +110,8 @@ export async function applyFileBackedSessionStoreMaintenance(
     planSessionEntryMaintenance({
       maintenance,
       initialUnarchivedCount: countUnarchivedSessionEntries(params.store),
-      readPreserveKeys: () => preserveSessionKeys,
+      readPreserveKeys: () => protection.keys,
+      deferArchiving: protection.deferArchiving,
       readAgeCandidates: () => params.store,
       readCapCandidates: () => ({ store: params.store, maxEntries: maintenance.maxEntries }),
       onRemoved: ({ entry }) => {
@@ -133,7 +134,7 @@ export async function applyFileBackedSessionStoreMaintenance(
     warnOnly,
     log: params.log,
     ...(!warnOnly
-      ? { preserveKeys: preserveSessionKeys, commitEvictedIndex: params.commitReducedStore }
+      ? { preserveKeys: protection.keys, commitEvictedIndex: params.commitReducedStore }
       : {}),
   });
 }

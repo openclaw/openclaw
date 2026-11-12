@@ -115,7 +115,8 @@ import {
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
   invalidateSessionAutomationIndex,
-  claimSessionAutomationEpoch,
+  expectSessionAutomationSource,
+  markSessionAutomationSourceUnavailable,
   registerSessionAutomationSource,
   unregisterSessionAutomationSource,
 } from "./session-automation-index.js";
@@ -125,6 +126,7 @@ export type GatewayCronState = {
   cron: GatewayCronServiceContract;
   storePath: string;
   cronEnabled: boolean;
+  markAutomationUnavailable?: () => void;
   prepareExitWatcherHandoff?: () => Promise<GatewayCronExitWatcherHandoff | undefined>;
   // The lazy proxy must preserve system-job reconciliation on the serving config.
   reconcileExitWatchers: () => Promise<void>;
@@ -146,6 +148,8 @@ export function buildGatewayCronService(params: {
   deps: CliDeps;
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   env?: NodeJS.ProcessEnv;
+  /** Inherited by the lazy loader so delayed construction cannot claim a newer epoch. */
+  automationEpoch?: number;
   resolveGatewayContext?: () => GatewayRequestContext | undefined;
   resolvePluginRegistry?: () => PluginRegistry | undefined;
 }): GatewayCronState {
@@ -162,6 +166,11 @@ export function buildGatewayCronService(params: {
   const storePath = params.storePath;
   const cronEnabled =
     env.OPENCLAW_SKIP_CRON !== "1" && (params.cfg.cron?.enabled ?? DEFAULT_CRON_ENABLED);
+  const automationEpoch = expectSessionAutomationSource(
+    params.cfg,
+    cronEnabled,
+    params.automationEpoch,
+  );
   // Resolve once per cron service snapshot so every webhook route shares the
   // same explicit opt-in while omitted config keeps the guard strict.
   const webhookSsrfPolicy = mergeSsrFPolicies(params.cfg.cron?.webhookSsrfPolicy);
@@ -1150,10 +1159,12 @@ export function buildGatewayCronService(params: {
     return stopPromise;
   };
   const automationSource = {
-    getJobs: () => cron.getLoadedJobs(),
+    getConfig: getRuntimeConfig,
+    enabled: cronEnabled,
+    getJobs: () => (cronEnabled ? cron.getLoadedJobs() : []),
     getDefaultAgentId: () => cron.getDefaultAgentId(),
   };
-  const automationEpoch = claimSessionAutomationEpoch();
+  registerSessionAutomationSource(automationSource, automationEpoch);
   const stopCron = cron.stop.bind(cron);
   const stopCronLifecycle = (preserveExitWatchers = false) => {
     settleExitWatcherHandoff(false);
@@ -1220,7 +1231,12 @@ export function buildGatewayCronService(params: {
     if (lifecycleChanged()) {
       return;
     }
-    await startCron();
+    try {
+      await startCron();
+    } catch (error) {
+      markSessionAutomationSourceUnavailable(automationEpoch);
+      throw error;
+    }
     if (lifecycleChanged()) {
       return;
     }
@@ -1262,6 +1278,7 @@ export function buildGatewayCronService(params: {
     cron,
     storePath,
     cronEnabled,
+    markAutomationUnavailable: () => markSessionAutomationSourceUnavailable(automationEpoch),
     prepareExitWatcherHandoff: async () => ({
       current: () => exitWatchers!,
       adopt: (watchers) => {

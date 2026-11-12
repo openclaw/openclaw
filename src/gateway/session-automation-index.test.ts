@@ -25,7 +25,11 @@ describe("session automation index", () => {
     const first = job({ id: "a", sessionTarget: "main" });
     const second = job({ id: "b", sessionTarget: "main" });
     const jobs = [first, second];
-    registerSessionAutomationSource({ getJobs: () => jobs, getDefaultAgentId: () => "main" });
+    registerSessionAutomationSource({
+      getJobs: () => jobs,
+      getConfig: () => cfg,
+      getDefaultAgentId: () => "main",
+    });
     expect(sessionHasAutomation("agent:main:main", cfg)).toBe(true);
     const changed = vi.fn();
     const stop = sessionChanges.subscribe(changed);
@@ -55,6 +59,7 @@ describe("session automation index", () => {
     let defaultAgentId = "main";
     registerSessionAutomationSource({
       getJobs: () => jobs,
+      getConfig: () => config,
       getDefaultAgentId: () => defaultAgentId,
     });
     expect(sessionHasAutomation("agent:main:first", config)).toBe(false);
@@ -103,6 +108,7 @@ describe("session automation index", () => {
     let defaultAgentId = "main";
     registerSessionAutomationSource({
       getJobs: () => jobs,
+      getConfig: () => cfg,
       getDefaultAgentId: () => defaultAgentId,
     });
     expect(sessionHasAutomation("agent:main:main", cfg)).toBe(true);
@@ -116,7 +122,11 @@ describe("session automation index", () => {
 
   test("reads during array replacement do not consume the pending owner delta", () => {
     let jobs = [job({ id: "a" })];
-    registerSessionAutomationSource({ getJobs: () => jobs, getDefaultAgentId: () => "main" });
+    registerSessionAutomationSource({
+      getJobs: () => jobs,
+      getConfig: () => cfg,
+      getDefaultAgentId: () => "main",
+    });
     expect(sessionHasAutomation("agent:main:cron:a", cfg)).toBe(true);
     const changed = vi.fn();
     const stop = sessionChanges.subscribe(changed);
@@ -143,11 +153,13 @@ describe("session automation index", () => {
       const staleEpoch = claimSessionAutomationEpoch();
       const staleSource = {
         getJobs: () => [job({ id: "stale" })],
+        getConfig: () => cfg,
         getDefaultAgentId: () => "main",
       };
       const freshEpoch = claimSessionAutomationEpoch();
       const freshSource = {
         getJobs: () => [job({ id: "fresh" })],
+        getConfig: () => cfg,
         getDefaultAgentId: () => "main",
       };
       registerSessionAutomationSource(freshSource, freshEpoch);

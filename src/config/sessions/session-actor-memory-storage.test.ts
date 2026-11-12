@@ -5,6 +5,7 @@ import type {
   SessionActorStorage,
 } from "./session-actor-contract.js";
 import { createMemorySessionActorOwner } from "./session-actor-memory.js";
+import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 vi.mock("node:sqlite", async (importOriginal) => ({
@@ -545,3 +546,62 @@ describe("actor-owned memory storage", () => {
     expect((await acquire()).snapshot(authority)?.entry).toBeUndefined();
   });
 });
+
+it.each(["dashboard", "age", "cap"] as const)(
+  "carries archive deferral and bound keys through memory %s maintenance",
+  async (phase) => {
+    const { store, acquire, actor } = await fixture();
+    await create(store, { sessionId: "active", updatedAt: Date.now() });
+    const otherKey = "agent:main:dashboard:unbound";
+    const disposableKey = "agent:main:subagent:disposable";
+    const handles: SessionActor[] = [];
+    for (const [index, key] of [siblingKey, otherKey, disposableKey].entries()) {
+      const handle = await acquire(key);
+      handles.push(handle);
+      await create(storage(handle), {
+        sessionId: `candidate-${index}`,
+        updatedAt: Date.now() - (40 - index) * 86_400_000,
+      });
+    }
+    const config = {
+      ...resolveMaintenanceConfigFromInput(),
+      archiveDashboardAfterMs: phase === "dashboard" ? 7 * 86_400_000 : null,
+      pruneAfterMs: phase === "age" ? 30 * 86_400_000 : Number.MAX_SAFE_INTEGER,
+      maxEntries: phase === "cap" ? 2 : 500,
+    };
+    const maintain = (deferArchiving: boolean) =>
+      store.mutate(
+        {
+          type: "session.entry.patch",
+          input: {
+            operation: { kind: "fields", patch: { label: "maintained" } },
+            preserveActivity: true,
+            maintenance: {
+              config,
+              preservation: {
+                providerKeys: [siblingKey],
+                workIdentities: [],
+                lifecycleIdentities: [],
+                ...(deferArchiving ? { deferArchiving: true as const } : {}),
+              },
+            },
+          },
+        },
+        authority,
+      );
+    try {
+      expect(await maintain(true)).toMatchObject({ kind: "committed" });
+      const readEntry = (key: string) =>
+        store.read({ type: "session.entry.read", input: { sessionKey: key } }, authority);
+      expect((await readEntry(otherKey))?.archivedAt).toBeUndefined();
+      if (phase !== "dashboard") {
+        expect(await readEntry(disposableKey)).toBeUndefined();
+      }
+      expect(await maintain(false)).toMatchObject({ kind: "committed" });
+      expect((await readEntry(siblingKey))?.archivedAt).toBeUndefined();
+      expect((await readEntry(otherKey))?.archivedAt).toEqual(expect.any(Number));
+    } finally {
+      await Promise.all([actor, ...handles].map((handle) => handle.release()));
+    }
+  },
+);

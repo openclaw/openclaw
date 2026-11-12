@@ -91,7 +91,10 @@ export function startGatewayCronWithLogging(params: {
         await params.afterStart?.();
         await reconciliation.complete();
       } catch (err) {
-        params.logCron.error(`failed to start: ${String(err)}`);
+        params.cronState.markAutomationUnavailable?.();
+        params.logCron.error(
+          `failed to start; automatic session archiving is deferred until cron loads: ${String(err)}`,
+        );
         // Recovery callbacks must run before this independent root releases its
         // admission fence; restart and suspension cannot race past this point.
         params.onStartError?.(err);

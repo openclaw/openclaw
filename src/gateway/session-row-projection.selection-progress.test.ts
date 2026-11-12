@@ -107,7 +107,11 @@ it.each(["parent model change", "late cron registration"])(
             payload: { kind: "systemEvent", text: "Synthetic binding" },
             state: {},
           }));
-          registerSessionAutomationSource({ getJobs: () => jobs, getDefaultAgentId: () => "main" });
+          registerSessionAutomationSource({
+            getJobs: () => jobs,
+            getDefaultAgentId: () => "main",
+            getConfig: () => cfg,
+          });
         }
         expect(projection.dirtyRowCount).toBeGreaterThanOrEqual(keys.length);
         for (const [index, row] of rows.entries()) {

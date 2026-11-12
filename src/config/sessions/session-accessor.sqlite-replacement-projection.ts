@@ -62,6 +62,7 @@ import { composeSessionSourceAssertion } from "./session-source-authority.js";
 import { maintenanceLane, projectionLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { MAX_SESSION_ROW_FACTS_KEYS } from "./session-transcript-worker.types.js";
+import { assertMaintenancePreservationCompatible } from "./store-maintenance-preserve-snapshot.js";
 import { prepareSessionMaintenancePreservation } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 
@@ -196,6 +197,7 @@ async function applyMemorySessionEntryReplacementProjection<T, TReplacement>(
         ? await prepareSessionMaintenancePreservation(memory.path)
         : undefined;
     try {
+      const maintenanceSnapshot = preservation?.capture();
       readSessionActorStorageResult(
         await memory.actor.storage!.mutate(
           {
@@ -203,11 +205,11 @@ async function applyMemorySessionEntryReplacementProjection<T, TReplacement>(
             input: {
               replacements,
               consumePendingReset: params.consumePendingReset,
-              ...(config && preservation
+              ...(config && maintenanceSnapshot
                 ? {
                     maintenance: {
                       config,
-                      preservation: preservation.capture(),
+                      preservation: maintenanceSnapshot,
                       activeSessionKey: params.activeSessionKey,
                     },
                   }
@@ -221,7 +223,34 @@ async function applyMemorySessionEntryReplacementProjection<T, TReplacement>(
               assertSourceCurrent?.();
             },
           },
-          { committed: () => params.onLifecycleCommitted?.(false) },
+          {
+            beforeCommit({ changes }) {
+              if (maintenanceSnapshot && preservation) {
+                // Explicit replacement/removal retains its intentional lifecycle semantics.
+                const automatic = changes.filter(
+                  ({ sessionKey }) => !replacements.some((entry) => entry.sessionKey === sessionKey),
+                );
+                assertMaintenancePreservationCompatible(
+                  maintenanceSnapshot,
+                  preservation.refreshCandidates(automatic.map(({ sessionKey }) => sessionKey)),
+                  [
+                    {
+                      archivedEntries: automatic.flatMap(({ sessionKey, before, after }) =>
+                        before?.entry?.archivedAt === undefined && after?.entry?.archivedAt !== undefined
+                          ? [{ sessionKey, sessionId: after.entry.sessionId }]
+                          : [],
+                      ),
+                      entryRemovals: automatic.flatMap(({ sessionKey, before, after }) =>
+                        before?.entry && !after?.entry ? [{ sessionKey, expectedEntry: before.entry }] : [],
+                      ),
+                      stateDeletePlans: [],
+                    },
+                  ],
+                );
+              }
+            },
+            committed: () => params.onLifecycleCommitted?.(false),
+          },
         ),
       );
       if (params.afterCommitted) {

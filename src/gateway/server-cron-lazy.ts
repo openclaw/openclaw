@@ -4,6 +4,10 @@ import { DEFAULT_CRON_ENABLED } from "../config/cron-limits.js";
 import { captureSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker-context.js";
 import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import { createLazyPromiseLoader, createLazyRuntimeMethodBinder } from "../shared/lazy-runtime.js";
+import {
+  expectSessionAutomationSource,
+  markSessionAutomationSourceUnavailable,
+} from "./session-automation-index.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
 import type {
   buildGatewayCronService,
@@ -30,6 +34,7 @@ export function createLazyGatewayCronState(
   const storePath = params.storePath;
   const cronEnabled =
     env.OPENCLAW_SKIP_CRON !== "1" && (params.cfg.cron?.enabled ?? DEFAULT_CRON_ENABLED);
+  const automationEpoch = expectSessionAutomationSource(params.cfg, cronEnabled);
   let loaded: LoadedGatewayCronState | null = null;
   let stopped = false;
   let exitWatcherHandoff: GatewayCronExitWatcherHandoff | undefined;
@@ -57,7 +62,7 @@ export function createLazyGatewayCronState(
       import("./server-cron.js").then(({ buildGatewayCronService }) => {
         loaded = {
           state: runWithSpawnBroker(spawnBroker, () =>
-            runWithReadOnlyWorkers(() => buildGatewayCronService(params)),
+            runWithReadOnlyWorkers(() => buildGatewayCronService({ ...params, automationEpoch })),
           ),
           phase: "idle",
           startPromise: null,
@@ -305,6 +310,7 @@ export function createLazyGatewayCronState(
     cron,
     storePath,
     cronEnabled,
+    markAutomationUnavailable: () => markSessionAutomationSourceUnavailable(automationEpoch),
     prepareExitWatcherHandoff: async (): Promise<GatewayCronExitWatcherHandoff | undefined> => {
       const loading = cronStateLoader.peek();
       const resolved = loaded ?? (loading ? await loading : null);

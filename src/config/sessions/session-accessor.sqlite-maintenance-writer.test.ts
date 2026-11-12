@@ -590,3 +590,97 @@ it("rolls back planner statistics when maintenance ownership is revoked before c
   expect(readStatistics()).toEqual({ stat: expect.stringMatching(/^1\b/u) });
   expect(database.db.prepare("PRAGMA analysis_limit").get()).toEqual({ analysis_limit: 37 });
 });
+
+it("rolls back archive candidates when cron becomes unavailable at final refresh", async () => {
+  const { database, storePath } = createPlannerStore(1);
+  const target = { storePath, sessionKey: "agent:main:planner-0" };
+  let unavailable = false;
+  const unregister = registerSessionMaintenancePreserveKeysProvider(async () => ({
+    capture: () => [],
+    deferArchiving: () => unavailable,
+    refreshCandidates: () => {
+      unavailable = true;
+      return [];
+    },
+    dispose() {},
+  }));
+  onTestFinished(unregister);
+  const preservation = await prepareSessionMaintenancePreservation(storePath);
+  onTestFinished(preservation.dispose);
+  const run = () =>
+    runOpenClawAgentWriteTransaction(
+      (owner) =>
+        maintenance.applySessionEntryMaintenance(owner, {
+          storePath,
+          archiveDirectory: path.dirname(database.path),
+          forceMaintenance: true,
+          preservation: preservation.capture,
+          refreshCandidates: preservation.refreshCandidates,
+          maintenanceConfig: resolveMaintenanceConfigFromInput(),
+        }),
+      { agentId: "main", path: database.path },
+    );
+
+  expect(run).toThrow("SQLite maintenance candidates became protected before commit");
+  expect(loadSessionEntry(target)?.archivedAt).toBeUndefined();
+  expect(run().archived).toBe(0);
+});
+
+it.each(["dashboard", "age", "cap"] as const)(
+  "defers %s archives but still removes disposable rows in the SQLite owner",
+  async (phase) => {
+    const { database, storePath } = createPlannerStore(2);
+    const disposableKey = "agent:main:subagent:maintenance-disposable";
+    replaceSessionEntrySync(
+      { sessionKey: disposableKey, storePath },
+      { sessionId: "maintenance-disposable", updatedAt: Date.now() - 40 * 86_400_000 },
+    );
+    // Ordinary rows sort before the disposable row; an indexed cap must still find it.
+    if (phase === "dashboard") {
+      for (let index = 0; index < 2; index += 1) {
+        replaceSessionEntrySync(
+          { sessionKey: `agent:main:dashboard:deferred-${index}`, storePath },
+          { sessionId: `deferred-${index}`, updatedAt: 1 },
+        );
+      }
+    }
+    let pending = true;
+    const unregister = registerSessionMaintenancePreserveKeysProvider(async () => ({
+      capture: () => ["agent:main:planner-0", "agent:main:dashboard:deferred-0"],
+      deferArchiving: () => pending,
+      dispose() {},
+    }));
+    onTestFinished(unregister);
+    const preservation = await prepareSessionMaintenancePreservation(storePath);
+    onTestFinished(preservation.dispose);
+    const run = () =>
+      runOpenClawAgentWriteTransaction(
+        (owner) =>
+          maintenance.applySessionEntryMaintenance(owner, {
+            storePath,
+            archiveDirectory: path.dirname(database.path),
+            forceMaintenance: true,
+            preservation: preservation.capture,
+            refreshCandidates: preservation.refreshCandidates,
+            maintenanceConfig: {
+              ...resolveMaintenanceConfigFromInput(),
+              archiveDashboardAfterMs: phase === "dashboard" ? 7 * 86_400_000 : null,
+              pruneAfterMs: phase === "age" ? 30 * 86_400_000 : Number.MAX_SAFE_INTEGER,
+              maxEntries: phase === "cap" ? 1 : 500,
+            },
+          }),
+        { agentId: "main", path: database.path },
+      );
+    const deferred = run();
+    expect(deferred.archived).toBe(0);
+    if (phase !== "dashboard") {
+      expect(deferred.entryRemovals.map(({ sessionKey }) => sessionKey)).toContain(disposableKey);
+    }
+    pending = false;
+    const loaded = run();
+    expect(loaded.archived).toBeGreaterThan(0);
+    const protectedKey =
+      phase === "dashboard" ? "agent:main:dashboard:deferred-0" : "agent:main:planner-0";
+    expect(loadSessionEntry({ storePath, sessionKey: protectedKey })?.archivedAt).toBeUndefined();
+  },
+);

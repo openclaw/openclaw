@@ -67,7 +67,11 @@ it.each(["activity summary", "runtime settlement", "automation", "sharing revoca
       const original = (await readMentionInbox(fixture.inbox, fixture.bobClient)).items[0]!;
       const jobs: CronJob[] = [];
       if (publication === "automation") {
-        registerSessionAutomationSource({ getJobs: () => jobs, getDefaultAgentId: () => "main" });
+        registerSessionAutomationSource({
+          getJobs: () => jobs,
+          getDefaultAgentId: () => "main",
+          getConfig: () => cfg,
+        });
         expect(sessionHasAutomation(SESSION_KEY, cfg, "main")).toBe(false);
       }
       const prepared = createDeferred();

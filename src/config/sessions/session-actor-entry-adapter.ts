@@ -28,6 +28,7 @@ import {
   releaseSessionSourceAuthorities,
   type SessionSourceValidation,
 } from "./session-source-authority.js";
+import { assertMaintenancePreservationCompatible } from "./store-maintenance-preserve-snapshot.js";
 import { prepareSessionMaintenancePreservation } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
@@ -131,6 +132,7 @@ async function patchSessionActorEntry(
     if (config && config.mode !== "warn") {
       maintenancePreservation = await prepareSessionMaintenancePreservation(binding.path);
     }
+    const maintenanceSnapshot = maintenancePreservation?.capture();
     const result = await actor.storage!.mutate(
       {
         type: "session.entry.patch",
@@ -138,8 +140,8 @@ async function patchSessionActorEntry(
           ...input,
           operation: input.operation,
           expected,
-          ...(config && maintenancePreservation
-            ? { maintenance: { config, preservation: maintenancePreservation.capture() } }
+          ...(config && maintenanceSnapshot
+            ? { maintenance: { config, preservation: maintenanceSnapshot } }
             : {}),
         },
       },
@@ -168,6 +170,29 @@ async function patchSessionActorEntry(
         },
       },
       {
+        beforeCommit({ changes }) {
+          if (maintenanceSnapshot && maintenancePreservation) {
+            // The caller's patch is explicit; only sibling maintenance is automatic.
+            const automatic = changes.filter((change) => change.sessionKey !== sessionKey);
+            assertMaintenancePreservationCompatible(
+              maintenanceSnapshot,
+              maintenancePreservation.refreshCandidates(automatic.map(({ sessionKey }) => sessionKey)),
+              [
+                {
+                  archivedEntries: automatic.flatMap(({ sessionKey, before, after }) =>
+                    before?.entry?.archivedAt === undefined && after?.entry?.archivedAt !== undefined
+                      ? [{ sessionKey, sessionId: after.entry.sessionId }]
+                      : [],
+                  ),
+                  entryRemovals: automatic.flatMap(({ sessionKey, before, after }) =>
+                    before?.entry && !after?.entry ? [{ sessionKey, expectedEntry: before.entry }] : [],
+                  ),
+                  stateDeletePlans: [],
+                },
+              ],
+            );
+          }
+        },
         committed(outcome) {
           const change = outcome.changes.find((value) => value.sessionKey === sessionKey);
           if (!outcome.value || isDeepStrictEqual(change?.before?.entry, change?.after?.entry)) {

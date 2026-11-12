@@ -82,6 +82,13 @@ export function assertMaintenancePreservationCompatible(
         .filter(Boolean);
     }),
   );
+  if (
+    current.deferArchiving &&
+    !sent.deferArchiving &&
+    (!plans || plans.some((plan) => plan.archivedEntries.length > 0))
+  ) {
+    throw new SqliteSessionMutationConflictError("session maintenance");
+  }
   // Lost protection only over-preserves the sent plan, so it cannot invalidate a commit.
   if (added.size === 0) {
     return;

@@ -735,6 +735,7 @@ describe("gateway session utils", () => {
   test("session rows project automation bindings and event fields forward them", () => {
     const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
     registerSessionAutomationSource({
+      getConfig: () => cfg,
       getJobs: () => [{ id: "job1", enabled: true, sessionTarget: "isolated" } as CronJob],
       getDefaultAgentId: () => "main",
     });

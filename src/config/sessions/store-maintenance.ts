@@ -225,6 +225,7 @@ export function pruneStaleEntries(
     log?: boolean;
     onPruned?: (params: { key: string; entry: SessionEntry }) => void;
     onArchived?: (params: { key: string; entry: SessionEntry }) => void;
+    deferArchiving?: boolean;
     preserveKeys?: ReadonlySet<string>;
     preserveRecentMs?: number | null;
   } = {},
@@ -348,6 +349,7 @@ export function archiveStaleDashboardEntries(
     log?: boolean;
     nowMs?: number;
     onArchived?: (params: { key: string; entry: SessionEntry }) => void;
+    deferArchiving?: boolean;
     preserveKeys?: ReadonlySet<string>;
     preserveRecentMs?: number | null;
   } = {},
@@ -431,6 +433,7 @@ function isProtectedSessionMaintenanceEntry(
 type SessionMaintenanceEntryParams = {
   key: string;
   entry: SessionEntry | undefined;
+  deferArchiving?: boolean;
   preserveKeys?: ReadonlySet<string>;
   preserveRecentMs?: number | null;
 };
@@ -456,7 +459,9 @@ export function shouldPreserveMaintenanceEntry(params: SessionMaintenanceEntryPa
   // Ordinary age/count maintenance never deletes an archived session. Disk-budget cleanup has a
   // separate positive eligibility check for rows that this product automatically archived.
   return (
-    params.entry?.archivedAt !== undefined || shouldPreserveNonArchivedMaintenanceEntry(params)
+    params.entry?.archivedAt !== undefined ||
+    (params.deferArchiving === true && !isSyntheticSessionMaintenanceKey(params.key)) ||
+    shouldPreserveNonArchivedMaintenanceEntry(params)
   );
 }
 
@@ -475,6 +480,7 @@ function selectSessionEntryCapVictims(
   maxEntries: number,
   preserveKeys?: ReadonlySet<string>,
   preserveRecentMs?: number | null,
+  deferArchiving?: boolean,
 ): string[] {
   const keys = Object.keys(store).filter((key) => store[key]?.archivedAt === undefined);
   const overflow = keys.length - Math.max(0, maxEntries);
@@ -492,6 +498,7 @@ function selectSessionEntryCapVictims(
         entry: store[key],
         preserveKeys,
         preserveRecentMs,
+        deferArchiving,
       }),
   );
   // Rank the whole eligible roster by its latest activity signal so the sessions untouched for
@@ -520,6 +527,7 @@ export function capEntryCount(
     log?: boolean;
     nowMs?: number;
     onArchived?: (params: { key: string; entry: SessionEntry }) => void;
+    deferArchiving?: boolean;
     onRemoved?: (params: { key: string; entry: SessionEntry }) => void;
     preserveKeys?: ReadonlySet<string>;
     preserveRecentMs?: number | null;
@@ -530,6 +538,7 @@ export function capEntryCount(
     maxEntries,
     opts.preserveKeys,
     opts.preserveRecentMs,
+    opts.deferArchiving,
   );
   if (victims.length === 0) {
     return 0;

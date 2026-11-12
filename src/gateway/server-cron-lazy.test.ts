@@ -4,6 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../test/helpers/promise.js";
 import type { CliDeps } from "../cli/deps.types.js";
+import { prepareSessionMaintenancePreservation } from "../config/sessions/store-maintenance-preserve.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createMockCronStateForJobs } from "../cron/service.test-harness.js";
 import { listPage } from "../cron/service/ops-read.js";
@@ -18,6 +19,7 @@ import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
 import type { GatewayCronState } from "./server-cron.js";
+import { registerSessionAutomationSource } from "./session-automation-index.js";
 
 const hoisted = vi.hoisted(() => {
   let state: unknown;
@@ -37,6 +39,7 @@ const { createLazyGatewayCronState } = await import("./server-cron-lazy.js");
 
 describe("createLazyGatewayCronState", () => {
   const createBroker = useSpawnBrokerTestFixture(afterEach);
+  afterEach(() => registerSessionAutomationSource(null));
   beforeEach(() => {
     vi.unstubAllEnvs();
     hoisted.buildGatewayCronService.mockClear();
@@ -84,6 +87,28 @@ describe("createLazyGatewayCronState", () => {
 
     await expect(lazy.prepareExitWatcherHandoff?.()).resolves.toBeUndefined();
     expect(hoisted.buildGatewayCronService).not.toHaveBeenCalled();
+  });
+
+  it("defers archiving before import and after build failure without poisoning a disabled replacement", async () => {
+    const lazy = createLazyGatewayCronState(createParams());
+    const preservation = await prepareSessionMaintenancePreservation(
+      "/synthetic/agents/main/sessions/sessions.json",
+    );
+    try {
+      expect(preservation.capture().deferArchiving).toBe(true);
+      expect(hoisted.buildGatewayCronService).not.toHaveBeenCalled();
+      hoisted.buildGatewayCronService.mockImplementationOnce(() => {
+        throw new Error("cron construction failed");
+      });
+      await expect(lazy.cron.status()).rejects.toThrow("cron construction failed");
+      expect(preservation.capture().deferArchiving).toBe(true);
+
+      createLazyGatewayCronState(createParams({ cron: { enabled: false } }));
+      lazy.markAutomationUnavailable?.();
+      expect(preservation.capture().deferArchiving).toBeUndefined();
+    } finally {
+      preservation.dispose();
+    }
   });
 
   it("keeps visibility filtering inside the loaded service's page snapshot", async () => {

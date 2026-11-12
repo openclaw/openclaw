@@ -1,4 +1,6 @@
 export type SessionMaintenancePreservationSnapshot = {
+  /** Incomplete provider facts defer automatic archiving only. */
+  deferArchiving?: true;
   providerKeys: string[];
   workIdentities: string[];
   lifecycleIdentities: string[];

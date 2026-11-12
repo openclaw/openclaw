@@ -29,7 +29,11 @@ it("rebuilds only changed automation bindings and preserves complete unrelated r
       );
     }
     const jobs: CronJob[] = [];
-    registerSessionAutomationSource({ getJobs: () => jobs, getDefaultAgentId: () => "main" });
+    registerSessionAutomationSource({
+      getJobs: () => jobs,
+      getDefaultAgentId: () => "main",
+      getConfig: () => cfg,
+    });
     const projection = await createSessionRowProjection({ cfg });
     const snapshot = () =>
       projection
@@ -104,7 +108,11 @@ it("keeps automation aliases scoped to their logical agent in a shared store", a
     }
     const binding = { id: "binding", enabled: true, sessionTarget: "main" } as CronJob;
     const jobs = [binding];
-    registerSessionAutomationSource({ getJobs: () => jobs, getDefaultAgentId: () => "main" });
+    registerSessionAutomationSource({
+      getJobs: () => jobs,
+      getDefaultAgentId: () => "main",
+      getConfig: () => cfg,
+    });
     const projection = await createSessionRowProjection({ cfg });
     try {
       await projection.ensureMaterialized();

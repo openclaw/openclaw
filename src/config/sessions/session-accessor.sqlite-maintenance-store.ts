@@ -185,6 +185,7 @@ export function prepareSessionEntryMaintenanceInDatabase(
       maintenance,
       initialUnarchivedCount: entryCount,
       forceMaintenance: params.forceMaintenance,
+      deferArchiving: readPreservation().deferArchiving === true,
       readPreserveKeys,
       log: false,
       readAgeCandidates: (minimumAgeMs) =>
@@ -202,6 +203,7 @@ export function prepareSessionEntryMaintenanceInDatabase(
             overflow,
             readPreserveKeys,
             preserveRecentMs: maintenance.preserveRecentMs,
+            deferArchiving: readPreservation().deferArchiving === true,
             excludedKeys: new Set([...removalReasons.keys(), ...archivedKeys]),
           });
           durableNoCandidates = candidates.durableNoCandidates;
@@ -310,12 +312,18 @@ export function prepareSessionEntryMaintenanceInDatabase(
           (entry) => (entry.parentSessionKey ? [entry.parentSessionKey] : []),
         );
       }
+      const currentSnapshot = refreshCandidates
+        ? refreshCandidates(selectedKeys)
+        : readPreservation();
       const currentPreserveKeys = resolveSessionMaintenancePreserveKeys({
-        snapshot: refreshCandidates ? refreshCandidates(selectedKeys) : readPreservation(),
+        snapshot: currentSnapshot,
         store: selectedEntries,
         baseKeys: currentBaseKeys,
       });
-      if (selectedKeys.some((key) => currentPreserveKeys.has(normalizeStoreSessionKey(key)))) {
+      if (
+        (currentSnapshot.deferArchiving === true && archivedKeys.size > 0) ||
+        selectedKeys.some((key) => currentPreserveKeys.has(normalizeStoreSessionKey(key)))
+      ) {
         throw new SqliteReclamationInputsChangedError(
           "SQLite maintenance candidates became protected before commit",
         );

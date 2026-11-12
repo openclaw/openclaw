@@ -26,6 +26,8 @@ export function planSessionEntryMaintenance(params: {
   maintenance: EntryMaintenanceConfig;
   initialUnarchivedCount: number;
   forceMaintenance?: boolean;
+  /** Skip archive transitions, retaining disposable cleanup and its counters. */
+  deferArchiving?: boolean;
   readPreserveKeys: () => ReadonlySet<string> | undefined;
   log?: boolean;
   readAgeCandidates: (minimumAgeMs: number | null) => Record<string, SessionEntry>;
@@ -52,6 +54,7 @@ export function planSessionEntryMaintenance(params: {
   const counts = { archived: 0, capArchived: 0, modelRunPruned: 0, pruned: 0, capped: 0 };
   const options = {
     log: params.log,
+    deferArchiving: params.deferArchiving,
     preserveRecentMs: params.maintenance.preserveRecentMs,
   };
   let protectedOptions: (typeof options & { preserveKeys?: ReadonlySet<string> }) | undefined;

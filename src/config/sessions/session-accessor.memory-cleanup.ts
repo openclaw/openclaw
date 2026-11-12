@@ -8,7 +8,10 @@ import { captureSessionActorStorageOwner } from "./session-actor-storage-binding
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import { shouldRemoveSessionEntry } from "./session-entry-lifecycle-removal.js";
 import { planSessionEntryMaintenance } from "./store-maintenance-plan.js";
-import { resolveSessionMaintenancePreserveKeys } from "./store-maintenance-preserve-snapshot.js";
+import {
+  assertMaintenancePreservationCompatible,
+  resolveSessionMaintenancePreserveKeys,
+} from "./store-maintenance-preserve-snapshot.js";
 import { prepareSessionMaintenancePreservation } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
@@ -98,12 +101,13 @@ export function applyMemorySessionEntryCleanup(
         ...resolveMaintenanceConfig(),
         ...params.maintenanceOverride,
       });
-      if (preservation && maintenance.mode !== "warn") {
-        const snapshot = preservation.capture();
+      const snapshot = preservation?.capture();
+      if (snapshot && maintenance.mode !== "warn") {
         planSessionEntryMaintenance({
           maintenance,
           initialUnarchivedCount: countUnarchivedSessionEntries(store),
           forceMaintenance: params.maintenanceOverride !== undefined,
+          deferArchiving: snapshot.deferArchiving === true,
           readPreserveKeys: () =>
             resolveSessionMaintenancePreserveKeys({
               store,
@@ -147,6 +151,31 @@ export function applyMemorySessionEntryCleanup(
               {
                 beforeCommit(receipt) {
                   params.beforeCommitInTransaction?.();
+                  if (snapshot && preservation) {
+                    const automaticRemovals = removals.filter(
+                      ({ sessionKey }) => !explicitKeys.has(sessionKey),
+                    );
+                    assertMaintenancePreservationCompatible(
+                      snapshot,
+                      preservation.refreshCandidates([
+                        ...archives.map(({ sessionKey }) => sessionKey),
+                        ...automaticRemovals.map(({ sessionKey }) => sessionKey),
+                      ]),
+                      [
+                        {
+                          archivedEntries: archives.map(({ sessionKey, entry }) => ({
+                            sessionKey,
+                            sessionId: entry.sessionId,
+                          })),
+                          entryRemovals: automaticRemovals.map(({ sessionKey, expected }) => ({
+                            sessionKey,
+                            expectedEntry: expected,
+                          })),
+                          stateDeletePlans: [],
+                        },
+                      ],
+                    );
+                  }
                   const removed = new Set(receipt.value.removedSessionKeys);
                   settlement = capture(
                     deletedEntries.filter(({ sessionKey }) => removed.has(sessionKey)),
