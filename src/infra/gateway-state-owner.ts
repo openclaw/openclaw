@@ -115,9 +115,24 @@ function hasPhysicalOwnership(owner: ProcessOwner): boolean {
 function verifyOwnerLock(owner: ProcessOwner, lock: StateOwnerFile | undefined): boolean {
   owner.lost.signal.throwIfAborted();
   owner.heartbeat?.inspect();
-  owner.lost.signal.throwIfAborted();
   if (!lock) {
     return false;
+  }
+  const projection = owner.getProjection?.();
+  if (projection && owner.heartbeat && !owner.heartbeat.paths.has(projection.lockPath)) {
+    owner.heartbeat.register(projection);
+  }
+  // Live process custody cannot be reclaimed by a peer. Its worker observes physical loss;
+  // supported release and retirement revoke the local owner immediately.
+  const role = owner.payload.role ?? "gateway";
+  if (
+    owner.kind === "process" &&
+    owner.accepting &&
+    (role === "gateway" || role === "agent-embedded") &&
+    owner.heartbeat
+  ) {
+    owner.heartbeat.assertActive();
+    return true;
   }
   if (!lock.verifyStillHeld()) {
     loseOwner(
@@ -125,10 +140,6 @@ function verifyOwnerLock(owner: ProcessOwner, lock: StateOwnerFile | undefined):
       new Error(`${lock.lockPath}: no longer current; lock removed/replaced; restart the Gateway.`),
     );
     return false;
-  }
-  const projection = owner.getProjection?.();
-  if (projection && owner.heartbeat && !owner.heartbeat.paths.has(projection.lockPath)) {
-    owner.heartbeat.register(projection);
   }
   return true;
 }
@@ -144,6 +155,16 @@ function loseOwner(owner: ProcessOwner, error: Error) {
   void owner.heartbeat?.stop();
   log.error(error.message);
   owner.lost.abort(error);
+}
+
+function observeOwnerLoss(owner: ProcessOwner, error: Error, lockPath?: string) {
+  if (
+    !lockPath ||
+    owner.getProjection?.()?.lockPath === lockPath ||
+    Array.from(owner.locks).some((lock) => lock.lockPath === lockPath)
+  ) {
+    loseOwner(owner, error);
+  }
 }
 
 const readOwnerPaths = resolveGlobalSingleton(
@@ -333,8 +354,8 @@ export function acquireGatewayStateOwner(params: {
   owners.set(owner.key, owner);
   const lease = leaseForFile(pathname, lock, owner);
   try {
-    owner.heartbeat = startGatewayStateOwnerHeartbeat(owner.locks, (error) =>
-      loseOwner(owner, error),
+    owner.heartbeat = startGatewayStateOwnerHeartbeat(owner.locks, (error, lockPath) =>
+      observeOwnerLoss(owner, error, lockPath),
     );
     lease.assertCurrent();
   } catch (error) {
@@ -460,8 +481,9 @@ export function acquireStateDatabaseSchemaLease(
   }
   const lease = leaseForFile(pathname, lock, owner, projection);
   try {
-    const heartbeat = (owner.heartbeat ??= startGatewayStateOwnerHeartbeat(owner.locks, (error) =>
-      loseOwner(owner, error),
+    const heartbeat = (owner.heartbeat ??= startGatewayStateOwnerHeartbeat(
+      owner.locks,
+      (error, lockPath) => observeOwnerLoss(owner, error, lockPath),
     ));
     lease.assertCurrent();
     heartbeat.register(projection);
@@ -515,12 +537,7 @@ export function captureGatewayStateOwner(databasePath: string) {
       process.platform === "win32"
         ? normalizeWindowsPathForComparison(canonicalPath)
         : canonicalPath;
-    if (
-      owners.get(key) !== owner ||
-      !owner.accepting ||
-      currentKey !== key ||
-      (owner.getProjection && !owner.getProjection()?.verifyStillHeld())
-    ) {
+    if (owners.get(key) !== owner || !owner.accepting || currentKey !== key) {
       throw new GatewayStateOwnerContentionError(databasePath);
     }
     assertStateDatabaseAccessAtOwnerPath(databasePath, identity, undefined);
@@ -530,6 +547,8 @@ export function captureGatewayStateOwner(databasePath: string) {
     ownerId: owner.payload.ownerId,
     role: owner.payload.role ?? "gateway",
     assertCurrent,
+    // Async preparation is for retained native handles bound to this canonical target.
+    prepareAccess: createStateDatabaseAccess(identity).prepareAccess,
     signal: owner.lost.signal,
   };
 }
@@ -560,7 +579,6 @@ function assertStateDatabaseReadAtOwnerPath(
   if (cached?.accepting) {
     return;
   }
-  readOwnerPaths.delete(key);
   const identity = prepared ?? resolveStateOwnerIdentity(databasePath);
   const owner = owners.get(identity.key);
   const role = owner?.payload.role ?? "gateway";
@@ -574,10 +592,7 @@ function assertStateDatabaseReadAtOwnerPath(
     assertStateDatabaseAccessAtOwnerPath(databasePath, identity, captured);
     return;
   }
-  if (
-    !hasPhysicalOwnership(owner) ||
-    (owner.getProjection && !owner.getProjection()?.verifyStillHeld())
-  ) {
+  if (!hasPhysicalOwnership(owner)) {
     // A recorded loss already names the lock and the restart step; rethrow it unwrapped.
     owner.lost.signal.throwIfAborted();
     throw new Error(
@@ -604,26 +619,27 @@ export function assertStateDatabaseAccessAllowed(
 
 /** Retained handles keep their admitted paths; reopening captures a fresh identity. */
 export async function captureStateDatabaseAccess(databasePath: string) {
-  const identity = await resolveStateOwnerIdentityAsync(databasePath);
+  return createStateDatabaseAccess(await resolveStateOwnerIdentityAsync(databasePath));
+}
+function createStateDatabaseAccess(identity: ReturnType<typeof resolveStateOwnerIdentity>) {
   const { canonicalPath } = identity;
-  const registered = owners.get(identity.key);
+  const owner = owners.get(identity.key);
   return {
     canonicalPath,
     processOwner:
-      registered?.kind === "process"
+      owner?.kind === "process"
         ? {
-            role: registered.payload.role ?? "gateway",
-            signal: registered.lost.signal,
+            role: owner.payload.role ?? "gateway",
+            signal: owner.lost.signal,
             assertCurrent() {
-              registered.lost.signal.throwIfAborted();
-              if (!registered.accepting || owners.get(identity.key) !== registered) {
+              owner.lost.signal.throwIfAborted();
+              if (!owner.accepting || owners.get(identity.key) !== owner) {
                 throw createGatewayStateProcessOwnerRetiredError();
               }
             },
           }
         : undefined,
-    async prepareAccess(captured?: Parameters<typeof assertStateDatabaseAccessAllowed>[1]) {
-      const owner = owners.get(identity.key);
+    prepareAccess: async (captured?: Parameters<typeof assertStateDatabaseAccessAllowed>[1]) => {
       const role = owner?.payload.role ?? "gateway";
       if (
         !owner ||
@@ -666,17 +682,18 @@ export async function captureStateDatabaseAccess(databasePath: string) {
       if (projection) {
         paths.push(projection.lockPath);
       }
-      const current = await heartbeat.verify(paths);
+      const current = await heartbeat.verify(paths).catch((error: unknown) => {
+        owner.lost.signal.throwIfAborted();
+        throw error;
+      });
       // A fresh physical observation belongs only to this request and owner generation.
       assertCurrent();
       if (!current) {
-        loseOwner(
-          owner,
-          new Error(
-            `${root.lockPath}: no longer current; lock removed/replaced; restart the Gateway.`,
-          ),
+        const error = new Error(
+          `${root.lockPath}: no longer current; lock removed/replaced; restart the Gateway.`,
         );
-        owner.lost.signal.throwIfAborted();
+        loseOwner(owner, error);
+        throw error;
       }
       // Read admission consumes this verified custody without another host filesystem probe.
       readOwnerPaths.set(path.resolve(canonicalPath), owner);
