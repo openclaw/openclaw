@@ -135,6 +135,17 @@ describe("ClawHub publication status", () => {
     ).toThrow("must not be after the observation time");
   });
 
+  it("accepts ISO-8601 timestamps with sub-millisecond precision", () => {
+    expect(
+      parseClawHubPublicationStatusArgs([
+        "--version",
+        version,
+        "--last-progress-at",
+        "2026-11-04T04:37:00.123456789Z",
+      ]).lastProgressAt,
+    ).toBe("2026-11-04T04:37:00.123Z");
+  });
+
   it("parses a selected read-only observation with the default threshold", () => {
     expect(
       parseClawHubPublicationStatusArgs([

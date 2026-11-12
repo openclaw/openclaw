@@ -310,7 +310,9 @@ The public stages have these operational meanings:
 - `published`: the version is publicly final.
 - `failed`: the attempt is terminal. Its public `recoverable` flag is advisory;
   the recovery owner revalidates it.
-- `absent`: only this authoritative state permits a new publication candidate.
+- `absent`: only an explicit publication-state response is authoritative enough
+  to permit a new publication candidate. The status command refuses the legacy
+  version-route fallback rather than reporting a version 404 as absence.
 
 The normal child accepts an active or successful exact publish parent and seals
 transactions to that parent and attempt. Once sealed, later parent work does not

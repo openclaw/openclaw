@@ -45,7 +45,7 @@ function parsePositiveMinutes(value: string): number {
 
 function parseTimestamp(value: string, flag: string): string {
   const match =
-    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,3})?(?:Z|([+-])(\d{2}):(\d{2}))$/u.exec(
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(?:Z|([+-])(\d{2}):(\d{2}))$/u.exec(
       value,
     );
   const year = Number(match?.[1]);
@@ -54,8 +54,8 @@ function parseTimestamp(value: string, flag: string): string {
   const hour = Number(match?.[4]);
   const minute = Number(match?.[5]);
   const second = Number(match?.[6]);
-  const offsetHour = Number(match?.[8]);
-  const offsetMinute = Number(match?.[9]);
+  const offsetHour = Number(match?.[9]);
+  const offsetMinute = Number(match?.[10]);
   const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
   const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
   const validFields =
@@ -67,8 +67,12 @@ function parseTimestamp(value: string, flag: string): string {
     hour <= 23 &&
     minute <= 59 &&
     second <= 59 &&
-    (match[7] === undefined || (offsetHour <= 23 && offsetMinute <= 59));
-  const timestamp = validFields ? Date.parse(value) : Number.NaN;
+    (match[8] === undefined || (offsetHour <= 23 && offsetMinute <= 59));
+  const normalizedValue =
+    match === null || match[7] === undefined
+      ? value
+      : value.replace("." + match[7], "." + match[7].slice(0, 3).padEnd(3, "0"));
+  const timestamp = validFields ? Date.parse(normalizedValue) : Number.NaN;
   if (!Number.isFinite(timestamp)) {
     throw new Error(`${flag} must be an ISO-8601 timestamp.`);
   }
@@ -260,7 +264,10 @@ export async function collectClawHubPublicationStatus(
     );
   }
 
-  const readPublication = options.readPublication ?? readClawHubPublication;
+  const readPublication =
+    options.readPublication ??
+    ((name: string, version: string) =>
+      readClawHubPublication(name, version, { allowLegacyVersionFallback: false }));
   const tasks = names.map((name) => async () => ({
     name,
     publication: await readPublication(name, args.version),
