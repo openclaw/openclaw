@@ -1,0 +1,489 @@
+/**
+ * Real managed/private template owners under seven first-parent main advances.
+ * See workspace-template-morning-measure.md for timing and acceptance boundaries.
+ */
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import { loadavg } from "node:os";
+import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
+import { parseArgs } from "node:util";
+import { getHeapStatistics } from "node:v8";
+import type { ManagedWorktreeRecord } from "../../src/agents/worktrees/types.js";
+import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
+import type { GatewaySchedulerClock } from "../../src/infra/gateway-scheduler.js";
+import {
+  morningSessionMaintenance,
+  verifyMorningAgentSeed,
+} from "./workspace-template-agent-seed.js";
+import {
+  cleanupMorningWorktrees,
+  verifyMorningWorktreeCleanup,
+} from "./workspace-template-morning-cleanup.js";
+
+const { values } = parseArgs({
+  options: {
+    fixture: { type: "string" },
+    output: { type: "string" },
+    image: { type: "string" },
+    "state-dir": { type: "string" },
+    prewarm: { type: "boolean" },
+  },
+});
+assert(values.fixture && values.output && values.image, "--fixture, --output and --image required");
+assert(
+  values["state-dir"],
+  "--state-dir must be the campaign's original writable synthetic agent state",
+);
+const output = path.resolve(values.output);
+await fs.mkdir(output);
+const repo = path.join(output, "source");
+const origin = path.join(output, "origin.git");
+const command = (cwd: string, ...args: string[]) =>
+  execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
+for (const key of Object.keys(process.env)) {
+  if (key.toUpperCase().startsWith("GIT_")) {
+    delete process.env[key];
+  }
+}
+Object.assign(process.env, {
+  OPENCLAW_STATE_DIR: path.resolve(values["state-dir"]),
+  OPENCLAW_HOME: output,
+  TMPDIR: path.join(output, "tmp"),
+  XDG_CONFIG_HOME: path.join(output, "config"),
+  GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_CONFIG_SYSTEM: "/dev/null",
+  GIT_CONFIG_NOSYSTEM: "1",
+});
+await fs.mkdir(process.env.TMPDIR!, { recursive: true });
+const agentSeedBefore = verifyMorningAgentSeed(process.env.OPENCLAW_STATE_DIR!);
+assert(
+  agentSeedBefore.fullScale,
+  "Morning replay requires the allocated 35 GiB / 10k-session seed",
+);
+const { readSqliteCleanCloseSeal } = await import("../../src/infra/sqlite-clean-close-seal.js");
+const sealBefore = readSqliteCleanCloseSeal(
+  agentSeedBefore.databasePath,
+  await fs.stat(agentSeedBefore.databasePath, { bigint: true }),
+);
+assert(sealBefore, "Warm morning replay requires the preceding owner's genuine clean-close seal");
+// Borrow only immutable synthetic objects. Every ref and checkout below is task-owned.
+command(output, "clone", "--quiet", "--bare", path.resolve(values.fixture), origin);
+command(origin, "update-ref", "refs/heads/main", "refs/tags/fixture-base");
+command(origin, "symbolic-ref", "HEAD", "refs/heads/main");
+command(output, "clone", "--quiet", "--no-hardlinks", origin, repo);
+command(repo, "config", "user.name", "Synthetic Fixture");
+command(repo, "config", "user.email", "fixture@example.invalid");
+command(repo, "config", "gc.auto", "0");
+const commits = [command(repo, "rev-parse", "HEAD")];
+for (let index = 1; index <= 7; index++) {
+  await fs.writeFile(path.join(repo, "source.txt"), `morning-${index}\n`);
+  await fs.writeFile(
+    path.join(repo, "vendor/dependency/index.js"),
+    `module.exports = 'morning-${index}';\n`,
+  );
+  command(repo, "commit", "-qam", `synthetic main advance ${index}`);
+  commits.push(command(repo, "rev-parse", "HEAD"));
+}
+command(repo, "push", "--quiet", "origin", "main:refs/heads/fixture-series");
+command(repo, "checkout", "--quiet", "--detach", commits[0]!);
+const shape = command(repo, "ls-tree", "-r", "--format=%(objectsize)", commits[0]!, "--", "src")
+  .split("\n")
+  .map(Number);
+assert.equal(shape.length, 62_000, "Use the existing full-sized synthetic fixture");
+assert.equal(
+  shape.reduce((bytes, size) => bytes + size, 0),
+  1_100_004_000,
+);
+
+const { setRuntimeConfigSnapshot } = await import("../../src/config/runtime-snapshot.js");
+const config: OpenClawConfig = {
+  session: { maintenance: morningSessionMaintenance },
+  worktreeRoot: path.join(output, "managed"),
+  agents: {
+    defaults: {
+      workspace: repo,
+      sandbox: {
+        mode: "all",
+        backend: "docker",
+        docker: { image: values.image, network: "none" },
+      },
+    },
+  },
+  logging: { level: "info", consoleLevel: "warn", file: path.join(output, "runtime.log") },
+};
+setRuntimeConfigSnapshot(config, config);
+const { resolveSandboxConfigForAgent } = await import("../../src/agents/sandbox/config.js");
+const { ManagedWorktreeService } = await import("../../src/agents/worktrees/service.js");
+const { resolveWorktreeBase } = await import("../../src/agents/worktrees/base-ref.js");
+const { prepareLocalSandboxWorkspace } =
+  await import("../../src/agents/sandbox/local-workspace.js");
+const { replaceSessionEntry } =
+  await import("../../src/config/sessions/session-accessor.sqlite-entry.js");
+const { withWorktreePreparationTiming } =
+  await import("../../src/agents/worktrees/preparation-timing.js");
+const { withDiagnosticsTimelineObserver } = await import("../../src/infra/diagnostics-timeline.js");
+const { onTrustedInternalDiagnosticEvent, setDiagnosticsEnabledForProcess } =
+  await import("../../src/infra/diagnostic-events.js");
+const { listTemplatesAsync } =
+  await import("../../src/agents/worktrees/template-registry-async.js");
+const { closeOpenClawStateDatabaseAsync } = await import("../../src/state/openclaw-state-db.js");
+const { closeOpenClawAgentDatabasesAsync } = await import("../../src/state/openclaw-agent-db.js");
+const { readSqliteDatabaseIntegrityVerification } =
+  await import("../../src/infra/sqlite-database-admission.js");
+const { drainGlobalSingletonLifecycleState } = await import("../../src/shared/global-singleton.js");
+const { nativeWorktreeFilesystem } =
+  await import("../../src/agents/worktrees/filesystem-native.js");
+const { GatewayScheduler } = await import("../../src/infra/gateway-scheduler.js");
+const service = new ManagedWorktreeService({ getConfig: () => config });
+const sandbox = resolveSandboxConfigForAgent(config, "fixture");
+const signal = new AbortController().signal;
+const clockOrigin = performance.now();
+const clockNow = () => performance.now() - clockOrigin;
+const running = new Set<Promise<void>>();
+const errors: string[] = [];
+const clock: GatewaySchedulerClock = {
+  now: clockNow,
+  monotonicNow: clockNow,
+  arm(run, delayMs) {
+    const timer = setTimeout(() => {
+      const pending = Promise.resolve()
+        .then(run)
+        .catch((error: unknown) => {
+          errors.push(String(error));
+        })
+        .finally(() => running.delete(pending));
+      running.add(pending);
+    }, delayMs);
+    timer.unref();
+    return () => clearTimeout(timer);
+  },
+};
+const scheduler = new GatewayScheduler({ clock });
+const advance = async (at: number) => {
+  await delay(Math.max(0, at - clockNow()));
+};
+const prewarm = values.prewarm
+  ? (await import("../../src/gateway/workspace-template-prewarm.js")).startWorkspaceTemplatePrewarm(
+      {
+        scheduler: scheduler.scope(),
+        getConfig: () => config,
+        onError: (message) => errors.push(message),
+      },
+    )
+  : undefined;
+const resources = () => ({
+  process: process.cpuUsage(),
+  thread: process.threadCpuUsage(),
+  allocated: getHeapStatistics().total_allocated_bytes,
+});
+assert(Number.isFinite(resources().allocated), "Node must expose exact V8 allocation counters");
+const used = (before: ReturnType<typeof resources>) => ({
+  processCpuMs: Object.values(process.cpuUsage(before.process)).reduce((a, b) => a + b) / 1000,
+  mainThreadCpuMs:
+    Object.values(process.threadCpuUsage(before.thread)).reduce((a, b) => a + b) / 1000,
+  mainThreadAllocatedBytes: getHeapStatistics().total_allocated_bytes - before.allocated,
+});
+const rows: object[] = [];
+const events: object[] = [];
+setDiagnosticsEnabledForProcess(true);
+const unsubscribe = onTrustedInternalDiagnosticEvent((event) => {
+  if (event.type === "diagnostic.phase.completed" && event.name === "worktree.preparation") {
+    events.push({ logicalAt: clockNow(), ...event });
+  }
+});
+const campaignStart = performance.now();
+const worktrees: ManagedWorktreeRecord[] = [];
+const sessions: Array<{ sessionKey: string; sessionId: string }> = [];
+async function request(label: string, commit: string, guest = true, discover = false) {
+  const sessionKey = `agent:fixture:morning-${path.basename(output)}-${label}`;
+  const phases: Record<string, number> = {};
+  const before = resources();
+  const started = performance.now();
+  const logicalAt = clockNow();
+  const backgroundActiveAtArrival = running.size > 0;
+  let destination = "";
+  await withDiagnosticsTimelineObserver(
+    (name, _attributes, duration) => {
+      if (duration !== undefined) {
+        phases[name] = (phases[name] ?? 0) + duration;
+        return undefined;
+      }
+      const at = performance.now();
+      return () => {
+        phases[name] = (phases[name] ?? 0) + performance.now() - at;
+      };
+    },
+    async () => {
+      const worktree = await service.create({
+        repoRoot: repo,
+        ...(discover ? {} : { baseRef: commit, checkoutCommit: commit }),
+        ownerKind: "session",
+        ownerId: sessionKey,
+        name: label,
+        runSetupScript: false,
+        provisionIgnoredFiles: false,
+      });
+      worktrees.push(worktree);
+      destination = worktree.path;
+      if (guest) {
+        const { id, branch, repoRoot } = worktree;
+        const sessionId = randomUUID();
+        sessions.push({ sessionKey, sessionId });
+        await replaceSessionEntry(
+          { agentId: "fixture", sessionKey },
+          { sessionId, updatedAt: Date.now(), worktree: { id, branch, repoRoot } },
+        );
+        destination = await withWorktreePreparationTiming("sandbox", async () => {
+          using projection = await prepareLocalSandboxWorkspace({
+            cfg: config,
+            agentId: "fixture",
+            sessionKey,
+            workspaceDir: worktree.path,
+            sandbox,
+            signal,
+          });
+          assert(projection, "Synthetic session must resolve its managed workspace owner");
+          return projection.workspaceDir;
+        });
+      }
+    },
+  );
+  rows.push({
+    label,
+    commit,
+    guest,
+    discover,
+    logicalAt,
+    backgroundActiveAtArrival,
+    actualAtMs: started - campaignStart,
+    elapsedMs: performance.now() - started,
+    ...used(before),
+    phases,
+    load: loadavg(),
+  });
+  assert.equal(command(destination, "rev-parse", "HEAD"), commit);
+  assert.equal(command(destination, "status", "--porcelain"), "");
+  const source = await fs.readFile(path.join(destination, "source.txt"), "utf8");
+  assert.equal(source, `${command(repo, "show", `${commit}:source.txt`)}\n`);
+  if (guest) {
+    assert.equal(
+      await fs.readFile(path.join(destination, "node_modules/source-derived.txt"), "utf8"),
+      source,
+    );
+    assert.equal(
+      await fs.readFile(path.join(destination, "node_modules/fixture-dependency/index.js"), "utf8"),
+      `${command(repo, "show", `${commit}:vendor/dependency/index.js`)}\n`,
+    );
+  }
+  console.log(JSON.stringify({ completed: label, actualAtMs: performance.now() - campaignStart }));
+}
+let lastRefreshAt = -Infinity;
+async function observe(index: number) {
+  // Preserve the base owner's real freshness contract even if a request runs late.
+  await delay(Math.max(0, 30_100 - (Date.now() - lastRefreshAt)));
+  if (index === 0) {
+    const base = await resolveWorktreeBase(repo);
+    assert.equal(base.commit, commits[index]);
+    assert.equal(base.fetchSucceeded, true);
+  } else {
+    // Default-base refresh is demand-driven. Charge its first template miss to this user.
+    await request(`discover-${index}`, commits[index]!, false, true);
+  }
+  lastRefreshAt = Date.now();
+}
+let replayOrigin = 0;
+let admittedVerificationAt: number | undefined;
+let templates: Awaited<ReturnType<typeof listTemplatesAsync>> | undefined;
+const settlePrewarm = async () => {
+  const budgetMs = 5 * 60_000;
+  const before = resources();
+  const started = performance.now();
+  const deadline = started + budgetMs;
+  const initialNextWakeAtMs = scheduler.nextWakeAtMs;
+  const initialRunning = running.size;
+  let complete = false;
+  try {
+    while (scheduler.nextWakeAtMs !== null || running.size) {
+      const remainingMs = deadline - performance.now();
+      assert(remainingMs > 0, "Live template maintenance did not settle within five real minutes");
+      const wait = new AbortController();
+      try {
+        await Promise.race([
+          ...(running.size ? [Promise.all(running)] : []),
+          delay(
+            running.size
+              ? remainingMs
+              : Math.max(1, Math.min(remainingMs, scheduler.nextWakeAtMs! - clockNow())),
+            undefined,
+            { signal: wait.signal },
+          ),
+        ]);
+      } finally {
+        wait.abort();
+      }
+    }
+    assert(
+      performance.now() <= deadline,
+      "Live template maintenance exceeded its settlement limit",
+    );
+    complete = true;
+  } finally {
+    rows.push({
+      label: "settlement",
+      budgetMs,
+      elapsedMs: performance.now() - started,
+      ...used(before),
+      initialNextWakeAtMs,
+      initialRunning,
+      nextWakeAtMs: scheduler.nextWakeAtMs,
+      running: running.size,
+      complete,
+    });
+  }
+};
+try {
+  await request("seed", commits[0]!);
+  admittedVerificationAt = readSqliteDatabaseIntegrityVerification(
+    agentSeedBefore.databasePath,
+  )?.verifiedAt;
+  assert.equal(
+    admittedVerificationAt,
+    sealBefore.verifiedAt,
+    "Normal agent admission must reuse the genuine prior verification",
+  );
+  await observe(0);
+  await delay(0);
+  events.length = 0;
+  replayOrigin = clockNow();
+  const before = resources();
+  const started = performance.now();
+  for (const [index, at] of [
+    0, 300_000, 600_000, 605_000, 610_000, 1_200_000, 1_800_000,
+  ].entries()) {
+    const generation = index + 1;
+    await advance(replayOrigin + at);
+    command(origin, "update-ref", "refs/heads/main", commits[generation]!);
+    rows.push({
+      label: `push-${generation}`,
+      nominalAt: at,
+      logicalAt: clockNow(),
+      actualAtMs: performance.now() - campaignStart,
+    });
+    if (generation === 3 || generation === 4) {
+      await delay(5_000);
+      continue;
+    }
+    await observe(generation);
+    if (generation === 6) {
+      // Both variants use the same nominal arrival; retain late arrivals and actual overlap.
+      await advance(replayOrigin + at + 31_000);
+      await request("during-prewarm-older", commits[5]!);
+    }
+    await advance(replayOrigin + at + 90_000);
+    const waveBefore = resources();
+    const waveStart = performance.now();
+    const wave = await Promise.allSettled([
+      request(`head-${generation}-guest`, commits[generation]!),
+      request(`head-${generation}-managed`, commits[generation]!, false),
+      ...(generation === 5 ? [request("head-5-waiter", commits[generation]!)] : []),
+    ]);
+    // Settle siblings before owner teardown, including when one request fails.
+    for (const result of wave) {
+      if (result.status === "rejected") {
+        throw result.reason;
+      }
+    }
+    rows.push({
+      label: `wave-${generation}`,
+      elapsedMs: performance.now() - waveStart,
+      ...used(waveBefore),
+    });
+    if (generation === 2) {
+      await advance(replayOrigin + at + 120_000);
+      await request("recent-older", commits[1]!);
+    }
+    await advance(replayOrigin + at + 120_000);
+  }
+  assert.equal(sessions.length, 9);
+  assert.equal(worktrees.length, 19);
+  rows.push({ label: "campaign", elapsedMs: performance.now() - started, ...used(before) });
+  await settlePrewarm();
+  // Inspect retention before stop can cancel pending maintenance.
+  templates = await listTemplatesAsync(process.env);
+} finally {
+  prewarm?.stop();
+  await scheduler.stop();
+  unsubscribe();
+  try {
+    await fs.writeFile(
+      path.join(output, "results.json"),
+      JSON.stringify(
+        {
+          sourceHead: command(process.cwd(), "rev-parse", "HEAD"),
+          prewarm: Boolean(values.prewarm),
+          timingMode: "real-clock",
+          node: process.version,
+          replayOrigin,
+          files: shape.length,
+          payloadBytes: 1_100_004_000,
+          agentSeedBefore,
+          admission: {
+            priorVerificationAt: sealBefore.verifiedAt,
+            admittedVerificationAt,
+            reused: admittedVerificationAt === sealBefore.verifiedAt,
+          },
+          sessionMaintenance: morningSessionMaintenance,
+          commits,
+          rows,
+          events,
+          errors,
+          templateSnapshotWhileLive: templates !== undefined,
+          templates: templates ?? (await listTemplatesAsync(process.env)),
+        },
+        null,
+        2,
+      ),
+    );
+    const cleanup = await cleanupMorningWorktrees({ service, worktrees, sessions });
+    await fs.writeFile(path.join(output, "cleanup.json"), JSON.stringify(cleanup, null, 2) + "\n");
+  } finally {
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
+    await drainGlobalSingletonLifecycleState();
+  }
+  const cleanupAfter = await verifyMorningWorktreeCleanup(process.env.OPENCLAW_STATE_DIR!);
+  await fs.writeFile(
+    path.join(output, "cleanup-after.json"),
+    JSON.stringify(cleanupAfter, null, 2) + "\n",
+  );
+  const agentSeedAfter = verifyMorningAgentSeed(
+    process.env.OPENCLAW_STATE_DIR!,
+    agentSeedBefore.sessions - agentSeedBefore.seededSessions + sessions.length,
+  );
+  assert(
+    readSqliteCleanCloseSeal(
+      agentSeedAfter.databasePath,
+      await fs.stat(agentSeedAfter.databasePath, { bigint: true }),
+    ),
+    "Normal owner close must publish a valid seal for the next arm",
+  );
+  await fs.writeFile(
+    path.join(output, "agent-state-after.json"),
+    JSON.stringify({ ...agentSeedAfter, cleanCloseSeal: true }, null, 2) + "\n",
+  );
+  for (const directory of ["managed", "state", "source", "origin.git", "tmp", "config"]) {
+    const target = path.join(output, directory);
+    if (
+      await fs.stat(target).then(
+        () => true,
+        () => false,
+      )
+    ) {
+      await nativeWorktreeFilesystem.remove(target, { commitGuard: () => {} });
+    }
+  }
+}
+assert.deepEqual(errors, [], "Background prewarm errors must be investigated");

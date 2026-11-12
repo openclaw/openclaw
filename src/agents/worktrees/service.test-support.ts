@@ -183,7 +183,6 @@ export async function ageManagedWorktreeTemplates(
         id: template.id,
         key,
         owner: { pid: process.pid, host: hostname(), startedAt: null },
-        unpublish: true,
       } satisfies Parameters<typeof retainTemplateReaderAsync>[1];
       assert(await retainTemplateReaderAsync(env, reader, guard.commitGuard));
       try {

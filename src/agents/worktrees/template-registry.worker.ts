@@ -264,19 +264,10 @@ export const worktreeTemplateOperations = {
           : k
               .selectFrom("worktree_templates")
               .selectAll()
-              .where(
-                "cache_key",
-                "in",
-                input.selection.backend.startsWith("sandbox-")
-                  ? [
-                      input.selection.cacheKey,
-                      retainedWorktreeTemplateKey(
-                        input.selection.cacheKey,
-                        input.selection.contentKey,
-                      ),
-                    ]
-                  : [input.selection.cacheKey],
-              )
+              .where("cache_key", "in", [
+                input.selection.cacheKey,
+                retainedWorktreeTemplateKey(input.selection.cacheKey, input.selection.contentKey),
+              ])
               .where("content_key", "=", input.selection.contentKey)
               .where("backend", "=", input.selection.backend)
               .where("status", "=", "ready"),
@@ -299,6 +290,7 @@ export const worktreeTemplateOperations = {
           k
             .updateTable("worktree_templates")
             .set({
+              cache_key: `retired:${row.id}`,
               status: "preparing",
             })
             .where("id", "=", row.id),

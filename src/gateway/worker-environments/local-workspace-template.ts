@@ -16,6 +16,7 @@ import { hasWorktreeUnknownOutcome } from "../../agents/worktrees/errors.js";
 import { detectWorktreeFilesystemBackend } from "../../agents/worktrees/filesystem-backend.js";
 import { requireGit, runGit } from "../../agents/worktrees/git.js";
 import { timeWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
+import { notifyWorktreeTemplateActivity } from "../../agents/worktrees/run-end-lifecycle.js";
 import { prepareWorktreeTemplate } from "../../agents/worktrees/template-cache.js";
 import {
   readTemplateManifest,
@@ -141,6 +142,7 @@ type LocalWorkspaceTemplateParams = {
   env: NodeJS.ProcessEnv;
   sandbox: SandboxConfig;
   buildCacheInputs?: string[];
+  background?: boolean;
   guard: Pick<WorktreeAllocationGuard, "commitGuard" | "rollbackGuard" | "requireDiskSpace"> & {
     signal: AbortSignal;
   };
@@ -307,6 +309,7 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
     worktreeRoot: params.templateRoot,
     sourceCommit: params.baseCommit,
     backend: `sandbox-${backend.id}`,
+    background: params.background,
     requireSpace: () =>
       guard.requireDiskSpace(
         [{ path: params.templateRoot, bytes: WORKTREE_SETUP_HEADROOM_BYTES }],
@@ -365,6 +368,16 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
   if (!record) {
     return undefined;
   }
+  const { release: _release, ...template } = record;
+  notifyWorktreeTemplateActivity(params.env, {
+    type: "used",
+    recipe: {
+      kind: "sandbox",
+      template,
+      sandbox: params.sandbox,
+      buildCacheInputs,
+    },
+  });
   try {
     if (!manifest) {
       await prepareManifest(record, guard);

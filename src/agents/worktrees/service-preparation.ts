@@ -48,6 +48,7 @@ import {
   type ResolvedRepository,
 } from "./repository-paths.js";
 import {
+  beginWorktreePreparation,
   captureWorktreeRunEndContext,
   prepareWorktreeSourcePaths,
   withWorktreeRunEnd,
@@ -71,13 +72,13 @@ export type RepositoryCreationParams = CreateManagedWorktreeParams &
 export async function prepareWorktreeRepository(
   params: Pick<CreateManagedWorktreeParams, "repoRoot" | "signal">,
   env: NodeJS.ProcessEnv,
-): Promise<ResolvedRepository> {
+): Promise<ResolvedRepository & { env: NodeJS.ProcessEnv }> {
   params.signal?.throwIfAborted();
   const repository = await resolveRepository(params.repoRoot);
   const { warnIfProjectCloneShallow } =
     await import("../../projects/project-clone-preparation.runtime.js");
   await warnIfProjectCloneShallow(repository.repoRoot, { env, commonDir: repository.commonDir });
-  return repository;
+  return { ...repository, env };
 }
 
 export async function readWorktreeGitInventory(repoRoot: string, suppliedName?: string) {
@@ -131,6 +132,7 @@ export async function createWithWorktreeAllocation(
   ) => Promise<ManagedWorktreeCreationOutcome>,
   rollbackPublished: (record: ManagedWorktreeRecord) => Promise<void>,
 ): Promise<ManagedWorktreeCreationOutcome> {
+  using _ = beginWorktreePreparation(input.env);
   const params = {
     ...input,
     waitBudget: input.waitBudget ?? { remainingMs: WORKTREE_CREATE_LEASE_WAIT_MS },

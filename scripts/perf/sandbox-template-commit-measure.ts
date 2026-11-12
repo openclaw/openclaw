@@ -249,7 +249,7 @@ const sandbox = resolveSandboxConfigForAgent({
     defaults: {
       sandbox: {
         backend: "docker",
-        docker: { image: values.image, user: "0:0", network: values.registry ? "bridge" : "none" },
+        docker: { image: values.image, network: values.registry ? "bridge" : "none" },
       },
     },
   },

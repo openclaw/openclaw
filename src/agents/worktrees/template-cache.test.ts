@@ -165,7 +165,6 @@ it.each(["cold", "idle"])("shares %s preparation and reader custody", async (sta
     await idle();
   }
   const { entered, finish, prepare: build, validate } = preparationGate();
-  const mutate = vi.spyOn(allocation, "withWorktreeMutationLease");
   const first = prepare({ prepare: build, validate });
   await entered;
   const attempted = observeReaderAttempt();
@@ -176,7 +175,6 @@ it.each(["cold", "idle"])("shares %s preparation and reader custody", async (sta
   expect(left).toMatchObject({ id: right?.id, status: "ready" });
   expect(right).toMatchObject({ status: "ready" });
   expect(build).toHaveBeenCalledTimes(state === "cold" ? 1 : 0);
-  expect(mutate).toHaveBeenCalledTimes(1);
   assert(left && right, "Both callers must acquire the prepared template");
   const warm = await allocation.withWorktreeMutationLease(
     { env, ...options, id: `template:${params.cacheKey}` },
@@ -187,7 +185,10 @@ it.each(["cold", "idle"])("shares %s preparation and reader custody", async (sta
   await warm?.release();
   await collect();
   expect(await source(left)).toBe("source");
-  expect(await prepare({ contentKey: "commit-2" })).toBeUndefined();
+  const other = await prepare({ contentKey: "commit-2" });
+  assert(other, "Reader-held generations must not block another commit");
+  expect(other.id).not.toBe(left.id);
+  await other.release();
   await left.release();
   await collect();
   expect(await list()).toHaveLength(1);
@@ -206,6 +207,94 @@ it.each(["cold", "idle"])("shares %s preparation and reader custody", async (sta
   await collect();
   expect(await list()).toEqual([]);
   await expect(fs.access(left.path)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it("prepares another commit without waiting for an in-flight native refresh", async () => {
+  const original = await idle();
+  const { entered, finish, block } = preparationGate();
+  const refresh = block(async (existing: { path: string }, staged: { path: string }) => {
+    await fs.cp(existing.path, staged.path, { recursive: true });
+    return true;
+  });
+  const first = prepare({ contentKey: "commit-2", sourceCommit: "b".repeat(40), refresh });
+  await entered;
+  try {
+    const foreground = await prepare({
+      contentKey: "commit-3",
+      sourceCommit: "c".repeat(40),
+      options: { ...options, waitBudget: { remainingMs: 0 } },
+    });
+    assert(foreground, "A different commit must not wait behind native work");
+    expect(await source(foreground)).toBe("source");
+    expect(await source(original!)).toBe("source");
+    await foreground.release();
+  } finally {
+    finish();
+    await (await first)?.release();
+    await original?.release();
+  }
+});
+
+it("refreshes and collects after matching retained retirement is interrupted", async () => {
+  const original = await idle();
+  const current = await prepare({ contentKey: "commit-2", sourceCommit: "b".repeat(40) });
+  assert(original && current);
+  await current.release();
+  const controller = new AbortController();
+  const interrupted = new Error("retirement canceled before native removal");
+  const remove = nativeWorktreeFilesystem.remove;
+  const removal = vi
+    .spyOn(nativeWorktreeFilesystem, "remove")
+    .mockImplementationOnce((directory, guard) => {
+      expect(directory).toBe(original.path);
+      controller.abort(interrupted);
+      return remove(directory, guard);
+    });
+  await expect(
+    collectWorktreeTemplates(env, 0, {
+      ...options,
+      signal: controller.signal,
+      supersededBy: current,
+    }),
+  ).rejects.toBe(interrupted);
+  removal.mockRestore();
+  expect((await list()).find((record) => record.id === original.id)).toMatchObject({
+    status: "preparing",
+    contentKey: params.contentKey,
+  });
+  const build = vi.fn(params.prepare);
+  const refresh = vi.fn<NonNullable<typeof params.refresh>>(async (existing, staged) => {
+    expect(existing.id).toBe(current.id);
+    await fs.cp(existing.path, staged.path, { recursive: true });
+    return true;
+  });
+  const resumed = await prepare({ prepare: build, refresh });
+  try {
+    assert(resumed);
+    expect(await source(resumed)).toBe("source");
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(build).not.toHaveBeenCalled();
+  } finally {
+    await resumed?.release();
+  }
+  const switched = await prepare({ contentKey: "commit-2", sourceCommit: "b".repeat(40) });
+  try {
+    expect(switched?.id).toBe(current.id);
+    assert(switched);
+    expect(await source(switched)).toBe("source");
+  } finally {
+    await switched?.release();
+  }
+  expect(
+    await templateRegistry.hasTemplateReadersAsync(env, original.id, options.commitGuard),
+  ).toBe(false);
+  await collectWorktreeTemplates(env, 0, {
+    ...options,
+    scope: params,
+    supersededBy: current,
+  });
+  expect(await list()).toMatchObject([{ id: current.id, status: "ready" }]);
+  await expect(fs.access(original.path)).rejects.toMatchObject({ code: "ENOENT" });
 });
 
 it.each([false, true])("settles refresh before publication (fail=%s)", async (fail) => {
@@ -382,9 +471,31 @@ it.each([
     expect((await list())[0]).toMatchObject({ id: prepared?.id, status: "preparing" });
   }
   if (uncertain) {
-    expect(await prepare()).toBeUndefined();
     if (phase === "build") {
+      expect(await prepare()).toBeUndefined();
       expect(await source(record!)).toBe("source");
+    } else {
+      assert(record);
+      const replacement = await prepare();
+      try {
+        assert(replacement);
+        expect(replacement.id).not.toBe(record.id);
+        expect(replacement.path).not.toBe(record.path);
+        expect(await source(replacement)).toBe("source");
+        await collectWorktreeTemplates(env, 0, {
+          ...options,
+          scope: params,
+          supersededBy: replacement,
+        });
+        expect((await list()).find((entry) => entry.id === record.id)).toMatchObject({
+          status: "preparing",
+        });
+        expect(
+          await templateRegistry.hasTemplateReadersAsync(env, record.id, options.commitGuard),
+        ).toBe(true);
+      } finally {
+        await replacement?.release();
+      }
     }
   }
 });

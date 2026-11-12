@@ -27,6 +27,7 @@ import { withWorktreeGitConfig } from "./checkout-git-config.js";
 import { hasWorktreeUnknownOutcome } from "./errors.js";
 import { commandError, listGitWorktrees, requireGit, runGit } from "./git.js";
 import { timeWorktreePreparationPhase } from "./preparation-timing.js";
+import { notifyWorktreeTemplateActivity } from "./run-end-lifecycle.js";
 import type { CreateManagedWorktreeParams, WorktreeWaitBudget } from "./types.js";
 
 const log = createSubsystemLogger("agents/worktrees");
@@ -167,7 +168,7 @@ export async function resolveWorktreeBase(
 
 /** Capture a creation cohort before capacity waits, without fetching until a source owner consumes it. */
 export async function withWorktreeBasePreparation<T>(
-  repository: { repoRoot: string; commonDir: string },
+  repository: { repoRoot: string; commonDir: string; env?: NodeJS.ProcessEnv },
   run: (resolve: WorktreeBasePreparation) => Promise<T>,
 ): Promise<T> {
   const key = JSON.stringify(
@@ -263,6 +264,13 @@ export async function withWorktreeBasePreparation<T>(
               options.beforeRun();
               if (base.fetchSucceeded) {
                 started.refreshedAt = Date.now();
+                if (base.recordRef === "origin/main") {
+                  notifyWorktreeTemplateActivity(repository.env ?? process.env, {
+                    type: "base",
+                    commonDir: repository.commonDir,
+                    commit: base.commit,
+                  });
+                }
               }
               return base;
             }),

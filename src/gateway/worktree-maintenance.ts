@@ -32,6 +32,7 @@ import {
 } from "../process/gateway-work-admission.js";
 import { prepareScratchMaintenanceTargets } from "./scratch-maintenance-custody.js";
 import { sweepLocalWorkspaceManifests } from "./worker-environments/local-workspace-gc.js";
+import { startWorkspaceTemplatePrewarm } from "./workspace-template-prewarm.js";
 
 type MaintenanceRequest = { jobId?: string; retryDeferred?: boolean };
 type MaintenanceOwner = {
@@ -78,6 +79,11 @@ export function startWorktreeMaintenance(params: {
 }): MaintenanceOwner {
   const previousDrain = owners.get(params.getRuntimeConfig)?.stop();
   const scheduler = params.scheduler.scope();
+  const templatePrewarm = startWorkspaceTemplatePrewarm({
+    scheduler,
+    getConfig: params.getRuntimeConfig,
+    onError: params.onError,
+  });
   const inOwnerContext = AsyncLocalStorage.snapshot();
   let receipt: ManagedWorktreeGcReceipt | undefined;
   let archivePending = false;
@@ -354,6 +360,7 @@ export function startWorktreeMaintenance(params: {
       }
     },
     stop: async () => {
+      templatePrewarm.stop();
       stopWarmPool();
       warmPending.clear();
       // Aborting also wakes a paused batch before joining worker settlement.
