@@ -264,7 +264,7 @@ it.each([
                     finalAdmission: true,
                   },
                 );
-                // The request was admitted before DNS; the host discards its retired result.
+                // A request admitted before DNS may finish; the host rejects its stale result.
                 expect(requests).toHaveLength(1);
                 expect(events).toEqual([]);
                 expect(registry.decisionProviders[0]?.host.inspect(config).activeRequests).toBe(0);

@@ -185,27 +185,27 @@ describePosix("prior-CI forward main admission", () => {
     "oversized stderr",
   ] as const)("refuses a local-only probe failure: %s", (fault) => {
     const state = f.state();
-    const localOnlyFault: Partial<typeof state.priorCi> = {};
     const secret = "fixture-sensitive-token-not-a-real-credential";
+    const finalProbeFault: Partial<typeof state.priorCi> = {};
     let probe: { role: string; oid: string; exit: number } | undefined;
     if (fault === "stderr" || fault === "exit") {
-      localOnlyFault.localOnlyQueryFault = fault;
+      finalProbeFault.localOnlyQueryFault = fault;
       state.observations = [{}, {}, {}, {}, { advanceMain: true }];
     } else if (fault === "verified pin") {
       const previous = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
-      localOnlyFault.localOnlyFailureOid = f.base;
-      localOnlyFault.localOnlyFailureStderr = "fatal: fixture verified pin is unreadable";
+      finalProbeFault.localOnlyFailureOid = f.base;
+      finalProbeFault.localOnlyFailureStderr = "fatal: fixture verified pin is unreadable";
       state.observations = [{}, {}, {}, { main: previous }, { advanceMain: true }];
       probe = { role: "verified-main", oid: f.base, exit: 128 };
     } else if (fault === "unsupported Git" || fault === "oversized stderr") {
       const main = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
       state.observations = [{}, {}, {}, {}, { main }];
       if (fault === "unsupported Git") {
-        localOnlyFault.unsupportedNoLazy = true;
+        finalProbeFault.unsupportedNoLazy = true;
         probe = { role: "previous-main", oid: f.base, exit: 129 };
       } else {
-        localOnlyFault.localOnlyFailureOid = main;
-        localOnlyFault.localOnlyFailureStderr =
+        finalProbeFault.localOnlyFailureOid = main;
+        finalProbeFault.localOnlyFailureStderr =
           "Authorization: Bearer " + "sensitive".repeat(2_000);
         probe = { role: "reread-main", oid: main, exit: 128 };
       }
@@ -218,15 +218,15 @@ describePosix("prior-CI forward main admission", () => {
         writeFileSync(join(f.worktree, "tsconfig.json"), "{ invalid caller tsconfig");
       }
       state.observations = [{}, {}, {}, { main: previous }, { main }];
-      localOnlyFault.localOnlyFailureOid = failed;
-      localOnlyFault.localOnlyFailureStderr =
+      finalProbeFault.localOnlyFailureOid = failed;
+      finalProbeFault.localOnlyFailureStderr =
         `fatal: fixture-local object unavailable\nAuthorization: Bearer ${secret}\n` +
         "diagnostic detail ".repeat(200);
       state.priorCi.revokeAdminOnMainFetch = true;
       probe = { role: fault, oid: failed, exit: 128 };
     }
-    // Initial commit acquisition must succeed before the final local-only fault.
-    state.observations.at(-1)!.priorCi = localOnlyFault;
+    // Keep initial commit acquisition valid; fail the final local-only window.
+    state.observations.at(-1)!.priorCi = finalProbeFault;
     f.save(state);
     const result = refuse("final prior-CI main cannot be verified with local-only Git");
     if (probe) {

@@ -451,7 +451,7 @@ struct MacNodeOpenClawIDBridgeTests {
     private func tunnel(_ stream: BridgeTestStream) -> OpenClawIDNodeTunnel {
         OpenClawIDNodeTunnel(
             endpoint: BridgeTestEndpoint(stream: stream),
-            verifiedServerKey: "synthetic",
+            verifiedServerKey: { "synthetic" },
             relayURL: URL(string: "https://relay.invalid")!)
     }
 
