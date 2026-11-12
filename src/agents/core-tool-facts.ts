@@ -19,6 +19,8 @@ type CoreToolFacts = {
   factoryFamily?: CoreToolFactoryFamily;
   // Recorded-call replay and blind attempt retry have distinct audited allowlists.
   replay?: "both" | "blind" | "recorded";
+  // Present only on runs whose owner granted it; absence is not a policy mistake.
+  runGranted?: true;
 };
 
 export type CoreToolDefinition = CoreToolFacts & {
@@ -291,4 +293,9 @@ export function resolveCoreToolProfiles(toolId: string): ToolProfileId[] {
 /** Returns true when a tool id is a known core tool. */
 export function isKnownCoreToolId(toolId: string): boolean {
   return CORE_TOOL_BY_ID.has(toolId);
+}
+
+/** Core tools that only exist on runs whose owner granted them. */
+export function isRunGrantedCoreToolId(toolId: string): boolean {
+  return CORE_TOOL_BY_ID.get(toolId)?.runGranted === true;
 }

@@ -12,6 +12,7 @@ import { getAgentToolExecutionLocation } from "../../agents/agent-tool-metadata.
 import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../../agents/harness/tool-surface-bridge.js";
 import { projectAgentToolDefinition } from "../../agents/prepared-tool-surface.js";
+import { buildRunGrantedToolDirectory } from "../../agents/tool-search.js";
 import type { AnyAgentTool } from "../../agents/tools/common.js";
 import { getPluginToolMeta, setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
@@ -169,6 +170,10 @@ export function createWorkerGatewayToolRuntime(params: {
               parameters,
             })),
             toolSchemaDirectoryPrompt: projected.toolSchemaDirectoryPrompt,
+            // Render before cleanup disposes the catalog.
+            runGrantedToolDirectory: projected.toolSchemaDirectoryPrompt
+              ? buildRunGrantedToolDirectory(runtime.toolSearchCatalogRef)
+              : undefined,
           };
         } finally {
           runtime.cleanup();

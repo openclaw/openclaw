@@ -25,6 +25,14 @@ export function isSchedulerSystemTurn(params: {
   );
 }
 
+/** Host-owned session events retain the session prompt, without granting tool authority. */
+export function isHostSystemTurn(params: {
+  trigger?: string;
+  inputProvenance?: { kind?: string };
+}): boolean {
+  return params.trigger === "event" && params.inputProvenance?.kind === "internal_system";
+}
+
 /**
  * Offers the session's tool surface on every turn, so the provider prompt prefix
  * stays cacheable, and gates the calls this turn's authority does not cover.
