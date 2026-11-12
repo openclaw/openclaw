@@ -1,0 +1,5 @@
+# Regression tests for the terminal EXIT marker on gate tools: marker on pass, failure and SIGTERM
+# through a named shim wrapper, silence for wrappers that name no gate tool, one marker when a
+# trailer-aware implementation runs through its wrapper or directly, and exit-code normalization.
+# Exact net growth for this change.
+164
