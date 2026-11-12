@@ -64,7 +64,7 @@ jobs:
           env -i HOME="$RUNNER_TEMP/allocation-install-home" PATH="$PATH" \
             npm install --prefix "$RUNNER_TEMP/allocation-install" --omit=dev --no-audit --no-fund \
             "$PREPARED_TARBALL" "$CORE_TARBALL_DIR"/*.tgz
-      - name: Capture first five seconds after Kova-compatible readiness
+      - name: Capture profiled restart after native installation
         shell: bash
         run: |
           set -euo pipefail

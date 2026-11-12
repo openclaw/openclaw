@@ -65,12 +65,6 @@ const server=net.createServer();
 server.on('error',()=>process.exit(1));
 server.listen(19789,'127.0.0.1',()=>server.close());
 NODE
-mkdir -p "$drop"
-# Preserve native base argv/autoheap; modify only this task's effective ExecStart.
-printf '[Service]\nExecStart=\nExecStart=/usr/bin/python3 %s %s %s\n' \
-  "$private/tools/launch.py" "$base" "$private/tools/profile-config.json" > "$drop/90-allocation.conf"
-"$node" "$scripts/capture.mjs" "$private/tools/profile-config.json" &
-collector=$!
 # HOME is native service account home only for installation. Explicit paths isolate config/state.
 # The wrapper replaces runtime HOME with the private empty home before loading package code.
 set +e
@@ -88,6 +82,26 @@ if [[ $install_status != 0 ]]; then
   sed 's/isolated-ci-diagnostic-not-a-live-credential/[synthetic-token]/g' "$private/install.log" > "$output/install-error.txt"
   exit "$install_status"
 fi
+# Native publication must finish before a diagnostic drop-in exists.
+# This is a fresh process over synthetic state initialized by native install,
+# not an untouched-state Kova run and never release qualification.
+timeout 100 systemctl --user stop "$unit"
+[[ "$(systemctl --user show "$unit" -p MainPID --value)" == 0 ]]
+mkdir -p "$drop"
+# Preserve native base argv/autoheap; modify only this task's effective ExecStart.
+printf '[Service]\nExecStart=\nExecStart=/usr/bin/python3 %s %s %s\n' \
+  "$private/tools/launch.py" "$base" "$private/tools/profile-config.json" > "$drop/90-allocation.conf"
+python3 - "$private/tools/profile-config.json" <<'PY'
+import json, pathlib, sys, time
+p = pathlib.Path(sys.argv[1])
+d = json.loads(p.read_text())
+d["hardEndAt"] = int(time.time() * 1000) + 120000
+p.write_text(json.dumps(d))
+PY
+"$node" "$scripts/capture.mjs" "$private/tools/profile-config.json" &
+collector=$!
+systemctl --user daemon-reload
+systemctl --user start "$unit"
 wait "$collector"
 collector=''
 # Only generated unit has synthetic config. Do not upload config, env files or raw journal.
