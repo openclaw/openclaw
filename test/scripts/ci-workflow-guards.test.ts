@@ -5081,12 +5081,21 @@ ${buildScript}`,
     expect(currentTargetBranch).not.toContain("--no-parallel");
     expect(testStep.run).toContain("swift_test_args+=(--no-parallel)");
 
-    for (const buildExitCode of [0, 23]) {
-      const root = tempDirs.make(`openclaw-swift-test-${buildExitCode}-`);
+    for (const [buildExitCode, historicalTarget] of [
+      [0, false],
+      [23, false],
+      [0, true],
+    ] as const) {
+      const root = tempDirs.make(`openclaw-swift-test-${buildExitCode}-${historicalTarget}-`);
       const binDir = path.join(root, "bin");
       const callsPath = path.join(root, "swift-calls");
       const outputPath = path.join(root, "github-output");
       mkdirSync(binDir, { recursive: true });
+      if (historicalTarget) {
+        const suites = path.join(root, "apps/macos/Tests/OpenClawIPCTests");
+        mkdirSync(suites, { recursive: true });
+        writeFileSync(path.join(suites, "QuickChatCatalogPresentationTests.swift"), "");
+      }
       symlinkSync(path.resolve("scripts"), path.join(root, "scripts"), "dir");
       mkdirSync(path.join(root, ".ci-harness/scripts"), { recursive: true });
       symlinkSync(path.resolve("scripts/lib"), path.join(root, ".ci-harness/scripts/lib"), "dir");
@@ -5143,7 +5152,7 @@ if (args[0] === 'delete-keychain') fs.unlinkSync(args.at(-1));
           GITHUB_OUTPUT: outputPath,
           PATH: `${binDir}:${process.env.PATH ?? ""}`,
           SWIFT_TEST_EXECUTION: "serial",
-          HISTORICAL_TARGET: "false",
+          HISTORICAL_TARGET: String(historicalTarget),
         },
       });
       const calls = readFileSync(callsPath, "utf8").trim().split("\n");
@@ -5153,8 +5162,15 @@ if (args[0] === 'delete-keychain') fs.unlinkSync(args.at(-1));
         ...(buildExitCode === 0
           ? [
               expect.stringMatching(
-                /^test --package-path apps\/macos --build-system native --enable-code-coverage --disable-index-store -Xswiftc -gline-tables-only --skip-build --experimental-maximum-parallelization-width 4 --skip AppStateIsolationTests\|ProfileChatPreferencesTests\|QuickChatCatalogPresentationTests --event-stream-output-path \S+\/swift-testing-events\.jsonl --event-stream-version 6\.3$/,
+                /^test --package-path apps\/macos --build-system native --enable-code-coverage --disable-index-store -Xswiftc -gline-tables-only --skip-build --experimental-maximum-parallelization-width 4 --skip AppStateIsolationTests\|ProfileChatPreferencesTests\|QuickChatCatalogPresentationTests\|DashboardExperienceTests --event-stream-output-path \S+\/swift-testing-events\.jsonl --event-stream-version 6\.3$/,
               ),
+              ...(historicalTarget
+                ? []
+                : [
+                    expect.stringMatching(
+                      /^test --package-path apps\/macos --build-system native --enable-code-coverage --disable-index-store -Xswiftc -gline-tables-only --skip-build --experimental-maximum-parallelization-width 4 --filter DashboardExperienceTests --event-stream-output-path \S+\/swift-testing-events\.jsonl --event-stream-version 6\.3$/,
+                    ),
+                  ]),
               expect.stringMatching(
                 /^test --package-path apps\/macos --build-system native --enable-code-coverage --disable-index-store -Xswiftc -gline-tables-only --skip-build --experimental-maximum-parallelization-width 4 --filter QuickChatCatalogPresentationTests --event-stream-output-path \S+\/swift-testing-events\.jsonl --event-stream-version 6\.3$/,
               ),
@@ -5167,16 +5183,15 @@ if (args[0] === 'delete-keychain') fs.unlinkSync(args.at(-1));
       const output = existsSync(outputPath) ? readFileSync(outputPath, "utf8").trim() : "";
       const outputLines = output.split("\n");
       if (buildExitCode === 0) {
-        expect(outputLines).toHaveLength(4);
+        expect(outputLines).toHaveLength(historicalTarget ? 4 : 5);
         expect(outputLines[0]).toBe("debug-tests-built=true");
+        for (const outputLine of outputLines.slice(1, -1)) {
+          expect(
+            outputLine.startsWith(`menu-default-artifact-path=${root}/openclaw-menu-default-`),
+          ).toBe(true);
+        }
         expect(
-          outputLines[1]?.startsWith(`menu-default-artifact-path=${root}/openclaw-menu-default-`),
-        ).toBe(true);
-        expect(
-          outputLines[2]?.startsWith(`menu-default-artifact-path=${root}/openclaw-menu-default-`),
-        ).toBe(true);
-        expect(
-          outputLines[3]?.startsWith(`menu-named-artifact-path=${root}/openclaw-menu-named-`),
+          outputLines.at(-1)?.startsWith(`menu-named-artifact-path=${root}/openclaw-menu-named-`),
         ).toBe(true);
       } else {
         expect(output).toBe("");

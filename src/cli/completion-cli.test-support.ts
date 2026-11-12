@@ -154,17 +154,24 @@ function base64(value: string, encoding: BufferEncoding = "utf8"): string {
 function encodePowerShellHostScript(framePrefix: string): string {
   const script = String.raw`
 $ErrorActionPreference = 'Stop'
+function Write-CompletionPhase([string]$phase) {
+  [Console]::Error.WriteLine('${framePrefix}DIAG:' + $request.id + ':' + $phase + ':' + $caseClock.ElapsedMilliseconds + ':' + $PSVersionTable.PSVersion)
+  [Console]::Error.Flush()
+}
 [Console]::Out.WriteLine('${framePrefix}READY')
 [Console]::Out.Flush()
 while (($encodedRequest = [Console]::In.ReadLine()) -ne $null) {
   $request = $null
+  $caseClock = [Diagnostics.Stopwatch]::StartNew()
   try {
     $requestJson = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encodedRequest))
     $request = $requestJson | ConvertFrom-Json
     $completionScript = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([string]$request.script))
     $commandLine = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([string]$request.commandLine))
+    Write-CompletionPhase decoded
     Register-ArgumentCompleter -Native -CommandName openclaw -ScriptBlock $null
     Invoke-Expression $completionScript | Out-Null
+    Write-CompletionPhase registered
     $completions = @(
       [System.Management.Automation.CommandCompletion]::CompleteInput(
         $commandLine,
@@ -172,6 +179,7 @@ while (($encodedRequest = [Console]::In.ReadLine()) -ne $null) {
         $null
       ).CompletionMatches | ForEach-Object { [string]$_.CompletionText }
     )
+    Write-CompletionPhase completed
     $response = @{ version = 1; id = [string]$request.id; ok = $true; completions = $completions }
   } catch {
     $responseId = if ($null -ne $request -and $null -ne $request.id) {
@@ -187,6 +195,7 @@ while (($encodedRequest = [Console]::In.ReadLine()) -ne $null) {
   $encodedResponse = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($responseJson))
   [Console]::Out.WriteLine('${framePrefix}' + $encodedResponse)
   [Console]::Out.Flush()
+  Write-CompletionPhase responded
 }
 `;
   return base64(script, "utf16le");
@@ -430,10 +439,46 @@ export class PowerShellCompletionRunner {
         }
       });
       child.once("error", fail);
+      const diagnosticPrefix = `${this.framePrefix}DIAG:`;
+      let diagnosticPending = "";
       child.stderr.on("data", (chunk: string) => {
-        const stderr = chunk.trim();
-        if (stderr) {
-          fail(`Unexpected PowerShell completion stderr: ${stderr}`);
+        diagnosticPending += chunk;
+        let newline: number;
+        while ((newline = diagnosticPending.indexOf("\n")) !== -1) {
+          const line = diagnosticPending.slice(0, newline).replace(/\r$/u, "");
+          diagnosticPending = diagnosticPending.slice(newline + 1);
+          const fields = line.startsWith(diagnosticPrefix)
+            ? /^([0-9a-f]{20}):(decoded|registered|completed|responded):(\d{1,12}):(\d+\.\d+\.\d+(?:[-+.][A-Za-z0-9.-]{1,40})?)$/u.exec(
+                line.slice(diagnosticPrefix.length),
+              )
+            : null;
+          if (fields) {
+            console.error(
+              "[completion-phase]",
+              JSON.stringify({
+                caseId: fields[1],
+                phase: fields[2],
+                elapsedMs: Number(fields[3]),
+                powerShellVersion: fields[4],
+              }),
+            );
+          } else if (line.trim()) {
+            fail(`Unexpected PowerShell completion stderr: ${line.trim()}`);
+          }
+        }
+        // Hold only an incomplete diagnostic; unrelated stderr still fails immediately.
+        if (
+          diagnosticPending.length > 512 ||
+          (diagnosticPending.trim() &&
+            !diagnosticPrefix.startsWith(diagnosticPending) &&
+            !diagnosticPending.startsWith(diagnosticPrefix))
+        ) {
+          fail(`Unexpected PowerShell completion stderr: ${diagnosticPending.trim()}`);
+        }
+      });
+      child.stderr.once("end", () => {
+        if (diagnosticPending.trim()) {
+          fail(`Unexpected PowerShell completion stderr: ${diagnosticPending.trim()}`);
         }
       });
       this.exitPromise = new Promise((exitResolve) => {
