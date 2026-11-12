@@ -1077,6 +1077,7 @@ jobs:
             /config/ci-adaptive-markdown.json
             /config/ci-test-timings.json
             /node-runtime-env.mjs
+            /node-version.mjs
             /runtime-process-scripts.generated.mjs
             /packages/normalization-core/src/stable-stringify.ts
             /src/infra/node-runtime-executable.ts
