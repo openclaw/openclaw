@@ -31,6 +31,7 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 // Package scripts, workflows, Docker scenarios, and documented maintainer commands invoke these
 // files by path. They are executable roots rather than importable library modules.
 const repositoryScriptEntries = [
+  "scripts/perf/file-log-main-thread-measure.mjs!",
   "scripts/diagnostics/windows-link-service.mjs!",
   "scripts/boat-release-runner.mjs!",
   "scripts/build-iroh.mjs!",
@@ -716,6 +717,7 @@ const rootEntries = [
   // Deployed in the worker archive and launched by path, without a static host import.
   "src/worker/worker-deploy-client-credentials.ts!",
   "src/worker/worker-deploy-entry.ts!",
+  "src/worker/worker-deploy-file-log.ts!",
   "src/worker/worker-deploy-file-tool-planning.ts!",
   "src/worker/worker-deploy-file-tool-read.ts!",
   "src/worker/worker-deploy-image-processor.ts!",
@@ -733,6 +735,7 @@ const rootEntries = [
   "src/commands/status.ts!",
   "src/cli/daemon-cli.ts!",
   "src/agents/code-mode.worker.ts!",
+  "src/logging/logger-file.worker.ts!",
   // Offline port foundations precede orchestration; remove with their first production callers.
   "src/infra/database-engine/port.worker.ts!",
   "src/snapshot/export-envelope.ts!",
