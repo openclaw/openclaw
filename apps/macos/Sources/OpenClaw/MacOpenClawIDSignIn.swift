@@ -44,7 +44,10 @@ final class MacOpenClawIDSignIn: NSObject, ASWebAuthenticationPresentationContex
     private let http: any OpenClawIDNodeEnrollmentHTTP
     private var session: ASWebAuthenticationSession?
 
-    init(configuration: MacOpenClawIDConfiguration, http: any OpenClawIDNodeEnrollmentHTTP = OpenClawIDNodeEnrollmentURLSession()) {
+    init(
+        configuration: MacOpenClawIDConfiguration,
+        http: any OpenClawIDNodeEnrollmentHTTP = OpenClawIDNodeEnrollmentURLSession())
+    {
         self.configuration = configuration
         self.http = http
     }
@@ -85,7 +88,8 @@ final class MacOpenClawIDSignIn: NSObject, ASWebAuthenticationPresentationContex
         guard let parts = URLComponents(url: callback, resolvingAgainstBaseURL: false),
               parts.scheme == MacOpenClawIDConfiguration.callbackScheme, parts.path == "/oauth/callback"
         else { throw MacOpenClawIDSignInError.malformed }
-        let items = Dictionary((parts.queryItems ?? []).map { ($0.name, $0.value ?? "") }, uniquingKeysWith: { a, _ in a })
+        let pairs = (parts.queryItems ?? []).map { ($0.name, $0.value ?? "") }
+        let items = Dictionary(pairs, uniquingKeysWith: { first, _ in first })
         guard items["state"] == state else { throw MacOpenClawIDSignInError.stateMismatch }
         if let iss = items["iss"], iss != issuer.absoluteString { throw MacOpenClawIDSignInError.issuerMismatch }
         if items["error"] != nil { throw MacOpenClawIDSignInError.refused }

@@ -41,8 +41,12 @@ final class MacOpenClawIDDeviceStore {
               let approval = fields["approvedWith"].flatMap(MacOpenClawIDDevice.Approval.init(rawValue:))
         else { return nil }
         return .init(
-            hostname: hostname, clawID: clawID, discoveryOrigin: origin, deviceEnrollmentID: device,
-            nodeEnrollmentID: fields["nodeEnrollmentID"].flatMap(UUID.init(uuidString:)), approvedWith: approval)
+            hostname: hostname,
+            clawID: clawID,
+            discoveryOrigin: origin,
+            deviceEnrollmentID: device,
+            nodeEnrollmentID: fields["nodeEnrollmentID"].flatMap(UUID.init(uuidString:)),
+            approvedWith: approval)
     }
 
     func save(_ device: MacOpenClawIDDevice?) {
@@ -65,7 +69,9 @@ final class MacOpenClawIDDeviceStore {
     func nodeTarget(_ device: MacOpenClawIDDevice) -> MacNodeOpenClawIDTarget? {
         device.nodeEnrollmentID.map {
             MacNodeOpenClawIDTarget(
-                hostname: device.hostname, enrollmentID: $0, databaseURL: self.databaseURL,
+                hostname: device.hostname,
+                enrollmentID: $0,
+                databaseURL: self.databaseURL,
                 identityStore: OpenClawIDNodeIdentityKeychainStore(enrollmentID: $0, purpose: .node))
         }
     }
@@ -88,8 +94,13 @@ final class MacOpenClawIDDeviceStore {
                 identity: peer,
                 verifiedTarget: {
                     let target = try await OpenClawIDDeviceRoute.refresh(
-                        hostname: device.hostname, discoveryOrigin: device.discoveryOrigin, peer: peer,
-                        admission: .owner, node: node, session: session, store: store)
+                        hostname: device.hostname,
+                        discoveryOrigin: device.discoveryOrigin,
+                        peer: peer,
+                        admission: .owner,
+                        node: node,
+                        session: session,
+                        store: store)
                     return (target.serverKey, target.relayURL)
                 },
                 close: { await store.close() })
@@ -106,10 +117,13 @@ final class MacOpenClawIDDeviceStore {
     func forget(_ device: MacOpenClawIDDevice) async {
         self.save(nil)
         self.saveSession(nil)
-        let stores = [
+        var stores = [
             OpenClawIDNodeIdentityKeychainStore(enrollmentID: device.deviceEnrollmentID, purpose: .device),
             OpenClawIDNodeIdentityKeychainStore(enrollmentID: device.deviceEnrollmentID, purpose: .devicePeer),
-        ] + (device.nodeEnrollmentID.map { [OpenClawIDNodeIdentityKeychainStore(enrollmentID: $0, purpose: .node)] } ?? [])
+        ]
+        if let node = device.nodeEnrollmentID {
+            stores.append(OpenClawIDNodeIdentityKeychainStore(enrollmentID: node, purpose: .node))
+        }
         for store in stores {
             try? await store.delete()
         }

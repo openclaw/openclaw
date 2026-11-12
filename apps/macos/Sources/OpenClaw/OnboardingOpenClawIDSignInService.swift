@@ -16,7 +16,7 @@ struct OnboardingOpenClawIDSignInEnvironment {
     var keyStore: (UUID, OpenClawIDKeyPurpose) -> any OpenClawIDNodeIdentityStore = {
         OpenClawIDNodeIdentityKeychainStore(enrollmentID: $0, purpose: $1)
     }
-    var readKitFile: () -> String? = { OnboardingOpenClawIDSignInService.chooseKitFile() }
+    var readKitFile: () async -> String? = { await OnboardingOpenClawIDSignInService.chooseKitFile() }
     /// Saves the device, selects it for the operator route and starts its node.
     var install: (MacOpenClawIDDevice, OpenClawIDDiscoverySession) -> Void
 }
@@ -120,7 +120,7 @@ final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
         case let .submitRecoveryKit(code):
             return try await self.useRecoveryKit(code)
         case .chooseKitFile:
-            guard let text = self.environment.readKitFile() else {
+            guard let text = await self.environment.readKitFile() else {
                 return .recoveryKitEntry(claw: self.claw?.hostname ?? "")
             }
             return try await self.useRecoveryKit(text)
@@ -162,35 +162,48 @@ final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
         self.claws = try await self.discovery(configuration).listClaws(session)
         let account = session.email ?? session.accountID
         guard !self.claws.isEmpty else { return .problem(.notInvited(account: account)) }
-        return .claws(account: account, claws: self.claws.map {
-            .init(
-                id: $0.id, name: $0.hostname,
+        let claws = self.claws.map {
+            OnboardingClaw(
+                id: $0.id,
+                name: $0.hostname,
                 relationship: $0.relationship == "owner" ? "Owner" : ($0.role ?? "member").capitalized,
                 online: $0.online)
-        })
+        }
+        return .claws(account: account, claws: claws)
     }
 
     /// Generates D, W and W_node for this attempt in this process's Keychain items.
-    private func newDevice(_ claw: OpenClawIDDiscoveryClaw, configuration: MacOpenClawIDConfiguration, approval: MacOpenClawIDDevice.Approval)
-        async throws -> (MacOpenClawIDDevice, OpenClawIDOwnerDeviceKeys)
+    private func newDevice(
+        _ claw: OpenClawIDDiscoveryClaw,
+        configuration: MacOpenClawIDConfiguration,
+        approval: MacOpenClawIDDevice.Approval) async throws -> (MacOpenClawIDDevice, OpenClawIDOwnerDeviceKeys)
     {
+        let nodeID = UUID()
         let device = MacOpenClawIDDevice(
-            hostname: claw.hostname, clawID: claw.id, discoveryOrigin: configuration.discoveryOrigin,
-            deviceEnrollmentID: UUID(), nodeEnrollmentID: UUID(), approvedWith: approval)
+            hostname: claw.hostname,
+            clawID: claw.id,
+            discoveryOrigin: configuration.discoveryOrigin,
+            deviceEnrollmentID: UUID(),
+            nodeEnrollmentID: nodeID,
+            approvedWith: approval)
+        let store = self.environment.keyStore
         let keys = try await OpenClawIDOwnerDeviceKeys(
-            device: OpenClawIDNodeIdentity.loadOrCreate(
-                store: self.environment.keyStore(device.deviceEnrollmentID, .device)),
-            peer: OpenClawIDNodeIdentity.loadOrCreate(
-                store: self.environment.keyStore(device.deviceEnrollmentID, .devicePeer)),
-            node: OpenClawIDNodeIdentity.loadOrCreate(store: self.environment.keyStore(device.nodeEnrollmentID!, .node)))
+            device: OpenClawIDNodeIdentity.loadOrCreate(store: store(device.deviceEnrollmentID, .device)),
+            peer: OpenClawIDNodeIdentity.loadOrCreate(store: store(device.deviceEnrollmentID, .devicePeer)),
+            node: OpenClawIDNodeIdentity.loadOrCreate(store: store(nodeID, .node)))
         return (device, keys)
     }
 
-    private func client(_ device: MacOpenClawIDDevice, configuration: MacOpenClawIDConfiguration) -> OpenClawIDOwnerEnrollmentClient {
+    private func client(
+        _ device: MacOpenClawIDDevice,
+        configuration: MacOpenClawIDConfiguration) -> OpenClawIDOwnerEnrollmentClient
+    {
         .init(
             discoveryOrigin: configuration.discoveryOrigin,
             deviceStore: OpenClawIDNodeNativeTrustStore(
-                databaseURL: self.databaseURL, enrollmentID: device.deviceEnrollmentID, assertCurrent: {}),
+                databaseURL: self.databaseURL,
+                enrollmentID: device.deviceEnrollmentID,
+                assertCurrent: {}),
             nodeStore: device.nodeEnrollmentID.map {
                 OpenClawIDNodeNativeTrustStore(databaseURL: self.databaseURL, enrollmentID: $0, assertCurrent: {})
             },
@@ -212,7 +225,11 @@ final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
         self.approval = Task {
             do {
                 _ = try await client.approveFromDevice(
-                    session: session, claw: claw, keys: keys, label: label, node: description,
+                    session: session,
+                    claw: claw,
+                    keys: keys,
+                    label: label,
+                    node: description,
                     onCode: { codes.continuation.yield($0) })
                 codes.continuation.finish()
                 return (device, session)
@@ -225,7 +242,9 @@ final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
             var iterator = codes.stream.makeAsyncIterator()
             guard let code = try await iterator.next() else { throw CancellationError() }
             return .ownerCompareCode(
-                claw: claw.hostname, device: self.environment.deviceName(), code: Self.spaced(code),
+                claw: claw.hostname,
+                device: self.environment.deviceName(),
+                code: Self.spaced(code),
                 approvalURL: URL(string: "https://\(claw.hostname)/"))
         } catch {
             return try self.problem(error, claw: claw)
@@ -281,11 +300,15 @@ final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
     }
 
     /// The recovery code from a saved kit file. The file is read once and not kept.
-    static func chooseKitFile() -> String? {
+    static func chooseKitFile() async -> String? {
+        guard AppLaunchRuntimePlan.current.allowsActivation else { return nil }
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.plainText, .text, .data]
         panel.allowsMultipleSelection = false
-        guard panel.runModal() == .OK, let url = panel.url,
+        let response = await withCheckedContinuation { continuation in
+            panel.begin { continuation.resume(returning: $0) }
+        }
+        guard response == .OK, let url = panel.url,
               let text = try? String(contentsOf: url, encoding: .utf8),
               let range = text.range(of: "OCK1(-?[0-9A-Za-z]){31}", options: .regularExpression)
         else { return nil }

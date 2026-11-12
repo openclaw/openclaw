@@ -265,7 +265,9 @@ struct OpenClawIDConfirmationSheet: View {
                     OpenClaw ID fully cuts it off.
                     """,
                     icon: "key.slash")
-                self.bullet("This Mac’s existing node pairing is replaced by its OpenClaw ID node.", icon: "desktopcomputer")
+                self.bullet(
+                    "This Mac’s existing node pairing is replaced by its OpenClaw ID node.",
+                    icon: "desktopcomputer")
                 self.bullet(
                     """
                     \(route) is not changed. It keeps running on this Mac, and the Gateway’s \(route) \
