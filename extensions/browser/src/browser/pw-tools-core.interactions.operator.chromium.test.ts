@@ -15,7 +15,8 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const recordKeys = `<script>window.keys=[];addEventListener("keydown",(e)=>keys.push(e.key),true)</script>`;
 const pages: Record<string, string> = {
   "/a": `${recordKeys}<form action="/b"><input id="q" name="q" autofocus></form>
-    <a id="blocked" href="http://localhost:PORT/c" style="display:block;width:200px;height:40px">blocked</a>`,
+    <a id="blocked" href="http://localhost:PORT/c" style="display:block;width:200px;height:40px">blocked</a>
+    <script>addEventListener("keydown",(e)=>{if(e.key==="n")setTimeout(()=>{location.href=document.getElementById("blocked").href},200)})</script>`,
   "/b": `${recordKeys}<input id="r" autofocus>`,
   "/c": `<p>blocked target</p>`,
 };
@@ -76,6 +77,18 @@ describe.runIf(runChromiumProof)("operator input sessions in Chromium", () => {
     // The next burst opens a fresh session on the checked document.
     expect(await send(keys("xy"))).toMatchObject({ sent: 2 });
     expect(await page.locator("#r").inputValue()).toBe("xy");
+  });
+
+  it("makes input wait for a finishing session and reports its late denial", async () => {
+    const { page, send } = await openFormPage();
+    expect(await send(keys("n"))).toMatchObject({ sent: 1 });
+    // The page starts a blocked navigation after that burst was answered. Input sent
+    // while the session's guard is still settling waits for it and gets the denial.
+    await new Promise((resolve) => {
+      setTimeout(resolve, 300);
+    });
+    await expect(send(keys("z"))).rejects.toThrow(/blocked|private|not allowed/i);
+    expect(new URL(page.url()).pathname).toBe("/a");
   });
 
   it("keeps policy denial for navigation started inside a session", async () => {

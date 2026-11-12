@@ -92,7 +92,8 @@ export class BrowserPanelInputOwner {
   // next inputs queue, so a typing burst shares one navigation guard on the Gateway.
   private queuedInputs: QueuedInput[] = [];
   private inputFlight: Promise<void> | null = null;
-  private operatorInputUnsupported = false;
+  // The browser route bound to this client answered that it has no operator input session.
+  private operatorInputUnsupportedClient: BrowserRequestClient | null = null;
   // After a failed click the previous field may still be focused; text waits for a new click.
   private focusUncertain = false;
   private compositionCurrent: (() => boolean) | null = null;
@@ -409,48 +410,68 @@ export class BrowserPanelInputOwner {
         return;
       }
       const epoch = this.host.operations.epoch;
-      let navigated = false;
+      const current = () =>
+        this.inputGeneration === generation &&
+        this.host.operations.isLive(epoch, client) &&
+        this.host.activeTargetId === targetId &&
+        this.host.mode === "interact";
+      let outcome = { navigated: false, unsent: 0 };
       const delivered = await this.host.runAction(async (actionClient) => {
-        navigated = await this.sendInputs(actionClient, targetId, inputs);
+        outcome = await this.sendInputs(actionClient, targetId, inputs, current);
       });
       if (this.inputGeneration !== generation || !this.host.operations.isLive(epoch, client)) {
         return;
       }
-      if (navigated) {
-        // Input queued meanwhile was aimed at the document the user saw before it changed.
-        if (this.queuedInputs.length > 0) {
+      const clicked = inputs.some((input) => input.kind === "clickCoords");
+      if (outcome.navigated) {
+        // Input withheld from this burst or queued meanwhile was aimed at the document
+        // the user saw before it changed.
+        if (outcome.unsent > 0 || this.queuedInputs.length > 0) {
           this.queuedInputs = [];
           this.host.setState("noticeText", t("browser.inputDroppedAfterNavigation"));
         }
-      } else if (!delivered) {
+      } else if (delivered) {
+        // A click that reached the page retargets focus after an earlier failed click.
+        if (clicked) {
+          this.focusUncertain = false;
+        }
+      } else {
         // A failed click can leave the previous field focused; only a new click retargets.
-        this.focusUncertain ||= inputs.some((input) => input.kind === "clickCoords");
         const nextClick = this.queuedInputs.findIndex(
           (entry) => entry.input.kind === "clickCoords",
         );
         this.queuedInputs = nextClick < 0 ? [] : this.queuedInputs.slice(nextClick);
+        if (clicked && nextClick < 0) {
+          this.focusUncertain = true;
+        }
       }
     }
   }
 
-  /** Returns true when a navigation withheld input from the next document. */
+  /** Reports whether a navigation withheld input from the next document, and how much. */
   private async sendInputs(
     client: BrowserRequestClient,
     targetId: string,
     inputs: BrowserOperatorInput[],
-  ): Promise<boolean> {
-    if (!this.operatorInputUnsupported) {
+    current: () => boolean,
+  ): Promise<{ navigated: boolean; unsent: number }> {
+    if (this.operatorInputUnsupportedClient !== client) {
       try {
-        return (await sendBrowserOperatorInput(client, { targetId, inputs })).navigated;
+        const result = await sendBrowserOperatorInput(client, { targetId, inputs });
+        return { navigated: result.navigated, unsent: inputs.length - result.sent };
       } catch (error) {
         if (!isBrowserOperatorInputUnsupportedError(error)) {
           throw error;
         }
-        this.operatorInputUnsupported = true;
+        this.operatorInputUnsupportedClient = client;
       }
     }
-    // Existing-session profiles: one guarded act per input.
+    // Profiles without operator input sessions: one guarded act per input, each
+    // only while the panel still owns this input.
     for (const input of inputs) {
+      if (!current()) {
+        break;
+      }
       if (input.kind === "clickCoords") {
         await clickBrowserCoords(client, { targetId, x: input.x, y: input.y });
       } else if (input.kind === "press") {
@@ -459,7 +480,7 @@ export class BrowserPanelInputOwner {
         await insertBrowserText(client, { targetId, text: input.text });
       }
     }
-    return false;
+    return { navigated: false, unsent: 0 };
   }
 
   handleOverlayPointerDown(event: PointerEvent): void {

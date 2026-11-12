@@ -664,6 +664,84 @@ describe("Browser panel", () => {
       expect(actions()[2]).toMatchObject({ kind: "insertText", text: "correct field" });
     });
 
+    const unsupported = () =>
+      new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "Operator input sessions need a Playwright-managed Chromium profile.",
+        details: { code: "OPERATOR_INPUT_UNSUPPORTED" },
+      });
+    const paths = (request: { mock: { calls: unknown[][] } }) =>
+      request.mock.calls.map(([, envelope]) => (envelope as { path?: string })?.path);
+
+    it("notices input withheld from the burst that navigated", async () => {
+      const { panel, request, input } = await mountForm();
+      const first = createDeferred<unknown>();
+      request.mockImplementationOnce(async () => first.promise);
+      request.mockImplementationOnce(async () => ({ ok: true, sent: 1, navigated: true }));
+      for (const value of ["a", "b", "c"]) {
+        key(input, { key: value, cancelable: true });
+      }
+      first.resolve({ ok: true, sent: 1 });
+      await vi.advanceTimersByTimeAsync(0);
+      await panel.updateComplete;
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(panel.querySelector('[role="status"]')?.textContent).toContain(
+        "input typed before it loaded was not sent",
+      );
+    });
+
+    it("types again after a queued click recovers from a failed click", async () => {
+      const { request, input, actions } = await mountForm({ clickable: true });
+      const failedClick = createDeferred<unknown>();
+      request.mockImplementationOnce(async () => failedClick.promise);
+      input.click();
+      input.click();
+      failedClick.reject(new Error("Click failed"));
+      await vi.advanceTimersByTimeAsync(0);
+      key(input, { key: "x", cancelable: true });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(actions()).toMatchObject([
+        { kind: "clickCoords" },
+        { kind: "clickCoords" },
+        { kind: "press", key: "x" },
+      ]);
+    });
+
+    it("stops per-action fallback input once the panel no longer owns it", async () => {
+      const { panel, request, input, actions } = await mountForm();
+      const first = createDeferred<unknown>();
+      request.mockImplementationOnce(async () => first.promise);
+      key(input, { key: "a", cancelable: true });
+      key(input, { key: "b", cancelable: true });
+      key(input, { key: "c", cancelable: true });
+      const fallbackB = createDeferred<unknown>();
+      // Burst [a] meets the unsupported profile and falls back; burst [b, c] follows.
+      first.reject(unsupported());
+      request.mockImplementationOnce(async () => ({ ok: true }));
+      request.mockImplementationOnce(async () => fallbackB.promise);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(actions().map((body) => body?.key)).toEqual(["a", "a", "b"]);
+      (await action(panel, "Annotate page")).click();
+      fallbackB.resolve({ ok: true });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(actions().map((body) => body?.key)).toEqual(["a", "a", "b"]);
+    });
+
+    it("asks a new browser route for operator input after an unsupported one", async () => {
+      const { panel, request, input } = await mountForm();
+      request.mockImplementationOnce(async () => {
+        throw unsupported();
+      });
+      key(input, { key: "a", cancelable: true });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(paths(request)).toEqual(["/operator/input", "/act"]);
+      panel.sessionKey = "replacement-session";
+      await waitForSolid(() => expect(panel.querySelector(".bp-shot")).not.toBeNull());
+      key(panel.querySelector<HTMLTextAreaElement>(".bp-input")!, { key: "b", cancelable: true });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(paths(request).at(-1)).toBe("/operator/input");
+    });
+
     it.each(["empty", "files", "disconnected", "changing tab", "captured view"])(
       "does not send %s clipboard input",
       async (reason) => {

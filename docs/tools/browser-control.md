@@ -169,9 +169,10 @@ viewers receive no further frames or metadata. The loopback HTTP control API
 has no Gateway connection to bind, so its tickets remain TTL-only.
 
 The plugin shares one CDP screencast per profile and tab. Chrome sends JPEG
-frames on repaint. Each frame is acknowledged once every viewer socket has taken
-it, so the frame rate follows delivery; when every viewer is congested the next
-frame waits 50 ms. Slow viewers skip frames instead of building a queue. Navigation immediately retires the
+frames on repaint. Each frame is acknowledged once the first viewer socket has
+taken it, so the frame rate follows the fastest delivery; when every viewer is
+congested the next frame waits 50 ms. Slow viewers skip frames instead of
+building a queue. Navigation immediately retires the
 capture session. A new CDP session starts only after the address is allowed,
 so delayed frames from the previous document cannot enter the new stream.
 A rejected navigation stops the stream.

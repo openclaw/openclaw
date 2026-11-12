@@ -104,11 +104,12 @@ class OperatorInputSession {
   /** Finish queued bursts, then release the guard without waiting for more input. */
   retire(): void {
     this.retired = true;
-    this.stopAccepting();
+    this.accepting = false;
     this.wake?.();
   }
 
-  private stopAccepting(): void {
+  /** Later bursts find a registered session and wait for it to settle. */
+  private release(): void {
     this.accepting = false;
     if (sessions.get(this.page) === this) {
       sessions.delete(this.page);
@@ -174,7 +175,7 @@ class OperatorInputSession {
       failed = true;
       failure = error;
     } finally {
-      this.stopAccepting();
+      this.release();
       this.page.off("close", this.onPageClose);
     }
     if (failed && this.queue.length === 0) {
@@ -262,7 +263,13 @@ class OperatorInputSession {
       }
     } finally {
       // Settled synchronously with the loop exit so no burst joins a finishing guard.
-      this.stopAccepting();
+      this.accepting = false;
+      if (!this.stopped(signal)) {
+        // Idle end: the guard's tail checks nothing this session started, so new
+        // input need not wait for it. A navigation, dialog or abort keeps the
+        // session registered until its guard has checked and settled.
+        this.release();
+      }
     }
   }
 
@@ -327,19 +334,19 @@ export async function sendOperatorInputViaPlaywright(
       reject,
     };
     const admit = async () => {
-      if (lateFailures.has(page)) {
-        const failure = lateFailures.get(page);
-        lateFailures.delete(page);
-        reject(toErrorObject(failure, "Browser operator input failed"));
-        return;
-      }
       for (;;) {
+        if (lateFailures.has(page)) {
+          const failure = lateFailures.get(page);
+          lateFailures.delete(page);
+          reject(toErrorObject(failure, "Browser operator input failed"));
+          return;
+        }
         const current = sessions.get(page);
         if (current?.canShare(sessionOpts) && current.enqueue(burst)) {
           return;
         }
         if (current) {
-          // A differently scoped session finishes its queue, then its guard settles.
+          // A finishing or differently scoped session settles its guard first.
           current.retire();
           await current.finished;
           continue;

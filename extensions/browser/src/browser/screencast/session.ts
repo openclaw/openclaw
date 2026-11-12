@@ -304,12 +304,15 @@ class BrowserScreencastSession {
     wire.writeUInt32BE(header.length, 0);
     header.copy(wire, 4);
     jpeg.copy(wire, 4 + header.length);
-    // Chrome retains one unacked frame, so acking once viewers took this frame paces
-    // capture to delivery without a frame queue. Congested viewers skip frames instead.
+    // Chrome retains one unacked frame. Acking once the first viewer has taken this
+    // frame paces capture to the fastest delivery without a frame queue; slower
+    // viewers fall behind to MAX_BUFFERED_BYTES and then skip frames.
+    let acked = false;
     const ack = () => {
-      if (this.capture?.cdp !== cdp || !this.isCurrent()) {
+      if (acked || this.capture?.cdp !== cdp || !this.isCurrent()) {
         return;
       }
+      acked = true;
       void this.trackWork(
         cdp
           .send("Page.screencastFrameAck", { sessionId: frame.sessionId })
@@ -321,25 +324,11 @@ class BrowserScreencastSession {
           }),
       );
     };
-    // The extra count holds the ack until every accepted write is registered.
-    let unwritten = 1;
-    let accepted = 0;
-    const written = () => {
-      unwritten -= 1;
-      if (unwritten === 0) {
-        ack();
-      }
-    };
+    let accepted = false;
     for (const ws of this.readyViewers) {
-      unwritten += 1;
-      if (this.send(ws, wire, written)) {
-        accepted += 1;
-      } else {
-        unwritten -= 1;
-      }
+      accepted = this.send(ws, wire, ack) || accepted;
     }
-    if (accepted > 0) {
-      written();
+    if (accepted) {
       return;
     }
     // No viewer took the frame: back off before asking Chrome for another.
