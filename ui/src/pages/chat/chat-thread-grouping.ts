@@ -197,6 +197,7 @@ export function groupMessages(
   const runPrompts = new Map<string, MessageGroup["messages"][number] | null>();
   const promptCounts = new Map<string, number>();
   const stateBefore = new Map<string, ReplyState>();
+  const voiceReplies = new Set<string>();
   let state: ReplyState = {};
   for (const item of context) {
     // System notices and projected/forwarded inputs own turns too. Clear the
@@ -212,6 +213,9 @@ export function groupMessages(
     }
     for (const source of item.messages) {
       stateBefore.set(source.key, { ...state });
+      if (source.voiceReply) {
+        voiceReplies.add(source.key);
+      }
     }
     if (item.role === "user") {
       for (const source of item.messages) {
@@ -288,6 +292,16 @@ export function groupMessages(
     const { sender, message, turnSource } = states[index]!;
     if (item.kind === "group" || item.kind === "stream") {
       item.replyPreviousMessageId = previousMessageId;
+    }
+    if (
+      item.kind === "group" &&
+      context !== result &&
+      item.messages.some((source) => (source.voiceReply ?? false) !== voiceReplies.has(source.key))
+    ) {
+      // Search can hide the backing answer a speech row restates.
+      item.messages = item.messages.map(({ voiceReply: _local, ...source }) =>
+        voiceReplies.has(source.key) ? { ...source, voiceReply: true } : source,
+      );
     }
     if (item.kind === "group") {
       // Excerpts are redundant only when their source is in the displayed projection.
