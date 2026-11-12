@@ -1,2 +1,3 @@
 # Preserve default Files authority, filtering, download lifetime and bounded keyboard navigation.
-526
+# 526 regression lines plus explicitly approved inherited debt of 5; no spare headroom.
+531
