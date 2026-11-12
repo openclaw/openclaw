@@ -42,6 +42,7 @@ async function loginFixture(
     agentModel?: AgentModelConfig;
     agent?: "main" | "coder";
     credentialOnly?: boolean;
+    reuse?: boolean;
     models?: OpenClawConfig["models"];
   } = {},
 ) {
@@ -66,9 +67,20 @@ async function loginFixture(
     ...(!identityOnly
       ? { defaultModel: apiKey ? "openai/gpt-6-astra" : "openai/gpt-6.1-sol" }
       : {}),
-    ...(!identityOnly && !apiKey ? { defaultModelSelection: "if-unset" } : {}),
   };
-  const { plugin } = writeWorkspacePlugin({
+  const initialSelection = !apiKey
+    ? { starterModel: "openai/gpt-6.1-sol", defaultModelSelection: "if-unset" }
+    : {};
+  const importSpec = options.reuse
+    ? {
+        credentialImport: {
+          migrationProviderId: pluginId,
+          itemId: "auth:openai",
+          credentialKind: apiKey ? "api_key" : "oauth",
+        },
+      }
+    : {};
+  const { plugin, workspacePluginDir } = writeWorkspacePlugin({
     workspaceDir: state.workspaceDir,
     id: pluginId,
     body: `module.exports = {
@@ -80,13 +92,43 @@ async function loginFixture(
             id: ${JSON.stringify(options.method ?? "oauth")},
             label: "Fixture sign-in",
             kind: ${JSON.stringify(apiKey ? "api_key" : "oauth")},
-            async run() { return ${JSON.stringify(result)}; },
+            ...${JSON.stringify(initialSelection)},
+            ...${JSON.stringify(importSpec)},
+            async run() {
+              if (${options.reuse === true}) throw new Error("Credential reuse unexpectedly started a new sign-in");
+              return ${JSON.stringify(result)};
+            },
           }],
         });
+        ${
+          options.reuse
+            ? `
+        api.registerMigrationProvider({
+          id: ${JSON.stringify(pluginId)}, label: "Fixed external credential source",
+          supportedItemKinds: ["auth"],
+          plan() { return {
+            providerId: ${JSON.stringify(pluginId)}, source: "synthetic-native-login",
+            summary: { total: 1, planned: 1, migrated: 0, skipped: 0, conflicts: 0, errors: 0, sensitive: 1 },
+            items: [{ id: "auth:openai", kind: "auth", action: "create", status: "planned", sensitive: true,
+              details: { provider: "openai", credentialKind: ${JSON.stringify(apiKey ? "api_key" : "oauth")} } }],
+          }; },
+          async apply(ctx, plan) {
+            const { upsertAuthProfileAsync } = await import("openclaw/plugin-sdk/provider-auth");
+            await upsertAuthProfileAsync({ agentDir: ${JSON.stringify(state.agentDir(agent))},
+              profileId: "openai:initial-proof", credential: ${JSON.stringify(credential)} });
+            return { ...plan, summary: { ...plan.summary, planned: 0, migrated: 1 },
+              items: plan.items.map(item => ({ ...item, status: "migrated", details: { ...item.details, profileId: "openai:initial-proof", configUpdated: false } })) };
+          },
+        });`
+            : ""
+        }
       },
     };`,
   });
-  updatePluginManifest(plugin, { providers: ["openai"] });
+  updatePluginManifest(plugin, {
+    providers: ["openai"],
+    ...(options.reuse ? { contracts: { migrationProviders: [pluginId] } } : {}),
+  });
   const config: OpenClawConfig = {
     agents: {
       ownership: "explicit",
@@ -101,7 +143,11 @@ async function loginFixture(
           : {}),
       },
     },
-    plugins: { allow: [pluginId], entries: { [pluginId]: { enabled: true } } },
+    plugins: {
+      allow: [pluginId],
+      entries: { [pluginId]: { enabled: true } },
+      ...(options.reuse ? { load: { paths: [workspacePluginDir] } } : {}),
+    },
     ...(options.models ? { models: options.models } : {}),
   };
   await state.writeConfig(config);
@@ -109,7 +155,7 @@ async function loginFixture(
     options.credentialOnly === false
       ? runModelsAuthLoginFlowCore
       : runModelsAuthLoginFlowForGateway;
-  await login({
+  const loginResult = await login({
     provider: "openai",
     method: options.method ?? "oauth",
     agent,
@@ -121,14 +167,14 @@ async function loginFixture(
   });
   const persisted = await readConfigFileSnapshot();
   expect(persisted.valid).toBe(true);
-  const profiles =
-    agent === "main"
-      ? loadPersistedSharedAuthProfileStore(state.env)?.profiles
-      : loadPersistedAuthProfileStore(state.agentDir(agent))?.profiles;
+  const profiles = {
+    ...loadPersistedSharedAuthProfileStore(state.env)?.profiles,
+    ...loadPersistedAuthProfileStore(state.agentDir(agent))?.profiles,
+  };
   expect(profiles).toMatchObject({
     "openai:initial-proof": credential,
   });
-  return { config: persisted.config, state };
+  return { config: persisted.config, loginResult };
 }
 
 // The real login owner writes credentials and config, then the chat-selection owner reads them.
@@ -158,6 +204,22 @@ it("initializes only the target agent while preserving its inherited fallback ch
     model: "gpt-6.1-sol",
   });
   expect(resolveAgentModelFallbacksOverride(config, "coder")).toEqual(fallbacks);
+});
+
+it.each([
+  ["oauth", "gpt-6.1-sol"],
+  ["api-key", "gpt-6-astra"],
+] as const)("selects the right default after reusing %s credentials", async (method, model) => {
+  const { config, loginResult } = await loginFixture({
+    method,
+    credentialOnly: false,
+    reuse: true,
+  });
+  expect(loginResult.imported).toBe(true);
+  expect(resolveDefaultModelForAgent({ cfg: config, agentId: "main" })).toEqual({
+    provider: "openai",
+    model,
+  });
 });
 
 it.each(["global", "agent"] as const)(

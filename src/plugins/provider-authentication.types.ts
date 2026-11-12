@@ -56,12 +56,6 @@ export type ProviderAuthResult = {
     };
   };
   defaultModel?: string;
-  /**
-   * Let connection-only login initialize an unset model from `defaultModel`.
-   * The host preserves configured selections and applies this only after saving credentials.
-   * Omit to retain credential-only login's usual model-preservation behavior.
-   */
-  defaultModelSelection?: "if-unset";
   /** Setup routes the selected agent's model through this runtime, without changing global defaults. */
   agentRuntimeId?: string;
   notes?: string[];
@@ -179,6 +173,12 @@ export type ProviderAuthMethod = {
   kind: "oauth" | "api_key" | "token" | "device_code" | "custom";
   /** Provider-owned model used to validate app-guided secret setup. */
   starterModel?: string;
+  /**
+   * Initialize an unset agent model after successful login or credential reuse.
+   * Login still requires an inference-capable result's `defaultModel`; imports use `starterModel`.
+   * Omit to preserve existing login behavior, including an unset model.
+   */
+  defaultModelSelection?: "if-unset";
   /** One-time import attempted only after the user starts this login method. */
   credentialImport?: {
     migrationProviderId: string;

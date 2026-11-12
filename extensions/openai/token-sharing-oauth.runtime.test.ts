@@ -56,7 +56,6 @@ function existingCredential(overrides: Partial<OAuthCredential> = {}): OAuthCred
 async function expectConnected(result: Awaited<ReturnType<typeof loginTokenSharing>>) {
   expect(result).toMatchObject({
     defaultModel: "openai/gpt-6.1-sol",
-    defaultModelSelection: "if-unset",
     configPatch: { agents: { defaults: { models: { "openai/gpt-6.1-sol": {} } } } },
   });
   expect(result.profiles).toHaveLength(1);
@@ -484,7 +483,6 @@ describe("ChatGPT token-sharing authorization", () => {
       authorizationScope: TOKEN_SHARING_LEGACY_SCOPE,
     });
     expect(result).not.toHaveProperty("defaultModel");
-    expect(result).not.toHaveProperty("defaultModelSelection");
     expect(result).not.toHaveProperty("configPatch");
     expect(result.notes?.[0]).toContain("token sharing is disabled");
   });

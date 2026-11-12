@@ -25,7 +25,7 @@ import {
   isOpenAICodexBaseUrl,
   OPENAI_CODEX_RESPONSES_BASE_URL,
 } from "./base-url.js";
-import { OPENAI_CODEX_DEFAULT_MODEL } from "./default-models.js";
+import { OPENAI_CODEX_DEFAULT_MODEL } from "./chatgpt-default-model.js";
 import {
   OPENAI_CODEX_GPT_61_SOL_CONTEXT_TOKENS,
   OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
@@ -385,7 +385,7 @@ function buildOpenAICodexAuthResult(
     access: creds.access,
     email: readStringValue(creds.email),
   });
-  const result = buildResult({
+  return buildResult({
     providerId: PROVIDER_ID,
     defaultModel: OPENAI_CODEX_DEFAULT_MODEL,
     configPatch: { agents: { defaults: { models: { [OPENAI_CODEX_DEFAULT_MODEL]: {} } } } },
@@ -396,7 +396,6 @@ function buildOpenAICodexAuthResult(
     profileName: identity.profileName,
     credentialExtra: buildCodexCredentialExtra(identity),
   });
-  return { ...result, defaultModelSelection: "if-unset" as const };
 }
 
 async function runOpenAICodexOAuth(ctx: OpenAICodexOAuthContext) {

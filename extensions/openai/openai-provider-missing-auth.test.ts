@@ -6,6 +6,7 @@ const FUTURE_CODEX_DEFAULT_MODEL = "openai/gpt-next-codex-default";
 describe("OpenAI missing auth message", () => {
   afterEach(() => {
     vi.doUnmock("./default-models.js");
+    vi.doUnmock("./chatgpt-default-model.js");
     vi.resetModules();
   });
 
@@ -16,9 +17,12 @@ describe("OpenAI missing auth message", () => {
       return {
         ...actual,
         OPENAI_DEFAULT_MODEL: FUTURE_API_DEFAULT_MODEL,
-        OPENAI_CODEX_DEFAULT_MODEL: FUTURE_CODEX_DEFAULT_MODEL,
       };
     });
+    vi.doMock("./chatgpt-default-model.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./chatgpt-default-model.js")>()),
+      OPENAI_CODEX_DEFAULT_MODEL: FUTURE_CODEX_DEFAULT_MODEL,
+    }));
 
     const { buildOpenAIProvider } = await import("./openai-provider.js");
     const provider = buildOpenAIProvider();

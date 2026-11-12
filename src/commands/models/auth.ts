@@ -1,31 +1,17 @@
 import { cancel } from "@clack/prompts";
-import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveAgentEntry } from "../../agents/agent-scope-config.js";
-import {
-  listAgentEntries,
-  resolveAgentEffectiveModelPrimary,
-  resolveAgentModelFallbacksOverride,
-  resolveAgentWorkspaceDir,
-  toAgentEntriesRecord,
-} from "../../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { removeProviderAuthProfilesWithLock } from "../../agents/auth-profiles.js";
 import { upsertAuthProfileWithLockOrThrow } from "../../agents/auth-profiles/profiles.js";
 import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { normalizeProviderId } from "../../agents/model-ref-shared.js";
 import { isCliProvider } from "../../agents/model-selection-cli.js";
-import { resolveConfiguredPrimaryProviderFallback } from "../../agents/model-selection-shared.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { logConfigUpdated } from "../../config/logging.js";
-import {
-  normalizeAgentModelRefForConfig,
-  resolveAgentModelFallbackValues,
-  toAgentModelListLike,
-} from "../../config/model-input.js";
+import { normalizeAgentModelRefForConfig } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   applyProviderAuthConfigPatchWithNormalization,
@@ -83,6 +69,8 @@ import {
   allowLoginProviderModels,
   allowProviderModelsInConfig,
   applyProviderLoginDefaultModel,
+  applyProviderLoginInitialDefaultModel,
+  hasProviderLoginModelSelection,
   withoutProviderModelPolicy,
   type ProviderModelAccess,
 } from "./auth-model-policy.js";
@@ -309,11 +297,8 @@ async function runProviderAuthMethod(
     ? {
         profiles: result.profiles,
         notes: result.notes,
-        ...(result.defaultModelSelection === "if-unset"
-          ? {
-              defaultModel: result.defaultModel,
-              defaultModelSelection: result.defaultModelSelection,
-            }
+        ...(params.method.defaultModelSelection === "if-unset"
+          ? { defaultModel: result.defaultModel }
           : {}),
         ...(result.configPatch
           ? {
@@ -348,22 +333,7 @@ async function runProviderAuthMethod(
     ? normalizeAgentModelRefForConfig(login.result.defaultModel)
     : undefined;
   const initializeDefault =
-    profiles.length > 0 && login.result.defaultModelSelection === "if-unset" && defaultModel;
-  const hasModelSelection = (config: OpenClawConfig) =>
-    Boolean(resolveAgentEffectiveModelPrimary(config, login.agentId)) ||
-    Boolean(
-      findNormalizedProviderValue(config.models?.providers, DEFAULT_PROVIDER)?.models?.some(
-        (model) => model.id === DEFAULT_MODEL,
-      ),
-    ) ||
-    resolveConfiguredPrimaryProviderFallback({
-      cfg: config,
-      agentId: login.agentId,
-      defaultProvider: DEFAULT_PROVIDER,
-      defaultModel: DEFAULT_MODEL,
-      allowManifestNormalization: false,
-      allowPluginNormalization: false,
-    }) !== null;
+    profiles.length > 0 && login.method.defaultModelSelection === "if-unset" && defaultModel;
   const persistedProfiles: ProviderAuthResult["profiles"] = [];
   let initializedDefault = false;
   // Match source and runtime rows using the config owner's canonical model identities.
@@ -389,7 +359,7 @@ async function runProviderAuthMethod(
   const shouldUpdateConfig =
     (isRecord(configPatch) && Object.keys(configPatch).length > 0) ||
     Boolean(login.setDefault && defaultModel) ||
-    Boolean(initializeDefault && !hasModelSelection(loginConfig));
+    Boolean(initializeDefault && !hasProviderLoginModelSelection(loginConfig, login.agentId));
   if (profiles.length > 0 || shouldUpdateConfig) {
     await login.beforePersistentEffect?.();
   }
@@ -438,37 +408,15 @@ async function runProviderAuthMethod(
               ? applyProviderLoginDefaultModel(next, defaultModel)
               : applyPrimaryModel(next, defaultModel);
           }
-          if (initializeDefault && !hasModelSelection(next)) {
+          if (initializeDefault) {
             // Use the current writer snapshot: a choice made during sign-in wins.
-            initializedDefault = true;
-            const entries = listAgentEntries(next);
-            if (entries.length <= 1) {
-              return applyProviderLoginDefaultModel(next, initializeDefault);
-            }
-            const target = expectDefined(
-              resolveAgentEntry(next, login.agentId),
-              "configured login agent",
+            const initialized = applyProviderLoginInitialDefaultModel(
+              next,
+              login.agentId,
+              initializeDefault,
             );
-            const fallbacks =
-              resolveAgentModelFallbacksOverride(next, login.agentId) ??
-              resolveAgentModelFallbackValues(next.agents?.defaults?.model);
-            // Do not mutate entries shared with the writer's before snapshot.
-            const targetIndex = entries.findIndex((entry) => entry.id === target.id);
-            entries[targetIndex] = {
-              ...target,
-              model: {
-                ...toAgentModelListLike(target.model),
-                primary: initializeDefault,
-                fallbacks,
-              },
-            };
-            return {
-              ...next,
-              agents: {
-                ...next.agents,
-                entries: toAgentEntriesRecord(entries),
-              },
-            };
+            initializedDefault = initialized !== next;
+            return initialized;
           }
           return next;
         },
@@ -932,15 +880,57 @@ async function runModelsAuthLoginFlow(
       profileId: imported.profileId,
       assertCurrent: opts.assertCurrent,
     });
+    const initialModel =
+      chosenMethod.defaultModelSelection === "if-unset" && chosenMethod.starterModel
+        ? normalizeAgentModelRefForConfig(chosenMethod.starterModel)
+        : undefined;
+    let initializedDefault = false;
+    let connectedConfig = context.config;
+    if (initialModel && !hasProviderLoginModelSelection(context.config, context.agentId)) {
+      opts.signal?.throwIfAborted();
+      try {
+        connectedConfig = await writeProviderAuthConfig({
+          config: context.config,
+          configSnapshot: context.configSnapshot,
+          configPatch: undefined,
+          credentialsSaved: true,
+          beforeCommit: opts.assertCurrent,
+          writeOptions: { assertCurrent: opts.assertCurrent },
+          finalizeConfig: (current) => {
+            const initialized = applyProviderLoginInitialDefaultModel(
+              current,
+              context.agentId,
+              initialModel,
+            );
+            initializedDefault = initialized !== current;
+            return initialized;
+          },
+        });
+      } catch (error) {
+        if (error instanceof ProviderAuthConfigApplyError) {
+          await refreshSavedAuthAfterSettingsFailure({ ...opts, agentId: context.agentId });
+        }
+        throw error;
+      }
+      if (initializedDefault) {
+        for (const warning of await repairModelSelectionRuntimePlugins({
+          cfg: connectedConfig,
+          model: initialModel,
+        })) {
+          opts.runtime.error?.(warning);
+        }
+        opts.runtime.log(`Default model set to ${initialModel}`);
+      }
+    }
     const authRefresh = await refreshProviderAuthAfterLogin({ ...opts, agentId: context.agentId });
-    if (imported.configUpdated) {
+    if (imported.configUpdated || initializedDefault) {
       logConfigUpdated(opts.runtime);
     }
     opts.runtime.log(
       `Auth profile: ${imported.profileId} (${imported.provider}/${imported.mode}, imported)`,
     );
     const modelAccess = await allowLoginProviderModels(
-      { ...opts, config: context.config },
+      { ...opts, config: connectedConfig },
       context.agentId,
       selectedProvider.id,
     );
@@ -950,6 +940,7 @@ async function runModelsAuthLoginFlow(
       authRefresh,
       ...(modelAccess ? { modelAccess } : {}),
       imported: true,
+      ...(initializedDefault && initialModel ? { defaultModel: initialModel } : {}),
       profiles: [
         { profileId: imported.profileId, provider: imported.provider, mode: imported.mode },
       ],

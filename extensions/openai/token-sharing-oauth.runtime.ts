@@ -20,7 +20,7 @@ import {
   isRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { OPENAI_CODEX_DEFAULT_MODEL } from "./default-models.js";
+import { OPENAI_CODEX_DEFAULT_MODEL } from "./chatgpt-default-model.js";
 import {
   createOpenAIAuthorizationCodeForm,
   withOpenAIOAuthResponse,
@@ -484,7 +484,7 @@ export async function loginTokenSharing(ctx: ProviderAuthContext): Promise<Provi
       // Identity-only login must not change the model or silently choose another funding source.
       return { profiles: result.profiles, notes: result.notes };
     }
-    return { ...result, defaultModelSelection: "if-unset" };
+    return result;
   } catch (error) {
     await callback.complete({
       status: 400,

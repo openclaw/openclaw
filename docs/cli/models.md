@@ -479,6 +479,8 @@ configuration edits made while login is running. ChatGPT browser OAuth, device
 code, and inference-enabled SIWC initialize `openai/gpt-6.1-sol` when no model has
 been selected; an explicit primary or configured provider-model default is not
 replaced. On multi-agent Gateways, only the target agent is initialized.
+Offline login that reuses a compatible Codex OAuth credential follows the same
+rule without starting another sign-in.
 Identity-only SIWC, direct API-key login, and methods without an initial-model
 recommendation also preserve an unset default. If credentials are saved but
 provider settings cannot be applied, the error reports the saved credentials

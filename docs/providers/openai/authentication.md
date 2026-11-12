@@ -184,6 +184,9 @@ when the agent has no selected model. Identity-only SIWC and direct API-key
 login do not initialize a model. On a multi-agent Gateway, initialization
 applies only to the target agent. Personal-account connections do not change
 the agent's model selection.
+Offline login may reuse a compatible existing Codex credential instead of
+starting another browser flow. Reused OAuth credentials initialize the same Sol
+default when no model has been selected; API-key reuse preserves model selection.
 
 For guided setup, use `openclaw onboard`. An existing compatible login may be
 offered for reuse.

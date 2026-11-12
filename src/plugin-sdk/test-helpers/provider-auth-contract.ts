@@ -166,7 +166,6 @@ export function describeOpenAICodexProviderAuthContract(
         ],
         configPatch: { agents: { defaults: { models: { [expectedCodexDefaultModel]: {} } } } },
         defaultModel: expectedCodexDefaultModel,
-        defaultModelSelection: "if-unset",
         notes: undefined,
       });
     }

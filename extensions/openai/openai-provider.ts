@@ -27,11 +27,8 @@ import {
   isOpenAIApiBaseUrl,
   resolveOpenAIDefaultBaseUrl,
 } from "./base-url.js";
-import {
-  applyOpenAIConfig,
-  OPENAI_CODEX_DEFAULT_MODEL,
-  OPENAI_DEFAULT_MODEL,
-} from "./default-models.js";
+import { OPENAI_CODEX_DEFAULT_MODEL } from "./chatgpt-default-model.js";
+import { applyOpenAIConfig, OPENAI_DEFAULT_MODEL } from "./default-models.js";
 import { classifyOpenAiFailoverCode } from "./failover-code.js";
 import {
   OPENAI_MANIFEST_PROVIDER,
@@ -258,9 +255,6 @@ export function buildOpenAIProvider(): ProviderPlugin {
     wizard: apiKeyDefinition.wizard,
   });
   for (const method of providerDefinition.auth) {
-    if (method.kind === "oauth" || method.kind === "device_code") {
-      method.starterModel = OPENAI_CODEX_DEFAULT_MODEL;
-    }
     if (method.id === "siwc") {
       method.run = async (ctx) =>
         (await import("./token-sharing-oauth.runtime.js")).loginTokenSharing(ctx);

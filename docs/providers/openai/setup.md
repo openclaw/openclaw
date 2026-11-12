@@ -20,6 +20,9 @@ initializes Sol when no model has been selected. Existing explicit selections
 and configured provider-model defaults are preserved, including choices made
 while sign-in is running. Identity-only sign-in does not select an inference
 model. Direct OpenAI API-key setup keeps its separate Astra default.
+Offline login that reuses an existing Codex OAuth credential follows the same
+initial-model rule; reusing an API key does not initialize a model.
+Direct Codex OAuth imports also use Sol when they supply a missing default.
 
 Detected native Codex setup recommends Sol regardless of whether Codex itself
 uses a ChatGPT account or an API key. This is separate from OpenAI API-key setup.

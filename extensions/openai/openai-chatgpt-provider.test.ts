@@ -93,12 +93,17 @@ describe("OpenAI provider Codex transport hooks", () => {
     expect(provider.aliases).toBeUndefined();
     expect(provider.hookAliases).toEqual(["azure-openai", "azure-openai-responses"]);
     expect(
-      provider.auth.map(({ id, wizard, starterModel }) => [id, wizard?.choiceId, starterModel]),
+      provider.auth.map(({ id, wizard, starterModel, defaultModelSelection }) => [
+        id,
+        wizard?.choiceId,
+        starterModel,
+        defaultModelSelection,
+      ]),
     ).toEqual([
-      ["oauth", "openai", "openai/gpt-6.1-sol"],
-      ["device-code", "openai-device-code", "openai/gpt-6.1-sol"],
-      ["siwc", "openai-token-sharing", "openai/gpt-6.1-sol"],
-      ["api-key", "openai-api-key", "openai/gpt-6-astra"],
+      ["oauth", "openai", "openai/gpt-6.1-sol", "if-unset"],
+      ["device-code", "openai-device-code", "openai/gpt-6.1-sol", "if-unset"],
+      ["siwc", "openai-token-sharing", "openai/gpt-6.1-sol", "if-unset"],
+      ["api-key", "openai-api-key", "openai/gpt-6-astra", undefined],
     ]);
     expect(provider.oauthProfileIdRepairs).toBeUndefined();
   });
@@ -121,7 +126,6 @@ describe("OpenAI provider Codex transport hooks", () => {
         },
       ],
       defaultModel: "openai/gpt-6.1-sol",
-      defaultModelSelection: "if-unset",
     });
     expect(result?.configPatch?.agents?.defaults?.models).toEqual({ "openai/gpt-6.1-sol": {} });
   });
