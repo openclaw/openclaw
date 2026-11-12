@@ -1,2 +1,0 @@
-# Closed producer-scope routing regression: 20 lines; CI base inherited debt: 128 lines.
-148

@@ -663,7 +663,7 @@ it.each([
   "missing-env",
   "missing-schema",
   "unverified-health",
-  "operator-overrides",
+  "launcher-overrides",
   "unknown-overrides",
   "reload-pending",
   "no-restart",
@@ -678,10 +678,10 @@ it.each([
   if (scenario === "missing-env") {
     before.serviceEnv = undefined;
   }
-  if (scenario === "operator-overrides" || scenario === "unknown-overrides") {
+  if (scenario === "launcher-overrides" || scenario === "unknown-overrides") {
     serviceState.command!.managedDefinition = structuredClone(serviceState.command!);
-    if (scenario === "operator-overrides") {
-      serviceState.command!.managedOverrides = { environment: { keys: ["NODE_OPTIONS"] } };
+    if (scenario === "launcher-overrides") {
+      serviceState.command!.managedOverrides = { launcher: "command" };
     }
   }
   if (scenario === "reload-pending") {

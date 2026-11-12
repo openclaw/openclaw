@@ -74,12 +74,12 @@ openclaw-browser-tab-card {
     white-space: nowrap;
   }
   .title {
-    font-size: calc(0.8rem * var(--control-ui-text-scale));
+    font-size: 0.8rem;
     font-weight: 500;
   }
   .url {
     color: var(--muted);
-    font-size: calc(0.72rem * var(--control-ui-text-scale));
+    font-size: 0.72rem;
   }
   .actions {
     display: flex;
@@ -100,7 +100,7 @@ openclaw-browser-tab-card {
     padding: 4px 8px;
     color: var(--text);
     font: inherit;
-    font-size: calc(0.75rem * var(--control-ui-text-scale));
+    font-size: 0.75rem;
     background: none;
     border: 0;
     border-radius: var(--radius-sm);
@@ -145,21 +145,21 @@ openclaw-browser-tab-card {
   }
   .tweet-author {
     color: var(--text);
-    font-size: calc(0.9rem * var(--control-ui-text-scale));
+    font-size: 0.9rem;
     font-weight: 650;
     line-height: 1.4;
     overflow-wrap: anywhere;
   }
   .tweet-handle {
     color: var(--muted);
-    font-size: calc(0.8rem * var(--control-ui-text-scale));
+    font-size: 0.8rem;
     line-height: 1.5;
   }
   .tweet-text {
     margin: 0;
     padding: 0 16px 16px;
     color: var(--text);
-    font-size: calc(0.9rem * var(--control-ui-text-scale));
+    font-size: 0.9rem;
     line-height: 1.6;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
@@ -178,7 +178,7 @@ openclaw-browser-tab-card {
   }
   .tweet-source {
     color: var(--muted);
-    font-size: calc(0.75rem * var(--control-ui-text-scale));
+    font-size: 0.75rem;
   }
   .tweet .actions {
     opacity: 1;

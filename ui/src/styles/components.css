@@ -23,7 +23,7 @@ openclaw-session-progress-hovercard-provider {
 .connect-splash__status {
   margin-top: 16px;
   color: var(--muted);
-  font-size: var(--control-ui-text-md);
+  font-size: 14px;
 }
 
 .loading-skeleton {
@@ -460,7 +460,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 }
 
 .card-title {
-  font-size: calc(15px * var(--control-ui-text-scale));
+  font-size: 15px;
   font-weight: 600;
   letter-spacing: -0.02em;
   color: var(--text-strong);
@@ -468,7 +468,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 
 .card-sub {
   color: var(--muted);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   margin-top: 6px;
   line-height: 1.5;
 }
@@ -504,7 +504,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 }
 
 .stat-value {
-  font-size: calc(24px * var(--control-ui-text-scale));
+  font-size: 24px;
   font-weight: 700;
   margin-top: 6px;
   letter-spacing: -0.03em;
@@ -513,7 +513,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 
 .label {
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   font-weight: 500;
 }
 
@@ -570,7 +570,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   background: var(--btn-bg, var(--bg-elevated));
   padding: 8px 14px;
   border-radius: var(--radius-md);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   font-weight: 500;
   letter-spacing: -0.01em;
   /* Labels never break mid-text; tight clusters wrap whole buttons instead
@@ -655,12 +655,12 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 
 .btn--sm {
   padding: 6px 10px;
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
 }
 
 .btn--xs {
   padding: 4px 6px;
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   line-height: 1;
 }
 
@@ -992,7 +992,7 @@ openclaw-toast-host[data-toast-placement="shell"] .app-toast-lane--top-center {
 .login-gate__form .field label,
 .field span {
   color: var(--muted);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   font-weight: 500;
 }
 
@@ -1071,7 +1071,7 @@ select.input {
   padding: 0 12px;
   color: var(--text);
   font-family: var(--mono);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   letter-spacing: 0.08em;
   line-height: 1;
   pointer-events: none;
@@ -1410,7 +1410,7 @@ openclaw-tooltip:last-child > .refresh-button {
   border-radius: var(--radius-md);
   background: var(--secondary);
   border: 1px solid var(--border);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   line-height: 1.5;
   position: relative;
   user-select: text;
@@ -1578,7 +1578,7 @@ openclaw-tooltip:last-child > .refresh-button {
 
 .lazy-element-loading__header h2 {
   margin: 0;
-  font-size: calc(15px * var(--control-ui-text-scale));
+  font-size: 15px;
   font-weight: 600;
 }
 
@@ -1587,7 +1587,7 @@ openclaw-tooltip:last-child > .refresh-button {
   align-items: center;
   gap: 10px;
   color: var(--muted);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
 }
 
 .agent-startup-state {
@@ -1597,7 +1597,7 @@ openclaw-tooltip:last-child > .refresh-button {
   gap: 8px;
   padding: 32px 24px;
   color: var(--muted);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   line-height: 1.5;
   text-align: center;
 }
@@ -1638,14 +1638,14 @@ openclaw-tooltip:last-child > .refresh-button {
 }
 
 .lazy-view-error__title {
-  font-size: calc(15px * var(--control-ui-text-scale));
+  font-size: 15px;
   font-weight: 650;
   color: var(--text-strong);
 }
 
 .lazy-view-error__subtitle {
   max-width: 40ch;
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   line-height: 1.5;
   color: var(--muted);
 }
@@ -1769,7 +1769,7 @@ openclaw-tooltip:last-child > .refresh-button {
 
 .code-block {
   font-family: var(--mono);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   line-height: 1.5;
   background: var(--secondary);
   padding: 12px;
@@ -1927,7 +1927,7 @@ openclaw-tooltip:last-child > .refresh-button {
   min-height: 36px;
   padding: 8px 8px 4px 14px;
   background: transparent;
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   line-height: 1;
 }
 
@@ -2022,7 +2022,7 @@ openclaw-tooltip:last-child > .refresh-button {
 .code-block-lang {
   color: var(--muted);
   font-family: var(--mono);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   text-transform: lowercase;
   user-select: none;
 }
@@ -2063,7 +2063,7 @@ openclaw-tooltip:last-child > .refresh-button {
   overscroll-behavior: contain;
   color: var(--muted);
   font-family: var(--mono);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   line-height: 1.7;
   white-space: nowrap;
 }
@@ -2210,7 +2210,7 @@ openclaw-tooltip:last-child > .refresh-button {
 }
 
 .chip {
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   font-weight: 500;
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
@@ -2286,7 +2286,7 @@ openclaw-tooltip:last-child > .refresh-button {
   width: 100%;
   border-collapse: separate;
   border-spacing: 0;
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
 }
 
 .data-table th {
@@ -2296,7 +2296,7 @@ openclaw-tooltip:last-child > .refresh-button {
   padding: 10px 12px;
   text-align: left;
   font-weight: 600;
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   color: var(--muted);
   background: var(--bg-elevated);
   border-bottom: 1px solid var(--border);
@@ -2458,7 +2458,7 @@ td.data-table-key-col {
   padding: 8px 12px;
   border-bottom: 1px solid var(--border);
   background: var(--accent-subtle);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   font-weight: 500;
   color: var(--text);
 }
@@ -2471,7 +2471,7 @@ td.data-table-key-col {
   padding: 10px 12px;
   border-top: 1px solid var(--border);
   background: var(--bg-elevated);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   color: var(--muted);
 }
 
@@ -2483,7 +2483,7 @@ td.data-table-key-col {
 
 .data-table-pagination__controls button {
   padding: 4px 12px;
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   border: 1px solid var(--border);
   border-radius: var(--field-radius);
   background: var(--card);
@@ -2566,7 +2566,7 @@ select.data-table-pagination__size {
 
 .exec-approval-sub {
   color: var(--muted);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   margin-top: 4px;
 }
 
@@ -2581,12 +2581,12 @@ select.data-table-pagination__size {
   word-break: break-word;
   white-space: pre-wrap;
   font-family: var(--mono);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
 }
 
 .exec-approval-error {
   margin-top: 10px;
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   color: var(--danger);
 }
 
@@ -2606,7 +2606,7 @@ select.data-table-pagination__size {
 .exec-approval-skip {
   margin-top: 12px;
   column-gap: 10px;
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   cursor: var(--cursor-action);
 }
 
@@ -2640,7 +2640,7 @@ select.data-table-pagination__size {
 .agent-scope-control .agent-select__trigger {
   border-color: var(--border);
   background: var(--bg-elevated);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   font-weight: 600;
 }
 
@@ -2723,7 +2723,7 @@ select.data-table-pagination__size {
   border-radius: var(--radius-full);
   background: transparent;
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   font-weight: 500;
 }
 
@@ -2784,7 +2784,7 @@ select.data-table-pagination__size {
 .agent-select__option {
   color: var(--text);
   font: inherit;
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
 }
 
 .agent-select__option > .oc-menu-item__check {
@@ -2820,7 +2820,7 @@ select.data-table-pagination__size {
 .agent-select__option-description {
   overflow: hidden;
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   font-weight: 400;
   line-height: 1.3;
   text-overflow: ellipsis;
@@ -2837,6 +2837,11 @@ select.data-table-pagination__size {
 .agent-select__option .agent-select__avatar {
   width: 20px;
   height: 20px;
+}
+
+/* The search icon and text sit on the rows' avatar and name columns. */
+.agent-select__menu > .header-search {
+  --header-search-icon-slot: 20px;
 }
 
 .code-block-json-node > summary::-webkit-details-marker {
@@ -2882,8 +2887,8 @@ select.data-table-pagination__size {
   scrollbar-gutter: stable;
   overscroll-behavior: contain;
   font-family: inherit;
-  font-size: calc(15px * var(--control-ui-text-scale));
-  line-height: calc(22px * var(--control-ui-text-scale));
+  font-size: 15px;
+  line-height: 22px;
   background: transparent;
   border: 0;
   border-radius: 0;
@@ -2941,7 +2946,7 @@ select.data-table-pagination__size {
   flex: 0 0 auto;
   padding: 8px 18px;
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
 }
 
 @media (max-width: 768px) {
@@ -2959,7 +2964,7 @@ select.data-table-pagination__size {
   }
 
   .exec-approval-command {
-    font-size: var(--control-ui-text-sm);
+    font-size: 12px;
     padding: 8px 10px;
     max-height: 40dvh;
   }
@@ -3111,7 +3116,7 @@ select.data-table-pagination__size {
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
 }

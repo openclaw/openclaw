@@ -24,8 +24,8 @@ private final class DashboardWindowContentView: NSView {
     }
 }
 
-/// The dashboard's empty unified toolbar exists only to grow the titlebar to
-/// 52pt so the traffic lights align with the hosted web chrome. `View > Hide
+/// The empty compact toolbar keeps the traffic lights aligned with the
+/// hosted web chrome's 40pt row. `View > Hide
 /// Toolbar` (and ⌥⌘T) would collapse the titlebar while the web inset stays
 /// pinned at `--openclaw-native-titlebar-height`, resurrecting the traffic-light
 /// misalignment. Refusing the toggle keeps the two heights in lockstep.
@@ -109,6 +109,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private var browserProfileImportOfferRequestIsInFlight = false
     private var browserProfileImportOfferRetryPending = false
     private var nativeCommandsReady = false
+    private var lastPublishedNativeTitlebarInset: CGFloat?
     /// The document whose finish arrived while a newer load was pending.
     private var deferredFinishSourceID: String?
     private(set) var gatewayHealth: DashboardGatewayHealth?
@@ -693,11 +694,10 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         window.title = title
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
-        // An empty unified toolbar grows the transparent titlebar to 52pt so the
-        // traffic lights sit vertically centered against the web titlebar row
-        // (--openclaw-native-titlebar-height); without it they hug the top edge.
+        // Keep AppKit's traffic lights and the web titlebar on the same centerline.
+        // DashboardWindowLayout supplies this style and the CSS row height.
         window.toolbar = NSToolbar(identifier: "DashboardWindowTitlebar")
-        window.toolbarStyle = .unified
+        window.toolbarStyle = DashboardWindowLayout.toolbarStyle
         window.titlebarSeparatorStyle = .none
         window.isMovableByWindowBackground = true
         window.isReleasedWhenClosed = false
@@ -1090,6 +1090,30 @@ extension DashboardWindowController {
         self.updateToolbarVisibility(isFullScreen: false)
     }
 
+    func windowDidUpdate(_: Notification) {
+        // Full-screen transitions can finish laying out AppKit's traffic lights
+        // after the web view's bounds have stopped changing.
+        self.publishNativeTitlebarInset()
+    }
+
+    private func publishNativeTitlebarInset() {
+        guard self.documentHost.hasLiveContent, self.isTrustedDashboardDocument,
+              let window = self.window else { return }
+        let buttons: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
+        guard let trailingEdge = buttons.compactMap({ window.standardWindowButton($0) })
+            .map({ self.webView.convert($0.bounds, from: $0).maxX }).max() else { return }
+        // AppKit controls vary with toolbar style and OS. Their measured edge is
+        // in view points; the hosted controls use CSS pixels at the page's zoom.
+        let inset = (trailingEdge - self.webView.bounds.minX) / self.webView.pageZoom +
+            DashboardWindowLayout.titlebarControlsGap
+        guard self.lastPublishedNativeTitlebarInset != inset else { return }
+        self.lastPublishedNativeTitlebarInset = inset
+        self.webView.evaluateJavaScript(ControlUIDocumentHost.scopedDashboardScript(
+            """
+            document.documentElement.style.setProperty('--openclaw-native-controls-inset', "\(inset)px");
+            """, url: self.currentURL))
+    }
+
     private func updateToolbarVisibility(isFullScreen: Bool) {
         // Apply completed transitions; failed transitions keep their previous chrome.
         // Reused windows also pass through this owner during initialization.
@@ -1468,6 +1492,8 @@ extension DashboardWindowController {
         self.documentHost.hasLiveContent = true
         guard self.isTrustedDashboardDocument else { return }
         self.deviceSettingsMessageHandler.refresh(refreshAvailability: true)
+        self.lastPublishedNativeTitlebarInset = nil
+        self.publishNativeTitlebarInset()
         self.publishNativeHistoryState()
         self.nativeBrowser.scheduleStatePush()
         self.refreshNativeCommandReadiness()

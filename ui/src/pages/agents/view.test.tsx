@@ -119,6 +119,7 @@ describe("renderAgents", () => {
         <Agents
           {...props}
           tools={{ ...props.tools, readCatalog }}
+          config={config({})}
           readData={() => ({ ...props.readData(), agentsPanel: "tools" })}
         />
       );
@@ -447,7 +448,7 @@ describe("renderAgents", () => {
     expect(inheritedSelection?.textContent?.trim()).toBe("Inherit default (openai/gpt-5.4)");
   });
 
-  it("shows canonical model names alongside configured aliases in agent options", async () => {
+  it("omits redundant family aliases and preserves custom aliases in agent options", async () => {
     const container = document.createElement("div");
     const configForm = {
       agents: {
@@ -516,8 +517,8 @@ describe("renderAgents", () => {
       ]),
     );
 
-    expect(options.get("anthropic/claude-opus-4-8")).toBe("Opus 4.8 · opus");
-    expect(options.get("anthropic/claude-sonnet-5")).toBe("Sonnet 5 · sonnet");
+    expect(options.get("anthropic/claude-opus-4-8")).toBe("Opus 4.8");
+    expect(options.get("anthropic/claude-sonnet-5")).toBe("Sonnet 5");
     expect(options.get("nvidia/moonshotai/kimi-k2.5")).toBe("Kimi K2.5 (NVIDIA)");
     expect(options.get("local/unlisted-model")).toBe("Alpha local model (local/unlisted-model)");
     expect(options.get("google/gemini-3-flash-preview")).toBe(
@@ -954,7 +955,7 @@ describe("renderAgents toolbar", () => {
     },
   );
 
-  it("keeps unavailable creation visible and disabled with a recovery reason", () => {
+  it("hides unavailable creation without replacing authorized page content", () => {
     const container = document.createElement("div");
     document.body.append(container);
     const onCreateAgent = vi.fn();
@@ -980,10 +981,8 @@ describe("renderAgents toolbar", () => {
       );
       expect(container.querySelector("openclaw-agent-select")).toBeNull();
       const createButton = container.querySelector<HTMLButtonElement>(".agents-create-btn");
-      expect(createButton).not.toBeNull();
-      expect(createButton?.disabled).toBe(true);
-      expect(createButton?.title).toBe("You need admin access to set up OpenClaw.");
-      createButton?.click();
+      expect(createButton).toBeNull();
+      expect(container.querySelector("#agents-tab-overview")).not.toBeNull();
       expect(onCreateAgent).not.toHaveBeenCalled();
     } finally {
       container.remove();

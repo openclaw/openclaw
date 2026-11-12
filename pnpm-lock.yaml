@@ -932,6 +932,12 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/celeris:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/cerebras:
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -1291,6 +1297,12 @@ importers:
         version: link:../..
 
   extensions/fal:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
+  extensions/fastino:
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1953,6 +1965,12 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/nace:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/nextcloud-talk:
     dependencies:
       saxes:
@@ -2513,6 +2531,9 @@ importers:
       grammy:
         specifier: 1.46.0
         version: 1.46.0(supports-color@10.2.2)
+      quickjs-wasi:
+        specifier: 3.6.3
+        version: 3.6.3
       typebox:
         specifier: 1.4.3
         version: 1.4.3

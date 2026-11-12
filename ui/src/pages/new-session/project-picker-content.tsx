@@ -4,7 +4,6 @@ import {
   affects,
   createMemo,
   createOptimistic,
-  createSignal,
   Errored,
   For,
   Loading,
@@ -31,7 +30,6 @@ import { projectCloneInput } from "./project-chip.ts";
 import type { ProjectChipProps } from "./project-chip.tsx";
 
 export function ProjectPickerContent(props: ProjectChipProps) {
-  const [projectSearching, setProjectSearching] = createSignal<boolean | undefined>(undefined);
   const applyFolder = (folder: string) => {
     if (!props.params.place.browser.browserNodeId) {
       props.params.place.applyFolder(folder);
@@ -274,23 +272,12 @@ export function ProjectPickerContent(props: ProjectChipProps) {
         <div class="new-session-page__environment-layout" data-chat-autotype-exempt>
           <HeaderSearch
             class="new-session-page__project-search"
-            typeToSearchWhenOpen
-            title={t("newSession.projects")}
             label={t("newSession.projectSearchPlaceholder")}
             query={props.params.place.browser.projectQuery}
-            open={
-              (projectSearching() ??
-                props.params.place.browser.projects.length + props.state.recents.length >= 6) ||
-              Boolean(props.params.place.browser.projectQuery)
-            }
+            autofocus="popover"
             disabled={props.params.submitting || props.params.pendingPlacement}
             inputProps={{ onCompositionEnd: recordCompositionEnd }}
-            onOpenChange={(open) => {
-              // Passive dismissal restores automatic search; an explicit collapse remains a choice.
-              setProjectSearching(
-                !open && !props.params.place.browser.popoverOpen("project") ? undefined : open,
-              );
-            }}
+            inputRef={(node) => props.focus && (props.focus.search = node)}
             onQueryChange={(query) => props.params.place.browser.changeProjectQuery(query)}
             onInputKeyDown={(event) => {
               if (
@@ -393,13 +380,13 @@ export function ProjectPickerContent(props: ProjectChipProps) {
                   each={localProjects()}
                   keyed={(project) => project.id}
                   fallback={
-                    projectsReady() && !projectCatalogError() ? (
+                    <Show when={projectsReady() && !projectCatalogError()}>
                       <div class="new-session-page__menu-note">
                         {view().query
                           ? t("newSession.noLocalProjectMatches")
                           : t("newSession.noLocalProjects")}
                       </div>
-                    ) : undefined
+                    </Show>
                   }
                 >
                   {(project) => {
@@ -466,11 +453,11 @@ export function ProjectPickerContent(props: ProjectChipProps) {
                         each={remoteProjects()}
                         keyed={(project) => project.cloneUrl}
                         fallback={
-                          projectSearchResult() ? (
+                          <Show when={projectSearchResult()}>
                             <div class="new-session-page__menu-note">
                               {t("newSession.noAdditionalGithubProjects")}
                             </div>
-                          ) : undefined
+                          </Show>
                         }
                       >
                         {(project) => {
