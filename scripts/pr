@@ -956,6 +956,15 @@ pr_start_dependency_lifetime() {
 }
 
 pr_collect_dependencies() {
+  if [ "${OPENCLAW_PR_DEFER_CACHE_COLLECTION+x}" = x ]; then
+    case "$OPENCLAW_PR_DEFER_CACHE_COLLECTION" in
+      1) return 0 ;;
+      *)
+        echo "OPENCLAW_PR_DEFER_CACHE_COLLECTION must be 1 or unset." >&2
+        return 2
+        ;;
+    esac
+  fi
   [ "${OPENCLAW_PR_CACHE_COLLECTION_PID:-}" != "$$" ] || return 0
   # Recovery must retain its target and lock-recover needs no Node toolchain.
   case "$requested_subcommand" in
