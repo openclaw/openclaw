@@ -93,7 +93,10 @@ describe("plugin state unknown settlement reconciliation", () => {
     let confirmed!: () => void;
     const reconciling = reconcilePluginStatePublication(
       identity,
-      () => new Promise<void>((resolve) => (confirmed = resolve)),
+      () =>
+        new Promise<void>((resolve) => {
+          confirmed = resolve;
+        }),
     );
     // A second indeterminate write is unresolved by the read that was already in flight.
     settleUnknown(identity);
@@ -110,7 +113,12 @@ describe("plugin state unknown settlement reconciliation", () => {
   it("shares one confirmation across concurrent callers", async () => {
     const identity = latchedIdentity();
     let confirmed!: () => void;
-    const confirm = vi.fn(() => new Promise<void>((resolve) => (confirmed = resolve)));
+    const confirm = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          confirmed = resolve;
+        }),
+    );
 
     const first = reconcilePluginStatePublication(identity, confirm);
     const second = reconcilePluginStatePublication(identity, confirm);
