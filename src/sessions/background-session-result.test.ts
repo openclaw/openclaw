@@ -282,7 +282,7 @@ it("places a GitHub publication receipt that lands during a tool call after the 
     ],
   });
   await withSessionTurn(target, () => session.prompt("Run lookup"));
-  const receipt = { role: "assistant", model: "gateway-publication" };
+  const receipt = { role: "assistant", responseId: "github-publication:publication-during-tool" };
   expect(requests[1]).toMatchObject([{ role: "user" }, lookupCall, lookupResult, receipt]);
   const replay = (await SessionManager.openAsync(target.scope)).buildSessionContext().messages;
   expect(JSON.stringify(replay.slice(0, requests[1]!.length))).toBe(JSON.stringify(requests[1]));

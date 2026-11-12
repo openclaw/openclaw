@@ -2,8 +2,6 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentMessage } from "../../types.js";
 
 export const BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE = "openclaw.background-result-placement";
-/** OpenClaw rows that producers outside the live run append; the next request places them. */
-const PENDING_PLACEMENT_MODELS = new Set(["automation-result", "gateway-publication"]);
 
 export type BackgroundResultPlacement = {
   afterEntryId: string | null;
@@ -22,8 +20,7 @@ export function isPendingBackgroundResultMessage(message: unknown): message is E
   return (
     value?.role === "assistant" &&
     value.provider === "openclaw" &&
-    typeof value.model === "string" &&
-    PENDING_PLACEMENT_MODELS.has(value.model) &&
+    value.model === "automation-result" &&
     value.excludeFromContext === true &&
     value.openclawModelPlacement === "pending"
   );

@@ -8,6 +8,10 @@ import {
 } from "../config/sessions/session-actor-storage-binding.js";
 import { isSessionControllerWorkActive } from "../sessions/session-controller.lifecycle-observation.js";
 import { attachSessionTranscriptRunId } from "../sessions/transcript-events.js";
+import {
+  AUTOMATION_RESULT_MODEL,
+  OPENCLAW_TRANSCRIPT_ARTIFACT_API,
+} from "../shared/transcript-only-openclaw-assistant.js";
 import type {
   GitHubPublicationCoordinator,
   GitHubPublicationTranscriptReport,
@@ -93,13 +97,18 @@ export async function reportGitHubPublicationTranscript(
     throw new Error("GitHub publication transcript owner changed");
   }
   // A receipt that lands inside a live run would sit before that run's later messages on
-  // replay. The run's next request places it at the end of history instead.
+  // replay. Use the pending background-result row, so the run's next request appends it.
   const placement = isSessionControllerWorkActive(
     target.storePath,
     [recipient.sessionKey, recipient.sessionId],
     target.agentId,
   )
-    ? { excludeFromContext: true, openclawModelPlacement: "pending" as const }
+    ? {
+        api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
+        model: AUTOMATION_RESULT_MODEL,
+        excludeFromContext: true,
+        openclawModelPlacement: "pending" as const,
+      }
     : {};
   const appended = await appendSessionTranscriptReport(
     {
