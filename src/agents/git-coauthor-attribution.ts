@@ -1,4 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
+import {
+  gitCoauthorOrganizationPolicy,
+  publicGitHubCoauthorEmail,
+} from "../../packages/gateway-protocol/src/schema/git-coauthor-identity.js";
 import { getRuntimeConfig } from "../config/io.js";
 import {
   MAX_SESSION_PARTICIPANTS,
@@ -110,9 +114,11 @@ async function resolveAttribution(
     return empty;
   }
   const host = params.host ?? resolveConfiguredGitHubHost(params.config);
+  const auth = params.config.gateway?.auth;
   const organizationDefaults =
-    params.config.gateway?.auth?.mode === "trusted-proxy" &&
-    Boolean(params.config.gateway.auth.trustedProxy?.gitCoauthor);
+    auth?.mode === "trusted-proxy" && auth.trustedProxy?.gitCoauthor
+      ? gitCoauthorOrganizationPolicy(auth.trustedProxy.userHeader, auth.trustedProxy.gitCoauthor)
+      : undefined;
   const organizationMapping = organizationDefaults
     ? { ...params.config.gateway?.auth?.trustedProxy?.gitCoauthor }
     : undefined;
@@ -156,7 +162,7 @@ async function resolveAttribution(
       ? identity.email
       : "host" in identity
         ? identity.verifiedEmail
-        : `${identity.accountId}+${identity.login}@users.noreply.github.com`;
+        : publicGitHubCoauthorEmail(identity.accountId, identity.login);
     if (!email) {
       continue;
     }
@@ -168,9 +174,7 @@ async function resolveAttribution(
     const identityKey = email.toLowerCase();
     const contributor = contributors.get(identityKey);
     if (contributor) {
-      if (!organization) {
-        contributor.githubLogin ??= identity.login;
-      }
+      contributor.githubLogin ??= organization ? identity.githubLogin : identity.login;
       if (record) {
         contributor.contributionCount += record.contributionCount;
         contributor.firstPromptedAt =
@@ -186,7 +190,7 @@ async function resolveAttribution(
       contributionCount: record?.contributionCount ?? 0,
       firstPromptedAt: record?.firstPromptedAt ?? null,
       login: organization ? identity.name : identity.login,
-      githubLogin: organization ? undefined : identity.login,
+      githubLogin: organization ? identity.githubLogin : identity.login,
       identityKey,
       ...(!record ? { inheritedOrder: inheritedProfileIds.indexOf(profileId) } : {}),
     });
@@ -222,11 +226,11 @@ async function resolveAttribution(
           if (!prepared.isCurrent()) {
             return false;
           }
-          const auth = getRuntimeConfig().gateway?.auth;
+          const currentAuth = getRuntimeConfig().gateway?.auth;
           return (
-            auth?.mode === "trusted-proxy" &&
-            auth.trustedProxy?.userHeader === principalHeader &&
-            isDeepStrictEqual(auth.trustedProxy?.gitCoauthor, organizationMapping)
+            currentAuth?.mode === "trusted-proxy" &&
+            currentAuth.trustedProxy?.userHeader === principalHeader &&
+            isDeepStrictEqual(currentAuth.trustedProxy?.gitCoauthor, organizationMapping)
           );
         },
   };

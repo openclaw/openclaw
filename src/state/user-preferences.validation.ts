@@ -4,7 +4,7 @@ import {
   USER_BACKGROUND_PREFERENCE_KEY,
 } from "../../packages/gateway-protocol/src/schema/background-preferences.js";
 import {
-  normalizeGitCoauthorIdentity,
+  normalizeGitCoauthorOrganizationIdentity,
   GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
 } from "../../packages/gateway-protocol/src/schema/git-coauthor-identity.js";
 import {
@@ -46,7 +46,7 @@ function prepareEntries(
           : undefined;
       const credit =
         prefKey === GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY
-          ? normalizeGitCoauthorIdentity(value)
+          ? normalizeGitCoauthorOrganizationIdentity(value)
           : undefined;
       if (prefKey === GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY && !credit) {
         return err({ code: "invalid-value", key: prefKey });
@@ -72,7 +72,7 @@ function prepareEntries(
 export function prepareUserPreferenceUpdate(
   entries: Record<string, unknown>,
   expectedEntries: Record<string, unknown> = {},
-  options: { trustedProxyGitCoauthor?: true } = {},
+  options: { trustedProxyGitCoauthor?: true; organizationPolicy?: string | null } = {},
 ): Result<PreparedUserPreferenceUpdate, UserPreferenceError> {
   const prepared = prepareEntries(entries, options.trustedProxyGitCoauthor);
   if (!prepared.ok) {
@@ -84,6 +84,9 @@ export function prepareUserPreferenceUpdate(
   }
   return ok({
     ...prepared.value,
+    ...(options.organizationPolicy !== undefined
+      ? { organizationPolicy: options.organizationPolicy }
+      : {}),
     expected: [
       ...expected.value.serialized,
       ...expected.value.deletionKeys.map((prefKey) => ({ prefKey, valueJson: null })),

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { gitCoauthorOrganizationPolicy } from "../../packages/gateway-protocol/src/schema/git-coauthor-identity.js";
 import type { GatewayAuthResult } from "./auth.js";
 import { resolveTrustedProxyGitCoauthor } from "./trusted-proxy-git-coauthor.js";
 
@@ -39,6 +40,10 @@ describe("trusted proxy Git credit claims", () => {
     ).toEqual({
       name: "Alice Example",
       email: "alice@example.test",
+      policy: gitCoauthorOrganizationPolicy(
+        authConfig.trustedProxy.userHeader,
+        authConfig.trustedProxy.gitCoauthor,
+      ),
     });
     expect(
       resolveTrustedProxyGitCoauthor({
@@ -82,6 +87,13 @@ describe("trusted proxy Git credit claims", () => {
         authResult,
         headers,
       }),
-    ).toEqual({ name: "Alice Example", email: "alice@example.test" });
+    ).toEqual({
+      name: "Alice Example",
+      email: "alice@example.test",
+      policy: gitCoauthorOrganizationPolicy(authConfig.trustedProxy.userHeader, {
+        nameHeader: "x-credit-name",
+        emailHeader: "x-credit-email",
+      }),
+    });
   });
 });

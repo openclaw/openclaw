@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, expect, it, vi } from "vitest";
 import {
+  validateUsersSelfResult,
   validateUsersSetAvatarResult,
   validateUsersSetDisplayNameResult,
   validateUsersSetRoleResult,
@@ -279,6 +280,53 @@ it.each<InvalidRequest>([
       expect(getRuntimeConfig).not.toHaveBeenCalled();
     }
     expectUntouched(...effects);
+  },
+);
+
+it.each(["github.com", "ghe.example.test"])(
+  "projects only public GitHub commit details in users.self (host=%s)",
+  async (host) => {
+    prepareUserProfileGitHubAttribution.mockResolvedValue({
+      identities: new Map([
+        [
+          profile.id,
+          {
+            accountId: 101,
+            login: "verified-ada",
+            ...(host === "github.com"
+              ? {}
+              : { host, verifiedEmail: "private@enterprise.example.test" }),
+          },
+        ],
+      ]),
+      isCurrent: () => true,
+    });
+    const respond = await runUsersHandler(
+      "users.self",
+      {},
+      {
+        ...selfClient,
+        authenticatedUserProfile: { ...profileBinding },
+      },
+      { getRuntimeConfig: () => ({ gateway: { github: { host } } }) },
+    );
+    const result = respond.mock.calls[0]?.[1];
+    expect(result).toEqual({
+      profile: {
+        ...profile,
+        gitCoauthorAvailable: true,
+        ...(host === "github.com"
+          ? {
+              gitCoauthorIdentity: {
+                name: "verified-ada",
+                email: "101+verified-ada@users.noreply.github.com",
+              },
+            }
+          : {}),
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain("private@enterprise.example.test");
+    expect(validateUsersSelfResult(result)).toBe(true);
   },
 );
 

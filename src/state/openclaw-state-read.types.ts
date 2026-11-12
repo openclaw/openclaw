@@ -154,7 +154,7 @@ export type OpenClawStateReadCommand =
       type: "userProfiles.githubAttribution.resolve";
       profileIds: readonly string[];
       host?: string;
-      organizationDefaults?: boolean;
+      organizationDefaults?: string;
       githubAvailability?: boolean;
     }
   | { type: "userProfiles.catalog" }

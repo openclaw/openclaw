@@ -15,6 +15,7 @@ export type UserProfile = Omit<
   | "emails"
   | "githubIdentity"
   | "gitCoauthorAvailable"
+  | "gitCoauthorIdentity"
   | "hasAvatar"
   | "effectiveRole"
   | "roleSource"
@@ -56,6 +57,7 @@ export type UserProfileGitHubAttribution = Map<
   | EnterpriseGitHubIdentity
   | (GitCoauthorIdentity & {
       accountId?: number;
+      githubLogin?: string;
     })
   | null
 >;

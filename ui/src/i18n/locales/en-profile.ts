@@ -63,7 +63,8 @@ const enProfile = {
       displayName: identity.displayName,
       displayNameDescription: "Shown to other people using OpenClaw.",
       linkedEmails: identity.linkedEmails,
-      linkedEmailsDescription: "Email addresses connected to this profile.",
+      linkedEmailsDescription:
+        "Used for sign-in and profile linking. Commit credit can use a different address.",
       attribution: identity.attribution,
       githubAccount: "GitHub sign-in",
       githubAccountDescription:
@@ -75,14 +76,15 @@ const enProfile = {
       ownerGithubDescription:
         "GitHub-backed sign-in through Cloudflare Access or Tailscale Serve provides this identity.",
       gitCoauthor: "Git co-author credit",
-      gitCoauthorShort: "Adds this profile’s credit details to shared-session commits.",
+      gitCoauthorShort:
+        "Adds the GitHub identity selected for the publishing host to public commit history.",
       gitCoauthorDescription:
-        "Adds your organization-provided details or GitHub address to shared-session commits. Organization details require explicitly enabling this option. Your selected email address is visible in commit history. Turning it off affects future commits only.",
-      gitCoauthorSource: "Credit source",
-      gitCoauthorOrganization: "From your organization",
-      gitCoauthorGithub: "GitHub sign-in account",
-      gitCoauthorGithubHost: "GitHub identity for the publishing host",
-      gitCoauthorNoSource: "Not configured",
+        "When available, adds this profile’s organization-provided details, public GitHub noreply address or verified enterprise email address to shared-session commits. The email address is visible in commit history. Turning it off affects future commits only.",
+      gitCoauthorChanged: "Credit details changed. Review them and enable credit again.",
+      gitCoauthorOrganization:
+        "Adds the name and email supplied by your organization to public commit history.",
+      gitCoauthorGithub:
+        "Adds your verified GitHub identity to commits using its public noreply address.",
       gitCoauthorConfigure:
         "Ask your administrator to supply co-author details through your sign-in proxy, or use supported GitHub sign-in.",
       ownerGitCoauthorDescription:

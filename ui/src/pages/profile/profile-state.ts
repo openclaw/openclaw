@@ -10,9 +10,9 @@ import {
   isGitCoauthorCreditEnabled,
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import {
-  normalizeGitCoauthorIdentity,
+  normalizeGitCoauthorOrganizationIdentity,
   GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
-  type GitCoauthorIdentity,
+  type GitCoauthorOrganizationIdentity,
 } from "../../../../packages/gateway-protocol/src/schema/git-coauthor-identity.ts";
 import { userProfileDisplayName } from "../../../../src/shared/user-profile-display-name.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -59,10 +59,11 @@ export class ProfileState {
   ownProfile: UserProfile | null = null;
   displayName = "";
   gitCoauthorEnabled = true;
-  gitCoauthorOrganization: GitCoauthorIdentity | undefined;
+  gitCoauthorOrganization: GitCoauthorOrganizationIdentity | undefined;
   private gitCoauthorConsent: unknown;
   prAttributionEnabled = false;
   identityLoading = false;
+  private identityRefreshPending = false;
   identityBusy: IdentityChange["kind"] | null = null;
   identityError: string | null = null;
   attributionError: string | null = null;
@@ -167,11 +168,25 @@ export class ProfileState {
     });
   }
 
+  refreshPublishedIdentity() {
+    if (this.client) {
+      invalidateUserPreferences(this.client);
+    }
+    if (this.identityBusy) {
+      this.identityRefreshPending = true;
+      return;
+    }
+    this.identityRequestId += 1;
+    this.identityLoading = false;
+    this.loadIdentity();
+  }
+
   loadIdentity() {
     const client = this.client;
     if (!client || !this.identityReady || !this.canRead || this.identityLoading) {
       return;
     }
+    this.identityRefreshPending = false;
     const requestId = ++this.identityRequestId;
     const currentProfile = this.ownProfile;
     const displayNameDraft = this.displayName;
@@ -225,7 +240,7 @@ export class ProfileState {
         return;
       }
       const entries = preferences.status === "ok" ? preferences.entries : {};
-      this.gitCoauthorOrganization = normalizeGitCoauthorIdentity(
+      this.gitCoauthorOrganization = normalizeGitCoauthorOrganizationIdentity(
         entries[GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY],
       );
       this.gitCoauthorConsent = entries[GIT_COAUTHOR_PREFERENCE_KEY];
@@ -262,17 +277,22 @@ export class ProfileState {
       : isGitCoauthorCreditEnabled(this.gitCoauthorConsent);
   }
 
+  get gitCoauthorIdentity() {
+    return this.gitCoauthorOrganization ?? this.ownProfile?.gitCoauthorIdentity;
+  }
+
   get gitCoauthorAvailable() {
     return Boolean(this.gitCoauthorOrganization || this.ownProfile?.gitCoauthorAvailable !== false);
   }
 
   private retainCreditAvailability(profile: UserProfile): UserProfile {
-    // Ordinary profile mutation responses omit the users.self-only availability projection.
+    // Ordinary profile mutations omit users.self-only credit projections.
     return this.ownProfile?.id === profile.id
       ? {
           ...profile,
           gitCoauthorAvailable:
             profile.gitCoauthorAvailable ?? this.ownProfile.gitCoauthorAvailable,
+          gitCoauthorIdentity: profile.gitCoauthorIdentity ?? this.ownProfile.gitCoauthorIdentity,
         }
       : profile;
   }
@@ -363,8 +383,23 @@ export class ProfileState {
               : PR_ATTRIBUTION_PREFERENCE_KEY;
           const result = await saveUserPreferences(client, {
             entries: { [key]: change.enabled },
+            ...(change.kind === "git-coauthor" && change.enabled
+              ? {
+                  expectedEntries: {
+                    [GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY]:
+                      this.gitCoauthorOrganization ?? null,
+                  },
+                }
+              : {}),
           });
           if (!isCurrent()) {
+            return;
+          }
+          if (result.status === "conflict" && change.kind === "git-coauthor") {
+            this.identityBusy = null;
+            this.loadIdentity();
+            this.attributionError = t("profilePage.identity.gitCoauthorChanged");
+            this.publish();
             return;
           }
           if (result.status !== "ok") {
@@ -399,6 +434,9 @@ export class ProfileState {
       if (isCurrent() && this.identityBusy === change.kind) {
         this.identityBusy = null;
         this.publish();
+        if (this.identityRefreshPending) {
+          this.loadIdentity();
+        }
       }
     }
     if (isCurrent()) {

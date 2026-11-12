@@ -33,7 +33,12 @@ import {
   validateUsersGitHubAuthorizeCancelParams,
   validateUsersGitHubDisconnectParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY } from "../../../packages/gateway-protocol/src/schema/git-coauthor-identity.js";
+import {
+  GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
+  gitCoauthorOrganizationPolicy,
+  normalizeGitCoauthorOrganizationIdentity,
+  publicGitHubCoauthorEmail,
+} from "../../../packages/gateway-protocol/src/schema/git-coauthor-identity.js";
 import { resolveConfiguredGitHubHost } from "../../agents/github-host.js";
 import { resolveSystemGitHubIdentityStatus } from "../../agents/github-tool-identity.js";
 import { resolveGatewayPersonalToolParticipant } from "../../agents/tools/gateway-caller-context.js";
@@ -447,10 +452,19 @@ export const usersHandlers: GatewayRequestHandlers = {
         respond(false, undefined, authenticatedProfileUnavailableError());
         return;
       }
+      const identity = availability.identities.get(profileId);
       respond(true, {
         profile: {
           ...profile.listItem,
-          gitCoauthorAvailable: Boolean(availability.identities.get(profileId)),
+          gitCoauthorAvailable: Boolean(identity),
+          ...(host === "github.com" && identity && "login" in identity
+            ? {
+                gitCoauthorIdentity: {
+                  name: identity.login,
+                  email: publicGitHubCoauthorEmail(identity.accountId, identity.login),
+                },
+              }
+            : {}),
         },
       });
     } catch (error) {
@@ -482,7 +496,19 @@ export const usersHandlers: GatewayRequestHandlers = {
       const entries = preferences.entries;
       if (Object.hasOwn(entries, GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY)) {
         const auth = context.getRuntimeConfig().gateway?.auth;
-        if (auth?.mode !== "trusted-proxy" || !auth.trustedProxy?.gitCoauthor) {
+        const policy =
+          auth?.mode === "trusted-proxy" && auth.trustedProxy?.gitCoauthor
+            ? gitCoauthorOrganizationPolicy(
+                auth.trustedProxy.userHeader,
+                auth.trustedProxy.gitCoauthor,
+              )
+            : undefined;
+        if (
+          !policy ||
+          normalizeGitCoauthorOrganizationIdentity(
+            entries[GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY],
+          )?.policy !== policy
+        ) {
           delete entries[GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY];
         }
       }
@@ -513,13 +539,31 @@ export const usersHandlers: GatewayRequestHandlers = {
       const backgroundAction = Object.hasOwn(params.entries, "ui.background")
         ? await prepareUserBackgroundAction(options, "operator.write")
         : undefined;
+      const compareOrganization = Object.hasOwn(
+        params.expectedEntries ?? {},
+        GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
+      );
+      const readOrganizationPolicy = () => {
+        const auth = context.getRuntimeConfig().gateway?.auth;
+        return auth?.mode === "trusted-proxy" && auth.trustedProxy?.gitCoauthor
+          ? gitCoauthorOrganizationPolicy(
+              auth.trustedProxy.userHeader,
+              auth.trustedProxy.gitCoauthor,
+            )
+          : null;
+      };
+      const organizationPolicy = compareOrganization ? readOrganizationPolicy() : undefined;
       const assertCurrent = () => {
         assertPersonal();
         options.sessionMutationAuthorization?.assertCurrent();
         backgroundAction?.assertCurrent();
+        if (compareOrganization && readOrganizationPolicy() !== organizationPolicy) {
+          throw new Error("Git co-author policy changed. Refresh Profile and try again.");
+        }
       };
       const result = await setCanonicalUserPreferences(profileId, params.entries, {
         expectedEntries: params.expectedEntries,
+        ...(compareOrganization ? { organizationPolicy } : {}),
         assertCurrent,
       });
       if (!result) {

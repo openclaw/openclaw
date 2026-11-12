@@ -41,14 +41,14 @@ import { GitHubConnections } from "../../features/github-connections/github-conn
 import { registerModelAccountsEnglish } from "../../i18n/locales/en-model-accounts.ts";
 import { registerProfileEnglish } from "../../i18n/locales/en-profile.ts";
 import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
-import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import "../../components/solid/viewer-facepile.tsx";
+import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { projectApplicationConfig } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { projectOwner } from "../../lib/reactive/projection.ts";
 import "../../styles/profile.css";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import { uploadsEnabled } from "../../lib/uploads.ts";
 import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
 import { DiscordIdentity } from "./discord-identity.tsx";
@@ -186,13 +186,11 @@ export function ProfilePage() {
     );
     const stopEvents = context.gateway.subscribeEvents((event) => {
       if (
-        !state.identityBusy &&
-        event.event === "sessions.changed" &&
-        asOptionalRecord(event.payload)?.reason === "profile-identity"
+        event.event === "users.prefs.changed" ||
+        (event.event === "sessions.changed" &&
+          asOptionalRecord(event.payload)?.reason === "profile-identity")
       ) {
-        state.identityRequestId += 1;
-        state.identityLoading = false;
-        state.loadIdentity();
+        state.refreshPublishedIdentity();
       }
     });
     state.applyGatewaySnapshot(context.gateway.snapshot);
@@ -402,17 +400,16 @@ export function ProfilePage() {
                     </form>
                   }
                 />
-                <Show when={!isOwnerProfile()}>
+                <Show when={!isOwnerProfile() && profile().emails.length > 0}>
                   <SettingsRow
                     title={t("profilePage.identity.linkedEmails")}
-                    description={
-                      profile().emails.length ? (
-                        <span class="identity-emails">
-                          <For each={profile().emails}>
-                            {(email) => <span class="identity-account">{email}</span>}
-                          </For>
-                        </span>
-                      ) : undefined
+                    description={t("profilePage.identity.linkedEmailsDescription")}
+                    control={
+                      <span class="identity-emails">
+                        <For each={profile().emails}>
+                          {(email) => <span class="identity-account">{email}</span>}
+                        </For>
+                      </span>
                     }
                   />
                 </Show>

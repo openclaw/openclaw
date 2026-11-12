@@ -1,7 +1,10 @@
 import { IncomingMessage } from "node:http";
 import { Socket } from "node:net";
 import { describe, expect, it, vi } from "vitest";
-import { GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/schema/git-coauthor-identity.js";
+import {
+  GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
+  gitCoauthorOrganizationPolicy,
+} from "../../packages/gateway-protocol/src/schema/git-coauthor-identity.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -9,10 +12,12 @@ import {
   getCanonicalUserPreferences,
   setCanonicalUserPreferences,
 } from "../state/user-preferences.js";
+import { onUserProfilesChanged } from "../state/user-profile-events.js";
 import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolveAuthenticatedHttpUserProfile } from "./http-auth-user-profile.js";
 import { resolveGatewayConnectProfileAdmission } from "./server/ws-connection/connect-user-profile.js";
+import { syncTrustedProxyGitCoauthor } from "./trusted-proxy-git-coauthor.js";
 
 const cfg: OpenClawConfig = {
   gateway: {
@@ -31,6 +36,10 @@ const cfg: OpenClawConfig = {
     },
   },
 };
+const policy = gitCoauthorOrganizationPolicy("x-auth-user", {
+  nameHeader: "x-credit-name",
+  emailHeader: "x-credit-email",
+});
 const authResult = { ok: true, method: "trusted-proxy" as const, user: "oidc:issuer:alice" };
 
 describe("organization credit through authenticated profile admission", () => {
@@ -86,6 +95,7 @@ describe("organization credit through authenticated profile admission", () => {
             [GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY]: {
               name: "Alice Example",
               email: "alice@example.test",
+              policy,
             },
           });
           expect(
@@ -104,6 +114,7 @@ describe("organization credit through authenticated profile admission", () => {
             [GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY]: {
               name: "Alice Updated",
               email: "updated@example.test",
+              policy,
             },
           });
           req.headers = {};
@@ -208,5 +219,30 @@ describe("organization credit through authenticated profile admission", () => {
         req.destroy();
       }
     });
+  });
+});
+
+it("publishes profile invalidation for changed and cleared proxy details only", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot(cfg);
+    const profile = await ensureCanonicalUserProfileForEmail(authResult.user);
+    const changed = vi.fn();
+    const stop = onUserProfilesChanged(changed);
+    const params = {
+      authConfig: cfg.gateway?.auth,
+      authResult,
+      profileId: profile.id,
+      headers: { "x-credit-name": "Alice Example", "x-credit-email": "alice@example.test" },
+    };
+    try {
+      await syncTrustedProxyGitCoauthor(params);
+      expect(changed).toHaveBeenCalledTimes(1);
+      await syncTrustedProxyGitCoauthor(params);
+      expect(changed).toHaveBeenCalledTimes(1);
+      await syncTrustedProxyGitCoauthor({ ...params, headers: {} });
+      expect(changed).toHaveBeenCalledTimes(2);
+    } finally {
+      stop();
+    }
   });
 });

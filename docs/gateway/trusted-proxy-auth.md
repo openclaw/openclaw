@@ -177,7 +177,6 @@ A configuration writer receives its accepted result before its connection closes
 Pending handshakes and HTTP requests recheck the policy applicable to their authority
 after asynchronous waits.
 
-<<<<<<< HEAD
 ## Enterprise browser delegation
 
 OpenClaw Enterprise (OCE) can authorize each browser request without copying its
@@ -228,8 +227,6 @@ Credential-file replacement or removal invalidates admitted grants when the
 one-second credential-file poll observes the change. Reconnect with a current grant;
 restoring a previous key does not revive old connections.
 
-||||||| parent of fc8705ef4e1b23a (feat: let profiles configure Git co-author details)
-=======
 ## Organization co-author defaults
 
 Optionally import a commit-credit name/email pair from your existing identity-aware
@@ -279,7 +276,12 @@ Successful profile admission refreshes the organization pair. Missing, malformed
 partial, or unverified configured claims clear that pair. Unchanged claims do not
 invalidate pending credit. Removing the mapping stops using stored organization
 defaults and leaves the existing GitHub fallback. Profile does not offer manual
-name/email entry or per-user identity overrides.
+name/email entry or per-user identity overrides. Imported details are bound to the
+configured principal and credit header mapping. A replacement mapping withholds
+old details until the next successful sign-in and requires renewed disclosure
+consent. A stale Profile page cannot enable a pair it has not observed; it refreshes
+the details and asks for a new choice. Later email updates under the same mapping
+retain the profile-wide credit preference.
 
 Organization defaults use one protected metadata slot outside the 128-key user
 preference allowance. Importing them does not consume a user preference slot or
@@ -289,7 +291,6 @@ These are organization-supplied credit details. An `email_verified` claim reflec
 the provider's email-verification policy, not proof of a GitHub account. See
 [Git co-author credit](/concepts/user-model#gateway-profile-and-github-credit).
 
->>>>>>> fc8705ef4e1b23a (feat: let profiles configure Git co-author details)
 ## Per-identity scope grants
 
 Use `gateway.auth.identityScopes` to give selected verified users additional

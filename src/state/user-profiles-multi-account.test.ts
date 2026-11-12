@@ -100,8 +100,16 @@ describe("multi-account people", () => {
   ])("merges proxy credit: $label", async (scenario) => {
     const source = ensureProfileForEmail("source@example.test", options);
     const target = ensureProfileForEmail("target@example.test", options);
-    const sourcePair = { name: "Source Person", email: "source-credit@example.test" };
-    const targetPair = { name: "Target Person", email: "target-credit@example.test" };
+    const sourcePair = {
+      name: "Source Person",
+      email: "source-credit@example.test",
+      policy: "test-policy",
+    };
+    const targetPair = {
+      name: "Target Person",
+      email: "target-credit@example.test",
+      policy: "test-policy",
+    };
     expect(
       setUserPreferences(
         source.id,
@@ -142,16 +150,21 @@ describe("multi-account people", () => {
     });
     const credit = await resolveAttribution([source.id, target.id], {
       ...options,
-      organizationDefaults: true,
+      organizationDefaults: "test-policy",
     });
-    const expected = scenario.expectedConsent === true ? selected : null;
+    const expected =
+      scenario.expectedConsent === true ? { name: selected.name, email: selected.email } : null;
     expect(credit.get(source.id)).toEqual(expected);
     expect(credit.get(target.id)).toEqual(expected);
   });
 
   it("retains protected proxy defaults under canonical authority", async () => {
     const profile = ensureProfileForEmail("oidc:proxy-credit", options);
-    const imported = { name: "Organization Alice", email: "work@example.test" };
+    const imported = {
+      name: "Organization Alice",
+      email: "work@example.test",
+      policy: "test-policy",
+    };
     expect(await setPreferences(profile.id, { [organizationKey]: imported }, options)).toEqual({
       ok: false,
       error: { code: "invalid-key", key: organizationKey },
@@ -165,7 +178,7 @@ describe("multi-account people", () => {
     ).toMatchObject({ ok: true });
     const unsigned = await prepareAttribution([profile.id], {
       ...options,
-      organizationDefaults: true,
+      organizationDefaults: "test-policy",
     });
     expect(unsigned.identities.get(profile.id)).toBeNull();
     await setPreferences(profile.id, publicCredit(true), options);
@@ -173,15 +186,18 @@ describe("multi-account people", () => {
     expect((await resolveAttribution([profile.id], options)).get(profile.id)).toBeNull();
     const organization = await prepareAttribution([profile.id], {
       ...options,
-      organizationDefaults: true,
+      organizationDefaults: "test-policy",
     });
-    expect(organization.identities.get(profile.id)).toEqual(imported);
+    expect(organization.identities.get(profile.id)).toEqual({
+      name: imported.name,
+      email: imported.email,
+    });
     await setPreferences(profile.id, publicCredit(false), options);
     expect(organization.isCurrent()).toBe(false);
     expect(
-      (await resolveAttribution([profile.id], { ...options, organizationDefaults: true })).get(
-        profile.id,
-      ),
+      (
+        await resolveAttribution([profile.id], { ...options, organizationDefaults: "test-policy" })
+      ).get(profile.id),
     ).toBeNull();
   });
 

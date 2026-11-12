@@ -3,13 +3,15 @@ import { isDeepStrictEqual } from "node:util";
 import {
   GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
   normalizeGitCoauthorIdentity,
-  type GitCoauthorIdentity,
+  gitCoauthorOrganizationPolicy,
+  type GitCoauthorOrganizationIdentity,
 } from "../../packages/gateway-protocol/src/schema/git-coauthor-identity.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import {
   getCanonicalUserPreferences,
   setCanonicalUserPreferences,
 } from "../state/user-preferences.js";
+import { emitUserProfilesChanged } from "../state/user-profile-events.js";
 import type { GatewayAuthResult } from "./auth.js";
 
 type ProxyCreditParams = {
@@ -21,7 +23,7 @@ type ProxyCreditParams = {
 /** Undefined means this sign-in has no import owner; null clears that owner's default. */
 export function resolveTrustedProxyGitCoauthor(
   params: ProxyCreditParams,
-): GitCoauthorIdentity | null | undefined {
+): GitCoauthorOrganizationIdentity | null | undefined {
   const mapping = params.authConfig?.trustedProxy?.gitCoauthor;
   if (
     !mapping ||
@@ -36,12 +38,16 @@ export function resolveTrustedProxyGitCoauthor(
   if (mapping.emailVerifiedHeader && header(mapping.emailVerifiedHeader) !== "true") {
     return null;
   }
-  return (
-    normalizeGitCoauthorIdentity({
-      name: header(mapping.nameHeader),
-      email: header(mapping.emailHeader),
-    }) ?? null
-  );
+  const identity = normalizeGitCoauthorIdentity({
+    name: header(mapping.nameHeader),
+    email: header(mapping.emailHeader),
+  });
+  return identity
+    ? {
+        ...identity,
+        policy: gitCoauthorOrganizationPolicy(params.authConfig.trustedProxy?.userHeader, mapping),
+      }
+    : null;
 }
 
 /** Import only after the caller has resolved this admitted principal's canonical profile. */
@@ -69,8 +75,10 @@ export async function syncTrustedProxyGitCoauthor(
     { [GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY]: identity },
     { assertCurrent: params.assertCurrent, trustedProxyGitCoauthor: true },
   );
-  params.assertCurrent?.();
   if (!result?.ok) {
     throw new Error("Git co-author defaults could not be updated; reconnect to retry");
   }
+  // A committed import must invalidate views even if this caller was revoked after its write.
+  emitUserProfilesChanged();
+  params.assertCurrent?.();
 }

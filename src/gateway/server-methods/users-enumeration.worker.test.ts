@@ -101,7 +101,11 @@ it("reports verified GitHub fallback availability independently of supplied cred
   await setCanonicalUserPreferences(
     person.id,
     {
-      "git.coauthor.organization": { name: "Organization Alice", email: "work@example.test" },
+      "git.coauthor.organization": {
+        name: "Organization Alice",
+        email: "work@example.test",
+        policy: "test-policy",
+      },
       "git.coauthor.enabled": false,
     },
     { trustedProxyGitCoauthor: true },

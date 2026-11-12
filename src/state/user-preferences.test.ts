@@ -46,22 +46,42 @@ describe("user preferences", () => {
       expect(
         setUserPreferences(
           profileId,
-          { [key]: { name: "Alice Example", email: "alice@example.test" } },
+          { [key]: { name: "Alice Example", email: "alice@example.test", policy: "test-policy" } },
           { ...options, trustedProxyGitCoauthor: true },
         ),
       ).toMatchObject({ ok: true });
       expect(getUserPreferences(profileId, undefined, options)).toEqual({
-        [key]: { name: "Alice Example", email: "alice@example.test" },
+        [key]: { name: "Alice Example", email: "alice@example.test", policy: "test-policy" },
         "git.coauthor.enabled": false,
       });
       setUserPreferences(profileId, { "git.coauthor.enabled": true }, options);
       setUserPreferences(
         profileId,
-        { [key]: { name: "Alice Updated", email: "alice.updated@example.test" } },
+        {
+          [key]: {
+            name: "Alice Updated",
+            email: "alice.updated@example.test",
+            policy: "test-policy",
+          },
+        },
         { ...options, trustedProxyGitCoauthor: true },
       );
       expect(getUserPreferences(profileId, ["git.coauthor.enabled"], options)).toEqual({
         "git.coauthor.enabled": true,
+      });
+      setUserPreferences(
+        profileId,
+        {
+          [key]: {
+            name: "Alice Updated",
+            email: "alice.updated@example.test",
+            policy: "replacement-policy",
+          },
+        },
+        { ...options, trustedProxyGitCoauthor: true },
+      );
+      expect(getUserPreferences(profileId, ["git.coauthor.enabled"], options)).toEqual({
+        "git.coauthor.enabled": false,
       });
     },
   );
@@ -248,7 +268,11 @@ describe("user preferences", () => {
         setUserPreferences(
           "source",
           {
-            "git.coauthor.organization": { name: "Alice", email: "alice@example.test" },
+            "git.coauthor.organization": {
+              name: "Alice",
+              email: "alice@example.test",
+              policy: "test-policy",
+            },
           },
           { ...options, trustedProxyGitCoauthor: true },
         ),
@@ -259,7 +283,11 @@ describe("user preferences", () => {
         count === 127 ? { "source-a": true } : {},
       );
       expect(target.get(["git.coauthor.organization"])).toEqual({
-        "git.coauthor.organization": { name: "Alice", email: "alice@example.test" },
+        "git.coauthor.organization": {
+          name: "Alice",
+          email: "alice@example.test",
+          policy: "test-policy",
+        },
       });
       expect(source.get()).toEqual({});
     },

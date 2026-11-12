@@ -1,5 +1,5 @@
 import {
-  normalizeGitCoauthorIdentity,
+  normalizeGitCoauthorOrganizationIdentity,
   GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
 } from "../../packages/gateway-protocol/src/schema/git-coauthor-identity.js";
 import {
@@ -25,7 +25,7 @@ export function readUserProfileGitAttribution(
   db: EngineConnection,
   profileIds: readonly string[],
   host = "github.com",
-  organizationDefaults = false,
+  organizationDefaults?: string,
   githubAvailability = false,
 ): UserProfileGitHubAttributionRead {
   if (profileIds.length === 0 || !tableExists(db, "user_profiles")) {
@@ -101,8 +101,11 @@ export function readUserProfileGitAttribution(
       const organization =
         !organizationDefaults || row.organization_json === null
           ? undefined
-          : normalizeGitCoauthorIdentity(JSON.parse(row.organization_json));
-      return [row.source_id, organization] as const;
+          : normalizeGitCoauthorOrganizationIdentity(JSON.parse(row.organization_json));
+      return [
+        row.source_id,
+        organization?.policy === organizationDefaults ? organization : undefined,
+      ] as const;
     }),
   );
   return {
@@ -114,17 +117,21 @@ export function readUserProfileGitAttribution(
         const enterpriseIdentity = enterprise.get(canonicalId);
         const identity =
           host !== "github.com"
-            ? enterpriseIdentity?.verifiedEmail
-              ? enterpriseIdentity
-              : null
+            ? (enterpriseIdentity ?? null)
             : (identities.get(sourceId)?.primary ?? null);
+        const fallback =
+          host !== "github.com" && !enterpriseIdentity?.verifiedEmail ? null : identity;
         const preference = githubAvailability ? true : preferences.get(sourceId);
         const pair = githubAvailability ? undefined : creditPairs.get(sourceId);
         const credit = pair
           ? preference === true
-            ? { ...pair, ...(identity ? { accountId: identity.accountId } : {}) }
+            ? {
+                name: pair.name,
+                email: pair.email,
+                ...(identity ? { accountId: identity.accountId, githubLogin: identity.login } : {}),
+              }
             : null
-          : identity;
+          : fallback;
         return [sourceId, isGitCoauthorCreditEnabled(preference) ? credit : null];
       }),
     ),

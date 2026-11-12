@@ -7,7 +7,7 @@ import {
   USER_BACKGROUND_PREFERENCE_KEY,
 } from "../../packages/gateway-protocol/src/schema/background-preferences.js";
 import {
-  normalizeGitCoauthorIdentity,
+  normalizeGitCoauthorOrganizationIdentity,
   GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
 } from "../../packages/gateway-protocol/src/schema/git-coauthor-identity.js";
 import {
@@ -251,8 +251,8 @@ export function writeUserPreferences(
   profileId: string,
   update: PreparedUserPreferenceUpdate,
 ): Result<void, UserPreferenceError> {
-  const { deletionKeys, expected } = update;
-  let { serialized } = update;
+  const { expected } = update;
+  let { serialized, deletionKeys } = update;
   if (updatesPersonalSessionPins(update)) {
     assertUserPreferenceWriteNotHeld(sqlite);
   }
@@ -274,6 +274,23 @@ export function writeUserPreferences(
       profileId,
       expected.map(({ prefKey }) => prefKey),
     );
+    if (update.organizationPolicy !== undefined) {
+      const organization = normalizeGitCoauthorOrganizationIdentity(
+        current[GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY],
+      );
+      if (!organization || organization.policy !== update.organizationPolicy) {
+        // Match the policy-filtered read. Enabling GitHub fallback must not revive dormant credit.
+        delete current[GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY];
+        if (
+          serialized.some(
+            ({ prefKey, valueJson }) =>
+              prefKey === GIT_COAUTHOR_PREFERENCE_KEY && valueJson === "true",
+          )
+        ) {
+          deletionKeys = [...deletionKeys, GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY];
+        }
+      }
+    }
     for (const { prefKey, valueJson } of expected) {
       if (
         valueJson === null
@@ -285,22 +302,24 @@ export function writeUserPreferences(
       }
     }
   }
-  const suppliesCredit = serialized.some(
+  const suppliedCredit = serialized.find(
     ({ prefKey }) => prefKey === GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
   );
   const choosesConsent =
     serialized.some(({ prefKey }) => prefKey === GIT_COAUTHOR_PREFERENCE_KEY) ||
     deletionKeys.includes(GIT_COAUTHOR_PREFERENCE_KEY);
-  if (suppliesCredit && !choosesConsent) {
+  if (suppliedCredit && !choosesConsent) {
     const previous = readUserPreferences(sqlite, profileId, [
       GIT_COAUTHOR_PREFERENCE_KEY,
       GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
     ]);
     if (
       previous[GIT_COAUTHOR_PREFERENCE_KEY] === true &&
-      !normalizeGitCoauthorIdentity(previous[GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY])
+      normalizeGitCoauthorOrganizationIdentity(previous[GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY])
+        ?.policy !==
+        normalizeGitCoauthorOrganizationIdentity(JSON.parse(suppliedCredit.valueJson))?.policy
     ) {
-      // Consent saved before any supplied address existed cannot authorize its first disclosure.
+      // An old or absent proxy mapping cannot authorize disclosure under a replacement policy.
       serialized = [...serialized, { prefKey: GIT_COAUTHOR_PREFERENCE_KEY, valueJson: "false" }];
     }
   }

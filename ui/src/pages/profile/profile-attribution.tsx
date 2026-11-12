@@ -1,12 +1,7 @@
 import { Show } from "solid-js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../../packages/gateway-protocol/src/index.ts";
 import { SettingsSectionHelp } from "../../components/solid/settings-section-help.tsx";
-import {
-  SettingsRow,
-  SettingsSection,
-  SettingsToggleRow,
-  SettingsValue,
-} from "../../components/solid/settings-ui.tsx";
+import { SettingsSection, SettingsToggleRow } from "../../components/solid/settings-ui.tsx";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
@@ -45,12 +40,30 @@ export function ProfileAttribution(props: {
           <SettingsToggleRow
             title={t("profilePage.identity.gitCoauthor")}
             description={
-              // Publication selects its host independently of the displayed primary account.
-              isOwnerProfile()
-                ? t("profilePage.identity.ownerGitCoauthorDescription")
-                : props.getView().gitCoauthorAvailable
-                  ? t("profilePage.identity.gitCoauthorShort")
-                  : t("profilePage.identity.gitCoauthorConfigure")
+              <span class="settings-row__text">
+                <span>
+                  {isOwnerProfile()
+                    ? t("profilePage.identity.ownerGitCoauthorDescription")
+                    : props.getView().gitCoauthorOrganization
+                      ? t("profilePage.identity.gitCoauthorOrganization")
+                      : props.getView().ownProfile?.gitCoauthorIdentity
+                        ? t("profilePage.identity.gitCoauthorGithub")
+                        : props.getView().gitCoauthorAvailable
+                          ? t("profilePage.identity.gitCoauthorShort")
+                          : t("profilePage.identity.gitCoauthorConfigure")}
+                </span>
+                <Show
+                  when={
+                    !isOwnerProfile() &&
+                    props.getView().gitCoauthorAvailable &&
+                    props.getView().gitCoauthorIdentity
+                  }
+                >
+                  {(identity) => (
+                    <code class="identity-account">{`${identity().name} <${identity().email}>`}</code>
+                  )}
+                </Show>
+              </span>
             }
             checked={
               !isOwnerProfile() && props.getView().gitCoauthorAvailable && props.gitCoauthorEnabled
@@ -64,27 +77,6 @@ export function ProfileAttribution(props: {
             saving={props.busy === "git-coauthor"}
             onChange={(enabled) => void props.onSave({ kind: "git-coauthor", enabled })}
           />
-          <Show when={!isOwnerProfile()}>
-            <SettingsRow
-              title={t("profilePage.identity.gitCoauthorSource")}
-              description={
-                props.getView().gitCoauthorOrganization
-                  ? t("profilePage.identity.gitCoauthorOrganization")
-                  : props.getView().ownProfile?.githubIdentity
-                    ? t("profilePage.identity.gitCoauthorGithub")
-                    : props.getView().ownProfile?.gitCoauthorAvailable
-                      ? t("profilePage.identity.gitCoauthorGithubHost")
-                      : t("profilePage.identity.gitCoauthorNoSource")
-              }
-              control={
-                <Show when={props.getView().gitCoauthorOrganization}>
-                  {(identity) => (
-                    <SettingsValue value={`${identity().name} <${identity().email}>`} />
-                  )}
-                </Show>
-              }
-            />
-          </Show>
           <SettingsToggleRow
             title={t("profilePage.identity.prAttribution")}
             description={

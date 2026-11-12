@@ -324,7 +324,11 @@ it("shows pending coauthor consent and restores the accepted value after failure
       status: "ok",
       entries: {
         [GIT_COAUTHOR_PREFERENCE_KEY]: true,
-        "git.coauthor.organization": { name: "Ada", email: "ada@example.test" },
+        "git.coauthor.organization": {
+          name: "Ada",
+          email: "ada@example.test",
+          policy: "test-policy",
+        },
       },
     }),
     "users.prefs.set": () => saved.promise,
@@ -368,7 +372,11 @@ it.each(["identity", "navigation"])(
         status: "ok",
         entries: {
           [GIT_COAUTHOR_PREFERENCE_KEY]: true,
-          "git.coauthor.organization": { name: "Ada", email: "ada@example.test" },
+          "git.coauthor.organization": {
+            name: "Ada",
+            email: "ada@example.test",
+            policy: "test-policy",
+          },
         },
       }),
       "users.prefs.set": () => saved.promise,

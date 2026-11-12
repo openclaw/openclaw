@@ -1,6 +1,6 @@
 import {
   GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
-  normalizeGitCoauthorIdentity,
+  normalizeGitCoauthorOrganizationIdentity,
 } from "../../packages/gateway-protocol/src/schema/git-coauthor-identity.js";
 import {
   GATEWAY_OWNER_PROFILE_ID,
@@ -270,7 +270,7 @@ export async function resolveUserProfileGitHubAttribution(
   profileIds: readonly string[],
   options: OpenClawStateDatabaseOptions & {
     host?: string;
-    organizationDefaults?: boolean;
+    organizationDefaults?: string;
     githubAvailability?: boolean;
   } = {},
 ): Promise<UserProfileGitHubAttribution> {
@@ -292,14 +292,14 @@ export async function prepareUserProfileGitHubAttribution(
   profileIds: readonly string[],
   options: OpenClawStateDatabaseOptions & {
     host?: string;
-    organizationDefaults?: boolean;
+    organizationDefaults?: string;
     githubAvailability?: boolean;
   } = {},
 ): Promise<PreparedGitHubAttribution> {
   const selectedProfileIds = [...profileIds];
   const context = captureOpenClawStateWorkerContext(options);
   const host = options.host ?? "github.com";
-  const organizationDefaults = options.organizationDefaults === true;
+  const organizationDefaults = options.organizationDefaults;
   const githubAvailability = options.githubAvailability === true;
   const key = JSON.stringify([
     context.admission.identity.key,
@@ -406,7 +406,7 @@ export function prepareUserProfileGitHubMerge(
     GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
   );
   const suppliedOwner = profileIds.find((id) =>
-    normalizeGitCoauthorIdentity(suppliedPairs.get(id)),
+    normalizeGitCoauthorOrganizationIdentity(suppliedPairs.get(id)),
   );
   if (suppliedOwner && suppliedOwner !== targetProfileId) {
     const choices = selectUserPreferenceValues(
