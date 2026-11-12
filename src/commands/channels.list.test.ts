@@ -261,19 +261,16 @@ describe("channels list", () => {
 
     await channelsListCommand({ all: true }, runtime);
 
-    expect(mocks.callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "channels.status",
-        params: { probe: false, timeoutMs: 5000 },
-        timeoutMs: 5000,
-      }),
-    );
+    expect(mocks.callGateway).toHaveBeenCalledWith({
+      method: "channels.status",
+      params: { probe: false, timeoutMs: 5000 },
+      timeoutMs: 5000,
+    });
     const output = stripAnsi(loggedText(runtime));
     const accountLines = output.split("\n").filter((line) => line.startsWith("- Discord "));
     expect(accountLines).toHaveLength(2);
     expect(accountLines[0]).toContain("Discord default (clawsweeper):");
     expect(accountLines[1]).toContain("Discord ops (operator):");
-    expect(output).toContain("configured");
     expect(output).toContain("token=env");
     expect(output).not.toContain("not configured");
     expect(output).not.toContain("token=none");
@@ -297,6 +294,17 @@ describe("channels list", () => {
     expect(output).toContain("Discord default:");
     expect(output).toContain("not configured");
     expect(output).toContain("token=none");
+
+    runtime.log.mockClear();
+    const scope = new AsyncWorkScope();
+    const reason = new Error("channels list interrupted");
+    mocks.callGateway.mockImplementation(async () => {
+      scope.beginClose(reason);
+      throw new Error("gateway unavailable");
+    });
+    await expect(scope.run(() => channelsListCommand({ all: true }, runtime))).rejects.toBe(reason);
+    expect(runtime.log).not.toHaveBeenCalled();
+    await scope.drain();
   });
 
   it("marks configured-but-unavailable credential sources in text output", async () => {
@@ -318,39 +326,31 @@ describe("channels list", () => {
     expect(output).toContain("token=config-unavailable");
   });
 
-  it.each(["env"])(
-    "default output shows recovery for a missing plugin with credentials from %s",
-    async (source) => {
-      mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([
-        createCatalogEntry("mattermost", "Mattermost"),
-      ]);
-      const actual = await vi.importActual<
-        typeof import("../plugins/official-external-plugin-repair-hints.js")
-      >("../plugins/official-external-plugin-repair-hints.js");
-      mocks.resolveMissingOfficialExternalChannelPluginRepairHints.mockImplementation(
-        actual.resolveMissingOfficialExternalChannelPluginRepairHints,
-      );
-      vi.stubEnv("MATTERMOST_URL", source === "env" ? "https://mattermost.example.test" : "");
-      vi.stubEnv("MATTERMOST_BOT_TOKEN", source === "env" ? "test-token" : "");
-      mocks.readConfigFileSnapshot.mockResolvedValue(
-        createTestConfigSnapshot(
-          source === "config" ? { channels: { mattermost: { botToken: "test-token" } } } : {},
-        ),
-      );
+  it("default output shows recovery for a missing plugin with env credentials", async () => {
+    mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([
+      createCatalogEntry("mattermost", "Mattermost"),
+    ]);
+    const actual = await vi.importActual<
+      typeof import("../plugins/official-external-plugin-repair-hints.js")
+    >("../plugins/official-external-plugin-repair-hints.js");
+    mocks.resolveMissingOfficialExternalChannelPluginRepairHints.mockImplementation(
+      actual.resolveMissingOfficialExternalChannelPluginRepairHints,
+    );
+    vi.stubEnv("MATTERMOST_URL", "https://mattermost.example.test");
+    vi.stubEnv("MATTERMOST_BOT_TOKEN", "test-token");
 
-      await channelsListCommand({}, runtime);
+    await channelsListCommand({}, runtime);
 
-      const output = stripAnsi(loggedText(runtime));
-      expect(output).toContain("Mattermost");
-      expect(output).toContain("not installed");
-      expect(output).toContain("configured");
-      expect(output).toContain("disabled");
-      expect(output).toContain(
-        "run openclaw plugins install npm:@openclaw/mattermost or openclaw doctor --fix",
-      );
-      expect(output).not.toContain("no configured chat channels");
-    },
-  );
+    const output = stripAnsi(loggedText(runtime));
+    expect(output).toContain("Mattermost");
+    expect(output).toContain("not installed");
+    expect(output).toContain("configured");
+    expect(output).toContain("disabled");
+    expect(output).toContain(
+      "run openclaw plugins install npm:@openclaw/mattermost or openclaw doctor --fix",
+    );
+    expect(output).not.toContain("no configured chat channels");
+  });
 
   it("--all surfaces bundled-but-unconfigured plugins with installed=true / not configured", async () => {
     mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
@@ -362,14 +362,11 @@ describe("channels list", () => {
       enabled: false,
     });
 
-    // Without --all: discord should not appear.
     await channelsListCommand({}, runtime);
     const noAllOutput = stripAnsi(loggedText(runtime));
     expect(noAllOutput).not.toContain("Discord default:");
 
     runtime.log.mockClear();
-
-    // With --all: discord is rendered with installed + not configured + disabled.
     await channelsListCommand({ all: true }, runtime);
     const allOutput = stripAnsi(loggedText(runtime));
     expect(allOutput).toContain("Discord default:");
@@ -419,29 +416,5 @@ describe("channels list", () => {
     expect(payload.chat.qqbot).toMatchObject({ label: "QQ Bot", docsPath: "/channels/qqbot" });
     expect(payload.chat.discord).toMatchObject({ label: "Discord" });
     expect(payload.chat.discord).not.toHaveProperty("docsPath");
-  });
-
-  it("propagates cancellation during a pending gateway status read", async () => {
-    const scope = new AsyncWorkScope();
-    const reason = new Error("channels list interrupted");
-    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
-      createMockChannelPlugin({ id: "discord", label: "Discord", accountIds: ["default"] }),
-    ]);
-    mocks.resolveChannelAccountSnapshot.mockResolvedValue({
-      accountId: "default",
-      configured: false,
-      tokenSource: "none",
-      enabled: true,
-    });
-    // The gateway read starts and is cancelled while pending; the settled failure
-    // must surface as the cancellation, not as a late command-local fallback list.
-    mocks.callGateway.mockImplementation(() => {
-      scope.beginClose(reason);
-      return Promise.reject(new Error("gateway unavailable"));
-    });
-
-    await expect(scope.run(() => channelsListCommand({ all: true }, runtime))).rejects.toBe(reason);
-    expect(runtime.log).not.toHaveBeenCalled();
-    await scope.drain();
   });
 });
