@@ -17,6 +17,7 @@ extension OpenClawChatViewModel {
             !isSubmittingDraft &&
             !isSending &&
             self.attachmentStagingCount == 0 &&
+            self.retainedVoiceNote == nil &&
             !self.isSwitchingSessionBranch &&
             (!self.hasBlockingRunActivity || self.canSendDuringRun) &&
             self.composerModelAvailabilityMessage == nil &&
@@ -333,9 +334,9 @@ extension OpenClawChatViewModel {
         guard !isSubmittingDraft, !isSending else {
             return nil
         }
-        guard self.attachmentStagingCount == 0 else {
-            // File reads and image processing suspend before publishing the
-            // attachment. Do not let a programmatic send overtake that owner.
+        guard self.attachmentStagingCount == 0, self.retainedVoiceNote == nil else {
+            // Keep the draft together while an attachment is staging or a
+            // recording is waiting for space.
             return nil
         }
         guard !self.isSwitchingSessionBranch,

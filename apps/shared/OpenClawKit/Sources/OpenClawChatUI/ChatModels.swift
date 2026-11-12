@@ -1255,6 +1255,16 @@ public struct OpenClawPendingAttachment: Identifiable {
     }
 }
 
+/// A recording the current draft could not admit within its attachment budget.
+struct OpenClawRetainedVoiceNote {
+    let recording: OpenClawVoiceNoteRecording
+    let rejectionMessage: String?
+
+    var fileName: String {
+        self.recording.fileURL.lastPathComponent
+    }
+}
+
 public struct OpenClawChatAttachmentPayload: Codable, Sendable, Hashable {
     public let type: String
     public let mimeType: String

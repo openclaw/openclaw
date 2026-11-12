@@ -96,6 +96,9 @@ public final class OpenClawChatViewModel {
     public private(set) var isAborting = false
     public var errorText: String?
     public var attachments: [OpenClawPendingAttachment] = []
+    var retainedVoiceNote: OpenClawRetainedVoiceNote?
+    @ObservationIgnored
+    var isRetryingRetainedVoiceNote = false
     public internal(set) var healthOK: Bool = false
     /// Bumped after every successful group-catalog mutation so views keyed on it
     /// refetch; catalog-only changes (e.g. creating an empty group) alter no
@@ -1289,6 +1292,7 @@ extension OpenClawChatViewModel {
         self.isLoadingSessionBranches = false
         self.sessionBranchSwitchActivity = nil
         clearPendingRuns()
+        self.clearRetainedVoiceNote()
     }
 
     func performReset() async {

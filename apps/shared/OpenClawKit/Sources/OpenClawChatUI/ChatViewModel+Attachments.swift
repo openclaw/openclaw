@@ -91,7 +91,8 @@ extension OpenClawChatViewModel {
 
     public func removeAttachment(_ id: OpenClawPendingAttachment.ID) {
         attachments.removeAll { $0.id == id }
-        applyDeferredExternalStateIfReady()
+        self.retryRetainedVoiceNote()
+        self.applyDeferredExternalStateIfReady()
     }
 
     func restoreEditorAttachments(_ editorAttachments: [OpenClawChatEditorAttachment]?) {
@@ -116,6 +117,7 @@ extension OpenClawChatViewModel {
         attachmentOwnerIsActive() ||
             isSendingAttachmentDraft ||
             attachmentStagingCount > 0 ||
+            retainedVoiceNote != nil ||
             !attachments.isEmpty
     }
 
@@ -145,44 +147,93 @@ extension OpenClawChatViewModel {
         applyDeferredExternalStateIfReady()
     }
 
-    /// Stages a recorded m4a voice note and removes its temporary file.
+    /// Retains a recording when the draft's remaining budget cannot admit it.
     public func addVoiceNoteAttachment(fileURL: URL, durationSeconds: Double) async {
         self.beginAttachmentStaging()
+        defer { self.endAttachmentStaging() }
+        let normalizedDuration = durationSeconds.isFinite
+            ? min(max(0, durationSeconds), OpenClawVoiceNoteRecorder.maximumDurationSeconds)
+            : 0
+        await self.readAndStageVoiceNote(
+            OpenClawVoiceNoteRecording(fileURL: fileURL, durationSeconds: normalizedDuration))
+    }
+
+    private func readAndStageVoiceNote(
+        _ recording: OpenClawVoiceNoteRecording,
+        retrying: Bool = false) async
+    {
+        let fileURL = recording.fileURL
         defer {
-            try? FileManager.default.removeItem(at: fileURL)
-            self.endAttachmentStaging()
+            // Once retained, the draft owns cleanup of this file.
+            if !retrying, self.retainedVoiceNote?.recording != recording {
+                try? FileManager.default.removeItem(at: fileURL)
+            }
         }
+        let read = await Task.detached(priority: .userInitiated) {
+            Result { try Data(contentsOf: fileURL) }
+        }.value
+        guard !retrying || self.retainedVoiceNote?.recording == recording else { return }
 
         let data: Data
         do {
-            data = try await Task.detached(priority: .userInitiated) {
-                try Data(contentsOf: fileURL)
-            }.value
+            data = try read.get()
         } catch {
-            errorText = String(
+            if retrying { self.clearRetainedVoiceNote() }
+            self.errorText = String(
                 format: String(localized: "Could not attach voice note: %@"),
                 error.localizedDescription)
             return
         }
 
         guard data.count <= Self.maxAttachmentBytes else {
-            errorText = String(localized: "Voice note exceeds the 5 MB attachment limit")
+            if retrying { self.clearRetainedVoiceNote() }
+            self.errorText = String(localized: "Voice note exceeds the 5 MB attachment limit")
             return
         }
 
         let limits = await self.transport.attachmentLimits() ?? .legacyClientFallback
-        let normalizedDuration = durationSeconds.isFinite
-            ? min(max(0, durationSeconds), OpenClawVoiceNoteRecorder.maximumDurationSeconds)
-            : 0
-        self.stageAttachment(
-            OpenClawPendingAttachment(
-                url: nil,
-                data: data,
-                fileName: fileURL.lastPathComponent,
-                mimeType: "audio/mp4",
-                preview: nil,
-                durationSeconds: normalizedDuration),
-            limits: limits)
+        guard !retrying || self.retainedVoiceNote?.recording == recording else { return }
+        let attachment = OpenClawPendingAttachment(
+            url: nil,
+            data: data,
+            fileName: fileURL.lastPathComponent,
+            mimeType: "audio/mp4",
+            preview: nil,
+            durationSeconds: recording.durationSeconds)
+        guard self.stageAttachment(attachment, limits: limits) else {
+            self.retainedVoiceNote = OpenClawRetainedVoiceNote(
+                recording: recording,
+                rejectionMessage: self.errorText)
+            return
+        }
+        if retrying { self.clearRetainedVoiceNote() }
+    }
+
+    func retryRetainedVoiceNote() {
+        guard let retained = self.retainedVoiceNote, !self.isRetryingRetainedVoiceNote else { return }
+        self.isRetryingRetainedVoiceNote = true
+        self.beginAttachmentStaging()
+        Task {
+            defer {
+                self.isRetryingRetainedVoiceNote = false
+                self.endAttachmentStaging()
+            }
+            await self.readAndStageVoiceNote(retained.recording, retrying: true)
+        }
+    }
+
+    func discardRetainedVoiceNote() {
+        self.clearRetainedVoiceNote()
+        self.applyDeferredExternalStateIfReady()
+    }
+
+    func clearRetainedVoiceNote() {
+        guard let retained = self.retainedVoiceNote else { return }
+        self.retainedVoiceNote = nil
+        try? FileManager.default.removeItem(at: retained.recording.fileURL)
+        if self.errorText == retained.rejectionMessage {
+            self.errorText = nil
+        }
     }
 
     func loadAttachments(urls: [URL], expectedSession: SessionSnapshot? = nil) async {

@@ -46,6 +46,60 @@ struct OpenClawVoiceNoteButton: View {
     }
 }
 
+struct OpenClawVoiceNoteRetainedRow: View {
+    let note: OpenClawRetainedVoiceNote
+    let onRetry: () -> Void
+    let onDiscard: () -> Void
+    var embedded = false
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "mic.fill")
+                .font(OpenClawChatTypography.display(size: 13, weight: .semibold, relativeTo: .footnote))
+                .foregroundStyle(.secondary)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(self.note.fileName)
+                    .font(OpenClawChatTypography.body)
+                    .lineLimit(1)
+                Text("Too large to send. Remove an attachment or retry.")
+                    .font(OpenClawChatTypography.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 8)
+
+            Button(action: self.onRetry) {
+                Text("Retry")
+                    .font(OpenClawChatTypography.caption)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .accessibilityLabel("Retry voice note")
+
+            Button {
+                self.onDiscard()
+            } label: {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .accessibilityLabel("Discard voice note")
+        }
+        .padding(.horizontal, self.embedded ? 2 : 14)
+        .padding(.vertical, self.embedded ? 2 : 10)
+        .background {
+            if !self.embedded {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(OpenClawChatTheme.composerField)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .strokeBorder(OpenClawChatTheme.composerBorder))
+            }
+        }
+    }
+}
+
 struct OpenClawVoiceNoteRecordingRow: View {
     let recorder: OpenClawVoiceNoteRecorder
     var embedded = false
