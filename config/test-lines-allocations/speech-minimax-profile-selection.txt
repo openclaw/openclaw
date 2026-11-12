@@ -1,2 +1,0 @@
-# Existing synthesis precedence table: real profile lookup counts and wire/audio output.
-13
