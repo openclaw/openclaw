@@ -1,2 +1,0 @@
-# Ctrl+C interrupt regression proof for devices join-code read-only Gateway call.
-28
