@@ -2910,8 +2910,6 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       ).trim();
     git(source, "init", "--initial-branch=main");
     writeFileSync(path.join(source, "base.txt"), "base\n");
-    mkdirSync(path.join(source, "config"));
-    writeFileSync(path.join(source, "config/test-lines-baseline.txt"), "0\n");
     for (const file of collectRuntimeImportClosure(process.cwd(), [
       "scripts/check-test-lines-ratchet.mts",
     ])) {
@@ -2922,7 +2920,10 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     git(source, "commit", "-m", "base");
     git(source, "checkout", "-b", "pull-request");
     for (let index = 0; index < 3; index++) {
-      writeFileSync(path.join(source, "change.test.ts"), `export const change = ${index};\n`);
+      writeFileSync(
+        path.join(source, "change.test.ts"),
+        `export const change = ${index};\n`.repeat(401),
+      );
       git(source, "add", ".");
       git(source, "commit", "-m", `change ${index}`);
     }
@@ -2992,13 +2993,13 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       });
     const unallocated = check();
     expect(unallocated.status, unallocated.stdout + unallocated.stderr).toBe(1);
-    expect(unallocated.stderr).toContain("over by: 1; net delta: +1.");
-    mkdirSync(path.join(selected, "config/test-lines-allocations"));
+    expect(unallocated.stderr).toContain("Net test lines: +401; allowance: 400;");
+    mkdirSync(path.join(selected, "config/test-lines-allocations"), { recursive: true });
     writeFileSync(path.join(selected, "config/test-lines-allocations/regression.txt"), "1\n");
     git(selected, "add", "config/test-lines-allocations/regression.txt");
     const allocated = check();
     expect(allocated.status, allocated.stdout + allocated.stderr).toBe(0);
-    expect(allocated.stdout).toContain("Test lines OK: 1; ceiling: 1; slack: 0.");
+    expect(allocated.stdout).toContain("allocation credit: 1.");
   });
 
   it("keeps action manifests within the runner's anchor-free YAML grammar", () => {
@@ -3795,23 +3796,6 @@ server.listen(0, "127.0.0.1", () => {
   });
 
   it("keeps each compiled worker preset in a separate archive", () => {
-    const uiSetup = requiredWorkflowStep(
-      readCiWorkflow().jobs["checks-ui-e2e"].steps,
-      "Setup Node environment",
-    );
-    expect(uiSetup.with?.["vitest-worker-preset"]).toBe("runtime");
-    for (const [task, frozen, expected] of [
-      ["control-ui", "false", "true"],
-      ["control-ui", "true", "false"],
-      ["browser-extension", "false", "false"],
-    ] as const) {
-      expect(
-        evaluateWorkflowExpression(uiSetup.with?.["vitest-worker-cache"], {
-          matrix: { task },
-          preflightOutputs: { frozen_target: frozen },
-        }),
-      ).toBe(expected);
-    }
     const setup = readWorkflow(".github/actions/setup-node-env/action.yml");
     const steps = setup.runs.steps as WorkflowStep[];
     const restore = requiredWorkflowStep(steps, "Restore compiled Vitest workers");

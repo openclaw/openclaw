@@ -113,6 +113,7 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     execRealpath: runtimeProcessEntrypoint("infra/exec-realpath.worker"),
     sharedStateStore: runtimeProcessEntrypoint("state/openclaw-state.worker"),
     clientCredentials: runtimeProcessEntrypoint("infra/client-credential.worker"),
+    secretFileRead: runtimeProcessEntrypoint("infra/secret-file-read.worker"),
     ttsPreferences: runtimeProcessEntrypoint("tts/tts-settings-write.worker"),
     authProfileInlineUsage: runtimeProcessEntrypoint("agents/auth-profiles/inline-usage.worker"),
     pluginModelCatalogRead: runtimeProcessEntrypoint("agents/plugin-model-catalog-read.worker"),

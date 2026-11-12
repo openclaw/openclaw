@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
-import { root as fsRoot } from "@openclaw/fs-safe/root";
 import type {
   GitHubIdentityFacts,
   ToolsGitHubStatusResult,
@@ -14,11 +13,10 @@ import {
   composeSessionSourceAssertion,
 } from "../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { GitHubToolIdentityConfig } from "../config/types.tools.js";
 import { AGENT_GIT_CONFIG_PARAMETERS } from "../infra/git-maintenance-env.js";
 import { runGitWorkerOperation } from "../infra/git-worker.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
-import { resolveAgentEntry, resolveAgentWorkspaceDir } from "./agent-scope-config.js";
+import { resolveAgentWorkspaceDir } from "./agent-scope-config.js";
 import {
   prepareAppGitHubIdentity,
   configuredAppGitHubIdentityFacts,
@@ -46,7 +44,12 @@ import {
   type PreparedGitHubReadIdentity,
   type PreparedGitHubSourceReadIdentity,
 } from "./github-read-identity.js";
-import { managedGitHubHosts, type GitHubToolAccount } from "./github-tool-account.js";
+import type { GitHubToolAccount } from "./github-tool-account.js";
+import {
+  resolveGitHubToolIdentity,
+  resolveScopedGitHubToolIdentity,
+  resolveSystemGitHubToolIdentity,
+} from "./github-tool-identity-config.js";
 import {
   githubCredentialEnvironmentExclusions,
   managedGitHubIdentityEnvironment,
@@ -61,12 +64,10 @@ import type {
   PreparedGitHubToolEnvironment,
   SharedGitHubIdentityPreparation,
 } from "./github-tool-identity.types.js";
-import {
-  isPrivateManagedGitHubProfile,
-  writeManagedGitHubProfileFiles,
-} from "./github-tool-profile-files.js";
+import { isPrivateManagedGitHubProfile } from "./github-tool-profile-files.js";
 import { resolveManagedGitHubProfileDir } from "./github-tool-profile-path.js";
 
+export { resolveConfiguredGitHubToolIdentity } from "./github-tool-identity-config.js";
 export {
   resolveManagedGitHubAgentKey,
   resolveManagedGitHubProfileDir,
@@ -83,46 +84,6 @@ export class GitHubAccountMismatchError extends Error {}
 
 export function createManagedGitHubProfileId(): string {
   return `ghp_${randomBytes(16).toString("hex")}`;
-}
-
-export function resolveConfiguredGitHubToolIdentity(params: {
-  config: OpenClawConfig;
-  agentId: string;
-  scope: "system" | "agent";
-}): GitHubToolIdentityConfig | undefined {
-  return params.scope === "agent"
-    ? resolveAgentEntry(params.config, params.agentId)?.tools?.github
-    : params.config.tools?.github;
-}
-
-function resolveSystemGitHubToolIdentity(params: Pick<GitHubIdentityPreparation, "config">) {
-  return (
-    resolveScopedGitHubToolIdentity({ ...params, agentId: "", scope: "system" }) ?? {
-      source: "system-detected" as const,
-    }
-  );
-}
-
-function resolveGitHubToolIdentity(params: Pick<GitHubIdentityPreparation, "config" | "agentId">) {
-  return (
-    resolveScopedGitHubToolIdentity({ ...params, scope: "agent" }) ??
-    resolveSystemGitHubToolIdentity(params)
-  );
-}
-
-function resolveScopedGitHubToolIdentity(params: {
-  config: OpenClawConfig;
-  agentId: string;
-  scope: "system" | "agent";
-}) {
-  const config = resolveConfiguredGitHubToolIdentity(params);
-  return config
-    ? {
-        source:
-          params.scope === "agent" ? ("agent-override" as const) : ("system-configured" as const),
-        config,
-      }
-    : undefined;
 }
 
 type ResolvedGitHubToolIdentity = ReturnType<typeof resolveGitHubToolIdentity>;
@@ -631,24 +592,17 @@ export async function refreshManagedGitHubProfile(params: {
   if (account.accountId !== params.expectedAccountId) {
     throw new GitHubAccountMismatchError("GitHub OAuth refresh returned a different account.");
   }
-  const targetHosts = path.join(params.profileDir, "hosts.yml");
-  const targetStat = await fs.lstat(targetHosts);
-  if (!targetStat.isFile() || targetStat.isSymbolicLink()) {
-    throw new Error("The configured GitHub identity profile is unavailable.");
-  }
-  const profile = await fsRoot(params.profileDir);
   await params.prepareEffect?.();
-  params.assertCurrent?.();
-  await profile.write(
-    "hosts.yml",
-    managedGitHubHosts({ login: account.login, token: credential }),
+  await runGitWorkerOperation(
     {
-      mode: 0o600,
-      mkdir: false,
-      durable: false,
-      mutationSymlinks: "reject",
-      assertBeforeMutation: params.assertCurrent,
+      type: "github.profile-refresh",
+      input: {
+        profileDir: params.profileDir,
+        identity: { login: account.login, token: credential },
+        nativeMode: getFsSafeNativeConfig().mode,
+      },
     },
+    { assertCurrent: params.assertCurrent },
   );
   clearNativeGitHubTokenCache();
   params.assertCurrent?.();
@@ -674,9 +628,13 @@ export async function installManagedGitHubProfile(params: {
   let committed = false;
   try {
     const { account, credential } = await verifyManagedGitHubCredential(params.token);
-    await writeManagedGitHubProfileFiles(stagedProfile, {
-      login: account.login,
-      token: credential,
+    await runGitWorkerOperation({
+      type: "github.profile-stage",
+      input: {
+        profileDir: stagedProfile,
+        identity: { login: account.login, token: credential },
+        nativeMode: getFsSafeNativeConfig().mode,
+      },
     });
     await params.prepareEffect?.();
     params.assertCurrent?.();

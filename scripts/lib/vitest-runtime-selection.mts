@@ -49,6 +49,7 @@ const runtimeOnlyUnitFiles = new Set([
   "src/commands/doctor-plugin-package-consent.test.ts",
   "src/config/io.load-async.test.ts",
   "src/cron/session-run.session-model-strictness.integration.test.ts",
+  "src/flows/doctor-health.managed-settlement.test.ts",
   "src/flows/doctor-health.update-schema.test.ts",
   "src/gateway/client-callsites.guard.test.ts",
   "src/gateway/server-methods/session-catalog-privacy.test.ts",
