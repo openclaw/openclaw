@@ -248,37 +248,21 @@ suite.define(() => {
       await paragraph(page, partial).waitFor();
       const toggle = notice.getByRole("button", { name: "Couldn’t finish this reply" });
       const copy = notice.getByRole("button", { name: "Copy error", exact: true });
-      const panel = notice.locator(".chat-run-failure__panel");
       const retryButton = notice.getByRole("button", { name: "Try again", exact: true });
-      const conversation = () =>
-        page.evaluate(() => {
-          const thread = document.querySelector(".chat-thread")!;
-          const line = document.querySelector(".chat-run-failure")!.getBoundingClientRect();
-          return { top: line.top, scrollHeight: thread.scrollHeight, scrollTop: thread.scrollTop };
-        });
       await page.mouse.move(0, 0);
-      expect(await copy.isVisible()).toBe(false);
+      expect(await copy.isVisible()).toBe(true);
       const titleBox = await notice.locator(".chat-run-failure__title").boundingBox();
       const retryBox = await retryButton.boundingBox();
       assert(titleBox && retryBox);
       expect(retryBox.y).toBeGreaterThan(titleBox.y + titleBox.height);
       expect(retryBox.height).toBe(26);
-      const closed = await conversation();
-      await toggle.click();
-      await panel.waitFor();
-      expect(await toggle.getAttribute("aria-expanded")).toBe("true");
-      expect(await panel.evaluate((node) => node.hasAttribute("popover"))).toBe(false);
+      expect(await toggle.count()).toBe(0);
+      expect(await notice.locator(".chat-run-failure__summary").textContent()).toBe(
+        "The AI service needs a short break. Please try again in a few minutes.",
+      );
       const copyIcon = copy.locator(".chat-copy-btn__icon-copy svg");
-      expect(await copyIcon.boundingBox()).toMatchObject({ width: 14, height: 14 });
-      await toggle.click();
-      await panel.waitFor({ state: "hidden" });
-      expect(await toggle.getAttribute("aria-expanded")).toBe("false");
-      expect(await toggle.evaluate((node) => node === document.activeElement)).toBe(true);
-      await toggle.click();
-      await panel.waitFor();
-      await toggle.click();
-      await panel.waitFor({ state: "hidden" });
-      await expect.poll(async () => (await conversation()).scrollHeight).toBe(closed.scrollHeight);
+      expect(await copy.boundingBox()).toMatchObject({ width: 28, height: 26 });
+      expect(await copyIcon.boundingBox()).toMatchObject({ width: 13, height: 13 });
       expect(await notice.locator("details").count()).toBe(0);
       expect(await notice.getByRole("button", { name: "Change model", exact: true }).count()).toBe(
         0,
@@ -297,11 +281,10 @@ suite.define(() => {
           await touchPage.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
           const touchNotice = touchPage.locator(".chat-run-failure");
           const touchCopy = touchNotice.getByRole("button", { name: "Copy error", exact: true });
-          await touchNotice.getByRole("button", { name: "Couldn’t finish this reply" }).tap();
-          await touchNotice.locator(".chat-run-failure__panel").waitFor();
+          await touchCopy.waitFor();
           expect(await touchPage.evaluate(() => matchMedia("(hover: none)").matches)).toBe(true);
           expect(await touchCopy.evaluate((node) => getComputedStyle(node).opacity)).toBe("1");
-          expect(await touchCopy.evaluate((node) => node.getBoundingClientRect().width)).toBe(32);
+          expect(await touchCopy.evaluate((node) => node.getBoundingClientRect().width)).toBe(28);
         },
       );
       // Persist the mock Gateway response, not just its current document state.
