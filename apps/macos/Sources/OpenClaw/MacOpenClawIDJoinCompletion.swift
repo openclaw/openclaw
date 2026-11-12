@@ -34,10 +34,19 @@ enum MacOpenClawIDJoinCompletion {
         return serves(url)
     }
 
+    /// The claw replaces this Mac's primary connection (Tailscale, token or SSH): its saved Gateway
+    /// token and password are cleared in the same write, so they cannot bypass a revocation in
+    /// OpenClaw ID. Tailscale itself is not touched.
     private static func selectPrimary(_ claw: String) {
         let state = AppStateStore.shared
+        if let url = URL(string: "wss://\(claw)"),
+           (try? state.setPrimaryGateway(.direct(url: url, token: nil, password: nil, tlsFingerprint: nil))) != nil
+        {
+            return
+        }
         state.remoteTransport = .direct
         state.remoteUrl = "wss://\(claw)"
+        state.remoteToken = ""
         state.connectionMode = .remote
     }
 }
