@@ -1,4 +1,6 @@
 # Distinct authority boundaries: signed-owner versus member live Gateway actions,
 # queued publication source and hydration recovery, and admitted personal tools.
 # Retain negative and unchanged-caller coverage alongside the administrator proof.
-81
+# Historical source-less member refusal and unchanged nonmember same-key recovery
+# need both publication backends; legacy profile-schema reads cover catalog safety.
+196

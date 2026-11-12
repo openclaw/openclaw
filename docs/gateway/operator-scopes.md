@@ -447,6 +447,7 @@ source and checks it again before later writes, including after recovery. Remova
 role changes, or a definition that no longer permits the request stop later writes;
 a new access-policy requirement cannot replace the original grant. Nonadministrator
 members retain their existing publication restrictions.
+Publications queued by a member before upgrading are refused and must be requested again.
 
 A member's sandbox requirement comes from the membership definition, even when
 `gateway.roles.default` is absent or their profile has a different named role

@@ -314,20 +314,24 @@ export async function createRequesterPublicationFixture(
       );
     },
     removeRequesterSnapshot(requestId: string) {
+      this.replaceRequesterSnapshot(requestId, null);
+    },
+    replaceRequesterSnapshot(requestId: string, json: string | null) {
       runOpenClawStateWriteTransaction(({ db }) => {
         if (backend === "repository") {
           const row = readRepositoryGitHubPublication(requestId)!;
           db.prepare(
-            "UPDATE github_repository_publication_requests SET requester_authority_json = NULL, request_digest = ? WHERE request_id = ?",
+            "UPDATE github_repository_publication_requests SET requester_authority_json = ?, request_digest = ? WHERE request_id = ?",
           ).run(
-            repositoryGitHubPublicationDigest({ ...row, requester_authority_json: null }),
+            json,
+            repositoryGitHubPublicationDigest({ ...row, requester_authority_json: json }),
             requestId,
           );
           return;
         }
         db.prepare(
-          "UPDATE github_publication_session_lifecycles SET requester_authority_json = NULL WHERE publication_kind = 'shared' AND request_id = ?",
-        ).run(requestId);
+          "UPDATE github_publication_session_lifecycles SET requester_authority_json = ? WHERE publication_kind = 'shared' AND request_id = ?",
+        ).run(json, requestId);
       });
     },
   };
