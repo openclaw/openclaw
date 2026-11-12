@@ -1156,13 +1156,19 @@ See also [Scripts](https://docs.openclaw.ai/help/scripts) for public-facing scri
 
 ### Message-tool request proof
 
-Run the maintained synthetic workload against a built product:
+Run the maintained synthetic workload from inside a disposable built installation:
 
 ```bash
-node scripts/perf/message-tool-availability.mjs --build <installed-build> \
+INSTALL=/absolute/path/to/disposable-install
+cp scripts/perf/message-tool-availability.mjs "$INSTALL/message-tool-availability.mjs"
+node "$INSTALL/message-tool-availability.mjs" --build "$INSTALL" \
   --state .openclaw/tmp/message-proof/state --out .openclaw/tmp/message-proof/base \
   --route none
 ```
+
+The worker self-spawns from its entry path, which also selects the bundled-plugin
+package root. Launching the source-checkout entry with a different `--build` can
+therefore mix that checkout's plugins into the compared installation.
 
 The routes are `none`, `internal`, `external-webchat`, and `configured`.
 Add `--unbound-sender` to the configured route to verify that a disabled bound
