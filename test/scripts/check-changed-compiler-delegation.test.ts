@@ -98,7 +98,9 @@ it.each(["github", "hybrid", "blacksmith"])(
     expect(plan.core_type_matrix.include.flatMap((row) => row.root_type_stripe ?? [])).toEqual(
       hosted ? ["1/4", "2/4", "3/4", "4/4"] : [],
     );
-    expect(plan.check_matrix.include.filter(({ task }) => task === "changed-checks")).toHaveLength(1);
+    expect(plan.check_matrix.include.filter(({ task }) => task === "changed-checks")).toHaveLength(
+      1,
+    );
     expect(plan.lint_core_matrix.include).toEqual([]);
     expect(plan.lint_extension_matrix.include).toEqual([]);
   },
