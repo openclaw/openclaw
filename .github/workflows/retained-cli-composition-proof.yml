@@ -1,4 +1,4 @@
-name: Placement owner diagnostic proof
+name: Placement owner formatting recovery
 
 # Scratch diagnostic only: install alongside the pinned patch, never on a candidate ref.
 on:
@@ -27,22 +27,8 @@ jobs:
       max-parallel: 3
       matrix:
         include:
-          - lane: unit
-            config: ""
           - lane: static
             config: ""
-          - lane: types-core
-            config: tsconfig.core.json
-          - lane: types-gateway-methods
-            config: test/tsconfig/tsconfig.core.test.gateway-methods.json
-          - lane: types-gateway-other
-            config: test/tsconfig/tsconfig.core.test.gateway-other.json
-          - lane: types-infra
-            config: test/tsconfig/tsconfig.core.test.infra.json
-          - lane: types-ui-e2e-chat
-            config: test/tsconfig/tsconfig.core.test.ui-e2e-chat.json
-          - lane: types-root-e2e
-            config: test/tsconfig/tsconfig.test.root.e2e.json
     env:
       PROOF_LANE: ${{ matrix.lane }}
       TYPE_CONFIG: ${{ matrix.config }}
@@ -116,25 +102,39 @@ jobs:
           set -euo pipefail
           node --version | tee "$PROOF_DIR/node.txt"
           pnpm --version | tee "$PROOF_DIR/pnpm.txt"
-      - name: Prove complete coordinator admission file
-        id: unit
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' && matrix.lane == 'unit' }}
+      - name: Canonically format only the two reported files
+        id: canonical_format
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
-          pnpm test src/gateway/worker-environments/placement-dispatch-coordinator-admission.test.ts \
-            --maxWorkers=1 --reporter=default --reporter=junit \
-            --outputFile.junit="$PROOF_DIR/coordinator.junit.xml" 2>&1 | tee "$PROOF_DIR/coordinator.log"
-          python3 - "$PROOF_DIR/coordinator.junit.xml" <<'PY'
-          import sys
-          import xml.etree.ElementTree as ET
-          root = ET.parse(sys.argv[1]).getroot()
-          cases = list(root.iter('testcase'))
-          assert len(cases) == 22, f'Expected all 22 coordinator cases, got {len(cases)}'
-          assert not any(c.find('skipped') is not None for c in cases), 'Coordinator proof skipped cases'
-          assert not any(c.find('failure') is not None or c.find('error') is not None for c in cases), 'Coordinator proof failed'
-          print(f'Coordinator admission: {len(cases)} cases, zero skipped/failures/errors')
-          PY
+          cp "$PROOF_DIR/applied.patch" "$PROOF_DIR/original-failing.patch"
+          files=(src/gateway/server-methods/sessions-create.visible-spawn.live.test.ts src/infra/heartbeat-runner.live.test.ts)
+          mkdir -p "$PROOF_DIR/before" "$PROOF_DIR/formatted"
+          for file in "${files[@]}"; do
+            mkdir -p "$PROOF_DIR/before/$(dirname "$file")" "$PROOF_DIR/formatted/$(dirname "$file")"
+            cp "$file" "$PROOF_DIR/before/$file"
+          done
+          if pnpm format:check -- "${files[@]}" > "$PROOF_DIR/original-format-failure.log" 2>&1; then
+            echo 'Expected original two-file formatting failure was absent' >&2
+            exit 1
+          else
+            status=$?
+            test "$status" -eq 1
+          fi
+          cat "$PROOF_DIR/original-format-failure.log"
+          pnpm format -- "${files[@]}" 2>&1 | tee "$PROOF_DIR/canonical-format.log"
+          for file in "${files[@]}"; do cp "$file" "$PROOF_DIR/formatted/$file"; done
+          python3 - "$PROOF_DIR" <<'PYTHON'
+          import pathlib, re, sys
+          root = pathlib.Path(sys.argv[1])
+          for before in (root / 'before').rglob('*.ts'):
+              after = root / 'formatted' / before.relative_to(root / 'before')
+              assert re.sub(rb'\s+', b'', before.read_bytes()) == re.sub(rb'\s+', b'', after.read_bytes()), f'Non-whitespace change: {after}'
+          PYTHON
+          git diff --check
+          git -c diff.algorithm=myers -c diff.indentHeuristic=false diff --full-index --binary --no-ext-diff --no-textconv --no-color --no-renames --unified=3 --src-prefix=a/ --dst-prefix=b/ > "$PROOF_DIR/formatted.patch"
+          sha256sum "$PROOF_DIR/formatted.patch" > "$PROOF_DIR/formatted-patch.sha256"
       - name: Check exact seven-file formatting
         id: format
         if: ${{ !cancelled() && steps.setup.outcome == 'success' && matrix.lane == 'static' }}
@@ -161,15 +161,6 @@ jobs:
           mapfile -t files < <(grep '^test/' "$PROOF_DIR/changed-files.txt")
           test "${#files[@]}" -eq 2
           node scripts/run-oxlint.mjs --tsconfig test/tsconfig/tsconfig.test.root.json "${files[@]}" 2>&1 | tee "$PROOF_DIR/lint-root.log"
-      - name: Typecheck exact owning graph
-        id: types
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' && startsWith(matrix.lane, 'types-') }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          printf '%s\n' "$TYPE_CONFIG" > "$PROOF_DIR/type-config.txt"
-          node scripts/run-tsgo.mjs -p "$TYPE_CONFIG" --incremental \
-            --tsBuildInfoFile ".artifacts/tsgo-cache/$PROOF_LANE.tsbuildinfo" 2>&1 | tee "$PROOF_DIR/types.log"
       - name: Record all outcomes even on failure
         if: ${{ always() }}
         shell: bash
@@ -186,7 +177,11 @@ jobs:
           fi
           if test -f "$PROOF_DIR/applied.patch"; then
             test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-            printf '%s  %s\n' "$OVERLAY_SHA256" "$PROOF_DIR/final.patch" | sha256sum --check
+            if test -f "$PROOF_DIR/formatted.patch"; then
+              cmp "$PROOF_DIR/formatted.patch" "$PROOF_DIR/final.patch"
+            else
+              printf '%s  %s\n' "$OVERLAY_SHA256" "$PROOF_DIR/final.patch" | sha256sum --check
+            fi
           fi
       - name: Upload exact proof including failures
         if: ${{ always() }}
