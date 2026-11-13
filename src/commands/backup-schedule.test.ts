@@ -13,6 +13,7 @@ import { createCronStoreHarness, createNoopLogger } from "../cron/service.test-h
 import type { CronListPageOptions } from "../cron/service/list-page-types.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../cron/types.js";
 import { defaultRuntime } from "../runtime.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -547,5 +548,55 @@ describe("scheduled backups", () => {
       backupDisableCommand(runtime, { url: "wss://gateway.example.invalid" }),
     ).rejects.toThrow(expected);
     expect(gatewayRpc.call).not.toHaveBeenCalled();
+  });
+
+  it("stops removing further backup schedules once interrupted", async () => {
+    const scope = new AsyncWorkScope();
+    const base: CronJob = {
+      id: "git-job",
+      name: "Git backups",
+      enabled: true,
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      declarationKey: "openclaw-backup-scheduled",
+      schedule: { kind: "every", everyMs: 60_000 },
+      payload: { kind: "command", argv: ["openclaw", "backup", "git", "create"] },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      state: {},
+    };
+    const jobs = [
+      base,
+      { ...base, id: "offsite-job", declarationKey: "openclaw-backup-offsite-scheduled" },
+    ];
+    gatewayRpc.call.mockImplementation(async (method: string, _opts, params: { id: string }) => {
+      if (method === "cron.list") {
+        return {
+          jobs,
+          snapshotRevision: "1",
+          total: jobs.length,
+          offset: 0,
+          limit: 200,
+          hasMore: false,
+          nextOffset: null,
+        };
+      }
+      if (method === "cron.remove") {
+        // The first removal completes; the next iteration sees the closed scope
+        // and must not remove the remaining schedule.
+        if (params.id === "git-job") {
+          scope.beginClose(new Error("interrupted"));
+        }
+        return { removed: true };
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+    vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    await scope.run(() => runCli(["backup", "disable"]));
+    expect(
+      gatewayRpc.call.mock.calls
+        .filter(([method]) => method === "cron.remove")
+        .map((call) => call[2]),
+    ).toEqual([{ id: "git-job" }]);
   });
 });

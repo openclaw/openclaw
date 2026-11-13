@@ -21,6 +21,7 @@ import {
 import { executeGitCommand } from "../infra/git-exec.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { shortenHomePath } from "../utils.js";
 import { GIT_BACKUP_PUSH_CREDENTIAL_WARNING } from "./backup-git.js";
 import { resolveRequiredBackupPath } from "./backup-shared.js";
@@ -213,8 +214,12 @@ export async function backupDisableCommand(
     runtime.log(`${label} are already disabled.`);
     return { removed: false };
   }
+  const signal = getAsyncWorkSignal();
   for (const job of existing) {
-    await callGatewayFromCli("cron.remove", options, { id: job.id });
+    if (signal?.aborted) {
+      break;
+    }
+    await callGatewayFromCli("cron.remove", options, { id: job.id }, { signal });
   }
   runtime.log(`${label} disabled.`);
   return { removed: true };
