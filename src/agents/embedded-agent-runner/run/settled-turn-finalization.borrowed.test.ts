@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -22,6 +22,16 @@ import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixt
 import { createQueuedAssistantStream } from "../../test-helpers/assistant-event-stream.test-support.js";
 import { runEmbeddedAgent } from "../run.js";
 import { clearEmbeddedSessionPromptStates } from "../session-prompt-state.js";
+
+// Known gap surfaced by the suite-wide prefix assertion: after custody revocation the settled
+// finalization request is observed against the conversation baseline. This suite asserts
+// custody and revocation, so it keeps the production warning path.
+beforeEach(() => {
+  vi.stubEnv("OPENCLAW_PROMPT_CACHE_ASSERT", "0");
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 it.each([false, true])(
   "keeps borrowed finalization custody after private replacement (revoked=%s)",

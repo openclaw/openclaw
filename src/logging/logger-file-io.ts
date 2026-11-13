@@ -20,9 +20,9 @@ function rotatedLogPath(file: string, index: number): string {
  * children (a deleted directory that is still mounted, such as a stale systemd
  * PrivateTmp), which would block the event loop inside the logger.
  */
-function ensureLogDirectorySync(dir: string, createParents = true): void {
+function ensureLogDirectorySync(dir: string, createParents = true, mode = 0o777): void {
   try {
-    fs.mkdirSync(dir);
+    fs.mkdirSync(dir, { mode });
   } catch (error) {
     const code = extractErrorCode(error);
     if (code === "EEXIST" && fs.statSync(dir).isDirectory()) {
@@ -32,9 +32,9 @@ function ensureLogDirectorySync(dir: string, createParents = true): void {
     if (!createParents || code !== "ENOENT" || parent === dir) {
       throw error;
     }
-    ensureLogDirectorySync(parent);
+    ensureLogDirectorySync(parent, true, mode);
     // One retry once the parents exist; a second ENOENT is final.
-    ensureLogDirectorySync(dir, false);
+    ensureLogDirectorySync(dir, false, mode);
   }
 }
 
@@ -90,11 +90,17 @@ export function prepareFileLogTarget(file: string, rolling: boolean): void {
   }
 }
 
-export type DefaultFileLogRoot = { tmpDir: string; stateDir: string };
+export type DefaultFileLogRoot = { stateDir: string };
 
 export function resolveDefaultFileLogTarget(file: string, root: DefaultFileLogRoot): string {
+  // First-run writers and subsequent readers must select the same preferred directory.
+  ensureLogDirectorySync(root.stateDir, true, 0o700);
   return path.join(
-    resolvePreferredOpenClawTmpDir({ tmpdir: () => root.tmpDir, stateDir: root.stateDir }),
+    resolvePreferredOpenClawTmpDir({
+      preferredDir: path.join(root.stateDir, "logs"),
+      tmpdir: () => path.join(root.stateDir, "tmp"),
+      stateDir: root.stateDir,
+    }),
     file,
   );
 }

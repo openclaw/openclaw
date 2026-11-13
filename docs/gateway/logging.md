@@ -56,7 +56,7 @@ of all workers. Startup logging never requests new worker samples.
 
 ## File-based logger
 
-- Default rolling log files are under `/tmp/openclaw/` (one file per day), dated by the gateway host's local timezone. The default profile uses `openclaw-YYYY-MM-DD.log`. Named profiles use `openclaw-<profile>-YYYY-MM-DD.log` (for example, `openclaw-dev-YYYY-MM-DD.log`). If that directory is unsafe or unwritable (wrong owner, world-writable, a symlink), OpenClaw falls back to a user-scoped `os.tmpdir()/openclaw-<uid>` path instead. On Windows it always uses that OS-tmpdir fallback.
+- Default rolling log files are under the selected state directory's `logs/` directory (one file per day), dated by the gateway host's local timezone. The default profile uses `openclaw-YYYY-MM-DD.log`. Named profiles use `openclaw-<profile>-YYYY-MM-DD.log` (for example, `openclaw-dev-YYYY-MM-DD.log`). If that directory is unsafe or unwritable (wrong owner, world-writable, a symlink), OpenClaw falls back to `tmp/openclaw-<uid>` under the same state directory. On Windows it uses `tmp/openclaw` under that state directory. See [log locations and upgrade guidance](/logging#where-logs-live).
 - Active log files rotate at `logging.maxFileBytes` (default: 100 MB). Rotation keeps up to five numbered archives (`.1` through `.5`), and continues to write a fresh active file.
 - Configure the log file path and level via `~/.openclaw/openclaw.json`: `logging.file`, `logging.level`.
 - The file format is one JSON object per line.
@@ -135,6 +135,13 @@ log egress applies secret redaction, and support bundles omit the nested owner
 details. Plain-text timeout warnings include the bounded structured fields.
 
 The Control UI Logs tab tails this file via the gateway (`logs.tail`). The CLI does the same:
+
+Gateway tail reads and redaction run in a bounded background worker, so opening
+the Logs tab does not tokenize log records on the shared chat event loop. Each
+response keeps the requested line and byte limits (at most 5,000 lines and 1 MB).
+The byte cursor skips completed records on subsequent polls. The reader may
+inspect older bytes to preserve private-key redaction across window boundaries;
+it uses the current redaction patterns and registered secrets for each request.
 
 ```bash
 openclaw logs --follow

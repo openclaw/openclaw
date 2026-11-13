@@ -31,9 +31,10 @@ import {
   WorktreeRemovalContentionError,
 } from "./registry.js";
 import { getRegistryWorktree, listRegistryWorktrees } from "./registry.test-support.js";
+import { IDLE_GC_MS } from "./retention.js";
 import { acquireWorktreeRunLease, claimWorktreeRemoval } from "./run-lease.js";
 import { testing as runLeaseTesting } from "./run-lease.test-support.js";
-import { IDLE_GC_MS, ManagedWorktreeService } from "./service.js";
+import { ManagedWorktreeService } from "./service.js";
 import {
   git,
   materializeManagedWorktreeFixture,

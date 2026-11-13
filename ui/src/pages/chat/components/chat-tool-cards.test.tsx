@@ -18,6 +18,7 @@ import {
 import { mountSolid as mountComponent } from "../../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { attachHistoryActivity } from "../chat-history-request.ts";
+import { inlineCommandPresentation } from "../chat-inline-command-presentation.ts";
 import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "../tool-stream.ts";
 import { DiffBlock } from "./chat-diff-render.solid.tsx";
@@ -879,4 +880,58 @@ it.each([
   postPrompt(port, "Late but valid");
   await flushPorts();
   expect(received).toEqual(expected);
+});
+
+it("previews live command output without inferring completion and retains detail disclosure", async () => {
+  const container = document.createElement("div");
+  const onToggleExpanded = vi.fn();
+  const card: ToolCard = {
+    id: "trail-command",
+    name: "exec",
+    args: { command: "npm test", title: "Run tests" },
+    outputText: "first\nsecond\nthird\nfourth\nfifth",
+    live: true,
+    completed: false,
+    outputTruncated: true,
+  };
+  const options = {
+    inlineCommands: await inlineCommandPresentation(),
+    expanded: false,
+    runActive: true,
+    onToggleExpanded,
+  };
+  await mountCard(card, options, container);
+  await waitForSolid(() => {
+    expect(textOf(container, ".chat-tool-row__cmd")).toBe("npm test");
+    expect(textOf(container, ".chat-command-trail__status")).toBe("Running");
+  });
+  expect(textOf(container, ".chat-command-trail__preview pre")).toBe("third\nfourth\nfifth");
+  expect(container.textContent).not.toContain("Earlier output omitted");
+  expect(container.textContent).toContain("Captured output is truncated");
+  query(container, ".chat-command-trail__more")!.click();
+  expect(onToggleExpanded).toHaveBeenCalledWith("trail-command");
+
+  await mountCard({ ...card, outputText: `${card.outputText}\nsixth` }, options, container);
+  expect(textOf(container, ".chat-command-trail__preview pre")).toBe("fourth\nfifth\nsixth");
+
+  await mountCard({ ...card, outputText: `prefix😀${"x".repeat(593)}latest` }, options, container);
+  const longPreview = textOf(container, ".chat-command-trail__preview pre")!;
+  expect(longPreview).toBe(`${"x".repeat(593)}latest`);
+
+  await mountCard({ ...card, outputText: "\nshort output" }, options, container);
+  expect(textOf(container, ".chat-command-trail__preview pre")).toBe("\nshort output");
+  expect(container.textContent).toContain("Captured output is truncated");
+
+  await mountCard({ ...card, completed: true, isError: true, exitCode: 2 }, options, container);
+  expect(textOf(container, ".chat-tool-failure")).toBe("Exit code 2");
+  expect(textOf(container, ".chat-command-trail__status")).not.toBe("Completed");
+  await mountCard(
+    { ...card, completed: true, isError: false },
+    { ...options, expanded: true },
+    container,
+  );
+  expect(query(container, ".chat-command-trail__preview")).toBeNull();
+  expect(container.textContent).toContain("fifth");
+  await mountCard(card, { ...options, inlineCommands: undefined }, container);
+  expect(query(container, ".chat-command-trail__preview")).toBeNull();
 });

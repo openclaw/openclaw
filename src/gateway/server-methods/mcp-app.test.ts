@@ -639,6 +639,32 @@ describe("MCP App gateway bridge", () => {
     expect(getMcpAppModelContext(activeRuntime, view)).toBeNull();
   });
 
+  it.each([false, true])(
+    "returns the owning app's name and optional icon metadata (%s)",
+    async (withIcons) => {
+      const active = runtime();
+      const catalog = active.peekCatalog();
+      const icons = withIcons ? [{ src: "https://example.test/excalidraw.png" }] : undefined;
+      const server = expectDefined(catalog.servers.demo, "demo server fixture");
+      server.title = "Excalidraw";
+      server.icons = icons;
+      mocks.peekSessionMcpRuntime.mockReturnValue(active);
+      const response = await invoke("mcp.app.view", {
+        sessionKey: "agent:main:main",
+        viewId: "cv_app",
+      });
+      expect(response.mock.calls[0]?.[1]).toMatchObject({
+        appIdentity: { label: "Excalidraw", icons: icons ?? [] },
+      });
+      server.title = undefined;
+      const fallback = await invoke("mcp.app.view", {
+        sessionKey: "agent:main:main",
+        viewId: "cv_app",
+      });
+      expect(fallback.mock.calls[0]?.[1]).toMatchObject({ appIdentity: { label: "demo" } });
+    },
+  );
+
   it("rechecks current widget authority for every interactive capability", async () => {
     const activeRuntime = runtime();
     mocks.peekSessionMcpRuntime.mockReturnValue(activeRuntime);

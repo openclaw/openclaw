@@ -5,6 +5,7 @@ import * as downloads from "./pw-tools-core.downloads.js";
 import * as interactionActions from "./pw-tools-core.interactions.actions.js";
 import * as interactionContent from "./pw-tools-core.interactions.content.js";
 import * as interactionExecution from "./pw-tools-core.interactions.execution.js";
+import * as operatorInput from "./pw-tools-core.interactions.operator.js";
 import * as responses from "./pw-tools-core.responses.js";
 import * as snapshot from "./pw-tools-core.snapshot.js";
 import * as state from "./pw-tools-core.state.js";
@@ -32,6 +33,7 @@ export const pwAi = {
   downloadViaPlaywright: downloads.downloadViaPlaywright,
   emulateMediaViaPlaywright: state.emulateMediaViaPlaywright,
   executeActViaPlaywright: interactionExecution.executeActViaPlaywright,
+  sendOperatorInputViaPlaywright: operatorInput.sendOperatorInputViaPlaywright,
   getConsoleMessagesViaPlaywright: activity.getConsoleMessagesViaPlaywright,
   getNetworkRequestsViaPlaywright: activity.getNetworkRequestsViaPlaywright,
   getPageErrorsViaPlaywright: activity.getPageErrorsViaPlaywright,
