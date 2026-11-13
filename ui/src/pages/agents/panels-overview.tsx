@@ -184,8 +184,12 @@ export function AgentOverview(
   const thinkingDefault = createMemo(() => thinkingConfig().entry?.thinkingDefault);
   // The Gateway resolves both from the saved config: thinkingDefault is the agent's level, and
   // thinkingInheritedDefault (sent only with an override) is what clearing it resolves to.
+  // With an override, thinkingDefault is the override itself, so it never names the inherited
+  // level; restricted rosters omit the inherited field and the option then names no level.
   const inheritedThinking = () =>
-    params.agent.thinkingInheritedDefault ?? params.agent.thinkingDefault;
+    thinkingDefault()
+      ? params.agent.thinkingInheritedDefault
+      : (params.agent.thinkingInheritedDefault ?? params.agent.thinkingDefault);
   const thinkingDisabled = createMemo(
     () =>
       !params.canUpdateConfig || !params.configForm || params.configLoading || params.configSaving,

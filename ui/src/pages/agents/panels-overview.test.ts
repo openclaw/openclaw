@@ -243,6 +243,27 @@ it("edits the thinking default while the model catalog restricts model choices",
   expect(select.disabled).toBe(false);
 });
 
+it("names no inherited level when a restricted roster omits it", () => {
+  // A model-restricted roster drops thinkingInheritedDefault and its thinkingDefault is the
+  // agent's own override (Medium); clearing may resolve elsewhere, so no level is claimed.
+  const container = renderAgents({
+    configForm: agentConfig({ thinkingDefault: "low" }, { thinkingDefault: "medium" }),
+    overview: { modelSelectionPolicy: { restricted: true, defaultModel: inheritedAgentModel } },
+    readData: () => ({
+      ...data,
+      agentsPanel: "overview",
+      agentsList: {
+        ...data.agentsList!,
+        agents: [{ id: "beta", thinkingLevels, thinkingDefault: "medium" }],
+      },
+    }),
+  });
+  const select = overviewRow(container, "Thinking default")?.querySelector("select");
+  assert(select);
+  expect(select.value).toBe("medium");
+  expect(select.options[0]?.textContent).toBe("Inherit default");
+});
+
 it("shows the resolved thinking level, disabled, until config is readable", () => {
   const container = renderAgents({
     readData: () => ({
