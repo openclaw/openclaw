@@ -6,7 +6,11 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import * as providerPolicySurface from "../plugins/provider-policy-surface.js";
 import type { ModelAuthAvailabilityEvaluation } from "./model-auth-availability.js";
 import { subscriptionRoute as selectedRoute } from "./model-auth-availability.test-support.js";
-import { model, providerConfig, row } from "./model-catalog-fixtures.test-support.js";
+import {
+  model as modelFixture,
+  providerConfig,
+  row,
+} from "./model-catalog-fixtures.test-support.js";
 import {
   prepareLogicalVisibleModelCatalog,
   resolveLogicalModelCatalogEntryState,
@@ -346,7 +350,7 @@ describe("resolveLogicalVisibleModelCatalog", () => {
     const cfg = providerConfig("demo", {
       api: "openai-completions",
       baseUrl: "https://example.test/v1",
-      models: [model("voice")],
+      models: [modelFixture("voice")],
     });
     const catalog = [
       row("demo", "voice", {
