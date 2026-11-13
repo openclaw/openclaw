@@ -72,9 +72,13 @@ const cases: {
     name: "partial status warnings",
     payload: {
       partial: true,
-      warnings: ["whatsapp:default status failed: snapshot failed"],
+      warnings: [
+        "whatsapp:default status failed: snapshot failed",
+        "snapshot\u001b[2J failed\nnext\rrow\tcell\u202e",
+      ],
     },
     contains: [/Channel status is partial/, "whatsapp:default status failed: snapshot failed"],
+    verify: (lines) => expect(lines).toContain("- snapshot failed\\nnext\\rrow\\tcell"),
   },
   {
     name: "policy diagnostics without partial status",
@@ -88,10 +92,20 @@ const cases: {
           message: "Channel configuration reload is deferred while active work finishes.",
           fix: "Wait for active work to finish, then refresh channel status.",
         },
+        {
+          channel: "signal",
+          accountId: "default",
+          kind: "runtime",
+          message: "Issue\u001b[31m text\nnext",
+          fix: "fix\u001b]2;forged\u0007 here\rrow",
+        },
       ],
     },
     contains: ["running", "configuration reload is deferred", "Wait for active work to finish"],
-    verify: (_lines, output) => expect(output).not.toContain("status is partial"),
+    verify: (lines, output) => {
+      expect(output).not.toContain("status is partial");
+      expect(lines).toContain("- signal default: Issue text\\nnext (fix here\\rrow)");
+    },
   },
   {
     name: "transport liveness timestamps",

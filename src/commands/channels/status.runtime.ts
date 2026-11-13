@@ -4,6 +4,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
+import { terminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import {
   hasConfiguredUnavailableCredentialStatus,
@@ -89,7 +90,7 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
   if (payload.partial === true || statusWarnings.length > 0) {
     lines.push(theme.warn("Channel status is partial:"));
     for (const warning of statusWarnings) {
-      lines.push(`- ${warning.slice(0, 500)}`);
+      lines.push(terminalText`- ${warning.slice(0, 500)}`);
     }
     lines.push("");
   }
@@ -184,7 +185,7 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
     lines.push(theme.warn("Warnings:"));
     for (const issue of issues) {
       lines.push(
-        `- ${issue.channel} ${issue.accountId}: ${issue.message}${issue.fix ? ` (${issue.fix})` : ""}`,
+        terminalText`- ${issue.channel} ${issue.accountId}: ${issue.message}${issue.fix ? ` (${issue.fix})` : ""}`,
       );
     }
     lines.push(`- Run: ${formatCliCommand("openclaw doctor")}`);
