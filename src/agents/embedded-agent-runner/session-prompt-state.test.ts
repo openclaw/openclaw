@@ -551,6 +551,18 @@ describe("session tool surface", () => {
     ]);
   });
 
+  it("keeps the series when a bounded window starts after the compaction", async () => {
+    const entries: SessionEntry[] = [historyEntry("compaction", "compaction-1")];
+    await persist(entries);
+    fixture.reload();
+    // The reload sees only entries after the compaction, then a workspace file changed.
+    const window = entries.slice(1);
+    const prepared = fixture.prepare("Base.\n## AGENTS.md\nNew rule.", window);
+    expect(prepared.restart).toBe(false);
+    expect(prepared.systemPrompt).toBe("Base.");
+    expect(prepared.update?.content).toContain("New rule.");
+  });
+
   it("retires the pin at compaction instead of carrying it into the new history", async () => {
     const entries: SessionEntry[] = [];
     surface([tool("read"), tool("gateway")]);
