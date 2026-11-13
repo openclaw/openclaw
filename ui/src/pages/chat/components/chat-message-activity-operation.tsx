@@ -21,6 +21,16 @@ export function descendantCards(group: ToolCallGroup<ToolCard>) {
   return cards;
 }
 
+function retainsOwnOutcome(card: ToolCard, activity: AgentActivityItem | undefined): boolean {
+  return (
+    Boolean(readNodePermissionRequest(asNullableRecord(card.details)?.permissionMissing)) ||
+    card.isError === true ||
+    activity?.status === "failed" ||
+    activity?.status === "blocked" ||
+    activity?.status === "skipped"
+  );
+}
+
 /** Presentation follows recorded children; execution containers remain inspector evidence. */
 export function projectActivityOperations(
   roots: readonly ToolCallGroup<ToolCard>[],
@@ -54,24 +64,31 @@ export function projectActivityOperations(
     const { group, target, executionCards } = pending.pop()!;
     const call = unwrapToolCallForDisplay(group.card);
     const args = asNullableRecord(call.args);
-    const permission = readNodePermissionRequest(
-      asNullableRecord(group.card.details)?.permissionMissing,
-    );
     const activity = prepared.get(group.card);
-    const container =
+    const showOutcome = retainsOwnOutcome(group.card, activity);
+    const execution =
       call.name.trim().toLowerCase() === "exec" &&
-      !(typeof args?.command === "string" && args.command.trim()) &&
-      (group.children.some((child) => visible.has(child)) ||
-        suppressed.has(group.card) ||
-        activity?.hideFromChannelProgress === true ||
-        activity?.suppressChannelProgress === true);
-    const outcome = prepared.get(group.card)?.status;
-    const showOutcome =
-      Boolean(permission) ||
-      group.card.isError === true ||
-      outcome === "failed" ||
-      outcome === "blocked" ||
-      outcome === "skipped";
+      !(typeof args?.command === "string" && args.command.trim());
+    const visibleChildren = group.children.some((child) => visible.has(child));
+    if (execution && group.children.length > 0 && !visibleChildren && !showOutcome) {
+      const children = descendantCards(group);
+      if (!children.some((card) => retainsOwnOutcome(card, prepared.get(card)))) {
+        // A known routine subtree, such as polling, must not reappear as its wrapper.
+        // Include every card so the ordinary message renderer cannot restore the children.
+        hidden.add(group.card);
+        for (const card of children) {
+          hidden.add(card);
+        }
+        continue;
+      }
+    }
+    const container =
+      execution &&
+      (visibleChildren ||
+        (!showOutcome &&
+          (suppressed.has(group.card) ||
+            activity?.hideFromChannelProgress === true ||
+            activity?.suppressChannelProgress === true)));
     if (container && !showOutcome) {
       hidden.add(group.card);
     }

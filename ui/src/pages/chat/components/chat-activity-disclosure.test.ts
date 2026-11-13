@@ -253,7 +253,7 @@ it.each([
   { outcome: "failed", isError: true },
 ])("draws a settled $outcome step whose nested calls are all routine", async ({ isError }) => {
   const runId = "step-run";
-  const title = "Check the release checklist";
+  const title = "Observe long check progress";
   const history = attachHistoryActivity(
     prepareChatHistoryFixture([
       createAssistantMessage(
@@ -261,7 +261,7 @@ it.each([
           createToolCall(
             "step",
             "exec",
-            { title, code: "await tools.progress_card({ plan });" },
+            { title, code: "return await process({action: 'poll', sessionId: 'long-check'});" },
             { type: "toolCall", runId },
           ),
         ],
@@ -274,10 +274,10 @@ it.each([
           afterEntryId: "step-call",
           startOrder: 1,
           parentToolCallId: "step",
-          toolCallId: "plan",
-          toolName: "progress_card",
-          input: { plan: [{ step: title, status: "in_progress" }] },
-          result: { content: [{ type: "text", text: "Updated" }] },
+          toolCallId: "poll",
+          toolName: "process",
+          input: { action: "poll", sessionId: "long-check" },
+          result: { content: [{ type: "text", text: "Verified batch 3" }] },
           isError: false,
           startedAt: 2_100,
           timestamp: 2_200,
@@ -295,14 +295,18 @@ it.each([
   const { container, draw } = mountGroup(history.messages);
   await draw(false);
   expect(container.querySelector(".chat-activity-group__summary")).toBeNull();
+  if (!isError) {
+    expect(container.querySelector(".chat-tool-row")).toBeNull();
+    await draw(true);
+    expect(container.querySelector(".chat-tool-row")).toBeNull();
+    return;
+  }
+  // The failed wrapper stays inspectable, with its routine child inside it.
   expect(container.querySelector(".chat-tool-disclosure__content")?.textContent).toMatch(/code/i);
-  // The step's own row carries its outcome now that groups no longer count it.
-  expect(container.querySelector(".chat-tool-failure") !== null).toBe(isError);
-  expect(container.querySelector(".chat-progress-card-receipt")).toBeNull();
+  expect(container.querySelector(".chat-tool-failure")).not.toBeNull();
+  expect(container.querySelector(".chat-tool-children")).toBeNull();
   await draw(true);
-  expect(
-    container.querySelectorAll(".chat-tool-children .chat-progress-card-receipt"),
-  ).toHaveLength(1);
+  expect(container.querySelectorAll(".chat-tool-children .chat-tool-row")).toHaveLength(1);
   expect(container.querySelectorAll(".chat-tool-children .chat-tool-wrapper-details")).toHaveLength(
     1,
   );
