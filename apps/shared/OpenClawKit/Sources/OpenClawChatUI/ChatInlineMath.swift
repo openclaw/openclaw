@@ -152,6 +152,7 @@ enum ChatMathParseCache {
     }
 
     private static var cache: [String: Entry] = [:]
+    private static var insertionOrder: [String] = []
     private static let capacity = 80
     private static let maxNestingDepth = 64
     private static let maxCommandCount = 128
@@ -174,9 +175,11 @@ enum ChatMathParseCache {
 
         let result = Entry(mathList: MTMathListBuilder.build(fromString: latex))
         if self.cache.count >= self.capacity {
-            self.cache.removeAll(keepingCapacity: true)
+            // Evict one oldest result, including cached failures, not every warm expression.
+            self.cache.removeValue(forKey: self.insertionOrder.removeFirst())
         }
         self.cache[latex] = result
+        self.insertionOrder.append(latex)
         return result.mathList
     }
 
@@ -219,9 +222,11 @@ enum ChatInlineMathImageCache {
         let latex: String
         let fontSize: CGFloat
         let colorHash: Int
+        let scale: CGFloat
     }
 
     private static var cache: [Key: RenderedImage] = [:]
+    private static var insertionOrder: [Key] = []
     private static let capacity = 80
     private static let maxRenderedPixelArea: CGFloat = 262_144
     private static let maxRenderedPixelDimension: CGFloat = 4096
@@ -236,10 +241,13 @@ enum ChatInlineMathImageCache {
               let mathList = ChatMathParseCache.mathList(latex: latex)
         else { return nil }
         let platformColor = self.platformColor(textColor, colorScheme: colorScheme)
+        // A display-scale change must recheck the pixel budget before reusing a render.
+        let scale = self.imageScale
         let key = Key(
             latex: latex,
             fontSize: fontSize,
-            colorHash: self.colorHash(platformColor))
+            colorHash: self.colorHash(platformColor),
+            scale: scale)
         if let cached = self.cache[key] {
             return cached
         }
@@ -259,7 +267,7 @@ enum ChatInlineMathImageCache {
         metricsLabel.frame = CGRect(origin: .zero, size: size)
         metricsLabel.layoutIfNeeded()
         #endif
-        guard self.isSafeImageSize(size, scale: self.imageScale) else { return nil }
+        guard self.isSafeImageSize(size, scale: scale) else { return nil }
 
         // MTMathImage allocates immediately in asImage(). Measure with the same
         // text-mode typesetter first so hostile input cannot request an empty or
@@ -279,9 +287,10 @@ enum ChatInlineMathImageCache {
             image: image,
             baselineOffset: -(metricsLabel.displayList?.descent ?? 0))
         if self.cache.count >= self.capacity {
-            self.cache.removeAll(keepingCapacity: true)
+            self.cache.removeValue(forKey: self.insertionOrder.removeFirst())
         }
         self.cache[key] = rendered
+        self.insertionOrder.append(key)
         return rendered
     }
 
