@@ -1036,6 +1036,7 @@ export function inspectPersonalCredentialWriters(
   );
   const aliases: [string, string][] = [];
   const bindingNames: (ts.Identifier | ts.StringLiteral)[] = [];
+  const importBindings: [ts.Expression, ts.BindingName][] = [];
   for (const { file, source } of sources) {
     const visit = (node: ts.Node) => {
       if (
@@ -1070,6 +1071,23 @@ export function inspectPersonalCredentialWriters(
         bindingNames.push(node.name);
       } else if (ts.isImportClause(node) && node.name) {
         bindingNames.push(node.name);
+      }
+      if (ts.isVariableDeclaration(node) && node.initializer) {
+        importBindings.push([node.initializer, node.name]);
+      }
+      if (
+        ts.isCallExpression(node) &&
+        ts.isPropertyAccessExpression(node.expression) &&
+        node.expression.name.text === "then"
+      ) {
+        const callback = node.arguments[0];
+        if (
+          callback &&
+          (ts.isArrowFunction(callback) || ts.isFunctionExpression(callback)) &&
+          callback.parameters[0]
+        ) {
+          importBindings.push([node.expression.expression, callback.parameters[0].name]);
+        }
       }
       node.forEachChild(visit);
     };
@@ -1232,28 +1250,9 @@ export function inspectPersonalCredentialWriters(
       }
     }
   };
-  for (const { source } of sources) {
-    const visit = (node: ts.Node) => {
-      if (ts.isVariableDeclaration(node) && node.initializer) {
-        bindImports(node.initializer, node.name);
-      }
-      if (
-        ts.isCallExpression(node) &&
-        ts.isPropertyAccessExpression(node.expression) &&
-        node.expression.name.text === "then"
-      ) {
-        const callback = node.arguments[0];
-        if (
-          callback &&
-          (ts.isArrowFunction(callback) || ts.isFunctionExpression(callback)) &&
-          callback.parameters[0]
-        ) {
-          bindImports(node.expression.expression, callback.parameters[0].name);
-        }
-      }
-      node.forEachChild(visit);
-    };
-    source.forEachChild(visit);
+  // Resolve in the original traversal order, after every declaration is available.
+  for (const [expression, binding] of importBindings) {
+    bindImports(expression, binding);
   }
   // Resolve namespace candidates after every dynamic binding has its prepared target.
   const bindingSymbols = symbolsAt(bindingNames);
