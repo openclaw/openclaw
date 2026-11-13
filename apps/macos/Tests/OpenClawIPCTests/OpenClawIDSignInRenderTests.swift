@@ -21,16 +21,20 @@ struct OpenClawIDSignInRenderTests {
             ("switch-no-claws", .problem(.notInvited(account: "sam@example.test"))),
         ]
         for (name, step) in cases {
-            let model = OnboardingOpenClawIDModel(service: RenderService(step: step), onJoined: { _ in })
-            await model.begin(.connect)?.value
-            try #require(model.step == step)
-            try OnboardingRenderTests.capture(
-                OnboardingOpenClawIDView(model: model),
-                name: name,
-                label: Self.label,
-                output: output,
-                width: 574)
-            model.cancel()
+            for dark in [false, true] {
+                let model = OnboardingOpenClawIDModel(service: RenderService(step: step), onJoined: { _ in })
+                await model.begin(.connect)?.value
+                try #require(model.step == step)
+                // Closing a capture invokes onDisappear, which cancels the model; each appearance needs its own.
+                try OnboardingRenderTests.capture(
+                    OnboardingOpenClawIDView(model: model),
+                    name: name,
+                    label: Self.label,
+                    output: output,
+                    width: 574,
+                    dark: dark)
+                model.cancel()
+            }
         }
     }
 
