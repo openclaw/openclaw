@@ -1023,9 +1023,14 @@ function operation(node: ts.Node): string {
 /** Extend the existing worker-ratchet semantic snapshot; no second compiler or runtime guard. */
 export function inspectPersonalCredentialWriters(
   sources: readonly { file: string; source: ts.SourceFile }[],
-  checker: NativeTypeScriptProject["project"]["checker"],
-  symbolsAt: (nodes: readonly ts.Node[]) => (Symbol | undefined)[],
+  compiler: {
+    checker: NativeTypeScriptProject["project"]["checker"];
+    symbolsAt: (nodes: readonly ts.Node[]) => (Symbol | undefined)[];
+    unalias: (symbol: Symbol | undefined) => Symbol | undefined;
+    moduleExports: (symbol: Symbol) => readonly Symbol[];
+  },
 ): string[] {
+  const { checker, symbolsAt, unalias, moduleExports } = compiler;
   const symbolAt = (node: ts.Node) => symbolsAt([node])[0];
   const approvedCallers = new Map([...callers, ...exclusiveMaintenanceCallers]);
   const protectedDeclarations = new Map<ts.Node, string>();
@@ -1076,17 +1081,8 @@ export function inspectPersonalCredentialWriters(
     source.forEachChild(visit);
   }
   const importedBindings = new Map<Symbol, Symbol>();
-  // Compiler aliases are immutable; prepared binding overrides are applied separately.
-  const aliasTargets = new Map<Symbol, Symbol>();
   const resolveSymbol = (raw: Symbol | undefined): Symbol | undefined => {
-    let symbol = raw;
-    if (raw && raw.flags & SymbolFlags.Alias) {
-      symbol = aliasTargets.get(raw);
-      if (!symbol) {
-        symbol = checker.getAliasedSymbol(raw);
-        aliasTargets.set(raw, symbol);
-      }
-    }
+    const symbol = unalias(raw);
     return symbol && (importedBindings.get(symbol) ?? symbol);
   };
   const resolved = new Map<Symbol, string[]>();
@@ -1120,7 +1116,7 @@ export function inspectPersonalCredentialWriters(
     } else if (declaration && ts.isShorthandPropertyAssignment(declaration)) {
       found.push(...targets(checker.getShorthandAssignmentValueSymbol(declaration)));
     } else if (symbol.flags & SymbolFlags.Module) {
-      for (const member of checker.getExportsOfModule(symbol)) {
+      for (const member of moduleExports(symbol)) {
         const writers = targets(member);
         if (writers.length) {
           names.add(member.name);

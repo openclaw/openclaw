@@ -441,10 +441,9 @@ export function inspectDatabaseWorkerBoundaries(
   };
   const symbolAt = (node: ts.Node): Symbol | undefined =>
     compilerSymbols.has(node) ? compilerSymbols.get(node) : symbolsAt([node])[0];
-  const forwarded = new Map<Symbol, Symbol>();
-  // Compiler aliases are immutable; prepared binding overrides are applied separately.
+  // Both guards consume the same immutable compiler facts; each applies its own bindings.
   const aliasTargets = new Map<Symbol, Symbol>();
-  const resolveSymbol = (symbol: Symbol | undefined): Symbol | undefined => {
+  const unalias = (symbol: Symbol | undefined): Symbol | undefined => {
     let target = symbol;
     if (symbol && symbol.flags & SymbolFlags.Alias) {
       target = aliasTargets.get(symbol);
@@ -453,6 +452,20 @@ export function inspectDatabaseWorkerBoundaries(
         aliasTargets.set(symbol, target);
       }
     }
+    return target;
+  };
+  const exportsByModule = new Map<Symbol, readonly Symbol[]>();
+  const moduleExports = (symbol: Symbol): readonly Symbol[] => {
+    let exports = exportsByModule.get(symbol);
+    if (!exports) {
+      exports = checker.getExportsOfModule(symbol);
+      exportsByModule.set(symbol, exports);
+    }
+    return exports;
+  };
+  const forwarded = new Map<Symbol, Symbol>();
+  const resolveSymbol = (symbol: Symbol | undefined): Symbol | undefined => {
+    const target = unalias(symbol);
     return target && (forwarded.get(target) ?? target);
   };
   const operationName = (node: ts.Node) => {
@@ -608,7 +621,9 @@ export function inspectDatabaseWorkerBoundaries(
   });
   session.checkpoint?.("sources-registration");
   if (validateCredentialWriters) {
-    violations.push(...inspectPersonalCredentialWriters(sources, checker, symbolsAt));
+    violations.push(
+      ...inspectPersonalCredentialWriters(sources, { checker, symbolsAt, unalias, moduleExports }),
+    );
     session.checkpoint?.("credential-writers");
   }
   // Follow named kernels from the reviewed boundaries. A symbol reference from
@@ -884,7 +899,7 @@ export function inspectDatabaseWorkerBoundaries(
     if (direct) {
       found.add(direct);
     } else if (symbol.flags & SymbolFlags.Module) {
-      for (const member of checker.getExportsOfModule(symbol)) {
+      for (const member of moduleExports(symbol)) {
         for (const operation of targets(member)) {
           found.add(operation);
         }
