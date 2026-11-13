@@ -480,9 +480,7 @@ export function resetCompactHooksHarnessMocks(workspaceDir: string, sessionId = 
   );
 }
 
-export async function loadCompactHooksHarness(
-  options: { durableSession?: boolean; realSkills?: boolean } = {},
-): Promise<{
+export async function loadCompactHooksHarness(options: { durableSession?: boolean } = {}): Promise<{
   compactEmbeddedAgentSessionDirect: typeof import("./compact.js").compactEmbeddedAgentSessionDirect;
   compactEmbeddedAgentSession: CompactHooksQueuedCompaction;
   onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
@@ -775,9 +773,7 @@ export async function loadCompactHooksHarness(
     limitHistoryTurns: limitHistoryTurnsMock,
   }));
 
-  if (!options.realSkills) {
-    mockCompactHooksSkills(resolveSkillsPromptMock);
-  }
+  mockCompactHooksSkills(resolveSkillsPromptMock);
 
   vi.doMock("../agent-scope.js", async () => {
     const { listAgentIds } = await import("../agent-scope-config.js");

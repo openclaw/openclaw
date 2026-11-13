@@ -140,15 +140,6 @@ export type MockResolvedModel = {
 };
 
 export function createDefaultCompactionAuthStore(): AuthProfileStore {
-  return {
-    version: 1,
-    profiles: {
-      "openai:test": {
-        type: "api_key",
-        provider: "openai",
-        key: "test",
-      },
-    },
-    order: { openai: ["openai:test"] },
-  };
+  const profile = { type: "api_key", provider: "openai", key: "test" } as const;
+  return { version: 1, profiles: { "openai:test": profile }, order: { openai: ["openai:test"] } };
 }

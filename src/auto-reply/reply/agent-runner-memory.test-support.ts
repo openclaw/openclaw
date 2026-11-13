@@ -1,15 +1,9 @@
-import path from "node:path";
-import { expect } from "vitest";
 import type { PreparedAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import type { MemoryFlushToolRunContext } from "../../agents/agent-tools.memory-flush.types.js";
 import { createAssistantErrorTranscript } from "../../agents/assistant-error-transcript.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
-import type { CompactEmbeddedAgentSessionParams as CompactionParams } from "../../agents/embedded-agent-runner/compact.types.js";
 import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
-import type {
-  EmbeddedAgentCompactResult,
-  EmbeddedAgentRunResult,
-} from "../../agents/embedded-agent-runner/types.js";
+import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import type { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
 import type { ModelFallbackAttemptProvenance } from "../../agents/model-fallback.types.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
@@ -21,9 +15,6 @@ import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions/types.js";
 import type { MemoryAudience } from "../../plugins/memory-provider-types.js";
 import type { MemoryFlushPlan } from "../../plugins/registry-contribution-types.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
-import { createCanonicalFixtureSkill } from "../../skills/test-support/test-helpers.js";
-import { createTestFollowupRun } from "./agent-runner.test-fixtures.js";
-import type { FollowupRun } from "./queue.js";
 
 export function createSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
   return { sessionId: "session", updatedAt: Date.now(), ...overrides };
@@ -283,77 +274,4 @@ export function registerClaudeCliBackend(ownsNativeCompaction = false): void {
       },
     ],
   });
-}
-
-export async function expectPreparedSkillsPreflight(params: {
-  workspaceDir: string;
-  compact: {
-    mockImplementationOnce: (
-      implementation: (input: CompactionParams) => Promise<EmbeddedAgentCompactResult>,
-    ) => unknown;
-  };
-  createRequiredPreflight: (entry: Partial<SessionEntry>) => Promise<{
-    sessionEntry: SessionEntry;
-    run: (options: { followupRun: FollowupRun }) => Promise<SessionEntry | undefined>;
-  }>;
-}) {
-  const { resolveSandboxSkillRuntimeInputs } =
-    await import("../../agents/embedded-agent-runner/sandbox-skills.js");
-  const { stripRuntimeOnlySessionSkillsFields } =
-    await import("../../config/sessions/store-entry-shape.js");
-  const snapshot = {
-    prompt: "Selected library instructions",
-    skills: [{ name: "selected" }],
-    librarySelections: [
-      { skillId: "selected", revision: "r1", name: "selected", ownerProfileId: "owner" },
-    ],
-    resolvedSkills: [
-      createCanonicalFixtureSkill({
-        name: "selected",
-        description: "Pinned instructions",
-        filePath: "/library/r1/SKILL.md",
-        baseDir: "/library/r1",
-        source: "library",
-      }),
-    ],
-  };
-  const { sessionEntry, run } = await params.createRequiredPreflight({
-    skillsSnapshot: stripRuntimeOnlySessionSkillsFields({
-      sessionId: "session",
-      updatedAt: 1,
-      skillsSnapshot: snapshot,
-    }).skillsSnapshot,
-  });
-  params.compact.mockImplementationOnce(async (input: CompactionParams) => {
-    const prepared = resolveSandboxSkillRuntimeInputs({
-      skillsAnchorWorkspace: params.workspaceDir,
-      skillsSnapshot: input.skillsSnapshot,
-      sandbox: {
-        enabled: true,
-        workspaceAccess: "rw",
-        containerWorkdir: "/workspace",
-        skillUsagePaths: [
-          {
-            skillName: "selected",
-            skillSource: "workspace",
-            skillFile: "/library/r1/SKILL.md",
-            readPath: path.join(params.workspaceDir, "selected/SKILL.md"),
-          },
-        ],
-      },
-    });
-    expect(prepared.skillsSnapshot?.resolvedSkills?.[0]?.filePath).toMatch(/^\/workspace\//);
-    expect(prepared.skillsSnapshot?.librarySelections).toEqual(snapshot.librarySelections);
-    return { ok: true, compacted: true, result: { tokensBefore: 120, tokensAfter: 42 } };
-  });
-  await expect(
-    run({
-      followupRun: createTestFollowupRun({
-        sessionId: "session",
-        sessionKey: "agent:main:main",
-        skillsSnapshot: snapshot,
-      }),
-    }),
-  ).resolves.toMatchObject({ compactionCount: 1 });
-  expect(sessionEntry.skillsSnapshot?.resolvedSkills).toBeUndefined();
 }
