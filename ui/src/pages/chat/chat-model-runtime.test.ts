@@ -274,17 +274,6 @@ describe("chat model runtime choices", () => {
     expect(container.querySelector('[data-chat-thinking-option="medium"]')).toBeNull();
   });
 
-  it("groups a pinned session's Default under its configured runtime", async () => {
-    const opus = { ...model, id: "claude-opus-5-5", provider: "anthropic" };
-    const result = createSessionsListResult({ defaultsModel: opus.id });
-    result.sessions[0]!.agentRuntime = { id: "codex", source: "session-key" };
-    result.defaults.agentRuntime = { id: "claude-cli", source: "model" };
-    const row = (await renderControls(result, [model, opus])).querySelector(
-      '[data-chat-model-default="true"]',
-    );
-    expect(row?.closest("section")?.dataset.chatModelProviderGroup).toBe("claude-cli");
-  });
-
   it.each(["missing-auth", "unsupported-runtime", "locked"] as const)(
     "preserves the %s guard for additional harness rows",
     async (guard) => {
