@@ -20,6 +20,7 @@ import {
   listSessionPendingInputs,
   readSessionPendingInput,
 } from "../config/sessions/session-pending-input-history.js";
+import { readSessionPendingInputReceiptsInWorker } from "../config/sessions/session-pending-input-receipts.js";
 import * as pendingInputWithdrawal from "../config/sessions/session-pending-input-withdrawal.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -30,6 +31,11 @@ import {
 } from "../process/gateway-work-admission.js";
 import { withSessionTurn } from "../sessions/session-controller.admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import {
+  assertAgentDatabaseAdmitted,
+  recordAgentDatabaseAdmissions,
+} from "../state/agent-database-admission.js";
+import { withAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
@@ -430,5 +436,90 @@ it.for(["aborted", "draining"] as const)(
         resetGatewayWorkAdmission();
         enqueue.mockRestore();
       }
+    }),
+);
+
+it.each(["running", "stopped"] as const)(
+  "settles deferred crash inputs only while recovery is current (%s)",
+  (mode) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
+      const target = {
+        agentId: "main",
+        sessionKey: "agent:main:deferred-crash",
+        sessionId: "deferred-crash",
+      };
+      replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: 1 });
+      const database = openOpenClawAgentDatabase({ agentId: target.agentId });
+      const receipt = await stageSessionPendingInput(target, {
+        runId: "deferred-crash",
+        assertCurrent() {},
+        message: {
+          role: "user",
+          content: "synthetic crash input",
+          timestamp: 1,
+          idempotencyKey: "deferred-crash:user",
+        },
+      });
+      assert(receipt);
+      receipt.finish("interrupted");
+      await receipt.settled?.();
+      database.db
+        .prepare(
+          "UPDATE session_pending_inputs SET state = 'queued', lifecycle_generation = 'previous-process' WHERE input_id = ?",
+        )
+        .run(receipt.inputId);
+      await withAgentDatabaseStartupAdmission(async (admission) => {
+        const inspected = createDeferredCore<{ incompatible: []; indeterminate: [] }>();
+        const refusals = admission.defer({
+          env: process.env,
+          reason: "synthetic delayed startup inspection",
+          inspections: [
+            { target: { agentId: target.agentId, path: database.path }, result: inspected.promise },
+          ],
+        });
+        recordAgentDatabaseAdmissions(refusals, { source: "startup" });
+        const owner = admission.adopt();
+        const recovery = new AbortController();
+        const warn = vi.fn();
+        try {
+          admission.activate({
+            isCurrent: () => true,
+            preparationReady: Promise.resolve(),
+            openAgent: async ({ assertCurrent }) => assertCurrent(),
+            migrateAgent: async ({ assertCurrent }) => assertCurrent(),
+            publishAgent: async ({ assertCurrent }) => assertCurrent(),
+          });
+          const prepared = admission.waitForAgentPreparation(target.agentId, { forWrite: true });
+          expect(prepared).toBeDefined();
+          await resumeMarkedSessions({
+            context: createContext([], () => ({})),
+            signal: recovery.signal,
+            log: { warn },
+          });
+          if (mode === "stopped") {
+            recovery.abort(new Error("Gateway stopped before database preparation completed"));
+          }
+          inspected.resolve({ incompatible: [], indeterminate: [] });
+          await prepared;
+          assertAgentDatabaseAdmitted(target.agentId);
+          await admission.pendingPreparation;
+          expect(warn).not.toHaveBeenCalled();
+          const receipts = await readSessionPendingInputReceiptsInWorker(target, {
+            runIds: ["deferred-crash"],
+          });
+          if (mode === "running") {
+            expect(receipts).toEqual([
+              expect.objectContaining({ runId: "deferred-crash", cancelled: true }),
+            ]);
+          } else {
+            expect(receipts).toEqual([{ runId: "deferred-crash", state: "pending" }]);
+          }
+        } finally {
+          inspected.resolve({ incompatible: [], indeterminate: [] });
+          await owner.stop();
+          recordAgentDatabaseAdmissions([], { source: "startup" });
+        }
+      });
     }),
 );

@@ -7,12 +7,21 @@ import {
   withinTest,
 } from "../../test/helpers/promise.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import { stageSessionPendingInput } from "../config/sessions/session-accessor.pending-inputs.js";
+import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope-helpers.js";
+import { readSessionPendingInputReceiptsInWorker } from "../config/sessions/session-pending-input-receipts.js";
 import { MAX_SESSION_ROW_FACTS_KEYS } from "../config/sessions/session-transcript-worker.types.js";
 import * as hostAccount from "../infra/host-account-name.js";
+import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
-import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
+import { recordAgentDatabaseAdmissions } from "../state/agent-database-admission.js";
+import { withAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
+import {
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../state/openclaw-agent-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { readResidentGatewayOwnerProfile } from "../state/user-profile-list.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -313,6 +322,98 @@ it.each([false, true])(
     }
   },
 );
+
+it("settles a prior-process queued receipt through full Gateway startup", async ({ signal }) => {
+  const port = await createStartupState();
+  vi.stubEnv("OPENCLAW_TEST_MINIMAL_GATEWAY", "0");
+  const target = {
+    agentId: "main",
+    sessionKey: "agent:main:dashboard:cold-startup-probe",
+    sessionId: "cold-startup-probe",
+  };
+  replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: 1 });
+  const receipt = await stageSessionPendingInput(target, {
+    runId: "cold-startup-probe",
+    message: {
+      role: "user",
+      content: "Synthetic queued input",
+      timestamp: 1,
+      idempotencyKey: "cold-startup-probe",
+    },
+    assertCurrent() {},
+  });
+  if (!receipt) {
+    throw new Error("Synthetic queued input was not admitted");
+  }
+  receipt.finish("interrupted");
+  await receipt.settled?.();
+  // Seed only the state left by a dead process; the real startup owner must settle it.
+  const database = openOpenClawAgentDatabase({ agentId: "main" });
+  executeSqliteQuerySync(
+    database.db,
+    getSessionKysely(database.db)
+      .updateTable("session_pending_inputs")
+      .set({ state: "queued", lifecycle_generation: "previous-process" })
+      .where("input_id", "=", receipt.inputId),
+  );
+  await withAgentDatabaseStartupAdmission(async (admission) => {
+    const inspected = createDeferred<{ incompatible: []; indeterminate: [] }>();
+    const refusals = admission.defer({
+      env: process.env,
+      reason: "synthetic delayed startup inspection",
+      inspections: [
+        { target: { agentId: target.agentId, path: database.path }, result: inspected.promise },
+      ],
+    });
+    recordAgentDatabaseAdmissions(refusals, { source: "startup" });
+    const { startGatewayServerCore } = await import("./server-start.js");
+    const recoveryFinished = createDeferred();
+    const resumeMarkedSessions = restartResume.resumeMarkedSessions;
+    vi.spyOn(restartResume, "resumeMarkedSessions").mockImplementation(async (...args) => {
+      await resumeMarkedSessions(...args);
+      recoveryFinished.resolve();
+    });
+    let server: GatewayServer | undefined;
+    let client: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
+    try {
+      server = await startGatewayServerCore(port, authenticatedOptions);
+      await server.startupSettled;
+      // Sidecar readiness precedes the recovery observer. Keep inspection pending
+      // until the real initial recovery scan has returned.
+      await withinTest(recoveryFinished.promise, signal);
+      const prepared = admission.waitForAgentPreparation(target.agentId, { forWrite: true });
+      expect(prepared).toBeDefined();
+      inspected.resolve({ incompatible: [], indeterminate: [] });
+      await prepared;
+      await admission.pendingPreparation;
+      client = await connectGatewayClient({
+        url: `ws://127.0.0.1:${port}`,
+        token,
+        scopes: ["operator.admin"],
+      });
+      await client.request("sessions.list", { limit: 100 });
+      expect(
+        await client.request("chat.history", {
+          sessionKey: target.sessionKey,
+          inputRunIds: ["cold-startup-probe"],
+          limit: 10,
+        }),
+      ).toMatchObject({
+        inputReceipts: [{ runId: "cold-startup-probe", state: "pending", cancelled: true }],
+      });
+      expect(
+        await readSessionPendingInputReceiptsInWorker(target, { runIds: ["cold-startup-probe"] }),
+      ).toContainEqual(
+        expect.objectContaining({ runId: "cold-startup-probe", state: "pending", cancelled: true }),
+      );
+    } finally {
+      inspected.resolve({ incompatible: [], indeterminate: [] });
+      await client?.stopAndWait();
+      await server?.close();
+      recordAgentDatabaseAdmissions([], { source: "startup" });
+    }
+  });
+});
 
 it("joins and disposes a warming projection when transport creation fails", async ({ signal }) => {
   const port = await createStartupState({ anonymous: true });

@@ -43,6 +43,7 @@ import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gate
 import {
   GatewayDrainingError,
   isGatewayRestartDraining,
+  runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import {
   isAcpSessionKey,
@@ -56,6 +57,7 @@ import {
   activeSessionOperations,
   hasCommittedReplyOperationOutcome,
 } from "../sessions/session-controller.state.js";
+import { getAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
 import { resolveExplicitIncognitoAgentSqliteTarget } from "../state/openclaw-agent-db.paths.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import { continueSessionQueuedInputs } from "./queued-chat-inputs.js";
@@ -272,12 +274,50 @@ export async function persistRunningSessionsForRestart(params: {
   }
 }
 
-/** Admit one ordinary input per marker; startup does not wait for the agent to finish. */
-export async function resumeMarkedSessions(params: {
+type RestartResumeParams = {
   context: GatewayRequestContext;
   signal: AbortSignal;
   log: { warn: (message: string) => void };
-}): Promise<void> {
+};
+
+/** Admit one ordinary input per marker without holding healthy agents behind preparation. */
+export async function resumeMarkedSessions(params: RestartResumeParams): Promise<void> {
+  const { context, signal, log } = params;
+  const startup = getAgentDatabaseStartupAdmission();
+  const visited = new Set<string>();
+  const readyAgents: string[] = [];
+  for (const agentId of listConfiguredSessionStoreAgentIds(context.getRuntimeConfig())) {
+    const prepared = startup?.waitForAgentPreparation(agentId, { forWrite: true, signal });
+    if (!prepared || !startup) {
+      readyAgents.push(agentId);
+      continue;
+    }
+    // The initial inventory excludes preparing stores. Keep their recovery with the
+    // same startup owner, rather than silently losing it when admission completes.
+    startup.track(
+      prepared
+        .then(() =>
+          runWithGatewayIndependentRootWorkAdmission(
+            () => resumeAgentSessions(params, [agentId], visited),
+            "startup:deferred-session-resume",
+            signal,
+          ),
+        )
+        .catch((error: unknown) => {
+          if (!signal.aborted) {
+            log.warn(`Deferred restart resume failed for agent ${agentId}: ${String(error)}`);
+          }
+        }),
+    );
+  }
+  await resumeAgentSessions(params, readyAgents, visited);
+}
+
+async function resumeAgentSessions(
+  params: RestartResumeParams,
+  agentIds: readonly string[],
+  visited: Set<string>,
+): Promise<void> {
   const { context, signal, log } = params;
   const assertRecoveryCurrent = () => {
     signal.throwIfAborted();
@@ -287,10 +327,11 @@ export async function resumeMarkedSessions(params: {
   };
   const processStartedAt = performance.timeOrigin;
   const cfg = context.getRuntimeConfig();
+  const configuredAgents = new Set(listConfiguredSessionStoreAgentIds(cfg));
   const inventory = prepareSessionStoreTargetInventoryRead(
     prepareSessionStoreTargetInventory(
       cfg,
-      listConfiguredSessionStoreAgentIds(cfg),
+      agentIds.filter((agentId) => configuredAgents.has(agentId)),
       undefined,
       "configured",
     ),
@@ -303,7 +344,6 @@ export async function resumeMarkedSessions(params: {
     () => signal.throwIfAborted(),
     signal,
   );
-  const visited = new Set<string>();
   for (const target of targets) {
     const targetKey = target.storePath;
     if (visited.has(targetKey)) {
