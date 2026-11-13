@@ -65,6 +65,7 @@ export function createConfigFileSnapshot(
     issues: params.issues,
     warnings: params.warnings,
     legacyIssues: params.legacyIssues,
+    ...(params.olderReleaseMigration ? { olderReleaseMigration: true } : {}),
   };
 }
 

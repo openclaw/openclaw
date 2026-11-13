@@ -311,7 +311,10 @@ it.each([
     expect(fs.readFileSync(context.configPath, "utf8")).toBe(raw);
     expect(snapshot.sourceConfig.agents?.defaults?.compaction?.memoryFlush).toEqual(retired);
     if (scenario.valid) {
-      expect(snapshot.config.agents?.defaults?.compaction?.memoryFlush?.model).toBeUndefined();
+      expect(snapshot.config.agents?.defaults?.compaction?.memoryFlush ?? {}).not.toHaveProperty(
+        "model",
+      );
+      expect(snapshot.olderReleaseMigration).toBe(true);
       const warning = snapshot.warnings.find((entry) => entry.path === "meta.lastTouchedVersion");
       expect(warning?.message).toContain("openclaw doctor --fix");
       expect(warning?.message.includes("heartbeat settings are paused")).toBe(scenario.heartbeat);

@@ -446,6 +446,7 @@ async function readConfigSnapshot(
             runtimeConfig: snapshotConfig,
             issues: [],
             legacyIssues: [],
+            ...(olderReleaseWarnings.length > 0 ? { olderReleaseMigration: true as const } : {}),
           }),
           envSnapshotForRestore: readResolution.envSnapshotForRestore,
           includeFileHashesForWrite,

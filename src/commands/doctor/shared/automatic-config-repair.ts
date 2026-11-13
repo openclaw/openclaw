@@ -58,6 +58,8 @@ export function canPlanAutomaticConfigRepair(
     // Voice Call remains valid telephony config after its runtime Talk inheritance retires.
     (pendingStateMigration ||
       !snapshot.valid ||
+      // A config an older release wrote runs on Doctor's in-memory migration until saved.
+      snapshot.olderReleaseMigration === true ||
       findLegacyConfigRuleIssues(
         snapshot.sourceConfig,
         LEGACY_TALK_VOICE_CALL_INHERITANCE.legacyRules ?? [],

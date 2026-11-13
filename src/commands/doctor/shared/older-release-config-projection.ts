@@ -21,6 +21,7 @@ export function projectOlderReleaseConfig(
       pluginContracts: false,
     });
     projected = projectRetiredHeartbeatConfig(
+      // SAFETY: migrated output keeps the legacy roster shape that the heartbeat projection reads.
       (migrated.next ?? raw) as OpenClawConfigWithLegacyRoster,
     );
   } catch {
