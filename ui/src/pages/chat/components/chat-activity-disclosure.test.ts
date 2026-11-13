@@ -49,7 +49,9 @@ it("commits a cached activity summary with its transcript row", () => {
   activityRoot.render([group], visibleTools);
   const row = summaryContainer.querySelector('[data-chat-row-key="cached"]');
   expect(row).not.toBeNull();
-  expect(row?.querySelector(".chat-activity-group__summary")?.textContent).toContain("File reads");
+  expect(row?.querySelector(".chat-activity-group__summary")?.textContent).toContain(
+    "Attempted file reads",
+  );
   expect(row?.querySelector(".chat-tool-failure")).toBeNull();
 });
 
@@ -182,14 +184,21 @@ it.each(["anonymous", "missing-card", "matched"] as const)(
           preparedOutcome("failed", pairing === "matched" ? "call-failed" : null, {
             itemId: "prepared-failure",
             title: "Read file",
+            error: "Permission denied",
           }),
         ],
       },
     );
     for (const expanded of [false, true]) {
       const summary = await renderSummary([message], "activity", { expanded });
-      expect(summary?.textContent).toContain("File reads");
-      expect(summary?.textContent).toContain("Some actions failed");
+      expect(summary?.textContent).toContain("Attempted file reads");
+      expect(summary?.textContent).not.toContain("Some actions failed");
+      expect(summaryContainer.querySelector(".chat-tool-failure") !== null).toBe(expanded);
+      if (expanded && pairing !== "matched") {
+        expect(summaryContainer.querySelector(".chat-activity-group__body")?.textContent).toContain(
+          "Permission denied",
+        );
+      }
     }
   },
 );
@@ -407,7 +416,15 @@ it.each(["live receipt", "history projection"])(
 it("preserves prepared-only outcomes and an open group when a permission row arrives", async () => {
   const first = createMessageEntry(
     "first-outcome",
-    createAssistantMessage([], { activity: [preparedOutcome("failed", "without-card")] }),
+    createAssistantMessage([], {
+      activity: [
+        preparedOutcome("failed", "without-card", {
+          title: "Read release.md",
+          error: "Permission denied",
+        }),
+        preparedOutcome("completed", "another-call", { title: "Read release.md" }),
+      ],
+    }),
   );
   const permission = createMessageEntry(
     "permission",
@@ -455,7 +472,14 @@ it("preserves prepared-only outcomes and an open group when a permission row arr
   await draw([first, permission, last]);
   const summaries = [...summaryContainer.querySelectorAll(".chat-activity-group__summary")];
   expect(summaries).toHaveLength(2);
-  expect(summaries[0]?.textContent).toContain("Some actions failed");
+  expect(summaries[0]?.textContent).not.toContain("Some actions failed");
+  const rows = [...summaryContainer.querySelectorAll(`#${bodyId} .chat-tool-row`)];
+  expect(
+    rows.map((row) => row.querySelector(".chat-tool-row__title")?.textContent?.trim()),
+  ).toEqual(["Read release.md", "Read release.md"]);
+  expect(rows[0]?.textContent).toContain("failed");
+  expect(rows[1]?.textContent).toContain("Completed");
+  expect(summaryContainer.querySelector(`#${bodyId}`)?.textContent).toContain("Permission denied");
   expect(summaries[1]?.textContent).toContain("Blocked");
   expect(summaries[0]?.getAttribute("aria-expanded")).toBe("true");
   expect(summaries[0]?.getAttribute("aria-controls")).toBe(bodyId);

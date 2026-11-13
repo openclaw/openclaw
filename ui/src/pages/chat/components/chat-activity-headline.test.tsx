@@ -161,6 +161,31 @@ it.each([
   }
 });
 
+it("names prepared-only activity when the raw call is unavailable", async () => {
+  const activity = toolActivity("session_status", {});
+  await renderActivityFixture(
+    [
+      entryGroup(
+        "current",
+        createAssistantMessage([], { runId: "active-run", activity: [activity] }),
+      ),
+    ],
+    liveOptions,
+  );
+  expect(label()).toBe("Called Session Status");
+});
+
+it("shows a command once when its live activity group is expanded", async () => {
+  const command = "pnpm test transcript";
+  const activity = toolActivity("exec", { command });
+  await renderActivityFixture([group("current", [activity], "active-run", { command })], {
+    ...liveOptions,
+    isToolMessageExpanded: () => true,
+  });
+  expect(query("summary")?.textContent).not.toContain(command);
+  expect(container.textContent?.split(command)).toHaveLength(2);
+});
+
 it("keeps the icon paired with the current action and restores the aggregate icon", async () => {
   const exec = toolActivity("exec", { title: "Inspect source", code: "return null" });
   const search = toolActivity("web_search", { query: "API docs" });
@@ -173,11 +198,13 @@ it("keeps the icon paired with the current action and restores the aggregate ico
   advanceTimersByTime(100);
   await draw([exec, search]);
   await settleToolBridges(container);
+  expect(icon()?.getAttribute("aria-label")).toBe("exec");
+  advanceTimersByTime(900);
   expect(label()).toBe("Web Search…");
   expect(icon()?.getAttribute("aria-label")).toBe("web_search");
   expect(icon()?.innerHTML).not.toBe(execSvg);
   await draw([exec, search], false);
-  expect(label()).toBe("Command execution · Searches");
+  expect(label()).toBe("Attempted commands, attempted searches");
   expect(icon()?.getAttribute("aria-hidden")).toBe("true");
   expect(icon()?.getAttribute("aria-label")).toBeNull();
 });
@@ -210,7 +237,7 @@ it("keeps accessible disclosure identity while the current action advances", () 
   draw([prepared("first", "completed")]);
   expanded = true;
   draw([prepared("first", "completed"), prepared("next")]);
-  expect(label()).toBe("Reading next.ts…");
+  expect(label()).toBe("Read files");
   expect(summary.getAttribute("aria-expanded")).toBe("true");
   expect(body.hidden).toBe(false);
 
@@ -258,7 +285,7 @@ it("settles an earlier activity headline when narration follows in the same live
   expect(after.activityGroupKey).toBeNull();
   activityRoot.render([activity], { ...liveOptions, ...after });
   expect(container.querySelector(".text-shimmer")).toBeNull();
-  expect(label()).toBe("File reads");
+  expect(label()).toBe("Attempted file reads");
 });
 
 it("uses the newest group's live card label without inheriting an earlier failure", async () => {
@@ -303,7 +330,7 @@ it("uses the newest group's live card label without inheriting an earlier failur
 
   await renderActivityFixture(groups, { ...opts, runActive: false });
   expect(activitySummary.textContent?.replace(/\s+/gu, " ").trim()).toBe(
-    "File reads · File edits · Some actions failed",
+    "Attempted file reads, attempted file edits",
   );
 });
 
@@ -320,7 +347,7 @@ it.each(["failed", "blocked"] as const)(
     if (status === "blocked") {
       expect(summary).toContain("Blocked");
     } else {
-      expect(summary).toContain("Some actions failed");
+      expect(summary).toContain("failed");
     }
   },
 );
@@ -355,6 +382,11 @@ it.each([false, true])(
       expect(label()).toBe("Read first.ts");
     }
     activityRoot.render([group("current", [...settled, prepared("next")])], liveOptions);
+    expect(container.querySelector(".text-shimmer")).toBeNull();
+    expect(label()).toBe("Read first.ts");
+    advanceTimersByTime(799);
+    expect(label()).toBe("Read first.ts");
+    advanceTimersByTime(1);
     expect(container.querySelector(".text-shimmer")?.textContent).toBe("Reading next.ts…");
     expect(label()).toBe("Reading next.ts…");
   },

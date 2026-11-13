@@ -119,7 +119,7 @@ it("keeps a command child under its parent across an intervening inline command"
 });
 
 it.each([false, true])(
-  "retains the active noncommand purpose and bubble marker across inline segments (bubbles=%s)",
+  "retains inline commands and only the tail bubble across a child launch (bubbles=%s)",
   async (bubbleMode) => {
     const { container, view } = mountActivity();
     const args = { query: "Release notes" };
@@ -128,6 +128,7 @@ it.each([false, true])(
       createToolGroup("activity", [
         operation("completed-other", "lookup_record", { query: "Earlier record" }),
         operation("completed-command", "exec", { command: "printf checked" }),
+        operation("launched", "sessions_spawn", { label: "Research", task: "Read the sources." }),
         {
           ...pending,
           message: {
@@ -164,6 +165,9 @@ it.each([false, true])(
     view.render(groups, { ...options, inlineCommands: await inlineCommandPresentation() });
     await settleToolBridges(container);
     expect(label()).toBe(purpose);
+    expect(container.querySelector(".chat-activity-group--inline")?.textContent).toContain(
+      "printf checked",
+    );
     const working = container.querySelectorAll(
       ".chat-activity-group--working .chat-bubble-dots--working",
     );
@@ -171,6 +175,17 @@ it.each([false, true])(
     if (bubbleMode) {
       expect(working[0]?.closest(".chat-activity-group")?.textContent).toContain("Release notes");
     }
+    view.render(
+      [
+        createToolGroup("activity", [
+          ...groups[0]!.messages,
+          operation("last-launch", "sessions_spawn", { label: "Follow-up", task: "Read more." }),
+        ]),
+      ],
+      { ...options, inlineCommands: await inlineCommandPresentation() },
+    );
+    await settleToolBridges(container);
+    expect(container.querySelector(".chat-bubble-dots--working")).toBeNull();
   },
 );
 

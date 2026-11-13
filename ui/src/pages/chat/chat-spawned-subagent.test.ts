@@ -291,4 +291,60 @@ describe("a launched subagent", () => {
       title: `Child chat creation outcome unknown ${label}`,
     });
   });
+
+  it("names the subagent a call addresses instead of its key's suffix", () => {
+    const addressedChild = child("00000000-0000-4000-8000-000000007ef3");
+    const address = (
+      name: string,
+      args: Record<string, unknown>,
+      title: string,
+      extra: Partial<ToolCard> = {},
+    ) => {
+      const card: ToolCard = { id: "call", callId: "call", name, args, ...extra };
+      const item: AgentActivityItem = {
+        itemId: "tool:call",
+        toolCallId: "call",
+        kind: "tool",
+        phase: "start",
+        status: "running",
+        name,
+        title,
+        meta: "…7ef3",
+      };
+      return (rows?: GatewaySessionRow[]) =>
+        selectActivityHeadline([item], new Map([[card, item]]), rows)?.title;
+    };
+    const send = address(
+      "sessions_send",
+      { sessionKey: addressedChild.key, message: "Hi" },
+      "Send to session",
+    );
+    expect(send([addressedChild])).toContain(label);
+    // Before the roster holds it, the action stands in; the key never does.
+    expect(send([])).toBe("Send to session");
+    // Through the catalog dispatcher, and for history reads and steering.
+    expect(
+      address(
+        "dispatch_action",
+        { id: "sessions_send", args: { sessionKey: addressedChild.key, message: "Hi" } },
+        "Send to session",
+      )([addressedChild]),
+    ).toContain(label);
+    expect(
+      address(
+        "sessions_history",
+        { sessionKey: addressedChild.key },
+        "Read session history",
+      )([addressedChild]),
+    ).toContain(label);
+    expect(
+      address("subagents", { action: "steer", target: addressedChild.key }, "Send to subagent")([]),
+    ).toBe("Send to subagent");
+    // An unlabeled launch is named by the session its result names.
+    const unlabeled = address("sessions_spawn", { task: "Write" }, "Start subagent", {
+      outputText: accepted(addressedChild.key),
+    });
+    expect(unlabeled([addressedChild])).toContain(label);
+    expect(unlabeled([])).toBe("Start subagent");
+  });
 });

@@ -61,10 +61,17 @@ export function commandPreview(command: string): string {
 }
 
 /** The title describes recorded action and target; authored purpose stays in input details. */
-export function resolveToolOperationLabel(card: ToolCard, outcome: ToolCardOutcome): string {
+export function resolveToolOperationLabel(
+  card: ToolCard,
+  outcome: ToolCardOutcome,
+  addressed?: { name?: string },
+): string {
   const launch = resolveSessionLaunchPresentation(card, outcome);
   if (launch) {
-    return [t(`chat.toolCards.launch.${launch.kind}.${launch.phase}`), launch.label]
+    return [
+      t(`chat.toolCards.launch.${launch.kind}.${launch.phase}`),
+      addressed?.name ?? launch.label,
+    ]
       .filter(Boolean)
       .join(" ");
   }
@@ -100,7 +107,10 @@ export function resolveToolOperationLabel(card: ToolCard, outcome: ToolCardOutco
             ? "searchedChats"
             : "chatSearch"
         : undefined;
-  return [sessionLabel ? t(`chat.toolCards.${sessionLabel}`) : display.label, display.detail]
+  return [
+    sessionLabel ? t(`chat.toolCards.${sessionLabel}`) : display.label,
+    addressed ? addressed.name : display.detail,
+  ]
     .filter(Boolean)
     .join(" ");
 }

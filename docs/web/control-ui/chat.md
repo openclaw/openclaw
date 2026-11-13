@@ -90,6 +90,10 @@ Code Mode execution does not by itself start another visual group. Activity
 summaries stay dimmed until hover or keyboard focus brightens their text, without
 an icon tooltip; screen readers retain the exact tool identity. The **Worked for**
 header shows elapsed time without adding a tool-call counter when expanded.
+When a run finishes while you are reading earlier work, that work stays open
+and your reading position is preserved. If you are following the end of the
+conversation, completed work folds above the answer. Opening saved history keeps
+completed work folded until you expand it.
 The **Worked for** summary and reply metadata use the same saved elapsed time,
 from the initiating message to the last recorded output for that run. This includes
 request preparation and waiting, not just model execution. Starting another turn

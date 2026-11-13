@@ -220,8 +220,11 @@ schema 35 does not remove the rollback requirement.
 
 Workspace maintenance advances `workspace.manifest.sweepEpoch` in the existing
 `config_machine_state` owner, marks every accepted and pending checkpoint root
-in one read snapshot, and deletes unreachable packs and path sets older than the
-preceding epoch in bounded batches. Writers stamp the current epoch when
+using reads of at most 256 rows, and deletes unreachable packs and path sets older
+than the preceding epoch in bounded batches. SQLite releases each read between
+pages so maintenance does not pin a checkpoint for the whole graph walk. Immutable
+pack links and the epoch check protect publications between pages; deletion
+rechecks the epoch in its writer transaction. Writers stamp the current epoch when
 preparing or reusing content. A writer stalled for more than an epoch can lose
 unaccepted packs. Preparation returns its sweep epoch; acceptance checks the
 oldest preparation epoch inside the writer transaction and refuses an expired

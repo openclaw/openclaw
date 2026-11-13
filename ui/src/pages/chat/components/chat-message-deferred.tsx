@@ -141,7 +141,7 @@ const ExpandedContent = lazy(() => import("./chat-tool-expanded.solid.tsx"), {
 export function ExpandedToolCardContent(props: ToolCardContentProps) {
   return (
     <ChatLazyBoundary>
-      <ExpandedContent card={props.card} output={props.output} options={props.options} />
+      <ExpandedContent {...props} />
     </ChatLazyBoundary>
   );
 }

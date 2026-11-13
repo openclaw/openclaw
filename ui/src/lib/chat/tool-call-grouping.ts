@@ -4,6 +4,7 @@ import { summarizeAgentActivity } from "../../../../src/agents/agent-activity-pr
 import { t } from "../../i18n/index.ts";
 import { registerChatToolLabelsEnglish } from "../../i18n/locales/en-chat-tool-labels.ts";
 import { isAgentActivityItem } from "../protocol-validators.generated/activity.js";
+import { resolveToolDisplayIdentity } from "./tool-display-identity.ts";
 
 registerChatToolLabelsEnglish();
 
@@ -51,14 +52,34 @@ export function describeToolGroup(
       .filter(([, count]) => count > 0)
       .map(([kind]) => kind),
   );
+  const otherTools = summary.counts.other
+    ? [
+        ...new Set(
+          current.flatMap((item) =>
+            item.name &&
+            item.name !== "sessions_spawn" &&
+            summarizeAgentActivity([item], options).counts.other
+              ? [resolveToolDisplayIdentity(item.name).label]
+              : [],
+          ),
+        ),
+      ]
+    : [];
   const label = Object.entries(summary.counts)
     .filter(([, count]) => count > 0)
-    .map(([kind]) =>
-      t(`chat.toolCards.activity.${kind}${completedKinds.has(kind) ? "Summary" : "Pending"}`),
-    )
-    .join(" · ");
+    .map(([kind], index) => {
+      const continuation = index > 0 ? "Continuation" : "";
+      return kind === "other" && otherTools.length
+        ? t(`chat.toolCards.activity.calledTools${continuation}`, { tools: otherTools.join(", ") })
+        : t(
+            `chat.toolCards.activity.${kind}${completedKinds.has(kind) ? "Summary" : "Pending"}${continuation}`,
+          );
+    })
+    .join(", ");
+  // Attempt outcomes remain on their rows. They do not establish the result
+  // of a whole group, nor whether another call recovered from an earlier one.
   const outcomes = Object.entries(summary.outcomes)
-    .filter(([, count]) => count > 0)
+    .filter(([kind, count]) => count > 0 && kind !== "failed" && kind !== "skipped")
     .map(([kind]) => ({
       kind,
       label: t(`chat.toolCards.activity.${kind}Summary`),

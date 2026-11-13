@@ -17,17 +17,17 @@ describe("summarizeToolGroup", () => {
     ...extra,
   });
 
-  it("counts launched subagents apart from the launcher's other operations", () => {
+  it("distinguishes launched subagents from the launcher's other operations", () => {
     const launches = ["story", "puzzle", "cafe"].map((id) =>
       prepared(`tool:${id}`, "Sub-agent", { name: "sessions_spawn", toolCallId: id }),
     );
     expect(
       summarizeToolGroup([prepared("search", "Find notes", { name: "custom_tool" }), ...launches]),
-    ).toBe("Used tools · Launched subagents");
+    ).toBe("Called Custom Tool, launched subagents");
     expect(summarizeToolGroup(launches.slice(0, 1))).toBe("Launched subagents");
     // A launch that opened a session in its own right is not a subagent.
     expect(summarizeToolGroup(launches, { ownSessionLaunches: new Set(["story"]) })).toBe(
-      "Used tools · Launched subagents",
+      "Performed actions, launched subagents",
     );
     // A refused launch started no subagent.
     const refused = prepared("tool:refused", "Sub-agent", {
@@ -36,7 +36,7 @@ describe("summarizeToolGroup", () => {
       status: "failed",
     });
     expect(summarizeToolGroup([...launches, refused])).toBe(
-      "Tool activity · Launched subagents · Some actions failed",
+      "Attempted actions, launched subagents",
     );
   });
 
@@ -47,7 +47,7 @@ describe("summarizeToolGroup", () => {
         prepared("tool:call", "Inspect", { toolCallId: "call", status: "failed" }),
         prepared("command:call", "Command", { toolCallId: "call", suppressChannelProgress: true }),
       ]),
-    ).toBe("Tool activity · Some actions failed");
+    ).toBe("Attempted actions");
     const read = prepared("tool:shared", "Read", { name: "read", toolCallId: "shared" });
     const command = prepared("tool:shared", "Command", { name: "exec", toolCallId: "shared" });
     expect(
@@ -57,7 +57,7 @@ describe("summarizeToolGroup", () => {
           [command, "run-b:shared"],
         ]),
       }),
-    ).toBe("Ran commands · Read files");
+    ).toBe("Ran commands, read files");
   });
 
   it("keeps approval and unknown outcomes but leaves failed and skipped steps to their rows", () => {
@@ -70,7 +70,7 @@ describe("summarizeToolGroup", () => {
         prepared("unknown", "Outcome unknown", { status: undefined }),
         prepared("unpaired", "Run build", { status: undefined, unpairedCall: true }),
       ]),
-    ).toBe("Tool activity · Some actions failed · Blocked · Skipped actions · Outcome unknown");
+    ).toBe("Attempted actions · Blocked · Outcome unknown");
   });
 
   it("keeps the diagnostic disclosure label when all prepared work is quiet", () => {

@@ -437,6 +437,7 @@ export function ToolCardBody(
                 card={props.card}
                 output={props.output}
                 options={props.options}
+                commandInRow
               />
             </div>
           }
@@ -456,16 +457,36 @@ export function ToolCardBody(
           </div>
         </Show>
         <Show when={props.options.executionCards?.length}>
-          <details class="chat-tool-wrapper-details">
-            <summary>{t("chat.toolCards.executionDetails")}</summary>
-            <For each={props.options.executionCards}>
-              {(execution) => (
-                <div class="chat-tool-msg-body">
-                  <ExpandedToolCardContent card={execution} options={props.options} />
-                </div>
-              )}
-            </For>
-          </details>
+          <For each={props.options.executionCards}>
+            {(execution) => (
+              <Show
+                when={props.options.onOpenSidebar}
+                fallback={
+                  <details class="chat-tool-wrapper-details">
+                    <summary>{t("chat.toolCards.executionDetails")}</summary>
+                    <div class="chat-tool-msg-body">
+                      <ExpandedToolCardContent card={execution} options={props.options} />
+                    </div>
+                  </details>
+                }
+              >
+                <button
+                  class="btn btn--sm"
+                  type="button"
+                  onClick={() =>
+                    props.options.onOpenSidebar?.({
+                      kind: "tool-output",
+                      card: execution,
+                      sessionKey: props.options.sessionKey,
+                      agentId: props.options.agentId,
+                    })
+                  }
+                >
+                  {t("chat.toolCards.executionDetails")}
+                </button>
+              </Show>
+            )}
+          </For>
         </Show>
       </Show>
     </>

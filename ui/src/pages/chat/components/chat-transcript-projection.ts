@@ -19,6 +19,7 @@ import {
   getExpansionStateVersion,
   getExpandedToolCards,
   getExpandedUserMessages,
+  setExpansionState,
   syncToolCardExpansionState,
   toggleExpansionState,
 } from "../chat-thread.ts";
@@ -166,6 +167,28 @@ export function projectChatTranscript(
   };
   const transcriptChain = projectTranscriptChain(chatItems, transcriptChainOptions);
   const { collapsedItems, transcriptItems, continuations } = transcriptChain;
+  if (state.observedWorkRun?.sessionKey !== props.sessionKey) {
+    state.observedWorkRun = undefined;
+  }
+  const completedWork =
+    state.observedWorkRun &&
+    transcriptChain.workGroups.find(
+      (work) =>
+        work.replyRunId === state.observedWorkRun?.runId ||
+        work.groups.some((group) => group.runId === state.observedWorkRun?.runId),
+    );
+  if (completedWork) {
+    // Completion must not remove the paragraph a reader scrolled back to read.
+    // Cold history has no observed live run; explicit disclosure choices still win.
+    if (!transcript.canFollowEnd && !expandedToolCards.has(completedWork.key)) {
+      transcript.preserveReaderPosition();
+      setExpansionState(expandedToolCards, completedWork.key, true);
+    }
+    state.observedWorkRun = undefined;
+  } else if (!props.loading && (props.runWorking || props.runActive) && props.runId) {
+    state.observedWorkRun = { sessionKey: props.sessionKey, runId: props.runId };
+  }
+
   syncToolCardExpansionState(
     props.sessionKey,
     chatItems,

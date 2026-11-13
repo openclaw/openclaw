@@ -1354,7 +1354,7 @@ describe("runPreparedReply media-only handling", () => {
     const { resolveSessionAuthSelection } =
       await import("../../agents/auth-profiles/session-override.js");
     const sessionId = "reply-operation-auth-failure";
-    const activeBefore = sessionQueries.listActiveReplyRunSessionKeys().length;
+    const activeBefore = sessionQueries.listActiveSessionRunKeys().length;
     vi.mocked(resolveSessionAuthSelection).mockRejectedValueOnce(new Error("auth failed"));
 
     await expect(
@@ -1363,7 +1363,7 @@ describe("runPreparedReply media-only handling", () => {
       }),
     ).rejects.toThrow("auth failed");
 
-    expect(sessionQueries.listActiveReplyRunSessionKeys().length).toBe(activeBefore);
+    expect(sessionQueries.listActiveSessionRunKeys().length).toBe(activeBefore);
   });
 
   it("routes a channel-configured interrupt through session-work admission", async () => {

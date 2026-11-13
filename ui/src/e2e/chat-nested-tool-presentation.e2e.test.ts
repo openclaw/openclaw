@@ -40,10 +40,10 @@ async function expectCollapsed(work: Locator) {
   const summary = work.locator(":scope > .chat-activity-group__summary");
   expect(await summary.getAttribute("aria-expanded")).toBe("false");
   expect(await summary.locator(".chat-activity-group__label").textContent()).toBe(
-    "Command execution · Read files · Some actions failed",
+    "Attempted commands, read files",
   );
-  // The step completed and the agent replied, so its recovered child failure stays on its row.
-  expect(await summary.textContent()).toContain("Some actions failed");
+  // The wrapper returned, but the failed child keeps its own outcome inside the group.
+  expect(await summary.textContent()).not.toContain("Some actions failed");
   expect(await summary.textContent()).not.toContain("/workspace/README.md");
   expect(await work.textContent()).not.toContain("gh: command not found");
 }
@@ -76,7 +76,7 @@ function nestedHistory() {
 }
 
 suite.define(() => {
-  it("keeps a recovered child failure on its own row, including after reload", async () => {
+  it("keeps a child failure on its own row, including after reload", async () => {
     await suite.withPage(contextOptions, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         methodResponses: {
@@ -130,8 +130,11 @@ suite.define(() => {
       });
       await diagnostics.waitFor({ state: "visible" });
       await diagnostics.getByText("gh: command not found", { exact: true }).waitFor();
-      await activityBody.locator(".chat-tool-wrapper-details > summary").click();
-      await activityBody.getByText(wrapperCode, { exact: false }).first().waitFor();
+      await activityBody.getByRole("button", { name: "Execution details", exact: true }).click();
+      const execution = page.locator(".chat-tool-output");
+      await execution.locator("summary", { hasText: "Tool input" }).click();
+      await execution.getByText(wrapperCode, { exact: false }).waitFor();
+      await execution.getByText("Child operations finished.", { exact: true }).waitFor();
       await summary.click();
       expect(await summary.getAttribute("aria-expanded")).toBe("false");
       await page.reload();
@@ -170,7 +173,8 @@ suite.define(() => {
       await call.waitFor();
       await call.click();
       const body = page.locator(".chat-tool-msg-body");
-      await showText(body, "node --version");
+      expect(await call.textContent()).toContain("node --version");
+      expect(await body.getByText("node --version", { exact: true }).count()).toBe(0);
       await showText(body, "v24.7.0");
       expect(await page.getByText("Code Mode", { exact: true }).count()).toBe(0);
     });

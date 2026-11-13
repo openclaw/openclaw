@@ -20,6 +20,8 @@ import {
   readPreparedActivity,
 } from "../../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
+import { resolveToolDisplayIcon } from "../../../lib/chat/tool-display-icon.ts";
+import { resolveToolDisplayIdentity } from "../../../lib/chat/tool-display-identity.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { isInlineCommandCard } from "../chat-activity-segments.ts";
 import {
@@ -39,7 +41,7 @@ import type {
   ActivityOperationProps,
 } from "./chat-message-bubble-options.ts";
 import type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
-import { syncToolDisclosureOverflow } from "./chat-tool-card-chrome.tsx";
+import { ChatToolIcon, syncToolDisclosureOverflow } from "./chat-tool-card-chrome.tsx";
 import { ToolReviewOutcome } from "./chat-tool-outcome-summary.solid.tsx";
 
 function isStandaloneActivity(card: ToolCard): boolean {
@@ -150,7 +152,11 @@ export function prepareActivityGroup(
     : projection!.groups;
   const order = new Map(cards.map((card, index) => [card, index]));
   cardGroups.sort((left, right) => order.get(left.card)! - order.get(right.card)!);
-  const headline = selectActivityHeadline(currentActivity, preparedByCard);
+  const headline = selectActivityHeadline(
+    currentActivity,
+    preparedByCard,
+    opts.subagents?.subagentSessions,
+  );
   const activityKey = source?.key ?? firstGroup.key;
   const activityDisclosureId = `activity:${activityKey}`;
   const activityBodyId = `activity-body-${fnv1aUtf16(activityKey).toString(16)}`;
@@ -213,14 +219,30 @@ export function prepareActivityGroup(
     }
   }
 
+  const representedActivity = new Set(
+    [...preparedByCard.values()].map((item) => activityKeys.get(item)),
+  );
   return {
     firstGroup,
     toolContexts,
     preparedByCard,
     activityKeys,
     headline,
+    resolveHeadline: (key: string) =>
+      selectActivityHeadline(
+        currentActivity.filter((item) => (item.toolCallId ?? item.itemId) === key),
+        preparedByCard,
+        opts.subagents?.subagentSessions,
+      ),
     groupSummaryLabel,
     visibleActivity,
+    unmatchedActivity: [
+      ...new Map(
+        visibleActivity
+          .filter((item) => !representedActivity.has(activityKeys.get(item)))
+          .map((item) => [activityKeys.get(item), item]),
+      ).values(),
+    ],
     reviewOutcome,
     approvalReviews,
     activityDisclosureId,
@@ -292,9 +314,16 @@ export function ActivityGroupBody(props: {
           }
         >
           <ChatActivityHeadline
-            bubbleMode={liveBubble()}
+            bubbleMode={liveBubble() && !state().activityExpanded}
             contentRef={(element) => (disclosureContent = element)}
-            activity={state().headline}
+            scope={JSON.stringify([
+              props.options.sessionKey,
+              props.options.connectionEpoch,
+              props.options.activityRunId,
+              state().activityDisclosureId,
+            ])}
+            activity={state().activityExpanded ? undefined : state().headline}
+            resolveActivity={state().resolveHeadline}
             summary={state().groupSummaryLabel}
             pluginToolIcons={props.options.pluginToolIcons}
             outcomes={describeToolGroup(state().visibleActivity, {
@@ -332,14 +361,61 @@ export type ActivityGroupContentProps = {
   renderEntries: ActivityEntries;
 };
 
+type ActivityEntry =
+  | { operation: ActivityOperationGroup; activity?: never }
+  | { activity: ReturnType<typeof readPreparedActivity>[number]; operation?: never };
+
+/** A recorded outcome can survive without its raw call in the loaded history page. */
+function PreparedActivityRow(props: {
+  activity: ReturnType<typeof readPreparedActivity>[number];
+  options: NativeMessageGroupOptions;
+}) {
+  const detail = () =>
+    props.activity.error || props.activity.summary || props.activity.progressText;
+  return (
+    <div class="chat-tool-msg-collapse">
+      <div class="chat-tool-msg-summary chat-tool-row">
+        <span class="chat-tool-msg-summary__icon" aria-hidden="true">
+          <ChatToolIcon
+            name={
+              props.activity.commandBearing
+                ? "squareTerminal"
+                : resolveToolDisplayIcon(props.activity.name ?? "")
+            }
+            tool={{
+              toolName: props.activity.name ?? "",
+              pluginToolIcons: props.options.pluginToolIcons,
+            }}
+            style={{ display: "contents" }}
+          />
+        </span>
+        <span class="chat-tool-disclosure__content">
+          <span class="chat-tool-row__title">
+            {props.activity.title || resolveToolDisplayIdentity(props.activity.name ?? "").label}
+          </span>
+        </span>
+        <span
+          class={{
+            "chat-tool-failure": props.activity.status === "failed",
+            "chat-tool-skipped": props.activity.status === "skipped",
+            muted: props.activity.status !== "failed" && props.activity.status !== "skipped",
+          }}
+        >
+          {t(`chat.toolCards.${!props.activity.status ? "outcomeUnknown" : props.activity.status}`)}
+        </span>
+      </div>
+      <Show when={detail()}>{(text) => <div class="chat-tool-msg-body">{text()}</div>}</Show>
+    </div>
+  );
+}
+
 function ActivityOperationSegments(props: ActivityGroupContentProps & { state: ActivityState }) {
   const segments = createMemo(() => {
     const result: Array<{
       key: string;
       standalone: boolean;
       inline?: boolean;
-      operations: ActivityOperationGroup[];
-      unmatchedActivity?: ReturnType<typeof readPreparedActivity>;
+      entries: ActivityEntry[];
       content?: MessageGroupData;
     }> = [];
     const byMessage = new Map<string, ActivityOperationGroup[]>();
@@ -349,12 +425,7 @@ function ActivityOperationSegments(props: ActivityGroupContentProps & { state: A
       operations.push(operation);
       byMessage.set(key, operations);
     }
-    const represented = new Set(
-      [...props.state.preparedByCard.values()].map((activity) =>
-        props.state.activityKeys.get(activity),
-      ),
-    );
-    const visible = new Set(props.state.visibleActivity);
+    const unmatched = new Set(props.state.unmatchedActivity);
     for (const group of props.groups) {
       for (const entry of group.messages) {
         for (const operation of byMessage.get(entry.key) ?? []) {
@@ -363,33 +434,28 @@ function ActivityOperationSegments(props: ActivityGroupContentProps & { state: A
             Boolean(props.options.inlineCommands) && isInlineCommandCard(operation.card);
           const previous = result.at(-1);
           if (!standalone && previous && !previous.standalone && previous.inline === inline) {
-            previous.operations.push(operation);
+            previous.entries.push({ operation });
           } else {
             result.push({
               key: props.state.toolContexts.get(operation.card)!.disclosureId,
               standalone,
               inline,
-              operations: [operation],
+              entries: [{ operation }],
             });
           }
         }
-        const unmatchedActivity = readPreparedActivity(entry.message).filter(
-          (activity) =>
-            visible.has(activity) && !represented.has(props.state.activityKeys.get(activity)),
+        const unmatchedActivity = readPreparedActivity(entry.message).filter((activity) =>
+          unmatched.has(activity),
         );
         if (unmatchedActivity.length > 0) {
           const previous = result.at(-1);
           if (previous && !previous.standalone && !previous.inline) {
-            previous.unmatchedActivity = [
-              ...(previous.unmatchedActivity ?? []),
-              ...unmatchedActivity,
-            ];
+            previous.entries.push(...unmatchedActivity.map((activity) => ({ activity })));
           } else {
             result.push({
               key: `${entry.key}:activity`,
               standalone: false,
-              operations: [],
-              unmatchedActivity,
+              entries: unmatchedActivity.map((activity) => ({ activity })),
             });
           }
         }
@@ -400,7 +466,7 @@ function ActivityOperationSegments(props: ActivityGroupContentProps & { state: A
           result.push({
             key: `${entry.key}:output`,
             standalone: true,
-            operations: [],
+            entries: [],
             content: { ...group, messages: [entry] },
           });
         }
@@ -420,38 +486,58 @@ function ActivityOperationSegments(props: ActivityGroupContentProps & { state: A
     <>
       <For each={segments()} keyed={(segment) => segment.key}>
         {(segment) => {
+          const isTail = () => segment() === segments().at(-1);
           const prepared = createMemo(() => {
-            const selected = new Set([
-              ...(segment().unmatchedActivity ?? []),
-              ...segment().operations.flatMap((operation) =>
-                [operation.card, ...descendantCards(operation)].flatMap((card) => {
-                  const activity = props.state.preparedByCard.get(card);
-                  return activity ? [activity] : [];
-                }),
+            const selected = new Set(
+              segment().entries.flatMap((entry) =>
+                entry.activity
+                  ? [entry.activity]
+                  : [entry.operation.card, ...descendantCards(entry.operation)].flatMap((card) => {
+                      const activity = props.state.preparedByCard.get(card);
+                      return activity ? [activity] : [];
+                    }),
               ),
-            ]);
+            );
             return prepareActivityGroup(props.groups, props.options, {
               rootGroups: new Map(
-                segment().operations.map((operation) => [operation.card, operation]),
+                segment().entries.flatMap((entry) =>
+                  entry.operation ? [[entry.operation.card, entry.operation] as const] : [],
+                ),
               ),
               toolCardOverrides: props.state.toolCardOverrides,
-              currentRunActivity:
-                segment() === segments().at(-1) ? props.state.currentRunActivity : new Set(),
+              currentRunActivity: isTail() ? props.state.currentRunActivity : new Set(),
               visibleActivity: selected,
               key: segment().key,
             });
           });
           const entries = () => (
             <For
-              each={segment().operations}
-              keyed={(operation) => props.state.toolContexts.get(operation.card)!.disclosureId}
+              each={segment().entries}
+              keyed={(entry) =>
+                entry.operation
+                  ? props.state.toolContexts.get(entry.operation.card)!.disclosureId
+                  : props.state.activityKeys.get(entry.activity)!
+              }
             >
-              {(operation) => (
-                <ActivityOperation
-                  group={operation()}
-                  options={props.options}
-                  contexts={props.state.toolContexts}
-                />
+              {(entry) => (
+                <Show
+                  when={entry().operation}
+                  fallback={
+                    <Show when={entry().activity}>
+                      {(activity) => (
+                        <PreparedActivityRow activity={activity()} options={props.options} />
+                      )}
+                    </Show>
+                  }
+                >
+                  {(operation) => (
+                    <ActivityOperation
+                      group={operation()}
+                      options={props.options}
+                      contexts={props.state.toolContexts}
+                    />
+                  )}
+                </Show>
               )}
             </For>
           );
@@ -464,7 +550,18 @@ function ActivityOperationSegments(props: ActivityGroupContentProps & { state: A
                   fallback={
                     <Show when={prepared()}>
                       {(state) => (
-                        <ActivityGroupBody {...props} state={state()} renderEntries={entries} />
+                        <ActivityGroupBody
+                          {...props}
+                          state={state()}
+                          renderEntries={entries}
+                          inline={segment().inline}
+                          liveBubble={
+                            isTail() &&
+                            props.groups.some(
+                              (group) => group.key === props.options.bubbleActivityGroupKey,
+                            )
+                          }
+                        />
                       )}
                     </Show>
                   }
@@ -487,7 +584,10 @@ export function ActivityGroupContent(props: ActivityGroupContentProps) {
   const InlineContent = dynamic(() => props.options.inlineCommands?.InlineActivityGroupContent);
   const body = () => (
     <Show
-      when={state()!.cardGroups.some((group) => isStandaloneActivity(group.card))}
+      when={
+        state()!.unmatchedActivity.length > 0 ||
+        state()!.cardGroups.some((group) => isStandaloneActivity(group.card))
+      }
       fallback={
         <Show
           when={props.options.inlineCommands}

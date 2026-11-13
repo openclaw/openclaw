@@ -19,6 +19,8 @@ export type ToolCardProps = {
 
 export type ToolCardContentProps = {
   card: ToolCard;
+  /** The adjacent disclosure already presents this command's compact form. */
+  commandInRow?: boolean;
   output?: ToolCardOutput;
   options: ToolRenderOptions;
 };

@@ -316,6 +316,13 @@
   white-space: nowrap;
 }
 
+/* Expanded commands keep their full preview readable even on narrow panes. */
+.chat-tool-msg-collapse.is-open > .chat-tool-row .chat-tool-disclosure__content,
+.chat-tool-msg-collapse.is-open > .chat-tool-row .chat-tool-row__cmd {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .chat-tool-msg-summary__names,
 .chat-tool-msg-summary__preview,
 .chat-progress-card-receipt__text {
