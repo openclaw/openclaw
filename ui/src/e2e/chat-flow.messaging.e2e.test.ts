@@ -414,7 +414,7 @@ suite.define(() => {
     await page.locator(".chat-attachment-thumb--browser-annotation").waitFor();
 
     await composer.fill("/stop");
-    await page.getByRole("option", { name: /\/stop/ }).waitFor();
+    await page.getByRole("option", { name: /^Stop\b/ }).waitFor();
     await composer.press("Enter");
 
     const abortRequest = await gateway.waitForRequest("sessions.abort");

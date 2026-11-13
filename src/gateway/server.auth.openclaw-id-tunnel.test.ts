@@ -59,6 +59,7 @@ const TEST_PEER_HEADER = "x-test-openclaw-id-peer";
 const OWNER_KEY = `iroh:${"0a".repeat(32)}`;
 const OPERATOR_KEY = `iroh:${"0b".repeat(32)}`;
 const VIEWER_KEY = `iroh:${"0c".repeat(32)}`;
+const GUEST_KEY = `iroh:${"0e".repeat(32)}`;
 const REMOVED_KEY = `iroh:${"0d".repeat(32)}`;
 const CONTROL_UI_SCOPES = [
   "operator.admin",
@@ -72,6 +73,7 @@ const PRINCIPALS: Record<string, OpenClawIdTunnelPrincipal> = {
   [OWNER_KEY]: { kind: "owner", peerKey: OWNER_KEY },
   [OPERATOR_KEY]: { kind: "member", peerKey: OPERATOR_KEY, accountId: "acct_op", role: "operator" },
   [VIEWER_KEY]: { kind: "member", peerKey: VIEWER_KEY, accountId: "acct_view", role: "viewer" },
+  [GUEST_KEY]: { kind: "member", peerKey: GUEST_KEY, accountId: "acct_guest", role: "guest" },
 };
 
 let started: Awaited<ReturnType<typeof createGatewaySuiteHarness>> | undefined;
@@ -500,8 +502,11 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
     }
   });
 
-  test("a key the authority no longer admits is refused", async () => {
-    const { ws, res } = await connectTunnel(REMOVED_KEY);
+  test.each([
+    ["removed", REMOVED_KEY],
+    ["unknown role", GUEST_KEY],
+  ])("a %s member is refused even with the Gateway token", async (_reason, peerKey) => {
+    const { ws, res } = await connectTunnel(peerKey, { token: TOKEN });
     try {
       expect(res.ok).toBe(false);
       expect(res.error?.message).toMatch(/no longer has access to this claw/);

@@ -733,6 +733,26 @@ OpenClaw applies these cleanup rules:
 
 Maintenance works in small batches with a time budget, yields between batches, and resumes from its previous position until the sweep finishes; the batch size is not an hourly removal limit. Filesystem scans, lossless checks, and nested-repository inspection run in the Git worker. The Gateway request starts or observes the same background job instead of waiting for the entire fleet to be inspected; `openclaw worktrees gc` reports that owner's progress. Health summaries include each eviction reason and any live-owner refusal.
 
+The first cleanup pass starts with post-ready maintenance, after deferred startup
+settles and its grace period expires; later passes remain hourly. Restarting drops
+the in-memory directory cursor, but completed scratch deletions remain completed.
+Scratch visits the oldest-created managed worktrees first so a restarted pass does
+not spend its candidate budget repeatedly inspecting the newest, fresh scratch.
+The new owner evaluates only entries still present, with fresh custody and expiry
+checks and the same bounded budgets; no cleanup checkpoint file is needed.
+The 256-candidate limit counts files and directories inspected, not clones removed;
+large clones can instead exhaust the filesystem-entry budget.
+
+Scratch expiry applies only to the declared scratch roots. Clones placed directly
+under `.openclaw/<name>` or under a workspace path such as
+`loops/contributor-prs/worktrees/pr-*-native` are outside this policy. Their
+creating task or maintainer workflow owns closeout: use that workflow's cleanup
+for its registered worktrees, and retain unregistered clones until their owner
+has verified that no live work or required changes remain. The broader
+`.openclaw` directory can contain durable files; a clone's location or name does
+not establish disposal authority. Put future disposable landing clones under
+`.openclaw/tmp/` to opt into automatic expiry.
+
 Gateway idle cleanup starts at most one removal attempt per minute, including
 across archive-triggered sweeps. On Linux, btrfs commits taking at least one second, a one-second delay in the
 Gateway’s own asynchronous kernel-counter reads (including event-loop and IO-pool
