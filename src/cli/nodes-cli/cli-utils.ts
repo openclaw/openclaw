@@ -39,7 +39,10 @@ export function runNodesCommand(label: string, action: () => Promise<void>) {
   return runCommandWithRuntime(defaultRuntime, action, (err) => {
     const message = formatErrorMessage(err);
     const { error, warn } = getNodesTheme();
-    defaultRuntime.error(error(sanitizeTerminalText(`nodes ${label} failed: ${message}`)));
+    // Multi-line failures (config misconfigurations carry Config/Fix remedy lines) keep
+    // their line breaks; each line is sanitized separately.
+    const detail = message.split("\n").map(sanitizeTerminalText).join("\n  ");
+    defaultRuntime.error(error(`nodes ${label} failed: ${detail}`));
     const normalized = normalizeLowercaseStringOrEmpty(message);
     if (
       normalized.includes("unauthorizedclient") ||
