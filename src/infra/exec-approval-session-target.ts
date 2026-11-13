@@ -42,9 +42,6 @@ type ApprovalRequestOriginTargetResolver<TTarget> = {
   resolveTurnSourceTarget: (request: ApprovalRequestLike) => TTarget | null;
   resolveSessionTarget: (sessionTarget: ExecApprovalSessionTarget) => TTarget | null;
   targetsMatch: (a: TTarget, b: TTarget) => boolean;
-  // Channel hook may recover one target after the exact matcher rejects the pair.
-  // Null keeps the no-origin result.
-  reconcileDivergentTargets?: (turnSourceTarget: TTarget, sessionTarget: TTarget) => TTarget | null;
   resolveFallbackTarget?: (request: ApprovalRequestLike) => TTarget | null;
 };
 
@@ -154,8 +151,8 @@ function resolveApprovalRequestOriginTargetFromDelivery<TTarget>(
       : null;
 
   if (turnSourceTarget && sessionTarget && !params.targetsMatch(turnSourceTarget, sessionTarget)) {
-    // The channel owns whether a rejected pair still names one destination.
-    return params.reconcileDivergentTargets?.(turnSourceTarget, sessionTarget) ?? null;
+    // Avoid routing to an origin when live turn metadata disagrees with persisted session state.
+    return null;
   }
 
   return (
