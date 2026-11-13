@@ -10,6 +10,7 @@ import {
   releaseSessionFilePreviewGrant,
   sessionFilePreviewBinding,
 } from "../artifact-download-grants.js";
+import { usesClawSandbox } from "../sandbox-view.js";
 import {
   analyzeSessionHtmlPreview,
   analyzeSessionHtmlPreviewCss,
@@ -122,6 +123,11 @@ export async function respondSessionFilePreview({
       html: params.html,
       omitted: omitted.size,
     } satisfies SessionsFilesPreviewResult);
+    return;
+  }
+  // Relative resources load from the Gateway sandbox listener, which a claw-loader sandbox cannot reach.
+  if (usesClawSandbox(options.client)) {
+    unsupported();
     return;
   }
   const resources = new Map<string, { ref: string; mimeType: string; digest: string }>();

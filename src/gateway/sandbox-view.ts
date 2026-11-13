@@ -24,15 +24,23 @@ function sandboxHostLabel(clawHost: string): string {
   return label;
 }
 
+/** The linked claw origin when this connection's sandbox is the claw-loader sibling origin. */
+function clawSandboxOrigin(client: GatewayClient | null | undefined): string | undefined {
+  return client?.browserOrigin?.openclawIdTunnel ? resolveOpenClawIdClawOrigin() : undefined;
+}
+
+/** True when this connection's sandbox is served by claw-loader, which cannot serve Gateway files. */
+export function usesClawSandbox(client: GatewayClient | null | undefined): boolean {
+  return clawSandboxOrigin(client) !== undefined;
+}
+
 /** Projects the same view policy onto the sandbox reachable by this connection. */
 export function resolveSandboxView(
   sandboxPath: string,
   client: GatewayClient | null | undefined,
   configuredOrigin?: string,
 ): { sandboxUrl: string; sandboxOrigin?: string; sandboxShellHtml?: string } {
-  const clawOrigin = client?.browserOrigin?.openclawIdTunnel
-    ? resolveOpenClawIdClawOrigin()
-    : undefined;
+  const clawOrigin = clawSandboxOrigin(client);
   if (clawOrigin) {
     const sandbox = new URL(sandboxPath, clawOrigin);
     const separator = sandbox.hostname.indexOf(".");

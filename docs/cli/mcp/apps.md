@@ -48,10 +48,12 @@ Gateway's sandbox port through the tunnel or setting `mcp.apps.sandboxOrigin`.
 Direct connections and tunnel connections without a linked claw retain the
 configured sandbox origin or the Gateway's sandbox port.
 
-Session-file previews with retained relative resources
-(`/__openclaw__/file-preview/`) do not use this bootstrap. They retain the existing
-sandbox-listener origin and reachability requirements; the sibling sandbox does
-not serve file-preview paths.
+HTML session-file previews that declare their own Content-Security-Policy and load
+relative resources (`/__openclaw__/file-preview/`) need the Gateway sandbox listener,
+which the sibling sandbox origin does not serve. On these connections, such previews
+report the existing unsupported-preview notice and render without their relative
+resources; use Source or Download for the original file. Previews without an authored
+policy keep their relative assets, which the Control UI inlines before rendering.
 
 For example, the official basic React demo can be configured as:
 
