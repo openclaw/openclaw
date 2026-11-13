@@ -10,6 +10,7 @@ import {
   buildTaskScript,
   buildStartupLauncherScript,
   readScheduledTaskCommand,
+  readStartupEntryCommand,
   resolveStartupEntryPaths,
   resolveTaskScriptPath,
 } from "./schtasks-layout.js";
@@ -155,7 +156,25 @@ describe("readScheduledTaskCommand", () => {
         { requireEffective: true, requireLoaded: true },
       ),
     ).rejects.toThrow(
-      `${inspectionError} The task action was refused: ${reason}. Accepted Scheduled Task action shapes: a native .exe; cmd.exe /d /s /c "<launcher>.cmd"; wscript.exe "<launcher>.vbs".`,
+      `${inspectionError} The task action was refused: ${reason}. Accepted Scheduled Task action shapes: a native .exe; cmd.exe with Arguments /d /s /c ""<launcher>.cmd""; wscript.exe with Arguments "<launcher>.vbs".`,
+    );
+  });
+
+  it("names the Startup entry shape when the Startup launcher is refused", async () => {
+    // A Startup entry is not a Task action: the reader only accepts the generated
+    // start "" /min wrapper, so the recovery example must not advertise .exe or Task quoting.
+    const startupEntry =
+      "C:\\Users\\test\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\OpenClaw Gateway.cmd";
+    mockLauncherFiles(
+      new Map([
+        [
+          startupEntry,
+          '@echo off\r\n"C:\\Node\\node.exe" "C:\\OpenClaw\\openclaw.mjs" gateway --port 18789\r\n',
+        ],
+      ]),
+    );
+    await expect(readStartupEntryCommand(startupEntry)).rejects.toThrow(
+      'Startup service command could not be inspected. The startup entry was refused: Unrecognized Startup launcher. Accepted Startup entry shapes: start "" /min cmd.exe /d /c "<launcher>.cmd".',
     );
   });
 
