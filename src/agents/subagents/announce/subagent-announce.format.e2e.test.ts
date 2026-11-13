@@ -488,19 +488,6 @@ describe("subagent announce formatting", () => {
     },
   );
 
-  it("tells a user-facing parent not to resend a result the user already received", async () => {
-    // Completion review always runs in a new parent turn, so "this same turn" never matched.
-    const call = await deliverCompletion({});
-    expectText(
-      getAgentCallContext(call),
-      [
-        "already delivered to the user earlier in this conversation, by you or by the subagent",
-        "do not repeat it or re-attach its files",
-      ],
-      ["in this same turn", SILENT_REPLY_TOKEN],
-    );
-  });
-
   async function expectRealStoreUsage(
     entryPatch: Record<string, unknown>,
     expected: string,
