@@ -102,7 +102,7 @@ export async function runEmbeddedAttemptPromptPhase(
     state: sessionRuntimeState,
     toolResultPromptProjectionState,
     trajectoryRecorder,
-    transcriptPolicy: { appendOnlyRuntimeContext, inHistorySystemUpdates },
+    transcriptPolicy: { appendOnlyRuntimeContext, inHistorySystemUpdates, pinnedSystemPrompt },
     transport: {
       effectiveAgentTransport,
       effectiveExtraParams,
@@ -539,8 +539,10 @@ export async function runEmbeddedAttemptPromptPhase(
         persistToolResultProjections: async () => {
           if (
             !isRawModelRun &&
-            (inHistorySystemUpdates ||
+            (pinnedSystemPrompt ||
               sessionPromptState.pendingToolSurface ||
+              sessionPromptState.usageRanking?.snapshot !==
+                sessionPromptState.persistedUsageRanking ||
               toolResultPromptProjectionState.frozen.size > 0)
           ) {
             await withTranscriptWrite(async () => {
@@ -551,7 +553,9 @@ export async function runEmbeddedAttemptPromptPhase(
               );
               const appendEntry = (customType: string, data: unknown) =>
                 sessionManager.appendCustomEntryAsync(customType, data);
-              await (sessionRuntime.prepareSystemPromptUpdate
+              // Only a pinned prompt series owns prompt commits; ranking alone installs the
+              // updater without pinning.
+              await (sessionRuntime.prepareSystemPromptUpdate && pinnedSystemPrompt
                 ? persistSessionSystemPrompt(sessionPromptState, appendEntry)
                 : persistSessionToolSurface(sessionPromptState, appendEntry));
             });

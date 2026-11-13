@@ -22,6 +22,19 @@ const enProfile = {
       startFailed: "Couldn’t start Discord sign-in. Try again.",
       incomplete: "Couldn’t complete Discord sign-in. Try again.",
     },
+    openclawId: {
+      title: "OpenClaw ID",
+      notLinked: "Not linked",
+      unavailable: "Link over a personal sign-in, such as Tailscale",
+      loadFailed: "Couldn’t load your OpenClaw ID link.",
+      link: "Link OpenClaw ID",
+      linkShort: "Link",
+      unlink: "Unlink",
+      ownerOf: "{email} · Owner of {claw}",
+      linkedElsewhere:
+        "This OpenClaw ID is already linked to another profile. Merge that profile into this one in Users, or unlink it there first.",
+      failed: "Couldn’t update the OpenClaw ID link. Try again.",
+    },
     access: {
       title: "Your access",
       admin: "You have admin access.",
@@ -63,7 +76,8 @@ const enProfile = {
       displayName: identity.displayName,
       displayNameDescription: "Shown to other people using OpenClaw.",
       linkedEmails: identity.linkedEmails,
-      linkedEmailsDescription: "Email addresses connected to this profile.",
+      linkedEmailsDescription:
+        "Used for sign-in and profile linking. Commit credit can use a different address.",
       attribution: identity.attribution,
       githubAccount: "GitHub sign-in",
       githubAccountDescription:
@@ -75,9 +89,17 @@ const enProfile = {
       ownerGithubDescription:
         "GitHub-backed sign-in through Cloudflare Access or Tailscale Serve provides this identity.",
       gitCoauthor: "Git co-author credit",
-      gitCoauthorShort: "Adds this profile’s GitHub address to shared-session commits.",
+      gitCoauthorShort:
+        "Adds the GitHub identity selected for the publishing host to public commit history.",
       gitCoauthorDescription:
-        "When a verified account is available, adds this profile’s public GitHub noreply address or verified enterprise email address to shared-session commits, depending on the publishing host. The enterprise address is visible in commit history. Turning it off affects future commits only.",
+        "When available, adds this profile’s organization-provided details, public GitHub noreply address or verified enterprise email address to shared-session commits. The email address is visible in commit history. Turning it off affects future commits only.",
+      gitCoauthorChanged: "Credit details changed. Review them and enable credit again.",
+      gitCoauthorOrganization:
+        "Adds the name and email supplied by your organization to public commit history.",
+      gitCoauthorGithub:
+        "Adds your verified GitHub identity to commits using its public noreply address.",
+      gitCoauthorConfigure:
+        "Ask your administrator to supply co-author details through your sign-in proxy, or use supported GitHub sign-in.",
       ownerGitCoauthorDescription:
         "Requires GitHub-backed sign-in through Cloudflare Access or Tailscale Serve.",
       prAttribution: "Add OpenClaw attribution to pull requests",
@@ -97,7 +119,10 @@ const enProfile = {
 export const registerProfileEnglish = Object.assign(
   () => {
     // Shared menu/search labels stay eager; editor copy loads with its consumers.
-    Object.assign(en.profilePage, { discord: enProfile.profilePage.discord });
+    Object.assign(en.profilePage, {
+      discord: enProfile.profilePage.discord,
+      openclawId: enProfile.profilePage.openclawId,
+    });
     en.profilePage.access = enProfile.profilePage.access;
     Object.assign(en.profilePage.identity, enProfile.profilePage.identity);
   },

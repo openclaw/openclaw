@@ -118,10 +118,10 @@ vi.mock("./server-startup-model-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./server-startup-model-runtime.js")>()),
   publishConfiguredModelRuntimeSnapshots: async () => {},
 }));
-// mock-isolation: Transcript reload startup does not execute config-driven replies or their agent-runtime graph.
-vi.mock("../auto-reply/reply/get-reply-from-config.runtime.js", () => ({
-  getReplyFromConfig: vi.fn(),
-  prewarmConfigDrivenReplyRuntime: async () => {},
+// mock-isolation: Transcript reload startup does not execute the agent-runtime graph.
+vi.mock("../auto-reply/reply/get-reply-run-helpers.js", () => ({
+  loadEmbeddedAgentRuntime: async () => {},
+  loadSessionUpdatesRuntime: async () => {},
 }));
 // mock-isolation: Transcript reload startup owns this import, not authenticated WebSocket connection dispatch.
 vi.mock("./server/ws-connection/message-handler.js", () => ({

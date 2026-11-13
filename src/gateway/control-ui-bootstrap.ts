@@ -13,8 +13,8 @@ import type {
   ControlUiPluginFrameGrantAck,
 } from "./control-ui-contract.js";
 import type { ControlUiDocumentDiagnostics } from "./control-ui-document-diagnostics.js";
+import { authorizeControlUiReadRequestOrReply } from "./http-auth-utils.js";
 import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
-import { authorizeControlUiReadRequestOrReply } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 
 type ControlUiBootstrapRequestOptions = Partial<GatewayHttpRequestAuthOptions> & {

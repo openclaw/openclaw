@@ -2,6 +2,7 @@ import type { SessionGoal } from "../../../api/types.ts";
 import { registerChatGoalsEnglish } from "../../../i18n/locales/en-chat-goals.ts";
 import type { ChatGoalDraftMode } from "../../../lib/chat/chat-types.ts";
 import type { SlashCommandDef } from "../../../lib/chat/commands.ts";
+import { focusComposerInput, selectComposerInput } from "../../../lib/composer-input.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { isChatGoalCreationDraft } from "../chat-goals.ts";
 import { adjustTextareaHeight } from "./chat-composer-dom.ts";
@@ -26,7 +27,8 @@ export function createGoalComposer(readProps: () => ChatComposerProps, state: Ch
       adjustTextareaHeight(textarea);
     }
   };
-  const focus = () => queueMicrotask(() => state.composerTextarea?.focus({ preventScroll: true }));
+  const focus = () =>
+    queueMicrotask(() => focusComposerInput(state.composerTextarea, { preventScroll: true }));
   const clearMode = (current: ChatGoalDraftMode) => {
     readProps().onGoalDraftModeChange?.(null);
     // Editing borrows the composer; leaving it restores the conversation draft.
@@ -68,7 +70,8 @@ export function createGoalComposer(readProps: () => ChatComposerProps, state: Ch
     replaceDraft(goal?.objective ?? commandObjective ?? "");
     if (selection && textarea && commandObjective !== undefined) {
       const consumed = previousDraft.length - commandObjective.length;
-      textarea.setSelectionRange(
+      selectComposerInput(
+        textarea,
         Math.max(0, selection.start - consumed),
         Math.max(0, selection.end - consumed),
         selection.direction,
@@ -90,7 +93,7 @@ export function createGoalComposer(readProps: () => ChatComposerProps, state: Ch
     }
     props.onGoalDraftModeChange(null);
     replaceDraft("/goal ");
-    state.composerTextarea?.setSelectionRange(6, 6);
+    selectComposerInput(state.composerTextarea, 6, 6);
     focus();
     return true;
   };

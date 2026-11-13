@@ -267,17 +267,34 @@ it.skipIf(process.platform === "win32").for(["continue", "finish", "root-source-
           assert(finishRequester);
           finishRequester();
           await vi.waitFor(
-            () => {
-              const closed = readRestartSession(instance.state.agentDir("main"), childKey!);
-              expect(closed?.status).toBe("failed");
-              expect(closed?.lastRunError).toContain("Requester finished");
-              expect(closed?.lifecycleRunId).toBeUndefined();
-              expect(closed?.activeWriterRunId).toBe(parked?.activeWriterRunId);
+            async () => {
+              const history = await client!.request<{
+                messages: unknown[];
+                sessionInfo: { hasActiveRun: boolean };
+              }>("chat.history", { sessionKey: rootKey });
+              expect(JSON.stringify(history.messages)).toContain(
+                "REQUESTER_FINISHED_WITHOUT_CONTINUATION",
+              );
+              expect(history.sessionInfo.hasActiveRun).toBe(false);
             },
             { timeout: 15_000 },
           );
+          // An unclaimed restored wait survives this committed requester turn.
+          const retained = readRestartSession(instance.state.agentDir("main"), childKey);
+          expect(retained?.status).toBeUndefined();
+          expect(retained?.lifecycleRunId).toBe(parked?.lifecycleRunId);
+          expect(retained?.activeWriterRunId).toBe(parked?.activeWriterRunId);
           expect(childCalls).toBe(callsBeforeRestart);
-          return;
+          const requestsBeforeContinuation = rootResumes;
+          await client.request("chat.send", {
+            sessionKey: rootKey,
+            message: "CONTINUE_RETAINED_CHILD",
+            idempotencyKey: randomUUID(),
+            deliver: false,
+          });
+          await vi.waitFor(() => expect(rootResumes).toBe(requestsBeforeContinuation + 1), {
+            timeout: 15_000,
+          });
         }
         phase = "requester continues child";
         assert(continueChild);

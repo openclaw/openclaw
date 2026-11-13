@@ -233,7 +233,7 @@ export async function readOwnGitHubPullRequest(params: {
     }
   };
   const assertCurrent = () => {
-    assertRequester();
+    params.assertCurrent();
     assertIdentityCurrent();
   };
   assertCurrent();

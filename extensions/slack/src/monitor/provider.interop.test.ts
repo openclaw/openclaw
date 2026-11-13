@@ -5,7 +5,6 @@ import { WebSocketServer } from "ws";
 import {
   createSlackBoltApp,
   gracefulStopSlackApp,
-  publishSlackDisconnectedStatus,
   resolveSlackBoltInterop,
   startSlackSocketAndWaitForDisconnect,
 } from "./provider-support.js";
@@ -103,14 +102,15 @@ describe("createSlackBoltApp", () => {
       numOfConsecutiveReconnectionFailures: 0,
       shuttingDown: false,
       send: async () => {},
-      start: vi.fn(async () => {}),
-      delayReconnectAttempt: (_callback: () => Promise<unknown>): Promise<unknown> => {
+      start: (): Promise<unknown> => Promise.reject(new Error("fetch failed")),
+      delayReconnectAttempt: (..._args: unknown[]): Promise<unknown> => {
         throw new Error("native reconnect observer was not installed");
       },
     });
   }
   class FakeSocketModeReceiver extends FakeHTTPReceiver {
     client = createSocketClient();
+    start = () => this.client.start();
   }
 
   const fakeInterop = {
@@ -187,26 +187,35 @@ describe("createSlackBoltApp", () => {
     }
   });
 
-  it("routes native reconnect start failures through the socket disconnect event", async () => {
-    const startError = new Error("invalid_auth");
+  it("reports SDK reconnect and refresh start failures and stops on disconnect", async () => {
     const { receiver } = createFakeApp();
     if (!(receiver instanceof FakeSocketModeReceiver)) {
       throw new Error("expected Socket Mode receiver");
     }
     const client = receiver.client;
-    client.start.mockRejectedValue(startError);
     const emit = vi.spyOn(client, "emit");
+    const signal = new AbortController().signal;
 
-    await expect(client.delayReconnectAttempt(client.start)).resolves.toBeUndefined();
+    await expect(receiver.start()).rejects.toThrow("fetch failed");
+    await expect(client.delayReconnectAttempt(() => client.start(), signal)).resolves.toBe(
+      undefined,
+    );
+    await expect(client.start()).resolves.toBeUndefined();
     await expect(
-      client.delayReconnectAttempt(async () => {
-        throw new Error("transient");
-      }),
+      client.delayReconnectAttempt(() => Promise.reject(new Error("transient")), signal),
     ).rejects.toThrow("transient");
+    vi.useFakeTimers();
+    const stopped = client.delayReconnectAttempt(() => client.start(), signal);
+    client.emit("disconnecting");
+    await vi.runAllTimersAsync();
+    vi.useRealTimers();
+    await expect(stopped).resolves.toBeUndefined();
     expect(emit.mock.calls).toEqual([
       ["reconnecting"],
-      ["unable_to_socket_mode_start", startError],
+      ["unable_to_socket_mode_start", new Error("fetch failed")],
+      ["unable_to_socket_mode_start", new Error("fetch failed")],
       ["reconnecting"],
+      ["disconnecting"],
     ]);
   });
 
@@ -225,11 +234,12 @@ describe("createSlackBoltApp", () => {
       });
       Reflect.set(client, "start", start);
       const delayReconnectAttempt = Reflect.get(client, "delayReconnectAttempt");
+      const lifecycle = new AbortController();
       if (typeof delayReconnectAttempt !== "function") {
         throw new Error("expected a native reconnect scheduler");
       }
 
-      const reconnect = delayReconnectAttempt.call(client, start);
+      const reconnect = delayReconnectAttempt.call(client, () => client.start(), lifecycle.signal);
       await gracefulStopSlackApp(app, client);
       await expect(reconnect).resolves.toBeUndefined();
       await app.start();
@@ -377,20 +387,6 @@ describe("createSlackBoltApp", () => {
 });
 
 describe("slack socket reconnect helpers", () => {
-  it("marks socket mode disconnected without error when the socket closes cleanly", () => {
-    const setStatus = vi.fn();
-    vi.spyOn(Date, "now").mockReturnValue(1_711_406_402_000);
-
-    publishSlackDisconnectedStatus(setStatus);
-
-    expect(setStatus).toHaveBeenCalledExactlyOnceWith({
-      connected: false,
-      lifecycle: "recovering",
-      lastDisconnect: { at: 1_711_406_402_000 },
-      lastError: null,
-    });
-  });
-
   it("warns once when Slack reports a shared Socket Mode app token", () => {
     const client = new EventEmitter();
     const onSharedConnection = vi.fn();
