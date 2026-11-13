@@ -252,6 +252,7 @@ function isBareDeliveryMirrorDuplicate(out: AgentMessage[], next: AssistantRepla
 
 function normalizeAssistantReplayMessage(
   message: AssistantReplayMessage,
+  keepSilentReply = false,
 ): AssistantReplayMessage | null {
   if (isTranscriptOnlyOpenClawAssistantMessage(message)) {
     // Drop from the in-memory replay copy; the persisted JSONL keeps the
@@ -271,7 +272,7 @@ function normalizeAssistantReplayMessage(
   }
   const replayContent = (message as { content?: unknown }).content;
   // Hidden transcript rows still belong to model context, including tool-call/result pairs.
-  if (asOptionalRecord(message)?.display !== false && isSilentAssistantTranscriptMessage(message)) {
+  if (!keepSilentReply && isVisibleSilentReply(message)) {
     return null;
   }
   if (typeof replayContent === "string") {
@@ -299,17 +300,30 @@ function normalizeAssistantReplayMessage(
   return normalized;
 }
 
+function isVisibleSilentReply(message: AgentMessage): boolean {
+  return (
+    asOptionalRecord(message)?.display !== false && isSilentAssistantTranscriptMessage(message)
+  );
+}
+
 export function normalizeAssistantReplayContent(messages: AgentMessage[]): AgentMessage[] {
   let touched = false;
   let isCompletedToolCall: ReturnType<typeof createCompletedToolCallPredicate> | undefined;
   const out: AgentMessage[] = [];
-  for (const message of messages) {
+  for (const [index, message] of messages.entries()) {
     if (message?.role !== "user" && message?.role !== "assistant") {
       out.push(message);
       continue;
     }
     let normalized = normalizedReplayMessages.get(message);
-    if (normalized === undefined) {
+    if (message.role === "assistant" && isVisibleSilentReply(message)) {
+      // A silent reply stays in replay: dropping it would leave two user turns adjacent, and
+      // role-alternating transports would merge the later turn into this one. It is dropped only
+      // when another assistant turn follows, so the two are never merged (#99620). It is kept
+      // while it is the newest stored row, because the current prompt is appended after replay.
+      const next = messages.slice(index + 1).find((later) => later?.role !== "custom");
+      normalized = normalizeAssistantReplayMessage(message, next?.role !== "assistant");
+    } else if (normalized === undefined) {
       normalized =
         message.role === "user"
           ? sanitizeUserReplayContent(message)
