@@ -532,7 +532,7 @@ export function ProfilePage() {
             </Show>
           </Show>
           <PersonalEnrollment
-            gateway={context.gateway}
+            initialGateway={context.gateway}
             basePath={context.basePath}
             idManaged={pageConfiguration.read().openclawIdEnabled}
             hidden={!hasPresentation() || initialIdentityPending()}

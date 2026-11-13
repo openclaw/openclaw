@@ -262,7 +262,7 @@ export function CustodianSetupCard(props: {
           <Show when={setup().ready && !setup().pending}>
             <Loading fallback={<p role="status">{t("common.loading")}</p>}>
               <PersonalEnrollment
-                gateway={context.gateway}
+                initialGateway={context.gateway}
                 basePath={context.basePath}
                 idManaged={configuration.read().openclawIdEnabled}
                 onboarding

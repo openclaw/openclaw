@@ -220,14 +220,14 @@ async function reservePort(): Promise<number> {
 async function resolveBuiltModule(params: {
   distDir: string;
   prefix: string;
-  exportMarker: string;
+  exportPattern: RegExp;
 }): Promise<string> {
   for (const name of await fs.readdir(params.distDir)) {
     if (!name.startsWith(params.prefix) || !/\.m?js$/u.test(name)) {
       continue;
     }
     const filePath = path.join(params.distDir, name);
-    if ((await fs.readFile(filePath, "utf8")).includes(params.exportMarker)) {
+    if (params.exportPattern.test(await fs.readFile(filePath, "utf8"))) {
       return pathToFileURL(filePath).href;
     }
   }
@@ -249,12 +249,12 @@ async function startControlledSourceGateway(params: {
     resolveBuiltModule({
       distDir,
       prefix: "server-",
-      exportMarker: "startGatewayServer, truncateCloseReason",
+      exportPattern: /startGatewayServer,\s*truncateCloseReason/u,
     }),
     resolveBuiltModule({
       distDir,
       prefix: "prepared-model-runtime-",
-      exportMarker: "export { PreparedModelRuntimeOwnerNotPublishedError",
+      exportPattern: /export\s*\{\s*PreparedModelRuntimeOwnerNotPublishedError/u,
     }),
   ]);
   await fs.writeFile(

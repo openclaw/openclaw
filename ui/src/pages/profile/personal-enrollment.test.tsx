@@ -10,7 +10,7 @@ it("does not mount another setup card or load its directory for an admitted pers
   const { context } = createConnectedContext(request, { id: "existing-person", name: "Ada" });
   const view = mountSolid(() => (
     <PersonalEnrollment
-      gateway={context.gateway}
+      initialGateway={context.gateway}
       basePath=""
       onboarding
       onLater={() => undefined}

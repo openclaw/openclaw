@@ -23,9 +23,10 @@ const PersonalRolePreview = lazy(() =>
 
 /** Shared by Profile, Devices and the post-inference optional setup step. */
 type PersonalEnrollmentProps = {
-  gateway: ApplicationGateway;
+  // The caller owns the form lifetime; reconnects update this same Gateway owner.
+  initialGateway: ApplicationGateway;
   basePath: string;
-  deviceId?: string;
+  initialDeviceId?: string;
   onLater?: () => void;
   idManaged?: boolean;
   hidden?: boolean;
@@ -34,9 +35,7 @@ type PersonalEnrollmentProps = {
 
 export function PersonalEnrollment(props: PersonalEnrollmentProps) {
   const { owner, view } = projectCallbackOwner(
-    // This leaf is keyed by its route/dialog target; reconnect state belongs to the plain owner.
-    // oxlint-disable-next-line solid/reactivity -- immutable target for this mounted form.
-    (publish) => new PersonalEnrollmentState(props.gateway, publish, props.deviceId),
+    (publish) => new PersonalEnrollmentState(props.initialGateway, publish, props.initialDeviceId),
     (state) => state,
   );
   onSettled(() => {
@@ -49,7 +48,7 @@ export function PersonalEnrollment(props: PersonalEnrollmentProps) {
   const visible = () => {
     const state = view.read();
     return (
-      props.deviceId ||
+      props.initialDeviceId ||
       state.busy ||
       state.error ||
       state.success ||
@@ -61,11 +60,11 @@ export function PersonalEnrollment(props: PersonalEnrollmentProps) {
     <Show when={visible()}>
       <Show
         when={props.onboarding}
-        fallback={<PersonalEnrollmentForm {...props} owner={owner} readState={view.read} />}
+        fallback={<PersonalEnrollmentForm {...props} staticOwner={owner} readState={view.read} />}
       >
         <div class="custodian-setup__personal">
           <h3>{t("profilePage.enrollment.onboarding")}</h3>
-          <PersonalEnrollmentForm {...props} owner={owner} readState={view.read} />
+          <PersonalEnrollmentForm {...props} staticOwner={owner} readState={view.read} />
           <Show when={props.onLater}>
             <button class="btn btn--ghost" type="button" onClick={() => props.onLater?.()}>
               {t("profilePage.enrollment.later")}
@@ -79,19 +78,18 @@ export function PersonalEnrollment(props: PersonalEnrollmentProps) {
 
 function PersonalEnrollmentForm(
   props: PersonalEnrollmentProps & {
-    owner: PersonalEnrollmentState;
+    staticOwner: PersonalEnrollmentState;
     readState: () => PersonalEnrollmentState;
   },
 ) {
-  // oxlint-disable-next-line solid/reactivity -- The form's operation owner is fixed for this mounted leaf.
-  const owner = props.owner;
+  const owner = props.staticOwner;
   const gateway = projectGateway(owner.gateway);
   const directory = profileDirectory(owner.gateway);
   const people = projectOwner(directory, (source) => source);
   const [expanded, setExpanded] = createSignal(false);
   const snapshot = () => gateway.read().snapshot;
   const state = () => props.readState();
-  const attached = () => !props.deviceId && state().personal && !state().expectedProfileId;
+  const attached = () => !props.initialDeviceId && state().personal && !state().expectedProfileId;
   const disconnected = () => snapshot().phase !== "connected";
   const selectedRole = () =>
     personalProfileChoices(people.read().result?.profiles).find(
@@ -195,7 +193,7 @@ function PersonalEnrollmentForm(
             <Show when={!state().profileId && state().canEnroll}>
               <Loading fallback={<p class="muted">{t("common.loading")}</p>}>
                 <PersonalRolePreview
-                  ceiling={props.deviceId ? undefined : snapshot().hello?.auth?.scopes}
+                  ceiling={props.initialDeviceId ? undefined : snapshot().hello?.auth?.scopes}
                 />
               </Loading>
             </Show>

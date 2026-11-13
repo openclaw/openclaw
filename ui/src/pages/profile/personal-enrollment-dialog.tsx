@@ -41,9 +41,9 @@ export function showPersonalEnrollment(options: {
           <DialogHeader title={options.name} onClose={() => modal.finish()} />
           <div class="oc-dialog__body">
             <PersonalEnrollment
-              gateway={options.gateway}
+              initialGateway={options.gateway}
               basePath={options.basePath}
-              deviceId={options.deviceId}
+              initialDeviceId={options.deviceId}
             />
           </div>
           <openclaw-modal-actions class="oc-dialog__footer">
