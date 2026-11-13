@@ -22,6 +22,7 @@ import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import type { SessionManager } from "../../agents/sessions/session-manager.js";
 import type { TranscriptPolicy } from "../../agents/transcript-policy.types.js";
+import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import type { ContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createDiagnosticTraceContextFromActiveScope } from "../../infra/diagnostic-trace-context.js";
@@ -31,6 +32,8 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import type { WorkerGatewayToolRuntime } from "./worker-gateway-tool-contract.js";
+import { pinWorkerTurnPrompt } from "./worker-turn-system-prompt.js";
+import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
 
 export const WORKER_CONTEXT_ENGINE_HOST = {
   id: "openclaw-worker",
@@ -249,15 +252,32 @@ export async function prepareWorkerTurnPrompt(params: {
     systemPromptRuntimeContextFragments: prompt.runtimeContextFragments,
     toolResultPromptProjectionState: createToolResultPromptProjectionState(),
   });
-  const history = context.hookMessagesForCurrentPrompt;
+  const renderedHistory = context.hookMessagesForCurrentPrompt;
   if (context.runtimeContextMessageForCurrentTurn) {
-    history.pop();
+    renderedHistory.pop();
   }
+  params.assertCurrent();
+  // Worker turns keep the session's pinned system prompt, like embedded turns.
+  const transcriptTarget = resolveWorkerTurnTranscriptTarget(turn);
+  const systemPromptPin = await pinWorkerTurnPrompt({
+    turn,
+    sessionId: turn.sessionId,
+    manager: params.manager,
+    model,
+    inHistorySystemUpdates: transcriptPolicy.inHistorySystemUpdates,
+    systemPrompt: systemPromptText,
+    history: renderedHistory,
+    write: (operation) =>
+      withSessionTranscriptWriteAssertion(transcriptTarget, params.assertCurrent, operation),
+  });
+  const history = systemPromptPin?.history ?? renderedHistory;
+  systemPromptText = systemPromptPin?.systemPrompt ?? systemPromptText;
   params.assertCurrent();
   return {
     contextEngineTurn,
     systemPromptText,
     systemPromptReport: prompt.systemPromptReport,
+    systemPromptPin,
     history,
     prompt: context.llmBoundaryPromptForPrecheck,
     runtimeContext: isRawModelRun ? undefined : context.runtimeContextFragments,
