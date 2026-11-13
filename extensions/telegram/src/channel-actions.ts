@@ -10,6 +10,10 @@ import type {
   ChannelMessageToolDiscovery,
   ChannelMessageToolSchemaContribution,
 } from "openclaw/plugin-sdk/channel-contract";
+import {
+  isMessagePresentationInteractiveBlock,
+  normalizeMessagePresentation,
+} from "openclaw/plugin-sdk/interactive-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { asNonArrayRecord, readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -72,7 +76,15 @@ async function prepareTelegramSendPayload({
     return null;
   }
   const quoteText = readStringParam(ctx.params, "quoteText", { trim: false });
-  if (!quoteText) {
+  // message(action=send) controls belong to the conversation's agent: a tap no
+  // plugin handler claims reaches the agent instead of expiring like a retired
+  // plugin control.
+  const hasControls = Boolean(
+    normalizeMessagePresentation(payload.presentation)?.blocks.some(
+      isMessagePresentationInteractiveBlock,
+    ),
+  );
+  if (!quoteText && !hasControls) {
     return payload;
   }
   const telegramData = asNonArrayRecord(payload.channelData?.telegram);
@@ -80,7 +92,11 @@ async function prepareTelegramSendPayload({
     ...payload,
     channelData: {
       ...payload.channelData,
-      telegram: { ...telegramData, quoteText },
+      telegram: {
+        ...telegramData,
+        ...(quoteText ? { quoteText } : {}),
+        ...(hasControls ? { typedCallbackOwner: "agent" } : {}),
+      },
     },
   };
 }
