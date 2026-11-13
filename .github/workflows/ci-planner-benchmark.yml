@@ -2,6 +2,24 @@ name: CI Planner Benchmark
 
 on:
   workflow_dispatch:
+    inputs:
+      workload_sha:
+        description: Exact canonical repository workload commit (40 lowercase hex characters)
+        type: string
+        required: true
+        default: "79f5aeb133830a1db60b55cff3cf7a617086aa07"
+      case:
+        description: Planner case to measure
+        type: choice
+        required: true
+        default: all
+        options: [all, main, cron, discord]
+      repetitions:
+        description: Serial repetitions per selected case
+        type: choice
+        required: true
+        default: "5"
+        options: ["1", "2", "3", "4", "5"]
   pull_request:
     types: [opened, reopened, synchronize]
     paths:
@@ -95,6 +113,24 @@ jobs:
         shell: bash
         working-directory: harness
     steps:
+      - name: Validate measurement selection
+        id: selection
+        working-directory: ${{ runner.temp }}
+        env:
+          WORKLOAD_SHA: ${{ inputs.workload_sha }}
+          BENCHMARK_CASE: ${{ inputs.case }}
+          REPETITIONS: ${{ inputs.repetitions }}
+          LC_ALL: C
+        run: |
+          set -euo pipefail
+          [[ "$WORKLOAD_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'Invalid workload SHA' >&2; exit 1; }
+          case "$BENCHMARK_CASE" in
+            all|main|cron|discord) ;;
+            *) echo 'Invalid planner case' >&2; exit 1 ;;
+          esac
+          [[ "$REPETITIONS" =~ ^[1-5]$ ]] || { echo 'Invalid repetition count' >&2; exit 1; }
+          printf 'workload_sha=%s\ncase=%s\nrepetitions=%s\n' "$WORKLOAD_SHA" "$BENCHMARK_CASE" "$REPETITIONS" >> "$GITHUB_OUTPUT"
+
       - name: Checkout measurement harness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -107,7 +143,8 @@ jobs:
       - name: Checkout frozen planner workload
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: 79f5aeb133830a1db60b55cff3cf7a617086aa07
+          repository: openclaw/openclaw
+          ref: ${{ steps.selection.outputs.workload_sha }}
           path: workload
           fetch-depth: 1
           persist-credentials: false
@@ -129,13 +166,26 @@ jobs:
       - name: Verify checkout and toolchain identities
         env:
           HARNESS_SHA: ${{ github.sha }}
+          WORKLOAD_SHA: ${{ steps.selection.outputs.workload_sha }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$HARNESS_SHA"
-          test "$(git -C ../workload rev-parse HEAD)" = 79f5aeb133830a1db60b55cff3cf7a617086aa07
+          test "$(git -C ../workload rev-parse HEAD)" = "$WORKLOAD_SHA"
           test "$(node --version)" = v24.22.1
           test "$(pnpm --version)" = 12.15.0
           /usr/bin/time --version
+
+      - name: Verify matching package-manager pins before installation
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          const harness = JSON.parse(readFileSync('package.json', 'utf8')).packageManager;
+          const workload = JSON.parse(readFileSync('../workload/package.json', 'utf8')).packageManager;
+          const pin = typeof harness === 'string' && harness.match(/^pnpm@12\.15\.0\+sha512\.[0-9a-f]{128}$/);
+          if (!pin || pin[0] !== harness || workload !== harness) {
+            throw new Error('Harness and workload must have identical integrity-pinned pnpm 12.15.0 packageManager values');
+          }
+          NODE
 
       - name: Install each checkout from its own frozen lockfile
         timeout-minutes: 15
@@ -159,13 +209,16 @@ jobs:
           pnpm check:workflows
           pnpm deadcode:unused-files
 
-      - name: Measure fifteen serial planner flows
+      - name: Measure selected serial planner flows
         timeout-minutes: 22
         env:
+          WORKLOAD_SHA: ${{ steps.selection.outputs.workload_sha }}
+          BENCHMARK_CASE: ${{ steps.selection.outputs.case }}
+          REPETITIONS: ${{ steps.selection.outputs.repetitions }}
           PLANNER_BENCHMARK_INSTALL_PROOF: separate pnpm install --frozen-lockfile completed for harness and workload in this job; caches off
         run: |
           set -euo pipefail
-          node scripts/bench-ci-planner.mts --workload ../workload --output "$RUNNER_TEMP/ci-planner-benchmark.json"
+          node scripts/bench-ci-planner.mts --workload ../workload --workload-sha "$WORKLOAD_SHA" --case "$BENCHMARK_CASE" --repetitions "$REPETITIONS" --output "$RUNNER_TEMP/ci-planner-benchmark.json"
 
       - name: Check report size and completeness
         id: report
