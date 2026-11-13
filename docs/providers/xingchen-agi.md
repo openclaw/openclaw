@@ -72,7 +72,7 @@ The plugin catalog seeds the Xing4.1-Preview model:
 
 | Model ref                    | Input | Context | Max output |
 | ---------------------------- | ----- | ------- | ---------- |
-| `xingchen-agi/xing4.1-preview` | text  | 192,000 | 192,000    |
+| `xingchen-agi/xing4.1-preview` | text  | 1,000,000 | 192,000    |
 
 The catalog is a seed, not a promise that every account can call every model at
 all times. List what the configured provider reports in your environment:
