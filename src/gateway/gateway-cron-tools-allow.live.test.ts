@@ -82,7 +82,12 @@ describeLive("cron tool allowlists through live harnesses", () => {
               },
               entries: { probe: { workspace } },
             },
-            tools: { exec: { host: "gateway", security: "full", ask: "off" } },
+            tools: {
+              // This probe checks direct tool receipts, not model-selected code-mode wrappers.
+              codeMode: false,
+              toolSearch: false,
+              exec: { host: "gateway", security: "full", ask: "off" },
+            },
             models: {
               mode: "merge",
               providers: {
