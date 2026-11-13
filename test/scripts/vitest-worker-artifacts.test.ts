@@ -349,7 +349,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
       const directory=${JSON.stringify(directory)}, mode=${JSON.stringify(mode)};
       const record=(name,value)=>fs.writeFileSync(path.join(directory,name),value);
       const write=fs.writeFileSync;
-      const gate=()=>new Promise(resolve=>{
+      const gate=ready=>new Promise(resolve=>{
         const poll=setInterval(()=>{
           if(fs.existsSync(path.join(directory,'release'))) {clearInterval(poll);resolve();}
         },5);
@@ -357,13 +357,13 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
           record('cancel-read',fs.readFileSync(path.join(directory,'input'),'utf8'));
           clearInterval(poll);process.exit(0);
         });
+        record(ready,String(process.pid)); // The parent may cancel as soon as this receipt exists.
       });
       let leafSpawned=false; // One descendant per compiler, across every build phase.
       export async function build(options) {
         const result=await compile(options);
         if(mode==='cancel while compiling') {
-          record('compiling',String(process.pid));
-          await gate();
+          await gate('compiling');
         } else if((mode==='terminated group' || mode==='uncertain output') && !leafSpawned) {
           leafSpawned=true;
           const leaf=spawn(process.execPath,['--input-type=module','--eval',\`
@@ -388,7 +388,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
       fs.writeFileSync=(filename,...args)=>{
         const result=write(filename,...args);
         if(path.basename(String(filename))==='manifest.json' && mode==='close before ready') {
-          record('compiled',String(process.pid));void gate();
+          void gate('compiled');
         }
         return result;
       };
