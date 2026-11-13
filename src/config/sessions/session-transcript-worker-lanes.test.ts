@@ -736,6 +736,7 @@ it.each([false, true])("retains reads dispatched after cleanup (capable=%s)", as
 });
 
 it("releases pressure subscriptions after native settlement and rearms reopened lanes", async () => {
+  using clock = vi.spyOn(performance, "now").mockReturnValue(0);
   const pressure = channel("openclaw.memory.critical");
   const request = input();
   observed.run.mockResolvedValue(absent);
@@ -747,6 +748,9 @@ it("releases pressure subscriptions after native settlement and rearms reopened 
   expect(observed.unregister).not.toHaveBeenCalled();
   const retirement = createDeferredCore();
   observed.rotate.mockReturnValueOnce(retirement.promise);
+  pressure.publish(undefined);
+  expect(historyLane.rotation).toBeUndefined();
+  clock.mockReturnValue(1_000);
   pressure.publish(undefined);
   const rotation = historyLane.rotation;
   assert(rotation);
@@ -770,6 +774,7 @@ it("releases pressure subscriptions after native settlement and rearms reopened 
   expect(pressure.hasSubscribers).toBe(true);
   const reopenedRetirement = createDeferredCore();
   observed.rotate.mockReturnValueOnce(reopenedRetirement.promise);
+  clock.mockReturnValue(2_000);
   pressure.publish(undefined);
   const reopenedRotation = historyLane.rotation;
   assert(reopenedRotation);
@@ -778,6 +783,7 @@ it("releases pressure subscriptions after native settlement and rearms reopened 
   await Promise.all([reopenedRotation, successor]);
   // The queued successor retains its newly opened native reader.
   expect(pressure.hasSubscribers).toBe(true);
+  clock.mockReturnValue(3_000);
   pressure.publish(undefined);
   await historyLane.rotation;
   expect(pressure.hasSubscribers).toBe(false);

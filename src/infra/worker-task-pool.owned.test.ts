@@ -271,6 +271,7 @@ it("guards process-wide reader cleanup before dispatching to registered pools", 
 });
 
 it("retires only idle slots on critical pressure, after result and resource custody settle", async () => {
+  using clock = vi.spyOn(performance, "now").mockReturnValue(0);
   const pool = createPool({ idleTimeoutMs: 30 * 60_000 });
   const pressure = diagnosticsChannel("openclaw.memory.critical");
   const { task, worker } = startTask(pool, "read");
@@ -285,6 +286,7 @@ it("retires only idle slots on critical pressure, after result and resource cust
   expect(worker.terminate).not.toHaveBeenCalled();
   acknowledgeCleanup(cleanupReceipt(worker));
   await cleanup;
+  clock.mockReturnValue(1_000);
   pressure.publish(undefined);
   await nextTurn();
   expect(worker.terminate).toHaveBeenCalledOnce();
@@ -292,6 +294,28 @@ it("retires only idle slots on critical pressure, after result and resource cust
   const { task: next, worker: replacement } = startTask(pool, "next");
   expect(replacement).not.toBe(worker);
   await finishTask(next, "next");
+});
+
+it("reuses recently active workers under repeated pressure and retires them after an idle gap", async () => {
+  using clock = vi.spyOn(performance, "now").mockReturnValue(0);
+  const pool = createPool({ idleTimeoutMs: 30 * 60_000 });
+  const pressure = diagnosticsChannel("openclaw.memory.critical");
+  const worker = await completedWorker(pool);
+  for (const time of [500, 1_000, 1_500]) {
+    clock.mockReturnValue(time);
+    pressure.publish(undefined);
+    await nextTurn();
+    expect(worker.terminate).not.toHaveBeenCalled();
+    const input = `read-${time}`;
+    const next = startTask(pool, input);
+    expect(next.worker).toBe(worker);
+    await finishTask(next.task, input);
+  }
+  expect(pool.getSnapshot().workersCreated).toBe(1);
+  clock.mockReturnValue(2_500);
+  pressure.publish(undefined);
+  await nextTurn();
+  expect(worker.terminate).toHaveBeenCalledOnce();
 });
 
 it("reaches a cooperative exchange when earlier shared pressure has not released capacity", async () => {

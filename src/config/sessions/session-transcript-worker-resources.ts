@@ -1,7 +1,7 @@
 import { addAbortListener } from "node:events";
 import path from "node:path";
 import type { Result } from "@openclaw/normalization-core/result";
-import { joinOwnedWorkerTasks } from "@openclaw/worker-runtime";
+import { isWorkerIdleForPressure, joinOwnedWorkerTasks } from "@openclaw/worker-runtime";
 import { racePromiseWithAbortSignal } from "../../../packages/retry/src/index.js";
 import { encodeAgentDatabaseReaderRequest } from "../../infra/agent-database-readers.js";
 import type { UsageCostWorkerDatabase } from "../../infra/session-cost-usage-worker.types.js";
@@ -149,7 +149,7 @@ export const refreshDatabaseWorkerPressureSubscription =
       databaseWorkerLanes.some(
         (lane) => lane.pending > 0 || lane.rotation !== undefined || lane.native,
       ),
-    retireIdleDatabaseWorkers,
+    () => retireIdleDatabaseWorkers(true),
   );
 
 registerOpenClawStateDatabaseAsyncResource({
@@ -168,9 +168,14 @@ registerOpenClawStateDatabaseAsyncResource({
   },
 });
 
-function retireIdleDatabaseWorkers(): void {
+function retireIdleDatabaseWorkers(pressure = false): void {
   for (const lane of databaseWorkerLanes) {
-    if (lane.pending > 0 || lane.rotation || !lane.native) {
+    if (
+      lane.pending > 0 ||
+      lane.rotation ||
+      !lane.native ||
+      (pressure && !isWorkerIdleForPressure(lane.idleSince))
+    ) {
       continue;
     }
     clearDatabaseWorkerIdleRetirement(lane);
@@ -220,6 +225,7 @@ export function rotateDatabaseWorkers(lane: SessionDatabaseWorkerLane): Promise<
 }
 
 export function clearDatabaseWorkerIdleRetirement(lane: SessionDatabaseWorkerLane): void {
+  lane.idleSince = undefined;
   lane.idleCleanupListener?.[Symbol.dispose]();
   lane.idleCleanupListener = undefined;
   historyClearTimeout(lane.idleTimer);
@@ -237,13 +243,14 @@ export function armDatabaseWorkerIdleRetirement(lane: SessionDatabaseWorkerLane)
   if (lane.idleTimer) {
     return;
   }
+  lane.idleSince = performance.now();
   const cleanupSignal = getGatewayShutdownCleanupSignal();
   // Accepted reads keep their lane until settlement; then shutdown needs no warm retention.
   if (cleanupSignal.aborted) {
     retireIdleDatabaseWorkers();
     return;
   }
-  lane.idleCleanupListener = addAbortListener(cleanupSignal, retireIdleDatabaseWorkers);
+  lane.idleCleanupListener = addAbortListener(cleanupSignal, () => retireIdleDatabaseWorkers());
   const idleMs = lane === historyLane || lane === transcriptSearchLane ? 5 * 60_000 : 90_000;
   lane.idleTimer = runInDetachedAsyncContext(() =>
     historySetTimeout(() => {

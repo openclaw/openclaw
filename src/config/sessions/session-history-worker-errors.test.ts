@@ -272,6 +272,7 @@ it.each(
 );
 
 it("retires idle history workers under critical pressure after active scopes release custody", async () => {
+  const clock = vi.spyOn(performance, "now").mockReturnValue(0);
   useAdmittedHistoryReader();
   const pressure = channel("openclaw.memory.critical");
   const request = input();
@@ -286,6 +287,10 @@ it("retires idle history workers under critical pressure after active scopes rel
     expect(observed.rotate).not.toHaveBeenCalled();
   });
 
+  pressure.publish(undefined);
+  expect(observed.rotate).not.toHaveBeenCalled();
+  await request.read();
+  clock.mockReturnValue(1_000);
   pressure.publish(undefined);
   expect(observed.rotate).toHaveBeenCalledTimes(1);
   expect(observed.unregister).not.toHaveBeenCalled();

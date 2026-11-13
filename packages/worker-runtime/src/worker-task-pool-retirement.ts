@@ -16,6 +16,11 @@ import type { Slot, WorkerTaskPoolOptions } from "./worker-task-pool.types.js";
 
 const WORKER_WARM_WINDOW_MS = 5 * 60_000;
 
+// A pressure sample between adjacent requests must not repeatedly reload a busy worker.
+export function isWorkerIdleForPressure(idleSince: number | undefined): boolean {
+  return idleSince !== undefined && performance.now() - idleSince >= 1_000;
+}
+
 /** Repeated idle notifications preserve the deadline; only admitted work clears it. */
 export function createWorkerIdleTimers(runInContext: <T>(operation: () => T) => T) {
   // Replies may arrive under another clock; retain the execution owner's clock.
@@ -83,6 +88,7 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
     return newest;
   }
   function clearIdle(slot: Slot<Input, Output>): void {
+    slot.idleSince = undefined;
     idleSlots?.delete(slot);
     idleTimers.clear(slot);
   }
@@ -369,6 +375,7 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
     if (idleMs <= 0) {
       return;
     }
+    slot.idleSince ??= now() - elapsedIdleMs;
     if (idleSlots && !idleSlots.has(slot)) {
       const previous = newestIdle();
       idleSlots.add(slot);
@@ -436,6 +443,7 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
           !slot.retiring &&
           !slot.retirementFailed &&
           slot.worker &&
+          isWorkerIdleForPressure(slot.idleSince) &&
           !resourceClosures.get(slot.worker)?.pending
         ) {
           void retire(slot, "memory_pressure").catch(() => undefined);

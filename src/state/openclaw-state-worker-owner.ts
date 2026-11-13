@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { isWorkerIdleForPressure } from "@openclaw/worker-runtime";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
@@ -57,6 +58,7 @@ function createSharedStateWorkerOwner() {
       entry.actor ? active.actor === entry.actor : active === entry,
     );
   const clearIdleRetirement = (entry: Entry) => {
+    entry.idleSince = undefined;
     clearTimeout(entry.idleTimer);
     entry.idleTimer = undefined;
   };
@@ -108,6 +110,7 @@ function createSharedStateWorkerOwner() {
     ) {
       return;
     }
+    entry.idleSince = performance.now();
     const timer: IdleTimer = runInDetachedAsyncContext(() =>
       setTimeout(() => {
         if (entry.idleTimer !== timer || entry.activeOperations !== 0 || !stores.has(entry)) {
@@ -232,6 +235,9 @@ function createSharedStateWorkerOwner() {
   });
   function retireIdleWorkers() {
     for (const entry of stores) {
+      if (!isWorkerIdleForPressure(entry.idleSince)) {
+        continue;
+      }
       void runInDetachedAsyncContext(() => retireIdle(entry))?.catch((error: unknown) => {
         log.warn("Idle shared-state worker retirement failed", {
           path: entry.context.admission.databasePath,
