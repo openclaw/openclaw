@@ -43,31 +43,34 @@ function catalogRef(tools: ReturnType<typeof localCatalog>): ToolSearchCatalogRe
 }
 
 describe("run-granted tools in the Tool Search directory", () => {
-  it("keeps the cached directory identical whether or not the turn holds the grant", () => {
-    const base = localCatalog().slice(0, 3);
-    const granted = [...base, createStubTool("skill_library")];
-    const grantedRef = catalogRef(granted);
-    const withoutGrant = buildToolSchemaDirectoryPrompt({ catalogRef: catalogRef(base) });
+  it.each(["suggest_task", "dismiss_task"])(
+    "keeps the cached directory identical whether or not the turn holds the %s grant",
+    (name) => {
+      const base = localCatalog().slice(0, 3);
+      const granted = [...base, createStubTool(name)];
+      const grantedRef = catalogRef(granted);
+      const withoutGrant = buildToolSchemaDirectoryPrompt({ catalogRef: catalogRef(base) });
 
-    expect(buildToolSchemaDirectoryPrompt({ catalogRef: grantedRef })).toBe(withoutGrant);
-    expect(buildRunGrantedToolDirectory(grantedRef)).toContain("- skill_library (core)");
-    expect(buildRunGrantedToolDirectory(catalogRef(base))).toBeUndefined();
-  });
+      expect(buildToolSchemaDirectoryPrompt({ catalogRef: grantedRef })).toBe(withoutGrant);
+      expect(buildRunGrantedToolDirectory(grantedRef)).toContain(`- ${name} (core)`);
+      expect(buildRunGrantedToolDirectory(catalogRef(base))).toBeUndefined();
+    },
+  );
 
   it("lists an exact id that resolves when another source shares the granted name", async () => {
-    const ref = catalogRef([createStubTool("skill_library")]);
+    const ref = catalogRef([createStubTool("suggest_task")]);
     addClientToolsToToolCatalog({
       enabled: true,
-      tools: [createStubTool("skill_library")],
+      tools: [createStubTool("suggest_task")],
       catalogRef: ref,
     });
     const listing = buildRunGrantedToolDirectory(ref) ?? "";
     const listed = /^- (\S+): /m.exec(listing)?.[1];
 
     expect(listed).toBeDefined();
-    expect(listed).not.toBe("skill_library");
+    expect(listed).not.toBe("suggest_task");
     const runtime = new ToolSearchRuntime({ catalogRef: ref }, resolveToolSearchConfig());
-    await expect(runtime.describe(listed!)).resolves.toMatchObject({ name: "skill_library" });
+    await expect(runtime.describe(listed!)).resolves.toMatchObject({ name: "suggest_task" });
   });
 });
 

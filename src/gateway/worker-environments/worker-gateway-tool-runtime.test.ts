@@ -169,7 +169,7 @@ it("prepares deferred discovery guidance with the model tool projection", async 
 
 it("carries the run-granted listing that the cached deferred directory omits", async () => {
   const { runtime } = fixture([], async () => ({
-    tools: [tool("web_fetch"), tool("skill_library")],
+    tools: [tool("web_fetch"), tool("suggest_task")],
     policy,
     presentation: createToolSurfacePresentationForTest({
       tools: { codeMode: false, toolSearch: { enabled: true, mode: "tools" } },
@@ -177,8 +177,8 @@ it("carries the run-granted listing that the cached deferred directory omits", a
   }));
   const projection = await runtime.getPromptProjection(identity);
   expect(projection.toolSchemaDirectoryPrompt).toContain("- web_fetch");
-  expect(projection.toolSchemaDirectoryPrompt).not.toContain("skill_library");
-  expect(projection.runGrantedToolDirectory).toContain("- skill_library (core)");
+  expect(projection.toolSchemaDirectoryPrompt).not.toContain("suggest_task");
+  expect(projection.runGrantedToolDirectory).toContain("- suggest_task (core)");
 });
 
 it("issues one finite surface and invokes only an issued Gateway handle with valid arguments", async () => {
