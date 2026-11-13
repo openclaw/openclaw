@@ -218,6 +218,10 @@ export async function updateMigrateCommand(
           config: source.config,
           env,
           stopped: true,
+          // Parity with the native update path: server recovery captures keep
+          // non-state PostgreSQL stores on the database instead of local exports.
+          postgresSchemaCaptures:
+            source.config.database?.postgres?.recoveryCaptures === "server",
         }),
       );
       lock.assertCurrent();
