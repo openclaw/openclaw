@@ -1,4 +1,5 @@
 import Foundation
+import Network
 import OpenClawKit
 import os
 import Security
@@ -903,6 +904,72 @@ private func withLastGatewaySnapshot(_ body: () -> Void) async {
             #expect(remaining.contains(where: {
                 GatewayStableIdentifier.matches($0.stableID, decomposedOwner)
             }))
+        }
+    }
+
+    @Test @MainActor func `saved Bonjour identity still addresses profile credentials and TLS pin`() async {
+        await withLastGatewaySnapshot {
+            let fixtureID = UUID().uuidString
+            let instanceID = "bonjour-compatibility-\(fixtureID)"
+            let savedID = "_openclaw-gw._tcp|local.|Bobby\u{00E2}\u{0080}\u{0099}s Mac \(fixtureID)"
+            let fingerprint = String(repeating: "a", count: 64)
+            defer {
+                GatewaySettingsStore.deleteAllGatewayCredentials(instanceId: instanceID)
+                GatewayTLSStore.clearFingerprint(stableID: savedID)
+            }
+
+            // Serialized by the shipped scalar-per-escape decoder, not by the decoder under test.
+            let savedRegistry = #"""
+            {
+              "version": 1,
+              "activeStableID": "_openclaw-gw._tcp|local.|Bobby\u00e2\u0080\u0099s Mac \#(fixtureID)",
+              "entries": [{
+                "stableID": "_openclaw-gw._tcp|local.|Bobby\u00e2\u0080\u0099s Mac \#(fixtureID)",
+                "kind": "discovered",
+                "name": "Bobby\u00e2\u0080\u0099s Mac \#(fixtureID)",
+                "useTLS": true
+              }]
+            }
+            """#
+            #expect(GenericPasswordKeychainStore.saveString(
+                savedRegistry, service: gatewayService, account: "gateway-registry"))
+            #expect(GatewaySettingsStore.saveGatewayCredentials(
+                token: "saved-bonjour-token",
+                bootstrapToken: nil,
+                password: nil,
+                gatewayStableID: savedID,
+                suppressStoredDeviceAuth: false,
+                instanceId: instanceID))
+            #expect(GatewayTLSStore.replaceFingerprint(fingerprint, stableID: savedID))
+
+            let rawName = "Bobby\\226\\128\\153s Mac \(fixtureID)"
+            let endpoint = NWEndpoint.service(
+                name: rawName, type: "_openclaw-gw._tcp", domain: "local.", interface: nil)
+            let discoveredID = GatewayEndpointID.stableID(endpoint)
+            let displayName = BonjourEscapes.decode(rawName)
+            let registry = GatewaySettingsStore.loadGatewayRegistry()
+            #expect(Array(discoveredID.utf8) == Array(savedID.utf8))
+            #expect(GatewayStableIdentifier.matches(registry.activeEntry?.stableID, discoveredID))
+            #expect(registry.connectedStableIDs.contains { GatewayStableIdentifier.matches($0, discoveredID) })
+            #expect(displayName == "Bobby’s Mac \(fixtureID)")
+
+            // Discovery can refresh the label without creating a second saved profile or losing its state.
+            #expect(GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
+                stableID: discoveredID,
+                kind: .discovered,
+                name: displayName,
+                host: nil,
+                port: nil,
+                useTLS: true,
+                lastConnectedAtMs: nil)))
+            #expect(GatewaySettingsStore.setActiveGateway(stableID: discoveredID))
+            let reloaded = GatewaySettingsStore.loadGatewayRegistry()
+            #expect(reloaded.entries.count == 1)
+            #expect(reloaded.activeEntry.map { Array($0.stableID.utf8) } == Array(savedID.utf8))
+            #expect(reloaded.activeEntry?.name == displayName)
+            #expect(GatewaySettingsStore.loadGatewayCredentials(
+                instanceId: instanceID, gatewayStableID: discoveredID).token == "saved-bonjour-token")
+            #expect(GatewayTLSStore.loadFingerprint(stableID: discoveredID) == fingerprint)
         }
     }
 
