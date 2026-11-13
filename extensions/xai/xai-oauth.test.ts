@@ -172,8 +172,8 @@ describe("xAI OAuth", () => {
     vi.restoreAllMocks();
   });
 
-  it("retries only verified Cloudflare challenge headers without reading the challenge body", async () => {
-    const cancelled = vi.fn();
+  it("retries only verified Cloudflare challenge headers without reading the challenge body or waiting for a capture tee", async () => {
+    const cancelled = vi.fn(() => new Promise<void>(() => {}));
     const challenge = () =>
       new Response(
         new ReadableStream<Uint8Array>({

@@ -216,7 +216,7 @@ async function requestXaiOAuthRefresh(
     // HTML alone is not nonconsumption evidence, and must never replay a rotating grant.
     if (response.status === 403 && response.headers.get("cf-mitigated") === "challenge") {
       try {
-        await response.body?.cancel();
+        void response.body?.cancel().catch(() => undefined);
       } finally {
         await result.release();
       }
