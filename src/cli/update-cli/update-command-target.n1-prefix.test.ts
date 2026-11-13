@@ -2,6 +2,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { resolveBunRuntimeInfo, resolveNodeRuntimeInfo } from "../../daemon/runtime-paths.js";
 import { pkgQueryResult } from "../../infra/update-freebsd-pkg-ownership.test-support.js";
+import { defaultRuntime } from "../../runtime.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { activationFixture, runtimeFixture } from "./update-command-fixtures.test-support.js";
 import { preparePackageUpdateRuntime } from "./update-command-node-runtime.js";
@@ -131,6 +132,7 @@ async function resolve(servicePlan: {
 it.each(["writable rebind", "protected redirect", "unowned project"] as const)(
   "selects the package root for a %s",
   async (kind) => {
+    const warning = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
     const selected = await resolve({
       rootRedirect: kind === "protected redirect" ? { root: rootA, previousRoot: rootB } : null,
       ...(kind === "writable rebind" ? { serviceRoot: rootA } : {}),
@@ -138,6 +140,9 @@ it.each(["writable rebind", "protected redirect", "unowned project"] as const)(
     expect(selected.packageInstallTarget?.packageRoot).toBe(
       kind === "writable rebind" ? rootB : rootA,
     );
+    if (kind === "protected redirect") {
+      expect(warning).toHaveBeenCalledWith(expect.stringContaining("will remain unchanged"));
+    }
     if (kind === "writable rebind") {
       expect(selected.packageInstallTarget?.directNodeModulesRoot).toBe(true);
       expect(selected.packageUpdateNodeRunner).toBe(

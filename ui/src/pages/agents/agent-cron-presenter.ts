@@ -21,6 +21,7 @@ export function createAgentCronPresenter(deps: {
   publish: () => void;
 }) {
   let retirement = Promise.withResolvers<void>();
+  let status: AgentCronRead | null = null;
   let summary: AgentCronRead | null = null;
   let jobs: AgentCronRead | null = null;
   let refresh: AgentCronRead | null = null;
@@ -72,13 +73,8 @@ export function createAgentCronPresenter(deps: {
     ) {
       return;
     }
-    summary = read(async (current) => {
-      const [error] = await Promise.all([
-        loadCronStatus(current),
-        loadCronScopeStats(current, { refresh: force }),
-      ]);
-      return error;
-    });
+    status = read(loadCronStatus);
+    summary = read((current) => loadCronScopeStats(current, { refresh: force }));
     if (scope.cronJobsLoadingMore) {
       // The admitted append also awaits the queued page-zero recovery.
       void runTask(scope, (current) => loadCronJobsPage(current, { tableFilters: true }));
@@ -87,7 +83,11 @@ export function createAgentCronPresenter(deps: {
     }
     refresh = {
       scope,
-      completion: Promise.allSettled([summary.completion, jobs?.completion]).then((results) => {
+      completion: Promise.allSettled([
+        status.completion,
+        summary.completion,
+        jobs?.completion,
+      ]).then((results) => {
         for (const result of results) {
           if (result.status === "rejected") {
             throw result.reason;
@@ -134,7 +134,7 @@ export function createAgentCronPresenter(deps: {
     ) {
       return undefined;
     }
-    command = summary = null;
+    command = status = summary = null;
     const admitted = read((current) => runCronJob(current, jobId, "force"));
     const receipt = {
       ...admitted,
@@ -160,6 +160,7 @@ export function createAgentCronPresenter(deps: {
     read(this: void) {
       const scope = deps.readState();
       return {
+        status: status?.scope === scope ? status : null,
         summary: summary?.scope === scope ? summary : null,
         jobs: jobs?.scope === scope ? jobs : null,
         refresh: refresh?.scope === scope ? refresh : null,
@@ -169,7 +170,7 @@ export function createAgentCronPresenter(deps: {
     retire() {
       retirement.resolve();
       retirement = Promise.withResolvers<void>();
-      summary = jobs = refresh = command = null;
+      status = summary = jobs = refresh = command = null;
     },
   };
 }

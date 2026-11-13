@@ -301,7 +301,7 @@ function Ask(props: { model: LogbookModel; actions: LogbookActions }) {
         }}
       >
         <input
-          class="logbook-ask__input"
+          class="input logbook-ask__input"
           type="text"
           value={question()}
           placeholder={t("logbook.ask.placeholder")}

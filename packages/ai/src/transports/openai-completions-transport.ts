@@ -6,7 +6,7 @@ import type {
   SimpleStreamOptions,
   StreamFn,
 } from "@openclaw/llm-core";
-import OpenAI from "openai";
+import type OpenAI from "openai";
 import type { ChatCompletion, ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
@@ -19,7 +19,6 @@ import { resolveProviderContext } from "../provider-types.js";
 import { resolveCacheRetention } from "../providers/cache-retention.js";
 import { buildCopilotDynamicHeaders } from "../providers/github-copilot-headers.js";
 import { finalizeOpenAICompletionsToolCalls } from "../providers/openai-completions-tool-calls.js";
-import { createOpenAIProviderClient } from "../providers/openai-provider-client.js";
 import { mapOpenAIStopReason } from "../providers/openai-stop-reason.js";
 import { toOpenAIResponsesToolChoice } from "../providers/openai-tool-projection.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
@@ -275,6 +274,8 @@ export function streamOpenAICompletionsRequest(
     let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
     try {
       const requestContext = await resolveProviderContext(context, options);
+      const { default: OpenAI } = await import("openai");
+      const { createOpenAIProviderClient } = await import("../providers/openai-provider-client.js");
       const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
       const cacheRetention = resolveCacheRetention(options?.cacheRetention);
       const policy =

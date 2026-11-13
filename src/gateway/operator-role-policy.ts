@@ -23,7 +23,7 @@ import { SessionMutationAuthorizationChangedError } from "./session-mutation-aut
 const operatorRoleLog = createSubsystemLogger("gateway/operator-roles");
 const reportedUnknownAssignments = new Set<string>();
 type OperatorRolePolicyChange =
-  | { kind: "assignment"; profileId: string }
+  | { kind: "assignment"; profileId: string; roleOnly: boolean }
   | { kind: "config"; context: object };
 const policyListeners = new Set<(change: OperatorRolePolicyChange) => void>();
 const configRevisions = new WeakMap<object, object>();
@@ -43,8 +43,14 @@ type GatewaySessionAgentAuthorization = {
   | { actor?: never; profileId?: never; client: GatewayClient | null | undefined }
 );
 
-/** Publishes a committed assignment change to retained authorization consumers. */
-export function invalidateOperatorRolePolicy(profileId: string): void {
+/**
+ * Publishes a committed assignment change to retained authorization consumers. `roleOnly`
+ * marks a change to the profile's named role alone, with the person behind it unchanged.
+ */
+export function invalidateOperatorRolePolicy(
+  profileId: string,
+  opts?: { roleOnly?: boolean },
+): void {
   assignmentRevision += 1;
   bumpGatewayAccessRevision();
   for (const reported of reportedUnknownAssignments) {
@@ -52,7 +58,11 @@ export function invalidateOperatorRolePolicy(profileId: string): void {
       reportedUnknownAssignments.delete(reported);
     }
   }
-  notifyListeners([...policyListeners], { kind: "assignment", profileId });
+  notifyListeners([...policyListeners], {
+    kind: "assignment",
+    profileId,
+    roleOnly: opts?.roleOnly === true,
+  });
 }
 
 export function onOperatorRolePolicyChanged(
@@ -217,6 +227,14 @@ export function resolveOperatorRolePolicy(
     }
     if (authority.profileId !== actor.profileId) {
       throw new Error("Gateway requester profile changed");
+    }
+    // A linked owner device's run keeps the owner's authority under its person's profile.
+    if (authority.openclawIdPrincipal?.kind === "owner") {
+      if (!isOpenClawIdTunnelPrincipalCurrent(authority.openclawIdPrincipal)) {
+        throw new Error("OpenClaw ID membership authority changed");
+      }
+      authority.assertCurrent();
+      return undefined;
     }
     if (roleFacts?.policy) {
       return roleFacts.policy;

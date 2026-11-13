@@ -193,6 +193,21 @@ async function stage(
   if (migrationRequired || !verification) {
     refuse("observed unmigrated private source; required migrate phase before staging");
   }
+  // Fresh and resumed staging share one admission tail; copy equality alone is not admission.
+  const admit = async () => {
+    assertCurrent();
+    await descriptor.admit?.(
+      task.targetPath,
+      task.to === "postgres"
+        ? (getScopedDatabaseEngineSelection()?.postgres ??
+            (await resolveDatabaseEngineInput(task.config)))
+        : undefined,
+    );
+    if (task.to === "sqlite") {
+      using image = openNodeSqliteDatabase(task.targetPath, { readOnly: true });
+      compare((await inspectSqliteImage(image, descriptor)).verification!, verification);
+    }
+  };
   if (task.sourceVerification) {
     compare(
       verification,
@@ -220,15 +235,22 @@ async function stage(
       refuse("observed occupied target file; required absent private staging path");
     }
     const { targetPath: sourcePath, to: engine } = task;
-    try {
-      await verify({ ...task, operation: "verify", sourcePath, engine, verification }, descriptor);
+    const verified = await verify(
+      { ...task, operation: "verify", sourcePath, engine, verification },
+      descriptor,
+    ).then(
+      () => true,
+      () => false,
+    );
+    if (verified) {
+      // Outside the rebuild path: an admission refusal keeps the verified target.
+      await admit();
       return { verification };
-    } catch {
-      // Only unverified private staging is rebuilt; occupied namespaces are checked below.
-      for (const suffix of ["", "-wal", "-shm", "-journal"]) {
-        assertCurrent();
-        await fs.rm(task.targetPath + suffix, { force: true });
-      }
+    }
+    // Only unverified private staging is rebuilt; occupied namespaces are checked below.
+    for (const suffix of ["", "-wal", "-shm", "-journal"]) {
+      assertCurrent();
+      await fs.rm(task.targetPath + suffix, { force: true });
     }
   }
   if (task.to === "postgres") {
@@ -294,18 +316,7 @@ async function stage(
       },
     });
   }
-  assertCurrent();
-  await descriptor.admit?.(
-    task.targetPath,
-    task.to === "postgres"
-      ? (getScopedDatabaseEngineSelection()?.postgres ??
-          (await resolveDatabaseEngineInput(task.config)))
-      : undefined,
-  );
-  if (task.to === "sqlite") {
-    using image = openNodeSqliteDatabase(task.targetPath, { readOnly: true });
-    compare((await inspectSqliteImage(image, descriptor)).verification!, verification);
-  }
+  await admit();
   return { verification, plannerStatistics };
 }
 async function verify(

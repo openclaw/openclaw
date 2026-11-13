@@ -180,7 +180,8 @@ it("groups Anthropic refs pinned to Claude CLI under Claude CLI", async () => {
     selectedModelValue: "anthropic/claude-opus-4-8",
     triggerModelLabel: "claude-opus-4-8",
     providerAuth: new Map<string, ModelProviderAuthLabel>([
-      ["anthropic", { kind: "subscription", label: "Claude Max" }],
+      ["claude-cli", { kind: "subscription", label: "Claude Max" }],
+      ["anthropic", { kind: "api", label: "API" }],
     ]),
   });
   await waitForMenu(container);
@@ -197,7 +198,7 @@ it("groups Anthropic refs pinned to Claude CLI under Claude CLI", async () => {
     provider("claude-cli/claude-haiku-5-5"),
     provider("anthropic/claude-sonnet-5-5"),
   ]).toEqual(["claude-cli", "claude-cli", "anthropic"]);
-  // Claude CLI signs in through the Anthropic account, so its group carries that auth label.
+  // Runtime grouping preserves the native account rather than borrowing the API sibling.
   expect(
     container.querySelector(
       '[data-chat-model-provider-group="claude-cli"] .chat-controls__auth-meta-label',

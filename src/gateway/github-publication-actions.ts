@@ -131,7 +131,6 @@ export async function performSessionGitHubAction(options: Options): Promise<void
       throw new Error("GitHub pull request actions require full operator write permission.");
     }
   };
-  assertRequester();
   const explicit = explicitPullRequestUrl
     ? await inspectOwnGitHubPullRequest({
         pullRequestUrl: explicitPullRequestUrl,
@@ -168,7 +167,6 @@ export async function performSessionGitHubAction(options: Options): Promise<void
   if (receipt?.result.status === "failed") {
     receipt = await service.latestPublishedShared(session, readCurrent);
   }
-  assertRequester();
   const publication = receipt?.result.status === "published" ? receipt.result : undefined;
   if (!explicit && !binding && !publication) {
     throw new Error(
@@ -200,7 +198,6 @@ export async function performSessionGitHubAction(options: Options): Promise<void
       ? { url: binding.url, repository: binding.base.repository, branch: binding.head.branch }
       : publication!);
   const identity = await prepareCurrentGitHubPublicationIdentity(session.agentId);
-  assertRequester();
   if (publication) {
     assertExpectedSharedGitHubPublisher(publication.publisher, {
       source: identity.source,
@@ -245,7 +242,6 @@ export async function performSessionGitHubAction(options: Options): Promise<void
   }
   const endpoint = `repos/${pullRequest.repository}/pulls/${number}`;
   const read = async () => {
-    assertCurrent();
     if (explicitPullRequestUrl) {
       inspection = await inspectOwnGitHubPullRequest({
         pullRequestUrl: explicitPullRequestUrl,
@@ -253,7 +249,6 @@ export async function performSessionGitHubAction(options: Options): Promise<void
         requester: admitted.requester,
         assertCurrent: assertIdentity,
       });
-      assertCurrent();
       return pullRequestState(
         inspection.details,
         pullRequest,
@@ -273,7 +268,6 @@ export async function performSessionGitHubAction(options: Options): Promise<void
       env: identity.env,
       beforeRun: assertCurrent,
     });
-    assertCurrent();
     if (result.code !== 0) {
       throw new Error(
         "GitHub PR state is unavailable; check the publisher's repository access and retry inspect.",
@@ -337,10 +331,8 @@ export async function performSessionGitHubAction(options: Options): Promise<void
         assertCurrent,
         requirePublicRepositories: inspection.requirePublicRepositories,
       });
-      assertCurrent();
       return pullRequestState(current, pullRequest, binding, inspection.result.author.accountId);
     }
-    assertCurrent();
     return null;
   };
   if (evidenceUpload) {
@@ -449,7 +441,6 @@ export async function performSessionGitHubAction(options: Options): Promise<void
           excludeAccountId: identity.account.accountId,
         })
       : undefined;
-  assertCurrent();
   if (binding && attribution) {
     const current = await read();
     assertHead(current);

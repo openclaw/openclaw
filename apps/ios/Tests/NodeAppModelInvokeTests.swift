@@ -345,8 +345,7 @@ private func makeAgentDeepLinkURL(
     message: String,
     deliver: Bool = false,
     to: String? = nil,
-    channel: String? = nil,
-    key: String? = nil) -> URL
+    channel: String? = nil) -> URL
 {
     var components = URLComponents()
     components.scheme = "openclaw"
@@ -360,9 +359,6 @@ private func makeAgentDeepLinkURL(
     }
     if let channel {
         queryItems.append(URLQueryItem(name: "channel", value: channel))
-    }
-    if let key {
-        queryItems.append(URLQueryItem(name: "key", value: key))
     }
     components.queryItems = queryItems
     return components.url!
@@ -1451,7 +1447,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 
         let appModel = NodeAppModel()
         appModel.isBackgrounded = true
-        appModel.gatewayConnected = true
+        appModel.apply(.connected(GatewaySessionInfo()), to: .node, route: nil)
         let delegate = OpenClawAppDelegate()
         delegate.appModel = appModel
 
@@ -3871,18 +3867,70 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         await waitForTalkCondition { talkMode.gatewayTalkPermissionState == .requestingUpgrade }
 
         #expect(appModel._test_forceTalkPermissionUpgradeRequest())
-        appModel.gatewayAutoReconnectEnabled = false
-        appModel.gatewayPairingPaused = true
+        let pairingProblem = GatewayConnectionProblem(
+            kind: .pairingScopeUpgradeRequired,
+            owner: .gateway,
+            title: "Additional permissions required",
+            message: "Approve the requested permissions on the gateway.",
+            requestId: "req-talk",
+            retryable: false,
+            pauseReconnect: true)
+        appModel.applyOperatorGatewayConnectionProblem(pairingProblem, route: nil)
         appModel.setTalkEnabled(false)
         #expect(!appModel._test_forceTalkPermissionUpgradeRequest())
-        #expect(appModel.gatewayAutoReconnectEnabled)
-        #expect(!appModel.gatewayPairingPaused)
+        #expect(appModel.canAutoReconnect)
 
-        appModel.gatewayAutoReconnectEnabled = false
-        appModel.gatewayPairingPaused = true
+        appModel.applyOperatorGatewayConnectionProblem(pairingProblem, route: nil)
         appModel.setTalkEnabled(false)
-        #expect(!appModel.gatewayAutoReconnectEnabled)
-        #expect(appModel.gatewayPairingPaused)
+        #expect(!appModel.canAutoReconnect)
+    }
+
+    @Test @MainActor func `Talk approval polling resumes pairing pauses but not rate limits`() async throws {
+        let (talkMode, appModel) = makeTalkModel()
+        try appModel.applyGatewayConnectConfig(GatewayConnectConfig(
+            url: #require(URL(string: "ws://127.0.0.1:1")),
+            stableID: "manual|talk-poll|1",
+            tls: nil,
+            token: nil,
+            bootstrapToken: nil,
+            password: nil,
+            nodeOptions: GatewayConnectOptions(
+                role: "node",
+                scopes: [],
+                caps: [],
+                commands: [],
+                permissions: [:],
+                clientId: "openclaw-ios",
+                clientMode: "node",
+                clientDisplayName: nil)))
+        talkMode.gatewayTalkPermissionState = .missingScope("operator.talk.secrets")
+        defer {
+            appModel.setTalkEnabled(false)
+            appModel.disconnectGateway()
+        }
+        appModel.setTalkEnabled(true)
+        await waitForTalkCondition { talkMode.gatewayTalkPermissionState == .requestingUpgrade }
+
+        let rateLimit = try #require(GatewayConnectionProblemMapper.map(error: GatewayConnectAuthError(
+            message: "too many failed authentication attempts",
+            detailCode: "AUTH_RATE_LIMITED",
+            canRetryWithDeviceToken: false)))
+        appModel.applyOperatorGatewayConnectionProblem(rateLimit, route: nil)
+        await appModel._test_pollTalkPermissionUpgradeNow()
+        #expect(!appModel.canAutoReconnect)
+
+        let pairing = GatewayConnectionProblem(
+            kind: .pairingScopeUpgradeRequired,
+            owner: .gateway,
+            title: "Additional permissions required",
+            message: "Approve the requested permissions on the gateway.",
+            requestId: "req-talk-poll",
+            retryable: false,
+            pauseReconnect: true)
+        appModel.resumeAfterUserAction()
+        appModel.applyOperatorGatewayConnectionProblem(pairing, route: nil)
+        await appModel._test_pollTalkPermissionUpgradeNow()
+        #expect(appModel.canAutoReconnect)
     }
 
     @Test @MainActor func `stale PTT recognition callback cannot mutate a newer capture`() async throws {
@@ -4603,7 +4651,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         talkMode.updateGatewayConnected(true)
         talkMode.isEnabled = true
         talkMode._test_setContinuousTranscriptProcessingActive(true)
-        appModel.gatewayConnected = true
+        appModel.apply(.connected(GatewaySessionInfo()), to: .node, route: nil)
         defer {
             talkMode.stop()
             appModel.setScenePhase(.active)
@@ -4627,7 +4675,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(appModel.backgroundReconnectSuppressed)
         await waitForTalkCondition { !talkMode.isGatewayConnected }
         #expect(!appModel.gatewayConnected)
-        #expect(appModel.gatewayStatusText == "Background idle")
+        #expect(appModel.connection.node == .idle)
     }
 
     @Test @MainActor func `late finalizer release cannot restart Voice Wake in background`() async throws {
@@ -4722,7 +4770,6 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 
         #expect(appModel.isBackgrounded)
         #expect(!appModel.backgroundReconnectSuppressed)
-        #expect(appModel.gatewayStatusText != "Background idle")
     }
 
     @Test @MainActor func `retired foreground health probe cannot reconnect after rebackgrounding`() async throws {
@@ -4735,9 +4782,8 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             appModel.setScenePhase(.active)
         }
         appModel.activeGatewayConnectConfig = config
-        appModel.gatewayConnected = true
-        appModel.gatewayStatusText = "Connected"
-        appModel.setOperatorConnected(true)
+        appModel.apply(.connected(GatewaySessionInfo()), to: .node, route: nil)
+        appModel.apply(.connected(GatewaySessionInfo()), to: .operator, route: nil)
 
         appModel.setScenePhase(.background)
         try await Task.sleep(for: .milliseconds(3100))
@@ -4751,7 +4797,6 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(appModel.isBackgrounded)
         #expect(appModel.gatewayConnected)
         #expect(appModel.isOperatorGatewayConnected)
-        #expect(appModel.gatewayStatusText == "Connected")
         #expect(!appModel._test_hasGatewayLoopTasks().node)
         #expect(!appModel._test_hasGatewayLoopTasks().operator)
     }
@@ -6022,10 +6067,9 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let (watchService, appModel) = makeWatchModel()
         let gatewayStableID = " gateway-watch-snapshot "
-        appModel.gatewayConnected = true
-        appModel.setOperatorConnected(true)
+        appModel.apply(.connected(GatewaySessionInfo()), to: .node, route: nil)
+        appModel.apply(.connected(GatewaySessionInfo()), to: .operator, route: nil)
         configureMockApprovalRoute(appModel, stableID: gatewayStableID)
-        appModel.gatewayStatusText = "Connected"
         appModel.talkMode.setEnabled(true)
         appModel.talkMode.statusText = "Listening"
 
@@ -6056,15 +6100,17 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 
     @Test @MainActor func `watch gateway problem keeps localization semantics`() async throws {
         let (watchService, appModel) = makeWatchModel()
-        appModel.applyOperatorGatewayConnectionProblem(GatewayConnectionProblem(
-            kind: .pairingRequired,
-            owner: .gateway,
-            title: "Pairing approval required",
-            message: "Approve this device.",
-            titlePresentation: .localized("Pairing approval required"),
-            requestId: "request-42",
-            retryable: false,
-            pauseReconnect: true))
+        appModel.applyOperatorGatewayConnectionProblem(
+            GatewayConnectionProblem(
+                kind: .pairingRequired,
+                owner: .gateway,
+                title: "Pairing approval required",
+                message: "Approve this device.",
+                titlePresentation: .localized("Pairing approval required"),
+                requestId: "request-42",
+                retryable: false,
+                pauseReconnect: true),
+            route: nil)
 
         watchService.emitAppSnapshotRequest(
             WatchAppSnapshotRequestEvent(
@@ -6087,9 +6133,8 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 
     @Test @MainActor func `watch app snapshot publishes offline when operator disconnects`() async {
         let (watchService, appModel) = makeWatchModel()
-        appModel.gatewayConnected = true
-        appModel.setOperatorConnected(true)
-        appModel.gatewayStatusText = "Connected"
+        appModel.apply(.connected(GatewaySessionInfo()), to: .node, route: nil)
+        appModel.apply(.connected(GatewaySessionInfo()), to: .operator, route: nil)
 
         watchService.emitAppSnapshotRequest(
             WatchAppSnapshotRequestEvent(
@@ -6118,7 +6163,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 
     @Test @MainActor func `watch app snapshot preserves gateway connection progress`() async throws {
         let (watchService, appModel) = makeWatchModel()
-        appModel.setGatewayConnectionProgress(reconnecting: false)
+        appModel.setGatewayConnectionProgress(.connecting)
 
         watchService.emitAppSnapshotRequest(
             WatchAppSnapshotRequestEvent(
@@ -6205,8 +6250,8 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 
     @Test @MainActor func `watch app snapshot publishes online when operator reconnects`() async {
         let (watchService, appModel) = makeWatchModel()
-        appModel.gatewayConnected = true
-        appModel.gatewayStatusText = "Connected"
+        appModel.apply(.connected(GatewaySessionInfo()), to: .node, route: nil)
+        appModel.apply(.attemptStarted, to: .operator, route: nil)
 
         watchService.emitAppSnapshotRequest(
             WatchAppSnapshotRequestEvent(
@@ -6220,8 +6265,10 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
         #expect(watchService.lastSentAppSnapshot?.gatewayConnected == false)
+        // The node is up, so the attempting operator is what the Watch waits on.
+        #expect(watchService.lastSentAppSnapshot?.gatewayStatus.code == .gatewayConnecting)
 
-        appModel.setOperatorConnected(true)
+        appModel.apply(.connected(GatewaySessionInfo()), to: .operator, route: nil)
         for _ in 0..<20 {
             if watchService.lastSentAppSnapshot?.gatewayConnected == true {
                 break
@@ -9423,7 +9470,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 
     @Test @MainActor func `handle deep link requires confirmation when connected and unkeyed`() async {
         let appModel = NodeAppModel()
-        appModel.gatewayConnected = true
+        appModel.apply(.connected(GatewaySessionInfo()), to: .node, route: nil)
         appModel.testAgentRequestHandler = { _ in }
         let url = makeAgentDeepLinkURL(message: "hello from deep link")
 
@@ -9439,7 +9486,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 
     @Test @MainActor func `handle deep link coalesces prompt when rate limited`() async throws {
         let appModel = NodeAppModel()
-        appModel.gatewayConnected = true
+        appModel.apply(.connected(GatewaySessionInfo()), to: .node, route: nil)
 
         await appModel.handleDeepLink(url: makeAgentDeepLinkURL(message: "first prompt"))
         let firstPrompt = try #require(appModel.pendingAgentDeepLinkPrompt)
@@ -9451,9 +9498,9 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(coalescedPrompt.messagePreview.contains("second prompt"))
     }
 
-    @Test @MainActor func `handle deep link strips delivery fields when unkeyed`() async throws {
+    @Test @MainActor func `handle deep link strips delivery fields before confirmation`() async throws {
         let appModel = NodeAppModel()
-        appModel.gatewayConnected = true
+        appModel.apply(.connected(GatewaySessionInfo()), to: .node, route: nil)
         let url = makeAgentDeepLinkURL(
             message: "route this",
             deliver: true,
@@ -9467,9 +9514,9 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(prompt.request.channel == nil)
     }
 
-    @Test @MainActor func `handle deep link rejects long unkeyed message when connected`() async {
+    @Test @MainActor func `handle deep link rejects long message when connected`() async {
         let appModel = NodeAppModel()
-        appModel.gatewayConnected = true
+        appModel.apply(.connected(GatewaySessionInfo()), to: .node, route: nil)
         let message = String(repeating: "x", count: 241)
         let url = makeAgentDeepLinkURL(message: message)
 
@@ -9478,17 +9525,37 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(ShareGatewayRelaySettings.loadLastEvent()?.contains("Rejected") == true)
     }
 
-    @Test @MainActor func `handle deep link bypasses prompt with valid key`() async {
+    @Test @MainActor func `handle deep link with retired stored key still requires confirmation`() async throws {
+        let retiredKeyName = "deeplink.agent.key"
+        UserDefaults.standard.set("retired-demo-key", forKey: retiredKeyName)
+        defer { UserDefaults.standard.removeObject(forKey: retiredKeyName) }
         let appModel = NodeAppModel()
-        appModel.gatewayConnected = true
-        appModel.testAgentRequestHandler = { _ in }
-        let key = NodeAppModel.expectedDeepLinkKey()
-        let url = makeAgentDeepLinkURL(message: "trusted request", key: key)
+        appModel.apply(.connected(GatewaySessionInfo()), to: .node, route: nil)
+        var sent: [AgentDeepLink] = []
+        appModel.testAgentRequestHandler = { sent.append($0) }
+        let url = try #require(URL(
+            string: "openclaw://agent?message=keyed&deliver=1&to=123456&channel=telegram&key=retired-demo-key"))
 
         await appModel.handleDeepLink(url: url)
+        #expect(appModel.pendingAgentDeepLinkPrompt != nil)
+        #expect(sent.isEmpty)
+
+        appModel.declinePendingAgentDeepLinkPrompt()
         #expect(appModel.pendingAgentDeepLinkPrompt == nil)
-        #expect(appModel.openChatRequestID == 1)
-        #expect(ShareGatewayRelaySettings.loadLastEvent()?.contains("Sent to gateway") == true)
+        #expect(sent.isEmpty)
+
+        // A fresh model skips the 5 s prompt throttle without waiting on it.
+        let approvingModel = NodeAppModel()
+        approvingModel.apply(.connected(GatewaySessionInfo()), to: .node, route: nil)
+        approvingModel.testAgentRequestHandler = { sent.append($0) }
+        await approvingModel.handleDeepLink(url: url)
+        #expect(sent.isEmpty)
+        await approvingModel.approvePendingAgentDeepLinkPrompt()
+        #expect(sent.count == 1)
+        let request = try #require(sent.first)
+        #expect(request.deliver == false)
+        #expect(request.to == nil)
+        #expect(request.channel == nil)
     }
 
     @Test @MainActor func `stored operator scopes request permissions without granting disconnected authority`() throws {

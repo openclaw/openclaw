@@ -26,17 +26,17 @@ function evaluateSkill(command: ReturnType<typeof segment>, resolvedPath: string
   });
 }
 
-function expectSkillMiss(result: ReturnType<typeof evaluateExecAllowlist>): void {
+function expectSkillMiss(result: Awaited<ReturnType<typeof evaluateExecAllowlist>>): void {
   expect(result).toMatchObject({ allowlistSatisfied: false, segmentSatisfiedBy: [null] });
 }
 
-it("matches auto-allow skill bins against the executable trust realpath", () => {
+it("matches auto-allow skill bins against the executable trust realpath", async () => {
   const command = segment(["skill-bin", "--help"], {
     resolvedPath: "/tmp/symlink-bin/skill-bin",
     resolvedRealPath: "/opt/skills/skill-bin",
   });
-  expect(evaluateSkill(command, "/opt/skills/skill-bin").allowlistSatisfied).toBe(true);
-  expectSkillMiss(evaluateSkill(command, "/tmp/symlink-bin/skill-bin"));
+  expect((await evaluateSkill(command, "/opt/skills/skill-bin")).allowlistSatisfied).toBe(true);
+  expectSkillMiss(await evaluateSkill(command, "/tmp/symlink-bin/skill-bin"));
 });
 
 const skillPath = "/tmp/skill-bin";
@@ -44,13 +44,16 @@ const resolvedSkill = { resolvedPath: skillPath, executableName: "skill-bin" };
 it.each([
   ["relative paths", "./skill-bin", resolvedSkill, skillPath],
   ["missing resolution", "skill-bin", {}, "/opt/skills/skill-bin"],
-] as const)("does not auto-allow skills with %s", (_reason, executable, paths, trustedPath) => {
-  expectSkillMiss(evaluateSkill(segment([executable, "--help"], paths), trustedPath));
-});
+] as const)(
+  "does not auto-allow skills with %s",
+  async (_reason, executable, paths, trustedPath) => {
+    expectSkillMiss(await evaluateSkill(segment([executable, "--help"], paths), trustedPath));
+  },
+);
 
-it("returns empty segment details for chain misses", () => {
+it("returns empty segment details for chain misses", async () => {
   const command = segment(["tool"], { resolvedPath: "/usr/bin/tool" });
-  const result = evaluateExecAllowlist({
+  const result = await evaluateExecAllowlist({
     analysis: { ok: true, segments: [command], chains: [[command]] },
     allowlist: [{ pattern: "/usr/bin/other" }],
     safeBins: new Set(),
@@ -60,13 +63,13 @@ it("returns empty segment details for chain misses", () => {
   expect([result.allowlistMatches, result.segmentSatisfiedBy]).toStrictEqual([[], []]);
 });
 
-it("aggregates segment satisfaction across chains", () => {
+it("aggregates segment satisfaction across chains", async () => {
   const allowlistSegment = segment(["tool"], { resolvedPath: "/usr/bin/tool" });
   const safeBinSegment = segment(["head", "-n", "1"], {
     resolvedPath: "/usr/bin/head",
     resolvedRealPath: "/usr/bin/head",
   });
-  const result = evaluateExecAllowlist({
+  const result = await evaluateExecAllowlist({
     analysis: {
       ok: true,
       segments: [allowlistSegment, safeBinSegment],

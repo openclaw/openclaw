@@ -28,7 +28,7 @@ export function GoalIcon() {
 }
 
 const goalStatusIcons = {
-  paused: "pause",
+  paused: "pauseFilled",
   blocked: "alertTriangle",
   usage_limited: "alertTriangle",
   budget_limited: "alertTriangle",
@@ -55,10 +55,10 @@ type ChatGoalProps = {
 
 const goalActions = ["edit", "pause", "resume", "clear"] as const;
 const goalActionIcons = {
-  edit: "penLine",
-  pause: "pause",
-  resume: "play",
-  clear: "trash",
+  edit: "pencil",
+  pause: "pauseFilled",
+  resume: "playRounded",
+  clear: "trashSimple",
 } as const;
 
 type GoalPresentationProps = Pick<
@@ -88,7 +88,7 @@ export function ChatGoalActions(props: GoalPresentationProps) {
           disabled={!props.connected}
           onClick={() => void props.resumeRecovery?.onCheck()}
         >
-          <Icon name="play" />
+          <Icon name="playRounded" />
           <span class="agent-chat__goal-action-label">{t("chat.goals.retryResume")}</span>
         </button>
       </Show>

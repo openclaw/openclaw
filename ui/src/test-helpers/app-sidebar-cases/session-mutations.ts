@@ -472,6 +472,7 @@ describe("AppSidebar session mutation feedback", () => {
 
   it.each(["delete", "archive"] as const)("surfaces partial batch-%s errors", async (action) => {
     const { harness, sidebar } = await mountMutationHarness();
+    sidebar.setSessionSortMode("created");
     const toast = await mountToastHost();
     if (action === "delete") {
       harness.deleteMany.mockResolvedValueOnce({
@@ -564,6 +565,7 @@ describe("AppSidebar session mutation feedback", () => {
 
   it("does not truncate a pending batch when another mutation starts", async () => {
     const { harness, sidebar } = await mountMutationHarness();
+    sidebar.setSessionSortMode("created");
     const toast = await mountToastHost();
     toast.querySelector<HTMLButtonElement>(".app-toast__dismiss")?.click();
     await toast.updateComplete;

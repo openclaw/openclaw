@@ -24,7 +24,7 @@ import { autoRemovalProtectionReason, type WorktreeCleanupDeferrals } from "./gc
 import {
   createWorktreeGcRemoval,
   removeWorktreeIfLossless,
-  type WorktreeCleanupOwnerPolicy,
+  type ManagedWorktreeGcParams,
 } from "./gc-removal.js";
 import { createWorktreeGcPrefilter, lockState, unlockWorktree } from "./git-lock.js";
 import { createWorktreeGitMaintenance } from "./git-maintenance.js";
@@ -63,6 +63,7 @@ import {
   materializeRepositoryWorktree,
   prepareWarmWorktree,
 } from "./repository-setup.js";
+import { IDLE_GC_MS } from "./retention.js";
 import {
   captureWorktreeRunEndContext,
   withWorktreeRunEnd,
@@ -120,7 +121,6 @@ export {
   type WorktreeRemovalFailureReason,
 } from "./removal-errors.js";
 
-export const IDLE_GC_MS = 7 * 24 * 60 * 60 * 1000; // Idle worktrees remain restorable after automatic cleanup.
 export const SNAPSHOT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000; // Snapshot refs expire with their registry affordance.
 export const WORKTREE_GC_INTERVAL_MS = 60 * 60 * 1000;
 
@@ -131,11 +131,6 @@ type ServiceOptions = {
   env?: NodeJS.ProcessEnv;
   getConfig?: () => OpenClawConfig;
 };
-
-type ManagedWorktreeGcParams = WorktreeCleanupOwnerPolicy &
-  WorktreeMutationGuard & {
-    checkpoint?: (progress: ManagedWorktreeGcResult) => Promise<void>;
-  };
 
 type WorktreeCreation =
   | ManagedWorktreeCreationOutcome
@@ -172,7 +167,7 @@ export class ManagedWorktreeService {
   private readonly orphanCleanupFailures: Parameters<
     typeof collectRetiredWorktreeArtifacts
   >[0]["orphanFailures"] = new Map();
-  private readonly maintainGit: ReturnType<typeof createWorktreeGitMaintenance>;
+  readonly maintainGit: ReturnType<typeof createWorktreeGitMaintenance>;
 
   constructor(options: ServiceOptions = {}) {
     this.env = options.env ?? process.env;
@@ -1007,7 +1002,11 @@ export class ManagedWorktreeService {
           await collectWorktreeTemplates(
             this.env,
             now - IDLE_GC_MS,
-            { signal: params.signal, commitGuard: assertCurrent },
+            {
+              signal: params.signal,
+              commitGuard: assertCurrent,
+              beforeRemoval: params.beforeTemplateRemoval,
+            },
             (error, id) => progress.error("templates", error, id),
           );
         }

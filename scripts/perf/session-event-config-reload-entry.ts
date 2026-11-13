@@ -49,8 +49,11 @@ registerHooks({
           const { getRuntimeConfig } = await import('../../../config/config.js');
           const { setTimeout: delay } = await import('node:timers/promises');
           const deadline = Date.now() + 30000;
-          while (!getRuntimeConfig().mcp?.servers?.unrelated) {
-            if (Date.now() > deadline) throw new Error('Fixture did not observe committed MCP config');
+          const committed = ${JSON.stringify(process.env.OPENCLAW_CONFIG_RELOAD_FIXTURE_CHANGE === "plugin")}
+            ? () => getRuntimeConfig().plugins?.entries?.advisor?.enabled === true
+            : () => Boolean(getRuntimeConfig().mcp?.servers?.unrelated);
+          while (!committed()) {
+            if (Date.now() > deadline) throw new Error('Fixture did not observe committed config');
             await delay(10);
           }
         }

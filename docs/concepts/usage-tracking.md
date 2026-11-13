@@ -71,7 +71,11 @@ Detailed report batches share one short wait per agent for pending usage updates
 Session reports have a 15-second data-read budget. If it expires, completed
 batches remain visible as a partial report, with a hint to narrow the date
 range or select a session. Partial totals are not complete billing totals.
-Disconnecting still cancels the request without publishing a response.
+Disconnecting still cancels the request without publishing a response. The
+`usage.cost` method has the same 15-second budget; when no summary is available
+in time, it returns an unavailable error rather than zero totals. Its
+request-owned refresh stops when the response is sent. Independently scheduled
+projection updates continue, and the overview retains its background backfill.
 
 Session reports preserve agent attribution when agents share a session store. A
 background usage refresh does not invalidate a selected report when its session
@@ -122,9 +126,14 @@ backfill yields between completed transcripts after ten seconds of scanning or
 50 transcripts, whichever comes first. One large transcript or the initial
 inventory can take longer. Transcripts
 remain the source of truth. Detailed reports retain exact timestamp boundaries and the recorded
-order of floating-point cost additions. Cached SQLite detail reads use the rollup's
-recorded checkpoint and current transcript mutation facts instead of rescanning
-all transcript rows for their size and event count.
+order of floating-point cost additions. SQLite summary and detail reads use recorded quarter aggregates, checkpoints,
+and transcript mutation facts instead of recounting transcript payloads. Complete
+cost summaries remain reusable until the owning usage, transcript, session, or
+pricing facts change. Cold SQLite statistics are read in cancellable pages;
+refresh discovery applies its batch limit before collecting those statistics.
+Hot payload reads yield between pages, with physical reads paced to 16 MiB/s where
+kernel accounting is available. A single oversized row can exceed a page budget.
+Cold archives retain whole-archive verification, with cancellation checks between records.
 After an append, background refresh also reuses the checkpoint's size and event
 count and reads only the appended rows. A transcript rewrite or missing checkpoint
 still requires a full recount before the new totals are published.

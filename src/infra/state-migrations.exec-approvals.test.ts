@@ -171,7 +171,11 @@ it.each([
   const legacyPath = claimed ? `${sourcePath}.doctor-importing` : sourcePath;
   await writeLegacy(stub, legacyPath);
   const original = await fsp.readFile(legacyPath);
-  expect(() => loadExecApprovals()).toThrow(ExecApprovalsMigrationRequiredError);
+  if (canonical === "missing") {
+    expect(() => loadExecApprovals()).toThrow(ExecApprovalsMigrationRequiredError);
+  } else {
+    expect(loadExecApprovals().defaults?.security).toBe("deny");
+  }
   const result = await migrate();
   expect(result.warnings).toEqual([]);
   expectSourcesRemoved();

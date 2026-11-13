@@ -433,7 +433,7 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
             when={selectedRow()}
             fallback={
               <Show
-                when={detailProps.loading}
+                when={detailProps.loading && !data().hasResult}
                 fallback={
                   <div class="chat-processes__empty" role="status">
                     {t(
@@ -495,7 +495,7 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
             when={rows().length}
             fallback={
               <Show
-                when={data().hasResult && !data().error && !contentProps.loading}
+                when={data().hasResult && !data().error}
                 fallback={
                   <Show
                     when={contentProps.loading}

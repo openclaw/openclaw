@@ -221,6 +221,7 @@ it("filters URL and named-remote fetches without sharing host objects or credent
     }
     expect(await fs.readFile(path.join(source, ".git/config"), "utf8")).toBe(sourceConfig);
     expect(await git(destination, "config", "--get", "remote.origin.url")).toBe(`${url}.git`);
+    expect(await git(destination, "config", "--get", "openclaw.projection")).toBe("true");
     const config = await fs.readFile(path.join(destination, ".git/config"), "utf8");
     expect(config).not.toMatch(/synthetic-password|synthetic-host-helper/);
     await expect(fs.stat(path.join(destination, ".git/objects/info/alternates"))).rejects.toThrow();
