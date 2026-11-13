@@ -64,6 +64,11 @@ import type {
 
 export const MAX_CONCURRENT_FULL_MODEL_CATALOG_BUILDS = 1;
 const limitFullModelCatalogBuild = pLimit(MAX_CONCURRENT_FULL_MODEL_CATALOG_BUILDS);
+// Provider cache deadlines are short (often 60s) and every catalog read can start background
+// renewal, one worker task per expired provider. Keep each provider's renewal at least this far
+// apart so heartbeat-paced reads on a multi-agent Gateway do not keep its catalog worker busy.
+// Explicit refresh requests ignore this deadline.
+const CATALOG_BACKGROUND_RENEWAL_INTERVAL_MS = 10 * 60_000;
 
 export async function createFullModelCatalogAccess(
   params: PreparedModelRuntimeCatalogAccessParams,
@@ -306,6 +311,7 @@ export async function createFullModelCatalogAccess(
         auth,
         normalizeProvider,
       );
+      const renewalFloor = Date.now() + CATALOG_BACKGROUND_RENEWAL_INTERVAL_MS;
       const completedProviders = new Map(
         [...scope].map((provider) => {
           const source =
@@ -317,7 +323,8 @@ export async function createFullModelCatalogAccess(
               normalizeProvider,
             );
           providerSources.set(provider, source);
-          const expiresAt = providerExpiries.get(provider);
+          const expiry = providerExpiries.get(provider);
+          const expiresAt = expiry === undefined ? undefined : Math.max(expiry, renewalFloor);
           const failed = workerCatalog.providerOutcomes?.some(
             (outcome) =>
               normalizeProvider(outcome.provider) === provider && outcome.status !== "ready",
