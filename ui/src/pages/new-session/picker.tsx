@@ -10,6 +10,7 @@ import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx"
 import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { createScrollStateRef } from "../../lib/reactive/scroll-state.ts";
+import { createPickerNavigation, PickerNavigation } from "./picker-navigation.ts";
 import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
 
 export function SessionPicker(props: {
@@ -29,6 +30,7 @@ export function SessionPicker(props: {
   onAfterHide?: () => void;
   ref?: (handle: PopoverHandle) => void;
 }) {
+  const navigation = props.kind === "checkout" ? null : createPickerNavigation();
   let trigger!: HTMLButtonElement;
   let popover!: PopoverHandle;
   let cleanup: (() => void) | undefined;
@@ -84,6 +86,7 @@ export function SessionPicker(props: {
         </button>
       </span>
       <Popover
+        contained
         lazy={props.lazy}
         onBeforeShow={props.onBeforeShow}
         id={`new-session-${props.kind}-popover`}
@@ -97,6 +100,9 @@ export function SessionPicker(props: {
         open={props.params.place.browser.popoverOpen(props.kind)}
         placement="bottom-start"
         onOpenChange={(open) => {
+          if (!open) {
+            navigation?.clear();
+          }
           const callbacks = props.params.place.browser.popoverCallbacks(props.kind);
           callbacks[open ? "onPopoverShow" : "onPopoverHide"]();
         }}
@@ -141,7 +147,7 @@ export function SessionPicker(props: {
             <Loading
               fallback={<PickerSkeleton tray checkout={props.params.place.checkoutVisible} />}
             >
-              {props.children}
+              <PickerNavigation value={navigation}>{props.children}</PickerNavigation>
             </Loading>
           </Errored>
         </div>

@@ -1553,6 +1553,7 @@ div.new-session-page__project-search {
   padding-top: var(--new-session-tray-radius);
   border-radius: 0 0 var(--new-session-tray-radius) var(--new-session-tray-radius);
   background: var(--new-session-tray-surface);
+  box-shadow: var(--shadow-sm);
   corner-shape: superellipse(1.5);
   anchor-name: --new-session-context-tray;
 }
@@ -1832,7 +1833,15 @@ div.new-session-page__project-search {
 
 .new-session-page__picker-foot {
   flex: none;
-  padding: 8px calc(var(--new-session-tray-edge, 18px) - 8px) 6px;
+  padding: 6px calc(var(--new-session-tray-edge, 18px) - 8px);
+}
+
+.new-session-page__picker-foot::before {
+  content: "";
+  display: block;
+  height: 1px;
+  margin: 0 8px 6px;
+  background: var(--border);
 }
 
 .new-session-page__picker-foot .new-session-page__menu-chevron svg {
@@ -1943,7 +1952,7 @@ div.new-session-page__project-search {
    Only the surface height clips; its content keeps its final layout. */
 
 .new-session-page__context-tray:has(
-    .new-session-page__picker-popover:popover-open:not([data-phase="closing"])
+    .new-session-page__picker-popover[open]:not([data-phase="closing"])
   )
   .new-session-page__trigger {
   opacity: 0;
@@ -1973,7 +1982,7 @@ div.new-session-page__project-search {
   opacity: 1;
   scale: 1;
   overflow: clip;
-  box-shadow: 0 0 0 0 transparent;
+  box-shadow: var(--shadow-sm);
   interpolate-size: allow-keywords;
   transition:
     height var(--oc-overlay-hide-duration) var(--new-session-tray-ease),
@@ -1981,7 +1990,7 @@ div.new-session-page__project-search {
 }
 
 .new-session-page__context-tray
-  .new-session-page__picker-popover:popover-open:not([data-phase="closing"]) {
+  .new-session-page__picker-popover[open]:not([data-phase="closing"]) {
   height: auto;
   box-shadow:
     0 18px 32px -14px rgb(0 0 0 / 16%),
@@ -1998,7 +2007,7 @@ div.new-session-page__project-search {
 }
 
 .new-session-page__context-tray
-  .new-session-page__picker-popover:popover-open:not([data-phase="closing"])
+  .new-session-page__picker-popover[open]:not([data-phase="closing"])
   > .new-session-page__picker-panel {
   opacity: 1;
   transition: opacity calc(var(--oc-overlay-show-duration) * 0.8) var(--new-session-tray-ease);
@@ -2006,12 +2015,12 @@ div.new-session-page__project-search {
 
 @starting-style {
   .new-session-page__context-tray
-    .new-session-page__picker-popover:popover-open:not([data-phase="closing"]) {
+    .new-session-page__picker-popover[open]:not([data-phase="closing"]) {
     height: 42px;
-    box-shadow: 0 0 0 0 transparent;
+    box-shadow: var(--shadow-sm);
   }
   .new-session-page__context-tray
-    .new-session-page__picker-popover:popover-open:not([data-phase="closing"])
+    .new-session-page__picker-popover[open]:not([data-phase="closing"])
     > .new-session-page__picker-panel {
     opacity: 0;
   }
@@ -2028,6 +2037,7 @@ div.new-session-page__project-search {
     padding: 0;
     border-radius: 0;
     background: none;
+    box-shadow: none;
   }
 
   .new-session-page__context-tray .new-session-page__triggers {
@@ -2115,13 +2125,13 @@ div.new-session-page__project-search {
   }
 
   .new-session-page__context-tray
-    .new-session-page__picker-popover:popover-open:not([data-phase="closing"]) {
+    .new-session-page__picker-popover[open]:not([data-phase="closing"]) {
     height: auto;
   }
 
   @starting-style {
     .new-session-page__context-tray
-      .new-session-page__picker-popover:popover-open:not([data-phase="closing"]) {
+      .new-session-page__picker-popover[open]:not([data-phase="closing"]) {
       height: anchor-size(--new-session-context-tray height);
     }
   }
@@ -2191,7 +2201,7 @@ div.new-session-page__project-search {
 
 /* A lazy picker keeps the resting tray geometry until its panel is ready. */
 .new-session-page__context-tray
-  .new-session-page__picker-popover:popover-open:has(.new-session-page__skeletons--tray) {
+  .new-session-page__picker-popover[open]:has(.new-session-page__skeletons--tray) {
   height: 42px;
 }
 
@@ -2203,7 +2213,7 @@ div.new-session-page__project-search {
 
 @media (max-width: 768px) {
   .new-session-page__context-tray
-    .new-session-page__picker-popover:popover-open:has(.new-session-page__skeletons--tray) {
+    .new-session-page__picker-popover[open]:has(.new-session-page__skeletons--tray) {
     height: anchor-size(--new-session-context-tray height);
     box-shadow: none;
   }
@@ -2218,4 +2228,33 @@ div.new-session-page__project-search {
     height: auto;
     padding: 0 calc(var(--chat-composer-editor-inset-inline, 14px) + 1px);
   }
+}
+
+.new-session-page__context-tray .new-session-page__picker-popover:not([open]) {
+  display: none;
+}
+
+/* Pointer and keyboard navigation share one highlighted row. */
+.new-session-page__picker-navigation
+  .session-menu__item:not([data-highlighted]):hover:not(:disabled):not([aria-disabled="true"]) {
+  background: transparent;
+}
+
+.new-session-page__picker-navigation
+  .session-menu__item[aria-pressed="true"]:not([data-highlighted]):hover:not(:disabled):not(
+    [aria-disabled="true"]
+  ) {
+  background: var(--menu-selected);
+}
+
+.new-session-page__picker-navigation .session-menu__item[data-highlighted] {
+  background: var(--bg-hover);
+}
+
+.new-session-page__picker-navigation .session-menu__item[aria-pressed][data-highlighted] {
+  background: var(--menu-hover);
+}
+
+.new-session-page__picker-navigation .session-menu__item[aria-pressed="true"][data-highlighted] {
+  background: var(--surface-selected-hover);
 }

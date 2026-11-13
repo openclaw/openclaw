@@ -1,8 +1,8 @@
-import type { JSX } from "@solidjs/web";
+import { dynamic, type JSX } from "@solidjs/web";
 import { Show, onSettled, untrack } from "solid-js";
 import { acquireNativeOverlaySurface } from "../../lib/native-overlay-occlusion.ts";
 import { createAnchoredOverlay } from "../../lib/reactive/overlay-anchor.ts";
-import type { OverlayPlacement } from "../overlay-anchor.ts";
+import { showOverlayAnchor, type OverlayPlacement } from "../overlay-anchor.ts";
 import { createOverlay, type Overlay } from "../overlay-lifecycle.ts";
 import { useOverlayControl } from "./overlay-control.ts";
 import { retainShadowStyles } from "./shadow-styles.ts";
@@ -16,6 +16,8 @@ export interface PopoverHandle {
 }
 
 export function Popover(props: {
+  /** Keep an attached surface in its parent stacking context. */
+  contained?: boolean;
   /** Preserve drafts by default; transient bodies are released after the exit. */
   lazy?: boolean | "while-open";
   /** The caller keeps anchor and surface in one DOM root for this mount. */
@@ -43,13 +45,15 @@ export function Popover(props: {
   ref?(handle: PopoverHandle): void;
 }): JSX.Element {
   let trigger!: HTMLButtonElement;
-  let surface!: HTMLDivElement;
+  let surface!: HTMLDivElement | HTMLDialogElement;
   // Identity, lazy mounting, and root placement are fixed for this native overlay lifetime.
   const initialIdentity = untrack(() => ({
     id: props.id,
     lazy: props.lazy,
     sameRoot: props.sameRoot ?? false,
+    contained: props.contained ?? false,
   }));
+  const Surface = dynamic(() => (initialIdentity.contained ? "dialog" : "div"));
   const overlay = createOverlay(initialIdentity.id, undefined, {
     get dismissOutsidePointer() {
       return props.dismissOutsidePointer;
@@ -57,6 +61,22 @@ export function Popover(props: {
     get dismissOutsideFocus() {
       return props.dismissOutsideFocus;
     },
+    native: initialIdentity.contained
+      ? {
+          isOpen: (node) => node.hasAttribute("open"),
+          show: (node) => {
+            showOverlayAnchor(node);
+            if (node instanceof HTMLDialogElement) {
+              node.show();
+            }
+          },
+          hide: (node) => {
+            if (node instanceof HTMLDialogElement) {
+              node.close();
+            }
+          },
+        }
+      : undefined,
     acquireOcclusion: acquireNativeOverlaySurface,
     onRootChange: (root) =>
       root instanceof ShadowRoot ? retainShadowStyles(root, [overlayStyles]) : undefined,
@@ -110,19 +130,19 @@ export function Popover(props: {
           {props.trigger ?? props.label}
         </button>
       </Show>
-      <div
-        ref={(node) => {
+      <Surface
+        ref={(node: HTMLDivElement | HTMLDialogElement) => {
           surface = node;
         }}
         class={["oc-overlay oc-popover", props.class]}
         id={initialIdentity.id}
-        popover="manual"
+        popover={initialIdentity.contained ? undefined : "manual"}
         role="dialog"
         aria-label={props.label}
         tabindex={-1}
       >
         {initialIdentity.lazy ? undefined : props.children}
-      </div>
+      </Surface>
     </>
   );
 }

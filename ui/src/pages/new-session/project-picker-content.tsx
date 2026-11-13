@@ -9,6 +9,7 @@ import {
   Loading,
   refresh,
   Show,
+  useContext,
 } from "solid-js";
 import type { ProjectRecord } from "../../../../packages/gateway-protocol/src/index.js";
 import { HeaderSearch } from "../../components/solid/header-search.tsx";
@@ -24,6 +25,7 @@ import { SessionMenuItem } from "./cloud-target-view.tsx";
 import { findBrowsableDeviceFolderHost } from "./device-placement.ts";
 import type { BrowserProjectRegistration } from "./draft-place-browser.ts";
 import { parentFolderDisplayName } from "./path.ts";
+import { PickerNavigation, pickerOptionRef } from "./picker-navigation.ts";
 import { createPickerScrollRef, PickerBack, PickerSkeleton } from "./picker.tsx";
 import { PlaceBrowser } from "./place-browser.tsx";
 import { disambiguate } from "./place-labels.ts";
@@ -31,6 +33,8 @@ import { projectCloneInput } from "./project-chip.ts";
 import type { ProjectChipProps } from "./project-chip.tsx";
 
 export function ProjectPickerContent(props: ProjectChipProps) {
+  const navigation = useContext(PickerNavigation);
+  const browseRef = pickerOptionRef();
   const applyFolder = (folder: string) => {
     if (!props.params.place.browser.browserNodeId) {
       props.params.place.applyFolder(folder);
@@ -234,7 +238,7 @@ export function ProjectPickerContent(props: ProjectChipProps) {
         props.params.pendingPlacement ||
         (!props.params.place.browseAvailable() && !view().browseNeedsAdmin)
       }
-      ref={(node) => props.focus && (props.focus.browse = node)}
+      ref={[browseRef, (node) => props.focus && (props.focus.browse = node)]}
       onClick={() => {
         if (
           props.params.place.browseAvailable() &&
@@ -277,7 +281,10 @@ export function ProjectPickerContent(props: ProjectChipProps) {
           }}
         />
       ) : (
-        <div class="new-session-page__environment-layout" data-chat-autotype-exempt>
+        <div
+          class="new-session-page__environment-layout new-session-page__picker-navigation"
+          data-chat-autotype-exempt
+        >
           <HeaderSearch
             leading={<PickerBack onBack={() => props.params.place.browser.close()} />}
             class="new-session-page__project-search"
@@ -286,9 +293,20 @@ export function ProjectPickerContent(props: ProjectChipProps) {
             autofocus="popover"
             disabled={props.params.submitting || props.params.pendingPlacement}
             inputProps={{ onCompositionEnd: recordCompositionEnd }}
-            inputRef={(node) => props.focus && (props.focus.search = node)}
-            onQueryChange={(query) => props.params.place.browser.changeProjectQuery(query)}
+            inputRef={(node) => {
+              navigation?.inputRef(node);
+              if (props.focus) {
+                props.focus.search = node;
+              }
+            }}
+            onQueryChange={(query) => {
+              navigation?.clear();
+              props.params.place.browser.changeProjectQuery(query);
+            }}
             onInputKeyDown={(event) => {
+              if (navigation?.keydown(event)) {
+                return;
+              }
               if (
                 event.key === "Enter" &&
                 !isComposingKeyboardEvent(event) &&

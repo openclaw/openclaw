@@ -162,7 +162,7 @@ it.each([
       await userEvent.tab({ shift: true });
       await userEvent.tab({ shift: true });
       await expect
-        .poll(() => query("#new-session-project-popover").matches(":popover-open"))
+        .poll(() => query("#new-session-project-popover").hasAttribute("open"))
         .toBe(false);
       await expect.element(button(`What: ${workspaceLabel}`)).toHaveFocus();
       await button(`What: ${workspaceLabel}`).click();
@@ -171,3 +171,18 @@ it.each([
     expect(onApplyFolder).toHaveBeenCalledExactlyOnceWith(workspace);
   },
 );
+
+it("selects the second device option with two ArrowDown presses from search", async () => {
+  await page.viewport(1440, 900);
+  const onSelectDevice = vi.fn();
+  const where = pickerParams(true, undefined, {}, { onSelectDevice });
+  mountSolid(() => createComponent(WhereChip, where), {
+    container: query(".new-session-page__triggers"),
+  });
+  const search = page.getByRole("searchbox", { name: "Search devices" });
+  await search.click();
+  await userEvent.keyboard("{ArrowDown}{ArrowDown}");
+  await expect.element(search).toHaveFocus();
+  await userEvent.keyboard("{Enter}");
+  expect(onSelectDevice).toHaveBeenCalledExactlyOnceWith("");
+});

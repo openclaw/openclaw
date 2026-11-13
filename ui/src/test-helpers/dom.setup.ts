@@ -186,6 +186,11 @@ defineMissing(elementPrototype, "scrollIntoView", { writable: true, value: () =>
 
 const dialogPrototype =
   typeof HTMLDialogElement === "undefined" ? undefined : HTMLDialogElement.prototype;
+defineMissing(dialogPrototype, "show", {
+  value(this: HTMLDialogElement) {
+    this.setAttribute("open", "");
+  },
+});
 defineMissing(dialogPrototype, "showModal", {
   value(this: HTMLDialogElement) {
     this.setAttribute("open", "");
