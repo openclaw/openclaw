@@ -156,10 +156,16 @@ function authorizePortalRequest(
   ) {
     return { kind: "unauthorized" };
   }
-  url?.searchParams.delete(PORTAL_AUTH_NAME);
+  // Mutating searchParams also normalizes unrelated app query bytes (for
+  // example, Vite's bare `lang.css` becomes `lang.css=`). Strip only our key.
+  const query = (url?.search ?? "")
+    .slice(1)
+    .split("&")
+    .filter((entry) => !new URLSearchParams(`?${entry}`).has(PORTAL_AUTH_NAME))
+    .join("&");
   return {
     kind: "authorized",
-    requestPath: `${url?.pathname ?? "/"}${url?.search ?? ""}`,
+    requestPath: `${url?.pathname ?? "/"}${query ? `?${query}` : ""}`,
     setCookie,
   };
 }
