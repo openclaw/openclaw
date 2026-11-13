@@ -378,7 +378,7 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
             try {
               const input = {
                 config,
-                profile: pluginProfile(profile, profile.role),
+                profile: pluginProfile(profile, role.assignedRole),
                 requiredByRole: pluginId === requiredPlugin,
               };
               current =

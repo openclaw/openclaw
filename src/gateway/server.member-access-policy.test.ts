@@ -149,6 +149,27 @@ it.each([false, true])(
   },
 );
 
+it("retains the membership role when a transient policy failure is re-evaluated", () => {
+  const { config, register, authority } = fixture();
+  const { authorize, resume } = register();
+  authorize.mockImplementation(({ profile: subject }) =>
+    subject.assignedRole === member.role ? authority : undefined,
+  );
+  resume.mockImplementation(({ profile: subject }) =>
+    subject.assignedRole === member.role ? authority : undefined,
+  );
+  const access = resolvePreparedGatewayOperatorAccessAuthority(preparedProfile, config, source);
+  vi.spyOn(authority, "assertCurrent").mockImplementationOnce(() => {
+    throw new Error("temporary policy outage");
+  });
+  expect(() => access?.assertCurrent()).toThrow("Gateway access policy is unavailable");
+  expect(resume).toHaveBeenCalledWith(
+    expect.objectContaining({ profile: expect.objectContaining({ assignedRole: member.role }) }),
+  );
+  expect(access?.signal.aborted).toBe(false);
+  expect(() => access?.assertCurrent()).not.toThrow();
+});
+
 it("does not inherit a profile binding when the membership role has no plugin", () => {
   const { config } = fixture(true);
   expect(() => resolvePreparedGatewayOperatorAccessAuthority(preparedProfile, config)).toThrow(

@@ -4,4 +4,6 @@
 # Includes the linked-owner grant regression's member-aware options signature
 # and explicit named-role fixture opt-in plus recovery helper imports/extraction
 # needed by the rebased line cap.
-918
+# Main restack: explicit member catalogs in delegated ingress/MCP fixtures and
+# a transient policy recovery regression retaining the resolved membership role.
+945

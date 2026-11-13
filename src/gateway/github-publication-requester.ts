@@ -277,12 +277,9 @@ function prepareRequesterPolicy(
     const profile = assertPrepared(config);
     if (profile) {
       try {
-        const authority = resumeGatewayOperatorAccessGrant(
-          profile,
-          config,
-          snapshot.grant,
-          retainedAuthority,
-        );
+        const authority = resumeGatewayOperatorAccessGrant(profile, config, snapshot.grant, {
+          retained: retainedAuthority,
+        });
         retainedAuthority = authority;
         onPolicy?.(authority);
       } catch (error) {
