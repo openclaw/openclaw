@@ -740,6 +740,7 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
         deliveredPayload: send.payload,
         deliveredPayloads: send.deliveredPayloads,
         replyToIsExplicit: reply?.source === "explicit",
+        runId: input.runId,
       });
     } catch (error) {
       // Delivery is already committed; a transcript failure must not resend it.

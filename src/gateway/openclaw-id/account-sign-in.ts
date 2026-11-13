@@ -1,9 +1,13 @@
-// OpenClaw ID sign-in for the Control UI's account menu: an OpenID Connect
-// authorization code flow with PKCE for a public client. The browser opens the
-// authorization URL in a popup and hands the returned code back; the Gateway
-// holds the verifier and redeems the code, because the issuer serves no CORS.
-// The ID token goes back to the browser, which keeps the account; the Gateway
-// keeps only display claims in its claw record through the trusted completion callback.
+// OpenClaw ID sign-in for the Control UI's account menu, for a public client.
+// On this machine: an OpenID Connect authorization code flow with PKCE. The browser
+// opens the authorization URL in a popup and hands the returned code back; the
+// Gateway holds the verifier and redeems the code, because the issuer serves no CORS.
+// Elsewhere (a Control UI the issuer cannot redirect to): the device authorization
+// grant (RFC 8628). The Gateway gets a user code for the browser to show, then polls
+// the token endpoint for the ID token.
+// Either way the ID token goes back to the browser, which keeps the account; the
+// Gateway keeps only display claims in its claw record through the trusted completion
+// callback, which only the loopback flow supplies.
 import { createHash, randomBytes } from "node:crypto";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawIdAccount } from "./claw-store.js";
@@ -15,6 +19,29 @@ type IssuerMetadata = {
   issuer: string;
   authorization_endpoint: string;
   token_endpoint: string;
+  device_authorization_endpoint?: string;
+};
+
+type PendingDeviceSignIn = {
+  issuer: string;
+  tokenEndpoint: string;
+  clientId: string;
+  deviceCode: string;
+  /** The connection identity that started it; only that identity may poll it. */
+  owner: string;
+  intervalMs: number;
+  nextPollAt: number;
+  expiresAt: number;
+};
+
+/** The user code and where to enter it, for the browser to show while the Gateway polls. */
+export type OpenClawIdDeviceSignIn = {
+  state: string;
+  userCode: string;
+  verificationUri: string;
+  verificationUriComplete: string | null;
+  expiresAt: number;
+  interval: number;
 };
 
 type PendingSignIn = {
@@ -41,6 +68,10 @@ const SIGN_IN_CALLBACK_PATH = "/openclaw-id/callback";
 
 const PENDING_TTL_MS = 10 * 60_000;
 const MAX_PENDING = 16;
+const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
+// RFC 8628 section 3.2 defaults and the slow_down increment (section 3.5).
+const DEFAULT_DEVICE_INTERVAL_S = 5;
+const SLOW_DOWN_INCREMENT_MS = 5_000;
 
 function refusal(code: string, detail: string): OpenClawIdSignInRefusal {
   return { ok: false, code, detail };
@@ -140,9 +171,11 @@ function optionalText(value: unknown): string | null {
 }
 
 // Checks the claims the browser relies on: issuer, audience, nonce, expiry and subject.
+// A device grant carries no nonce (`null`): its token answers only the device code the
+// Gateway itself holds, so there is no front channel to inject a token into.
 function acceptedClaims(
   claims: IdTokenClaims | null,
-  expected: { issuer: string; clientId: string; nonce: string; nowMs: number },
+  expected: { issuer: string; clientId: string; nonce: string | null; nowMs: number },
 ): claims is IdTokenClaims & { sub: string; exp: number } {
   if (!claims) {
     return false;
@@ -152,12 +185,30 @@ function acceptedClaims(
     typeof claims.iss === "string" &&
     trimSlash(claims.iss) === trimSlash(expected.issuer) &&
     audiences.includes(expected.clientId) &&
-    claims.nonce === expected.nonce &&
+    claims.nonce === (expected.nonce ?? undefined) &&
     typeof claims.exp === "number" &&
     claims.exp * 1000 > expected.nowMs &&
     typeof claims.sub === "string" &&
     claims.sub.length > 0
   );
+}
+
+function accountFrom(claims: IdTokenClaims & { sub: string; exp: number }): OpenClawIdAccount {
+  return {
+    sub: claims.sub,
+    email: optionalText(claims.email),
+    name: optionalText(claims.name),
+    exp: claims.exp,
+  };
+}
+
+function httpUrl(value: unknown): value is string {
+  try {
+    const url = new URL(String(value));
+    return typeof value === "string" && (url.protocol === "https:" || url.protocol === "http:");
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -171,12 +222,18 @@ export function createOpenClawIdSignIn(
   const fetchImpl = deps.fetchImpl ?? fetch;
   const now = deps.now ?? Date.now;
   const pending = new Map<string, PendingSignIn>();
+  const pendingDevices = new Map<string, PendingDeviceSignIn>();
 
   // Drops expired sign-ins, then the oldest ones past the cap (Map keeps insertion order).
   const prune = () => {
     for (const [state, entry] of pending) {
       if (now() - entry.createdAt > PENDING_TTL_MS || pending.size >= MAX_PENDING) {
         pending.delete(state);
+      }
+    }
+    for (const [state, entry] of pendingDevices) {
+      if (now() >= entry.expiresAt || pendingDevices.size >= MAX_PENDING) {
+        pendingDevices.delete(state);
       }
     }
   };
@@ -209,6 +266,9 @@ export function createOpenClawIdSignIn(
       issuer: meta.issuer,
       authorization_endpoint: meta.authorization_endpoint,
       token_endpoint: meta.token_endpoint,
+      ...(onIssuerOrigin(meta.device_authorization_endpoint, issuerUrl)
+        ? { device_authorization_endpoint: meta.device_authorization_endpoint }
+        : {}),
     };
   };
 
@@ -318,14 +378,167 @@ export function createOpenClawIdSignIn(
       if (!acceptedClaims(claims, expected)) {
         return refusal("id_token_invalid", "the issuer returned an unusable ID token");
       }
-      const account: OpenClawIdAccount = {
-        sub: claims.sub,
-        email: optionalText(claims.email),
-        name: optionalText(claims.name),
-        exp: claims.exp,
-      };
+      const account = accountFrom(claims);
       await params.onVerifiedAccount?.(account);
       return { idToken, account };
+    },
+
+    /**
+     * Starts a device sign-in for `owner` (the connection identity that may poll it) and
+     * returns the user code and verification page the browser shows.
+     */
+    async beginDevice(params: {
+      issuerUrl: string;
+      clientId: string;
+      owner: string;
+    }): Promise<OpenClawIdDeviceSignIn | OpenClawIdSignInRefusal> {
+      const meta = await metadata(params.issuerUrl);
+      if (isRefusal(meta)) {
+        return meta;
+      }
+      if (!meta.device_authorization_endpoint) {
+        return refusal("device_unsupported", "the OpenClaw ID issuer offers no device sign-in");
+      }
+      const response = await fetchJson(
+        fetchImpl,
+        meta.device_authorization_endpoint,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/x-www-form-urlencoded",
+            accept: "application/json",
+          },
+          body: new URLSearchParams({ client_id: params.clientId, scope: "openid profile email" }),
+        },
+        "issuer_unavailable",
+      );
+      if (isRefusal(response)) {
+        return response;
+      }
+      if (!response.httpOk) {
+        return refusal("issuer_unavailable", `device sign-in failed with HTTP ${response.status}`);
+      }
+      const body = asRecord(response.body);
+      const complete = httpUrl(body.verification_uri_complete)
+        ? body.verification_uri_complete
+        : null;
+      if (
+        typeof body.device_code !== "string" ||
+        !body.device_code ||
+        typeof body.user_code !== "string" ||
+        !body.user_code ||
+        !httpUrl(body.verification_uri) ||
+        typeof body.expires_in !== "number" ||
+        !(body.expires_in > 0)
+      ) {
+        return refusal("issuer_invalid", "the issuer returned an unusable device code");
+      }
+      const interval =
+        typeof body.interval === "number" && body.interval > 0
+          ? body.interval
+          : DEFAULT_DEVICE_INTERVAL_S;
+      const state = base64url(randomBytes(16));
+      // Never hold a code longer than a popup sign-in, whatever the issuer offers.
+      const expiresAt = now() + Math.min(body.expires_in * 1000, PENDING_TTL_MS);
+      prune();
+      pendingDevices.set(state, {
+        issuer: meta.issuer,
+        tokenEndpoint: meta.token_endpoint,
+        clientId: params.clientId,
+        deviceCode: body.device_code,
+        owner: params.owner,
+        intervalMs: interval * 1000,
+        nextPollAt: now() + interval * 1000,
+        expiresAt,
+      });
+      return {
+        state,
+        userCode: body.user_code,
+        verificationUri: body.verification_uri,
+        verificationUriComplete: complete,
+        expiresAt,
+        interval,
+      };
+    },
+
+    /**
+     * Polls the token endpoint once for `owner`'s device sign-in. Returns `pending` until
+     * the user approves, then the account and ID token (once). Never records the account.
+     */
+    async pollDevice(params: {
+      state: unknown;
+      owner: string;
+    }): Promise<
+      | { pending: true; interval: number }
+      | { account: OpenClawIdAccount; idToken: string }
+      | OpenClawIdSignInRefusal
+    > {
+      const state = typeof params.state === "string" ? params.state : "";
+      const entry = pendingDevices.get(state);
+      // Another identity's state is unknown to this caller; it must not cancel the owner's sign-in.
+      if (!entry || entry.owner !== params.owner || now() >= entry.expiresAt) {
+        if (entry?.owner === params.owner) {
+          pendingDevices.delete(state);
+        }
+        return refusal("state_mismatch", "sign-in expired or was already used; start again");
+      }
+      if (now() < entry.nextPollAt) {
+        return { pending: true, interval: Math.ceil(entry.intervalMs / 1000) };
+      }
+      entry.nextPollAt = now() + entry.intervalMs;
+      const response = await fetchJson(
+        fetchImpl,
+        entry.tokenEndpoint,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/x-www-form-urlencoded",
+            accept: "application/json",
+          },
+          body: new URLSearchParams({
+            grant_type: DEVICE_GRANT,
+            device_code: entry.deviceCode,
+            client_id: entry.clientId,
+          }),
+        },
+        "token_exchange_failed",
+      );
+      if (isRefusal(response)) {
+        // A transient network failure keeps the sign-in; the next poll tries again.
+        return { pending: true, interval: Math.ceil(entry.intervalMs / 1000) };
+      }
+      const body = asRecord(response.body);
+      if (!response.httpOk) {
+        if (body.error === "authorization_pending" || body.error === "slow_down") {
+          if (body.error === "slow_down") {
+            entry.intervalMs += SLOW_DOWN_INCREMENT_MS;
+            entry.nextPollAt = now() + entry.intervalMs;
+          }
+          return { pending: true, interval: Math.ceil(entry.intervalMs / 1000) };
+        }
+        pendingDevices.delete(state);
+        return body.error === "access_denied"
+          ? refusal("access_denied", "the sign-in was cancelled in OpenClaw ID")
+          : body.error === "expired_token"
+            ? refusal("state_mismatch", "sign-in expired; start again")
+            : refusal(
+                "token_exchange_failed",
+                `token exchange failed with HTTP ${response.status}`,
+              );
+      }
+      pendingDevices.delete(state);
+      const idToken = typeof body.id_token === "string" ? body.id_token : "";
+      const claims = decodeClaims(idToken);
+      const expected = {
+        issuer: entry.issuer,
+        clientId: entry.clientId,
+        nonce: null,
+        nowMs: now(),
+      };
+      if (!acceptedClaims(claims, expected)) {
+        return refusal("id_token_invalid", "the issuer returned an unusable ID token");
+      }
+      return { idToken, account: accountFrom(claims) };
     },
 
     /** Asks Discovery for a one-time link code for the signed-in account. */

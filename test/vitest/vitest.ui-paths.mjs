@@ -82,6 +82,7 @@ export const uiTimingTestFiles = ["ui/src/components/markdown.progress.node.test
 // These files launch Playwright from Node; all other .browser tests run in Chromium.
 export const uiNodeDrivenBrowserTestFiles = [
   "ui/src/pages/chat/chat-responsive.browser.test.ts",
+  "ui/src/pages/chat/chat-run-spacing.browser.test.ts",
   "ui/src/pages/chat/chat-rhythm-alignment.browser.test.ts",
   "ui/src/pages/chat/chat-search-layout.browser.test.ts",
   "ui/src/pages/chat/chat-footer-layout.browser.test.ts",
@@ -175,6 +176,7 @@ export const uiE2eRealGatewayTestFiles = [
   "ui/src/e2e/worker-initial-setup.real-gateway.e2e.test.ts",
   "ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-composer-websearch-kill-switch.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-github-tool-surface.real-gateway.e2e.test.ts",
   "ui/src/e2e/skill-workshop-plugin-enable.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",

@@ -23,7 +23,6 @@ export function PaletteSessionSettingsView(properties: {
 }) {
   const [open, setOpen] = createSignal(false);
   const [query, setQuery] = createSignal("");
-  const [searching, setSearching] = createSignal(false);
   const focusControls = new Set<HTMLElement>();
   const controlRef = () =>
     elementRef((element: HTMLElement) => {
@@ -35,7 +34,6 @@ export function PaletteSessionSettingsView(properties: {
     preferences.retirePresentation();
     setOpen(false);
     setQuery("");
-    setSearching(false);
   };
   const view = createMemo(() => resolvePaletteSessionSettings(properties.options, query()));
   const selectMachine = (
@@ -87,11 +85,12 @@ export function PaletteSessionSettingsView(properties: {
     }
     const panel = event.currentTarget;
     const controls = [...focusControls]
+      // Arrows walk the field and the choices; Tab still reaches the field's clear button.
       .filter(
         (control) =>
           panel.contains(control) &&
           !control.matches(":disabled") &&
-          !(searching() && control.matches(".header-search__toggle")),
+          !control.matches(".header-search__clear"),
       )
       .toSorted((left, right) =>
         left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
@@ -131,12 +130,12 @@ export function PaletteSessionSettingsView(properties: {
         <HeaderSearch
           class="palette-session-settings__heading"
           inputClass="palette-session-settings__search"
-          title={t("newSession.projects")}
           label={t("common.search")}
+          placeholder={t("newSession.searchProjects")}
           query={query()}
-          open={searching()}
+          autofocus="popover"
+          disabled={view().locked}
           controlRef={controlRef}
-          onOpenChange={setSearching}
           onQueryChange={setQuery}
         />
         <div class="palette-session-settings__choices">

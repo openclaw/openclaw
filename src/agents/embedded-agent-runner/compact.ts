@@ -177,6 +177,20 @@ export async function compactNativeCliSession(params: {
           ? { sessionEntry: params.compactParams.sessionEntry }
           : {}),
         contextWindow: params.compactParams.sessionEntry?.contextWindow,
+        // Forward the turn's prompt inputs so the compact control op rebuilds
+        // the same request prefix (system prompt, MCP, skills) and the provider
+        // cache hits instead of rewriting history at cache-write price.
+        chatType: params.compactParams.chatType,
+        agentAccountId: params.compactParams.agentAccountId,
+        conversationToolPolicy: params.compactParams.conversationToolPolicy,
+        messageChannel: params.compactParams.messageChannel,
+        messageProvider: params.compactParams.messageProvider,
+        skillsSnapshot: params.compactParams.skillsSnapshot,
+        toolOverrides: params.compactParams.toolOverrides,
+        ownerNumbers: params.compactParams.ownerNumbers,
+        sourceReplyDeliveryMode: params.compactParams.sourceReplyDeliveryMode,
+        extraSystemPrompt: params.compactParams.extraSystemPrompt,
+        bootstrapWorkspaceDir: params.compactParams.bootstrapWorkspaceDir,
         trigger: "manual",
         controlOperation: "compact",
         disableCliLiveSession: true,

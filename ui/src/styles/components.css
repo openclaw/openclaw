@@ -2839,6 +2839,11 @@ select.data-table-pagination__size {
   height: 20px;
 }
 
+/* The search icon and text sit on the rows' avatar and name columns. */
+.agent-select__menu > .header-search {
+  --header-search-icon-slot: 20px;
+}
+
 .code-block-json-node > summary::-webkit-details-marker {
   display: none;
 }

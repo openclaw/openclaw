@@ -54,3 +54,17 @@ export function bindPostgresPool(endpoints: PostgresPoolEndpoints): void {
   }
   postgresPoolState.endpoints = endpoints;
 }
+
+/** Executable cleanup calls this after SQL hosts and native backend-close settlement. */
+export async function closePostgresPool(): Promise<void> {
+  const workers = postgresPoolState.workers;
+  postgresPoolState.workers = undefined;
+  for (const { port } of postgresPoolState.endpoints?.services ?? []) {
+    port.close();
+  }
+  postgresPoolState.endpoints = undefined;
+  postgresPoolState.ready = [];
+  postgresPoolState.refresh = undefined;
+  postgresPoolState.failure = undefined;
+  await Promise.all(workers?.map((worker) => worker.terminate()) ?? []);
+}

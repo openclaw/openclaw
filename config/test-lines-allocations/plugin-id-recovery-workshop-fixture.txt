@@ -1,2 +1,0 @@
-1
-# Isolate the existing staged recovery fixture from Workshop policy migration.

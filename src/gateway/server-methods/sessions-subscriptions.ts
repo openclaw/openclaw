@@ -142,6 +142,7 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
         const rollback = connId
           ? context.subscribeSessionMessageEvents(connId, subscriptionKey, {
               ...(includeApprovals ? { includeApprovals: true } : {}),
+              ...(params.includeLiveToolOutput ? { includeLiveToolOutput: true } : {}),
               provisional: true,
               mode: params.mode,
               subscriptionId: params.subscriptionId,

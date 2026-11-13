@@ -1,2 +1,0 @@
-# Extend the real release-note CLI regression to prove paginated original coauthors, bot/carrier exclusion, and malformed-cursor rejection.
-43

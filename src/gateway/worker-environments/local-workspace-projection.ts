@@ -424,7 +424,7 @@ export function reuseLocalWorkspaceProjection(
   );
 }
 
-/** A live probe can prove there is nothing to publish; changed bytes still require quiescence. */
+/** A live probe can prove there is nothing to publish; changes need a consistent capture. */
 async function probeUnchangedLocalWorkspace(
   owner: LocalWorkspaceOwner,
   store: LocalWorkspaceStore,
@@ -517,7 +517,7 @@ export async function expireLocalWorkspaceProjection(params: {
       if (params.worktree.removedAt === undefined) {
         throw new Error("Cannot expire a live sandbox workspace");
       }
-      const accept = captureWorktreeRegistryReadGuard(context, "lifecycle");
+      const accept = captureWorktreeRegistryReadGuard(context, "lifecycle", params.worktree);
       const record = await readRegistryWorktree(context, params.worktree.id);
       const assertWorktreeCurrent = accept(record);
       params.assertCurrent();
@@ -626,7 +626,8 @@ export async function resolveLocalWorkspaceOwner(params: {
       release();
       return undefined;
     }
-    const accept = captureWorktreeRegistryReadGuard(context, "lifecycle");
+    const selection = { id: entry.worktree.id, ownerKind: "session" } as const;
+    const accept = captureWorktreeRegistryReadGuard(context, "lifecycle", selection);
     const worktree = await readRegistryWorktree(context, entry.worktree.id);
     const assertWorktreeCurrent = accept(worktree);
     if (

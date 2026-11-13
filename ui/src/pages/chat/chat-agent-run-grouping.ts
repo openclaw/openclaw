@@ -200,14 +200,6 @@ export function coalesceAgentRunFrames(
       // A delayed active-session snapshot cannot revive a run whose terminal we already observed.
       if (terminal) {
         activeRunIds.delete(id);
-      }
-      if (
-        terminal ||
-        record.stopReason === "stop" ||
-        record.stopReason === "error" ||
-        assistantMessageIsInterrupted(message) ||
-        resolveAssistantReplyPhase(message) === "final_answer"
-      ) {
         terminalRuns.add(id);
       }
     }

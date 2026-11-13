@@ -187,17 +187,14 @@ suite.define(() => {
           const remember = popup.getByRole("checkbox", { name: /Remember settings for/ });
           expect(await remember.isVisible()).toBe(true);
           const search = popup.getByRole("searchbox", { name: "Search", exact: true });
-          const searchToggle = popup.locator(".header-search__toggle");
-          await searchToggle.waitFor({ state: "visible" });
+          await search.waitFor({ state: "visible" });
           await expectPaletteProjectGrouping(popup);
           await changePicker(popup, "overlay-after-hide", () => page.keyboard.press("Escape"));
           expect(await folder.evaluate((element) => document.activeElement === element)).toBe(true);
           await changePicker(popup, "overlay-after-show", () => folder.press("Enter"));
-          await searchToggle.focus();
-          await searchToggle.press("Enter");
-          await search.waitFor({ state: "visible" });
-          await page.keyboard.type("no-such-workspace");
+          // Keyboard entry opens in the search field.
           expect(await search.evaluate((element) => document.activeElement === element)).toBe(true);
+          await page.keyboard.type("no-such-workspace");
           expect(await popup.locator("[data-machine]").count()).toBe(0);
           await search.fill("");
           await changePicker(popup, "overlay-after-hide", () =>
@@ -306,7 +303,6 @@ suite.define(() => {
             await gateway.waitForRequest("environments.list");
             const workspaceChoice = palette.locator(".palette-session-settings__trigger");
             await changePicker(settings, "overlay-after-show", () => workspaceChoice.click());
-            await settings.locator(".header-search__toggle").click();
             const search = settings.getByRole("searchbox");
             await search.fill("Palette runner");
             await search.press("Escape");

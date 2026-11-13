@@ -1,2 +1,0 @@
-# Ensure delta publications allocate only delivered frames, with dropped-client reset recovery.
-10

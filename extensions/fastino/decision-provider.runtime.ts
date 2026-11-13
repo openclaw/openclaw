@@ -73,7 +73,7 @@ export async function evaluateFastinoDecision(
     }),
     decode: (payload) => {
       const invalid = { status: "unavailable", reason: "invalid-response" } as const;
-      if (!isRecord(payload.answers)) {
+      if (!isRecord(payload) || !isRecord(payload.answers)) {
         return invalid;
       }
       const answers = Object.fromEntries(

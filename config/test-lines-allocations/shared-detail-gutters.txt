@@ -1,2 +1,0 @@
-89
-# Shared page-gutter regression covers catalog-to-detail, cold and Settings-warmed entry, loaded Plugins detail, light/dark, and unchanged tablet/desktop columns; the existing standalone settings check now measures the visible content axis.

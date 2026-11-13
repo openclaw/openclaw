@@ -39,8 +39,7 @@ type EnglishCatalog = TranslationMap & {
   openclawId: TranslationMap;
   agentTools: TranslationMap;
   githubPublication: TranslationMap & Record<"newAction" | "capacity", string>;
-  githubConnections: TranslationMap &
-    Record<"title" | "mine" | "system" | "forMe" | "forSystem", string>;
+  githubConnections: TranslationMap & Record<"title" | "mine" | "system", string>;
   board: TranslationMap & { announcement: TranslationMap; widget: TranslationMap };
   browser: TranslationMap & { errors: TranslationMap; annotatePrompt: TranslationMap };
   pluginUi: TranslationMap & { surface: TranslationMap };
@@ -99,8 +98,7 @@ type EnglishCatalog = TranslationMap & {
           | "automationRecovery"
           | "gatewayRestarted"
           | "cliHarnessContext"
-          | "claudeCliTaskNotification"
-          | "pluginSteering",
+          | "claudeCliTaskNotification",
           TranslationMap
         >;
       mermaid: TranslationMap;
@@ -473,6 +471,7 @@ const startupEnglish = {
     colorMode: "Color mode",
     colorModeOption: "Color mode: {mode}",
     search: "Search",
+    clearSearch: "Clear search",
     pickerNoMatches: "No matches",
     save: "Save",
     saving: "Saving…",
@@ -957,20 +956,14 @@ const startupEnglish = {
     stop: {},
     profile: {},
     title: "Browser",
-    open: "Open",
-    openPanel: "Open browser panel",
     moreActions: "More actions",
     copyUrl: "Copy URL",
-    openNewTab: "Open in new tab",
-    openWithinOpenClaw: "Open in OpenClaw",
     toggle: "Toggle browser panel",
     close: {},
     resize: {},
     newTab: "New tab",
     closeTab: "Close tab",
     untitledTab: {},
-    tweetPost: "Post on X",
-    openPost: "Open post",
     back: {},
     forward: {},
     reload: {},
@@ -1169,6 +1162,7 @@ const startupEnglish = {
     saveErrorTitle: "Couldn’t save this setting. Try again.",
     saveFailed: "The feature setting could not be saved.",
     decisionAssistance: {},
+    usageRankedToolIndex: {},
     codeMode: {},
 
     swarm: {},
@@ -1259,9 +1253,7 @@ const startupEnglish = {
   githubConnections: {
     title: "GitHub accounts",
     mine: "My GitHub",
-    system: "System GitHub",
-    forMe: "For me",
-    forSystem: "For the system",
+    system: "Shared agent account",
   },
   profilePage: {
     personalInstructions: {
@@ -1700,7 +1692,7 @@ const startupEnglish = {
     codeBlock: {},
     workspaceConflict: {},
     compaction: {
-      savedTokens: "saved {count} tokens",
+      savedTokensWithPercent: "saved {count} tokens ({percent}%)",
     },
     sessionReset: {
       label: "Session reset",
@@ -1744,7 +1736,6 @@ const startupEnglish = {
       gatewayRestarted: {},
       cliHarnessContext: {},
       claudeCliTaskNotification: {},
-      pluginSteering: {},
     },
     skillLearned: {},
     progressLabels: {},
@@ -1939,6 +1930,7 @@ const startupEnglish = {
     },
     permissions: {},
     toolCards: {
+      tool: "Tool",
       activity: {},
       review: {},
       verbs: {},

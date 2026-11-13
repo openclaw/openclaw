@@ -215,9 +215,11 @@
   justify-self: center;
 }
 
-.palette-session-settings .palette-session-settings__heading {
-  padding-inline: 7px 2px;
-  border-bottom: 0;
+/* The search icon and text sit on the rows' icon and label columns. */
+.palette-session-settings__heading {
+  --header-search-gap: 11px;
+
+  padding-inline: 10px 2px;
 }
 
 .palette-session-settings__choices {

@@ -172,7 +172,6 @@ it("keeps filtered choices and unavailable rows in DOM order before the existing
     expect(host.querySelector('[data-machine="runtime:hosted"]')).not.toBeNull(),
   );
   const content = get(host, ".palette-session-settings__content");
-  get(content, ".header-search__toggle").click();
   await waitForSolid(() =>
     expect(content.querySelector(".palette-session-settings__search")).not.toBeNull(),
   );
@@ -229,8 +228,6 @@ it("retains focused place choices through a quiet cloud catalog refresh failure"
   await openSettings(host);
   const draft = expectDefined(host.draft.settingsView(), "palette settings").options.draft;
   await draft.gateway.refreshCloudProfiles();
-  await waitForSolid(() => expect(host.querySelector(".header-search__toggle")).not.toBeNull());
-  get(host, ".header-search__toggle").click();
   await waitForSolid(() =>
     expect(host.querySelector(".palette-session-settings__search")).not.toBeNull(),
   );

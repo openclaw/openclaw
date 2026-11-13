@@ -50,6 +50,10 @@ Configure the provider plugin before selecting its model:
   Decisions endpoint. Configure a Celeris key; the model is not a chat model.
 - [Fastino](/providers/fastino) connects to hosted GLiDE. Its current hosted
   selector is unversioned; selecting it does not pin an evaluation checkpoint.
+- [Google](/providers/google#decision-models) uses the bundled `google` plugin
+  and the Gemini Decisions API. Configure a Gemini API key. Text/JSON and inline
+  image evidence use the native endpoint; evaluations send the supplied evidence
+  to Google and incur Gemini API usage charges.
 - [Liquid AI](/providers/liquid-ai) connects directly to hosted d1 and d1 Ultra.
   Install the plugin candidate from a compatible development checkout and
   configure a Liquid AI API key. Text/JSON and inline image evidence use the
@@ -75,6 +79,9 @@ Configure the provider plugin before selecting its model:
   `choice`, and `sort` questions with relevance scores, which suits matching
   judgments such as the Knowledge recall gate, not rubric scoring.
 - [SubQ](/plugins/subq) connects to hosted SubQ Snap for text/JSON decisions.
+  SubQ retired `subq-snap-preview` on November 11, 2026
+  ([Models page](https://docs.subq.ai/using-the-api/models/)); no SubQ model is
+  listed until the hosted catalog publishes one.
   Configure a protected SubQ credential. This V1 adapter supports text/JSON
   input only; it does not expose the vendor API's image input.
 - [TypeSafe AI](/plugins/typesafe) connects to hosted Jev or a self-hosted System One
@@ -93,6 +100,7 @@ The current plugins declare these model references:
 | `baseten/decision-models/baseten-mammoth-27b-latest` | Mammoth 27B            | Baseten credential                                     |
 | `celeris/celeris-1.1-decision`                       | Celeris-1.1 Decision   | Celeris credential                                     |
 | `fastino/fastino/GLiDE`                              | GLiDE (hosted)         | Fastino credential; unversioned hosted selector        |
+| `google/gemini-decision-1`                           | Gemini Decision 1      | Gemini API key                                         |
 | `nace/drex-max-v1.1`                                 | Drex Max v1.1          | Nace credential and model access                       |
 | `onnx/deberta-v3-base-zeroshot-v2.0`                 | DeBERTa Zero-shot v2   | Download pinned ONNX artifacts                         |
 | `onnx/gliclass-base-v3.0`                            | GLiClass Base v3       | Download pinned ONNX artifacts                         |
@@ -104,7 +112,6 @@ The current plugins declare these model references:
 | `openai/gpt-6-luna`                                  | GPT-6 Luna             | OpenAI Platform API key and Decisions API access       |
 | `openrouter/typesafe/jev-1.14`                       | Jev 1.14               | OpenRouter credential                                  |
 | `perplexity-decisions/pplx-decider-v1.2`             | Decider v1.2           | Perplexity credential                                  |
-| `subq/subq-snap-preview`                             | SubQ Snap (preview)    | SubQ credential and account credits                    |
 | `typesafe/jev-1.13.0`                                | Jev 1.13.0             | TypeSafe credential                                    |
 | `typesafe/jev-latest`                                | Jev                    | TypeSafe credential; follows the vendor's latest model |
 | `typesafe/kev-latest`                                | Kev (local server)     | Running System One server and explicit loopback URL    |
@@ -376,7 +383,7 @@ Provider limits differ:
 | Provider    | Choice alternatives | Score levels | Additional limits                                                                  |
 | ----------- | ------------------- | ------------ | ---------------------------------------------------------------------------------- |
 | ONNX        | 2–64                | 2–64         | Up to 32 questions; 512 tokens per encoded input; one MiB of compiled batch inputs |
-| SubQ        | 2–255               | 2–10         | Up to 16 questions; text/JSON state; question IDs at most 100 characters           |
+| SubQ        | 2–255               | 2–10         | Up to 128 questions; text/JSON state; question IDs at most 100 characters          |
 | TypeSafe AI | 2–255               | 2–10         | Subject to the host's batch limits and the vendor input contract                   |
 
 The host bounds JSON evidence to one MiB, 20,000 nodes, and depth 32. V1 accepts
@@ -427,7 +434,7 @@ identify the contract; `evaluate(batch, context)` returns validated typed answer
 or a supported unavailable reason. The context includes the selected model,
 optional agent ID, composed cancellation signal, monotonic deadline, and an optional
 host-owned `isAdmissible()` predicate for automatic consumers. External transports
-check that predicate at final synchronous I/O, after awaited preparation; see the
+check that predicate when the request starts; see the
 [provider contract](/plugins/sdk-overview/capabilities#decision-models-contract-version-1).
 
 Declare provider ownership and static model metadata in the plugin manifest:

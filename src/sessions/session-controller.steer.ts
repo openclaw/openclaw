@@ -53,6 +53,10 @@ export type SessionControllerSteerResult =
       reason:
         | Extract<ReplyMessageInjectionOutcome, { status: "rejected" }>["reason"]
         | "admission_declined";
+      runtimeReason?: Extract<
+        ReplyMessageInjectionOutcome,
+        { status: "rejected" }
+      >["runtimeReason"];
       errorMessage?: string;
     };
 
@@ -163,6 +167,7 @@ export async function beginSessionControllerSteer(
           sessionKey: params.input.mailbox.key,
           activeRunId: attempt.targetRunId,
           reason: nativeOutcome.reason,
+          ...(nativeOutcome.runtimeReason ? { runtimeReason: nativeOutcome.runtimeReason } : {}),
           error: nativeOutcome.errorMessage.slice(0, 512),
         });
       }
@@ -289,8 +294,7 @@ export async function submitSessionControllerSteer(
   });
   const { targetRunId } = finalization;
   if (finalization.status === "rejected") {
-    const { reason, errorMessage } = finalization.outcome;
-    return { status: "rejected", reason, ...(errorMessage ? { errorMessage } : {}) };
+    return finalization.outcome;
   }
   if (finalization.status === "indeterminate") {
     return {
