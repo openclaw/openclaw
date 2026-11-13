@@ -42,7 +42,7 @@ export default defineSingleProviderPluginEntry({
               cacheRead: 0.0022,
               cacheWrite: 0,
             },
-            contextWindow: 192000,
+            contextWindow: 1000000,
             maxTokens: 192000,
           },
         ],
