@@ -156,13 +156,14 @@ pairing URL to the Docker host's clipboard.
 
 ```powershell
 docker compose up --wait openclaw-gateway
-(docker compose run --rm -T openclaw-cli dashboard --json | ConvertFrom-Json).browserUrl | Set-Clipboard
+(docker compose exec -T openclaw-gateway node openclaw.mjs dashboard --json | ConvertFrom-Json).browserUrl | Set-Clipboard
 ```
 
-Paste the URL into a browser on the Docker host within 10 minutes. If the
-Control UI is still preparing or the link expires, rerun the second command.
-The named volumes preserve the configuration, workspace, and auth-profile keys
-when you replace the container.
+Run `dashboard` inside the Gateway container so it can create the pairing link
+in the Gateway's state. Paste the URL into a browser on the Docker host within
+10 minutes. If the Control UI is still preparing or the link expires, rerun the
+second command. The named volumes preserve the configuration, workspace, and
+auth-profile keys when you replace the container.
 
 ### Using the Control UI browser
 
