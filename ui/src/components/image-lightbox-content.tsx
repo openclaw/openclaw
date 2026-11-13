@@ -413,12 +413,7 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
   };
 
   const downloadCurrentImage = () => {
-    const item = gallery.peek().current ?? {
-      src: props.src,
-      originalSrc: props.originalSrc,
-      title: props.imageTitle,
-      readOriginalBlob: props.readOriginalBlob,
-    };
+    const item = gallery.peek().current!;
     return downloadLightboxImage(item.originalSrc || item.src, item.title, item.readOriginalBlob);
   };
 
@@ -550,6 +545,11 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
           hasGallery={hasGallery()}
           isVideo={props.mediaKind === "video"}
           onDownloadImage={downloadCurrentImage}
+          onUseImage={
+            props.onUseImage &&
+            (() => gallery.useCurrentImage(props.onUseImage, () => host.isConnected && !disposed))
+          }
+          useImageDisabled={galleryState().busy || !currentImage()}
           onClose={emitClose}
         >
           <Show when={galleryState().upgrading || galleryState().upgradeFailed}>

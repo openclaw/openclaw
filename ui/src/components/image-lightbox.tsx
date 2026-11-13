@@ -52,6 +52,7 @@ const ImageLightbox = defineSolidBridge<ImageLightboxProps>(
   ),
   {
     properties: {
+      onUseImage: { default: undefined, attribute: false },
       connectVideo: { default: undefined, attribute: false },
       gallery: { default: undefined, attribute: false },
       loadDisplayImage: { default: undefined, attribute: false },
@@ -70,11 +71,13 @@ const ImageLightbox = defineSolidBridge<ImageLightboxProps>(
 export function ImageLightboxItemView(props: {
   item: ImageLightboxItem | null | undefined;
   onClose: () => void;
+  onUseImage?: ImageLightboxProps["onUseImage"];
 }) {
   return (
     <Show when={props.item}>
       {(item) => (
         <ImageLightbox
+          onUseImage={props.onUseImage}
           mediaKind={item().kind ?? "image"}
           gallery={item().gallery}
           connectVideo={item().connectVideo}

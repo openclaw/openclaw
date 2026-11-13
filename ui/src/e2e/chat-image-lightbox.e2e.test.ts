@@ -1,10 +1,11 @@
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContextOptions, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { openChatPanels } from "../test-helpers/chat-layout-menu.ts";
 import { mediaTicketPayload } from "../test-helpers/control-ui-attachment-fixtures.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   exactButton,
@@ -97,6 +98,174 @@ async function installImageGalleries(page: Page) {
 }
 
 suite.define(() => {
+  it.each([false, true])(
+    "uses the selected original in the existing draft without sending (mobile=%s)",
+    async (mobile) => {
+      const page = await newPage(
+        mobile ? { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true } : {},
+      );
+      const images = await page.evaluate(() =>
+        [0, 1].map((index) => {
+          const canvas = document.createElement("canvas");
+          canvas.width = 720;
+          canvas.height = 400;
+          const drawing = canvas.getContext("2d")!;
+          drawing.fillStyle = index ? "#f4bf83" : "#a9c8d4";
+          drawing.fillRect(0, 0, 720, 400);
+          drawing.fillStyle = "#fff2c8";
+          drawing.beginPath();
+          drawing.arc(540, 98, 43, 0, Math.PI * 2);
+          drawing.fill();
+          drawing.fillStyle = index ? "#4d7c83" : "#235774";
+          drawing.fillRect(0, 200, 720, 200);
+          drawing.fillStyle = "#e1c9a1";
+          drawing.beginPath();
+          drawing.moveTo(0, 180);
+          drawing.lineTo(310, 400);
+          drawing.lineTo(0, 400);
+          drawing.fill();
+          drawing.fillStyle = "#fff7e4";
+          drawing.font = "bold 28px sans-serif";
+          drawing.fillText("COASTAL STUDIES / 0" + (index + 1), 32, 48);
+          return canvas.toDataURL("image/png");
+        }),
+      );
+      const thumbnails = await page.evaluate(
+        (originals) =>
+          Promise.all(
+            originals.map(async (source) => {
+              const image = new Image();
+              image.src = source;
+              await image.decode();
+              const canvas = document.createElement("canvas");
+              canvas.width = 360;
+              canvas.height = 200;
+              canvas.getContext("2d")!.drawImage(image, 0, 0, 360, 200);
+              return canvas.toDataURL("image/png");
+            }),
+          ),
+        images,
+      );
+      const sources = [
+        "media://inbound/coastal-direction-1.png",
+        "media://inbound/coastal-direction-2.png",
+      ];
+      const originalReads: string[] = [];
+      await page.route("**/__openclaw__/assistant-media?**", async (route) => {
+        const url = new URL(route.request().url());
+        const index = sources.indexOf(url.searchParams.get("source") ?? "");
+        expect(index).toBeGreaterThanOrEqual(0);
+        if (url.searchParams.get("meta") === "1") {
+          await route.fulfill({ json: mediaTicketPayload("composer-original", 300_000) });
+        } else {
+          const original = !url.searchParams.has("variant");
+          if (original) {
+            originalReads.push(sources[index]!);
+          }
+          await route.fulfill({
+            contentType: "image/png",
+            body: Buffer.from(
+              (original ? images[index]! : thumbnails[index]!).split(",")[1]!,
+              "base64",
+            ),
+          });
+        }
+      });
+      const gateway = await installMockGateway(page, {
+        historyMessages: [
+          chatMessage("user", "Explore two directions for the coastal postcard."),
+          chatMessage(
+            "assistant",
+            "Two coastal studies.\n\n" + sources.map((source) => "MEDIA:" + source).join("\n"),
+          ),
+        ],
+      });
+      await page.goto(suite.server.baseUrl + "chat");
+      await gateway.waitForRequest("sessions.messages.subscribe");
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const draft = "Keep this composition, but make the sky warmer.";
+      await composer.fill(draft);
+      await page.locator(".agent-chat__file-input").setInputFiles({
+        name: "art-notes.txt",
+        mimeType: "text/plain",
+        buffer: Buffer.from("Keep the shoreline."),
+      });
+      await page
+        .locator(".chat-attachments-preview")
+        .getByText("art-notes.txt", { exact: true })
+        .waitFor();
+      await exactButton(page, "Open image coastal-direction-1.png").click();
+      await expectLoadedImage(page.locator("openclaw-image-lightbox .image"));
+      if (mobile) {
+        await exactButton(page, "Next image").click();
+      } else {
+        await page.keyboard.press("ArrowRight");
+      }
+      const dialog = page.getByRole("dialog", { name: "Image preview: coastal-direction-2.png" });
+      await dialog.waitFor();
+      await expectLoadedImage(page.locator("openclaw-image-lightbox .image"));
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        const frame = await takeControlUiScreenshotFrame(
+          page,
+          dialog,
+          [exactButton(page, "Download image")],
+          { animations: "disabled" },
+        );
+        await writeFile(
+          path.join(suite.artifactDir, mobile ? "selected-image-mobile.png" : "selected-image.png"),
+          frame.png,
+        );
+      }
+      const use = exactButton(page, "Use in message");
+      await use.waitFor({ timeout: 3000 });
+      if (mobile) {
+        const bounds = await use.boundingBox();
+        const zoom = await page.locator("openclaw-image-lightbox .zoom-controls").boundingBox();
+        expect(bounds!.x).toBeGreaterThanOrEqual(0);
+        expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390);
+        expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(zoom!.y);
+        await use.tap();
+      } else {
+        await use.focus();
+        await page.keyboard.press("Enter");
+      }
+      await expect.poll(() => page.locator("openclaw-image-lightbox").count()).toBe(0);
+      await page
+        .locator(".chat-attachments-preview")
+        .getByRole("img", { name: "coastal-direction-2.png" })
+        .waitFor();
+      expect(await composer.inputValue()).toBe(draft);
+      expect(originalReads).toEqual([sources[1]]);
+      await expectFocused(composer);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        const frame = await takeControlUiScreenshotFrame(
+          page,
+          composer,
+          [composer, page.locator(".chat-attachments-preview")],
+          { animations: "disabled" },
+        );
+        await writeFile(
+          path.join(suite.artifactDir, mobile ? "staged-image-mobile.png" : "staged-image.png"),
+          frame.png,
+        );
+      }
+      await exactButton(page, "Send message").click();
+      const sent = await gateway.waitForRequest("chat.send");
+      expect(sent.params).toMatchObject({
+        message: draft,
+        attachments: [
+          { fileName: "art-notes.txt", mimeType: "text/plain" },
+          {
+            fileName: "coastal-direction-2.png",
+            mimeType: "image/png",
+            content: images[1]!.split(",")[1],
+          },
+        ],
+      });
+    },
+  );
+
   it("opens transcript and sidebar images in one accessible modal", async () => {
     const banner = await readFile(path.join(process.cwd(), "docs/assets/openclaw-banner-dark.png"));
     const bannerBase64 = banner.toString("base64");
@@ -297,7 +466,8 @@ suite.define(() => {
         const image = stage.querySelector("img");
         const header = root?.querySelector(".header");
         const controls = root?.querySelector(".zoom-controls");
-        if (!image || !header || !controls) {
+        const footer = root?.querySelector(".lightbox-footer");
+        if (!image || !header || !controls || !footer) {
           throw new Error("missing lightbox geometry");
         }
         const rect = (element: Element) => {
@@ -313,6 +483,7 @@ suite.define(() => {
           image: imageBox,
           stage: stageBox,
           overlapsControls: overlaps(rect(controls)),
+          overlapsFooter: overlaps(rect(footer)),
           overlapsHeader: overlaps(rect(header)),
         };
       });
@@ -327,10 +498,18 @@ suite.define(() => {
     expect(mobileImageLayout.image.right).toBeLessThanOrEqual(mobileImageLayout.stage.right);
     expect(mobileImageLayout.image.top).toBeGreaterThanOrEqual(mobileImageLayout.stage.top);
     expect(mobileImageLayout.image.bottom).toBeLessThanOrEqual(mobileImageLayout.stage.bottom);
-    expect(mobileImageLayout).toMatchObject({ overlapsHeader: false, overlapsControls: false });
+    expect(mobileImageLayout).toMatchObject({
+      overlapsHeader: false,
+      overlapsControls: false,
+      overlapsFooter: false,
+    });
     await page.setViewportSize({ height: 500, width: 932 });
     const landscapeLayout = await readMobileLayout();
-    expect(landscapeLayout).toMatchObject({ overlapsHeader: false, overlapsControls: false });
+    expect(landscapeLayout).toMatchObject({
+      overlapsHeader: false,
+      overlapsControls: false,
+      overlapsFooter: false,
+    });
     await page.setViewportSize({ height: 844, width: 390 });
     const readMobileScale = () =>
       mobileImage.evaluate((image) =>

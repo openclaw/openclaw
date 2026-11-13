@@ -44,6 +44,10 @@ earlier response turns.
 When more than one item is available, use the visible previous/next buttons,
 Left/Right arrow keys, or touch swipes to browse; the counter shows your position.
 Older messages that have not been loaded are not fetched just to fill the viewer.
+In an editable conversation, **Use in message** attaches the selected image’s
+original to the current composer, keeping your text and existing attachments.
+Normal upload limits and image preparation apply. Nothing is sent until you send
+the message.
 
 Optional surfaces follow the permissions granted to the current connection.
 Session-only roles do not load the plugin UI catalog, Side Chat history, observer

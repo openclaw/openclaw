@@ -15,6 +15,8 @@ const enChatMedia = {
       openOriginal: "Open in new tab",
       copy: "Copy image",
       download: "Download image",
+      useInMessage: "Use in message",
+      useFailed: "Couldn’t attach this image. Try again.",
       copyFailed: "Couldn’t copy this image. Check clipboard access and try again.",
       downloadFailed: "Couldn’t download this image. Try again.",
       loadFailed: "Couldn’t load this image. Try again.",

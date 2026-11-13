@@ -605,7 +605,7 @@ export abstract class ChatPaneStateOwner {
     reactions: new Map(),
   };
   protected readonly sessionSharingHydrationTargets = new Map<string, string>();
-  protected readonly sessionParticipationTracker = new SessionParticipationTracker();
+  readonly sessionParticipationTracker = new SessionParticipationTracker();
   readonly resetConfirmation: {
     pending:
       | {

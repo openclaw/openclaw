@@ -2,7 +2,10 @@ import type { JSX as SolidJSX } from "@solidjs/web";
 import { createSignal, lazy, Show } from "solid-js";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { ImageLightboxItemView } from "../../components/image-lightbox.tsx";
-import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
+import type {
+  ImageLightboxItem,
+  ImageLightboxProps,
+} from "../../components/image-lightbox.types.ts";
 import { SessionBackgroundView } from "../../components/session-background-view.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { useScrollState } from "../../components/solid/scroll-state.ts";
@@ -184,6 +187,7 @@ export type PaneLayoutData = {
     presentation: PresentationValue;
     image: ImageLightboxItem | null;
     onCloseImage: () => void;
+    onUseImage?: ImageLightboxProps["onUseImage"];
     reset: ChatBoardResetConfirmationProps | null;
   };
 };
@@ -234,6 +238,7 @@ function PaneContent(props: { data: PaneLayoutData; questions: ComposerQuestions
         <ImageLightboxItemView
           item={props.data.overlays.image}
           onClose={() => props.data.overlays.onCloseImage()}
+          onUseImage={props.data.overlays.onUseImage}
         />
         <Show when={props.data.overlays.reset}>
           {(reset) => (

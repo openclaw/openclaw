@@ -94,6 +94,10 @@ openclaw-image-lightbox {
     outline: none;
   }
 
+  .use-image {
+    min-height: 44px;
+  }
+
   .download-image {
     gap: 8px;
     min-height: 44px;
@@ -322,6 +326,19 @@ openclaw-image-lightbox {
     .stage {
       padding: calc(68px + var(--safe-area-top, 0px)) calc(12px + var(--safe-area-right, 0px))
         calc(64px + var(--safe-area-bottom, 0px)) calc(12px + var(--safe-area-left, 0px));
+    }
+
+    .lightbox--compose .stage {
+      padding-bottom: calc(116px + var(--safe-area-bottom, 0px));
+    }
+
+    .lightbox--compose .gallery-error {
+      bottom: max(120px, calc(116px + var(--safe-area-bottom, 0px)));
+    }
+
+    openclaw-modal-actions.lightbox-footer--compose {
+      bottom: max(68px, calc(64px + var(--safe-area-bottom, 0px)));
+      max-width: calc(100vw - 32px);
     }
 
     .download-image {

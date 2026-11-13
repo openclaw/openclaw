@@ -152,3 +152,28 @@ it("loads on selection, reuses neighbors and releases evictions", async () => {
   await Promise.resolve();
   expect(images.map((image) => image.release.mock.calls.length)).toEqual([0, 1, 1, 1, 0]);
 });
+
+it("keeps a composer selection through sharpening but retires it on navigation", async () => {
+  const sharper = createDeferred<ImageLightboxItem | null>();
+  const complete = createDeferred();
+  const preview = { ...imageItem("preview"), loadDisplayImage: () => sharper.promise };
+  const neighbor = imageItem("neighbor");
+  controller.reset({ index: 0, items: [async () => preview, async () => neighbor] }, preview);
+  let currentSelection = () => false;
+  const pending = controller.useCurrentImage(
+    async (_item, current) => {
+      currentSelection = current;
+      await complete.promise;
+    },
+    () => true,
+  );
+  expect(currentSelection()).toBe(true);
+  const detail = imageItem("detail");
+  sharper.resolve(detail);
+  await vi.waitFor(() => expect(controller.peek().current).toBe(detail));
+  expect(currentSelection()).toBe(true);
+  await controller.move(1);
+  expect(currentSelection()).toBe(false);
+  complete.resolve();
+  await pending;
+});
