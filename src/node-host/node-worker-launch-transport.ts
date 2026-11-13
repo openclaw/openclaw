@@ -54,6 +54,7 @@ import {
   type NodeWorkerCredentialScrubber,
 } from "./node-worker-output.js";
 import type { NodeWorkerProcessIdentity } from "./node-worker-process-identity.js";
+import { nodeWorkerEnvironmentBinding } from "./node-worker-supervisor-ownership.js";
 
 export type NodeWorkerChildAdapter = AwaitedStdoutChildAdapter & {
   confirmExtinction?: () => boolean;
@@ -200,6 +201,7 @@ export async function prepareNodeWorkerLaunchTransport(
         ? await prepareNodeWorkerFilesystem({
             workspaceDir: options.descriptor.assignment.workspaceDir,
             bundleRoot: options.bundleRoot,
+            placement: nodeWorkerEnvironmentBinding(options.input),
             entry,
             homeDir: options.homeDir,
             env: workerOptions.env,

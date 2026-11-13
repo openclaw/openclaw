@@ -1,0 +1,2 @@
+# Node-host launch must admit its assigned placement and reject a different gateway or epoch.
+38

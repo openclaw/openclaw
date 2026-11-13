@@ -5,11 +5,16 @@ import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { removeTemporaryArtifacts } from "../infra/temp-artifact-cleanup.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import {
+  nodeWorkerManagedWorkspacePath,
+  type NodeWorkerWorkspaceLaunchReference,
+} from "./node-worker-workspace-identity.js";
 
 /** Node-owned grants; a worker descriptor cannot add filesystem permissions. */
 export async function prepareNodeWorkerFilesystem(params: {
   workspaceDir: string;
   bundleRoot: string;
+  placement?: NodeWorkerWorkspaceLaunchReference;
   entry: string;
   homeDir?: string;
   env: NodeJS.ProcessEnv;
@@ -105,9 +110,17 @@ export async function prepareNodeWorkerFilesystem(params: {
     protectPathEntries(root);
     return canonicalRoot;
   };
+  const stateRoot = protectRuntimePath(params.bundleRoot);
+  const { placement } = params;
+  const isManagedWorkspace =
+    placement &&
+    workspace === params.workspaceDir &&
+    workspace === nodeWorkerManagedWorkspacePath(stateRoot, placement);
   const protectedRuntimePaths = [
     ...new Set([
-      params.bundleRoot,
+      isManagedWorkspace
+        ? path.join(params.bundleRoot, placement.gatewayNamespace, "bundles")
+        : params.bundleRoot,
       ...runtimePaths,
       // Keep broad read grants from excluding otherwise disjoint project directories.
       ...readOnlyPaths.filter((root) => root !== "/usr" && root !== "/proc"),
@@ -119,6 +132,7 @@ export async function prepareNodeWorkerFilesystem(params: {
   const assertWritableRoot = (directory: string) => {
     // Landlock grants are additive: a read-only rule cannot subtract a write grant.
     if (
+      (directory !== workspace && isPathInside(stateRoot, directory)) ||
       protectedRuntimePaths.some(
         (root) => isPathInside(directory, root) || isPathInside(root, directory),
       ) ||
