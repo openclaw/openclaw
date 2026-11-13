@@ -142,6 +142,9 @@ const workScope = new AsyncLocalStorage<ActiveWork>();
 const active = new Set<ActiveWork>();
 const work: object[] = [];
 const costs: object[] = [];
+const handlerPrewarmReady = Promise.withResolvers<void>();
+let expectedHandlerLoads: number | undefined;
+let completedHandlerLoads = 0;
 let recording = false;
 let previous = resources();
 let previousAt = performance.now();
@@ -197,9 +200,22 @@ async function measureWork<T>(kind: WorkKind, commit: string | undefined, run: (
         ...used(before),
       });
     }
+    if (kind === "other-prewarm" && ++completedHandlerLoads === expectedHandlerLoads) {
+      handlerPrewarmReady.resolve();
+    }
   }
 }
-Object.defineProperty(globalThis, instrumentation, { configurable: true, value: measureWork });
+Object.defineProperty(globalThis, instrumentation, {
+  configurable: true,
+  value: Object.assign(measureWork, {
+    handlerCount(count: number) {
+      expectedHandlerLoads = count;
+      if (completedHandlerLoads === count) {
+        handlerPrewarmReady.resolve();
+      }
+    },
+  }),
+});
 const hooks = registerHooks({
   load(url, context, next) {
     const name = path.basename(url);
@@ -227,6 +243,12 @@ const hooks = registerHooks({
         source += `\nexport async function ${fn}(...args: Parameters<typeof measured_${fn}>) { return await globalThis[Symbol.for("openclaw.perf.sandbox-template-prewarm")]("${kind}", args[0].baseCommit, () => measured_${fn}(...args)); }\n`;
       }
       if (handlers) {
+        const inventory = "const items = gatewayPrewarmItems(params.getConfig);";
+        assert(source.includes(inventory), "Handler inventory instrumentation must bind both arms");
+        source = source.replace(
+          inventory,
+          `${inventory}\nglobalThis[Symbol.for("openclaw.perf.sandbox-template-prewarm")].handlerCount(items.length);`,
+        );
         const load = "const load = () => item.load(() => stopped || isBusy());";
         assert(source.includes(load), "Handler prewarm instrumentation must bind both arms");
         source = source.replace(
@@ -447,8 +469,12 @@ const runCampaign = async () => {
   const loop = monitorEventLoopDelay({ resolution: 10 });
   const profiler = new Session();
   profiler.connect();
+  const profileTiming: Array<{ event: string; beforeMs: number; afterMs: number }> = [];
   try {
     await request("seed", commits[0]!);
+    // A base advance on a running Gateway follows its one-time handler prewarm.
+    // Observe the actual inventory settlement, rather than sleeping or cancelling it.
+    await handlerPrewarmReady.promise;
     admittedVerificationAt = readSqliteDatabaseIntegrityVerification(
       agentSeedBefore.databasePath,
     )?.verifiedAt;
@@ -461,7 +487,13 @@ const runCampaign = async () => {
     await delay(0);
     events.length = 0;
     await profiler.post("Profiler.enable");
+    const profileStartBefore = performance.now();
     await profiler.post("Profiler.start");
+    profileTiming.push({
+      event: "start",
+      beforeMs: profileStartBefore,
+      afterMs: performance.now(),
+    });
     replayOrigin = clockNow();
     const before = resources();
     const started = performance.now();
@@ -488,7 +520,9 @@ const runCampaign = async () => {
       eventLoopP99Ms: loop.percentile(99) / 1e6,
       eventLoopMaxMs: loop.max / 1e6,
     });
+    const profileStopBefore = performance.now();
     const { profile } = await profiler.post("Profiler.stop");
+    profileTiming.push({ event: "stop", beforeMs: profileStopBefore, afterMs: performance.now() });
     await fs.writeFile(path.join(output, "campaign.cpuprofile"), JSON.stringify(profile));
     for (const verify of verifications) {
       await verify();
@@ -524,6 +558,8 @@ const runCampaign = async () => {
             rows,
             work,
             costs,
+            profileTiming,
+            completedHandlerLoads,
             events,
             errors,
             templateSnapshotWhileLive: templates !== undefined,
