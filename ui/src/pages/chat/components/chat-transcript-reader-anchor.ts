@@ -19,12 +19,16 @@ type ReaderAnchorHost = {
   readonly contentElement: HTMLDivElement | null;
 };
 
-/** The first content the reader sees, located inside its row. */
+/**
+ * Content the reader sees in the row crossing the top edge, in anchoring order: content starting
+ * at or below the edge, then content the edge cuts through. The first still in the row anchors.
+ * `from`/`until` bound the edge positions (row offsets) for which this order still holds.
+ */
 type ReaderContent = {
   readonly row: HTMLElement;
-  readonly element: Element;
-  readonly offset: number;
-  readonly height: number;
+  readonly from: number;
+  readonly until: number;
+  readonly candidates: readonly { readonly element: Element; readonly offset: number }[];
 };
 
 /** A row first measured while crossing the top edge was laid out above the reader. */
@@ -46,9 +50,9 @@ function isAboveReader(top: number, height: number, first: boolean, readerTop: n
  * scrollMargin). It folds into scrollTop at the start boundary or once scrolling settles.
  *
  * Content can also change size inside the row at the reader's top edge, such as a preview image
- * that loads above text the reader already sees. Like native scroll anchoring (disabled on the
- * transcript), the first content at or below that edge is recorded after each scroll and resize
- * delivery, and growth above it inside the row is compensated the same way.
+ * or diagram that renders above text the reader already sees. Like native scroll anchoring
+ * (disabled on the transcript), the content at that edge is recorded after each scroll and
+ * resize delivery, and growth above it inside the row is compensated the same way.
  */
 export class TranscriptReaderAnchor {
   focusedRowKey: string | null = null;
@@ -63,9 +67,9 @@ export class TranscriptReaderAnchor {
   private readonly heights = new WeakMap<Element, number>();
   // Corrections applied to native geometry before virtual-core measured the row.
   private readonly unlanded = new Map<string, number>();
-  // Rows the reader was moved inside of, by corrected height. Landing that size moves no reader
-  // the correction did not already move, though the moved reader now sees the old size as above.
-  private readonly unlandedWithin = new Map<string, number>();
+  // Unlanded corrections made inside the reader's row. Its growth below the reader moves no
+  // reader, so landing it owes no further scroll.
+  private readonly unlandedWithin = new Set<string>();
   private columnShift = 0;
   private landedShift = 0;
   private owedScroll = 0;
@@ -179,7 +183,6 @@ export class TranscriptReaderAnchor {
         : undefined;
     let moved = 0;
     let correction = 0;
-    let within = 0;
     for (const { entry, row, top } of rows) {
       const key = row.dataset.virtualRowKey;
       const box = entry.borderBoxSize?.[0];
@@ -201,28 +204,29 @@ export class TranscriptReaderAnchor {
       const previousTop = top - moved;
       moved += delta;
       const index = virtualizer.indexFromElement(row);
-      const above =
-        isAboveReader(previousTop, previous, first, readerTop) ||
-        (first && retainedIndex !== undefined && index < retainedIndex);
-      if (compensating && !above && Math.abs(delta) >= 0.5) {
-        const shift = this.contentShift(row);
-        if (shift) {
-          within += shift;
-          this.unlandedWithin.set(key, height);
-        }
-      }
       if (
         !compensating ||
         !range ||
         index < range.startIndex - overscan ||
         index > range.endIndex + overscan ||
-        Math.abs(delta) < 0.5 ||
-        !above
+        Math.abs(delta) < 0.5
       ) {
         continue;
       }
-      correction += delta;
-      this.unlanded.set(key, (this.unlanded.get(key) ?? 0) + delta);
+      // A row above the reader moves it by its whole change; the reader's own row by the part
+      // above the content the reader sees.
+      const above =
+        isAboveReader(previousTop, previous, first, readerTop) ||
+        (first && retainedIndex !== undefined && index < retainedIndex);
+      const applied = above ? delta : this.contentShift(row);
+      if (!applied) {
+        continue;
+      }
+      if (!above) {
+        this.unlandedWithin.add(key);
+      }
+      correction += applied;
+      this.unlanded.set(key, (this.unlanded.get(key) ?? 0) + applied);
     }
     if (this.host.prependAnchor.messageKey !== null) {
       this.host.renderer.queueAfterCommit(this.onRowsMeasured);
@@ -239,43 +243,37 @@ export class TranscriptReaderAnchor {
         this.scrollBy(correction, offset);
       }
     }
-    // The row's virtual start is unchanged, so only the reader moves within it. A held shift
-    // moves the column instead, and scrollMargin follows the rows it moved.
-    if (within) {
-      if (this.holdsNativeOffset()) {
-        this.columnShift += within;
-        this.shiftVirtual(within);
-        this.syncColumn();
-      } else {
-        this.scrollBy(within);
-      }
-    }
     this.captureReaderContent(true);
+  };
+
+  /** The recorded content the reader sees, while it is still in its row. */
+  readonly readerElement = (): Element | null => {
+    const content = this.readerContent;
+    return (
+      content?.candidates.find(({ element }) => content.row.contains(element))?.element ?? null
+    );
   };
 
   /** How far the recorded reader content moved inside a resized row. */
   private contentShift(row: HTMLElement): number {
     const content = this.readerContent;
     // At native zero the reader is at the start, where new content stays visible.
-    if (
-      content?.row !== row ||
-      !row.contains(content.element) ||
-      !this.host.scrollElement?.scrollTop
-    ) {
+    if (content?.row !== row || !this.host.scrollElement?.scrollTop) {
+      return 0;
+    }
+    const anchor = content.candidates.find(({ element }) => row.contains(element));
+    if (!anchor) {
       return 0;
     }
     const shift =
-      content.element.getBoundingClientRect().top -
-      row.getBoundingClientRect().top -
-      content.offset;
+      anchor.element.getBoundingClientRect().top - row.getBoundingClientRect().top - anchor.offset;
     return Math.abs(shift) < 0.5 ? 0 : shift;
   }
 
   /**
-   * Record the first content at or below the reader's top edge: the deepest first element of the
-   * row crossing that edge which still reaches below it. Runs after every native scroll and resize
-   * delivery, so the record describes the layout the next size change starts from. `refresh`
-   * re-reads a record the reader is still inside, after its row's layout changed.
+   * Record the content the reader sees in the row crossing the top edge. Runs after every native
+   * scroll and resize delivery, so the record describes the layout the next size change starts
+   * from. `refresh` re-reads a record the reader is still inside, after its row's layout changed.
    */
   captureReaderContent(refresh = false): void {
     const element = this.host.scrollElement;
@@ -285,16 +283,12 @@ export class TranscriptReaderAnchor {
     }
     const readerTop = element.getBoundingClientRect().top;
     const previous = this.readerContent;
-    if (!refresh && previous?.row.isConnected && previous.row.contains(previous.element)) {
+    if (!refresh && previous?.row.isConnected) {
       // Offsets inside a row change only when it resizes, so scrolling within the recorded
-      // content keeps the record without walking the row again.
+      // range keeps the record without walking the row again.
       const rect = previous.row.getBoundingClientRect();
       const edge = readerTop - rect.top;
-      if (
-        rect.bottom > readerTop &&
-        edge >= previous.offset &&
-        edge < previous.offset + previous.height
-      ) {
+      if (rect.bottom > readerTop && edge >= previous.from && edge <= previous.until) {
         return;
       }
     }
@@ -312,40 +306,64 @@ export class TranscriptReaderAnchor {
       }
     }
     // A scroll event can run after this frame's content change and before its resize delivery;
-    // keep the record of the layout that change started from.
+    // keep the record of the layout that change started from. After a delivery, a further
+    // change already laid out leaves no layout to record.
     const delivered = row && this.heights.get(row);
-    if (
-      row &&
+    const pending =
+      row !== undefined &&
       delivered !== undefined &&
-      Math.abs(row.getBoundingClientRect().height - delivered) >= 0.5
-    ) {
+      Math.abs(row.getBoundingClientRect().height - delivered) >= 0.5;
+    if (pending && !refresh) {
       return;
     }
     this.readerContent = null;
-    if (!row) {
+    if (!row || pending) {
       return;
     }
-    let content: Element = row;
+    // Like native scroll anchoring, walk into the content the edge cuts until reaching the first
+    // content that starts at or below it; that anchors whole, so content growing inside what the
+    // reader fully sees moves what follows. The cut content can be what changes (a diagram's
+    // toolbar while its image grows below it), so it anchors only as a last resort.
+    const rowTop = row.getBoundingClientRect().top;
+    const edge = readerTop - rowTop;
+    const below: { element: Element; offset: number }[] = [];
+    const cut: { element: Element; offset: number }[] = [];
+    let until = row.getBoundingClientRect().height;
+    let walked: Element = row;
     let child = row.firstElementChild;
     while (child) {
       const rect = child.getBoundingClientRect();
       if (rect.height > 0 && rect.bottom > readerTop) {
-        content = child;
+        const offset = rect.top - rowTop;
+        walked = child;
+        if (offset >= edge - 0.5) {
+          below.push({ element: child, offset });
+          until = Math.min(until, offset);
+          break;
+        }
+        cut.unshift({ element: child, offset });
+        until = Math.min(until, rect.bottom - rowTop);
         child = child.firstElementChild;
       } else {
         child = child.nextElementSibling;
       }
     }
-    if (content === row) {
+    // A rendered replacement (a diagram for its source block) detaches what it replaces; the
+    // content after it still marks the reader's place.
+    for (let node: Element | null = walked; node && node !== row; node = node.parentElement) {
+      let next = node.nextElementSibling;
+      while (next && !next.getBoundingClientRect().height) {
+        next = next.nextElementSibling;
+      }
+      const offset = next ? next.getBoundingClientRect().top - rowTop : -Infinity;
+      if (next && offset >= edge - 0.5) {
+        below.push({ element: next, offset });
+      }
+    }
+    if (!below.length && !cut.length) {
       return;
     }
-    const rect = content.getBoundingClientRect();
-    this.readerContent = {
-      row,
-      element: content,
-      offset: rect.top - row.getBoundingClientRect().top,
-      height: rect.height,
-    };
+    this.readerContent = { row, from: edge, until, candidates: [...below, ...cut] };
     // Entering bubbles animate a transform that rects include and row sizes don't. Record the
     // settled layout once the row's running animations end; a size change mid-animation stays
     // approximate. Activity shimmer never ends and moves nothing; a finished animation that
@@ -386,11 +404,7 @@ export class TranscriptReaderAnchor {
       return false;
     }
     const key = String(item.key);
-    const corrected = this.unlandedWithin.get(key);
-    this.unlandedWithin.delete(key);
-    if (corrected !== undefined && Math.abs(item.size + delta - corrected) < 0.5) {
-      return false;
-    }
+    const within = this.unlandedWithin.delete(key);
     const applied = this.unlanded.get(key);
     this.unlanded.delete(key);
     const readerTop = instance.scrollOffset ?? 0;
@@ -410,7 +424,7 @@ export class TranscriptReaderAnchor {
       this.landedShift += delta;
       return false;
     }
-    const owed = delta - applied;
+    const owed = within ? 0 : delta - applied;
     this.landedShift += applied;
     if (this.holdsNativeOffset()) {
       this.columnShift += owed;
@@ -424,23 +438,16 @@ export class TranscriptReaderAnchor {
   /** Apply corrections collected while virtual-core landed a measurement batch. */
   flush(): void {
     const { virtualizer } = this.host;
-    // A row unmounted before its measurement landed no longer extends the flow, and
-    // measurement without scroll adjustment lands sizes without consulting landSize.
-    const settled = (key: string): boolean => {
+    for (const [key, applied] of this.unlanded) {
       const row = virtualizer.elementsCache.get(key);
-      return (
+      // A row unmounted before its measurement landed no longer extends the flow, and
+      // measurement without scroll adjustment lands sizes without consulting landSize.
+      if (
         row?.isConnected !== true ||
         Math.abs((virtualizer.itemSizeCache.get(key) ?? -1) - (this.heights.get(row) ?? 0)) < 0.5
-      );
-    };
-    for (const [key, applied] of this.unlanded) {
-      if (settled(key)) {
+      ) {
         this.landedShift += applied;
         this.unlanded.delete(key);
-      }
-    }
-    for (const key of this.unlandedWithin.keys()) {
-      if (settled(key)) {
         this.unlandedWithin.delete(key);
       }
     }

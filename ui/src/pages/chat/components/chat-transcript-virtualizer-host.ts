@@ -147,7 +147,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   private readonly rowRefs: TranscriptRowRefs;
   private readonly readerAnchor = new TranscriptReaderAnchor(this, this.reconcilePosition);
   private readonly captureInteractionResize = (event: Event) => {
-    const anchor = resolveChatTranscriptInteractionAnchor(event);
+    const anchor = resolveChatTranscriptInteractionAnchor(event, this.readerAnchor.readerElement);
     if (!anchor) {
       return;
     }
