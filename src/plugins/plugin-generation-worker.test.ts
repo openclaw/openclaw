@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { setTimeout as nextTimer } from "node:timers/promises";
-import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -30,6 +29,8 @@ import { withPluginGenerationSourceCustody } from "./plugin-generation-source-lo
 import type { GenerationWorkerInput } from "./plugin-generation-worker-contract.js";
 import { preparePluginGenerationArtifact } from "./plugin-generation-worker.js";
 import { isPluginSourceAcquisitionError } from "./plugin-instance-error.js";
+import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.js";
+import { PluginInstance } from "./plugin-instance.js";
 import {
   nativeAdmissionStateFor,
   preparePluginNativeAdmissions,
@@ -88,6 +89,39 @@ function sourceFixture(version?: string) {
   return { root, source, entry };
 }
 
+it("binds and loads an asynchronously prepared dependency graph without synchronous worker waits", async () => {
+  const { root, source, entry } = sourceFixture();
+  writeTree(source, {
+    "package.json": { name: "fixture", type: "commonjs", dependencies: { dependency: "1.0.0" } },
+    "index.js": 'module.exports = { value: require("dependency") };',
+    "node_modules/dependency/package.json": { name: "dependency", main: "index.js" },
+    "node_modules/dependency/index.js": 'module.exports = require("./leaf.js");',
+    "node_modules/dependency/leaf.js": "module.exports = 42;",
+  });
+  await withArtifactPreservingStateReads(() =>
+    withStorage(root, async () => {
+      const prepared = await preparePluginGenerationArtifact({ rootDir: source, source: entry });
+      const instance = new PluginInstance("prepared-fixture");
+      const wait = vi.spyOn(Atomics, "wait");
+      try {
+        bindPluginInstanceModuleLoader({
+          instance,
+          origin: "config",
+          rootDir: source,
+          source: entry,
+          preparedArtifact: prepared,
+        });
+        expect(instance.loadModule(entry)).toMatchObject({ value: 42 });
+        expect(wait).not.toHaveBeenCalled();
+      } finally {
+        wait.mockRestore();
+        await instance.dispose();
+        await prepared.artifact.disposeAsync();
+      }
+    }),
+  );
+});
+
 it("transports source acquisition classification and errno after worker cleanup", async () => {
   const root = temp.make("plugin-worker-unavailable-");
   const missing = path.join(root, "missing");
@@ -130,39 +164,25 @@ it.each(["missing", "directory"] as const)(
   },
 );
 
-it("signals posted source-mapping callbacks before their worker task can finish", async () => {
+it("maps first-demand source locally after asynchronous preparation", async () => {
   const { root, source, entry } = sourceFixture();
-  writeTree(source, {
-    "index.js": "export const value = 42;",
-    "dependency.js": "export const value = 7;",
-  });
+  writeTree(source, { "dependency.js": "export const value = 7;" });
   await withArtifactPreservingStateReads(() =>
     withStorage(root, async () => {
-      const posts = vi.spyOn(NativeWorker.prototype, "postMessage");
       const prepared = await preparePluginGenerationArtifact({ rootDir: source, source: entry });
+      const mappings: string[] = [];
+      prepared.attachModuleSource((filename) => {
+        mappings.push(filename);
+        return filename;
+      });
       try {
-        const input = posts.mock.calls
-          .map(([value]) => (isRecord(value) ? value.input : undefined))
-          .find((value) => isRecord(value) && value.operation === "capture");
-        const command = input as Extract<GenerationWorkerInput, { operation: "capture" }>;
-        const progress = expectDefined(command.progressSignal, "source callback progress signal");
-        let observed = Atomics.load(progress, 0);
-        let mappings = 0;
-        prepared.attachModuleSource((filename) => {
-          const current = Atomics.load(progress, 0);
-          expect(current).not.toBe(observed);
-          observed = current;
-          mappings++;
-          return filename;
-        });
         const capturedEntry = prepared.artifact.resolve(entry);
         prepared.artifact.prepareModule(capturedEntry);
-        observed = Atomics.load(progress, 0);
         const captured = prepared.artifact.captureModule(capturedEntry, "./dependency.js", [
           "node",
           "import",
         ]);
-        expect(mappings).toBeGreaterThan(0);
+        expect(mappings.length).toBeGreaterThan(0);
         expect(captured && "target" in captured && fs.readFileSync(captured.target, "utf8")).toBe(
           "export const value = 7;",
         );
@@ -378,9 +398,7 @@ it("joins retained capture workers before terminal native-source shutdown", asyn
   await withArtifactPreservingStateReads(() =>
     withStorage(root, async () => {
       const prepared = await preparePluginGenerationArtifact({ rootDir: source, source: entry });
-      const capturesBeforeRecovery = fs.readdirSync(path.dirname(prepared.artifact.boundaryRoot));
       const recovery = prepared.artifact.captureRecoverySource();
-      const capturesWithRecovery = fs.readdirSync(path.dirname(prepared.artifact.boundaryRoot));
       const nativeSource = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
       expect(nativeSource.hasActiveWorkers).toBe(true);
       expectSource(prepared.artifact, entry, "42");
@@ -388,13 +406,14 @@ it("joins retained capture workers before terminal native-source shutdown", asyn
       expect(nativeSource.hasActiveWorkers).toBe(false);
       expect(fs.existsSync(prepared.artifact.boundaryRoot)).toBe(false);
       await prepared.artifact.disposeAsync();
+      // Recovery has independent local custody, not the retired preparation session.
+      expectSource(recovery, entry, "42");
       await recovery.disposeAsync();
+      expect(fs.existsSync(recovery.sourceCapture.directory)).toBe(false);
       prepared.artifact.dispose();
       expect(() => prepared.artifact.prepareModule(entry)).toThrow(
         "Plugin preparation worker has closed",
       );
-      expect(capturesBeforeRecovery).toEqual([path.basename(prepared.artifact.boundaryRoot)]);
-      expect(capturesWithRecovery).toHaveLength(2);
     }),
   );
 });

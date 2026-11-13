@@ -15,6 +15,67 @@ afterEach(() => {
 });
 
 describe("plugin generation source lookup", () => {
+  it.each(["sync", "async"] as const)(
+    "%s recovery includes later graph additions and relocates dependency links",
+    async (mode) => {
+      const parent = fs.realpathSync(tempDirs.make("plugin-generation-recovery-"));
+      const sourceRoot = path.join(parent, "installed");
+      const boundaryRoot = path.join(parent, "captured");
+      const capturedRoot = path.join(boundaryRoot, "plugin");
+      const dependency = path.join(boundaryRoot, "dependency");
+      fs.mkdirSync(capturedRoot, { recursive: true });
+      fs.mkdirSync(dependency);
+      fs.writeFileSync(path.join(capturedRoot, "index.js"), "export default 1;\n");
+      fs.symlinkSync(
+        dependency,
+        path.join(capturedRoot, "dependency"),
+        process.platform === "win32" ? "junction" : "dir",
+      );
+      const capturedPaths = new Map([
+        [path.join(sourceRoot, "index.js"), path.join(capturedRoot, "index.js")],
+      ]);
+      const capturedDirectories = new Set([capturedRoot]);
+      const lookup = createPluginGenerationSourceLookup({
+        rootDir: sourceRoot,
+        sourceRoot,
+        capturedRoot,
+        boundaryRoot,
+        capturedPaths,
+        capturedDirectories,
+        hardlinkedSources: new Set(),
+        assertModuleAvailable: () => {},
+      });
+      // A lazy import extends the existing owner after the lookup was created.
+      const laterSource = path.join(sourceRoot, "later.js");
+      fs.writeFileSync(path.join(dependency, "later.js"), "export default 2;\n");
+      capturedPaths.set(laterSource, path.join(dependency, "later.js"));
+      capturedDirectories.add(dependency);
+      const recovery =
+        mode === "async"
+          ? await lookup.captureRecoverySourceAsync()
+          : lookup.captureRecoverySource();
+      try {
+        fs.rmSync(boundaryRoot, { recursive: true, force: true });
+        expect(fs.readFileSync(recovery.resolve(laterSource), "utf8")).toBe("export default 2;\n");
+        expect(recovery.directories.has(path.dirname(recovery.resolve(laterSource)))).toBe(true);
+        const fork = recovery.fork();
+        try {
+          await recovery.disposeAsync();
+          expect(fs.readFileSync(path.join(fork.rootDir, "dependency", "later.js"), "utf8")).toBe(
+            "export default 2;\n",
+          );
+          expect(fs.readFileSync(fork.resolve(path.join(sourceRoot, "index.js")), "utf8")).toBe(
+            "export default 1;\n",
+          );
+        } finally {
+          await fork.disposeAsync();
+        }
+      } finally {
+        await recovery.disposeAsync();
+      }
+    },
+  );
+
   it("reuses isolated recovery facts for transport", () => {
     const root = path.resolve("fixture-source");
     const source = path.join(root, "index.js");

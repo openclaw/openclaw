@@ -1,6 +1,7 @@
 import path from "node:path";
 import { isPathInside } from "../infra/path-guards.js";
 import type { PluginGenerationArtifact } from "./plugin-generation-artifact.types.js";
+import { createPluginGenerationArtifactSteps } from "./plugin-generation-capture.js";
 import {
   markPluginSourceCaptureOperation,
   restorePluginRecoverySourceResolver,
@@ -8,14 +9,46 @@ import {
   type PluginRecoverySource,
 } from "./plugin-generation-source-lookup.js";
 import type { PluginFrozenSourceSnapshot } from "./plugin-generation-source.types.js";
+import { drainPluginGenerationSteps } from "./plugin-generation-steps.js";
 import { markPluginSourceAcquisitionError } from "./plugin-instance-error.js";
+import type { PluginNativeRecovery } from "./plugin-native-admission.js";
 import { PluginSnapshotDependencyError } from "./plugin-snapshot-dependency-error.js";
 
-/** Own immutable source mapping and recovery policy independently of the capture engine. */
-export function createPluginFrozenGeneration(
-  snapshot: PluginFrozenSourceSnapshot,
-  create: (resolveInput: (filename: string) => string) => PluginGenerationArtifact,
+/** Rebuild every runtime owner independently from the complete immutable source closure. */
+export function capturePluginSnapshotGeneration(
+  snapshot: Parameters<typeof createPluginFrozenGenerationSteps>[0],
+  _entryFile?: string | readonly string[],
+  execute?: <T>(run: () => T) => T,
+  moduleSource?: (filename: string) => string,
+  nativeRecovery?: PluginNativeRecovery,
 ): PluginGenerationArtifact {
+  return drainPluginGenerationSteps(
+    createPluginFrozenGenerationSteps(snapshot, (resolveInput) =>
+      createPluginGenerationArtifactSteps(
+        snapshot.rootDir,
+        undefined,
+        execute,
+        moduleSource,
+        nativeRecovery,
+        undefined,
+        undefined,
+        undefined,
+        true,
+        false,
+        resolveInput,
+      ),
+    ),
+  );
+}
+
+/** Own immutable source mapping and recovery policy independently of the capture engine. */
+export function* createPluginFrozenGenerationSteps(
+  snapshot: PluginFrozenSourceSnapshot,
+  create: (
+    resolveInput: (filename: string) => string,
+  ) => Generator<void, PluginGenerationArtifact, void>,
+  failureCleanup: "capture" | "caller" = "capture",
+): Generator<void, PluginGenerationArtifact, void> {
   const aliases = Object.entries(snapshot.sourceAliases).toSorted(
     ([left], [right]) => right.length - left.length,
   );
@@ -44,9 +77,11 @@ export function createPluginFrozenGeneration(
     assertInput(filename);
     return inputFor(filename);
   };
-  const artifact = create(frozenInput);
+  const artifact = yield* create(frozenInput);
   if (artifact.sourceDigest !== snapshot.sourceDigest) {
-    artifact.dispose();
+    if (failureCleanup === "capture") {
+      artifact.dispose();
+    }
     throw new Error("Plugin snapshot runtime receipt differs from its immutable source receipt");
   }
   const capturedAliases = Object.entries(artifact.sourceAliases).toSorted(
@@ -109,9 +144,9 @@ export function createPluginFrozenGeneration(
     );
     return recovery;
   };
-  const recover = () =>
+  const freezeCapturedRecovery = (recovery: PluginRecoverySource) =>
     freezeRecovery(
-      artifact.captureRecoverySource(),
+      recovery,
       artifact.boundaryRoot,
       ownedAliases,
       new Map(
@@ -122,7 +157,8 @@ export function createPluginFrozenGeneration(
       ),
       new Set([...snapshot.sourceHardlinks].map(runtimeFor)),
     );
-  // Complete receipt facts stay in the worker until custody is explicitly requested.
+  const recover = () => freezeCapturedRecovery(artifact.captureRecoverySource());
+  // Complete receipt facts stay with the capture owner until custody is explicitly requested.
   const runtimeArtifact = { ...artifact };
   delete runtimeArtifact.sourceSnapshotFacts;
   return {
@@ -135,6 +171,11 @@ export function createPluginFrozenGeneration(
     frozenSource: true,
     assertFrozenModule,
     captureRecoverySource: markPluginSourceCaptureOperation(recover),
+    captureRecoverySourceAsync: artifact.captureRecoverySourceAsync
+      ? markPluginSourceCaptureOperation(async () =>
+          freezeCapturedRecovery(await artifact.captureRecoverySourceAsync!()),
+        )
+      : undefined,
     retainSourceCustody: markPluginSourceCaptureOperation(() => ({
       source: recover(),
       files: artifact.sourceSnapshotFacts!.files,

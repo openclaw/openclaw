@@ -17,9 +17,11 @@ import {
   waitForPluginCacheRetirement,
 } from "./plugin-cache.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
+import { preparePluginGenerationArtifact } from "./plugin-generation-worker.js";
 import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { withPluginSourceCaptureDirectory } from "./plugin-package-metadata-capture.js";
+import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
 const instances: PluginInstance[] = [];
@@ -34,9 +36,13 @@ afterEach(async () => {
 });
 type Probe = { value: string; increment: () => number; late: () => Promise<string> };
 
-it.each(["_scriptName", "import.meta.url"])(
-  "does not capture the host build for a discarded URL based on %s",
-  async (base) => {
+it.each(
+  ["_scriptName", "import.meta.url"].flatMap((base) =>
+    ["sync", "async"].map((mode) => ({ base, mode })),
+  ),
+)(
+  "does not capture the host build for a discarded URL based on $base ($mode)",
+  async ({ base, mode }) => {
     const root = temp.make("bundled-reload-url-base-");
     const captures = temp.make("bundled-reload-url-captures-");
     const plugin = path.join(root, "dist/extensions/demo");
@@ -68,20 +74,33 @@ it.each(["_scriptName", "import.meta.url"])(
       }),
     );
     const policy = resolveBundledPluginReloadSource(plugin);
-    const artifact = withPluginSourceCaptureDirectory(captures, () =>
-      capturePluginGenerationArtifact(
-        ...bundledPluginCaptureInputs({
-          rootDir: plugin,
-          source: entry,
-          bundledReloadSource: policy,
-        }),
-        (run) => run(),
-        undefined,
-        undefined,
-        undefined,
-        policy,
-      ),
-    );
+    const artifact =
+      mode === "async"
+        ? (
+            await withPluginSourceCaptureStorage(
+              { stateDir: captures, placement: "temporary" },
+              () =>
+                preparePluginGenerationArtifact({
+                  rootDir: plugin,
+                  source: entry,
+                  bundledReload: true,
+                }),
+            )
+          ).artifact
+        : withPluginSourceCaptureDirectory(captures, () =>
+            capturePluginGenerationArtifact(
+              ...bundledPluginCaptureInputs({
+                rootDir: plugin,
+                source: entry,
+                bundledReloadSource: policy,
+              }),
+              (run) => run(),
+              undefined,
+              undefined,
+              undefined,
+              policy,
+            ),
+          );
     try {
       expect(artifact.hasSource(entry)).toBe(true);
       expect(artifact.hasSource(codec)).toBe(true);
