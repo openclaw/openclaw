@@ -149,6 +149,14 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     exact: true,
     policy: { loadPlugins: "never" },
   })),
+  ...["list", "get"].map((verb): CliCommandCatalogEntry => ({
+    commandPath: ["agents", "workspace", verb],
+    exact: true,
+    policy: {
+      loadPlugins: "never",
+      ...(verb === "get" ? { ownsProtocolStdout: true } : {}),
+    },
+  })),
   {
     commandPath: ["configure"],
     policy: { configGuard: "skip", stateStoreGuard: "run", loadPlugins: "never" },

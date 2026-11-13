@@ -241,6 +241,29 @@ credential failures exit with an error and leave local config, workspace, and
 session state alone. Restore the Gateway connection and credentials, or run the
 command on the Gateway host.
 
+### `agents workspace`
+
+Read-only workspace browser for an agent's files.
+
+```bash
+openclaw agents workspace list
+openclaw agents workspace list --path notes --limit 50 --json
+openclaw agents workspace get notes/plan.md
+```
+
+`agents workspace list` reads `agents.workspace.list`. Options: `--agent <id>`,
+`--path <dir>` (workspace-relative; defaults to the workspace root), `--offset <n>`,
+`--limit <n>` (Gateway default 250, maximum 500), `--json`. The table lists `name`,
+`kind` (`file` or `directory`), `size`, and `updatedAt`.
+
+`agents workspace get <path>` reads `agents.workspace.get` and writes the file payload
+to stdout without appending a newline, so `> file` redirection keeps the exact bytes.
+Size, MIME type, and `encoding` (`utf8` or `base64`) go to stderr; supported images
+arrive as base64. Absolute paths and `..` escapes are rejected by the Gateway, and the
+command exits nonzero on that error.
+
+The browser is read-only; write, delete, and upload stay outside this contract.
+
 ## Routing bindings
 
 Use routing bindings to pin inbound channel traffic to a specific agent.
