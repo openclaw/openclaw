@@ -3,8 +3,8 @@ import { fetchControlUiResource } from "../../app/browser-http.ts";
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import type { ImageLightboxProps } from "../../components/image-lightbox.types.ts";
 import { imageFileName } from "../../lib/image-download.ts";
-import type { ChatPaneRuntime } from "./chat-pane-render.ts";
 import { readChatPaneRouteMutationAccess } from "./chat-pane-session-controls.ts";
+import type { ChatPaneStateOwner } from "./chat-pane-state-owner.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import type { ChatProps } from "./chat-view.tsx";
@@ -13,7 +13,7 @@ import { appendChatAttachmentFiles } from "./components/chat-attachments.ts";
 /** The pane retains destination authority; the lightbox supplies current selection intent. */
 export function createLightboxComposerAction(
   pane: Pick<
-    ChatPaneRuntime,
+    ChatPaneStateOwner,
     | "state"
     | "active"
     | "presented"
@@ -21,9 +21,8 @@ export function createLightboxComposerAction(
     | "context"
     | "chatState"
     | "awaitDomCommit"
-    | "focusComposerInput"
     | "sessionParticipationTracker"
-  >,
+  > & { focusComposerInput(): boolean },
   state: ChatPageHost,
   composer: Pick<ChatProps, "canCompose" | "suggestionComposer">,
 ): ImageLightboxProps["onUseImage"] {
