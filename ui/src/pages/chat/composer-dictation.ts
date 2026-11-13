@@ -277,15 +277,10 @@ export class ComposerDictationOwner extends EventTarget {
     }
   };
 
-  // Losing the window interrupts capture; it is not a request to discard what was already heard.
+  // Losing the window interrupts capture but keeps dictated text in the draft.
   private readonly handleWindowBlur = (): void => {
-    if (this.active) {
-      this.clearClickSuppression();
-      void this.stop({ commit: true });
-    } else if (!this.pendingCommitSession) {
-      this.cancel();
-    }
-    // A blur often precedes visibilitychange; the second event must not retire the draining commit.
+    this.clearClickSuppression();
+    void this.finishActive();
   };
 
   private canHold(): boolean {
