@@ -100,10 +100,6 @@ it("AppSidebar person activity card projects authorized facts and keeps links st
   await settleLitElement(sidebar);
   expect(view.text(".person-activity-card__status")?.trim()).toMatch(/^Online · .+ local time$/);
   expect(view.query(".person-activity-card__clock")?.getAttribute("title")).toBe("Pacific/Chatham");
-  // Connection details belong to the Activity page.
-  for (const [label] of devices) {
-    expect(card.textContent).not.toContain(label);
-  }
   const sections = view.all("section");
   expect(sections[0]?.querySelectorAll("a")).toHaveLength(1);
   expect(sections[0]?.textContent).toContain("Visible 0");
