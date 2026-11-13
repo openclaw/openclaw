@@ -16,6 +16,7 @@ import { recordUpdateDoctorDeferredInspectionChecks } from "../../infra/update-d
 import * as updateHistory from "../../infra/update-run-ledger.js";
 import { listUpdateRuns } from "../../infra/update-run-reader.js";
 import { defaultRuntime } from "../../runtime.js";
+import * as snapshotBackup from "../../snapshot/database-backup.js";
 import { completeDeletion } from "../../state/agent-deletion-journal.test-support.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
@@ -608,6 +609,85 @@ it("refuses a future database before capture or Doctor mutation", async () => {
   });
 });
 
+it.each([false, true])(
+  "retires server captures before removing supervised backups (cleanup fails: %s)",
+  async (failCleanup) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const config = { database: { postgres: { recoveryCaptures: "server" as const } } };
+      await state.writeConfig(config);
+      const backupRoot = state.path("server-captures", "native");
+      const directory = `${backupRoot}.databases`;
+      const exportDirectories = ["agent.postgres", "workboard.postgres"].map((name) =>
+        path.join(directory, name),
+      );
+      const manifest =
+        '{"carrier":"postgres-schema","schema":"restore_11111111111111111111111111111111"}';
+      // The backup owner supplies server-capture entries; migrate persists the real receipt.
+      vi.spyOn(databaseBackup, "createUpdateDatabaseBackup").mockImplementation(async () => {
+        for (const exported of exportDirectories) {
+          await fs.mkdir(exported, { recursive: true });
+          await fs.writeFile(path.join(exported, "manifest.json"), manifest);
+        }
+        return {
+          directory,
+          databases: exportDirectories.map((exportDirectory) => ({
+            path: `${exportDirectory}.sqlite`,
+            snapshotPath: path.join(exportDirectory, "anchor.sqlite"),
+            engine: "postgres",
+            exportDirectory,
+            userVersion: 1,
+            sha256: "0".repeat(64),
+            sizeBytes: 0,
+          })),
+          missingPaths: [],
+          sourcePaths: [],
+          sourceGenerations: {},
+          warnings: [],
+        };
+      });
+      vi.spyOn(doctor, "runDoctorHealthFlow").mockResolvedValue();
+      const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+      await updateMigrateCommand(backupRoot);
+      const discard = vi
+        .spyOn(snapshotBackup, "discardPostgresSchemaCaptures")
+        .mockImplementation(async () => {
+          for (const exported of exportDirectories) {
+            expect(await readText(path.join(exported, "manifest.json"))).toBe(manifest);
+          }
+          if (failCleanup && discard.mock.calls.length === 1) {
+            throw new Error("synthetic schema drop failure");
+          }
+        });
+
+      await updateFinishCommand(backupRoot);
+      expect(discard).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining(config),
+        exportDirectories,
+      );
+      if (failCleanup) {
+        expect((await fs.stat(directory)).isDirectory()).toBe(true);
+        expect(output).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            status: "finished",
+            warning: expect.stringMatching(/cleanup remains pending.*retry update finish/su),
+          }),
+        );
+        await updateFinishCommand(backupRoot);
+        expect(discard).toHaveBeenCalledTimes(2);
+      }
+      await expect(fs.stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(output).toHaveBeenLastCalledWith(
+        expect.objectContaining({ status: "finished", receipt: `${backupRoot}.receipt.json` }),
+      );
+      expect(output.mock.lastCall?.[0]).not.toHaveProperty("warning");
+      // Finished receipts also retry after their manifests have already been removed.
+      await updateFinishCommand(backupRoot);
+      expect(discard).toHaveBeenCalledTimes(failCleanup ? 2 : 1);
+      expect(output.mock.lastCall?.[0]).not.toHaveProperty("warning");
+    });
+  },
+);
+
 it.each(["server", "portable"] as const)(
   "honors the configured recovery captures in the migration database backup (%s)",
   async (recoveryCaptures) => {
@@ -615,8 +695,10 @@ it.each(["server", "portable"] as const)(
       await state.writeConfig({ database: { postgres: { recoveryCaptures } } });
       vi.spyOn(doctor, "runDoctorHealthFlow").mockImplementation(async () => {});
       vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-      const captured: Array<{ stopped: boolean | undefined; postgresSchemaCaptures: boolean | undefined }> =
-        [];
+      const captured: Array<{
+        stopped: boolean | undefined;
+        postgresSchemaCaptures: boolean | undefined;
+      }> = [];
       const backupSpy = vi
         .spyOn(databaseBackup, "createUpdateDatabaseBackup")
         .mockImplementation(async (input) => {
