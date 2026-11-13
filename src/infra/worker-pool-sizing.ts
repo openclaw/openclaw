@@ -61,9 +61,13 @@ export const CACHED_WORKER_HEAP_FLOOR_MB = 512;
 /** Resolve the shared per-worker ceiling, clamped to a sane range. */
 export function resolveWorkerHeapLimitMb(env: NodeJS.ProcessEnv = process.env): number {
   const raw = env.OPENCLAW_WORKER_HEAP_LIMIT_MB?.trim();
-  if (!raw) return DEFAULT_WORKER_HEAP_LIMIT_MB;
+  if (!raw) {
+    return DEFAULT_WORKER_HEAP_LIMIT_MB;
+  }
   const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed)) return DEFAULT_WORKER_HEAP_LIMIT_MB;
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_WORKER_HEAP_LIMIT_MB;
+  }
   return Math.min(MAX_WORKER_HEAP_LIMIT_MB, Math.max(MIN_WORKER_HEAP_LIMIT_MB, parsed));
 }
 
