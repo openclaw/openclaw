@@ -61,6 +61,8 @@ const historyPrewarms = new WeakMap<
 
 function projectionTarget(input: SessionHistoryWorkerPreparedInput) {
   switch (input.kind) {
+    case "transcript-maintenance":
+      return input.request.operation === "latest-active-control" ? input.resolvedScope : undefined;
     case "history-page":
       return input.request.kind === "active-accounting" ? input.target.transcript : undefined;
     case "transcript-hydration":

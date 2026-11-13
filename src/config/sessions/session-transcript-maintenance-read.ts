@@ -1,16 +1,26 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { sql } from "kysely";
 import {
   CODE_MODE_STORE_CUSTOM_TYPE,
   collectCodeModeStoreWrites,
 } from "../../agents/code-mode-session-store-replay.js";
-import { iterateSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { jsonPathValue } from "../../infra/database-engine/json-values.js";
+import {
+  executeSqliteQueryTakeFirstSync,
+  iterateSqliteQuerySync,
+} from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { NESTED_TOOL_ACTIVITY_CUSTOM_TYPE } from "../../sessions/nested-tool-activity.js";
 import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { readSessionEntryIdentity } from "./session-accessor.sqlite-entry-read.js";
+import { readCurrentProjectionSnapshot } from "./session-accessor.sqlite-projection-read.js";
 import { readTranscriptIdentityByEventId } from "./session-accessor.sqlite-read.js";
-import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import {
+  getSessionKysely,
+  type ResolvedTranscriptReadScope,
+} from "./session-accessor.sqlite-scope.js";
 import {
   loadTranscriptSuffixEventsBoundedFromDatabase,
   readPreviousIndexedTranscriptEventSync,
@@ -25,17 +35,24 @@ import type {
   SessionTranscriptMaintenanceFacts,
 } from "./session-transcript-hydration.types.js";
 import { selectTranscriptMaintenanceSuffix } from "./session-transcript-maintenance-suffix.js";
+import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import {
   readTranscriptReportEvent,
   readTranscriptReportNavigation,
 } from "./session-transcript-report-read.js";
-import { transcriptEventJsonSql } from "./transcript-payload.js";
+import {
+  transcriptEventJsonSql,
+  transcriptEventNavigationSql,
+  transcriptPredicateSql,
+} from "./transcript-payload.js";
 
 export function readSessionTranscriptMaintenance(
   database: OpenClawAgentReadOnlyDatabase,
   target: SessionTranscriptRuntimeTarget,
   request: SessionTranscriptMaintenanceRead,
+  /** Required by operations that read the active projection (`latest-active-control`). */
+  resolvedScope?: ResolvedTranscriptReadScope,
 ): SessionTranscriptMaintenanceFacts {
   if (request.operation === "custom-branch" || request.operation === "code-mode-store") {
     return readWithCanonicalSessionAdmission(database, () =>
@@ -106,6 +123,56 @@ export function readSessionTranscriptMaintenance(
         };
       }),
     );
+  }
+  if (request.operation === "latest-active-control") {
+    if (!resolvedScope) {
+      throw new Error("latest-active-control requires a resolved transcript scope");
+    }
+    const scope = resolvedScope;
+    const result = readCurrentProjectionSnapshot(database, scope, (projection) => {
+      const fence = resolveSqliteSessionTranscriptReadFence({ database, ...scope });
+      const eventType = transcriptPredicateSql(database.db, "navigation_last_type", "event");
+      const navigation = transcriptEventNavigationSql(database.db, "event");
+      const customType = isPostgresSqlConnection(database.db)
+        ? jsonPathValue(database.db, navigation, sql.lit("$.customType"))
+        : /* kysely-allow-raw: SQLite's final duplicate root member matches JSON.parse and memory history. */
+          sql<
+            string | null
+          >`(SELECT value FROM json_each(${navigation}) WHERE key = 'customType' ORDER BY id DESC LIMIT 1)`;
+      const query = getSessionKysely(database.db)
+        .selectFrom("session_transcript_active_events as active")
+        .innerJoin("transcript_events as event", (join) =>
+          join
+            .onRef("event.session_id", "=", "active.session_id")
+            .onRef("event.seq", "=", "active.event_seq"),
+        )
+        .select(eventType.as("type"))
+        .where("active.session_id", "=", projection.resolved.sessionId)
+        .where((eb) =>
+          eb.or([
+            eb(eventType, "in", ["reset", "compaction"]),
+            // Read the small navigation projection, never decompress message bodies.
+            eb(
+              eb.case().when(eventType, "=", "custom").then(customType).else(null).end(),
+              "=",
+              request.customType,
+            ),
+          ]),
+        )
+        .orderBy("active.active_position", "desc")
+        .limit(1);
+      const row = executeSqliteQueryTakeFirstSync(
+        database.db,
+        fence ? query.where("event.seq", "<", fence.beforeRawSeq) : query,
+      );
+      return row?.type === "custom" || row?.type === "reset" || row?.type === "compaction"
+        ? row.type
+        : undefined;
+    });
+    if (result.kind !== "value") {
+      throw new SessionTranscriptProjectionUnavailableError(target.sessionId);
+    }
+    return { kind: "transcript-maintenance", latestControl: result.value };
   }
   if (request.operation === "previous") {
     return {

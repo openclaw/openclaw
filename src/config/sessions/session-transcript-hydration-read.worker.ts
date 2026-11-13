@@ -19,7 +19,13 @@ export async function readSessionTranscriptHydrationRequest(
     const { readSessionTranscriptMaintenance } =
       await import("./session-transcript-maintenance-read.js");
     const result = withOpenClawAgentDatabaseReadOnly(
-      (database) => readSessionTranscriptMaintenance(database, request.target, request.request),
+      (database) =>
+        readSessionTranscriptMaintenance(
+          database,
+          request.target,
+          request.request,
+          request.resolvedScope,
+        ),
       { ...request.database, env: request.target.env },
     );
     if (!result.found) {

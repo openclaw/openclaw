@@ -247,6 +247,18 @@ function maintenance(
 
   const navigation = createSessionActorMemoryHistoryNavigation(window);
   switch (request.operation) {
+    case "latest-active-control": {
+      for (let index = navigation.active.length - 1; index >= 0; index--) {
+        const event = asOptionalRecord(navigation.active[index]!.event);
+        if (event?.type === "compaction" || event?.type === "reset") {
+          return { kind, latestControl: event.type };
+        }
+        if (event?.type === "custom" && event.customType === request.customType) {
+          return { kind, latestControl: "custom" };
+        }
+      }
+      return { kind };
+    }
     case "previous":
       return {
         kind,
