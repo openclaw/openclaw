@@ -758,6 +758,22 @@ authority and release suites retain another ten declarations and 21 expanded
 cases covering wire payloads, caller authority and release ownership. These
 retention decisions are source-only; no runtime pass or removal is claimed.
 
+### Provider WebSocket proxy DNS pin proof
+
+At `cd61ce32dd28e92003b213f8d2014608504515fb`, the provider WebSocket proxy
+case uses localhost and accepts any function-valued socket lookup. It does not
+establish that the connection consumes the prepared proxy DNS pin. The proposed
+repair gives the proxy a synthetic hostname resolved through the real SSRF
+owner, then uses the existing successful CONNECT and WebSocket assertions as
+proof. Baseline and deliberate unpinned-lookup qualification are pending.
+
+Source review covers 35 declarations and 59 expanded cases across proxy-env,
+node-proxy-agent, provider-websocket, undici-runtime and undici-global-dispatcher.
+The environment, admission, deadline, TLS and lifecycle contracts remain useful.
+Separate follow-ups are the WSL temporary-family dispatch ordering assertion and
+the supplied-env SOCKS CA fixture's setup/cleanup ownership. These are source-only
+findings; no runtime result or production defect is claimed.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Retain Twitch's pre-abort pending check: it protects the passive account lifecycle. Its post-await settled check remains a separate live-test cleanup candidate.
