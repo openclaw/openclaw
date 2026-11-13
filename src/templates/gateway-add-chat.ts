@@ -1,6 +1,8 @@
 import { rmdir } from "node:fs/promises";
+import { resolve } from "node:path";
 import { coerceErrorMessage } from "@openclaw/normalization-core";
 import { listAgentIds } from "../agents/agent-scope-config.js";
+import { isToolAllowedByPolicyName } from "../agents/tool-policy-match.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ClawHubFetchOptions } from "../infra/clawhub-client.js";
 import type { PluginInstallBatchReload } from "../plugins/install-runtime-batch.js";
@@ -32,10 +34,34 @@ import {
 } from "./gateway-add-plan.js";
 import { installTemplateMcpServersStateless } from "./mcp.js";
 import { installTemplatePackages } from "./packages.js";
+import { templateManifestWorkspaceConflictsWithPath } from "./schema.js";
 import type { TemplateAddPlan, TemplateAddPlanAction, TemplateReadResult } from "./types.js";
 
 type VerifiedTemplateSource = Extract<TemplateReadResult, { ok: true }>;
 type TemplateAgentConfig = TemplateAddPlan["agent"]["config"];
+
+const MANIFEST_FILE = "CLAW.md";
+/** The agent's own conversation finishes setup with these tools. */
+const SETUP_TOOLS = ["automations", "plugins", "message"];
+
+/**
+ * Add what the Template's own allowlist omits. A Template without an allowlist
+ * inherits the operator's policy, which this agent entry does not narrow. A tool
+ * the Template explicitly denies stays denied: creation adds grants, it does not
+ * lift an author's restriction.
+ */
+function allowSetupTools(tools: TemplateAgentConfig["tools"]): TemplateAgentConfig["tools"] {
+  const allow = tools?.allow;
+  return allow
+    ? {
+        ...tools,
+        allow: [
+          ...allow,
+          ...SETUP_TOOLS.filter((tool) => !isToolAllowedByPolicyName(tool, { allow })),
+        ],
+      }
+    : tools;
+}
 
 function withoutAgent(config: OpenClawConfig, agentId: string): OpenClawConfig {
   const entries = { ...config.agents?.entries };
@@ -184,11 +210,36 @@ export async function createTemplateAgentFromChat(
     if (planned.blockers.length > 0) {
       throw new TemplateAddMutationError("plan_blocked", planned.blockers[0]!.message);
     }
+    const manifestClaimed = templateManifestWorkspaceConflictsWithPath(
+      source.manifest,
+      MANIFEST_FILE,
+    );
     const plan: TemplateAddPlan = {
       ...planned,
-      // The planner turns a legacy heartbeat declaration and its HEARTBEAT.md into an
-      // automation. Creation makes none, so that retired file is not written either.
-      actions: planned.actions.filter((action) => action.kind !== "cronJob"),
+      agent: {
+        ...planned.agent,
+        config: { ...planned.agent.config, tools: allowSetupTools(planned.agent.config.tools) },
+      },
+      actions: [
+        // The planner turns a legacy heartbeat declaration and its HEARTBEAT.md into an
+        // automation. Creation makes none, so that retired file is not written either.
+        ...planned.actions.filter((action) => action.kind !== "cronJob"),
+        ...(manifestClaimed
+          ? []
+          : [
+              {
+                kind: "workspaceFile" as const,
+                id: MANIFEST_FILE,
+                action: "write" as const,
+                target: resolve(planned.agent.workspace, MANIFEST_FILE),
+                source: planned.template.manifestPath,
+                sourceKind: "templateManifest" as const,
+                digest: source.snapshot.manifest.digest,
+                details: { expectedState: "absent" },
+                blocked: false,
+              },
+            ]),
+      ],
     };
     const options: StatelessTemplateAddOptions = {
       stateMode: "worker",
@@ -228,6 +279,13 @@ export async function createTemplateAgentFromChat(
       throw new KeptTemplateAgentError(
         core.error ?? { code: "add_failed", message: "Template Add did not finish." },
       );
+    }
+    if (manifestClaimed) {
+      report.failures.push({
+        kind: "manifest",
+        name: MANIFEST_FILE,
+        reason: `The Template's own workspace files claim ${MANIFEST_FILE}; that file was kept and the Template manifest was not copied.`,
+      });
     }
     return options;
   };

@@ -8,7 +8,8 @@ export const TEMPLATE_AGENT_OPENING_MESSAGE = [
 
 /** One thing chat-based Add could not finish; the agent kept everything else. */
 export type TemplateSetupFailure = {
-  kind: "skill" | "plugin" | "mcpServer";
+  /** `manifest` is the Template's CLAW.md copy at the workspace root. */
+  kind: "skill" | "plugin" | "mcpServer" | "manifest";
   name: string;
   reason: string;
 };

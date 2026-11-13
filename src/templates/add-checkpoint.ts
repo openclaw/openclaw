@@ -95,10 +95,12 @@ export async function configuredSourceIntegrity(plan: TemplateAddPlan): Promise<
     const digest =
       action.sourceKind === "templateMarkdownBody" && source.templateMarkdownBody
         ? digestTemplateBytes(source.templateMarkdownBody)
-        : [
-            ...source.snapshot.workspaceSources,
-            ...(source.packageBootstrap ? [source.packageBootstrap] : []),
-          ].find((file) => file.realPath === action.source)?.digest;
+        : action.sourceKind === "templateManifest"
+          ? source.snapshot.manifest.digest
+          : [
+              ...source.snapshot.workspaceSources,
+              ...(source.packageBootstrap ? [source.packageBootstrap] : []),
+            ].find((file) => file.realPath === action.source)?.digest;
     if (!digest || digest !== action.digest) {
       throw new Error("Template source changed after consent.");
     }

@@ -115,7 +115,8 @@ export type TemplateAddPlanAction = {
   action: "create" | "write" | "install" | "reuse" | "configure" | "schedule";
   target: string;
   source?: string;
-  sourceKind?: "templateMarkdownBody";
+  /** Bytes other than a declared workspace source: the CLAW.md body, or the whole manifest file. */
+  sourceKind?: "templateMarkdownBody" | "templateManifest";
   digest?: string;
   details?: Record<string, unknown>;
   automation?: CronJobCreate;
