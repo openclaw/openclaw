@@ -15,5 +15,10 @@ export const CRON_SCOPED_READ_ACTIONS: readonly string[] = ["list", "get", "runs
  * rewrite, no removal window.
  */
 export function isAutomationsToolName(name: string): boolean {
-  return name === AUTOMATIONS_TOOL_NAME || name === "cron";
+  // MCP exposes the tool as `mcp__<server>__<tool>` (e.g. mcp__openclaw__automations),
+  // so match on the underlying tool name as well as the bare name. Without this the
+  // scheduler add made over MCP is not counted and the reminder guard wrongly reports
+  // that no reminder was scheduled (#193958).
+  const base = name.startsWith("mcp__") ? name.slice(name.lastIndexOf("__") + 2) : name;
+  return base === AUTOMATIONS_TOOL_NAME || base === "cron";
 }

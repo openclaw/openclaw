@@ -9,6 +9,7 @@ import {
   filterToolResultMediaUrls,
 } from "../embedded-agent-tool-media.js";
 import { resolveToolResultFailureKind, type ToolResultFailureKind } from "../tool-result-error.js";
+import { isAutomationsToolName } from "../tools/automations-tool-name.js";
 
 export function recordAgentHarnessToolResultTelemetry(params: {
   toolName: string;
@@ -31,7 +32,7 @@ export function recordAgentHarnessToolResultTelemetry(params: {
   sourceReplyFinal?: boolean;
   trustedLocalMediaToolNames?: ReadonlySet<string>;
 }): MessagingToolSend | MessagingToolSourceReplyPayload | undefined {
-  if (!params.isError && params.toolName === "cron" && isCronAddAction(params.args)) {
+  if (!params.isError && isAutomationsToolName(params.toolName) && isCronAddAction(params.args)) {
     params.telemetry.successfulCronAdds = (params.telemetry.successfulCronAdds ?? 0) + 1;
   }
   // Only a live invocation may accept new media; committed effects remain evidence.
