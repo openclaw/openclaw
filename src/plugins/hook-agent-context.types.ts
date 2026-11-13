@@ -64,6 +64,14 @@ export type PluginHookAgentContext = PluginHookContextWindow & {
   channelId?: string;
   /** Typed origin of the turn's user-role input when supplied by the producer. */
   inputProvenance?: InputProvenance;
+  /**
+   * True once a tool result in this user turn carried network-sourced content, the same flag
+   * that records the turn's memory writes as untrusted. Absent when the runtime does not report it.
+   * Informational only: `false` means no network-sourced tool result was seen, not that content is trusted.
+   * Memory-flush runs (`trigger: "memory"`) start `true` when the source turn was tainted
+   * or the sender was not the owner.
+   */
+  readonly turnTainted?: boolean;
   /** @deprecated Use `channelContext.sender` for channel-specific identities. */
   senderExternalId?: string;
   /** Channel-owned sender/chat details. Plugins may augment the nested interfaces. */

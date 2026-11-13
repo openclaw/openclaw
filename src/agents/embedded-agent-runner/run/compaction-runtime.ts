@@ -356,6 +356,7 @@ export function createEmbeddedRunCompactionRuntime(input: {
   hookRunner: PreparedEmbeddedRunInput["hookRunner"];
   hookContext: PreparedEmbeddedRunInput["hookContext"];
   sessionPromptState: SessionPromptState;
+  isTurnTainted?: () => boolean;
 }) {
   const { runParams: params, contextEngine, hookRunner, hookContext, sessionPromptState } = input;
   const abortSignal = params.abortSignal;
@@ -548,6 +549,7 @@ export function createEmbeddedRunCompactionRuntime(input: {
   const resolveActiveHookContext = () => ({
     ...hookContext,
     sessionId: sessionPromptState.sessionId,
+    ...(input.isTurnTainted ? { turnTainted: input.isTurnTainted() } : {}),
   });
   const adoptCompactionTranscript = async (
     compactResult: CompactionResult,

@@ -74,6 +74,7 @@ export function buildAgentHookContext(params: AgentHarnessHookContext): PluginHo
         }
       : {}),
     ...(params.inputProvenance ? { inputProvenance: params.inputProvenance } : {}),
+    ...(params.turnTainted !== undefined ? { turnTainted: params.turnTainted } : {}),
     ...(params.channelId ? { channelId: params.channelId } : {}),
     ...(params.contextTokenBudget ? { contextTokenBudget: params.contextTokenBudget } : {}),
     ...(params.contextWindowSource ? { contextWindowSource: params.contextWindowSource } : {}),

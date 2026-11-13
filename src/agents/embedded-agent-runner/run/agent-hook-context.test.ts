@@ -7,6 +7,7 @@ import {
 } from "../../../plugins/memory-provider-runtime.audience.test-support.js";
 import type { MemoryAudience } from "../../../plugins/memory-provider-types.js";
 import { buildEmbeddedAgentHookContext } from "./agent-hook-context.js";
+import { createAgentTurnTaintState } from "./turn-taint-state.js";
 
 const build = (memoryAudience?: MemoryAudience, sessionKey = AUDIENCE_CHILD_KEY) =>
   buildEmbeddedAgentHookContext(
@@ -35,4 +36,27 @@ it("omits the audience fields when the embedded run has none", () => {
   const context = build();
   expect(context).not.toHaveProperty("memoryAudience");
   expect(context).not.toHaveProperty("assertMemoryAudienceCurrent");
+  expect(context).not.toHaveProperty("turnTainted");
+});
+
+it("reports the turn taint that memory provenance reads", () => {
+  const taint = createAgentTurnTaintState();
+  const run = {
+    runId: "run",
+    sessionId: "session",
+    workspaceDir: "/w",
+    isTurnTainted: taint.isTainted,
+  };
+  expect(buildEmbeddedAgentHookContext(run, "main", undefined).turnTainted).toBe(false);
+
+  taint.observe({ toolName: "read", argsHash: "a", resultHash: "a" });
+  expect(buildEmbeddedAgentHookContext(run, "main", undefined).turnTainted).toBe(false);
+
+  taint.observe({
+    toolName: "web_fetch",
+    argsHash: "b",
+    resultHash: "b",
+    resultContentSource: "network",
+  });
+  expect(buildEmbeddedAgentHookContext(run, "main", undefined).turnTainted).toBe(true);
 });
