@@ -1,7 +1,10 @@
 # Distinct authority boundaries: signed-owner versus member live Gateway actions,
 # queued publication source and hydration recovery, and admitted personal tools.
 # Retain negative and unchanged-caller coverage alongside the administrator proof.
-# Historical source-less member refusal and unchanged nonmember same-key recovery
+# Historical source-less OCID-profile refusal and unchanged non-OCID same-key recovery
 # need both publication backends; legacy profile-schema reads cover catalog safety.
 # Catalog-backed ingress recovery and member-scoped personal files retain new-base contracts.
-212
+# Linked-owner historical refusal plus recorded-source owner-device and other-sign-in
+# recovery/publish controls add 67 lines, exercising both backends and real owner attribution
+# without changing policy.
+279

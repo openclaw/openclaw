@@ -159,6 +159,10 @@ export async function createGitHubPublicationRequesterFixture(params: {
   };
   if (params.openclawIdPrincipal) {
     client.internal = { ...client.internal, openclawIdPrincipal: params.openclawIdPrincipal };
+    if (params.openclawIdPrincipal.kind === "owner") {
+      client.internal.authenticatedOperator = true;
+      client.internal.operatorRoleActor = { kind: "system" };
+    }
   }
   prepareGatewayConnectOperatorAccess(client);
   const context = {

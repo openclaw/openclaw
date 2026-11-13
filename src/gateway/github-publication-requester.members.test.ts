@@ -39,6 +39,17 @@ const principal: OpenClawIdTunnelPrincipal = {
   authority: { clawId: "publication-claw", rootPub: "publication-root", listedSeq: 1 },
 };
 
+const ownerPrincipal: OpenClawIdTunnelPrincipal = {
+  kind: "owner",
+  peerKey: `iroh:${"cd".repeat(32)}`,
+  authority: {
+    clawId: "publication-claw",
+    rootPub: "publication-root",
+    listedSeq: 1,
+    ownerDevice: "publication-owner-device",
+  },
+};
+
 afterEach(() => setOpenClawIdTunnelPrincipalLookup(undefined));
 
 it("refuses unattested membership and member-attributed System publication snapshots", () => {
@@ -151,17 +162,21 @@ describe("member publication authority", () => {
       }
     },
   );
-  it.each(forPublicationBackends(["member", "nonmember"] as const))(
+  it.each(forPublicationBackends(["member", "linked owner", "nonmember"] as const))(
     "rechecks parent-format $change provenance at recovery and write ($backend)",
     async ({ backend, change }) => {
       const f = await createRequesterPublicationFixture(checkpoint, backend);
       const config = structuredClone(f.config);
       delete config.gateway!.roles!.default;
       setRuntimeConfigSnapshot(config);
+      if (change === "linked owner") {
+        setOpenClawIdTunnelPrincipalLookup(() => ownerPrincipal);
+      }
       const captured = await createGitHubPublicationRequesterFixture({
         profileId: f.guestProfile,
         scopes: ["operator.admin"],
         ...f.guestSource.session,
+        openclawIdPrincipal: change === "linked owner" ? ownerPrincipal : undefined,
       });
       const currentJson = encodeGitHubPublicationRequester(captured.requester.snapshot);
       expect(decodeGitHubPublicationRequester(currentJson)).toEqual(captured.requester.snapshot);
@@ -184,13 +199,15 @@ describe("member publication authority", () => {
       );
       expect(accepted.status).toBe("requested");
       f.replaceRequesterSnapshot(accepted.requestId, json);
-      if (change === "member") {
-        const member = await ensureCanonicalUserProfileForOpenClawIdIdentity({
-          accountId: principal.accountId,
+      if (change !== "nonmember") {
+        const linked = await ensureCanonicalUserProfileForOpenClawIdIdentity({
+          accountId: change === "member" ? principal.accountId : "publication-owner",
         });
-        await mergeCanonicalUserProfiles(member.id, f.guestProfile);
-        // The canonical identity remains OCID-bound even with remote access off.
-        setOpenClawIdTunnelPrincipalLookup(undefined);
+        await mergeCanonicalUserProfiles(linked.id, f.guestProfile);
+        if (change === "member") {
+          // The canonical identity remains OCID-bound even with remote access off.
+          setOpenClawIdTunnelPrincipalLookup(undefined);
+        }
         const knownNonmember = await restoreGitHubPublicationRequester(
           currentJson,
           f.guestSource.session,
@@ -219,14 +236,60 @@ describe("member publication authority", () => {
       const restarted = f.restart();
       await restarted.resumeSessionRequests();
       expect(await restarted.readAsync(accepted.requestId)).toMatchObject(
-        change === "member"
+        change !== "nonmember"
           ? { status: "failed", code: "identity_changed" }
           : { status: "published" },
       );
-      expect(f.publishedTitles).toEqual(change === "member" ? [] : ["historical-publication"]);
-      if (change === "member") {
+      expect(f.publishedTitles).toEqual(change !== "nonmember" ? [] : ["historical-publication"]);
+      if (change !== "nonmember") {
         expect(f.externalWrites).toEqual([]);
       }
+    },
+  );
+  it.each(forPublicationBackends(["owner device", "other sign-in"] as const))(
+    "recovers a linked owner's recorded-source publication over $change ($backend)",
+    async ({ backend, change }) => {
+      const f = await createRequesterPublicationFixture(checkpoint, backend);
+      const config = structuredClone(f.config);
+      delete config.gateway!.roles!.default;
+      setRuntimeConfigSnapshot(config);
+      const linked = await ensureCanonicalUserProfileForOpenClawIdIdentity({
+        accountId: "publication-owner",
+      });
+      await mergeCanonicalUserProfiles(linked.id, f.guestProfile);
+      setOpenClawIdTunnelPrincipalLookup(() => ownerPrincipal);
+      const captured = await createGitHubPublicationRequesterFixture({
+        profileId: f.guestProfile,
+        scopes: ["operator.admin"],
+        ...f.guestSource.session,
+        openclawIdPrincipal: change === "owner device" ? ownerPrincipal : undefined,
+      });
+      expect(captured.requester.snapshot).toMatchObject({
+        actor: { kind: "operator", profileId: f.guestProfile },
+        authenticationSource: "non-member",
+      });
+      const json = encodeGitHubPublicationRequester(captured.requester.snapshot);
+      expect(decodeGitHubPublicationRequester(json)).toEqual(captured.requester.snapshot);
+      const restored = await restoreGitHubPublicationRequester(
+        json,
+        f.guestSource.session,
+        f.guestSource.context.getCommittedRuntimeConfig,
+      );
+      onTestFinished(restored.release);
+      expect(captured.requester.assertCurrent).not.toThrow();
+      expect(restored.assertCurrent).not.toThrow();
+      const claim = await holdWorkerTurn(f);
+      const accepted = await f.coordinator.requestForSessionV2(
+        f.request("recorded-source-publication", captured.requester),
+      );
+      expect(accepted.status).toBe("requested");
+      expect(f.readRequester(accepted.requestId)).toEqual(captured.requester.snapshot);
+      captured.release();
+      await f.placements.releaseTurn(claim);
+      const restarted = f.restart();
+      await restarted.resumeSessionRequests();
+      expect(await restarted.readAsync(accepted.requestId)).toMatchObject({ status: "published" });
+      expect(f.publishedTitles).toEqual(["recorded-source-publication"]);
     },
   );
   it("does not widen a nonadministrator member's existing publication cap", async () => {

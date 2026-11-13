@@ -447,7 +447,13 @@ source and checks it again before later writes, including after recovery. Remova
 role changes, or a definition that no longer permits the request stop later writes;
 a new access-policy requirement cannot replace the original grant. Nonadministrator
 members retain their existing publication restrictions.
-Publications queued by a member before upgrading are refused and must be requested again.
+
+After upgrading, historical publication requests without a recorded authentication
+source are refused if the requester's profile has an OpenClaw ID identity. This
+includes linked owners and people who queued the request through another sign-in:
+the original sign-in cannot be inferred from the profile. This one-time refusal
+affects requests in flight across the upgrade; request publication again. New
+requests record their source and are not subject to this historical-source refusal.
 
 A member's sandbox requirement comes from the membership definition, even when
 `gateway.roles.default` is absent or their profile has a different named role
