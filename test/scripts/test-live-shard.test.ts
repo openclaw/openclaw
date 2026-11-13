@@ -196,9 +196,10 @@ it("requires live shard report evidence for each selected file", () => {
   expectReport(report(1, 1), "is missing testResults file evidence.", [ACP_FILE]);
 });
 
-it("respects explicit opt-in and pass evidence", () => {
-  const reviewFile = "test/e2e/crabbox-sandbox.live.test.ts";
-  const optInEnv = "OPENCLAW_E2E_CRABBOX";
+it.each([
+  ["test/e2e/crabbox-sandbox.live.test.ts", "OPENCLAW_E2E_CRABBOX"],
+  ["src/agents/tools/sessions-send-retained-child.live.test.ts", "OPENCLAW_LIVE_RETAINED_CHILD"],
+])("respects explicit opt-in and pass evidence for %s", (reviewFile, optInEnv) => {
   const payload = report(
     1,
     2,
