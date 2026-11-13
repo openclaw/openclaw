@@ -244,6 +244,19 @@ async function buildDaemonStatusSummary(serviceLabel: "gateway" | "node", timeou
   };
 }
 
+/** Ends an interrupted scan quietly; other scan failures keep their report. */
+export async function reportStatusScanFailureUnlessInterrupted(
+  error: unknown,
+  runtime: RuntimeEnv,
+  timeoutMs?: number,
+): Promise<undefined> {
+  const signal = getAsyncWorkSignal();
+  if (signal?.aborted && error === signal.reason) {
+    return undefined;
+  }
+  return await reportStatusScanFailure(error, runtime, timeoutMs);
+}
+
 /** Preserve independent service diagnostics when local status collection refuses state. */
 export async function reportStatusScanFailure(
   error: unknown,

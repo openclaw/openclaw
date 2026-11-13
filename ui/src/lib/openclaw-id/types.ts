@@ -1,5 +1,8 @@
 // Response shapes of the OpenClaw ID Gateway methods (openclawId.*) the Control UI reads.
-import type { SignedStatement } from "../../../../packages/openclaw-id-protocol/src/index.ts";
+import type {
+  MemberRole,
+  SignedStatement,
+} from "../../../../packages/openclaw-id-protocol/src/index.ts";
 import type { OpenClawIdLinkPreparation } from "./link.ts";
 
 export type OpenClawIdPublication =
@@ -24,8 +27,13 @@ export type OpenClawIdStatusResult = {
     hostname?: string;
     rootPub?: string;
   };
-  /** How this browser reaches the Gateway: only `local_operator` may link or sign in. */
+  /** How this browser reaches the Gateway: only `local_operator` may link. */
   channel: "local_operator" | "tunnel" | null;
+  /**
+   * How this connection signs in with OpenClaw ID: the loopback popup, the device grant
+   * (a verified personal sign-in such as Tailscale), or not at all.
+   */
+  accountSignIn: "popup" | "device" | null;
   /** Whether `openclawId.people` answers this client (loopback operator or an owner device). */
   owner?: boolean;
   /** Active owner devices, returned only to an owner. */
@@ -57,7 +65,7 @@ type OpenClawIdConnection =
     }
   | {
       kind: "member";
-      role: "operator" | "viewer";
+      role: MemberRole;
       accountId: string;
       email: string | null;
       displayName: string | null;

@@ -14,7 +14,7 @@ import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { collectNodeRuntimeFindings } from "./node-runtime-diagnostics.js";
 import { assertStatusUsageAgentScope, runStatusJsonCommand } from "./status-json-command.ts";
 import {
-  reportStatusScanFailure,
+  reportStatusScanFailureUnlessInterrupted,
   resolveStatusGatewayHealth,
   resolveStatusSecurityAudit,
   resolveStatusRuntimeSnapshot,
@@ -72,7 +72,12 @@ export async function statusCommand(
 
   const scan = await import("./status.scan.js")
     .then(({ scanStatus }) => scanStatus({ ...probeBudget, deep: opts.deep }))
-    .catch((error: unknown) => reportStatusScanFailure(error, runtime, opts.timeoutMs));
+    .catch((error: unknown) =>
+      reportStatusScanFailureUnlessInterrupted(error, runtime, opts.timeoutMs),
+    );
+  if (!scan) {
+    return;
+  }
 
   const {
     cfg,

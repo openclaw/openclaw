@@ -13,6 +13,7 @@ import {
   withToolApprovalReviews,
 } from "../../lib/chat/tool-approval-reviews.ts";
 import { readLiveDiffStat } from "../../lib/chat/tool-call-diff.ts";
+import { readLiveToolOutput } from "../../lib/chat/tool-live-output.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatUnknownText, truncateText } from "../../lib/format.ts";
 import {
@@ -27,7 +28,11 @@ import { observedRunInputSendId } from "./stream-causal-boundary.ts";
 import type { AgentEventPayload, ToolStreamEntry, ToolStreamHost } from "./tool-stream-contract.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 import { handlePreambleProgress } from "./tool-stream-preamble.ts";
-import { cancelToolStreamSync, syncToolStreamMessages } from "./tool-stream-state.ts";
+import {
+  cancelToolStreamSync,
+  refreshToolStreamMessage,
+  syncToolStreamMessages,
+} from "./tool-stream-state.ts";
 import { handleStreamStatus, acceptsToolStreamSession } from "./tool-stream-status.ts";
 
 // How far a cyber notice has settled. A lower value never replaces a higher one
@@ -81,7 +86,7 @@ function formatToolOutput(value: unknown): string | null {
   let text: string;
   if (typeof value === "string") {
     text = value;
-  } else if (contentText) {
+  } else if (contentText !== null) {
     text = contentText;
   } else {
     try {
@@ -111,63 +116,24 @@ function refreshSessionStatusModel(host: ToolStreamHost, data: Record<string, un
   void host.sessions.reconcileMutation(agentId);
 }
 
-function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown> {
-  const itemEnded = entry.activity?.some(
-    (item) =>
-      (item.toolCallId ?? item.itemId) === entry.toolCallId &&
-      item.phase === "end" &&
-      !item.suppressChannelProgress,
-  );
-  const content: Array<Record<string, unknown>> = [];
-  content.push({
-    type: "toolcall",
-    name: entry.name,
-    arguments: entry.args ?? {},
-    ...(entry.parentToolCallId ? { parentToolCallId: entry.parentToolCallId } : {}),
-    ...(entry.details !== undefined ? { details: entry.details } : {}),
-  });
-  // Emit the result block whenever a result landed, even with empty output;
-  // otherwise a completed no-stdout command keeps its running state in the UI.
-  if (entry.output || entry.resultReceived) {
-    content.push({
-      type: "toolresult",
-      name: entry.name,
-      text: entry.output ?? "",
-      ...(entry.parentToolCallId ? { parentToolCallId: entry.parentToolCallId } : {}),
-      ...(entry.details !== undefined ? { details: entry.details } : {}),
-      ...(entry.isError !== undefined ? { isError: entry.isError } : {}),
-      ...(entry.exitCode !== undefined ? { exitCode: entry.exitCode } : {}),
-    });
-  }
-  return {
-    role: "assistant",
-    toolCallId: entry.toolCallId,
-    runId: entry.runId,
-    ...(entry.activity ? { activity: entry.activity } : {}),
-    content,
-    timestamp: entry.startedAt,
-    // Running-state markers: only live tool-stream cards may show a spinner,
-    // and completion comes from a result or live item end, never partial output
-    // or a status-less history placeholder. Transcript messages never carry these,
-    // so historical output-less calls (aborted runs) stay inert.
-    __openclawToolStreamLive: true,
-    __openclawToolStreamResultReceived: entry.resultReceived === true,
-    __openclawToolStreamItemEnded: itemEnded === true,
-    ...(entry.resultReceived !== true && !itemEnded && entry.liveDiffStat
-      ? { __openclawToolStreamDiffStat: entry.liveDiffStat }
-      : {}),
-    __openclawToolStreamReceivedAt: entry.receivedAt,
-    ...(entry.afterUserSendId ? { openclawToolStreamAfterSendId: entry.afterUserSendId } : {}),
-  };
-}
-
 function flushToolStreamSync(host: ToolStreamHost) {
   cancelToolStreamSync(host);
-  syncToolStreamMessages(host);
+  syncToolStreamMessages(host, host.toolStreamStructureChanged !== false);
 }
 
-function publishToolStreamEntry(host: ToolStreamHost, entry: ToolStreamEntry, force: boolean) {
-  entry.message = buildToolStreamMessage(entry);
+function publishToolStreamEntry(
+  host: ToolStreamHost,
+  entry: ToolStreamEntry,
+  force: boolean,
+  outputOnly = false,
+) {
+  host.toolStreamStructureChanged = (host.toolStreamStructureChanged ?? false) || !outputOnly;
+  if (outputOnly) {
+    // Facts already advanced; build the immutable snapshot only at the existing publication.
+    entry.messageDirty = true;
+  } else {
+    refreshToolStreamMessage(entry);
+  }
   if (host.toolStreamOrder.length > TOOL_STREAM_LIMIT) {
     const overflow = host.toolStreamOrder.length - TOOL_STREAM_LIMIT;
     for (const id of host.toolStreamOrder.splice(0, overflow)) {
@@ -181,20 +147,25 @@ function publishToolStreamEntry(host: ToolStreamHost, entry: ToolStreamEntry, fo
   if (host.toolStreamSyncTimer != null) {
     return;
   }
-  host.toolStreamSyncTimer = window.setTimeout(() => {
-    flushToolStreamSync(host);
-  }, TOOL_STREAM_THROTTLE_MS);
-}
-
-function toolActivityIdentity(runId: string, toolCallId: string): string {
-  return `tool:${buildToolStreamIdentity(runId, toolCallId)}`;
+  const elapsed =
+    host.toolStreamPublishedAt === undefined ? 0 : performance.now() - host.toolStreamPublishedAt;
+  host.toolStreamSyncTimer = window.setTimeout(
+    () => {
+      flushToolStreamSync(host);
+    },
+    Math.max(0, TOOL_STREAM_THROTTLE_MS - elapsed),
+  );
 }
 
 function toolReviewSequenceIdentity(ownerIdentity: string, reviewId: string): string {
   return `${ownerIdentity}:review:${JSON.stringify(reviewId)}`;
 }
 
-function acceptActivityEvent(host: ToolStreamHost, payload: AgentEventPayload): boolean {
+function acceptActivityEvent(
+  host: ToolStreamHost,
+  payload: AgentEventPayload,
+  toolStreamIdentity: string,
+): boolean {
   const seq = Number.isSafeInteger(payload.seq) ? payload.seq : 0;
   let identity: string;
   let resultOwner: string | undefined;
@@ -203,7 +174,12 @@ function acceptActivityEvent(host: ToolStreamHost, payload: AgentEventPayload): 
     if (!toolCallId) {
       return true;
     }
-    const ownerIdentity = toolActivityIdentity(payload.runId, toolCallId);
+    // Admission historically trims IDs; invocation lookup retains their raw bytes.
+    const ownerIdentity = `tool:${
+      toolCallId === payload.data.toolCallId
+        ? toolStreamIdentity
+        : buildToolStreamIdentity(payload.runId, toolCallId)
+    }`;
     const terminalIdentity = `${ownerIdentity}:result`;
     const terminalSeq = host.activityEventSeqById?.get(terminalIdentity);
     const phase = toTrimmedString(payload.data?.phase);
@@ -437,6 +413,16 @@ export function handleAgentEvent(
   if (!payload) {
     return false;
   }
+  // A shared connection can serve inline and grouped panes. Declining the
+  // optional stream must precede both live reduction and history sequence fences.
+  if (
+    payload.stream === "tool" &&
+    payload.data.phase === "update" &&
+    payload.data.outputOnly === true &&
+    (host.settings?.chatInlineCommands !== true || !host.inlineCommandPresentation)
+  ) {
+    return false;
+  }
 
   // Filter the shared activity stream by session first. Chat-linked events use
   // the client run id, but spawned and session-replayed events may not own the
@@ -445,10 +431,16 @@ export function handleAgentEvent(
   if (sessionKey && !uiSessionEventMatches(host, sessionKey, toTrimmedString(payload.agentId))) {
     return false;
   }
+  const toolStreamIdentity =
+    payload.stream === "tool" &&
+    typeof payload.data.toolCallId === "string" &&
+    payload.data.toolCallId
+      ? buildToolStreamIdentity(payload.runId, payload.data.toolCallId)
+      : "";
   // History can replay an older active-run snapshot after newer live activity.
   // Fence activity by Gateway sequence so restore fills gaps
   // without regressing a result or newer progress already rendered by this pane.
-  if (!acceptActivityEvent(host, payload)) {
+  if (!acceptActivityEvent(host, payload, toolStreamIdentity)) {
     return false;
   }
   if ((payload.stream === "tool" || payload.stream === "item") && payload.data.display === false) {
@@ -538,7 +530,6 @@ export function handleAgentEvent(
   if (!toolCallId) {
     return false;
   }
-  const toolStreamIdentity = buildToolStreamIdentity(payload.runId, toolCallId);
   let entry = host.toolStreamById.get(toolStreamIdentity);
   const phase = typeof data.phase === "string" ? data.phase : "";
   const approvalReview = phase === "review" ? normalizeToolApprovalReview(data.review) : null;
@@ -577,6 +568,16 @@ export function handleAgentEvent(
       ? resultExitCode
       : undefined;
   const liveDiffStat = phase === "input_delta" ? readLiveDiffStat(data.diff) : undefined;
+  // Canvas output creates conversation items. Creation, identity adoption, and all
+  // non-output facts retain the structural publication path, including terminal state.
+  const outputOnly =
+    phase === "update" &&
+    entry !== undefined &&
+    entry.name === name &&
+    entry.resultReceived !== true &&
+    entry.message["__openclawToolStreamItemEnded"] !== true &&
+    !resultApprovalReviewOutcome &&
+    (!parentToolCallId || entry.parentToolCallId === parentToolCallId);
   if (name === "session_status" && phase === "result") {
     refreshSessionStatusModel(host, data);
   }
@@ -606,6 +607,13 @@ export function handleAgentEvent(
   if (output !== undefined) {
     entry.output = output || undefined;
   }
+  if (phase === "update" || phase === "result") {
+    const run = getChatRunProjection(host, payload.runId);
+    entry.liveOutput =
+      phase === "update" && (!run || run.status === "streaming")
+        ? readLiveToolOutput(readRecord(data.partialResult)?.liveOutput)
+        : undefined;
+  }
   if (resultDetails !== undefined || resultApprovalReviewOutcome) {
     const currentOutcome = readToolApprovalReviewOutcome(entry.details);
     const outcome =
@@ -630,7 +638,7 @@ export function handleAgentEvent(
   }
 
   if (approvalReview) {
-    const ownerIdentity = toolActivityIdentity(payload.runId, entry.toolCallId);
+    const ownerIdentity = `tool:${toolStreamIdentity}`;
     const sequences = (host.activityEventSeqById ??= new Map());
     const sequenceFor = (candidate: ToolApprovalReview) =>
       sequences.get(toolReviewSequenceIdentity(ownerIdentity, candidate.id)) ?? 0;
@@ -666,6 +674,6 @@ export function handleAgentEvent(
       nextOutcome && payload.seq >= newestReviewSeq ? nextOutcome : currentOutcome,
     );
   }
-  publishToolStreamEntry(host, entry, phase === "result" || approvalReview !== null);
+  publishToolStreamEntry(host, entry, phase === "result" || approvalReview !== null, outputOnly);
   return true;
 }
