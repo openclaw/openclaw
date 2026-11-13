@@ -1,301 +1,78 @@
-name: Release 11.4 worker fixture cleanup proof
+name: Release 11.4 UI attachment diagnostics
 'on':
   workflow_dispatch:
-    inputs:
-      target_ref:
-        required: true
-        type: string
 permissions:
   contents: read
 concurrency:
-  group: release-114-worker-cleanup-7957bf32
+  group: release-114-ui-diagnostics-7957bf32
   cancel-in-progress: false
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
-  EXPECTED_TARGET: 7957bf3258707ba5d5860393990a67aa53ef2f91
-  EXPECTED_TREE: 33c1d06b7b1bc65e9a538a6acf21cd2510f42208
 jobs:
-  baseline:
-    runs-on: blacksmith-16vcpu-ubuntu-2404
-    timeout-minutes: 30
+  connection-entry:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
     steps:
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      with:
-        ref: ${{ inputs.target_ref }}
-        fetch-depth: 1
-        persist-credentials: false
-    - name: Bind exact C, source tree and frozen fixture-only proposal
-      shell: bash
-      env:
-        INPUT_TARGET: ${{ inputs.target_ref }}
-        WORKFLOW_SHA: ${{ github.workflow_sha }}
-        LANE: baseline
-      run: |
-        set -euo pipefail
-        test "$INPUT_TARGET" = "$EXPECTED_TARGET"
-        test "$(git rev-parse HEAD)" = "$EXPECTED_TARGET"
-        test "$(git rev-parse HEAD^{tree})" = "$EXPECTED_TREE"
-        test -z "$(git status --porcelain)"
-        proof=.artifacts/worker-cleanup-proof
-        mkdir -p "$proof"
-        printf 'source=%s
-        source_tree=%s
-        workflow=%s
-        run=%s
-        attempt=%s
-        lane=%s
-        ' "$EXPECTED_TARGET" "$EXPECTED_TREE" "$WORKFLOW_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$LANE" > "$proof/identity.txt"
-        base64 --decode > "$proof/payload.tar.gz" <<'FROZEN_BUNDLE'
-        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
-        FROZEN_BUNDLE
-        printf '%s  %s\n' '43b4b2c2b5aad71ead94732716db309bfed6dd670b4a799338c5d29b9b9e3f34' "$proof/payload.tar.gz" | sha256sum --check --strict
-        tar --extract --gzip --file "$proof/payload.tar.gz" --directory "$proof" --no-same-owner --no-same-permissions repair.patch bound-paths.txt bound-base.sha256 baseline-effective.sha256 expected-tests.json origin-failure.json reduce.py
-        printf '%s  %s\n' 'ffd711a99338ea8012e8340a5c83e8f440df171f8af4791938a60b595cded640' "$proof/repair.patch" | sha256sum --check --strict
-        printf '%s  %s\n' '1524111b96bf4e9a8d23e00a4d22ea2a40d3764cb9fdb8c65c4520c3946e3e76' "$proof/bound-paths.txt" | sha256sum --check --strict
-        printf '%s  %s\n' '94418a13df750db31ee66772a4207bf071d35bc578b453bfcad572a958533fa7' "$proof/bound-base.sha256" | sha256sum --check --strict
-        printf '%s  %s\n' '94418a13df750db31ee66772a4207bf071d35bc578b453bfcad572a958533fa7' "$proof/baseline-effective.sha256" | sha256sum --check --strict
-        printf '%s  %s\n' 'd62ce73f7930d970c22b587896f4c787b59763ce340f168a154f86545dfcb5f7' "$proof/expected-tests.json" | sha256sum --check --strict
-        printf '%s  %s\n' '04a36cff273919bc87207f43b28fd165083f3c036fb0f4386f3f2bb3ccb6b91f' "$proof/origin-failure.json" | sha256sum --check --strict
-        printf '%s  %s\n' 'ac43a76ec115e1592ff6973416a6fd09c87b5148f3fa150bf0da14ab8a509617' "$proof/reduce.py" | sha256sum --check --strict
-        sha256sum --check --strict "$proof/bound-base.sha256"
-        git ls-tree -r HEAD > "$proof/base-git-tree.txt"
-        git archive --format=tar HEAD | gzip -n > "$proof/base-source.tar.gz"
-        while IFS= read -r path; do
-          mkdir -p "$proof/source/$(dirname "$path")"
-          cp "$path" "$proof/source/$path"
-        done < "$proof/bound-paths.txt"
-        sha256sum --check --strict "$proof/baseline-effective.sha256"
-        git diff --name-only | LC_ALL=C sort > "$proof/actual-paths.txt"
-        printf '' > "$proof/expected-paths.txt"
-        diff -u "$proof/expected-paths.txt" "$proof/actual-paths.txt"
-        git diff --check
-        git diff --binary --full-index > "$proof/effective.patch"
-        while IFS= read -r path; do
-          mkdir -p "$proof/effective-source/$(dirname "$path")"
-          cp "$path" "$proof/effective-source/$path"
-        done < "$proof/bound-paths.txt"
-        test ! -d dist
-        test ! -d dist-runtime
-    - uses: ./.github/actions/setup-node-env
-      with:
-        semantic-checks: 'true'
-        install-bun: 'false'
-        cache-mode: restore
-    - uses: ./.github/actions/setup-test-bun
-    - uses: ./.github/actions/setup-ripgrep
-    - name: live
-      shell: bash
-      run: |
-        set -euo pipefail
-        proof=.artifacts/worker-cleanup-proof
-        set +e
-        node scripts/run-vitest.mjs src/gateway/worker-environments/live-events-settlement.test.ts --config test/vitest/vitest.gateway-database-workers.config.ts --maxWorkers=1 --reporter=verbose --reporter=json --outputFile="$GITHUB_WORKSPACE/$proof/live-results.json" 2>&1 | tee "$proof/live.log"
-        statuses=("${PIPESTATUS[@]}")
-        set -e
-        printf 'command_exit=%s
-        log_exit=%s
-        ' "${statuses[0]}" "${statuses[1]}" > "$proof/live-status.txt"
-        exit "${statuses[1]}"
-    - name: resources
-      shell: bash
-      run: |
-        set -euo pipefail
-        proof=.artifacts/worker-cleanup-proof
-        set +e
-        node scripts/run-vitest.mjs src/state/openclaw-agent-db-resources.test.ts --config test/vitest/vitest.unit.config.ts --maxWorkers=1 --reporter=verbose --reporter=json --outputFile="$GITHUB_WORKSPACE/$proof/resources-results.json" 2>&1 | tee "$proof/resources.log"
-        statuses=("${PIPESTATUS[@]}")
-        set -e
-        printf 'command_exit=%s
-        log_exit=%s
-        ' "${statuses[0]}" "${statuses[1]}" > "$proof/resources-status.txt"
-        exit "${statuses[1]}"
-    - name: Require complete original case coverage and classify baseline honestly
-      shell: bash
-      run: |
-        set -euo pipefail
-        python3 .artifacts/worker-cleanup-proof/reduce.py
-    - name: Digest retained artifacts even on failure
-      if: always()
-      shell: bash
-      run: |
-        set -euo pipefail
-        proof=.artifacts/worker-cleanup-proof
-        if test -d "$proof"; then
-          find "$proof" -type f ! -name artifact-digests.sha256 -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum > "$proof/artifact-digests.sha256"
-        fi
-    - name: Preserve frozen source, patches, raw logs and results
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-      if: always()
-      with:
-        name: release-114-worker-cleanup-baseline-${{ github.run_id }}-${{ github.run_attempt }}
-        path: |
-          .artifacts/
-          test-results/
-        include-hidden-files: true
-        if-no-files-found: error
-        retention-days: 14
-  repair:
-    runs-on: blacksmith-16vcpu-ubuntu-2404
-    timeout-minutes: 30
-    steps:
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      with:
-        ref: ${{ inputs.target_ref }}
-        fetch-depth: 1
-        persist-credentials: false
-    - name: Bind exact C, source tree and frozen fixture-only proposal
-      shell: bash
-      env:
-        INPUT_TARGET: ${{ inputs.target_ref }}
-        WORKFLOW_SHA: ${{ github.workflow_sha }}
-        LANE: repair
-      run: |
-        set -euo pipefail
-        test "$INPUT_TARGET" = "$EXPECTED_TARGET"
-        test "$(git rev-parse HEAD)" = "$EXPECTED_TARGET"
-        test "$(git rev-parse HEAD^{tree})" = "$EXPECTED_TREE"
-        test -z "$(git status --porcelain)"
-        proof=.artifacts/worker-cleanup-proof
-        mkdir -p "$proof"
-        printf 'source=%s
-        source_tree=%s
-        workflow=%s
-        run=%s
-        attempt=%s
-        lane=%s
-        ' "$EXPECTED_TARGET" "$EXPECTED_TREE" "$WORKFLOW_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$LANE" > "$proof/identity.txt"
-        base64 --decode > "$proof/payload.tar.gz" <<'FROZEN_BUNDLE'
-        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
-        FROZEN_BUNDLE
-        printf '%s  %s\n' '7077f874e606d2ce051adc4d8ee375c255db8fb5348539b6dd0cc68e9b3c1f33' "$proof/payload.tar.gz" | sha256sum --check --strict
-        tar --extract --gzip --file "$proof/payload.tar.gz" --directory "$proof" --no-same-owner --no-same-permissions repair.patch bound-paths.txt bound-base.sha256 repair-effective.sha256 expected-tests.json origin-failure.json reduce.py
-        printf '%s  %s\n' 'ffd711a99338ea8012e8340a5c83e8f440df171f8af4791938a60b595cded640' "$proof/repair.patch" | sha256sum --check --strict
-        printf '%s  %s\n' '1524111b96bf4e9a8d23e00a4d22ea2a40d3764cb9fdb8c65c4520c3946e3e76' "$proof/bound-paths.txt" | sha256sum --check --strict
-        printf '%s  %s\n' '94418a13df750db31ee66772a4207bf071d35bc578b453bfcad572a958533fa7' "$proof/bound-base.sha256" | sha256sum --check --strict
-        printf '%s  %s\n' '7566996a9768da17d445af2c027180736e549f503b2443245e0009c6b4d270ef' "$proof/repair-effective.sha256" | sha256sum --check --strict
-        printf '%s  %s\n' 'd62ce73f7930d970c22b587896f4c787b59763ce340f168a154f86545dfcb5f7' "$proof/expected-tests.json" | sha256sum --check --strict
-        printf '%s  %s\n' '04a36cff273919bc87207f43b28fd165083f3c036fb0f4386f3f2bb3ccb6b91f' "$proof/origin-failure.json" | sha256sum --check --strict
-        printf '%s  %s\n' 'ac43a76ec115e1592ff6973416a6fd09c87b5148f3fa150bf0da14ab8a509617' "$proof/reduce.py" | sha256sum --check --strict
-        sha256sum --check --strict "$proof/bound-base.sha256"
-        git ls-tree -r HEAD > "$proof/base-git-tree.txt"
-        git archive --format=tar HEAD | gzip -n > "$proof/base-source.tar.gz"
-        while IFS= read -r path; do
-          mkdir -p "$proof/source/$(dirname "$path")"
-          cp "$path" "$proof/source/$path"
-        done < "$proof/bound-paths.txt"
-        git apply --check "$proof/repair.patch"
-        git apply "$proof/repair.patch"
-        sha256sum --check --strict "$proof/repair-effective.sha256"
-        git diff --name-only | LC_ALL=C sort > "$proof/actual-paths.txt"
-        printf '%s
-        ' 'src/gateway/worker-environments/live-events-settlement.test.ts' > "$proof/expected-paths.txt"
-        diff -u "$proof/expected-paths.txt" "$proof/actual-paths.txt"
-        git diff --check
-        git diff --binary --full-index > "$proof/effective.patch"
-        while IFS= read -r path; do
-          mkdir -p "$proof/effective-source/$(dirname "$path")"
-          cp "$path" "$proof/effective-source/$path"
-        done < "$proof/bound-paths.txt"
-        test ! -d dist
-        test ! -d dist-runtime
-    - uses: ./.github/actions/setup-node-env
-      with:
-        semantic-checks: 'true'
-        install-bun: 'false'
-        cache-mode: restore
-    - uses: ./.github/actions/setup-test-bun
-    - uses: ./.github/actions/setup-ripgrep
-    - name: live
-      shell: bash
-      run: |
-        set -euo pipefail
-        proof=.artifacts/worker-cleanup-proof
-        set +e
-        node scripts/run-vitest.mjs src/gateway/worker-environments/live-events-settlement.test.ts --config test/vitest/vitest.gateway-database-workers.config.ts --maxWorkers=1 --reporter=verbose --reporter=json --outputFile="$GITHUB_WORKSPACE/$proof/live-results.json" 2>&1 | tee "$proof/live.log"
-        statuses=("${PIPESTATUS[@]}")
-        set -e
-        printf 'command_exit=%s
-        log_exit=%s
-        ' "${statuses[0]}" "${statuses[1]}" > "$proof/live-status.txt"
-        exit "${statuses[1]}"
-    - name: resources
-      shell: bash
-      run: |
-        set -euo pipefail
-        proof=.artifacts/worker-cleanup-proof
-        set +e
-        node scripts/run-vitest.mjs src/state/openclaw-agent-db-resources.test.ts --config test/vitest/vitest.unit.config.ts --maxWorkers=1 --reporter=verbose --reporter=json --outputFile="$GITHUB_WORKSPACE/$proof/resources-results.json" 2>&1 | tee "$proof/resources.log"
-        statuses=("${PIPESTATUS[@]}")
-        set -e
-        printf 'command_exit=%s
-        log_exit=%s
-        ' "${statuses[0]}" "${statuses[1]}" > "$proof/resources-status.txt"
-        exit "${statuses[1]}"
-    - name: Require complete original case coverage and classify baseline honestly
-      shell: bash
-      run: |
-        set -euo pipefail
-        python3 .artifacts/worker-cleanup-proof/reduce.py
-    - name: fixture-format
-      shell: bash
-      run: |
-        set -euo pipefail
-        proof=.artifacts/worker-cleanup-proof
-        set +e
-        pnpm format:check -- src/gateway/worker-environments/live-events-settlement.test.ts 2>&1 | tee "$proof/fixture-format.log"
-        statuses=("${PIPESTATUS[@]}")
-        set -e
-        printf 'command_exit=%s
-        log_exit=%s
-        ' "${statuses[0]}" "${statuses[1]}" > "$proof/fixture-format-status.txt"
-        if (( statuses[0] != 0 )); then exit "${statuses[0]}"; fi
-        exit "${statuses[1]}"
-    - name: fixture-lint
-      shell: bash
-      run: |
-        set -euo pipefail
-        proof=.artifacts/worker-cleanup-proof
-        set +e
-        node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json src/gateway/worker-environments/live-events-settlement.test.ts 2>&1 | tee "$proof/fixture-lint.log"
-        statuses=("${PIPESTATUS[@]}")
-        set -e
-        printf 'command_exit=%s
-        log_exit=%s
-        ' "${statuses[0]}" "${statuses[1]}" > "$proof/fixture-lint-status.txt"
-        if (( statuses[0] != 0 )); then exit "${statuses[0]}"; fi
-        exit "${statuses[1]}"
-    - name: affected-typegraph
-      shell: bash
-      run: |
-        set -euo pipefail
-        proof=.artifacts/worker-cleanup-proof
-        set +e
-        env -u OPENCLAW_LOCAL_CHECK node scripts/run-tsgo-core-test-shards.mjs --changed-paths-json '["src/gateway/worker-environments/live-events-settlement.test.ts"]' --concurrency 2 2>&1 | tee "$proof/affected-typegraph.log"
-        statuses=("${PIPESTATUS[@]}")
-        set -e
-        printf 'command_exit=%s
-        log_exit=%s
-        ' "${statuses[0]}" "${statuses[1]}" > "$proof/affected-typegraph-status.txt"
-        if (( statuses[0] != 0 )); then exit "${statuses[0]}"; fi
-        exit "${statuses[1]}"
-    - name: Digest retained artifacts even on failure
-      if: always()
-      shell: bash
-      run: |
-        set -euo pipefail
-        proof=.artifacts/worker-cleanup-proof
-        if test -d "$proof"; then
-          find "$proof" -type f ! -name artifact-digests.sha256 -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum > "$proof/artifact-digests.sha256"
-        fi
-    - name: Preserve frozen source, patches, raw logs and results
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-      if: always()
-      with:
-        name: release-114-worker-cleanup-repair-${{ github.run_id }}-${{ github.run_attempt }}
-        path: |
-          .artifacts/
-          test-results/
-        include-hidden-files: true
-        if-no-files-found: error
-        retention-days: 14
-    needs: baseline
+      - name: Checkout exact C only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 7957bf3258707ba5d5860393990a67aa53ef2f91
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Bind exact C and frozen test-only patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = 7957bf3258707ba5d5860393990a67aa53ef2f91
+          test "$(git rev-parse HEAD^{tree})" = 33c1d06b7b1bc65e9a538a6acf21cd2510f42208
+          test -z "$(git status --porcelain)"
+          proof="$RUNNER_TEMP/ui-attachment-private"
+          mkdir -m 700 "$proof"
+          base64 --decode > "$proof/payload.tar.gz" <<'FROZEN'
+          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
+          FROZEN
+          printf '%s  %s\n' 'd563c6c81860ade05278c61ab4740fff442e533d8dc5d77e87c93266e4d2ea1f' "$proof/payload.tar.gz" | sha256sum --check --strict
+          tar --extract --gzip --file "$proof/payload.tar.gz" --directory "$proof" --no-same-owner --no-same-permissions regression.patch manifest.json run.py
+          python3 "$proof/run.py" prepare
+      - name: Setup exact-C Node and dependencies
+        id: setup
+        uses: ./.github/actions/setup-node-env
+        with:
+          semantic-checks: 'true'
+          install-bun: 'false'
+          cache-mode: restore
+      - name: Setup canonical test Bun
+        id: bun
+        uses: ./.github/actions/setup-test-bun
+      - name: Attached exported entry (supported path)
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && steps.bun.outcome == 'success' }}
+        shell: bash
+        run: python3 "$RUNNER_TEMP/ui-attachment-private/run.py" attached
+      - name: Held-detached tree (diagnostic only, not routed proof)
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && steps.bun.outcome == 'success' }}
+        shell: bash
+        run: python3 "$RUNNER_TEMP/ui-attachment-private/run.py" detached
+      - name: Complete connection-page file (26 expected cases)
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && steps.bun.outcome == 'success' }}
+        shell: bash
+        run: python3 "$RUNNER_TEMP/ui-attachment-private/run.py" complete
+      - name: Require all three recorded outcomes, no expected-failure mask
+        if: ${{ always() }}
+        shell: bash
+        run: python3 "$RUNNER_TEMP/ui-attachment-private/run.py" finalize
+      - name: Upload strict allowlisted diagnostic summary only
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ui-attachment-exactC-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .artifacts/ui-attachment-public/identity.json
+            .artifacts/ui-attachment-public/manifest.json
+            .artifacts/ui-attachment-public/regression.patch
+            .artifacts/ui-attachment-public/attached.json
+            .artifacts/ui-attachment-public/detached.json
+            .artifacts/ui-attachment-public/complete.json
+            .artifacts/ui-attachment-public/summary.json
+            .artifacts/ui-attachment-public/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
