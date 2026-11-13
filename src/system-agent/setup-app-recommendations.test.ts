@@ -151,6 +151,27 @@ it("gathers, dedupes, and sorts candidates with their ClawHub publisher ids", as
   expect(result.matches[0]?.candidate.id).toBe("@demo-owner/notes-tools");
 });
 
+it("rejects coincidental official-name substrings while preserving exact app matches", async () => {
+  const result = await matched({
+    labels: ["Linear", "LINE Desktop"],
+    channels: [officialEntry("line", true)],
+    plugins: [officialEntry("linear")],
+    searchSkills: async () => [],
+    matches: [
+      match("line", "substring overlap", "Linear"),
+      match("linear", "project integration", "Linear"),
+      match("line", "messaging integration", "LINE Desktop"),
+    ],
+  });
+  expect(result.groups.find((group) => group.app.label === "Linear")?.candidates).toEqual([
+    expect.objectContaining({ id: "linear" }),
+  ]);
+  expect(result.matches.map(({ appLabel, candidateId }) => [appLabel, candidateId])).toEqual([
+    ["LINE Desktop", "line"],
+    ["Linear", "linear"],
+  ]);
+});
+
 it("degrades one failed ClawHub search without aborting other apps", async () => {
   const searchSkills = vi.fn(async ({ query }: { query: string }) => {
     if (query === "Broken") {
