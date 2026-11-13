@@ -12,6 +12,7 @@ import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { isRecord } from "../lib/record-shared.mjs";
 import { resolveRepoRoot } from "../lib/repo-root.mjs";
 
 const root = resolveRepoRoot(import.meta.url);
@@ -42,11 +43,11 @@ const ids = process.argv[3]
       .map((entry) => entry.name)
       .filter((id) => {
         const file = path.join(root, "extensions", id, "tsconfig.json");
-        return (
-          existsSync(file) &&
-          JSON.parse(readFileSync(file, "utf8")).extends ===
-            "../tsconfig.package-boundary.base.json"
-        );
+        if (!existsSync(file)) {
+          return false;
+        }
+        const config: unknown = JSON.parse(readFileSync(file, "utf8"));
+        return isRecord(config) && config.extends === "../tsconfig.package-boundary.base.json";
       })
       .toSorted();
 const started = performance.now();
