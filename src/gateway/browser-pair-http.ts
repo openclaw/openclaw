@@ -1,6 +1,10 @@
 // Public device-code pairing for browsers that hold no Gateway credential yet.
 import type { IncomingMessage, ServerResponse } from "node:http";
+import os from "node:os";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { formatCliCommand } from "../cli/command-format.js";
+import { normalizeProfileName } from "../cli/profile-utils.js";
+import { resolveConfigPath } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   deriveDeviceIdFromPublicKey,
@@ -15,6 +19,7 @@ import {
 import {
   BROWSER_PAIR_IDENTITY_REQUIRED_MESSAGE,
   buildBrowserPairPayload,
+  formatBrowserPairCode,
   type BrowserPairAction,
 } from "../shared/browser-pair.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -73,6 +78,24 @@ function verifyBrowserPairProof(action: BrowserPairAction, body: BrowserPairBody
     requestId: body.requestId,
   });
   return verifyDeviceSignature(publicKey, payload, body.signature) ? publicKey : null;
+}
+
+/**
+ * The approval command for this Gateway, so a host running several Gateways reaches the issuer.
+ * `--profile` reproduces only a profile's default config location; any other location
+ * (OPENCLAW_STATE_DIR, OPENCLAW_CONFIG_PATH, OPENCLAW_HOME) lives in the Gateway's own
+ * environment, which the page cannot show, so it says the command needs that environment instead.
+ */
+export function buildBrowserPairCommand(
+  code: string,
+  env: NodeJS.ProcessEnv = process.env,
+): { command: string; commandNeedsGatewayEnv: boolean } {
+  const plainShell = { OPENCLAW_PROFILE: normalizeProfileName(env.OPENCLAW_PROFILE) ?? undefined };
+  return {
+    command: formatCliCommand(`openclaw pair ${formatBrowserPairCode(code)}`, env),
+    commandNeedsGatewayEnv:
+      resolveConfigPath(env) !== resolveConfigPath(plainShell, undefined, os.homedir),
+  };
 }
 
 function boundedMetadata(value: string | undefined): string | undefined {
@@ -154,7 +177,7 @@ export async function handleBrowserPairHttpRequest(params: {
           return;
         }
         const { requestId, code, expiresAtMs } = started;
-        sendJson(res, 200, { requestId, code, expiresAtMs });
+        sendJson(res, 200, { requestId, code, expiresAtMs, ...buildBrowserPairCommand(code) });
         return;
       }
 

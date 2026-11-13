@@ -1,8 +1,10 @@
 import type { IncomingMessage } from "node:http";
+import os from "node:os";
+import path from "node:path";
 import { Readable } from "node:stream";
 import { expect, it } from "vitest";
 import { createMockServerResponse } from "../test-utils/mock-http-response.js";
-import { handleBrowserPairHttpRequest } from "./browser-pair-http.js";
+import { buildBrowserPairCommand, handleBrowserPairHttpRequest } from "./browser-pair-http.js";
 
 it.each([
   ["refuses a remote socket claiming", "localhost:18789", "203.0.113.9", 403],
@@ -23,4 +25,26 @@ it.each([
   });
   expect(res.statusCode).toBe(status);
   expect(String(res.body).includes("origin_not_allowed")).toBe(status === 403);
+});
+
+it.each([
+  ["the default profile", {}, "openclaw pair ABCD-EFGH", false],
+  [
+    "a named profile",
+    {
+      OPENCLAW_PROFILE: "work",
+      OPENCLAW_STATE_DIR: path.join(os.homedir(), ".openclaw-work"),
+      OPENCLAW_CONFIG_PATH: path.join(os.homedir(), ".openclaw-work", "openclaw.json"),
+    },
+    "openclaw --profile work pair ABCD-EFGH",
+    false,
+  ],
+  [
+    "a custom state directory",
+    { OPENCLAW_STATE_DIR: "/srv/openclaw-b" },
+    "openclaw pair ABCD-EFGH",
+    true,
+  ],
+])("targets the issuing Gateway on %s", (_name, env, command, commandNeedsGatewayEnv) => {
+  expect(buildBrowserPairCommand("ABCDEFGH", env)).toEqual({ command, commandNeedsGatewayEnv });
 });

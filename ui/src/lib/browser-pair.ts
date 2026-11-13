@@ -24,7 +24,13 @@ export type BrowserPairFailure =
   | "noIdentity"
   | "identityRequired";
 
-type BrowserPairCode = { code: string; browserId: string };
+type BrowserPairCode = {
+  code: string;
+  browserId: string;
+  /** Issued by the Gateway so it targets that Gateway's profile. */
+  command: string;
+  commandNeedsGatewayEnv: boolean;
+};
 export type BrowserPairState =
   | { kind: "idle" | "cancelled" }
   | { kind: "starting" }
@@ -45,6 +51,8 @@ type BrowserPairReply = {
   status?: string;
   requestId?: string;
   code?: string;
+  command?: string;
+  commandNeedsGatewayEnv?: boolean;
   deviceId?: string;
   deviceToken?: string;
   role?: string;
@@ -112,7 +120,8 @@ export function createBrowserPairSession(params: {
     kind: "waiting" | "reconnecting" | "cancelling" | "cancelFailed" | "alreadyApproved",
     active: Attempt,
   ) => {
-    params.onState({ kind, code: active.code, browserId: active.browserId });
+    const { code, browserId, command, commandNeedsGatewayEnv } = active;
+    params.onState({ kind, code, browserId, command, commandNeedsGatewayEnv });
   };
   const fail = (reason: BrowserPairFailure) => {
     stop();
@@ -207,7 +216,7 @@ export function createBrowserPairSession(params: {
         return;
       }
       const body = result?.response.ok ? result.body : undefined;
-      if (!body?.requestId || !body.code) {
+      if (!body?.requestId || !body.code || !body.command) {
         fail(result?.response.status === 429 ? "busy" : "unavailable");
         return;
       }
@@ -218,6 +227,8 @@ export function createBrowserPairSession(params: {
         requestId: body.requestId,
         code: formatBrowserPairCode(body.code),
         browserId: formatBrowserPairDeviceId(body.deviceId ?? identity.deviceId),
+        command: body.command,
+        commandNeedsGatewayEnv: body.commandNeedsGatewayEnv === true,
       };
       showCode("waiting", attempt);
       void poll(current, attempt);

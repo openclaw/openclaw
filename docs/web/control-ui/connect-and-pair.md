@@ -91,6 +91,8 @@ Code pairing is for a direct connection to the Gateway serving the page, not an 
     openclaw pair ABCD-EFGH
     ```
 
+    Copy the command from the page: it targets the Gateway that issued the code, so a Gateway running under a named profile shows `openclaw --profile <name> pair ABCD-EFGH`. If that Gateway was started with its own `OPENCLAW_STATE_DIR` or `OPENCLAW_CONFIG_PATH`, the page says so; run the command with the same setting, or it may reach a different Gateway on the same host.
+
     The command prints the browser's user agent, address, page, **Browser ID**, and when it asked, then waits for your answer.
 
   </Step>

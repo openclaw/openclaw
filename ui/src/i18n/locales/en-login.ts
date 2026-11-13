@@ -40,6 +40,8 @@ const enLogin = {
       intro:
         "Pair your own browser for administrator access. This is not a guest invitation. Get a code here, then approve it on the Gateway host.",
       runOnGatewayHost: "Run on the Gateway host",
+      commandNeedsGatewayEnv:
+        "This Gateway uses its own state directory or config path. Run the command with the same OPENCLAW_STATE_DIR or OPENCLAW_CONFIG_PATH it was started with, or it may reach a different Gateway.",
       reconnecting: "Connection interrupted. Retrying with the same code…",
       cancelling: "Withdrawing the request on the Gateway…",
       cancelled: "Pairing request withdrawn.",
