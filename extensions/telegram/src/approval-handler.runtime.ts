@@ -19,7 +19,6 @@ import type {
 } from "openclaw/plugin-sdk/approval-runtime";
 import { resolveGatewayPublicOrigin } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildTelegramApprovalCallbackData } from "./approval-callback-data.js";
@@ -27,6 +26,7 @@ import {
   buildTelegramNativeExpiredApprovalText,
   buildTelegramNativeResolvedApprovalText,
 } from "./approval-terminal.js";
+import { buildTelegramRoutingTarget } from "./bot/helpers.js";
 import { normalizeTelegramButtonStyle, resolveTelegramInlineButtons } from "./button-types.js";
 import { normalizeControlUiBasePath } from "./control-ui-base-path.js";
 import {
@@ -34,6 +34,8 @@ import {
   shouldHandleTelegramExecApprovalRequest,
 } from "./exec-approvals.js";
 import { escapeTelegramHtml } from "./format.js";
+import { parseTelegramThreadId } from "./outbound-params.js";
+import { resolveTelegramSendThreadSpec } from "./reply-parameters.js";
 import {
   editMessageReplyMarkupTelegram,
   editMessageTelegram,
@@ -48,6 +50,11 @@ const log = createSubsystemLogger("telegram/approvals");
 const terminalizedSystemAgentApprovals = new Set<string>();
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
+type TelegramApprovalTarget = {
+  chatId: string;
+  messageThreadId?: number;
+  directMessagesTopicId?: number;
+};
 type TelegramPendingDelivery = {
   text: string;
   buttons: ReturnType<typeof resolveTelegramInlineButtons>;
@@ -63,6 +70,17 @@ type TelegramApprovalHandlerContext = {
   token: string;
   deps?: TelegramExecApprovalHandlerDeps;
 };
+
+function approvalTargetKey(target: TelegramApprovalTarget): string {
+  return buildTelegramRoutingTarget(
+    target.chatId,
+    resolveTelegramSendThreadSpec({
+      messageThreadId: target.messageThreadId,
+      targetDirectMessagesTopicId: target.directMessagesTopicId,
+      chatType: parseTelegramTarget(target.chatId).chatType,
+    }),
+  );
+}
 
 function resolveHandlerContext(params: ChannelApprovalCapabilityHandlerContext) {
   const context = params.context as TelegramApprovalHandlerContext | undefined;
@@ -153,8 +171,8 @@ function buildPendingPayload(params: {
 
 export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapterAsync<
   TelegramPendingDelivery,
-  { chatId: string; messageThreadId?: number; directMessagesTopicId?: number },
-  { chatId: string; messageId: string },
+  TelegramApprovalTarget,
+  TelegramApprovalTarget & { messageId: string },
   never,
   { text: string }
 >({
@@ -228,11 +246,21 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
           : {}),
       });
       return {
+        ...preparedTarget,
         chatId: result.chatId,
         messageId: result.messageId,
       };
     },
-    updateEntry: async ({ cfg, accountId, context, entry, payload, request, approvalKind }) => {
+    updateEntry: async ({
+      cfg,
+      accountId,
+      context,
+      entry,
+      payload,
+      request,
+      approvalKind,
+      remainingEntries,
+    }) => {
       const resolved = resolveHandlerContext({ cfg, accountId, context });
       if (!resolved) {
         return;
@@ -258,25 +286,36 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
           ? normalizeTelegramChatId(parsedOrigin.chatId)
           : undefined;
         const originThreadId =
-          parseStrictPositiveInteger(request.request.turnSourceThreadId) ??
+          parseTelegramThreadId(request.request.turnSourceThreadId) ??
           parsedOrigin?.messageThreadId;
         const sourceAccountId = request.request.turnSourceAccountId?.trim();
         const isSourceAccount = !sourceAccountId || sourceAccountId === resolved.accountId;
         if (originChatId && isSourceAccount) {
-          if (
-            (entry.chatId !== originChatId || editError !== undefined) &&
-            !terminalizedSystemAgentApprovals.has(request.id)
-          ) {
-            const sendMessage = resolved.context.deps?.sendMessage ?? sendMessageTelegram;
-            const originTo =
-              parsedOrigin?.directMessagesTopicId != null ? originTarget! : originChatId;
-            await sendMessage(originTo, escapeTelegramHtml(payload.text), {
-              ...resolved.options(),
-              textMode: "html",
-              ...(originThreadId != null ? { messageThreadId: originThreadId } : {}),
-            });
+          const origin = {
+            chatId: originChatId,
+            messageThreadId: originThreadId,
+            directMessagesTopicId: parsedOrigin?.directMessagesTopicId,
+          };
+          // Wait for a later origin card before deciding whether a fallback is needed.
+          const originKey = approvalTargetKey(origin);
+          const needsFallback = approvalTargetKey(entry) !== originKey || editError !== undefined;
+          const awaitingOrigin =
+            needsFallback &&
+            remainingEntries?.some((pending) => approvalTargetKey(pending) === originKey);
+          if (!awaitingOrigin) {
+            if (needsFallback && !terminalizedSystemAgentApprovals.has(request.id)) {
+              const sendMessage = resolved.context.deps?.sendMessage ?? sendMessageTelegram;
+              await sendMessage(originChatId, escapeTelegramHtml(payload.text), {
+                ...resolved.options(),
+                textMode: "html",
+                ...(originThreadId != null ? { messageThreadId: originThreadId } : {}),
+                ...(origin.directMessagesTopicId != null
+                  ? { directMessagesTopicId: origin.directMessagesTopicId }
+                  : {}),
+              });
+            }
+            terminalizedSystemAgentApprovals.add(request.id);
           }
-          terminalizedSystemAgentApprovals.add(request.id);
         }
       }
       if (editError !== undefined) {

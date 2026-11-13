@@ -61,6 +61,36 @@ function approverDm(to: string) {
 }
 
 describe("createApprovalNativeRouteReporter", () => {
+  it("suppresses the DM fallback notice when delivery matches a private topic origin", async () => {
+    const requestGateway = createGatewayRequestMock();
+    const reporter = createApprovalNativeRouteReporter({
+      requestGateway,
+      channel: "telegram",
+      channelLabel: "Telegram",
+      accountId: "default",
+    });
+    const request = createRequest("private-dm-topic", {
+      turnSourceChannel: "telegram",
+      turnSourceTo: "700000001",
+      turnSourceAccountId: "default",
+      turnSourceThreadId: 42,
+    });
+    reporter.start();
+    await reporter.selectRequest({ approvalKind: "exec", request });
+    await reporter.reportDelivery({
+      approvalKind: "exec",
+      request,
+      deliveryPlan: {
+        targets: [approverDm("700000001")],
+        originTarget: { to: "700000001", threadId: 42 },
+        notifyOriginWhenDmOnly: true,
+      },
+      deliveredTargets: [{ ...approverDm("700000001"), target: { to: "700000001", threadId: 42 } }],
+    });
+
+    expect(requestGateway).not.toHaveBeenCalled();
+  });
+
   it("keeps the local approval route visible when an unbound request has multiple runtimes", () => {
     const coordinator = createApprovalNativeRouteCoordinator();
     const first = coordinator.createReporter(reporterOptions());
