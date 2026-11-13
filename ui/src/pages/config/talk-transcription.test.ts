@@ -160,3 +160,34 @@ it("rejects a malformed custom speech-to-text model without changing the prefere
     t("talkPage.transcription.invalidModel", { value: "openrouter/" }),
   );
 });
+
+it("does not report a ready provider-less transcription route as unconfigured", async () => {
+  const { page } = createTalkMutationHarness({
+    catalogRequest: (_index, catalog) => ({
+      ...catalog,
+      transcription: { ready: true, providers: [] },
+    }),
+  });
+  page.configObject = {
+    ...page.configObject,
+    tools: {
+      media: {
+        models: [
+          {
+            type: "cli",
+            command: "whisper",
+            args: ["{{AttachmentPath}}"],
+            capabilities: ["audio"],
+          },
+        ],
+      },
+    },
+  };
+  const statusRow = () =>
+    [...page.querySelectorAll<HTMLElement>("section.settings-section")]
+      .find((section) => section.textContent?.includes(t("talkPage.transcription.title")))
+      ?.querySelector<HTMLElement>(".settings-row");
+  await waitForSolid(() => expect(statusRow()?.textContent).toContain(t("talkPage.status.ready")));
+  expect(statusRow()?.textContent).not.toContain(t("talkPage.transcription.noProvider"));
+  expect(statusRow()?.textContent).toContain(t("talkPage.transcription.readyWithoutProvider"));
+});

@@ -441,6 +441,7 @@ const enSettings = {
       unavailableHint: "Connect to the Gateway to check speech-to-text readiness.",
       failedHint: "Couldn’t check speech-to-text readiness.",
       noProvider: "No speech-to-text model is configured yet.",
+      readyWithoutProvider: "A configured local transcription model is ready.",
       modelTitle: "Speech-to-text model",
       modelDescription:
         "Used for voice notes, and for Talk dictation when no streaming transcription provider or speech-to-text voice-model default is configured; those take precedence for Talk. Automatic tries configured audio models in order.",

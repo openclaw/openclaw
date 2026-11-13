@@ -120,9 +120,14 @@ function TranscriptionStatusRow(props: { catalog: TranscriptionProps["catalog"] 
     return {
       kind: catalog.ready ? ("ok" as const) : ("warn" as const),
       label: t(catalog.ready ? "talkPage.status.ready" : "talkPage.status.notReady"),
+      // A ready route without a provider id is a local CLI model, not a missing one.
       description: catalog.activeProvider
         ? t("talkPage.status.activeProvider", { provider: catalog.activeProvider })
-        : t("talkPage.transcription.noProvider"),
+        : t(
+            catalog.ready
+              ? "talkPage.transcription.readyWithoutProvider"
+              : "talkPage.transcription.noProvider",
+          ),
     };
   };
   return (
