@@ -7,6 +7,8 @@ import type { ProviderRuntimeModel } from "../plugin-entry.js";
 import { registerProviderPlugin, requireRegisteredProvider } from "../plugin-test-runtime.js";
 import { buildManifestModelProviderConfig } from "../provider-catalog-shared.js";
 import type { ProviderPlugin } from "../provider-model-shared.js";
+import { describeOpenRouterRoutingCapabilitiesContract } from "./openrouter-routing-capabilities.test-support.js";
+import type { ProviderRuntimeContractPluginLoader } from "./provider-runtime-contract.types.js";
 
 const CONTRACT_SETUP_TIMEOUT_MS = 300_000;
 
@@ -70,9 +72,7 @@ function expectFields(value: unknown, fields: Record<string, unknown>) {
   expect(value).toEqual(expect.objectContaining(fields));
 }
 
-export type ProviderRuntimeContractPluginLoader = () => Promise<{
-  default: Parameters<typeof registerProviderPlugin>[0]["plugin"];
-}>;
+export type { ProviderRuntimeContractPluginLoader } from "./provider-runtime-contract.types.js";
 
 function installRuntimeHooks(
   load: ProviderRuntimeContractPluginLoader,
@@ -574,6 +574,7 @@ export function describeOpenRouterProviderRuntimeContract(
       });
     });
   });
+  describeOpenRouterRoutingCapabilitiesContract(load);
 }
 
 export function describeZAIProviderRuntimeContract(load: ProviderRuntimeContractPluginLoader) {

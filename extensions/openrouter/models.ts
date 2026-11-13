@@ -21,6 +21,16 @@ const OPENROUTER_SHORT_TO_API_MODEL_ID = new Map([
   ["deepseek-v4-pro", "deepseek/deepseek-v4-pro"],
 ]);
 
+// Routing variants do not have catalog rows. Keep catalog and unknown suffixes;
+// this lookup ID must never replace the model ID sent to OpenRouter.
+export function resolveOpenRouterRoutingCapabilityFallback(modelId: string): string | undefined {
+  const [slug, ...suffixes] = modelId.split(":");
+  const retained = suffixes.filter(
+    (suffix) => !["nitro", "floor", "exacto", "online"].includes(suffix),
+  );
+  return retained.length === suffixes.length ? undefined : [slug, ...retained].join(":");
+}
+
 export function normalizeOpenRouterApiModelId(modelId: unknown): string | undefined {
   if (typeof modelId !== "string") {
     return undefined;
