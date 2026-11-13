@@ -1,7 +1,7 @@
 // Tsdown config tests protect package artifact build contracts.
 import { execFile, type ExecFileOptionsWithStringEncoding } from "node:child_process";
 import fs from "node:fs";
-import { createRequire, isBuiltin } from "node:module";
+import { createRequire, isBuiltin, SourceMap } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "tsdown";
@@ -11,6 +11,7 @@ import {
   collectRootPackageExcludedExtensionDirs,
   DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV,
 } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
+import { createCompactModuleLabelsPlugin } from "../../scripts/lib/compact-module-labels.mts";
 import {
   collectPackageDistImportErrors,
   collectPackageDistImports,
@@ -296,6 +297,26 @@ if (loaded.length) assert(loaded[0].startsWith(path.dirname(rootDir) + path.sep)
 `;
 
 describe("tsdown config", () => {
+  it("preserves source positions and ignores module-like text inside strings and functions", () => {
+    const source = `// src/owner.ts
+const script = \`
+// src/string.ts
+\`;
+function run() {
+// src/nested.ts
+return script;
+}
+// src/next.ts
+export { run };`;
+    const output = createCompactModuleLabelsPlugin().renderChunk(source);
+    expect(output?.code).toBe(
+      source
+        .replace("// src/owner.ts", "//!src/owner.ts")
+        .replace("// src/next.ts", "//!src/next.ts"),
+    );
+    expect(output?.code.length).toBe(source.length);
+  });
+
   it("reduces emitted source while preserving names, update origins, and lazy execution", async () => {
     const selected = configs.find((config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP);
     if (!selected) {
@@ -339,6 +360,7 @@ export class PublicClass {
       tsconfig: false,
       dts: false,
       logLevel: "silent",
+      sourcemap: "hidden",
     });
     try {
       const chunks = bundles.flatMap((bundle) =>
@@ -349,7 +371,16 @@ export class PublicClass {
       expect(entry?.dynamicImports).toHaveLength(1);
       const owner = chunks.find((chunk) => findBundledModuleRegion(chunk.code, "src/owner.ts"));
       expect(owner).toBeDefined();
-      expect(owner?.code).toMatch(/\b(?:const|var) originValue = 7;/u);
+      expect(owner?.code).toMatch(/\b(?:const|var) originValue\s*=\s*7;/u);
+      const beforeFunction = owner!.code.slice(0, owner!.code.indexOf("function PublicFunction("));
+      const lines = beforeFunction.split("\n");
+      const sourceMap = new SourceMap(
+        JSON.parse(fs.readFileSync(path.join(outDir, `${owner!.fileName}.map`), "utf8")),
+      );
+      expect(sourceMap.findEntry(lines.length - 1, lines.at(-1)!.length)).toMatchObject({
+        originalSource: expect.stringContaining("src/owner.ts"),
+        originalLine: 1,
+      });
       const relocated = path.join(root, "relocated");
       fs.renameSync(outDir, relocated);
       fs.rmSync(path.join(root, "src"), { recursive: true });
@@ -377,7 +408,7 @@ assert.equal(process.env.OPENCLAW_FIXTURE_LAZY_LOADED, "yes");
       // Bound the source retained by the loader, including the required owner labels.
       expect(
         chunks.reduce((total, chunk) => total + Buffer.byteLength(chunk.code), 0),
-      ).toBeLessThan(600);
+      ).toBeLessThan(400);
     } finally {
       for (const bundle of bundles) {
         await bundle[Symbol.asyncDispose]();
