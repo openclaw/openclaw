@@ -224,8 +224,8 @@ export function readLocalWorkspaceSweepCandidates(
       query(db)
         .selectFrom("local_workspace_projections")
         .select(["worktree_id", "tree_root_digest", "source_paths_digest", "checkpoint_json"])
-        .$if(projectionCursor !== undefined, (query) =>
-          query.where("worktree_id", ">", projectionCursor!),
+        .$if(projectionCursor !== undefined, (statement) =>
+          statement.where("worktree_id", ">", projectionCursor!),
         )
         .orderBy("worktree_id")
         .limit(LOCAL_WORKSPACE_CONTENT_BATCH),
