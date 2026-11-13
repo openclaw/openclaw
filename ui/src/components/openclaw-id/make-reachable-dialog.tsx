@@ -328,7 +328,10 @@ export function showMakeReachableDialog(params: {
           void watchRelay(
             {
               relayOnline: () => readRelayOnline(params.client),
-              sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+              sleep: (ms) =>
+                new Promise((resolve) => {
+                  setTimeout(resolve, ms);
+                }),
               active: () => !modal.settled && !lifetime.signal?.aborted,
               now: () => Date.now(),
             },
