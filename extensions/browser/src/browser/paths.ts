@@ -152,12 +152,13 @@ async function resolveUploadPaths({
       return managedMediaPathResult;
     }
 
+    let uploadPathsResult: ExistingPathsResult | undefined;
     if (managedMediaPathResult?.uploadRootPrecedence !== false) {
       const resolvePaths =
         strict || managedMediaPathResult?.uploadRootPrecedence === true
           ? resolveStrictExistingPathsWithinRoot
           : resolveExistingPathsWithinRoot;
-      const uploadPathsResult = await resolvePaths({
+      uploadPathsResult = await resolvePaths({
         rootDir: DEFAULT_UPLOAD_DIR,
         requestedPaths: [requestedPath],
         scopeLabel: `uploads directory (${DEFAULT_UPLOAD_DIR})`,
@@ -173,6 +174,16 @@ async function resolveUploadPaths({
       strict,
     });
     if (!inboundPathsResult.ok) {
+      if (uploadPathsResult && !uploadPathsResult.ok) {
+        return {
+          ok: false,
+          error:
+            `Invalid path: must be inside the uploads directory (${DEFAULT_UPLOAD_DIR}) ` +
+            `or be a direct inbound media file (media://inbound/<id>). ` +
+            `Uploads check: ${uploadPathsResult.error} ` +
+            `Inbound media check: ${inboundPathsResult.error}`,
+        };
+      }
       return inboundPathsResult;
     }
     paths.push(inboundPathsResult.paths[0] ?? requestedPath);
