@@ -1107,6 +1107,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/harness/native-hook-relay.observations.test.ts",
   "src/agents/harness/native-hook-relay.run-ownership.test.ts",
   "src/agents/harness/native-hook-relay.test.ts",
+  "src/agents/harness/native-hook-relay.transport-failure.test.ts",
   "src/cli/native-hook-relay-cli.locator-worker.test.ts",
   "src/cli/command-execution-startup.test.ts",
   "src/cli/daemon-cli/lifecycle.restart-intent.test.ts",

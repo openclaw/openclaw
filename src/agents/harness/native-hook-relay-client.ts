@@ -207,6 +207,11 @@ function isRetryableNativeHookRelayBridgeLookupError(params: {
   );
 }
 
+export {
+  isNativeHookRelayTransportFailedError,
+  NATIVE_HOOK_RELAY_DISPOSITION_MARKER,
+} from "./native-hook-relay-transport-error.js";
+
 /** Detect a stale locator response that must not fall back to the Gateway. */
 export function isNativeHookRelayBridgeStaleRegistrationError(error: unknown): boolean {
   return (
@@ -220,6 +225,7 @@ export function renderNativeHookRelayUnavailableResponse(params: {
   event: unknown;
   preToolUseUnavailable?: unknown;
   message?: string;
+  failureDisposition?: NativeHookRelayProcessResponse["failureDisposition"];
 }): NativeHookRelayProcessResponse {
   readNativeHookRelayProvider(params.provider);
   const event = readNativeHookRelayEvent(params.event);
@@ -230,7 +236,13 @@ export function renderNativeHookRelayUnavailableResponse(params: {
     if (params.preToolUseUnavailable === "noop") {
       return codexNativeHookRelayResponseCodec.renderNoopResponse();
     }
-    return codexNativeHookRelayResponseCodec.renderPreToolUseBlockResponse(message);
+    // Attribute the deny. Without a disposition this block is indistinguishable
+    // from an OpenClaw policy decision, which is exactly how three validator
+    // deaths reached the dispatcher as ordinary completions.
+    return codexNativeHookRelayResponseCodec.renderPreToolUseBlockResponse(
+      message,
+      params.failureDisposition,
+    );
   }
   if (event === "permission_request") {
     return codexNativeHookRelayResponseCodec.renderPermissionDecisionResponse("deny", message);

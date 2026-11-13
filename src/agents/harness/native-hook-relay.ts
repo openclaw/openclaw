@@ -24,7 +24,6 @@ import {
 import {
   normalizeNativeHookInvocation,
   normalizeNativeHookToolName,
-  readNativeHookRelayApprovalMode,
 } from "./native-hook-relay-codec.js";
 import type {
   ActiveNativeHookRelayRegistration,
@@ -54,6 +53,13 @@ import {
   MAX_NATIVE_HOOK_RELAY_INVOCATIONS,
   nativeHookRelayState,
 } from "./native-hook-relay-state.js";
+import { NATIVE_HOOK_RELAY_TRANSPORT_FAILED_ERROR } from "./native-hook-relay-transport-error.js";
+import {
+  nativeHookRelayTransportFailureDisposition,
+  createNativeHookRelayPreToolUseFailureProjector,
+  readNativeHookRelayTransportFailureTerminal,
+  resetNativeHookRelayTransportFailures,
+} from "./native-hook-relay-transport-failure.js";
 import type {
   InvokeNativeHookRelayParams,
   NativeHookRelayEvent,
@@ -184,6 +190,7 @@ function registerNativeHookRelayInternal(
   const relayId = normalizeRelayKey(params.relayId, "id") ?? randomUUID();
   const generation = normalizeRelayKey(params.generation, "generation") ?? randomUUID();
   const generationMismatchGraceMs = normalizePositiveInteger(params.generationMismatchGraceMs, 0);
+  const commandTimeoutMs = normalizePositiveInteger(params.command?.timeoutMs, 0);
   const now = Date.now();
   const expiresAtMs = resolveNativeHookRelayExpiresAtMs(params.ttlMs);
   const expiresAtMonotonicMs = resolveNativeHookRelayMonotonicExpiresAtMs(params.ttlMs);
@@ -232,6 +239,8 @@ function registerNativeHookRelayInternal(
       requirePreToolUse: params.requirePreToolUse,
       expiresAtMs,
       preToolUseFailureProjections: new Map(),
+      relayTransportFailures: { consecutive: 0 },
+      ...(commandTimeoutMs > 0 ? { commandTimeoutMs } : {}),
       ...(params.signal ? { signal: params.signal } : {}),
       ...(params.runBeforeToolCall ? { runBeforeToolCall: params.runBeforeToolCall } : {}),
       ...(approvalHost ? { approvalHost } : {}),
@@ -476,6 +485,12 @@ export async function invokeNativeHookRelay(
     pruneExpiredNativeHookRelays();
     throw new Error("native hook relay not found");
   }
+  const terminal = readNativeHookRelayTransportFailureTerminal(registration);
+  if (terminal) {
+    // The relay's transport is dead, not merely slow. Refuse loudly so the child
+    // surfaces a hook execution error instead of another benign fail-closed deny.
+    throw new Error(NATIVE_HOOK_RELAY_TRANSPORT_FAILED_ERROR);
+  }
   const signal =
     invocationSignal && registration.signal
       ? AbortSignal.any([invocationSignal, registration.signal])
@@ -513,104 +528,67 @@ export async function invokeNativeHookRelay(
     event,
     rawPayload: params.rawPayload,
   });
-  const { registration: effectiveRegistration, assertExecutionAdmissionCurrent } =
-    await resolveNativeHookRelayInvocationBinding(
-      registration,
-      readRelayLifetime(registration),
-      event,
-      params.rawPayload,
+  const startedAt = Date.now();
+  const projectFailure = createNativeHookRelayPreToolUseFailureProjector(
+    registration,
+    normalized,
+    startedAt,
+  );
+  try {
+    const { registration: effectiveRegistration, assertExecutionAdmissionCurrent } =
+      await resolveNativeHookRelayInvocationBinding(
+        registration,
+        readRelayLifetime(registration),
+        event,
+        params.rawPayload,
+        signal,
+      );
+    if (event === "pre_tool_use" || event === "permission_request") {
+      effectiveRegistration.assertActive?.();
+    }
+    recordNativeHookRelayInvocation(normalized);
+    const lifetime = readRelayLifetime(registration);
+    if (
+      event === "post_tool_use" &&
+      lifetime?.postToolUse?.toolNames.includes(normalizeNativeHookToolName(normalized.toolName))
+    ) {
+      assertExecutionAdmissionCurrent();
+      // Once accepted, the owner's write must settle even if the hook transport disconnects.
+      const observation = Promise.resolve(
+        lifetime.postToolUse.observe(normalized, assertExecutionAdmissionCurrent),
+      );
+      lifetime.postToolUseWork.add(observation);
+      retainNativeHookRelayOperation(relayId, observation);
+      await racePromiseWithAbortSignal(observation, signal);
+    }
+    const response = await racePromiseWithAbortSignal(
+      processNativeHookRelayInvocation({
+        registration: effectiveRegistration,
+        invocation: normalized,
+        executionAdmission: readRelayLifetime(registration)?.executionAdmission,
+        assertExecutionAdmissionCurrent,
+      }),
       signal,
     );
-  if (event === "pre_tool_use" || event === "permission_request") {
-    effectiveRegistration.assertActive?.();
-  }
-  recordNativeHookRelayInvocation(normalized);
-  const lifetime = readRelayLifetime(registration);
-  if (
-    event === "post_tool_use" &&
-    lifetime?.postToolUse?.toolNames.includes(normalizeNativeHookToolName(normalized.toolName))
-  ) {
-    assertExecutionAdmissionCurrent();
-    // Once accepted, the owner's write must settle even if the hook transport disconnects.
-    const observation = Promise.resolve(
-      lifetime.postToolUse.observe(normalized, assertExecutionAdmissionCurrent),
-    );
-    lifetime.postToolUseWork.add(observation);
-    retainNativeHookRelayOperation(relayId, observation);
-    await racePromiseWithAbortSignal(observation, signal);
-  }
-  const startedAt = Date.now();
-  const response = await racePromiseWithAbortSignal(
-    processNativeHookRelayInvocation({
-      registration: effectiveRegistration,
-      invocation: normalized,
-      executionAdmission: readRelayLifetime(registration)?.executionAdmission,
-      assertExecutionAdmissionCurrent,
-    }),
-    signal,
-  );
-  // Policy and approval callbacks may yield while their admitted run closes.
-  // Never let a late allow cross back into the native runtime.
-  if (event === "pre_tool_use" || event === "permission_request") {
-    await effectiveRegistration.assertActiveAsync?.();
-    effectiveRegistration.assertActive?.();
-  }
-  if (
-    normalized.toolUseId &&
-    response.failureDisposition &&
-    readNativeHookRelayApprovalMode(normalized.rawPayload) !== "report"
-  ) {
-    projectNativeHookRelayPreToolUseFailure(registration, {
-      toolName: normalizeNativeHookToolName(normalized.toolName),
-      toolCallId: normalized.toolUseId,
-      disposition: response.failureDisposition,
-      durationMs: Date.now() - startedAt,
-    });
-  }
-  return response;
-}
-
-function projectNativeHookRelayPreToolUseFailure(
-  registration: ActiveNativeHookRelayRegistration,
-  failure: Parameters<NonNullable<NativeHookRelayRegistration["onPreToolUseFailure"]>>[0],
-): void {
-  const callback = registration.onPreToolUseFailure;
-  if (!callback || registration.preToolUseFailureProjections.has(failure.toolCallId)) {
-    return;
-  }
-  const record = {
-    promise: Promise.resolve().then(() => callback(failure)),
-    settled: false,
-  };
-  registration.preToolUseFailureProjections.set(failure.toolCallId, record);
-  void record.promise.then(
-    () => {
-      record.settled = true;
-    },
-    (error: unknown) => {
-      record.settled = true;
-      if (registration.preToolUseFailureProjections.get(failure.toolCallId) === record) {
-        registration.preToolUseFailureProjections.delete(failure.toolCallId);
-      }
-      log.debug("native pre-tool failure projection failed", {
-        error,
-        relayId: registration.relayId,
-        toolCallId: failure.toolCallId,
-      });
-    },
-  );
-  if (registration.preToolUseFailureProjections.size > MAX_NATIVE_HOOK_RELAY_INVOCATIONS) {
-    let oldestToolCallId: string | undefined;
-    for (const [toolCallId, candidate] of registration.preToolUseFailureProjections) {
-      oldestToolCallId ??= toolCallId;
-      if (candidate.settled) {
-        registration.preToolUseFailureProjections.delete(toolCallId);
-        return;
-      }
+    // Policy and approval callbacks may yield while their admitted run closes.
+    // Never let a late allow cross back into the native runtime.
+    if (event === "pre_tool_use" || event === "permission_request") {
+      await effectiveRegistration.assertActiveAsync?.();
+      effectiveRegistration.assertActive?.();
     }
-    if (oldestToolCallId) {
-      registration.preToolUseFailureProjections.delete(oldestToolCallId);
+    if (response.failureDisposition) {
+      projectFailure(response.failureDisposition);
     }
+    resetNativeHookRelayTransportFailures(registration);
+    return response;
+  } catch (error) {
+    // A caller that abandoned this invocation is a transport failure the parent
+    // observed directly, and the only record that a child hook was attempted.
+    // The owning run's own signal is not a transport event and projects nothing.
+    if (invocationSignal?.aborted) {
+      projectFailure(nativeHookRelayTransportFailureDisposition("client-disconnected"));
+    }
+    throw error;
   }
 }
 

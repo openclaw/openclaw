@@ -15,6 +15,7 @@ import type {
   NativeHookRelayInvocation,
   NativeHookRelayPermissionApprovalResult,
   NativeHookRelayProvider,
+  NativeHookRelayTransportFailureCause,
 } from "./native-hook-relay-types.js";
 
 type NativeHookRelayApprovalContext = Pick<
@@ -120,6 +121,17 @@ export type ActiveNativeHookRelayRegistration = NativeHookRelayRegistration & {
   generation: string;
   preToolUseLoopDetection: boolean;
   preToolUseFailureProjections: Map<string, { promise: Promise<void>; settled: boolean }>;
+  /** Relay-level command budget the child was admitted with; bounds the bridge deadline. */
+  commandTimeoutMs?: number;
+  /** Consecutive relay-transport failures, latched terminal once the threshold trips. */
+  relayTransportFailures?: {
+    consecutive: number;
+    terminal?: {
+      cause: NativeHookRelayTransportFailureCause;
+      consecutive: number;
+      atMs: number;
+    };
+  };
 };
 
 export type ActiveNativeHookRelayRegistrationHandle = NativeHookRelayRegistrationHandle & {

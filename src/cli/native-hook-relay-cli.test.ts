@@ -1,6 +1,12 @@
 import { PassThrough, Readable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { renderNativeHookRelayUnavailableResponse } from "../agents/harness/native-hook-relay-client.js";
+import { codexNativeHookRelayResponseCodec } from "../agents/harness/native-hook-relay-response-codec.js";
+import {
+  NATIVE_HOOK_RELAY_DISPOSITION_MARKER,
+  NATIVE_HOOK_RELAY_TRANSPORT_FAILED_ERROR,
+} from "../agents/harness/native-hook-relay-transport-error.js";
 import type { NativeHookRelayProcessResponse } from "../agents/harness/native-hook-relay-types.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
 import {
@@ -395,6 +401,83 @@ describe("native hook relay CLI", () => {
       expect(callGateway).not.toHaveBeenCalled();
     },
   );
+
+  it("attributes the fail-closed PreToolUse deny as an unreachable relay", () => {
+    const response = renderNativeHookRelayUnavailableResponse({
+      provider: "codex",
+      event: "pre_tool_use",
+      message: "Native hook relay unavailable",
+      failureDisposition: "failed",
+    });
+
+    // A policy deny renders through the same codec with no disposition at all,
+    // which is the only thing that tells the two cases apart downstream.
+    expect(response.failureDisposition).toBe("failed");
+    expect(
+      codexNativeHookRelayResponseCodec.renderPreToolUseBlockResponse("repo policy blocks this"),
+    ).not.toHaveProperty("failureDisposition");
+  });
+
+  it("marks a relay deadline deny as timed out rather than merely failed", async () => {
+    const invokeBridge = vi.fn(
+      async () =>
+        await new Promise<never>((_resolve, reject) => {
+          setTimeout(reject, 5_000).unref?.();
+        }),
+    );
+    const callGateway = vi.fn(async () => {
+      throw new Error("gateway closed");
+    });
+    const { stdout, stderr, run } = relayFixture();
+
+    const exitCode = await run(
+      { event: "pre_tool_use", timeout: "1" },
+      { invokeBridge: invokeBridge as never, callGateway: callGateway as never },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(stdout.text())).toMatchObject({
+      hookSpecificOutput: { permissionDecisionReason: "Native hook relay timed out" },
+    });
+    expect(stderr.text()).toContain("native hook relay timed out");
+    expect(stderr.text()).toContain(`${NATIVE_HOOK_RELAY_DISPOSITION_MARKER} timed_out`);
+  });
+
+  it("blocks native tools when the relay transport is dead", async () => {
+    const invokeBridge = vi.fn(async () => {
+      throw new Error(NATIVE_HOOK_RELAY_TRANSPORT_FAILED_ERROR);
+    });
+    const callGateway = vi.fn(async () => ({ stdout: "", stderr: "", exitCode: 0 }));
+    const { stdout, stderr, run } = relayFixture();
+
+    const exitCode = await run(
+      { event: "pre_tool_use" },
+      { invokeBridge: invokeBridge as never, callGateway: callGateway as never },
+    );
+
+    // Native PreToolUse interprets exit 2 plus stderr as blocking; exit 1 is only observational.
+    expect(exitCode).toBe(2);
+    expect(stdout.text()).toBe("");
+    expect(stderr.text()).toContain("native hook relay transport failed");
+    // No gateway retry: the relay itself declared the transport dead.
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("blocks native tools when the gateway fallback reports a dead relay transport", async () => {
+    const callGateway = vi.fn(async () => {
+      throw new Error(NATIVE_HOOK_RELAY_TRANSPORT_FAILED_ERROR);
+    });
+    const { stdout, stderr, run } = relayFixture();
+
+    const exitCode = await run(
+      { event: "pre_tool_use" },
+      { invokeBridge: rejectMissingBridge, callGateway: callGateway as never },
+    );
+
+    expect(exitCode).toBe(2);
+    expect(stdout.text()).toBe("");
+    expect(stderr.text()).toContain("native hook relay transport failed");
+  });
 
   it("fails closed for PermissionRequest when the gateway relay is unavailable", async () => {
     const callGateway = vi.fn(async () => {
