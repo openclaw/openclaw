@@ -8,6 +8,7 @@
 // The native query owner also runs in workers: its on-disk bytes must match the ref.
 // Prepare that source in a task-owned baseline checkout or a serialized overlay first;
 // never change it while a Gateway, benchmark or test in this checkout is running.
+// --verify-sources-only checks source/worker identity without creating state or starting a Gateway.
 // First-use is per shape in one process, not OS-cold cache/startup or browser/rendering proof.
 // Retain plan.json, samples.json, result.json, and synthetic state.
 import assert from "node:assert/strict";
@@ -53,6 +54,7 @@ const { values } = parseArgs({
     pairs: { type: "string", default: "20" },
     "first-variant": { type: "string", default: "A" },
     "source-ref": { type: "string" },
+    "verify-sources-only": { type: "boolean", default: false },
   },
 });
 const stateDirectory = values["state-dir"];
@@ -108,9 +110,14 @@ const sources = [
   "src/config/sessions/session-transcript-search.ts",
   "src/config/sessions/session-transcript-index-readiness.ts",
   "src/config/sessions/session-transcript-worker-readers.ts",
+  "src/infra/database-engine/sqlite-full-text.ts",
 ].map(captureSource);
 const workerSources = [
-  ...sources.filter((source) => source.file.startsWith("src/config/sessions/")),
+  ...sources.filter(
+    (source) =>
+      source.file.startsWith("src/config/sessions/") ||
+      source.file === "src/infra/database-engine/sqlite-full-text.ts",
+  ),
   ...[
     "src/infra/kysely-sync.ts",
     "src/config/sessions/session-transcript-search.types.ts",
@@ -125,6 +132,16 @@ for (const source of workerSources) {
     source.source,
     "Worker source must match --source-ref before starting: " + source.file,
   );
+}
+const sourceIdentity = {
+  sourceRef: sourceRef ?? "working-tree",
+  head,
+  sourceHashes: sources.map(({ file, sha256 }) => ({ file, sha256 })),
+  workerSources: workerSources.map(({ file, sha256 }) => ({ file, sha256 })),
+};
+if (values["verify-sources-only"]) {
+  console.log(JSON.stringify(sourceIdentity, null, 2));
+  process.exit(0);
 }
 const hook = registerHooks({
   load(url, context, nextLoad) {
@@ -207,10 +224,7 @@ const plan = {
   proofBoundary:
     "Real source Gateway and authenticated WebSocket sessions.list/sessions.search; no UI debounce, rendering, tie-break, inference, external service, built artifact or OS-cold-cache claim.",
   variants: { A: "default active scope", B: "archived:all", "A-control": "identical to A" },
-  sourceRef: sourceRef ?? "working-tree",
-  head,
-  sourceHashes: sources.map(({ file, sha256 }) => ({ file, sha256 })),
-  workerSources: workerSources.map(({ file, sha256 }) => ({ file, sha256 })),
+  ...sourceIdentity,
   sessions,
   active,
   archived: sessions - active,
