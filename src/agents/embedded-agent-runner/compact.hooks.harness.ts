@@ -24,6 +24,7 @@ import {
 import {
   acquireCompactHooksPreparedModelRuntime,
   createCompactHooksResolvedModel,
+  createDefaultCompactionAuthStore,
   getCurrentPluginMetadataSnapshotMock,
   mockCompactHooksContextEngine,
   mockCompactHooksPluginMetadata,
@@ -270,19 +271,6 @@ export const resolveProviderEntryApiKeyProfileReferenceMock: Mock<() => unknown>
 const shouldPreferExplicitConfigApiKeyAuthMock = vi.fn(() => false);
 const registerProviderStreamForModelMock: Mock<(params?: unknown) => unknown> = vi.fn();
 export const applyExtraParamsToAgentMock = vi.fn(() => ({ effectiveExtraParams: {} }));
-function createDefaultCompactionAuthStore(): AuthProfileStore {
-  return {
-    version: 1,
-    profiles: {
-      "openai:test": {
-        type: "api_key",
-        provider: "openai",
-        key: "test",
-      },
-    },
-    order: { openai: ["openai:test"] },
-  };
-}
 
 export const ensureAuthProfileStoreMock: Mock<() => AuthProfileStore> = vi.fn(
   createDefaultCompactionAuthStore,
@@ -492,7 +480,9 @@ export function resetCompactHooksHarnessMocks(workspaceDir: string, sessionId = 
   );
 }
 
-export async function loadCompactHooksHarness(options: { durableSession?: boolean } = {}): Promise<{
+export async function loadCompactHooksHarness(
+  options: { durableSession?: boolean; realSkills?: boolean } = {},
+): Promise<{
   compactEmbeddedAgentSessionDirect: typeof import("./compact.js").compactEmbeddedAgentSessionDirect;
   compactEmbeddedAgentSession: CompactHooksQueuedCompaction;
   onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
@@ -785,7 +775,9 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
     limitHistoryTurns: limitHistoryTurnsMock,
   }));
 
-  mockCompactHooksSkills(resolveSkillsPromptMock);
+  if (!options.realSkills) {
+    mockCompactHooksSkills(resolveSkillsPromptMock);
+  }
 
   vi.doMock("../agent-scope.js", async () => {
     const { listAgentIds } = await import("../agent-scope-config.js");

@@ -6,6 +6,7 @@ import {
 import { createEmptyPluginMetadataSnapshot } from "../../plugins/plugin-metadata-empty.test-support.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type {
   PreparedModelRuntimeInput,
   PreparedModelRuntimeLeaseOptions,
@@ -137,3 +138,17 @@ export type MockResolvedModel = {
   authStorage: Pick<AuthStorage, "setRuntimeApiKey" | "getApiKey">;
   modelRegistry: Record<string, never> | import("../sessions/model-registry.js").ModelRegistry;
 };
+
+export function createDefaultCompactionAuthStore(): AuthProfileStore {
+  return {
+    version: 1,
+    profiles: {
+      "openai:test": {
+        type: "api_key",
+        provider: "openai",
+        key: "test",
+      },
+    },
+    order: { openai: ["openai:test"] },
+  };
+}

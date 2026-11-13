@@ -74,6 +74,8 @@ import {
   createModifiedMemoryFlushPlan,
   createMemoryRunEntryMockImplementation,
   createSessionEntry,
+  expectPreparedSkillsPreflight,
+  registerClaudeCliBackend,
   modelRoutingProvenance,
   runSelectedMemoryModel,
   seedMemoryAccountingTranscript,
@@ -163,20 +165,6 @@ async function runSessionCompactionIfNeeded(params: PreflightCompactionTestParam
 
 function registerMemoryFlushPlanResolverForTest(resolver: MemoryFlushPlanResolver): void {
   registerMemoryCapability("memory-core", { flushPlanResolver: resolver });
-}
-
-function registerClaudeCliBackend(ownsNativeCompaction = false): void {
-  cliBackendsTesting.setDepsForTest({
-    resolveRuntimeCliBackends: () => [
-      {
-        id: "claude-cli",
-        modelProvider: "anthropic",
-        pluginId: "anthropic",
-        config: { command: "claude" },
-        ownsNativeCompaction,
-      },
-    ],
-  });
 }
 
 type TestReplyOperation = ReplyOperation & {
@@ -809,6 +797,13 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(incrementCompactionCountMock).not.toHaveBeenCalled();
     expect(refreshQueuedFollowupSessionMock).not.toHaveBeenCalled();
   });
+
+  it("compacts a persisted selected-skill session with the prepared turn catalog", () =>
+    expectPreparedSkillsPreflight({
+      workspaceDir: rootDir,
+      compact: compactEmbeddedAgentSessionMock,
+      createRequiredPreflight,
+    }));
 
   it("passes persisted session policy and runtime policy key to preflight compaction", async () => {
     registerMemoryFlushPlanResolverForTest(() =>
