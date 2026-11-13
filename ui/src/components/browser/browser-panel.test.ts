@@ -16,6 +16,7 @@ import {
   flushBrowserResponses as flush,
   type BrowserRequestEnvelope,
 } from "./browser-panel-controller-test-support.ts";
+import { browserRequestActions } from "./browser-panel-stream.test-support.ts";
 import {
   bareNameAddress,
   normalizeBrowserUrlDraft,
@@ -463,7 +464,12 @@ describe("Browser panel", () => {
           new DOMRect(0, 0, 100, 100),
         );
       }
-      return { panel, request, input, actions: () => request.mock.calls.map(([, p]) => p?.body) };
+      return {
+        panel,
+        request,
+        input,
+        actions: () => request.mock.calls.flatMap(([, p]) => browserRequestActions(p)),
+      };
     }
 
     it.each([
@@ -485,11 +491,11 @@ describe("Browser panel", () => {
       expect(bubbled).not.toHaveBeenCalled();
       expect(request).toHaveBeenCalledExactlyOnceWith("browser.request", {
         method: "POST",
-        path: "/act",
+        path: "/operator/input",
         target: "node",
         node: "browser-node",
         query: { profile: "work" },
-        body: { kind: "insertText", targetId: "form-tab", text },
+        body: { targetId: "form-tab", inputs: [{ kind: "insertText", text }] },
       });
       if (outcome === "failed") {
         await panel.updateComplete;
@@ -584,6 +590,38 @@ describe("Browser panel", () => {
       ]);
     });
 
+    it.each([false, true])(
+      "sends keys typed during an in-flight burst as one burst (navigated: %s)",
+      async (navigated) => {
+        const { panel, request, input } = await mountForm();
+        const first = createDeferred<unknown>();
+        request.mockImplementationOnce(async () => first.promise);
+        for (const value of ["a", "b", "c"]) {
+          key(input, { key: value, cancelable: true });
+        }
+        expect(request).toHaveBeenCalledTimes(1);
+        first.resolve({ ok: true, sent: 1, ...(navigated ? { navigated: true } : {}) });
+        await vi.advanceTimersByTimeAsync(0);
+        await panel.updateComplete;
+        const bursts = request.mock.calls.map(([, envelope]) => envelope?.body?.inputs);
+        if (navigated) {
+          // Keys typed before the user saw the new document never reach it.
+          expect(bursts).toEqual([[{ kind: "press", key: "a" }]]);
+          expect(panel.querySelector('[role="status"]')?.textContent).toContain(
+            "input typed before it loaded was not sent",
+          );
+        } else {
+          expect(bursts).toEqual([
+            [{ kind: "press", key: "a" }],
+            [
+              { kind: "press", key: "b" },
+              { kind: "press", key: "c" },
+            ],
+          ]);
+        }
+      },
+    );
+
     it.each(["failure", "route change", "new click"])(
       "paste waits for click: %s",
       async (outcome) => {
@@ -665,6 +703,116 @@ describe("Browser panel", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(request).toHaveBeenCalledTimes(3);
       expect(actions()[2]).toMatchObject({ kind: "insertText", text: "correct field" });
+    });
+
+    const unsupported = () =>
+      new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "Operator input sessions need a Playwright-managed Chromium profile.",
+        details: { code: "OPERATOR_INPUT_UNSUPPORTED" },
+      });
+    const paths = (request: { mock: { calls: unknown[][] } }) =>
+      request.mock.calls.map(([, envelope]) => (envelope as { path?: string })?.path);
+
+    it("notices input withheld from the burst that navigated", async () => {
+      const { panel, request, input } = await mountForm();
+      const first = createDeferred<unknown>();
+      request.mockImplementationOnce(async () => first.promise);
+      request.mockImplementationOnce(async () => ({ ok: true, sent: 1, navigated: true }));
+      for (const value of ["a", "b", "c"]) {
+        key(input, { key: value, cancelable: true });
+      }
+      first.resolve({ ok: true, sent: 1 });
+      await vi.advanceTimersByTimeAsync(0);
+      await panel.updateComplete;
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(panel.querySelector('[role="status"]')?.textContent).toContain(
+        "input typed before it loaded was not sent",
+      );
+    });
+
+    it("keeps typing out of the old field when a dialog drops a queued click", async () => {
+      const { request, input, actions } = await mountForm({ clickable: true });
+      const burst = createDeferred<unknown>();
+      request.mockImplementationOnce(async () => burst.promise);
+      key(input, { key: "a", cancelable: true });
+      input.click();
+      burst.resolve({ ok: true, sent: 1, blockedByDialog: true });
+      await vi.advanceTimersByTimeAsync(0);
+      key(input, { key: "x", cancelable: true });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(actions()).toMatchObject([{ kind: "press", key: "a" }]);
+    });
+
+    it("keeps typing out of the old field when a dialog stops the click", async () => {
+      const { panel, request, input, actions } = await mountForm({ clickable: true });
+      request.mockImplementationOnce(async () => ({
+        ok: true,
+        sent: 0,
+        blockedByDialog: true,
+        browserState: { dialogs: { pending: [{ type: "alert" }] } },
+      }));
+      input.click();
+      await vi.advanceTimersByTimeAsync(0);
+      key(input, { key: "x", cancelable: true });
+      await vi.advanceTimersByTimeAsync(0);
+      await panel.updateComplete;
+      expect(actions()).toMatchObject([{ kind: "clickCoords" }]);
+      expect(panel.querySelector('[role="status"]')?.textContent).toContain(
+        "The page opened a dialog",
+      );
+    });
+
+    it("types again after a queued click recovers from a failed click", async () => {
+      const { request, input, actions } = await mountForm({ clickable: true });
+      const failedClick = createDeferred<unknown>();
+      request.mockImplementationOnce(async () => failedClick.promise);
+      input.click();
+      input.click();
+      failedClick.reject(new Error("Click failed"));
+      await vi.advanceTimersByTimeAsync(0);
+      key(input, { key: "x", cancelable: true });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(actions()).toMatchObject([
+        { kind: "clickCoords" },
+        { kind: "clickCoords" },
+        { kind: "press", key: "x" },
+      ]);
+    });
+
+    it("stops per-action fallback input once the panel no longer owns it", async () => {
+      const { panel, request, input, actions } = await mountForm();
+      const first = createDeferred<unknown>();
+      request.mockImplementationOnce(async () => first.promise);
+      key(input, { key: "a", cancelable: true });
+      key(input, { key: "b", cancelable: true });
+      key(input, { key: "c", cancelable: true });
+      const fallbackB = createDeferred<unknown>();
+      // Burst [a] meets the unsupported profile and falls back; burst [b, c] follows.
+      first.reject(unsupported());
+      request.mockImplementationOnce(async () => ({ ok: true }));
+      request.mockImplementationOnce(async () => fallbackB.promise);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(actions().map((body) => body?.key)).toEqual(["a", "a", "b"]);
+      (await action(panel, "Annotate page")).click();
+      fallbackB.resolve({ ok: true });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(actions().map((body) => body?.key)).toEqual(["a", "a", "b"]);
+    });
+
+    it("asks a new browser route for operator input after an unsupported one", async () => {
+      const { panel, request, input } = await mountForm();
+      request.mockImplementationOnce(async () => {
+        throw unsupported();
+      });
+      key(input, { key: "a", cancelable: true });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(paths(request)).toEqual(["/operator/input", "/act"]);
+      panel.sessionKey = "replacement-session";
+      await waitForSolid(() => expect(panel.querySelector(".bp-shot")).not.toBeNull());
+      key(panel.querySelector<HTMLTextAreaElement>(".bp-input")!, { key: "b", cancelable: true });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(paths(request).at(-1)).toBe("/operator/input");
     });
 
     it.each(["empty", "files", "disconnected", "changing tab", "captured view"])(

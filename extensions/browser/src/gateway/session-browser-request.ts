@@ -35,6 +35,7 @@ const routes = new Set([
   "POST /navigate",
   "POST /tabs/focus",
   "POST /act",
+  "POST /operator/input",
   "POST /screencast",
 ]);
 const actions = new Set([

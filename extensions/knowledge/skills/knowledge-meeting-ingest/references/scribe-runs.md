@@ -6,6 +6,11 @@ plugin's tools ([source acquisition](source-acquisition.md)).
 
 ## Learn from Granola
 
+The pending, checkpoint and completion rules below address the November 12, 2026
+live run that stopped after digesting a meeting instead of finishing ingestion:
+[#197890](https://github.com/openclaw/openclaw/pull/197890) and
+[#197391](https://github.com/openclaw/openclaw/pull/197391).
+
 The prompt names which meetings (the owner's, or every meeting the account can
 read) and how far back to start (today, or the last 7 or 30 days, in the owner's
 time zone).

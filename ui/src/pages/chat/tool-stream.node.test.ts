@@ -471,13 +471,8 @@ describe("app-tool-stream approval lifecycle", () => {
     expect(card).toMatchObject({
       completed: true,
       live: true,
-      preview: {
-        kind: "browser-tab",
-        profile: "managed",
-        target: "host",
-        targetId: "tab-1",
-        title: "Example",
-      },
+      browserTab: { profile: "managed", target: "host", targetId: "tab-1" },
+      preview: undefined,
     });
     resetToolStream(host);
   });
@@ -514,7 +509,7 @@ describe("app-tool-stream approval lifecycle", () => {
       completed: true,
       outputText: "CLI result",
       browserTab: { profile: "shared", target: "node", node: "node-1", targetId: "tab-shared" },
-      preview: { kind: "browser-tab", profile: "shared", target: "node", targetId: "tab-shared" },
+      preview: undefined,
     });
     resetToolStream(host);
   });

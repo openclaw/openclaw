@@ -34,7 +34,8 @@ import { git } from "./git-fixture.test-support.js";
 import { readPendingWorktrees } from "./pending-slots.js";
 import * as preparationTiming from "./preparation-timing.js";
 import { updateRegistryWorktree } from "./registry.js";
-import { IDLE_GC_MS, ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
+import { IDLE_GC_MS } from "./retention.js";
+import { ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
 import {
   ageManagedWorktreeTemplates,
   useManagedWorktreeTestRepository,

@@ -13,7 +13,6 @@ import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { hasForwardedSource, isSessionActivityGroup } from "../chat-turn-boundary.ts";
 import { isActivityMessageGroup } from "../chat-turn-presentation.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
-import { BrowserTabPreviews } from "./chat-browser-tab-previews.tsx";
 import { ForwardedAttribution } from "./chat-forwarded-attribution.tsx";
 import { ChatHandoffResume } from "./chat-handoff-sessions.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
@@ -50,7 +49,6 @@ import {
 import { ReplyLineView, ReplyLineConnector } from "./chat-reply-attribution.tsx";
 import type { ReplyConnectorElements } from "./chat-reply-connector.tsx";
 import { ChatSessionActivity } from "./chat-session-activity.solid.tsx";
-import { selectBrowserTabPreviews } from "./chat-tool-cards.ts";
 import { TurnRecapRow } from "./chat-turn-recap-view.tsx";
 
 export type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
@@ -234,12 +232,6 @@ export function MessageGroupContent(props: {
           />
         )}
       </For>
-      {options().showToolCalls === false ? undefined : (
-        <BrowserTabPreviews
-          previews={selectBrowserTabPreviews([props.group], options())}
-          mediaReadAllowed={options().mediaReadAllowed}
-        />
-      )}
     </Show>
   );
 }
@@ -508,12 +500,6 @@ function FramedMessageGroup(props: {
         >
           {options().frameContent}
         </Show>
-        {frame().ownsRunFrame || options().showToolCalls === false ? undefined : (
-          <BrowserTabPreviews
-            previews={selectBrowserTabPreviews([props.group], options())}
-            mediaReadAllowed={options().mediaReadAllowed}
-          />
-        )}
         <Show
           when={Boolean(options().activeContinuation)}
           fallback={
