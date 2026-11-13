@@ -22,7 +22,7 @@ import { runInNewContext } from "node:vm";
 import { expectDefined } from "@openclaw/normalization-core";
 import { minimatch } from "minimatch";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { isAlias, parse, parseDocument, visit } from "yaml";
+import { isAlias, isScalar, parse, parseDocument, visit } from "yaml";
 import { encodeNodeTestGroups } from "../../scripts/lib/ci-node-test-groups-codec.mts";
 import {
   SOURCE_CHANNEL_TEST_POLICY,
@@ -237,22 +237,31 @@ function findYamlFiles(directory: string): string[] {
   });
 }
 
-function findUnpinnedExternalActions(): string[] {
+function findUnpinnedExternalActions(
+  workflowPaths = [...findYamlFiles(".github/workflows"), ...findYamlFiles(".github/actions")],
+): string[] {
   const violations: string[] = [];
-  for (const workflowPath of [
-    ...findYamlFiles(".github/workflows"),
-    ...findYamlFiles(".github/actions"),
-  ]) {
-    for (const [index, line] of readFileSync(workflowPath, "utf8").split("\n").entries()) {
-      const uses = line.match(/^\s*(?:-\s*)?uses:\s*([^#\s]+)/u)?.[1];
-      if (!uses || uses.startsWith("./") || uses.startsWith("docker://")) {
-        continue;
-      }
-      const at = uses.lastIndexOf("@");
-      if (at < 1 || !/^[a-f0-9]{40}$/u.test(uses.slice(at + 1))) {
-        violations.push(`${workflowPath}:${index + 1}: ${uses}`);
-      }
-    }
+  for (const workflowPath of workflowPaths) {
+    const source = readFileSync(workflowPath, "utf8");
+    const document = parseDocument(source);
+    expect(document.errors, workflowPath).toEqual([]);
+    visit(document, {
+      Pair(_key, pair) {
+        if (!isScalar(pair.key) || pair.key.value !== "uses") {
+          return;
+        }
+        const value = isAlias(pair.value) ? pair.value.resolve(document) : pair.value;
+        const uses = isScalar(value) && typeof value.value === "string" ? value.value : "";
+        if (uses.startsWith("./") || uses.startsWith("docker://")) {
+          return;
+        }
+        const at = uses.lastIndexOf("@");
+        if (at < 1 || !/^[a-f0-9]{40}$/u.test(uses.slice(at + 1))) {
+          const line = source.slice(0, pair.key.range?.[0] ?? 0).split("\n").length;
+          violations.push(`${workflowPath}:${line}: ${uses || "non-string action reference"}`);
+        }
+      },
+    });
   }
   return violations;
 }
@@ -519,6 +528,41 @@ describe("ci workflow guards", () => {
   });
 
   const ci = readCiWorkflow();
+  it("keeps CLI audit uploads separate and limited to first-attempt scheduled rows", () => {
+    const job = ci.jobs["checks-node-core-test-nondist-shard"];
+    const upload = requiredWorkflowStep(job.steps, "Upload CLI audit observations");
+    const run = requiredWorkflowStep(job.steps, "Run Node test shard");
+    for (const [eventName, repository, frozen, runAttempt, assigned, expected] of [
+      ["schedule", "openclaw/openclaw", "false", 1, true, true],
+      ["schedule", "openclaw/openclaw", "false", 2, true, false],
+      ["schedule", "openclaw/openclaw", "false", 1, false, false],
+      ["schedule", "openclaw/openclaw", "true", 1, true, false],
+      ["schedule", "example/fork", "false", 1, true, false],
+      ["pull_request", "openclaw/openclaw", "false", 1, true, false],
+    ] as const) {
+      const context = {
+        eventName,
+        repository,
+        runId: 100,
+        runAttempt,
+        preflightOutputs: { frozen_target: frozen },
+        matrix: { audit_cli_observations: assigned },
+      };
+      expect(evaluateWorkflowCondition(upload.if, context)).toBe(expected);
+      expect(
+        Boolean(evaluateWorkflowExpression(run.env.OPENCLAW_CI_TEST_AUDIT_CLI_DIR, context)),
+      ).toBe(expected);
+    }
+    expect(upload["continue-on-error"]).toBe(true);
+    expect(upload.with.name).toBe(
+      "ci-test-observations-audit-cli-${{ github.run_id }}-${{ github.run_attempt }}-${{ strategy.job-index }}",
+    );
+    expect(upload.with.path.trim().split("\n")).toEqual([
+      "${{ runner.temp }}/ci-test-observations-audit-cli/*/observations.json",
+      "${{ runner.temp }}/ci-test-observations-audit-cli/*/launch.json",
+    ]);
+  });
+
   it("limits observation uploads to the sampled current-target CI cohort", () => {
     const job = ci.jobs["checks-node-core-test-nondist-shard"];
     const upload = requiredWorkflowStep(job.steps, "Upload adaptive CI observations");
@@ -961,6 +1005,21 @@ AFTER_CD
 
   it("pins every external GitHub Action reference to a full commit SHA", () => {
     expect(findUnpinnedExternalActions()).toEqual([]);
+  });
+
+  it.each([
+    ["actions/upload-artifact@" + "a".repeat(40), 0],
+    ["actions/upload-artifact@v7", 2],
+    ["actions/upload-artifact", 2],
+    ["false", 2],
+  ])("checks the resolved pin of an aliased action: %s", (reference, expected) => {
+    const directory = tempDirs.make("openclaw-action-pins-");
+    const workflow = path.join(directory, "workflow.yml");
+    writeFileSync(
+      workflow,
+      `jobs:\n  check:\n    steps:\n      - uses: &upload ${reference}\n      - uses: *upload\n`,
+    );
+    expect(findUnpinnedExternalActions([workflow])).toHaveLength(expected);
   });
 
   it("schedules approved Docker refreshes from independently resolved channels", () => {

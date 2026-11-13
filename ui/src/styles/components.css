@@ -433,7 +433,9 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   text-decoration: none;
 }
 
-.session-link:hover {
+/* Models agent links take the color and plain text from the global link rule. */
+.session-link:hover,
+.model-providers__agent-link:hover {
   text-decoration: underline;
 }
 

@@ -52,6 +52,7 @@ import {
   shouldDeliverMissingReplyNotice,
   type ReplyExpectation,
 } from "../../agents/reply-completion.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   collectErrorGraphCandidates,
   formatErrorMessage,
@@ -81,11 +82,12 @@ function readFallbackAttempts(error: unknown): readonly ReplyFallbackAttempt[] {
 export function resolveReplyFailureSummary(params: {
   error: unknown;
   message: string;
-  reason: ReplyFailoverFacts["reason"];
+  facts: ReplyFailoverFacts;
   attempts?: readonly ReplyFallbackAttempt[];
+  config?: OpenClawConfig;
 }): { kind: "billing" | "rate_limit" | "overloaded"; text: string } | undefined {
   const attempts = params.attempts;
-  let kind = params.reason;
+  let kind = params.facts.reason;
   // The top-level reason describes the last attempt; aggregate copy must account for the entire chain.
   if (attempts?.length) {
     if (attempts.some((attempt) => attempt.reason === "billing")) {
@@ -104,26 +106,33 @@ export function resolveReplyFailureSummary(params: {
     return undefined;
   }
   const failoverError = isFailoverError(params.error) ? params.error : undefined;
+  const facts = params.facts;
   const text =
-    kind === "billing"
-      ? renderBillingReplyCopy({
-          attempts,
-          provider: failoverError?.provider,
-          model: failoverError?.model,
-          authMode: failoverError?.authMode,
-        })
-      : kind === "overloaded"
-        ? renderRateLimitOrOverloadedCopy({ reason: kind, raw: params.message })
-        : renderRateLimitReplyCopy({
-            message: params.message,
-            reason: params.reason,
+    kind === "rate_limit" && !attempts?.length && facts.requestFailureText
+      ? facts.requestFailureText
+      : kind === "billing"
+        ? renderBillingReplyCopy({
             attempts,
             provider: failoverError?.provider,
-            code: failoverError?.code,
-            rateLimitRetriesExhausted: failoverError?.rateLimitRetriesExhausted,
-            cooldownExpiry: failoverError?.soonestCooldownExpiry,
-            sanitizeText: (rawText) => sanitizeUserFacingText(rawText, { errorContext: true }),
-          });
+            model: failoverError?.model,
+            authMode: failoverError?.authMode,
+          })
+        : kind === "overloaded"
+          ? renderRateLimitOrOverloadedCopy({ reason: kind, raw: params.message })
+          : renderRateLimitReplyCopy({
+              message: params.message,
+              reason: facts.reason,
+              attempts,
+              provider: failoverError?.provider,
+              code: failoverError?.code,
+              rateLimitRetriesExhausted: failoverError?.rateLimitRetriesExhausted,
+              cooldownExpiry: failoverError?.soonestCooldownExpiry,
+              rateLimitResetAt: facts.rateLimitResetAt,
+              model: failoverError?.model,
+              locale: params.config?.ui?.prefs?.locale,
+              timeZone: params.config?.agents?.defaults?.userTimezone,
+              sanitizeText: (rawText) => sanitizeUserFacingText(rawText, { errorContext: true }),
+            });
   return { kind, text };
 }
 
@@ -285,7 +294,10 @@ export function buildExternalRunFailureReply(
   const failoverFacts =
     options?.failoverFacts ??
     resolveReplyFailoverFacts(error ?? normalizedMessage, normalizedMessage);
-  const failoverCodeCopy = renderFailoverCodeUserCopy(failoverFacts.code);
+  const failoverCodeCopy =
+    failoverFacts.rateLimitResetAt === undefined
+      ? renderFailoverCodeUserCopy(failoverFacts.code)
+      : undefined;
   if (failoverCodeCopy) {
     return { text: failoverCodeCopy, isGenericRunnerFailure: false };
   }
@@ -356,12 +368,15 @@ export function buildExternalRunFailureReply(
   if (cliBackendTimeoutFailure) {
     return { text: cliBackendTimeoutFailure, isGenericRunnerFailure: false };
   }
-  if (isFailoverError(error) && error.rateLimitRetriesExhausted !== undefined) {
+  if (
+    (isFailoverError(error) && error.rateLimitRetriesExhausted !== undefined) ||
+    failoverFacts.rateLimitResetAt !== undefined
+  ) {
     const summary = resolveReplyFailureSummary({
       error,
       message,
-      reason: failoverFacts.reason,
-      attempts: error.attempts,
+      facts: failoverFacts,
+      attempts: isFailoverError(error) ? error.attempts : undefined,
     });
     if (summary) {
       return { text: summary.text, isGenericRunnerFailure: false };
@@ -505,6 +520,7 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
   err: unknown;
   sessionCtx: TemplateContext;
   resolvedVerboseLevel: VerboseLevel | undefined;
+  config?: OpenClawConfig;
 }): ReplyPayload | undefined {
   // Preflight diagnostics are not provider failures. Only explicit public copy
   // can bypass the caller's diagnostic disclosure policy.
@@ -518,12 +534,13 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
       ? undefined
       : markAgentRunFailureReplyPayload({ text: reply.text });
   }
-  const failoverFacts = resolveReplyFailoverFacts(params.err, message);
+  const failoverFacts = resolveReplyFailoverFacts(params.err, message, params.config);
   const failureSummary = resolveReplyFailureSummary({
     error: params.err,
     message,
-    reason: failoverFacts.reason,
+    facts: failoverFacts,
     attempts: readFallbackAttempts(params.err),
+    config: params.config,
   });
   const knownFailureText =
     failureSummary?.kind === "billing"

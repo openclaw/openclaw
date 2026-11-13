@@ -22,6 +22,7 @@ import type {
 const packs = "local_workspace_tree_packs";
 const pathSets = "local_workspace_source_path_sets";
 const epochKey = "workspace.manifest.sweepEpoch";
+const pendingSweepKey = "workspace.manifest.pendingSweepEpoch";
 const query = (db: EngineConnection) => getNodeSqliteKysely<DB>(db);
 
 export function currentLocalWorkspaceSweepEpoch(db: EngineConnection): number {
@@ -181,7 +182,59 @@ export function readLocalWorkspaceTree(
   return records;
 }
 
-export function beginLocalWorkspaceSweepInDatabase(db: EngineConnection): number {
+/** The writer records demand atomically with preparations and projection changes. */
+export function requestLocalWorkspaceSweepInDatabase(
+  db: EngineConnection,
+  epoch = currentLocalWorkspaceSweepEpoch(db),
+): void {
+  executeSqliteQuerySync(
+    db,
+    query(db)
+      .insertInto("config_machine_state")
+      .values({
+        state_key: pendingSweepKey,
+        // Preserve the preparation grace even if no further workspace writes arrive.
+        value_json: String(epoch + 2),
+        updated_at_ms: Date.now(),
+      })
+      .onConflict((conflict) =>
+        conflict
+          .column("state_key")
+          .doUpdateSet({
+            value_json: String(epoch + 2),
+            updated_at_ms: Date.now(),
+          })
+          .where("value_json", "!=", String(epoch + 2)),
+      ),
+  );
+}
+
+export function finishLocalWorkspaceSweepInDatabase(db: EngineConnection, epoch: number): void {
+  executeSqliteQuerySync(
+    db,
+    query(db)
+      .updateTable("config_machine_state")
+      .set({ value_json: "0", updated_at_ms: Date.now() })
+      .where("state_key", "=", pendingSweepKey)
+      .where((eb) => eb(eb.cast<number>("value_json", "integer"), "<=", epoch)),
+  );
+}
+
+export function beginLocalWorkspaceSweepInDatabase(db: EngineConnection): number | null {
+  const pending = executeSqliteQueryTakeFirstSync(
+    db,
+    query(db)
+      .selectFrom("config_machine_state")
+      .select("value_json")
+      .where("state_key", "=", pendingSweepKey),
+  );
+  if (pending?.value_json === "0") {
+    return null;
+  }
+  // A pre-upgrade database has no demand marker; settle its existing content once.
+  if (!pending) {
+    requestLocalWorkspaceSweepInDatabase(db);
+  }
   const epoch = currentLocalWorkspaceSweepEpoch(db) + 1;
   executeSqliteQuerySync(
     db,
