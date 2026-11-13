@@ -1,0 +1,4 @@
+# Exact net test-line growth from PR #197696 (malformed MCP events control request JSON reports
+# a one-line diagnostic instead of a raw SyntaxError traceback): new spawn-style regression test
+# test/scripts/mcp-events-test-server.test.ts.
+32

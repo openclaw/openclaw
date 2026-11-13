@@ -99,9 +99,16 @@ if (values.help) {
   ) {
     throw new Error("Fixture client requires HTTPS except for explicit loopback HTTP");
   }
-  const params = JSON.parse(
-    values["json-file"] ? readFileSync(values["json-file"], "utf8") : (values.json ?? "{}"),
-  );
+  const requestJson = values["json-file"]
+    ? readFileSync(values["json-file"], "utf8")
+    : (values.json ?? "{}");
+  let params;
+  try {
+    params = JSON.parse(requestJson);
+  } catch (error) {
+    process.stderr.write(`Failed to parse --json/--json-file JSON: ${error.message}\n`);
+    process.exit(1);
+  }
   const headers = {
     authorization: "Bearer " + readToken(values["token-file"]),
     "content-type": "application/json",
