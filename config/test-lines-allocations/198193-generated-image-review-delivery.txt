@@ -1,5 +1,5 @@
-# Required #198193 coordinated identity/review regressions: real completion/SQLite/filesystem
-# custody, rollback/source isolation, private vision, exact-task correction and admission,
-# reference/mode identity, exact retries, and bounded candidate discovery/continuation.
-# Net test growth is 995 lines; this covers only the excess above 400.
-595
+# Required #198193 review regressions: real completion/SQLite/filesystem custody,
+# rollback/source isolation, private vision, exact-task correction/admission,
+# automatic-versus-review identity and bounded candidate discovery/continuation.
+# Net test growth above landed identity is 942 lines; covers only excess above 400.
+542

@@ -684,6 +684,26 @@ instrumentation was restored byte for byte. Independent preservation review
 found no coverage loss. Focused checks, full local review and hosted outcomes
 are tracked in [PR #198154](https://github.com/openclaw/openclaw/pull/198154).
 
+### Binary discovery oracle errors
+
+At `da0e0ba8cae139938cba66ff96e1f794c48acf12`, two binary-discovery tests
+interpret every `which` error as a missing executable. The repair preserves
+real resolver parity while accepting only the expected exit status 1 without a
+signal. Fixed fixture outcomes are asserted independently, so two broken
+lookups cannot agree on a false negative. All 11 declarations and 19 expanded
+cases remain; test code grows by four lines, with no production or support
+changes.
+
+Normal baseline and repaired runs pass all 19 cases. Replacing negative lookup
+results with real child-process launch errors, exit status 2 or signal
+termination leaves the original green; each repaired control fails the two
+affected cases. A paired false-negative mutation of `which` and `detectBinary`
+also passes the original but fails both repaired positive controls. Temporary
+test and production instrumentation was restored byte for byte. Independent
+preservation review found no lost coverage. Focused checks, full local review
+and hosted outcomes are tracked in
+[PR #198168](https://github.com/openclaw/openclaw/pull/198168).
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Retain Twitch's pre-abort pending check: it protects the passive account lifecycle. Its post-await settled check remains a separate live-test cleanup candidate.
@@ -691,7 +711,6 @@ are tracked in [PR #198154](https://github.com/openclaw/openclaw/pull/198154).
 - Retain the CodeMode worker-leg deadline case: its real warmed worker and interruption path are distinct from the cancellation table's typed host-error precedence. Both suites keep their active-run settlement checks; this is a source-only retention decision.
 - Repair Android runtime/model fixture custody through existing guaranteed closers; no measured leak is claimed. Retarget misleading coroutine/authority/streaming assertions. Qualify Android dropdown arithmetic, IPv6 URL, empty SMS defaults and component-state mapping against their stronger keepers.
 - Repair swallowed/unrelated setup errors, silent auth/symlink skips, SSRF negative controls, content-absence/privacy results, delayed observer proofs, missing CLI fixture cleanup. Retain CI inventory gaps as route repairs, including PostgreSQL conformance and removed Logbook worker paths.
-- `detect-binary.test.ts` retains all 11 declarations (19 cases). Its two `which` oracle catch-all blocks remain a source-only repair candidate: distinguish an expected not-found result from resolver execution failures before claiming parity.
 - Diagnostics OTel: the NodeSDK replay removal remains qualified above; content capture completion proof is recorded separately above.
 - SDK removal search was incomplete: public2,115/2,527 complete and bundled169/179 complete. No observed consumer is not proof of no external reliance. The retired target facade was private and excluded from packaging since `780bc791470`.
 - Retain duplicate Swift TLS fixtures in separate packages, renderer-discovered Blobster JSON (also production prompt inputs), process-entry helpers referenced extensionlessly, stable borrowed-reference assertions, and independent release/architecture/platform guards.

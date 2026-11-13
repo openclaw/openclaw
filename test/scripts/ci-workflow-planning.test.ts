@@ -591,7 +591,7 @@ function runRunnerProfileFixture(options: {
   configuredProfile?: string;
   author?: string;
   starter?: string;
-  eventName: "pull_request" | "push" | "workflow_dispatch";
+  eventName: "pull_request" | "push" | "schedule" | "workflow_dispatch";
   headRepository?: string;
   repository?: string;
   runAttempt?: number;
@@ -6103,6 +6103,7 @@ describe("ci workflow guards", () => {
   it.each([
     ...[
       { author: "vincentkoc", starter: "vincentkoc", admitted: true },
+      { author: "jalehman", starter: "davemorin", admitted: true },
       { author: "other-maintainer", starter: "vincentkoc", admitted: false },
       { author: "vincentkoc", starter: "other-maintainer", admitted: false },
       { author: "vincentkoc", starter: "vincentkoc", runAttempt: 2, admitted: false },
@@ -6115,7 +6116,16 @@ describe("ci workflow guards", () => {
         qualificationDispatch: true,
       }),
     ),
+    ...["davemorin", "jalehman", "joshavant", "steipete"].flatMap((owner) => [
+      { author: owner, starter: "vincentkoc", admitted: true },
+      { author: "vincentkoc", starter: owner, admitted: true },
+    ]),
     { author: "vincentkoc", starter: "vincentkoc", admitted: true },
+    { author: "steipete", starter: "joshavant", admitted: true },
+    { author: "github-actions[bot]", starter: "vincentkoc", admitted: false },
+    { author: "vincentkoc", starter: "github-actions[bot]", admitted: false },
+    { author: "vincent", starter: "vincentkoc", admitted: false },
+    { author: "", starter: "steipete", eventName: "schedule" as const, admitted: false },
     { author: "contributor", starter: "vincentkoc", admitted: false },
     { author: "vincentkoc", starter: "contributor", admitted: false },
     { author: "vincentkoc", starter: "vincentkoc", runAttempt: 2, admitted: false },
