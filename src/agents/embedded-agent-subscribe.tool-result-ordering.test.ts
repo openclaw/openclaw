@@ -336,6 +336,98 @@ describe("tool result ordering", () => {
     },
   );
 
+  it("finishes a nested tool without revisiting unrelated completed activities", async () => {
+    const h = harness();
+    h.start("read", "unrelated", { path: "fixture.txt" });
+    h.end("read", "unrelated", jsonResult({ done: true }));
+    await h.subscription.waitForPendingEvents();
+    const unrelated = h.subscription.toolMetas[0]!;
+    const activity = unrelated.activity;
+    let reads = 0;
+    Object.defineProperty(unrelated, "activity", {
+      configurable: true,
+      get: () => {
+        reads += 1;
+        return activity;
+      },
+    });
+    h.start("exec", "outer");
+    for (let index = 0; index < 100; index += 1) {
+      h.start("read", `child-${index}`, { path: "fixture.txt" }, "outer");
+      h.end("read", `child-${index}`, jsonResult({ done: true }));
+    }
+    h.end("exec", "outer", jsonResult({ done: true }));
+    await h.subscription.waitForPendingEvents();
+    expect(reads).toBe(0);
+  });
+
+  it.each(["completed", "failed", "cancelled", "routine", "parallel"])(
+    "preserves nested presentation snapshots for %s tools",
+    async (outcome) => {
+      const events: AgentActivityItem[] = [];
+      const h = harness({
+        onAgentEvent: (event) => {
+          if (event.stream === "item" && Value.Check(AgentActivityItemSchema, event.data)) {
+            events.push(event.data);
+          }
+        },
+      });
+      const name = outcome === "routine" ? "progress_card" : "read";
+      h.start("exec", "outer");
+      h.start("exec", "inner", {}, "outer");
+      if (outcome !== "cancelled") {
+        h.start(name, "leaf", { path: "fixture.txt" }, "inner");
+      }
+      if (outcome === "parallel") {
+        h.start("read", "sibling", { path: "fixture.txt" }, "inner");
+      }
+      h.end("exec", "outer", jsonResult({ done: true }));
+      h.end("exec", "inner", jsonResult({ done: true }));
+      await h.subscription.waitForPendingEvents();
+      const before = events.map((event) => ({ ...event }));
+      if (outcome === "cancelled") {
+        await expect(
+          h.subscription.runToolLifecycle({
+            toolName: name,
+            toolCallId: "leaf",
+            parentToolCallId: "inner",
+            args: { path: "fixture.txt" },
+            execute: async (started) => {
+              started();
+              throw new DOMException("Cancelled", "AbortError");
+            },
+          }),
+        ).rejects.toThrow("Cancelled");
+      } else {
+        h.end(name, "leaf", jsonResult({ done: true }), outcome === "failed");
+      }
+      if (outcome === "parallel") {
+        h.end("read", "sibling", jsonResult({ done: true }));
+      }
+      await h.subscription.waitForPendingEvents();
+      expect(events.slice(0, before.length)).toEqual(before);
+      const latest = new Map(events.map((event) => [event.toolCallId, event]));
+      expect(
+        [...latest].map(([id, item]) => [id, item.status, Boolean(item.hideFromChannelProgress)]),
+      ).toEqual([
+        ["outer", "completed", true],
+        ["inner", "completed", outcome !== "routine"],
+        [
+          "leaf",
+          outcome === "failed" || outcome === "cancelled" ? "failed" : "completed",
+          outcome === "routine",
+        ],
+        ...(outcome === "parallel" ? [["sibling", "completed", false]] : []),
+      ]);
+      const retractions = events.filter(
+        (item) => item.hideFromChannelProgress && item.name === "exec",
+      );
+      expect(retractions.map((item) => item.toolCallId)).toEqual(
+        outcome === "routine" ? ["outer"] : ["outer", "inner"],
+      );
+    },
+  );
+
   it("captures faithful trajectory pairs while tool-start delivery remains blocked", async () => {
     const entered = createDeferred();
     const pending = createDeferred();
