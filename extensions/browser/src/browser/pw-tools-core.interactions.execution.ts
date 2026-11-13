@@ -185,7 +185,7 @@ export async function executeActViaPlaywright(
 
 /**
  * Owns one page operation's download policy, dialog interruption and policy-denial
- * quarantine. Act calls and operator input sessions share it.
+ * quarantine. Act calls and operator input bursts share it.
  */
 export async function runActionExecution<T extends Record<string, unknown>>(
   opts: GuardedInteractionOptions,

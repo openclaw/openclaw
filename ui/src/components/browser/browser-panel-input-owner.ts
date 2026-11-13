@@ -92,7 +92,7 @@ export class BrowserPanelInputOwner {
   // next inputs queue, so a typing burst shares one navigation guard on the Gateway.
   private queuedInputs: QueuedInput[] = [];
   private inputFlight: Promise<void> | null = null;
-  // The browser route bound to this client answered that it has no operator input session.
+  // The browser route bound to this client answered that it has no operator input.
   private operatorInputUnsupportedClient: BrowserRequestClient | null = null;
   // After a failed click the previous field may still be focused; text waits for a new click.
   private focusUncertain = false;
@@ -485,7 +485,7 @@ export class BrowserPanelInputOwner {
         this.operatorInputUnsupportedClient = client;
       }
     }
-    // Profiles without operator input sessions: one guarded act per input, each
+    // Profiles without operator input: one guarded act per input, each
     // only while the panel still owns this input.
     for (const input of inputs) {
       if (!current()) {

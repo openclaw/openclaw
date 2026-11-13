@@ -73,7 +73,7 @@ export function registerBrowserOperatorInputRoutes(
       return;
     }
     const capabilities = getBrowserProfileCapabilities(profileCtx.profile);
-    // Sessions drive Playwright mouse and keyboard on a rendered page.
+    // Operator input drives Playwright mouse and keyboard on a rendered page.
     if (capabilities.usesChromeMcp || !capabilities.supportsVisualActions) {
       res.status(501).json({
         error: "Operator input sessions need a Playwright-managed Chromium profile.",

@@ -136,16 +136,15 @@ The JSON body has an optional `targetId` and `inputs`, an ordered list of up to
 or `{"kind":"clickCoords","x":...,"y":...}`, validated like the same `POST /act`
 kinds. Agent tools keep using `POST /act`.
 
-Input for one tab shares one navigation guard while it keeps arriving, instead
-of one guard per action, and the guard ends after one second without input.
+Each request runs its inputs under one navigation guard, instead of one guard
+per action, so a burst waits for the guard's 250 ms post-action window once.
 Every document request is policy-checked while the guard is active, as with
-`POST /act`. A main-frame navigation request or commit ends the session before
-any further input is sent, and the next input waits until the guard has checked
-the navigation. The response contains `sent` (inputs delivered, in order) and
-`navigated: true` when a navigation withheld later inputs. A policy denial is
-returned as an error, to the next request when it is detected after the earlier
-ones were answered. Existing-session profiles answer `501` with code
-`OPERATOR_INPUT_UNSUPPORTED`.
+`POST /act`. A main-frame navigation request or commit stops the burst before
+any further input is sent; subframe navigations do not stop it and are still
+checked. The response contains `sent` (inputs delivered, in order) and
+`navigated: true` when a navigation withheld later inputs. A policy denial or
+an open dialog is reported on the request whose input caused it.
+Existing-session profiles answer `501` with code `OPERATOR_INPUT_UNSUPPORTED`.
 
 ### Screencast stream
 

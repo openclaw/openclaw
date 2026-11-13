@@ -391,7 +391,7 @@ export type BrowserOperatorInput =
   | { kind: "insertText"; text: string }
   | { kind: "clickCoords"; x: number; y: number };
 
-/** Existing-session profiles have no operator input session; the panel acts per input there. */
+/** Existing-session profiles have no operator input route; the panel acts per input there. */
 export function isBrowserOperatorInputUnsupportedError(error: unknown): boolean {
   return (
     error instanceof GatewayRequestError &&

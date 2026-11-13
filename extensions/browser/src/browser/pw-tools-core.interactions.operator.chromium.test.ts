@@ -29,7 +29,7 @@ const pages: Record<string, string> = {
 const keys = (text: string): BrowserOperatorInput[] =>
   Array.from(text, (key) => ({ kind: "press", key }));
 
-describe.runIf(runChromiumProof)("operator input sessions in Chromium", () => {
+describe.runIf(runChromiumProof)("operator input in Chromium", () => {
   const cleanup: Array<() => Promise<void>> = [];
   afterEach(async () => {
     for (const dispose of cleanup.splice(0).toReversed()) {
@@ -72,9 +72,11 @@ describe.runIf(runChromiumProof)("operator input sessions in Chromium", () => {
 
   it("withholds keys that follow a navigation from the new document", async () => {
     const { page, send } = await openFormPage();
-    // Which burst reports a navigation is best effort (it depends on when the request
-    // event arrives); the invariant is that the new document never gets this burst's keys.
-    await send(keys("abc").concat({ kind: "press", key: "Enter" }, ...keys("def")));
+    // How many keys after Enter reach the old document depends on when the request
+    // event arrives; the invariant is that the new document never gets this burst's keys.
+    expect(
+      await send(keys("abc").concat({ kind: "press", key: "Enter" }, ...keys("def"))),
+    ).toMatchObject({ navigated: true });
     await page.waitForURL(/\/b\?q=abc$/);
     expect(await page.evaluate(() => (window as unknown as { keys: string[] }).keys)).toEqual([]);
     expect(await page.locator("#r").inputValue()).toBe("");
@@ -84,23 +86,13 @@ describe.runIf(runChromiumProof)("operator input sessions in Chromium", () => {
     expect(await page.locator("#r").inputValue()).toBe("xy");
   });
 
-  it("makes input wait for a finishing session and reports its late denial", async () => {
-    const { page, send } = await openFormPage();
-    expect(await send(keys("n"))).toMatchObject({ sent: 1 });
-    // The page starts a blocked navigation after that burst was answered. Input sent
-    // while the session's guard is still settling waits for it and gets the denial.
-    await new Promise((resolve) => {
-      setTimeout(resolve, 300);
-    });
-    await expect(send(keys("z"))).rejects.toThrow(/blocked|private|not allowed/i);
-    expect(new URL(page.url()).pathname).toBe("/a");
-  });
-
   it("keeps typing through an allowed iframe reload", async () => {
     const { page, send } = await openFormPage("/f");
-    const typed = "abcdefghij".repeat(4);
+    // No "d" or "r": those keys start the page's other iframe navigations.
+    const typed = "abcefghijk".repeat(4);
     const result = await send(keys(`r${typed}`));
-    expect(result).toEqual({ sent: typed.length + 1 });
+    expect(result.sent).toBe(typed.length + 1);
+    expect(result.navigated).toBeUndefined();
     expect(await page.locator("#q").inputValue()).toBe(`r${typed}`);
     await expect
       .poll(() => page.frames().some((frame) => frame.url().includes("reload=")))
@@ -109,11 +101,8 @@ describe.runIf(runChromiumProof)("operator input sessions in Chromium", () => {
 
   it("stops input when an iframe navigates to a blocked address", async () => {
     const { send } = await openFormPage("/f");
-    await send(keys("d"));
-    await new Promise((resolve) => {
-      setTimeout(resolve, 1_600);
-    });
-    await expect(send(keys("z"))).rejects.toThrow(/blocked|private|not allowed/i);
+    // The burst whose key started the iframe navigation reports the denial itself.
+    await expect(send(keys("dz"))).rejects.toThrow(/blocked|private|not allowed/i);
   });
 
   it("keeps policy denial for navigation started inside a session", async () => {
