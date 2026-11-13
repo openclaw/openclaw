@@ -651,7 +651,7 @@ export async function runTalkSpawnBoundaryCase(
           status: "error",
           error:
             change === "caller revoked"
-              ? "operator source authority is no longer active"
+              ? "operator source authority is no longer active. Reconnect to the Gateway, then resend your message. If access is denied, ask an administrator to restore it."
               : "In-process gateway dispatch requires a gateway request scope or instance binding (method: agent).",
         });
         expect(createFacade).not.toHaveBeenCalled();
