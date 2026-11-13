@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -84,7 +84,17 @@ describe("update.run handoff refusal diagnostics", () => {
   it("records a real detached helper refusal before launchd activation", async () => {
     const root = tempDirs.make("openclaw-handoff-missing-runtime-");
     const tmp = await import("../../infra/tmp-openclaw-dir.js");
+    const runtime = await import("../../infra/update-managed-service-handoff-runtime.js");
+    const stage = runtime.stageManagedHandoffRuntime;
     const coordinator = vi.spyOn(tmp, "resolvePreferredOpenClawTmpDir").mockReturnValue(root);
+    const runtimeFixture = vi
+      .spyOn(runtime, "stageManagedHandoffRuntime")
+      .mockImplementation((directory) => {
+        const files = stage(directory);
+        // Pre-activation bookkeeping now loads the sealed helper, not the installed CLI.
+        unlinkSync(expectDefined(files[0], "staged handoff runtime"));
+        return files;
+      });
     const handoff = await vi.importActual<
       typeof import("../../infra/update-managed-service-handoff.js")
     >("../../infra/update-managed-service-handoff.js");
@@ -110,6 +120,7 @@ describe("update.run handoff refusal diagnostics", () => {
       expect(report.body).not.toContain("exit unknown");
       expectServing();
     } finally {
+      runtimeFixture.mockRestore();
       coordinator.mockRestore();
     }
   });
