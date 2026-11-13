@@ -17,7 +17,12 @@ const prompt =
   "Check the linked PR for failed checks and unresolved review comments. Fix actionable issues and verify the changes.\nFollow the repository’s review and test workflow. Recheck current state before making changes. Report blockers in the originating session; do not bypass required checks or reviews.";
 const withPage = (run: Parameters<typeof suite.withPage>[1], width = 1440) =>
   suite.withPage(
-    { locale: "en-US", serviceWorkers: "block", viewport: { width, height: 900 } },
+    {
+      locale: "en-US",
+      timezoneId: "UTC",
+      serviceWorkers: "block",
+      viewport: { width, height: 900 },
+    },
     run,
   );
 function job(id = "ci", overrides: Partial<CronJob> = {}): CronJob {
@@ -75,6 +80,37 @@ async function installSessionFixture(page: Page, jobs: CronJob[]) {
   return gateway;
 }
 suite.define(() => {
+  it.each([1440, 390])(
+    "leads rows and the detail header with the next run at %ipx",
+    async (width) => {
+      await withPage(async ({ page }) => {
+        // A rearmed one-shot: the configured 5:51 AM occurrence passed; the scheduler owns 6:02 AM.
+        const rearmed = job("follow-up", {
+          name: "Release follow-up",
+          schedule: { kind: "at", at: "2026-10-14T05:51:00Z" },
+        });
+        await installSessionFixture(page, [job(), rearmed]);
+        const details = await openChatDetails(page);
+        const automations = details.locator('[data-details-group="automations"]');
+        if (width < 560) {
+          await automations.locator('[data-details-destination="automations"]').click();
+        }
+        const next = "Next in 2 min (today at 6:02 AM)";
+        const row = details.getByRole("link", { name: /Release follow-up/ });
+        await expect.poll(() => row.textContent()).toContain(next);
+        expect(await row.textContent()).not.toContain("5:51");
+        const recurring = details.getByRole("link", { name: /Check CI and comments/ });
+        expect(await recurring.textContent()).toContain(next);
+        expect(await recurring.locator('[role="img"]').first().getAttribute("aria-label")).toBe(
+          "Every 5 minutes",
+        );
+        await row.click();
+        const header = page.locator(".cron-detail-meta > .cron-detail-sub");
+        await expect.poll(() => header.textContent()).toBe(next);
+        expect(await header.locator('[role="img"]').getAttribute("aria-label")).toBe("Runs once");
+      }, width);
+    },
+  );
   it.each([
     { width: 1440, entry: "desktop" },
     { width: 390, entry: "single" },

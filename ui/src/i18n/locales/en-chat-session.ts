@@ -16,8 +16,6 @@ const enChatSession = {
     savedConversation: "{status} · Saved conversation",
     sessionAutomation: {
       everyDuration: "Every {duration}",
-      onceAt: "{day} at {time}",
-      tomorrow: "Tomorrow",
     },
     activityPills: {
       publication: {

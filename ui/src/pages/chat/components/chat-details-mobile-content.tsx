@@ -57,8 +57,8 @@ import {
   SessionAutomationRead,
   type SessionAutomationInventory,
 } from "./chat-summary-automations.tsx";
+import { sessionAutomationRow, sessionAutomationTiming } from "./session-automation-row.ts";
 import "../../../styles/chat/details.css";
-import { createSessionAutomationSchedule } from "./session-automation-schedule-loader.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -149,7 +149,6 @@ export type ChatDetailsMobileContentProps = ChatDetailsMobileRegionProps & {
 function MobileRoot(
   props: ChatDetailsMobileRegionProps & { content: ChatDetailsMobileRootContent },
 ) {
-  const formatSchedule = createSessionAutomationSchedule();
   const outputs = (): ChatDetailsMobileEntry | undefined => {
     const data = props.details.outputs;
     if (!data) {
@@ -233,17 +232,11 @@ function MobileRoot(
       items: inventory.jobs().map((job) => ({
         value: job.id,
         label: job.name.trim() || job.id,
-        // Keep asynchronous schedule reads inside the rendered automations section.
+        // Keep live countdown reads inside the rendered automations section.
         get description() {
-          return job.autoDisabled
-            ? t("chat.sessionDetails.automationAttention")
-            : !job.enabled
-              ? t("chat.sessionDetails.automationPaused")
-              : inventory.connected() && job.runningAtMs !== undefined
-                ? t("common.running")
-                : job.schedule
-                  ? formatSchedule(job.schedule)
-                  : undefined;
+          return (
+            sessionAutomationTiming(sessionAutomationRow(job, inventory.connected())) || undefined
+          );
         },
       })),
       total: inventory.loaded() ? inventory.total() : undefined,

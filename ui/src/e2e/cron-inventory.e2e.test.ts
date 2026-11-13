@@ -33,6 +33,7 @@ const other = createCronJob("other", "Other session automation", {
 });
 const pageOptions = {
   locale: "en-US",
+  timezoneId: "UTC",
   serviceWorkers: "block" as const,
   viewport: { width: 1440, height: 900 },
 };
@@ -95,14 +96,17 @@ function runtime(job: CronJob, action: "started" | "finished", revision: number)
 }
 
 suite.define(() => {
-  it("shows the scheduler's next run when hovering an automation row", async () => {
+  it("shows the scheduler's next run on an automation row and its cadence on hover", async () => {
     await suite.withPage({ locale: "en-US", timezoneId: "UTC" }, async ({ page }) => {
       const { row } = await fixture(page);
+      await row(held.name)
+        .getByText("Next in 1 hour (today at 7:00 AM)", { exact: true })
+        .waitFor();
       await row(held.name).hover();
       await page.clock.runFor(1_000);
       await expect
         .poll(async () => (await page.getByRole("tooltip").textContent())?.trim())
-        .toBe("Next run today at 7:00 AM");
+        .toBe("Every 10 minutes");
     });
   });
 
@@ -150,7 +154,8 @@ suite.define(() => {
           await gateway.emitGatewayEvent("cron", runtime(held, "finished", 101));
           await clientPage.clock.runFor(100);
           await current.locator(".session-run-spinner").waitFor({ state: "detached" });
-          await current.getByText("Every 10 minutes", { exact: true }).waitFor();
+          // The finished event's scheduler deadline replaces the timing without a reread.
+          await current.getByText("Next in 10 min (today at 6:10 AM)", { exact: true }).waitFor();
           await settled();
           const additional = (await gateway.getRequests("cron.list")).length - before;
           const additionalSessions =
