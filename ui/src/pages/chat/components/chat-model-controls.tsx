@@ -265,6 +265,7 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
         recommended: catalogEntry?.recommended,
         disabled: option.disabled,
         unavailableReason: option.disabled ? option.unavailableReason : undefined,
+        unavailableUntil: catalogEntry?.unavailableUntil,
         provider: catalog.provider(
           option.value,
           isDefault
@@ -303,6 +304,7 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
           supportsTools: choice.supportsTools,
           disabled: choice.available === false,
           unavailableReason: choice.unavailableReason,
+          unavailableUntil: choice.unavailableUntil,
           recommended: pickerOption.recommended,
         });
       }
