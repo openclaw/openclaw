@@ -29,7 +29,7 @@ export const CLAWROUTER_GOOGLE_IMAGE_MODELS = [
   "google/gemini-3.1-flash-image",
   "google/gemini-3-pro-image",
 ];
-export const CLAWROUTER_GOOGLE_IMAGE_CAPABILITIES: ImageGenerationProvider["capabilities"] = {
+const CLAWROUTER_GOOGLE_IMAGE_CAPABILITIES: ImageGenerationProvider["capabilities"] = {
   generate: {
     maxCount: 4,
     supportsSize: false,
