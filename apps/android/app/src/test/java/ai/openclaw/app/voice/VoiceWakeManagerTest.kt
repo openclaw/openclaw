@@ -187,6 +187,95 @@ class VoiceWakeManagerTest {
     }
 
   @Test
+  fun differentCombiningMarksCannotTriggerAWakeCommand() {
+    runTest {
+      val cases =
+        listOf(
+          Triple(
+            VoiceWakeMatch("मीरा", "कैलेंडर दिखाओ"),
+            "मेरा कैलेंडर दिखाओ",
+            "मीरा, कैलेंडर दिखाओ",
+          ),
+          Triple(
+            VoiceWakeMatch("ロホ\u3099", "天気を教えて"),
+            "ロホ天気を教えて",
+            "ロホ\u3099天気を教えて",
+          ),
+        )
+      for ((expected, rejectedTranscript, matchingTranscript) in cases) {
+        val recognizer = FakeVoiceWakeRecognizer()
+        val commands = mutableListOf<VoiceWakeMatch>()
+        val manager =
+          manager(recognizer = recognizer) { match ->
+            commands += match
+            true
+          }
+        manager.updateTriggerWords(listOf(expected.trigger))
+        manager.setForeground(true)
+        manager.setEnabled(true)
+        recognizer.emit(VoiceWakeRecognitionEvent.Ready)
+
+        try {
+          recognizer.emit(
+            VoiceWakeRecognitionEvent.Transcript(rejectedTranscript, isFinal = true, sessionEnded = false),
+          )
+          runCurrent()
+          assertEquals(emptyList<VoiceWakeMatch>(), commands)
+          assertTrue(manager.isListening.value)
+          assertEquals(0, recognizer.stopCount)
+
+          recognizer.emit(
+            VoiceWakeRecognitionEvent.Transcript(matchingTranscript, isFinal = true, sessionEnded = false),
+          )
+          runCurrent()
+          assertEquals(listOf(expected), commands)
+          assertEquals(1, recognizer.stopCount)
+        } finally {
+          manager.setEnabled(false)
+          runCurrent()
+        }
+      }
+    }
+  }
+
+  @Test
+  fun combiningMarkAfterTriggerIsNotAWordBoundary() {
+    runTest {
+      val recognizer = FakeVoiceWakeRecognizer()
+      val commands = mutableListOf<VoiceWakeMatch>()
+      val manager =
+        manager(recognizer = recognizer) { match ->
+          commands += match
+          true
+        }
+      manager.updateTriggerWords(listOf("cafe"))
+      manager.setForeground(true)
+      manager.setEnabled(true)
+      recognizer.emit(VoiceWakeRecognitionEvent.Ready)
+
+      try {
+        recognizer.emit(
+          VoiceWakeRecognitionEvent.Transcript("cafe\u0301 show status", isFinal = true, sessionEnded = false),
+        )
+        runCurrent()
+        assertEquals(emptyList<VoiceWakeMatch>(), commands)
+        assertTrue(manager.isListening.value)
+        assertEquals(0, recognizer.stopCount)
+
+        recognizer.emit(
+          VoiceWakeRecognitionEvent.Transcript("Cafe, show status", isFinal = true, sessionEnded = false),
+        )
+        runCurrent()
+        assertEquals(listOf(VoiceWakeMatch("Cafe", "show status")), commands)
+        assertEquals(1, recognizer.stopCount)
+      } finally {
+        manager.setEnabled(false)
+        runCurrent()
+      }
+    }
+  }
+
+  @Test
   fun suppressionStopsAndResumesRecognizer() =
     runTest {
       val recognizer = FakeVoiceWakeRecognizer()
