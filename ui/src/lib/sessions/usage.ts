@@ -20,6 +20,11 @@ export type SessionUsageQuery = {
   sortDirection?: "asc" | "desc";
 };
 
+/** Whole-history reads (one session's lifetime total) replace the calendar window. */
+type SessionUsageRequestQuery =
+  | SessionUsageQuery
+  | (Omit<SessionUsageQuery, "startDate" | "endDate"> & { range: "all" });
+
 function formatUtcOffset(timezoneOffsetMinutes: number): string {
   const offsetFromUtcMinutes = -timezoneOffsetMinutes;
   const sign = offsetFromUtcMinutes >= 0 ? "+" : "-";
@@ -43,7 +48,7 @@ function buildSessionUsageDateParams(timeZone: "local" | "utc") {
 
 export function requestSessionUsage(
   client: SessionRequestClient,
-  query: SessionUsageQuery,
+  query: SessionUsageRequestQuery,
   options?: {
     key?: string;
     projection?: "overview";
@@ -54,8 +59,9 @@ export function requestSessionUsage(
 ): Promise<SessionsUsageResult> {
   const key = options?.key;
   const params = {
-    startDate: query.startDate,
-    endDate: query.endDate,
+    ...("range" in query
+      ? { range: query.range }
+      : { startDate: query.startDate, endDate: query.endDate }),
     ...(query.agentId ? { agentId: query.agentId } : key ? {} : { agentScope: "all" }),
     ...buildSessionUsageDateParams(query.timeZone),
     ...(query.creatorKey ? { creatorKey: query.creatorKey } : {}),

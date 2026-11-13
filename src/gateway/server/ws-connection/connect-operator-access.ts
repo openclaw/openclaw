@@ -9,6 +9,8 @@ import { loadPairedDevicePairingStoreRecordReadOnly } from "../../../infra/devic
 import { getPairedDevice } from "../../../infra/device-pairing.js";
 import { deviceBootstrapProfilesEqual } from "../../../shared/device-bootstrap-profile.js";
 import { intersectOperatorScopes } from "../../../shared/operator-scope-compat.js";
+import { isOperatorAuthorityUnavailable } from "../../../infra/operator-authority-error.js";
+import { errorShapeFromError } from "../../error-shape.js";
 import {
   GatewayOperatorAccessDeniedError,
   hasGatewayOperatorAccessPolicies,
@@ -46,6 +48,14 @@ export async function rejectGatewayConnectOperatorAccess(
   context: GatewayConnectPhaseContext,
   error: unknown,
 ): Promise<void> {
+  if (isOperatorAuthorityUnavailable(error)) {
+    const unavailable = errorShapeFromError(ErrorCodes.UNAVAILABLE, error);
+    context.markHandshakeFailure("operator-access-unavailable", {});
+    context.sendHandshakeErrorResponse(ErrorCodes.UNAVAILABLE, unavailable.message, unavailable);
+    await context.releasePendingNodePairingCleanup();
+    context.handler.close(1013, unavailable.message);
+    return;
+  }
   const denial = gatewayOperatorAccessError(
     error instanceof GatewayOperatorAccessDeniedError ? error.accessCause : "profile-invalidated",
   );

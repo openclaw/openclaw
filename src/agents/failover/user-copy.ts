@@ -155,12 +155,62 @@ export function renderRateLimitRecoveryStopped(retries: number): string {
   );
 }
 
+type RateLimitResetContext = {
+  rateLimitResetAt?: number;
+  provider?: string;
+  model?: string;
+  locale?: string;
+  timeZone?: string;
+  nowMs?: number;
+};
+
+/** Provider deadlines outrank generic retry advice; diagnostic bodies never become this copy. */
+export function renderRateLimitResetCopy(params: RateLimitResetContext): string | undefined {
+  const resetAt = params.rateLimitResetAt ?? 0;
+  const remainingMs = resetAt - (params.nowMs ?? Date.now());
+  if (remainingMs <= 60_000 || !Number.isFinite(remainingMs)) {
+    return undefined;
+  }
+  const unit = remainingMs >= 86_400_000 ? "day" : remainingMs >= 3_600_000 ? "hour" : "minute";
+  const divisor = unit === "day" ? 86_400_000 : unit === "hour" ? 3_600_000 : 60_000;
+  const options: Intl.DateTimeFormatOptions = {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
+    timeZone: params.timeZone,
+  };
+  let absolute: string;
+  let relative: string;
+  try {
+    absolute = new Intl.DateTimeFormat(params.locale, options).format(resetAt);
+    relative = new Intl.RelativeTimeFormat(params.locale).format(
+      Math.ceil(remainingMs / divisor),
+      unit,
+    );
+  } catch {
+    // Invalid saved display preferences must not hide the provider's reset.
+    absolute = new Date(resetAt).toISOString();
+    relative = new Intl.RelativeTimeFormat("en").format(Math.ceil(remainingMs / divisor), unit);
+  }
+  const route = [params.provider, params.model].filter(Boolean).join("/") || "This model";
+  return `⚠️ ${route} is rate-limited. The provider says to retry ${relative} (${absolute}). Choose another model in the model picker, or configure Model fallbacks in Settings (\`agents.defaults.model.fallbacks\`).`;
+}
+
 /** Render rate-limit versus overload copy from the canonical classified reason. */
-export function renderRateLimitOrOverloadedCopy(params: {
-  reason: Extract<FailoverReason, "rate_limit" | "overloaded">;
-  raw?: string;
-  rateLimitRetriesExhausted?: number;
-}): string {
+export function renderRateLimitOrOverloadedCopy(
+  params: RateLimitResetContext & {
+    reason: Extract<FailoverReason, "rate_limit" | "overloaded">;
+    raw?: string;
+    rateLimitRetriesExhausted?: number;
+  },
+): string {
+  const resetCopy = params.reason === "rate_limit" ? renderRateLimitResetCopy(params) : undefined;
+  if (resetCopy) {
+    return resetCopy;
+  }
   const exhaustion =
     params.reason === "rate_limit"
       ? renderRateLimitRetryExhaustion(params.rateLimitRetriesExhausted)
@@ -403,18 +453,27 @@ export function resolveProviderRequestFailureCopy(params: {
 export type ReplyFallbackAttempt = FallbackAttemptRecord & { authMode?: string };
 
 /** Render the reply surface's rate-limit copy, including structured cooldown context. */
-export function renderRateLimitReplyCopy(params: {
-  message: string;
-  reason?: FailoverReason;
-  provider?: string;
-  code?: string;
-  attempts?: readonly ReplyFallbackAttempt[];
-  rateLimitRetriesExhausted?: number;
-  cooldownExpiry?: number | null;
-  nowMs?: number;
-  sanitizeText?: (text: string) => string;
-}): string {
+export function renderRateLimitReplyCopy(
+  params: RateLimitResetContext & {
+    message: string;
+    reason?: FailoverReason;
+    code?: string;
+    attempts?: readonly ReplyFallbackAttempt[];
+    rateLimitRetriesExhausted?: number;
+    cooldownExpiry?: number | null;
+    sanitizeText?: (text: string) => string;
+  },
+): string {
   const attempts = params.attempts ?? [];
+  const limited = attempts.find(
+    (attempt) =>
+      attempt.reason === "rate_limit" &&
+      (attempt.rateLimitResetAt ?? 0) > (params.nowMs ?? Date.now()) + 60_000,
+  );
+  const resetCopy = renderRateLimitResetCopy(limited ? { ...params, ...limited } : params);
+  if (resetCopy && !attempts.some((attempt) => attempt.reason === "billing")) {
+    return resetCopy;
+  }
   // Host-authored failures keep their own copy; cooldown copy below adds expiry detail.
   const code = params.code ?? attempts.at(-1)?.code;
   const codeCopy =
