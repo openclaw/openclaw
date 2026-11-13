@@ -19,6 +19,14 @@ type ReaderAnchorHost = {
   readonly contentElement: HTMLDivElement | null;
 };
 
+/** The first content the reader sees, located inside its row. */
+type ReaderContent = {
+  readonly row: HTMLElement;
+  readonly element: Element;
+  readonly offset: number;
+  readonly height: number;
+};
+
 /** A row first measured while crossing the top edge was laid out above the reader. */
 function isAboveReader(top: number, height: number, first: boolean, readerTop: number): boolean {
   return top + height <= readerTop + 0.5 || (first && top < readerTop);
@@ -36,6 +44,11 @@ function isAboveReader(top: number, height: number, first: boolean, readerTop: n
  * WebKit can cancel native wheel, touch and momentum scrolling on a scrollTop write, so during
  * scrolling the correction moves the row column instead (a negative margin, mirrored in
  * scrollMargin). It folds into scrollTop at the start boundary or once scrolling settles.
+ *
+ * Content can also change size inside the row at the reader's top edge, such as a preview image
+ * that loads above text the reader already sees. Like native scroll anchoring (disabled on the
+ * transcript), the first content at or below that edge is recorded after each scroll and resize
+ * delivery, and growth above it inside the row is compensated the same way.
  */
 export class TranscriptReaderAnchor {
   focusedRowKey: string | null = null;
@@ -50,6 +63,9 @@ export class TranscriptReaderAnchor {
   private readonly heights = new WeakMap<Element, number>();
   // Corrections applied to native geometry before virtual-core measured the row.
   private readonly unlanded = new Map<string, number>();
+  // Rows the reader was moved inside of, by corrected height. Landing that size moves no reader
+  // the correction did not already move, though the moved reader now sees the old size as above.
+  private readonly unlandedWithin = new Map<string, number>();
   private columnShift = 0;
   private landedShift = 0;
   private owedScroll = 0;
@@ -57,6 +73,8 @@ export class TranscriptReaderAnchor {
   // A positioning owner can measure and release its anchor before this frame's resize
   // delivery. Its restoration already accounts for that delivery's rows.
   private ownedSinceDelivery = false;
+  private readerContent: ReaderContent | null = null;
+  private animatedRow: HTMLElement | null = null;
 
   constructor(
     private readonly host: ReaderAnchorHost,
@@ -161,6 +179,7 @@ export class TranscriptReaderAnchor {
         : undefined;
     let moved = 0;
     let correction = 0;
+    let within = 0;
     for (const { entry, row, top } of rows) {
       const key = row.dataset.virtualRowKey;
       const box = entry.borderBoxSize?.[0];
@@ -182,16 +201,23 @@ export class TranscriptReaderAnchor {
       const previousTop = top - moved;
       moved += delta;
       const index = virtualizer.indexFromElement(row);
+      const above =
+        isAboveReader(previousTop, previous, first, readerTop) ||
+        (first && retainedIndex !== undefined && index < retainedIndex);
+      if (compensating && !above && Math.abs(delta) >= 0.5) {
+        const shift = this.contentShift(row);
+        if (shift) {
+          within += shift;
+          this.unlandedWithin.set(key, height);
+        }
+      }
       if (
         !compensating ||
         !range ||
         index < range.startIndex - overscan ||
         index > range.endIndex + overscan ||
         Math.abs(delta) < 0.5 ||
-        !(
-          isAboveReader(previousTop, previous, first, readerTop) ||
-          (first && retainedIndex !== undefined && index < retainedIndex)
-        )
+        !above
       ) {
         continue;
       }
@@ -201,20 +227,151 @@ export class TranscriptReaderAnchor {
     if (this.host.prependAnchor.messageKey !== null) {
       this.host.renderer.queueAfterCommit(this.onRowsMeasured);
     }
-    if (!correction) {
+    if (correction) {
+      // At native zero a negative correction already clamps; don't paint a temporary shift.
+      if (this.holdsNativeOffset() && !(correction < 0 && element.scrollTop === 0)) {
+        this.columnShift += correction;
+        this.syncColumn();
+      } else {
+        // Keep the pre-shrink offset: committing a smaller extent can clamp it first.
+        const offset = element.scrollTop;
+        this.shiftVirtual(-correction);
+        this.scrollBy(correction, offset);
+      }
+    }
+    // The row's virtual start is unchanged, so only the reader moves within it. A held shift
+    // moves the column instead, and scrollMargin follows the rows it moved.
+    if (within) {
+      if (this.holdsNativeOffset()) {
+        this.columnShift += within;
+        this.shiftVirtual(within);
+        this.syncColumn();
+      } else {
+        this.scrollBy(within);
+      }
+    }
+    this.captureReaderContent(true);
+  };
+
+  /** How far the recorded reader content moved inside a resized row. */
+  private contentShift(row: HTMLElement): number {
+    const content = this.readerContent;
+    // At native zero the reader is at the start, where new content stays visible.
+    if (
+      content?.row !== row ||
+      !row.contains(content.element) ||
+      !this.host.scrollElement?.scrollTop
+    ) {
+      return 0;
+    }
+    const shift =
+      content.element.getBoundingClientRect().top -
+      row.getBoundingClientRect().top -
+      content.offset;
+    return Math.abs(shift) < 0.5 ? 0 : shift;
+  }
+
+  /**
+   * Record the first content at or below the reader's top edge: the deepest first element of the
+   * row crossing that edge which still reaches below it. Runs after every native scroll and resize
+   * delivery, so the record describes the layout the next size change starts from. `refresh`
+   * re-reads a record the reader is still inside, after its row's layout changed.
+   */
+  captureReaderContent(refresh = false): void {
+    const element = this.host.scrollElement;
+    if (!element?.clientHeight) {
+      this.readerContent = null;
       return;
     }
-    // At native zero a negative correction already clamps; don't paint a temporary shift.
-    if (this.holdsNativeOffset() && !(correction < 0 && element.scrollTop === 0)) {
-      this.columnShift += correction;
-      this.syncColumn();
-    } else {
-      // Keep the pre-shrink offset: committing a smaller extent can clamp it first.
-      const offset = element.scrollTop;
-      this.shiftVirtual(-correction);
-      this.scrollBy(correction, offset);
+    const readerTop = element.getBoundingClientRect().top;
+    const previous = this.readerContent;
+    if (!refresh && previous?.row.isConnected && previous.row.contains(previous.element)) {
+      // Offsets inside a row change only when it resizes, so scrolling within the recorded
+      // content keeps the record without walking the row again.
+      const rect = previous.row.getBoundingClientRect();
+      const edge = readerTop - rect.top;
+      if (
+        rect.bottom > readerTop &&
+        edge >= previous.offset &&
+        edge < previous.offset + previous.height
+      ) {
+        return;
+      }
     }
-  };
+    const { virtualizer } = this.host;
+    let row: HTMLElement | undefined;
+    for (const item of virtualizer.getVirtualItems()) {
+      const candidate = virtualizer.elementsCache.get(item.key);
+      if (
+        candidate?.isConnected &&
+        candidate.dataset.preparedRow !== "true" &&
+        candidate.getBoundingClientRect().bottom > readerTop
+      ) {
+        row = candidate;
+        break;
+      }
+    }
+    // A scroll event can run after this frame's content change and before its resize delivery;
+    // keep the record of the layout that change started from.
+    const delivered = row && this.heights.get(row);
+    if (
+      row &&
+      delivered !== undefined &&
+      Math.abs(row.getBoundingClientRect().height - delivered) >= 0.5
+    ) {
+      return;
+    }
+    this.readerContent = null;
+    if (!row) {
+      return;
+    }
+    let content: Element = row;
+    let child = row.firstElementChild;
+    while (child) {
+      const rect = child.getBoundingClientRect();
+      if (rect.height > 0 && rect.bottom > readerTop) {
+        content = child;
+        child = child.firstElementChild;
+      } else {
+        child = child.nextElementSibling;
+      }
+    }
+    if (content === row) {
+      return;
+    }
+    const rect = content.getBoundingClientRect();
+    this.readerContent = {
+      row,
+      element: content,
+      offset: rect.top - row.getBoundingClientRect().top,
+      height: rect.height,
+    };
+    // Entering bubbles animate a transform that rects include and row sizes don't. Record the
+    // settled layout once the row's running animations end; a size change mid-animation stays
+    // approximate. Activity shimmer never ends and moves nothing; a finished animation that
+    // fills forwards is already settled.
+    if (this.animatedRow === row) {
+      return;
+    }
+    const animations = row
+      .getAnimations({ subtree: true })
+      .filter(
+        (animation) =>
+          animation.playState === "running" &&
+          Number.isFinite(animation.effect?.getComputedTiming().endTime),
+      );
+    if (animations.length) {
+      this.animatedRow = row;
+      void Promise.allSettled(animations.map((animation) => animation.finished)).then(() => {
+        if (this.animatedRow === row) {
+          this.animatedRow = null;
+          if (this.readerContent?.row === row) {
+            this.captureReaderContent(true);
+          }
+        }
+      });
+    }
+  }
 
   /** Virtual-core's adjustment predicate: reconcile a landed size with native corrections. */
   readonly landSize = (
@@ -229,6 +386,11 @@ export class TranscriptReaderAnchor {
       return false;
     }
     const key = String(item.key);
+    const corrected = this.unlandedWithin.get(key);
+    this.unlandedWithin.delete(key);
+    if (corrected !== undefined && Math.abs(item.size + delta - corrected) < 0.5) {
+      return false;
+    }
     const applied = this.unlanded.get(key);
     this.unlanded.delete(key);
     const readerTop = instance.scrollOffset ?? 0;
@@ -262,16 +424,24 @@ export class TranscriptReaderAnchor {
   /** Apply corrections collected while virtual-core landed a measurement batch. */
   flush(): void {
     const { virtualizer } = this.host;
-    for (const [key, applied] of this.unlanded) {
+    // A row unmounted before its measurement landed no longer extends the flow, and
+    // measurement without scroll adjustment lands sizes without consulting landSize.
+    const settled = (key: string): boolean => {
       const row = virtualizer.elementsCache.get(key);
-      // A row unmounted before its measurement landed no longer extends the flow, and
-      // measurement without scroll adjustment lands sizes without consulting landSize.
-      if (
+      return (
         row?.isConnected !== true ||
         Math.abs((virtualizer.itemSizeCache.get(key) ?? -1) - (this.heights.get(row) ?? 0)) < 0.5
-      ) {
+      );
+    };
+    for (const [key, applied] of this.unlanded) {
+      if (settled(key)) {
         this.landedShift += applied;
         this.unlanded.delete(key);
+      }
+    }
+    for (const key of this.unlandedWithin.keys()) {
+      if (settled(key)) {
+        this.unlandedWithin.delete(key);
       }
     }
     const shift = this.landedShift;
@@ -316,7 +486,10 @@ export class TranscriptReaderAnchor {
   /** A moved pane keeps its mounted rows observed; only pending corrections are retired. */
   reset(): void {
     this.settle(true);
+    this.readerContent = null;
+    this.animatedRow = null;
     this.unlanded.clear();
+    this.unlandedWithin.clear();
     this.landedShift = 0;
     this.owedScroll = 0;
   }
