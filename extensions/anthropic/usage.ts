@@ -63,7 +63,10 @@ export async function fetchAnthropicUsage(
     const webSessionKey = decodeProviderUsageAdminToken(CLAUDE_WEB_SESSION_TOKEN_PREFIX, ctx.token);
     const snapshot = webSessionKey
       ? ((await fetchClaudeWebUsage(webSessionKey, ctx.timeoutMs, ctx.fetchFn)) ??
-        buildUsageErrorSnapshot("anthropic", "Claude web usage unavailable"))
+        buildUsageErrorSnapshot(
+          "anthropic",
+          "Claude web usage unavailable. Renew the claude.ai session in CLAUDE_AI_SESSION_KEY, CLAUDE_WEB_SESSION_KEY or CLAUDE_WEB_COOKIE, then retry.",
+        ))
       : await fetchClaudeUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn);
     if (snapshot.error) {
       return snapshot;
@@ -245,20 +248,24 @@ export async function resolveAnthropicUsageAuth(
     return oauthToken;
   }
 
-  let setupToken = oauthToken;
+  if (oauthToken) {
+    const sessionKey = resolveClaudeWebSessionKey(ctx.env);
+    return sessionKey
+      ? {
+          ...oauthToken,
+          token: encodeProviderUsageAdminToken(CLAUDE_WEB_SESSION_TOKEN_PREFIX, sessionKey),
+        }
+      : { handled: true };
+  }
+
+  // Configured bearers carry no credential type, and the setup-token shape check
+  // also matches scoped OAuth access tokens, so they keep the OAuth usage path.
   const apiKey = storedCandidates[0];
-  if (!setupToken && apiKey) {
+  if (apiKey) {
     const { validateAnthropicSetupToken } = await import("openclaw/plugin-sdk/provider-auth");
     if (validateAnthropicSetupToken(apiKey) === undefined) {
-      setupToken = { token: apiKey };
+      return { token: apiKey };
     }
-  }
-  const sessionKey = setupToken ? resolveClaudeWebSessionKey(ctx.env) : undefined;
-  if (setupToken && sessionKey) {
-    return {
-      ...setupToken,
-      token: encodeProviderUsageAdminToken(CLAUDE_WEB_SESSION_TOKEN_PREFIX, sessionKey),
-    };
   }
 
   // Claude owns its native refresh-token family. Do not resolve a copied

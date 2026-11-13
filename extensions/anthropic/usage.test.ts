@@ -106,14 +106,16 @@ const setupTokenProfile = {
   }),
 };
 
-it.each([
-  ["stored setup-token profile", setupTokenProfile],
-  [
-    "configured setup token",
-    { resolveApiKeyCandidatesFromConfigAndStore: async () => [setupToken] },
-  ],
-])("skips OAuth usage for a %s without a web session", async (_name, overrides) => {
-  expect(await resolveAuth(overrides)).toEqual({ handled: true });
+it("skips OAuth usage for a stored setup-token profile without a web session", async () => {
+  expect(await resolveAuth(setupTokenProfile)).toEqual({ handled: true });
+});
+
+it("keeps OAuth usage for a configured setup-token-shaped bearer", async () => {
+  const result = await resolveAuth({
+    env: webSessionEnv,
+    resolveApiKeyCandidatesFromConfigAndStore: async () => [setupToken],
+  });
+  expect(result).toEqual({ token: setupToken });
 });
 
 it("routes a stored setup-token profile to the claude.ai web session", async () => {
@@ -143,7 +145,7 @@ it("routes a stored setup-token profile to the claude.ai web session", async () 
 it("reports an unavailable web session instead of polling OAuth usage", async () => {
   const fetchFn = vi.fn(async () => new Response("down", { status: 503 }));
   const snapshot = await fetchUsage({ token: webSessionToken, fetchFn });
-  expect(snapshot.error).toBe("Claude web usage unavailable");
+  expect(snapshot.error).toMatch(/^Claude web usage unavailable\. Renew the claude\.ai session/);
   expect(fetchFn).toHaveBeenCalledOnce();
 });
 
