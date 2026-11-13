@@ -112,13 +112,13 @@ export async function prepareNodeWorkerFilesystem(params: {
   };
   const stateRoot = protectRuntimePath(params.bundleRoot);
   const { placement } = params;
-  const isManagedWorkspace =
-    placement &&
-    workspace === params.workspaceDir &&
-    workspace === nodeWorkerManagedWorkspacePath(stateRoot, placement);
+  const assignedRoot = placement && nodeWorkerManagedWorkspacePath(stateRoot, placement);
+  const assignedWorkspace = workspace === params.workspaceDir && workspace === assignedRoot;
+  // Existing device folders keep their private HOME at the node-owned placement path.
+  const assignedHome = hostHome === params.homeDir && hostHome === assignedRoot;
   const protectedRuntimePaths = [
     ...new Set([
-      isManagedWorkspace
+      placement && (assignedWorkspace || assignedHome)
         ? path.join(params.bundleRoot, placement.gatewayNamespace, "bundles")
         : params.bundleRoot,
       ...runtimePaths,
@@ -129,10 +129,12 @@ export async function prepareNodeWorkerFilesystem(params: {
   // These roots allow writable children, but their lookup entries must stay trusted.
   protectRuntimePath(capturedHome);
   const temporaryParent = protectRuntimePath(resolvePreferredOpenClawTmpDir());
-  const assertWritableRoot = (directory: string) => {
+  const assertWritableRoot = (kind: "workspace" | "model HOME" | "scratch", directory: string) => {
     // Landlock grants are additive: a read-only rule cannot subtract a write grant.
+    const assigned =
+      (kind === "workspace" && assignedWorkspace) || (kind === "model HOME" && assignedHome);
     if (
-      (directory !== workspace && isPathInside(stateRoot, directory)) ||
+      (!assigned && isPathInside(stateRoot, directory)) ||
       protectedRuntimePaths.some(
         (root) => isPathInside(directory, root) || isPathInside(root, directory),
       ) ||
@@ -140,12 +142,12 @@ export async function prepareNodeWorkerFilesystem(params: {
       [hostHome, temporaryParent].some((root) => isPathInside(directory, root))
     ) {
       throw new Error(
-        "Worker writable storage cannot overlap node runtime or contain private or shared temporary storage",
+        `Worker writable storage cannot use the ${kind} path ${JSON.stringify(directory)}. Choose a location separate from protected node runtime and shared storage.`,
       );
     }
   };
-  assertWritableRoot(workspace);
-  assertWritableRoot(home);
+  assertWritableRoot("workspace", workspace);
+  assertWritableRoot("model HOME", home);
   fs.mkdirSync(home, { recursive: true, mode: 0o700 });
   const stat = fs.lstatSync(home);
   if (
@@ -159,7 +161,7 @@ export async function prepareNodeWorkerFilesystem(params: {
   const temporaryRoot = fs.mkdtempSync(path.join(temporaryParent, "worker-"));
   const cleanup = () => removeTemporaryArtifacts(temporaryRoot, "Node worker scratch");
   try {
-    assertWritableRoot(temporaryRoot);
+    assertWritableRoot("scratch", temporaryRoot);
     const launch = prepareFilesystemRestrictedLaunch({
       executable: process.execPath,
       args: params.args,
@@ -183,9 +185,9 @@ export async function prepareNodeWorkerFilesystem(params: {
       protectRuntimePath(path.dirname(launch.command)),
       path.dirname(protectRuntimePath(launch.command)),
     );
-    for (const directory of [workspace, home, temporaryRoot]) {
-      assertWritableRoot(directory);
-    }
+    assertWritableRoot("workspace", workspace);
+    assertWritableRoot("model HOME", home);
+    assertWritableRoot("scratch", temporaryRoot);
     return { ...launch, cleanup };
   } catch (error) {
     await cleanup();
