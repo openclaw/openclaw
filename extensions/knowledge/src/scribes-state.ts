@@ -51,6 +51,8 @@ export type ScribeJob = {
   activeHours?: unknown;
   pacing?: unknown;
   idleOnly?: boolean;
+  trigger?: unknown;
+  delivery?: unknown;
   createdAtMs?: number;
   state: {
     nextRunAtMs?: number;

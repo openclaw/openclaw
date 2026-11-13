@@ -352,7 +352,9 @@ function automationSteps(
       `- schedule: ${schedule}`,
       `- session target: \`${SCRIBE_SESSION_TARGET}\`, so each run starts in a fresh session of this conversation`,
       "- payload: an agent turn whose message is the run message below, exactly as written inside the fence",
-      "- delivery: none; failure alert after 2 failed runs",
+      saved
+        ? "- delivery and failure alert: as saved on the current automation (below)"
+        : "- delivery: none; failure alert after 2 failed runs",
       ...(saved ? [saved] : []),
       `Adding with an existing declaration key updates this conversation's automation in place. ${enabled}`,
     ].join("\n"),
@@ -532,8 +534,9 @@ export type RepairSource = {
   schedule: { kind: string; expr?: string; tz?: string };
   runMessage?: string;
   /**
-   * Options saved on the automation that the prompt doesn't set (payload model or thinking,
-   * active hours, pacing, idle-only): re-declaring would drop them, so the turn passes them on.
+   * Options saved on the automation that a re-declaration would otherwise drop or reset (payload
+   * model or thinking, active hours, pacing, idle-only, trigger, delivery and failure alert), so the
+   * turn passes them on.
    */
   saved?: Record<string, unknown>;
 };

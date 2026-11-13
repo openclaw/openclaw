@@ -172,8 +172,8 @@ made directly from the page would drop it. The update:
   the new one for the same settings.
 - Keeps the schedule, and keeps a paused scribe paused.
 - Keeps options saved on the automation that the prompt doesn't set, such as a
-  model or thinking override, active hours, pacing and idle-only, by passing
-  them to the re-declaration.
+  model or thinking override, active hours, pacing, idle-only, a trigger,
+  delivery and the failure alert, by passing them to the re-declaration.
 - Only touches this agent's automations; another agent's scribe with the same
   declaration key is left alone.
 
@@ -188,7 +188,8 @@ that carries no replaced wording shows nothing.
 After an update, **Replace with new…** or **Repair** sends its turn, the scribe
 shows **Updating…** and the tab refreshes when the automation changes. If it
 hasn't changed after 3 minutes, the tab says so; open the conversation to see
-what the turn did. The page asks for an update once per automation revision. A
+what the turn did. The page asks for an update once per automation revision while it is open;
+reopen the Scribes tab to ask again. A
 scribe that is running or whose conversation is not found is updated on a later
 load. Until the Scribes tab loads, a scribe keeps running its earlier message,
 which still works.

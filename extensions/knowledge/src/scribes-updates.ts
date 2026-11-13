@@ -6,12 +6,20 @@ import { needsUpdate, updateScribe } from "./scribes-actions.js";
 import type { ScribeJob, ScribeSnapshot } from "./scribes-state.js";
 
 /**
- * Automation revisions this page already asked to update. The update is a turn in the scribe's
- * conversation, so the revision stays until that turn re-declares the automation; this keeps
- * reloads in that gap from asking again. A turn that left it unchanged is asked again after the
- * page is reopened.
+ * Automation revisions this page already asked to update, per open page. The update is a turn in
+ * the scribe's conversation, so the revision stays until that turn re-declares the automation;
+ * this keeps reloads in that gap from asking again. A turn that left it unchanged is asked again
+ * once the page is reopened.
  */
-const updatesAsked = new Set<string>();
+const updatesAsked = new WeakMap<object, Set<string>>();
+const askedOf = (ui: Page) => {
+  let asked = updatesAsked.get(ui.s);
+  if (!asked) {
+    asked = new Set();
+    updatesAsked.set(ui.s, asked);
+  }
+  return asked;
+};
 /**
  * Per Gateway connection: automations a turn was just asked to change (an update, Replace with
  * new, or Repair), by job id, with the revision they had then, and the page's watch over them.
@@ -55,20 +63,20 @@ export async function update(ui: Page, snapshot: ScribeSnapshot, agentId: string
   if (
     !job ||
     !asked ||
-    updatesAsked.has(asked) ||
+    askedOf(ui).has(asked) ||
     (landing && !landing.late) ||
     !needsUpdate(snapshot)
   ) {
     return;
   }
-  updatesAsked.add(asked);
+  askedOf(ui).add(asked);
   try {
     await updateScribe(ui.s.context.host, snapshot, job, agentId);
     markUpdating(ui, job, agentId, (next) => !needsUpdate(next));
     ui.announce(`${snapshot.scribe.title}: updating for this version of Knowledge…`);
   } catch (error) {
     // Not sent: forget it so a later load asks again.
-    updatesAsked.delete(asked);
+    askedOf(ui).delete(asked);
     ui.announce(`${snapshot.scribe.title}: the update was not sent. ${ui.errorText(error)}`);
   }
 }

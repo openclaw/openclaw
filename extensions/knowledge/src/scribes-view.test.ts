@@ -511,7 +511,10 @@ it("asks an earlier scribe's conversation to update it once and offers an edited
   });
   const prompt = String(sent[0]![1]!.message);
   expect(prompt).toMatch(/^Update the Knowledge scribe "Knowledge Consolidation"/);
-  expect(prompt).toContain('exactly as written: `{"thinking":"high","idleOnly":true}`');
+  expect(prompt).toContain(
+    'exactly as written: `{"thinking":"high","idleOnly":true,"failureAlert":{"after":2}}`',
+  );
+  expect(prompt).toContain("- delivery and failure alert: as saved on the current automation");
   expect(prompt).toContain("Leave `enabled` out");
   expect(prompt.endsWith(`\`\`\`text\n${runMessage}\n\`\`\``)).toBe(true);
   Object.assign(legacyJob, {
@@ -597,6 +600,32 @@ it("says so when an update leaves the automation unchanged past the wait", async
     expect((await render()).querySelector(".scribe-update")?.textContent).toContain(
       "hasn't changed after 3 minutes",
     );
+  } finally {
+    vi.restoreAllMocks();
+  }
+});
+
+it("asks again after reopening when an update left the automation unchanged", async () => {
+  const runMessage = setupPrompt(reviewSetup).match(/```text\n([\s\S]+)\n```$/)![1]!;
+  const legacy = {
+    ...reviewJob,
+    id: "job-reopen",
+    sessionKey: "s-review",
+    payload: { kind: "agentTurn", message: runMessage },
+  };
+  const { render, ui, calls } = fixture({ sessions: reviewSession, jobs: [legacy] });
+  const sends = () => calls.filter(([method]) => method === "chat.send").length;
+  await render();
+  await render();
+  expect(sends()).toBe(1);
+  vi.spyOn(Date, "now").mockReturnValue(Date.now() + 4 * 60_000);
+  try {
+    await render();
+    expect(sends()).toBe(1);
+    // A reopened page asks once more.
+    ui.s = { ...ui.s };
+    await render();
+    expect(sends()).toBe(2);
   } finally {
     vi.restoreAllMocks();
   }
