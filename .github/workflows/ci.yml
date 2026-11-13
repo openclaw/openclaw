@@ -1206,7 +1206,8 @@ jobs:
           fi
           if [[ "$boat_requested" == "true" ]]; then
             author="${SOURCE_AUTHOR:-}"
-            if [[ "$GITHUB_REPOSITORY" == "openclaw/openclaw" && "$fork_pull_request" == "false" && "${GITHUB_RUN_ATTEMPT:-1}" == "1" && "$author" == "vincentkoc" && "${GITHUB_TRIGGERING_ACTOR:-$GITHUB_ACTOR}" == "vincentkoc" ]]; then
+            boat_users=" davemorin jalehman joshavant steipete vincentkoc "
+            if [[ "$GITHUB_REPOSITORY" == "openclaw/openclaw" && "$fork_pull_request" == "false" && "${GITHUB_RUN_ATTEMPT:-1}" == "1" && "$boat_users" == *" $author "* && "$boat_users" == *" ${GITHUB_TRIGGERING_ACTOR:-$GITHUB_ACTOR} "* ]]; then
               runner_profile=hybrid
               node_runner_backend=boat
               effective_runner_backend=boat
