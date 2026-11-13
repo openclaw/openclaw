@@ -57,7 +57,7 @@ it("expires only entries whose newest file is older than 24 hours, retaining bou
   const result = await f.run();
   expect(result).toMatchObject({ entriesRemoved: 1, bytesRemoved: 5, skippedLive: 0, errors: [] });
   await expect(fs.stat(expired)).rejects.toMatchObject({ code: "ENOENT" });
-  expect((await fs.readdir(path.join(f.root, ".openclaw/tmp"))).sort()).toEqual([
+  expect((await fs.readdir(path.join(f.root, ".openclaw/tmp"))).toSorted()).toEqual([
     "boundary",
     "mixed",
   ]);
