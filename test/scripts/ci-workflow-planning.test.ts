@@ -13228,7 +13228,7 @@ describe("ci workflow guards", () => {
       const manifest = runCiManifestFixture({
         bundledPlanner: true,
         eventName,
-        changedPaths: null,
+        changedPaths: [],
         nodeTestShards: rows.map(({ name, configs }) => ({
           checkName: name,
           shardName: name,
@@ -13238,7 +13238,11 @@ describe("ci workflow guards", () => {
         })),
       });
       expect(manifest.status, manifest.output).toBe(0);
-      const result = readJsonOutput(manifest.outputs, "checks_node_core_nondist_matrix").include;
+      const result: {
+        check_name: string;
+        audit_cli_observations?: boolean;
+        adaptive_observations?: boolean;
+      }[] = readJsonOutput(manifest.outputs, "checks_node_core_nondist_matrix").include;
       expect(
         result.filter((row) => row.audit_cli_observations).map((row) => row.check_name),
       ).toEqual(eventName === "schedule" ? ["first-cli"] : []);
