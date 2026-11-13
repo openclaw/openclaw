@@ -1,0 +1,3 @@
+22
+# Bounded mixed-runtime packing coverage minus consolidated selector assertions.
+# Exact net regression-test growth for the alternative runtime partition cleanup.

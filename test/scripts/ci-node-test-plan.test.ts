@@ -632,6 +632,46 @@ function mockPackingEntries(entries: readonly PackingEntry[], timingName = (name
 }
 
 describe("scripts/lib/ci-node-test-plan.mts", () => {
+  it.each(["bun-all", "dual-all"] as const)(
+    "packs bounded %s membership into distinct runtime jobs without replaying dist",
+    (runtimePolicy) => {
+      const nodeOnly = "src/cli/cli-process-diagnostics.test.ts";
+      const bothHosts = "src/infra/sqlite-schema-facts.native.test.ts";
+      const bunEligible = "src/runtime-fixture.test.ts";
+      const files = [nodeOnly, bothHosts, bunEligible];
+      mockPackingEntries([
+        ["mixed", 30],
+        ["core-support-boundary", "boundary", 10],
+      ]);
+      vi.spyOn(nodeTestInventory, "listNodeTestConfigFiles").mockImplementation((config) =>
+        config === configPath("hooks") ? files : undefined,
+      );
+      const jobs = bundleTests({
+        compactMode: "pull-request",
+        runnerBackend: "hybrid",
+        compactNodeJobCap: 2,
+        runtimePolicy,
+      });
+      const runtimeFiles = (runtime: "node" | "bun") =>
+        jobs
+          .filter((job) => !job.requiresDist && job.testRuntime === runtime)
+          .flatMap((job) => job.groups.flatMap((group) => group.includePatterns ?? files))
+          .toSorted();
+      expect(runtimeFiles("node")).toEqual(
+        (runtimePolicy === "dual-all" ? files : [nodeOnly, bothHosts]).toSorted(),
+      );
+      expect(runtimeFiles("bun")).toEqual([bothHosts, bunEligible].toSorted());
+      expect(jobs.filter((job) => !job.requiresDist)).toHaveLength(2);
+      expect(new Set(jobs.map((job) => [job.testRuntime, job.checkName].join(":"))).size).toBe(3);
+      expect(jobs.filter((job) => job.requiresDist)).toEqual([
+        expect.objectContaining({
+          testRuntime: "node",
+          groups: [expect.objectContaining({ configs: [configPath("boundary")] })],
+        }),
+      ]);
+    },
+  );
+
   it.each([false, true])(
     "keeps the scheduled main inventory within its reserved compact capacity (extra group: %s)",
     (extraGroup) => {

@@ -4,6 +4,7 @@ import {
   BUN_UI_TEST_ENV,
   ciTestShardRuntimes,
   filterCiTestRuntimeSelections,
+  resolveCiTestRuntimeFiles,
   resolveCiTestRuntimeSelections,
 } from "../../scripts/lib/ci-test-runtime.mts";
 
@@ -13,25 +14,6 @@ const bunEligible = "src/agents/sandbox/docker.execDockerRaw.enoent.test.ts";
 const config = "test/vitest/vitest.unit-fast.config.ts";
 
 describe("CI runtime job inventory", () => {
-  it.each(["node", "bun-all", "dual-all"] as const)(
-    "preserves exact-target process envelopes under %s",
-    (policy) => {
-      const targets = [nodeOnly, bothHosts, bunEligible];
-      const original = targets.flatMap((target) =>
-        resolveCiTestRuntimeSelections({ targets: [target] }, policy),
-      );
-      const runtimes = ciTestShardRuntimes({ targets }, policy);
-      expect(runtimes).toEqual(policy === "node" ? ["node"] : ["node", "bun"]);
-      const split = runtimes.flatMap((runtime) =>
-        filterCiTestRuntimeSelections(original, { OPENCLAW_CI_TEST_RUNTIME: runtime }),
-      );
-      expect(split).toHaveLength(original.length);
-      for (const selection of original) {
-        expect(split.filter((entry) => entry === selection)).toHaveLength(1);
-      }
-    },
-  );
-
   it("keeps Node exceptions once and both-host coverage in a mixed bun-all group", () => {
     const group = { configs: [config], includePatterns: [nodeOnly, bothHosts, bunEligible] };
     const original = resolveCiTestRuntimeSelections(group, "bun-all");
@@ -40,12 +22,12 @@ describe("CI runtime job inventory", () => {
       { runtime: "bun", vitestArgs: ["--exclude=" + path.resolve(nodeOnly)] },
     ]);
     expect(ciTestShardRuntimes({ groups: [group] }, "bun-all")).toEqual(["node", "bun"]);
-    expect(filterCiTestRuntimeSelections(original, { OPENCLAW_CI_TEST_RUNTIME: "node" })).toEqual([
-      original[0],
-    ]);
-    expect(filterCiTestRuntimeSelections(original, { OPENCLAW_CI_TEST_RUNTIME: "bun" })).toEqual([
-      original[1],
-    ]);
+    expect(resolveCiTestRuntimeFiles(group, "bun-all", "node", group.includePatterns)).toEqual(
+      [nodeOnly, bothHosts].toSorted(),
+    );
+    expect(resolveCiTestRuntimeFiles(group, "bun-all", "bun", group.includePatterns)).toEqual(
+      [bothHosts, bunEligible].toSorted(),
+    );
     expect(
       ciTestShardRuntimes(
         { groups: [{ configs: [config], includePatterns: [nodeOnly] }] },
@@ -78,12 +60,6 @@ describe("CI runtime job inventory", () => {
     expect(
       new Set(node.includePatterns!.filter((file) => bun.includePatterns!.includes(file))).size,
     ).toBe(0);
-    expect(filterCiTestRuntimeSelections(original, { OPENCLAW_CI_TEST_RUNTIME: "node" })).toEqual([
-      node,
-    ]);
-    expect(filterCiTestRuntimeSelections(original, { OPENCLAW_CI_TEST_RUNTIME: "bun" })).toEqual([
-      bun,
-    ]);
   });
 
   it("includes inherited CLI arguments when selecting grouped runtime jobs", () => {
@@ -98,10 +74,16 @@ describe("CI runtime job inventory", () => {
   });
 
   it("leaves unsplit selections unchanged and rejects unknown runtime jobs", () => {
-    const original = resolveCiTestRuntimeSelections({ targets: [bunEligible] }, "dual-all");
-    expect(filterCiTestRuntimeSelections(original, {})).toBe(original);
+    const original = [{ runtime: "node" }, { runtime: "bun" }] as const;
+    const selections = [...original];
+    expect(filterCiTestRuntimeSelections(selections, {})).toBe(selections);
+    for (const runtime of ["node", "bun"] as const) {
+      expect(
+        filterCiTestRuntimeSelections(selections, { OPENCLAW_CI_TEST_RUNTIME: runtime }),
+      ).toEqual([{ runtime }]);
+    }
     expect(() =>
-      filterCiTestRuntimeSelections(original, { OPENCLAW_CI_TEST_RUNTIME: "other" }),
+      filterCiTestRuntimeSelections(selections, { OPENCLAW_CI_TEST_RUNTIME: "other" }),
     ).toThrow("expected node or bun");
   });
 });

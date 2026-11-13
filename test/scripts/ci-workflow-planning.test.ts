@@ -8525,8 +8525,8 @@ describe("ci workflow guards", () => {
           timeoutMinutes: 20,
         },
         {
-          checkName: "checks-node-bound-proof (node)",
-          shardName: "bound-proof-node",
+          checkName: "checks-node-bound-proof",
+          shardName: "bound-proof",
           testRuntime: "node",
           configs: ["fixture-bun.config.ts"],
           targets,

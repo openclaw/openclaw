@@ -91,7 +91,7 @@ import {
   RELEASE_ONLY_UI_TEST_FILES,
 } from "./ci-proof-test-inventory.mts";
 import { rebalanceRuntimeTestJobs } from "./ci-runtime-test-placement.mts";
-import { resolveCiTestRuntimeSelections, type CiTestRuntimePolicy } from "./ci-test-runtime.mts";
+import { resolveCiTestRuntimeFiles, type CiTestRuntimePolicy } from "./ci-test-runtime.mts";
 import {
   NATIVE_SOLO_TIMING_PROFILE,
   createNativeSoloTimingKey,
@@ -3196,13 +3196,7 @@ export function createNodeTestShardBundles(
             runtimeCompactMode,
           ),
           options.runnerBackend,
-        ).map((job) =>
-          Object.assign(job, {
-            testRuntime,
-            checkName: `${job.checkName} (${testRuntime})`,
-            shardName: `${job.shardName}-${testRuntime}`,
-          }),
-        ),
+        ).map((job) => Object.assign(job, { testRuntime })),
       );
     }
     const cap =
@@ -4825,22 +4819,15 @@ function routeRunsOnJobs(
   return routed.toSorted((a, b) => a.checkName.localeCompare(b.checkName));
 }
 
-/** Partition process membership before bin admission, retaining the existing file-cost model. */
+/** Partition once before admission; both runner prices use the original group's history. */
 function projectCompactRuntimeGroup(
-  planned: { group: NodeTestShardGroup; seconds: number },
+  group: NodeTestShardGroup,
   runtime: "node" | "bun",
   policy: CiTestRuntimePolicy,
   runnerBackend: string | undefined,
-): { group: NodeTestShardGroup; seconds: number }[] {
-  const { group, seconds } = planned;
+): { group: NodeTestShardGroup; seconds?: { profile: number; hosted: number } } | undefined {
   if (group.requiresDist) {
-    return runtime === "node" ? [planned] : [];
-  }
-  const selections = resolveCiTestRuntimeSelections(group, policy).filter(
-    (selection) => selection.runtime === runtime,
-  );
-  if (!selections.length) {
-    return [];
+    return runtime === "node" ? { group } : undefined;
   }
   const inventories = group.configs.map((config) => listNodeTestConfigFiles(config));
   const inventory =
@@ -4849,77 +4836,57 @@ function projectCompactRuntimeGroup(
     (inventories.every(Boolean)
       ? [...new Set(inventories.flat().filter((file): file is string => file !== undefined))]
       : undefined);
-  const files = new Set<string>();
-  let whole = false;
-  for (const selection of selections) {
-    if (selection.engine === "bun-test") {
-      selection.files.forEach((file) => files.add(file));
-      continue;
-    }
-    const explicit =
-      selection.includePatterns ??
-      selection.targets ??
-      (selection.vitestArgs?.length && selection.vitestArgs.every((arg) => !arg.startsWith("-"))
-        ? selection.vitestArgs.map((file) => relative(process.cwd(), file))
-        : undefined);
-    if (explicit) {
-      explicit.forEach((file) => files.add(file));
-    } else if (inventory) {
-      const excluded = new Set(
-        selection.vitestArgs
-          ?.filter((arg) => arg.startsWith("--exclude="))
-          .map((arg) => relative(process.cwd(), arg.slice("--exclude=".length))),
-      );
-      inventory.filter((file) => !excluded.has(file)).forEach((file) => files.add(file));
-    } else {
-      whole = true;
-    }
+  const includePatterns = resolveCiTestRuntimeFiles(group, policy, runtime, inventory);
+  if (includePatterns?.length === 0) {
+    return undefined;
   }
+  const files = new Set(includePatterns);
   if (
-    whole ||
-    (inventory && inventory.length === files.size && inventory.every((file) => files.has(file)))
+    !includePatterns ||
+    (inventory &&
+      inventory.length === includePatterns.length &&
+      inventory.every((file) => files.has(file)))
   ) {
-    return [planned];
+    return { group };
   }
-  if (!files.size) {
-    return [];
-  }
-  const includePatterns = [...files].toSorted();
   const configs = inventories.every(Boolean)
     ? group.configs.filter((_, index) => inventories[index]!.some((file) => files.has(file)))
     : group.configs;
   const weight = (paths: readonly string[]) =>
     paths.reduce((total, file) => total + stripeFileWeight(file), 0);
-  // Same subset projection as changed-file planning: no runtime speed discount.
-  // Unknown inventories retain the whole price; known subsets keep startup and indivisible-file floors.
-  const projectedSeconds = inventory?.length
-    ? Math.max(
-        (seconds * weight(includePatterns)) / weight(inventory),
-        DEFAULT_WHOLE_GROUP_SECONDS *
-          (runnerBackend === "github" ? COMPACT_GITHUB_GROUP_SECONDS_SCALE : 1),
-        ...includePatterns.map(stripeFileWeight),
-      )
-    : seconds;
+  const selectedWeight = weight(includePatterns);
+  const inventoryWeight = inventory?.length ? weight(inventory) : undefined;
+  const fileFloor = Math.max(...includePatterns.map(stripeFileWeight));
+  // Keep startup and indivisible-file floors, without a runtime speed discount.
+  const price = (backend: string | undefined) => {
+    const seconds = estimateCompactGroupSeconds(group, backend);
+    return inventoryWeight === undefined
+      ? seconds
+      : Math.max(
+          (seconds * selectedWeight) / inventoryWeight,
+          fileFloor,
+          DEFAULT_WHOLE_GROUP_SECONDS *
+            (backend === "github" ? COMPACT_GITHUB_GROUP_SECONDS_SCALE : 1),
+        );
+  };
   const { timingKeys } = createCompactSplitTimingGeneration({
     configs,
     env: group.env,
     parentShardName: `runtime-${runtime}-${parseCompactSplitTimingKey(compactGroupTimingKey(group))?.parentShardName ?? compactGroupTimingKey(group)}`,
     stripes: [includePatterns],
   });
-  return [
-    {
-      group: {
-        ...group,
-        configs,
-        includePatterns,
-        pretestBuildMode: group.pretestBuildMode
-          ? resolveTestFilesBuildMode(includePatterns)
-          : undefined,
-        timing_key: timingKeys[0]!,
-      },
-      seconds: projectedSeconds,
+  return {
+    group: {
+      ...group,
+      configs,
+      includePatterns,
+      pretestBuildMode: group.pretestBuildMode
+        ? resolveTestFilesBuildMode(includePatterns)
+        : undefined,
+      timing_key: timingKeys[0]!,
     },
-  ];
+    seconds: { profile: price(runnerBackend), hosted: price("github") },
+  };
 }
 
 function createCompactNodeTestShardBundles(
@@ -5022,26 +4989,16 @@ function createCompactNodeTestShardBundles(
     let selectionSeconds: { profile: number; hosted: number } | undefined;
     if (options.testRuntime && options.runtimePolicy) {
       const selected = projectCompactRuntimeGroup(
-        { group, seconds: estimateCompactGroupSeconds(group, options.runnerBackend) },
+        group,
         options.testRuntime,
         options.runtimePolicy,
         options.runnerBackend,
-      )[0];
+      );
       if (!selected) {
         continue;
       }
-      if (selected.group !== group) {
-        selectionSeconds = {
-          profile: selected.seconds,
-          hosted: projectCompactRuntimeGroup(
-            { group, seconds: estimateCompactGroupSeconds(group, "github") },
-            options.testRuntime,
-            options.runtimePolicy,
-            "github",
-          )[0]!.seconds,
-        };
-        group = selected.group;
-      }
+      selectionSeconds = selected.seconds;
+      group = selected.group;
     }
     const partitionFiles = group.pretestBuildMode
       ? (group.includePatterns ?? listWholeConfigSplitFiles(group.shard_name))

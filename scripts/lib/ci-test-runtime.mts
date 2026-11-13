@@ -502,6 +502,45 @@ export function resolveCiTestRuntimeSelections(
     : resolveAllRuntimeSelections(selection, policy, cwd);
 }
 
+/** Resolve executable selections to packing membership. Undefined retains an unknown whole inventory. */
+export function resolveCiTestRuntimeFiles(
+  selection: TestSelection,
+  policy: CiTestRuntimePolicy,
+  runtime: TestRuntime,
+  inventory: readonly string[] | undefined,
+  cwd = process.cwd(),
+): string[] | undefined {
+  const files = new Set<string>();
+  for (const selected of resolveCiTestRuntimeSelections(selection, policy, cwd)) {
+    if (selected.runtime !== runtime) {
+      continue;
+    }
+    if (selected.engine === "bun-test") {
+      selected.files.forEach((file) => files.add(file));
+      continue;
+    }
+    const explicit =
+      selected.includePatterns ??
+      selected.targets ??
+      (selected.vitestArgs?.length && selected.vitestArgs.every((arg) => !arg.startsWith("-"))
+        ? selected.vitestArgs.map((file) => path.relative(cwd, file))
+        : undefined);
+    if (explicit) {
+      explicit.forEach((file) => files.add(file));
+    } else if (inventory) {
+      const excluded = new Set(
+        selected.vitestArgs
+          ?.filter((arg) => arg.startsWith("--exclude="))
+          .map((arg) => path.relative(cwd, arg.slice("--exclude=".length))),
+      );
+      inventory.filter((file) => !excluded.has(file)).forEach((file) => files.add(file));
+    } else {
+      return undefined;
+    }
+  }
+  return [...files].toSorted();
+}
+
 /** Restrict execution, not policy: Node exceptions and native Bun keep their original membership. */
 export function filterCiTestRuntimeSelections(
   selections: CiTestRuntimeSelection[],

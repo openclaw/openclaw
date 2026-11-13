@@ -1467,6 +1467,18 @@ const nodeTestShards = targetNodeTestShards
       (b.predictedSeconds ?? 0) - (a.predictedSeconds ?? 0),
   )
   .flatMap((shard) => {
+    const runtimes =
+      !shard.requiresDist && splitRuntimeJobs
+        ? shard.testRuntime
+          ? [shard.testRuntime]
+          : testRuntimePolicy.ciTestShardRuntimes(shard, testRuntimeMode)
+        : null;
+    // Node-hosted packaging proof also launches a pinned Bun child.
+    const needsBunChild =
+      !shard.requiresDist &&
+      shardRequiresTests(shard, ["test/scripts/bun-standalone-codegen.test.ts"], (plan) =>
+        plan.configs?.includes(goToolingConfig),
+      );
     const minTotalMemoryBytes = Math.max(
       0,
       ...(shard.groups ?? []).map((group) => group.minTotalMemoryBytes ?? 0),
@@ -1502,11 +1514,10 @@ const nodeTestShards = targetNodeTestShards
         ) || undefined,
       requires_bun:
         !shard.requiresDist &&
-        (Boolean(testRuntimePolicy?.ciTestShardRequiresBun(shard, testRuntimeMode)) ||
-          // Node-hosted packaging proof also launches a pinned Bun child.
-          shardRequiresTests(shard, ["test/scripts/bun-standalone-codegen.test.ts"], (plan) =>
-            plan.configs?.includes(goToolingConfig),
-          )),
+        ((runtimes
+          ? runtimes.includes("bun")
+          : Boolean(testRuntimePolicy?.ciTestShardRequiresBun(shard, testRuntimeMode))) ||
+          needsBunChild),
       shard_name: shard.shardName,
       groups_gzip_base64: packedGroups,
       groups: groups && !nodeTestGroupsCodec ? groups : undefined,
@@ -1520,9 +1531,7 @@ const nodeTestShards = targetNodeTestShards
       runner: capacity?.runner ?? shard.runner,
       runner_label: capacity?.runner ?? blacksmithRunnerLabel(shard.runner, minTotalMemoryBytes),
       timeout_minutes:
-        !shard.requiresDist &&
-        testRuntimeMode === "dual-all" &&
-        typeof testRuntimePolicy?.ciTestShardRuntimes !== "function"
+        !shard.requiresDist && testRuntimeMode === "dual-all" && !splitRuntimeJobs
           ? 2 * (shard.timeoutMinutes ?? 60)
           : shard.timeoutMinutes,
       plan_concurrency: shard.planConcurrency,
@@ -1594,25 +1603,16 @@ const nodeTestShards = targetNodeTestShards
         delete row.shard_name;
       }
     }
-    const runtimes =
-      !shard.requiresDist && typeof testRuntimePolicy?.ciTestShardRuntimes === "function"
-        ? shard.testRuntime
-          ? [shard.testRuntime]
-          : testRuntimePolicy.ciTestShardRuntimes(shard, testRuntimeMode)
-        : null;
     const rows = runtimes
       ? runtimes.map((runtime) =>
           Object.assign({}, row, {
-            base_check_name: shard.testRuntime
-              ? row.check_name.replace(/ \((?:node|bun)\)$/u, "")
-              : row.check_name,
-            check_name: shard.testRuntime ? row.check_name : `${row.check_name} (${runtime})`,
+            base_check_name: row.check_name,
+            check_name: `${row.check_name} (${runtime})`,
+            ...(shard.testRuntime && row.shard_name
+              ? { shard_name: `${row.shard_name}-${runtime}` }
+              : {}),
             test_runtime: runtime,
-            requires_bun:
-              runtime === "bun" ||
-              shardRequiresTests(shard, ["test/scripts/bun-standalone-codegen.test.ts"], (plan) =>
-                plan.configs?.includes(goToolingConfig),
-              ),
+            requires_bun: runtime === "bun" || needsBunChild,
           }),
         )
       : [row];
