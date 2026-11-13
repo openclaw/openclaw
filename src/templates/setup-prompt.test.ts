@@ -103,4 +103,10 @@ it("uses package identity and non-final intermediate sends", () => {
   expect(prompt).toContain('"action":"send","final":false,"message":"..."');
   expect(prompt).toContain("not found");
   expect(prompt).toContain("including user-enabled jobs");
+  expect(prompt).toContain(
+    "Present plugin cards directly, without announcing or narrating the card/tool operation",
+  );
+  expect(prompt).toContain(
+    "Do not repeat a card’s name or installation status as surrounding prose",
+  );
 });

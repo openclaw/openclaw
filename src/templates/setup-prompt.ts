@@ -79,7 +79,7 @@ export function buildTemplateOpeningMessage(
     ].join("\n"),
     "Do these steps in this order. Skip a step that has nothing to do, and say nothing about it.",
     ...steps.map((step, index) => `${index + 1}. ${step}`),
-    "Report nothing else about setup: skills and files that were created need no mention.",
+    "Report nothing else about setup: skills and files that were created need no mention. Present plugin cards directly, without announcing or narrating the card/tool operation (for example, ‘I’ll try to show its review card’). Do not repeat a card’s name or installation status as surrounding prose. Keep useful status for plugins that have no card, such as installed-but-disabled plugins, and report an actual card lookup failure honestly.",
     'Sending: do the tool work first. A card appears in the chat the moment you call `message`. So when you show any card, first send your text for the earlier steps with `message` ({"action":"send","final":false,"message":"..."}), then the cards, and put the later steps in your final reply. When there is no card, put everything in your final reply. Every intermediate message call, including cards, must use final:false or it finishes the source turn. Never repeat text you already sent, and always end with a final reply.',
   ].join("\n\n");
 }
