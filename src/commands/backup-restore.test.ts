@@ -13,7 +13,7 @@ import {
   closeOpenClawStateDatabase,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { backupRestoreCommand } from "./backup-restore.js";
+import { assertRecoveryConfigInsideRestore, backupRestoreCommand } from "./backup-restore.js";
 import { encodeTarEntry } from "./backup-tar.test-support.js";
 import type { BackupManifest } from "./backup-verify-manifest.js";
 import { prepareBackupArchive, verifyBackupArchive } from "./backup-verify.js";
@@ -164,6 +164,31 @@ describe("backupRestoreCommand", () => {
         recoveryConfigPath: payloadPath,
         recoveryConfigContextPath: aliasPath,
       });
+    });
+  });
+
+  it("accepts a recovery configuration below a symlinked restore target", async () => {
+    await withState(async (state) => {
+      await fs.mkdir(state.path("real-target", "payload"), { recursive: true });
+      await fs.writeFile(state.path("real-target", "payload", "openclaw.json"), "{}\n");
+      await fs.symlink(
+        state.path("real-target"),
+        state.path("link"),
+        process.platform === "win32" ? "junction" : "dir",
+      );
+      const linkedTarget = state.path("link");
+      const configPath = path.join(linkedTarget, "payload", "openclaw.json");
+      const outsidePath = state.path("outside.json");
+      await fs.writeFile(outsidePath, "{}\n");
+
+      // The restore target keeps the caller's symlinked spelling; an inside path must still be
+      // recognized as inside once both sides are canonicalized (#197779).
+      await expect(
+        assertRecoveryConfigInsideRestore(linkedTarget, configPath),
+      ).resolves.toBeUndefined();
+      await expect(assertRecoveryConfigInsideRestore(linkedTarget, outsidePath)).rejects.toThrow(
+        "PostgreSQL recovery configuration must be inside the restored archive.",
+      );
     });
   });
 

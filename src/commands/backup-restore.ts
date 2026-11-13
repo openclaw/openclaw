@@ -140,6 +140,25 @@ async function extractBackupArchive(
   }
 }
 
+/**
+ * A restored archive is the only place its recovery configuration may live. Both spellings must be
+ * canonicalized: `targetPath` keeps whatever spelling the caller passed (macOS `/tmp` and any
+ * symlinked parent stay unresolved), so realpathing only the configuration made an inside path look
+ * like an escape (#197779).
+ */
+export async function assertRecoveryConfigInsideRestore(
+  targetPath: string,
+  configPath: string,
+): Promise<void> {
+  const [canonicalTarget, canonicalConfig] = await Promise.all([
+    canonicalizePathForContainment(targetPath),
+    canonicalizePathForContainment(configPath),
+  ]);
+  if (!isPathInside(canonicalTarget, canonicalConfig)) {
+    throw new Error("PostgreSQL recovery configuration must be inside the restored archive.");
+  }
+}
+
 async function restorePostgresExports(
   targetPath: string,
   candidates: Array<{ directoryPath: string; anchorPath: string }>,
@@ -157,9 +176,7 @@ async function restorePostgresExports(
     throw new Error("PostgreSQL archive restore requires its captured configuration.");
   }
   const configPath = path.join(targetPath, recoveryConfigPath);
-  if (!isPathInside(targetPath, await fs.realpath(configPath))) {
-    throw new Error("PostgreSQL recovery configuration must be inside the restored archive.");
-  }
+  await assertRecoveryConfigInsideRestore(targetPath, configPath);
   const {
     discardPostgresRestores,
     preparePostgresRestore,
