@@ -215,8 +215,11 @@ or plugin lifetime ends. An internal assertion error, including a closed invocat
 scope or a temporarily quiesced plugin, refuses the operation without revoking the
 person or their admitted runs. The Gateway reevaluates the captured grant before
 treating an unclassified exception as a denial. An unavailable evaluation returns
-`UNAVAILABLE` with `retryable: true` and `details.code: "OPERATOR_ACCESS_UNAVAILABLE"`;
-it does not authorize the failed operation. The log includes the redacted inner
+`UNAVAILABLE` with `details.code: "OPERATOR_ACCESS_UNAVAILABLE"`; before dispatch,
+it is retryable and does not authorize the failed operation. After dispatch starts,
+the response instead warns that execution may have completed and is not automatically
+retryable. HTTP authentication returns a retryable 503 for policy unavailability.
+The log includes the redacted inner
 error name and message. Successful responses remain subject to current authority,
 and the next operation checks the policy again.
 

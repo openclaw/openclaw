@@ -1,4 +1,8 @@
 import type { ServerResponse } from "node:http";
+import {
+  GatewayOperatorAccessUnavailableError,
+  isOperatorAuthorityUnavailable,
+} from "../infra/operator-authority-error.js";
 import type { PluginGatewayAccessAuthority } from "../plugins/gateway-access-policy.types.js";
 import type { GatewayAuthResult } from "./auth.js";
 import {
@@ -15,6 +19,18 @@ export function sendGatewayHttpAuthFailure(
   res: ServerResponse,
   authResult: GatewayAuthResult,
 ): void {
+  if (authResult.reason === "operator_access_unavailable") {
+    if (prepareGatewayHttpErrorResponse(res, "Service Unavailable")) {
+      sendJson(res, 503, {
+        error: {
+          message: new GatewayOperatorAccessUnavailableError().message,
+          type: "service_unavailable",
+          retryable: true,
+        },
+      });
+    }
+    return;
+  }
   if (authResult.reason !== "operator_access_denied") {
     sendGatewayAuthFailure(res, authResult);
     return;
@@ -36,9 +52,20 @@ export function bindHttpOperatorAccessAuthority(
   if (!authority) {
     return true;
   }
-  if (!hasCurrentGatewayOperatorAccess(authority)) {
+  let failure: string | undefined;
+  try {
+    if (!hasCurrentGatewayOperatorAccess(authority)) {
+      failure = "operator_access_denied";
+    }
+  } catch (error) {
+    if (!isOperatorAuthorityUnavailable(error)) {
+      throw error;
+    }
+    failure = "operator_access_unavailable";
+  }
+  if (failure) {
     if (replyOnFailure && !res.writableEnded && !res.destroyed) {
-      sendGatewayHttpAuthFailure(res, { ok: false, reason: "operator_access_denied" });
+      sendGatewayHttpAuthFailure(res, { ok: false, reason: failure });
     }
     return false;
   }

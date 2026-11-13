@@ -328,6 +328,18 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       });
       deviceCredentialMutationBarrier = barrier;
     }
+    let handlerStarted = false;
+    const responseOutcome = (failure: ErrorShape) => {
+      if (
+        handlerStarted &&
+        asOptionalRecord(failure.details)?.code === "OPERATOR_ACCESS_UNAVAILABLE"
+      ) {
+        failure.retryable = false;
+        failure.message =
+          "Gateway access policy is unavailable. The operation may have completed; check its status before retrying.";
+      }
+      return failure;
+    };
     try {
       const expectedProfileBinding =
         req.expectedProfileId === undefined
@@ -357,6 +369,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
           payload = undefined;
           error = errorShapeFromError(ErrorCodes.UNAVAILABLE, cause);
         }
+        if (error) error = responseOutcome(error);
         try {
           let responseOk = ok;
           let responseError = error;
@@ -579,6 +592,9 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
                   context,
                   ...(admission ? { admission } : {}),
                   requestEntry: entry,
+                  onHandlerStart: () => {
+                    handlerStarted = true;
+                  },
                   ...(signal ? { signal } : {}),
                 },
                 client,
@@ -644,7 +660,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
         type: "res",
         id: req.id,
         ok: false,
-        error: errorShapeFromError(ErrorCodes.UNAVAILABLE, error),
+        error: responseOutcome(errorShapeFromError(ErrorCodes.UNAVAILABLE, error)),
       });
     } finally {
       try {
