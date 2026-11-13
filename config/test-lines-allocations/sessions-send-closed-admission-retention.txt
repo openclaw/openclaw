@@ -1,0 +1,3 @@
+# One GC regression for sender inputs retained by the child dispatch assertion after close.
+# Existing authorization tests do not observe reachability; fails on the original callback.
+68
