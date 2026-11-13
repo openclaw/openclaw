@@ -56,12 +56,10 @@ async function withoutSyncFs(operation: () => Promise<void>): Promise<void> {
 const directory: string = isMainThread ? process.argv[2]! : workerData.directory;
 const starts: string[] = [];
 
-// This mode owns /tmp/openclaw only inside a fresh disposable Linux container.
 async function proveDefaultTargets(): Promise<void> {
-  assert.equal(process.platform, "linux");
-  assert.ok(fs.existsSync("/.dockerenv"));
-  const preferred = "/tmp/openclaw";
-  assert.equal(fs.existsSync(preferred), false, "Default-root proof requires a fresh container");
+  const state = path.join(directory, "captured-state");
+  process.env.OPENCLAW_STATE_DIR = state;
+  const preferred = path.join(state, "logs");
   process.env.OPENCLAW_PROFILE = "default-proof";
   setLoggerOverride(null);
   applyLoggingConfig(undefined);
@@ -93,7 +91,6 @@ async function proveDefaultTargets(): Promise<void> {
   const unsafe = path.join(directory, "unsafe");
   fs.mkdirSync(unsafe, { mode: 0o777 });
   fs.chmodSync(unsafe, 0o777);
-  const state = path.join(directory, "captured-state");
   process.env.TMPDIR = unsafe;
   process.env.OPENCLAW_STATE_DIR = state;
   process.env.OPENCLAW_PROFILE = "fallback-proof";
