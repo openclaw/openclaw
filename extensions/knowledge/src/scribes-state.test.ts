@@ -50,6 +50,14 @@ describe("scribes catalog", () => {
       ].join("\n"),
     );
     expect(prompt).toContain("declaration key `knowledge:scribe:conversations`");
+    expect(prompt).toContain("list automations for this agent (pass `agentId` from Runtime)");
+    expect(prompt).toContain(
+      "Only consider automations whose recorded `owner.agentId` equals this agent’s ID from Runtime",
+    );
+    expect(prompt).toContain("leave automations with another or missing owner agent unchanged");
+    expect(prompt).toContain("Never remove another agent’s automation");
+    expect(prompt).toContain("- agentId: this agent's ID from Runtime");
+    expect(prompt).toContain("pause carries over");
     expect(prompt).toContain("Don't start a run from this turn");
     expect(prompt).toContain("`Scribe status: on — <one sentence: the automation");
     const runMessage = prompt.match(/Run message:\n\n```text\n([\s\S]+)\n```$/)?.[1] ?? "";
@@ -87,6 +95,13 @@ describe("scribes catalog", () => {
     expect(prompt).toContain("- Runs nightly at 3:45 AM UTC (cron `45 3 * * *`).");
     expect(prompt).toContain("leave it as it is and go to the last step");
     expect(prompt).toContain("Pass `enabled: true`");
+    expect(prompt).toContain("list automations for this agent (pass `agentId` from Runtime)");
+    expect(prompt).toContain(
+      "Only consider automations whose recorded `owner.agentId` equals this agent’s ID from Runtime",
+    );
+    expect(prompt).toContain("leave automations with another or missing owner agent unchanged");
+    expect(prompt).toContain("Never remove another agent’s automation");
+    expect(prompt).toContain("- agentId: this agent's ID from Runtime");
     expect(prompt.endsWith("```text\nEdited run message\n```")).toBe(true);
     expect(
       repairPrompt("claim-consolidation", {

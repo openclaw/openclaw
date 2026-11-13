@@ -269,17 +269,18 @@ const numbered = (steps: string[]) =>
 
 /**
  * Steps that declare an ongoing scribe's one automation in this conversation: clear same-key
- * jobs of other conversations (carrying a pause over), add, then check the target. `keep` is a
- * repair's condition for leaving a healthy automation alone.
+ * jobs of other conversations in the same agent (carrying a pause over), add, then check
+ * the target. `keep` is a repair's condition for leaving a healthy automation alone.
  */
 // `enabled` is how the added automation's enabled flag is set: setup keeps a pause, repair turns it on.
 function automationSteps(scribe: ScribeDefinition, schedule: string, enabled: string, keep = "") {
   const key = scribeDeclarationKey(scribe.id);
   return [
-    `With the automations tool, list automations including disabled ones and take those with declaration key \`${key}\`.${keep} Remove each one owned by another conversation, noting whether it was paused. If this conversation owns one that targets another session, update its session target to this conversation.`,
+    `With the automations tool, list automations for this agent (pass \`agentId\` from Runtime), including disabled ones, and find those with declaration key \`${key}\`. Get each match. Only consider automations whose recorded \`owner.agentId\` equals this agent’s ID from Runtime; leave automations with another or missing owner agent unchanged. Never remove another agent’s automation.${keep} Remove each one owned by another conversation, noting whether it was paused. If this conversation owns one that targets another session, update its session target to this conversation.`,
     [
       "Add the automation with the automations tool:",
       `- name: Knowledge scribe · ${scribe.title}`,
+      "- agentId: this agent's ID from Runtime",
       `- declaration key: \`${key}\``,
       `- schedule: ${schedule}`,
       "- session target: `session:` followed by this conversation's session key (from Runtime)",
@@ -287,7 +288,7 @@ function automationSteps(scribe: ScribeDefinition, schedule: string, enabled: st
       "- delivery: none; failure alert after 2 failed runs",
       `Adding with an existing declaration key updates this conversation's automation in place. ${enabled}`,
     ].join("\n"),
-    "Get the automation and check that it targets this conversation.",
+    "Get the automation and check that `owner.agentId` equals this agent’s ID from Runtime and it targets this conversation.",
   ];
 }
 
