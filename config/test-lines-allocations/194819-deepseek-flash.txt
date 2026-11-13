@@ -1,0 +1,2 @@
+# Cover canonical deepseek-flash recommendation from model seed in catalog projection.
+8
