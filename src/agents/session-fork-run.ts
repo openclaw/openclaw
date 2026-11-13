@@ -513,7 +513,7 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
       verboseLevel: "off",
     });
     foreground.signal.throwIfAborted();
-    emitInternalRunUsageDiagnostic(result, {
+    await emitInternalRunUsageDiagnostic(result, {
       config,
       agentId,
       agentDir,
@@ -522,6 +522,7 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
       provider: params.model.provider,
       model: params.model.model,
     });
+    foreground.signal.throwIfAborted();
     assertSessionForkRunSucceeded(
       result,
       preparedRunAdmission.assertSourceCurrent,

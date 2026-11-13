@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { createSignal } from "solid-js";
+import { createMemo, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ControlUiReplacement } from "../../../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../../../app/context.ts";
@@ -12,7 +12,10 @@ import { createInertViewHost } from "../../../plugins/control-ui-view.test-suppo
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { coalesceAgentRunFrames } from "../chat-agent-run-grouping.ts";
+import {
+  coalesceAgentRunFrames,
+  type AgentRunFrameRenderItem,
+} from "../chat-agent-run-grouping.ts";
 import { groupMessages } from "../chat-thread-grouping.ts";
 import { collapseCompletedTurnWork } from "../chat-turn-presentation.ts";
 import { buildLocalUserMessage } from "../user-message-content.ts";
@@ -25,6 +28,7 @@ import {
   MessageGroup,
   type NativeMessageGroupOptions,
 } from "./chat-message-group-view.tsx";
+import type { StreamGroupOptions } from "./chat-message-stream-view.tsx";
 import { ChatTimestamp, MessageMeta } from "./chat-message-timestamp-view.tsx";
 import { createMessageGroup, createToolResultMessage } from "./chat-message.test-support.ts";
 
@@ -304,6 +308,106 @@ it("does not give provider speech unframed answer actions", () => {
   expect(prepared.ownsActions).toBe(false);
   expect(prepared.actions?.replyTarget).toBeUndefined();
   expect(prepared.source.displayMarkdown).toBe(speech.content);
+});
+
+it("keeps frame stream options narrow and live through replacement and first-bubble changes", () => {
+  const openFirst = vi.fn();
+  const openLatest = vi.fn();
+  let unrelatedReads = 0;
+  const initialOptions: StreamGroupOptions = {
+    startupLabel: "Starting the first command",
+    runningSubagents: 1,
+    onOpenSubagents: openFirst,
+    firstBubbleKey: "not-the-frame-key",
+    get widgetLayout() {
+      unrelatedReads += 1;
+      return undefined;
+    },
+  };
+  const [streamOptions, setStreamOptions] = createSignal(initialOptions);
+  const reading = { kind: "reading-indicator", key: "reading", startedAt: Date.now() } as const;
+  const group = createMessageGroup(
+    { role: "assistant", content: "Checking the command.", timestamp: 1 },
+    "assistant",
+  );
+  const initialFrame: AgentRunFrameRenderItem = {
+    kind: "agent-run-frame",
+    key: "live-frame",
+    runId: "live-run",
+    boundaryId: "live-boundary",
+    outcome: { kind: "active" },
+    parts: [group, { kind: "stream-run", key: "streams", parts: [reading] }],
+  };
+  const [frame, setFrame] = createSignal(initialFrame);
+  const view = mountSolid(() => {
+    const options = createMemo<Parameters<typeof AgentRunFrame>[0]["options"]>(() => {
+      const currentStreamOptions = streamOptions();
+      return {
+        streamOptions: currentStreamOptions,
+        workPreviews: new Map(),
+        partDependencies: (part) => [part, currentStreamOptions],
+        renderGroupOptions: () => ({ showReasoning: false }),
+        isWorkExpanded: () => false,
+        onToggleWork: () => {},
+      };
+    });
+    return <AgentRunFrame frame={frame()} options={options()} />;
+  });
+  flush();
+  const indicator = view.container.querySelector(".chat-working-indicator");
+  expect(indicator?.textContent).toContain("Starting the first command");
+  expect.soft(unrelatedReads).toBe(0);
+  const subagents = view.container.querySelector<HTMLButtonElement>(
+    ".chat-working-indicator__subagents",
+  )!;
+  subagents.click();
+  expect(openFirst).toHaveBeenCalledOnce();
+  setStreamOptions({
+    ...initialOptions,
+    startupLabel: "Starting the next command",
+    onOpenSubagents: openLatest,
+  });
+  unrelatedReads = 0;
+  flush();
+  expect(view.container.querySelector(".chat-working-indicator")).toBe(indicator);
+  expect(indicator?.textContent).toContain("Starting the next command");
+  expect.soft(unrelatedReads).toBe(0);
+  expect(view.container.querySelector(".chat-working-indicator__subagents")).toBe(subagents);
+  subagents.click();
+  expect(openFirst).toHaveBeenCalledOnce();
+  expect(openLatest).toHaveBeenCalledOnce();
+
+  const first = {
+    kind: "stream",
+    key: "first-stream",
+    text: "",
+    thinking: "",
+    startedAt: 2,
+    isStreaming: true,
+  } as const;
+  const answer = { ...first, key: "answer-stream", text: "The live answer." };
+  const withStreams = (text: string): AgentRunFrameRenderItem => ({
+    ...initialFrame,
+    parts: [{ kind: "stream-run", key: "streams", parts: [{ ...first, text }, answer, reading] }],
+  });
+  setFrame(withStreams(""));
+  flush();
+  const answerBubble = view.container.querySelector(
+    '.chat-bubble[data-message-id="answer-stream"]',
+  );
+  expect(answerBubble).not.toBeNull();
+  expect(answerBubble?.classList.contains("chat-bubble--first")).toBe(true);
+  setFrame(withStreams("An earlier live item."));
+  flush();
+  expect(view.container.querySelector('.chat-bubble[data-message-id="answer-stream"]')).toBe(
+    answerBubble,
+  );
+  expect(answerBubble?.classList.contains("chat-bubble--first")).toBe(false);
+  expect(
+    view.container
+      .querySelector('.chat-bubble[data-message-id="first-stream"]')
+      ?.classList.contains("chat-bubble--first"),
+  ).toBe(true);
 });
 
 it("paints every right-side user turn with the viewer accent and only peers with identity hues", () => {

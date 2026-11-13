@@ -34,10 +34,8 @@ export const OWNER_CAPABILITIES = ["approve_device", "bind", "invite", "manage_m
 /** One of {@link OWNER_CAPABILITIES}. */
 export type OwnerCapability = (typeof OWNER_CAPABILITIES)[number];
 
-/** Member roles, most privileged first. Invites grant at most `operator` (open question: final role set). */
-export const MEMBER_ROLES = ["operator", "viewer"] as const;
-/** One of {@link MEMBER_ROLES}. */
-export type MemberRole = (typeof MEMBER_ROLES)[number];
+/** Opaque role name: 1–64 lowercase ASCII letters, digits, hyphens or underscores; starts with a letter. */
+export type MemberRole = string;
 
 /** Most owner devices one claw keeps. Adding past it is refused with `limit_reached`. */
 export const MAX_OWNER_DEVICES = 20;

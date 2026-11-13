@@ -14,22 +14,29 @@ import { withLegacyTemplateStateSchema } from "./openclaw-state-db-schema-v36-te
 import { withLegacyWorkerResourceReceipts } from "./openclaw-state-db-schema-v37-resource-receipts.js";
 import { withLegacyRepositoryDiskAuthority } from "./openclaw-state-db-schema-v38-repository-disk.js";
 import { withLegacyWorkerRetention } from "./openclaw-state-db-schema-v39-worker-retention.js";
+import { withLegacyStateV40Additions } from "./openclaw-state-db-schema-v40-lazy-additions.js";
+import { withLegacyWorkerProvisionSource } from "./openclaw-state-db-schema-v40-worker-provision-source.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 const runtimeSchemaCache = new Map<string, string>();
 
 /** Project canonical SQL to the tables the shared runtime may create during this open. */
-export function getOpenClawStateRuntimeSchema(options: {
-  includeVersionLazyAdditiveTables: boolean;
-  includeAgentDeletionJournal?: boolean;
-}): string {
+export function getOpenClawStateRuntimeSchema(
+  options: {
+    includeVersionLazyAdditiveTables: boolean;
+    includeAgentDeletionJournal?: boolean;
+  },
+  schemaSql = OPENCLAW_STATE_SCHEMA_SQL,
+): string {
   const { includeVersionLazyAdditiveTables, includeAgentDeletionJournal = true } = options;
-  const key = `${includeVersionLazyAdditiveTables}:${includeAgentDeletionJournal}`;
+  // Catalog generation interleaves historical sources with current runtime requests.
+  const sourceKey = schemaSql === OPENCLAW_STATE_SCHEMA_SQL ? "current" : schemaSql;
+  const key = `${includeVersionLazyAdditiveTables}:${includeAgentDeletionJournal}:${sourceKey}`;
   const cached = runtimeSchemaCache.get(key);
   if (cached !== undefined) {
     return cached;
   }
-  let schema = OPENCLAW_STATE_SCHEMA_SQL;
+  let schema = schemaSql;
   const omittedTables = [
     ...(includeVersionLazyAdditiveTables ? FIRST_USE_STATE_TABLES : LAZY_ADDITIVE_STATE_TABLES),
     ...(includeAgentDeletionJournal ? [] : DOCTOR_OWNED_STATE_TABLES),
@@ -38,6 +45,13 @@ export function getOpenClawStateRuntimeSchema(options: {
     ? FIRST_USE_STATE_INDEXES
     : LAZY_ADDITIVE_STATE_INDEXES;
   for (const tableName of omittedTables) {
+    // Historical source layouts can predate today's optional tables.
+    if (
+      schemaSql !== OPENCLAW_STATE_SCHEMA_SQL &&
+      !schema.includes(`CREATE TABLE IF NOT EXISTS ${tableName} (`)
+    ) {
+      continue;
+    }
     schema = schema.replace(
       extractSqliteTableSchema(schema, tableName, {
         errorMessage: `lazy additive state schema block is missing for ${tableName}`,
@@ -63,6 +77,8 @@ export function getOpenClawStateRuntimeSchema(options: {
 export function getOpenClawStatePredecessorSchema(version: number): string {
   let schema = OPENCLAW_STATE_SCHEMA_SQL;
   for (const [introduced, transform] of [
+    [40, withLegacyWorkerProvisionSource],
+    [40, withLegacyStateV40Additions],
     [39, withLegacyWorkerRetention],
     [38, withLegacyRepositoryDiskAuthority],
     [37, withLegacyWorkerResourceReceipts],

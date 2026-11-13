@@ -12,6 +12,7 @@ import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts
 import {
   interruptedChatHistory,
   interruptedChatCommentary,
+  interruptedChatSession,
 } from "../../../test-helpers/interrupted-chat-history.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import * as artworkLoader from "../../plugins/icon-loader.ts";
@@ -156,6 +157,7 @@ describe("chat transcript rendering", () => {
         attachHistoryActivity(interruptedChatHistory()).messages,
       );
       props.showToolCalls = showTools;
+      props.selectedSession = { key: props.sessionKey, kind: "direct", ...interruptedChatSession };
       const { container } = await mountThread(props);
       for (const text of interruptedChatCommentary) {
         expect(container.textContent).toContain(text);
@@ -810,7 +812,12 @@ describe("chat transcript rendering", () => {
     });
     const answer = message("assistant", text, answeredAt, {
       stopReason: "stop",
-      __openclaw: { id: "timestamp-answer", runId, runTerminal: true },
+      __openclaw: {
+        id: "timestamp-answer",
+        runId,
+        runTerminal: true,
+        recordTimestampMs: startedAt - 1_000 + 35 * 60_000 + 17_000,
+      },
     });
     const call = { type: "toolCall", id: "ask", name: "ask_user", arguments: {} };
     const work = [

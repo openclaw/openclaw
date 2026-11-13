@@ -6,6 +6,7 @@ import { createQuotedStringScanner, parseXmlTagAt } from "./xml-tag-at.js";
 const MEMORY_TAG_RE = /<\s*(\/?)\s*relevant[-_]memories\b[^<>]*>/gi;
 const MEMORY_TAG_QUICK_RE = /<\s*\/?\s*relevant[-_]memories\b/i;
 const LEGACY_BRACKET_TOOL_BLOCK_QUICK_RE = /\[\s*\/?\s*TOOL_(?:CALL|RESULT)\s*\]/i;
+const LEGACY_BRACKET_OPEN_HEADERS = ["[TOOL_CALL]", "[TOOL_RESULT]"];
 const traceIconHeads = ["📊", "🛠️", "📖", "📝", "🔍", "🔎", "⚙️"].flatMap((icon) => [
   [icon],
   ["⚠️", icon],
@@ -160,8 +161,16 @@ export function scanLegacyBracketToolCallBlocks(
   let result = "";
   let cursor = 0;
   // An unfinished header can cross a Markdown checkpoint before its closing bracket.
+  // An ordinary unmatched bracket is not a tool-call candidate and must not pin the reply.
   const pendingStart = text.lastIndexOf("[");
-  let pending = pendingStart > text.lastIndexOf("]") && !isInsideCode(pendingStart, codeRegions);
+  const pendingTail =
+    pendingStart > text.lastIndexOf("]")
+      ? text.slice(pendingStart).replace(/\s+/gu, "").toUpperCase()
+      : "";
+  let pending =
+    pendingTail.length > 0 &&
+    LEGACY_BRACKET_OPEN_HEADERS.some((header) => header.startsWith(pendingTail)) &&
+    !isInsideCode(pendingStart, codeRegions);
   for (const openMatch of text.matchAll(/\[\s*TOOL_(CALL|RESULT)\s*\]/gi)) {
     const openStart = openMatch.index;
     if (openStart < cursor || isInsideCode(openStart, codeRegions)) {

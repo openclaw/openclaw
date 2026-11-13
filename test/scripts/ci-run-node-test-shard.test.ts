@@ -518,11 +518,32 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       files: ["src/commands/doctor-maintenance.stopped-systemd.test.ts"],
       sibling: {
         configs: ["test/vitest/vitest.infra.config.ts"],
-        includePatterns: ["src/flows/doctor-health.update-schema.test.ts"],
+        includePatterns: [
+          "src/flows/doctor-health.update-schema.test.ts",
+          "src/flows/doctor-health.managed-settlement.test.ts",
+        ],
       },
       preset: "runtime",
     },
     { configs: [gatewayDatabaseConfig], files: [], preset: "full" },
+    {
+      configs: ["test/vitest/vitest.unit.config.ts"],
+      files: [
+        "src/flows/doctor-health.migration-refusal.test.ts",
+        "src/flows/doctor-health.nocow.test.ts",
+        "src/flows/doctor-health.plugin-load.test.ts",
+        "src/flows/doctor-health.readonly-filesystem.test.ts",
+      ],
+      sibling: {
+        configs: ["test/vitest/vitest.infra.config.ts"],
+        includePatterns: [
+          "src/flows/doctor-health.managed-admission.test.ts",
+          "src/flows/doctor-health.managed-approvals.test.ts",
+          "src/flows/doctor-health.readonly-config.test.ts",
+        ],
+      },
+      preset: "runtime",
+    },
     { configs: [gatewayDatabaseConfig], files: null, preset: "full" },
     { configs: [gatewayDatabaseConfig], files: undefined, preset: "full" },
     {
@@ -591,6 +612,13 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
 
   it.each([
     {
+      targets: [
+        "src/gateway/server.plugin-reload-send-continuation.product.test.ts",
+        "src/gateway/server.plugin-reload-send-revocation.product.test.ts",
+      ],
+      preset: "runtime",
+    },
+    {
       extra: [
         "src/agents/provider-auth-websocket.test.ts",
         "src/cron/session-run.session-model-strictness.integration.test.ts",
@@ -601,6 +629,14 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     {
       targets: [
         "src/flows/doctor-health.update-schema.test.ts",
+        "src/flows/doctor-health.managed-admission.test.ts",
+        "src/flows/doctor-health.managed-approvals.test.ts",
+        "src/flows/doctor-health.managed-settlement.test.ts",
+        "src/flows/doctor-health.migration-refusal.test.ts",
+        "src/flows/doctor-health.nocow.test.ts",
+        "src/flows/doctor-health.plugin-load.test.ts",
+        "src/flows/doctor-health.readonly-config.test.ts",
+        "src/flows/doctor-health.readonly-filesystem.test.ts",
         "src/commands/doctor-config-preflight.container-upgrade.test.ts",
         "src/commands/doctor-maintenance.schema-preflight.test.ts",
         "src/commands/doctor-maintenance.stopped-systemd.test.ts",

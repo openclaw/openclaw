@@ -23,15 +23,20 @@ const workflowEventName = process.env.OPENCLAW_CI_EVENT_NAME ?? "";
 const ordinaryPullRequest = workflowEventName === "pull_request";
 const ciQualification =
   workflowEventName === "workflow_dispatch" &&
-  process.env.OPENCLAW_CI_RELEASE_GATE === "true" &&
   (process.env.OPENCLAW_CI_QUALIFICATION === "true" ||
-    process.env.OPENCLAW_CI_NODE_RUNNER_BACKEND === "runson");
+    (process.env.OPENCLAW_CI_RELEASE_GATE === "true" &&
+      process.env.OPENCLAW_CI_NODE_RUNNER_BACKEND === "runson"));
 const mainQualification = ciQualification && process.env.OPENCLAW_CI_SHAPE === "main";
-const eventName = ciQualification
-  ? mainQualification
-    ? "push"
-    : "pull_request"
-  : workflowEventName;
+const exactMainQualification =
+  mainQualification && process.env.OPENCLAW_CI_RELEASE_GATE === "false";
+// Admission owns identity. Project only coverage; the raw event still owns trust and provenance.
+const eventName = exactMainQualification
+  ? "schedule"
+  : ciQualification
+    ? mainQualification
+      ? "push"
+      : "pull_request"
+    : workflowEventName;
 const eventRef = mainQualification ? "refs/heads/main" : process.env.GITHUB_REF;
 const checkoutRevision = process.env.OPENCLAW_CI_CHECKOUT_REVISION ?? "";
 const workflowRevision = process.env.OPENCLAW_CI_WORKFLOW_REVISION ?? "";
@@ -177,6 +182,9 @@ const packageScripts = packageJson.scripts ?? {};
 const hasPackageScript = (name) => typeof packageScripts[name] === "string";
 const isCanonicalRepository = process.env.OPENCLAW_CI_REPOSITORY === "openclaw/openclaw";
 const changedPaths = (() => {
+  if (exactMainQualification) {
+    return null;
+  }
   try {
     const manifestPath = process.env.OPENCLAW_CI_CHANGED_PATHS_FILE;
     // Frozen target producers can predate the complete file transport.
@@ -190,8 +198,9 @@ const changedPaths = (() => {
     return null;
   }
 })();
-const docsOnly = parseCiEnvFlag(process.env.OPENCLAW_CI_DOCS_ONLY);
-const docsChanged = parseCiEnvFlag(process.env.OPENCLAW_CI_DOCS_CHANGED);
+const docsOnly = !exactMainQualification && parseCiEnvFlag(process.env.OPENCLAW_CI_DOCS_ONLY);
+const docsChanged = exactMainQualification || parseCiEnvFlag(process.env.OPENCLAW_CI_DOCS_CHANGED);
+const scopeEnabled = (value) => exactMainQualification || parseCiEnvFlag(value);
 const rootProseOnly = parseCiEnvFlag(process.env.OPENCLAW_CI_DOCS_ROOT_PROSE_ONLY);
 const releaseGate = parseCiEnvFlag(process.env.OPENCLAW_CI_RELEASE_GATE) && !ciQualification;
 const compactPullRequest = isCanonicalRepository && eventName === "pull_request";
@@ -202,6 +211,9 @@ const runProofTier = eventName !== "pull_request" && !releaseGate;
 const releaseScope = process.env.OPENCLAW_CI_RELEASE_SCOPE ?? "full";
 const validationTier = process.env.OPENCLAW_CI_VALIDATION_TIER ?? "full";
 const mainValidation = validationTier === "main";
+if (exactMainQualification && !mainValidation) {
+  throw new Error("Exact main qualification requires validation_tier=main");
+}
 if (validationTier !== "full" && !mainValidation) {
   throw new Error("validation_tier must be full or main");
 }
@@ -211,7 +223,8 @@ if (
     !isCanonicalRepository ||
     frozenTarget ||
     compatibilityTarget ||
-    ciQualification ||
+    (ciQualification && !exactMainQualification) ||
+    (exactMainQualification && checkoutRevision !== workflowRevision) ||
     releaseGate ||
     releaseScope !== "full" ||
     process.env.OPENCLAW_CI_PULL_REQUEST_NUMBER)
@@ -295,11 +308,12 @@ const nativeGeneratedOnly =
 const runNode =
   !nodeDataOnly &&
   !nativeGeneratedOnly &&
-  ((parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_NODE) && !docsOnly) || toolingOwnerChange);
+  ((scopeEnabled(process.env.OPENCLAW_CI_RUN_NODE) && !docsOnly) || toolingOwnerChange);
 const runNodeFastOnly =
   runNode &&
   !runtimePullRequest &&
   !toolingOwnerChange &&
+  !exactMainQualification &&
   parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_NODE_FAST_ONLY);
 const runNodeFull = runNode && !runNodeFastOnly;
 const runBuiltSourceVerifiers =
@@ -363,9 +377,13 @@ if (
 }
 
 const runNodeFastPluginContracts =
-  runNode && parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_NODE_FAST_PLUGIN_CONTRACTS);
+  runNode &&
+  !exactMainQualification &&
+  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_NODE_FAST_PLUGIN_CONTRACTS);
 const runNodeFastCiRouting =
-  runNode && parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_NODE_FAST_CI_ROUTING);
+  runNode &&
+  !exactMainQualification &&
+  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_NODE_FAST_CI_ROUTING);
 const proposedCheckScope =
   runtimePullRequest &&
   (!frozenTarget || releaseGate) &&
@@ -382,10 +400,25 @@ const pluginContractShards =
     : [];
 const channelContractShards =
   !runtimePullRequest && runNodeFull && !releaseFastLane ? createChannelContractTestShards() : [];
+// Reuse releaseGate's existing exact-SHA/PR admission; never acquire a backend
+// or download models for ordinary PR, push, schedule, or unrelated dispatches.
+const mlxNativeProofScope =
+  workflowEventName === "workflow_dispatch" && releaseGate && !frozenTarget && !compatibilityTarget
+    ? await importTargetPlan("./scripts/ci-changed-scope.mjs")
+    : null;
+const runMlxNativeProof =
+  workflowEventName === "workflow_dispatch" &&
+  releaseGate &&
+  isCanonicalRepository &&
+  !frozenTarget &&
+  !compatibilityTarget &&
+  releaseScope === "full" &&
+  typeof mlxNativeProofScope?.hasMlxNativeProofInputs === "function" &&
+  mlxNativeProofScope.hasMlxNativeProofInputs(changedPaths);
 const runMacos =
   !ordinaryPullRequest &&
   !nativeGeneratedOnly &&
-  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_MACOS) &&
+  scopeEnabled(process.env.OPENCLAW_CI_RUN_MACOS) &&
   !docsOnly &&
   isCanonicalRepository &&
   !releaseFastLane;
@@ -394,7 +427,7 @@ const runMacosNode =
   runMacos ||
   (!ordinaryPullRequest &&
     !nativeGeneratedOnly &&
-    parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_MACOS_NODE) &&
+    scopeEnabled(process.env.OPENCLAW_CI_RUN_MACOS_NODE) &&
     !docsOnly &&
     isCanonicalRepository &&
     !releaseFastLane);
@@ -403,14 +436,14 @@ const supportsCurrentMacosSwiftCi =
   existsSync("scripts/lint-swift.sh") &&
   existsSync("scripts/format-swift.sh");
 const runMacosSwift =
-  runMacos &&
+  (runMacos || runMlxNativeProof) &&
   !deferMacosSwift &&
   (!frozenTarget || compatibilityTarget || supportsCurrentMacosSwiftCi);
 const supportsIosBuild = hasPackageScript("ios:build");
 const supportsCurrentIosCi = supportsIosBuild && supportsCurrentMacosSwiftCi;
 const iosBuildScope =
   !nativeGeneratedOnly &&
-  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_BUILD) &&
+  scopeEnabled(process.env.OPENCLAW_CI_RUN_IOS_BUILD) &&
   !releaseFastLane &&
   !npmQualification &&
   !docsOnly &&
@@ -419,7 +452,7 @@ const iosBuildScope =
 const runIosBuild = !ordinaryPullRequest && iosBuildScope;
 const runAndroid =
   !nativeGeneratedOnly &&
-  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_ANDROID) &&
+  scopeEnabled(process.env.OPENCLAW_CI_RUN_ANDROID) &&
   !npmQualification &&
   !docsOnly &&
   isCanonicalRepository &&
@@ -435,18 +468,18 @@ const runAndroidAccessNative =
     ));
 let runWindows =
   !ordinaryPullRequest &&
-  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_WINDOWS) &&
+  scopeEnabled(process.env.OPENCLAW_CI_RUN_WINDOWS) &&
   !releaseFastLane &&
   !docsOnly &&
   !runNodeFastOnly &&
   isCanonicalRepository;
 const runSkillsPython =
-  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_SKILLS_PYTHON) && !docsOnly && !releaseFastLane;
+  scopeEnabled(process.env.OPENCLAW_CI_RUN_SKILLS_PYTHON) && !docsOnly && !releaseFastLane;
 const runControlUiI18n =
-  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_CONTROL_UI_I18N) && !docsOnly && !releaseFastLane;
+  scopeEnabled(process.env.OPENCLAW_CI_RUN_CONTROL_UI_I18N) && !docsOnly && !releaseFastLane;
 let runUiTests =
   fullUiPullRequest ||
-  (parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_UI_TESTS) &&
+  (scopeEnabled(process.env.OPENCLAW_CI_RUN_UI_TESTS) &&
     !docsOnly &&
     !nodeDataOnly &&
     !releaseFastLane);
@@ -505,7 +538,7 @@ const supportsNativeI18n =
   hasPackageScript("android:i18n:check") &&
   hasPackageScript("apple:i18n:check");
 const runNativeI18n =
-  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_NATIVE_I18N) &&
+  scopeEnabled(process.env.OPENCLAW_CI_RUN_NATIVE_I18N) &&
   !releaseFastLane &&
   !npmQualification &&
   !docsOnly &&
@@ -987,7 +1020,7 @@ const fullCoreLintStripes =
   !frozenTarget &&
   ((!releaseGate && ["push", "pull_request"].includes(eventName)) ||
     nodeRunnerBackend === "runson" ||
-    ciQualification)
+    (ciQualification && !exactMainQualification))
     ? [1, 2]
     : [1, 2, 3, 4, 5];
 const coreLintRows = fullCoreLintStripes.map((stripe) => ({ stripe }));
@@ -1671,7 +1704,7 @@ const additionalChecks = [
     runner: "blacksmith-4vcpu-ubuntu-2404",
   })),
   // Main-shaped qualifications are still dispatches with an exact comparison range.
-  ...(eventName === "workflow_dispatch" || mainQualification
+  ...(eventName === "workflow_dispatch" || (mainQualification && !exactMainQualification)
     ? [
         // Serial renders exceeded 20m; the measured 32-class clears the 8-CPU/24-GiB parallel floor.
         {
@@ -1958,6 +1991,7 @@ const manifest = {
       : [],
   ),
   run_macos_swift: runMacosSwift,
+  run_mlx_native_proof: runMlxNativeProof,
   run_openclawkit_tests: runMacos && !deferMacosSwift && supportsOpenClawKitTests,
   run_ios_build: runIosBuild,
   run_ios_voice_cleanup_tests: iosSimulatorSelection.voice.selected,
@@ -2114,7 +2148,9 @@ if (hybridHostedEligible) {
       manifest.checks_windows_matrix.include.length,
     ),
     "macos-node": count(manifest.run_macos_node, manifest.macos_node_matrix.include.length),
-    "macos-swift": count(manifest.run_macos_swift, 2),
+    // Eligible profiles emit one app test row plus packages and mlx; settings
+    // and release rows require a different dispatch admission.
+    "macos-swift": count(manifest.run_macos_swift, 3),
     "ios-build": count(manifest.run_ios_build),
     "ios-screenshot-capture": count(parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS), 1),
     "ios-screenshot-evidence": count(parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS)),

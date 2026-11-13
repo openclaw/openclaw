@@ -42,7 +42,14 @@ build_mlx_tts_helper() {
 }
 
 sparkle_framework_for_arch() {
-  echo "$(build_path_for_arch "$1")/$BUILD_CONFIG/Sparkle.framework"
+  # Swift Build products do not contain binary dependencies. SwiftPM resolves
+  # the locked XCFramework into the architecture's scratch artifact directory.
+  local framework="$(build_path_for_arch "$1")/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
+  if [[ ! -f "$framework/Sparkle" ]]; then
+    echo "ERROR: Required Sparkle.framework not found at $framework" >&2
+    return 1
+  fi
+  printf '%s\n' "$framework"
 }
 
 run_with_locked_swift_packages() {
@@ -244,6 +251,10 @@ prepare_swift_package_root() {
   ln -s "$ROOT_DIR/apps/macos/Tests" "$SWIFT_PACKAGE_ROOT/Tests"
   ln -s "$ROOT_DIR/apps/shared" "$SWIFT_PACKAGE_CONTAINER/apps/shared"
   ln -s "$ROOT_DIR/apps/swabble" "$SWIFT_PACKAGE_CONTAINER/apps/swabble"
+  if [[ "${OPENCLAW_IROH_NATIVE:-0}" == "1" ]]; then
+    mkdir -p "$SWIFT_PACKAGE_CONTAINER/crates"
+    ln -s "$ROOT_DIR/crates/openclaw-iroh-ffi" "$SWIFT_PACKAGE_CONTAINER/crates/openclaw-iroh-ffi"
+  fi
   MLX_TTS_HELPER_ROOT="$SWIFT_PACKAGE_CONTAINER/apps/macos-mlx-tts"
   mkdir -p "$MLX_TTS_HELPER_ROOT"
   cp "$ROOT_DIR/apps/macos-mlx-tts/Package.swift" "$MLX_TTS_HELPER_ROOT/Package.swift"

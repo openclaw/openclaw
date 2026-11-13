@@ -55,6 +55,7 @@ export function prepareGatewayOperatorSessionRun(params: {
   assertCurrent();
   const client = createSyntheticPluginRuntimeClient({
     operatorRoleActor: { kind: "operator", profileId: params.authority.profileId },
+    operatorRunAuthority: params.authority,
     scopes: [...params.authority.scopes],
   });
   const creation = resolveSandboxedSessionCreation(

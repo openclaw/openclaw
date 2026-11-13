@@ -3094,9 +3094,9 @@ Quarter grain is exact for zones whose offsets and transitions fall on quarter
 hours (including +05:30, +05:45 and DST changes). A per-day p95 is the largest
 quarter p95. Ranges or zones that split a quarter with activity report
 `aggregate-boundary` for the overview; `usage.cost` replays those transcripts
-within its bounded allowance. Overview freshness compares the checkpoint with the
-session window's last mutation time and rewrite generation instead of transcript
-statistics. Session detail reads keep using the month partitions.
+within its bounded allowance. Overview and summary freshness compare the checkpoint
+with the session window's last mutation time and rewrite generation instead of
+transcript statistics. Session detail reads keep using the month partitions.
 
 Upgraded installs have partitions without quarter rows. The usage refresh owner
 finds partitions without a paired quarter row with one anti-join, derives the
@@ -3104,15 +3104,22 @@ rows from the stored partitions (no transcript scan) in its bounded batches, and
 inserts each row only while the partition header it decoded is still current.
 The work is idempotent and resumes after a restart.
 
-Both reports first let pending transcript publications land. When a pass finds
-instances without quarter rows, with invalid rows or older than their
-transcript, it asks the refresh owner for exactly those sessions (which also
-runs the upgrade backfill for them), waits up to 10 seconds inside the
-15-second usage request budget, and runs once more, so the answer includes
-them. Only a refresh that outlasts that wait leaves the second answer `partial`
-with reason `summarizing` and the summarized/total counts. Archived JSONL
-transcripts resolve through the same read cache as session detail reads and
-count in both reports.
+Overview reports return recorded aggregates immediately and request background
+refresh for missing or stale instances. Cost summaries first let pending transcript
+publications land, then request missing or stale instances, wait up to 10 seconds
+inside the 15-second RPC budget, and read once more. Incomplete coverage remains
+explicit in cache status. Cost RPC-owned refresh work is cancelled when the response
+is sent; publication-owned updates retain their own lifetime. Archived JSONL
+transcripts resolve through the same read cache as session detail reads and count
+in both reports.
+
+Refresh discovery limits its selected files before reading their statistics.
+SQLite statistics use fixed-tail keyset pages and release native custody between
+pages, so cancellation can stop the next read. Cold archives use their recorded
+statistics. Unchanged checkpoints skip those pages entirely; appended transcripts
+count only the suffix. Pacing uses kernel-accounted reads when available, with
+bounded scalar-page estimates otherwise. Rewrites during a paged recount discard
+the incomplete result; a later publication retries it.
 
 Transcripts remain authoritative; the projection changes neither retention nor
 billing data. Exact partial-quarter ranges and arithmetic that cannot be
@@ -3364,3 +3371,44 @@ unchanged content hash. Earlier
 editors cannot write to a different same-name file, even with identical bytes.
 Older runtimes do not implement message-qualified prior-file access or this new
 adoption behavior; original files remain in their source without migration.
+
+## Scheduled run parent receipts
+
+A scheduled run whose job is linked to a parent conversation and runs as a
+child (`isolated` or `current` session target) executes in its own hidden
+`:run:` row. The run resolves its memory audience through its admitted parent,
+but sessions it spawns walk their spawn lineage to the run row, which is not the
+parent. Cron run preparation therefore records one private
+`scheduledMemoryParent` relation in that row's existing `entry_json`: the
+parent's session key, session ID, lifecycle revision (when the link recorded
+one), and the occurrence's admitted owner bit.
+
+- **Writer:** only the cron run-continuation write that prepares the `:run:`
+  row, once per attempt, before the agent runs. A retried attempt whose
+  occurrence has no parent clears it. In-session runs execute on their parent's
+  own row and detached runs have no parent, so neither records one.
+- **Not settable elsewhere:** `sessions.create` and `sessions.patch` are closed
+  schemas without this field, spawn parameters never reach it, and the plugin
+  session-store API strips it from reads and writes. The slot key is reserved.
+- **Reader:** memory-audience resolution follows the receipt only from a
+  spawned session's lineage, and only when both the spawn and the occurrence
+  were owner-attributed. The parent hop must still match the recorded session
+  ID and lifecycle revision, so a parent reset or replacement denies the
+  spawned session. Every other combination resolves from the run row exactly
+  as before.
+- **Lifetime:** the relation lives as long as the run row: cron removes the
+  row once the run and its spawned sessions settle, and otherwise session
+  maintenance prunes it after `cron.sessionRetention` (24 hours by default).
+  Reset, rollover, and carry-over never copy it; rotating the row through the
+  public session writer clears it.
+- **Upgrade:** existing run rows and sessions spawned before the upgrade carry
+  no receipt and an earlier non-owner spawn bit, so they keep resolving from
+  the run row. The next occurrence of an existing linked job records the
+  receipt.
+- **Downgrade:** older Gateways keep the unknown optional field but ignore it.
+  A session spawned after this change already recorded the occurrence's owner
+  bit, so until its run row expires it resolves from the run row's copied chat
+  type: owner-private for a direct-chat parent, without the parent-reset
+  check. Sessions spawned by the older Gateway behave as before this change.
+
+There is no SQL migration, table, column, index, or schema-version change.
