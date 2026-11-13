@@ -382,6 +382,68 @@ describe("memory actor history", () => {
 });
 
 describe("memory actor history facts", () => {
+  it.each([false, true])(
+    "reads only markers before the admitted user (before: %s)",
+    async (before) => {
+      const customType = "openclaw:bootstrap-context:full";
+      const marker = {
+        type: "custom",
+        id: "marker",
+        parentId: before ? null : "input",
+        customType,
+        data: {},
+      };
+      const input = message("input", before ? "marker" : null, "user", "current input");
+      const { storage, actor } = await fixture(before ? [marker, input] : [input, marker]);
+      const anchor = actor
+        .snapshot(authority)!
+        .transcript.anchors.find((entry) => entry.entryId === "input");
+      assert(anchor);
+      expect(
+        await readMemory(storage, "session.history.maintenance", {
+          admission: { ...anchor, role: "user", logicalTurnId: "bootstrap-turn" },
+          request: { operation: "latest-active-control", customType },
+        }),
+      ).toEqual({ kind: "transcript-maintenance", ...(before ? { latestControl: "custom" } : {}) });
+    },
+  );
+
+  it.each([
+    { boundary: undefined, latestControl: "custom" },
+    { boundary: "reset", latestControl: "reset" },
+    { boundary: "compaction", latestControl: "compaction" },
+    { boundary: "off-branch", latestControl: undefined },
+    { boundary: "new-marker", latestControl: "custom" },
+  ] as const)(
+    "finds old control facts with a newer $boundary boundary without returning message bodies",
+    async ({ boundary, latestControl }) => {
+      const customType = "openclaw:bootstrap-context:full";
+      const marker = { type: "custom", id: "marker", parentId: null, customType, data: {} };
+      const tail = Array.from({ length: 501 }, (_, index) =>
+        message(`tail-${index}`, index === 0 ? "marker" : `tail-${index - 1}`, "user", "later"),
+      );
+      const { storage } = await fixture([
+        marker,
+        ...tail,
+        ...(boundary === "off-branch"
+          ? [message("other-branch", null, "user", "independent branch")]
+          : boundary === "new-marker"
+            ? [
+                { type: "reset", id: "boundary", parentId: "tail-500" },
+                { ...marker, id: "new-marker", parentId: "boundary" },
+              ]
+            : boundary
+              ? [{ type: boundary, id: "boundary", parentId: "tail-500", summary: "trimmed" }]
+              : []),
+      ]);
+      expect(
+        await readMemory(storage, "session.history.maintenance", {
+          request: { operation: "latest-active-control", customType },
+        }),
+      ).toEqual({ kind: "transcript-maintenance", latestControl });
+    },
+  );
+
   it("selects the first usable task with the supplied command metadata", async () => {
     const { read } = await fixture([
       message("control", null, "user", "/status"),
