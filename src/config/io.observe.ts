@@ -20,6 +20,7 @@ import type {
 } from "./io.health-state.types.js";
 import {
   createConfigHealthFingerprint,
+  readConfigBaselineContentBytes,
   readConfigFingerprintForPath,
   readConfigFingerprintForPathSync,
   readConfigHealthEntry,
@@ -65,6 +66,7 @@ function createObservedFingerprint(snapshot: ConfigFileSnapshot, stat: fs.Stats 
 }
 
 function resolveObservation(params: {
+  deps: NormalizedConfigIoDeps;
   snapshot: ConfigFileSnapshot;
   current: ConfigHealthFingerprint;
   healthState: ConfigHealthState;
@@ -79,6 +81,9 @@ function resolveObservation(params: {
     gatewayMode: params.current.gatewayMode,
     parsed: params.snapshot.parsed,
     lastKnownGood: baseline,
+    getBaselineContentBytes: baseline
+      ? () => readConfigBaselineContentBytes(params.deps, params.snapshot.path, baseline)
+      : undefined,
   });
   return { entry, baseline, suspicious };
 }
@@ -123,6 +128,7 @@ export async function observeConfigSnapshot(
       undefined;
     health.assertCurrent();
     const { entry, baseline, suspicious } = resolveObservation({
+      deps,
       snapshot,
       current,
       healthState,
@@ -264,6 +270,8 @@ export async function advanceConfigHealthBaselineForAcceptedWrite(
       gatewayMode: current.gatewayMode,
       parsed: params.parsed,
       lastKnownGood: baseline.previousLastKnownGood,
+      getBaselineContentBytes: () =>
+        readConfigBaselineContentBytes(deps, baseline.configPath, baseline.previousLastKnownGood),
     });
     if (suspicious.some((reason) => !reason.startsWith("size-drop-vs-last-good:"))) {
       return null;
@@ -292,6 +300,8 @@ export async function advanceConfigHealthBaselineForAcceptedWrite(
         ...before,
         parsed: source.parsed,
         lastKnownGood: baseline.previousLastKnownGood,
+        getBaselineContentBytes: () =>
+          readConfigBaselineContentBytes(deps, baseline.configPath, baseline.previousLastKnownGood),
         lastObservedSuspiciousSignature: baseline.previousSuspiciousSignature,
       }).length > 0;
     const nextBaseline = preserveBaseline ? baseline.previousLastKnownGood : current;
@@ -405,6 +415,7 @@ export function observeConfigSnapshotSync(
   const backupBaseline =
     initialEntry.lastKnownGood ?? readConfigFingerprintForPathSync(deps, backupPath) ?? undefined;
   const { entry, baseline, suspicious } = resolveObservation({
+    deps,
     snapshot,
     current,
     healthState,
