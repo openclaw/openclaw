@@ -1250,5 +1250,55 @@ describe("exportTrajectoryBundle", () => {
     expect(eventTypes(markerBundle.events)).toContain("context.compiled");
     expect(fs.existsSync(path.join(tmpDir, "trajectory", "session-1.jsonl"))).toBe(false);
   });
+
+  it("preserves history-heavy context events through export", async () => {
+    const { tmpDir, sessionTarget, outputDir } = exportPaths();
+    await replaceTranscriptEvents(sessionTarget, simpleSessionEntries(tmpDir));
+    const messages = Array.from({ length: 64 }, (_, index) => ({
+      role: "user",
+      content: `history message ${index}`,
+    }));
+    const tools = [{ name: "exec" }, { name: "read" }];
+    appendSqliteTrajectoryRuntimeEvents(
+      sessionTarget,
+      runtimeSeries([["context.compiled", { messages, tools }]]),
+    );
+    await exportFrom(tmpDir, { sessionTarget });
+
+    const compiled = expectDefined(
+      readEvents(outputDir).find((event) => event.type === "context.compiled"),
+      "exported context.compiled event",
+    );
+    const data = compiled.data as Record<string, unknown>;
+    expect(data.messages).toEqual(messages);
+    expect(data.tools).toEqual(tools);
+    expect(readText(outputDir, "events.jsonl")).not.toContain("[Truncated]");
+  });
+
+  it("preserves schema-heavy tool catalogs through export", async () => {
+    const { tmpDir, sessionTarget, outputDir } = exportPaths();
+    await replaceTranscriptEvents(sessionTarget, simpleSessionEntries(tmpDir));
+    // Capture bounds stored arrays to 64 items, so a full default catalogue is
+    // 64 entries; export's default node budget still cut the tail entries.
+    const tools = Array.from({ length: 64 }, (_, index) => ({
+      name: `tool-${String(index).padStart(2, "0")}`,
+      description: `catalog entry ${index}`,
+    }));
+    appendSqliteTrajectoryRuntimeEvents(
+      sessionTarget,
+      runtimeSeries([
+        ["context.compiled", { messages: [{ role: "user", content: "hello" }], tools }],
+      ]),
+    );
+    await exportFrom(tmpDir, { sessionTarget });
+
+    const compiled = expectDefined(
+      readEvents(outputDir).find((event) => event.type === "context.compiled"),
+      "exported context.compiled event",
+    );
+    expect((compiled.data as Record<string, unknown>).tools).toEqual(tools);
+    const exportedTools = JSON.parse(readText(outputDir, "tools.json")) as unknown;
+    expect(exportedTools).toEqual(tools);
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
