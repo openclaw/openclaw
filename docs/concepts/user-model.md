@@ -119,6 +119,16 @@ Your authenticated Gateway profile is separate from `USER.md`. Open **Settings �
 
 Authenticated users can read their own profile with `operator.read`, `operator.sessions.read`, or their implied write/admin scopes, even when the shared People roster is unavailable. Refresh and reconnect read the current authenticated profile. Those same grants allow members to edit their own display name, avatar, and Git co-author credit preference without general write or administrator access. Session-only users can load avatar images by exact profile ID, so people shown in shared sessions and owner filters do not require broader directory access. This does not grant the People roster, emails, roles, or account metadata. The server checks the authenticated profile on every edit; selecting another profile ID does not grant access. Server-wide upload restrictions still apply.
 
+In authenticated Control UI chat, the agent receives the current requester’s
+verified primary GitHub login and profile URL in `requester_profile.github` when
+available, including the host for Enterprise accounts. This works for guests
+without access to the People directory. The per-message context contains only
+that requester’s public identity, not emails, credentials, roles, or other
+people’s profiles. It does not grant GitHub or Gateway permissions; publication
+still checks current authority separately. Unlinked or unverified requesters
+receive no GitHub identity, and names or profile IDs pasted into a message cannot
+establish one.
+
 ### Member and administrator controls
 
 | Members control for themselves                                   | Administrator or verified-provider controls                                |

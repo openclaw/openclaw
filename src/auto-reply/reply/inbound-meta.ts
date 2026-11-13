@@ -12,6 +12,7 @@ import { resolveSessionGoalDisplayState } from "../../config/sessions/goals.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildDeliveryFormatPrompt } from "../../infra/outbound/delivery-format-prompt.js";
+import { readUserProfileGitHubIdentity } from "../../state/user-profile-list.js";
 import type { EnvelopeFormatOptions } from "../envelope.js";
 import { formatAgentEnvelopeTimestamp } from "../envelope.js";
 import { getRequesterProfile } from "../requester-profile.js";
@@ -457,6 +458,7 @@ export function buildInboundUserContextPrefix(
   const senderIdDigits = senderId?.replace(/\D/gu, "");
   const senderE164Digits = senderE164?.replace(/\D/gu, "");
   const requester = getRequesterProfile(ctx);
+  const requesterGitHub = requester ? readUserProfileGitHubIdentity(requester.id) : undefined;
   const senderIdentity = {
     id: senderId,
     name: normalizePromptMetadataString(ctx.SenderName),
@@ -469,7 +471,17 @@ export function buildInboundUserContextPrefix(
   // prompt stays byte-stable across task-scoped sessions and reply turns.
   const conversationInfo = {
     requester_profile: requester
-      ? { id: requester.id, display_name: sanitizeTranscriptText(requester.displayName) }
+      ? {
+          id: requester.id,
+          display_name: sanitizeTranscriptText(requester.displayName),
+          github: requesterGitHub
+            ? {
+                login: requesterGitHub.login,
+                profile_url: requesterGitHub.profileUrl,
+                host: requesterGitHub.host,
+              }
+            : undefined,
+        }
       : undefined,
     // Inside the marked block so display, history and memory strippers drop it with the rest.
     requester_profile_hint: requester

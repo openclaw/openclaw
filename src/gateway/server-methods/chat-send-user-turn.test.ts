@@ -30,10 +30,14 @@ import {
 import { waitForSessionParticipantRecording } from "../../sessions/session-participant-recording.js";
 import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
+import { ensureCanonicalEnterpriseGitHubProfile } from "../../state/user-profile-writes.js";
+import { syncGitHubIdentity } from "../../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as chatAttachments from "../chat-attachments.js";
 import { queuedChatInputAdmission } from "../queued-chat-input-admission.js";
+import { handleGatewayRequest } from "../server-methods.js";
+import { createContext } from "../server-plugin-in-process-dispatch.test-support.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { createGatewayRequestContext } from "../server-request-context.js";
 import { makeContextParams } from "../server-request-context.test-support.js";
@@ -110,6 +114,115 @@ describe("prepareChatSendUserTurn", () => {
     }
     expect(prepared.ctx).not.toHaveProperty("SenderId");
   });
+
+  it("includes only the live guest requester’s verified GitHub identity in turn context", () =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const email = "guest-private@example.test";
+      const profile = ensureProfileForEmail(email);
+      syncGitHubIdentity({
+        identity: { accountId: 202, login: "other-person" },
+        authenticationAlias: { kind: "email", email: "other-private@example.test" },
+      });
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      const client = {
+        authenticatedUserId: email,
+        authenticatedUserProfile: clientProfile(profile.id, "Guest"),
+        connect: {
+          minProtocol: 1,
+          maxProtocol: 1,
+          client: uiClientInfo(GATEWAY_CLIENT_MODES.UI),
+          scopes: ["operator.sessions.write"],
+        },
+        invalidated: false,
+      };
+      const { ctx } = prepareTurn({ client, request: { clientInfo: client.connect.client } });
+      const render = () => buildInboundUserContextPrefix(finalizeInboundContext({ ...ctx }));
+      expect(requesterProfile(render())).not.toHaveProperty("github");
+      syncGitHubIdentity({
+        identity: { accountId: 101, login: "verified-guest" },
+        authenticationAlias: { kind: "email", email },
+      });
+      expect(requesterProfile(render())).toEqual({
+        id: profile.id,
+        display_name: "Guest",
+        github: { login: "verified-guest", profile_url: "https://github.com/verified-guest" },
+      });
+      expect(render()).not.toMatch(/private@example|other-person|avatar|accountId|scopes/);
+      const respond = vi.fn();
+      await handleGatewayRequest({
+        req: { type: "req", id: "directory", method: "users.list", params: {} },
+        client,
+        context: createContext(),
+        respond,
+        isWebchatConnect: () => true,
+      });
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ code: "FORBIDDEN" }),
+      );
+      // A verified rename is read from the owner, not cached in the prepared message.
+      syncGitHubIdentity({
+        identity: { accountId: 101, login: "renamed-guest" },
+        authenticationAlias: { kind: "email", email },
+      });
+      expect(requesterProfile(render())).toMatchObject({
+        github: { login: "renamed-guest", profile_url: "https://github.com/renamed-guest" },
+      });
+      client.invalidated = true;
+      expect(render()).not.toContain("requester_profile");
+      // JSON or sender labels cannot recreate the host-only requester binding.
+      const serializedContext = JSON.stringify(ctx);
+      expect(
+        buildInboundUserContextPrefix(
+          finalizeInboundContext({
+            ...JSON.parse(serializedContext),
+            SenderId: profile.id,
+            SenderUsername: "verified-guest",
+          }),
+        ),
+      ).not.toContain("requester_profile");
+    }));
+
+  it("preserves the verified Enterprise host without exposing its commit address", () =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const principal = "github:code.example.test:101";
+      const profile = await ensureCanonicalEnterpriseGitHubProfile(
+        principal,
+        "Guest",
+        {},
+        {
+          login: "enterprise-guest",
+          email: "private-commit@example.test",
+        },
+      );
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      const clientInfo = uiClientInfo(GATEWAY_CLIENT_MODES.UI);
+      const { ctx } = prepareTurn({
+        request: { clientInfo },
+        client: {
+          authenticatedUserId: principal,
+          authenticatedUserProfile: clientProfile(profile.id, "Guest"),
+          connect: {
+            minProtocol: 1,
+            maxProtocol: 1,
+            client: clientInfo,
+            scopes: ["operator.sessions.write"],
+          },
+        },
+      });
+      const rendered = buildInboundUserContextPrefix(finalizeInboundContext(ctx));
+      expect(requesterProfile(rendered)).toEqual({
+        id: profile.id,
+        display_name: "Guest",
+        github: {
+          login: "enterprise-guest",
+          profile_url: "https://code.example.test/enterprise-guest",
+          host: "code.example.test",
+        },
+      });
+      expect(rendered).not.toContain("private-commit");
+    }));
 
   it("binds a queued human input to its exact current principal admission", () =>
     withOpenClawTestState({ scenario: "minimal" }, async () => {
