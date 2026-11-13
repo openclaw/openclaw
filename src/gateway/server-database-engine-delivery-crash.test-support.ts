@@ -53,7 +53,7 @@ export function createDeliveryCrashReader(
     (namespace) => `"${namespace.replaceAll('"', '""')}"`,
   );
   return {
-    async readEntry(): Promise<InternalSessionEntry> {
+    readEntry: async (): Promise<InternalSessionEntry> => {
       const { rows } = await client.query<{ entry_json: string }>(
         `SELECT entry_json FROM ${agent}.session_nodes WHERE session_key = $1`,
         [sessionKey],
@@ -61,7 +61,7 @@ export function createDeliveryCrashReader(
       expect(rows).toHaveLength(1);
       return JSON.parse(rows[0]!.entry_json);
     },
-    async readQueue(entryId = id) {
+    readQueue: async (entryId = id) => {
       return (
         await client.query<{ status: string; entry_json: string }>(
           `SELECT status, entry_json FROM ${state}.delivery_queue_entries WHERE queue_name = $1 AND id = $2`,
@@ -69,7 +69,7 @@ export function createDeliveryCrashReader(
         )
       ).rows;
     },
-    async readNoticeTranscript(sessionId: string, noticeId: string) {
+    readNoticeTranscript: async (sessionId: string, noticeId: string) => {
       return (
         await client.query<{ event_json: string }>(
           `SELECT e.event_json FROM ${agent}.transcript_events e JOIN ${agent}.transcript_event_identities i USING (session_id, seq) WHERE i.session_id = $1 AND i.message_idempotency_key = $2`,
