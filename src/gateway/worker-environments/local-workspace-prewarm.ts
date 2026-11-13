@@ -116,6 +116,8 @@ export async function prewarmLocalWorkspaceTemplates(params: {
                     env,
                     sandbox,
                     identity,
+                    // Prepare the default projection manifest along with its dependencies.
+                    buildCacheInputs: [],
                     guard: { ...guard, signal: guard.signal ?? signal },
                   });
                   await prepared?.record.release();

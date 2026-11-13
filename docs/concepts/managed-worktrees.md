@@ -119,7 +119,8 @@ creator-role-required sandboxes when the agent's sandbox mode is `off`.
 Unused repositories with sandbox mode `off` are not prepared. Background passes
 run serially and defer for foreground work or host I/O pressure; each build keeps
 the existing disk admission and generation retention. A session arriving during preparation
-waits for the same build; later checkouts arrive with `node_modules`. Other selected commits
+waits for the same build; later checkouts reuse `node_modules` and the default
+projection manifest. Other selected commits
 still run dependency installation on first use. When the frozen lockfile and Git
 attributes are unchanged, OpenClaw clones a prepared template into a separate generation,
 imports only the new Git objects, and checks out the source delta before reinstalling

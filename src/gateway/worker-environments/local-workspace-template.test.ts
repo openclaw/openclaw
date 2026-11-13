@@ -11,7 +11,10 @@ import { createHostSandboxFsBridge } from "../../agents/test-helpers/host-sandbo
 import { withWorktreeAllocationLease } from "../../agents/worktrees/allocation.js";
 import { createCopyWorktreeBackend } from "../../agents/worktrees/filesystem-backend.test-support.js";
 import * as worktreeGit from "../../agents/worktrees/git.js";
-import { withWorktreePreparationTiming } from "../../agents/worktrees/preparation-timing.js";
+import {
+  markManagedWorktreePreparation,
+  withWorktreePreparationTiming,
+} from "../../agents/worktrees/preparation-timing.js";
 import { makeWorktreeRecord } from "../../agents/worktrees/service.test-support.js";
 import { listTemplatesAsync } from "../../agents/worktrees/template-registry-async.js";
 import { stageSandboxMedia } from "../../auto-reply/reply/stage-sandbox-media.js";
@@ -577,7 +580,19 @@ it("prepares the current base of a previously sandboxed project with sandbox mod
   await warmed.prepare(signal);
   expect(mocks.install).toHaveBeenCalledTimes(2);
   const commit = await git(source, "rev-parse", "HEAD");
-  await clone("first-after-advance", commit);
+  const phases = new Set<string>();
+  await withDiagnosticsTimelineObserver(
+    (name) => {
+      phases.add(name);
+    },
+    () =>
+      withWorktreePreparationTiming("sandbox", () => {
+        markManagedWorktreePreparation();
+        return clone("first-after-advance", commit);
+      }),
+  );
+  expect(phases).toContain("worktree.sandbox");
+  expect(phases).not.toContain("worktree.sandbox.snapshot");
   expect(await read(path.join(templateRoot, "first-after-advance"), dependencyFile)).toBe(
     secondLock,
   );

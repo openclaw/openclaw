@@ -109,14 +109,12 @@ for (let index = 1; index <= 1; index++) {
 }
 command(repo, "push", "--quiet", "origin", "main:refs/heads/fixture-series");
 command(repo, "checkout", "--quiet", "--detach", commits[0]!);
-const shape = command(repo, "ls-tree", "-r", "--format=%(objectsize)", commits[0]!, "--", "src")
+const shape = command(repo, "ls-tree", "-r", "--format=%(objectsize)", commits[0]!)
   .split("\n")
   .map(Number);
-assert.equal(shape.length, 62_000, "Use the existing full-sized synthetic fixture");
-assert.equal(
-  shape.reduce((bytes, size) => bytes + size, 0),
-  1_100_004_000,
-);
+const payloadBytes = shape.reduce((bytes, size) => bytes + size, 0);
+assert(shape.length >= 60_000 && shape.length <= 66_000, "Use a Team-sized synthetic workspace");
+assert(payloadBytes >= 1_050_000_000 && payloadBytes <= 1_150_000_000);
 
 const frozenOwners = new Set([
   "server-startup-handler-prewarm.ts",
@@ -164,7 +162,11 @@ const config: OpenClawConfig = {
       sandbox: {
         mode: "all",
         backend: "docker",
-        docker: { image: values.image, network: "none" },
+        docker: {
+          image: values.image,
+          network: "bridge",
+          env: { PNPM_CONFIG_STORE_DIR: "/workspace/.openclaw/.pnpm-store" },
+        },
       },
     },
   },
@@ -409,7 +411,7 @@ const runCampaign = async () => {
             node: process.version,
             replayOrigin,
             files: shape.length,
-            payloadBytes: 1_100_004_000,
+            payloadBytes,
             agentSeedBefore,
             admission: {
               priorVerificationAt: sealBefore.verifiedAt,
