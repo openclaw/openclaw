@@ -731,6 +731,19 @@ describe("Browser panel", () => {
       );
     });
 
+    it("keeps typing out of the old field when a dialog drops a queued click", async () => {
+      const { request, input, actions } = await mountForm({ clickable: true });
+      const burst = createDeferred<unknown>();
+      request.mockImplementationOnce(async () => burst.promise);
+      key(input, { key: "a", cancelable: true });
+      input.click();
+      burst.resolve({ ok: true, sent: 1, blockedByDialog: true });
+      await vi.advanceTimersByTimeAsync(0);
+      key(input, { key: "x", cancelable: true });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(actions()).toMatchObject([{ kind: "press", key: "a" }]);
+    });
+
     it("keeps typing out of the old field when a dialog stops the click", async () => {
       const { panel, request, input, actions } = await mountForm({ clickable: true });
       request.mockImplementationOnce(async () => ({

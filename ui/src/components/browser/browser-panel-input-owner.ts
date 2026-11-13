@@ -427,9 +427,12 @@ export class BrowserPanelInputOwner {
       const clicked = inputs.slice(0, sentCount).some(isClick);
       if (outcome.blockedByDialog) {
         // A page dialog stopped the burst. Input it withheld or that queued behind it
-        // was typed for a page the dialog now blocks; a withheld click never moved focus.
+        // was typed for a page the dialog now blocks; a dropped click never moved focus.
+        const droppedClick =
+          inputs.slice(sentCount).some(isClick) ||
+          this.queuedInputs.some((entry) => isClick(entry.input));
         this.queuedInputs = [];
-        if (inputs.slice(sentCount).some(isClick)) {
+        if (droppedClick) {
           this.focusUncertain = true;
         } else if (clicked) {
           this.focusUncertain = false;

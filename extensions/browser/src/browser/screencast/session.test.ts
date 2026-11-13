@@ -198,6 +198,19 @@ describe("browser screencast sessions", () => {
     );
   });
 
+  it("releases a frame stalled on the only viewer when another viewer joins", async () => {
+    const stalled = await attach();
+    // The only viewer accepts the frame but its write never completes.
+    stalled.send.mockImplementation(() => {});
+    page.paint(1);
+    expect(stalled.frames()).toHaveLength(1);
+    expect(page.cdp.acks()).toHaveLength(0);
+    const joined = await attach();
+    expect(page.cdp.acks()).toEqual([["Page.screencastFrameAck", { sessionId: 1 }]]);
+    page.paint(2);
+    expect(joined.frames()).toHaveLength(1);
+  });
+
   it.each(["event blocked", "frame allowed", "stale blocked"])(
     "fences %s navigation",
     async (mode) => {
