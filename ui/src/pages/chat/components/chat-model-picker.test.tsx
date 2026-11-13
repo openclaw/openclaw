@@ -60,6 +60,7 @@ it("forgets disclosure for removed providers", async () => {
       option("selected", "current"),
       option("other", "lead", { recommended: true }),
       option("other", "rest"),
+      option("other", "rest-2"),
     ],
     selectedModelValue: "selected/current",
   });
@@ -133,6 +134,23 @@ it.each([
   },
 );
 
+it("keeps the tenth model of an unranked catalog inline", async () => {
+  const models = Array.from({ length: 10 }, (_unused, index) =>
+    option("fixture", `model-${index}`),
+  );
+  const { container } = mountPicker({
+    modelOptions: models,
+    selectedModelValue: "fixture/model-0",
+    triggerModelLabel: "model-0",
+    open: true,
+  });
+  await waitForMenu(container);
+
+  // Without the singleton rule the tenth model folds alone behind "All models (1)".
+  expect(control(container, "option", "fixture/model-9")).not.toBeNull();
+  expect(control(container, "more-toggle")).toBeNull();
+});
+
 it.each([false, true])(
   "drops the All models row once expanded so the rest continue the group (rest disabled=%s)",
   async (restDisabled) => {
@@ -140,6 +158,7 @@ it.each([false, true])(
       modelOptions: [
         option("fixture", "lead", { recommended: true }),
         option("fixture", "rest", { disabled: restDisabled }),
+        option("fixture", "rest-2", { disabled: restDisabled }),
       ],
       selectedModelValue: "fixture/lead",
       triggerModelLabel: "lead",

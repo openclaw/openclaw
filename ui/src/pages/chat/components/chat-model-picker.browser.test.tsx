@@ -28,12 +28,14 @@ afterEach(() => {
   container.remove();
 });
 
-function mountPicker(optionsReady = true) {
+function mountPicker(optionsReady = true, customOptions?: ReturnType<typeof modelOption>[]) {
   document.body.append(container);
   dispose = installChatComposerPickerDismissal(document);
-  const modelOptions = ["Alpha", "Beta", "Gamma"].map((label) =>
-    modelOption(label === "Gamma" ? "other" : "example", label.toLowerCase(), { label }),
-  );
+  const modelOptions =
+    customOptions ??
+    ["Alpha", "Beta", "Gamma"].map((label) =>
+      modelOption(label === "Gamma" ? "other" : "example", label.toLowerCase(), { label }),
+    );
   const params = modelPickerProps({
     selectedModelValue: "example/alpha",
     triggerModelLabel: "Alpha",
@@ -462,4 +464,23 @@ it("windows a large catalog while keeping keyboard choices and accessible positi
   expect(search.getAttribute("aria-activedescendant")).toBe(rows()[0]?.id);
   search.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   expect(params.onModelSelect).toHaveBeenCalledWith("example/model-999", "main", undefined);
+});
+
+it("shows a lone leftover model without an All models row", async () => {
+  const { open } = mountPicker(true, [
+    modelOption("example", "lead", { label: "Lead", recommended: true }),
+    modelOption("example", "solo", { label: "Solo" }),
+  ]);
+  await open();
+
+  const providerToggle = container.querySelector<HTMLElement>(
+    modelControlSelector("provider-toggle"),
+  );
+  if (providerToggle?.getAttribute("aria-expanded") !== "true") {
+    providerToggle?.click();
+    flush();
+  }
+
+  expect(option("example/solo")).toBeTruthy();
+  expect(container.querySelector(modelControlSelector("more-toggle"))).toBeNull();
 });
