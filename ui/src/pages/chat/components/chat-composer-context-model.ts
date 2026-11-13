@@ -1,7 +1,7 @@
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNullableObjectRecord as readCostRecord } from "@openclaw/normalization-core/record-coerce";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../../../src/shared/transcript-only-openclaw-assistant.js";
-import type { GatewaySessionRow } from "../../../api/types.ts";
+import type { GatewaySessionRow, ModelCatalogResult } from "../../../api/types.ts";
 import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { formatCompactTokenCount } from "../../../lib/format.ts";
 import type { ProviderUsageDisplayProps } from "../../../lib/provider-quota-summary.ts";
@@ -70,6 +70,8 @@ export type ContextNoticeProps = {
   contextUsage?: ChatSessionStateSnapshot["contextUsage"];
   messages?: unknown[];
   providerUsage?: ProviderUsageDisplayProps;
+  /** Configured account preference, not attribution for an earlier run. */
+  accountSelection?: ModelCatalogResult["accountSelection"] | null;
 } & {
   session?: GatewaySessionRow;
   gateway?: ApplicationGateway;

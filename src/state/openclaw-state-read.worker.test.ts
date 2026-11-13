@@ -174,34 +174,38 @@ it.each([
   expect(mock.unrelatedHandlerLoaded).toBe(false);
 });
 
-it("reads an absent publication receipt without loading unrelated handlers", async () => {
-  const db = openNodeSqliteDatabase(":memory:");
-  mock.database = db;
-  try {
-    const reply = await mock.handler({
-      ...request,
-      command: {
-        type: "githubPublications.sharedObservation",
-        input: {
-          session: { agentId: "main", sessionKey: "agent:main:fixture", sessionId: "fixture" },
-          selector: {},
-          entry: {},
-        },
-      },
-    });
-    expect(reply).toEqual({
-      ok: true,
-      type: "githubPublications.sharedObservation",
-      sourceAdmitted: true,
-      row: undefined,
-    });
-    expect(mock.unrelatedHandlerLoaded).toBe(false);
-  } finally {
-    db.close();
-  }
-});
-
 it.each([
+  {
+    command: {
+      type: "githubPublications.sharedObservation",
+      input: {
+        session: { agentId: "main", sessionKey: "agent:main:fixture", sessionId: "fixture" },
+        selector: {},
+        entry: {},
+      },
+    },
+    tables: [],
+    result: { row: undefined },
+  },
+  {
+    command: { type: "cron.store" },
+    tables: ["config_machine_state"],
+    result: { row: undefined },
+  },
+  {
+    command: { type: "hooks.internal.installs" },
+    tables: ["config_machine_state"],
+    result: { row: undefined },
+  },
+  {
+    command: { type: "devicePairing.list", nowMs: 1 },
+    tables: ["config_machine_state", "device_pairing_paired", "device_pairing_pending"],
+    result: {
+      revision: "0",
+      bindings: [],
+      list: { pending: [], paired: [] },
+    },
+  },
   {
     command: { type: "workerEnvironments.snapshot", input: {} },
     tables: [
@@ -225,6 +229,11 @@ it.each([
     command: { type: "preparedPoolPresence.read", input: undefined },
     tables: ["config_machine_state"],
     result: { demand: undefined },
+  },
+  {
+    command: { type: "sandboxRegistry.list", input: {} },
+    tables: ["sandbox_registry_entries"],
+    result: { entries: [] },
   },
 ] as const)(
   "reads startup $command.type without loading unrelated handlers",
@@ -398,6 +407,7 @@ it.each([
 });
 
 describe.each([
+  { type: "backup.runs" },
   { type: "subagents.restore" },
   {
     type: "meetingTranscripts.export",
@@ -405,7 +415,7 @@ describe.each([
     selector: "fixture-session",
     includeNotes: true,
   },
-] as const)("$type stream loading", (command) => {
+] as const)("$type owner loading", (command) => {
   const loaded = new Set<string>();
   const freshAdmission = vi.fn<() => void>();
   const nativeSection = vi.fn();
@@ -452,6 +462,17 @@ describe.each([
         onAdmitted();
         return { ok: true };
       });
+    vi.doMock("./backup-run-records.kernel.js", async (importOriginal) => {
+      loaded.add("backup.runs");
+      if (holdImport && command.type === "backup.runs") {
+        importStarted.resolve();
+        await releaseImport.promise;
+      }
+      return {
+        ...(await importOriginal<typeof import("./backup-run-records.kernel.js")>()),
+        readBackupRunsInDatabase: mock.query,
+      };
+    });
     vi.doMock("./openclaw-state-read-handlers.js", async (importOriginal) => {
       loaded.add("catchall");
       return importOriginal<typeof import("./openclaw-state-read-handlers.js")>();
@@ -502,6 +523,7 @@ describe.each([
 
   afterEach(() => {
     releaseImport.resolve();
+    vi.doUnmock("./backup-run-records.kernel.js");
     vi.doUnmock("./openclaw-state-read-handlers.js");
     vi.doUnmock("../agents/subagents/registry/subagent-registry.store.worker.js");
     vi.doUnmock("../agents/subagents/registry/subagent-registry.store.restore.worker.js");
@@ -509,44 +531,46 @@ describe.each([
     vi.restoreAllMocks();
   });
 
-  it("loads only its stream owner and preserves the reply", async () => {
-    const input = { ...request, checkFreshAdmission: true, command };
-    const reply = await mock.handler(input, channel, control);
-    expect(reply).toEqual(
-      command.type === "subagents.restore"
-        ? { ok: true, type: command.type, sourceAdmitted: true, count: 2 }
-        : { ok: true, type: command.type, sourceAdmitted: true, result: { ok: true } },
-    );
-    if (command.type === "subagents.restore") {
-      expect(restore).toHaveBeenCalledExactlyOnceWith(input, channel, expect.any(Function));
-      expect(exportTranscript).not.toHaveBeenCalled();
-    } else {
-      expect(exportTranscript).toHaveBeenCalledExactlyOnceWith(
-        input,
-        command,
-        channel,
-        expect.any(Function),
+  if (command.type !== "backup.runs") {
+    it("loads only its stream owner and preserves the reply", async () => {
+      const input = { ...request, checkFreshAdmission: true, command };
+      const reply = await mock.handler(input, channel, control);
+      expect(reply).toEqual(
+        command.type === "subagents.restore"
+          ? { ok: true, type: command.type, sourceAdmitted: true, count: 2 }
+          : { ok: true, type: command.type, sourceAdmitted: true, result: { ok: true } },
       );
-      expect(restore).not.toHaveBeenCalled();
-    }
-    expect(freshAdmission).toHaveBeenCalledOnce();
-    expect(nativeSection).toHaveBeenCalledOnce();
-    expect(loaded).toEqual(new Set([command.type]));
-  });
-
-  it("requires a receiver before entering either stream owner", async () => {
-    const reply = await mock.handler({ ...request, command }, undefined, control);
-    const operation =
-      command.type === "subagents.restore" ? "Subagent restore" : "Transcript export";
-    expect(reply).toMatchObject({
-      ok: false,
-      message: `${operation} requires a bounded receiver`,
-      sourceAdmitted: undefined,
+      if (command.type === "subagents.restore") {
+        expect(restore).toHaveBeenCalledExactlyOnceWith(input, channel, expect.any(Function));
+        expect(exportTranscript).not.toHaveBeenCalled();
+      } else {
+        expect(exportTranscript).toHaveBeenCalledExactlyOnceWith(
+          input,
+          command,
+          channel,
+          expect.any(Function),
+        );
+        expect(restore).not.toHaveBeenCalled();
+      }
+      expect(freshAdmission).toHaveBeenCalledOnce();
+      expect(nativeSection).toHaveBeenCalledOnce();
+      expect(loaded).toEqual(new Set([command.type]));
     });
-    expect(restore).not.toHaveBeenCalled();
-    expect(exportTranscript).not.toHaveBeenCalled();
-    expect(mock.open).not.toHaveBeenCalled();
-  });
+
+    it("requires a receiver before entering either stream owner", async () => {
+      const reply = await mock.handler({ ...request, command }, undefined, control);
+      const operation =
+        command.type === "subagents.restore" ? "Subagent restore" : "Transcript export";
+      expect(reply).toMatchObject({
+        ok: false,
+        message: `${operation} requires a bounded receiver`,
+        sourceAdmitted: undefined,
+      });
+      expect(restore).not.toHaveBeenCalled();
+      expect(exportTranscript).not.toHaveBeenCalled();
+      expect(mock.open).not.toHaveBeenCalled();
+    });
+  }
 
   it("checks fresh admission after the pending owner import settles", async () => {
     holdImport = true;
@@ -560,7 +584,7 @@ describe.each([
       await Promise.race([
         importStarted.promise,
         pending.then(() => {
-          throw new Error("Worker returned before loading the selected stream owner");
+          throw new Error("Worker returned before loading the selected owner");
         }),
       ]);
       expect(freshAdmission).not.toHaveBeenCalled();
@@ -581,5 +605,7 @@ describe.each([
     expect(restore).not.toHaveBeenCalled();
     expect(exportTranscript).not.toHaveBeenCalled();
     expect(mock.open).not.toHaveBeenCalled();
+    expect(mock.query).not.toHaveBeenCalled();
+    expect(mock.admit).not.toHaveBeenCalled();
   });
 });

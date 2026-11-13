@@ -247,7 +247,7 @@ it("reports an update-suspended install as blocked without sending it", async ()
   expect(request.mock.calls.some(([method]) => method === "plugins.install")).toBe(false);
   expect(message(identity)).toEqual({
     kind: "error",
-    text: "Installation blocked: an OpenClaw upgrade is in progress, try again when it finishes.",
+    text: "OpenClaw is updating. Try installing the plugin when the update finishes.",
   });
   expect(progress.has(identity)).toBe(false);
 });

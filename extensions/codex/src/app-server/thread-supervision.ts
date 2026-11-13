@@ -33,7 +33,10 @@ import {
 } from "./thread-lifecycle-errors.js";
 import type { CodexThreadLifecycleTimingTracker } from "./thread-lifecycle-timing.js";
 import type { CodexAppServerThreadLifecycleBinding } from "./thread-lifecycle-types.js";
-import { buildDeveloperInstructions } from "./thread-prompt.js";
+import {
+  buildDeveloperInstructions,
+  resolveCodexOpenClawBaseInstructions,
+} from "./thread-prompt.js";
 import {
   attestCodexRestrictedToolSurfaceMcpServersDisabled,
   buildCodexRuntimeThreadConfigForRun,
@@ -242,11 +245,18 @@ export async function materializePendingSupervisionBranch(
     }
 
     const nativeAttempt = { ...params.attempt, modelId: nativeModel };
-    const startParams = await buildThreadStartParams(nativeAttempt, {
+    const nativeStartOptions = {
       ...params,
       model: nativeModel,
       modelProvider: nativeModelProvider,
-    });
+      nativeModelProvider,
+    };
+    const startParams = await buildThreadStartParams(nativeAttempt, nativeStartOptions);
+    // Rendered from the probed native model, which the pre-startup estimate could not know.
+    const openClawBaseInstructions = resolveCodexOpenClawBaseInstructions(
+      nativeAttempt,
+      nativeStartOptions,
+    );
     assertExactSupervisionModelSelection(startParams, {
       model: nativeModel,
       modelProvider: nativeModelProvider,
@@ -393,6 +403,7 @@ export async function materializePendingSupervisionBranch(
       model: nativeModel,
       modelProvider: bindingModelProvider,
       historyCoveredThrough,
+      preparedOpenClawBaseInstructions: openClawBaseInstructions,
       lifecycle: { action: "forked" },
     };
   } catch (error) {

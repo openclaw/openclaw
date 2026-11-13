@@ -39,7 +39,7 @@ import {
   type GatewayClientMode,
   type GatewayClientName,
 } from "../utils/message-channel.js";
-import type { GatewayClient } from "./client.js";
+import type { GatewayClient, GatewayClientOptions } from "./client.js";
 import { GatewayStartupCleanupError } from "./server-shutdown.js";
 import { startGatewayServer, type GatewayServer, type GatewayServerOptions } from "./server.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
@@ -69,6 +69,7 @@ export async function connectGatewayClient(params: {
   deviceIdentity?: DeviceIdentity;
   onEvent?: (evt: { event?: string; payload?: unknown }) => void;
   onHelloOk?: (hello: HelloOk) => void;
+  onClose?: GatewayClientOptions["onClose"];
   connectChallengeTimeoutMs?: number;
   preauthHandshakeTimeoutMs?: number;
   requestTimeoutMs?: number;
@@ -136,6 +137,7 @@ export async function connectGatewayClient(params: {
       deviceIdentity,
       onEvent: params.onEvent,
       onHelloOk: params.onHelloOk,
+      onClose: params.onClose,
     },
     {
       // The Gateway answers or closes an unfinished handshake at its preauth deadline.

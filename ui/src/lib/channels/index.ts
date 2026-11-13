@@ -494,8 +494,15 @@ export function createChannelCapability(gateway: {
         return;
       }
       if (isMissingOperatorReadScopeError(err)) {
+        const message = await formatMissingOperatorReadScopeMessage(
+          "channel status",
+          formatUiError(err),
+        );
+        if (!isCurrent()) {
+          return;
+        }
         state.channelsSnapshot = null;
-        state.channelsError = formatMissingOperatorReadScopeMessage("channel status");
+        state.channelsError = message;
       } else {
         state.channelsError = formatUiError(err);
       }

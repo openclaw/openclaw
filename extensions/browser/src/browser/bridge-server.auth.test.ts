@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { getBridgeAuthForPort } from "./bridge-auth-registry.js";
 import { startBrowserBridgeServer, stopBrowserBridgeServer } from "./bridge-server.js";
@@ -46,6 +47,28 @@ describe("startBrowserBridgeServer auth", () => {
 
   it("requires auth params", async () => {
     await expect(startBridge()).rejects.toThrow(/requires auth/i);
+  });
+
+  it("does not carry its preparing turn into later authenticated requests", async () => {
+    const turn = new AsyncLocalStorage<string>();
+    const observed: Array<string | undefined> = [];
+    const bridge = await turn.run("finished-turn", async () => {
+      const started = await startBridge({
+        ...tokenAuth,
+        resolveSandboxNoVncToken: () => {
+          observed.push(turn.getStore());
+          return { noVncPort: 45678 };
+        },
+      });
+      expect(turn.getStore()).toBe("finished-turn");
+      return started;
+    });
+    const response = await fetch(`${bridge.baseUrl}/sandbox/novnc?token=synthetic`, {
+      headers: tokenHeaders,
+    });
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(observed).toEqual([undefined]);
   });
 
   it("closes ingress but retains exact bridge cleanup state for retry", async () => {

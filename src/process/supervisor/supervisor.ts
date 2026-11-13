@@ -13,7 +13,8 @@ import { formatChildRuntimeSpawnWarning } from "../../infra/child-runtime-viabil
 import { materializeErrorStack } from "../../infra/error-graph-internal.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
-import { watchChildMemory } from "../child-memory.js";
+import { watchHostExecMemory } from "../child-memory.js";
+import { applyAgentExecMemoryBudget } from "../linux-exec-cgroup.js";
 import { setProcessTimeout } from "../process-deadline.js";
 import { createChildAdapter } from "./adapters/child.js";
 import { createPtyAdapter } from "./adapters/pty.js";
@@ -21,26 +22,17 @@ import { GRACEFUL_CANCEL_TIMEOUT_MS, isTimeoutReason } from "./cancellation-poli
 import { waitForExecRootCompletion } from "./supervisor-completion.js";
 import type {
   ManagedRun,
+  OwnedRun,
   ProcessExtinctionResult,
   ProcessSupervisor,
   ProcessScopeCleanupPolicy,
   RunExit,
+  ScopeCleanupOwner,
   SpawnInput,
   SpawnProcessAdapter,
+  StartingScope,
   TerminationReason,
 } from "./types.js";
-
-type OwnedRun = {
-  runId: string;
-  scopeKey?: string;
-  terminationReason?: TerminationReason;
-  cancel: (reason: TerminationReason) => void;
-  pending?: Promise<ManagedRun>;
-  waitForExtinction?: () => Promise<ProcessExtinctionResult>;
-  cleanupOwners: ScopeCleanupOwner[];
-};
-
-type ScopeCleanupOwner = { processTree: ProcessScopeCleanupPolicy; failure?: { error: unknown } };
 
 function requiresProcessTree(scope: ScopeCleanupOwner, external: boolean): boolean {
   return scope.processTree === "required-all" || (scope.processTree === "owned-only" && !external);
@@ -53,11 +45,6 @@ function recordScopeCleanupFailure(cleanupOwners: ScopeCleanupOwner[], error: un
     cleanupOwner.failure ??= { error };
   }
 }
-
-type StartingScope = {
-  runs: Set<Promise<ManagedRun>>;
-  replacement?: Promise<ManagedRun>;
-};
 
 const DEFAULT_MAX_CAPTURED_OUTPUT_CHARS = 1024 * 1024;
 
@@ -182,6 +169,8 @@ export function createProcessSupervisor(): ProcessSupervisor & {
 
   const startRun = async (input: SpawnInput, owner: OwnedRun): Promise<ManagedRun> => {
     const external = input.cleanupOwnership === "external";
+    const hostExec =
+      process.platform === "linux" && input.executionIntent === "agent-tool" && !external;
     const treeCleanupOwners = owner.cleanupOwners.filter((scope) =>
       requiresProcessTree(scope, external),
     );
@@ -198,7 +187,6 @@ export function createProcessSupervisor(): ProcessSupervisor & {
     }
     const { runId, scopeKey } = owner;
     const startedAtMs = Date.now();
-    const startingTerminationReason = owner.terminationReason;
 
     const settleConstructionResult = (
       reason: TerminationReason,
@@ -227,10 +215,10 @@ export function createProcessSupervisor(): ProcessSupervisor & {
         cancel: () => undefined,
       };
     };
-    if (startingTerminationReason) {
+    if (owner.terminationReason) {
       // A replacement can be cancelled behind its scope fence. Never launch
       // its command or terminate the surviving scope after that cancellation.
-      return settleConstructionResult(startingTerminationReason);
+      return settleConstructionResult(owner.terminationReason);
     }
 
     // Finish fallible argument preparation before affecting a surviving scope or arming cancellation.
@@ -258,9 +246,12 @@ export function createProcessSupervisor(): ProcessSupervisor & {
     }
     if (input.prepareSpawn) {
       await input.prepareSpawn();
-      if (owner.terminationReason) {
-        return settleConstructionResult(owner.terminationReason);
-      }
+    }
+    if (hostExec && !owner.terminationReason) {
+      await applyAgentExecMemoryBudget();
+    }
+    if (owner.terminationReason) {
+      return settleConstructionResult(owner.terminationReason);
     }
     input.assertCurrent?.();
     input.beforeSpawn?.();
@@ -377,22 +368,22 @@ export function createProcessSupervisor(): ProcessSupervisor & {
       void cleanup.promise.catch(() => undefined);
       let constructionCleanup: Promise<ProcessExtinctionResult> | undefined;
       let ownedAdapter: SpawnProcessAdapter | undefined;
-      const onSpawnCleanup = (promise: Promise<ProcessExtinctionResult>) => {
-        constructionCleanup = promise;
-        void promise.catch(() => undefined);
-      };
       overallDeadline.reset();
       outputDeadline.reset();
       const construction = {
         executionIntent: input.executionIntent,
         executionScopeKey: input.executionScopeKey ?? scopeKey,
         assertCurrent: input.assertCurrent,
+        ...(input.mode === "child" ? { prepareTargetSpawn: input.prepareTargetSpawn } : {}),
         beforeSpawn: input.beforeSpawn,
         initiateSpawn: input.initiateSpawn,
         cwd: input.cwd,
         env: input.env,
         abortSignal: constructionAbort.signal,
-        onSpawnCleanup,
+        onSpawnCleanup: (promise: Promise<ProcessExtinctionResult>) => {
+          constructionCleanup = promise;
+          void promise.catch(() => undefined);
+        },
       };
       const startupPromise =
         input.mode === "pty"
@@ -408,7 +399,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
               })
             : createChildAdapter({
                 ...construction,
-                ...((requireProcessTree || input.memoryLimitBytes !== undefined) && !external
+                ...((requireProcessTree || hostExec) && !external
                   ? { ownProcessTree: true as const }
                   : {}),
                 argv,
@@ -490,13 +481,19 @@ export function createProcessSupervisor(): ProcessSupervisor & {
               new Error("process cleanup cannot confirm owned execution-tree settlement"),
             );
           }
-          ownedRuns.delete(owner);
+          delete owner.waitForExtinction;
+          if (!owner.pending) {
+            ownedRuns.delete(owner);
+          }
           cleanup.resolve(outcome);
         },
         (error: unknown) => {
           recordScopeCleanupFailure(owner.cleanupOwners, error);
           cleanupFailure ??= { error };
-          ownedRuns.delete(owner);
+          delete owner.waitForExtinction;
+          if (!owner.pending) {
+            ownedRuns.delete(owner);
+          }
           cleanup.reject(error);
         },
       );
@@ -598,10 +595,10 @@ export function createProcessSupervisor(): ProcessSupervisor & {
         forceKillTimer.unref?.();
       };
 
-      if (!external && !cleanupSettled) {
-        stopMemoryWatch = watchChildMemory({
-          pid: adapter.memoryRootPid ?? adapter.pid,
-          limitBytes: input.memoryLimitBytes,
+      const memoryRootPid = adapter.memoryRootPid ?? adapter.pid;
+      if (hostExec && !cleanupSettled && memoryRootPid) {
+        stopMemoryWatch = watchHostExecMemory({
+          pid: memoryRootPid,
           onLimit: () => requestCancel("memory-limit"),
           onDiagnostic: withOutputFence((chunk: string) => {
             if (captureOutput) {
@@ -673,15 +670,15 @@ export function createProcessSupervisor(): ProcessSupervisor & {
       return managedRun;
     } catch (err) {
       settleResult();
-      const runtimeWarning = formatChildRuntimeSpawnWarning(err);
+      const runtimeWarning = await formatChildRuntimeSpawnWarning(err);
       if (runtimeWarning && err instanceof Error) {
         // Preserve errno/path for callers while returning the operator's recovery action.
         err.message = runtimeWarning;
       }
       if (!runtimeWarning || !staleRuntimeReported) {
         staleRuntimeReported ||= runtimeWarning !== undefined;
-        const { warnProcessSupervisorSpawnFailure } = await loadSupervisorLogRuntime();
-        warnProcessSupervisorSpawnFailure(`spawn failed: runId=${runId} reason=${String(err)}`);
+        const { warnProcessSupervisorFailure } = await loadSupervisorLogRuntime();
+        warnProcessSupervisorFailure(`spawn failed: runId=${runId} reason=${String(err)}`);
       }
       throw err;
     }
@@ -749,22 +746,19 @@ export function createProcessSupervisor(): ProcessSupervisor & {
     return pending;
   };
 
-  const shutdown = (): Promise<void> => {
-    // Publish the admission fence before cancellation can invoke owner callbacks.
-    return (shutdownPromise ??= Promise.resolve().then(async () => {
-      while (ownedRuns.size) {
-        for (const owner of ownedRuns) {
-          owner.cancel("manual-cancel");
-        }
-        // A failed startup owns no live process; only failed owner extinction
-        // must keep the process-wide supervisor fenced for operator recovery.
-        await waitForRuns(null, true);
+  // Publish the admission fence before cancellation can invoke owner callbacks.
+  const shutdown = (): Promise<void> =>
+    (shutdownPromise ??= Promise.resolve().then(async () => {
+      for (const owner of ownedRuns) {
+        owner.cancel("manual-cancel");
       }
+      // The admission fence is closed; this join includes pending starts and fails on live cleanup.
+      await waitForRuns(null, true);
       if (cleanupFailure) {
-        throw cleanupFailure.error;
+        const { warnProcessSupervisorFailure } = await loadSupervisorLogRuntime();
+        warnProcessSupervisorFailure(`Earlier cleanup failed: ${String(cleanupFailure.error)}`);
       }
     }));
-  };
 
   return {
     acquireScopeCleanup,

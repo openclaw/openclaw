@@ -32,6 +32,7 @@ export function tryResetGatewaySessionForCreation(
   if (
     canonicalParentSessionKey &&
     params.fork !== true &&
+    params.succeedsParent !== false &&
     params.emitCommandHooks === true &&
     !requestedKey &&
     params.resetMainWhenUnspecified === true &&

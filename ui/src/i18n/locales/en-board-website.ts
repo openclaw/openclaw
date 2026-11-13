@@ -6,9 +6,9 @@ const enBoardWebsite = {
   board: {
     widget: {
       websiteOpen: "Open website",
-      websiteEmbedHint: "If this site does not load here, open it in a new tab.",
+      websiteEmbedHint: "If this site doesn’t load here, open it in a new tab.",
       websiteSameOrigin:
-        "Open this website in a new tab. Gateway and Control UI pages cannot be embedded in a website widget.",
+        "Open this website in a new tab. Gateway and Control UI pages can’t be embedded in a website widget.",
     },
   },
 } satisfies TranslationMap;

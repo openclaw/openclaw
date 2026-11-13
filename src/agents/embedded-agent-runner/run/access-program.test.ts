@@ -163,10 +163,10 @@ it.each(["current", "revoked", "reassigned"])(
   },
 );
 
-it("enforces role grants for configured defaults without overriding explicit Standard", async () => {
+it("enforces restricted-role grants for defaults without overriding explicit Standard", async () => {
   const authority = createAdmittedRunOperatorAuthority({
     profileId: "access-default-fixture",
-    scopes: ["operator.admin"],
+    scopes: ["operator.write"],
     rolePolicy: { sessionAccessCap: "none", sandboxRequired: false, agents: "*" },
     assertCurrent() {},
   });

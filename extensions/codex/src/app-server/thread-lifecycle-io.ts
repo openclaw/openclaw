@@ -53,6 +53,7 @@ import {
   withCodexThreadWriteCurrent,
   type CodexThreadRequestContext,
 } from "./thread-lifecycle-preflight.js";
+import { recordCodexThreadReady } from "./thread-lifecycle-timing.js";
 import type {
   CodexAppServerThreadLifecycleBinding,
   CodexStartOrResumeThreadParams,
@@ -89,31 +90,6 @@ export type CodexStartThreadContext = CodexThreadRequestContext & {
   replacementPredecessor?: CodexAppServerThreadBinding;
 };
 
-function recordCodexThreadReady(
-  params: CodexStartOrResumeThreadParams,
-  context: Pick<CodexResumeThreadContext, "contextEngineBinding" | "lifecycleTiming">,
-  threadId: string,
-  action: "resumed" | "rotated" | "started",
-): void {
-  const { contextEngineBinding, lifecycleTiming } = context;
-  const event = {
-    sessionId: params.params.sessionId,
-    sessionKey: params.params.sessionKey,
-    threadId,
-    action,
-  };
-  if (contextEngineBinding) {
-    embeddedAgentLog.info("codex app-server wrote context-engine thread binding", {
-      ...event,
-      engineId: contextEngineBinding.engineId,
-      epoch: contextEngineBinding.projection?.epoch,
-      fingerprint: contextEngineBinding.projection?.fingerprint,
-    });
-  }
-  lifecycleTiming.mark("thread-ready");
-  lifecycleTiming.logSummary({ runId: params.params.runId, ...event });
-}
-
 export async function resumeExistingCodexThread(
   params: CodexStartOrResumeThreadParams,
   context: CodexResumeThreadContext,
@@ -142,6 +118,12 @@ export async function resumeExistingCodexThread(
   try {
     // Preparation reads must share resume recovery, before any subscription is acquired.
     const configuration = await context.prepareResume();
+    // Supervision resumes keep Codex's current selection, which a native switch can move
+    // past the stored binding; render the prompt for that model, as the supervised start does.
+    const promptBinding =
+      resumeBinding.connectionScope === "supervision" && configuration.model
+        ? { ...resumeBinding, model: configuration.model }
+        : resumeBinding;
     const assertHandoffCurrent = configuration.assertConfigured;
     disposeConfiguration = configuration.dispose;
     await context.releaseRetainedThread(configuration.assertCurrent);
@@ -202,7 +184,7 @@ export async function resumeExistingCodexThread(
       finalConfigPatch.configPatch,
     );
     const resumeParams = await lifecycleTiming.measure("thread-resume-params", () =>
-      context.buildResumeParams(resumeBinding, authProfileId, resumeConfig),
+      context.buildResumeParams(promptBinding, authProfileId, resumeConfig),
     );
     if (!isRestrictedThreadConfigCompatible(params, context, resumeParams, authProfileId)) {
       stageBindingReplacement("rotating changed restricted thread configuration");
@@ -391,6 +373,7 @@ export async function resumeExistingCodexThread(
         },
         params,
       ),
+      preparedOpenClawBaseInstructions: context.resolveOpenClawBaseInstructions(promptBinding),
       lifecycle: {
         action: "resumed",
         ...(activeTurnIds.length ? { activeTurnIds } : {}),
@@ -626,6 +609,8 @@ export async function startFreshCodexThread(
     startParams,
     { model: response.model, modelProvider: bindingModelProvider ?? null },
   );
+  // An authored native base moves OpenClaw's base into the developer carrier.
+  const baseInstructions = context.resolveOpenClawBaseInstructions();
   const startedBinding: CodexAppServerThreadBinding = {
     threadId: response.thread.id,
     ...(clientId ? { clientId } : {}),
@@ -714,10 +699,11 @@ export async function startFreshCodexThread(
     // turn still reports the provider selected by the native runtime.
     modelProvider:
       response.modelProvider ?? requestModelProvider ?? startModelProvider ?? modelProvider,
+    preparedOpenClawBaseInstructions: baseInstructions,
     // Restricted ephemeral threads also need creation policy for fenced warm reuse.
     liveThreadEphemeralPolicy: startParams.ephemeral
       ? createCodexEphemeralThreadPolicy(
-          { ...params, config: startParams.config },
+          { ...params, baseInstructions, config: startParams.config },
           context.effectiveConfig.config,
         )
       : undefined,

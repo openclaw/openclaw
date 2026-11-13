@@ -85,6 +85,37 @@ it("classifies canonical and impersonated unavailability", () => {
   ).toBeUndefined();
 });
 
+it("requires SQLite worker provenance for native worker OOM classification", () => {
+  const nativeOom = codedError("ERR_WORKER_OUT_OF_MEMORY");
+  expect(classifyGatewayStorageFailure(nativeOom)).toBeUndefined();
+
+  const storageOom = new SqliteWorkerError("Storage worker stopped", "unavailable");
+  storageOom.cause = nativeOom;
+  expect(classifyGatewayStorageFailure(storageOom)).toBe("storage-worker-memory");
+
+  const unsafe = unsafeGetter();
+  const hostileErrors = [undefined];
+  Object.defineProperty(hostileErrors, "0", { get: unsafe });
+  Object.defineProperty(hostileErrors, Symbol.iterator, { value: unsafe });
+  Object.defineProperty(nativeOom, "errors", { value: hostileErrors });
+  expect(classifyGatewayStorageFailure(storageOom)).toBe("storage-worker-memory");
+  expect(unsafe).not.toHaveBeenCalled();
+  expect(
+    classifyGatewayStorageFailure(
+      new AggregateError(
+        [
+          new SqliteWorkerError("Storage worker unavailable", "unavailable"),
+          codedError("ERR_WORKER_OUT_OF_MEMORY"),
+        ],
+        "Unrelated worker failures",
+      ),
+    ),
+  ).toBe("unavailable");
+  expect(classifyGatewayStorageFailure({ code: "storage-worker-memory" })).toBe(
+    "storage-worker-memory",
+  );
+});
+
 it.each([false, true])("ignores throwing metadata (native: %s)", (native) => {
   const unsafe = unsafeGetter();
   const failure = native

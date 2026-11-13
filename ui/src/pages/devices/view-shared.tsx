@@ -122,8 +122,11 @@ export function CommandFact(props: { values: readonly string[] }) {
   return (
     <Show when={props.values.length > 0}>
       <DeviceFact label={t("devices.inventory.commands")} mono>
-        {formatList(visible())}
-        {overflow() > 0 ? ` +${overflow()}` : ""}
+        <details>
+          <summary>{t("devices.inventory.showDetails")}</summary>
+          {formatList(visible())}
+          {overflow() > 0 ? ` +${overflow()}` : ""}
+        </details>
       </DeviceFact>
     </Show>
   );

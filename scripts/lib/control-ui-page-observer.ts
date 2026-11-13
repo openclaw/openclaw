@@ -17,16 +17,43 @@ export type ControlUiPageObservation = {
     at: number;
     value: number;
     hadRecentInput: boolean;
-    nodes: Array<{ tag: string; classes: string; before: number[]; after: number[] }>;
+    nodes: Array<{
+      tag: string;
+      classes: string;
+      rowKey: string | null;
+      ancestors: string[];
+      before: number[];
+      after: number[];
+    }>;
   }>;
   elementsBefore: number;
   elementsAfter: number;
+  assets: Array<{
+    name: string;
+    startMs: number;
+    requestMs: number;
+    responseMs: number;
+    endMs: number;
+    protocol: string;
+    encodedBodyBytes: number;
+    transferBytes: number;
+    completedByReady: boolean | null;
+  }>;
+  assetRequests: number;
+  assetRequestsCompletedByReady: number | null;
+  assetEncodedBytesCompletedByReady: number | null;
+  /** Six-connection HTTP/1.1 capacity floor, not measured dependency depth. */
+  http1AssetConnectionWavesByReady: number | null;
 };
 
 type PageObserver = {
   reset(): number;
   finish(): number;
-  read(actionStartedAt?: number): ControlUiPageObservation;
+  read(
+    actionStartedAt?: number,
+    readyAt?: number,
+    assetStartedAt?: number,
+  ): ControlUiPageObservation;
 };
 
 declare global {
@@ -53,13 +80,46 @@ function installPageObserverInBrowser() {
   const longTasksSupported = supported.includes("longtask");
   const layoutShiftsSupported = supported.includes("layout-shift");
   const tasks: PerformanceEntry[] = [];
-  const shifts: Shift[] = [];
+  const shifts: Array<{
+    startTime: number;
+    value: number;
+    hadRecentInput: boolean;
+    nodes: ControlUiPageObservation["layoutShiftSources"][number]["nodes"];
+  }> = [];
   const taskObserver = longTasksSupported
     ? new PerformanceObserver((list) => tasks.push(...list.getEntries()))
     : undefined;
   const collectShifts = (entries: PerformanceEntry[]) => {
     // The Layout Instability entry contract supplies value and hadRecentInput.
-    shifts.push(...(entries as Shift[]));
+    // Capture identity at delivery: virtual rows may retire before the report is read.
+    for (const shift of entries as Shift[]) {
+      shifts.push({
+        startTime: shift.startTime,
+        value: shift.value,
+        hadRecentInput: shift.hadRecentInput,
+        nodes: shift.sources.map(({ node, previousRect: before, currentRect: after }) => {
+          const element = node instanceof Element ? node : node?.parentElement;
+          const ancestors: string[] = [];
+          for (
+            let parent = element;
+            parent && ancestors.length < 6;
+            parent = parent.parentElement
+          ) {
+            ancestors.push(`${parent.localName}.${[...parent.classList].join(".")}`);
+          }
+          return {
+            tag: node?.nodeName ?? "removed",
+            classes: node instanceof Element ? (node.getAttribute("class") ?? "") : "",
+            rowKey:
+              element?.closest("[data-virtual-row-key]")?.getAttribute("data-virtual-row-key") ??
+              null,
+            ancestors,
+            before: [before.x, before.y, before.width, before.height],
+            after: [after.x, after.y, after.width, after.height],
+          };
+        }),
+      });
+    }
   };
   const shiftObserver = layoutShiftsSupported
     ? new PerformanceObserver((list) => collectShifts(list.getEntries()))
@@ -85,15 +145,39 @@ function installPageObserverInBrowser() {
       endedAt ??= performance.now();
       return endedAt;
     },
-    read(actionStartedAt) {
+    read(actionStartedAt, readyAt, assetStartedAt) {
       const start = actionStartedAt ?? startedAt;
+      // The navigation task starts before its inner asset timestamp; retain it in task/CLS proof.
+      const assetStart = assetStartedAt ?? start;
       const end = endedAt ?? performance.now();
       tasks.push(...(taskObserver?.takeRecords() ?? []));
       collectShifts(shiftObserver?.takeRecords() ?? []);
-      const inInterval = (entry: PerformanceEntry) =>
+      const inInterval = (entry: { startTime: number }) =>
         entry.startTime >= start && entry.startTime < end;
       const observedTasks = tasks.filter(inInterval);
       const observedShifts = shifts.filter(inInterval);
+      // Completed resource entries exclude in-flight requests, as in boot evidence.
+      const resources = performance.getEntriesByType("resource") as PerformanceResourceTiming[];
+      const assets = resources
+        .filter(
+          (entry) =>
+            entry.startTime >= assetStart &&
+            entry.startTime < end &&
+            entry.responseEnd <= end &&
+            /\.(?:m?js|css|woff2?|ttf|otf)$/u.test(new URL(entry.name).pathname),
+        )
+        .map((entry) => ({
+          name: new URL(entry.name).pathname,
+          startMs: entry.startTime - assetStart,
+          requestMs: entry.requestStart - assetStart,
+          responseMs: entry.responseStart - assetStart,
+          endMs: entry.responseEnd - assetStart,
+          protocol: entry.nextHopProtocol,
+          encodedBodyBytes: entry.encodedBodySize,
+          transferBytes: entry.transferSize,
+          completedByReady: readyAt === undefined ? null : entry.responseEnd <= readyAt,
+        }));
+      const readyAssets = assets.filter((entry) => entry.completedByReady);
       let cls = 0;
       let windowValue = 0;
       let windowStart = 0;
@@ -139,15 +223,21 @@ function installPageObserverInBrowser() {
           at: shift.startTime - start,
           value: shift.value,
           hadRecentInput: shift.hadRecentInput,
-          nodes: shift.sources.map(({ node, previousRect: before, currentRect: after }) => ({
-            tag: node?.nodeName ?? "removed",
-            classes: node instanceof Element ? (node.getAttribute("class") ?? "") : "",
-            before: [before.x, before.y, before.width, before.height],
-            after: [after.x, after.y, after.width, after.height],
-          })),
+          nodes: shift.nodes,
         })),
         elementsBefore,
         elementsAfter: document.querySelectorAll("*").length,
+        assets,
+        assetRequests: assets.length,
+        assetRequestsCompletedByReady: readyAt === undefined ? null : readyAssets.length,
+        assetEncodedBytesCompletedByReady:
+          readyAt === undefined
+            ? null
+            : readyAssets.reduce((total, entry) => total + entry.encodedBodyBytes, 0),
+        http1AssetConnectionWavesByReady:
+          readyAt !== undefined && readyAssets.every((entry) => entry.protocol === "http/1.1")
+            ? Math.ceil(readyAssets.length / 6)
+            : null,
       };
     },
   };
@@ -183,11 +273,16 @@ export async function finishControlUiPageObserver(page: Page) {
 export async function readControlUiPageObserver(
   page: Page,
   actionStartedAt?: number,
+  readyAt?: number,
+  assetStartedAt?: number,
 ): Promise<ControlUiPageObservation> {
-  return page.evaluate((start) => {
-    if (!window.openclawPageBenchmarkObserver) {
-      throw new Error("Control UI page observer was not installed");
-    }
-    return window.openclawPageBenchmarkObserver.read(start);
-  }, actionStartedAt);
+  return page.evaluate(
+    ({ start, ready, assetStart }) => {
+      if (!window.openclawPageBenchmarkObserver) {
+        throw new Error("Control UI page observer was not installed");
+      }
+      return window.openclawPageBenchmarkObserver.read(start, ready, assetStart);
+    },
+    { start: actionStartedAt, ready: readyAt, assetStart: assetStartedAt },
+  );
 }

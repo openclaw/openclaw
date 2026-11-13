@@ -76,7 +76,7 @@ describe("explicit live model candidates", () => {
           id: "deepseek-v4-flash",
           api: "openai-completions",
           baseUrl: "https://api.deepseek.com",
-          input: ["text"],
+          input: ["text", "image"],
         },
         {
           provider: "deepseek",

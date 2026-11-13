@@ -136,7 +136,7 @@ it.each([
         pluginDir,
         apiKey: "synthetic-fork-key",
         input: ["text", "image"],
-        tools: ["fork_probe", ...(api === "openai-responses" ? ["web_search"] : [])],
+        tools: ["fork_probe"],
         modelSettings: {
           agentRuntime: { id: "openclaw" },
           params: {
@@ -154,14 +154,28 @@ it.each([
         throwOnLoadError: true,
       });
       const sessionId = `fork-${provider}`;
-      const sessionKey = `agent:main:direct:${sessionId}`;
+      const sessionKey = `agent:main:subagent:${sessionId}`;
       const target = {
         agentId: "main",
         sessionId,
         sessionKey,
         storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
       };
-      await upsertSessionEntryCore(target, { sessionId, updatedAt: 1 });
+      // The delegated child's fork tool policy reads its cold, persisted ancestor row.
+      const ancestor = {
+        ...target,
+        sessionKey: "agent:main:dashboard:coding",
+        sessionId: "coding",
+      };
+      const policy = { requesterSessionKey: "agent:main:main", targetAgentId: "main" };
+      const delegatedToolPolicy = { ...policy, deny: [], requesterDeny: [] };
+      for (const [row, spawnedBy] of [
+        [ancestor, "agent:main:main"],
+        [target, ancestor.sessionKey],
+      ] as const) {
+        const lineage = { spawnedBy, inheritedToolPolicyVersion: 1 as const, delegatedToolPolicy };
+        await upsertSessionEntryCore(row, { ...lineage, sessionId: row.sessionId, updatedAt: 1 });
+      }
       const host = getAiTransportHost();
       const payloads: Array<Record<string, unknown>> = [];
       let toolsRemaining = 0;
@@ -180,8 +194,7 @@ it.each([
           return response(api, model, tool);
         },
       });
-      const onUsage = vi.fn();
-      const onBlockReply = vi.fn();
+      const [onUsage, onBlockReply] = [vi.fn(), vi.fn()];
       let sessionReadCurrent = true;
       const fork = (abortSignal?: AbortSignal, denyTools = true) =>
         runBtwSideQuestion({
@@ -258,23 +271,9 @@ it.each([
         const original = structuredClone(payloads[0]!);
         // Reconstruct after process-local transport state is discarded, as after restart.
         cleanupSessionResources(sessionId);
-        const sessionFile = resolveBtwSessionTranscriptPath({
-          sessionId,
-          sessionKey,
-          storePath: target.storePath,
-          sessionEntry: { sessionId, updatedAt: 1 },
-        });
-        if (!sessionFile) {
-          throw new Error("Parent transcript was not created");
-        }
-        const readTranscript = () =>
-          readBtwTranscriptMessages({
-            agentId: "main",
-            sessionFile,
-            sessionId,
-            sessionKey,
-            storePath: target.storePath,
-          });
+        const sessionEntry = { sessionId, updatedAt: 1 };
+        const sessionFile = resolveBtwSessionTranscriptPath({ ...target, sessionEntry })!;
+        const readTranscript = () => readBtwTranscriptMessages({ ...target, sessionFile });
         const parentTranscript = await readTranscript();
         const database = openOpenClawStateDatabase();
         const placements = createWorkerSessionPlacementStore({ database });
@@ -318,14 +317,29 @@ it.each([
           expect(replayMessages).toHaveLength(originalMessages.length + 2);
           expect(JSON.stringify(replay.instructions)).toBe(JSON.stringify(original.instructions));
         } else {
-          // Older routes do not persist their full system prompt or ephemeral temporal carrier.
           // Rebuild from configured bootstrap context while preserving the durable conversation.
           expect(JSON.stringify(replayMessages)).toContain(
             "Stable plugin context\\n\\nParent question",
           );
           if (api === "anthropic-messages") {
-            expect(JSON.stringify(replayMessages[0])).toBe(JSON.stringify(originalMessages[0]));
-            expect(replayMessages).toHaveLength(3);
+            const originalUser = originalMessages[0];
+            if (!isRecord(originalUser) || typeof originalUser.content !== "string") {
+              throw new Error("Missing original Anthropic user text");
+            }
+            expect(replayMessages.slice(0, originalMessages.length)).toEqual([
+              {
+                ...originalUser,
+                content: [
+                  {
+                    type: "text",
+                    text: originalUser.content,
+                    cache_control: { type: "ephemeral" },
+                  },
+                ],
+              },
+              ...originalMessages.slice(1),
+            ]);
+            expect(replayMessages).toHaveLength(originalMessages.length + 2);
           }
         }
         expect(JSON.stringify(original)).toContain("REVIEW_CONTEXT_1672");
@@ -336,12 +350,11 @@ it.each([
         expect(replay.tool_choice).toEqual(
           api === "anthropic-messages" ? { type: "none" } : "none",
         );
-        if (api === "openai-responses") {
-          expect(original.tools).toEqual(expect.arrayContaining([{ type: "web_search" }]));
-        }
+        expect(JSON.stringify(original.tools)).not.toContain('"web_search"');
         expect(JSON.stringify(original.tools)).toContain("fork_probe");
         expect(replay.previous_response_id).toBeUndefined();
-        expect(replay.prompt_cache_key).toBeUndefined();
+        expect(replay.prompt_cache_key).toBe(original.prompt_cache_key);
+        expect(replay.reasoning).toEqual(original.reasoning);
         if (api !== "anthropic-messages") {
           expect(original.prompt_cache_key).toBeTruthy();
         } else {
@@ -388,7 +401,7 @@ it.each([
             ]);
             const whileRunning = await readTranscript();
             await expect(fork()).resolves.toEqual({ text: "Review answer" });
-            expect(payloads.at(-1)?.prompt_cache_key).toBeUndefined();
+            expect(payloads.at(-1)?.prompt_cache_key).toBe(original.prompt_cache_key);
             expect(JSON.stringify(payloads.at(-1))).toContain("This tool call is still running");
             expect(JSON.stringify(payloads.at(-1))).not.toContain("LIVE_TOOL_RESULT_1672");
             expect(await readTranscript()).toEqual(whileRunning);

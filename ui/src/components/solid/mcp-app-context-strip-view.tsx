@@ -109,9 +109,6 @@ export function McpAppContextStripView(
   }
   return (
     <section class="mcp-app-context" aria-label={t("mcpApp.contextTitle")}>
-      <div class="mcp-app-context__header" title={t("mcpApp.contextDescription")}>
-        <Icon name="puzzle" /> {t("mcpApp.contextTitle")}
-      </div>
       <For each={props.entries}>
         {(entry) => (
           <div class="mcp-app-context__items">
@@ -130,6 +127,11 @@ export function McpAppContextStripView(
                     {thumbnail ? (
                       <img
                         src={thumbnail}
+                        class={{
+                          "mcp-app-context__icon":
+                            content.type === "resource_link" &&
+                            content.icons?.some((icon) => icon.src === thumbnail) === true,
+                        }}
                         alt={title()}
                         referrerpolicy="no-referrer"
                         loading="lazy"

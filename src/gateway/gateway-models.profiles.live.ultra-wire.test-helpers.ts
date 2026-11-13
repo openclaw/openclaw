@@ -16,7 +16,7 @@ export type OpenAIUltraWireObservation = {
 };
 
 export const OPENAI_ULTRA_NORMAL_EFFORT = "medium";
-// src/skills/workshop/review-run.ts runs background reviews with thinkLevel "low".
+// Skill Workshop reviews run as session forks, which src/agents/session-fork-run.ts runs with thinkLevel "low".
 const SKILL_WORKSHOP_REVIEW_EFFORT = "low";
 
 function logUltraProgress(message: string): void {

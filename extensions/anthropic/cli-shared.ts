@@ -1,8 +1,4 @@
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
-import {
-  requiresClaudeMandatoryAdaptiveThinking,
-  resolveClaudeHaiku55ModelIdentity,
-} from "openclaw/plugin-sdk/claude-model-runtime";
 import type {
   CliBackendConfig,
   CliBackendResolveExecutionArgsContext,
@@ -27,6 +23,7 @@ const CLAUDE_EXCLUDE_DYNAMIC_SYSTEM_PROMPT_SECTIONS_ARG =
 const CLAUDE_EXCLUDE_DYNAMIC_SYSTEM_PROMPT_SECTIONS_MINIMUM_VERSION = "2.1.98";
 const CLAUDE_SETTINGS_ARG = "--settings";
 const CLAUDE_EFFORT_ARG = "--effort";
+const CLAUDE_FAST_MODE_ARG = "--fast-mode";
 const CLAUDE_BARE_ARG = "--bare";
 const CLAUDE_SAFE_MODE_ARG = "--safe-mode";
 const CLAUDE_DISABLE_SLASH_COMMANDS_ARG = "--disable-slash-commands";
@@ -66,21 +63,15 @@ export function resolveClaudeCliAutoCompactEnv(
  * Map OpenClaw's fixed thinking levels to Claude Code's per-process budget.
  *
  * Claude Code 2.x reads MAX_THINKING_TOKENS for print-mode runs and a positive
- * integer requests that fixed token budget. Mandatory-adaptive models ignore
- * that projection, so they retain adaptive thinking and use --effort instead.
+ * integer requests that fixed token budget. Claude Code owns the per-model
+ * answer: models without budget or disabled thinking keep adaptive thinking
+ * and take --effort, so the projection does not depend on the model id.
  * These fixed budgets match OpenClaw's canonical provider defaults in
  * packages/ai/src/providers/simple-options.ts.
  */
 export function resolveClaudeCliThinkingEnv(
   thinkingLevel: CliBackendResolveExecutionArgsContext["thinkingLevel"],
-  modelId?: string,
 ): Record<string, string> | undefined {
-  if (
-    requiresClaudeMandatoryAdaptiveThinking({ id: modelId }) ||
-    (thinkingLevel !== "off" && resolveClaudeHaiku55ModelIdentity({ id: modelId }))
-  ) {
-    return undefined;
-  }
   switch (thinkingLevel) {
     case "off":
       return { MAX_THINKING_TOKENS: "0" };
@@ -202,14 +193,9 @@ function normalizeClaudeBackendArgs(context: CliBackendResolveExecutionArgsConte
 function applyClaudeCliEffortArgs(
   args: readonly string[],
   thinkingLevel?: string | null,
-  modelId?: string,
 ): string[] {
   const level = normalizeOptionalLowercaseString(thinkingLevel);
   switch (level) {
-    case "off":
-      return requiresClaudeMandatoryAdaptiveThinking({ id: modelId })
-        ? [...stripClaudeEffortArgs(args), CLAUDE_EFFORT_ARG, "low"]
-        : [...args];
     case "minimal":
     case "low":
       return [...stripClaudeEffortArgs(args), CLAUDE_EFFORT_ARG, "low"];
@@ -224,6 +210,15 @@ function applyClaudeCliEffortArgs(
     default:
       return [...args];
   }
+}
+
+// Claude Code owns fast mode: it ignores the flag for models without it and resends
+// a refused fast request (for example, no usage credits) at standard speed.
+function applyClaudeCliFastModeArgs(
+  args: readonly string[],
+  context: Pick<CliBackendResolveExecutionArgsContext, "fastMode">,
+): string[] {
+  return context.fastMode === true ? [...args, CLAUDE_FAST_MODE_ARG, "on"] : [...args];
 }
 
 function stripClaudeEffortArgs(args: readonly string[]): string[] {
@@ -400,6 +395,7 @@ function readClaudeToolDenials(args: readonly string[]): string[] {
 function resolveClaudeCliRestrictedExecutionArgs(
   baseArgs: readonly string[],
   availability: NonNullable<CliBackendResolveExecutionArgsContext["toolAvailability"]>,
+  options: { preserveSlashCommands?: boolean } = {},
 ): string[] {
   const preservedDenials = readClaudeToolDenials(baseArgs);
   const normalized = stripClaudeArgs(baseArgs, {
@@ -415,7 +411,9 @@ function resolveClaudeCliRestrictedExecutionArgs(
     "",
     CLAUDE_SETTINGS_ARG,
     CLAUDE_RESTRICTED_SETTINGS,
-    CLAUDE_DISABLE_SLASH_COMMANDS_ARG,
+    // /compact IS a native slash command: keep the restricted tool set for
+    // cache parity, but don't disable the command being executed.
+    ...(options.preserveSlashCommands ? [] : [CLAUDE_DISABLE_SLASH_COMMANDS_ARG]),
     CLAUDE_NO_CHROME_ARG,
     CLAUDE_STRICT_MCP_CONFIG_ARG,
     CLAUDE_TOOLS_ARG,
@@ -454,9 +452,14 @@ export function resolveClaudeCliExecutionArgs(
   const executionArgs =
     context.executionMode === "side-question"
       ? resolveClaudeCliSideQuestionExecutionArgs(baseArgs)
-      : applyClaudeCliEffortArgs(baseArgs, context.thinkingLevel, context.modelId);
+      : applyClaudeCliFastModeArgs(
+          applyClaudeCliEffortArgs(baseArgs, context.thinkingLevel),
+          context,
+        );
   const resolvedArgs = context.toolAvailability
-    ? resolveClaudeCliRestrictedExecutionArgs(executionArgs, context.toolAvailability)
+    ? resolveClaudeCliRestrictedExecutionArgs(executionArgs, context.toolAvailability, {
+        preserveSlashCommands: context.controlOperation === "compact",
+      })
     : executionArgs;
   return options.excludeDynamicSystemPromptSections && context.executionMode !== "side-question"
     ? [...resolvedArgs, CLAUDE_EXCLUDE_DYNAMIC_SYSTEM_PROMPT_SECTIONS_ARG]

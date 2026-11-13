@@ -312,7 +312,7 @@ export async function removeStaleInventoryEntries(
     state,
     failures.length > 0
       ? {
-          error: `Failed to remove ${failures.length} entr${failures.length === 1 ? "y" : "ies"}: ${failures[0]}`,
+          error: `Couldn’t remove ${failures.length} entr${failures.length === 1 ? "y" : "ies"}. Review the remaining entries before trying again. Details: ${failures[0]}`,
         }
       : undefined,
   );
@@ -491,7 +491,7 @@ export async function loadExecApprovals(
   try {
     const rpc = resolveExecApprovalsRpc(target);
     if (!rpc) {
-      state.execApprovalsError = "Select a node before loading exec approvals.";
+      state.execApprovalsError = "Select a device before loading exec approvals.";
       return;
     }
     const res = await client.request<ExecApprovalsSnapshot>(rpc.method, rpc.params);
@@ -545,7 +545,7 @@ export async function saveExecApprovals(
   try {
     if (isNativeExecApprovalsSnapshot(state.execApprovalsSnapshot)) {
       state.execApprovalsError =
-        "Host-native node approvals are read-only here; use the companion app or approvals set --node.";
+        "Device approvals are read-only here. Use the companion app or approvals set --node.";
       return;
     }
     const baseHash = state.execApprovalsSnapshot?.hash;
@@ -556,7 +556,7 @@ export async function saveExecApprovals(
     const file = state.execApprovalsForm ?? state.execApprovalsSnapshot?.file ?? {};
     const rpc = resolveExecApprovalsRpc(target, { file, baseHash });
     if (!rpc) {
-      state.execApprovalsError = "Select a node before saving exec approvals.";
+      state.execApprovalsError = "Select a device before saving exec approvals.";
       return;
     }
     await client.request(rpc.method, rpc.params);
@@ -585,7 +585,8 @@ function mutateExecApprovalsForm(
   mode: "copy-set" | "copy-remove",
 ) {
   if (isNativeExecApprovalsSnapshot(state.execApprovalsSnapshot)) {
-    state.execApprovalsError = "Host-native node approvals are read-only here.";
+    state.execApprovalsError =
+      "Device approvals are read-only here. Use the companion app or approvals set --node.";
     return;
   }
   const base = state.execApprovalsForm ?? state.execApprovalsSnapshot?.file ?? {};

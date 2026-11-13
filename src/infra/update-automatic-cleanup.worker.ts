@@ -6,6 +6,7 @@ import {
 import { retireOwnedSessionSqliteRecovery } from "../commands/doctor-session-sqlite-retirement.js";
 import { cleanupCompletedUpdateRecovery } from "../commands/update-automatic-cleanup.js";
 import { createConfigIO } from "../config/io.js";
+import { withSqliteSnapshotReuse } from "./sqlite-snapshot-reuse.js";
 import {
   requestSqliteWorkerOperationAdmission,
   withSqliteWorkerOperationAdmission,
@@ -35,36 +36,38 @@ serveWorkerTasks<UpdateStepResult | RecoveryCleanupReport | undefined, Automatic
       );
     };
     try {
-      return await control.runNativeSection(async () => {
-        if (input.runId) {
-          return cleanupCompletedUpdateRecovery(input.runId, input.env, assertCurrent);
-        }
-        assertCurrent();
-        const io = createConfigIO({
-          env: input.env,
-          observe: false,
-          pluginValidation: "core-only",
-        });
-        const readConfig = () => io.readSourceConfigBestEffort();
-        const preview = await inspectSessionSqliteRecovery({
-          cfg: await readConfig(),
-          env: input.env,
-        });
-        assertCurrent();
-        return input.dryRun
-          ? preview
-          : retireOwnedSessionSqliteRecovery(
-              {
-                env: input.env,
-                preview,
-                readConfig,
-                confirm: async () => true,
-                // Manual retirement shares the serving owner's ordinary destination writes.
-                allowOwnedDestinationMutation: true,
-              },
-              { assertCurrent },
-            );
-      });
+      return await control.runNativeSection(() =>
+        withSqliteSnapshotReuse(async () => {
+          if (input.runId) {
+            return cleanupCompletedUpdateRecovery(input.runId, input.env, assertCurrent);
+          }
+          assertCurrent();
+          const io = createConfigIO({
+            env: input.env,
+            observe: false,
+            pluginValidation: "core-only",
+          });
+          const readConfig = () => io.readSourceConfigBestEffort();
+          const preview = await inspectSessionSqliteRecovery({
+            cfg: await readConfig(),
+            env: input.env,
+          });
+          assertCurrent();
+          return input.dryRun
+            ? preview
+            : retireOwnedSessionSqliteRecovery(
+                {
+                  env: input.env,
+                  preview,
+                  readConfig,
+                  confirm: async () => true,
+                  // Manual retirement shares the serving owner's ordinary destination writes.
+                  allowOwnedDestinationMutation: true,
+                },
+                { assertCurrent },
+              );
+        }),
+      );
     } finally {
       input.authority.close();
     }

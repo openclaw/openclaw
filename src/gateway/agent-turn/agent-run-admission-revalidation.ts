@@ -1,5 +1,6 @@
 import { ErrorCodes, type ErrorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
+import { isUserInitiatedAgentRunAbortReason } from "../../agents/run-termination.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { registerChatAbortController } from "../chat-abort.js";
@@ -121,7 +122,13 @@ export function createAgentRunAdmissionRevalidator(options: {
     return (async () => {
       try {
         if (userTurn) {
-          await releasePreparedAgentRunUserTurn(userTurn);
+          await releasePreparedAgentRunUserTurn(
+            userTurn,
+            "cancelled",
+            isUserInitiatedAgentRunAbortReason(activeRunAbort.controller.signal.reason)
+              ? true
+              : undefined,
+          );
         }
         // Abort replay must not publish before pending input has durably settled.
         publishAborted();

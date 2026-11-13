@@ -120,6 +120,7 @@ export function createSessionsPage(
   let listRequest: Promise<void> | undefined;
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
   let appliedListResult: SessionsListResult | null | undefined;
+  let appliedArchiving = "";
   const rosterReadiness = createSessionsRosterReadiness(state);
   const details = createSessionDetails({
     captureScope: captureRequestScope,
@@ -251,7 +252,6 @@ export function createSessionsPage(
     publishError: publishRequestError,
     refresh: refreshSessionList,
     agentId: sessionAgentId,
-    patch: patchSession,
   });
 
   const groups = createSessionGroups({
@@ -388,7 +388,13 @@ export function createSessionsPage(
     const apply = (snapshot: SessionListSnapshot) => {
       applyListSnapshot(binding, snapshot);
     };
-    unsubscribeList = sessions.subscribeList(query, apply);
+    const stopList = sessions.subscribeList(query, apply);
+    // A held archive changes row visibility without publishing a new list result.
+    const stopArchiveVisibility = sessions.subscribe(() => apply(sessions.listSnapshot(query)));
+    unsubscribeList = () => {
+      stopList();
+      stopArchiveVisibility();
+    };
     const snapshot = sessions.listSnapshot(query);
     apply(snapshot);
     if (refreshMissing && (!snapshot.result || snapshot.loading)) {
@@ -406,9 +412,17 @@ export function createSessionsPage(
     if (!result) {
       return;
     }
-    if (result !== appliedListResult) {
+    // Archives held behind their Undo window leave the table as they do the sidebar.
+    const isArchiving = (row: GatewaySessionRow) =>
+      binding.sessions.archiveVisibility(row.key) === "pending";
+    const archiving = String(result.sessions.filter(isArchiving).map(({ key }) => key));
+    if (result !== appliedListResult || archiving !== appliedArchiving) {
       appliedListResult = result;
-      state.result = filterSessionRows(result, { archivedFilter: state.statusFilter });
+      appliedArchiving = archiving;
+      state.result = filterSessionRows(result, {
+        archivedFilter: state.statusFilter,
+        isHidden: isArchiving,
+      });
       void application.agentIdentity.ensure(sessionAgentIds(state.result.sessions));
     }
     if (!snapshot.loading && !snapshot.error && state.result && state.selectedSessions.size > 0) {

@@ -114,6 +114,7 @@ function createConfigSecretFields(context: SecretFieldsContext): ConfigSecretFie
       notify();
       for (const entry of dropped) {
         showToast({
+          severity: "error",
           message: t("configForm.secretDroppedOnConnectionChange", { field: entry.label }),
           durationMs: 12_000,
         });
@@ -152,6 +153,8 @@ function createConfigSecretFields(context: SecretFieldsContext): ConfigSecretFie
     const left = [...entries.values()].find((entry) => entry.pathname !== pathname);
     if (left) {
       showToast({
+        severity: undefined,
+        actionPrimary: true,
         message: t("configForm.secretUnsavedOnLeave", { field: left.label }),
         actionLabel: t("configForm.secretReview"),
         onAction: () =>

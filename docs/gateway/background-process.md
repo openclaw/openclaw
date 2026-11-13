@@ -57,7 +57,7 @@ Behavior:
 - Manually canceled commands do not trigger completion notifications, even when they produced output. Retained output remains available through `process poll` or `process log`. Cleanup failures from `process kill` still notify; request Stop reports cleanup failures through its error response without starting a completion turn.
 - Request Stop also retires the ordinary command's queued or running completion turn, including after its retained process output expires. A stopped continuation cannot deliver a late reply or retry itself. Unrelated queued events and later human requests remain eligible to run.
 - If automatic completion wake is unavailable, or you need quiet-success confirmation where empty successes do not wake (`tools.exec.notifyOnExitEmptySuccess`), poll with `process`.
-- Background exec does not automatically wake subagent sessions. A subagent must collect its command result with `process poll` before yielding without another completion source. A requested stop also needs its terminal result collected.
+- Background exec does not automatically wake hidden subagent sessions; visible spawned sessions are woken like other sessions. A hidden subagent must collect its command result with `process poll` before yielding without another completion source. A requested stop also needs its terminal result collected.
 - A quiet foreground command with an unexpired execution allowance is reported as long-running. Once that allowance expires, stalled-session recovery can abort the owning run. Repeated `process poll` or `process log` calls with unchanged output count toward loop detection; elapsed idle time alone is not progress.
 - Don't emulate reminders or delayed follow-ups with `sleep` loops or repeated polling — use cron for future work.
 
@@ -137,9 +137,11 @@ Durable commands have no interactive input: `pty: true`
 and `awaitResults: true` are refused, as are `process write`, `send-keys`, `submit`,
 and `paste`. Exec security policy, approvals, managed environment preparation, cwd
 restrictions, and process timeouts remain in effect. `timeoutSeconds` maps to
-`RuntimeMaxSec`; `timeoutSeconds: 0` disables that lifetime bound. The ordinary
-host-exec memory calculation supplies `MemoryMax`, enforced by the unit's cgroup
-instead of the sampled watchdog. Durable processes do not block safe Gateway
+`RuntimeMaxSec`; `timeoutSeconds: 0` disables that lifetime bound. Durable work shares the automatic
+[host-exec memory budget](/tools/exec#host-memory-protection) with ordinary commands.
+The shared sampler accounts their cgroup usage, including descendants after the
+initial shell exits. Each new unit also has hard RAM and swap bounds equal to the
+full shared allowance. Durable processes do not block safe Gateway
 restart or cooperative suspension. Ordinary background processes retain their
 existing restart and suspension behavior.
 
@@ -253,13 +255,19 @@ entry path, then uses in-process spawning for the rest of that Gateway process.
 A new Gateway process tries the broker again.
 When the broker is ready, exec commands, shell-snapshot capture and validation,
 and helpers using the shared command runner spawn from it, so Linux does not copy
-the Gateway's page tables for each command. The existing process supervisors and
+the Gateway's page tables for each command. Sandbox housekeeping retains that
+broker when it leaves the requesting turn's context, including recurring prune
+passes. The existing process supervisors and
 service relays still own cancellation, output, and cleanup. After the broker first
 becomes ready, broker loss fails affected commands rather than rerunning them; later commands use the restarted
 broker. One-shot CLI commands, native file-descriptor inputs, and independently
 launched applications keep their local process transport, as do Bun, macOS, and Windows.
 The broker has its own process group, which the Gateway terminates on broker loss;
 service relays also retain their own parent-loss cleanup.
+When the host denies group signals, the broker's own process group and the worker's retained
+detached groups are signaled member by member, and their extinction is confirmed from the process
+table. A detached child lost with the broker before its group identity was recorded can only be
+confirmed, not signaled.
 Broker cleanup grace periods use elapsed time and are unaffected by system-clock corrections.
 A detached child can survive a broker crash before its PID is reported, matching
 the existing residual for directly spawned children when the Gateway crashes.
@@ -309,6 +317,10 @@ Older builds do not reinterpret the new certificate as lineage completion.
 macOS and retained Bun process-group owners still require kernel group
 disappearance. Permission-denied checks never prove absence. A completed command
 or closed output pipe alone does not establish that its descendants stopped.
+A descendant that leaves the process group, such as a daemonized tmux server,
+can outlive cleanup there. Exec then still reports the command's own exit, adds a
+note that a detached process may still be running, and records the cleanup as
+uncertain; a failed or canceled command keeps reporting the cleanup failure.
 Local TUI shell shutdown uses the same cleanup owner for its own commands.
 If the host was busy, cleanup processes queued native completion events before
 reporting a timeout.
@@ -344,7 +356,7 @@ Actions:
 Notes:
 
 - Only backgrounded sessions are listed. Ordinary records stay in memory and are lost on process restart; durable records are adopted from SQLite. New handles include an opaque boot suffix so old handles cannot select a different process after restart. A durable process keeps its original handle when adopted. Looking up a lost ordinary handle advises checking saved output and side effects before rerunning. Older handles without a boot suffix cannot distinguish restart from expiry or removal.
-- Graceful Gateway shutdown stops ordinary supervised process trees and waits for their cleanup; durable units keep running under the systemd user manager. If earlier Gateway cleanup fails, the spawn broker remains available while command results, output, and process-tree cleanup settle. The shutdown caller still obeys its existing deadline and reports incomplete cleanup. After an abrupt crash, ordinary service-managed child processes have parent-loss cleanup; raw detached processes and native PTY descendants may survive. A lost handle does not establish that the process stopped.
+- Graceful Gateway shutdown stops ordinary supervised process trees and waits for their cleanup; durable units keep running under the systemd user manager. Restart interruption signals active requests' ordinary commands after saving restart markers, so their cleanup grace overlaps request draining. Accepted finalizers still finish before database sealing. If earlier Gateway cleanup fails, the spawn broker remains available while command results, output, and process-tree cleanup settle. The shutdown caller still obeys its existing deadline and reports incomplete cleanup. After an abrupt crash, ordinary service-managed child processes have parent-loss cleanup; raw detached processes and native PTY descendants may survive. A lost handle does not establish that the process stopped.
 - Resetting or deleting a session clears only its completed background processes; other sessions, explicit shared scopes, and running processes remain unaffected.
 - A live ordinary background session blocks cooperative host suspension and safe Gateway restart until the process owner confirms its actual exit. Durable units do not block either operation.
 - `process remove` can hide a running session immediately after requesting termination; ordinary processes keep suspension and restart blocked until exit confirmation.

@@ -1,11 +1,12 @@
 import type { ModelAuthStatusProvider } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { registerModelControlsEnglish } from "../i18n/locales/en-model-controls.ts";
+import { providerUsageForAccount } from "./model-auth.ts";
 
 registerModelControlsEnglish();
 
 export type ModelProviderAuthLabel = {
-  kind: "subscription" | "api" | "missing";
+  kind: "subscription" | "api" | "native" | "missing";
   label: string;
   detail?: string;
 };
@@ -31,6 +32,16 @@ export function describeModelProviderAuth(
       (showCredentials && provider.profiles.length > 0)) &&
       !provider.apiKey &&
       usableProfiles.length === 0);
+  if (!active && provider.nativeAuth && !(showCredentials && options.authProfileId)) {
+    const { kind, plan } = provider.nativeAuth;
+    return {
+      kind,
+      label:
+        kind === "subscription"
+          ? plan || t("chat.modelControls.subscription")
+          : t(kind === "api" ? "chat.modelControls.api" : "chat.modelControls.nativeLogin"),
+    };
+  }
   if (missing) {
     return { kind: "missing", label: t("modelSetup.candidates.signInNeeded") };
   }
@@ -46,15 +57,11 @@ export function describeModelProviderAuth(
     const account =
       active ??
       (showCredentials && subscriptions.length === 1 && !hasApiKey ? subscriptions[0] : undefined);
-    // A provider-wide plan remains ambiguous when an unusable second login exists.
-    const subscriptionCount = provider.profiles.filter(
-      (p) => p.type === "oauth" || p.type === "token",
-    ).length;
     return {
       kind: "subscription",
       label:
         active?.displayName ||
-        (subscriptionCount === 1 ? provider.usage?.plan : undefined) ||
+        providerUsageForAccount(provider, account?.profileId)?.plan ||
         t("chat.modelControls.subscription"),
       detail: account?.email,
     };

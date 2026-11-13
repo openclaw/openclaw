@@ -22,15 +22,27 @@ export function isMonitoredAuthProvider(p: ModelAuthStatusProvider): boolean {
   );
 }
 
+/** Only the measured account may consume account-specific quota facts. */
+export function providerUsageForAccount(
+  provider: Pick<ModelAuthStatusProvider, "usage">,
+  authProfileId: string | undefined,
+): ModelAuthStatusProvider["usage"] {
+  if (!authProfileId || provider.usage?.authProfileId !== authProfileId) {
+    return undefined;
+  }
+  return provider.usage;
+}
+
 const AUTH_STATUS_PRIORITY = ["expired", "missing", "expiring", "ok", "static"] as const;
 
 /** Collapse auth aliases before display; Gateway rows retain their auth facts. */
 export function listEffectiveModelAuthProviders(
   providers: readonly ModelAuthStatusProvider[],
+  providerKey: (provider: string) => string = canonicalModelAuthProviderId,
 ): ModelAuthStatusProvider[] {
   const groups = new Map<string, ModelAuthStatusProvider[]>();
   for (const provider of providers) {
-    const id = canonicalModelAuthProviderId(provider.provider);
+    const id = providerKey(provider.provider);
     const group = groups.get(id) ?? [];
     group.push(provider);
     groups.set(id, group);
@@ -44,11 +56,17 @@ export function listEffectiveModelAuthProviders(
     // An API key configured on any alias is a fact of the merged provider, not of
     // the worst-status record alone; dropping it would fake a sign-in gap.
     const apiKey = group.find((provider) => provider.apiKey)?.apiKey;
-    return Object.assign({}, selected, {
+    const merged = Object.assign({}, selected, {
       provider: id,
       profiles: group.flatMap((provider) => provider.profiles),
       ...(apiKey ? { apiKey } : {}),
     });
+    // Usage aliases cannot move a native runtime's billing facts onto an API
+    // provider. Runtime-specific consumers preserve the runtime key instead.
+    if (selected.provider !== id) {
+      delete merged.nativeAuth;
+    }
+    return merged;
   });
 }
 

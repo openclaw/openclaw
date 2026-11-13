@@ -1,2 +1,0 @@
-233
-# Real managed-checkout history-cut regression: incarnation transfer, failure recovery, reset and retry.

@@ -266,10 +266,10 @@ suite.define(() => {
         await expect
           .poll(async () => detail.locator(".settings-row__desc").allTextContents())
           .toContain(
-            "No stored WhatsApp session was cleared. It may already be absent, or its auth directory may require manual cleanup.",
+            "No saved WhatsApp session was cleared. It may already be gone or need manual cleanup.",
           );
         await expect(qr.getAttribute("src")).resolves.toBe(QR_DATA_URL);
-        await expect(detail.getByText("Logged out.", { exact: true }).count()).resolves.toBe(0);
+        await expect(detail.getByText("Signed out.", { exact: true }).count()).resolves.toBe(0);
         await expectRequests(gateway, "channels.logout", 1);
         expect((await gateway.getRequests("channels.logout"))[0]?.params).toEqual({
           channel: "whatsapp",

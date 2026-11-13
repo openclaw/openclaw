@@ -1,8 +1,5 @@
-import type {
-  McpCatalogTool,
-  McpToolCatalog,
-  SessionMcpRuntime,
-} from "./agent-bundle-mcp-types.js";
+import type { McpCatalogTool, McpToolCatalog } from "./agent-bundle-mcp-catalog.types.js";
+import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 
 type Tool = Pick<McpCatalogTool, "toolName"> & Partial<McpCatalogTool>;
 

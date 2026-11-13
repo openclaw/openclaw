@@ -77,6 +77,9 @@ export function createPluginServiceControlUiIngress(options: {
       capabilityVersion: 2,
       open: async (input) => (await hostFactory()).open(input),
       bindPrincipal: async (input) => (await hostFactory()).bindPrincipal(input),
+      registerPrincipalRecovery: async (resume) => {
+        await (await hostFactory()).registerPrincipalRecovery?.(resume);
+      },
     },
   };
 }

@@ -31,7 +31,7 @@ const failure = (file: string, tests: string[] = [], classification = "new") => 
 });
 const file = "src/gateway/server.sessions.abort-authorization.test.ts";
 const repo = "openclaw/openclaw";
-const job = (id: number, name: string, conclusion = "failure") => ({
+const job = (id: number, name: string, conclusion = "failure", checkRun?: number) => ({
   id,
   name,
   run_id: run.id,
@@ -39,6 +39,9 @@ const job = (id: number, name: string, conclusion = "failure") => ({
   status: "completed",
   conclusion,
   html_url: `job-${id}`,
+  check_run_url: checkRun
+    ? `https://api.github.com/repos/${repo}/check-runs/${checkRun}`
+    : undefined,
 });
 const jobPage = (jobs: ReturnType<typeof job>[]) => ({ total_count: jobs.length, jobs });
 function failureApi(
@@ -62,7 +65,7 @@ function failureApi(
   });
 }
 
-it("opts --run into collecting ordinary failures outside CI", async () => {
+it("replays annotated failures when oversized logs are unavailable outside CI", async () => {
   const invoked = Promise.withResolvers<{
     command: string;
     args: string[];
@@ -74,7 +77,10 @@ it("opts --run into collecting ordinary failures outside CI", async () => {
   for (const key of ["CI", "GITHUB_ACTIONS", "OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE"]) {
     vi.stubEnv(key, fixtureEnv[key]);
   }
-  const output = vi.spyOn(console, "log").mockImplementation(() => {});
+  const reported = Promise.withResolvers<string>();
+  const output = vi
+    .spyOn(console, "log")
+    .mockImplementation((value: string) => reported.resolve(value));
   vi.resetModules();
   vi.doMock("node:child_process", async (importOriginal) => ({
     ...(await importOriginal<typeof import("node:child_process")>()),
@@ -84,15 +90,28 @@ it("opts --run into collecting ordinary failures outside CI", async () => {
     },
   }));
   const api = failureApi(
-    { 100: [job(1, "checks-node")] },
+    {
+      100: [job(1, "checks-node", "failure", 501)],
+    },
     [],
-    () => `FAIL gateway-server ${file} > native session > denies`,
+    () => {
+      throw new Error("job log exceeds the transport size limit");
+    },
   );
   vi.doMock("../../scripts/lib/plain-gh.mjs", async (importOriginal) => ({
     ...(await importOriginal<typeof import("../../scripts/lib/plain-gh.mjs")>()),
     execGhReadAsync: async (args: string[]) => {
       if (args[1] === "repos/openclaw/openclaw/actions/runs/100") {
         return JSON.stringify(run);
+      }
+      if (args[1] === `repos/${repo}/check-runs/501/annotations?per_page=100&page=1`) {
+        return JSON.stringify([
+          { annotation_level: "failure", message: "Process completed with exit code 1." },
+          {
+            annotation_level: "failure",
+            title: `[gateway-server] ${file} > native session > denies`,
+          },
+        ]);
       }
       const result = await api(args[1]!.replace(/^repos\/openclaw\/openclaw/, ""));
       return typeof result === "string" ? result : JSON.stringify(result);
@@ -106,7 +125,9 @@ it("opts --run into collecting ordinary failures outside CI", async () => {
       "--run",
     ];
     await import("../../scripts/ci-failed-tests.mts");
+    expect(await reported.promise).toContain(file);
     const child = await invoked.promise;
+    expect(api.mock.calls.filter(([route]) => route.endsWith("/logs"))).toHaveLength(1);
     expect(child).toMatchObject({
       command: "pnpm",
       args: ["test", file, "--", "-t", "native session > denies"],
@@ -278,3 +299,114 @@ it("shares classifier evidence, excludes control jobs, and explains non-Vitest f
     reason: expect.any(String),
   });
 });
+
+it("paginates UI annotations and selects the test entry point when the error points into a helper", async () => {
+  const selected = job(1, "checks-ui (3/3)", "failure", 501);
+  const annotation = {
+    annotation_level: "failure",
+    path: "ui/src/components/board/board-view.test-support.ts",
+    title: "[unit] src/components/board/board-view.test.ts > board > reports a failed rejection",
+  };
+  const transport = failureApi({ 100: [selected] });
+  const api = vi.fn(async (route: string) => {
+    if (route === "/check-runs/501/annotations?per_page=100&page=1") {
+      return [
+        annotation,
+        ...Array.from({ length: 99 }, () => ({ annotation_level: "warning", title: "lint" })),
+      ];
+    }
+    if (route === "/check-runs/501/annotations?per_page=100&page=2") {
+      return [
+        annotation,
+        {
+          ...annotation,
+          title:
+            "[unit] src/components/board/board-view.test.ts > board > reports a failed approval",
+        },
+      ];
+    }
+    return transport(route);
+  });
+  const failures = await collectFailures(run, repo, api);
+  expect(failures[0]?.files).toEqual([
+    {
+      file: "ui/src/components/board/board-view.test.ts",
+      tests: ["board > reports a failed approval", "board > reports a failed rejection"],
+    },
+  ]);
+  expect(rerunArgs(failures)).toEqual([
+    "test",
+    "ui/src/components/board/board-view.test.ts",
+    "--",
+    "-t",
+    "board > reports a failed approval|board > reports a failed rejection",
+  ]);
+  expect(api.mock.calls.filter(([route]) => route.includes("/annotations?"))).toHaveLength(2);
+  expect(transport.mock.calls.filter(([route]) => route.endsWith("/logs"))).toHaveLength(1);
+});
+
+it.each([false, true])(
+  "reports unavailable logs when annotations are empty or unavailable: %s",
+  async (unavailable) => {
+    const selected = job(1, "checks-node", "failure", 501);
+    const transport = failureApi({ 100: [selected] }, [], () => {
+      throw new Error("oversized log");
+    });
+    const api = async (route: string) => {
+      if (route.startsWith("/check-runs/")) {
+        if (unavailable) {
+          throw new Error("annotations unavailable");
+        }
+        return [];
+      }
+      return transport(route);
+    };
+    const failures = await collectFailures(run, repo, api);
+    expect(failures[0]?.files).toEqual([]);
+    expect(failures[0]?.reason).toContain("job log unavailable");
+    expect(transport.mock.calls.filter(([route]) => route === "/actions/jobs/1/logs")).toHaveLength(
+      1,
+    );
+  },
+);
+
+it.each([false, true])(
+  "keeps full-log UI failures and recovers annotated cases when logs are unavailable: %s",
+  async (unavailable) => {
+    const selectedFile = "ui/src/components/board/board-settings.test.ts";
+    const other = "ui/src/components/board/board-view.test.ts";
+    const transport = failureApi(
+      {
+        100: [job(1, "checks-ui (3/3)", "failure", 501)],
+      },
+      [],
+      () => {
+        if (unavailable) {
+          throw new Error("oversized log");
+        }
+        return `FAIL unit ${selectedFile.slice(3)} > native session > denies\nUnhandled Errors\n${other.slice(3)}:12`;
+      },
+    );
+    const api = async (route: string) =>
+      route.startsWith("/check-runs/")
+        ? [
+            {
+              annotation_level: "failure",
+              title: `${selectedFile.slice(3)} > native session > denies`,
+            },
+            { annotation_level: "failure", message: `[vitest] UNHANDLED ERRORS (1): ${other}` },
+          ]
+        : transport(route);
+    const failures = await collectFailures(run, repo, api);
+    expect(failures[0]?.files).toEqual(
+      unavailable
+        ? [{ file: selectedFile, tests: ["native session > denies"] }]
+        : [
+            { file: selectedFile, tests: ["native session > denies"] },
+            { file: other, tests: [] },
+          ],
+    );
+    expect(failures[0]?.reason.includes("additional failures may be missing")).toBe(unavailable);
+    expect(transport.mock.calls.filter(([route]) => route.endsWith("/logs"))).toHaveLength(1);
+  },
+);

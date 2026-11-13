@@ -13,6 +13,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
+import { projectPreparedSessionRunState } from "./session-row-prepared-read.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import {
   buildGatewaySessionRow,
@@ -151,6 +152,15 @@ test("materializes without a clock and presents equivalent indexed and fallback 
         now,
         subagentRuns: buildSubagentRunReadIndexFromRuns({ ...runInputs, now }),
       });
+      const prepared = presentSessionRow(materialized, {
+        ...presentation,
+        now,
+        preparedRunState: projectPreparedSessionRunState(key, materialized.source, now, {
+          ...rowContext,
+          subagentRuns: rowContext.subagentRuns.atTime(now),
+        }),
+      });
+      expect(JSON.stringify(prepared)).toBe(JSON.stringify(row));
       expect(indexed).toStrictEqual(row);
       expect(JSON.stringify(indexed)).toBe(JSON.stringify(row));
       expect(structuredClone(row)).toMatchObject({

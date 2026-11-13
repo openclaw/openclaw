@@ -1,5 +1,6 @@
 import { createMemo, createSignal, Errored, For, Loading, onSettled, type Element } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
+import { MenuHeading } from "../../components/solid/menu-heading.tsx";
 import { Popover } from "../../components/solid/popover.tsx";
 import { isComposingKeyboardEvent } from "../../lib/ime.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -252,7 +253,7 @@ export function CheckoutPickerContent(props: {
     props.params.place.repository.kind === "git" ? props.params.place.repository : null;
   return (
     <div class="new-session-page__picker-root">
-      <div class="new-session-page__menu-title">{t("newSession.checkout")}</div>
+      <MenuHeading class="new-session-page__menu-title" label={t("newSession.checkout")} />
       {repositoryNotice() ? (
         <div class="new-session-page__menu-note" role="status">
           {repositoryNotice()}
