@@ -118,12 +118,16 @@ describe("config backup rotation", () => {
         ...fsNode,
         promises: {
           ...fsNode.promises,
-          writeFile: async (...args: Parameters<typeof fs.writeFile>) => {
-            if (String(args[0]).startsWith(retainedPath)) {
-              await fs.writeFile(args[0], String(args[1]).slice(0, 10), args[2]);
+          writeFile: async (
+            file: string,
+            data: string,
+            options?: Parameters<typeof fs.writeFile>[2],
+          ) => {
+            if (file.startsWith(retainedPath)) {
+              await fs.writeFile(file, data.slice(0, 10), options);
               throw Object.assign(new Error("injected ENOSPC"), { code: "ENOSPC" });
             }
-            return await fs.writeFile(...args);
+            return await fs.writeFile(file, data, options);
           },
         },
       } as typeof fsNode; // SAFETY: spreads the real module and overrides one promise method.
