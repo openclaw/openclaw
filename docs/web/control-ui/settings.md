@@ -115,6 +115,10 @@ After the Gateway applies the change, reload the browser page or reconnect to pi
 
 ## Personal identity
 
+For Discord linking, Profile initially selects an already-linked Gateway account, even if it is unavailable for new links. Otherwise, it selects an available account when one exists. Refreshing account status preserves your selection while that account is still listed, even if it becomes unavailable.
+
+A session writer can set or reset **Symbol & Color** for a session they own from the sidebar, Chat header, or Sessions page without Gateway-wide write access. Read-only access or access to someone else’s session does not grant this permission.
+
 **Settings → Profile → Your access** shows your current permissions. To request broader access, use **Admin access**; an admin must approve this device separately.
 
 **Personal instructions** keeps your preferences in your personal `USER.md`, separate from the shared workspace file. A missing profile asks you to sign in. If you’re already signed in but lack permission to view your own sessions, ask an admin for access instead. Your unsaved draft stays private when your profile or access changes.
@@ -135,9 +139,9 @@ Choose **Use for new sessions** to set a **New session default**. Existing sessi
 
 GitHub-backed sign-in through Cloudflare Access or Tailscale Serve fills the read-only **GitHub account** row with the verified public avatar and account link without replacing a custom OpenClaw avatar. **Git co-author credit** is a separate profile-wide toggle, on by default for verified accounts, that controls future commits from shared sessions. It stays editable for personal profiles without a single display account, including merged accounts on multiple enterprise hosts. See [User model](/concepts/user-model#gateway-profile-and-github-credit) for verification, retry, account-change, noreply privacy, and eligibility rules.
 
-**Settings → Profile → GitHub accounts** separately shows **My GitHub** and **System GitHub**. Identified people, including read-scoped operators, can connect and disconnect only their own account; administrators can also change the shared System account. Connecting defaults to **For me** for identified users and never changes their sign-in identity, co-author preference, or shared execution defaults. Personal credentials support explicit Gateway-brokered **Publish PR** actions, not ordinary agent shell commands. See [GitHub connections](/concepts/user-model#github-connections).
+**Settings → Profile → GitHub accounts** shows **My GitHub** separately from the agents' accounts: the **Shared agent account**, used by every agent without its own account, and one row per agent showing the account it uses and whether it is shared or its own. An agent's account, own or shared, serves its commands, its authenticated dashboard data, and **Publish PR** unless you choose My GitHub. Identified people, including read-scoped operators, can connect and disconnect only their own account; administrators can also change the shared agent account and give any agent its own account, inline beneath that agent. Connecting My GitHub never changes sign-in identity, co-author preference, or agent accounts. Personal credentials support explicit Gateway-brokered **Publish PR** actions, not ordinary agent shell commands. See [GitHub connections](/concepts/user-model#github-connections).
 
-Administrators also see the default agent's effective GitHub account and verification status here. **View agent account** opens **Agent settings → Tools → GitHub account**, where any agent's account source, credential type, OAuth expiry, and refresh state are available. Authenticated [GitHub Actions widgets](/tools/show-widget#read-github-actions-runs) use this effective agent account. **Verified** confirms the account with GitHub; repository permissions are checked on each data request.
+Each agent's row shows its account, where that account comes from, and its verification status; **Agent settings → Tools → GitHub account** shows the same facts read-only, with credential type, OAuth expiry, and refresh state. Authenticated [GitHub Actions widgets](/tools/show-widget#read-github-actions-runs) use the agent's account. **Verified** confirms the account with GitHub; repository permissions are checked on each data request.
 
 Credentials reserved for Control UI link previews are excluded from both agent authentication and its displayed status, including when the preview credential uses a SecretRef.
 
@@ -273,10 +277,7 @@ to open web links outside OpenClaw instead of in built-in readers or browser pan
 In a web browser, links use ordinary browser navigation; in a native app, they open
 in the system's default browser. The switch is off by default, preserving current
 behavior. Turning it off restores built-in readers and any existing **Open links
-in Control UI browser** preference. Browser preview cards also follow this setting
-when you click their image or **Open** button. Their three-dot menu offers
-**Open in OpenClaw** when external opening is enabled, or **Open in new tab**
-when it is disabled. Explicit context-menu choices still work.
+in Control UI browser** preference. Explicit context-menu choices still work.
 
 This preference is stored only in the current browser or app webview, separately
 for each Gateway. It does not change shared Gateway configuration or sync across

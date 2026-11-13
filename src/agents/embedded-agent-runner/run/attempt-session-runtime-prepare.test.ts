@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { buildSessionContext } from "../../../../packages/agent-core/src/harness/session/session.js";
@@ -99,6 +100,7 @@ vi.mock("./attempt-transcript-helpers.js", () => ({
   resolveAttemptTrajectorySessionFile: mocks.trajectoryPath,
 }));
 
+import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import { persistSessionSystemPrompt } from "../session-prompt-state.js";
 import { prepareEmbeddedAttemptSessionRuntime } from "./attempt-session-runtime-prepare.js";
 import {
@@ -276,7 +278,7 @@ function createFixture() {
       toolSearchRunPlan: { replayAllowedToolNames: new Set(["read"]) },
     },
     bundleTools: { clientTools: [], uncompactedEffectiveTools: [] },
-    systemPrompt: { systemPromptText: "initial prompt" },
+    prepareSystemPrompt: async () => ({ systemPromptText: "initial prompt" }),
     sessionLock: {
       transcriptLifecycle: {},
       ownedTranscriptWriteContext: {
@@ -408,7 +410,11 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
           abortSignal: fixture.input.runAbortSignal,
           executeCodeModeTool: async () => ({ content: [], details: {} }),
         });
-        fixture.input.systemPrompt.prepareToolPrompt = async () => (prompt) => prompt;
+        fixture.input.prepareSystemPrompt = async () =>
+          ({
+            systemPromptText: "initial prompt",
+            prepareToolPrompt: async () => (prompt: string) => prompt,
+          }) as never;
         const prepared = await fixture.prepare();
         const publication =
           runtime.toolSearchCatalogRef?.current?.entries.find(
@@ -423,7 +429,8 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
             runtime.toolSearchCatalogRef?.current?.entries ?? [],
           ),
         };
-        await owner.persistSessionToolSurface(prepared.sessionPromptState, (customType, data) =>
+        (await prepared.prepareSystemPromptUpdate!("listing proof")).commit?.();
+        await owner.persistSessionSystemPrompt(prepared.sessionPromptState, (customType, data) =>
           fixture.appendCustomEntryAsync(customType, structuredClone(data)),
         );
         return result;
@@ -473,11 +480,94 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       });
     },
   );
+  it("passes the frozen ranking to renderers after disabling the lab without a boundary", async () => {
+    const fixture = createFixture();
+    const first = await fixture.prepare();
+    const snapshot = {
+      version: 1 as const,
+      at: 100,
+      orderedToolIds: ["openclaw:core:read"],
+      newcomers: { "openclaw:core:read": 100 },
+    };
+    first.sessionPromptState.usageRanking!.snapshot = snapshot;
+    fixture.input.toolBase.toolSearchCatalogRef = {
+      current: {
+        entries: [
+          {
+            id: "openclaw:core:read",
+            name: "read",
+            source: "openclaw",
+            description: "read",
+            tool: {
+              name: "read",
+              label: "read",
+              description: "read",
+              parameters: Type.Object({}),
+              execute: async () => ({ content: [], details: {} }),
+            },
+          },
+        ],
+        counterScope: "synthetic",
+        searchCount: 0,
+        describeCount: 0,
+        callCount: 0,
+      },
+    };
+    const render = vi.fn<PrepareInput["prepareSystemPrompt"]>(async () => ({
+      runtimeChannel: undefined,
+      runtimeInfo: { model: "test-model" },
+      systemPromptReport: undefined,
+      systemPromptText: "unchanged",
+    }));
+    fixture.input.prepareSystemPrompt = render;
+    await fixture.prepare();
+    expect(render.mock.calls[0]?.[0]?.()).toBe(snapshot);
+  });
+
+  it.each([
+    ["proxy", "claude-opus-5", "anthropic-messages", "https://proxy.example.test"],
+    ["custom-openai", "gpt-5.4-mini", "openai-completions", "https://compat.example.test/v1"],
+    ["google", "gemini-3-pro", "google-generative-ai", "https://generativelanguage.googleapis.com"],
+    [
+      "amazon-bedrock",
+      "anthropic.claude-opus-5",
+      "bedrock-converse-stream",
+      "https://bedrock-runtime.us-east-1.amazonaws.com",
+    ],
+  ] as const)(
+    "pins the session prompt on %s %s (%s) without in-history system messages",
+    async (provider, id, api, baseUrl) => {
+      const fixture = createHistoryFixture();
+      const model = makeProviderModelFixture({ provider, id, api, baseUrl });
+      const policy = resolveTranscriptPolicy({
+        config: {},
+        directApiKey: true,
+        provider: model.provider,
+        modelApi: model.api,
+        modelId: model.id,
+        model,
+      });
+      expect(policy.inHistorySystemUpdates).toBeFalsy();
+      Object.assign(fixture.transcriptPolicy, policy);
+      const userTurn = await prepareEmbeddedAttemptSessionRuntime(fixture.input);
+      const admitted = await userTurn.prepareSystemPromptUpdate!(
+        "## Tooling\n- exec\n- suggest_task",
+      );
+      admitted.commit?.();
+      await fixture.persist(userTurn);
+      // An inter-session turn renders without the task-suggestion grant.
+      const sendTurn = await prepareEmbeddedAttemptSessionRuntime(fixture.input);
+      const next = await sendTurn.prepareSystemPromptUpdate!("## Tooling\n- exec");
+      expect(next.systemPrompt).toBe(admitted.systemPrompt);
+      expect(next.update?.content).toContain("## Tooling\n- exec");
+    },
+  );
+
   it("clears an unsent prompt without reading history when prompt updates remain enabled", async () => {
     const fixture = createHistoryFixture();
     const first = await prepareEmbeddedAttemptSessionRuntime(fixture.input);
     const prompt = await first.prepareSystemPromptUpdate!("## Policy\nUnsent update");
-    prompt.commit();
+    expectDefined(prompt.commit, "in-history prompt commit")();
     expect(first.sessionPromptState.pendingSystemPrompt?.renderedPrefix).toBe(
       "## Policy\nUnsent update",
     );
@@ -504,7 +594,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       const prompt = `## User\n${profile ?? "Shared"} guidance`;
       const prepared = await runtime.prepareSystemPromptUpdate!(prompt, true);
       expect(prepared).toMatchObject({ restart: true, systemPrompt: prompt });
-      prepared.commit();
+      expectDefined(prepared.commit, "in-history prompt commit")();
       await fixture.persist(runtime);
     }
   });
@@ -605,10 +695,10 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       const routeR = fixture.input.attempt.modelId;
       const firstRuntime = await fixture.prepare();
       const initial = await firstRuntime.prepareSystemPromptUpdate!("## Policy\nA");
-      initial.commit();
+      expectDefined(initial.commit, "in-history prompt commit")();
       await persistSessionSystemPrompt(firstRuntime.sessionPromptState, appendCustomEntryAsync);
       const changed = await firstRuntime.prepareSystemPromptUpdate!("## Policy\nB", true);
-      changed.commit();
+      expectDefined(changed.commit, "in-history prompt commit")();
       recordUpdate(changed.update!);
       agentState.messages.push(changed.update!);
       await persistSessionSystemPrompt(firstRuntime.sessionPromptState, appendCustomEntryAsync);
@@ -627,11 +717,11 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       fixture.input.attempt.modelId = routeR;
       const resumedRuntime = await fixture.prepare();
       const resumed = await resumedRuntime.prepareSystemPromptUpdate!("## Policy\nB", true);
-      expect(resumed.restart).toBe(true);
+      expect(resumed).toMatchObject({ restart: true });
       expect(resumed.systemPrompt).toBe("## Policy\nB");
       expect(resumed.update).toBeUndefined();
       expect(agentState.messages).toEqual([]);
-      resumed.commit();
+      expectDefined(resumed.commit, "in-history prompt commit")();
       await persistSessionSystemPrompt(resumedRuntime.sessionPromptState, appendCustomEntryAsync);
       expect(entries.at(-1)).toMatchObject({
         data: { prefix: "## Policy\nB", renderedPrefix: "## Policy\nB" },
@@ -662,7 +752,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
     // Failed replay admission never calls the returned projection's commit.
     const retry = await prepare(prompt);
     expect(retry.update?.content).toBe(permissionNotice);
-    retry.commit();
+    expectDefined(retry.commit, "in-history prompt commit")();
     recordUpdate(retry.update!);
     await persist(runtime);
     expect(buildSessionContext(entries).messages).toContainEqual(
@@ -672,7 +762,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
 
     const pinned = retry.systemPrompt;
     const restricted = await prepare("## Tools\nNo tools are available.");
-    restricted.commit();
+    expectDefined(restricted.commit, "in-history prompt commit")();
     await persist(runtime);
     expect((await prepare(pinned)).update).toBeUndefined();
     const restored = await prepare(pinned, true);

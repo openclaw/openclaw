@@ -4,10 +4,7 @@ import type { GitHubIdentityFacts } from "../../../../packages/gateway-protocol/
 import { ErrorDetails } from "../../components/config-error.tsx";
 import { handleCopyButton } from "../../components/copy-button-state.ts";
 import { Icon } from "../../components/solid/icon.tsx";
-import {
-  SettingsDetailsRow,
-  SettingsDisclosure,
-} from "../../components/solid/settings-disclosure.tsx";
+import { SettingsDetailsRow } from "../../components/solid/settings-disclosure.tsx";
 import {
   SettingsRow,
   SettingsSecretInput,
@@ -444,7 +441,7 @@ export function GitHubConnectionError(props: {
   );
 }
 
-export function GitHubConnectionSetup(props: IdentityProps) {
+export function GitHubConnectionSetup(props: IdentityProps & { saveLabel?: string }) {
   const view = () => props.identity.read();
   const disabled = () =>
     props.identity.saving() ||
@@ -504,7 +501,9 @@ export function GitHubConnectionSetup(props: IdentityProps) {
                 disabled={disabled()}
                 onClick={() => void props.identity.configure()}
               >
-                {props.identity.saving() ? t("common.saving") : t("agentTools.githubConfigure")}
+                {props.identity.saving()
+                  ? t("common.saving")
+                  : (props.saveLabel ?? t("agentTools.githubConfigure"))}
               </button>
             </div>
           </div>
@@ -551,8 +550,8 @@ export function GitHubIdentity(props: IdentityProps & { onOpenConnections: () =>
           description={
             identity()
               ? identity()!.source === "agent-override"
-                ? t("githubConnections.agentOverride")
-                : t("githubConnections.system")
+                ? t("githubConnections.ownAccount")
+                : t("githubConnections.usesShared")
               : undefined
           }
           control={
@@ -569,34 +568,6 @@ export function GitHubIdentity(props: IdentityProps & { onOpenConnections: () =>
           <GitHubDetails identity={identity()} />
         </SettingsDetailsRow>
         <GitHubConnectionError error={view().error} completion={view().completion} />
-        <Show when={view().configurable}>
-          <SettingsDisclosure quiet title={t("githubConnections.advancedOverride")}>
-            <SettingsRow
-              title={t("githubConnections.agentOverride")}
-              description={
-                view().status?.selected.configured
-                  ? t("agentTools.githubConfiguredHere")
-                  : t("agentTools.githubInheritedHere")
-              }
-            />
-            <GitHubConnectionSetup identity={props.identity} />
-            <Show when={view().status?.selected.configured}>
-              <SettingsRow
-                title={t("agentTools.githubUseSystemNewRuns")}
-                description={t("agentTools.githubAgentMutationHint")}
-                control={
-                  <button
-                    class="btn"
-                    disabled={view().busy || view().authorizationActive}
-                    onClick={() => void props.identity.inherit()}
-                  >
-                    {t("agentTools.githubUseSystemNewRuns")}
-                  </button>
-                }
-              />
-            </Show>
-          </SettingsDisclosure>
-        </Show>
       </SettingsSection>
     </openclaw-github-identity>
   );

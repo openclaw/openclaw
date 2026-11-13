@@ -95,12 +95,11 @@ function bindAccessAuthority(
       try {
         return instance.run(assertCurrent);
       } catch (error) {
-        failureCause ??=
-          instance.disposing ||
-          instance.lifecycle.signal.aborted ||
-          error instanceof PluginInstanceUnavailableError
-            ? "plugin-lifetime-retired"
-            : "policy-check-failed";
+        if (instance.disposing || instance.lifecycle.signal.aborted) {
+          failureCause ??= "plugin-lifetime-retired";
+        } else if (authority.signal.aborted) {
+          failureCause ??= "grant-revoked";
+        }
         throw error;
       }
     },

@@ -8,6 +8,7 @@ import { readHttp } from "./control-ui-fixture.test-support.js";
 import { listenProvider } from "./gateway-provider-fixture.test-support.js";
 import { AUTH_NONE, withGatewayServer } from "./server-http.test-harness.js";
 import { createGatewayEventLoopHealthMonitor } from "./server/event-loop-health.js";
+import { createPreparedReadinessFixture } from "./server/readiness.test-support.js";
 
 const nativeDelay = vi.hoisted(() => ({ max: 20_000_000 }));
 vi.mock("node:perf_hooks", async (importOriginal) => ({
@@ -45,7 +46,7 @@ it("retains a blocked request interval when readiness is read before the sampler
       prefix: "event-loop-http-owner",
       resolvedAuth: AUTH_NONE,
       overrides: {
-        getReadiness: () => {
+        getReadiness: createPreparedReadinessFixture(() => {
           if (blockNextRead) {
             blockNextRead = false;
             nativeDelay.max = 1_200_000_000;
@@ -62,7 +63,7 @@ it("retains a blocked request interval when readiness is read before the sampler
             uptimeMs: clock.clock.now(),
             eventLoop: monitor.snapshot(),
           };
-        },
+        }),
       },
       run: async (server) => {
         const url = new URL("/readyz", await listenProvider(server)).href;

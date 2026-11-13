@@ -39,6 +39,7 @@ const postgresConformanceTargets = [
   "src/state/openclaw-worker-provision-source-migration.postgres.test.ts",
   "src/state/openclaw-state-db.postgres.test.ts",
   "src/state/openclaw-state-db-open.postgres.test.ts",
+  "src/state/openclaw-agent-tool-usage-migration.postgres.test.ts",
   "src/state/openclaw-agent-active-event-facts-migration.postgres.test.ts",
   "src/state/openclaw-agent-creation-operations-migration.postgres.test.ts",
   "src/state/openclaw-agent-db.postgres.test.ts",

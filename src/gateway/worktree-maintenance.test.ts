@@ -55,7 +55,7 @@ function completedResult(): ManagedWorktreeGcResult {
   return { ...new WorktreeGcProgress().result, limitsSatisfied: true };
 }
 
-it("reclaims scratch on startup and preserves progress across a restart during GC", async () => {
+it("reports scratch progress and deferrals before GC and preserves completed removals across restart", async () => {
   const dirs = createTrackedTempDirs();
   try {
     const root = await fs.realpath(await dirs.make("worktree-maintenance-scratch-"));
@@ -71,7 +71,20 @@ it("reclaims scratch on startup and preserves progress across a restart during G
       release: () => {},
     };
     vi.mocked(prepareScratchMaintenanceTargets)
-      .mockResolvedValueOnce(custody)
+      .mockResolvedValueOnce({
+        ...custody,
+        targets: [
+          ...custody.targets,
+          {
+            root: path.join(root, "unavailable"),
+            kind: "checkout",
+            isLive: () => false,
+            prepare: async () => {
+              throw new Error("synthetic custody unavailable");
+            },
+          },
+        ],
+      })
       .mockResolvedValueOnce(custody);
     await using fixture = maintenanceFixture();
     fixture.clock.setTime(1_800_000_000_000);
@@ -83,8 +96,20 @@ it("reclaims scratch on startup and preserves progress across a restart during G
     await expect(fs.stat(scratch)).rejects.toMatchObject({ code: "ENOENT" });
     expect(owner.request()).toMatchObject({
       state: "running",
-      scratch: { entriesRemoved: 1, bytesRemoved: 5, skippedLive: 0, errors: [] },
+      scratch: {
+        entriesRemoved: 1,
+        bytesRemoved: 5,
+        skippedLive: 0,
+        deferred: 1,
+        errors: [expect.stringContaining("synthetic custody unavailable")],
+      },
     });
+    expect(fixture.onError).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("Scratch cleanup deferred:"),
+    );
+    expect(fixture.onError).toHaveBeenCalledWith(
+      expect.stringContaining("synthetic custody unavailable"),
+    );
     const stopping = owner.stop();
     release.resolve(completedResult());
     await stopping;
@@ -483,6 +508,28 @@ it("admits only one checkout or template removal per minute across cohorts and s
   expect(removed).toHaveLength(3);
   await fixture.clock.advanceBy(1);
   await vi.waitFor(() => expect(removed).toHaveLength(4));
+});
+
+it("settles overlapping removal and checkpoint waits independently", async () => {
+  await using fixture = maintenanceFixture();
+  const { guard, release } = await fixture.runHeld();
+  await guard.beforeRemoval!(cleanupRecord);
+  const resumed: string[] = [];
+  const removal = guard.beforeRemoval!(cleanupRecord).then(() => resumed.push("removal"));
+  const checkpoint = (async () => {
+    for (let index = 0; index < 8; index++) {
+      await guard.checkpoint!(completedResult());
+    }
+    resumed.push("checkpoint");
+  })();
+  fixture.track(Promise.allSettled([removal, checkpoint]).then(() => {}));
+  await vi.waitFor(() => expect(fixture.clock.armedAtMs).toBe(1_000));
+  await fixture.clock.advanceBy(1_000);
+  await checkpoint;
+  expect(resumed).toEqual(["checkpoint"]);
+  await fixture.clock.advanceBy(59_000);
+  await vi.waitFor(() => expect(resumed).toEqual(["checkpoint", "removal"]));
+  release.resolve(completedResult());
 });
 
 it.each([
