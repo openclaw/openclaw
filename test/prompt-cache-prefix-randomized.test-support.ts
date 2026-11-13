@@ -236,7 +236,7 @@ export function usePrefixRandomizedJourney() {
       const tools = (webFetch: boolean) => ({
         codeMode: { enabled: false },
         toolSearch: false,
-        exec: { host: "gateway", security: "full", ask: "off", notifyOnExit: true },
+        exec: { host: "gateway", security: "full", ask: "off", notifyOnExit: true } as const,
         ...(webFetch ? {} : { deny: ["web_fetch"] }),
       });
       const cfg = fixture.config(
