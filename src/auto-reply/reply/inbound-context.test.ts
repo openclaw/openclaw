@@ -4,7 +4,7 @@ import type { MsgContext } from "../templating.js";
 import { appendChannelPromptContext } from "./channel-prompt-context.js";
 import { markInboundContextLabel } from "./inbound-context-marker.js";
 import { finalizeInboundContext, finalizeInboundContextForSdk } from "./inbound-context.js";
-import { buildInboundUserContextPrefix } from "./inbound-meta.js";
+import { buildInboundUserContext } from "./inbound-meta.js";
 
 const rawContext = () => [{ label: "raw", payload: { ok: true } }];
 const finalize = (fields: MsgContext) => finalizeInboundContext({ Body: "hello", ...fields });
@@ -183,7 +183,7 @@ it("folds deprecated UntrustedStructuredContext before prompt rendering", () => 
   const deprecated = finalize({ UntrustedStructuredContext: [entry] });
   const canonical = finalize({ ChannelStructuredContext: [entry] });
 
-  expect(buildInboundUserContextPrefix(deprecated)).toBe(buildInboundUserContextPrefix(canonical));
+  expect(buildInboundUserContext(deprecated).text).toBe(buildInboundUserContext(canonical).text);
   expect(deprecated.ChannelStructuredContext).toEqual([entry]);
   expect(Object.hasOwn(deprecated, "UntrustedStructuredContext")).toBe(false);
 });

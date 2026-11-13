@@ -22,7 +22,7 @@ import { prepareChannelRunAdmission } from "../../auto-reply/reply/channel-run-a
 import { prepareInternalGetReplyOptions } from "../../auto-reply/reply/get-reply.types.js";
 import {
   buildInboundMetaSystemPrompt,
-  buildInboundUserContextPrefix,
+  buildInboundUserContext,
 } from "../../auto-reply/reply/inbound-meta.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { installDiscordRegistryHooks } from "../../auto-reply/test-helpers/command-auth-registry-fixture.js";
@@ -82,7 +82,7 @@ const requesterProfile = (prompt: string) =>
   JSON.parse(prompt.match(/```json\n([\s\S]*?)\n```/)![1]!).requester_profile;
 const namedProfile = (id: string) => ({ id, display_name: "Ada Lovelace" });
 const expectNoRequester = (ctx: MsgContext) =>
-  expect(buildInboundUserContextPrefix(ctx)).not.toContain("requester_profile");
+  expect(buildInboundUserContext(ctx).text).not.toContain("requester_profile");
 const forgeSymbols = (ctx: MsgContext, value: unknown) => ({
   ...ctx,
   ...Object.fromEntries(Object.getOwnPropertySymbols(ctx).map((key) => [key, value])),
@@ -134,13 +134,13 @@ it("refreshes requester facts and rejects forged context", () =>
       expect(buildInboundMetaSystemPrompt(await context(sender), cfg)).toBe(stablePrompt);
     }
     expect(stablePrompt).not.toContain("requester_profile");
-    expect(buildInboundUserContextPrefix({ ...original })).toContain(admin.profile.id);
+    expect(buildInboundUserContext({ ...original }).text).toContain(admin.profile.id);
     expect(authorize(cfg, { ...original })).toMatchObject({
       senderIsOwner: true,
       isAuthorizedSender: true,
     });
     setDisplayName(admin.profile.id, "Current label");
-    expect(buildInboundUserContextPrefix(await context(admin.identity.senderId))).toContain(
+    expect(buildInboundUserContext(await context(admin.identity.senderId)).text).toContain(
       '"display_name":"Current label"',
     );
     for (const forged of [
@@ -182,7 +182,7 @@ it("refreshes requester facts and rejects forged context", () =>
     expectNoRequester(await context(admin.identity.senderId));
     linkUserChannelIdentity(admins[1]!.profile.id, admin.identity);
     const relinked = await context(admin.identity.senderId);
-    expect(buildInboundUserContextPrefix(relinked)).toContain(admins[1]!.profile.id);
+    expect(buildInboundUserContext(relinked).text).toContain(admins[1]!.profile.id);
     retire();
     expectNoRequester(relinked);
   }));
@@ -570,7 +570,7 @@ it("carries native Slack requester authority and keeps relay replays asserted", 
         expect(contexts).toHaveLength(1);
         const check = async (index: number, linked: boolean, isOwner: boolean) => {
           const turn = contexts[index]!;
-          const prompt = buildInboundUserContextPrefix(turn);
+          const prompt = buildInboundUserContext(turn).text;
           expect
             .soft(requesterProfile(prompt))
             .toEqual(linked ? namedProfile(profile.id) : undefined);
@@ -772,7 +772,7 @@ it.each([
         setUserProfileRole(fixture.admins[0]!.profile.id, role);
         const turn = await fixture.context(fixture.admins[0]!.identity.senderId);
         const metadata = JSON.parse(
-          buildInboundUserContextPrefix(turn).match(/```json\n([\s\S]*?)\n```/)![1]!,
+          buildInboundUserContext(turn).text.match(/```json\n([\s\S]*?)\n```/)![1]!,
         );
         // Visible creation validates its inherited model against the prepared catalog.
         fixture.cfg.agents = { defaults: { model: "anthropic/claude-opus-4-6" } };

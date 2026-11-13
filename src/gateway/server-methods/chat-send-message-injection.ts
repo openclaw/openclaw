@@ -16,7 +16,7 @@ import { buildInboundMediaNoteProjection } from "../../auto-reply/media-note.js"
 import { emitInboundMessageAuditTerminal } from "../../auto-reply/reply/dispatch-from-config.audit.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { hasInboundAudio } from "../../auto-reply/reply/inbound-media.js";
-import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-meta.js";
+import { buildInboundUserContext } from "../../auto-reply/reply/inbound-meta.js";
 import { MessageInjectionTargetUnavailableError } from "../../auto-reply/reply/message-injection-authority.js";
 import { emitMessageReceivedHooks } from "../../auto-reply/reply/message-received-hooks.js";
 import { refuseCollaborativeSteering } from "../../auto-reply/reply/queue/lifecycle.js";
@@ -284,7 +284,7 @@ export function createChatSendMessageInjectionStarter(params: {
           currentInboundContext: p.replyToId
             ? undefined
             : {
-                text: buildInboundUserContextPrefix(ctx, resolveEnvelopeFormatOptions(cfg), entry),
+                text: buildInboundUserContext(ctx, resolveEnvelopeFormatOptions(cfg), entry).text,
               },
           canAdmit: () => {
             admissionRefused = !canAdmit();

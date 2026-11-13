@@ -7,7 +7,7 @@ import {
 import { callInProcessGatewayToolWithCreation } from "../agents/tools/in-process-gateway.js";
 import { resolveCommandAuthorization } from "../auto-reply/command-auth.js";
 import { prepareChannelRunAdmission } from "../auto-reply/reply/channel-run-admission.js";
-import { buildInboundUserContextPrefix } from "../auto-reply/reply/inbound-meta.js";
+import { buildInboundUserContext } from "../auto-reply/reply/inbound-meta.js";
 import { getRequesterProfile } from "../auto-reply/requester-profile.js";
 import { installDiscordRegistryHooks } from "../auto-reply/test-helpers/command-auth-registry-fixture.js";
 import {
@@ -79,7 +79,7 @@ it("assigns and reads back a created session through admitted non-owner Discord 
       const turn = await fixture.context(fixture.admins[0]!.identity.senderId);
       expect(turn.SessionKey).toBe(sessionKey);
       const metadata = JSON.parse(
-        buildInboundUserContextPrefix(turn).match(/```json\n([\s\S]*?)\n```/)![1]!,
+        buildInboundUserContext(turn).text.match(/```json\n([\s\S]*?)\n```/)![1]!,
       );
       expect(metadata.requester_profile.id).toBe(profile.id);
       const isOwner = (ctx: typeof turn) =>

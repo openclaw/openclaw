@@ -85,7 +85,7 @@ vi.mock("./lancedb-runtime.js", async (importOriginal) => {
 // Detectors key on this marker, not label text. Keep byte-identical with
 // src/auto-reply/reply/inbound-context-marker.ts (extensions cannot import core).
 const CTX = "⟦openclaw:ctx⟧";
-// Marks a context header line the way buildInboundUserContextPrefix does.
+// Marks a context header line the way buildInboundUserContext does.
 const ctxHeader = (label: string): string => `${label} ${CTX}`;
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "test-key";
