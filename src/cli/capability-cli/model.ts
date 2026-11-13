@@ -25,7 +25,6 @@ import {
   getAsyncWorkSignal,
 } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { runCommandWithRuntime } from "../cli-utils.js";
 import { collectOption } from "../program/helpers.js";
 import type { CapabilityEnvelope } from "./metadata.js";
 import { formatEnvelopeForText, providerSummaryText } from "./output.js";
@@ -91,51 +90,6 @@ async function buildModelProviders(cfg: OpenClawConfig, agentId: string) {
     grouped.set(entry.provider, current);
   }
   return [...grouped.values()].toSorted((a, b) => a.provider.localeCompare(b.provider));
-}
-
-async function runModelAuthLogout(provider: string, agent: string) {
-  const { captureRuntimeConfigAsyncReader } = await import("../../config/config.js");
-  const { resolveAgentDir } = await import("../../agents/agent-scope.js");
-  const { listProfilesForProvider, loadAuthProfileStoreForRuntimeAsync } =
-    await import("../../agents/auth-profiles.js");
-  const { updateAuthProfileStoreWithLock } =
-    await import("../../agents/auth-profiles/store-runtime.js");
-  const cfg = await captureRuntimeConfigAsyncReader()();
-  const agentDir = resolveAgentDir(cfg, agent);
-  const store = await loadAuthProfileStoreForRuntimeAsync(agentDir);
-  const profileIds = listProfilesForProvider(store, provider);
-  const updated = await updateAuthProfileStoreWithLock({
-    agentDir,
-    updater: (nextStore) => {
-      let changed = false;
-      for (const profileId of profileIds) {
-        if (nextStore.profiles[profileId]) {
-          delete nextStore.profiles[profileId];
-          changed = true;
-        }
-        if (nextStore.usageStats?.[profileId]) {
-          delete nextStore.usageStats[profileId];
-          changed = true;
-        }
-      }
-      if (nextStore.order?.[provider]) {
-        delete nextStore.order[provider];
-        changed = true;
-      }
-      if (nextStore.lastGood?.[provider]) {
-        delete nextStore.lastGood[provider];
-        changed = true;
-      }
-      return changed;
-    },
-  });
-  if (!updated) {
-    throw new Error(`Failed to remove saved auth profiles for provider ${provider}.`);
-  }
-  return {
-    provider,
-    removedProfiles: profileIds,
-  };
 }
 
 export function registerModelCapabilityCommands(capability: Command): void {
@@ -581,18 +535,13 @@ export function registerModelCapabilityCommands(capability: Command): void {
     .option("--method <id>", "Provider auth method id")
     .option("--agent <id>", "Agent id (default: configured default agent)")
     .action(async (opts, command) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const agent = await resolveModelAuthAgent(command, opts.agent, "infer model auth login");
-        const { modelsAuthLoginCommand } = await import("../../commands/models/auth.js");
-        await modelsAuthLoginCommand(
-          {
-            provider: String(opts.provider),
-            method: opts.method ? String(opts.method) : undefined,
-            agent,
-          },
-          defaultRuntime,
-        );
-      });
+      // Same state owner as `models auth login`: a running Gateway performs the sign-in.
+      const { runAuthModelCommand } = await import("../models-cli.js");
+      await runAuthModelCommand(
+        command,
+        (agent) => ({ provider: String(opts.provider), method: opts.method, agent }),
+        async () => (await import("../../commands/models/auth.js")).modelsAuthLoginCommand,
+      );
     });
 
   modelAuth
@@ -606,10 +555,42 @@ export function registerModelCapabilityCommands(capability: Command): void {
     .option("--json", "Output JSON", false)
     .action((opts, command) =>
       runCapabilityCommand(opts.json, undefined, async () => {
-        return runModelAuthLogout(
-          String(opts.provider),
-          await resolveModelAuthAgent(command, opts.agent, "infer model auth logout"),
-        );
+        const { runWithLocalStateOwner } = await import("../local-state-owner.js");
+        // Same state owner as `models auth logout`: refuse while a Gateway owns credentials.
+        return await runWithLocalStateOwner({
+          method: "models.auth",
+          params: {},
+          target: "system/agent credentials",
+          onForeignOwner: "refuse",
+          runLocal: async ({ config }) => {
+            const provider = String(opts.provider);
+            const [shared, { resolveAgentDir }, authProfiles, { removeModelAuthCredentials }] =
+              await Promise.all([
+                import("./shared.js"),
+                import("../../agents/agent-scope.js"),
+                import("../../agents/auth-profiles.js"),
+                import("../../commands/models/auth-logout.js"),
+              ]);
+            const agentDir = resolveAgentDir(
+              config,
+              shared.resolveCapabilityProviderAgentId(
+                config,
+                shared.resolveCapabilityAgentOption(command, opts.agent),
+                "infer model auth logout",
+              ),
+            );
+            const store =
+              await authProfiles.ensureAuthProfileStoreWithoutExternalProfilesAsync(agentDir);
+            const removedProfiles = authProfiles.listProfilesForProvider(store, provider);
+            const warning = await removeModelAuthCredentials({
+              cfg: config,
+              agentDir,
+              profileIds: removedProfiles,
+              provider,
+            });
+            return { provider, removedProfiles, ...(warning ? { warning } : {}) };
+          },
+        });
       }),
     );
 
