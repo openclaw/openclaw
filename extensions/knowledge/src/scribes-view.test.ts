@@ -17,6 +17,7 @@ const reviewJob = {
   state: { lastRunStatus: "ok", lastRunAtMs: 1_793_000_000_000, nextRunAtMs: 1_793_090_000_000 },
 };
 
+let gateways = 0;
 // A fake page host: Gateway reads answer from `world`; writes are recorded.
 function fixture(world: {
   sessions?: Record<
@@ -108,7 +109,9 @@ function fixture(world: {
     events.set(name, listener);
     return () => events.delete(name);
   });
-  const host = { request, connection, sessions: { create, open }, basePath: "", onEvent };
+  // Update state is kept per Gateway, by base path: each fixture is its own Gateway.
+  const basePath = `/gateway-${++gateways}`;
+  const host = { request, connection, sessions: { create, open }, basePath, onEvent };
   const load = vi.fn(async () => true);
   const scribesTab = document.createElement("button");
   const ui = {
@@ -678,9 +681,12 @@ it("offers Try again, as a new request, when an update left the automation uncha
       expect(ui.announce).toHaveBeenCalledWith(expect.stringContaining("Error: offline")),
     );
     expect(failing.textContent).toContain("hasn't changed");
+    // The lost send dropped the connection: the page reloads with a new host for that Gateway.
+    Object.assign(ui.s.context, { host: { ...ui.s.context.host } });
     expect((await render()).querySelector(".scribe-update")?.textContent).toContain(
       "hasn't changed",
     );
+    expect(sends()).toHaveLength(2);
     buttonNamed(await render(), "Try again").click();
     await vi.waitFor(() => expect(sends()).toHaveLength(3));
     // A new attempt for the completed turn, retained when that attempt loses its response.
