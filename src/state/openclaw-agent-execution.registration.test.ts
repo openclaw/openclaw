@@ -39,6 +39,7 @@ const edge = vi.hoisted(() => {
   };
   return {
     database,
+    pathIdentity: { key: "file:fixture", canonicalPath: database.path },
     on: vi.fn(),
     publishReply: vi.fn(),
     open: vi.fn<
@@ -98,7 +99,7 @@ vi.mock("../infra/sqlite-worker-identity.js", async () => ({
     "../infra/sqlite-worker-identity.js",
   )),
   assertExistingDatabaseIdentity() {},
-  readDatabasePathIdentitySync: () => ({ key: "file:fixture" }),
+  readDatabasePathIdentitySync: () => edge.pathIdentity,
 }));
 vi.mock("../infra/sqlite-worker-operation-admission.js", async (importOriginal) => {
   const actual = await importOriginal<AdmissionModule>();
@@ -359,6 +360,7 @@ beforeEach(async () => {
   nativeOpened = false;
   actorCloseAttempts = 0;
   edge.database.db.isOpen = true;
+  edge.pathIdentity = { key: "file:fixture", canonicalPath: input.databasePath };
   edge.request.mockImplementation(() => {});
   edge.publishReply.mockImplementation((reply: SqliteWorkerReply) => {
     const pending = replies.get(reply.id);
@@ -483,12 +485,14 @@ it.each([
 );
 
 it.each([
-  ["open job", "agent-registration-start"],
-  ["open job", "agent-registration-committed"],
-  ["first command", "agent-registration-start"],
+  ["open job", "agent-registration-start", undefined],
+  ["open job", "agent-registration-committed", undefined],
+  ["open job", "agent-registration-start", "file"],
+  ["open job", "agent-registration-start", "path"],
+  ["first command", "agent-registration-start", undefined],
 ] as const)(
-  "keeps the Worker when the host refuses an existing database's %s at %s",
-  async (path, refusedKind) => {
+  "retires the Worker for a refused %s at %s only when it creates the file (creating target: %s)",
+  async (path, refusedKind, creating) => {
     const actual = await vi.importActual<AdmissionModule>(
       "../infra/sqlite-worker-operation-admission.js",
     );
@@ -517,16 +521,34 @@ it.each([
       nativeOpened = true;
       return edge.database;
     });
+    // A create-capable caller captures its target even when the file exists; `path:` is absent.
+    const creatingIdentity = creating && {
+      key: creating === "file" ? "file:fixture" : `path:${input.databasePath}`,
+      canonicalPath: input.databasePath,
+    };
+    if (creatingIdentity) {
+      edge.pathIdentity = creatingIdentity;
+    }
     const request =
       path === "open job"
-        ? opening({ actor: actor + 1_000_000, operationAdmission: admission.port, stateContext })
+        ? opening({
+            actor: actor + 1_000_000,
+            input: serialize({ ...input, ...(creatingIdentity ? { creatingIdentity } : {}) }),
+            operationAdmission: admission.port,
+            stateContext,
+          })
         : prepareRequest({ operationAdmission: admission.port, stateContext });
     try {
       const reply = await sendFailed(request);
       expect(reply).toMatchObject({ admissionRefused: true });
       expect(reply.retire).toBeUndefined();
-      expect(reply.openOutcome).toBe(path === "open job" ? "refused-before-agent-open" : undefined);
       expect(edge.database.db.isOpen).toBe(false);
+      if (creating === "path") {
+        expect(reply.openOutcome).toBeUndefined();
+        expect(await retiredFailure(reply, request, refused)).toBe(refused);
+        return;
+      }
+      expect(reply.openOutcome).toBe(path === "open job" ? "refused-before-agent-open" : undefined);
       const { completion, settleNative } = retireFailedReply(reply, request, refused);
       expect(await completion.promise).toBe(refused);
       expect(settleNative).toHaveBeenCalledExactlyOnceWith(

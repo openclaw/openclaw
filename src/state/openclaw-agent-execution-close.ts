@@ -166,7 +166,10 @@ export function prepareCreatedAgentDatabaseBackend(
       );
     }
     // Cleanup closed every handle, so a host refusal reaches the broker as a refused open.
-    if (!(error instanceof SqliteWorkerOpenRefusedError) && isOpenRefusalWithoutHandle(error, opening)) {
+    if (
+      !(error instanceof SqliteWorkerOpenRefusedError) &&
+      isOpenRefusalWithoutHandle(error, opening)
+    ) {
       throw new SqliteWorkerOpenRefusedError(error);
     }
     throw error;
