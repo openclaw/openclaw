@@ -79,11 +79,17 @@ assert(churn <= rowCount);
 assert(parentCount * 2 <= rowCount, "Each parent needs at least one child");
 const now = 1_800_000_000_000;
 const cfg: OpenClawConfig = { agents: { entries: { main: {} } }, plugins: { enabled: false } };
-const metadata = createSessionRowProjectionContext({
-  snapshotIdentity: () => cfg,
-  runs: () => new Map(),
-  prepare: async () => {},
-});
+const metadata = createSessionRowProjectionContext(
+  {
+    snapshotIdentity: () => cfg,
+    runs: () => new Map(),
+    prepare: async () => {},
+  },
+  {
+    state: () => ({ cfg, epoch: 0, disposed: false }),
+    prepareRegistry: () => undefined,
+  },
+);
 const rows = new Map<string, records.MaterializedRow>();
 for (let index = 0; index < rowCount; index++) {
   const key = `agent:main:${index < parentCount ? "dashboard" : "subagent"}:synthetic-${index}`;

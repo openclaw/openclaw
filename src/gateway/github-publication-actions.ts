@@ -130,7 +130,6 @@ export async function performSessionGitHubAction(options: Options): Promise<void
       throw new Error("GitHub pull request actions require full operator write permission.");
     }
   };
-  assertRequester();
   const explicit = explicitPullRequestUrl
     ? await inspectOwnGitHubPullRequest({
         pullRequestUrl: explicitPullRequestUrl,
@@ -167,7 +166,6 @@ export async function performSessionGitHubAction(options: Options): Promise<void
   if (receipt?.result.status === "failed") {
     receipt = await service.latestPublishedShared(session, readCurrent);
   }
-  assertRequester();
   const publication = receipt?.result.status === "published" ? receipt.result : undefined;
   if (!explicit && !binding && !publication) {
     throw new Error(
@@ -220,7 +218,6 @@ export async function performSessionGitHubAction(options: Options): Promise<void
     inspection?.assertCurrent();
   };
   const read = async () => {
-    assertCurrent();
     if (explicitPullRequestUrl) {
       inspection = await inspectOwnGitHubPullRequest({
         pullRequestUrl: explicitPullRequestUrl,
@@ -228,7 +225,6 @@ export async function performSessionGitHubAction(options: Options): Promise<void
         requester: admitted.requester,
         assertCurrent: assertIdentity,
       });
-      assertCurrent();
       return pullRequestState(
         inspection.details,
         pullRequest,
@@ -238,7 +234,6 @@ export async function performSessionGitHubAction(options: Options): Promise<void
     }
     const value = await nativeReader.readJson(endpoint);
     inspection = nativeReader.inspection;
-    assertCurrent();
     return pullRequestState(value, pullRequest, binding, inspection?.result.author.accountId);
   };
   const present = (
@@ -292,10 +287,8 @@ export async function performSessionGitHubAction(options: Options): Promise<void
         assertCurrent,
         requirePublicRepositories: inspection.requirePublicRepositories,
       });
-      assertCurrent();
       return pullRequestState(current, pullRequest, binding, inspection.result.author.accountId);
     }
-    assertCurrent();
     return null;
   };
   if (evidenceUpload) {
@@ -404,7 +397,6 @@ export async function performSessionGitHubAction(options: Options): Promise<void
           excludeAccountId: identity.account.accountId,
         })
       : undefined;
-  assertCurrent();
   if (binding && attribution) {
     const current = await read();
     assertHead(current);

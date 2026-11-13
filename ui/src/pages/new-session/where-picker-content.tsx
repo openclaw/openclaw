@@ -1,13 +1,4 @@
-import {
-  action,
-  createMemo,
-  createOptimistic,
-  createSignal,
-  For,
-  Loading,
-  onSettled,
-  Show,
-} from "solid-js";
+import { action, createMemo, createOptimistic, For, Loading, Show } from "solid-js";
 import { resolveCloudProfileIconData } from "../../components/cloud-profile-icon-data.ts";
 import { CloudProfileIcon } from "../../components/solid/cloud-profile-icon.tsx";
 import { HeaderSearch } from "../../components/solid/header-search.tsx";
@@ -82,14 +73,7 @@ function EnvironmentHeading(props: {
   );
 }
 
-export function WherePickerContent(
-  props: Omit<WhereChipProps, "ref"> & {
-    onReady: (search: HTMLElement) => void;
-  },
-) {
-  let search!: HTMLElement;
-  onSettled(() => props.onReady(search));
-  const [searching, setSearching] = createSignal(false);
+export function WherePickerContent(props: Omit<WhereChipProps, "ref">) {
   const [saving, setSaving] = createOptimistic(false);
   const presentAdoption = action(function* (request: SuggestedProfileAdoption) {
     if (request.isCurrent()) {
@@ -238,15 +222,10 @@ export function WherePickerContent(
     <div class="new-session-page__environment-layout">
       <div class="new-session-page__picker-root new-session-page__environment-picker">
         <HeaderSearch
-          title={t("newSession.where")}
           label={t("newSession.environmentSearchPlaceholder")}
           query={props.params.place.browser.environmentQuery}
-          open={searching() || Boolean(props.params.place.browser.environmentQuery)}
+          autofocus="popover"
           disabled={busy()}
-          toggleRef={(element) => {
-            search = element;
-          }}
-          onOpenChange={setSearching}
           onQueryChange={(query) => props.params.place.browser.changeEnvironmentQuery(query)}
         />
         <div class="new-session-page__environment-list">

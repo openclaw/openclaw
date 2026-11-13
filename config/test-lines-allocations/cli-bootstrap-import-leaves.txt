@@ -1,2 +1,0 @@
-# Preserve import detection inside template expressions while skipping syntax-tree leaves.
-1

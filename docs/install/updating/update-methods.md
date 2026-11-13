@@ -122,10 +122,15 @@ For the default profile, run these commands from the source checkout:
 
 ```bash
 openclaw gateway stop &&
+git pull --ff-only &&
+pnpm install --frozen-lockfile &&
 pnpm build &&
 openclaw doctor --fix &&
 openclaw gateway start
 ```
+
+The `git pull` and `pnpm install` steps move the checkout to new upstream source
+and its dependencies. Omit them when rebuilding local source changes only.
 
 Stop every listed sibling before building and start each one afterward. Preserve
 its profile and custom service overrides, or use the matching native service

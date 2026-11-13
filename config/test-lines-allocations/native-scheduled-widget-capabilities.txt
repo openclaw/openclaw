@@ -1,2 +1,0 @@
-# Scheduled widget current-client capability regression.
-15

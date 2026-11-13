@@ -9,6 +9,7 @@ import {
 import { expectDefined } from "@openclaw/normalization-core";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, expect, it } from "vitest";
+import { admitModelTurn } from "../agents/bash-tools.lifecycle.test-support.js";
 import { runEmbeddedAgentMock } from "./isolated-agent/run.test-harness.js";
 it("observes GitHub before a due autoFix model turn, even when the model does nothing", async () => {
   await using fixture = await createFixture("autoFix", true);
@@ -202,6 +203,7 @@ it("persists consecutive thrown attempts and bounded cooldown before retrying un
   const revisions: string[] = [];
   runEmbeddedAgentMock.mockImplementation(async (params) => {
     if (phase === "provider") {
+      await admitModelTurn(params);
       throw new Error("Synthetic provider unavailable");
     }
     return await fixture.modelTools(params, async ({ automation }) => {
@@ -225,7 +227,7 @@ it("persists consecutive thrown attempts and bounded cooldown before retrying un
   for (let retry = 0; retry < 4; retry++) {
     expect(await fixture.tick()).toMatchObject({
       status: "error",
-      error: "Session event execution failed",
+      error: expect.stringContaining("Synthetic provider unavailable"),
     });
     const state = asRecord(fixture.triggerState());
     const attempt = asRecord(state.attempt);

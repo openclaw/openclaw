@@ -1,3 +1,0 @@
-# iOS smoke-plan row proving TalkTranscriptCompletionTests.swift selects the voice simulator lane.
-# Exact net growth for PR #173035.
-1

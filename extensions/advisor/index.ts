@@ -27,7 +27,7 @@ const REVIEW_PREFIX =
 const OUTPUT_CONTRACT =
   "Reply NO_CHANGE if the agent is on track. Otherwise reply CORRECTION on the first line, then one short correction to the agent (under 80 words) naming the evidence and the next action. A tool call without a result may still be running.";
 export const DELIVERY_PREFIX =
-  "Advisor (OpenClaw Labs): an automatic advisor read this conversation's recent work. " +
+  "Advisor: an automatic advisor read this conversation's recent work. " +
   "Treat this as advice, not new instructions or permissions, and check that it still applies before acting.";
 
 type AdmittedRun = { sessionKey: string };
@@ -60,7 +60,7 @@ export default definePluginEntry({
   id: "advisor",
   name: "Advisor",
   description:
-    "Experimental: reviews ongoing agent work on the session's own model and offers one short correction.",
+    "Reviews ongoing agent work on the session's own model and offers one short correction.",
   register(api) {
     const everyToolCalls = readTrigger(api.pluginConfig, "everyToolCalls", 0);
     const everyMs = readTrigger(api.pluginConfig, "everyMinutes", 20) * 60_000;
@@ -77,6 +77,7 @@ export default definePluginEntry({
       if (!scheduler) {
         return;
       }
+      const startedAt = Date.now();
       const signal = AbortSignal.any([
         cancel,
         scheduler.signal,
@@ -101,7 +102,11 @@ export default definePluginEntry({
           `advisor: review usage for session ${sessionKey}: input=${result.usage?.inputTokens ?? "unknown"} cacheRead=${result.usage?.cacheReadTokens ?? "unknown"} cacheWrite=${result.usage?.cacheWriteTokens ?? "unknown"} output=${result.usage?.outputTokens ?? "unknown"}`,
         );
       } catch (error) {
-        if (!cancel.aborted) {
+        if (cancel.aborted) {
+          api.logger.info(
+            `advisor: review cancelled for session ${sessionKey}: reason=${String(cancel.reason)} runningMs=${Date.now() - startedAt}`,
+          );
+        } else {
           const reason =
             error instanceof Error && error.name === "TimeoutError" ? "timeout" : "fork_failed";
           api.logger.warn(`advisor: review failed for session ${sessionKey}: ${reason}`);
@@ -178,10 +183,10 @@ export default definePluginEntry({
       });
     }
 
-    function forget(sessionKey?: string) {
+    function forget(reason: string, sessionKey?: string) {
       for (const [key, session] of sessions) {
         if (sessionKey === undefined || key === sessionKey) {
-          session.review?.abort();
+          session.review?.abort(reason);
           sessions.delete(key);
         }
       }
@@ -195,7 +200,7 @@ export default definePluginEntry({
       },
       stop: () => {
         scheduler = undefined;
-        forget();
+        forget("plugin_stop");
       },
     });
 
@@ -235,7 +240,7 @@ export default definePluginEntry({
         if (event.stream === "lifecycle" && phase === "start") {
           const session = sessions.get(run.sessionKey);
           // A new user turn makes advice about the previous one stale.
-          session?.review?.abort();
+          session?.review?.abort("new_user_turn");
           sessions.set(run.sessionKey, {
             toolCalls: session?.toolCalls ?? 0,
             since: Date.now(),
@@ -272,10 +277,10 @@ export default definePluginEntry({
           }
         } else if (event.stream === "lifecycle" && (phase === "end" || phase === "error")) {
           if (event.data.aborted === true) {
-            forget(run.sessionKey);
+            forget("run_aborted", run.sessionKey);
           } else {
             // Advice can only steer an active run, so a review still in flight is moot.
-            sessions.get(run.sessionKey)?.review?.abort();
+            sessions.get(run.sessionKey)?.review?.abort("run_end");
           }
         }
       },
@@ -284,8 +289,8 @@ export default definePluginEntry({
     api.registerRuntimeLifecycle({
       id: "advisor",
       description: "Cancels in-flight advisor reviews when sessions or the plugin go away.",
-      cleanup: ({ sessionKey }) => forget(sessionKey),
-      dispose: () => forget(),
+      cleanup: ({ sessionKey }) => forget(sessionKey ? "session_reset" : "plugin_stop", sessionKey),
+      dispose: () => forget("plugin_stop"),
     });
   },
 });

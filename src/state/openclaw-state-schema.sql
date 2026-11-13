@@ -2018,7 +2018,8 @@ CREATE TABLE IF NOT EXISTS worker_environments (
   last_error TEXT,
   shared_host INTEGER,
   resource_receipt_json TEXT,
-  retention_json TEXT
+  retention_json TEXT,
+  provision_source_json TEXT
 ) STRICT;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_environments_provider_lease

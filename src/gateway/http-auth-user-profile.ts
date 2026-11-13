@@ -5,6 +5,7 @@ import { getRuntimeConfig } from "../config/io.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveHostAccountName } from "../infra/host-account-name.js";
+import { isOperatorAuthorityUnavailable } from "../infra/operator-authority-error.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import { prepareUserProfileRoleAuthority } from "../state/user-channel-identity-operations.js";
@@ -42,6 +43,7 @@ import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.j
 import { resolveBrowserOriginPolicy } from "./origin-check.js";
 import type { GatewayClient, GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 import { isGatewayDelegationCurrent } from "./trusted-proxy-delegation.js";
+import { syncTrustedProxyGitCoauthor } from "./trusted-proxy-git-coauthor.js";
 import { formatForLog } from "./ws-log.js";
 
 const profileLog = createSubsystemLogger("gateway/user-profiles");
@@ -66,8 +68,9 @@ function failedHttpProfileAuthentication(error?: unknown): HttpUserProfileAuthRe
     ok: false,
     authResult: {
       ok: false,
-      reason:
-        error instanceof GatewayOperatorAccessDeniedError
+      reason: isOperatorAuthorityUnavailable(error)
+        ? "operator_access_unavailable"
+        : error instanceof GatewayOperatorAccessDeniedError
           ? "operator_access_denied"
           : "user_profile_unavailable",
     },
@@ -262,6 +265,13 @@ export async function resolveAuthenticatedHttpUserProfile(params: {
               )
             : await ensureCanonicalUserProfileForEmail(authenticatedUserId, options);
     const profileId = "profileId" in profile ? profile.profileId : profile.id;
+    await syncTrustedProxyGitCoauthor({
+      authConfig: params.cfg.gateway?.auth,
+      authResult: params.authResult,
+      headers: params.req.headers,
+      profileId,
+      assertCurrent,
+    });
     const prepared = await prepareHttpProfile(
       profileId,
       profile.updatedAt,

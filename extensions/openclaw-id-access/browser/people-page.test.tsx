@@ -349,43 +349,46 @@ describe("Access page", () => {
     expect(button(container, "Add node")?.disabled).toBe(false);
   });
 
-  it("approves a pending request with an owner-signed change", async () => {
-    const { container, request } = await mountPage([
-      linked(),
-      linked({
-        invites: [],
-        members: [
-          {
-            accountId: "acct-member",
-            role: "operator",
-            peerKeys: ["iroh:member"],
-            email: "member@example.test",
+  it.each(["operator", "viewer", "guest"])(
+    "approves a pending %s request with its exact owner-signed role",
+    async (role) => {
+      const { container, request } = await mountPage([
+        linked({ invites: [{ ...pendingInvite, role }] }),
+        linked({
+          invites: [],
+          members: [
+            {
+              accountId: "acct-member",
+              role,
+              peerKeys: ["iroh:member"],
+              email: "member@example.test",
+            },
+          ],
+        }),
+      ]);
+      await vi.waitFor(() => expect(container.textContent).toContain("member@example.test"));
+      await vi.waitFor(() => expect(button(container, "Approve")?.disabled).toBe(false));
+      button(container, "Approve")!.click();
+      await vi.waitFor(() =>
+        expect(request).toHaveBeenCalledWith("openclawId.authority", {
+          action: "submit",
+          statement: {
+            signed: {
+              op: "add",
+              account_id: "acct-member",
+              role,
+              peer_keys: ["iroh:member"],
+              invite_id: "inv-1",
+            },
           },
-        ],
-      }),
-    ]);
-    await vi.waitFor(() => expect(container.textContent).toContain("member@example.test"));
-    await vi.waitFor(() => expect(button(container, "Approve")?.disabled).toBe(false));
-    button(container, "Approve")!.click();
-    await vi.waitFor(() =>
-      expect(request).toHaveBeenCalledWith("openclawId.authority", {
-        action: "submit",
-        statement: {
-          signed: {
-            op: "add",
-            account_id: "acct-member",
-            role: "operator",
-            peer_keys: ["iroh:member"],
-            invite_id: "inv-1",
-          },
-        },
-      }),
-    );
-    await vi.waitFor(() => expect(container.textContent).toContain("member@example.test"));
-    await vi.waitFor(() =>
-      expect(container.textContent).toContain("No one is waiting for approval."),
-    );
-  });
+        }),
+      );
+      await vi.waitFor(() => expect(container.textContent).toContain("member@example.test"));
+      await vi.waitFor(() =>
+        expect(container.textContent).toContain("No one is waiting for approval."),
+      );
+    },
+  );
 
   it.each([false, true])(
     "finishes a decided row's exit before replacing it (reduced=%s)",

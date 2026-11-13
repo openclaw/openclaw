@@ -1,2 +1,0 @@
-# Cover direct and deferred peer-link failure settlement through the plugin updater.
-54

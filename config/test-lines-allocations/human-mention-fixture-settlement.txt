@@ -1,4 +1,0 @@
-# Fourteen net lines repair human-only mention fixtures after ba6dce8d:
-# verify committed transcript identity and no agent dispatch; explicitly address
-# the agent in tests that need agent-owned pending input for cancellation.
-14

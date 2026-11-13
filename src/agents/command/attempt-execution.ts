@@ -24,7 +24,6 @@ import {
   resolveCliExecutionAuthProfileId,
 } from "../cli-execution-auth.js";
 import { isClaudeCliProvider } from "../cli-output-records.js";
-import { runCliAgent } from "../cli-runner.js";
 import { hasCliLiveSession } from "../cli-runner/cli-live-session-registry.js";
 import { buildCliMcpDelegationCapabilityBinding } from "../cli-runner/mcp-grant-context.js";
 import { resolveCliRuntimeToolsAllow } from "../cli-runner/tool-policy.js";
@@ -313,6 +312,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
       ? "openclaw"
       : undefined);
   if (!isRawModelRun && isCliExecutionProvider) {
+    const { runCliAgent } = await import("../cli-runner.js");
     const expectedLifecycleRevision = params.sessionEntry?.lifecycleRevision;
     return withAdmittedCliCandidate(
       {

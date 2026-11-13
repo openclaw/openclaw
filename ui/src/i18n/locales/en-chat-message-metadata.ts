@@ -116,9 +116,6 @@ const enChatMessageMetadata = {
       claudeCliTaskNotification: {
         label: "System · background task",
       },
-      pluginSteering: {
-        label: "{plugin} guidance",
-      },
     },
   },
 } satisfies TranslationMap;
@@ -132,7 +129,6 @@ export const registerChatMessageMetadataEnglish = Object.assign(
       gatewayRestarted,
       cliHarnessContext,
       claudeCliTaskNotification,
-      pluginSteering,
       ...labels
     } = enChatMessageMetadata.chat.systemNotice;
     Object.assign(en.chat.systemNotice, labels);
@@ -141,7 +137,6 @@ export const registerChatMessageMetadataEnglish = Object.assign(
     Object.assign(en.chat.systemNotice.gatewayRestarted, gatewayRestarted);
     Object.assign(en.chat.systemNotice.cliHarnessContext, cliHarnessContext);
     Object.assign(en.chat.systemNotice.claudeCliTaskNotification, claudeCliTaskNotification);
-    Object.assign(en.chat.systemNotice.pluginSteering, pluginSteering);
   },
   { catalog: enChatMessageMetadata },
 );

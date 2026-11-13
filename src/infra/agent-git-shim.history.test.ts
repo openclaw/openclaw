@@ -102,9 +102,23 @@ it.skipIf(process.platform === "win32")(
         ["log", "-p", "--", file],
         ["log", "--stat", "--max-count=3", "--", file],
         ["log", "--patch", "HEAD~5..HEAD~1", "--", file],
+        ["log", "--oneline", "-Shistory line 3", "HEAD~8..HEAD", "--", file],
+        ["log", "--format=%H", "-S", "history line 3", "-n", "1", "--", file],
+        ["log", "-G", "history line [34]", "--pickaxe-all", "--", file],
+        ["log", "-Shistory line [34]", "--pickaxe-regex", "--", file],
         ["blame", "HEAD", "--", file],
         ["blame", file],
         ["diff", "HEAD~8", "HEAD~2", "--", file],
+        ["diff", "HEAD~8..HEAD~2", "--", file],
+        ["grep", "-n", "-G", "history", "HEAD~8", "HEAD~2", "--", file],
+        ["log", "--oneline", "-Shistory"],
+        ["log", "-Ghistory", "HEAD~8..HEAD~2"],
+        ["log", "-p", "HEAD~8..HEAD~2"],
+        ["log", "--stat", "HEAD~8..HEAD~2"],
+        ["log", "--numstat", "HEAD~8..HEAD~2"],
+        ["diff", "HEAD~8..HEAD~2"],
+        ["grep", "-G", "version", "HEAD~8"],
+        ["grep", "-e", "version", "HEAD~8"],
       ]) {
         const { invoke, newPacks, requests } = await reader();
         const result = await invoke(args);
@@ -121,11 +135,13 @@ it.skipIf(process.platform === "win32")(
           "--",
           "other.txt",
         ]);
-        for (const oid of wanted) {
-          expect(unrelated, args.join(" ")).not.toContain(oid);
+        if (args.includes(file)) {
+          for (const oid of wanted) {
+            expect(unrelated, args.join(" ")).not.toContain(oid);
+          }
         }
         if (args[0] === "diff") {
-          expect(wanted).toHaveLength(2);
+          expect(wanted).toHaveLength(args.includes(file) ? 2 : 4);
         }
       }
       const { linked, invoke, newPacks } = await reader();
@@ -147,8 +163,8 @@ it.skipIf(process.platform === "win32")(
         const { base, linked, invoke, newPacks, requests } = await reader();
         const peer = path.join(root, overlap ? "overlap peer" : "identical peer");
         git(base, ["worktree", "add", "--detach", peer]);
-        const first = ["log", "-p", ...(overlap ? ["--max-count=5"] : []), "--", file];
-        const second = ["log", "-p", "--", file];
+        const first = ["log", "-Shistory", ...(overlap ? ["HEAD~5..HEAD"] : []), "--", file];
+        const second = ["log", "-Shistory", "--", file];
         const results = await Promise.all([invoke(first, linked), invoke(second, peer)]);
         for (const [index, result] of results.entries()) {
           expect(result.code, result.stderr).toBe(0);
@@ -164,6 +180,7 @@ it.skipIf(process.platform === "win32")(
       expect((await invoke(["--no-lazy-fetch", "log", "-p", "--", file])).code).not.toBe(0);
       expect(await newPacks()).toHaveLength(0);
       expect(await requests()).toHaveLength(0);
+      expect((await invoke(["blame"])).code).not.toBe(0);
       const metadata = ["log", "--format=%H", "--", file];
       expect((await invoke(metadata)).stdout).toBe(git(origin, metadata));
       expect(await requests()).toHaveLength(0);
@@ -176,7 +193,7 @@ it.skipIf(process.platform === "win32")(
 );
 
 it.skipIf(process.platform === "win32")(
-  "falls back to one requested blob when a path history exceeds the batch bound",
+  "bounds show and blame discovery but batches large pickaxe searches",
   () =>
     withTempDir("agent-git-blob-bound-", async (root) => {
       const { origin, file, git, reader } = await historyFixture(root, 2050, false);
@@ -186,5 +203,15 @@ it.skipIf(process.platform === "win32")(
       expect(result.code, result.stderr).toBe(0);
       expect(result.stdout).toBe(git(origin, args));
       expect(await requests()).toHaveLength(1);
+      const blame = ["blame", "-L", "1,1", "HEAD", "--", file];
+      expect((await invoke(blame)).stdout).toBe(git(origin, blame));
+      expect(await requests()).toHaveLength(1);
+      const search = await reader();
+      const pickaxe = ["log", "--oneline", "-Shistory line 1", "--", file];
+      const searched = await search.invoke(pickaxe);
+      expect(searched.code, searched.stderr).toBe(0);
+      expect(searched.stdout).toBe(git(origin, pickaxe));
+      expect(await search.newPacks()).toHaveLength(2);
+      expect(await search.requests()).toHaveLength(2049);
     }),
 );

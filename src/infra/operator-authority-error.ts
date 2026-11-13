@@ -1,4 +1,23 @@
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+
+/** A failed policy evaluation refuses this operation without revoking its source. */
+export const GatewayOperatorAccessUnavailableError = resolveGlobalSingleton(
+  Symbol.for("openclaw.gatewayOperatorAccessUnavailableError"),
+  () =>
+    class extends Error {
+      constructor() {
+        super("Gateway access policy is unavailable; retry the operation.");
+        this.name = "GatewayOperatorAccessUnavailableError";
+      }
+    },
+);
+
+export function isOperatorAuthorityUnavailable(error: unknown): boolean {
+  return collectNestedErrorCandidates(error).some(
+    (candidate) => candidate instanceof GatewayOperatorAccessUnavailableError,
+  );
+}
 
 type OperatorAuthorityFailure = {
   operatorAuthorityReason:

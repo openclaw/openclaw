@@ -31,6 +31,7 @@ export async function callSkillsGateway<T>(params: {
   method: string;
   params: Record<string, unknown>;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<T> {
   const { callGateway } = await import("../gateway/call.js");
   return await callGateway<T>({
