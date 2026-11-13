@@ -30,7 +30,7 @@ const DEFAULT_MCP_BODY_TIMEOUT_MS = 30_000;
 // gateway/server-startup-post-attach.ts, which bounds waiting for an ACP
 // backend to report readiness at 5s) — it does not wait on model generation,
 // so a few seconds is a conservative upper bound, not a typical wait time.
-const DEFAULT_MCP_NATIVE_TOOL_ALLOWLIST_WAIT_TIMEOUT_MS = 5_000;
+const MCP_NATIVE_TOOL_ALLOWLIST_WAIT_TIMEOUT_MS = 5_000;
 
 function readPositiveIntEnv(name: string, fallback: number): number {
   const raw = process.env[name]?.trim();
@@ -256,18 +256,8 @@ export function resolveMcpHttpBodyTimeoutMs(): number {
   return readPositiveIntEnv("OPENCLAW_MCP_LOOPBACK_BODY_TIMEOUT_MS", DEFAULT_MCP_BODY_TIMEOUT_MS);
 }
 
-let nativeToolAllowlistWaitTimeoutOverrideMs: number | undefined;
-
-export function setMcpNativeToolAllowlistWaitTimeoutMsForTests(
-  timeoutMs: number | undefined,
-): void {
-  nativeToolAllowlistWaitTimeoutOverrideMs = timeoutMs;
-}
-
 export function resolveMcpNativeToolAllowlistWaitTimeoutMs(): number {
-  return (
-    nativeToolAllowlistWaitTimeoutOverrideMs ?? DEFAULT_MCP_NATIVE_TOOL_ALLOWLIST_WAIT_TIMEOUT_MS
-  );
+  return MCP_NATIVE_TOOL_ALLOWLIST_WAIT_TIMEOUT_MS;
 }
 
 export function resolveMcpCliCaptureKey(

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
@@ -485,9 +485,12 @@ describe("mcp-grant-store", () => {
 
   describe("waitForMcpLoopbackClientGrantNativeToolAllowlist", () => {
     const LONG_TIMEOUT_MS = 60_000;
-    // Generous enough that CI scheduling jitter cannot flip it, but far below
-    // LONG_TIMEOUT_MS: proves a resolve-triggered return, not a timeout one.
-    const FAST_PATH_BUDGET_MS = 2_000;
+    // Time is controlled: the clock only moves when a test advances it, so a wait that
+    // returns without an advance woke on its event, and its timeout timer is gone.
+    const controlTime = () => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
 
     async function mintNativeCaptureGrant(params: { runId: string; runtimeOwnerToken: string }) {
       const admittedRunContext = await admitted(params.runId);
@@ -508,6 +511,7 @@ describe("mcp-grant-store", () => {
       if (!capture) {
         throw new Error("expected an active native capture");
       }
+      controlTime();
       return { grant, capture };
     }
 
@@ -516,12 +520,12 @@ describe("mcp-grant-store", () => {
         context: { sessionKey: "agent:main:no-native-gate", senderIsOwner: false },
         runtimeOwnerToken: "runtime-one",
       });
-      const startedAt = performance.now();
+      controlTime();
       await waitForNativeToolAllowlist({
         token: grant.token,
         timeoutMs: LONG_TIMEOUT_MS,
       });
-      expect(performance.now() - startedAt).toBeLessThan(FAST_PATH_BUDGET_MS);
+      expect(vi.getTimerCount()).toBe(0);
     });
 
     it("returns immediately when the allowlist already resolved before the wait began", async () => {
@@ -530,12 +534,11 @@ describe("mcp-grant-store", () => {
         runtimeOwnerToken: "runtime-one",
       });
       expect(capture.captureNativeToolAuthority(["read"])).toBe(true);
-      const startedAt = performance.now();
       await waitForNativeToolAllowlist({
         token: grant.token,
         timeoutMs: LONG_TIMEOUT_MS,
       });
-      expect(performance.now() - startedAt).toBeLessThan(FAST_PATH_BUDGET_MS);
+      expect(vi.getTimerCount()).toBe(0);
     });
 
     it("wakes as soon as a real allowlist lands, not at the timeout, and the live value is fresh afterward", async () => {
@@ -543,21 +546,16 @@ describe("mcp-grant-store", () => {
         runId: "wakes-on-capture",
         runtimeOwnerToken: "runtime-one",
       });
-      const startedAt = performance.now();
       const waitPromise = waitForNativeToolAllowlist({
         token: grant.token,
         timeoutMs: LONG_TIMEOUT_MS,
       });
-      // Give the wait a tick to actually start observing the token before the
-      // capture lands, so this exercises the real subscribe-then-wake path
-      // rather than a synchronous race.
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 10);
-      });
+      // The wait subscribes synchronously when called, so the capture below lands on
+      // a live waiter.
       expect(liveAllowlist(grant.token, "capture-wakes-on-capture")).toBeNull();
       expect(capture.captureNativeToolAuthority(["read", "exec"])).toBe(true);
       await waitPromise;
-      expect(performance.now() - startedAt).toBeLessThan(FAST_PATH_BUDGET_MS);
+      expect(vi.getTimerCount()).toBe(0);
       // The wait function itself returns nothing; correctness depends on the
       // caller re-reading live state afterward rather than any pre-wait
       // snapshot — assert that live read directly.
@@ -576,13 +574,12 @@ describe("mcp-grant-store", () => {
       }).then(() => {
         waitSettled = true;
       });
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 10);
-      });
       // Re-arming the null placeholder (as prepare.ts does to probe liveness
       // before reporting a real list) must not be mistaken for a resolution.
       expect(capture.captureNativeToolAuthority(null)).toBe(true);
+      await vi.advanceTimersByTimeAsync(59);
       expect(waitSettled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
       await waitPromise;
       expect(waitSettled).toBe(true);
       expect(liveAllowlist(grant.token, "capture-null-probe-no-wake")).toBeNull();
@@ -607,9 +604,6 @@ describe("mcp-grant-store", () => {
       }).then(() => {
         secondSettled = true;
       });
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 10);
-      });
       expect(capture.captureNativeToolAuthority(["read"])).toBe(true);
       await Promise.all([first, second]);
       expect(firstSettled).toBe(true);
@@ -621,9 +615,16 @@ describe("mcp-grant-store", () => {
         runId: "timeout-fallback",
         runtimeOwnerToken: "runtime-one",
       });
-      const startedAt = performance.now();
-      await waitForNativeToolAllowlist({ token: grant.token, timeoutMs: 30 });
-      expect(performance.now() - startedAt).toBeGreaterThanOrEqual(25);
+      let settled = false;
+      const waitPromise = waitForNativeToolAllowlist({ token: grant.token, timeoutMs: 30 }).then(
+        () => {
+          settled = true;
+        },
+      );
+      await vi.advanceTimersByTimeAsync(29);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await waitPromise;
       expect(liveAllowlist(grant.token, "capture-timeout-fallback")).toBeNull();
     });
 
@@ -632,17 +633,13 @@ describe("mcp-grant-store", () => {
         runId: "revoked-mid-wait",
         runtimeOwnerToken: "runtime-one",
       });
-      const startedAt = performance.now();
       const waitPromise = waitForNativeToolAllowlist({
         token: grant.token,
         timeoutMs: LONG_TIMEOUT_MS,
       });
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 10);
-      });
       revokeClient(grant.token);
       await waitPromise;
-      expect(performance.now() - startedAt).toBeLessThan(FAST_PATH_BUDGET_MS);
+      expect(vi.getTimerCount()).toBe(0);
     });
 
     it("does not leak a pending waiter when its capture is deactivated before it ever captures", async () => {
@@ -650,13 +647,9 @@ describe("mcp-grant-store", () => {
         runId: "deactivated-mid-wait",
         runtimeOwnerToken: "runtime-one",
       });
-      const startedAt = performance.now();
       const waitPromise = waitForNativeToolAllowlist({
         token: grant.token,
         timeoutMs: LONG_TIMEOUT_MS,
-      });
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 10);
       });
       expect(
         deactivateCapture({
@@ -666,7 +659,7 @@ describe("mcp-grant-store", () => {
         }),
       ).toBe(true);
       await waitPromise;
-      expect(performance.now() - startedAt).toBeLessThan(FAST_PATH_BUDGET_MS);
+      expect(vi.getTimerCount()).toBe(0);
     });
 
     it("migrates a pending waiter across a warm-token transfer so it still wakes", async () => {
@@ -674,13 +667,9 @@ describe("mcp-grant-store", () => {
         runId: "transfer-mid-wait",
         runtimeOwnerToken: "runtime-one",
       });
-      const startedAt = performance.now();
       const waitPromise = waitForNativeToolAllowlist({
         token: grant.token,
         timeoutMs: LONG_TIMEOUT_MS,
-      });
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 10);
       });
       const targetToken = "warm-target-token-transfer-mid-wait";
       expect(
@@ -700,7 +689,7 @@ describe("mcp-grant-store", () => {
       }
       expect(capture.captureNativeToolAuthority(["exec"])).toBe(true);
       await waitPromise;
-      expect(performance.now() - startedAt).toBeLessThan(FAST_PATH_BUDGET_MS);
+      expect(vi.getTimerCount()).toBe(0);
       expect(liveAllowlist(targetToken, "capture-transfer-mid-wait")).toEqual(["exec"]);
     });
   });
