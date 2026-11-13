@@ -132,6 +132,29 @@ it.each(["bun-all", "dual-all"])("keeps %s release wall costs separate from Node
 });
 
 it.each([
+  ["bun-all", "node", "node-subset:", "bun-all:node:"],
+  ["bun-all", "bun", "bun:", "bun-all:bun:"],
+  ["dual-all", "node", "", ""],
+  ["dual-all", "bun", "bun:", "dual-all:bun:"],
+])("isolates %s %s job walls from combined costs", (policy, runtime, span, prefix) => {
+  const { result, bytes } = execute({
+    jobs: [{ ...job, name: "checks-node-fixture (" + runtime + ")" }],
+    logs: {
+      "1": [
+        "2026-09-01T01:01:00Z OPENCLAW_CI_TEST_RUNTIME_POLICY: " + policy,
+        "2026-09-01T01:01:00Z OPENCLAW_CI_TEST_RUNTIME: " + runtime,
+        log("fixture").replaceAll("[shard:fixture]", "[shard:" + span + "fixture]"),
+      ].join("\n"),
+    },
+  });
+  expect(result.status, result.stderr).toBe(0);
+  expect(JSON.parse(bytes).compactGroupSeconds.github).toEqual({
+    ...baseline.compactGroupSeconds.github,
+    [prefix + "release-full-fixture"]: 900,
+  });
+});
+
+it.each([
   { name: "whole owner", files: undefined },
   { name: "explicit files", files: ["test/fixture.test.ts"] },
   { name: "wildcard owner", files: ["src/**/*.test.ts"] },

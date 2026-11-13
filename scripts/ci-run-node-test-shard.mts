@@ -610,8 +610,13 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
   // contract must not import current target discovery or runtime policy code.
   const runtimePolicy = baseEnv.OPENCLAW_CI_TEST_RUNTIME_POLICY?.trim() || "node";
   const runtimeOwner =
-    runtimePolicy === "node" ? undefined : await import("./lib/ci-test-runtime.mts");
+    runtimePolicy === "node" && !baseEnv.OPENCLAW_CI_TEST_RUNTIME
+      ? undefined
+      : await import("./lib/ci-test-runtime.mts");
   const policy = runtimeOwner?.resolveCiTestRuntimePolicy(baseEnv) ?? "node";
+  const selectRuntime = (selections: CiTestRuntimeSelection[]) =>
+    runtimeOwner?.filterCiTestRuntimeSelections(selections, baseEnv) ?? selections;
+  selectRuntime([]);
   // Respect serial timing-sensitive bins and never clone cache slots that
   // cannot receive a plan.
   const requestedConcurrency =
@@ -906,7 +911,7 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
             },
             policy,
           ) ?? [{ runtime: "node" as const }];
-        for (const selection of selections) {
+        for (const selection of selectRuntime(selections)) {
           if (interrupted || (exitCode !== 0 && exitCode !== 1)) {
             return;
           }

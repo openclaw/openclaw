@@ -58,6 +58,7 @@ type CiManifestFixtureOptions = {
   nodeTestShards?: Record<string, unknown>[];
   nodeTestGroupsCodec?: boolean;
   bunTestRuntime?: boolean;
+  runtimeJobs?: boolean;
   nativeBunInspection?: {
     report: {
       staleEntries: string[];
@@ -186,7 +187,7 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
       const inspection = options.nativeBunInspection;
       writeScript(
         "ci-test-runtime.mts",
-        `export { resolveCiTestRuntimePolicy } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-test-runtime.mts")).href)};
+        `export { resolveCiTestRuntimePolicy${options.runtimeJobs ? ", ciTestShardRuntimes" : ""} } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-test-runtime.mts")).href)};
         ${options.bunUiTestRuntime ? `import { ciTestShardRequiresBun as currentRuntime } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-test-runtime.mts")).href)};` : ""}
         export const ciTestShardRequiresBun = (shard, policy) =>
           policy !== "node" && (shard.configs?.includes("fixture-bun.config.ts") ||

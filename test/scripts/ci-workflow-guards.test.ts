@@ -6036,7 +6036,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       if: "failure()",
       uses: UPLOAD_ARTIFACT_V7,
       with: {
-        name: "control-ui-test-timeout-${{ matrix.shard }}-${{ github.run_attempt }}",
+        name: "control-ui-test-timeout-${{ matrix.shard }}-${{ matrix.test_runtime || 'legacy' }}-${{ github.run_attempt }}",
         path: `${test.env.OPENCLAW_UI_E2E_DIAGNOSTIC_DIR}/failure-*/failure.public.json`,
         "if-no-files-found": "ignore",
         "retention-days": 7,
@@ -6067,7 +6067,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       (row: { shard: number }) => row.shard,
     );
     expect(shards).toEqual(scenario.shards);
-    expect(ui.strategy).toMatchObject({ "fail-fast": false, "max-parallel": 3 });
+    expect(ui.strategy["fail-fast"]).toBe(false);
+    expect(ui.strategy["max-parallel"]).toBe(3);
     expect(ui.needs).toEqual(["preflight"]);
     expect(ui.if).toBe("needs.preflight.outputs.run_ui_tests == 'true'");
     expect(ui.permissions).toEqual({ contents: "read" });
@@ -6134,7 +6135,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       expect(env.OPENCLAW_NODE_TEST_PLAN_CONCURRENCY).toBe("1");
       expect(env.BUN_JSC_useFTLJIT).toBeUndefined();
       expect(env.OPENCLAW_UI_E2E_DIAGNOSTIC_DIR).toBe(
-        `${root}/.artifacts/control-ui-e2e-timeouts/ui-shard-${shard}-attempt-1`,
+        `${root}/.artifacts/control-ui-e2e-timeouts/ui-shard-${shard}-legacy-attempt-1`,
       );
       const flags = [
         "--maxWorkers",

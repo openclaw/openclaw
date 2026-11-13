@@ -1450,7 +1450,11 @@ describe("release decision policy", () => {
     expect(classifyReleaseSnapshot({ children: [snapshot] }).state).toBe("blocked_complete");
   });
 
-  it("accepts a human child rerun with retained earlier jobs in a reused plan", async () => {
+  it("accepts a targeted runtime child rerun with retained sibling evidence", async () => {
+    const runtime = "bun";
+    const sibling = "node";
+    const failedName = `checks-node-core-fast-isolated (${runtime})`;
+    const siblingName = `checks-node-core-fast-isolated (${sibling})`;
     const original = child("normalCi");
     const planned = hydrateReusedPlan([original], {
       children: [
@@ -1475,22 +1479,35 @@ describe("release decision policy", () => {
       readAttemptJobs: async (_runId, attempt) =>
         attempt === 1
           ? [
-              { name: "lint", status: "completed", conclusion: "success" },
-              { name: "test", status: "completed", conclusion: "failure" },
+              { name: siblingName, status: "completed", conclusion: "success" },
+              { name: failedName, status: "completed", conclusion: "failure" },
             ]
-          : [{ name: "test", status: "completed", conclusion: "success" }],
+          : [{ name: failedName, status: "completed", conclusion: "success" }],
     });
     expect(result.errors).toEqual([]);
+    expect(terminalPolicyPass(result)).toBe(true);
+    expect(classifyReleaseSnapshot({ children: [result] }).state).toBe("passed");
     expect(result).toMatchObject({
       observedRunAttempts: [1, 2],
       plannedRunAttempt: 1,
       runAttempt: 2,
       triggeringActor: "release-operator",
     });
-    expect(result.jobs).toEqual([
-      expect.objectContaining({ name: "lint", acceptedRunAttempt: 1, conclusion: "success" }),
-      expect.objectContaining({ name: "test", acceptedRunAttempt: 2, conclusion: "success" }),
-    ]);
+    expect(result.jobs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: siblingName,
+          acceptedRunAttempt: 1,
+          conclusion: "success",
+        }),
+        expect.objectContaining({
+          name: failedName,
+          acceptedRunAttempt: 2,
+          conclusion: "success",
+        }),
+      ]),
+    );
+    expect(result.jobs).toHaveLength(2);
   });
 
   it.each(["queued", "in_progress"])(

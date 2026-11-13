@@ -1038,6 +1038,55 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     );
   });
 
+  it.each(["node", "bun"] as const)(
+    "runs and retries only the selected %s job with unchanged coverage",
+    async (runtime) => {
+      const plans = groupPlans([
+        {
+          configs: [bunConfig],
+          shard_name: "eligible",
+          includePatterns: [nodeTarget, vitestBunTarget, nativeBunTarget],
+        },
+      ]);
+      const env = { CI: "true", OPENCLAW_CI_TEST_RUNTIME_POLICY: "dual-all" };
+      const capture = async (selected?: string, outcome = 0) => {
+        const calls: {
+          args: string[];
+          runtime: string | undefined;
+          include: unknown;
+          label: string;
+          timingKey: string | undefined;
+        }[] = [];
+        const code = await runPlans(plans, {
+          concurrency: 1,
+          env: { ...env, OPENCLAW_CI_TEST_RUNTIME: selected },
+          runChild: async (args, childEnv, label, timingKey) => {
+            calls.push({
+              args,
+              runtime: childEnv.OPENCLAW_VITEST_RUNTIME,
+              include: childEnv.OPENCLAW_VITEST_INCLUDE_FILE
+                ? readList(childEnv.OPENCLAW_VITEST_INCLUDE_FILE)
+                : undefined,
+              label,
+              timingKey,
+            });
+            return outcome;
+          },
+        });
+        return { code, calls };
+      };
+      const original = await capture();
+      const expected = original.calls.filter((call) => call.runtime === runtime);
+      expect(expected.length).toBeGreaterThan(0);
+      const failed = await capture(runtime, 1);
+      expect(failed.code).toBe(1);
+      expect(failed.calls).toEqual(expected);
+      const retry = await capture(runtime);
+      expect(retry.code).toBe(0);
+      expect(retry.calls).toEqual(expected);
+    },
+  );
+
   it("finishes every release engine after ordinary test failures", async () => {
     const { code, calls } = await recordPlans(
       groupPlans([

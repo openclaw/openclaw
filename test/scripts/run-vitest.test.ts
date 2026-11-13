@@ -197,6 +197,8 @@ describe("scripts/run-vitest", () => {
       CI: "1",
       GITHUB_ACTIONS: "true",
       OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE: "1",
+      OPENCLAW_CI_TEST_RUNTIME_POLICY: "bun-all",
+      OPENCLAW_CI_TEST_RUNTIME: "bun",
     };
     expect(testRunnerFixtureEnv({}, inherited)).toEqual({ PATH: "/fixture/bin" });
     expect(testRunnerFixtureEnv({ CI: "1", GITHUB_ACTIONS: "true" }, inherited)).toEqual({

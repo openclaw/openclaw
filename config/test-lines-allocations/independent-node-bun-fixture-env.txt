@@ -1,0 +1,3 @@
+5
+# Extend fixture isolation to the runtime job selector and supply the required matrix diagnostic.
+# Exact net test-line growth for this repair; shared scalar unchanged.

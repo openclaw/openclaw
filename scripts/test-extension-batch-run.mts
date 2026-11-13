@@ -8,6 +8,7 @@ import {
 import { databaseWorkerExtensionTestFiles } from "../test/vitest/vitest.extension-database-workers-paths.mjs";
 import { collectVitestExcludePatterns } from "../test/vitest/vitest.pattern-file.ts";
 import {
+  filterCiTestRuntimeSelections,
   resolveCiTestRuntimePolicy,
   resolveCiTestRuntimeSelections,
 } from "./lib/ci-test-runtime.mts";
@@ -302,7 +303,12 @@ export async function runExtensionBatchPlan(
   const suppliedEnv = params.env ?? process.env;
   const runtimePolicy = resolveCiTestRuntimePolicy(suppliedEnv);
   const allRuntimes = runtimePolicy === "bun-all" || runtimePolicy === "dual-all";
-  const env = allRuntimes ? { ...suppliedEnv, OPENCLAW_VITEST_RUNTIME: "node" } : suppliedEnv;
+  const selectedRuntime = suppliedEnv.OPENCLAW_CI_TEST_RUNTIME?.trim();
+  // Validate the internal job selector even when this plan has no invocations.
+  filterCiTestRuntimeSelections([], suppliedEnv);
+  const env = allRuntimes
+    ? { ...suppliedEnv, OPENCLAW_VITEST_RUNTIME: selectedRuntime || "node" }
+    : suppliedEnv;
   const vitestArgs = params.vitestArgs ?? [];
   // Single-plugin CLI historically leaves exact exclusions to Vitest.
   const exactExcludePaths =
@@ -333,19 +339,22 @@ export async function runExtensionBatchPlan(
   );
   // Admit the whole selection before report or runtime preparation can import code.
   assertTestHomeSelection(env, homeMode);
-  if (allRuntimes) {
+  if (allRuntimes || selectedRuntime) {
     for (const leaf of leafGroups) {
       const selections = leaf.invocations.flatMap((invocation) =>
-        resolveCiTestRuntimeSelections(
-          {
-            configs: [invocation.config],
-            includePatterns: invocation.targets.map((target) =>
-              path.posix.join("extensions", target),
-            ),
-            vitestArgs: invocation.args,
-            env: invocation.env,
-          },
-          runtimePolicy,
+        filterCiTestRuntimeSelections(
+          resolveCiTestRuntimeSelections(
+            {
+              configs: [invocation.config],
+              includePatterns: invocation.targets.map((target) =>
+                path.posix.join("extensions", target),
+              ),
+              vitestArgs: invocation.args,
+              env: invocation.env,
+            },
+            runtimePolicy,
+          ),
+          suppliedEnv,
         ).map((selection) => {
           const cache = invocation.env[FS_MODULE_CACHE_PATH_ENV_KEY];
           return Object.assign({}, invocation, {
@@ -370,19 +379,32 @@ export async function runExtensionBatchPlan(
       leaf.bunInvocations = selections.filter(
         (invocation) => invocation.env.OPENCLAW_VITEST_RUNTIME === "bun",
       );
-      if (runtimePolicy === "bun-all") {
-        leaf.invocations = selections.filter(
-          (invocation) => invocation.env.OPENCLAW_VITEST_RUNTIME === "node",
-        );
-      }
+      leaf.invocations = selections.filter(
+        (invocation) => invocation.env.OPENCLAW_VITEST_RUNTIME === "node",
+      );
     }
   }
+  // Prepare filtered leaf selections before single-plugin aggregation loses their exact targets.
+  const preparationInvocations = leafGroups.flatMap((group) => [
+    ...group.invocations,
+    ...group.bunInvocations,
+  ]);
   const preparedGroups =
-    batchPlan.extensionCount === 1 && !allRuntimes
+    batchPlan.extensionCount === 1 && !allRuntimes && !selectedRuntime
       ? combineSinglePluginGroups(leafGroups, vitestArgs, env, homeMode)
-      : leafGroups;
+      : // Skip absent runtime members, but keep genuinely empty exclusions for their normal outcome.
+        leafGroups.filter(
+          (group) =>
+            !selectedRuntime ||
+            group.invocations.length > 0 ||
+            group.bunInvocations.length > 0 ||
+            !leafInvocations.some((invocation) => invocation.config === group.group.config),
+        );
+  if (preparedGroups.length === 0) {
+    return 0;
+  }
   const phases =
-    runtimePolicy === "dual-all"
+    runtimePolicy === "dual-all" && !selectedRuntime
       ? [
           preparedGroups,
           preparedGroups
@@ -452,7 +474,7 @@ export async function runExtensionBatchPlan(
     // No reader may start while a shared generation is being replaced. Select
     // from the exact emitted chunks, including existing exact-exclude expansion.
     const preparationCode = await prepareVitestRuntime(
-      leafInvocations.flatMap(({ config, args, targets, env: invocationEnv }) =>
+      preparationInvocations.flatMap(({ config, args, targets, env: invocationEnv }) =>
         resolveVitestRuntimeCliSelections(config, [...args, ...targets], invocationEnv),
       ),
       env,

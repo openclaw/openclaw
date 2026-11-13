@@ -1053,6 +1053,65 @@ describe("CI test timing refit", () => {
     expect(result.contributingRunIds.blacksmith).toEqual([1, 2, 3]);
   });
 
+  it.each(["bun-all", "dual-all"])(
+    "isolates split %s legs from serial timing history",
+    (policy) => {
+      const descriptor = {
+        shard_name: "owner",
+        configs: ["test/vitest/vitest.unit-fast.config.ts"],
+        includePatterns: ["bun.test.ts", "node.test.ts"],
+        env: { OPENCLAW_VITEST_MAX_WORKERS: "2" },
+      };
+      const previous = compactBaseline({ [policy + ":owner"]: 70, [policy + ":retained"]: 80 });
+      previous.runtimePlacementTimings = {
+        ...previous.runtimePlacementTimings,
+        blacksmith: [
+          runtimeTiming(descriptor, 70, {
+            ...descriptor.env,
+            OPENCLAW_CI_TEST_RUNTIME_POLICY: policy,
+          }),
+        ],
+      };
+      const logs = (["node", "bun"] as const).map((runtime) => {
+        const key =
+          runtime === "bun" ? "bun:owner" : policy === "bun-all" ? "node-subset:owner" : "owner";
+        return timingLog(
+          [
+            "2026-08-27T23:00:00Z OPENCLAW_CI_TEST_RUNTIME_POLICY: " + policy,
+            "2026-08-27T23:00:00Z OPENCLAW_CI_TEST_RUNTIME: " + runtime,
+            "2026-08-27T23:00:00Z OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: " +
+              encodeNodeTestGroups([descriptor]),
+            "2026-08-27T23:00:00Z [shard:" + key + "] begin",
+            "2026-08-27T23:00:01Z [shard:" +
+              key +
+              "] [test] preparing runtime runtime before Vitest workers",
+            "2026-08-27T23:00:20Z [shard:" + key + "] end (exit 0)",
+          ].join("\n"),
+          "blacksmith-4vcpu-ubuntu-2404",
+        );
+      });
+      const result = refitTestTimings(
+        [1, 2, 3].map((id) => timingRun(id, logs)),
+        previous,
+      );
+      expect(result.timings.compactGroupSeconds.blacksmith).toEqual({
+        ...previous.compactGroupSeconds.blacksmith,
+        [policy === "dual-all" ? "owner" : "bun-all:node:owner"]: 20,
+        [policy + ":bun:owner"]: 20,
+      });
+      expect(result.timings.runtimePlacementTimings.blacksmith).toEqual(
+        expect.arrayContaining([
+          ...previous.runtimePlacementTimings.blacksmith,
+          runtimeTiming(descriptor, 20, {
+            ...descriptor.env,
+            OPENCLAW_CI_TEST_RUNTIME_POLICY: policy,
+            OPENCLAW_CI_TEST_RUNTIME: "bun",
+          }),
+        ]),
+      );
+    },
+  );
+
   it("keeps the partial Bun pass in dual validation out of complete Bun timing history", () => {
     const descriptor = {
       shard_name: "owner",
@@ -1093,6 +1152,7 @@ describe("CI test timing refit", () => {
     "failed runtime",
     "missing receipt",
     "partial Node selection",
+    "split runtime",
     "wrong workers",
   ])("retains packed release costs on %s", (fault) => {
     const fixture = packedReleaseFixture();
@@ -1116,6 +1176,8 @@ describe("CI test timing refit", () => {
         `[shard:${fixture.timingKeys[0]}]`,
         `[shard:node-subset:${fixture.timingKeys[0]}]`,
       );
+    } else if (fault === "split runtime") {
+      text = "2026-08-27T23:00:00Z OPENCLAW_CI_TEST_RUNTIME: node\n" + text;
     } else if (fault === "wrong workers") {
       text = text.replace("OPENCLAW_VITEST_MAX_WORKERS: 3", "OPENCLAW_VITEST_MAX_WORKERS: 1");
     }
@@ -2170,6 +2232,43 @@ describe("CI timing sampler provenance", () => {
       expect(fixture.requestUrls().some((url) => url.includes("/workflows/openclaw-"))).toBe(false);
     },
   );
+
+  it("samples exact split extension job names across retry attempts", () => {
+    const log = (runtime: string) =>
+      [
+        "2026-08-27T23:00:00Z OPENCLAW_CI_TEST_RUNTIME_POLICY: dual-all",
+        "2026-08-27T23:00:00Z OPENCLAW_CI_TEST_RUNTIME: " + runtime,
+        compactLog(40, (runtime === "bun" ? "bun:" : "") + "split-extension"),
+      ].join("\n");
+    const fixture = createSamplerFixture({
+      runs: samplerRuns([1, 2], { run_attempt: 2 }),
+      jobs: [1, 2].flatMap((id) => [
+        samplerJob(id * 10, id, {
+          name: "checks-node-changed-extensions-config-1 (node)",
+          log: log("node"),
+        }),
+        samplerJob(id * 10 + 1, id, {
+          name: "checks-node-changed-extensions-bundle-1 (bun)",
+          log: log("bun"),
+          run_attempt: 2,
+        }),
+        samplerJob(id * 10 + 2, id, {
+          name: "checks-node-changed-extensions-config-1 (bun) extra",
+          log: "not a timing log",
+        }),
+      ]),
+      baseline: compactBaseline({ "dual-all:split-extension": 100 }),
+    });
+    invoke(fixture);
+    expect(readTimings(fixture).compactGroupSeconds.blacksmith).toEqual({
+      "dual-all:split-extension": 100,
+      "split-extension": 40,
+      "dual-all:bun:split-extension": 40,
+    });
+    expect(fixture.requestUrls().filter((url) => /\/jobs\/(?:12|22)\/logs$/u.test(url))).toEqual(
+      [],
+    );
+  });
 
   it("deduplicates overlapping run and job pages without treating retries as extra runs", () => {
     const first = samplerRun(1);
