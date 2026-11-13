@@ -4,6 +4,7 @@
 // --built --build-dir <checkout> measures shipped dist without a TypeScript loader in workers.
 // --worker <name> selects one owner. --compare-build-dir <base> alternates base/candidate
 // order per sample against --build-dir <candidate>, reporting both arms for each worker.
+// --prewarm-history measures foreground transcript workers' eager presentation imports.
 // Example: node --import ./scripts/tsx.mjs scripts/perf/worker-spawn-measure.mjs --built --build-dir . --samples 5 --output .local/spawn/built.json
 // Run arms in alternating order. Every sample owns a fresh isolate; one unmeasured preparation
 // isolate per owner caches transpiled source bytes in source mode. Built mode uses the shipped
@@ -72,6 +73,7 @@ function summarize(rows) {
             2,
           min: sorted[0],
           max: sorted.at(-1),
+          p95: sorted[Math.ceil(sorted.length * 0.95) - 1],
         },
       ];
     }),
@@ -139,6 +141,8 @@ if (!isMainThread) {
       // Census runs only after both measured intervals, so debugger allocations do not enter them.
       const inspector = new Session();
       inspector.connect();
+      await inspector.post("HeapProfiler.collectGarbage");
+      const retainedHeapBytes = getHeapStatistics().used_heap_size;
       const evaluated = new Map();
       inspector.on("Debugger.scriptParsed", ({ params }) => {
         if (params.url.startsWith("file:") && params.url !== import.meta.url) {
@@ -160,6 +164,7 @@ if (!isMainThread) {
           firstTask,
           evaluatedModules: new Set(evaluated.values()).size,
           parsedSourceBytes,
+          retainedHeapBytes,
           overlays: [...overlays],
         },
         [],
@@ -180,6 +185,7 @@ if (!isMainThread) {
       output: { type: "string" },
       samples: { type: "string", default: "10" },
       worker: { type: "string" },
+      "prewarm-history": { type: "boolean" },
       "baseline-dir": { type: "string" },
       built: { type: "boolean" },
       "build-dir": { type: "string" },
@@ -195,6 +201,10 @@ if (!isMainThread) {
   const samples = Number(values.samples);
   assert(Number.isSafeInteger(samples) && samples > 0, "--samples must be positive");
   assert(!values.worker || Object.hasOwn(entries, values.worker), "Unknown --worker");
+  assert(
+    !values["prewarm-history"] || values.worker === "session-transcript",
+    "--prewarm-history requires --worker session-transcript",
+  );
   const baselineDir = values["baseline-dir"] && path.resolve(values["baseline-dir"]);
   // Keep this parent-only directory walker outside the measured worker import graph.
   const { listDirectoryTreeStrictSync } = await import("../../src/infra/directory-walk.js");
@@ -506,6 +516,7 @@ if (!isMainThread) {
           ),
         ).href,
         built: values.built,
+        prewarmHistory: values["prewarm-history"] === true,
         cache,
         prepare,
         baselineFiles: prepare ? baselineFiles : undefined,
@@ -606,6 +617,7 @@ if (!isMainThread) {
         spawnToFirstReplyMs: spawnToReadyMs + firstRoundTripMs,
         evaluatedModules: result.evaluatedModules,
         parsedSourceBytes: result.parsedSourceBytes,
+        retainedHeapBytes: result.retainedHeapBytes,
         overlays: result.overlays,
         hostLoad: os.loadavg(),
       };
@@ -623,6 +635,7 @@ if (!isMainThread) {
     samples,
     baselineDir: values["baseline-dir"] ?? null,
     built: values.built === true,
+    prewarmHistory: values["prewarm-history"] === true,
     buildRoot: values.built ? buildRoot : null,
     comparisonRoot: comparisonRoot ?? null,
     order: comparisonRoot ? "AB/BA per sample: base then candidate on even indices" : "single arm",
@@ -669,6 +682,8 @@ if (!isMainThread) {
             spawnToFirstReplyMs: summarize(rows.map((row) => ({ value: row.spawnToFirstReplyMs })))
               .value,
             parsedSourceBytes: rows.map((row) => row.parsedSourceBytes),
+            retainedHeapBytes: summarize(rows.map((row) => ({ value: row.retainedHeapBytes })))
+              .value,
             evaluatedModules: rows.map((row) => row.evaluatedModules),
             rows,
           },
