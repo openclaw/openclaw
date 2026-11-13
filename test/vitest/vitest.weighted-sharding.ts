@@ -1,12 +1,14 @@
 import type { TestSpecification } from "vitest/node";
 
-export function selectWeightedShard(
+export function planWeightedShards(
   files: TestSpecification[],
-  shard: { count: number; index: number },
+  count: number,
   estimateWeight: (file: TestSpecification) => number,
   affinityKey?: (file: TestSpecification) => string | undefined,
-): TestSpecification[] {
-  const buckets = Array.from({ length: shard.count }, () => ({
+  // One-time cost an affinity group pays wherever it lands, such as shared preparation.
+  affinityWeight?: (key: string) => number,
+): Array<{ weight: number; files: TestSpecification[] }> {
+  const buckets = Array.from({ length: count }, () => ({
     weight: 0,
     files: [] as TestSpecification[],
   }));
@@ -18,7 +20,7 @@ export function selectWeightedShard(
     const key = affinityKey?.(file);
     let group = key === undefined ? undefined : affinities.get(key);
     if (!group) {
-      group = { weight: 0, files: [] };
+      group = { weight: key === undefined ? 0 : (affinityWeight?.(key) ?? 0), files: [] };
       weightedGroups.push(group);
       if (key !== undefined) {
         affinities.set(key, group);
@@ -41,5 +43,15 @@ export function selectWeightedShard(
     bucket.weight += weight;
     bucket.files.push(...groupFiles);
   }
-  return buckets[shard.index - 1]!.files;
+  return buckets;
+}
+
+export function selectWeightedShard(
+  files: TestSpecification[],
+  shard: { count: number; index: number },
+  estimateWeight: (file: TestSpecification) => number,
+  affinityKey?: (file: TestSpecification) => string | undefined,
+): TestSpecification[] {
+  return planWeightedShards(files, shard.count, estimateWeight, affinityKey)[shard.index - 1]!
+    .files;
 }

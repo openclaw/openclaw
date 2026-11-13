@@ -701,9 +701,9 @@ These are intentionally guarded by the `ci-workflow-guards`,
   three-row cap and three-worker limit. Full UI owners and manual validation
   retain their established shards, runtime policy and first-row WebKit checks.
 - Eligible Control UI E2E rows request the 16-vCPU class with unchanged live
-  backend/event routing. Compact plans use six mocked Control UI shards with four
-  workers each, matching four observed CPUs per runner and retaining 24 aggregate
-  worker slots. Private source-server projects remain serial. The conditional
+  backend/event routing. Compact plans use nine mocked Control UI shards with four
+  workers each, matching four observed CPUs per runner; the planner's cold-shard
+  budget test keeps each shard under 700 planned seconds for slow hosted CPUs. Private source-server projects remain serial. The conditional
   browser-extension row keeps its existing reuse and routing rules. Hourly main
   uses the same compact plan without a changed-path inventory. Non-main full
   manual, noncanonical, compatibility, and other unknown-path inventories retain twelve Control UI

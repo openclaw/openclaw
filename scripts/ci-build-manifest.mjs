@@ -515,11 +515,13 @@ const includeReleaseOnlyUiTests =
     !isCanonicalRepository ||
     compatibilityTarget ||
     changedPaths === null);
-// Match four observed CPUs per 16-class job while retaining 24 worker slots.
+// Match four observed CPUs per 16-class job. Nine Control UI shards keep each
+// planned cold shard within its step budget on the slowest hosted runners
+// (see the budget case in test/scripts/vitest-e2e-sharding.test.ts).
 // Private source-server projects remain serial.
 const compactUiE2e = supportsUiE2eProjects && !includeReleaseOnlyUiTests;
 let uiE2eJobCount = compactUiE2e
-  ? 7
+  ? 10
   : supportsUiE2eProjects
     ? 13
     : usesHostedRunnerProfile

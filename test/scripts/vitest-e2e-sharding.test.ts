@@ -4,18 +4,28 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import type { TestSpecification } from "vitest/node";
+import { RELEASE_ONLY_UI_TEST_FILES } from "../../scripts/lib/ci-proof-test-inventory.mts";
 import { createE2EVitestConfig } from "../vitest/vitest.e2e.config.ts";
 import { RepoE2eSequencer } from "../vitest/vitest.e2e.sequencer.ts";
 import { createUiE2eVitestConfig } from "../vitest/vitest.ui-e2e.config.ts";
-import { UiE2eSequencer } from "../vitest/vitest.ui-e2e.sequencer.ts";
+import { planUiE2eShards, UiE2eSequencer } from "../vitest/vitest.ui-e2e.sequencer.ts";
 import { selectWeightedShard } from "../vitest/vitest.weighted-sharding.ts";
 
-const { timings } = vi.hoisted(() => ({ timings: {} as Record<string, number> }));
-vi.mock("../../scripts/lib/ci-test-timings.mts", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../scripts/lib/ci-test-timings.mts")>()),
-  readRepoE2eFileTimings: () => timings,
-  readUiE2eFileTimings: () => ({ fileSeconds: timings, perFileOverheadSeconds: 0 }),
+const { committedUiTimings, timings } = vi.hoisted(() => ({
+  committedUiTimings: { enabled: false },
+  timings: {} as Record<string, number>,
 }));
+vi.mock("../../scripts/lib/ci-test-timings.mts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../scripts/lib/ci-test-timings.mts")>();
+  return {
+    ...actual,
+    readRepoE2eFileTimings: () => timings,
+    readUiE2eFileTimings: () =>
+      committedUiTimings.enabled
+        ? actual.readUiE2eFileTimings()
+        : { fileSeconds: timings, perFileOverheadSeconds: 0 },
+  };
+});
 
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 const directories: string[] = [];
@@ -37,7 +47,30 @@ afterEach(() => {
   for (const key of Object.keys(timings)) {
     delete timings[key];
   }
+  committedUiTimings.enabled = false;
 });
+
+function discoverUiE2eSpecs(env: Record<string, string>, parallelWorkers?: number) {
+  const ui = createUiE2eVitestConfig(env, []).test!;
+  return (ui.projects ?? []).flatMap((project) => {
+    if (typeof project !== "object" || project === null || !("test" in project) || !project.test) {
+      return [];
+    }
+    const config = project.test;
+    // CI resolves --maxWorkers for the parallel phases; the serial phase keeps one worker.
+    const maxWorkers =
+      parallelWorkers === undefined
+        ? config.maxWorkers
+        : config.sequence?.groupOrder === 1
+          ? 1
+          : parallelWorkers;
+    return globSync(config.include ?? [], { cwd: repoRoot, exclude: config.exclude }).map((file) =>
+      Object.assign({ moduleId: path.join(repoRoot, file) } as TestSpecification, {
+        project: { name: config.name, config: { ...config, maxWorkers } },
+      }),
+    );
+  });
+}
 
 function testFiles(sizes: number[]): TestSpecification[] {
   const directory = realpathSync(mkdtempSync(path.join(tmpdir(), "openclaw-sharding-")));
@@ -116,27 +149,17 @@ it("keeps shared UI/Gateway partition ties deterministic without collapsing spec
 });
 
 it("keeps the UI worker borrowers together without changing discovered or selected files", async () => {
-  const ui = createUiE2eVitestConfig({ OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1" }, []).test!;
-  const discovered = (ui.projects ?? []).flatMap((project) => {
-    if (typeof project !== "object" || project === null || !("test" in project) || !project.test) {
-      return [];
-    }
-    const config = project.test;
-    return globSync(config.include ?? [], { cwd: repoRoot, exclude: config.exclude }).map((file) =>
-      Object.assign({ moduleId: path.join(repoRoot, file) } as TestSpecification, {
-        project: { name: config.name, config },
-      }),
-    );
-  });
+  const discovered = discoverUiE2eSpecs({ OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1" });
   const borrowerPaths = new Set(
     [
+      "guest-person-identities",
       "model-providers-profile-outcomes",
       "post-deploy-session-entry",
       "question-guest",
       "screen-requester-routing",
     ].map((name) => path.join(repoRoot, "ui/src/e2e", `${name}.e2e.test.ts`)),
   );
-  expect(discovered.filter((file) => borrowerPaths.has(file.moduleId))).toHaveLength(4);
+  expect(discovered.filter((file) => borrowerPaths.has(file.moduleId))).toHaveLength(5);
   const partition = (files: TestSpecification[]) =>
     Promise.all(
       Array.from({ length: 6 }, (_, offset) =>
@@ -154,6 +177,23 @@ it("keeps the UI worker borrowers together without changing discovered or select
     expect(owners).toHaveLength(1);
     expect(await partition(files.toReversed())).toEqual(shards);
   }
+});
+
+it("fits every complete cold compact Control UI shard in the step budget", () => {
+  committedUiTimings.enabled = true;
+  // Hourly main's inventory: mocked Gateway only, production-artifact suites in the
+  // browser row, no release-only compositions, and CI's four parallel workers.
+  const files = discoverUiE2eSpecs(
+    { OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1", OPENCLAW_UI_E2E_SKIP_PRODUCTION_ARTIFACT: "1" },
+    4,
+  ).filter((file) => !RELEASE_ONLY_UI_TEST_FILES.has(path.relative(repoRoot, file.moduleId)));
+  // The compact plan in scripts/ci-build-manifest.mjs runs nine Control UI shards.
+  const shards = planUiE2eShards(files, 9);
+  expect(new Set(shards.flatMap((shard) => shard.files))).toEqual(new Set(files));
+  // The 20-minute step must also hold on the slowest hosted runner: AMD EPYC 7763 jobs ran
+  // at 1.31-1.36x their planned cold wall in hourly main CI (2026-11-13), and 700s x 1.36
+  // leaves about 20% of the step for runner noise.
+  expect(Math.max(...shards.map((shard) => shard.seconds))).toBeLessThanOrEqual(700);
 });
 
 it("starts expensive standalone UI work early without crossing serial phase barriers", async () => {

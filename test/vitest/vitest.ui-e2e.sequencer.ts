@@ -5,7 +5,7 @@ import { basename, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BaseSequencer, type TestSpecification } from "vitest/node";
 import { readUiE2eFileTimings } from "../../scripts/lib/ci-test-timings.mts";
-import { selectWeightedShard } from "./vitest.weighted-sharding.ts";
+import { planWeightedShards } from "./vitest.weighted-sharding.ts";
 
 // Cold-start fallback when committed measurements are missing. Refresh
 // config/ci-test-timings.json with `pnpm ci:timings:refit`, not these literals.
@@ -107,13 +107,23 @@ const UI_E2E_FILE_SECONDS_HINTS = new Map<string, number>([
 const UI_E2E_FALLBACK_SECONDS_PER_KB = 0.38;
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 // These source fixtures borrow one invocation's compiled subprocess generation.
-// New borrowers may add preparation elsewhere until this measured group is refreshed.
+// New borrowers may add preparation elsewhere until this measured group is refreshed:
+// each shard holding a borrower prepares its own generation.
 const UI_E2E_SHARED_WORKER_FILES = new Set([
+  "ui/src/e2e/guest-person-identities.e2e.test.ts",
   "ui/src/e2e/model-providers-profile-outcomes.e2e.test.ts",
   "ui/src/e2e/post-deploy-session-entry.e2e.test.ts",
   "ui/src/e2e/question-guest.e2e.test.ts",
   "ui/src/e2e/screen-requester-routing.e2e.test.ts",
 ]);
+
+// Cold costs that file timings omit, measured in hourly main CI from 2026-11-11 to 2026-11-13.
+// Every shard builds the Control UI bundle and launches Chromium before its first file: 21-31s.
+const UI_E2E_SHARD_STARTUP_SECONDS = 30;
+// The borrower shard prepares a 12.7k-input generation during the parallel phase: 31-60s on
+// Blacksmith, 61-124s hosted. It blocks one worker and competes for CPU with the other three;
+// that shard ran about 75s longer than its hosted siblings.
+const UI_E2E_SHARED_WORKER_PREPARATION_SECONDS = 75;
 
 function estimateFileSeconds(moduleId: string): number {
   const { fileSeconds, perFileOverheadSeconds } = readUiE2eFileTimings();
@@ -154,16 +164,29 @@ export class UiE2eSequencer extends BaseSequencer {
 
   override async shard(files: TestSpecification[]): Promise<TestSpecification[]> {
     // Vitest invokes shard() only when config.shard is present.
-    return selectWeightedShard(
-      files,
-      this.ctx.config.shard!,
-      (file) => estimateFileSeconds(file.moduleId) / effectiveProjectWorkers(file),
-      (file) =>
-        UI_E2E_SHARED_WORKER_FILES.has(relative(repoRoot, file.moduleId).replaceAll("\\", "/"))
-          ? "compiled-workers"
-          : undefined,
-    );
+    const { count, index } = this.ctx.config.shard!;
+    return planUiE2eShards(files, count)[index - 1]!.files;
   }
+}
+
+/** Partitions discovered files and prices each shard's complete cold wall time. */
+export function planUiE2eShards(
+  files: TestSpecification[],
+  count: number,
+): Array<{ seconds: number; files: TestSpecification[] }> {
+  return planWeightedShards(
+    files,
+    count,
+    (file) => estimateFileSeconds(file.moduleId) / effectiveProjectWorkers(file),
+    (file) =>
+      UI_E2E_SHARED_WORKER_FILES.has(relative(repoRoot, file.moduleId).replaceAll("\\", "/"))
+        ? "compiled-workers"
+        : undefined,
+    () => UI_E2E_SHARED_WORKER_PREPARATION_SECONDS,
+  ).map(({ weight, files: shardFiles }) => ({
+    seconds: UI_E2E_SHARD_STARTUP_SECONDS + weight,
+    files: shardFiles,
+  }));
 }
 
 function effectiveProjectWorkers(file: TestSpecification): number {
