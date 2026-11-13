@@ -596,8 +596,8 @@ async function runCloseTeardownFailure() {
   const source = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
   const worker = source.create(echoWorkerSource, { eval: true, execArgv: [] });
   await worker.terminate();
-  // oxlint-disable-next-line typescript/unbound-method -- Restored below; call retains the intercepted Worker receiver.
-  const terminate = Worker.prototype.terminate;
+  const terminateDescriptor = Object.getOwnPropertyDescriptor(Worker.prototype, "terminate");
+  assert.ok(terminateDescriptor);
   const failure = new Error("synthetic native teardown failure");
   let joinSupervisor: (() => Promise<number>) | undefined;
   let ownerAttempts = 0;
@@ -607,7 +607,7 @@ async function runCloseTeardownFailure() {
   // Fault only the real supervisor's native teardown, not source admission or settlement.
   Worker.prototype.terminate = function () {
     assert.notEqual(this.threadId, -1);
-    joinSupervisor = () => terminate.call(this);
+    joinSupervisor = () => this.terminate();
     throw failure;
   };
   try {
@@ -626,7 +626,7 @@ async function runCloseTeardownFailure() {
       }),
     );
   } finally {
-    Worker.prototype.terminate = terminate;
+    Object.defineProperty(Worker.prototype, "terminate", terminateDescriptor);
     await joinSupervisor?.();
   }
 }
