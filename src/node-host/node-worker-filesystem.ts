@@ -24,31 +24,27 @@ export async function prepareNodeWorkerFilesystem(params: {
   }
   const workspace = fs.realpathSync.native(params.workspaceDir);
   const hostHome = fs.realpathSync.native(capturedHome);
-  const hostRoot = fs.realpathSync.native(params.bundleRoot);
   const packageRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
   if (!packageRoot) {
     throw new Error("Cannot locate the node runtime for filesystem isolation");
   }
-  if ([hostHome, hostRoot, packageRoot].some((root) => isPathInside(workspace, root))) {
-    throw new Error("Worker workspace cannot contain node runtime or private storage");
-  }
   const home = path.join(hostHome, "model-home");
-  fs.mkdirSync(home, { recursive: true, mode: 0o700 });
-  const stat = fs.lstatSync(home);
-  if (
-    !stat.isDirectory() ||
-    stat.isSymbolicLink() ||
-    stat.uid !== process.getuid?.() ||
-    (stat.mode & 0o077) !== 0
-  ) {
-    throw new Error("Isolated model HOME must be an owned private directory");
-  }
+  const runtimePaths = [path.dirname(params.entry), packageRoot, path.dirname(process.execPath)];
   const readOnlyPaths = [
-    path.dirname(params.entry),
-    packageRoot,
-    path.dirname(process.execPath),
+    ...runtimePaths,
     "/bin",
+    "/sbin",
     "/usr",
+    "/usr/bin",
+    "/usr/sbin",
+    "/usr/lib",
+    "/usr/lib64",
+    "/usr/libexec",
+    "/usr/local/bin",
+    "/usr/local/sbin",
+    "/usr/local/lib",
+    "/usr/local/lib64",
+    "/usr/local/libexec",
     "/lib",
     "/lib64",
     "/etc/ssl",
@@ -74,14 +70,87 @@ export async function prepareNodeWorkerFilesystem(params: {
       readOnlyPaths.push(value);
     }
   }
-  const temporaryRoot = fs.mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), "worker-"));
+  const protectedNamespaceParents: string[] = [];
+  const protectRuntimePath = (root: string) => {
+    const canonicalRoot = fs.realpathSync.native(root);
+    const inspectedPaths = new Set<string>();
+    // Trusted callers may resolve the original pathname again after launch.
+    // Ordinary directories before .. can be replaced too; protect entry parents.
+    const protectPathEntries = (value: string) => {
+      const absolute = path.isAbsolute(value) ? value : `${process.cwd()}/${value}`;
+      for (
+        let current = absolute;
+        current !== path.dirname(current);
+        current = path.dirname(current)
+      ) {
+        // A trailing slash makes lstat follow the link instead of inspecting its entry.
+        current = current.replace(/\/+$/u, "") || "/";
+        if (inspectedPaths.has(current)) {
+          break;
+        }
+        inspectedPaths.add(current);
+        const name = path.basename(current);
+        if (name === "." || name === "..") {
+          continue;
+        }
+        const parent = fs.realpathSync.native(path.dirname(current));
+        protectedNamespaceParents.push(parent);
+        if (fs.lstatSync(current).isSymbolicLink()) {
+          const target = fs.readlinkSync(current);
+          // Preserve segments such as link/.. until the filesystem resolves them.
+          protectPathEntries(path.isAbsolute(target) ? target : `${parent}/${target}`);
+        }
+      }
+    };
+    protectPathEntries(root);
+    return canonicalRoot;
+  };
+  const protectedRuntimePaths = [
+    ...new Set([
+      params.bundleRoot,
+      ...runtimePaths,
+      // Keep broad read grants from excluding otherwise disjoint project directories.
+      ...readOnlyPaths.filter((root) => root !== "/usr" && root !== "/proc"),
+    ]),
+  ].map(protectRuntimePath);
+  // These roots allow writable children, but their lookup entries must stay trusted.
+  protectRuntimePath(capturedHome);
+  const temporaryParent = protectRuntimePath(resolvePreferredOpenClawTmpDir());
+  const assertWritableRoot = (directory: string) => {
+    // Landlock grants are additive: a read-only rule cannot subtract a write grant.
+    if (
+      protectedRuntimePaths.some(
+        (root) => isPathInside(directory, root) || isPathInside(root, directory),
+      ) ||
+      protectedNamespaceParents.some((parent) => isPathInside(directory, parent)) ||
+      [hostHome, temporaryParent].some((root) => isPathInside(directory, root))
+    ) {
+      throw new Error(
+        "Worker writable storage cannot overlap node runtime or contain private or shared temporary storage",
+      );
+    }
+  };
+  assertWritableRoot(workspace);
+  assertWritableRoot(home);
+  fs.mkdirSync(home, { recursive: true, mode: 0o700 });
+  const stat = fs.lstatSync(home);
+  if (
+    !stat.isDirectory() ||
+    stat.isSymbolicLink() ||
+    stat.uid !== process.getuid?.() ||
+    (stat.mode & 0o077) !== 0
+  ) {
+    throw new Error("Isolated model HOME must be an owned private directory");
+  }
+  const temporaryRoot = fs.mkdtempSync(path.join(temporaryParent, "worker-"));
   const cleanup = () => removeTemporaryArtifacts(temporaryRoot, "Node worker scratch");
   try {
+    assertWritableRoot(temporaryRoot);
     const launch = prepareFilesystemRestrictedLaunch({
       executable: process.execPath,
       args: params.args,
       cwd: workspace,
-      readOnlyPaths,
+      readOnlyPaths: readOnlyPaths.map((root) => fs.realpathSync.native(root)),
       readWritePaths: [workspace, home, temporaryRoot, "/dev/null"],
       // Apply only after confinement: the trusted process owner must never use
       // a model-writable HOME or code cache.
@@ -95,6 +164,14 @@ export async function prepareNodeWorkerFilesystem(params: {
         NODE_COMPILE_CACHE: path.join(temporaryRoot, "node-compile-cache"),
       },
     });
+    // Native helpers can be installed outside the OpenClaw package tree.
+    protectedRuntimePaths.push(
+      protectRuntimePath(path.dirname(launch.command)),
+      path.dirname(protectRuntimePath(launch.command)),
+    );
+    for (const directory of [workspace, home, temporaryRoot]) {
+      assertWritableRoot(directory);
+    }
     return { ...launch, cleanup };
   } catch (error) {
     await cleanup();

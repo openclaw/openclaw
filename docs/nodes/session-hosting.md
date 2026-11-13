@@ -468,12 +468,15 @@ unrestricted execution. Restart the node host after changing this setting.
 
 The worker can write its admitted workspace, a model HOME below its captured
 execution HOME, and a per-process temporary directory. It can read runtime code,
-system libraries, and captured platform CA files. It cannot rename those writable
-roots through their ungranted parent directories. The existing process owner
-keeps responsibility for descendants. Normal shutdown removes temporary storage
-after their extinction. An abrupt node-host exit can leave temporary directories;
-remove them only after its worker processes have exited. Worker-local inference
-is supported without a nested container.
+system libraries, and captured platform CA files. Writable roots must not overlap
+protected runtime paths or captured trust files. They must not contain the captured
+execution HOME or shared OpenClaw temporary root. Path entries and their targets
+are checked; disjoint projects beneath broad read grants such as `/usr` remain allowed.
+It cannot rename those writable roots through their ungranted parent directories.
+The existing process owner keeps responsibility for descendants. Normal shutdown
+removes temporary storage after their extinction. An abrupt node-host exit can leave
+temporary directories; remove them only after its worker processes have exited.
+Worker-local inference is supported without a nested container.
 
 This mode restricts filesystem access, not network access, signals, or all file
 metadata operations. It does not revoke inherited file descriptors or confine
