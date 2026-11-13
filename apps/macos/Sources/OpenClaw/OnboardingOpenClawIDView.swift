@@ -37,12 +37,16 @@ struct OnboardingOpenClawIDView: View {
 
     var body: some View {
         VStack(spacing: 20) {
-            OnboardingOpenClawIDContent(
-                step: self.model.step,
-                unavailableReason: self.model.step == .signIn
-                    ? self.model.accountUnavailableReason : self.model.unavailableReason,
-                action: { self.model.perform($0) })
-                .disabled(self.model.busy || self.model.unavailableReason != nil)
+            if self.model.error != nil, case .ownerConnected = self.model.step {
+                Image(systemName: "exclamationmark.triangle").font(.largeTitle).foregroundStyle(.orange)
+            } else {
+                OnboardingOpenClawIDContent(
+                    step: self.model.step,
+                    unavailableReason: self.model.step == .signIn
+                        ? self.model.accountUnavailableReason : self.model.unavailableReason,
+                    action: { self.model.perform($0) })
+                    .disabled(self.model.busy || self.model.unavailableReason != nil)
+            }
             if self.model.busy { ProgressView("Working…") }
             if let error = self.model.error {
                 Text(error).foregroundStyle(.orange).font(.callout)
