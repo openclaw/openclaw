@@ -13,12 +13,12 @@ import {
   UI_RAIL_SHORTCUTS_PREFERENCE_KEY,
 } from "../../../packages/gateway-protocol/src/schema/ui-navigation-preferences.ts";
 import { isThemeId, normalizeThemeMode } from "../../../packages/gateway-protocol/src/theme-ids.ts";
-import { DEFAULT_SIDEBAR_ENTRIES, normalizeSidebarEntries } from "../app-navigation.ts";
-import { isSupportedLocale } from "../i18n/index.ts";
 import {
   normalizePersonalSessionGroups,
   type PersonalSessionGroup,
-} from "../lib/sessions/personal-groups.ts";
+} from "../../../src/shared/personal-session-groups.js";
+import { DEFAULT_SIDEBAR_ENTRIES, normalizeSidebarEntries } from "../app-navigation.ts";
+import { isSupportedLocale } from "../i18n/index.ts";
 import {
   normalizeAccentColor,
   normalizeChatFollowUpModeOverride,
@@ -153,6 +153,10 @@ export type SyncedServerUiPrefs = { [K in SyncedPrefKey]?: SyncedPrefValue<K> | 
 // Browser storage can retain unknown keys until authoritative rejection; known fields stay typed.
 export type ServerUiPrefs = SyncedServerUiPrefs &
   Record<string, unknown> & {
+    /** Observed profile value, not a fresh read that could erase concurrent group edits. */
+    personalSessionGroupsBase?: PersonalSessionGroup[] | null;
+    /** Transient authored predecessor; consumed before the outbox is persisted. */
+    personalSessionGroupsPrevious?: PersonalSessionGroup[];
     /** Browser-only edit base: the observed snapshot with subsequent authored membership operations folded in. */
     sidebarEntriesBase?: readonly string[];
     /** Browser-only: an unacknowledged authored reorder, including a reversal back to the edit base. */

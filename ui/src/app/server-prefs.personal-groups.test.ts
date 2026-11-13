@@ -25,7 +25,10 @@ it("syncs only the authored field through profile CAS and hydrates it in another
   const previous = loadSettings();
   const next = patchSettings({ personalSessionGroups: [group("project")] });
   const delta = changedServerUiPrefs(previous, next)!;
-  expect(delta).toEqual({ personalSessionGroups: [group("project")] });
+  expect(delta).toEqual({
+    personalSessionGroups: [group("project")],
+    personalSessionGroupsPrevious: [],
+  });
   pushServerUiPrefs(a.writer, delta, authority);
   await vi.dynamicImportSettled();
   expect(a.request.mock.calls.filter(([method]) => method === "users.prefs.set")).toEqual([

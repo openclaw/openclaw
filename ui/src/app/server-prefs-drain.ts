@@ -3,7 +3,11 @@ import type { BackgroundPreference } from "../../../packages/gateway-protocol/sr
 import type { ConfigPatchAck } from "../lib/config/config-draft-model.ts";
 import { showToast } from "../lib/toast.ts";
 import { readConfirmedPrefs, publishConfirmedPrefs } from "./server-prefs-confirmation.ts";
-import { foldSidebarEntriesBase, hasSidebarOrderIntent } from "./server-prefs-intent.ts";
+import {
+  foldSidebarEntriesBase,
+  hasSidebarOrderIntent,
+  pendingUiPrefKeys,
+} from "./server-prefs-intent.ts";
 import {
   resolveProfileAppearancePrefs,
   resolveProfileAppearanceProfileId,
@@ -24,6 +28,7 @@ import {
 import type { ServerUiPrefsWriter } from "./server-prefs-sync-contract.ts";
 import {
   selectProfileUiPrefs,
+  writeProfileAppearancePrefs,
   removePendingUiPrefsBatch,
   serverUiPrefsCommittedSnapshot,
 } from "./server-prefs-write-batch.ts";
@@ -47,6 +52,18 @@ export async function drainPendingPrefs(
     if (!sync.pendingPrefs) {
       return;
     }
+    if (
+      sync.pendingPrefs.personalSessionGroups &&
+      sync.pendingPrefs.personalSessionGroupsBase === undefined
+    ) {
+      // Recover older queued layouts only from their saved profile confirmation,
+      // never by treating a newly fetched value as the original edit base.
+      const confirmed = readConfirmedPrefs(sync, sync.pendingScope);
+      if (confirmed) {
+        sync.pendingPrefs.personalSessionGroupsBase = confirmed.personalSessionGroups ?? null;
+        sync.writePendingStorage(sync.pendingPrefs);
+      }
+    }
     const localOnlyKeys = SYNCED_PREF_KEYS.filter(
       (key) =>
         sync.pendingPrefs?.[key] !== undefined &&
@@ -54,7 +71,7 @@ export async function drainPendingPrefs(
           (key === "theme" &&
             typeof sync.pendingPrefs.theme === "string" &&
             sync.pendingPrefs.theme.includes("/"))) &&
-        !(sync.pushProfileId && sync.pushCanWrite),
+        !sync.canWriteProfilePref(key),
     );
     if (localOnlyKeys.length) {
       if (!writer.state.connected) {
@@ -74,10 +91,22 @@ export async function drainPendingPrefs(
       sync.updateRetainedLocalKeys(sync.pendingScope, ["theme"], true);
       continue;
     }
-    const profileBatch =
-      sync.pushProfileId && sync.pushCanWrite ? selectProfileUiPrefs(sync.pendingPrefs) : {};
+    const conflict = sync.preferenceWriteFailures
+      .get(sync.pendingScope)
+      ?.get("personalSessionGroups");
+    const dispatchable: ServerUiPrefs = { ...sync.pendingPrefs };
+    if (conflict?.retained && prefValuesEqual(conflict.value, dispatchable.personalSessionGroups)) {
+      // Keep the conflicted layout durable and shadowing reads, but do not let
+      // it repeatedly win navigation-first batching over unrelated preferences.
+      delete dispatchable.personalSessionGroups;
+      delete dispatchable.personalSessionGroupsBase;
+      if (!pendingUiPrefKeys(dispatchable).length) {
+        return;
+      }
+    }
+    const profileBatch = selectProfileUiPrefs(dispatchable, sync.canWriteProfilePref);
     const useProfile = Object.keys(profileBatch).length > 0;
-    let batch = useProfile ? profileBatch : { ...sync.pendingPrefs };
+    let batch = useProfile ? profileBatch : dispatchable;
     if (!useProfile) {
       clearSidebarEntriesMetadata(batch);
       delete batch.navigationConfirmation;
@@ -151,7 +180,10 @@ export async function drainPendingPrefs(
     let acknowledgedBase = batch.sidebarEntries;
     let composed = false;
     let reordered = false;
-    const compose: (typeof serverUiPrefsOutbox)["composeSidebar"] = (pending, next) => {
+    const compose: NonNullable<(typeof serverUiPrefsOutbox)["compositions"][string]> = (
+      pending,
+      next,
+    ) => {
       if (!next.sidebarEntries) {
         return;
       }
@@ -159,7 +191,7 @@ export async function drainPendingPrefs(
         !pending?.sidebarEntries ||
         !prefValuesEqual(next.sidebarEntriesBase, pending.sidebarEntries)
       ) {
-        sync.composeSidebar = null;
+        delete sync.compositions.sidebarEntries;
         return;
       }
       acknowledgedBase = foldSidebarEntriesBase(
@@ -171,7 +203,24 @@ export async function drainPendingPrefs(
       reordered ||= hasSidebarOrderIntent(next);
     };
     if (acknowledgedBase) {
-      sync.composeSidebar = compose;
+      sync.compositions.sidebarEntries = compose;
+    }
+    let groupsComposed = false;
+    const composeGroups: NonNullable<(typeof serverUiPrefsOutbox)["compositions"][string]> = (
+      pending,
+      next,
+    ) => {
+      if (
+        !pending?.personalSessionGroups ||
+        !prefValuesEqual(next.personalSessionGroupsPrevious, pending.personalSessionGroups)
+      ) {
+        delete sync.compositions.personalSessionGroups;
+        return;
+      }
+      groupsComposed = true;
+    };
+    if (batch.personalSessionGroups) {
+      sync.compositions.personalSessionGroups = composeGroups;
     }
     try {
       for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -185,28 +234,28 @@ export async function drainPendingPrefs(
         let lastSeenAtDispatch: ServerUiPrefs = {};
         const profileAtDispatch = resolveProfileAppearancePrefs(gatewayScope, profileId);
         const result = useProfile
-          ? await import("./server-prefs-profile-runtime.ts").then(
-              ({ writeProfileAppearancePrefs }) =>
-                writeProfileAppearancePrefs(
-                  writer.state.client,
-                  batch,
-                  () => {
-                    if (!profileIsCurrent() || !sync.pushCanWrite) {
-                      return false;
-                    }
-                    sync.reconcilePersistedPendingPrefs();
-                    if (sync.batchIsCurrent(batch)) {
-                      if (navigationReceipt) {
-                        lastSeenAtDispatch = readConfirmedPrefs(sync, sync.pendingScope) ?? {};
-                      }
-                      return true;
-                    }
-                    sync.drainRequested = Boolean(sync.pendingPrefs);
-                    return false;
-                  },
-                  profileId,
-                  expectedBackground,
-                ),
+          ? await writeProfileAppearancePrefs(
+              writer.state.client,
+              batch,
+              () => {
+                if (
+                  !profileIsCurrent() ||
+                  !pendingUiPrefKeys(batch).every(sync.canWriteProfilePref)
+                ) {
+                  return false;
+                }
+                sync.reconcilePersistedPendingPrefs();
+                if (sync.batchIsCurrent(batch)) {
+                  if (navigationReceipt) {
+                    lastSeenAtDispatch = readConfirmedPrefs(sync, sync.pendingScope) ?? {};
+                  }
+                  return true;
+                }
+                sync.drainRequested = Boolean(sync.pendingPrefs);
+                return false;
+              },
+              profileId,
+              expectedBackground,
             )
           : await writer.runExternalMutation(
               (client) =>
@@ -246,13 +295,20 @@ export async function drainPendingPrefs(
         sync.reconcilePersistedPendingPrefs();
         const dispatchedBatch = "batch" in result ? result.batch : batch;
         // RPC sub-batches omit browser metadata; acknowledge the complete original intent.
-        const acknowledgedBatch = Object.hasOwn(dispatchedBatch, "sidebarEntries")
-          ? {
-              ...dispatchedBatch,
-              sidebarEntriesBase: batch.sidebarEntriesBase,
-              sidebarEntriesOrder: batch.sidebarEntriesOrder,
-            }
-          : dispatchedBatch;
+        const acknowledgedBatch = {
+          ...dispatchedBatch,
+          ...(Object.hasOwn(dispatchedBatch, "sidebarEntries")
+            ? {
+                sidebarEntriesBase: batch.sidebarEntriesBase,
+                sidebarEntriesOrder: batch.sidebarEntriesOrder,
+              }
+            : {}),
+          ...(Object.hasOwn(dispatchedBatch, "personalSessionGroups")
+            ? {
+                personalSessionGroupsBase: batch.personalSessionGroupsBase,
+              }
+            : {}),
+        };
         if (result.ok) {
           if (useProfile) {
             invalidateProfileAppearanceReads();
@@ -305,7 +361,9 @@ export async function drainPendingPrefs(
           const publication = { ...committedBatch };
           let superseded = false;
           const confirmedNavigation: ServerUiPrefs = {};
-          const latestNavigation: Partial<Pick<UiSettings, "sidebarEntries">> = {};
+          const latestNavigation: Partial<
+            Pick<UiSettings, "sidebarEntries" | "personalSessionGroups">
+          > = {};
           if (navigationReceipt) {
             // Shared lastSeen is already-confirmed profile-only navigation. Keep the
             // local read cache aligned so a later reconcile cannot roll it backward.
@@ -332,7 +390,7 @@ export async function drainPendingPrefs(
           }
           if (
             composed &&
-            sync.composeSidebar === compose &&
+            sync.compositions.sidebarEntries === compose &&
             sync.pendingPrefs?.sidebarEntries &&
             acknowledgedBatch.sidebarEntries
           ) {
@@ -342,11 +400,26 @@ export async function drainPendingPrefs(
             delete acknowledgedBatch.sidebarEntries;
             clearSidebarEntriesMetadata(acknowledgedBatch);
           }
+          if (
+            groupsComposed &&
+            sync.compositions.personalSessionGroups === composeGroups &&
+            sync.pendingPrefs?.personalSessionGroups &&
+            batch.personalSessionGroups
+          ) {
+            // A descendant observed our authored layout, not remote-only groups
+            // merged at commit. Keep those unseen groups outside its edit base.
+            sync.pendingPrefs.personalSessionGroupsBase = batch.personalSessionGroups;
+            delete acknowledgedBatch.personalSessionGroups;
+            delete acknowledgedBatch.personalSessionGroupsBase;
+          }
           sync.pendingPrefs = removePendingUiPrefsBatch(
             sync.pendingPrefs,
             acknowledgedBatch,
             sync.pendingPersistedKeys,
           );
+          if (publication.personalSessionGroups && !sync.pendingPrefs?.personalSessionGroups) {
+            latestNavigation.personalSessionGroups = publication.personalSessionGroups;
+          }
           if (useProfile && profileId) {
             recordProfileAppearanceCommit(gatewayScope, profileId, publication);
           }
@@ -435,6 +508,18 @@ export async function drainPendingPrefs(
           }
           break;
         }
+        if (result.reason === "conflict" && dispatchedBatch.personalSessionGroups) {
+          // A same-group conflict cannot be fixed by repeating the same authored layout.
+          sync.recordPreferenceWriteFailures(
+            sync.pendingScope,
+            { personalSessionGroups: dispatchedBatch.personalSessionGroups },
+            result.error,
+            true,
+          );
+          sync.publishPreferenceWrites();
+          showToast({ placement: "top-right", severity: "error", message: result.error });
+          break;
+        }
         if (result.reason === "conflict" && attempt === 0) {
           await sleepWithAbort(250);
           continue;
@@ -499,8 +584,11 @@ export async function drainPendingPrefs(
         break;
       }
     } finally {
-      if (sync.composeSidebar === compose) {
-        sync.composeSidebar = null;
+      if (sync.compositions.sidebarEntries === compose) {
+        delete sync.compositions.sidebarEntries;
+      }
+      if (sync.compositions.personalSessionGroups === composeGroups) {
+        delete sync.compositions.personalSessionGroups;
       }
     }
   }

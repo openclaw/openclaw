@@ -7,7 +7,31 @@ import {
   SESSION_COLOR_IDS,
   SESSION_ICON_GLYPH_IDS,
 } from "../../../packages/gateway-protocol/src/session-agent-status.js";
+import { PERSONAL_SESSION_GROUP_LIMITS as GROUP_LIMITS } from "../../shared/personal-session-groups.js";
 import { requesterProfileSchema, stringEnum } from "../schema/typebox.js";
+
+const personalGroups = Type.Array(
+  Type.Object(
+    {
+      id: Type.String({ minLength: 1, maxLength: GROUP_LIMITS.id }),
+      label: Type.String({ minLength: 1, maxLength: GROUP_LIMITS.label }),
+      sessionKeys: Type.Array(Type.String({ minLength: 1, maxLength: GROUP_LIMITS.sessionKey }), {
+        maxItems: GROUP_LIMITS.sessionKeys,
+      }),
+    },
+    { additionalProperties: false },
+  ),
+  { maxItems: GROUP_LIMITS.groups },
+);
+const personalGroupProperties = {
+  groups: Type.Optional(personalGroups),
+  expectedGroups: Type.Optional(
+    Type.Union([personalGroups, Type.Null()], {
+      description:
+        "personal_group_set: exact expectedGroups returned by personal_group_list; null means the preference was absent. Conflicts never overwrite another edit.",
+    }),
+  ),
+};
 
 const ACTIONS = [
   "cloud_profiles",
@@ -21,6 +45,8 @@ const ACTIONS = [
   "group_set",
   "group_rename",
   "group_delete",
+  "personal_group_list",
+  "personal_group_set",
 ] as const;
 const SESSION_ICON_GLYPH_DESCRIPTION = SESSION_ICON_GLYPH_IDS.join(", ");
 
@@ -28,6 +54,7 @@ const SessionsToolSchema = Type.Object(
   {
     user: requesterProfileSchema({ defaultToTurnOwner: true }),
     action: stringEnum(ACTIONS, { description: "Action" }),
+    ...personalGroupProperties,
     profileId: Type.Optional({
       ...SessionMoveProfileTargetSchema.properties.profileId,
       description: "cloud_profiles: return OS and machine choices for this configured profile.",
@@ -186,6 +213,16 @@ export const SessionRenameToolSchema = Type.Object(
           "Durable identity from sessions_list; required when renaming another session. Current-session rename uses this run's captured identity.",
       }),
     ),
+  },
+  { additionalProperties: false },
+);
+
+/** Personal collections use profile preferences, not broad session-control authority. */
+export const SessionScopedToolSchema = Type.Object(
+  {
+    ...SessionRenameToolSchema.properties,
+    ...personalGroupProperties,
+    action: stringEnum(["patch", "personal_group_list", "personal_group_set"]),
   },
   { additionalProperties: false },
 );

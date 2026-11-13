@@ -484,7 +484,7 @@ export async function loadProfileAppearancePrefs(
 }
 
 /** Adoption restores this actor’s browser snapshot, never an inferred server default. */
-function loadLocalNavigationPreferences(
+export function loadLocalNavigationPreferences(
   gatewayUrl: string,
   profileId?: string | null,
 ): Partial<Pick<UiSettings, "sidebarEntries" | "personalSessionGroups">> | null {

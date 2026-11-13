@@ -56,12 +56,17 @@ export function changedServerUiPrefs(previous: UiSettings, next: UiSettings): Se
   if (prefs.sidebarEntries !== undefined) {
     prefs.sidebarEntriesBase = [...previous.sidebarEntries];
   }
+  if (prefs.personalSessionGroups !== undefined) {
+    prefs.personalSessionGroupsPrevious = previous.personalSessionGroups ?? [];
+  }
   return Object.keys(prefs).length > 0 ? prefs : null;
 }
 /** The observed base is part of pin intent, not independently acknowledgeable metadata. */
 export function prefIntentMatches(left: ServerUiPrefs, right: ServerUiPrefs, key: string): boolean {
   return (
     prefValuesEqual(left[key], right[key]) &&
+    (key !== "personalSessionGroups" ||
+      prefValuesEqual(left.personalSessionGroupsBase, right.personalSessionGroupsBase)) &&
     (key !== "sidebarEntries" ||
       (prefValuesEqual(left.sidebarEntriesBase, right.sidebarEntriesBase) &&
         left.sidebarEntriesOrder === right.sidebarEntriesOrder))
@@ -106,6 +111,40 @@ export function mergePendingUiPrefs(
   next: ServerUiPrefs,
 ): ServerUiPrefs {
   const merged = { ...pending, ...next };
+  if (pending?.personalSessionGroups && next.personalSessionGroups) {
+    const base = pending.personalSessionGroupsBase;
+    const previous = pending.personalSessionGroups;
+    if (base !== undefined && prefValuesEqual(next.personalSessionGroupsPrevious, previous)) {
+      const observed = new Map((base ?? []).map((group) => [group.id, group]));
+      const previousIds = previous.map((group) => group.id);
+      const desired = next.personalSessionGroups;
+      const desiredIds = desired.map((group) => group.id);
+      // Membership intent must survive whether an earlier unacknowledged save committed or not.
+      let ids = foldSidebarEntriesBase([...observed.keys()], previousIds, desiredIds);
+      const priorOrder = previousIds.filter((id) => ids.includes(id) && desiredIds.includes(id));
+      const desiredOrder = desiredIds.filter((id) => priorOrder.includes(id));
+      if (!prefValuesEqual(priorOrder, desiredOrder)) {
+        // Returning to an old order is still an authored reorder of the entries this edit saw.
+        let index = 0;
+        ids = ids.map((id) => (priorOrder.includes(id) ? priorOrder[index++]! : id));
+      }
+      merged.personalSessionGroupsBase = ids.map((id) => {
+        const original = observed.get(id);
+        const prior = previous.find((group) => group.id === id);
+        // A label/reference reversal must not replay as an untouched original value.
+        return original &&
+          prefValuesEqual(
+            original,
+            desired.find((group) => group.id === id),
+          )
+          ? (prior ?? original)
+          : (original ?? prior!);
+      });
+    } else {
+      merged.personalSessionGroupsBase = base;
+    }
+  }
+  delete merged.personalSessionGroupsPrevious;
   if (next.sidebarEntries) {
     merged.sidebarEntriesOrder = next.sidebarEntriesOrder;
   }
@@ -135,6 +174,12 @@ export function mergePendingUiPrefs(
 /** Browser metadata belongs to its owning intent, never an independently dispatched/settled key. */
 export function pendingUiPrefKeys(prefs: ServerUiPrefs): string[] {
   return Object.keys(prefs).filter(
-    (key) => !["sidebarEntriesBase", "sidebarEntriesOrder", "navigationConfirmation"].includes(key),
+    (key) =>
+      ![
+        "sidebarEntriesBase",
+        "sidebarEntriesOrder",
+        "personalSessionGroupsBase",
+        "navigationConfirmation",
+      ].includes(key),
   );
 }

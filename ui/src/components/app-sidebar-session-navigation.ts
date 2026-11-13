@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
+import type { PersonalSessionGroup } from "../../../src/shared/personal-session-groups.js";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { serializeSidebarEntry } from "../app-navigation.ts";
 import type { ApplicationContext } from "../app/context.ts";
@@ -12,7 +13,6 @@ import {
   type SidebarSessionsGrouping,
 } from "../lib/sessions/grouping.ts";
 import { runSessionNavigationIntent } from "../lib/sessions/navigation-handoff.ts";
-import type { PersonalSessionGroup } from "../lib/sessions/personal-groups.ts";
 import {
   SESSION_NAVIGATION_KEY_PARAM,
   resolveSessionPreferredFace,

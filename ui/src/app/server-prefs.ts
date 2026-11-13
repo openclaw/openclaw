@@ -4,7 +4,7 @@
 // intent shadows server snapshots until the hash-free LWW ack; failed pushes degrade device-local.
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
-import { hasOperatorWriteAccess } from "./operator-access.ts";
+import { hasOperatorSelfWriteAccess, hasOperatorWriteAccess } from "./operator-access.ts";
 import {
   mergePendingUiPrefs,
   resetServerUiPrefIntent,
@@ -15,6 +15,7 @@ import {
   rememberProfileAppearanceIdentity,
   resetProfileAppearancePrefs,
   resolveProfileAppearanceProfileId,
+  resolveProfileAppearancePrefs,
   resolveProfilePreferenceScope,
 } from "./server-prefs-profile.ts";
 import {
@@ -67,13 +68,22 @@ class ServerUiPrefsOutbox {
   pendingScope = "";
   pendingPrefs: ServerUiPrefs | null = null;
   pendingPersistedKeys = new Set<string>();
-  // The active pin operation alone can observe local successors; foreign adoption detaches it.
-  composeSidebar: ((pending: ServerUiPrefs | null, next: ServerUiPrefs) => void) | null = null;
+  // Only an active navigation write observes local successors; foreign adoption detaches its key.
+  compositions: Record<
+    string,
+    ((pending: ServerUiPrefs | null, next: ServerUiPrefs) => void) | undefined
+  > = {};
   pushWriter: ServerUiPrefsWriter | null = null;
   pushScope = "";
   pushClient: GatewayBrowserClient | null = null;
   pushProfileId: string | null = null;
   pushCanWrite = false;
+  pushCanWriteGroups = false;
+  canWriteProfilePref = (key: string) =>
+    Boolean(
+      this.pushProfileId &&
+      (this.pushCanWrite || (key === "personalSessionGroups" && this.pushCanWriteGroups)),
+    );
   pushAfterCommit: ((commit: ServerUiPrefsCommit) => void) | undefined;
   pushDraining = false;
   drainRequested = false;
@@ -137,7 +147,7 @@ function updateRetainedLocalKeys(
   }
 }
 function adoptPendingScope(scope: string): void {
-  sync.composeSidebar = null;
+  sync.compositions = {};
   sync.pendingScope = scope;
   const stored = readStoredPrefs(PENDING_KEY, scope);
   sync.pendingPrefs = stored.prefs;
@@ -146,6 +156,9 @@ function adoptPendingScope(scope: string): void {
   );
 }
 function writePendingStorage(prefs: ServerUiPrefs | null): void {
+  if (prefs && !prefs.personalSessionGroups) {
+    delete prefs.personalSessionGroupsBase;
+  }
   if (prefs && !prefs.sidebarEntries) {
     clearSidebarEntriesMetadata(prefs);
   }
@@ -180,11 +193,14 @@ function cancelPendingKeys(scope: string, keys: readonly SyncedPrefKey[]): void 
   if (!remaining.sidebarEntries) {
     clearSidebarEntriesMetadata(remaining);
   }
+  if (!remaining.personalSessionGroups) {
+    delete remaining.personalSessionGroupsBase;
+  }
   const next = Object.keys(remaining).length ? remaining : null;
   if (scope === sync.pendingScope) {
     sync.pendingPrefs = next;
-    if (keys.includes("sidebarEntries")) {
-      sync.composeSidebar = null;
+    for (const key of keys) {
+      delete sync.compositions[key];
     }
     writePendingStorage(next);
     return;
@@ -223,8 +239,8 @@ function reconcilePersistedPendingPrefs(adoptKeys: readonly SyncedPrefKey[] = []
     ) {
       continue;
     }
-    if (key === "sidebarEntries" && !prefIntentMatches(pending, current, key)) {
-      sync.composeSidebar = null;
+    if (!prefIntentMatches(pending, current, key)) {
+      delete sync.compositions[key];
     }
     if (!Object.hasOwn(current, key)) {
       delete pending[key];
@@ -237,9 +253,15 @@ function reconcilePersistedPendingPrefs(adoptKeys: readonly SyncedPrefKey[] = []
       pending.sidebarEntriesBase = current.sidebarEntriesBase;
       pending.sidebarEntriesOrder = current.sidebarEntriesOrder;
     }
+    if (key === "personalSessionGroups") {
+      pending.personalSessionGroupsBase = current.personalSessionGroupsBase;
+    }
   }
   if (!pending.sidebarEntries) {
     clearSidebarEntriesMetadata(pending);
+  }
+  if (!pending.personalSessionGroups) {
+    delete pending.personalSessionGroupsBase;
   }
   sync.pendingPrefs = Object.keys(pending).length ? pending : null;
 }
@@ -258,12 +280,13 @@ export function resetServerUiPrefsSync() {
   sync.applyingServerPrefs = sync.pushDraining = sync.drainRequested = false;
   sync.pendingScope = "";
   sync.pendingPrefs = sync.pushWriter = null;
-  sync.composeSidebar = null;
+  sync.compositions = {};
   sync.pendingPersistedKeys.clear();
   sync.pushScope = "";
   sync.pushClient = null;
   sync.pushProfileId = null;
   sync.pushCanWrite = false;
+  sync.pushCanWriteGroups = false;
   sync.confirmedPrefsFallback = null;
   sync.lastReconciledScope = null;
   sync.lastReconciledConfigObject = null;
@@ -291,6 +314,7 @@ function adoptPushWriter(writer: ServerUiPrefsWriter, hooks: ServerUiPrefsPushHo
   }
   const scope = resolveProfilePreferenceScope(gatewayScope, profileId);
   sync.pushCanWrite = hooks.canWrite ?? hasOperatorWriteAccess(hooks.profile?.hello?.auth ?? null);
+  sync.pushCanWriteGroups = hasOperatorSelfWriteAccess(hooks.profile?.hello?.auth ?? null);
   if (
     sync.pushWriter === writer &&
     sync.pushScope === scope &&
@@ -346,7 +370,9 @@ function startPendingDrain(writer: ServerUiPrefsWriter): void {
   }
   if (
     writer.canPatch === false &&
-    !(sync.pushProfileId && sync.pushCanWrite && Object.keys(sync.pendingPrefs).some(isProfilePref))
+    !Object.keys(sync.pendingPrefs).some(
+      (key) => isProfilePref(key) && sync.canWriteProfilePref(key),
+    )
   ) {
     return;
   }
@@ -390,7 +416,7 @@ export function pushServerUiPrefs(
         if (sync.pushProfileId && isProfilePref(key)) {
           // Imported custom palettes are browser-local by contract; a profile
           // must never carry a theme another browser cannot render.
-          return !sync.pushCanWrite || (key === "theme" && prefs.theme === "custom");
+          return !sync.canWriteProfilePref(key) || (key === "theme" && prefs.theme === "custom");
         }
         return writer.canPatch === false;
       })
@@ -411,15 +437,25 @@ export function pushServerUiPrefs(
     keys.filter((key) => !blockedKeys.includes(key)),
     false,
   );
-  const writablePrefs = blockedKeys.length
+  const writablePrefs: ServerUiPrefs = blockedKeys.length
     ? Object.fromEntries(
         Object.entries(prefs).filter(
           ([key]) => !blockedKeys.some((blockedKey) => blockedKey === key),
         ),
       )
-    : prefs;
+    : { ...prefs };
+  if (
+    writablePrefs.personalSessionGroups !== undefined &&
+    writablePrefs.personalSessionGroupsBase === undefined
+  ) {
+    writablePrefs.personalSessionGroupsBase =
+      resolveProfileAppearancePrefs(writer.state.client?.gatewayUrl ?? "", sync.pushProfileId)
+        ?.personalSessionGroups ?? null;
+  }
   reconcilePersistedPendingPrefs(keys);
-  sync.composeSidebar?.(sync.pendingPrefs, writablePrefs);
+  for (const key of keys) {
+    sync.compositions[key]?.(sync.pendingPrefs, writablePrefs);
+  }
   sync.pendingPrefs = mergePendingUiPrefs(sync.pendingPrefs, writablePrefs);
   mergePendingIntoStorage();
   publishPreferenceWrites();
@@ -433,7 +469,7 @@ export function flushServerUiPrefs(
   reconcilePersistedPendingPrefs(SYNCED_PREF_KEYS);
   sync.pushEpoch += 1;
   sync.pushDraining = sync.drainRequested = false;
-  sync.composeSidebar = null;
+  sync.compositions = {};
   sync.pushAfterCommit = hooks.afterCommit;
   startPendingDrain(writer);
 }

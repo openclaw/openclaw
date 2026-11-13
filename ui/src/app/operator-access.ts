@@ -13,6 +13,7 @@ function hasOperatorScope(
   requestedScope:
     | "operator.read"
     | "operator.sessions.read"
+    | "operator.sessions.write"
     | "operator.write"
     | "operator.admin"
     | "operator.pairing"
@@ -78,6 +79,10 @@ export function isRestrictedSessionGuest(auth: OperatorAuth): boolean {
 
 export function hasOperatorSelfReadAccess(auth: OperatorAuth): boolean {
   return hasOperatorReadAccess(auth) || hasOperatorScope(auth, "operator.sessions.read", true);
+}
+
+export function hasOperatorSelfWriteAccess(auth: OperatorAuth): boolean {
+  return hasOperatorScope(auth, "operator.sessions.write", false);
 }
 
 export function canReactToSession(

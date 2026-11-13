@@ -2,7 +2,9 @@ import { afterEach, expect, test, vi } from "vitest";
 import { GatewayErrorDetailCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { withinTest } from "../../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { withGatewayPersonalToolUser } from "../../agents/tools/gateway-caller-context.js";
+import { createSessionsTool } from "../../agents/tools/sessions-tool.js";
 import { withPersonalToolTurn } from "../../auto-reply/reply/personal-tool-turn.test-support.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -188,15 +190,17 @@ test("users.prefs reads merged-profile accents while an unrelated writer reply i
 async function withPreferenceToolTurn(
   run: (params: {
     ownerId: string;
+    otherId: string;
     steer: () => Promise<void>;
     revoke: () => void;
     request: (method: PreferenceMethod, params?: Record<string, unknown>) => Promise<unknown>;
   }) => Promise<void>,
+  scopeOverride?: string[],
 ) {
   return withPreferenceState(async () => {
     const owner = ensureProfileForEmail("prefs-owner@example.test");
     const guest = ensureProfileForEmail("prefs-guest@example.test");
-    const scopes = ["operator.read", "operator.write"];
+    const scopes = scopeOverride ?? ["operator.read", "operator.write"];
     const client = createOperatorClient({ profileId: owner.id, scopes });
     const context = createContext();
     const descriptors = createCoreGatewayMethodDescriptors({
@@ -209,12 +213,28 @@ async function withPreferenceToolTurn(
       () =>
         withPersonalToolTurn(
           {
-            owner: { profileId: owner.id, senderId: "owner", name: "Owner" },
+            owner: {
+              profileId: owner.id,
+              senderId: "owner",
+              name: "Owner",
+              ...(scopeOverride
+                ? {
+                    operatorAuthority: createAdmittedRunOperatorAuthority({
+                      profileId: owner.id,
+                      scopes,
+                      signal: new AbortController().signal,
+                      assertCurrent: () => {},
+                    }),
+                  }
+                : {}),
+            },
             allowCollaborativeSteering: true,
+            gatewayContextResolver: () => context,
           },
           (turn) =>
             run({
               ownerId: owner.id,
+              otherId: guest.id,
               steer: async () => {
                 expect(
                   await turn.steer({ profileId: guest.id, senderId: "guest", name: "Guest" }),
@@ -253,6 +273,63 @@ test("users.prefs rejects mixed-person synthetic turn calls before reading or wr
     expect(read).not.toHaveBeenCalled();
     expect(write).not.toHaveBeenCalled();
   });
+});
+
+test("session-only tools manage personal groups without shared group authority", async () => {
+  await withPreferenceToolTurn(
+    async ({ ownerId, otherId, steer }) => {
+      const tool = createSessionsTool({ senderIsOwner: false, sandboxSessionRenameOnly: true });
+      const replace = async (groups: unknown, expectedGroups: unknown) =>
+        (
+          await tool.execute("groups-change", {
+            action: "personal_group_set",
+            groups,
+            expectedGroups,
+          })
+        ).details;
+      expect(
+        (await tool.execute("groups-list", { action: "personal_group_list" })).details,
+      ).toEqual({ status: "ok", groups: [], expectedGroups: null });
+      await expect(tool.execute("shared-groups", { action: "group_list" })).rejects.toThrow(
+        /only permits renaming/,
+      );
+      const groups = [
+        { id: "focus", label: "Focus", sessionKeys: ["agent:main:task"] },
+        { id: "later", label: "Later", sessionKeys: [] },
+      ] as const;
+      expect(await replace(groups, null)).toEqual({ status: "ok", groups });
+      expect(await replace([], null)).toEqual({ status: "conflict" });
+      expect(await preferences.getCanonicalUserPreferences(ownerId)).toMatchObject({
+        entries: { "ui.personalSessionGroups": groups },
+      });
+      expect(await preferences.getCanonicalUserPreferences(otherId)).toMatchObject({ entries: {} });
+      const reordered = [groups[1], { ...groups[0], label: "Work" }];
+      expect(await replace(reordered, groups)).toEqual({ status: "ok", groups: reordered });
+      expect(await replace([], reordered)).toEqual({ status: "ok", groups: [] });
+      await expect(
+        tool.execute("groups-other-person", {
+          action: "personal_group_set",
+          groups,
+          expectedGroups: [],
+          profileId: otherId,
+        }),
+      ).rejects.toThrow(/never profile/);
+      await expect(replace([groups[0], groups[0]], [])).rejects.toThrow(
+        /no layout was truncated or saved/,
+      );
+      await expect(
+        tool.execute("groups-unguarded", { action: "personal_group_set", groups }),
+      ).rejects.toThrow(/exact expectedGroups/);
+      expect(await preferences.getCanonicalUserPreferences(ownerId)).toMatchObject({
+        entries: { "ui.personalSessionGroups": [] },
+      });
+      await steer();
+      await expect(tool.execute("groups-mixed", { action: "personal_group_list" })).rejects.toThrow(
+        /own Control UI turn/i,
+      );
+    },
+    ["operator.sessions.read", "operator.sessions.write"],
+  );
 });
 
 test.each(["read", "write"] as const)(

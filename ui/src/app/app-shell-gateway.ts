@@ -30,8 +30,8 @@ import type { ShellRouteState } from "./app-host-route-state.ts";
 import type { ShellNavigationCapability } from "./app-shell-navigation.ts";
 import type { ApplicationContext } from "./context.ts";
 import { isNativeMobileHost } from "./native-web-chrome.ts";
-import { hasOperatorWriteAccess } from "./operator-access.ts";
 import { profilePreferencesState } from "./server-prefs-profile.ts";
+import { applyServerUiPrefs, loadProfileAppearancePrefs } from "./server-prefs-reconcile.ts";
 import { flushServerUiPrefs, resetServerUiPrefsSync } from "./server-prefs.ts";
 import { capturePlacementStartupConnection } from "./session-placement-startup.ts";
 import { invalidateUserPreferences } from "./user-prefs-cache.ts";
@@ -557,8 +557,7 @@ export class ShellGatewayOwner {
     this.runtimeConfigSource = runtimeConfig;
     this.runtimeConfigProfileId = profileId;
     flushServerUiPrefs(runtimeConfig, {
-      profileId,
-      canWrite: hasOperatorWriteAccess(snapshot.hello?.auth ?? null),
+      profile: snapshot,
       afterCommit: ({ needsRefresh, retainedLocal }) => {
         void this.reconcileCommittedServerUiPrefs(runtimeConfig, needsRefresh, retainedLocal);
       },
@@ -624,7 +623,8 @@ export class ShellGatewayOwner {
     force = false,
     retryAttempt = 0,
   ): Promise<void> {
-    const { client, selfUser, phase, hello } = context.gateway.snapshot;
+    const snapshot = context.gateway.snapshot;
+    const { client, selfUser, phase, hello } = snapshot;
     const profileId = selfUser?.id;
     if (!profileId) {
       return Promise.resolve();
@@ -682,12 +682,13 @@ export class ShellGatewayOwner {
         }
       }, delay);
     };
-    source.promise = import("./server-prefs-reconcile.ts")
-      .then(async (runtime) => {
+    source.promise = import("./server-prefs-profile-runtime.ts")
+      .then(async (profileRuntime) => {
         if (!remainsCurrent()) {
           return;
         }
-        const pending = runtime.loadProfileAppearancePrefs(client, profileId, scope, {
+        profileRuntime.adoptLocalPersonalSessionGroups(runtimeConfig, { profile: snapshot });
+        const pending = loadProfileAppearancePrefs(client, profileId, scope, {
           isCurrent: remainsCurrent,
         });
         // Read admission may adopt the profile identity before its first await.
@@ -699,7 +700,7 @@ export class ShellGatewayOwner {
         if (!loaded) {
           return retry();
         }
-        const applied = runtime.applyServerUiPrefs(currentDisplayConfig(runtimeConfig.state), {
+        const applied = applyServerUiPrefs(currentDisplayConfig(runtimeConfig.state), {
           profileId,
           scope,
           navigationConfirmed: true,

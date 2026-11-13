@@ -1,3 +1,4 @@
+import type { PersonalSessionGroup } from "../../../src/shared/personal-session-groups.js";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { parseSidebarEntry, type NavigationRouteId } from "../app-navigation.ts";
 import { pathForRoute } from "../app-route-paths.ts";
@@ -6,7 +7,6 @@ import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { t } from "../i18n/index.ts";
 import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { listen } from "../lib/reactive/listener.ts";
-import type { PersonalSessionGroup } from "../lib/sessions/personal-groups.ts";
 import type {
   SessionConnectionScope,
   SessionListSnapshot,

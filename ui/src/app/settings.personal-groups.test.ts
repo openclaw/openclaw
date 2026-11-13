@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { USER_PREFS_VALUE_BYTES } from "../../../packages/gateway-protocol/src/schema/user-profile-constants.ts";
-import { normalizePersonalSessionGroups } from "../lib/sessions/personal-groups.ts";
+import { normalizePersonalSessionGroups } from "../../../src/shared/personal-session-groups.js";
 import { installSettingsStorageLifecycle, setTestLocation } from "../test-helpers/settings-node.ts";
 import { createApplicationNavigationPreferences } from "./bootstrap-navigation-preferences.ts";
 import { changedServerUiPrefs } from "./server-prefs-intent.ts";

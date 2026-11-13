@@ -118,7 +118,7 @@ it.each(["stable", "personal-pins"])(
     const before = loadSettings();
     const next = patchSettings({ personalSessionGroups: [group] });
     const delta = changedServerUiPrefs(before, next)!;
-    expect(delta).toEqual({ personalSessionGroups: [group] });
+    expect(delta).toEqual({ personalSessionGroups: [group], personalSessionGroupsPrevious: [] });
     pushServerUiPrefs(a.writer, delta, { profileId: "a", canWrite: true });
     await vi.dynamicImportSettled();
     expect(backend.profiles.a).toEqual({
