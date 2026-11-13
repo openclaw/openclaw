@@ -42,6 +42,8 @@ const commonMatchCount = 30;
 const commonQuery = "orchardglow";
 const uniqueQuery = "copperfinch";
 const targetKey = "agent:fifth:search-proof-12345678-0000-4000-8000-000000000001";
+const exactTitleKey = "agent:fifth:exact-title-overflow";
+const prefixTitleKeys = Array.from({ length: 10 }, (_, i) => `agent:main:prefix-title-${i}`);
 const archivedKey = "agent:main:archived-search-proof";
 const archivedLabel = "Quartz heron expedition notes";
 const archivedMessage = "The amberquill telescope records the completed expedition.";
@@ -99,6 +101,21 @@ async function seedSessions(owner: OpenClawTestInstance, config: OpenClawConfig)
   }));
   const fixtures: Array<(typeof recent)[number] & { extra?: Partial<SessionEntry> }> = [
     ...recent,
+    {
+      agentId: "fifth",
+      key: exactTitleKey,
+      label: "Heron",
+      updatedAt: now - 8 * 86_400_000,
+      text: null,
+    },
+    ...prefixTitleKeys.map((key, index) => ({
+      agentId: "main",
+      key,
+      label: `Heron notes ${index + 1}`,
+      updatedAt: now - index * 1000,
+      text: null,
+      extra: { archivedAt: now },
+    })),
     ...Object.entries({
       private: {
         visibility: "draft",
@@ -583,6 +600,7 @@ suite.define(() => {
               limit: 10,
               rowMode: "compact",
               source: "command-palette",
+              sortBy: "relevance",
             });
             expect(metadataResponse.ok).toBe(true);
             const revision = metadataResponse.rowsRevision;
@@ -621,6 +639,18 @@ suite.define(() => {
             return response;
           };
 
+          await search("Heron", 0, "metadata-overflow.png", [
+            exactTitleKey,
+            ...prefixTitleKeys.slice(0, 9),
+          ]);
+          expect(await results.getByRole("option").first().textContent()).toContain("Heron");
+          expect(
+            await results
+              .getByRole("option")
+              .first()
+              .getByText("Archived", { exact: true })
+              .count(),
+          ).toBe(0);
           const storageBefore = await client.request("sessions.storage.status", {});
           for (const [query, hits, filename, keys] of [
             [archivedLabel, 0, "archive-title.png", [archivedKey]],
@@ -908,7 +938,7 @@ suite.define(() => {
           {
             passed,
             fixture: {
-              sessions: recentSessionCount + 9,
+              sessions: recentSessionCount + 20,
               configuredAgents: agentIds.length,
               newerSessions: recentSessionCount,
               commonMatches: commonMatchCount,

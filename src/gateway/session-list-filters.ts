@@ -7,7 +7,6 @@ import type {
 import { SessionRunStatusSchema } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
-import { buildGroupDisplayName } from "../config/sessions/group-display.js";
 import {
   MAX_SESSION_PARTICIPANTS,
   resolveSessionCreatorActor,
@@ -19,14 +18,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { formatAgentRuntimeLabel } from "../shared/agent-runtime-display.js";
 import { sessionActivityTimestamp } from "../shared/session-activity-timestamp.js";
-import { formatGoalSummary } from "../shared/session-goal-display.js";
 import { isSessionRunStateActive } from "../shared/session-run-state.js";
 import {
   normalizeSessionSearchLiteral,
   normalizeSessionSearchText,
 } from "../shared/session-search-text.js";
 import type { SessionActivityPulse, SessionOwnerFacetIdentity } from "../shared/session-types.js";
-import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.read.js";
 import { readPreparedGatewayModelCatalogMetadata } from "./server-model-catalog-view.js";
 import {
   projectSessionOwner,
@@ -38,7 +35,10 @@ import {
   resolveSessionListProfileReference,
 } from "./session-identity-projection.js";
 import type { SessionEntryPair } from "./session-list-order.js";
-import { addSessionListSearchModelFields } from "./session-list-search-fields.js";
+import {
+  addSessionListSearchModelFields,
+  sessionListSearchFields,
+} from "./session-list-search-fields.js";
 import type {
   SessionListModelFactsLookup,
   SessionListTargetLookup,
@@ -55,13 +55,9 @@ import {
   resolveSessionChildOwners,
 } from "./session-utils-core.js";
 import {
-  resolveGatewaySessionDisplayName,
-  resolveGatewaySessionKind,
   projectGatewaySessionRunState,
   projectGatewaySessionActiveRun,
-  resolveGatewaySessionGoal,
 } from "./session-utils-display.js";
-import { isGroupOrChannelDisplaySession, parseGroupKey } from "./session-utils-store.js";
 import type { SessionListModelCatalog, SessionsListResult } from "./session-utils.types.js";
 
 export type SessionListFilteredEntries = {
@@ -115,39 +111,11 @@ export type SessionListFilterParams = {
   involvementKeys: (profileId: string, personal: boolean) => ReadonlySet<string>;
 };
 
-function resolveSessionListSearchDisplayName(
-  key: string,
-  entry?: SessionEntry,
-): string | undefined {
-  if (entry?.displayName) {
-    return entry.displayName;
-  }
-  const parsed = parseGroupKey(key);
-  const channel = sessionDeliveryChannel(entry) ?? parsed?.channel;
-  if (isGroupOrChannelDisplaySession(entry, parsed) && channel) {
-    return buildGroupDisplayName({
-      provider: channel,
-      subject: entry?.subject,
-      groupChannel: entry?.groupChannel,
-      space: entry?.space,
-      id: parsed?.id,
-      key,
-    });
-  }
-  return entry?.label ?? sessionDeliveryOrigin(entry)?.label;
-}
-
 function matchesSessionListSearch(fields: Array<string | undefined>, search: string): boolean {
   return fields.some(
     (field) => typeof field === "string" && normalizeSessionSearchLiteral(field).includes(search),
   );
 }
-
-// Search follows the committed entry and physical key; weak keys release retired revisions.
-const staticSearchFields = new WeakMap<
-  SessionEntry,
-  { key: string; literal: string[]; titles: string[] }
->();
 
 export function sessionListSearchMatchesRunState(search: string): boolean {
   return [
@@ -306,40 +274,7 @@ export function filterSessionEntries(
         target: NonNullable<ReturnType<SessionListTargetLookup>>,
       ): boolean => {
         const storeKey = target.storeKey ?? key;
-        let fields = staticSearchFields.get(entry);
-        if (!fields || fields.key !== storeKey) {
-          const titles = [
-            entry.label,
-            entry.subject,
-            entry.category,
-            resolveSessionListSearchDisplayName(storeKey, entry),
-            resolveGatewaySessionDisplayName(storeKey, entry),
-          ];
-          const rawFields = [
-            storeKey,
-            entry.sessionId,
-            ...titles,
-            resolveGatewaySessionKind(storeKey, entry),
-          ];
-          addSessionListSearchModelFields(rawFields, {
-            provider: entry.modelProvider,
-            model: entry.model,
-          });
-          // Goal search uses entry usage, not elapsed time or display-only timestamps.
-          const goal = entry.goal && resolveGatewaySessionGoal(entry, now);
-          if (goal) {
-            rawFields.push(
-              `${goal.objective} ${goal.status} ${formatGoalSummary(goal)} ${goal.lastStatusNote ?? ""}`,
-            );
-          }
-          fields = {
-            key: storeKey,
-            // Both matchers run only for nonempty queries; empty fields can never match.
-            literal: rawFields.map(normalizeSessionSearchLiteral).filter(Boolean),
-            titles: titles.map(normalizeSessionSearchText).filter(Boolean),
-          };
-          staticSearchFields.set(entry, fields);
-        }
+        const fields = sessionListSearchFields(storeKey, entry, now);
         if (
           fields.literal.some(matchesLiteralField) ||
           (titleSearch && fields.titles.some(matchesTitleField))

@@ -568,6 +568,7 @@ export class CommandPaletteState {
       const result = await sessions.list({
         ...COMMAND_PALETTE_SESSION_SEARCH_SCOPE,
         source: "command-palette",
+        sortBy: "relevance",
         search,
         limit: SESSION_SEARCH_LIMIT,
       });

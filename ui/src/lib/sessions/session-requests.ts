@@ -132,6 +132,9 @@ export function buildSessionListParams(options: SessionListOptions = {}): Sessio
       params[key] = value;
     }
   }
+  if (options.sortBy) {
+    params.sortBy = options.sortBy;
+  }
   if (options.boardFace) {
     params.boardFace = options.boardFace;
   }

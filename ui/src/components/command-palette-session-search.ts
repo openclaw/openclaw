@@ -3,6 +3,7 @@ import { indexFirstByKey } from "../../../src/shared/dedupe-by-key.ts";
 import {
   normalizeSessionSearchLiteral,
   normalizeSessionSearchText,
+  rankSessionSearchFields,
 } from "../../../src/shared/session-search-text.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { clampText } from "../lib/format.ts";
@@ -56,24 +57,12 @@ export function buildCommandPaletteSessionItems(params: {
         .map(normalizeSessionSearchLiteral)
         .filter(Boolean);
       const titleFields = titleSearch ? titles.map(normalizeSessionSearchText) : [];
-      let rawMetadataRank: number;
-      if (
-        fields.some((field) => field === normalizedSearch) ||
-        titleFields.some((field) => field === titleSearch)
-      ) {
-        rawMetadataRank = 3;
-      } else if (
-        fields.some((field) => field.startsWith(normalizedSearch)) ||
-        titleFields.some((field) => field.startsWith(titleSearch))
-      ) {
-        rawMetadataRank = 2;
-      } else {
-        rawMetadataRank =
-          fields.some((field) => field.includes(normalizedSearch)) ||
-          titleFields.some((field) => field.includes(titleSearch))
-            ? 1
-            : 0;
-      }
+      const rawMetadataRank = rankSessionSearchFields(
+        fields,
+        titleFields,
+        normalizedSearch,
+        titleSearch,
+      );
       return {
         row,
         label,

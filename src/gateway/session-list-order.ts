@@ -13,7 +13,11 @@ function sessionEntryPin([key, entry]: SessionEntryPair): number {
 }
 
 function sessionEntryTime(entry: SessionEntry, sortBy: NonNullable<SessionsListParams["sortBy"]>) {
-  return (sortBy === "activity" ? sessionActivityTimestamp(entry) : entry[sortBy]) ?? 0;
+  return (
+    (sortBy === "activity"
+      ? sessionActivityTimestamp(entry)
+      : entry[sortBy === "relevance" ? "updatedAt" : sortBy]) ?? 0
+  );
 }
 
 export function compareSessionEntryPairs(
@@ -21,7 +25,7 @@ export function compareSessionEntryPairs(
   b: SessionEntryPair,
   sortBy: SessionsListParams["sortBy"] = "updatedAt",
 ): number {
-  if (sortBy === "updatedAt") {
+  if (sortBy === "updatedAt" || sortBy === "relevance") {
     const aPinnedAt = sessionEntryPin(a);
     const bPinnedAt = sessionEntryPin(b);
     if (aPinnedAt !== bPinnedAt) {
@@ -40,9 +44,14 @@ export function sortAndLimitSessionEntries(
   entries: SessionEntryPair[],
   limit: number | undefined,
   sortBy: SessionsListParams["sortBy"] = "updatedAt",
+  comparePairs?: (a: SessionEntryPair, b: SessionEntryPair) => number,
 ): SessionEntryPair[] {
+  if (comparePairs) {
+    return sortAndLimitBy(entries, limit, comparePairs);
+  }
   const timestamps = new Float64Array(entries.length);
-  const pins = sortBy === "updatedAt" ? new Float64Array(entries.length) : undefined;
+  const pins =
+    sortBy === "updatedAt" || sortBy === "relevance" ? new Float64Array(entries.length) : undefined;
   const indices = Array<number>(entries.length);
   for (let index = 0; index < entries.length; index++) {
     const pair = entries[index]!;
@@ -71,6 +80,7 @@ export function mergeSessionEntryPages(
   pages: SessionEntryPair[][],
   limit: number | undefined,
   sortBy: SessionsListParams["sortBy"] = "updatedAt",
+  comparePairs?: (a: SessionEntryPair, b: SessionEntryPair) => number,
 ): SessionEntryPair[] {
   if (limit === 0) {
     return [];
@@ -83,14 +93,16 @@ export function mergeSessionEntryPages(
         page,
         index: 0,
         pair,
-        pin: sortBy === "updatedAt" ? sessionEntryPin(pair) : 0,
+        pin: sortBy === "updatedAt" || sortBy === "relevance" ? sessionEntryPin(pair) : 0,
         time: sessionEntryTime(pair[1], sortBy),
       };
     });
   const compare = (a: (typeof heads)[number], b: (typeof heads)[number]) =>
-    b.pin - a.pin ||
-    b.time - a.time ||
-    (a.pair[0] < b.pair[0] ? -1 : a.pair[0] > b.pair[0] ? 1 : 0);
+    comparePairs
+      ? comparePairs(a.pair, b.pair)
+      : b.pin - a.pin ||
+        b.time - a.time ||
+        (a.pair[0] < b.pair[0] ? -1 : a.pair[0] > b.pair[0] ? 1 : 0);
   heads.sort(compare);
   const entries: SessionEntryPair[] = [];
   const pageEnd = limit ?? Infinity;
@@ -101,7 +113,7 @@ export function mergeSessionEntryPages(
       continue;
     }
     head.pair = head.page[head.index]!;
-    head.pin = sortBy === "updatedAt" ? sessionEntryPin(head.pair) : 0;
+    head.pin = sortBy === "updatedAt" || sortBy === "relevance" ? sessionEntryPin(head.pair) : 0;
     head.time = sessionEntryTime(head.pair[1], sortBy);
     let low = 0;
     let high = heads.length;

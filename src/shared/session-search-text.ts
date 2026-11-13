@@ -13,3 +13,31 @@ export function normalizeSessionSearchText(value: unknown): string {
     .replace(/[\p{P}\s]+/gu, " ")
     .trim();
 }
+
+/** Rank already-normalized metadata identically before selection and in the palette. */
+export function rankSessionSearchFields(
+  literal: readonly string[],
+  titles: readonly string[],
+  search: string,
+  titleSearch: string,
+): number {
+  if (!search) {
+    return 0;
+  }
+  if (
+    literal.some((field) => field === search) ||
+    (titleSearch && titles.some((field) => field === titleSearch))
+  ) {
+    return 3;
+  }
+  if (
+    literal.some((field) => field.startsWith(search)) ||
+    (titleSearch && titles.some((field) => field.startsWith(titleSearch)))
+  ) {
+    return 2;
+  }
+  return literal.some((field) => field.includes(search)) ||
+    (titleSearch && titles.some((field) => field.includes(titleSearch)))
+    ? 1
+    : 0;
+}

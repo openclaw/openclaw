@@ -46,7 +46,6 @@ export type SessionListOptions = SchemaContract<
     | "activityPulseBoundaries"
     | "activeOnly"
     | "requireLastInteraction"
-    | "sortBy"
     | "includeActivitySummary"
     | "label"
     | "projectId"

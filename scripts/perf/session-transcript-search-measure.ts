@@ -8,6 +8,7 @@
 // The native query owner also runs in workers: its on-disk bytes must match the ref.
 // Prepare that source in a task-owned baseline checkout or a serialized overlay first;
 // never change it while a Gateway, benchmark or test in this checkout is running.
+// Current palette requests also pass --metadata-sort relevance; omit it for the historical baseline.
 // --verify-sources-only checks source/worker identity without creating state or starting a Gateway.
 // First-use is per shape in one process, not OS-cold cache/startup or browser/rendering proof.
 // Retain plan.json, samples.json, result.json, and synthetic state.
@@ -55,6 +56,7 @@ const { values } = parseArgs({
     "first-variant": { type: "string", default: "A" },
     "source-ref": { type: "string" },
     "verify-sources-only": { type: "boolean", default: false },
+    "metadata-sort": { type: "string" },
   },
 });
 const stateDirectory = values["state-dir"];
@@ -76,6 +78,8 @@ const pairs = parseStrictIntegerOption({
   fallback: 20,
 });
 const firstVariant = values["first-variant"];
+assert(values["metadata-sort"] === undefined || values["metadata-sort"] === "relevance");
+const metadataSort = values["metadata-sort"];
 const active = Math.round(sessions / 7);
 const coldCount = 5;
 const agentIds = ["main", "second", "third", "fourth", "fifth"];
@@ -102,7 +106,12 @@ const captureSource = (file: string) => {
   };
 };
 const sources = [
+  "packages/gateway-protocol/src/schema/sessions-list.ts",
+  "packages/gateway-protocol/src/compiled/protocol.generated/predicates.js",
   "src/gateway/session-list-filters.ts",
+  "src/gateway/session-list-order.ts",
+  "src/gateway/session-list-search-fields.ts",
+  "src/shared/session-search-text.ts",
   "src/gateway/session-row-presentation.ts",
   "src/gateway/session-utils-list.ts",
   "src/gateway/server-methods/sessions-search-projected.ts",
@@ -233,6 +242,7 @@ const plan = {
   pairs,
   warmups: 2,
   firstVariant,
+  metadataSort,
   queries,
   root,
   node: process.version,
@@ -557,6 +567,7 @@ try {
                 limit: 10,
                 rowMode: "compact",
                 source: "command-palette",
+                ...(metadataSort ? { sortBy: metadataSort } : {}),
                 ifRowsRevision: "",
               }
             : { query: q.query, limit: 25, scope: selected };

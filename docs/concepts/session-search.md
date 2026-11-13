@@ -84,7 +84,10 @@ Cmd+K (Ctrl+K on Windows and Linux) searches active and archived conversations
 by stored title and metadata, plus messages already available in the index.
 Archived results are labeled **Archived**. Active conversations come first only
 when title/metadata and message relevance are otherwise equal; an exact archived
-title match still ranks above a weaker active match. Opening a result does not
+title match still ranks above a weaker active match. Metadata matches are ranked
+before the ten-result limit, so newer archived prefixes cannot hide an older exact
+title match. Other session lists retain their requested chronological ordering.
+Opening a result does not
 unarchive the conversation, restore its worktree, or start an agent turn. It stays
 out of the active sidebar, with **Unarchive** available when you want to continue.
 Personal section editors still offer active conversations only.

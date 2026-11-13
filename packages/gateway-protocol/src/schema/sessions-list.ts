@@ -36,7 +36,10 @@ export const SessionsListParamsSchema = closedObject({
   activeOnly: Type.Optional(Type.Boolean()),
   /** Require a real user/channel interaction; excludes synthetic isolated heartbeat rows. */
   requireLastInteraction: Type.Optional(Type.Boolean()),
-  sortBy: Type.Optional(stringLiteralUnion(["updatedAt", "lastInteractionAt", "activity"])),
+  /** Relevance ranks search matches before pagination; empty searches retain recency order. */
+  sortBy: Type.Optional(
+    stringLiteralUnion(["updatedAt", "lastInteractionAt", "activity", "relevance"]),
+  ),
   includeGlobal: Type.Optional(Type.Boolean()),
   includeUnknown: Type.Optional(Type.Boolean()),
   /** Exclude subagent sessions before facets and pagination. */

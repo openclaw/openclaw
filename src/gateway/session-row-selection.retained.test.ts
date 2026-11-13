@@ -592,3 +592,61 @@ it.for([0x12e7, 0x4b91])("matches fresh selection after seeded write sequences (
     check();
   }
 });
+
+it.each([false, true])("ranks title overflow before page limits (retained: %s)", (retain) => {
+  const state = fixture();
+  const exact = "agent:ops:exact";
+  const denied = "agent:main:denied";
+  const prefixes = Array.from({ length: 10 }, (_, i) => "agent:main:prefix-" + i);
+  for (const [i, key] of prefixes.entries()) {
+    state.put(
+      key,
+      { sessionId: key, label: "Heron notes " + i, updatedAt: 100 - i, archivedAt: 1 },
+      { hasBoard: true },
+    );
+  }
+  state.put(exact, { sessionId: exact, label: "Heron", updatedAt: 1 }, { hasBoard: true });
+  state.put(denied, { sessionId: denied, label: "Heron", updatedAt: 999 });
+  const opts = {
+    search: "Heron",
+    archived: "all",
+    hasBoard: true,
+    limit: 10,
+    sortBy: "relevance",
+  } satisfies SessionsListParams;
+  const retained = retain ? new Map<object, SessionListFilteredEntries>() : undefined;
+  const select = () => state.select(state.selection, opts, retained);
+  for (let call = 0; call < 2; call++) {
+    const result = select();
+    expect(result.entries.map(([key]) => key)).toEqual([exact, ...prefixes.slice(0, 9)]);
+    expect(result).toMatchObject({ totalCount: 11, nextOffset: 10, hasMore: true });
+  }
+  expect(
+    state.select(state.selection, { ...opts, offset: 10 }).entries.map(([key]) => key),
+  ).toEqual([prefixes[9]]);
+  expect(
+    state.select(state.selection, { ...opts, sortBy: "updatedAt" }).entries.map(([key]) => key),
+  ).toEqual(prefixes);
+  state.put(
+    prefixes[0]!,
+    { sessionId: prefixes[0]!, label: "Heron", updatedAt: 100, archivedAt: 1 },
+    { hasBoard: true },
+  );
+  expect(
+    select()
+      .entries.slice(0, 2)
+      .map(([key]) => key),
+  ).toEqual([exact, prefixes[0]]);
+  state.put(
+    exact,
+    { sessionId: exact, label: "Heron notes active", updatedAt: 1 },
+    { hasBoard: true },
+  );
+  expect(
+    select()
+      .entries.slice(0, 2)
+      .map(([key]) => key),
+  ).toEqual([prefixes[0], exact]);
+  state.put(exact, { sessionId: exact, label: "Unrelated", updatedAt: 1 }, { hasBoard: true });
+  expect(select().entries[0]?.[0]).toBe(prefixes[0]);
+});

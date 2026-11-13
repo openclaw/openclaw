@@ -1,0 +1,2 @@
+# P2 metadata-cutoff regression: retained/fresh pagination and real Gateway UI overflow proof.
+88
