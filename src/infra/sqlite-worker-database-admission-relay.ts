@@ -22,6 +22,12 @@ const ABANDONED = 2;
 const ADMISSION_PEER_SAFETY_TIMEOUT_MS = 10 * 60_000;
 export const SQLITE_COLD_ADMISSION_PENDING = 4;
 
+export class SqliteDatabaseAdmissionTimeoutError extends SqliteWorkerError {
+  constructor() {
+    super("SQLite admission facts exchange timed out; the host did not reply", "unavailable");
+  }
+}
+
 type AdmissionWait = { readonly deadlineAtMs?: number; assertActive?: () => void };
 type AdmissionWaitScope = { wait: AdmissionWait; parent?: AdmissionWaitScope; active: boolean };
 const admissionWait = resolveGlobalSingleton(
@@ -137,10 +143,7 @@ export function exchangeDatabaseAdmissions(
     assertSqliteDatabaseAdmissionWaitActive();
     const remainingMs = Number(deadlineNs - readSqliteWorkerMonotonicNs()) / 1e6;
     if (remainingMs <= 0) {
-      throw new SqliteWorkerError(
-        "SQLite admission facts exchange timed out; the host did not reply",
-        "unavailable",
-      );
+      throw new SqliteDatabaseAdmissionTimeoutError();
     }
     return remainingMs;
   };
