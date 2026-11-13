@@ -1,11 +1,10 @@
-import { setImmediate } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { expectCollected } from "../test-utils/retention.js";
 import { createPluginServiceScheduler } from "./service-scheduler.js";
 
 function fixture(run?: Parameters<typeof createPluginServiceScheduler>[1]) {
@@ -18,7 +17,11 @@ describe("plugin service scheduling", () => {
   it.each([false, true])(
     "releases its runner after root cleanup (pending child: %s)",
     async (pending) => {
+      const references: WeakRef<object>[] = [];
       class RunnerOwner {
+        constructor() {
+          references.push(new WeakRef(this));
+        }
         run(work: () => void | Promise<unknown>) {
           return work();
         }
@@ -35,8 +38,7 @@ describe("plugin service scheduling", () => {
         const stopping = owner.stop();
         work.resolve();
         await Promise.all([stopping, wake]);
-        await setImmediate();
-        expect(queryObjects(RunnerOwner)).toBe(0);
+        await expectCollected(...references);
         expect(() => child.schedule({ id: "late", delayMs: 0, run() {} })).toThrow("closed");
       } finally {
         work.resolve();

@@ -48,7 +48,7 @@ it("navigates to the in-app Plugins hub from the plugins card", () => {
   const onNavigate = vi.fn();
   const container = renderIntoContainer({ onNavigate });
   const buttons = [...container.querySelectorAll<HTMLButtonElement>("button.apps-card__cta")];
-  expect(buttons).toMatchObject([{ textContent: expect.stringContaining("Open Plugins") }]);
+  expect(buttons).toMatchObject([{ textContent: expect.stringContaining("Open plugins") }]);
   buttons[0]?.click();
   expect(onNavigate).toHaveBeenCalledExactlyOnceWith("plugins");
 });

@@ -247,7 +247,7 @@ export function createPersonalSessionGroupActions(
       const updated = { ...group, sessionKeys: [...group.sessionKeys, key] };
       const error = write(groups().map((item) => (item.id === id ? updated : item)));
       showToast({
-        severity: error ? "error" : undefined,
+        severity: error ? "error" : "success",
         message: error ?? t("sessionsView.personalGroupReferenceAdded"),
       });
     });

@@ -1,8 +1,9 @@
 import { createSignal } from "solid-js";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
+import * as metrics from "./metrics.ts";
 import type { CostDailyEntry } from "./types.ts";
 import { dailyEntry } from "./usage-chart.test-support.ts";
 import { UsageHeatmap } from "./view-heatmap.tsx";
@@ -24,7 +25,7 @@ describe("UsageHeatmap", () => {
     (start) => {
       const container = mountHeatmap([dailyEntry("2026-07-09", 10)], start, "2026-07-09");
       expect(container.querySelector(".settings-section__heading")?.textContent?.trim()).toBe(
-        "Token Activity",
+        "Token activity",
       );
       const cells = [...container.querySelectorAll(".usage-heatmap__cell")];
       expect(cells).toHaveLength(364);
@@ -68,6 +69,8 @@ describe("UsageHeatmap", () => {
   });
 
   it("retains refreshed dates and moves overlapping cells when the visible range changes", () => {
+    const dateFormat = vi.spyOn(metrics, "formatFullDate");
+    onTestFinished(() => dateFormat.mockRestore());
     const [state, setState] = createSignal({
       daily: [dailyEntry("2026-07-09", 20)],
       start: "2026-05-08",
@@ -95,11 +98,13 @@ describe("UsageHeatmap", () => {
     const originalX = Number(last.getAttribute("x"));
     expect(last.classList.contains("usage-heatmap__cell--l4")).toBe(true);
 
+    dateFormat.mockClear();
     setState((current) => ({
       ...current,
       daily: [dailyEntry("2026-07-08", 10), dailyEntry("2026-07-09", 0)],
     }));
     flush();
+    expect(dateFormat).not.toHaveBeenCalled();
     expect(container.querySelector(".usage-heatmap__svg")).toBe(svg);
     expect(cells()).toHaveLength(initial.length);
     for (const [index, cell] of cells().entries()) {
@@ -109,8 +114,10 @@ describe("UsageHeatmap", () => {
     expect(last.getAttribute("data-tooltip")).toContain("0 tokens");
     expect(last.getAttribute("aria-label")).toBe(last.getAttribute("data-tooltip"));
 
+    dateFormat.mockClear();
     setState((current) => ({ ...current, start: "2026-05-15", end: "2026-07-16" }));
     flush();
+    expect(dateFormat).toHaveBeenCalledWith("2026-07-16");
     expect(container.querySelector(".usage-heatmap__svg")).toBe(svg);
     expect(cells()).toHaveLength(63);
     expect(cells().at(-8)).toBe(last);
@@ -138,6 +145,7 @@ describe("UsageHeatmap", () => {
 
   it("updates localized labels without replacing the SVG or its cells", async () => {
     const restoreI18n = captureI18nStateForTesting();
+    const dateFormat = vi.spyOn(metrics, "formatFullDate");
     try {
       await i18n.setLocale("en");
       const container = mountHeatmap([dailyEntry("2026-07-09", 1234)], "2026-05-08", "2026-07-09");
@@ -179,8 +187,10 @@ describe("UsageHeatmap", () => {
         expect(cell.getAttribute("aria-label")).toBe(cell.getAttribute("data-tooltip"));
       };
       labels();
+      dateFormat.mockClear();
       await i18n.setLocale("de");
       flush();
+      expect(dateFormat).toHaveBeenCalled();
       labels();
       expect(cell.getAttribute("data-tooltip")).not.toBe(englishTooltip);
       await i18n.setLocale("en");
@@ -188,6 +198,7 @@ describe("UsageHeatmap", () => {
       labels();
       expect(cell.getAttribute("data-tooltip")).toBe(englishTooltip);
     } finally {
+      dateFormat.mockRestore();
       await restoreI18n();
     }
   });

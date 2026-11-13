@@ -27,6 +27,7 @@ import {
   openWs,
   rpcReq,
   testState,
+  waitForWsClose,
   withGatewayServer,
 } from "./server.auth.test-helpers.js";
 import type { SessionsListResult } from "./session-utils.types.js";
@@ -231,7 +232,7 @@ describe("gateway presence audience", () => {
         };
       };
       try {
-        const guest = await openRecipient("guest", ["operator.sessions.write"]);
+        let guest = await openRecipient("guest", ["operator.sessions.write"]);
         const activity = {
           source: "activity",
           includePeople: true,
@@ -250,8 +251,11 @@ describe("gateway presence audience", () => {
             ]),
           },
         });
-        // Reuse this connection and its warmed selection after revoking the role's authority.
+        // A changed current-role presentation claim retires the warmed connection.
+        const demoted = waitForWsClose(guest.ws, 1_000);
         setUserProfileRole(guestProfile.id, "guest");
+        expect(await demoted).toBe(true);
+        guest = await openRecipient("guest", ["operator.sessions.write"]);
         for (const method of ["users.list", "presence.query"]) {
           expect(await rpcReq(guest.ws, method, {})).toMatchObject({
             ok: false,
@@ -272,18 +276,27 @@ describe("gateway presence audience", () => {
           payload: { session: { sessionId: sharedSessionId } },
         });
         expect(await rpcReq(guest.ws, "sessions.list", personActivity)).toMatchObject({
-          ok: false,
-          error: { code: "FORBIDDEN" },
+          ok: true,
+          payload: { sessions: [{ key: sharedKey }] },
         });
         const afterDemotion = await rpcReq<SessionsListResult>(guest.ws, "sessions.list", activity);
         expect(afterDemotion).toMatchObject({
           ok: true,
           payload: {
             totalCount: 2,
-            people: [{ identity: { id: guestProfile.id } }],
-            owners: [{ id: guestProfile.id }],
-            ownerSessionCounts: [{ profileId: guestProfile.id, open: 1 }],
-            peopleSessionCount: 1,
+            people: expect.arrayContaining([
+              expect.objectContaining({ identity: { type: "profile", id: guestProfile.id } }),
+              expect.objectContaining({ identity: { type: "profile", id: creator.id } }),
+            ]),
+            owners: expect.arrayContaining([
+              expect.objectContaining({ id: guestProfile.id }),
+              expect.objectContaining({ id: creator.id }),
+            ]),
+            ownerSessionCounts: expect.arrayContaining([
+              expect.objectContaining({ profileId: guestProfile.id, open: 1 }),
+              expect.objectContaining({ profileId: creator.id, open: 1 }),
+            ]),
+            peopleSessionCount: 2,
           },
         });
         expect(afterDemotion.payload?.sessions.map((session) => session.key)).toEqual(

@@ -5,6 +5,7 @@ import { nativeRuntime } from "../../test-helpers/chat-model.ts";
 import { buildSelectedSessionCreateParams } from "./draft-create-params.ts";
 import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
+import { resolveHostedEnvironments } from "./hosted-environments.ts";
 import { createNewSessionRouteData } from "./location.test-support.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { managedModelControls, controlQueries } from "./model-control-view-queries.test-support.ts";
@@ -40,6 +41,26 @@ function modelControl(context: Parameters<typeof renderControl>[1]) {
   const control = managed.make(() => {});
   return { control, ...controlQueries(control, context, "main", agent) };
 }
+it("keeps an unavailable hosted workspace distinct from an available one", () => {
+  const unavailableRuntime = { ...runtime, id: "unavailable" };
+  const choices = resolveHostedEnvironments(
+    [
+      model,
+      {
+        ...model,
+        runtimeChoices: [{ agentRuntime: unavailableRuntime, available: false }],
+      },
+    ],
+    modelRef,
+    true,
+  );
+  expect(choices.map((choice) => choice.id)).toEqual([runtime.id, unavailableRuntime.id]);
+  expect(choices.find((choice) => choice.id === runtime.id)?.disabledReason).toBeUndefined();
+  expect(choices.find((choice) => choice.id === unavailableRuntime.id)?.disabledReason).toBe(
+    "This hosted workspace isn’t available. Check its setup or choose another workspace.",
+  );
+});
+
 const catalog = (overrides: Partial<ModelCatalogEntry>) => ({
   models: [{ ...model, ...overrides }],
 });

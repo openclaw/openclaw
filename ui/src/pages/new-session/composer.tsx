@@ -1,4 +1,3 @@
-import type { JSX } from "@solidjs/web";
 import {
   createEffect,
   createMemo,
@@ -8,10 +7,7 @@ import {
   Show,
   useContext,
 } from "solid-js";
-import type { GatewayAgentRow } from "../../api/types.ts";
-import type { ApplicationContext } from "../../app/context.ts";
 import { createFooterControlRef } from "../../app/shell-layout-traits-solid.tsx";
-import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import {
   lobsterPetSeed,
   resolveLobsterPetMode,
@@ -22,18 +18,22 @@ import { createBackgroundLayoutRef } from "../../components/session-background-l
 import { createSidebarRendererLoader } from "../../components/sidebar-renderer-loader.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { isMobileBrowserPlatform, keepMobileReturnNative } from "../../lib/browser-platform.ts";
-import type { HumanMention } from "../../lib/chat/chat-types.ts";
-import type { ComposerDraftSource } from "../../lib/chat/composer-draft-changes.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
+import {
+  composerInputHasFocus,
+  focusComposerInput,
+  syncComposerInput,
+} from "../../lib/composer-input.ts";
 import {
   clearCompositionEnd,
   isComposingKeyboardEvent,
   recordCompositionEnd,
 } from "../../lib/ime.ts";
+import { createMentionComposerBinding } from "../../lib/reactive/composer-editor.ts";
+import { connectedElementRef } from "../../lib/reactive/element-ref.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { liveValue as createLiveValue } from "../../lib/reactive/live-value.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
-import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { resolveChatAttachmentLimits } from "../chat/components/chat-attachment-admission.ts";
 import { createChatAttachmentInputHandle } from "../chat/components/chat-attachment-inputs.ts";
 import { ChatAttachmentInputs } from "../chat/components/chat-attachment-inputs.tsx";
@@ -53,8 +53,6 @@ import { EmojiMenu } from "../chat/components/chat-composer-emoji.tsx";
 import type { HumanMentionMenuHost } from "../chat/components/chat-composer-mention-menu-state.ts";
 import { HumanMentionMenuView } from "../chat/components/chat-composer-mention-menu.tsx";
 import { resolveComposerMenus } from "../chat/components/chat-composer-menus.ts";
-import type { ChatComposerCapabilityMenuSource } from "../chat/components/chat-composer-plus-menu.types.ts";
-import { SelectedHumanMentions } from "../chat/components/chat-composer-selected-mentions.tsx";
 import type { SkillMenuHost } from "../chat/components/chat-composer-skill-menu-state.ts";
 import { SkillMenu } from "../chat/components/chat-composer-skill-menu.tsx";
 import type { SlashMenuHost } from "../chat/components/chat-composer-slash-menu-state.ts";
@@ -63,60 +61,19 @@ import {
   ComposerWidthEdge,
   prepareComposerWidthEdge,
 } from "../chat/components/chat-composer-width-ref.tsx";
-import type { SidebarContent } from "../chat/components/chat-sidebar-content-types.ts";
-import type { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import {
   NewSessionPlusMenu,
   NewSessionSelectionStatus,
   StartControl,
 } from "./composer-capability-controls.tsx";
+import type { NewSessionComposerOptions } from "./composer-options.ts";
 import { createComposerPlaceholder } from "./composer-placeholder.ts";
 import { NewSessionComposerTextareaContext } from "./composer-textarea-context.ts";
 import type { NewSessionComposerTextarea } from "./composer-textarea.ts";
 import { resolveNewSessionMentionDirectory } from "./mention-directory.ts";
 import { NewSessionModelControlView } from "./model-control-view.tsx";
-import type { NewSessionModelControl } from "./model-control.ts";
 
 registerNewSessionSetupEnglish();
-
-export type NewSessionComposerOptions = {
-  agent?: GatewayAgentRow;
-  agentId: string;
-  attachmentDraft: NewSessionAttachmentDraft;
-  draftSource?: ComposerDraftSource;
-  context: ApplicationContext | undefined;
-  draftOwnerKey: string;
-  /** Registered project whose skills the Gateway may preview before the session exists. */
-  commandProjectId?: string;
-  isCatalogTarget: boolean;
-  canSubmit: boolean;
-  message: string;
-  mentions?: readonly HumanMention[];
-  getMentions?: () => readonly HumanMention[];
-  modelControl: NewSessionModelControl;
-  permissionControl?: JSX.Element;
-  requiresModifier: boolean;
-  onChange: () => void;
-  submitDisabledReason?: string;
-  onBlockedSubmit?: () => void;
-  dictationActive?: boolean;
-  dictationPreview?: string;
-  dictationStatus?: JSX.Element;
-  nativeTerminal?: boolean;
-  onUnsupportedAttachment?: () => void;
-  submitting: boolean;
-  chatMessageMaxWidth?: string | null;
-  onComposerWidthChange?: (value: string | undefined) => void;
-  voiceControl?: JSX.Element;
-  messageLocked?: boolean;
-  capabilityMenu?: ChatComposerCapabilityMenuSource;
-  toolOverrides?: SessionToolOverrides | null;
-  onInput: (message: string, mentions?: readonly HumanMention[]) => void;
-  onOpenImage?: (item: ImageLightboxItem) => void;
-  onOpenSidebar?: (content: SidebarContent) => void;
-  onSubmit: () => void;
-  onBackgroundSubmit?: () => void;
-};
 
 function submitNewSession(
   options: NewSessionComposerOptions,
@@ -185,7 +142,10 @@ function prepareComposer(options: NewSessionComposerOptions, textarea: NewSessio
       return;
     }
     const hasSubmitModifier = event.metaKey || event.ctrlKey;
-    const isBackgroundShortcut = hasSubmitModifier && event.shiftKey;
+    // While plain Enter sends, the modified chord starts in the background like
+    // the command palette. A modifier-enter preference keeps it for Send, so
+    // Shift selects the background start there.
+    const isBackgroundShortcut = hasSubmitModifier && (event.shiftKey || !options.requiresModifier);
     const background = Boolean(!event.altKey && isBackgroundShortcut && options.onBackgroundSubmit);
     if (!background && (event.shiftKey || (options.requiresModifier && !hasSubmitModifier))) {
       return;
@@ -340,6 +300,144 @@ const LobsterPet = lazy(() => import("../../components/lobster-pet.tsx"), {
   export: "LobsterPet",
 });
 
+type NewSessionComposerFrame = ReturnType<typeof prepareComposer>;
+
+/** The draft-keyed field owns its editor/history; same-draft updates retain both. */
+function NewSessionComposerInput(props: {
+  options: NewSessionComposerOptions;
+  frame: NewSessionComposerFrame;
+  placeholder: string;
+  input: ReturnType<typeof connectedElementRef<HTMLTextAreaElement>>;
+}) {
+  const textarea = useContext(NewSessionComposerTextareaContext);
+  const messageValue = createLiveValue(() => props.frame.visibleMessage, syncComposerInput);
+  const editorRef = createMentionComposerBinding(
+    () => props.options.getMentions?.() ?? props.options.mentions ?? [],
+    textarea.mentionMenu.selectedAvatarUrls,
+  );
+  let field: HTMLTextAreaElement | undefined;
+  let releaseInput: (() => void) | undefined;
+  let restoreFocus = false;
+  onSettled(() => {
+    textarea.ref(field);
+    if (restoreFocus && document.activeElement === document.body) {
+      focusComposerInput(field, { preventScroll: true });
+    }
+    return () => {
+      if (textarea.getTextarea() === field) {
+        textarea.ref();
+      }
+      releaseInput?.();
+    };
+  });
+  return (
+    <textarea
+      data-composer-mentions={JSON.stringify(props.options.mentions ?? [])}
+      ref={[
+        (element) => {
+          restoreFocus = composerInputHasFocus(props.input.read());
+          releaseInput = props.input.bind(element);
+          field = element;
+          messageValue(element);
+        },
+        editorRef,
+      ]}
+      class="new-session-page__message"
+      rows="1"
+      autofocus={globalThis.matchMedia?.("(max-width: 560px)")?.matches ?? false}
+      disabled={props.options.submitting || props.options.messageLocked}
+      readonly={props.options.dictationActive}
+      placeholder={props.placeholder}
+      aria-label={props.frame.messagePlaceholder}
+      enterkeyhint="enter"
+      aria-keyshortcuts={isMobileBrowserPlatform() ? undefined : props.frame.keyShortcuts}
+      aria-autocomplete="list"
+      aria-controls={props.frame.menuVisible ? props.frame.menuListboxId : undefined}
+      aria-haspopup={props.frame.menuVisible ? "listbox" : undefined}
+      aria-activedescendant={props.frame.activeMenuOptionId ?? undefined}
+      aria-describedby={props.frame.menuAnnouncementId}
+      onInput={(event) => {
+        handleTextareaOverflowInteraction(event);
+        if (props.options.dictationActive) {
+          return;
+        }
+        const target = event.currentTarget;
+        adjustTextareaHeight(target, { nativeInput: true });
+        const mentions = props.frame.mentionMenuHost.getMentions();
+        const nextMentions = updateHumanMentions(
+          props.options.message,
+          target.value,
+          mentions,
+          textarea.mentionInput,
+        );
+        props.options.onInput(
+          target.value,
+          mentions.length || nextMentions.length ? nextMentions : undefined,
+        );
+        textarea.mentionInput = undefined;
+        props.frame.updateMenus(target, event);
+      }}
+      onBeforeInput={(event) => {
+        handleTextareaOverflowInteraction(event);
+        const target = event.currentTarget;
+        textarea.mentionInput = {
+          value: target.value,
+          start: target.selectionStart,
+          end: target.selectionEnd,
+          inputType: event.inputType,
+        };
+        textarea.emojiMenu.complete(
+          event,
+          !props.frame.composerLocked && !props.options.nativeTerminal && !textarea.composing,
+        );
+      }}
+      onScroll={handleTextareaOverflowScroll}
+      onWheel={handleTextareaOverflowInteraction}
+      onPointerDown={handleTextareaOverflowInteraction}
+      onSelect={(event) => props.frame.handleSelect(event)}
+      onFocus={(event) => props.frame.handleSelect(event)}
+      onPointerUp={(event) => props.frame.handleSelect(event)}
+      onKeyUp={(event) => {
+        clearCompositionEnd(event);
+        textarea.emojiMenu.handleKeyup(event);
+        if (event.key.startsWith("Arrow") || event.key === "Home" || event.key === "End") {
+          props.frame.handleSelect(event);
+        }
+      }}
+      onBlur={(event) => {
+        handleTextareaOverflowInteraction(event);
+        clearCompositionEnd(event);
+        textarea.composing = false;
+        textarea.emojiMenu.close();
+      }}
+      onCompositionEnd={(event) => {
+        recordCompositionEnd(event);
+        textarea.composing = false;
+        props.frame.updateMenus(event.currentTarget);
+      }}
+      onKeyDown={(event) => {
+        handleTextareaOverflowInteraction(event);
+        props.frame.handleComposerKeydown(event);
+      }}
+      onCompositionStart={(event) => {
+        handleTextareaOverflowInteraction(event);
+        textarea.composing = true;
+        textarea.emojiMenu.close();
+        textarea.mentionMenu.close();
+        props.options.onChange();
+      }}
+      onPaste={(event) => {
+        if (props.options.nativeTerminal && event.clipboardData?.files.length) {
+          event.preventDefault();
+          props.options.onUnsupportedAttachment?.();
+        } else if (!props.frame.composerLocked && !props.options.nativeTerminal) {
+          handleChatAttachmentPaste(event, props.frame.attachmentProps);
+        }
+      }}
+    />
+  );
+}
+
 export function NewSessionComposer(props: {
   options: NewSessionComposerOptions;
   surroundings?: () => Pick<LobsterComposerElements, "root" | "obstacles"> | undefined;
@@ -388,23 +486,22 @@ export function NewSessionComposer(props: {
       }
     },
   );
-  const visibleMessage = createMemo(() => frame().visibleMessage);
-  const messageValue = createLiveValue(visibleMessage);
-  let input: HTMLTextAreaElement | undefined;
+  const input = connectedElementRef<HTMLTextAreaElement>();
   let composer: HTMLDivElement | undefined;
   let footer: HTMLDivElement | undefined;
   let lead: HTMLDivElement | undefined;
   let model: HTMLDivElement | undefined;
   let actions: HTMLDivElement | undefined;
   const composerElements = (): LobsterComposerElements | null => {
-    if (!composer || !input || !footer) {
+    const editor = input.read();
+    if (!composer || !editor || !footer) {
       return null;
     }
     const surroundings = props.surroundings?.();
     return {
       root: surroundings?.root ?? composer,
       composer,
-      editor: input,
+      editor,
       footer,
       controls: [lead, model, actions].filter(
         (element): element is HTMLDivElement => element?.isConnected === true,
@@ -412,11 +509,6 @@ export function NewSessionComposer(props: {
       obstacles: surroundings?.obstacles ?? [],
     };
   };
-  // A replacement can render before the old branch retires; claim only the committed input.
-  onSettled(() => {
-    textarea.ref(input);
-    return () => textarea.ref();
-  });
   return (
     <div
       ref={footerControl}
@@ -486,131 +578,36 @@ export function NewSessionComposer(props: {
             />
           </Show>
         </PetBoundary>
+        <Show when={frame().slashMenuVisible}>
+          <SlashMenu
+            menu={textarea.slashMenu}
+            host={frame().slashMenuHost}
+            draft={frame().visibleMessage}
+          />
+        </Show>
         <HumanMentionMenuView args={[textarea.mentionMenu, frame().mentionMenuHost]} />
         <EmojiMenu args={[textarea.emojiMenu, "new-session", textarea.getTextarea()]} />
         <Show when={!options().nativeTerminal}>
           <ChatAttachmentInputs {...frame().attachmentProps} inputHandle={inputHandle} />
         </Show>
-        <SelectedHumanMentions
-          text={options().message}
-          mentions={options().mentions}
-          onRemove={() => options().onInput(options().message, [])}
-          avatarUrls={textarea.mentionMenu.selectedAvatarUrls}
-        />
         <AttachmentPreview {...frame().attachmentProps} readRevision={frame()} />
         <AttachmentReadStatus pendingReads={options().attachmentDraft.reads.pendingReads} />
         <div class="agent-chat__composer-lede">{options().dictationStatus}</div>
         <div class="agent-chat__composer-input-row">
           <div class="agent-chat__composer-combobox">
-            <Show when={frame().slashMenuVisible}>
-              <SlashMenu
-                menu={textarea.slashMenu}
-                host={frame().slashMenuHost}
-                draft={frame().visibleMessage}
-              />
-            </Show>
             <Show when={frame().skillMenuVisible}>
               <SkillMenu menu={textarea.skillMenu} host={frame().skillMenuHost} />
             </Show>
-            <textarea
-              ref={(element) => {
-                input = element;
-                messageValue(element);
-              }}
-              class="new-session-page__message"
-              rows="1"
-              autofocus={globalThis.matchMedia?.("(max-width: 560px)")?.matches ?? false}
-              disabled={options().submitting || options().messageLocked}
-              readonly={options().dictationActive}
-              placeholder={placeholder()}
-              aria-label={frame().messagePlaceholder}
-              enterkeyhint="enter"
-              aria-keyshortcuts={isMobileBrowserPlatform() ? undefined : frame().keyShortcuts}
-              aria-autocomplete="list"
-              aria-controls={frame().menuVisible ? frame().menuListboxId : undefined}
-              aria-haspopup={frame().menuVisible ? "listbox" : undefined}
-              aria-activedescendant={frame().activeMenuOptionId ?? undefined}
-              aria-describedby={frame().menuAnnouncementId}
-              onInput={(event) => {
-                handleTextareaOverflowInteraction(event);
-                if (options().dictationActive) {
-                  return;
-                }
-                const target = event.currentTarget;
-                adjustTextareaHeight(target, { nativeInput: true });
-                const mentions = frame().mentionMenuHost.getMentions();
-                options().onInput(
-                  target.value,
-                  mentions.length
-                    ? updateHumanMentions(
-                        options().message,
-                        target.value,
-                        mentions,
-                        textarea.mentionInput,
-                      )
-                    : undefined,
-                );
-                textarea.mentionInput = undefined;
-                frame().updateMenus(target, event);
-              }}
-              onBeforeInput={(event) => {
-                handleTextareaOverflowInteraction(event);
-                const target = event.currentTarget;
-                textarea.mentionInput = {
-                  value: target.value,
-                  start: target.selectionStart,
-                  end: target.selectionEnd,
-                  inputType: event.inputType,
-                };
-                textarea.emojiMenu.complete(
-                  event,
-                  !frame().composerLocked && !options().nativeTerminal && !textarea.composing,
-                );
-              }}
-              onScroll={handleTextareaOverflowScroll}
-              onWheel={handleTextareaOverflowInteraction}
-              onPointerDown={handleTextareaOverflowInteraction}
-              onSelect={(event) => frame().handleSelect(event)}
-              onFocus={(event) => frame().handleSelect(event)}
-              onPointerUp={(event) => frame().handleSelect(event)}
-              onKeyUp={(event) => {
-                clearCompositionEnd(event);
-                textarea.emojiMenu.handleKeyup(event);
-                if (event.key.startsWith("Arrow") || event.key === "Home" || event.key === "End") {
-                  frame().handleSelect(event);
-                }
-              }}
-              onBlur={(event) => {
-                handleTextareaOverflowInteraction(event);
-                clearCompositionEnd(event);
-                textarea.composing = false;
-                textarea.emojiMenu.close();
-              }}
-              onCompositionEnd={(event) => {
-                recordCompositionEnd(event);
-                textarea.composing = false;
-                frame().updateMenus(event.currentTarget);
-              }}
-              onKeyDown={(event) => {
-                handleTextareaOverflowInteraction(event);
-                frame().handleComposerKeydown(event);
-              }}
-              onCompositionStart={(event) => {
-                handleTextareaOverflowInteraction(event);
-                textarea.composing = true;
-                textarea.emojiMenu.close();
-                textarea.mentionMenu.close();
-                options().onChange();
-              }}
-              onPaste={(event) => {
-                if (options().nativeTerminal && event.clipboardData?.files.length) {
-                  event.preventDefault();
-                  options().onUnsupportedAttachment?.();
-                } else if (!frame().composerLocked && !options().nativeTerminal) {
-                  handleChatAttachmentPaste(event, frame().attachmentProps);
-                }
-              }}
-            />
+            <Show when={options().draftOwnerKey} keyed>
+              {(_draftOwnerKey) => (
+                <NewSessionComposerInput
+                  options={options()}
+                  frame={frame()}
+                  placeholder={placeholder()}
+                  input={input}
+                />
+              )}
+            </Show>
             <span class="agent-chat__composer-placeholder" aria-hidden="true">
               {placeholder()}
             </span>

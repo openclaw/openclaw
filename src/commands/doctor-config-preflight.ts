@@ -4,6 +4,7 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveFutureConfigActionBlock } from "../config/future-version-guard.js";
 import { tryGetLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveIsConfigReadOnly, resolveStateDir } from "../config/paths.js";
+import { describeConfigSnapshotInputChange } from "../config/snapshot-inputs.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -330,6 +331,7 @@ async function runDoctorConfigPreflightOperation(
         },
       }),
     );
+    preflightWarnings.push(...(entryState.warnings ?? []));
     if (!repair && entryState.found > 0) {
       const { SessionStoreMigrationRequiredError } =
         await import("../config/sessions/migration-required.js");
@@ -476,12 +478,13 @@ async function runDoctorConfigPreflightOperation(
       ),
     );
     const { repairLegacySessionEntryStates } = await import("./doctor-session-delivery-state.js");
-    await repairLegacySessionEntryStates({
+    const entryState = await repairLegacySessionEntryStates({
       apply: true,
       cfg: automaticConfigRepair?.config ?? baseConfig,
       env: process.env,
       integrityCheck: options.integrityCheck,
     });
+    preflightWarnings.push(...(entryState.warnings ?? []));
   }
   if (stateDirMigrations && options.doctorOnlyStateMigrations === true) {
     const { retireDoctorA2uiWidgets } = await import("./doctor-a2ui-widgets.js");
@@ -497,9 +500,14 @@ async function runDoctorConfigPreflightOperation(
   }
   // Import retired locators before removing them from the authored config.
   if (await pluginMigrations.complete()) {
-    configChanged = true;
+    const previousSnapshot = snapshot;
     configSnapshotRead = await readConfigSnapshotForPreflight(false);
     snapshot = configSnapshotRead.snapshot;
+    // Ledger settlement alone is not a config change; releasing excluded settings can be.
+    configChanged ||=
+      Boolean(describeConfigSnapshotInputChange(previousSnapshot, snapshot)) ||
+      previousSnapshot.valid !== snapshot.valid ||
+      !isDeepStrictEqual(previousSnapshot.config, snapshot.config);
     baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
     automaticConfigRepair = await planAdmittedConfigRepair(snapshot);
   }

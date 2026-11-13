@@ -26,6 +26,7 @@ import {
   settleUsagePage,
   usageButton,
 } from "./usage-page.test-support.ts";
+import { openUsageDisplay } from "./view-render.test-support.ts";
 
 afterEach(cleanupUsagePageTest);
 
@@ -176,7 +177,7 @@ describe("UsagePage detail requests", () => {
 
     await queryUsagePage(page, "label:missing");
     expect(page.querySelector(".session-bar-row, .sessions-selected-group")).toBeNull();
-    usageButton(page, "Clear Selection", ".sessions-card button").click();
+    usageButton(page, "Clear selection", ".sessions-card button").click();
     await settle();
     expect(page.usageSelectedSessions).toEqual([]);
   });
@@ -312,7 +313,7 @@ describe("UsagePage detail requests", () => {
     expect(
       page.querySelector(".usage-detail-error--timeline, .usage-detail-error--conversation"),
     ).toBeNull();
-    expect(textOf(page, ".session-logs-compact")).toContain("Loading");
+    expect(textOf(page, ".session-logs-compact")).toContain("Loading usage…");
 
     unavailable = false;
     context.setGatewaySnapshot({ suspensionPhase: "accepting" });
@@ -456,7 +457,9 @@ describe("UsagePage detail requests", () => {
 
     const selectSession = (index: number) => selectUsageSession(page, index);
     selectSession(0);
-    await waitForFast(() => expect(textOf(page, ".context-details-panel")).toContain("Loading"));
+    await waitForFast(() =>
+      expect(textOf(page, ".context-details-panel")).toContain("Loading usage…"),
+    );
     const firstContext = request.mock.calls.find(
       ([method, params]) => method === "sessions.usage" && params?.key === keys[0],
     )!;
@@ -477,7 +480,7 @@ describe("UsagePage detail requests", () => {
       expect(textOf(page, ".usage-detail-error--context")).toContain("context unavailable"),
     );
     expect(textOf(page, ".context-details-panel")).not.toContain("stale-context");
-    expect(textOf(page, ".context-details-panel")).not.toContain("No context data");
+    expect(textOf(page, ".context-details-panel")).not.toContain("No context data yet.");
 
     request.mockImplementation(async (method, params) =>
       method === "sessions.usage" && params?.key === keys[1]
@@ -504,7 +507,7 @@ describe("UsagePage detail requests", () => {
     const contextCalls = usageCalls(request).length;
     selectSession(2);
     await waitForFast(() =>
-      expect(textOf(page, ".context-details-panel")).toContain("No context data"),
+      expect(textOf(page, ".context-details-panel")).toContain("No context data yet."),
     );
     expect(usageCalls(request)).toHaveLength(contextCalls + 2);
   });
@@ -572,7 +575,7 @@ describe("UsagePage detail requests", () => {
     available = false;
     refreshButton(page).click();
     await waitForFast(() =>
-      expect(textOf(page, ".context-details-panel")).toContain("No context data"),
+      expect(textOf(page, ".context-details-panel")).toContain("No context data yet."),
     );
     expect(
       request.mock.calls.filter(([method, params]) => method === "sessions.usage" && params?.key),
@@ -633,7 +636,10 @@ describe("UsagePage detail requests", () => {
     pending = deferred<SessionsUsageResult>();
     await exportJson();
     await page.updateComplete;
-    usageButton(page, "Current instance").click();
+    const { surface } = openUsageDisplay(page, "Sessions");
+    surface
+      .querySelector<HTMLButtonElement>('[role="menuitemradio"][aria-label="Current instance"]')!
+      .click();
     await page.updateComplete;
     pending.resolve(full);
     await waitForFast(() => expect(refreshButton(page).disabled).toBe(false));

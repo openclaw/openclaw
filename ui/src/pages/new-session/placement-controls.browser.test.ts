@@ -142,7 +142,7 @@ it.each([
     expect(controls.scrollWidth).toBeLessThanOrEqual(controls.clientWidth);
     await expect
       .element(button(`Where: ${profileId}, Windows (WSL2) · Large`))
-      .toHaveAccessibleDescription("Cloud worker provider: AWS");
+      .toHaveAccessibleDescription("Cloud provider: AWS");
     // Exercise the real workspace popover after reflow, not a static label facsimile.
     await button(`What: ${workspaceLabel}`).click();
     await button(workspaceLabel).click();

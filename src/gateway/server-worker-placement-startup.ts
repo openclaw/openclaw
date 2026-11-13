@@ -595,23 +595,20 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
         "sidecars.worker-environments.github-ready",
         () => githubPublicationReady,
       );
-      // Track startup reconciliation in the placement slot so a concurrent
-      // close prelude drains it before uninstalling guards and stopping environments.
-      for (const reconcile of [
-        () =>
-          reconcilePhase("startup.workspaces", () =>
-            recoverGatewayWorkerPlacementWorkspaces({
-              placements: params.placements,
-              resolveWorkspace,
-              isStopping,
-            }),
-          ),
-        () => reconcilePhase("startup.active", () => dispatchService.reconcile("startup")),
-      ]) {
-        await trackOperation("reconcile", reconcile());
-        if (isStopping() || hooks.isClosePreludeStarted()) {
-          return await stopBeforeReady();
-        }
+      // Local journals settle before readiness. Remote provider recovery below
+      // shares the tracked reconcile slot so close still drains its effects.
+      await trackOperation(
+        "reconcile",
+        reconcilePhase("startup.workspaces", () =>
+          recoverGatewayWorkerPlacementWorkspaces({
+            placements: params.placements,
+            resolveWorkspace,
+            isStopping,
+          }),
+        ),
+      );
+      if (isStopping() || hooks.isClosePreludeStarted()) {
+        return await stopBeforeReady();
       }
       void nodeWorkspaceRetention.start();
       if (hooks.isClosePreludeStarted()) {
@@ -623,14 +620,19 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
       }
       void trackOperation(
         "reconcile",
-        reconcilePhase("reconcile.session-retirement", () =>
-          sessionRetirement.reconcile(optionalWorkSignal),
-        ).then(() =>
-          // Git/network recovery must drain on close, but cannot hold Gateway readiness.
-          reconcilePhase("startup.publications", () =>
-            reconcilePublications(isReconciliationPaused),
+        // Provider and Git/network recovery cannot hold Gateway readiness. Session
+        // admission still serializes recovery, and shutdown drains the entire chain.
+        reconcilePhase("startup.active", () => dispatchService.reconcile("startup"))
+          .then(() =>
+            reconcilePhase("reconcile.session-retirement", () =>
+              sessionRetirement.reconcile(optionalWorkSignal),
+            ),
+          )
+          .then(() =>
+            reconcilePhase("startup.publications", () =>
+              reconcilePublications(isReconciliationPaused),
+            ),
           ),
-        ),
         "Worker placement reconcile sweep failed",
       );
       void sweepDiskSpace();

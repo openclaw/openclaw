@@ -18,7 +18,7 @@ import {
   hasVisibleChannelTurnDispatch,
   type ChannelTurnDispatchResultLike,
 } from "./dispatch-result.js";
-import { admitPendingDeliveryNotice } from "./pending-delivery-notice.js";
+import { deliverPendingDeliveryNotice } from "./pending-delivery-notice.js";
 import type {
   ChannelTurnAdmission,
   ChannelTurnHistoryFinalizeOptions,
@@ -181,12 +181,15 @@ export async function runPreparedChannelTurnCore<
         const sourceAgentId =
           params.ctxPayload.AgentId ?? parseAgentSessionKey(params.routeSessionKey)?.agentId;
         const recordAgentId = parseAgentSessionKey(recordSessionKey)?.agentId ?? sourceAgentId;
-        for (const agentId of new Set([sourceAgentId, recordAgentId])) {
+        const sourceSessionKey = params.ctxPayload.SessionKey ?? params.routeSessionKey;
+        for (const sessionKey of new Set([sourceSessionKey, recordSessionKey])) {
+          const agentId = sessionKey === recordSessionKey ? recordAgentId : sourceAgentId;
           if (!agentId) {
             continue;
           }
           const preparation = waitForAgentInputAdmission(agentId, {
             storePath: params.storePath,
+            sessionKey,
             signal: getPluginServiceSchedulerBinding()?.().signal,
           });
           if (preparation) {
@@ -229,7 +232,7 @@ export async function runPreparedChannelTurnCore<
         });
         emitStage("record", "done");
         await params.afterRecord?.();
-        await admitPendingDeliveryNotice(recordSessionKey, params.storePath, recordAgentId);
+        await deliverPendingDeliveryNotice(recordSessionKey, params.storePath, recordAgentId);
       } catch (err) {
         emitStage("record", "error", err);
         try {

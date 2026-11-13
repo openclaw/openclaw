@@ -40,6 +40,10 @@ import {
 import { readSuspensionPhase } from "./gateway-readiness.ts";
 import { createAvailabilityIndicators } from "./gateway-store.availability.ts";
 import { updateGatewayAvatarContext } from "./gateway-store.avatar-context.ts";
+import {
+  CLEARED_CONNECT_FAILURE,
+  readConnectFailureDetails,
+} from "./gateway-store.connect-failure.ts";
 import { createGatewayCredentials } from "./gateway-store.credentials.ts";
 import { createGatewayDeferredIntents } from "./gateway-store.deferred-intents.ts";
 import { createDeviceCredentialMethods } from "./gateway-store.device-credential.ts";
@@ -92,9 +96,7 @@ export function createApplicationGateway(
     canvasPluginSurfaceUrl: null,
     assistantAgentId: null,
     sessionKey: settings.sessionKey,
-    lastError: null,
-    lastErrorCode: null,
-    lastErrorAuthReason: null,
+    ...CLEARED_CONNECT_FAILURE,
     selfUser: undefined,
   };
   let client: GatewayBrowserClient | null = null;
@@ -194,9 +196,7 @@ export function createApplicationGateway(
       pluginCapabilities: null,
       canvasPluginSurfaceUrl: null,
       selfUser: undefined,
-      lastError: null,
-      lastErrorCode: null,
-      lastErrorAuthReason: null,
+      ...CLEARED_CONNECT_FAILURE,
       ...patch,
     });
   const deferredIntents = createGatewayDeferredIntents({
@@ -472,10 +472,7 @@ export function createApplicationGateway(
           sessionKey !== settings.sessionKey ||
           lastActiveSessionKey !== settings.lastActiveSessionKey
         ) {
-          updateSettings({
-            sessionKey,
-            lastActiveSessionKey,
-          });
+          updateSettings({ sessionKey, lastActiveSessionKey });
         }
         everConnected = true;
         const canvasPluginSurfaceUrl = hello.pluginSurfaceUrls?.canvas?.trim() || null;
@@ -510,6 +507,7 @@ export function createApplicationGateway(
         }
         updateAvatarContext(nextClient.hello ?? undefined);
         retireStoredGoalOperations(nextConnection.gatewayUrl, nextClient.recoveryScope);
+        credentials.acceptRecoveryScope(nextConnection.gatewayUrl, nextClient.recoveryScope);
         void deferredIntents.flush();
         setSnapshot({});
       },
@@ -593,7 +591,7 @@ export function createApplicationGateway(
                     code: String(code),
                   }),
           lastErrorCode: startupPending ? null : busy ? "GATEWAY_BUSY" : lastErrorCode,
-          lastErrorAuthReason: startupPending ? null : readConnectionAuthReason(error?.details),
+          ...readConnectFailureDetails(error?.details, startupPending),
         });
       },
       onGap: ({ expected, received }) => {
@@ -601,9 +599,8 @@ export function createApplicationGateway(
           return;
         }
         setSnapshot({
+          ...CLEARED_CONNECT_FAILURE,
           lastError: `event gap detected (expected seq ${expected}, got ${received}); reconnecting`,
-          lastErrorCode: null,
-          lastErrorAuthReason: null,
         });
         // The protocol reconnects its socket after dropping the gapped frame.
         // Keep the client so conditional reads retain their raw row bases.

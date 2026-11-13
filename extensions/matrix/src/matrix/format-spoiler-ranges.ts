@@ -134,7 +134,7 @@ export function prepareMatrixMarkdownSource(markdown: string) {
     })),
   );
   for (const match of markdown.matchAll(/^\s*\[[^\]\n]+\]:\s*.+$/gmu)) {
-    const start = match.index ?? 0;
+    const start = match.index;
     const labelEnd = match[0].indexOf("]:");
     const reference = spoilerParser.utils.normalizeReference(match[0].slice(1, labelEnd));
     if (references.has(reference)) {

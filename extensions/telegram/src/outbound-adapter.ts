@@ -46,6 +46,7 @@ type TelegramPayloadData = {
   linkPreview?: boolean;
   buttons?: TelegramInlineButtons;
   quoteText?: string;
+  messageEffectId?: string;
   reaction?: { emoji?: unknown; replyToId?: unknown; replyToCurrent?: unknown };
 };
 
@@ -187,26 +188,32 @@ export async function sendTelegramPayloadMessages(params: {
   payload: ReplyPayload;
   baseOpts: Omit<NonNullable<TelegramSendOpts>, "buttons" | "mediaUrl" | "mediaUrls" | "quoteText">;
 }): Promise<Awaited<ReturnType<TelegramSendFn>>> {
+  const richMessages = resolveTelegramRichMessages({
+    cfg: params.baseOpts.cfg,
+    accountId: params.baseOpts.accountId,
+    htmlTextMode: params.baseOpts.textMode === "html",
+  });
   const payload = canonicalizeTelegramPresentationPayload(params.payload, {
     allowWebAppButtons: parseTelegramTarget(params.to).chatType === "direct",
-    richTables: resolveTelegramRichMessages({
-      cfg: params.baseOpts.cfg,
-      accountId: params.baseOpts.accountId,
-      htmlTextMode: params.baseOpts.textMode === "html",
-    }),
+    richTables: richMessages,
   });
   const telegramData = payload.channelData?.telegram as TelegramPayloadData | undefined;
   const quoteText =
     typeof telegramData?.quoteText === "string" ? telegramData.quoteText : undefined;
+  const messageEffectId =
+    typeof telegramData?.messageEffectId === "string" ? telegramData.messageEffectId : undefined;
   const reactionEmoji =
     typeof telegramData?.reaction?.emoji === "string" ? telegramData.reaction.emoji : undefined;
   const text = resolveTelegramInteractiveTextFallback(payload) ?? "";
   const mediaUrls = resolveSendableOutboundReplyParts(payload).mediaUrls;
-  const buttons = resolveTelegramInlineButtons({
-    buttons: telegramData?.buttons,
-    presentation: payload.presentation,
-    interactive: payload.interactive,
-  });
+  const buttons = resolveTelegramInlineButtons(
+    {
+      buttons: telegramData?.buttons,
+      presentation: payload.presentation,
+      interactive: payload.interactive,
+    },
+    { supportsDisabled: richMessages },
+  );
   const replyToMessageId = parseStrictPositiveInteger(
     telegramData?.reaction?.replyToId ?? params.baseOpts.replyToMessageId,
   );
@@ -221,6 +228,7 @@ export async function sendTelegramPayloadMessages(params: {
     ...params.baseOpts,
     ...(telegramData?.linkPreview === false ? { linkPreview: false } : {}),
     quoteText,
+    ...(messageEffectId ? { messageEffectId } : {}),
     ...(payload.audioAsVoice === true ? { asVoice: true } : {}),
     ...(payload.videoAsNote === true ? { asVideoNote: true } : {}),
   };
@@ -249,6 +257,7 @@ export async function sendTelegramPayloadMessages(params: {
       ...projectionOptions,
       buttons,
       quoteText,
+      ...(messageEffectId ? { messageEffectId } : {}),
     });
   }
   if (payload.videoAsNote === true && mediaUrls.length !== 1) {

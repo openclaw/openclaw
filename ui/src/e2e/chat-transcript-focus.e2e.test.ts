@@ -69,7 +69,11 @@ suite.define(() => {
       await vi.waitFor(async () => {
         const placement = await thread.evaluate(
           (element, { edge: placementEdge, sparse: isSparse }) => {
-            const rows = [...element.querySelectorAll<HTMLElement>(".chat-virtual-row")];
+            const rows = [
+              ...element.querySelectorAll<HTMLElement>(
+                ".chat-virtual-row:not([data-prepared-row])",
+              ),
+            ];
             const range = element
               .querySelector<HTMLElement>(".chat-thread-inner--virtual")!
               .getBoundingClientRect();

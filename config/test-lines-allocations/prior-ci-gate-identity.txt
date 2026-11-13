@@ -1,2 +1,0 @@
-222
-# Bind prior-CI exceptions to the attested gate while enforcing other events, identity faults, successful-primary authority, and native wrapper interpreter and Git guard policy in generated fixtures.

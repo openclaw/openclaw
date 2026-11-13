@@ -62,6 +62,13 @@ export function createDoctorOriginalCaptureHook(
         );
       }
     }
+    const { restorePrivateStateStoreModes } =
+      await import("../state/openclaw-state-db-permissions.js");
+    signal.throwIfAborted();
+    scope.assertOwnerCurrent();
+    // Restore remount-broadened stores only after repair admission, but before
+    // recovery capture reads them. Diagnostic startup must not change modes.
+    restorePrivateStateStoreModes(env);
     const { findings, warnings } = await withDoctorProgress(
       formatDoctorProgressPhase("Preserve original state"),
       () =>

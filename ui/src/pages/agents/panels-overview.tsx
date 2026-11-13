@@ -37,6 +37,7 @@ import {
   resolveModelPrimary,
 } from "../../lib/agents/display.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
+import type { AgentSettingsAccess } from "../../lib/agents/settings-access.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import { formatThinkingOverrideLabel } from "../../lib/chat/thinking.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -63,6 +64,7 @@ export function AgentOverview(
       agentFilesList: AgentsFilesListResult | null;
       agentIdentity: AgentIdentityResult | null;
       canUpdateIdentity: boolean;
+      panelAccess: AgentSettingsAccess["panels"];
       onSelectPanel: (panel: AgentsPanel) => void;
     },
 ) {
@@ -455,16 +457,36 @@ export function AgentOverview(
         />
       </SettingsSection>
       <SettingsSection title={t("agents.context.title")}>
-        <SettingsNavRow
-          title={t("agents.context.workspace")}
-          description={<span class="agent-overview__workspace">{context().workspace}</span>}
-          onClick={() => params.onSelectPanel("files")}
-        />
-        <SettingsNavRow
-          title={t("agents.context.skillsFilter")}
-          control={<SettingsValue value={context().skillsLabel} />}
-          onClick={() => params.onSelectPanel("skills")}
-        />
+        <Show
+          when={params.panelAccess.files === "available"}
+          fallback={
+            <SettingsRow
+              title={t("agents.context.workspace")}
+              control={<SettingsValue mono value={context().workspace} />}
+            />
+          }
+        >
+          <SettingsNavRow
+            title={t("agents.context.workspace")}
+            description={<span class="agent-overview__workspace">{context().workspace}</span>}
+            onClick={() => params.onSelectPanel("files")}
+          />
+        </Show>
+        <Show
+          when={params.panelAccess.skills === "available"}
+          fallback={
+            <SettingsRow
+              title={t("agents.context.skillsFilter")}
+              control={<SettingsValue value={context().skillsLabel} />}
+            />
+          }
+        >
+          <SettingsNavRow
+            title={t("agents.context.skillsFilter")}
+            control={<SettingsValue value={context().skillsLabel} />}
+            onClick={() => params.onSelectPanel("skills")}
+          />
+        </Show>
         <Show when={params.agent.thinkingDefault}>
           {(level) => (
             <SettingsRow

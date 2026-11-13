@@ -1,0 +1,47 @@
+import "../../../styles/mcp-app-extensions.css";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { createMemo, For, Show } from "solid-js";
+import { readChatAppContext } from "../../../../../packages/gateway-protocol/src/chat-app-context.js";
+import { Icon } from "../../../components/solid/icon.tsx";
+import { registerMcpAppEnglish } from "../../../i18n/locales/en-mcp-app.ts";
+import { t } from "../../../lib/reactive/i18n.ts";
+
+registerMcpAppEnglish();
+
+export function SubmittedAppContext(props: { message: unknown }) {
+  const items = createMemo(() =>
+    readChatAppContext(
+      asNullableRecord(asNullableRecord(props.message)?.["__openclaw"])?.appContext,
+    ),
+  );
+  return (
+    <Show when={items()}>
+      <section
+        class="mcp-app-context"
+        style="margin-bottom: 8px; border-bottom: 0; padding: 0;"
+        aria-label={t("mcpApp.contextTitle")}
+      >
+        <div class="mcp-app-context__items">
+          <For each={items()}>
+            {(item) => (
+              <div class="mcp-app-context__item" title={item.description || item.uri || item.title}>
+                {item.icon ? (
+                  <img
+                    class="mcp-app-context__icon"
+                    src={item.icon}
+                    alt=""
+                    referrerpolicy="no-referrer"
+                    loading="lazy"
+                  />
+                ) : (
+                  <Icon name="fileText" />
+                )}
+                <span class="mcp-app-context__label">{item.title}</span>
+              </div>
+            )}
+          </For>
+        </div>
+      </section>
+    </Show>
+  );
+}

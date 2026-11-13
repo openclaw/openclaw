@@ -261,6 +261,13 @@ provider credentials. The required placement checks the node's model and
 credentials before running the turn. Explicit Gateway account pins still require
 that account to be available.
 
+The model picker also allows configured OpenClaw models on this required worker
+route when the Gateway has no provider credential. Their authentication remains
+unknown until worker admission checks the node; this does not advertise the node's
+private model catalog or claim the provider is reachable. Other harnesses,
+configured account pins, and linked personal defaults keep their own authentication
+requirements.
+
 **Current limitation:** optional profiles still use Gateway model availability
 and auth checks for explicit model/runtime selection; worker proxy auth values
 do not satisfy those checks. The model picker is not a catalog of the node's model
@@ -297,7 +304,7 @@ or restart the failed worker placement.
 | `model ... is unavailable on this node`            | Configure that exact provider/model reference and credential in the node's `openclaw.json`, then restart the node host.                                                                    |
 | `startup data exceeds 2 MiB`                       | Reduce the number or size of configured node models and headers, then restart the node host.                                                                                               |
 
-If the Control UI reports **Runner failed**, open the placement details for the
+If the Control UI reports **Couldn’t continue the session**, open the placement details for the
 diagnostic. Restarting without changing the named configuration will repeat the
 same failure. Gateway logs do not contain node credentials or the node-local
 model catalog in full.
@@ -337,7 +344,7 @@ Before downgrading either service to a build without this feature:
 
    Finish or stop active turns, and reclaim every native placement while the
    compatible Gateway and node are still running. Use
-   **Stop cloud worker…** or the existing RPC:
+   **Stop cloud device…** or the existing RPC:
 
    ```bash
    openclaw gateway call sessions.reclaim --json --timeout 600000 \

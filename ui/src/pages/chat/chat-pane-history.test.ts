@@ -531,6 +531,31 @@ it("prefetches older history from upward intent well before the top edge", async
   expect(observer.rootMargin()).toBe("1200px 0px 0px");
 });
 
+it("resumes an armed history observation after a row correction in the same gesture", async () => {
+  const { pane, request } = historyPane();
+  const thread = appendChatThread(pane, { scrollHeight: 4_000, clientHeight: 600 });
+  appendSentinel(thread, pane);
+  const { construct } = installHistoryObserver(false);
+  const maintenance = vi.spyOn(pane.transcript, "isMaintenanceScroll", "get");
+  maintenance.mockReturnValue(false);
+  const event = new Event("scroll");
+  Object.defineProperty(event, "target", { value: thread });
+  pane.transcriptScrollTop = 900;
+  thread.scrollTop = 800;
+  pane.handleTranscriptScroll(event);
+  const [notify, observer] = construct.mock.calls[0]!;
+  maintenance.mockReturnValue(true);
+  notify([{ isIntersecting: true } as IntersectionObserverEntry], observer);
+  expect(request).not.toHaveBeenCalled();
+  maintenance.mockReturnValue(false);
+  thread.scrollTop = 700;
+  pane.handleTranscriptScroll(event);
+  expect(construct).toHaveBeenCalledTimes(2);
+  const [resume, replacement] = construct.mock.calls[1]!;
+  resume([{ isIntersecting: true } as IntersectionObserverEntry], replacement);
+  await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+});
+
 it.each([false, true])("joins an in-flight prefetch (tail refreshed=%s)", async (refresh) => {
   const held = createDeferred<unknown>();
   const pages = stagedPagesRequest({

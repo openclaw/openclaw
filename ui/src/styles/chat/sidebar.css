@@ -213,29 +213,39 @@
   color: var(--hljs-keyword);
 }
 
-:is(.file-view, .code-highlight)
-  :where(.tok-number, .tok-literal, .tok-atom, .tok-bool, .tok-variableName, .tok-variableName2) {
+:is(.file-view, .code-highlight) :where(.tok-number),
+:is(.file-view, .code-highlight) :where(.tok-literal),
+:is(.file-view, .code-highlight) :where(.tok-atom),
+:is(.file-view, .code-highlight) :where(.tok-bool),
+:is(.file-view, .code-highlight) :where(.tok-variableName),
+:is(.file-view, .code-highlight) :where(.tok-variableName2) {
   color: var(--hljs-number);
 }
 
-:is(.file-view, .code-highlight) :where(.tok-string, .tok-string2) {
+:is(.file-view, .code-highlight) :where(.tok-string),
+:is(.file-view, .code-highlight) :where(.tok-string2) {
   color: var(--hljs-string);
 }
 
-:is(.file-view, .code-highlight) :where(.tok-heading, .tok-definition) {
+:is(.file-view, .code-highlight) :where(.tok-heading),
+:is(.file-view, .code-highlight) :where(.tok-definition) {
   color: var(--hljs-title);
 }
 
-:is(.file-view, .code-highlight)
-  :where(.tok-typeName, .tok-className, .tok-namespace, .tok-macroName) {
+:is(.file-view, .code-highlight) :where(.tok-typeName),
+:is(.file-view, .code-highlight) :where(.tok-className),
+:is(.file-view, .code-highlight) :where(.tok-namespace),
+:is(.file-view, .code-highlight) :where(.tok-macroName) {
   color: var(--hljs-type);
 }
 
-:is(.file-view, .code-highlight) :where(.tok-propertyName, .tok-labelName) {
+:is(.file-view, .code-highlight) :where(.tok-propertyName),
+:is(.file-view, .code-highlight) :where(.tok-labelName) {
   color: var(--hljs-attribute);
 }
 
-:is(.file-view, .code-highlight) :where(.tok-link, .tok-url) {
+:is(.file-view, .code-highlight) :where(.tok-link),
+:is(.file-view, .code-highlight) :where(.tok-url) {
   color: var(--accent-2);
 }
 

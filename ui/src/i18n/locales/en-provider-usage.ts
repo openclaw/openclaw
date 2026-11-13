@@ -4,10 +4,10 @@ import { en } from "./en.ts";
 const catalog = {
   usage: {
     providerUsage: {
-      title: "Provider plans & billing",
-      subtitle: "Live plan, quota, balance, and budget data reported by configured providers.",
-      stalled: "Provider usage did not finish loading. Refresh to retry.",
-      unavailable: "Provider usage is unavailable; the last request failed. Refresh to retry.",
+      title: "Provider plans and billing",
+      subtitle: "Plan, quota, balance, and budget details from your providers.",
+      stalled: "Couldn’t finish loading provider usage. Refresh to try again.",
+      unavailable: "Couldn’t load provider usage. Refresh to try again.",
       balance: "Balance",
       spend: "Usage",
       budget: "Budget",
@@ -23,7 +23,7 @@ const catalog = {
       costCategories: "Cost categories",
       remaining: "{percent}% left",
       resets: "Resets {date}",
-      checkFailed: "Check failed",
+      checkFailed: "Couldn’t check usage",
     },
   },
 } satisfies TranslationMap;

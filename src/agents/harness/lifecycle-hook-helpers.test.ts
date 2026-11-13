@@ -1,6 +1,6 @@
 import { setImmediate } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { forceFullGc } from "../../test-utils/retention.js";
 const log = vi.hoisted(() => ({ warn: vi.fn() }));
 vi.mock("../../logging/subsystem.js", () => ({ createSubsystemLogger: () => log }));
 import {
@@ -82,7 +82,7 @@ describe("agent harness lifecycle hook helpers", () => {
         expect(receivedMessages).toEqual([{ role: "assistant", content: "completed" }]);
         const control = new WeakRef({});
         await setImmediate();
-        queryObjects(WeakRef);
+        forceFullGc();
         expect(control.deref()).toBeUndefined();
         expect(running.reference.deref()).toBeUndefined();
       } finally {

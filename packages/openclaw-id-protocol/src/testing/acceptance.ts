@@ -121,7 +121,7 @@ export const SPEC_11_ACCEPTANCE: readonly AcceptanceCase[] = [
   },
   {
     id: 9,
-    title: "a claw's root never changes: no statement or descriptor replaces the pinned root",
+    title: "only an owner reset vouched for by K_gw replaces a claw's root, and no pin moves to it",
     protocol: true,
     integration: [
       {

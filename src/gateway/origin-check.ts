@@ -16,12 +16,24 @@ import {
   normalizeHostHeader,
   resolveHostName,
 } from "./net.js";
+import { isOpenClawIdClawOrigin } from "./openclaw-id/claw-origin.js";
 import type {
   GatewayWsBrowserOrigin,
   RemoteControlUiIngressContext,
 } from "./server/client-identity-types.js";
 
-export function checkGatewayWsBrowserOrigin(origin: GatewayWsBrowserOrigin, cfg: OpenClawConfig) {
+/**
+ * WebSocket origin policy. A connection relayed by the OpenClaw ID tunnel may also use the linked
+ * claw's own origin (https://<claw hostname>), where the loader serves the Control UI; every other
+ * origin goes through the ordinary allowlist, same-host and local rules.
+ */
+export function checkGatewayWsBrowserOrigin(
+  origin: GatewayWsBrowserOrigin,
+  cfg: OpenClawConfig,
+): OriginCheckResult {
+  if (origin.openclawIdTunnel === true && isOpenClawIdClawOrigin(origin.origin)) {
+    return { ok: true, matchedBy: "openclaw-id-claw" };
+  }
   return checkBrowserOrigin({
     ...origin,
     allowedOrigins: resolveControlUiAllowedOrigins(cfg),
@@ -33,7 +45,12 @@ export function checkGatewayWsBrowserOrigin(origin: GatewayWsBrowserOrigin, cfg:
 type OriginCheckResult =
   | {
       ok: true;
-      matchedBy: "allowlist" | "host-header-fallback" | "private-same-origin" | "local-loopback";
+      matchedBy:
+        | "allowlist"
+        | "host-header-fallback"
+        | "private-same-origin"
+        | "local-loopback"
+        | "openclaw-id-claw";
     }
   | { ok: false; reason: string };
 

@@ -144,6 +144,7 @@ function createPluginMetadataCache(): PluginCache["metadata"] {
       compatibleConfigFingerprints: undefined,
       configIdentities: new WeakSet(),
     },
+    autoEnable: new WeakMap(),
     snapshots: new Map(),
     derivedIndexes: new WeakMap(),
     preparedManifests: new WeakMap(),

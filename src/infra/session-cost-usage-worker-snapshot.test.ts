@@ -48,7 +48,13 @@ vi.mock("../state/openclaw-agent-db-readonly.js", () => ({
 }));
 // mock-isolation: Avoid loading the worker's retained refresh state.
 vi.mock("./session-cost-usage-refresh-inputs.worker.js", () => ({
-  createUsageCostCollectionAccess: () => ({ inventory: fixture.inventory }),
+  createUsageCostCollectionAccess: () => ({
+    readFreshness: async () =>
+      (await fixture.inventory()).map((file) => ({
+        mtimeMs: file.mtimeMs,
+        generation: file.generation ?? null,
+      })),
+  }),
   usageRefreshInputs: vi.fn(),
 }));
 // mock-isolation: Supply captured metadata and aliases without opening a second native store.
@@ -57,6 +63,7 @@ vi.mock("./session-cost-usage-collection.js", async (importOriginal) => ({
   listUsageCountedTranscriptSources: fixture.inventory,
   readUsageCostTranscriptSourceStats: async (sources: UsageCostTranscriptFile[]) => sources,
   resolveUsageCostTranscriptFiles: fixture.selectedFiles,
+  resolveUsageCostTranscriptPaths: async (paths: string[]) => paths,
 }));
 
 afterEach(() => vi.resetAllMocks());
@@ -321,6 +328,7 @@ it("reads the report snapshot after discovery and keeps it closed across awaits"
     return [file];
   });
   fixture.inventory.mockResolvedValue([file]);
+  fixture.selectedFiles.mockResolvedValue([file]);
   const report = () =>
     execute({
       kind: "summary",

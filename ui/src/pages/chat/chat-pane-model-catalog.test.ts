@@ -316,7 +316,7 @@ describe("chat pane composer controls", () => {
       expect(state.chatModelCatalogError).toContain("Previous runtime preparation failed");
       expect(state.chatModelCatalog).toEqual(retained ? cachedModels : []);
       const failureLabel = retained
-        ? "Some models could not be refreshed. Open Models to try again."
+        ? "Couldn’t refresh some models. Open Models to try again."
         : "Models unavailable";
       await menuReady(container);
       expandModelProviders(container);

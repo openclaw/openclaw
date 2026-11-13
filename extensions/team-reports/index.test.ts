@@ -83,10 +83,14 @@ function captureReports(
       });
     },
   });
+  const service = registerService.mock.calls[0]![0];
+  if (service.apiVersion !== 2) {
+    throw new Error("Expected reports service API version 2");
+  }
   return {
     captured,
     scheduler,
-    service: registerService.mock.calls[0]![0],
+    service,
     context: {
       config: runtimeConfig,
       stateDir: "unused",

@@ -149,7 +149,12 @@ describe("settings sidebar search", () => {
     const onRetry = vi.fn();
     render({
       presentation: "embed-page",
-      saveIndicator: { ...saveIndicator(), status: "error", lastError: "Save failed", onRetry },
+      saveIndicator: {
+        ...saveIndicator(),
+        status: "error",
+        lastError: "Couldn’t save settings. Try again.",
+        onRetry,
+      },
     });
     expect(container.querySelector<HTMLElement>(".settings-sidebar")).toBeNull();
     await vi.waitFor(() => {
@@ -202,11 +207,11 @@ describe("settings sidebar search", () => {
   it("does not match the middle of a word for a short query", () => {
     render({
       searchQuery: "cp",
-      searchBlockMatches: [block("connection", "Gateway Host", "#settings-connection-host")],
+      searchBlockMatches: [block("connection", "This computer", "#settings-connection-host")],
     });
 
     const resultLabels = labels(".settings-sidebar__item-label, .settings-sidebar__subitem-label");
-    expect(resultLabels).toEqual(["Gateway Host"]);
+    expect(resultLabels).toEqual(["This computer"]);
     expect(labels(".settings-sidebar__subitem-page")).toEqual(["Gateway"]);
   });
 
@@ -347,7 +352,7 @@ describe("settings sidebar search", () => {
     // Management surfaces moved back to the workspace sidebar.
     expect(allLabels).not.toContain("Activity");
     expect(allLabels).not.toContain("Sessions");
-    expect(allLabels).toContain("Privacy & Security");
+    expect(allLabels).toContain("Privacy & security");
     expect(allLabels.indexOf("Updates")).toBe(allLabels.indexOf("Logs") + 1);
     expect(allLabels.indexOf("About")).toBe(allLabels.indexOf("Updates") + 1);
 
@@ -367,7 +372,7 @@ describe("settings sidebar search", () => {
     enterQuery("does-not-exist");
     expect(labels()).toEqual([]);
     expect(container.querySelector<HTMLElement>('[role="status"]')?.textContent?.trim()).toBe(
-      "No matching settings.",
+      "No settings match your search.",
     );
 
     container.querySelector<HTMLButtonElement>(".settings-sidebar__search-clear")?.click();
@@ -399,6 +404,35 @@ describe("settings sidebar search", () => {
       new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
     );
     expect(onExit).toHaveBeenCalledOnce();
+  });
+
+  it("clears native search text while asynchronous results hold the previous query", async () => {
+    const prepared = Promise.withResolvers<void>();
+    const prepareLocale = vi.spyOn(i18n, "prepareLocale").mockReturnValue(prepared.promise);
+    const onExit = vi.fn();
+    const search = searchHarness("", {
+      onExit,
+      searchParams: { query: "appearance", schema: null, value: null, uiHints: {} },
+    });
+    search.input.focus();
+    try {
+      search.enter("appearance");
+      await vi.waitFor(() => expect(prepareLocale).toHaveBeenCalled());
+      expect(search.input.value).toBe("appearance");
+      search.input.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+      );
+      expect(onExit).not.toHaveBeenCalled();
+      expect(search.value).toBe("");
+      expect(document.activeElement).toBe(search.input);
+    } finally {
+      prepared.resolve();
+      prepareLocale.mockRestore();
+      await prepared.promise;
+      flush();
+    }
+    await waitForSolid(() => expect(search.input.value).toBe(""));
+    expect(container.querySelector(".settings-sidebar__search-input")).toBe(search.input);
   });
 
   it("lists a group's pages after name matches when the query is its exact name", () => {
@@ -539,7 +573,11 @@ describe("settings sidebar search", () => {
           lastError,
           gatewayVersion: "1.0.0",
           onRetryConnect,
-          saveIndicator: { ...saveIndicator(), status: "error", lastError: "Save failed" },
+          saveIndicator: {
+            ...saveIndicator(),
+            status: "error",
+            lastError: "Couldn’t save settings. Try again.",
+          },
         });
 
       renderSidebar(null);

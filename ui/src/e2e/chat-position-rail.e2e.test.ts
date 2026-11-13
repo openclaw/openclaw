@@ -7,7 +7,11 @@ import {
   controlUiBundledSettingsStorageKey,
   createControlUiMockSameOriginGatewayScript,
 } from "../test-helpers/control-ui-e2e.ts";
-import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
+import {
+  createChatFlowE2eSuite,
+  installMockGateway,
+  waitForChatScrollIdle,
+} from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
@@ -264,6 +268,8 @@ async function trackReader(page: Page) {
   await expect.poll(currentIsVisible).toBe(true);
 
   // Crossing the midpoint can change the anchor while the visible cohort stays fixed.
+  // Nearby preparation must settle before reusing this native coordinate.
+  await waitForChatScrollIdle(page);
   const crossingOffset = await transcript.evaluate((element) => {
     const row = element
       .querySelector('[data-entry-id="position-rail-121"]')!
