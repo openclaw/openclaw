@@ -1,0 +1,633 @@
+name: Release 7420 bounded memory RPC diagnostic
+run-name: Release 7420 bounded memory RPC diagnostic
+permissions:
+  contents: read
+concurrency:
+  group: release-7420-memory-rpc-diagnostic
+  cancel-in-progress: false
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+  OCM_VERSION: v0.2.48
+  OCM_LINUX_X64_SHA256: d0bdb49d69fa8bf3c3487ff04f4be82126828876f81690afdc002c427e22c1ac
+  KOVA_REPOSITORY: openclaw/Kova
+  KOVA_CANONICAL_CONFIG_REF: 8c8764f443ecc703ec6d035fc322c2b0b3c9e96b
+  KOVA_LEGACY_LIST_CONFIG_REF: d69b2209905195bea06980721a92ad8b70808c5d
+  KOVA_TRUSTED_LIVE_REF: 8c8764f443ecc703ec6d035fc322c2b0b3c9e96b
+  PERFORMANCE_MODEL_ID: gpt-5.6-luna
+  KOVA_SCENARIO_TIMEOUT_MS: '900000'
+jobs:
+  resolve_target:
+    name: Resolve target ref
+    if: true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      checkout_ref: ${{ steps.resolve.outputs.checkout_ref }}
+      tested_ref: ${{ steps.resolve.outputs.tested_ref }}
+      tested_sha: ${{ steps.resolve.outputs.tested_sha }}
+      kova_ref: ${{ steps.resolve.outputs.kova_ref }}
+      kova_config_contract: ${{ steps.resolve.outputs.kova_config_contract }}
+      kova_ref_trusted_for_live: ${{ steps.resolve.outputs.kova_ref_trusted_for_live }}
+      secret_eligible: ${{ steps.candidate_trust.outputs.secret_eligible }}
+      cache_write_allowed: ${{ steps.candidate_trust.outputs.cache_write_allowed }}
+    steps:
+    - name: Require frozen candidate
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target_ref }}
+      run: |
+        set -euo pipefail
+        test "$TARGET" = 7420e1f380799b5239b5e4df6d83f9f6c3a3c196
+    - name: Prepare Git owner
+      uses: openclaw/openclaw/.github/actions/git-owner@a379bbd73e30b84a89aca4d54744ab9ca19082e7
+    - name: Checkout target metadata
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ inputs.target_ref || github.sha }}
+        path: .artifacts/performance-target
+        sparse-checkout: |
+          package.json
+          src/config/zod-schema.agent-defaults.ts
+          src/config/zod-schema.agent-defaults-base.ts
+        sparse-checkout-cone-mode: false
+        fetch-depth: 1
+        persist-credentials: false
+    - name: Setup supported Node runtime
+      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      with:
+        node-version: 24.22.1
+        package-manager-cache: false
+    - name: Resolve OpenClaw target ref
+      id: resolve
+      env:
+        TARGET_REF_INPUT: ${{ inputs.target_ref }}
+        TARGET_CHECKOUT_DIR: ${{ github.workspace }}/.artifacts/performance-target
+        KOVA_REF_INPUT: 8c8764f443ecc703ec6d035fc322c2b0b3c9e96b
+        KOVA_CONFIG_CONTRACT_INPUT: canonical
+        PERFORMANCE_MODE: kova
+      shell: bash
+      run: |
+        set -euo pipefail
+        requested="${TARGET_REF_INPUT:-}"
+        if [[ "$requested" == *$'\n'* || "$requested" == *$'\r'* ]]; then
+          echo "::error::target_ref must be a single line."
+          exit 1
+        fi
+        resolved_sha="$(python3 -I -S "$CI_GIT_OWNER" --git 0 -C "$TARGET_CHECKOUT_DIR" rev-parse HEAD)"
+        tested_ref="${requested:-$GITHUB_REF_NAME}"
+        if [[ ! "$resolved_sha" =~ ^[0-9a-f]{40}$ ]]; then
+          echo "::error::OpenClaw target ref resolved to invalid SHA '${resolved_sha}'."
+          exit 1
+        fi
+
+        if [[ "${PERFORMANCE_MODE:-}" == "gateway-concurrency" ]]; then
+          echo "checkout_ref=$resolved_sha" >> "$GITHUB_OUTPUT"
+          echo "tested_ref=$tested_ref" >> "$GITHUB_OUTPUT"
+          echo "tested_sha=$resolved_sha" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        kova_ref="${KOVA_REF_INPUT:-}"
+        kova_config_contract="${KOVA_CONFIG_CONTRACT_INPUT:-}"
+        if [[ -z "$kova_ref" ]]; then
+          target_version="$(node -e '
+            const fs = require("node:fs");
+            const version = JSON.parse(fs.readFileSync(process.argv[1], "utf8")).version;
+            if (typeof version !== "string") process.exit(1);
+            process.stdout.write(version);
+          ' "$TARGET_CHECKOUT_DIR/package.json")"
+        fi
+        if [[ "$kova_ref" == *$'\n'* || "$kova_ref" == *$'\r'* ]]; then
+          echo "::error::kova_ref must be a single line."
+          exit 1
+        fi
+        if [[ "$kova_config_contract" == *$'\n'* || "$kova_config_contract" == *$'\r'* ]]; then
+          echo "::error::kova_config_contract must be a single line."
+          exit 1
+        fi
+
+        if [[ -z "$kova_ref" || -z "$kova_config_contract" ]]; then
+          schema_path="${TARGET_CHECKOUT_DIR}/src/config/zod-schema.agent-defaults.ts"
+          # Follow the shipped composition only when the wrapper has no inline contract.
+          if [[ -f "$schema_path" ]] &&
+            ! grep -Eq '^[[:space:]]*mediaModels: z$' "$schema_path" &&
+            ! grep -Fqx '    imageGenerationModel: AgentToolModelSchema.optional(),' "$schema_path" &&
+            grep -Fqx 'import { AgentDefaultsBaseSchema } from "./zod-schema.agent-defaults-base.js";' "$schema_path" &&
+            grep -Fqx 'export const AgentDefaultsSchema = AgentDefaultsBaseSchema.safeExtend({' "$schema_path"; then
+            schema_path="${TARGET_CHECKOUT_DIR}/src/config/zod-schema.agent-defaults-base.ts"
+          fi
+          if [[ -f "$schema_path" ]]; then
+            schema_content="$(cat "$schema_path")"
+          elif [[ -z "$kova_ref" ]]; then
+            echo "::error::Unable to inspect the Kova config-fixture contract for target ${resolved_sha}. Supply kova_ref explicitly and optionally set kova_config_contract for that producer."
+            exit 1
+          else
+            schema_content=""
+          fi
+          if [[ -n "$schema_content" ]] && grep -Eq '^[[:space:]]*mediaModels: z$' <<<"$schema_content"; then
+            detected_kova_config_contract="canonical"
+            default_kova_ref="$KOVA_CANONICAL_CONFIG_REF"
+          elif [[ -n "$schema_content" ]] && grep -Fqx '    imageGenerationModel: AgentToolModelSchema.optional(),' <<<"$schema_content"; then
+            detected_kova_config_contract="legacy-list"
+            default_kova_ref="$KOVA_LEGACY_LIST_CONFIG_REF"
+          else
+            detected_kova_config_contract=""
+            default_kova_ref=""
+          fi
+          if [[ -n "$detected_kova_config_contract" ]]; then
+            kova_config_contract="${kova_config_contract:-$detected_kova_config_contract}"
+            kova_ref="${kova_ref:-$default_kova_ref}"
+          elif [[ -z "$kova_ref" ]]; then
+            echo "::error::Target ${resolved_sha} has no recognized Kova config-fixture contract. Supply kova_ref explicitly and optionally set kova_config_contract for that producer."
+            exit 1
+          fi
+        fi
+
+        echo "checkout_ref=$resolved_sha" >> "$GITHUB_OUTPUT"
+        echo "tested_ref=$tested_ref" >> "$GITHUB_OUTPUT"
+        echo "tested_sha=$resolved_sha" >> "$GITHUB_OUTPUT"
+        echo "kova_ref=$kova_ref" >> "$GITHUB_OUTPUT"
+        echo "kova_config_contract=$kova_config_contract" >> "$GITHUB_OUTPUT"
+        if [[ "$kova_ref" == "$KOVA_TRUSTED_LIVE_REF" ]]; then
+          echo "kova_ref_trusted_for_live=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "kova_ref_trusted_for_live=false" >> "$GITHUB_OUTPUT"
+        fi
+    - name: Classify performance candidate trust
+      id: candidate_trust
+      env:
+        CANDIDATE_SHA: ${{ steps.resolve.outputs.tested_sha }}
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        WORKFLOW_SHA: ${{ github.workflow_sha }}
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        secret_eligible=false
+        cache_write_allowed=false
+        if [[
+          "$GITHUB_EVENT_NAME" == "schedule" ||
+          "$GITHUB_EVENT_NAME" == "workflow_dispatch"
+        ]] && [[
+          "$GITHUB_REF" == "refs/heads/${DEFAULT_BRANCH}" &&
+          "$CANDIDATE_SHA" == "$WORKFLOW_SHA"
+        ]]; then
+          secret_eligible=true
+          cache_write_allowed=true
+        fi
+
+        {
+          echo "secret_eligible=$secret_eligible"
+          echo "cache_write_allowed=$cache_write_allowed"
+        } >> "$GITHUB_OUTPUT"
+  kova:
+    name: ${{ matrix.title }}
+    needs: resolve_target
+    if: true
+    permissions:
+      contents: read
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - lane: mock-memory-observation
+          title: Bounded memory RPC observation
+          auth: mock
+          repeat: '1'
+          deep_profile: 'false'
+          live: 'false'
+          managed_service: 'true'
+          include_filters: scenario:fresh-install
+          expected_release_entries: fresh-install:fresh,fresh-install:onboarded-user
+    env:
+      KOVA_REF: ${{ needs.resolve_target.outputs.kova_ref }}
+      KOVA_OPENCLAW_CONFIG_CONTRACT: ${{ needs.resolve_target.outputs.kova_config_contract }}
+      KOVA_HOME: ${{ github.workspace }}/.artifacts/kova/home/${{ matrix.lane }}
+      PERFORMANCE_HELPER_DIR: ${{ github.workspace }}/.artifacts/performance-workflow
+      REPORT_DIR: ${{ github.workspace }}/.artifacts/kova/reports/${{ matrix.lane }}
+      BUNDLE_DIR: ${{ github.workspace }}/.artifacts/kova/bundles/${{ matrix.lane }}
+      SUMMARY_DIR: ${{ github.workspace }}/.artifacts/kova/summaries
+      LANE_ID: ${{ matrix.lane }}
+      TARGET_REF: ${{ needs.resolve_target.outputs.tested_ref }}
+      EXPECTED_TESTED_SHA: ${{ needs.resolve_target.outputs.tested_sha }}
+      PROFILE: release
+      REQUESTED_REPEAT: '1'
+      FAIL_ON_REGRESSION: 'false'
+      INCLUDE_FILTERS: ${{ matrix.include_filters }}
+      EXPECTED_RELEASE_ENTRIES: ${{ matrix.expected_release_entries }}
+      AUTH_MODE: ${{ matrix.auth }}
+      MATRIX_REPEAT: ${{ matrix.repeat }}
+      MATRIX_DEEP_PROFILE: ${{ matrix.deep_profile }}
+      MATRIX_LIVE: ${{ matrix.live }}
+      KOVA_REF_TRUSTED_FOR_LIVE: ${{ needs.resolve_target.outputs.kova_ref_trusted_for_live }}
+      SECRET_ELIGIBLE: ${{ needs.resolve_target.outputs.secret_eligible }}
+    steps:
+    - name: Decide lane
+      id: lane
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "run=true" >> "$GITHUB_OUTPUT"
+    - name: Prepare Git owner
+      if: steps.lane.outputs.run == 'true'
+      uses: openclaw/openclaw/.github/actions/git-owner@a379bbd73e30b84a89aca4d54744ab9ca19082e7
+    - name: Checkout OpenClaw
+      if: steps.lane.outputs.run == 'true'
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ needs.resolve_target.outputs.checkout_ref }}
+        fetch-depth: 1
+        persist-credentials: false
+    - name: Checkout performance workflow helpers
+      if: steps.lane.outputs.run == 'true'
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: 7420e1f380799b5239b5e4df6d83f9f6c3a3c196
+        path: .artifacts/performance-workflow
+        fetch-depth: 1
+        persist-credentials: false
+    - name: Record tested revision
+      if: steps.lane.outputs.run == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        tested_sha="$(python3 -I -S "$CI_GIT_OWNER" --git 0 rev-parse HEAD)"
+        if [[ "$tested_sha" != "$EXPECTED_TESTED_SHA" ]]; then
+          echo "::error::Checked out ${tested_sha}, expected resolved target ${EXPECTED_TESTED_SHA}."
+          exit 1
+        fi
+        echo "TESTED_REF=${TARGET_REF}" >> "$GITHUB_ENV"
+        echo "TESTED_SHA=${EXPECTED_TESTED_SHA}" >> "$GITHUB_ENV"
+        {
+          echo "Tested ref: ${TARGET_REF}"
+          echo "Tested SHA: ${EXPECTED_TESTED_SHA}"
+          echo "Workflow ref: ${GITHUB_REF_NAME}"
+          echo "Workflow SHA: ${GITHUB_SHA}"
+        } >> "$GITHUB_STEP_SUMMARY"
+    - name: Stage trusted setup action graph
+      if: steps.lane.outputs.run == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        github_dir="$GITHUB_WORKSPACE/.github"
+        actions_dir="$github_dir/actions"
+        trusted_action="$PERFORMANCE_HELPER_DIR/.github/actions/setup-pnpm-store-cache"
+
+        test -f "$trusted_action/action.yml"
+        test -f "$trusted_action/ensure-node.sh"
+        if [[ -L "$github_dir" || ( -e "$github_dir" && ! -d "$github_dir" ) ]]; then
+          rm -rf -- "$github_dir"
+        fi
+        mkdir -p "$github_dir"
+        if [[ -L "$actions_dir" || ( -e "$actions_dir" && ! -d "$actions_dir" ) ]]; then
+          rm -rf -- "$actions_dir"
+        fi
+        mkdir -p "$actions_dir"
+        rm -rf -- "$actions_dir/setup-pnpm-store-cache"
+        cp -R -- "$trusted_action" "$actions_dir/setup-pnpm-store-cache"
+        cmp "$trusted_action/action.yml" "$actions_dir/setup-pnpm-store-cache/action.yml"
+        cmp "$trusted_action/ensure-node.sh" "$actions_dir/setup-pnpm-store-cache/ensure-node.sh"
+    - name: Set up Node environment
+      if: steps.lane.outputs.run == 'true'
+      uses: ./.artifacts/performance-workflow/.github/actions/setup-node-env
+      with:
+        semantic-checks: ${{ matrix.managed_service }}
+        cache-mode: ${{ needs.resolve_target.outputs.cache_write_allowed == 'true' && 'restore' || 'off' }}
+        install-bun: 'false'
+    - name: Install OCM and Kova
+      if: steps.lane.outputs.run == 'true'
+      env:
+        GH_TOKEN: ${{ github.token }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        KOVA_SRC="${RUNNER_TEMP}/kova-src"
+        echo "KOVA_SRC=$KOVA_SRC" >> "$GITHUB_ENV"
+        mkdir -p "$HOME/.local/bin" "$(dirname "$KOVA_SRC")" "${RUNNER_TEMP}/ocm-install"
+
+        ocm_archive="${RUNNER_TEMP}/ocm-${OCM_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+        # retry-max-time only gates new retries; cap an active transfer separately
+        # so a stalled release asset cannot consume the entire Kova job deadline.
+        curl -fsSL --proto '=https' --tlsv1.2 \
+          --max-time 180 \
+          --retry 8 --retry-max-time 180 --retry-all-errors --retry-connrefused \
+          -o "$ocm_archive" \
+          "https://github.com/openclaw/ocm/releases/download/${OCM_VERSION}/ocm-x86_64-unknown-linux-gnu.tar.gz"
+        echo "${OCM_LINUX_X64_SHA256}  ${ocm_archive}" | sha256sum -c -
+        tar -xzf "$ocm_archive" -C "${RUNNER_TEMP}/ocm-install"
+        install -m 0755 "${RUNNER_TEMP}/ocm-install/ocm" "$HOME/.local/bin/ocm"
+
+        python3 -I -S "$CI_GIT_OWNER" --policy - "$KOVA_SRC" <<'PYTHON'
+        import base64
+        import os
+        import sys
+        from ci_git_owner import checkout_environment, fetch, fetch_timeout_seconds, git_auth_environment, run_git
+
+        remote = f"https://github.com/{os.environ['KOVA_REPOSITORY']}.git"
+        token = os.environ.pop("GH_TOKEN")
+        print("::add-mask::" + base64.b64encode(f"x-access-token:{token}".encode()).decode(), flush=True)
+        checkout_environment.update(git_auth_environment(remote, token))
+        del token
+        source = sys.argv[3]
+        os.makedirs(source, exist_ok=True)
+        run_git(source, "init", "-b", "main")
+        run_git(source, "remote", "add", "origin", remote)
+        fetch(source, os.environ["KOVA_REF"], blobless=True, max_attempts=3, retry_failures=True)
+        # Filtered checkout can fetch promised blobs; retain process-only auth
+        # and the network deadline until the complete worktree is available.
+        run_git(source, "checkout", "--detach", "FETCH_HEAD", timeout=fetch_timeout_seconds)
+        PYTHON
+        unset GH_TOKEN
+        npm --prefix "$KOVA_SRC" ci --ignore-scripts --no-audit --no-fund
+        node - "$KOVA_SRC" <<'NODE'
+        const fs = require("node:fs");
+        const path = require("node:path");
+
+        const root = process.argv[2];
+        const packageJsonPath = require.resolve("mock-ai-provider/package.json", {
+          paths: [root],
+        });
+        const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
+        const bin =
+          typeof packageJson.bin === "string"
+            ? packageJson.bin
+            : packageJson.bin?.["mock-ai-provider"];
+        if (typeof bin !== "string" || bin.length === 0) {
+          throw new Error("mock-ai-provider does not declare its CLI entrypoint");
+        }
+        fs.accessSync(path.resolve(path.dirname(packageJsonPath), bin), fs.constants.R_OK);
+        fs.accessSync(
+          path.join(root, "node_modules", ".bin", "mock-ai-provider"),
+          fs.constants.X_OK,
+        );
+        require.resolve("zod", { paths: [root] });
+        NODE
+        cat > "$HOME/.local/bin/kova" <<EOF
+        #!/usr/bin/env bash
+        export KOVA_HOME="${KOVA_HOME}"
+        exec node "${KOVA_SRC}/bin/kova.mjs" "\$@"
+        EOF
+        chmod 0755 "$HOME/.local/bin/kova"
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+    - name: Install exact bounded memory observation scenario
+      if: steps.lane.outputs.run == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        test "$(git -C "$KOVA_SRC" rev-parse HEAD)" = 8c8764f443ecc703ec6d035fc322c2b0b3c9e96b
+        echo "e4caacb27079d923a035752c515ed7e126a9b6f383105e9fd57e1c6a45592e95  $KOVA_SRC/scenarios/fresh-install.json" | sha256sum -c -
+        printf %s ewogICJpZCI6ICJmcmVzaC1pbnN0YWxsIiwKICAic3VyZmFjZSI6ICJmcmVzaC1pbnN0YWxsIiwKICAidGl0bGUiOiAiRnJlc2ggT3BlbkNsYXcgSW5zdGFsbCBCYXNlbGluZSIsCiAgIm9iamVjdGl2ZSI6ICJDcmVhdGUgYSBkaXNwb3NhYmxlIGZyZXNoIE9wZW5DbGF3IGhvbWUgZnJvbSB0aGUgdGFyZ2V0IHJ1bnRpbWUsIHN0YXJ0IHRoZSBnYXRld2F5LCBhbmQgdmVyaWZ5IGJhc2ljIHVzZXItZmFjaW5nIGNvbW1hbmRzIHdpdGhvdXQgb25ib2FyZGluZyBvciBtYW51YWwgc2V0dXAuIiwKICAidGFncyI6IFsKICAgICJmcmVzaC11c2VyIiwKICAgICJnYXRld2F5IiwKICAgICJwbHVnaW5zIiwKICAgICJtb2RlbHMiLAogICAgInBlcmZvcm1hbmNlIgogIF0sCiAgInRocmVzaG9sZHMiOiB7CiAgICAiZ2F0ZXdheVJlYWR5TXMiOiAzMDAwMCwKICAgICJzdGF0dXNNcyI6IDEwMDAwLAogICAgInBsdWdpbnNMaXN0TXMiOiAxMDAwMCwKICAgICJtb2RlbHNMaXN0TXMiOiAyMDAwMCwKICAgICJwZWFrUnNzTWIiOiB7CiAgICAgICJiYXNlbGluZUJ5Tm9kZU1ham9yIjogewogICAgICAgICIyMiI6IDczNSwKICAgICAgICAiMjQiOiAxMDcwLAogICAgICAgICIyNSI6IDEwNjAKICAgICAgfSwKICAgICAgIm1heFJlZ3Jlc3Npb25QZXJjZW50IjogMTAsCiAgICAgICJhYnNvbHV0ZUNlaWxpbmdNYiI6IDEyMDAKICAgIH0KICB9LAogICJwaGFzZXMiOiBbCiAgICB7CiAgICAgICJpZCI6ICJlbnYtY3JlYXRlIiwKICAgICAgInRpdGxlIjogIkNyZWF0ZSBGcmVzaCBFbnYiLAogICAgICAiaW50ZW50IjogIkNyZWF0ZSBhIGRpc3Bvc2FibGUgT3BlbkNsYXcgZW52aXJvbm1lbnQgd2l0aG91dCBzdGFydGluZyB0aGUgZ2F0ZXdheSB5ZXQgc28gbW9jayBhdXRoIGlzIGFwcGxpZWQgYmVmb3JlIHRoZSBnYXRld2F5IHByb2Nlc3MgYm9vdHMuIiwKICAgICAgImNvbW1hbmRzIjogWwogICAgICAgICJvY20gc3RhcnQge2Vudn0ge3N0YXJ0U2VsZWN0b3J9IC0tbm8tc2VydmljZSAtLWpzb24iCiAgICAgIF0sCiAgICAgICJldmlkZW5jZSI6IFsKICAgICAgICAiT0NNIHN0YXJ0IEpTT04iLAogICAgICAgICJlbnYgbmFtZSIsCiAgICAgICAgInJ1bnRpbWUgYmluZGluZyIsCiAgICAgICAgImdhdGV3YXkgcG9ydCIKICAgICAgXSwKICAgICAgImhlYWx0aFNjb3BlIjogIm5vbmUiLAogICAgICAiY29sbGVjdGlvbkludGVudCI6ICJzZXJ2aWNlLW9ubHkiCiAgICB9LAogICAgewogICAgICAiaWQiOiAicHJvdmlzaW9uIiwKICAgICAgInRpdGxlIjogIlByb3Zpc2lvbiBGcmVzaCBHYXRld2F5IiwKICAgICAgImludGVudCI6ICJTdGFydCB0aGUgZ2F0ZXdheSBhZnRlciBtb2NrIHByb3ZpZGVyIGNvbmZpZyBpcyBwcmVzZW50IGluIHRoZSBPcGVuQ2xhdyBob21lLiIsCiAgICAgICJjb21tYW5kcyI6IFsKICAgICAgICAib2NtIHNlcnZpY2UgaW5zdGFsbCB7ZW52fSAtLWpzb24iLAogICAgICAgICJvY20gc2VydmljZSBzdGFydCB7ZW52fSAtLWpzb24iCiAgICAgIF0sCiAgICAgICJldmlkZW5jZSI6IFsKICAgICAgICAiZ2F0ZXdheSBzZXJ2aWNlIGluc3RhbGxlZCIsCiAgICAgICAgImdhdGV3YXkgc2VydmljZSBzdGFydGVkIiwKICAgICAgICAic3RhcnR1cCByZWFkaW5lc3MiCiAgICAgIF0sCiAgICAgICJoZWFsdGhTY29wZSI6ICJyZWFkaW5lc3MiCiAgICB9LAogICAgewogICAgICAiaWQiOiAicmVhZGluZXNzIiwKICAgICAgInRpdGxlIjogIkdhdGV3YXkgUmVhZGluZXNzIiwKICAgICAgImludGVudCI6ICJDb25maXJtIHRoZSBnYXRld2F5IHJlYWNoZXMgYSB1c2FibGUgcnVubmluZyBzdGF0ZSB3aXRoaW4gdGhlIHRocmVzaG9sZC4iLAogICAgICAiY29tbWFuZHMiOiBbCiAgICAgICAgIm9jbSBAe2Vudn0gLS0gc3RhdHVzIgogICAgICBdLAogICAgICAiZXZpZGVuY2UiOiBbCiAgICAgICAgInJlYWR5IHRpbWUiLAogICAgICAgICJnYXRld2F5IHN0YXRlIiwKICAgICAgICAiZ2F0ZXdheSBQSUQiLAogICAgICAgICJoZWFsdGgvc3RhdHVzIHJlc3VsdCIKICAgICAgXSwKICAgICAgImhlYWx0aFNjb3BlIjogInBvc3QtcmVhZHkiLAogICAgICAiY29sbGVjdGlvbkludGVudCI6ICJwb3N0LXJlYWR5LWhlYWx0aCIKICAgIH0sCiAgICB7CiAgICAgICJpZCI6ICJwbHVnaW5zIiwKICAgICAgInRpdGxlIjogIlBsdWdpbiBCYXNlbGluZSIsCiAgICAgICJpbnRlbnQiOiAiVmVyaWZ5IE9wZW5DbGF3IGNhbiBpbnNwZWN0IGluc3RhbGxlZC9idW5kbGVkIHBsdWdpbiBzdGF0ZSB3aXRob3V0IG1pc3NpbmcgcnVudGltZSBkZXBlbmRlbmN5IGVycm9ycy4iLAogICAgICAiY29tbWFuZHMiOiBbCiAgICAgICAgIm9jbSBAe2Vudn0gLS0gcGx1Z2lucyBsaXN0IiwKICAgICAgICAib2NtIEB7ZW52fSAtLSBwbHVnaW5zIHVwZGF0ZSAtLWFsbCAtLWRyeS1ydW4iCiAgICAgIF0sCiAgICAgICJldmlkZW5jZSI6IFsKICAgICAgICAicGx1Z2lucyBsaXN0IG91dHB1dCIsCiAgICAgICAgInBsdWdpbiB1cGRhdGUgZHJ5LXJ1biBvdXRwdXQiLAogICAgICAgICJtaXNzaW5nIGRlcGVuZGVuY3kgbG9nIHNjYW4iCiAgICAgIF0sCiAgICAgICJoZWFsdGhTY29wZSI6ICJwb3N0LXJlYWR5IiwKICAgICAgImNvbGxlY3Rpb25JbnRlbnQiOiAicG9zdC1yZWFkeS1oZWFsdGgiCiAgICB9LAogICAgewogICAgICAiaWQiOiAibW9kZWxzIiwKICAgICAgInRpdGxlIjogIk1vZGVsIEJhc2VsaW5lIiwKICAgICAgImludGVudCI6ICJWZXJpZnkgbW9kZWwgZGlzY292ZXJ5IGRvZXMgbm90IHN0YWxsIHRoZSBnYXRld2F5IG9yIGhhbmcgaW5kZWZpbml0ZWx5LiIsCiAgICAgICJjb21tYW5kcyI6IFsKICAgICAgICAib2NtIEB7ZW52fSAtLSBtb2RlbHMgbGlzdCIKICAgICAgXSwKICAgICAgImV2aWRlbmNlIjogWwogICAgICAgICJtb2RlbHMgbGlzdCBkdXJhdGlvbiIsCiAgICAgICAgInRpbWVvdXQgYmVoYXZpb3IiLAogICAgICAgICJnYXRld2F5IGhlYWx0aCBhZnRlciBtb2RlbCBsaXN0IgogICAgICBdLAogICAgICAiaGVhbHRoU2NvcGUiOiAicG9zdC1yZWFkeSIsCiAgICAgICJjb2xsZWN0aW9uSW50ZW50IjogInBvc3QtcmVhZHktaGVhbHRoIgogICAgfSwKICAgIHsKICAgICAgImlkIjogImxvZ3MiLAogICAgICAidGl0bGUiOiAiU3RhcnR1cCBMb2dzIiwKICAgICAgImludGVudCI6ICJDYXB0dXJlIHN0YXJ0dXAgbG9ncyBmb3IgZGVwZW5kZW5jeSBzdGFnaW5nLCBwbHVnaW4gbG9hZGluZywgc3RhbGxzLCBhbmQgd2FybmluZ3MuIiwKICAgICAgImNvbW1hbmRzIjogWwogICAgICAgICJvY20gQHtlbnZ9IC0tIGdhdGV3YXkgY2FsbCBkaWFnbm9zdGljcy5zdGFiaWxpdHkgLS1wYXJhbXMgJ3tcInR5cGVcIjpcImRpYWdub3N0aWMubWVtb3J5LnNhbXBsZVwiLFwibGltaXRcIjoxMDAwfScgLS1qc29uIgogICAgICBdLAogICAgICAiZXZpZGVuY2UiOiBbCiAgICAgICAgInN0YXJ0dXAgbG9ncyIsCiAgICAgICAgIm1pc3NpbmcgZGVwZW5kZW5jeSBlcnJvcnMiLAogICAgICAgICJwbHVnaW4gbWV0YWRhdGEgc2NhbiB3YXJuaW5ncyIKICAgICAgXSwKICAgICAgImhlYWx0aFNjb3BlIjogInBvc3QtcmVhZHkiLAogICAgICAiY29sbGVjdGlvbkludGVudCI6ICJwb3N0LXJlYWR5LWhlYWx0aCIKICAgIH0KICBdLAogICJwcm92ZXMiOiBbCiAgICAiYmFzZWxpbmUiCiAgXQp9Cg== | base64 --decode > "$KOVA_SRC/scenarios/fresh-install.json"
+        echo "778cfb4631293c04a106636c91e897da9293e81582e1fcbcd598960eba25171b  $KOVA_SRC/scenarios/fresh-install.json" | sha256sum -c -
+        mkdir -p "$SUMMARY_DIR"
+        sha256sum "$KOVA_SRC/scenarios/fresh-install.json" > "$SUMMARY_DIR/memory-scenario.sha256"
+    - name: Kova version and plan sanity
+      if: steps.lane.outputs.run == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        repeat="$REQUESTED_REPEAT"
+        if [[ "$MATRIX_REPEAT" != "input" ]]; then
+          repeat="$MATRIX_REPEAT"
+        fi
+        plan_dir="${RUNNER_TEMP}/kova-plans"
+        plan_json="${plan_dir}/${LANE_ID}.json"
+        mkdir -p "$plan_dir"
+
+        kova version --json
+        kova matrix plan \
+          --profile "$PROFILE" \
+          --target "local-build:${GITHUB_WORKSPACE}" \
+          --include "$INCLUDE_FILTERS" \
+          --parallel 1 \
+          --repeat "$repeat" \
+          --json >"$plan_json"
+        node --input-type=module - "$plan_json" <<'NODE'
+        import fs from "node:fs";
+
+        const plan = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+        const expectedFilters = process.env.INCLUDE_FILTERS.split(",");
+        const actualFilters = plan.controls?.include;
+        if (
+          !Array.isArray(actualFilters) ||
+          actualFilters.length !== expectedFilters.length ||
+          actualFilters.some((filter, index) => filter !== expectedFilters[index])
+        ) {
+          throw new Error("Kova plan did not preserve the requested include filters");
+        }
+
+        if (process.env.PROFILE === "release") {
+          const expectedEntries = process.env.EXPECTED_RELEASE_ENTRIES.split(",").sort();
+          if (!Array.isArray(plan.entries)) {
+            throw new Error("Kova release plan did not contain entries");
+          }
+          const actualEntries = plan.entries
+            .map((entry) => {
+              if (entry.status !== "SELECTED" || !entry.scenario?.id || !entry.state?.id) {
+                throw new Error("Kova release plan contained an invalid selected entry");
+              }
+              return `${entry.scenario.id}:${entry.state.id}`;
+            })
+            .sort();
+          if (
+            actualEntries.length !== expectedEntries.length ||
+            actualEntries.some((entry, index) => entry !== expectedEntries[index])
+          ) {
+            throw new Error("Kova release plan entries did not match the required lane coverage");
+          }
+        }
+        NODE
+        echo "KOVA_PLAN_JSON=$plan_json" >> "$GITHUB_ENV"
+        echo "KOVA_LANE_REPEAT=$repeat" >> "$GITHUB_ENV"
+
+        kova plan --scenario fresh-install --json > "$SUMMARY_DIR/memory-scenario-plan.json"
+        python3 - "$SUMMARY_DIR/memory-scenario-plan.json" <<'PYPLAN'
+        import json,sys
+        p=json.load(open(sys.argv[1]))
+        expected='ocm @{env} -- gateway call diagnostics.stability --params \'{"type":"diagnostic.memory.sample","limit":1000}\' --json'
+        assert len(p["scenarios"]) == 1 and p["scenarios"][0]["id"] == "fresh-install"
+        assert any(expected in phase.get("commands",[]) for phase in p["scenarios"][0]["phases"]), "planned scenario omitted memory query"
+        PYPLAN
+    - name: Run Kova
+      id: kova
+      if: steps.lane.outputs.run == 'true'
+      env:
+        OPENAI_API_KEY: ${{ matrix.live == 'true' && needs.resolve_target.outputs.secret_eligible == 'true' && secrets.OPENAI_API_KEY || '' }}
+        OPENAI_BASE_URL: ${{ matrix.live == 'true' && needs.resolve_target.outputs.secret_eligible == 'true' && secrets.OPENAI_BASE_URL || '' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p "$REPORT_DIR" "$BUNDLE_DIR" "$SUMMARY_DIR"
+
+        repeat="$KOVA_LANE_REPEAT"
+
+        args=(
+          matrix run
+          --profile "$PROFILE"
+          --target "local-build:${GITHUB_WORKSPACE}"
+          --include "$INCLUDE_FILTERS"
+          --auth "$AUTH_MODE"
+          --parallel 1
+          --repeat "$repeat"
+          --timeout-ms "$KOVA_SCENARIO_TIMEOUT_MS"
+          --report-dir "$REPORT_DIR"
+          --execute
+          --json
+        )
+
+        if [[ "$AUTH_MODE" == "live" ]]; then
+          args+=(--model "$PERFORMANCE_MODEL_ID")
+        fi
+        if [[ "$MATRIX_DEEP_PROFILE" == "true" ]]; then
+          args+=(--deep-profile)
+        fi
+        if [[ "$FAIL_ON_REGRESSION" == "true" ]]; then
+          args+=(--gate)
+        fi
+
+        log_path="$REPORT_DIR/${LANE_ID}.log"
+        set +e
+        kova "${args[@]}" 2>&1 | tee "$log_path"
+        status=${PIPESTATUS[0]}
+        set -e
+
+        report_json="$(node "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-selector.mjs" --report-dir "$REPORT_DIR")"
+        report_md="${report_json%.json}.md"
+        echo "status=$status" >> "$GITHUB_OUTPUT"
+        echo "report_json=$report_json" >> "$GITHUB_OUTPUT"
+        echo "report_md=$report_md" >> "$GITHUB_OUTPUT"
+
+        set +e
+        node --import tsx "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-workflow-evidence.mts" \
+          --plan "$KOVA_PLAN_JSON" \
+          --report "$report_json" \
+          --profile "$PROFILE" \
+          --target "local-build:${GITHUB_WORKSPACE}" \
+          --repeat "$repeat" \
+          --include "$INCLUDE_FILTERS" \
+          --auth "$AUTH_MODE" \
+          --model "$PERFORMANCE_MODEL_ID"
+        evidence_status=$?
+        set -e
+
+        effective_status="$status"
+        if [[ "$evidence_status" == "0" && "$FAIL_ON_REGRESSION" == "true" && "$status" != "0" ]]; then
+          gate_args=("$report_json")
+          if [[ "$KOVA_REF" == "$KOVA_CANONICAL_CONFIG_REF" || "$KOVA_REF" == "$KOVA_LEGACY_LIST_CONFIG_REF" ]]; then
+            gate_args+=(--require-instrumented-performance-contract)
+          fi
+          if node --import tsx "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-gate.mts" "${gate_args[@]}"
+          then
+            effective_status=0
+            {
+              echo "Kova returned a non-zero release-gate verdict, but the trusted report adapter found only filtered coverage or profiling-affected resource thresholds with no baseline regression."
+              echo
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+        fi
+        echo "effective_status=$effective_status" >> "$GITHUB_OUTPUT"
+
+        set +e
+        kova report bundle "$report_json" --output-dir "$BUNDLE_DIR" --json | tee "$BUNDLE_DIR/bundle.json"
+        bundle_status=${PIPESTATUS[0]}
+        set -e
+
+        summary_path="$SUMMARY_DIR/${LANE_ID}.md"
+        summary_args=(node --import tsx "$PERFORMANCE_HELPER_DIR/scripts/kova-ci-summary.mts" --report "$report_json" --output "$summary_path" --lane "$LANE_ID")
+        set +e
+        "${summary_args[@]}"
+        summary_status=$?
+        set -e
+        if [[ "$summary_status" != "0" ]]; then
+          cat > "$summary_path" <<EOF
+        # OpenClaw Performance Report
+
+        - Lane: ${LANE_ID}
+        - Kova report: ${report_json}
+        - Summary generation failed with status ${summary_status}; inspect the Kova report and lane log.
+        EOF
+        fi
+        cat >> "$summary_path" <<EOF
+
+        ## Test scope
+
+        - Repository: ${GITHUB_REPOSITORY}
+        - Tested ref: ${TESTED_REF}
+        - Tested SHA: ${TESTED_SHA}
+        - Workflow ref: ${GITHUB_REF_NAME}
+        - Workflow SHA: ${GITHUB_SHA}
+        - Kova repository: ${KOVA_REPOSITORY}
+        - Kova ref: ${KOVA_REF}
+        - Kova profile: ${PROFILE}
+        - Kova scenario timeout: ${KOVA_SCENARIO_TIMEOUT_MS}ms
+        - Lane auth: ${AUTH_MODE}
+        - Lane model: ${PERFORMANCE_MODEL_ID}
+        - Lane repeat: ${repeat}
+        - Include filters: ${INCLUDE_FILTERS}
+        EOF
+        cat "$summary_path" >> "$GITHUB_STEP_SUMMARY"
+
+        if [[ "$evidence_status" != "0" || "$bundle_status" != "0" || "$summary_status" != "0" ]]; then
+          exit 1
+        fi
+        if [[ "$FAIL_ON_REGRESSION" == "true" && "$effective_status" != "0" ]]; then
+          exit "$effective_status"
+        fi
+    - name: Validate Kova evidence
+      if: ${{ always() && steps.lane.outputs.run == 'true' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        missing=0
+        if ! node "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-selector.mjs" --report-dir "$REPORT_DIR" >/dev/null; then
+          echo "::error::Exactly one full Kova JSON report is required for ${LANE_ID}."
+          missing=1
+        fi
+        if [[ ! -s "$BUNDLE_DIR/bundle.json" ]]; then
+          echo "::error::Kova bundle evidence is missing for ${LANE_ID}."
+          missing=1
+        fi
+        if [[ ! -s "$SUMMARY_DIR/${LANE_ID}.md" ]]; then
+          echo "::error::Kova summary evidence is missing for ${LANE_ID}."
+          missing=1
+        fi
+        if [[ "$missing" != "0" ]]; then
+          exit 1
+        fi
+    - name: Upload Kova artifacts
+      id: upload_kova_artifacts
+      if: ${{ always() && steps.lane.outputs.run == 'true' }}
+      continue-on-error: true
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: openclaw-performance-${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
+        path: |
+          .artifacts/kova/reports/${{ matrix.lane }}
+          .artifacts/kova/bundles/${{ matrix.lane }}
+          .artifacts/kova/summaries/
+        if-no-files-found: error
+        retention-days: ${{ matrix.deep_profile == 'true' && 14 || 30 }}
+    - name: Report Kova artifact transport retry
+      if: ${{ always() && steps.lane.outputs.run == 'true' && steps.upload_kova_artifacts.outcome == 'failure' }}
+      run: echo "::warning::Kova artifact upload failed; retrying artifact transport once."
+    - name: Retry Kova artifact upload
+      if: ${{ always() && steps.lane.outputs.run == 'true' && steps.upload_kova_artifacts.outcome == 'failure' }}
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: openclaw-performance-${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
+        path: |
+          .artifacts/kova/reports/${{ matrix.lane }}
+          .artifacts/kova/bundles/${{ matrix.lane }}
+          .artifacts/kova/summaries/
+        if-no-files-found: error
+        retention-days: ${{ matrix.deep_profile == 'true' && 14 || 30 }}
+        overwrite: true
+'on':
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: Exact candidate for diagnostic only
+        required: true
+        type: string
+        default: 7420e1f380799b5239b5e4df6d83f9f6c3a3c196
