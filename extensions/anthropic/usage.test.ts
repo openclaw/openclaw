@@ -5,6 +5,7 @@ const storedProfileTypes: Record<string, "oauth" | "token"> = {
   "anthropic:setup": "token",
   "anthropic:oauth": "oauth",
 };
+// mock-isolation: profile types come from this fixture, not a real auth-profile store.
 vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
   findPersistedAuthProfileCredentialAsync: async ({ profileId }: { profileId: string }) =>
     storedProfileTypes[profileId] ? { type: storedProfileTypes[profileId] } : undefined,
