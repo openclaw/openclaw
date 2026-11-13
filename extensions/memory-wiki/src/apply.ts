@@ -215,6 +215,7 @@ async function applyCreateSynthesisMutation(params: {
     rootDir: params.config.vault.path,
     relativeDir: "syntheses",
     title: params.mutation.title,
+    producer: { pageType: "synthesis" },
   });
   const pagePath = path.join("syntheses", `${pageStem}.md`).replace(/\\/g, "/");
   const root = await fsRoot(params.config.vault.path);

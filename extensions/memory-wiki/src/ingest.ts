@@ -62,6 +62,9 @@ export async function ingestMemoryWikiSource(params: {
       rootDir: params.config.vault.path,
       relativeDir: "sources",
       title,
+      // Direct ingest only claims pages it produced; an imported source keeps its
+      // own identity even when a title looks equivalent.
+      producer: { pageType: "source", sourceType: "local-file" },
     });
     const pageRelativePath = path.join("sources", `${pageStem}.md`);
     const pagePath = path.join(params.config.vault.path, pageRelativePath);

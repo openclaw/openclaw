@@ -3,6 +3,7 @@ import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import { afterEach, describe, expect, it } from "vitest";
+import { ingestMemoryWikiSource } from "./ingest.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 import { syncMemoryWikiUnsafeLocalSources as sync } from "./unsafe-local.js";
 
@@ -142,5 +143,36 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
     expect(first.importedCount).toBe(1);
     expect(Buffer.byteLength(path.basename(page))).toBeLessThanOrEqual(255);
     await expect(read(path.join(vaultDir, page))).resolves.toContain("# very private");
+  });
+
+  it("keeps an imported page out of direct-ingest title reuse", async () => {
+    // A long basename caps the imported filename into the same hash-truncated
+    // shape a long direct-ingest title produces. Reusing by title alone would
+    // hand the imported page's id to the ingest and overwrite its provenance.
+    const longName = "a".repeat(220);
+    const dir = await sources({ [`${longName}.md`]: "imported body\n" });
+    const { vaultDir, config, first } = await importSources([dir]);
+    const importedPage = first.pagePaths[0]!;
+    const importedPath = path.join(vaultDir, importedPage);
+    const importedBefore = await read(importedPath);
+    expect(importedBefore).toContain("sourceType: memory-unsafe-local");
+
+    const inputDir = await createTempDir("memory-wiki-ingest-input-");
+    const inputPath = path.join(inputDir, "notes.md");
+    await fs.writeFile(inputPath, "direct ingest body\n");
+    const ingested = await ingestMemoryWikiSource({
+      config,
+      inputPath,
+      title: `Unsafe Local Import: ${longName}.md`,
+    });
+
+    expect(ingested.pagePath).not.toBe(importedPage);
+    expect(ingested.pageId).toMatch(/^source\.unsafe-local-import-/);
+    // Compiling the vault appends its managed blocks, so compare the identity and
+    // provenance the import owns, not the whole file.
+    const importedAfter = await read(importedPath);
+    expect(importedAfter).toContain("id: source.unsafe-local.");
+    expect(importedAfter).toContain("sourceType: memory-unsafe-local");
+    expect(importedAfter).toContain("imported body");
   });
 });

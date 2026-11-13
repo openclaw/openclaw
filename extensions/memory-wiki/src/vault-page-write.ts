@@ -11,6 +11,8 @@ import {
   slugifyWikiSegment,
 } from "./markdown.js";
 
+type WikiPageProducer = { pageType?: string; sourceType?: string };
+
 /**
  * Derive the identity for a page write. New pages get a canonical (NFC) stem so
  * NFC/NFD spellings of one visual title cannot create two files. A released
@@ -19,34 +21,74 @@ import {
  * some characters are composed and others decomposed). Reuse that exact stem so
  * upgrades keep the path, frontmatter ID, and hand-written Notes instead of
  * creating a duplicate page.
+ *
+ * `producer` names the frontmatter signature this writer owns. Only the title
+ * fallback consults it: a page already sitting at the target stem is this
+ * writer's page, but a hash-suffixed neighbour may belong to an importer
+ * (`memory-unsafe-local`, `chatgpt-export`) whose page keeps its own identity.
  */
 export async function resolveWikiPageIdentity(params: {
   rootDir: string;
   relativeDir: string;
   title: string;
+  producer: WikiPageProducer;
 }): Promise<{ slug: string; stem: string }> {
   const canonicalTitle = params.title.normalize("NFC");
-  const canonicalStem = slugifyWikiPageStem(canonicalTitle);
-  const targetNfc = canonicalStem.normalize("NFC");
-  // Reuse an already-published page whose slug is canonically (NFC) equivalent
-  // to this title, regardless of how it was originally normalized. Enumerating
-  // the directory and comparing on the NFC-normalized stem is the only way to
-  // catch mixed-form spellings, which no single decomposed candidate covers.
+  // The page id keeps the unreduced slug: `slugifyWikiPageStem` appends a hash to
+  // reserved stems (`index`), and an id must not carry that file-level suffix.
+  const slug = slugifyWikiSegment(canonicalTitle);
+  // Derive both the NFC and NFD stems. A released page whose title is long enough
+  // to be hash-truncated stores a stem with a content hash; normalization cannot
+  // restore the removed suffix or the original hash input, so NFC equivalence
+  // alone fails to recognize it. Matching the exact NFD-derived stem recovers
+  // those released identities.
+  const nfcStem = slugifyWikiPageStem(canonicalTitle);
+  const nfdStem = slugifyWikiPageStem(canonicalTitle.normalize("NFD"));
+  const targetNfc = nfcStem.normalize("NFC");
   const root = await fsRoot(params.rootDir);
-  let entries: string[] = [];
-  try {
-    entries = await root.list(params.relativeDir);
-  } catch {
-    entries = [];
-  }
-  for (const name of entries) {
-    if (!name.endsWith(".md") || name === "index.md") continue;
+  const entries = await root.list(params.relativeDir).catch((): string[] => []);
+  const pageNames = entries.filter((name) => name.endsWith(".md") && name !== "index.md");
+  for (const name of pageNames) {
     const stem = name.slice(0, -3);
-    if (stem.normalize("NFC") === targetNfc) {
-      return { slug: slugifyWikiSegment(stem), stem };
+    // Exact match on either normalization covers hash-truncated released pages;
+    // NFC equivalence covers untruncated mixed-form spellings.
+    if (stem === nfcStem || stem === nfdStem || stem.normalize("NFC") === targetNfc) {
+      return { slug, stem };
     }
   }
-  return { slug: slugifyWikiSegment(canonicalStem), stem: canonicalStem };
+  // Filename matching cannot recover a released page whose title was long enough
+  // for the filename cap to replace its tail with a content hash: the stored stem
+  // keeps neither the removed suffix nor the pre-cap text behind that hash, so it
+  // equals neither the NFC nor the NFD candidate. Fall back to the frontmatter
+  // `title` the writer stored, and compare canonical slugs instead of raw titles
+  // so case and separator variants of one visual title still match.
+  for (const name of pageNames) {
+    const stem = name.slice(0, -3);
+    if (!/-[0-9a-f]{12}$/.test(stem)) {
+      continue;
+    }
+    try {
+      const relativePath = `${params.relativeDir}/${name}`;
+      const raw = await root.readBytes(relativePath);
+      const { frontmatter } = parseWikiMarkdown(decodeWikiPageUtf8(raw, relativePath));
+      const producerMatches =
+        (params.producer.pageType === undefined ||
+          frontmatter.pageType === params.producer.pageType) &&
+        (params.producer.sourceType === undefined ||
+          frontmatter.sourceType === params.producer.sourceType);
+      const releasedTitle = frontmatter.title;
+      if (
+        producerMatches &&
+        typeof releasedTitle === "string" &&
+        slugifyWikiSegment(releasedTitle.normalize("NFC")) === slug
+      ) {
+        return { slug, stem };
+      }
+    } catch {
+      // Ignore unreadable or non-frontmatter pages.
+    }
+  }
+  return { slug, stem: nfcStem };
 }
 
 type VaultRoot = Awaited<ReturnType<typeof fsRoot>>;
