@@ -10,6 +10,7 @@ import * as gateway from "../gateway/call.js";
 import type { HookStatusEntry, HookStatusReport } from "../hooks/hooks-status.js";
 import { buildWorkspaceHookStatus } from "../hooks/hooks-status.js";
 import { defaultRuntime } from "../runtime.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { makeHookStatusEntry } from "./cli-fixtures.test-support.js";
 import { registerHooksCli } from "./hooks-cli.js";
@@ -64,21 +65,32 @@ beforeEach(() => {
   runPluginUpdateCommandMock.mockReset();
 });
 
-async function runHooksReport(statusReport: HookStatusReport, args: string[]): Promise<string> {
+async function runHooksReport(
+  statusReport: HookStatusReport,
+  args: string[],
+  interrupted = false,
+): Promise<string> {
   const fixtureConfig: OpenClawConfig = {
     agents: hookAgent(statusReport.workspaceDir),
   };
   const output: string[] = [];
+  const work = new AsyncWorkScope();
   const reader = Object.assign(async () => fixtureConfig, { assertCurrent() {} });
   const spies = [
     vi.spyOn(config, "captureRuntimeConfigAsyncReader").mockReturnValue(reader),
-    vi.spyOn(gateway, "callGateway").mockResolvedValue(statusReport),
+    vi.spyOn(gateway, "callGateway").mockImplementation(async (options) => {
+      if (interrupted) {
+        work.beginClose();
+        options.signal?.throwIfAborted();
+      }
+      return statusReport;
+    }),
     vi.spyOn(defaultRuntime, "log").mockImplementation((value) => output.push(String(value))),
     vi.spyOn(defaultRuntime, "writeStdout").mockImplementation((value) => output.push(value)),
     vi.spyOn(oneShotExit, "requestExitAfterOneShotOutput").mockReturnValue(true),
   ];
   try {
-    await hooksProgram().parseAsync(["hooks", ...args], { from: "user" });
+    await work.run(() => hooksProgram().parseAsync(["hooks", ...args], { from: "user" }));
     return output.join("\n");
   } finally {
     for (const spy of spies) {
@@ -116,6 +128,13 @@ it("retains raw hook descriptor metadata in JSON", async () => {
 });
 
 describe("hooks cli formatting", () => {
+  it.each(["list", "info session-memory"])(
+    "does not publish interrupted %s output",
+    async (args) => {
+      expect(await runHooksReport(withHook(), args.split(" "), true)).toBe("");
+    },
+  );
+
   it.each<
     [args: string, overrides: Partial<HookStatusEntry>, includes: string[], excludes?: string[]]
   >([
