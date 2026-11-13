@@ -45,10 +45,10 @@ describe("signalMessageActions", () => {
 
   it.each([
     ["unconfigured", {}, undefined, []],
-    ["reactions disabled", disabledCfg, undefined, ["send"]],
-    ["any enabled account", overrideCfg, undefined, ["send", "react"]],
-    ["default account", overrideCfg, "default", ["send"]],
-    ["work account", overrideCfg, "work", ["send", "react"]],
+    ["reactions disabled", disabledCfg, undefined, ["send", "poll"]],
+    ["any enabled account", overrideCfg, undefined, ["send", "poll", "react"]],
+    ["default account", overrideCfg, "default", ["send", "poll"]],
+    ["work account", overrideCfg, "work", ["send", "poll", "react"]],
   ] as const)("discovers actions for %s", (_name, cfg, accountId, actions) => {
     expect(
       signalMessageActions.describeMessageTool?.({ cfg, accountId })?.actions ?? [],

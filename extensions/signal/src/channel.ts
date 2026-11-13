@@ -52,6 +52,7 @@ import { resolveSignalOutboundTarget } from "./outbound-session.js";
 import { materializeSignalPresentationFallback } from "./presentation-fallback.js";
 import { resolveSignalReactionLevel } from "./reaction-level.js";
 import { resolveSignalReplyContextWithPersistence } from "./reply-authors.js";
+import { SIGNAL_POLL_MAX_OPTIONS, sendPollSignal } from "./send-polls.js";
 import { signalSetupContract } from "./setup-core.js";
 import {
   createSignalPluginBase,
@@ -440,6 +441,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
     outbound: {
       base: {
         deliveryMode: "direct",
+        pollMaxOptions: SIGNAL_POLL_MAX_OPTIONS,
         resolveTarget: ({ cfg, to, accountId }) => {
           const raw = to?.trim();
           if (!raw) {
@@ -602,6 +604,14 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
       },
       attachedResults: {
         channel: "signal",
+        sendPoll: async ({ cfg, to, poll, accountId, assertDirectAdapterHandoff }) => {
+          const result = await sendPollSignal(to, poll, {
+            cfg,
+            accountId: accountId ?? undefined,
+            ...(assertDirectAdapterHandoff ? { assertDirectAdapterHandoff } : {}),
+          });
+          return { messageId: result.messageId, pollId: result.messageId };
+        },
         sendText: sendSignalOutbound,
         sendMedia: sendSignalOutbound,
       },

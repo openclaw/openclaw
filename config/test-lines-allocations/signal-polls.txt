@@ -1,0 +1,2 @@
+# Signal polls: outbound adapter integration for direct, username, and group polls, unsupported-container discovery and dispatch, and native poll action discovery.
+65
