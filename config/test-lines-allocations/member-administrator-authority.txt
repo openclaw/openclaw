@@ -3,4 +3,5 @@
 # Retain negative and unchanged-caller coverage alongside the administrator proof.
 # Historical source-less member refusal and unchanged nonmember same-key recovery
 # need both publication backends; legacy profile-schema reads cover catalog safety.
-196
+# Catalog-backed ingress recovery and member-scoped personal files retain new-base contracts.
+212

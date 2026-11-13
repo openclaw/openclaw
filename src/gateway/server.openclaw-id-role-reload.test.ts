@@ -246,7 +246,7 @@ it("activates presets without breaking device-token reconnect, and reloads a mem
     expect.soft(administrator.hello?.auth.profileActivityViewerId).toBeUndefined();
     const self = await administrator.client.request<{ profile: { id: string } }>("users.self", {});
     expect(self.profile.id).not.toBe(GATEWAY_OWNER_PROFILE_ID);
-    const adminActions = [
+    const profileActions = [
       ["users.listChannelIdentities", { profileId: self.profile.id }],
       ["users.background.remove", { expectedAssetId: null, expectedPreference: null }],
       ["users.channelIdentity", { action: "status", channelId: "slack" }],
@@ -254,7 +254,7 @@ it("activates presets without breaking device-token reconnect, and reloads a mem
       ["mentions.list", {}],
       ["users.mentionable", { agentId: "main", visibility: "shared" }],
     ] as const;
-    for (const [method, params] of adminActions) {
+    for (const [method, params] of profileActions) {
       const result = await administrator.client.request(method, params).then(
         () => "allowed",
         (error: unknown) => String(error),
@@ -285,8 +285,15 @@ it("activates presets without breaking device-token reconnect, and reloads a mem
     await administrator.client.stopAndWait();
     const operator = await connectMember();
     expect(operator.hello?.auth.scopes).not.toContain("operator.admin");
-    for (const [method, params] of adminActions) {
-      await expect(operator.client.request(method, params), method).rejects.toThrow();
+    for (const [method, params] of profileActions) {
+      if (method === "users.personalFile.get") {
+        await expect(operator.client.request(method, params)).resolves.toMatchObject({
+          agentId: "main",
+          profileId: self.profile.id,
+        });
+      } else {
+        await expect(operator.client.request(method, params), method).rejects.toThrow();
+      }
     }
     expect(requestRecoveryRestart).not.toHaveBeenCalled();
   } finally {
