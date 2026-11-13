@@ -155,9 +155,8 @@ describe("registered id commands", () => {
   );
 
   it("keeps a multi-line follow-up failure readable instead of escaping its newlines", async () => {
-    followUpError = new Error(
-      "gateway transport failed: refused\n  remedy: check the gateway address\n  connection: 127.0.0.1:3080\u0007",
-    );
+    followUpError =
+      "gateway transport failed: refused\n  remedy: check the gateway address\n  connection: 127.0.0.1:3080\u0007";
     await run("rebind", false);
     expect(process.exitCode).toBe(2);
     // The CLI owns this layout: lines stay lines, and the control byte inside a line is
