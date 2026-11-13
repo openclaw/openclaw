@@ -15,7 +15,7 @@ openclaw pair ABCD-EFGH
 openclaw pair work:ABCD-EFGH
 ```
 
-A Gateway running under a named profile shows its code with that profile in front, such as `work:ABCD-EFGH`. The command then uses the `work` profile, as if you had run `openclaw --profile work pair ABCD-EFGH`, and prints the profile it reached before asking. The prefix only chooses where the command connects; the eight characters after it are the code. A code naming a different profile than `--profile` is refused.
+A Gateway running under a named profile shows its code with that profile in front, such as `work:ABCD-EFGH`. The command then uses the `work` profile, as if you had run `openclaw --profile work pair ABCD-EFGH`, and prints the profile it reached before asking. The prefix only chooses where the command connects; the eight characters after it are the code. A code naming a different profile than `--profile` is refused. With `--container`, the code goes unchanged to the CLI inside the container, which selects the profile there.
 
 The command prints what the Gateway knows about the requesting browser, then asks before approving:
 
