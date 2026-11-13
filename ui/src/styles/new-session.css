@@ -1563,6 +1563,28 @@ div.new-session-page__project-search {
   z-index: 2;
 }
 
+/* Keep the light outline inside the measured composer box, like the dark
+   border. An outside spread made the equal-width tray look inset by 1px. */
+:root[data-theme-mode="light"]
+  .new-session-page__composer
+  > .agent-chat__input:not([data-incognito="true"]) {
+  border-color: var(--chat-composer-light-outline);
+  box-shadow:
+    0 1px 2px -1px var(--chat-composer-light-outline),
+    0 2px 4px rgb(0 0 0 / 4%);
+}
+
+:root[data-theme-mode="light"]
+  .new-session-page__composer
+  > .agent-chat__input:not([data-incognito="true"]):has(
+    .agent-chat__composer-combobox > :is(textarea, input):focus
+  ) {
+  border-color: rgb(0 0 0 / 8%);
+  box-shadow:
+    0 1px 2px -1px rgb(0 0 0 / 8%),
+    0 2px 4px rgb(0 0 0 / 6%);
+}
+
 .new-session-page__context-tray .new-session-page__triggers {
   position: relative;
   top: -3px;
@@ -1960,8 +1982,14 @@ div.new-session-page__project-search {
   transition: opacity calc(var(--oc-overlay-show-duration) * 0.4) var(--new-session-tray-ease);
 }
 
-.new-session-page__context-tray .new-session-page__picker-popover {
+/* The tray owns placement even when a lazy picker loads shared RTL styles. */
+.new-session-page__context-tray .oc-overlay.new-session-page__picker-popover[data-placement] {
   position-area: none;
+}
+
+.new-session-page__context-tray .new-session-page__picker-popover {
+  position: fixed;
+  right: auto;
   position-try-fallbacks: none;
   top: calc(anchor(--new-session-context-tray top) + var(--new-session-tray-radius) - 6px);
   left: anchor(--new-session-context-tray left);

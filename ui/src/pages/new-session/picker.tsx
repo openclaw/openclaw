@@ -4,11 +4,16 @@ import {
   isStaleChunkImportError,
   retryStaleChunkReloadWhenReachable,
 } from "../../app/stale-chunk-reload.ts";
+import { showOverlayAnchor } from "../../components/overlay-anchor.ts";
+import { createOverlay } from "../../components/overlay-lifecycle.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
-import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
+import { useOverlayControl } from "../../components/solid/overlay-control.ts";
+import type { PopoverHandle } from "../../components/solid/popover.tsx";
+import { acquireNativeOverlaySurface } from "../../lib/native-overlay-occlusion.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
+import { createAnchoredOverlay } from "../../lib/reactive/overlay-anchor.ts";
 import { createScrollStateRef } from "../../lib/reactive/scroll-state.ts";
 import { createPickerNavigation, PickerNavigation } from "./picker-navigation.ts";
 import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
@@ -32,9 +37,100 @@ export function SessionPicker(props: {
 }) {
   const navigation = props.kind === "checkout" ? null : createPickerNavigation();
   let trigger!: HTMLButtonElement;
-  let popover!: PopoverHandle;
-  let cleanup: (() => void) | undefined;
-  onSettled(() => () => cleanup?.());
+  let surface!: HTMLDialogElement;
+  // This attached tray must stay below the composer, outside the top layer.
+  // The shared overlay owner still controls dismissal, focus return and phases.
+  const overlay = createOverlay(`new-session-${props.kind}-popover`, undefined, {
+    native: {
+      isOpen: (node) => node.hasAttribute("open"),
+      show: () => {
+        showOverlayAnchor(surface);
+        surface.show();
+      },
+      hide: () => surface.close(),
+    },
+    acquireOcclusion: acquireNativeOverlaySurface,
+  });
+  const popover: PopoverHandle = {
+    overlay,
+    show: () => overlay.request(true),
+    hide: () => overlay.request(false),
+  };
+  const content = () => (
+    <div class="new-session-page__picker-panel">
+      <Errored
+        fallback={(error, retry) => (
+          <PickerLoadError
+            error={error()}
+            retry={retry}
+            isOpen={() => props.params.place.browser.popoverOpen(props.kind)}
+          />
+        )}
+      >
+        <Loading fallback={<PickerSkeleton tray checkout={props.params.place.checkoutVisible} />}>
+          <PickerNavigation value={navigation}>{props.children}</PickerNavigation>
+        </Loading>
+      </Errored>
+    </div>
+  );
+  const control = useOverlayControl(
+    overlay,
+    props.lazy,
+    {
+      get open() {
+        return props.params.place.browser.popoverOpen(props.kind);
+      },
+      onBeforeShow: (event) => props.onBeforeShow?.(event),
+      onOpenChange: (open) => {
+        if (!open) {
+          navigation?.clear();
+        }
+        const callbacks = props.params.place.browser.popoverCallbacks(props.kind);
+        callbacks[open ? "onPopoverShow" : "onPopoverHide"]();
+      },
+    },
+    content,
+  );
+  const anchor = createAnchoredOverlay(
+    overlay,
+    () => trigger,
+    () => ({}),
+    {
+      sameRoot: true,
+      lazy: props.lazy,
+    },
+  );
+  onSettled(() => {
+    overlay.bindSurface(surface);
+    const disconnectAnchor = anchor.connect();
+    const stops = [
+      listen(surface, "overlay-after-hide", (event) => {
+        if (event.target === surface) {
+          const active = surface.ownerDocument.activeElement;
+          if (!active || active === surface.ownerDocument.body || surface.contains(active)) {
+            trigger.focus();
+          }
+          props.params.place.browser.popoverCallbacks(props.kind).onPopoverAfterHide();
+          props.onAfterHide?.();
+        }
+      }),
+      listen(surface, "click", (event) => {
+        if (
+          !event.defaultPrevented &&
+          event.target instanceof Element &&
+          event.target.closest('[data-popover="close"]')
+        ) {
+          overlay.request(false, "return");
+        }
+      }),
+    ];
+    const disconnectControl = control.connect(() => props.ref?.(popover));
+    return () => {
+      disconnectAnchor();
+      disconnectControl();
+      stops.forEach((stop) => stop());
+    };
+  });
   return (
     <>
       <span
@@ -85,73 +181,21 @@ export function SessionPicker(props: {
           <Icon name="chevronsUpDown" class="new-session-page__picker-chevron" />
         </button>
       </span>
-      <Popover
-        contained
-        lazy={props.lazy}
-        onBeforeShow={props.onBeforeShow}
-        id={`new-session-${props.kind}-popover`}
-        label={props.label}
-        anchor={trigger}
+      <dialog
+        ref={(node) => {
+          surface = node;
+        }}
+        id={overlay.id}
+        aria-label={props.label}
+        tabindex={-1}
         class={[
-          "new-session-page__select",
+          "oc-overlay oc-popover new-session-page__select",
           `new-session-page__${props.kind}-popover`,
           "new-session-page__picker-popover",
         ]}
-        open={props.params.place.browser.popoverOpen(props.kind)}
-        placement="bottom-start"
-        onOpenChange={(open) => {
-          if (!open) {
-            navigation?.clear();
-          }
-          const callbacks = props.params.place.browser.popoverCallbacks(props.kind);
-          callbacks[open ? "onPopoverShow" : "onPopoverHide"]();
-        }}
-        ref={(handle) => {
-          popover = handle;
-          const surface = handle.overlay.surface;
-          const stops = [
-            listen(surface, "overlay-after-hide", (event) => {
-              if (event.target === surface) {
-                const active = surface.ownerDocument.activeElement;
-                if (!active || active === surface.ownerDocument.body || surface.contains(active)) {
-                  trigger.focus();
-                }
-                props.params.place.browser.popoverCallbacks(props.kind).onPopoverAfterHide();
-                props.onAfterHide?.();
-              }
-            }),
-            listen(surface, "click", (event) => {
-              if (
-                !event.defaultPrevented &&
-                event.target instanceof Element &&
-                event.target.closest('[data-popover="close"]')
-              ) {
-                handle.overlay.request(false, "return");
-              }
-            }),
-          ];
-          cleanup = () => stops.forEach((stop) => stop());
-          props.ref?.(handle);
-        }}
       >
-        <div class="new-session-page__picker-panel">
-          <Errored
-            fallback={(error, retry) => (
-              <PickerLoadError
-                error={error()}
-                retry={retry}
-                isOpen={() => props.params.place.browser.popoverOpen(props.kind)}
-              />
-            )}
-          >
-            <Loading
-              fallback={<PickerSkeleton tray checkout={props.params.place.checkoutVisible} />}
-            >
-              <PickerNavigation value={navigation}>{props.children}</PickerNavigation>
-            </Loading>
-          </Errored>
-        </div>
-      </Popover>
+        {props.lazy ? undefined : content()}
+      </dialog>
     </>
   );
 }
