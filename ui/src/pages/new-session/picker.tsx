@@ -80,6 +80,7 @@ export function SessionPicker(props: {
               <span class="new-session-page__trigger-summary">{props.summary}</span>
             </>
           ) : undefined}
+          <Icon name="chevronsUpDown" class="new-session-page__picker-chevron" />
         </button>
       </span>
       <Popover

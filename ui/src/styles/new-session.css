@@ -1608,6 +1608,10 @@ div.new-session-page__project-search {
   max-width: 300px;
 }
 
+.new-session-page__picker-chevron {
+  display: none;
+}
+
 .new-session-page__context-tray .new-session-page__target-icon {
   flex: 0 0 14px;
   width: 14px;
@@ -2054,6 +2058,15 @@ div.new-session-page__project-search {
 
   .new-session-page__context-tray .new-session-page__trigger-label {
     max-width: none;
+  }
+
+  .new-session-page__context-tray .new-session-page__picker-chevron {
+    display: block;
+    flex: 0 0 14px;
+    width: 14px;
+    height: 14px;
+    color: var(--muted);
+    stroke-width: 1.5px;
   }
 
   .new-session-page__context-tray .new-session-page__trigger-summary {
