@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { formatAgo, memberPresence, memberRunning, removalNote } from "./people-format.js";
+import {
+  formatAgo,
+  memberPresence,
+  memberRunning,
+  removalNote,
+  roleName,
+} from "./people-format.js";
 
 const NOW = 1_800_000_000_000;
 const device = (connections: number, lastSeenAt: number | null, runs = 0) => ({
@@ -10,6 +16,13 @@ const device = (connections: number, lastSeenAt: number | null, runs = 0) => ({
 });
 
 describe("People page wording", () => {
+  it("labels built-ins and preserves opaque role names exactly", () => {
+    expect(roleName("operator")).toBe("Operator");
+    expect(roleName("viewer")).toBe("Viewer");
+    expect(roleName("guest")).toBe("guest");
+    expect(roleName("support_team-2")).toBe("support_team-2");
+  });
+
   it("says active now, last seen, or not seen yet", () => {
     expect(memberPresence([device(1, NOW)], NOW)).toBe("active now");
     expect(memberPresence([device(0, NOW - 5 * 60_000)], NOW)).toBe("last seen 5 min ago");

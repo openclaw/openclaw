@@ -42,9 +42,12 @@ export function openClawIdMenuIdentity(status: OpenClawIdStatusResult) {
   const identity = status.connection;
   if (status.channel === "tunnel") {
     if (identity?.kind === "member") {
-      const role = t(
-        identity.role === "viewer" ? "openclawId.roleViewer" : "openclawId.roleOperator",
-      );
+      const role =
+        identity.role === "operator"
+          ? t("openclawId.roleOperator")
+          : identity.role === "viewer"
+            ? t("openclawId.roleViewer")
+            : identity.role;
       return {
         name: identity.email || t("openclawId.accountFallback"),
         detail: t("openclawId.memberRoleOnClaw", {

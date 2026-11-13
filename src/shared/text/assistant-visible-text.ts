@@ -30,6 +30,7 @@ import {
   leadingEmptyLinesTextFilter,
   trimTextFilter,
   type TextFilter,
+  type TextProjector,
 } from "./text-projection.js";
 import { toolCallXmlTextFilter } from "./tool-call-xml.js";
 
@@ -73,6 +74,46 @@ const invisibleTextFilter: TextFilter = {
 
 const profileFilters = new Map<string, readonly TextFilter[]>();
 
+// Normalize the carried tail and the incoming delta together, so whitespace runs
+// spanning many appends collapse into one char instead of pushing the opening ``<``
+// out of the bounded tail. ``shape`` and the optional ``requires`` marker are latched
+// independently: the canonical MiniMax transform needs its marker anywhere in the
+// accumulated text, so the invocation shape may arrive first. A bare mention alone
+// satisfies neither shape nor marker (when required) and stays off the re-scan.
+// One char after a shape match is required to confirm a delta-split word boundary.
+function createBoundedTagProjector(
+  transform: (text: string) => string,
+  shape: RegExp,
+  requires?: RegExp,
+): TextProjector {
+  let tail = "";
+  let markerSeen = !requires;
+  let shapeSeen = false;
+  let active = false;
+  return createConditionalTextProjector(transform, (input) => {
+    if (active) {
+      return true;
+    }
+    const joined = (tail + (input.delta ?? input.text)).toLowerCase().replace(/\s+/g, " ");
+    if (requires?.test(joined)) {
+      markerSeen = true;
+    }
+    const match = shape.exec(joined);
+    if (match && match.index + match[0].length < joined.length) {
+      shapeSeen = true;
+    }
+    tail = joined.slice(-32);
+    active = markerSeen && shapeSeen;
+    return active;
+  });
+}
+
+const memoriesShape = /<\s*\/?\s*relevant[-_]memories\b/;
+const memoriesTextFilter: TextFilter = {
+  transform: stripRelevantMemoriesTags,
+  create: () => createBoundedTagProjector(stripRelevantMemoriesTags, memoriesShape),
+};
+
 export function assistantVisibleTextFilters(
   profile: AssistantVisibleTextSanitizerProfile,
   streaming = false,
@@ -101,10 +142,7 @@ export function assistantVisibleTextFilters(
     const filters = orderInternalScaffoldingStages<TextFilter>({
       reasoning,
       modelTokens: modelSpecialTokensTextFilter,
-      memories: {
-        transform: stripRelevantMemoriesTags,
-        activationTokens: ["relevant-memories", "relevant_memories"],
-      },
+      memories: memoriesTextFilter,
       xml: toolCallXmlTextFilter({}, streaming),
       trace: assistantTraceTextFilter,
       legacy: legacyBracketToolCallTextFilter,
@@ -118,10 +156,7 @@ export function assistantVisibleTextFilters(
   const filters: TextFilter[] = [
     minimaxToolCallTextFilter(streaming),
     modelSpecialTokensTextFilter,
-    {
-      transform: stripRelevantMemoriesTags,
-      activationTokens: ["relevant-memories", "relevant_memories"],
-    },
+    memoriesTextFilter,
     toolCallXmlTextFilter(
       {
         stripFunctionCallsXmlPayloads: profile === "tool-progress",
@@ -143,10 +178,19 @@ export function assistantVisibleTextFilters(
 
 // Activation is a necessary condition only; the canonical parsers still own
 // syntax, code protection, and later corrections once a marker has appeared.
+// The canonical transform also removes completed <invoke> blocks whenever the
+// ``minimax:tool_call`` marker occurs, even without an exact envelope token, so
+// activation needs that marker plus an invocation/tag shape. A bare mention alone
+// has no such shape and stays off the whole-reply re-scan.
+const encodedMinimaxOpen = escapeRegExp("<]minimax[>[<tool_call>");
+const minimaxShape = new RegExp(`<invoke\\b|<\\/?minimax:tool_call|${encodedMinimaxOpen}`);
+const minimaxRequires = new RegExp(`minimax:tool_call|${encodedMinimaxOpen}`);
 export function minimaxToolCallTextFilter(streaming = false): TextFilter {
+  const transform = (text: string) =>
+    stripMinimaxToolCallXml(text, { recoverUnclosed: !streaming });
   return {
-    transform: (text) => stripMinimaxToolCallXml(text, { recoverUnclosed: !streaming }),
-    activationTokens: ["minimax:tool_call", "<]minimax[>[<tool_call>"],
+    transform,
+    create: () => createBoundedTagProjector(transform, minimaxShape, minimaxRequires),
   };
 }
 

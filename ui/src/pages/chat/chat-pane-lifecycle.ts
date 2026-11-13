@@ -14,6 +14,7 @@ import {
 import { readPresenceEntries } from "../../app/user-profile.ts";
 import { BROWSER_ANNOTATION_EVENT } from "../../components/browser/browser-annotation-event.ts";
 import { hasModalSurface } from "../../components/overlay-registry.ts";
+import { focusComposerInput } from "../../lib/composer-input.ts";
 import { modelAuthEventInvalidates } from "../../lib/model-auth-request-state.ts";
 import { isSessionReactionEvent } from "../../lib/protocol-validators.generated/activity.js";
 import { listen } from "../../lib/reactive/listener.ts";
@@ -28,6 +29,7 @@ import { CHAT_ROUTE_READY_EVENT } from "./chat-history-events.ts";
 import { retireInitialChatSnapshot } from "./chat-history-state.ts";
 import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import { loadChatHistory } from "./chat-history.ts";
+import type { InlineCommandPresentation } from "./chat-inline-command-presentation.ts";
 import { disposeChatLiveEvents } from "./chat-live-events.ts";
 import {
   type ChatAttachmentGatewayOwner,
@@ -120,6 +122,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
               launch: this.mcpAppLaunch,
               replaceAttachments: this.chatState.attachmentInputProps(state).onAttachmentsChange,
               openFile: (path) => openSessionWorkspaceFile(state, { path }),
+              openAppPanel: () => this.navigateMobileHost({ area: "panels", slot: "detail" }),
             }
           : null;
       },
@@ -262,7 +265,10 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     );
   };
 
-  override start() {
+  override start(
+    inlineCommandPresentation?: InlineCommandPresentation,
+    inlineCommandPreparationError?: string,
+  ) {
     this.boardProviderLifecycleConnected = true;
     this.resumeStagedAttachments();
     super.start();
@@ -287,7 +293,11 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       this.context,
       chatState.createRenderLifecycle(),
       {
+        inlineCommandPresentation,
+        inlineCommandPreparationError,
+        isCurrent: () => this.isConnected && this.state === pageState,
         sessionKey: this.sessionKey,
+        agentId: parseAgentSessionKey(this.sessionKey)?.agentId ?? this.agentId,
         dispatchEvent: (event) => this.element.dispatchEvent(event),
         transcriptLoadingChanged: this.synchronizeForegroundTranscript,
       },
@@ -307,11 +317,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       }
     };
     chatState.addCleanup(listen(document, "visibilitychange", refreshPresentedReads));
-    const paneAgentId = parseAgentSessionKey(this.sessionKey)?.agentId ?? this.agentId;
-    if (paneAgentId) {
-      pageState.assistantAgentId = paneAgentId;
-      pageState.agentsSelectedId = paneAgentId;
-    }
     pageState.sidebarLayout = this.restorePaneSidebarLayout(pageState.sidebarLayout);
     pageState.getWorkContext = () => this.workContext;
     pageState.isRouteSessionPending = () => this.routeResolutionPending;
@@ -408,15 +413,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         this.synchronizeForegroundTranscript();
       }),
     );
-    // Chat actions read these synchronous owner settings before any render commits.
-    chatState.addCleanup(
-      this.context.theme.subscribe(() => {
-        pageState.settings = {
-          ...this.context.theme.settings,
-          token: this.context.gateway.connection.token,
-        };
-      }),
-    );
+    chatState.addCleanup(startupSubscriptions.subscribeChatPaneSettings(pageState, this.context));
     // Agent changes retire scoped owners and subscriptions before admitting another action.
     chatState.addCleanup(
       this.context.agentSelection.subscribe((next) => {
@@ -644,10 +641,9 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       );
     }
     if (focusComposerChanged && this.focusComposer) {
-      const input = textarea?.closest<HTMLElement>(".agent-chat__input");
-      textarea?.focus({ preventScroll: true });
-      if (input && this.draft) {
-        this.showComposerPrefillAttention(input);
+      focusComposerInput(textarea, { preventScroll: true });
+      if (this.draft) {
+        this.showComposerPrefillAttention(textarea?.closest<HTMLElement>(".agent-chat__input"));
       }
     }
     this.retireArchivedPresentation();

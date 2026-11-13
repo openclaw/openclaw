@@ -67,8 +67,8 @@ internal class GatewayImageLoader(
       .followSslRedirects(false)
       .build()
   private val faviconCache =
-    object : LinkedHashMap<String, GatewayLoadedImage?>(32, 0.75f, true) {
-      override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, GatewayLoadedImage?>?): Boolean = size > 32
+    object : LinkedHashMap<String, GatewayLoadedImage>(32, 0.75f, true) {
+      override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, GatewayLoadedImage>?): Boolean = size > 32
     }
   private val mutex = kotlinx.coroutines.sync.Mutex()
 
@@ -94,7 +94,9 @@ internal class GatewayImageLoader(
       if (faviconCache.containsKey(key)) return@withLock faviconCache[key]
       load(url, headers, credentials, 65_536, 8, withEnqueue) { mime ->
         mime in setOf("image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml", "image/x-icon", "image/vnd.microsoft.icon")
-      }.also { faviconCache[key] = it }
+      }.also { image ->
+        if (image != null) faviconCache[key] = image
+      }
     }
   }
 

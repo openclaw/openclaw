@@ -38,7 +38,10 @@ import { appliedConfigKey, resolveSettings, sameSettings } from "./service-setti
 import type { OpenClawIdStatus } from "./service-status.js";
 import { createTokenBindingPublisher } from "./service-token-bindings.js";
 import { createTunnelPrincipalPublisher } from "./service-tunnel-principals.js";
-import { notifyOpenClawIdTunnelPrincipalsChanged } from "./tunnel-principal.js";
+import {
+  isOpenClawIdTunnelPrincipalAdmitted,
+  notifyOpenClawIdTunnelPrincipalsChanged,
+} from "./tunnel-principal.js";
 import type { TunnelRuntime } from "./tunnel-runtime.js";
 import type { TunnelSupervisorStatus } from "./tunnel-supervisor.js";
 
@@ -587,6 +590,7 @@ export function createOpenClawIdService(params: {
     const { handleTunnelApiRequest } = await import("./tunnel-api.js");
     const owner = await getAuthority();
     await handleTunnelApiRequest(req, res, peerKey, {
+      isAdmitted: async (key) => isOpenClawIdTunnelPrincipalAdmitted(await owner.resolvePeer(key)),
       membership: (key) => owner.ownerView(key),
       prepareOwnerCheck: (key) => owner.prepareOwnerPeerCheck(key),
       submit: async (statement) => applyResult(await owner.submit(statement, "tunnel")),

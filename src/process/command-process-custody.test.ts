@@ -51,9 +51,10 @@ it.skipIf(process.platform === "win32")(
     const kill = vi.spyOn(termination, "killProcessTree").mockImplementation(() => {
       disappearsAt = Date.now() + 1_000;
     });
-    vi.spyOn(process, "kill").mockImplementation(() => {
+    vi.spyOn(process, "kill").mockImplementation((pid) => {
       throw Object.assign(new Error("synthetic group probe"), {
-        code: Date.now() < disappearsAt ? "EPERM" : "ESRCH",
+        // The denial canary's impossible group gets the kernel's ESRCH, so EPERM stays a kernel EPERM.
+        code: pid !== -(4_194_304 + 1) && Date.now() < disappearsAt ? "EPERM" : "ESRCH",
       });
     });
     vi.spyOn(identity, "getProcessInstanceStartTime").mockReturnValue(1);

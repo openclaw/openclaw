@@ -5,6 +5,9 @@ import { en } from "./en.ts";
 const enChatToolContent = {
   chat: {
     toolCards: {
+      previewMore: "Expand for more output",
+      previewCaptured: "View captured beginning",
+      previewTruncated: "Captured output is truncated",
       providerResponse: "Provider tool response",
       executionOutput: "Execution output",
       showFullOutput: "Show full output",

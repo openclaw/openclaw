@@ -249,8 +249,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 21700
   },
   "openClawBaseInstructions": {
-    "chars": 8373,
-    "roughTokens": 2094
+    "chars": 8756,
+    "roughTokens": 2189
   },
   "openClawDeveloperInstructions": {
     "chars": 3431,
@@ -261,12 +261,12 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 127
   },
   "totalTextOnly": {
-    "chars": 14480,
-    "roughTokens": 3620
+    "chars": 14863,
+    "roughTokens": 3716
   },
   "totalWithDynamicToolsJson": {
-    "chars": 101282,
-    "roughTokens": 25321
+    "chars": 101665,
+    "roughTokens": 25417
   },
   "userInputText": {
     "chars": 879,
@@ -317,6 +317,7 @@ Approval preview: exact full command/script, including chains/multiline. Keep pr
 
 ## Care
 Before config/scheduler edits (crontab/systemd/nginx/shell rc/timers): inspect; preserve/merge. Whole-file replacement only explicit.
+Repos already in the workspace: reuse the checkout, including multi-PR batches. For another checkout, use the repo's checkout workflow or `git worktree add` from the existing repo to share its object store. Do not clone the same repo into task scratch or copy/hardlink its Git objects. If shared paths are inaccessible, report the scope blocker before creating an independent clone.
 Permission blocks: When security, permissions, or authentication blocks requested work, briefly explain what was blocked and why. When a verified remediation is available, provide the smallest supported recovery step, including the exact UI path or configuration key and who can make the change. Prefer scoped access or approval over disabling safeguards. Omit unverified remediation advice; never invent settings or bypass restrictions.
 Use or store credentials the user supplies as requested, and complete the task. In the final reply, briefly acknowledge how the supplied credential was used or stored, without repeating its value. Keep the acknowledgment factual and non-alarming.
 For user-requested login or pairing in a group, deliver short-lived codes and verification URLs only to the requesting user in private, then acknowledge in the group without them.

@@ -15,7 +15,10 @@
 // --count-membership instruments owner reads; run separately from CPU/allocation measurements.
 // --notifications --clients 65 measures participant-fact notifications (one event per turn);
 // --transcript-notifications measures metadata-only transcript notifications instead.
+// --entry-notifications publishes timestamp-only entry writes through the real writer.
 // --receipt-changes inserts one receipt per turn and waits for its subscriber delivery.
+// --allocation-control runs separate unsampled/sampled passes on one prepared fixture.
+// --controls interleaves an extra baseline arm with each A/B pair.
 // --aa uses the baseline source for both arms as an identical-source control.
 // --large-state fills 35 GiB of real transcript pages and 62k workspace files before sampling.
 // --idle supplies the matching event-loop-only control. Iterations count events/idle turns.
@@ -58,13 +61,16 @@ const { values } = parseArgs({
     iterations: { type: "string", default: "4000" },
     warmup: { type: "string", default: "1000" },
     allocations: { type: "boolean", default: false },
+    "allocation-control": { type: "boolean", default: false },
     subscriptions: { type: "boolean", default: false },
     "task-receipts": { type: "boolean", default: false },
     "count-membership": { type: "boolean", default: false },
     subscribe: { type: "boolean", default: false },
     notifications: { type: "boolean", default: false },
     "transcript-notifications": { type: "boolean", default: false },
+    "entry-notifications": { type: "boolean", default: false },
     "receipt-changes": { type: "boolean", default: false },
+    controls: { type: "boolean", default: false },
     aa: { type: "boolean", default: false },
     "large-state": { type: "boolean", default: false },
     idle: { type: "boolean", default: false },
@@ -89,8 +95,10 @@ assert(
 );
 assert(!values.idle || values.notifications, "--idle requires --notifications");
 assert(!values["transcript-notifications"] || values.notifications);
+assert(!values["entry-notifications"] || values.notifications);
 assert(!values["receipt-changes"] || (values.notifications && values["task-receipts"]));
-assert(!values.aa || values["base-owner-suffix"]);
+assert(!(values.aa && values.controls));
+assert(!(values.aa || values.controls) || values["base-owner-suffix"]);
 assert(!(values.captures && watchSubscriptions), "Choose --captures or subscription work");
 assert(
   !values["unrelated-churn"] || ((!watchSubscriptions || values.subscriptions) && !values.captures),
@@ -103,6 +111,7 @@ assert(!values["base-projection-suffix"] || /^[a-z0-9-]+$/.test(values["base-pro
 const baseSuffix = values["base-owner-suffix"] ?? values["base-projection-suffix"];
 const sources = [
   ...(baseSuffix ? [{ name: "base", suffix: `.${baseSuffix}` }] : []),
+  ...(values.controls ? [{ name: "control", suffix: `.${baseSuffix}` }] : []),
   { name: "candidate", suffix: "" },
 ].map(({ name, suffix }) => {
   const projectionUrl = new URL(
@@ -639,6 +648,11 @@ try {
               () => [...receiptScopes],
               () => undefined,
             );
+          } else if (values["entry-notifications"]) {
+            await upsertSessionEntryCore(
+              { agentId: "main", sessionKey: keyFor(index % readerCount) },
+              { updatedAt: Date.now() + index },
+            );
           } else if (!values.idle) {
             sessionChanges.emit({
               agentId: "main",
@@ -788,12 +802,15 @@ try {
       membershipReads: () => membershipReads,
     });
   }
-  if (values.allocations) {
+  const allocationModes = values["allocation-control"] ? [false, true] : [values.allocations];
+  if (allocationModes.includes(true)) {
     inspector.connect();
     inspectorConnected = true;
   }
   const samples = [];
-  for (let pair = 0; pair < pairs; pair++) {
+  for (let pass = 0; pass < pairs * allocationModes.length; pass++) {
+    const pair = Math.floor(pass / allocationModes.length);
+    const allocations = allocationModes[pass % allocationModes.length];
     const order = pair % 2 === 0 ? arms : arms.toReversed();
     for (const arm of order) {
       await arm.prepare();
@@ -802,7 +819,7 @@ try {
       gc.length = 0;
       observer.takeRecords();
       observer.observe({ entryTypes: ["gc"] });
-      if (values.allocations) {
+      if (allocations) {
         await inspector.post("HeapProfiler.startSampling", {
           samplingInterval: 4096,
           includeObjectsCollectedByMajorGC: true,
@@ -820,7 +837,7 @@ try {
       const cpu = process.threadCpuUsage(cpuBefore);
       const after = process.memoryUsage();
       const hostLoadAfter = os.loadavg();
-      const sampled = values.allocations
+      const sampled = allocations
         ? (await inspector.post("HeapProfiler.stopSampling")).profile
         : undefined;
       await nextTurn();
@@ -965,14 +982,17 @@ try {
       subscribe: values.subscribe,
       notifications: values.notifications,
       transcriptNotifications: values["transcript-notifications"],
+      entryNotifications: values["entry-notifications"],
       receiptChanges: values["receipt-changes"],
       identicalSourceControl: values.aa,
+      interleavedControl: values.controls,
       largeState,
       idle: values.idle,
       unrelatedChurn: values["unrelated-churn"],
       captures: values.captures,
     },
-    allocationMode: values.allocations,
+    allocationMode: values["allocation-control"] ? "mixed" : values.allocations,
+    allocationModes,
     samples,
   };
   const output = `${JSON.stringify(result, null, 2)}\n`;
