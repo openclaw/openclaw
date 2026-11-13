@@ -77,7 +77,6 @@ describe("session menu", () => {
     const menu = await mountMenu();
     const rename = queryButton(menu, '[data-value="rename"]')!;
     const englishLabel = rename.getAttribute("aria-label");
-
     await i18n.setLocale("de");
     const translatedLabel = i18n.t("sessionsView.renameSessionMenu");
     expect(translatedLabel).not.toBe(englishLabel);
@@ -227,8 +226,10 @@ describe("session menu", () => {
   it("filters owner names typed in another Unicode form", async () => {
     const owner = createSessionOwnerMenuHarness(() => sessionOwnerProfiles("Jose\u0301", "Zoë"));
     const menu = await mountMenu({ context: owner.context });
-    await waitForOwners(menu, ["Me", "Research", "Jose\u0301", "Zoë"]);
-    const search = (await openSubmenu(menu, "Assign to…")).querySelector("input")!;
+    const panel = await openSubmenu(menu, "Assign to…");
+    panel.querySelector<HTMLButtonElement>(".header-search__toggle")!.click();
+    await settleSessionMenu(menu);
+    const search = panel.querySelector("input")!;
     const cases = { José: ["Jose\u0301"], "Zoe\u0308": ["Zoë"], x: [] };
     for (const [query, labels] of Object.entries(cases)) {
       search.value = query;
@@ -477,8 +478,7 @@ describe("session menu", () => {
       session: { category: "Research", categoryClearReturnsToGroups: returnsToGroups },
       groups: ["Research", "Projects"],
     });
-    const pin = menuItem(menu, "Pin session");
-    press(pin, "1");
+    press(menuItem(menu, "Pin session"), "1");
     expect(onAction).not.toHaveBeenCalled();
     const submenu = await openSubmenu(menu, "Move to group");
     expect(
