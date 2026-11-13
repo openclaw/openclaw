@@ -37,6 +37,11 @@ final class SidebarAttentionUITests: XCTestCase {
         app.buttons["Go to Chat"].tap()
         XCTAssertTrue(app.staticTexts["Your research workspace is ready."].waitForExistence(timeout: 30))
         self.openSidebar(app)
+        if environment["FAMILY_GROUP_FIXTURE"] == "1" {
+            let group = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@", "Research")).firstMatch
+            XCTAssertTrue(group.waitForExistence(timeout: 10))
+            group.tap()
+        }
         let review = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Pending review")).firstMatch
         XCTAssertTrue(review.waitForExistence(timeout: 15), app.debugDescription)
         let parent = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Website refresh")).firstMatch

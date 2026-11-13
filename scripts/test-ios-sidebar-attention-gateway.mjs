@@ -380,7 +380,7 @@ wss.on("connection", (ws) => {
               displayName: "Website refresh",
               label: "Website refresh",
               category: "Research",
-              pinned: true,
+              pinned: process.env.FAMILY_GROUP_FIXTURE !== "1",
               kind: "direct",
               childSessions: [reviewKey],
               updatedAt: created - 30000,
