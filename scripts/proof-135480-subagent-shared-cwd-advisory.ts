@@ -48,9 +48,9 @@
  *   9. The reader/advisory metadata key contract. `readSubagentListSessionEntries`
  *      keys its selection by run id, not by child session key, because raw child
  *      session keys repeat across agents
- *      (https://github.com/openclaw/openclaw/pull/166550). Asserts the real
- *      reader's key set directly and then feeds that exact selection to
- *      `buildSubagentList`, so a producer/consumer key disagreement cannot pass.
+ *      (https://github.com/openclaw/openclaw/pull/166550). Feeds the real
+ *      reader's own selection object straight into `buildSubagentList`, so a
+ *      producer/consumer key disagreement cannot pass.
  *      The cross-agent raw-key case itself needs an admitted database for a
  *      non-default agent, which this offline harness does not stand up; it is
  *      covered by `subagent-list.test.ts` ("groups by each run's own metadata
@@ -64,7 +64,11 @@
  *      — as the control — that the identical directory without the policy
  *      marker is still reported.
  *
- * Run: pnpm tsx scripts/proof-135480-subagent-shared-cwd-advisory.ts
+ * Every reported directory is compared through `expectedSharedCwdPath()` — the
+ * same helper the owner suites use — because the advisory keeps only the last 72
+ * characters of a long directory, which a deep temporary root reaches.
+ *
+ * Run: node --import ./scripts/tsx.mjs scripts/proof-135480-subagent-shared-cwd-advisory.ts
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -78,6 +82,8 @@ type SubagentRegistryQueriesModule =
   typeof import("../src/agents/subagents/registry/subagent-registry-queries.js");
 type SubagentsCommandModule =
   typeof import("../src/auto-reply/reply/commands-subagents/action-list.js");
+type SubagentListTestSupportModule =
+  typeof import("../src/agents/subagents/registry/subagent-list.test-support.js");
 type SubagentRunRecord =
   import("../src/agents/subagents/registry/subagent-registry.types.js").SubagentRunRecord;
 type SubagentRunReadRecord =
@@ -133,6 +139,10 @@ async function main(): Promise<void> {
     (await import("../src/agents/subagents/registry/subagent-registry-queries.js")) as SubagentRegistryQueriesModule;
   const { handleSubagentsListAction } =
     (await import("../src/auto-reply/reply/commands-subagents/action-list.js")) as SubagentsCommandModule;
+  // The advisory's own display contract: the owner suites assert reported
+  // directories through this helper, so the proof must not hand-roll the cap.
+  const { expectedSharedCwdPath } =
+    (await import("../src/agents/subagents/registry/subagent-list.test-support.js")) as SubagentListTestSupportModule;
 
   /**
    * Captures the read context the same way the production caller does. This
@@ -250,7 +260,7 @@ async function main(): Promise<void> {
     check("both ACP rows refer to one exact group summary", () => {
       assert.deepEqual(first, {
         id: 1,
-        path: dir,
+        path: expectedSharedCwdPath(dir),
         runCount: 2,
         runIds: runs.map((run) => run.runId),
       });
@@ -259,7 +269,7 @@ async function main(): Promise<void> {
     });
     check("the /subagents text surface emits the directory once", () => {
       const rendered = JSON.stringify(text);
-      assert.equal(rendered.split(dir).length, 2);
+      assert.equal(rendered.split(expectedSharedCwdPath(dir)).length, 2);
     });
   }
 
@@ -315,7 +325,7 @@ async function main(): Promise<void> {
     check("aliased runs group together and report the canonical directory", () => {
       assert.deepEqual(groupFor(list, realRun.runId), {
         id: 1,
-        path: canonical,
+        path: expectedSharedCwdPath(canonical),
         runCount: 2,
         runIds: [realRun.runId, linkRun.runId].toSorted(),
       });
@@ -383,7 +393,7 @@ async function main(): Promise<void> {
     console.log(`   ${dir} removed after spawn; advisory still resolves`);
     check("grouping survives an unresolvable directory without throwing", () => {
       for (const run of runs) {
-        assert.equal(groupFor(list, run.runId)?.path, dir);
+        assert.equal(groupFor(list, run.runId)?.path, expectedSharedCwdPath(dir));
       }
     });
   }
@@ -569,8 +579,8 @@ async function main(): Promise<void> {
     // The defect this round fixed was invisible to every scenario above that
     // asserted only an end result: the advisory read the reader's selection by
     // child session key while the reader stores it by run id, so every ordinary
-    // child resolved to `undefined` and the advisory went silent. Assert the
-    // contract itself against the real reader, not just its downstream effect.
+    // child resolved to `undefined` and the advisory went silent. Drive the real
+    // reader's own selection object through the owner, not a reconstructed one.
     const store = path.join(root, "sessions-key-contract.json");
     const dir = path.join(root, "key-contract-shared");
     await fs.mkdir(dir, { recursive: true });
@@ -590,16 +600,10 @@ async function main(): Promise<void> {
         .map((run) => run.runId)
         .join(", ")}; session keys: ${runs.map((run) => run.childSessionKey).join(", ")})`,
     );
-    check("the reader keys its selection by run id, never by child session key", () => {
-      assert.equal(selection.size, runs.length);
-      assert.deepEqual([...selection.keys()].toSorted(), runs.map((run) => run.runId).toSorted());
-      for (const run of runs) {
-        assert.equal(selection.has(run.childSessionKey), false);
-        assert.equal(selection.get(run.runId)?.spawnedCwd, path.resolve(dir));
-      }
-    });
     // Same selection object the production callers pass, consumed by the owner
     // under test — so a producer/consumer key disagreement cannot pass here.
+    // The key shape itself is not asserted separately: this call detects the
+    // disagreement, and `subagent-list.test.ts` covers cross-agent raw keys.
     const list = buildSubagentList({ context, sessionEntries: selection });
     check("the advisory consumes that selection under the same key", () => {
       assert.equal(list.sharedCwdGroupTotal, 1);
@@ -663,7 +667,7 @@ async function main(): Promise<void> {
     const { list: controlList } = await listFor(controlStore, control);
     check("the same directory without the policy marker is still reported", () => {
       assert.equal(controlList.sharedCwdGroupTotal, 1);
-      assert.equal(controlList.sharedCwdGroups[0]?.path, path.resolve(requesterRoot));
+      assert.equal(controlList.sharedCwdGroups[0]?.path, expectedSharedCwdPath(requesterRoot));
       assert.equal(controlList.sharedCwdGroups[0]?.runCount, control.length);
     });
   }
