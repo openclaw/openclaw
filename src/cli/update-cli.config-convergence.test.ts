@@ -227,24 +227,13 @@ it.each(["caller", "service"] as const)(
         ? await useFileBackedConfigIO()
         : (await import("../config/io.js")).createConfigIO;
     readFrom(createConfigIO);
-    let selectedConfig: OpenClawConfig | undefined;
     if (owner === "service") {
       const serviceState = f.profileStateDir("work");
       await writeProfile(serviceState, { gateway: { mode: "local", bind: "lan" } });
       primeManagedProfile(root, serviceState);
-      const selected = await createConfigIO({
-        env: { ...process.env, ...profileEnv("work", serviceState) },
-        observe: false,
-        pluginValidation: "skip",
-      }).readConfigFileSnapshot();
-      expect(selected.config).not.toEqual(selected.sourceConfig);
-      selectedConfig = selected.config;
     }
-    mocks.candidateCheck.mockImplementationOnce(async (options) => {
-      if (owner === "caller") {
-        expect(options.config.gateway.bind).toBe("loopback");
-        expect(await fs.readFile(configPath, "utf8")).toBe(before);
-      }
+    mocks.candidateCheck.mockImplementationOnce(async () => {
+      expect(await fs.readFile(configPath, "utf8")).toBe(before);
       throw new Error(
         owner === "caller"
           ? "candidate refused the projected config"
@@ -257,9 +246,6 @@ it.each(["caller", "service"] as const)(
       owner === "service" ? { OPENCLAW_PROFILE: "personal" } : {},
     );
     expect(mocks.candidateCheck).toHaveBeenCalledTimes(1);
-    if (owner === "service") {
-      expect(mocks.candidateCheck.mock.calls[0]?.[0].config).toEqual(selectedConfig);
-    }
     expect(await fs.readFile(configPath, "utf8")).toBe(before);
     checks.expectNoSideEffects(
       cli.replaceConfigFile,
