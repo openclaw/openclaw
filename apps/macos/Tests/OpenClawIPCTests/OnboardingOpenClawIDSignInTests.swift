@@ -95,8 +95,11 @@ struct OnboardingOpenClawIDSignInTests {
         let endpoint = Self.configuration.issuer.appendingPathComponent("oauth2/authorize")
         for fresh in [false, true] {
             let url = try signIn.authorizationURL(
-                endpoint: endpoint, verifier: "fixture-verifier", state: "fixture-state",
-                nonce: "fixture-nonce", freshLogin: fresh)
+                endpoint: endpoint,
+                verifier: "fixture-verifier",
+                state: "fixture-state",
+                nonce: "fixture-nonce",
+                freshLogin: fresh)
             let items = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems)
             let query = Dictionary(items.map { ($0.name, $0.value ?? "") }, uniquingKeysWith: { first, _ in first })
             #expect(query["prompt"] == (fresh ? "login" : nil))
@@ -118,7 +121,9 @@ struct OnboardingOpenClawIDSignInTests {
             return "fixture-id-token"
         }
         let service = OnboardingOpenClawIDSignInService(
-            configuration: Self.configuration, databaseURL: Self.database(), nodeInvitations: Self.nodeInvitations(),
+            configuration: Self.configuration,
+            databaseURL: Self.database(),
+            nodeInvitations: Self.nodeInvitations(),
             environment: environment)
         let model = OnboardingOpenClawIDModel(service: service, onJoined: { _ in })
         await model.begin(.connect)?.value

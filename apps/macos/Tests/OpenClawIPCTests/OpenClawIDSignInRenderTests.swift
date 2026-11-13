@@ -25,7 +25,10 @@ struct OpenClawIDSignInRenderTests {
             await model.begin(.connect)?.value
             try #require(model.step == step)
             try OnboardingRenderTests.capture(
-                OnboardingOpenClawIDView(model: model), name: name, label: Self.label, output: output,
+                OnboardingOpenClawIDView(model: model),
+                name: name,
+                label: Self.label,
+                output: output,
                 width: 574)
             model.cancel()
         }
