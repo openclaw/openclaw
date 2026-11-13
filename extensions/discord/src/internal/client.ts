@@ -48,6 +48,14 @@ type SerializedCommand = ReturnType<BaseCommand["serialize"]>;
 const DISCORD_APPLICATION_COMMAND_LIMIT_REACHED = 30032;
 const DISCORD_UNKNOWN_APPLICATION_COMMAND = 10063;
 
+function isUnknownApplicationCommand(error: unknown): boolean {
+  return (
+    error instanceof DiscordError &&
+    error.status === 404 &&
+    error.discordCode === DISCORD_UNKNOWN_APPLICATION_COMMAND
+  );
+}
+
 function stableCommandKey(command: { name: string; type?: ApplicationCommandType }) {
   return `${command.type ?? ApplicationCommandType.ChatInput}:${command.name}`;
 }
@@ -399,11 +407,19 @@ export class Client {
     for (const { command, key } of desiredCommands) {
       const current = existingByKey.get(key);
       if (current && !commandsEqual(current, command)) {
-        await this.requestCommandDeploy(
-          "patch",
-          Routes.applicationCommand(this.options.clientId, current.id),
-          command,
-        );
+        try {
+          await this.requestCommandDeploy(
+            "patch",
+            Routes.applicationCommand(this.options.clientId, current.id),
+            command,
+          );
+        } catch (error) {
+          if (!isUnknownApplicationCommand(error)) {
+            throw error;
+          }
+          // The listed command vanished before PATCH; forget it so the create loop recreates it.
+          existingByKey.delete(key);
+        }
       }
     }
     for (const { command, key } of desiredCommands) {
@@ -446,13 +462,7 @@ export class Client {
           );
         } catch (error) {
           // Another deploy may have already removed this obsolete command.
-          if (
-            !(
-              error instanceof DiscordError &&
-              error.status === 404 &&
-              error.discordCode === DISCORD_UNKNOWN_APPLICATION_COMMAND
-            )
-          ) {
+          if (!isUnknownApplicationCommand(error)) {
             throw error;
           }
         }
