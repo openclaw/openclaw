@@ -27,6 +27,9 @@
  * payload bytes, which understates the cost of reading an epoch after a large pack.
  * --pager-extension=<path> loads the synthetic CACHE_MISS probe for a separate
  * sweep pager pass; logical pager bytes are not physical disk bytes.
+ * --sweep-step emits a ready line after warmup, then awaits one stdin line per
+ * sample and emits that sample as JSON. Alternate two retained processes for
+ * paired warm measurements without repeating process startup and warmup.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -34,6 +37,7 @@ import { existsSync, statSync } from "node:fs";
 import { Session } from "node:inspector/promises";
 import os from "node:os";
 import { performance } from "node:perf_hooks";
+import { createInterface } from "node:readline";
 import { DatabaseSync } from "node:sqlite";
 import { deserialize, GCProfiler, serialize } from "node:v8";
 import { inflateRawSync, zstdCompressSync, zstdDecompressSync } from "node:zlib";
@@ -51,6 +55,7 @@ assert.ok(
     (option) =>
       option === "--reuse" ||
       option === "--sweep" ||
+      option === "--sweep-step" ||
       option.startsWith("--sweep-epoch=") ||
       option.startsWith("--target-bytes=") ||
       option.startsWith("--pager-extension="),
@@ -257,10 +262,19 @@ if (options.includes("--sweep")) {
   const sweep = () =>
     localWorkspaceReadOperations["localWorkspace.sweepCandidates"]({ epoch: sweepEpoch }, db)
       .candidates;
+  const steps = options.includes("--sweep-step")
+    ? createInterface({ input: process.stdin })[Symbol.asyncIterator]()
+    : undefined;
   const warmupStarted = performance.now();
   sweep();
   const warmupMs = performance.now() - warmupStarted;
+  if (steps) {
+    console.log(JSON.stringify({ ready: true }));
+  }
   for (let sample = 0; sample < iterations; sample++) {
+    if (steps) {
+      assert.equal((await steps.next()).done, false, "sample input closed");
+    }
     global.gc();
     if (mode === "allocation") {
       await startCollectedHeapSampling(inspector, 32_768);
@@ -302,7 +316,11 @@ if (options.includes("--sweep")) {
       hostLoad: os.loadavg(),
       memory: process.memoryUsage(),
     });
+    if (steps) {
+      console.log(JSON.stringify({ sample: samples.at(-1) }));
+    }
   }
+  await steps?.return?.();
   console.log(
     JSON.stringify({
       operation: "sweepCandidates",

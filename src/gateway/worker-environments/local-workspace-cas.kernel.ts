@@ -204,14 +204,52 @@ export function beginLocalWorkspaceSweepInDatabase(db: EngineConnection): number
 
 export type LocalWorkspaceSweepCandidates = { packs: Uint8Array[]; paths: Uint8Array[] };
 
+function readUnreachableWorkspaceContent(
+  retained: ReadonlySet<string>,
+  epoch: number,
+  readPage: (
+    after: Uint8Array,
+    through: Uint8Array | undefined,
+    excluded: Uint8Array[],
+  ) => readonly { digest: Uint8Array; sweep_epoch: number }[],
+): Uint8Array[] {
+  // Canonical fixed-width hex refs have the same lexical and byte ordering.
+  const refs = [...retained].toSorted();
+  const result: Uint8Array[] = [];
+  let cursor: Uint8Array = new Uint8Array();
+  for (let offset = 0; ; offset += LOCAL_WORKSPACE_CONTENT_BATCH) {
+    const excluded = refs
+      .slice(offset, offset + LOCAL_WORKSPACE_CONTENT_BATCH)
+      .map(localWorkspaceDigestBytes);
+    const through =
+      offset + LOCAL_WORKSPACE_CONTENT_BATCH < refs.length ? excluded.at(-1) : undefined;
+    for (;;) {
+      // At most 256 retained keys are skipped before a bounded candidate page.
+      const rows = readPage(cursor, through, excluded);
+      for (const row of rows) {
+        if (row.sweep_epoch < epoch - 1) {
+          result.push(row.digest);
+        }
+      }
+      if (rows.length < LOCAL_WORKSPACE_CONTENT_BATCH) {
+        break;
+      }
+      cursor = rows.at(-1)!.digest;
+    }
+    if (through === undefined) {
+      return result;
+    }
+    cursor = through;
+  }
+}
+
 /** Select unreachable old content with bounded reads in the existing worker. */
 export function readLocalWorkspaceSweepCandidates(
   db: EngineConnection,
   epoch: number,
 ): LocalWorkspaceSweepCandidates {
-  const result: LocalWorkspaceSweepCandidates = { packs: [], paths: [] };
   if (!tableExists(db, packs)) {
-    return result;
+    return { packs: [], paths: [] };
   }
   const reachable = new Set<string>();
   const paths = new Set<string>();
@@ -287,55 +325,48 @@ export function readLocalWorkspaceSweepCandidates(
       }
     }
   }
-  let packCursor: Uint8Array = new Uint8Array();
-  for (;;) {
-    const rows = executeSqliteQuerySync(
-      db,
-      query(db)
-        .selectFrom(packs)
-        .select(["tree_digest", "sweep_epoch"])
-        .where("tree_digest", ">", packCursor)
-        .orderBy("tree_digest")
-        .limit(LOCAL_WORKSPACE_CONTENT_BATCH),
-    ).rows;
-    for (const row of rows) {
-      if (
-        row.sweep_epoch < epoch - 1 &&
-        !reachable.has(localWorkspaceDigestReference(row.tree_digest))
-      ) {
-        result.packs.push(row.tree_digest);
-      }
-    }
-    if (rows.length < LOCAL_WORKSPACE_CONTENT_BATCH) {
-      break;
-    }
-    packCursor = rows.at(-1)!.tree_digest;
-  }
-  let pathCursor: Uint8Array = new Uint8Array();
-  for (;;) {
-    const rows = executeSqliteQuerySync(
-      db,
-      query(db)
-        .selectFrom(pathSets)
-        .select(["path_digest", "sweep_epoch"])
-        .where("path_digest", ">", pathCursor)
-        .orderBy("path_digest")
-        .limit(LOCAL_WORKSPACE_CONTENT_BATCH),
-    ).rows;
-    for (const row of rows) {
-      if (
-        row.sweep_epoch < epoch - 1 &&
-        !paths.has(localWorkspaceDigestReference(row.path_digest))
-      ) {
-        result.paths.push(row.path_digest);
-      }
-    }
-    if (rows.length < LOCAL_WORKSPACE_CONTENT_BATCH) {
-      break;
-    }
-    pathCursor = rows.at(-1)!.path_digest;
-  }
-  return result;
+  return {
+    packs: readUnreachableWorkspaceContent(
+      reachable,
+      epoch,
+      (after, through, excluded) =>
+        executeSqliteQuerySync(
+          db,
+          query(db)
+            .selectFrom(packs)
+            .select(["tree_digest as digest", "sweep_epoch"])
+            .where("tree_digest", ">", after)
+            .$if(through !== undefined, (statement) =>
+              statement.where("tree_digest", "<=", through!),
+            )
+            .$if(excluded.length > 0, (statement) =>
+              statement.where("tree_digest", "not in", excluded),
+            )
+            .orderBy("tree_digest")
+            .limit(LOCAL_WORKSPACE_CONTENT_BATCH),
+        ).rows,
+    ),
+    paths: readUnreachableWorkspaceContent(
+      paths,
+      epoch,
+      (after, through, excluded) =>
+        executeSqliteQuerySync(
+          db,
+          query(db)
+            .selectFrom(pathSets)
+            .select(["path_digest as digest", "sweep_epoch"])
+            .where("path_digest", ">", after)
+            .$if(through !== undefined, (statement) =>
+              statement.where("path_digest", "<=", through!),
+            )
+            .$if(excluded.length > 0, (statement) =>
+              statement.where("path_digest", "not in", excluded),
+            )
+            .orderBy("path_digest")
+            .limit(LOCAL_WORKSPACE_CONTENT_BATCH),
+        ).rows,
+    ),
+  };
 }
 
 /** The epoch predicate protects content reused during candidate discovery. */

@@ -53,7 +53,10 @@ import type {
 import { resolveEmbeddedCompactionTarget } from "./compaction-runtime-context.js";
 import { resolveCompactionRuntimeSelection } from "./compaction-runtime-preparation.js";
 import { resolveCompactionTimeoutMs } from "./compaction-safety-timeout.js";
-import type { PreparedCompactEmbeddedAgentSessionParams } from "./direct-compaction-preparation.js";
+import {
+  hydratePersistedCompactionSkillsSnapshot,
+  type PreparedCompactEmbeddedAgentSessionParams,
+} from "./direct-compaction-preparation.js";
 import { compactEmbeddedAgentSessionDirectOnce } from "./direct-compaction.js";
 import { log } from "./logger.js";
 import { readCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
@@ -152,6 +155,10 @@ export async function compactNativeCliSession(params: {
   let compactedMeta: EmbeddedAgentMeta | undefined;
   try {
     const runControlOperation = async () => {
+      const skillsSnapshot = await hydratePersistedCompactionSkillsSnapshot(
+        params.compactParams,
+        sessionAgentId,
+      );
       const result = await runCliAgent({
         replyOperation: params.replyOperation,
         preparedRunAdmission,
@@ -185,7 +192,7 @@ export async function compactNativeCliSession(params: {
         conversationToolPolicy: params.compactParams.conversationToolPolicy,
         messageChannel: params.compactParams.messageChannel,
         messageProvider: params.compactParams.messageProvider,
-        skillsSnapshot: params.compactParams.skillsSnapshot,
+        skillsSnapshot,
         toolOverrides: params.compactParams.toolOverrides,
         ownerNumbers: params.compactParams.ownerNumbers,
         sourceReplyDeliveryMode: params.compactParams.sourceReplyDeliveryMode,
