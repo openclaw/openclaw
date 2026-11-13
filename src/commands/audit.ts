@@ -28,6 +28,7 @@ import { parseAbsoluteTimeMs } from "../cron/parse.js";
 import { callGateway } from "../gateway/call.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { formatHumanList } from "../shared/human-list.js";
 
 const DEFAULT_AUDIT_LIMIT = 100;
@@ -207,13 +208,20 @@ function toLegacyAuditListParams(params: AuditActivityListParams): AuditListPara
 async function queryAuditActivity(
   params: AuditActivityListParams,
   options: AuditListCommandOptions,
-): Promise<AuditActivityListResult | AuditListResult> {
+): Promise<AuditActivityListResult | AuditListResult | undefined> {
+  const signal = getAsyncWorkSignal();
   try {
     return await callGateway<AuditActivityListResult>({
       method: "audit.activity.list",
       params,
+      signal,
     });
   } catch (error) {
+    // A Ctrl+C cancels the pending read; keep the canonical abort outcome instead of
+    // printing a late error or falling back to a legacy read the user no longer wants.
+    if (signal?.aborted) {
+      return undefined;
+    }
     if (!isUnsupportedAuditMethodError(error, "audit.activity.list")) {
       throw formatAuditGatewayError(error);
     }
@@ -226,6 +234,7 @@ async function queryAuditActivity(
     return await callGateway<AuditListResult>({
       method: "audit.list",
       params: toLegacyAuditListParams(params),
+      signal,
     });
   }
 }
@@ -255,10 +264,20 @@ function unsupportedRunInspection(
 
 async function queryAuditRunInspection(
   params: AuditRunInspectParams,
-): Promise<AuditRunInspectResult> {
+): Promise<AuditRunInspectResult | undefined> {
+  const signal = getAsyncWorkSignal();
   try {
-    return await callGateway<AuditRunInspectResult>({ method: "audit.run.inspect", params });
+    return await callGateway<AuditRunInspectResult>({
+      method: "audit.run.inspect",
+      params,
+      signal,
+    });
   } catch (error) {
+    // A Ctrl+C cancels the pending read; keep the canonical abort outcome instead of
+    // printing a late error or an upgrade-state reply the user no longer wants.
+    if (signal?.aborted) {
+      return undefined;
+    }
     if (!isUnsupportedAuditMethodError(error, "audit.run.inspect")) {
       throw formatAuditGatewayError(error);
     }
@@ -537,6 +556,10 @@ export async function auditListCommand(
             ...decisionPage,
           },
     );
+    if (result === undefined) {
+      // Interrupted before the read settled; exit quietly with the normal abort code.
+      return;
+    }
     if (options.json) {
       writeRuntimeJson(runtime, result);
       return;
@@ -572,6 +595,10 @@ export async function auditListCommand(
     ...(options.cursor ? { cursor: options.cursor } : {}),
   };
   const result = await queryAuditActivity(params, options);
+  if (result === undefined) {
+    // Interrupted before the read settled; exit quietly with the normal abort code.
+    return;
+  }
   if (options.json) {
     writeRuntimeJson(runtime, result);
     return;
