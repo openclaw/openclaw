@@ -337,7 +337,7 @@ it("queues a header rename and rendered reaction through the shared outbox", asy
   emoji.click();
   await waitForSolid(() => expect(h.gateway.snapshot.deferredIntentCount).toBe(2));
   h.draw();
-  expect(h.messages.querySelector(".chat-reaction-chip")?.getAttribute("aria-label")).toBe("👍 1");
+  expect(h.messages.querySelector(".chat-reaction-tab")?.textContent).toBe("👍");
   const reactions = () =>
     h.current().request.mock.calls.filter(([method]) => method === "session.reactions.set");
   expect(reactions()).toHaveLength(0);
@@ -443,14 +443,14 @@ it("a queued delete discards and rolls back the open chat's queued reaction and 
   );
   expect(h.gateway.snapshot.deferredIntentCount).toBe(2);
   h.draw();
-  expect(h.messages.querySelector(".chat-reaction-chip")).not.toBeNull();
+  expect(h.messages.querySelector(".chat-reaction-tab")).not.toBeNull();
   await h.sessions.delete("agent:main:current", {
     agentId: "main",
     expectedSessionId: "current-incarnation",
   });
   expect(h.gateway.snapshot.deferredIntentCount).toBe(1);
   h.draw();
-  expect(h.messages.querySelector(".chat-reaction-chip")).toBeNull();
+  expect(h.messages.querySelector(".chat-reaction-tab")).toBeNull();
   // Replacing the delete exposes the rolled-back row, not its abandoned name.
   await h.sessions.patch(
     "agent:main:current",

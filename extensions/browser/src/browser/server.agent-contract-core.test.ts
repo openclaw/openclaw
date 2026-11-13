@@ -267,7 +267,12 @@ describe("browser control server", () => {
     });
     pw("storageGetViaPlaywright").mockResolvedValueOnce({ values: { token: "value" } });
     for (const [route, mock, result, options] of [
-      ["/cookies", "cookiesGetViaPlaywright", { cookies: [{ name: "session" }] }, {}],
+      [
+        "/cookies",
+        "cookiesGetViaPlaywright",
+        { cookies: [{ name: "session" }] },
+        { partition: undefined, signal: expect.any(AbortSignal) },
+      ],
       [
         "/storage/local?key=token",
         "storageGetViaPlaywright",

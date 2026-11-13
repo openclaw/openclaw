@@ -212,11 +212,12 @@ changed Node plan defers its boundary coverage to that producer. This opt-in doe
 not enable unrelated proof-tier checks.
 
 Full and runtime-only compiled workers reserve separate live/cache slots, so
-runtime checks cannot replace a retained full generation. The protected warmer
-also supplies runtime workers to current-target Control UI E2E rows. Worker-cache
-identity ignores the compiler's heap ceiling while preserving other Node options;
-the warmer and test job keep their own memory limits. Frozen targets and browser
-extension rows retain their existing preparation.
+runtime checks cannot replace a retained full generation. Control UI E2E rows
+compile workers locally: bundled Settings preparation can change their installed
+namespace after the source-only seed was captured. Do not restore that seed
+until reuse is qualified against the prepared UI topology. Worker-cache identity
+ignores the compiler's heap ceiling while preserving other Node options; the
+warmer and test job keep their own memory limits.
 
 The protected warmer keeps its prebuild full seed for source-only Node shards and publishes the full
 generation already prepared by postbuild collection separately. Only selected
@@ -388,6 +389,8 @@ Additional checks and narrow-PR guards and dependency scans start directly after
 Changed compiler planning queries each config's complete file membership with `--listFilesOnly`, using tsrs by default and tsgo on unsupported hosts or when `OPENCLAW_TYPECHECKER=tsgo`. Type-only consumers and dependency declarations remain included; the selected compiler's bundled library directory is excluded because it describes compiler identity, not repository membership. Config expansion and shard/buildinfo validation still use tsgo's `--showConfig`. Queries run serially without opening native API snapshots. Upstream first-attempt `check-plan` jobs use the 16-class when the backend is unset, `blacksmith`, or `hybrid`, including fork PRs. Fork type stripes also use the 16-class with an unset or `blacksmith` backend; their logical GitHub profile and restore-only cache policy stay intact. Existing hybrid health admission, the explicit GitHub override, retries, and frozen routing remain in effect.
 
 When shared SDK declarations are enabled, explicitly selected core-only lint rows skip SDK restoration. Selected extension consumers restore this run's SDK; unselected legacy rows retain their existing cache restoration.
+
+Central lint also skips the SDK cache when the check planner assigns it no extension work. A retained extension tail, missing planner metadata, or a frozen or compatibility target keeps the existing restore path.
 
 The extension package boundary row has a 40-minute job budget for SDK preparation,
 all selected plugin compiles, input-receipt validation, the required negative

@@ -188,6 +188,10 @@ export const gatewayDirectStopEntrypoints = {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../infra/restart-intent",
   }),
+  bootLifecycle: worker({
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../infra/gateway-boot-lifecycle",
+  }),
   restartPolicy: worker({
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../infra/restart",

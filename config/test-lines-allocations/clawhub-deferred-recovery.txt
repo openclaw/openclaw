@@ -1,2 +1,0 @@
-# Authenticated core-only recovery guard, explicit deferred proof, and strict incomplete readback receipt.
-91

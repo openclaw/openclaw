@@ -1,2 +1,0 @@
-# Exercise the returned plugin memory callback after session revocation and retire its fixture grant/row.
-11

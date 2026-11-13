@@ -4,7 +4,10 @@ import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
-import { normalizeTabIconPreference } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
+import {
+  normalizeTabIconPreference,
+  UI_PREFERENCE_DEFAULTS,
+} from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
 import { CONTROL_UI_TOKEN_SESSION_KEY_PREFIX } from "../../../src/shared/control-ui-storage.js";
 import { DEFAULT_SIDEBAR_ENTRIES, normalizeSidebarEntries } from "../app-navigation.ts";
 import { configuredUiDevGateway } from "../dev-gateway.ts";
@@ -379,9 +382,9 @@ export function loadUiPreferences(
     lastActiveSessionKey: "main",
     theme: UI_APPEARANCE_DEFAULTS.theme,
     themeMode: UI_APPEARANCE_DEFAULTS.themeMode,
-    chatShowThinking: true,
-    chatShowToolCalls: true,
-    chatPersistCommentary: true,
+    chatShowThinking: UI_PREFERENCE_DEFAULTS.chatShowThinking,
+    chatShowToolCalls: UI_PREFERENCE_DEFAULTS.chatShowToolCalls,
+    chatPersistCommentary: UI_PREFERENCE_DEFAULTS.chatPersistCommentary,
     chatShowTaskProgress: UI_APPEARANCE_DEFAULTS.chatShowTaskProgress,
     chatCollapseTaskProgress: UI_APPEARANCE_DEFAULTS.chatCollapseTaskProgress,
     chatSendShortcut: UI_APPEARANCE_DEFAULTS.chatSendShortcut,
@@ -444,6 +447,7 @@ export function loadUiPreferences(
       terminalFontFamily: normalizeTerminalFontFamily(parsed.terminalFontFamily),
       chatShowThinking: booleanSetting("chatShowThinking"),
       chatShowToolCalls: booleanSetting("chatShowToolCalls"),
+      chatInlineCommands: booleanSetting("chatInlineCommands"),
       chatPersistCommentary: booleanSetting("chatPersistCommentary"),
       chatShowTaskProgress: booleanSetting("chatShowTaskProgress"),
       chatCollapseTaskProgress: booleanSetting("chatCollapseTaskProgress"),
@@ -632,6 +636,7 @@ export function saveSettings(
     terminalFontFamily: normalizeTerminalFontFamily(next.terminalFontFamily),
     chatShowThinking: next.chatShowThinking,
     chatShowToolCalls: next.chatShowToolCalls,
+    chatInlineCommands: next.chatInlineCommands === true ? true : undefined,
     chatPersistCommentary: next.chatPersistCommentary ?? true,
     chatShowTaskProgress: next.chatShowTaskProgress === false ? false : undefined,
     chatCollapseTaskProgress: next.chatCollapseTaskProgress === true ? true : undefined,

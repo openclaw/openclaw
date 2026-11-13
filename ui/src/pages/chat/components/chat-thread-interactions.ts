@@ -27,8 +27,10 @@ import type {
 } from "../../../lib/chat/chat-types.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
+import type { InlineCommandPresentation } from "../chat-inline-command-presentation.ts";
 // Pane-local search, context menus, selection actions, and presentation resets.
 import type { TurnRecapWatch } from "../chat-progress.ts";
+import type { ChatToolMessageSource } from "../chat-run-presentation.ts";
 import type { SubagentRoster } from "../chat-spawned-subagent.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { resetChatThreadState } from "../chat-thread.ts";
@@ -156,6 +158,8 @@ export type ChatThreadProps = Omit<
     historyPagination?: ChatHistoryBoundaryProps;
     messages: unknown[];
     toolMessages: unknown[];
+    /** Existing pane owner, forwarded into the transcript's detached render root. */
+    toolMessageSource?: ChatToolMessageSource;
     latestBrowserTabs?: ReadonlyMap<string, BrowserTabSelection>;
     guardianNotices?: ChatGuardianNotice[];
     streamSegments: ChatStreamSegment[];
@@ -171,6 +175,7 @@ export type ChatThreadProps = Omit<
     chatBubbleMode?: boolean;
     showThinking: boolean;
     showToolCalls: boolean;
+    inlineCommands?: InlineCommandPresentation;
     persistCommentary?: boolean;
     runWorking?: boolean;
     runFinalizing?: boolean;

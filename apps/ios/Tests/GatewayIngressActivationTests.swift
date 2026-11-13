@@ -1137,7 +1137,7 @@ extension GatewayIngressControllerTests {
         try await waitForIngress { !controller._test_pendingAutoConnectState().pending }
         #expect(model.activeGatewayConnectConfig == nil)
         #expect(model.lastGatewayProblem == nil)
-        #expect(model.gatewayStatusText == "Offline")
+        #expect(GatewayStatusBuilder.build(appModel: model) == .disconnected)
         #expect(ingress.attention?.message == "Sign-in was canceled. Choose Sign in to try again.")
         #expect(fixture.browser.presented.isEmpty)
         #expect(fixture.persisted == nil)

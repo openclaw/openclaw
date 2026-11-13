@@ -185,7 +185,10 @@ function prepareComposer(options: NewSessionComposerOptions, textarea: NewSessio
       return;
     }
     const hasSubmitModifier = event.metaKey || event.ctrlKey;
-    const isBackgroundShortcut = hasSubmitModifier && event.shiftKey;
+    // While plain Enter sends, the modified chord starts in the background like
+    // the command palette. A modifier-enter preference keeps it for Send, so
+    // Shift selects the background start there.
+    const isBackgroundShortcut = hasSubmitModifier && (event.shiftKey || !options.requiresModifier);
     const background = Boolean(!event.altKey && isBackgroundShortcut && options.onBackgroundSubmit);
     if (!background && (event.shiftKey || (options.requiresModifier && !hasSubmitModifier))) {
       return;
@@ -486,6 +489,13 @@ export function NewSessionComposer(props: {
             />
           </Show>
         </PetBoundary>
+        <Show when={frame().slashMenuVisible}>
+          <SlashMenu
+            menu={textarea.slashMenu}
+            host={frame().slashMenuHost}
+            draft={frame().visibleMessage}
+          />
+        </Show>
         <HumanMentionMenuView args={[textarea.mentionMenu, frame().mentionMenuHost]} />
         <EmojiMenu args={[textarea.emojiMenu, "new-session", textarea.getTextarea()]} />
         <Show when={!options().nativeTerminal}>
@@ -502,13 +512,6 @@ export function NewSessionComposer(props: {
         <div class="agent-chat__composer-lede">{options().dictationStatus}</div>
         <div class="agent-chat__composer-input-row">
           <div class="agent-chat__composer-combobox">
-            <Show when={frame().slashMenuVisible}>
-              <SlashMenu
-                menu={textarea.slashMenu}
-                host={frame().slashMenuHost}
-                draft={frame().visibleMessage}
-              />
-            </Show>
             <Show when={frame().skillMenuVisible}>
               <SkillMenu menu={textarea.skillMenu} host={frame().skillMenuHost} />
             </Show>

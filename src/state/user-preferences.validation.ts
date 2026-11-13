@@ -4,6 +4,10 @@ import {
   USER_BACKGROUND_PREFERENCE_KEY,
 } from "../../packages/gateway-protocol/src/schema/background-preferences.js";
 import {
+  normalizeGitCoauthorOrganizationIdentity,
+  GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
+} from "../../packages/gateway-protocol/src/schema/git-coauthor-identity.js";
+import {
   USER_PREFS_ENTRY_LIMIT,
   USER_PREFS_VALUE_BYTES,
 } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
@@ -14,6 +18,7 @@ import type {
 
 function prepareEntries(
   entries: Record<string, unknown>,
+  trustedProxyGitCoauthor = false,
 ): Result<Pick<PreparedUserPreferenceUpdate, "serialized" | "deletionKeys">, UserPreferenceError> {
   const rawEntries = Object.entries(entries);
   if (rawEntries.length > USER_PREFS_ENTRY_LIMIT) {
@@ -23,6 +28,9 @@ function prepareEntries(
   const deletionKeys: string[] = [];
   for (const [prefKey, value] of rawEntries) {
     if (!prefKey || prefKey.length > 256) {
+      return err({ code: "invalid-key", key: prefKey });
+    }
+    if (prefKey === GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY && !trustedProxyGitCoauthor) {
       return err({ code: "invalid-key", key: prefKey });
     }
     // JSON null is the additive removal form for this record-shaped RPC.
@@ -36,10 +44,17 @@ function prepareEntries(
         prefKey === USER_BACKGROUND_PREFERENCE_KEY
           ? normalizeBackgroundPreference(value)
           : undefined;
+      const credit =
+        prefKey === GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY
+          ? normalizeGitCoauthorOrganizationIdentity(value)
+          : undefined;
+      if (prefKey === GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY && !credit) {
+        return err({ code: "invalid-value", key: prefKey });
+      }
       if (prefKey === USER_BACKGROUND_PREFERENCE_KEY && !background) {
         return err({ code: "invalid-value", key: prefKey });
       }
-      valueJson = JSON.stringify(background ?? value);
+      valueJson = JSON.stringify(credit ?? background ?? value);
     } catch {
       return err({ code: "invalid-value", key: prefKey });
     }
@@ -57,17 +72,21 @@ function prepareEntries(
 export function prepareUserPreferenceUpdate(
   entries: Record<string, unknown>,
   expectedEntries: Record<string, unknown> = {},
+  options: { trustedProxyGitCoauthor?: true; organizationPolicy?: string | null } = {},
 ): Result<PreparedUserPreferenceUpdate, UserPreferenceError> {
-  const prepared = prepareEntries(entries);
+  const prepared = prepareEntries(entries, options.trustedProxyGitCoauthor);
   if (!prepared.ok) {
     return prepared;
   }
-  const expected = prepareEntries(expectedEntries);
+  const expected = prepareEntries(expectedEntries, true);
   if (!expected.ok) {
     return expected;
   }
   return ok({
     ...prepared.value,
+    ...(options.organizationPolicy !== undefined
+      ? { organizationPolicy: options.organizationPolicy }
+      : {}),
     expected: [
       ...expected.value.serialized,
       ...expected.value.deletionKeys.map((prefKey) => ({ prefKey, valueJson: null })),

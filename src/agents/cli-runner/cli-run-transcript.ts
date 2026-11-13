@@ -134,7 +134,7 @@ export async function persistApprovedCliUserTurnTranscript(
  * The counters carry the backend model's API-rate cost (via its `priceAs` provider), so a
  * subscription turn records what the API would charge instead of a $0 placeholder.
  */
-export function buildCliAssistantTranscriptUsage(params: {
+export async function buildCliAssistantTranscriptUsage(params: {
   runParams: Pick<RunCliAgentParams, "provider" | "config">;
   modelId: string;
   agentDir?: string;
@@ -142,7 +142,7 @@ export function buildCliAssistantTranscriptUsage(params: {
   usage?: CliUsage;
   /** Terminal whole-turn usage, when the backend reports it separately from the latest call. */
   turnUsage?: CliUsage;
-}): { usage: Usage; costUsd?: number } {
+}): Promise<{ usage: Usage; costUsd?: number }> {
   const counters = buildCliTranscriptCounters(params.usage, params.turnUsage);
   // Text-output backends report no counters; their zero placeholders measure nothing.
   const reported = params.turnUsage ?? params.usage;
@@ -154,7 +154,7 @@ export function buildCliAssistantTranscriptUsage(params: {
   ) {
     return { usage: counters };
   }
-  const rates = resolveModelCostConfig({
+  const rates = await resolveModelCostConfig({
     provider: params.runParams.provider,
     model: params.modelId,
     config: params.runParams.config,
