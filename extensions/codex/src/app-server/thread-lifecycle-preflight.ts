@@ -70,6 +70,7 @@ import type {
 } from "./thread-lifecycle-types.js";
 import { resolveCodexAppServerThreadModelSelection } from "./thread-model-selection.js";
 import { assertAdoptedCodexThreadResumeAllowed } from "./thread-policy.js";
+import { resolveCodexOpenClawBaseInstructions } from "./thread-prompt.js";
 import {
   assertCodexManagedRequirementsDoNotOverrideToolPolicy,
   buildCodexRingZeroThreadConfigPatch,
@@ -243,6 +244,23 @@ export async function prepareCodexThreadRequestContext(
     assertCodexThreadInferenceAuthority(params, modelPolicyEnforced);
   };
   params.assertCurrent();
+  // Supervision threads render for the native model they resume on, not the outer route's.
+  const resumeAttempt = (binding: CodexAppServerThreadBinding) =>
+    binding.connectionScope === "supervision" && binding.model
+      ? { ...params.params, modelId: binding.model }
+      : params.params;
+  const resumeOptions = (binding: CodexAppServerThreadBinding) => ({
+    ...params,
+    threadId: binding.threadId,
+    model: startModelSelection.model,
+    modelProvider: startModelProvider,
+    preserveNativeModel: binding.preserveNativeModel === true,
+    nativeModelProvider:
+      binding.connectionScope === "supervision" ? binding.modelProvider : undefined,
+    hostSystemAgentActive: options.preflight.hostSystemAgentActive,
+    restrictedToolSurfaceInheritedMcpServerNames:
+      options.preflight.restrictedToolSurfaceInheritedMcpServerNames,
+  });
   return {
     ...options.preflight,
     admittedNativeThread,
@@ -274,18 +292,19 @@ export async function prepareCodexThreadRequestContext(
       authProfileId: string | undefined,
       config: JsonObject | undefined,
     ) =>
-      await buildThreadResumeParams(params.params, {
-        ...params,
-        threadId: binding.threadId,
+      await buildThreadResumeParams(resumeAttempt(binding), {
+        ...resumeOptions(binding),
         authProfileId,
-        model: startModelSelection.model,
-        modelProvider: startModelProvider,
-        preserveNativeModel: binding.preserveNativeModel === true,
         config,
-        hostSystemAgentActive: options.preflight.hostSystemAgentActive,
-        restrictedToolSurfaceInheritedMcpServerNames:
-          options.preflight.restrictedToolSurfaceInheritedMcpServerNames,
       }),
+    // Start requests take their prompt options from `params`, as this omitted binding does.
+    resolveOpenClawBaseInstructions: (binding?: CodexAppServerThreadBinding) =>
+      resolveCodexOpenClawBaseInstructions(
+        binding ? resumeAttempt(binding) : params.params,
+        binding
+          ? resumeOptions(binding)
+          : { ...params, hostSystemAgentActive: options.preflight.hostSystemAgentActive },
+      ),
     throwIfAborted: options.throwIfAborted,
   };
 }
@@ -317,7 +336,12 @@ export async function publishCodexThreadInferenceBinding(
         params.inferenceProviderRoutes,
       );
     }
-    return { ...binding, preparedServiceTier: params.appServer.serviceTier };
+    return {
+      ...binding,
+      preparedServiceTier: params.appServer.serviceTier,
+      // Preflight stored its effective config here; reporting reuses it instead of re-reading.
+      ...(params.nativeConfig ? { preparedEffectiveConfig: params.nativeConfig } : {}),
+    };
   };
   return params.authority ? await params.authority.withCurrent(publish) : publish();
 }
@@ -517,7 +541,7 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
     );
   }
   params.config = mergeCodexNativeProjectDocThreadConfig(params.config, effectiveConfig);
-  params.nativeQuestionConfig = effectiveConfig;
+  params.nativeConfig = effectiveConfig;
   if (params.shellEnvironment || params.shellGitConfigParameters) {
     params.config = mergeCodexNativeShellEnvironment(
       params.config,

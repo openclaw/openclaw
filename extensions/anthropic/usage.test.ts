@@ -1,6 +1,16 @@
 import { expect, it, vi } from "vitest";
 import { fetchAnthropicUsage, resolveAnthropicUsageAuth } from "./usage.js";
 
+const storedProfileTypes: Record<string, "oauth" | "token"> = {
+  "anthropic:setup": "token",
+  "anthropic:oauth": "oauth",
+};
+// mock-isolation: profile types come from this fixture, not a real auth-profile store.
+vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
+  findPersistedAuthProfileCredentialAsync: async ({ profileId }: { profileId: string }) =>
+    storedProfileTypes[profileId] ? { type: storedProfileTypes[profileId] } : undefined,
+}));
+
 const requestUrl = (input: string | URL | Request) =>
   new URL(input instanceof Request ? input.url : input);
 
@@ -93,12 +103,69 @@ it("aggregates provider-reported costs, cache tokens, models, and categories", a
   }
 });
 
-it("uses a stored setup token when no Admin API or OAuth credential is available", async () => {
-  const token = `sk-ant-oat01-${"a".repeat(80)}`;
+const setupToken = `sk-ant-oat01-${"a".repeat(80)}`;
+const webSessionToken = 'openclaw:anthropic-web-session:v1:{"token":"sk-ant-session"}';
+const webSessionEnv = { CLAUDE_AI_SESSION_KEY: "sk-ant-session" };
+// resolveOAuthToken also resolves stored `token` profiles.
+const setupTokenProfile = {
+  resolveOAuthToken: async () => ({
+    token: setupToken,
+    authProfileId: "anthropic:setup",
+    email: "setup@example.com",
+  }),
+};
+
+it("skips OAuth usage for a stored setup-token profile without a web session", async () => {
+  expect(await resolveAuth(setupTokenProfile)).toEqual({ handled: true });
+});
+
+it("keeps OAuth usage for a configured setup-token-shaped bearer", async () => {
   const result = await resolveAuth({
-    resolveApiKeyCandidatesFromConfigAndStore: async () => [token],
+    env: webSessionEnv,
+    resolveApiKeyCandidatesFromConfigAndStore: async () => [setupToken],
   });
-  expect(result).toEqual({ token });
+  expect(result).toEqual({ token: setupToken });
+});
+
+it("routes a stored setup-token profile to the claude.ai web session", async () => {
+  const auth = await resolveAuth({ ...setupTokenProfile, env: webSessionEnv });
+  expect(auth).toEqual({
+    token: webSessionToken,
+    authProfileId: "anthropic:setup",
+    email: "setup@example.com",
+  });
+
+  const fetchFn = vi.fn(async (input: string | URL | Request) =>
+    requestUrl(input).pathname === "/api/organizations"
+      ? Response.json([{ uuid: "org-a" }])
+      : Response.json({ five_hour: { utilization: 12 } }),
+  );
+  const snapshot = await fetchUsage({ ...auth, fetchFn: fetchFn as typeof fetch });
+  expect(snapshot).toMatchObject({
+    windows: [{ label: "5h", usedPercent: 12 }],
+    accountEmail: "setup@example.com",
+  });
+  expect(fetchFn.mock.calls.map(([input]) => requestUrl(input).href)).toEqual([
+    "https://claude.ai/api/organizations",
+    "https://claude.ai/api/organizations/org-a/usage",
+  ]);
+});
+
+it("reports an unavailable web session instead of polling OAuth usage", async () => {
+  const fetchFn = vi.fn(async () => new Response("down", { status: 503 }));
+  const snapshot = await fetchUsage({ token: webSessionToken, fetchFn });
+  expect(snapshot.error).toMatch(/^Claude web usage unavailable\. Renew the claude\.ai session/);
+  expect(fetchFn).toHaveBeenCalledOnce();
+});
+
+it("keeps OAuth usage for an OAuth profile whose token is also the configured bearer", async () => {
+  const oauth = { token: setupToken, authProfileId: "anthropic:oauth", subscriptionType: "max" };
+  const result = await resolveAuth({
+    env: webSessionEnv,
+    resolveApiKeyCandidatesFromConfigAndStore: async () => [setupToken],
+    resolveOAuthToken: async () => oauth,
+  });
+  expect(result).toEqual(oauth);
 });
 
 it("prefers a stored Admin API key when normal API and OAuth credentials coexist", async () => {

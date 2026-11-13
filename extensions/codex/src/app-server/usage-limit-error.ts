@@ -1,4 +1,5 @@
 import {
+  AgentHarnessModelRequestPolicyError,
   embeddedAgentLog,
   formatErrorMessage,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
@@ -18,6 +19,7 @@ import {
   resolveCodexUsageLimitResetAtMs,
   shouldRefreshCodexRateLimitsForUsageLimitMessage,
 } from "./rate-limits.js";
+import { CodexAppServerRpcError } from "./rpc-error.js";
 
 const CODEX_USAGE_LIMIT_RATE_LIMIT_REFRESH_TIMEOUT_MS = 5_000;
 
@@ -70,12 +72,51 @@ export function resolveCodexPromptError(
       }
     }
   }
+  if (
+    isJsonObject(info) &&
+    Object.keys(info).length === 1 &&
+    isJsonObject(info.httpConnectionFailed) &&
+    info.httpConnectionFailed.httpStatusCode === 403 &&
+    isRequestPolicyDenial(source.message)
+  ) {
+    return new AgentHarnessModelRequestPolicyError();
+  }
   return status === undefined
     ? (source.message ?? undefined)
     : Object.assign(new Error(source.message ?? "codex app-server error"), {
         status,
         ...(info === "serverOverloaded" ? { code: "OVERLOADED" } : {}),
       });
+}
+
+function isRequestPolicyDenial(message: string | null | undefined): boolean {
+  const prefix = "unexpected status 403 Forbidden: ";
+  if (!message || message.length > 8_192 || !message.startsWith(prefix)) {
+    return false;
+  }
+  const body = message.slice(prefix.length);
+  // Parse one complete object before independently optional native transport metadata.
+  for (let end = body.indexOf("}"); end !== -1; end = body.indexOf("}", end + 1)) {
+    const suffix = body.slice(end + 1);
+    if (
+      suffix &&
+      !/^, (?:url|cf-ray|request id|auth error|auth error code): [^\r\n]*$/.test(suffix)
+    ) {
+      continue;
+    }
+    try {
+      const error: unknown = JSON.parse(body.slice(0, end + 1));
+      return (
+        isJsonObject(error) &&
+        error.error === "middleware_denied" &&
+        error.reason_code === "request_credential_denied" &&
+        error.layer === "l7"
+      );
+    } catch {
+      // A closing brace in a string or nested object is not the end of the envelope.
+    }
+  }
+  return false;
 }
 
 export async function markCodexAuthProfileBlockedFromRateLimits(params: {
@@ -218,6 +259,14 @@ function readCodexTurnStartUsageLimitErrorSource(
   const notificationError = readCodexErrorNotification(errorNotification);
   const errorPayload = readCodexErrorPayload(error);
   const rateLimits = errorPayload.rateLimits ?? readRecentCodexRateLimits(client);
+  // Explicit RPC failures own their facts; unbound notices only enrich a matching local error.
+  const source =
+    !(error instanceof CodexAppServerRpcError) &&
+    notificationError?.codexErrorInfo != null &&
+    errorPayload.codexErrorInfo == null &&
+    notificationError.message === errorPayload.message
+      ? notificationError
+      : errorPayload;
   // The cached snapshot may predate this attempt or belong to another turn on
   // the same process. Trust it for the auth profile only when this client saw
   // a primary update after this turn's startup began.
@@ -225,8 +274,8 @@ function readCodexTurnStartUsageLimitErrorSource(
     rateLimitsRevisionBeforeTurnStart !== undefined &&
     readCodexRateLimitsRevision(client) > rateLimitsRevisionBeforeTurnStart;
   return {
-    message: notificationError?.message ?? errorPayload.message ?? formatErrorMessage(error),
-    codexErrorInfo: notificationError?.codexErrorInfo ?? errorPayload.codexErrorInfo,
+    message: source.message,
+    codexErrorInfo: source.codexErrorInfo,
     rateLimits,
     rateLimitsTrustedForProfile:
       errorPayload.rateLimits !== undefined || cacheUpdatedDuringTurnStart,
@@ -236,7 +285,11 @@ function readCodexTurnStartUsageLimitErrorSource(
 function readCodexErrorNotification(
   notification: CodexServerNotification | undefined,
 ): { message?: string; codexErrorInfo?: JsonValue | null } | undefined {
-  if (notification?.method !== "error" || !isJsonObject(notification.params)) {
+  if (
+    notification?.method !== "error" ||
+    !isJsonObject(notification.params) ||
+    notification.params.willRetry === true
+  ) {
     return undefined;
   }
   const error = notification.params.error;

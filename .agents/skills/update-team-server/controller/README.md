@@ -57,6 +57,32 @@ the Gateway. The native backup remains on disk. This also applies to
 `ROLLBACK_FAILED` with the candidate still selected. An absent or unverifiable
 candidate follows the existing compatibility-checked rollback path.
 
+Session preservation separates live stores from held stores using the native
+deletion journal and reconstruction holds. Held databases retain a physical
+presence/identity witness; the controller does not open SQLite or require their
+schema to match the running release. Native migration receipts may omit them.
+New witnesses mark held stores explicitly, while existing session witnesses keep
+working without rewriting the journal or its artifacts. An explicit native agent
+restore owns migration before the store becomes live again.
+
+If a held canonical agent directory was moved out of `agents/`, recovery accepts
+its database under `held-agent-archive/<agent-id>-held-*/agent/` only with the
+original device/inode identity. This also covers older witnesses without a held
+marker when the original path is absent and that archive contains the exact
+store. A copied/replaced archive, missing store, or incompatible live database
+still refuses recovery. Leave the held directory archived during `--recover`;
+moving it back can break a running release that still discovers held stores.
+Adopt the complete controller pair before recovery and retain the existing
+private operator profile. Successful full acceptance retires the activation
+journal; the held archive, native backup, and original witness stay intact.
+
+For a distinct-release `ROLLBACK_FAILED` journal without a native-update backup,
+recovery records `verified/<current-sha>` after full acceptance and final recovery
+checks, before retiring the journal. This covers both the selected candidate and
+the restored predecessor, including config reconciliation. Failed marker
+publication retains the journal for retry. Existing `failed/<sha>` markers remain
+historical failed-attempt records, even after a later verified success.
+
 Native transaction roots under `<runtime-home>/.openclaw-update/` stay on disk
 until the controller next prunes releases with no activation journal present:
 before a deployment, after an accepted one, and in `--cleanup`. Without a
@@ -214,6 +240,13 @@ contention. A script waiting across adoption is rejected as stale after locking.
 For a gate-aware incumbent, use the retained adoption owner and its exact
 approved closure descriptors; replacing files outside that owner leaves the
 completed gate bound to the predecessor and correctly refuses admission.
+
+A completed gate from an earlier incident requires the explicit
+[`historical-successor` adoption action](RETAINED-REPAIR.md#whole-closure-adoption-boundary).
+It binds that gate and completion as immutable history, plus the new retained
+V1 incident and independently reviewed actual four-file incumbent and replacement
+closures. It reuses the existing adoption publication and replay owner; neither
+an old completion nor a new operation UUID authorizes today's files or incident.
 
 ## Installed closure
 

@@ -172,7 +172,7 @@ describeControlUiE2e("Control UI plugin lifecycle", () => {
     const removalErrors = await page.evaluateHandle(() => {
       const errors = new Set<string>();
       const observer = new MutationObserver(() => {
-        for (const alert of document.querySelectorAll(".plugin-catalog-detail .oc-banner-error")) {
+        for (const alert of document.querySelectorAll(".plugin-catalog-detail .callout.danger")) {
           errors.add(alert.textContent?.trim() ?? "");
         }
       });

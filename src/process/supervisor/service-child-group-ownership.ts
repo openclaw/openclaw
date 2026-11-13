@@ -16,7 +16,14 @@ export type ProcessCommand =
       owner?: "same" | "different" | "unknown";
     }
   | { argvUnavailable: true; uid: number; owner?: "same" | "different" | "unknown" }
-  | { argvUnavailable: true; uid?: never; owner: "different" };
+  | { argvUnavailable: true; uid?: never; owner: "different" }
+  /** A sealed Apple binary whose argument image Darwin redacts (no-read-procargs). */
+  | {
+      argvUnavailable: true;
+      executable: string;
+      uid?: never;
+      owner?: "same" | "different" | "unknown";
+    };
 
 /** Reject a known unsupported legacy contract before launching application work. */
 export function assertProcessGroupControl(): void {

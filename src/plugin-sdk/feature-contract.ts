@@ -53,12 +53,8 @@ export type FeatureQueryName<C extends FeatureContract> = {
 export type FeatureRequestOptions = { sessionKey?: string; agentId?: string };
 
 export function defineFeatureContract<const C extends FeatureContract>(contract: C): C {
-  if (
-    !contract.pluginId.trim() ||
-    Object.keys(contract.operations).length > 64 ||
-    Object.keys(contract.events).length > 64
-  ) {
-    throw new Error("Feature contracts require a plugin id and at most 64 operations and events");
+  if (!contract.pluginId.trim() || Object.keys(contract.events).length > 64) {
+    throw new Error("Feature contracts require a plugin id and at most 64 events");
   }
   for (const id of Object.keys(contract.operations)) {
     if (!/^[a-z][a-z0-9._-]{0,127}$/u.test(id)) {

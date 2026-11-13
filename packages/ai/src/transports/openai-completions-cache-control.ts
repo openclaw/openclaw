@@ -1,6 +1,11 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CacheRetention } from "../types.js";
-import { splitSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
+import {
+  splitSystemPromptCacheBoundaryForWire,
+  splitSystemPromptRelocatableBoundary,
+  stripSystemPromptRelocatableBoundary,
+  SYSTEM_PROMPT_RELOCATABLE_BOUNDARY,
+} from "../utils/system-prompt-cache-boundary.js";
 import type { resolveAnthropicEphemeralCacheControl } from "./anthropic-payload-policy.js";
 import type { ResolvedOpenAICompletionsCompat } from "./openai-completions-compat.js";
 
@@ -39,6 +44,7 @@ export function applyCompletionsAnthropicCacheControl(
   markTools = true,
   markMessages = true,
   systemOnly = false,
+  sharedSystemCheckpoint = false,
 ): void {
   if (shapedPayloads.has(payload)) {
     return;
@@ -61,7 +67,7 @@ export function applyCompletionsAnthropicCacheControl(
   const blocks = messages
     .filter(isRecord)
     .flatMap((message) => (Array.isArray(message.content) ? message.content.filter(isRecord) : []));
-  // This policy owns at most three breakpoints: tools, stable system, history.
+  // The opening OpenRouter Anthropic turn may add a fourth shared-system breakpoint.
   for (const block of blocks) {
     delete block.cache_control;
   }
@@ -86,7 +92,7 @@ export function applyCompletionsAnthropicCacheControl(
       ) {
         continue;
       }
-      const split = splitBoundary ? splitSystemPromptCacheBoundary(block.text) : undefined;
+      const split = splitBoundary ? splitSystemPromptCacheBoundaryForWire(block.text) : undefined;
       if (split) {
         content.splice(
           i,
@@ -120,9 +126,37 @@ export function applyCompletionsAnthropicCacheControl(
   );
   if (isRecord(system)) {
     markText(system, true);
+    if (sharedSystemCheckpoint && Array.isArray(system.content)) {
+      const openingTurn = !messages.some(
+        (message) => isRecord(message) && message.role === "assistant",
+      );
+      for (let i = 0; i < system.content.length; i++) {
+        const block: unknown = system.content[i];
+        if (!isRecord(block) || block.type !== "text" || typeof block.text !== "string") {
+          continue;
+        }
+        const raw = block.text;
+        const wireText = stripSystemPromptRelocatableBoundary(raw);
+        const seam = openingTurn ? splitSystemPromptRelocatableBoundary(raw) : undefined;
+        const start = raw.indexOf(SYSTEM_PROMPT_RELOCATABLE_BOUNDARY);
+        if (!seam?.relocatable || start < 0) {
+          block.text = wireText;
+          continue;
+        }
+        const sharedText = raw.slice(0, start);
+        const runtimeText = wireText.slice(sharedText.length);
+        system.content.splice(
+          i,
+          1,
+          ...(sharedText ? [{ type: "text", text: sharedText, cache_control: cacheControl }] : []),
+          ...(runtimeText ? [{ type: "text", text: runtimeText }] : []),
+        );
+        break;
+      }
+    }
   }
-  // OpenRouter Gemini uses only the last breakpoint. Keep it before the dynamic
-  // system suffix rather than superseding it with a tool/history checkpoint.
+  // OpenRouter Gemini caches one whole systemInstruction; Runtime facts were
+  // moved to the first user turn by the converter when a carrier exists.
   if (systemOnly) {
     return;
   }

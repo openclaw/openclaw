@@ -42,6 +42,15 @@ async function makeWorkspace(files: Record<string, string>) {
   return { ...fixture, manifestPath, readLocal, capture };
 }
 const cacheRoots = [
+  ".npm/_cacache",
+  ".npm/_logs",
+  ".cache/pip",
+  ".cache/uv",
+  ".pnpm-store",
+  ".bun/install/cache",
+  ".cargo/registry",
+  ".cargo/git",
+  ".gradle/caches",
   ".local/share/pnpm/store",
   "artifacts/task-environment/local/share/pnpm/store",
   ...["tmp", ".pnpm-store", "tools"].map((name) => `.openclaw/${name}`),
@@ -70,6 +79,9 @@ const userFiles = {
   ".openclaw/project.json": "project data\n",
   ".cache/openclaw/notes.md": "user notes\n",
   ".cache/user-data.json": "user data\n",
+  ".npm/npmrc": "user configuration\n",
+  ".cargo/config.toml": "user configuration\n",
+  ".gradle/gradle.properties": "user configuration\n",
   ...Object.fromEntries(
     cacheRoots.flatMap((root) => [
       [`${root}-notes`, "user notes\n"],
@@ -352,4 +364,36 @@ it("retains plain-workspace inputs when staging has created Git metadata", async
   const manifest = await fixture.readManifest(captured.stdout.trim());
   expect(manifest.baseCommit).toBeNull();
   expect(manifest.entries.map((entry) => entry.path)).toContain(input);
+});
+
+it("retains ignored result artifacts without enrolling other ignored project files", async () => {
+  const fixture = await makeWorkspace({ "source.txt": "base\n", "dist/tracked.txt": "base\n" });
+  const base = await initializeScriptGitWorkspace(fixture.workspace, ".");
+  await writeWorkspaceFiles(fixture.workspace, {
+    ".gitignore": "dist/\n.cache/\n.artifacts/\nnotes/\n",
+  });
+  const initial = await fixture.runManifest([base, "eligible"]);
+  expect(initial.code, initial.stderr).toBe(0);
+  await writeWorkspaceFiles(fixture.workspace, {
+    "source.txt": "edit\n",
+    "dist/tracked.txt": "tracked edit\n",
+    "dist/worker/sqlite-store.worker.mjs": "generated\n",
+    ".cache/openclaw-bun/runtime": "cached runtime\n",
+    "new.txt": "new source\n",
+    ".artifacts/proof/screenshot.png": "saved screenshot\n",
+    "notes/report.txt": "saved report\n",
+    ".cache/user-data.json": "saved data\n",
+  });
+  const result = await fixture.runManifest([base, "all", initial.stdout.trim().slice(7)]);
+  expect(result.code, result.stderr).toBe(0);
+  const manifest = await fixture.readManifest(result.stdout.trim());
+  expect(
+    manifest.entries.filter((entry) => entry.type === "file").map((entry) => entry.path),
+  ).toEqual([
+    ".artifacts/proof/screenshot.png",
+    ".gitignore",
+    "dist/tracked.txt",
+    "new.txt",
+    "source.txt",
+  ]);
 });

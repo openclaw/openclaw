@@ -6,6 +6,7 @@ import { formatUiExternalText } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
+import { activateAddedKey, startAddedChat } from "./add-provider-activation.ts";
 import type { createModelProviderMutationPresentation } from "./config-mutation-presentation.ts";
 import {
   modelProviderErrorMessage,
@@ -27,7 +28,7 @@ export function createModelProviderConfigActions(deps: {
   refresh: () => Promise<void>;
   setBusy: (key: string, busy: boolean) => void;
   setMessage: (key: string, message: ModelProviderRowMessage | null) => void;
-  setAddProviderOpen: (open: boolean) => void;
+  setAddProviderOpen: (open: boolean | ((open: boolean) => boolean)) => void;
 }) {
   const {
     context,
@@ -77,7 +78,24 @@ export function createModelProviderConfigActions(deps: {
     provider: string;
     configKey: string;
     action: "edit" | "add";
+    activateProfileId?: string;
   }): Promise<ModelProviderRowMessage | null> {
+    // With no usable model yet, activation runs the same check and makes the key the default.
+    if (params.activateProfileId) {
+      const activated = await activateAddedKey({
+        context,
+        client: params.client,
+        agentId: params.agentId,
+        profileId: params.activateProfileId,
+        provider: params.provider,
+      });
+      state.addStartChat = activated.model ?? null;
+      if (activated.model) {
+        void context.runtimeConfig.refresh({ background: true });
+        void refresh();
+      }
+      return activated.message;
+    }
     if (isGatewayMethodAdvertised(context.gateway.snapshot, "models.probe") === false) {
       return null;
     }
@@ -127,6 +145,7 @@ export function createModelProviderConfigActions(deps: {
     configKey: string,
     apiKey: string,
     action: "edit" | "add" = "edit",
+    activate = false,
   ) {
     const client = gateway.client;
     const key = action === "add" ? "add" : `key:${provider}`;
@@ -148,7 +167,7 @@ export function createModelProviderConfigActions(deps: {
             isCurrentClient: isCurrent,
             isCurrentAgent: isCurrent,
             canMutate: () => canMutate(),
-            checkSavedKey: async () => {
+            checkSavedKey: async (receipt) => {
               setBusy(`check:${key}`, true);
               try {
                 return await checkSavedKey({
@@ -157,6 +176,9 @@ export function createModelProviderConfigActions(deps: {
                   provider,
                   configKey,
                   action,
+                  ...(activate && receipt.profileId
+                    ? { activateProfileId: receipt.profileId }
+                    : {}),
                 });
               } finally {
                 setBusy(`check:${key}`, false);
@@ -206,6 +228,11 @@ export function createModelProviderConfigActions(deps: {
       return;
     }
     if (action === "add") {
+      // An activated first provider keeps its dialog open on Start chat.
+      if (state.addStartChat) {
+        state.addProviderKey = "";
+        return;
+      }
       if (state.addProviderId === provider && state.addProviderKey.trim() === apiKey) {
         setAddProviderOpen(Boolean(result.warning));
         if (!result.warning) {
@@ -247,5 +274,41 @@ export function createModelProviderConfigActions(deps: {
     }
   }
 
-  return { closeKeyEditor, mutateApiKey, saveDefaults };
+  // The add dialog's actions; Save activates the key when the agent has no usable model yet.
+  const addProviderActions = {
+    onAddProviderToggle: () => {
+      setAddProviderOpen((open) => !open);
+      state.addProviderKey = "";
+      state.addStartChat = null;
+      setMessage("add", null);
+    },
+    onAddProviderKeyChange: (value: string) => (state.addProviderKey = value),
+    onAddProvider: (activate: boolean) => {
+      const provider = state.addProviderId;
+      if (provider) {
+        void mutateApiKey(provider, provider, state.addProviderKey.trim(), "add", activate);
+      }
+    },
+    onAddStartChat: async () => {
+      const model = state.addStartChat;
+      if (!model || state.busy.add) {
+        return;
+      }
+      setBusy("add", true);
+      try {
+        const error = await startAddedChat(context, state.selectedAgentId, model);
+        if (error) {
+          setMessage("add", { kind: "error", text: error });
+          return;
+        }
+        state.addStartChat = null;
+        state.addProviderId = "";
+        setAddProviderOpen(false);
+      } finally {
+        setBusy("add", false);
+      }
+    },
+  };
+
+  return { closeKeyEditor, mutateApiKey, saveDefaults, addProviderActions };
 }

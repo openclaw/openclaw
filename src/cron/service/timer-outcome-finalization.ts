@@ -24,6 +24,7 @@ import type { TimedCronRunOutcome } from "./timer-execution-timeout.js";
 
 type CompletedCronRunOutcomeFinalizationOptions = {
   discardWhenStopped?: boolean;
+  onReceiptSettlement?: (settlement: Promise<void>) => void;
 };
 
 /** Sends terminal facts to the worker; the host only publishes committed results. */
@@ -40,7 +41,7 @@ export async function finalizeCompletedCronRunOutcomes(
     captureOpenClawStateWorkerContext();
   const storeKey = state.deps.storeKey;
   const canPublish = (outcome: TimedCronRunOutcome) =>
-    !(state.stopped && opts?.discardWhenStopped) &&
+    !(state.stopped && !state.handedOver && opts?.discardWhenStopped) &&
     isCronActiveJobMarkerCurrent(outcome.activeJobMarker);
   const finalized: TimedCronRunOutcome[] = [];
   let committedSuccessfully = false;
@@ -96,7 +97,7 @@ export async function finalizeCompletedCronRunOutcomes(
         if (!outcome.executionSettlement || !outcome.runReceipt) {
           continue;
         }
-        void trackAsyncWork(async () => {
+        const settlement = trackAsyncWork(async () => {
           await Promise.allSettled([outcome.executionSettlement]);
           await executeOpenClawStateWorker(context, {
             type: "cron.finalizeRuns",
@@ -116,6 +117,7 @@ export async function finalizeCompletedCronRunOutcomes(
             "cron: execution receipt settlement failed",
           );
         });
+        opts?.onReceiptSettlement?.(settlement);
       }
       applyCronRuntimeRowsToState(
         state,

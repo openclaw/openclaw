@@ -14,9 +14,7 @@ describe("doctor command", () => {
       const actual = await importOriginal<typeof import("./doctor-sandbox.js")>();
       return {
         ...actual,
-        maybeRepairSandboxImages: async (
-          cfg: Parameters<typeof actual.maybeRepairSandboxImages>[0],
-        ) => cfg,
+        maybeRepairSandboxImages: async () => [],
         maybeRepairSandboxRegistryFiles: async () => {},
       };
     });

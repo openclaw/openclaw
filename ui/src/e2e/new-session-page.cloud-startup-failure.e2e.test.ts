@@ -234,7 +234,7 @@ suite.define(() => {
       await pollCount(working).toBe(0);
       expect(await alert.locator("summary").count()).toBe(1);
       await alert.locator("summary").click();
-      const text = alert.locator("pre");
+      const text = alert.locator(".lazy-view-error__detail");
       await text.waitFor({ state: "visible" });
       expect(await text.textContent()).toContain(diagnostic);
       await alert.getByRole("button", { name: "Copy error", exact: true }).click();

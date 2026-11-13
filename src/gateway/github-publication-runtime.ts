@@ -76,10 +76,12 @@ export function createGitHubPublicationRuntime(params: {
     loadingUpdates = updates;
     pendingKnown = true;
     try {
-      const [shared, repository] = await Promise.all([
-        listSharedGitHubPublicationsAsync({ pending: true }),
-        listRepositoryGitHubPublicationsAsync({ ownerProfileId: null, pending: true }),
-      ]);
+      // Read serially so startup can reuse the same state-reader worker.
+      const shared = await listSharedGitHubPublicationsAsync({ pending: true });
+      const repository = await listRepositoryGitHubPublicationsAsync({
+        ownerProfileId: null,
+        pending: true,
+      });
       pendingRequests.clear();
       for (const row of shared) {
         pendingRequests.add(JSON.stringify(["shared", row.request_id]));

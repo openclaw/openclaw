@@ -31,6 +31,7 @@ import {
 } from "../chat-thread.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { saveChatSessionScrollPosition } from "../scroll.ts";
+import { settleChatMount } from "../test-helpers/chat-mount-frames.ts";
 import {
   render,
   renderChatThread,
@@ -103,7 +104,7 @@ describe("chat transcript invalidation", () => {
 
   it.each(["ready", "delayed"])(
     "updates settled avatars when only the theme hat changes with a %s palette",
-    (palette) => {
+    async (palette) => {
       const branding = resolveThemeBranding({ mascot: "claw", critters: [], avatarHat: "fedora" });
       const agentId = Array.from({ length: 100 }, (_, index) => `agent-${index}`).find((id) =>
         resolveAvatarHat(id, branding),
@@ -119,7 +120,7 @@ describe("chat transcript invalidation", () => {
       try {
         setCurrentThemeBranding(props.branding);
         rerender();
-        expect(find(container, ".identity-avatar--agent")).not.toBeNull();
+        await waitForSolid(() => expect(find(container, ".identity-avatar--agent")).not.toBeNull());
         expect(find(container, ".identity-avatar__hat")).toBeNull();
         props.branding = branding;
         setCurrentThemeBranding(branding);
@@ -337,7 +338,7 @@ describe("chat transcript invalidation", () => {
     );
   });
 
-  it("keeps explicit destinations stable as history, catalog rows, and sessions change", () => {
+  it("keeps explicit destinations stable as history, catalog rows, and sessions change", async () => {
     const { pane } = createTestChatPane({ client: createGatewayBrowserClientFixture() });
     const original = {
       role: "assistant",
@@ -355,7 +356,7 @@ describe("chat transcript invalidation", () => {
       "https://github.com/other/project/issues/126",
     ];
     rerender();
-    expect(links()).toEqual(expected);
+    await waitForSolid(() => expect(links()).toEqual(expected));
     for (const type of ["toolResult", "toolCall", "reasoning"] as const) {
       const catalogMessage = pane.catalogItemMessage({
         id: type,
@@ -378,7 +379,7 @@ describe("chat transcript invalidation", () => {
     props.sessionKey = "agent:main:another-checkout";
     props.messages = [original];
     rerender();
-    expect(links()).toEqual(expected);
+    await waitForSolid(() => expect(links()).toEqual(expected));
   });
 
   it("does not renormalize projected historical messages", () => {
@@ -796,25 +797,27 @@ describe("chat transcript invalidation", () => {
     applyToken("test-auth-token");
     const messages = [msg("assistant", [{ type: "image", url: source }])];
     const mediaOwner = {};
-    const view = mountSolid(
-      () => {
-        const gateway = projectOwner(
-          pane.context.gateway,
-          (owner) => owner.snapshot.hello,
-          Object.is,
-        );
-        return createComponent(ChatThread, {
-          get props() {
-            return {
-              ...threadProps("pane-gateway-media-auth", state.sessionKey, messages),
-              assistantAttachmentAuthToken: resolveControlUiAuthToken({ hello: gateway.read() }),
-              mediaOwner,
-            };
-          },
-          transcript,
-        });
-      },
-      { container },
+    const view = settleChatMount(() =>
+      mountSolid(
+        () => {
+          const gateway = projectOwner(
+            pane.context.gateway,
+            (owner) => owner.snapshot.hello,
+            Object.is,
+          );
+          return createComponent(ChatThread, {
+            get props() {
+              return {
+                ...threadProps("pane-gateway-media-auth", state.sessionKey, messages),
+                assistantAttachmentAuthToken: resolveControlUiAuthToken({ hello: gateway.read() }),
+                mediaOwner,
+              };
+            },
+            transcript,
+          });
+        },
+        { container },
+      ),
     );
     onTestFinished(view.unmount);
     transcript.start();

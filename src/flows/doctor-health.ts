@@ -605,15 +605,20 @@ async function runDoctorHealthFlowWithResult(
       return;
     }
   } catch (error) {
+    const { DoctorHeartbeatMigrationDeferredError } =
+      await import("../commands/doctor-heartbeat-run-recovery.js");
     if (
-      !maintenance &&
+      (!maintenance || error instanceof DoctorHeartbeatMigrationDeferredError) &&
       error instanceof DoctorMaintenanceRefusalError &&
       error.refusal.kind === "deferred" &&
-      doctorMode.isDoctorUpdateRepairMode(doctorMode.resolveDoctorRepairMode(options))
+      (doctorMode.isDoctorUpdateRepairMode(doctorMode.resolveDoctorRepairMode(options)) ||
+        (error instanceof DoctorHeartbeatMigrationDeferredError &&
+          updatePhase.isUpdateDoctorLintPass(process.env)))
     ) {
       showDoctorHealthSummary(healthContext ?? startupFindings);
       writeAuthority?.assertCurrent();
-      // Admission restored its service before refusing; no migration work has started.
+      // Admission restored its service, or heartbeat conversion rolled back
+      // before its config writer committed. Pending source data remains intact.
       const { recordDeferredUpdateDoctorWarning, recordUpdateDoctorRefusal } =
         await import("../commands/doctor-update-refusal.js");
       recordUpdateDoctorRefusal(error.message);
@@ -710,5 +715,5 @@ async function runDoctorHealthFlowWithResult(
     }
   }
 
-  startup.showDoctorOutro("Doctor complete.");
+  startup.showDoctorComplete({ watchExit: options.watchExitAfterComplete === true });
 }

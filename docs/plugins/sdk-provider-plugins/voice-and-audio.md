@@ -114,6 +114,15 @@ Register each capability inside `register(api)` alongside your existing
     });
     ```
 
+    Forward the optional synchronous `assertCurrent` callback with the other
+    request callbacks. It checks the caller's current authority, not just the
+    authority held when audio was queued. The WebSocket session helper checks
+    it before opening a connection, sending frames, and graceful finalization.
+    If it throws, the helper discards queued audio and aborts without calling
+    `onClose`. Custom transports must enforce the same checks at their I/O
+    boundaries, including reconnects. Callers that omit the callback retain
+    the existing session behavior.
+
     Batch STT providers that POST multipart audio should use
     `buildAudioTranscriptionFormData(...)` from
     `openclaw/plugin-sdk/provider-http`. The helper normalizes upload

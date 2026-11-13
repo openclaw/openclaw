@@ -5,6 +5,91 @@ import UserNotifications
 
 @MainActor
 enum IOSDeviceSettingsActions {
+    /// Native controls and the WebKit adapter share effects and consent; callers supply live authority.
+    static func set(
+        _ key: DeviceSettingKey,
+        value: DeviceSettingValue,
+        appModel: NodeAppModel,
+        appearanceModel: AppAppearanceModel,
+        confirm: @MainActor (IOSDeviceSettingsConsent) async -> Bool,
+        isCurrent: @escaping @MainActor @Sendable () -> Bool) async throws -> Bool
+    {
+        guard !Task.isCancelled, isCurrent() else { return false }
+        let required = IOSDeviceSettingsConsent.required(for: key, value: value, locationMode: self.locationMode)
+        if let required {
+            guard await confirm(required) else { return false }
+        }
+        guard !Task.isCancelled, isCurrent(),
+              IOSDeviceSettingsConsent.required(for: key, value: value, locationMode: self.locationMode) == required
+        else { return false }
+        switch (key, value) {
+        case let (.appearance, .string(raw)):
+            if let preference = AppAppearancePreference(rawValue: raw) { appearanceModel.select(preference) }
+        case let (.notificationsEnabled, .boolean(enabled)):
+            _ = await self.setNotificationsEnabled(
+                enabled, confirmDisclosure: { await confirm(.notificationEnrollment) }, isCurrent: isCurrent)
+        case let (.cameraEnabled, .boolean(enabled)):
+            UserDefaults.standard.set(enabled, forKey: "camera.enabled")
+            return true
+        case let (.keepAwakeEnabled, .boolean(enabled)):
+            UserDefaults.standard.set(enabled, forKey: "screen.preventSleep")
+        case let (.healthSummaryEnabled, .boolean(enabled)):
+            if enabled {
+                try await HealthAuthorization.enable(isCurrent: isCurrent)
+            } else {
+                HealthAuthorization.disable()
+            }
+            return true
+        case let (.wakeEnabled, .boolean(enabled)): appModel.setVoiceWakeEnabled(enabled)
+        case let (.talkEnabled, .boolean(enabled)): appModel.setTalkEnabled(enabled)
+        case let (.talkButtonEnabled, .boolean(enabled)):
+            UserDefaults.standard.set(enabled, forKey: "talk.button.enabled")
+        case let (.talkBackgroundEnabled, .boolean(enabled)):
+            UserDefaults.standard.set(enabled, forKey: "talk.background.enabled")
+        case let (.speakerphoneEnabled, .boolean(enabled)): appModel.setTalkSpeakerphoneEnabled(enabled)
+        case let (.locationMode, .string(raw)):
+            guard let mode = DeviceSettingsLocationMode(rawValue: raw) else { return false }
+            return await self.applyLocationMode(
+                mode.nativeMode,
+                appModel: appModel,
+                isCurrent: isCurrent)
+        default:
+            // Precision is system-owned on iOS; unsupported platform settings only republish current state.
+            break
+        }
+        return false
+    }
+
+    static func requestPermission(
+        _ permission: DeviceSettingsPermission,
+        appModel: NodeAppModel,
+        permissions: IOSDeviceSettingsPermissions,
+        confirm: @MainActor (IOSDeviceSettingsConsent) async -> Bool,
+        isCurrent: @escaping @MainActor @Sendable () -> Bool) async throws -> Bool
+    {
+        guard !Task.isCancelled, isCurrent() else { return false }
+        switch permission {
+        case .notifications:
+            _ = await IOSDeviceSettingsActions.requestNotificationPermission(
+                confirmDisclosure: { await confirm(.notificationEnrollment) },
+                isCurrent: isCurrent)
+            return false
+        case .location:
+            let mode = self.locationMode == .off ? .whileUsing : self.locationMode
+            _ = await appModel.requestLocationPermissions(mode: mode, isCurrent: isCurrent)
+            return true
+        default:
+            try await permissions.request(permission, isCurrent: isCurrent)
+            return [.camera, .microphone, .speechRecognition, .contacts, .calendars, .reminders, .photos]
+                .contains(permission)
+        }
+    }
+
+    private static var locationMode: OpenClawLocationMode {
+        UserDefaults.standard.string(forKey: "location.enabledMode")
+            .flatMap(OpenClawLocationMode.init(rawValue:)) ?? .off
+    }
+
     static func applyLocationMode(
         _ mode: OpenClawLocationMode,
         appModel: NodeAppModel,

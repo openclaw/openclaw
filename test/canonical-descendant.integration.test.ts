@@ -155,10 +155,10 @@ async function canonicalSource(fixture: CanonicalForkFixture, prompt: string) {
 function expectPolicyHandoff(
   calls: CanonicalForkFixture["native"]["calls"],
   threadId: string,
-  body: unknown,
+  policy: unknown,
 ) {
-  if (typeof body !== "string") {
-    throw new Error("Expected the complete generic policy, including an explicit empty body");
+  if (typeof policy !== "string") {
+    throw new Error("Expected the complete delimited native policy");
   }
   const refreshes = calls.filter((call) => call.method === "thread/inject_items");
   expect(refreshes).toHaveLength(1);
@@ -171,7 +171,7 @@ function expectPolicyHandoff(
         content: [
           {
             type: "input_text",
-            text: expect.stringContaining(body || "current OpenClaw generic policy is empty"),
+            text: expect.stringContaining(policy),
           },
         ],
       },
@@ -609,8 +609,9 @@ describe("canonical descendant lifecycle through real owners", () => {
           calls.find((call) => call.method === "thread/resume"),
           "cold configuration",
         );
-        expect(resume.params.developerInstructions).toBe(body);
-        expectPolicyHandoff(calls, binding.threadId, body);
+        const policy = `<thread_policy>\n${body}\n</thread_policy>`;
+        expect(resume.params.developerInstructions).toBe(policy);
+        expectPolicyHandoff(calls, binding.threadId, policy);
         expect(calls.findIndex((call) => call.method === "thread/inject_items")).toBeLessThan(
           calls.findIndex((call) => call.method === "turn/start"),
         );
@@ -1204,7 +1205,7 @@ describe("canonical descendant lifecycle through real owners", () => {
     );
   }, 180_000);
 
-  it("forks with the current native model instead of the stale persisted model", async () => {
+  it("forks with the current native model and keeps provider guidance on cold resume", async () => {
     await withFixture(async (fixture, fork) => {
       const source = await fixture.adopt();
       const binding = await fixture.turn(source.sessionKey, "canonical");
@@ -1221,6 +1222,21 @@ describe("canonical descendant lifecycle through real owners", () => {
         modelProvider: current.thread.modelProvider,
       });
       expect(current.model).toBe("gpt-5.6-luna");
+
+      // Supervision strips the outer runtime plan, so the native provider owns this guidance.
+      const parentBase = expectDefined(
+        nativeCalls(fixture, "thread/start").at(-1)?.params.baseInstructions,
+        "supervised parent base",
+      );
+      expect(parentBase).toContain("<execution_policy>");
+      await fixture.native.restart();
+      const offset = fixture.native.calls.length;
+      await fixture.turn(childKey, "continue the canonical fork");
+      const resume = expectDefined(
+        nativeCalls(fixture, "thread/resume", offset).at(-1),
+        "canonical fork cold resume",
+      );
+      expect(resume.params.baseInstructions).toBe(parentBase);
     });
   }, 180_000);
 

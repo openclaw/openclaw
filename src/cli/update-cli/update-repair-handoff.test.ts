@@ -11,6 +11,7 @@ import {
   leaseQueries,
 } from "../../infra/update-managed-service-handoff-database.js";
 import { createManagedHandoffRecoveryFixture } from "../../infra/update-managed-service-handoff-recovery.test-support.js";
+import * as handoffScope from "../../infra/update-managed-service-handoff-scope.js";
 import {
   createUpdateRun,
   finishUpdateRun,
@@ -114,6 +115,74 @@ it("registered update repair leaves a live current root owner alone", async () =
   expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   expect(defaultRuntime.writeJson).toHaveBeenCalledWith(expect.objectContaining({ status: "ok" }));
   expect(fixture.store.read(state.root)).toEqual(retained);
+});
+
+it.each([
+  ["foreground", "dead"],
+  ["native", "dead"],
+  ["foreground", "live helper"],
+  ["native", "live executor"],
+  ["foreground", "unknown helper"],
+  ["native", "unverified scope"],
+] as const)("repair settles or reports a closing %s lease with %s", async (lifetime, owners) => {
+  const previous = fixture.seed();
+  const nativeScope = handoffScope.createManagedHandoffScopeReader({});
+  vi.spyOn(handoffScope, "createManagedHandoffScopeReader").mockReturnValue({
+    ...nativeScope,
+    nativeClosed: () => owners !== "unverified scope",
+  });
+  handoffDatabase()(true, (db) =>
+    executeSqliteQuerySync(
+      db,
+      leaseQueries(db)
+        .updateTable("managed_update_handoffs")
+        .set({
+          payload_json: JSON.stringify({
+            version: 2,
+            helper: previous.helper,
+            executor: previous.executor,
+            action: {
+              kind: "triage",
+              phase: "closing",
+              lifetime:
+                lifetime === "foreground"
+                  ? { kind: "foreground", boot: fixture.store.bootIdentity() }
+                  : {
+                      kind: "native",
+                      unit: "openclaw-gateway.service",
+                      scope: "triage.scope",
+                      placement: { kind: "attached", invocation: "a".repeat(32) },
+                    },
+            },
+          }),
+        }),
+    ),
+  );
+  if (owners === "live executor") {
+    fixture.births.set(previous.executor.pid, Number(previous.executor.startIdentity));
+  } else if (owners === "live helper" || owners === "unknown helper") {
+    fixture.births.set(
+      previous.helper.pid,
+      owners === "live helper" ? Number(previous.helper.startIdentity) : null,
+    );
+  }
+  const retained = fixture.rows();
+  await repair();
+  if (owners === "dead") {
+    expectAbsent(state.root);
+    expectSettlement("legacy handoff lease reclaimed");
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Warning: Reclaiming"),
+    );
+    await expectAdmitted("after-closing-repair");
+  } else {
+    expect(fixture.rows()).toEqual(retained);
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining(`owner ${previous.owner}, lease version 2, phase closing`),
+    );
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.doctor).not.toHaveBeenCalled();
+  }
 });
 
 function seedLegacyLineage(nested = false, bound = false) {

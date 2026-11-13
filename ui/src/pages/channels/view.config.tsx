@@ -3,6 +3,7 @@ import { analyzeConfigSchema } from "../../components/config-form.analyze.ts";
 import { ConfigNode } from "../../components/config-form.node.tsx";
 import { ConfigTierGroups } from "../../components/config-form.render.tsx";
 import { schemaType, type JsonSchema } from "../../components/config-form.shared.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsLoadingSkeleton } from "../../components/solid/settings-ui.tsx";
 import { formatChannelExtraValue, resolveChannelConfigValue } from "../../lib/channels/index.ts";
 import { humanize, localizedHintForPath } from "../../lib/config-form-utils.ts";
@@ -115,7 +116,9 @@ export function ChannelConfigFeedback(params: { channelId: string; props: Channe
           )}
         </Show>
         <Show when={blockedSetup()}>
-          <div class="callout warn">{t("channels.hub.saveBeforeSetup")}</div>
+          <InlineAlert tone="warning" role="none">
+            {t("channels.hub.saveBeforeSetup")}
+          </InlineAlert>
         </Show>
       </div>
     </Show>

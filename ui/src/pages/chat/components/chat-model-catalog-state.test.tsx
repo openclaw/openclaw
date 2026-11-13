@@ -14,7 +14,7 @@ import {
 
 it.each([
   ["loading", true, undefined, "refresh", "Refreshing models…"],
-  ["ready", true, ["openai", "clawrouter"], "refresh", "Refreshing models for OpenAI, Clawrouter…"],
+  ["ready", true, ["openai", "clawrouter"], "refresh", "Refreshing models for OpenAI, ClawRouter…"],
   ["loading", false, ["clawrouter"], "loading", "Loading models…"],
   ["ready", false, ["clawrouter"], "loading", "Loading models…"],
   ["error", true, ["clawrouter"], "settled", "Couldn’t refresh some models."],

@@ -91,6 +91,10 @@ export function captureSidebarSnapshotModel(
   rows: SidebarRecentSession[],
   sections: SidebarVisibleSections["sections"],
 ): SidebarSnapshotModel | null {
+  const windowKeys = host.scroll?.windowKeys();
+  if (!windowKeys) {
+    return null;
+  }
   const bootRoster = context.sessions.captureBootRoster();
   const agents = context.agents.state.agentsList;
   if (!bootRoster || !agents) {
@@ -183,6 +187,8 @@ export function captureSidebarSnapshotModel(
       .map(profilePresenceViewer),
     ownerId: host.sessionOwnerFilterId,
     involvingMe: host.sessionInvolvingMeFilterActive,
+    windowKeys: windowKeys.filter((key) => !isIncognitoSessionKey(key)),
+    rowFloor: host.scroll?.rowFloor() ?? 32,
     footer: displayUser(context.gateway.snapshot.selfUser),
     brand: readSidebarBrandPresentation(host),
   });

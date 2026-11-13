@@ -1,4 +1,5 @@
 import { Errored, lazy, Loading, Show } from "solid-js";
+import { formatUiExternalText } from "./format-error.ts";
 import { t } from "./reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "./solid-bridge.ts";
 import { toastOwnerFor, type ToastProperties, type ToastMethods } from "./toast.ts";
@@ -38,7 +39,21 @@ if (typeof customElements !== "undefined") {
                     >
                       <div class="app-toast__content">
                         <div class="app-toast__body">
-                          <span class="app-toast__message">{t("lazyView.errorTitle")}</span>
+                          <span class="app-toast__message">
+                            {formatUiExternalText(
+                              props.toasts
+                                .flatMap(({ active, options: { message, description } }) =>
+                                  active
+                                    ? [
+                                        typeof message === "string" ? message : message.textContent,
+                                        description,
+                                      ]
+                                    : [],
+                                )
+                                .join("\n"),
+                              t("lazyView.errorTitle"),
+                            )}
+                          </span>
                         </div>
                         <button class="app-toast__action" type="button" onClick={() => reset()}>
                           {t("common.retry")}

@@ -128,7 +128,7 @@ jobs:
   run_discord_smoke:
     name: Run Mantis Discord smoke
     needs: validate_selected_ref
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 20
     environment: qa-live-shared
     steps:

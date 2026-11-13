@@ -240,13 +240,11 @@ export class WorkerTaskPoolCore<Input, Output> {
       );
       return task;
     }
-    if (!this.admission.admit(inputBytes)) {
-      this.finish(
-        task,
-        new WorkerTaskError("worker task capacity reached", "overloaded", {
-          capacityAvailable: this.admission.waitForCapacity(inputBytes),
-        }),
-      );
+    const refusal = this.admission.admit(inputBytes, () =>
+      this.host.describeTask?.(this.options.workerUrl, undefined, options.diagnosticOperation),
+    );
+    if (refusal) {
+      this.finish(task, refusal);
       return task;
     }
     task.admitted = true;

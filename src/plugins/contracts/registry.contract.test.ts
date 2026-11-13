@@ -133,7 +133,6 @@ describe("plugin contract registry", () => {
     const plugin = registry.plugins.find(
       (entry) => entry.origin === "bundled" && entry.id === "github-copilot",
     );
-
     expect(plugin?.providerAuthChoices).toEqual([
       {
         provider: "github-copilot",
@@ -146,6 +145,7 @@ describe("plugin contract registry", () => {
         choiceLabel: "GitHub Copilot",
         choiceHint: "Device login with your GitHub account",
         assistantPriority: 1,
+        onboardingFeatured: true,
         groupId: "copilot",
         groupLabel: "Copilot",
         groupHint: "GitHub, GitHub Enterprise + Local Proxy",

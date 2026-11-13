@@ -1,5 +1,6 @@
 // Model/auth provider selection step shared by the classic wizard and bootstrap onboarding.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import type { PreparedAuthChoiceResult } from "../commands/auth-choice.apply.types.js";
 import {
   applyOnboardingPrimaryModel,
@@ -137,6 +138,8 @@ export async function runSetupModelAuthStep(params: {
     | (typeof import("../commands/auth-choice-prompt.js"))["isKeepCurrentAuthChoice"]
     | undefined;
   let detectedProviderIds: ReadonlySet<string> | undefined;
+  // Staged credentials of a utility-only choice, kept while the agent's provider is chosen.
+  let utilityStage: Omit<SetupModelAuthCandidate, "config"> | undefined;
   // Auth/model proposals copy config; they do not change the admitted setup owner.
   const target = resolveOnboardingSetupTarget(params.config, params.pendingAgent);
   if (authChoiceFromPrompt) {
@@ -311,6 +314,15 @@ export async function runSetupModelAuthStep(params: {
     }
     if (authResult.utilityModelOverride) {
       nextConfig = applyOnboardingUtilityModel(nextConfig, target, authResult.utilityModelOverride);
+      // A utility-only provider (e.g. Apple Foundation Models) cannot serve agent chat. Without
+      // an agent model the first turn falls back to a provider the user never set up, so keep
+      // the utility setup and ask for the agent's provider next.
+      if (authChoiceFromPrompt && !resolveAgentEffectiveModelPrimary(nextConfig, target.agentId)) {
+        await prompter.note(t("wizard.setup.utilityOnlyNote"), t("wizard.setup.utilityOnlyTitle"));
+        utilityStage = { authProfiles, persistAuthProfiles };
+        replacementBaseConfig = nextConfig;
+        continue;
+      }
       break;
     }
 
@@ -353,5 +365,18 @@ export async function runSetupModelAuthStep(params: {
     });
     break;
   }
-  return { config: nextConfig, authProfiles, persistAuthProfiles };
+  if (!utilityStage) {
+    return { config: nextConfig, authProfiles, persistAuthProfiles };
+  }
+  const staged = utilityStage;
+  const agentPersist = persistAuthProfiles;
+  return {
+    config: nextConfig,
+    authProfiles: [...staged.authProfiles, ...authProfiles],
+    // Verification may rename the agent credential to a temporary setup profile.
+    persistAuthProfiles: async (profiles) => {
+      await staged.persistAuthProfiles();
+      await agentPersist(profiles);
+    },
+  };
 }

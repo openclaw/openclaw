@@ -31,6 +31,7 @@ type UpdateCampaignAnnouncement = {
     forced: boolean;
     target: UpdateCampaignTarget;
   }) => Promise<"handoff" | "applied" | "failed">;
+  canStart?: () => boolean;
   onChange: (campaign: UpdateCampaignState | undefined) => void;
 };
 
@@ -93,6 +94,10 @@ export class UpdateCampaignController {
     if (this.target && this.campaign && sameTarget(this.target, announcement.target)) {
       this.announcement = announcement;
       this.reconcile();
+      return;
+    }
+
+    if (announcement.canStart?.() === false) {
       return;
     }
 

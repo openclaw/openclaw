@@ -1,6 +1,9 @@
 import { expect, it } from "vitest";
 import { sourceConfigSnapshot } from "../lib/config/config-snapshot.test-support.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  defaultControlUiFeatureMethods,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import { expectText } from "./activity-assertions.test-support.ts";
 import { captureUiProof } from "./chat-flow.test-support.ts";
 import {
@@ -44,6 +47,14 @@ suite.define(() => {
         },
       };
       const gateway = await installMockGateway(page, {
+        featureMethods: [
+          ...defaultControlUiFeatureMethods,
+          "agents.files.list",
+          "agents.files.get",
+          "agents.list",
+          "config.get",
+          "models.list",
+        ],
         methodResponses: {
           "agents.list": {
             defaultId: "main",
