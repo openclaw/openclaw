@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 
-const LOW_DISK_SPACE_WARNING_THRESHOLD_BYTES = 1024 * 1024 * 1024;
+// A package update stages a second install (about 660 MiB in 2026.11) plus npm's
+// tarball cache and temp files on the install volume.
+const PACKAGE_UPDATE_STAGING_BYTES = 1024 * 1024 * 1024;
 
 function finiteNonNegativeNumber(value: unknown): number | null {
   const numberValue = Number(value);
@@ -69,18 +71,13 @@ export function formatDiskSpaceBytes(bytes: number): string {
   return `${gib.toFixed(gib < 10 ? 1 : 0)} GiB`;
 }
 
-/** Builds a soft low-disk warning for setup/update flows without failing the operation. */
-export function createLowDiskSpaceWarning(params: {
-  targetPath: string;
-  purpose: string;
-}): string | null {
-  const snapshot = tryReadDiskSpace(params.targetPath);
-  if (!snapshot || snapshot.availableBytes >= LOW_DISK_SPACE_WARNING_THRESHOLD_BYTES) {
+/** One refusal line when the install volume cannot hold a staged package update. */
+export function describePackageStagingShortfall(targetPath: string): string | null {
+  const snapshot = tryReadDiskSpace(targetPath);
+  // Unmeasurable space is not a shortfall; the install's own ENOSPC handling still applies.
+  if (!snapshot || snapshot.availableBytes >= PACKAGE_UPDATE_STAGING_BYTES) {
     return null;
   }
-  const location =
-    path.resolve(snapshot.targetPath) === path.resolve(snapshot.checkedPath)
-      ? snapshot.checkedPath
-      : `${snapshot.targetPath} (volume checked at ${snapshot.checkedPath})`;
-  return `Low disk space near ${location}: ${formatDiskSpaceBytes(snapshot.availableBytes)} available; ${params.purpose} may fail.`;
+  const missing = PACKAGE_UPDATE_STAGING_BYTES - snapshot.availableBytes;
+  return `Update refused: ${formatDiskSpaceBytes(snapshot.availableBytes)} free on the volume holding ${snapshot.checkedPath}; a package update needs about ${formatDiskSpaceBytes(PACKAGE_UPDATE_STAGING_BYTES)}. Free ${formatDiskSpaceBytes(missing)} there, then retry openclaw update. No changes were made.`;
 }

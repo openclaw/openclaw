@@ -353,9 +353,17 @@ export async function resolvePackageRuntimePreflight(params: {
           : undefined,
       remedy: [runtime.failure, upgrade, serviceHint, ...runtimeHints].filter(Boolean).join("\n"),
     });
+    // The first line is the whole instruction; the diagnostics below it stay in the report.
+    const select = recoverySteps?.find((step) => step.kind === "select-runtime");
+    const install = select && "command" in select ? select.command : undefined;
+    const owner =
+      nodeRunner && nodeRunner === params.service?.serviceNodeRunner
+        ? "the Gateway service runs"
+        : "this updater runs";
+    const summary = `Update refused: openclaw@${targetVersion} needs ${requirement}, but ${owner} ${runtimeLabel}. Install Node ${recommendation ?? "a compatible release"}${install ? ` (\`${install}\`)` : ""}, then rerun openclaw update with it. No changes were made.`;
     return {
       ...(recoverySteps ? { recoverySteps } : {}),
-      ...resultError<PackageRuntimePreflight, string>(diagnostics.message),
+      ...resultError<PackageRuntimePreflight, string>(`${summary}\n${diagnostics.message}`),
       // Preserve the single Node refusal fact; the error retains the full diagnostic.
       failureFacts: diagnostics.failureFacts.slice(0, 1),
     };

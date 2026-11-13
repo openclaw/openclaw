@@ -1,6 +1,7 @@
 import { Type, type Static } from "typebox";
 import {
   UPDATE_NPM_ERROR_CODES,
+  UPDATE_RUN_CAUSES,
   UPDATE_RUN_DRIVER_LIMIT,
   UPDATE_RUN_PHASES,
   UPDATE_RUN_STATUSES,
@@ -99,6 +100,7 @@ export const UpdateRunRecordSchema = closedObject({
     campaignId: Type.Optional(text),
     doctorHint: Type.Optional(text),
     nextAction: Type.Optional(text),
+    cause: Type.Optional(Type.Enum(UPDATE_RUN_CAUSES)),
   }),
   target: closedObject({
     channel: Type.Optional(text),

@@ -149,6 +149,21 @@ it.each([true, false])("bounds runtime guidance (saved=%s)", (saved) => {
   expect(report.markdown.includes("Historical recovery advice:")).toBe(saved);
 });
 
+it("leads a prerequisite refusal with its one instruction line", () => {
+  const line =
+    "Update refused: 291 MiB free on the volume holding /vol; a package update needs about 1.0 GiB. Free 733 MiB there, then retry openclaw update. No changes were made.";
+  const report = renderRecord(
+    failed({
+      reason: "preflight-insufficient-space",
+      origin: { nextAction: line },
+      steps: [failedStep("requested")],
+    }),
+  );
+  expect(report.headline).toBe(`⚠️ ${line}`);
+  expect(report.lines).toEqual([]);
+  expectText(report.markdown, ["Reason code: preflight-insufficient-space", "Cause: disk-full"]);
+});
+
 it.each([true, false])("separates saved and current health (responding=%s)", (responding) => {
   const record = failed({
     reason: "node-runtime-preflight",

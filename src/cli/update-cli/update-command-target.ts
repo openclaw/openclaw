@@ -3,7 +3,7 @@ import { withNodeRuntimePath } from "../../../node-runtime-env.mjs";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import { isBunRuntime } from "../../daemon/runtime-binary.js";
-import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
+import { describePackageStagingShortfall } from "../../infra/disk-space.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { compareSemverStrings } from "../../infra/npm-registry-spec.js";
 import { SqliteReadOnlyInspectionContentionError } from "../../infra/sqlite-readonly-worker-protocol.js";
@@ -28,6 +28,7 @@ import {
 } from "../../infra/update-global.js";
 import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import { isFailedUpdateStep, updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
+import { describeUnsupportedGit } from "../../infra/update-runner-git-commands.js";
 import {
   describeUpdateInstallRoot,
   resolveUnmanagedUpdateInstallReason,
@@ -295,6 +296,19 @@ export async function resolveUpdateCommandTarget(
         }
       }
 
+      if (updateInstallKind === "git" && !opts.dryRun) {
+        const unsupportedGit = await describeUnsupportedGit(runCommandWithTimeout, {
+          cwd: root,
+          timeoutMs: updateStepTimeoutMs,
+        });
+        if (unsupportedGit) {
+          await refuseUpdate("git-version-unsupported", unsupportedGit, [
+            { check: "git-runtime", code: "git-version-unsupported", message: unsupportedGit },
+          ]);
+          return undefined;
+        }
+      }
+
       const unsupportedMain = updateInstallKind === "package" && isMainPackageTarget(explicitTag);
       if ((channel === "extended-stable" && explicitTag) || unsupportedMain) {
         await refuseUpdate(
@@ -450,24 +464,6 @@ export async function resolveUpdateCommandTarget(
               await refuseUpdate(destination.reason, destination.message, destination.failureFacts);
               return undefined;
             }
-          }
-          const diskWarning = createLowDiskSpaceWarning({
-            targetPath: packageInstallTarget.packageRoot
-              ? path.dirname(packageInstallTarget.packageRoot)
-              : root,
-            purpose: "global package update",
-          });
-          if (diskWarning) {
-            warn(diskWarning);
-            opts.run?.executorFence?.assertCurrent();
-            recordPreflightStep({
-              name: "disk-space-preflight",
-              command: "disk-space-preflight",
-              cwd: root,
-              durationMs: 0,
-              exitCode: 0,
-              warnings: [diskWarning],
-            });
           }
           const npmLifecycleGate = resolveNpmLifecyclePolicyGate(packageInstallTarget);
           if (npmLifecycleGate.error) {
@@ -635,6 +631,18 @@ export async function resolveUpdateCommandTarget(
         if (warning && warning !== prepared.nodeSecurityWarning) {
           warn(`SECURITY WARNING: ${warning}`);
           recordNodeSecurityWarning(warning);
+        }
+      }
+
+      if (updateInstallKind === "package" && !opts.dryRun && !packageAlreadyCurrent) {
+        const diskShortfall = describePackageStagingShortfall(
+          packageInstallTarget?.packageRoot ? path.dirname(packageInstallTarget.packageRoot) : root,
+        );
+        if (diskShortfall) {
+          await refuseUpdate("preflight-insufficient-space", diskShortfall, [
+            { check: "disk-space", code: "preflight-insufficient-space", message: diskShortfall },
+          ]);
+          return undefined;
         }
       }
 

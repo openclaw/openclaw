@@ -8,6 +8,7 @@ import { readControlPlaneUpdateSentinelMeta } from "../../infra/update-control-p
 import { preparePublicUpdateFailureIdentifiers } from "../../infra/update-failure-public-identifiers.js";
 import { writeTriageUpdateFailure } from "../../infra/update-failure-report-artifact.js";
 import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
+import { isUpdatePrerequisiteRefusal } from "../../infra/update-run-cause.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateTriageTarget as TriageTarget } from "../../infra/update-triage.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
@@ -93,7 +94,12 @@ export async function prepareUpdateCommandFailureTriage(
       return reportUpdateCommandPendingRecovery(pending, opts);
     }
     const reportedFailure = error instanceof UpdateCommandFailure;
-    if (reportedFailure && error.result.reason === "invalid-dev-target") {
+    // A repair agent cannot install Node or Git or free disk; the refusal already says how.
+    if (
+      reportedFailure &&
+      (error.result.reason === "invalid-dev-target" ||
+        isUpdatePrerequisiteRefusal(error.result.reason))
+    ) {
       return exitCliAfterOutput(defaultRuntime, error.exitCode);
     }
     const rollbackCompleted = reportedFailure && isVerifiedUpdateRollback(error.result);

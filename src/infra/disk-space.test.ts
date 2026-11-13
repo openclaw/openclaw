@@ -1,9 +1,13 @@
-// Covers disk-space formatting and warning generation.
+// Covers disk-space formatting and the package staging refusal.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createLowDiskSpaceWarning, formatDiskSpaceBytes, tryReadDiskSpace } from "./disk-space.js";
+import {
+  describePackageStagingShortfall,
+  formatDiskSpaceBytes,
+  tryReadDiskSpace,
+} from "./disk-space.js";
 import { createStatfsFixture as statfsFixture } from "./disk-space.test-support.js";
 
 describe("disk-space helpers", () => {
@@ -36,22 +40,16 @@ describe("disk-space helpers", () => {
     }
   });
 
-  it("formats low disk warnings without making them hard errors", () => {
+  it("refuses package staging below 1 GiB with the amount to free", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-disk-space-"));
     try {
-      vi.spyOn(fs, "statfsSync").mockReturnValue(
-        statfsFixture({
-          bavail: 256,
-          bsize: 1024 * 1024,
-        }),
+      const statfs = vi.spyOn(fs, "statfsSync");
+      statfs.mockReturnValue(statfsFixture({ bavail: 256, bsize: 1024 * 1024 }));
+      expect(describePackageStagingShortfall(tempDir)).toBe(
+        `Update refused: 256 MiB free on the volume holding ${tempDir}; a package update needs about 1.0 GiB. Free 768 MiB there, then retry openclaw update. No changes were made.`,
       );
-
-      expect(
-        createLowDiskSpaceWarning({
-          targetPath: tempDir,
-          purpose: "test staging",
-        }),
-      ).toBe(`Low disk space near ${tempDir}: 256 MiB available; test staging may fail.`);
+      statfs.mockReturnValue(statfsFixture({ bavail: 1024, bsize: 1024 * 1024 }));
+      expect(describePackageStagingShortfall(tempDir)).toBeNull();
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }

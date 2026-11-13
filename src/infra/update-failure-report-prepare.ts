@@ -35,6 +35,7 @@ import {
   updatePreflightDetailMessage,
   UPDATE_HANDOFF_BEFORE_TRANSFER_DETAIL,
 } from "./update-preflight-details.js";
+import { classifyUpdateRunCause } from "./update-run-cause.js";
 import {
   LEGACY_UPDATE_RUN_ADVISORY,
   LEGACY_UPDATE_RUN_EXPIRED_REASON,
@@ -244,6 +245,12 @@ async function renderBoundedDiagnostics(
     `Result: ${input.result.status}`,
     `Update mode: ${sanitizeReportField(resolveUpdateMode(input), context)}`,
     `Reason code: ${sanitizeReportField(input.result.reason ?? "unknown", context)}`,
+    // A closed enum: the one diagnostic line that redaction never hides.
+    `Cause: ${classifyUpdateRunCause({
+      status: input.result.status === "error" ? "failed" : "succeeded",
+      reason: input.result.reason,
+      facts: steps.flatMap((step) => step.failureFacts ?? []),
+    })}`,
   ];
   if (input.error?.trim()) {
     diagnostics.push(

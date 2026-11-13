@@ -1038,6 +1038,32 @@ the Node executable in a service definition does not update its OpenClaw package
 openclaw update
 ```
 
+### Host prerequisites
+
+Before it stages anything, `openclaw update` checks the host. On a failure it
+prints one `Update refused: ...` line that names what to install or free, and
+changes nothing. The saved report keeps the details.
+
+- **Node:** the target's `engines.node` must accept the Node that the Gateway
+  service runs. The updater reads it from the launchd plist, systemd unit, or
+  Windows task, not from the shell's `PATH`. If the updater's own Node
+  qualifies, the update moves an owned service to it. Otherwise install the
+  named Node (for example `nvm install 24.22.1`) and run the update with it.
+- **Git (Git checkouts):** Git 2.31 or newer. Older Git misreads
+  `git rev-parse --path-format=absolute` instead of failing. The updater looks
+  for Git next to its Node first, then in system directories such as
+  `/usr/bin`, so the refusal names the Git it found.
+- **Disk (package installs):** about 1 GiB free on the volume that holds the
+  global package directory, for the staged install and npm's cache. The state
+  snapshot has its own measured check.
+
+Every attempt ends with one update run record. Its `cause` is one of `none`,
+`node-unsupported`, `git-unsupported`, `disk-full`, `permission-denied`,
+`network`, `config-invalid`, `install-failed`, `state-migration-failed`,
+`plugin-failed`, `service-failed`, `interrupted`, `refused` or `unknown`.
+Reports print it as `Cause:`. It is a closed set, so redaction never hides it.
+`openclaw update status --json` shows it as `lastRun.origin.cause`.
+
 Starting with the release that adds [candidate-owned admission](/cli/update#candidate-owned-admission),
 package updates privately stage the target and let its code judge configuration,
 database schema, Node requirements, and plugin availability before activation.

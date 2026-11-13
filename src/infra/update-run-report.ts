@@ -16,6 +16,7 @@ import {
   UPDATE_DESTINATION_RECOVERY,
 } from "./update-failure-facts-format.js";
 import { updateRepairRefusalNextAction } from "./update-preflight-details.js";
+import { classifyUpdateRunCause, isUpdatePrerequisiteRefusal } from "./update-run-cause.js";
 import {
   LEGACY_UPDATE_RUN_ADVISORY,
   LEGACY_UPDATE_RUN_EXPIRED_REASON,
@@ -279,6 +280,20 @@ export function renderUpdateRunReport(
     (run.reason === "node-runtime-preflight" ||
       run.reason === "preflight-node-runtime-incompatible");
   const warnings = updateRunWarningMessages(run.steps).map((message) => `Warning: ${message}`);
+  const cause =
+    run.origin.cause ??
+    classifyUpdateRunCause({
+      status: run.status,
+      reason: run.reason,
+      facts: run.steps.flatMap((step) => step.failureFacts ?? []),
+    });
+  // Prerequisite refusals change nothing and lead with one "Update refused: ..." line.
+  const refusalLine =
+    run.status === "failed" && isUpdatePrerequisiteRefusal(run.reason)
+      ? (opts.nextAction ?? run.origin.nextAction)
+          ?.split("\n")[0]
+          ?.match(/^Update refused: .+/u)?.[0]
+      : undefined;
   let headline: string;
   switch (run.status) {
     case "succeeded": {
@@ -297,9 +312,11 @@ export function renderUpdateRunReport(
         ? "ℹ️ OpenClaw abandoned update reconciled."
         : run.reason === LEGACY_UPDATE_RUN_EXPIRED_REASON
           ? `ℹ️ OpenClaw update abandoned: ${reason}.`
-          : runtimeCheckFailed
-            ? "⚠️ OpenClaw could not complete the update. A required system check failed."
-            : `⚠️ OpenClaw ${run.reason === "repair-failed" ? "repair" : "update"} failed: ${reason}.`;
+          : refusalLine
+            ? `⚠️ ${refusalLine}`
+            : runtimeCheckFailed
+              ? "⚠️ OpenClaw could not complete the update. A required system check failed."
+              : `⚠️ OpenClaw ${run.reason === "repair-failed" ? "repair" : "update"} failed: ${reason}.`;
       break;
     case "skipped":
       headline =
@@ -536,7 +553,19 @@ export function renderUpdateRunReport(
               ].filter((line): line is string => Boolean(line)),
             ),
           ];
+  if (run.status !== "succeeded") {
+    lines.unshift(`Cause: ${cause}`);
+  }
   const next = hints.at(-1);
+  if (refusalLine) {
+    // The terminal shows only the instruction; the saved report keeps every detail.
+    const details = ["Details:", `Reason code: ${reason}`, ...lines, ...hints].join("\n");
+    return {
+      headline,
+      lines: [],
+      markdown: `${headline}\n\n${bounded(details, markdownLimit - headline.length - 2)}`,
+    };
+  }
   if (runtimeCheckFailed || run.reason === "doctor-maintenance-pending") {
     // Keep the owner's selected action ahead of the diagnostic dump, including
     // historical-advice qualifications. Neither this layout nor truncation selects recovery.

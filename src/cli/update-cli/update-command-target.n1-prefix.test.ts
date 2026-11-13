@@ -48,7 +48,7 @@ vi.mock("./update-command-config.js", () => ({
     storedChannel: "stable",
   }),
 }));
-vi.mock("../../infra/disk-space.js", () => ({ createLowDiskSpaceWarning: () => undefined }));
+vi.mock("../../infra/disk-space.js", () => ({ describePackageStagingShortfall: () => null }));
 vi.mock("./update-command-package-destination.js", () => ({
   inspectNpmGlobalDestination: async () => ({ kind: "empty" }),
 }));
