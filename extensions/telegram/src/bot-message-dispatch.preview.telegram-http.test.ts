@@ -571,7 +571,7 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
         await http.waitForContaining("failed", "editMessageText");
         const card = http.texts()[0] ?? "";
         expect(card.match(/Exec/gu)).toHaveLength(1);
-        assertContains(card, "🛠️ Exec", "failed");
+        assertContains(card, "🛠️ <b>Exec</b>", "failed");
       },
       {
         mode: "progress",

@@ -25,7 +25,7 @@ import { type LogLevel, isLogLevelEnabled, levelToMinLevel, normalizeLogLevel } 
 import {
   isLegacyRollingLogFilePath,
   resolveRollingLogFilePathForDate,
-  resolveDefaultRollingLogFile,
+  resolveDefaultRollingLogFileName,
 } from "./log-file-path.js";
 import { canUseNodeFs, formatLocalDate, LOG_PREFIX, LOG_SUFFIX } from "./log-file-shared.js";
 import { serializeFileLogRecord, type FileLogMessagePart } from "./logger-file-message.js";
@@ -49,7 +49,11 @@ type ResolvedSettings = {
   file: string;
   maxFileBytes: number;
 };
-type ResolvedRuntimeSettings = ResolvedSettings & { rolling: boolean };
+type ResolvedRuntimeSettings = ResolvedSettings & {
+  rolling: boolean;
+  defaultRoot?: boolean;
+  target?: ReturnType<typeof fileLogTransport.prepareTarget>;
+};
 export type LoggerResolvedSettings = ResolvedSettings;
 type TsLogRecord = Record<string, unknown>;
 
@@ -406,7 +410,7 @@ function resolveDefaultActiveLogFile(): string {
       `${LOG_PREFIX}-vitest-${process.pid}-${formatLocalDate(new Date())}${LOG_SUFFIX}`,
     );
   }
-  return resolveDefaultRollingLogFile();
+  return resolveDefaultRollingLogFileName();
 }
 
 function resolveSettings(): ResolvedRuntimeSettings {
@@ -425,9 +429,10 @@ function resolveSettings(): ResolvedRuntimeSettings {
   if (canUseSilentVitestFileLogFastPath(envLevel)) {
     return {
       level: "silent",
-      file: resolveDefaultRollingLogFile(),
+      file: resolveDefaultRollingLogFileName(),
       maxFileBytes: DEFAULT_MAX_LOG_FILE_BYTES,
       rolling: true,
+      defaultRoot: true,
     };
   }
 
@@ -440,12 +445,26 @@ function resolveSettings(): ResolvedRuntimeSettings {
   const rolling = cfg?.file ? isLegacyRollingLogFilePath(cfg.file) : true;
   const file = resolveActiveLogFileWithMode(cfg?.file ?? resolveDefaultActiveLogFile(), rolling);
   const maxFileBytes = resolveMaxLogFileBytes(cfg?.maxFileBytes);
-  return { level, file, maxFileBytes, rolling };
+  const defaultRoot =
+    !cfg?.file && !(process.env.VITEST === "true" && process.env.OPENCLAW_TEST_FILE_LOG === "1");
+  return { level, file, maxFileBytes, rolling, defaultRoot };
 }
 
-export function getResolvedLoggerFileTarget(): { file: string; rolling: boolean } {
-  const { file, rolling } = resolveSettings();
-  return { file, rolling };
+function getRuntimeFileTarget(settings: ResolvedRuntimeSettings) {
+  const file = resolveActiveLogFileWithMode(settings.file, settings.rolling);
+  if (settings.target?.file !== file) {
+    settings.target = fileLogTransport.prepareTarget(
+      file,
+      settings.rolling,
+      settings.target?.defaultRoot ?? settings.defaultRoot,
+    );
+  }
+  return settings.target;
+}
+
+export async function getResolvedLoggerFileTarget(): Promise<{ file: string; rolling: boolean }> {
+  const target = getRuntimeFileTarget(getRuntimeSettings());
+  return { file: await fileLogTransport.resolveTarget(target), rolling: target.rolling };
 }
 
 function getRuntimeSettings(): ResolvedRuntimeSettings {
@@ -457,6 +476,10 @@ function getRuntimeSettings(): ResolvedRuntimeSettings {
 
 export function isFileLogLevelEnabled(level: LogLevel): boolean {
   return isLogLevelEnabled(level, getRuntimeSettings().level);
+}
+
+export function getFileLogLevel(): LogLevel {
+  return getRuntimeSettings().level;
 }
 
 type SubLoggerSettings = NonNullable<Parameters<TsLogger<LogObj>["getSubLogger"]>[0]>;
@@ -509,8 +532,6 @@ function buildLogger(): TsLogger<LogObj> {
     type: "hidden", // no ansi formatting
   });
   inheritLogLevel(logger, () => levelToMinLevel(getRuntimeSettings().level));
-  let activeFile: string | undefined;
-  let targetPreparation: ReturnType<typeof fileLogTransport.prepareTarget> | undefined;
   logger.attachTransport({
     // OpenClaw owns JSON serialization; tslog's formatted line is unused.
     format: () => "",
@@ -520,11 +541,7 @@ function buildLogger(): TsLogger<LogObj> {
         if (settings.level === "silent") {
           return;
         }
-        const nextActiveFile = resolveActiveLogFileWithMode(settings.file, settings.rolling);
-        if (nextActiveFile !== activeFile) {
-          activeFile = nextActiveFile;
-          targetPreparation = fileLogTransport.prepareTarget(activeFile, settings.rolling);
-        }
+        const targetPreparation = getRuntimeFileTarget(settings);
         const time = formatTimestamp(logObj.date ?? new Date(), { style: "long" });
         const { fields, messageParts } = prepareFileLogRecord(logObj as TsLogRecord);
         const line = serializeFileLogRecord(
@@ -537,7 +554,7 @@ function buildLogger(): TsLogger<LogObj> {
           messageParts,
         );
         fileLogTransport.enqueue({
-          file: activeFile,
+          file: targetPreparation.file,
           targetPreparation,
           hostname: fields.hostname,
           maxFileBytes: settings.maxFileBytes,
@@ -617,9 +634,14 @@ export type PinoLikeLogger = {
   fatal: (...args: unknown[]) => void;
 };
 
-export function getResolvedLoggerSettings(): LoggerResolvedSettings {
-  const { rolling: _rolling, ...settings } = resolveSettings();
-  return settings;
+export async function getResolvedLoggerSettings(): Promise<LoggerResolvedSettings> {
+  const settings = getRuntimeSettings();
+  const target = getRuntimeFileTarget(settings);
+  return {
+    level: settings.level,
+    file: await fileLogTransport.resolveTarget(target),
+    maxFileBytes: settings.maxFileBytes,
+  };
 }
 
 /** Flushes queued file logs before a graceful owner exits the process. */

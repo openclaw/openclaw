@@ -41,7 +41,6 @@ time zone).
    or failing verification as `pending`; record `no transcript` for one that
    has none. Record `done` only after verification passes. Write each line
    with `knowledge_edit_body` as soon as the meeting's outcome is known, so an
-   interrupted run resumes instead of redoing or losing it. If context runs
-   short, stop after the current meeting and leave the rest.
+   interrupted run resumes instead of redoing or losing it.
 6. Count meetings ingested, already in Knowledge, left pending and without a
    transcript, and pages and claims written.

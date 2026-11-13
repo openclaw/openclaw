@@ -127,7 +127,7 @@ export async function definePluginReloadProductTest(
   const lifetime = createFixtureLifetime();
   // Compilation is module preparation; the prebound child owns product effects.
   const nodeExecPath = resolveTestNodeExecPath();
-  const fixtureWorkers = createVitestWorkerRun(process.env, undefined, "full", nodeExecPath);
+  const fixtureWorkers = createVitestWorkerRun(process.env, undefined, "runtime", nodeExecPath);
   // A failed fixture drain retains worker claims; dispose only after successful cleanup.
   afterAll(async () => {
     await lifetime.cleanup();

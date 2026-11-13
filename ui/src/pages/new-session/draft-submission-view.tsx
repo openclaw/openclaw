@@ -29,9 +29,10 @@ export function NewSessionSubmission(props: {
   const json = createMemo(() => parseMarkdownJson(markdown()));
   const imageOptions = createMemo(() => ({ onOpenImage: props.onOpenImage }));
   const textOptions = { role: "user", isStreaming: false };
-  const markdownOptions = { codeBlockChrome: "none" } as const;
-  // Keep Markdown passive until Chat mounts its interaction owners. Uploaded
-  // images have their own lightbox handler and remain interactive while pending.
+  // Keep Markdown passive until Chat mounts its interaction owners; fences use
+  // Chat's markup so their rows do not reflow at handoff. Uploaded images have
+  // their own lightbox handler and remain interactive while pending.
+  const markdownOptions = { codeBlockChrome: "none", codeBlockInteraction: "wrap" } as const;
   return (
     <div class="new-session-page__starting chat-thread-inner">
       <div

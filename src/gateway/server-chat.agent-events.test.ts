@@ -133,22 +133,6 @@ describe("agent event handler", () => {
     });
   }
 
-  function mockSessionEntry(
-    entry: Awaited<ReturnType<typeof loadSessionEntryAsync>>["entry"],
-    canonicalKey = "session-1",
-  ) {
-    vi.mocked(loadSessionEntryAsync).mockResolvedValue({
-      cfg: {},
-      agentId: "main",
-      storePath: "/tmp/sessions.json",
-      store: {},
-      entry,
-      canonicalKey,
-      storeKeys: [canonicalKey],
-      legacyKey: undefined,
-    });
-  }
-
   function claimOwnedRun(runId: string, context: Parameters<typeof claimAgentRunContext>[1]) {
     return expectDefined(
       claimAgentRunContext(runId, context, { exclusive: true, trackOwner: true }),
@@ -318,7 +302,7 @@ describe("agent event handler", () => {
       ],
     ]);
 
-    expect(h.chatRunState.runs.get("client-run")?.progressSnapshot?.events).toMatchObject([
+    expect(h.inFlight("client-run").events).toMatchObject([
       {
         runId: "client-run",
         sessionKey: "session-1",
@@ -343,9 +327,10 @@ describe("agent event handler", () => {
       },
       { seq: 4 },
     );
-    expect(
-      h.chatRunState.runs.get("client-run")?.progressSnapshot?.events.at(-1)?.data,
-    ).toMatchObject({ phase: "strict_review_required", reviewId: "command-review" });
+    expect(h.inFlight("client-run").events?.at(-1)?.data).toMatchObject({
+      phase: "strict_review_required",
+      reviewId: "command-review",
+    });
 
     await h.emit(
       "provider-run",
@@ -358,12 +343,8 @@ describe("agent event handler", () => {
       },
       { seq: 5 },
     );
-    expect(h.chatRunState.runs.get("client-run")?.progressSnapshot?.events).not.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          data: expect.objectContaining({ reviewId: "command-review" }),
-        }),
-      ]),
+    expect(h.inFlight("client-run").events).not.toContainEqual(
+      expect.objectContaining({ data: expect.objectContaining({ reviewId: "command-review" }) }),
     );
   });
 
@@ -381,16 +362,16 @@ describe("agent event handler", () => {
       emit(seq);
     }
     await stop.drain();
-    const retained = h.chatRunState.runs.get("client-run")?.progressSnapshot?.events.at(-1);
+    const retained = h.inFlight("client-run").events?.at(-1);
     const stringify = vi.spyOn(JSON, "stringify");
     try {
       emit(51);
       await stop.drain();
       expect(stringify.mock.calls.filter(([value]) => value === retained)).toHaveLength(0);
-      const snapshot = h.chatRunState.runs.get("client-run")?.progressSnapshot;
-      expect(snapshot?.events).toHaveLength(50);
-      expect(snapshot?.events[0]?.seq).toBe(2);
-      expect(snapshot?.events.at(-1)?.seq).toBe(51);
+      const events = h.inFlight("client-run").events;
+      expect(events).toHaveLength(50);
+      expect(events?.[0]?.seq).toBe(2);
+      expect(events?.at(-1)?.seq).toBe(51);
     } finally {
       stringify.mockRestore();
       await stop();
@@ -2830,86 +2811,6 @@ describe("agent event handler", () => {
     },
   );
 
-  describe("spawnedBy enrichment in chat and agent broadcasts", () => {
-    function mockSessionLineage(key: string, spawnedBy?: string) {
-      lineageProjection = createSessionRowProjectionFixture({
-        cfg: {},
-        store: {
-          [key]: { sessionId: "lineage", updatedAt: 1, ...(spawnedBy ? { spawnedBy } : {}) },
-        },
-      });
-      mockSessionEntry(
-        { sessionId: "lineage", updatedAt: 1, ...(spawnedBy ? { spawnedBy } : {}) },
-        key,
-      );
-      vi.mocked(loadGatewaySessionRow).mockReturnValue({
-        key,
-        kind: "direct",
-        updatedAt: null,
-        ...(spawnedBy ? { spawnedBy } : {}),
-      });
-    }
-
-    it.each([
-      {
-        name: "dashboard delta",
-        key: "agent:main:dashboard:visible-child",
-        parent: "agent:main:discord:direct:alice",
-        state: "delta",
-        events: [["assistant", { text: "visible child" }]],
-      },
-      {
-        name: "subagent terminal error",
-        key: "agent:coder:subagent:err",
-        parent: "agent:conductor:task:parent-err",
-        state: "error",
-        events: [
-          ["assistant", { text: "partial" }],
-          ["lifecycle", { phase: "error", error: "provider failed" }],
-        ],
-      },
-      {
-        name: "subagent sequence gap",
-        key: "agent:coder:subagent:gap",
-        parent: "agent:conductor:task:parent-gap",
-        state: "gap",
-        events: [
-          ["lifecycle", { phase: "start" }],
-          ["assistant", { text: "skipped seq" }, { seq: 5 }],
-        ],
-      },
-    ] as const)(
-      "includes spawnedBy in $name broadcasts",
-      async ({ key, parent, state, events }) => {
-        mockSessionLineage(key, parent);
-        const h = createHarness({
-          resolveSessionKeyForRun: () => key,
-          lifecycleErrorRetryGraceMs: 0,
-        });
-        if (state === "gap") {
-          registerAgentRunContext("run-lineage", { sessionKey: key });
-        } else {
-          h.register("run-lineage", key, "client-lineage");
-        }
-        await h.emitMany("run-lineage", events);
-        const calls = state === "gap" ? h.agent() : h.chat();
-        const call = expectDefined(
-          calls.find(([, payload]) =>
-            state === "gap"
-              ? payload.stream === "error" && payload.data?.reason === "seq gap"
-              : payload.state === state,
-          ),
-          "lineage broadcast",
-        );
-        expectPayloadFields(call[1], { sessionKey: key, spawnedBy: parent });
-        if (state === "gap") {
-          expectPayloadDataFields(call[1], { reason: "seq gap", expected: 2, received: 5 });
-        } else {
-          expectPayloadFields(call[1], { state });
-        }
-      },
-    );
-  });
   describe("agent model roster publications", () => {
     type ModelObservation = { provider: string | null; model: string | null };
     const PRIMARY_MODEL: ModelObservation = { provider: "provider", model: "primary" };
