@@ -164,7 +164,8 @@ export default defineSingleProviderPluginEntry({
         code === "FreeTierError" ||
         /\bFreeTierError\b|OpenCode's free tier can only be used from within OpenCode/.test(
           errorMessage,
-        ))
+        ) ||
+        /Upstream request failed: Model access is disabled(?:"|$)/.test(errorMessage))
         ? "model_not_found"
         : undefined,
     wrapStreamFn: wrapOpencodeProviderStream,
