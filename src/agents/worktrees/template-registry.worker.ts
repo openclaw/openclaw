@@ -305,7 +305,11 @@ export const worktreeTemplateOperations = {
             .where("id", "=", row.id),
         );
       }
-      if ("selection" in input && input.selection.now !== undefined) {
+      if (
+        "selection" in input &&
+        input.selection.now !== undefined &&
+        input.selection.now > row.last_used_at
+      ) {
         row.last_used_at = input.selection.now;
         executeSqliteQuerySync(
           db,

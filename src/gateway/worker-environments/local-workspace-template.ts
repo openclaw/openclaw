@@ -142,7 +142,7 @@ type LocalWorkspaceTemplateParams = {
   env: NodeJS.ProcessEnv;
   sandbox: SandboxConfig;
   identity?: SandboxDependencyTemplateIdentity;
-  background?: boolean;
+  backgroundUsedAt?: number;
   buildCacheInputs?: string[];
   guard: Pick<WorktreeAllocationGuard, "commitGuard" | "rollbackGuard" | "requireDiskSpace"> & {
     signal: AbortSignal;
@@ -308,7 +308,7 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
   const record = await prepareWorktreeTemplate({
     env: params.env,
     now: Date.now,
-    background: params.background,
+    backgroundUsedAt: params.backgroundUsedAt,
     options: guard,
     cacheKey: sandboxTemplateCacheKey(commonDir, params.templateRoot, identity.key),
     contentKey: digest(`${params.baseCommit}\n${digest(lockfile.stdout)}\n${identity.key}`),

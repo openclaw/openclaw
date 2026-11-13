@@ -244,7 +244,7 @@ export async function prepareWorktreeTemplate(params: {
   sourceCommit: string;
   backend: string;
   reuseOnly?: boolean;
-  background?: boolean;
+  backgroundUsedAt?: number;
   requireSpace: () => Promise<void>;
   /** Immutable generations consume producer validation; mutable templates revalidate on reuse. */
   validate?: (
@@ -276,7 +276,7 @@ export async function prepareWorktreeTemplate(params: {
           cacheKey: params.cacheKey,
           contentKey: params.contentKey,
           backend: params.backend,
-          now: retainCommits && !params.background ? params.now() : undefined,
+          now: retainCommits ? (params.backgroundUsedAt ?? params.now()) : undefined,
         },
         assertCallerCurrent,
       );
@@ -372,8 +372,9 @@ export async function prepareWorktreeTemplate(params: {
           }
           if (valid && existing.contentKey === params.contentKey) {
             retained = await retainWorktreeTemplate(params.env, existing, assertCurrent);
-            if (!hasReaders && !params.background) {
-              await markTemplateReadyAsync(params.env, existing.id, params.now(), assertCurrent);
+            const usedAt = params.backgroundUsedAt ?? params.now();
+            if (!hasReaders && usedAt > existing.lastUsedAt) {
+              await markTemplateReadyAsync(params.env, existing.id, usedAt, assertCurrent);
             }
             setWorktreePreparationTemplate("warm", { reason: "ready" });
             return retained;
@@ -424,7 +425,7 @@ export async function prepareWorktreeTemplate(params: {
           contentKey: params.contentKey,
           status: "preparing",
           createdAt: params.now(),
-          lastUsedAt: params.background ? (existing?.lastUsedAt ?? 0) : params.now(),
+          lastUsedAt: Math.max(params.backgroundUsedAt ?? params.now(), existing?.lastUsedAt ?? 0),
         };
         await reserveTemplateAsync(params.env, record, assertCurrent);
         built = true;
@@ -459,7 +460,7 @@ export async function prepareWorktreeTemplate(params: {
         await markTemplateReadyAsync(
           params.env,
           id,
-          params.background ? record.lastUsedAt : params.now(),
+          params.backgroundUsedAt === undefined ? params.now() : record.lastUsedAt,
           assertCurrent,
           {
             cacheKey,

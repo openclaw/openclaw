@@ -16,8 +16,13 @@ import {
   markManagedWorktreePreparation,
   withWorktreePreparationTiming,
 } from "../../agents/worktrees/preparation-timing.js";
+import { IDLE_GC_MS } from "../../agents/worktrees/retention.js";
 import { makeWorktreeRecord } from "../../agents/worktrees/service.test-support.js";
-import { listTemplatesAsync } from "../../agents/worktrees/template-registry-async.js";
+import { collectWorktreeTemplates } from "../../agents/worktrees/template-cache.js";
+import {
+  listTemplatesAsync,
+  markTemplateReadyAsync,
+} from "../../agents/worktrees/template-registry-async.js";
 import { stageSandboxMedia } from "../../auto-reply/reply/stage-sandbox-media.js";
 import type { RuntimeMsgContext, TemplateContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -653,6 +658,56 @@ it("prepares the current base of a previously sandboxed project with sandbox mod
     (await listTemplatesAsync(warmed.env)).some((record) => record.lastUsedAt > priorUse),
   ).toBe(true);
 });
+
+it.each([false, true])(
+  "keeps prewarming reusable when only a retained commit is recent (canonical removed: %s)",
+  async (removed) => {
+    const signal = new AbortController().signal;
+    const warmed = prewarmFixture();
+    await warmed.seed(signal);
+    await warmed.prepare(signal);
+    const commit = await git(source, "rev-parse", "HEAD");
+    const templateRoot = path.join(warmed.state, "worktree-projections");
+    const guard = { commitGuard: () => {} };
+    for (const record of await listTemplatesAsync(warmed.env)) {
+      await markTemplateReadyAsync(warmed.env, record.id, 1, guard.commitGuard);
+    }
+    await withWorktreeAllocationLease({ env: warmed.env, signal }, (allocation) =>
+      cloneLocalWorkspaceTemplate({
+        source,
+        repoRoot: source,
+        baseCommit,
+        branch: "openclaw/pinned-session",
+        destination: path.join(templateRoot, "pinned-session"),
+        temporaryRoot: templateRoot,
+        templateRoot,
+        env: warmed.env,
+        sandbox,
+        guard: { ...allocation, signal: allocation.signal ?? signal },
+      }),
+    );
+    const pinned = (await listTemplatesAsync(warmed.env)).find(
+      (record) => record.sourceCommit === baseCommit,
+    )!;
+    const collect = () => collectWorktreeTemplates(warmed.env, Date.now() - IDLE_GC_MS, guard);
+    if (removed) {
+      await collect();
+      expect((await listTemplatesAsync(warmed.env)).map((record) => record.id)).toEqual([
+        pinned.id,
+      ]);
+    }
+    mocks.install.mockClear();
+    await warmed.prepare(signal);
+    await collect();
+    expect(await listTemplatesAsync(warmed.env)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ sourceCommit: commit, lastUsedAt: pinned.lastUsedAt }),
+      ]),
+    );
+    await warmed.prepare(signal);
+    expect(mocks.install).toHaveBeenCalledTimes(removed ? 1 : 0);
+  },
+);
 
 it.each(["shutdown", "config", "base advance"])(
   "settles a background install without publishing after %s",

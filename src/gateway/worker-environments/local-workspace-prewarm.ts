@@ -66,19 +66,19 @@ export async function prewarmLocalWorkspaceTemplates(params: {
       if (!identity) {
         continue;
       }
-      // Background preparation preserves foreground recency, so abandoned repositories age out.
+      // The newest foreground use wins across retained generations; background work never renews it.
       const candidates = templates
         .filter(
           (record) =>
             worktreeTemplateMutationKey(record.cacheKey) ===
             sandboxTemplateCacheKey(record.commonDir, record.worktreeRoot, identity.key),
         )
-        .map((record) => ({ repoRoot: record.repoRoot, templateRoot: record.worktreeRoot }));
+        .reverse();
       for (const candidate of candidates) {
         if (await params.shouldDefer?.()) {
           return;
         }
-        const key = JSON.stringify([candidate.repoRoot, candidate.templateRoot, identity.key]);
+        const key = JSON.stringify([candidate.repoRoot, candidate.worktreeRoot, identity.key]);
         if (visited.has(key)) {
           continue;
         }
@@ -97,7 +97,7 @@ export async function prewarmLocalWorkspaceTemplates(params: {
                     signal,
                     guard.commitGuard,
                   );
-                  const { templateRoot } = candidate;
+                  const templateRoot = candidate.worktreeRoot;
                   const superseded = new AbortController();
                   using _ = observeWorktreeBase((repoRoot, commit) => {
                     if (repoRoot === repository.repoRoot && commit !== base.commit) {
@@ -115,7 +115,7 @@ export async function prewarmLocalWorkspaceTemplates(params: {
                     env,
                     sandbox,
                     identity,
-                    background: true,
+                    backgroundUsedAt: candidate.lastUsedAt,
                     // Prepare the default projection manifest along with its dependencies.
                     buildCacheInputs: [],
                     guard: {
