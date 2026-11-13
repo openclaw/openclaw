@@ -3575,34 +3575,58 @@ describe("ci workflow guards", () => {
       const nodeRows = 1 + 40 - Number(baseline.outputs.hybrid_hosted_base_rows);
       expect(nodeRows).toBeGreaterThan(0);
       const sameRepository = manifestWithHostedNodeRows(nodeRows, options);
+      const forkProfile = runRunnerProfileFixture({
+        configuredProfile: "hybrid",
+        eventName,
+        headRepository: "contributor/openclaw",
+        targetSupportsContract: true,
+      });
+      expect(forkProfile.status, forkProfile.output).toBe(0);
       const fork = manifestWithHostedNodeRows(nodeRows, {
         ...options,
-        scopeEnv: { OPENCLAW_CI_HEAD_REPOSITORY: "contributor/openclaw" },
+        scopeEnv: {
+          OPENCLAW_CI_HEAD_REPOSITORY: "contributor/openclaw",
+          OPENCLAW_CI_RUNNER_BACKEND: expectDefined(
+            forkProfile.outputs.placement_runner_backend,
+            "fork placement backend",
+          ),
+          OPENCLAW_CI_RUNNER_PROFILE: expectDefined(
+            forkProfile.outputs.runner_profile,
+            "fork runner profile",
+          ),
+          OPENCLAW_CI_NODE_RUNNER_BACKEND: expectDefined(
+            forkProfile.outputs.node_runner_backend,
+            "fork Node backend",
+          ),
+        },
       });
       expect(sameRepository.status, sameRepository.output).toBe(0);
       expect(fork.status, fork.output).toBe(0);
       expect(Number(sameRepository.outputs.hybrid_hosted_base_rows)).toBe(40);
       const sameRows = emittedHostedRows(sameRepository.outputs, { eventName });
-      const forkRows = emittedHostedRows(fork.outputs, {
-        eventName,
-        headRepository: "contributor/openclaw",
+      const forkRows = emittedHostedRows(
+        { ...fork.outputs, ...forkProfile.outputs },
+        {
+          eventName,
+          headRepository: "contributor/openclaw",
+        },
+      );
+      expect(fork.outputs).toMatchObject({
+        hybrid_hosted_base_rows: "0",
+        hybrid_hosted_total_rows: "0",
+        hybrid_hosted_offload: "false",
+        hybrid_hosted_checks: "false",
+        hybrid_hosted_main_checks: "false",
       });
-      const hostedForkJobs = ["check-plan", "checks-baseline-ratchets", "docker-seed-e2e"].filter(
-        (name) => forkRows.includes(name) && !sameRows.includes(name),
-      ).length;
-      const forkBaseRows = 40 + hostedForkJobs - 3;
-      expect(Number(fork.outputs.hybrid_hosted_base_rows)).toBe(forkBaseRows);
       for (const job of ["preflight", "ci-gate", "pr-failure-report", "check-plan"]) {
         expect(sameRows).toContain(job);
       }
       expect(sameRows).toHaveLength(Number(sameRepository.outputs.hybrid_hosted_total_rows));
-      expect(forkRows).not.toContain("preflight");
-      expect(forkRows).not.toContain("ci-gate");
-      expect(forkRows).not.toContain("check-plan");
+      for (const job of ["preflight", "ci-gate", "pr-failure-report", "check-plan"]) {
+        expect(forkRows).toContain(job);
+      }
       expect(sameRepository.outputs.hybrid_hosted_offload).toBe("true");
-      expect(fork.outputs.hybrid_hosted_offload).toBe(String(forkBaseRows <= 40));
-      expect(Number(fork.outputs.hybrid_hosted_total_rows)).toBeLessThanOrEqual(45);
-      expect(forkRows).toContain("pr-failure-report");
+      expect(Number(sameRepository.outputs.hybrid_hosted_total_rows)).toBeLessThanOrEqual(45);
     });
 
     it.each([
@@ -3985,12 +4009,6 @@ describe("ci workflow guards", () => {
         headRepository: "openclaw/openclaw",
       },
       {
-        label: "trusted fork PR",
-        eventName: "pull_request" as const,
-        runnerProfile: "github" as const,
-        headRepository: "contributor/openclaw",
-      },
-      {
         label: "main",
         eventName: "push" as const,
         runnerProfile: "hybrid" as const,
@@ -4029,9 +4047,7 @@ describe("ci workflow guards", () => {
         eventName === "pull_request" ? 0 : 1,
       );
       for (const job of ["preflight", "ci-gate"]) {
-        expect(base.filter((name) => name === job)).toHaveLength(
-          headRepository === "openclaw/openclaw" ? 1 : 0,
-        );
+        expect(base.filter((name) => name === job)).toHaveLength(1);
       }
       expect(base.filter((name) => name === "pr-failure-report")).toHaveLength(
         eventName === "pull_request" ? 1 : 0,
