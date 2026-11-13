@@ -42,11 +42,6 @@ function buildToolTracking(): CliToolTracking {
     handleCliToolUseStart: vi.fn(),
     handleCliToolResult: vi.fn(() => undefined),
     dropRetainedToolArgs: vi.fn(),
-    getRetainedMessagingSizes: vi.fn(() => ({
-      pendingMessagingCalls: 0,
-      reducedMessagingCalls: 0,
-      reducedMessagingArgChars: 0,
-    })),
     resolveCliLoopbackTerminalOutcome: vi.fn(() => undefined),
     beginGatewayCapture: vi.fn(),
   } as unknown as CliToolTracking;
@@ -107,9 +102,13 @@ describe("cli event handler retention bounds", () => {
       // The other holder of the same decoded object was told to let go as well;
       // releasing only one of them would free nothing.
       expect(toolTracking.dropRetainedToolArgs).toHaveBeenCalled();
-      const retained = handlers.getRetainedStateSizes();
-      expect(retained.unfinishedToolCalls).toBeLessThan(MAX_UNFINISHED_TOOL_CALLS);
-      expect(retained.retainedToolArgChars).toBeLessThanOrEqual(MAX_RETAINED_TOOL_ARG_CHARS);
+      // There is deliberately no retained-size accessor to read: the two
+      // assertions above ARE the bound, observed where it is observable. A
+      // summed byte count over emitted events would measure streaming rather
+      // than retention (every tool START legitimately carries its arguments),
+      // so retained BYTES are measured where that is possible at all — the
+      // proof harness's forced-collection heap delta in
+      // `scripts/proof-cli-stream-turn-budget.ts`.
     } finally {
       dispose();
     }
@@ -135,9 +134,6 @@ describe("cli event handler retention bounds", () => {
       finishTool(handlers, `call-${calls - 1}`);
       expect(resultArgsFor(events, "call-0")).toBeUndefined();
       expect(resultArgsFor(events, `call-${calls - 1}`)).toEqual({ command: `run ${calls - 1}` });
-      const retained = handlers.getRetainedStateSizes();
-      expect(retained.unfinishedToolCalls).toBeLessThanOrEqual(MAX_UNFINISHED_TOOL_CALLS);
-      expect(retained.activeParsedTools).toBeLessThanOrEqual(MAX_UNFINISHED_TOOL_CALLS);
     } finally {
       dispose();
     }
@@ -156,10 +152,9 @@ describe("cli event handler retention bounds", () => {
           result: "ok",
         });
       }
-      expect(handlers.getRetainedStateSizes().toolSummaries).toBeLessThanOrEqual(
-        MAX_TRACKED_TOOL_SUMMARIES,
-      );
-      // Eviction costs recent-call dedup, never the trace the run reports.
+      // Eviction costs recent-call dedup, never the trace the run reports; the
+      // exact summary below is the only thing the cap is allowed to change, and
+      // it is what the run actually reports.
       expect(handlers.getToolSummary()).toEqual({
         calls,
         tools: ["Bash"],

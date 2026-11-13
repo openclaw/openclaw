@@ -109,9 +109,12 @@ describe("CLI delivery-evidence retention bounds", () => {
     expect(evidence.messagingToolSentTexts).toContain(sendBody(0));
     expect(evidence.messagingToolSentTexts).not.toContain(sendBody(SENDS - 1));
 
-    const retained = handlers.getRetainedStateSizes();
-    expect(retained.reducedMessagingCalls).toBeGreaterThan(0);
-    expect(retained.retainedToolArgChars).toBeLessThanOrEqual(MAX_RETAINED_TOOL_ARG_CHARS);
+    // There is no production measurement seam to read: the bound is asserted on
+    // what the run actually exports. An unbounded build exports every payload,
+    // so the exported total is the discriminating observation.
+    const exportedChars = JSON.stringify(evidence).length;
+    expect(exportedChars).toBeLessThan(SEND_CHARS * SENDS);
+    expect(exportedChars).toBeLessThanOrEqual(MAX_RETAINED_TOOL_ARG_CHARS);
   });
 
   it("still settles delivery and the source reply for a send past the bound", () => {
@@ -192,7 +195,6 @@ describe("CLI delivery-evidence retention bounds", () => {
     // send, and its small fields alone outgrow the reduced allowance.
     expect(JSON.stringify(smallFields()).length).toBeGreaterThan(MAX_REDUCED_MESSAGING_ARG_CHARS);
     startSend(handlers, `send-${SENDS - 1}`, args);
-    expect(handlers.getRetainedStateSizes().reducedMessagingCalls).toBeGreaterThan(0);
 
     handlers.emitParsedToolResult({
       toolCallId: `send-${SENDS - 1}`,
@@ -209,6 +211,9 @@ describe("CLI delivery-evidence retention bounds", () => {
     });
     const evidence = toolTracking.withExecutionEvidence({ text: "" });
     expect(evidence.didDeliverSourceReplyViaMessageTool).toBe(true);
+    // The send really was reduced: its body is gone from the exported target
+    // while its routing facts and `final:false` survived.
+    expect(evidence.messagingToolSentTargets?.[0]?.text).toBeUndefined();
     // A progress send stays a progress send: recording it as the final reply
     // would suppress the reply the turn still owes.
     expect(evidence.messagingToolSourceReplyPayloads).toEqual([
@@ -248,14 +253,12 @@ describe("CLI delivery-evidence retention bounds", () => {
     expect(SEND_CHARS * SEQUENTIAL_SENDS).toBeGreaterThan(MAX_SETTLED_MESSAGING_EVIDENCE_CHARS);
     expect(SEQUENTIAL_SENDS + 1).toBeLessThan(CLI_MESSAGING_EVIDENCE_MAX_CALLS);
 
-    const retained = handlers.getRetainedStateSizes();
-    expect(retained.retainedToolArgChars).toBe(0);
-    expect(retained.reducedSettledMessagingEntries).toBeGreaterThan(0);
-    expect(retained.settledMessagingEvidenceChars).toBeLessThanOrEqual(
+    const evidence = toolTracking.withExecutionEvidence({ text: "" });
+    // Every send settled and refunded its pending arguments, so the only thing
+    // that can still hold megabytes is the settled evidence this run exports.
+    expect(JSON.stringify(evidence).length).toBeLessThanOrEqual(
       MAX_SETTLED_MESSAGING_EVIDENCE_CHARS + MAX_REDUCED_MESSAGING_ARG_CHARS * SEQUENTIAL_SENDS,
     );
-
-    const evidence = toolTracking.withExecutionEvidence({ text: "" });
     // Delivery facts: every send settled, and every distinct send is still one
     // distinct, de-duplicated target.
     expect(evidence.didSendViaMessagingTool).toBe(true);
@@ -284,6 +287,7 @@ describe("CLI delivery-evidence retention bounds", () => {
     const evidence = toolTracking.withExecutionEvidence({ text: "" });
     expect(evidence.didSendViaMessagingTool).toBe(true);
     expect(evidence.messagingToolSentTexts).toEqual(["hello"]);
-    expect(handlers.getRetainedStateSizes().reducedMessagingCalls ?? 0).toBe(0);
+    // Nothing was reduced: the exported target still carries the real body.
+    expect(evidence.messagingToolSentTargets?.[0]?.text).toBe("hello");
   });
 });

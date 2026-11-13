@@ -700,22 +700,12 @@ export function createCliEventHandlers(params: {
       onCompactionActiveChange = listener;
     },
     activeParsedToolCount: () => activeParsedTools.size,
-    /**
-     * What this consumer is holding right now. The caps in
-     * `execute-event-retention.ts` are only meaningful if they are observable,
-     * and a run that had to drop tool arguments is worth being able to see.
-     */
-    getRetainedStateSizes: () => ({
-      toolSummaries: toolSummaryById.size,
-      toolNames: toolSummaryNames.size,
-      unfinishedToolCalls: toolArgsByCallId.size,
-      retainedToolArgChars,
-      activeParsedTools: activeParsedTools.size,
-      // The tracking side holds a third copy of the same arguments for an
-      // unresolved message send, so the run's retention is only observable
-      // with it included.
-      ...params.toolTracking.getRetainedMessagingSizes(),
-    }),
+    // The retention caps in `execute-event-retention.ts` are deliberately NOT
+    // exported as counters. They are observable from what this consumer emits
+    // and from what the run exports as evidence: a refused tool call echoes no
+    // arguments, a reduced send keeps its routing facts and loses its body.
+    // Tests and the proof harness assert those, plus retained heap, instead of
+    // a production measurement seam.
     isActiveForegroundAgentTool: (toolCallId: string) => {
       const tool = activeParsedTools.get(toolCallId);
       return tool !== undefined && isClaudeForegroundAgentToolName(tool.toolName);

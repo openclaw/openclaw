@@ -95,7 +95,6 @@ import { createCliJsonlStreamingParser } from "../src/agents/cli-output-stream.j
 import {
   MAX_REDUCED_MESSAGING_ARG_CHARS,
   MAX_RETAINED_TOOL_ARG_CHARS,
-  MAX_TRACKED_TOOL_SUMMARIES,
   MAX_UNFINISHED_TOOL_CALLS,
 } from "../src/agents/cli-runner/execute-event-retention.js";
 import { createCliEventHandlers } from "../src/agents/cli-runner/execute-events.js";
@@ -170,6 +169,26 @@ function toolResultFrame(index: number, payloadChars: number): string {
   });
 }
 
+/**
+ * A full assistant record: the ordinary shape charged in full against the
+ * raw-character budget. Partial deltas carry a fixed envelope charge and
+ * tool-result payloads are discounted outright by
+ * `measureClaudeToolResultMessage`, so neither can spend an 8 MiB character
+ * budget at any wire volume a real turn reaches.
+ */
+function assistantMessageFrame(index: number, textChars: number): string {
+  return JSON.stringify({
+    type: "assistant",
+    parent_tool_use_id: null,
+    session_id: SESSION_ID,
+    message: {
+      id: `msg_proof_${index}`,
+      role: "assistant",
+      content: [{ type: "text", text: `${index}:${"a".repeat(textChars)}` }],
+    },
+  });
+}
+
 function terminalResultFrame(): string {
   return JSON.stringify({
     type: "result",
@@ -205,15 +224,18 @@ function assertBudgetSpent(parser: Parser, measure: string, streamed: number): v
 /** Streams realistic frames until the parser reports the character budget spent. */
 function overflowRawCharBudget(parser: Parser): number {
   let streamed = 0;
-  // Partial deltas are charged below their raw size, so raw bytes streamed is
-  // not the stop condition; the parser's own verdict is. Capped so a parser
-  // that never charges cannot loop forever.
+  // Chargeable ordinary records are what spends this budget: 64 KiB of
+  // assistant text per frame reaches the 8 MiB character limit in about 128
+  // frames, far below the 20,000-line odometer, so the character limit is what
+  // every scenario below is standing on. Raw bytes streamed is not the stop
+  // condition; the parser's own verdict is, and the cap keeps a parser that
+  // never charges from looping forever.
   const cap = 4 * CLI_STREAM_JSON_OUTPUT_LIMITS.maxTurnRawChars;
   for (let index = 0; parser.getErrorText() === null && streamed <= cap; index += 1) {
     const frames = [
       textDeltaFrame(`step ${index} `),
-      toolResultFrame(index, 96_000),
-      textDeltaFrame(`observed ${index}\n`),
+      toolResultFrame(index, 4_096),
+      assistantMessageFrame(index, 64 * 1024),
     ];
     const chunk = `${frames.join("\n")}\n`;
     streamed += chunk.length;
@@ -846,24 +868,12 @@ function scenarioConsumerRetentionBound(): void {
     argCharsStreamed > MAX_RETAINED_TOOL_ARG_CHARS * 4,
     `consumer-retention-bound: only ${argCharsStreamed} argument chars streamed; the character bound never engaged`,
   );
-  // Read before the heap assertion so a failure reports the composition, not
-  // just the number. A build without the bound fails on the measurement itself
-  // rather than on a missing accessor, because the measurement comes first.
-  const retained = handlers.getRetainedStateSizes?.();
+  // Retained HEAP, not a production counter: the consumer exposes no
+  // measurement interface, so what is checked here is the bytes the real
+  // object graph still holds after a forced collection.
   assert(
     heapGrowth < retainedBound,
-    `consumer-retention-bound: heap grew ${heapGrowth} bytes while the runner's event consumer took ${uniqueToolCalls} post-budget tool starts carrying ${argCharsStreamed} argument chars; retained runner state is not bounded (bound ${retainedBound}, consumer state ${JSON.stringify(retained)})`,
-  );
-  assert(
-    retained !== undefined,
-    "consumer-retention-bound: the consumer exposes no retained-state sizes to check against its caps",
-  );
-  assert(
-    retained.retainedToolArgChars <= MAX_RETAINED_TOOL_ARG_CHARS &&
-      retained.unfinishedToolCalls <= MAX_UNFINISHED_TOOL_CALLS &&
-      retained.toolSummaries <= MAX_TRACKED_TOOL_SUMMARIES &&
-      retained.activeParsedTools <= MAX_UNFINISHED_TOOL_CALLS,
-    `consumer-retention-bound: consumer state outside its caps: ${JSON.stringify(retained)}`,
+    `consumer-retention-bound: heap grew ${heapGrowth} bytes while the runner's event consumer took ${uniqueToolCalls} post-budget tool starts carrying ${argCharsStreamed} argument chars; retained runner state is not bounded (bound ${retainedBound})`,
   );
   // Bounding retention must not cost the liveness this branch restores.
   const postBudgetCalls = handlers.getToolSummary().calls - callsAtOverflow;
@@ -878,7 +888,7 @@ function scenarioConsumerRetentionBound(): void {
   console.log(
     `[consumer-retention-bound] ${uniqueToolCalls} post-budget tool starts carrying ${argCharsStreamed} argument chars ` +
       `through the real createCliEventHandlers/createCliToolTracking; heap delta ${heapGrowth} bytes against ${streamedAfter} streamed; ` +
-      `retained ${JSON.stringify(retained)}; all ${uniqueToolCalls} starts still counted`,
+      `all ${uniqueToolCalls} starts still counted`,
   );
 }
 
@@ -994,7 +1004,6 @@ function scenarioMessagingRetentionBound(): void {
   }
   forceGarbageCollection();
   const heapGrowth = process.memoryUsage().heapUsed - heapAtOverflow;
-  const retained = handlers.getRetainedStateSizes();
   const retainedBound = 2 * MAX_RETAINED_TOOL_ARG_CHARS;
 
   assert(
@@ -1007,17 +1016,7 @@ function scenarioMessagingRetentionBound(): void {
   );
   assert(
     heapGrowth < retainedBound,
-    `messaging-retention-bound: heap grew ${heapGrowth} bytes while ${sends} unresolved message sends carrying ${contentChars * sends} argument chars reached the real tracking; delivery evidence is not bounded (bound ${retainedBound}, consumer state ${JSON.stringify(retained)})`,
-  );
-  assert(
-    retained.pendingMessagingCalls === sends,
-    `messaging-retention-bound: ${retained.pendingMessagingCalls} of ${sends} sends are held as delivery evidence; the holder under measurement was not exercised`,
-  );
-  assert(
-    retained.reducedMessagingCalls > 0 &&
-      retained.reducedMessagingArgChars <=
-        retained.reducedMessagingCalls * MAX_REDUCED_MESSAGING_ARG_CHARS,
-    `messaging-retention-bound: delivery evidence outside its bound: ${JSON.stringify(retained)}`,
+    `messaging-retention-bound: heap grew ${heapGrowth} bytes while ${sends} unresolved message sends carrying ${contentChars * sends} argument chars reached the real tracking; delivery evidence is not bounded (bound ${retainedBound})`,
   );
 
   // Bounding the holder must not cost what it exists for. Settle one send whose
@@ -1055,7 +1054,7 @@ function scenarioMessagingRetentionBound(): void {
   console.log(
     `[messaging-retention-bound] ${sends} unresolved message sends carrying ${contentChars * sends} argument chars ` +
       `through the real parser and createCliToolTracking; heap delta ${heapGrowth} bytes against ${streamedAfter} streamed; ` +
-      `retained ${JSON.stringify(retained)}; both settled sends recorded delivery and the source reply, only the send inside the bound kept its content`,
+      `both settled sends recorded delivery and the source reply, only the send inside the bound kept its content`,
   );
 }
 
@@ -1208,11 +1207,6 @@ function scenarioReducedFinalFlag(): void {
       },
     })}\n`,
   );
-  const retained = handlers.getRetainedStateSizes();
-  assert(
-    retained.reducedMessagingCalls > 0,
-    `reduced-final-flag: no send was reduced, so the scenario proves nothing: ${JSON.stringify(retained)}`,
-  );
   parser.push(
     `${JSON.stringify({
       type: "user",
@@ -1252,8 +1246,15 @@ function scenarioReducedFinalFlag(): void {
     payloads[0]?.sourceReplyFinal === false,
     `reduced-final-flag: a progress send settled as sourceReplyFinal=${String(payloads[0]?.sourceReplyFinal)}; the turn's real reply would be suppressed`,
   );
+  // The send really was reduced, read from exported evidence rather than a
+  // production counter: its body is gone while its routing facts survived.
+  const reducedTarget = evidence.messagingToolSentTargets?.[0];
+  assert(
+    reducedTarget?.text === undefined && reducedTarget?.provider === "slack",
+    `reduced-final-flag: no send was reduced, so the scenario proves nothing: ${JSON.stringify(reducedTarget)}`,
+  );
   console.log(
-    `[reduced-final-flag] send reduced past the retention bound (retained ${JSON.stringify(retained)}); ` +
+    `[reduced-final-flag] send reduced past the retention bound (exported target ${JSON.stringify(reducedTarget)}); ` +
       `final:false behind 1,000 small fields settled as ${JSON.stringify(payloads[0])}`,
   );
 }

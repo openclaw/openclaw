@@ -699,11 +699,6 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     handleCliToolUseStart,
     handleCliToolResult,
     dropRetainedToolArgs,
-    /** Retained delivery-evidence sizes, for the retention gate's measurement. */
-    getRetainedMessagingSizes: () => ({
-      ...pendingMessagingCalls.sizes(),
-      ...settledMessagingEvidence.sizes(),
-    }),
     resolveCliLoopbackTerminalOutcome,
     resolveCliLoopbackBrowserTab(toolCallId: string): unknown {
       const activeTool = activeCliTools.get(toolCallId);

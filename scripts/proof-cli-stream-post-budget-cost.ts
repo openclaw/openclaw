@@ -146,6 +146,25 @@ function toolResultFrame(index: number, payloadChars: number): string {
   });
 }
 
+/**
+ * A full assistant record: the ordinary shape charged in full against the
+ * raw-character budget. Partial deltas carry a fixed envelope charge and
+ * tool-result payloads are discounted outright by the limits module, so
+ * neither can spend the budget at any wire volume a real turn reaches.
+ */
+function assistantMessageFrame(index: number, textChars: number): string {
+  return JSON.stringify({
+    type: "assistant",
+    parent_tool_use_id: null,
+    session_id: SESSION_ID,
+    message: {
+      id: `msg_post_budget_${index}`,
+      role: "assistant",
+      content: [{ type: "text", text: `${index}:${"a".repeat(textChars)}` }],
+    },
+  });
+}
+
 type Sinks = {
   assistantDeltas: number;
   toolStarts: number;
@@ -172,13 +191,30 @@ function createCountingParser(sinks: Sinks) {
 
 type Parser = ReturnType<typeof createCountingParser>;
 
-/** Spends the cumulative character budget with realistic frames, outside any measured window. */
+/**
+ * Spends the cumulative character budget with chargeable ordinary records,
+ * outside any measured window, and refuses to continue unless it really was
+ * spent: a measured window that starts before exhaustion measures the
+ * pre-budget path and its zero-delta assertion is vacuous.
+ */
 function exhaustBudget(parser: Parser): void {
   let streamed = 0;
-  for (let index = 0; streamed <= CLI_STREAM_JSON_OUTPUT_LIMITS.maxTurnRawChars; index += 1) {
-    const chunk = `${textDeltaFrame(`step ${index} `)}\n${toolResultFrame(index, 96_000)}\n`;
+  const cap = 4 * CLI_STREAM_JSON_OUTPUT_LIMITS.maxTurnRawChars;
+  for (let index = 0; parser.getErrorText() === null && streamed <= cap; index += 1) {
+    const chunk =
+      `${textDeltaFrame(`step ${index} `)}\n` +
+      `${toolResultFrame(index, 4_096)}\n` +
+      `${assistantMessageFrame(index, 64 * 1024)}\n`;
     streamed += chunk.length;
     parser.push(chunk);
+  }
+  const errorText = parser.getErrorText();
+  if (
+    !errorText?.includes(`JSONL output exceeded ${CLI_STREAM_JSON_OUTPUT_LIMITS.maxTurnRawChars}`)
+  ) {
+    throw new Error(
+      `exhaustBudget: ${streamed} characters streamed without spending the character budget (error text ${JSON.stringify(errorText)}); the measured window would start before exhaustion`,
+    );
   }
 }
 

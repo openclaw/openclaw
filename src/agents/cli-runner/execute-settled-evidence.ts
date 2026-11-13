@@ -86,14 +86,10 @@ export function createSettledMessagingEvidence() {
   const targets = new Map<string, MessagingToolSend>();
   const sourceReplyPayloads: MessagingToolSourceReplyPayload[] = [];
   let retainedChars = 0;
-  let reducedEntries = 0;
-  let droppedChars = 0;
 
-  /** Charges the full payload, or records that it did not fit. */
+  /** Charges the full payload, or refuses it because it does not fit. */
   const charge = (chars: number): boolean => {
     if (retainedChars + chars > MAX_SETTLED_MESSAGING_EVIDENCE_CHARS) {
-      reducedEntries += 1;
-      droppedChars += chars;
       return false;
     }
     retainedChars += chars;
@@ -202,10 +198,5 @@ export function createSettledMessagingEvidence() {
     texts: (): string[] => [...texts.keys()],
     mediaUrls: (): string[] => [...mediaUrls.keys()],
     targets: (): MessagingToolSend[] => [...targets.values()],
-    sizes: () => ({
-      settledMessagingEvidenceChars: retainedChars,
-      reducedSettledMessagingEntries: reducedEntries,
-      droppedSettledMessagingChars: droppedChars,
-    }),
   };
 }

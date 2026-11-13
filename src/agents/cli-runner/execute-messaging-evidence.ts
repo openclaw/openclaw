@@ -16,7 +16,7 @@
  * bounding any of them frees nothing.
  */
 import type { MessagingToolSend } from "../embedded-agent-messaging.types.js";
-import { measureToolArgChars, reduceMessagingToolArgs } from "./execute-event-retention.js";
+import { reduceMessagingToolArgs } from "./execute-event-retention.js";
 import { CLI_MESSAGING_EVIDENCE_MAX_CALLS } from "./execute-messaging.js";
 
 export type PendingMessagingCall = {
@@ -33,16 +33,10 @@ export type PendingMessagingCall = {
 
 export function createPendingMessagingCalls() {
   const calls = new Map<string, PendingMessagingCall>();
-  let reducedCalls = 0;
-  let reducedArgChars = 0;
   const release = (toolCallId: string): PendingMessagingCall | undefined => {
     const pending = calls.get(toolCallId);
     if (!pending) {
       return undefined;
-    }
-    if (pending.argsReduced) {
-      reducedCalls -= 1;
-      reducedArgChars -= measureToolArgChars(pending.args);
     }
     calls.delete(toolCallId);
     return pending;
@@ -78,13 +72,6 @@ export function createPendingMessagingCalls() {
       }
       pending.args = reduction.args;
       pending.argsReduced = true;
-      reducedCalls += 1;
-      reducedArgChars += reduction.chars;
     },
-    sizes: () => ({
-      pendingMessagingCalls: calls.size,
-      reducedMessagingCalls: reducedCalls,
-      reducedMessagingArgChars: reducedArgChars,
-    }),
   };
 }
