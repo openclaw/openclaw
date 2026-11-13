@@ -86,18 +86,6 @@ function causeOf(code: string | null | undefined): UpdateRunCause | undefined {
   return CODE_CAUSES[code] ?? PREFIX_CAUSES.find(([prefix]) => code.startsWith(prefix))?.[1];
 }
 
-// Host prerequisites refused before the update changed anything; the message says what to fix.
-const PREREQUISITE_REFUSALS = new Set([
-  "preflight-node-runtime-incompatible",
-  "git-version-unsupported",
-  "preflight-insufficient-space",
-  "snapshot-capacity-insufficient",
-]);
-
-export function isUpdatePrerequisiteRefusal(reason: string | null | undefined): boolean {
-  return Boolean(reason && PREREQUISITE_REFUSALS.has(reason));
-}
-
 const MACHINE_CAUSES = new Set<UpdateRunCause>(["disk-full", "permission-denied", "network"]);
 
 /**

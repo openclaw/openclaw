@@ -155,7 +155,7 @@ it("leads a prerequisite refusal with its one instruction line", () => {
   const report = renderRecord(
     failed({
       reason: "preflight-insufficient-space",
-      origin: { nextAction: line },
+      origin: { nextAction: line, cause: "disk-full" },
       steps: [failedStep("requested")],
     }),
   );

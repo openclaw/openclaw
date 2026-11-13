@@ -2,6 +2,7 @@ import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { UPDATE_RUN_PHASES } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import {
   formatUpdateActivationTimeoutGuidance,
+  isUpdatePrerequisiteRefusal,
   isVerifiedUpdateRollback,
   UPDATE_ACTIVATION_TIMEOUT_REASON,
   UPDATE_FOREIGN_DESTINATION_REASON,
@@ -16,7 +17,6 @@ import {
   UPDATE_DESTINATION_RECOVERY,
 } from "./update-failure-facts-format.js";
 import { updateRepairRefusalNextAction } from "./update-preflight-details.js";
-import { classifyUpdateRunCause, isUpdatePrerequisiteRefusal } from "./update-run-cause.js";
 import {
   LEGACY_UPDATE_RUN_ADVISORY,
   LEGACY_UPDATE_RUN_EXPIRED_REASON,
@@ -280,13 +280,6 @@ export function renderUpdateRunReport(
     (run.reason === "node-runtime-preflight" ||
       run.reason === "preflight-node-runtime-incompatible");
   const warnings = updateRunWarningMessages(run.steps).map((message) => `Warning: ${message}`);
-  const cause =
-    run.origin.cause ??
-    classifyUpdateRunCause({
-      status: run.status,
-      reason: run.reason,
-      facts: run.steps.flatMap((step) => step.failureFacts ?? []),
-    });
   // Prerequisite refusals change nothing and lead with one "Update refused: ..." line.
   const refusalLine =
     run.status === "failed" && isUpdatePrerequisiteRefusal(run.reason)
@@ -553,8 +546,9 @@ export function renderUpdateRunReport(
               ].filter((line): line is string => Boolean(line)),
             ),
           ];
-  if (run.status !== "succeeded") {
-    lines.unshift(`Cause: ${cause}`);
+  // The terminal record owner stamps the cause; the Control UI loads this renderer.
+  if (run.status !== "succeeded" && run.origin.cause) {
+    lines.unshift(`Cause: ${run.origin.cause}`);
   }
   const next = hints.at(-1);
   if (refusalLine) {

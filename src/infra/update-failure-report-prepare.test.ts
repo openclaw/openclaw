@@ -244,24 +244,6 @@ it.each(diagnostics)("publishes only bounded diagnostic facts: $name", async (en
   }
 });
 
-it("names the real cause even when the failing step's text is redacted", async () => {
-  // 276 field reports read "Reason code: global-install-failed" with the npm detail redacted.
-  const prepared = await report({
-    reason: "global-install-failed",
-    steps: [
-      step("package install", {
-        failureFacts: [{ check: "npm", code: "global-install-failed", npmErrorCode: "ENOSPC" }],
-        stderrTail: "npm error nospc /private/customer/lib/node_modules",
-      }),
-    ],
-  });
-  expectText(
-    prepared.body,
-    ["- Reason code: global-install-failed", "- Cause: disk-full"],
-    /\/private\/customer/u,
-  );
-});
-
 it("keeps allowlisted stderr causes alongside a classified startup fact", async () => {
   const prepared = await report({
     steps: [

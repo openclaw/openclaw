@@ -84,6 +84,18 @@ export const UPDATE_ENVIRONMENT_FAILURE_REASONS: ReadonlySet<string> = new Set([
   UPDATE_FOREIGN_DESTINATION_REASON,
 ]);
 
+// Host prerequisites refused before the update changed anything; the message says what to fix.
+const UPDATE_PREREQUISITE_REFUSAL_REASONS: ReadonlySet<string> = new Set([
+  "preflight-node-runtime-incompatible",
+  "git-version-unsupported",
+  "preflight-insufficient-space",
+  "snapshot-capacity-insufficient",
+]);
+
+export function isUpdatePrerequisiteRefusal(reason: string | null | undefined): boolean {
+  return Boolean(reason && UPDATE_PREREQUISITE_REFUSAL_REASONS.has(reason));
+}
+
 export function formatUpdateActivationTimeoutGuidance(
   command: (value: string) => string = (value) => value,
 ): string {
