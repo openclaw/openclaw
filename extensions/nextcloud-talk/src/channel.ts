@@ -29,6 +29,7 @@ import {
 import { resolveLoggerBackedRuntime } from "openclaw/plugin-sdk/extension-shared";
 import { resolveGatewayPort } from "openclaw/plugin-sdk/gateway-config-runtime";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   buildWebhookChannelStatusSummary,
   createComputedAccountStatusAdapter,
@@ -73,6 +74,8 @@ import {
   resolveNextcloudTalkLegacyWebhook,
 } from "./webhook-route.js";
 import { createNextcloudTalkWebhookSpool } from "./webhook-spool.js";
+
+const webhookLog = createSubsystemLogger("nextcloud-talk/webhook");
 
 const nextcloudTalkApprovalAuth = createChannelApprovalAuth({
   channelLabel: "Nextcloud Talk",
@@ -383,10 +386,6 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
               if (routeConflict && !legacyListener) {
                 throw new Error(`[nextcloud-talk:${monitoredAccount.accountId}] ${routeConflict}`);
               }
-              const logger = core.logging.getChildLogger({
-                channel: "nextcloud-talk",
-                accountId: monitoredAccount.accountId,
-              });
               const expectedBackendOrigin = normalizeOrigin(monitoredAccount.baseUrl);
               const spool = createNextcloudTalkWebhookSpool({
                 accountId: monitoredAccount.accountId,
@@ -441,7 +440,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
                     !expectedBackendOrigin || normalizeOrigin(backend) === expectedBackendOrigin,
                   onWebhook: spool.receive,
                   onError: (error) => {
-                    logger.error(
+                    webhookLog.error(
                       `[nextcloud-talk:${monitoredAccount.accountId}] webhook error: ${error.message}`,
                     );
                   },
@@ -454,18 +453,18 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
               }
               statusSink(channelReadyPatch());
               if (routeConflict && legacyListener) {
-                logger.warn(
+                webhookLog.warn(
                   `[nextcloud-talk:${monitoredAccount.accountId}] ${routeConflict} ` +
                     `Legacy webhook listener ${legacyListener.host}:${legacyListener.port} remains available; verify the new route before removing the legacyWebhook pin.`,
                 );
                 return { stop };
               }
-              logger.info(
+              webhookLog.info(
                 `[nextcloud-talk:${monitoredAccount.accountId}] Gateway webhook route ready at port ${gatewayPort}${path}; ` +
                   "point the Nextcloud bot callback or reverse-proxy upstream here.",
               );
               if (legacyListener) {
-                logger.info(
+                webhookLog.info(
                   `[nextcloud-talk:${monitoredAccount.accountId}] legacy webhook listener ${legacyListener.host}:${legacyListener.port} forwards to the Gateway route. ` +
                     "After verifying the callback or proxy upstream uses the Gateway port, remove the legacyWebhook pin; use legacyWebhook: false to override an inherited endpoint.",
                 );
