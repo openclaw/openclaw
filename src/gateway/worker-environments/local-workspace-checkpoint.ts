@@ -183,6 +183,7 @@ export async function prepareLocalWorkspaceCheckpointCapture(
       }
       diagnostics.reason = "clone-unavailable";
       diagnostics.cloneError = code;
+      await pause();
       await run();
       return;
     }
