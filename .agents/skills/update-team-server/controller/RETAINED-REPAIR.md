@@ -312,6 +312,49 @@ Ordinary adoption consumes that receipt, retains the original backups (not bridg
 
 Never install an arbitrary partial closure or treat repository publication as live permission. See [SOURCE.md](SOURCE.md) for the captured installed provenance, reviewed differences, and qualification limits.
 
+### Adopt for native-update forward recovery
+
+A schema-crossing native update retained in `ROLLBACK_FAILED` can use the same
+four-file `prepare` (or `historical-successor`) and `apply` adoption sequence.
+Add `nativeRecovery` to its request. This is limited to a completed migration
+whose distinct candidate is still selected and running; it does not admit an
+incomplete migration, restored predecessor, downgrade, or another journal phase.
+Ordinary same-schema adoption keeps its existing request and checks.
+
+`nativeRecovery.receipt` is the exact `{path,device,inode,sha256}` descriptor of
+`<nativeUpdate.backupRoot>.receipt.json`. `nativeRecovery.backup` is the
+`{path,device,inode}` identity of the receipt's existing
+`<nativeUpdate.backupRoot>.databases` directory. The receipt must still say
+`migrated` and bind the current protected files. `nativeRecovery.process` is
+`{pid,generation,release,runtime,uid,port}`: the current system Gateway's PID,
+`/proc` start ticks, canonical candidate release directory, runtime executable,
+runtime UID and listener port. The existing native live-custody owner verifies
+the system service, process, invocation, command, cgroup and listeners. The
+existing `source` descriptor binds every byte of the original journal, including
+its candidate, predecessor/candidate schema
+pair, creation time, and transaction UUID in `nativeUpdate.backupRoot`; V1
+activation journals have no separate `id` field.
+
+Adoption retains the original journal and all four old controller files through
+the existing immutable adoption archives. It validates the original session
+witness and native backup identity without rewriting either or copying database
+snapshots. Keep the old adoption archives, native backup, receipt and original
+witness in place while the transaction references them.
+
+After completed adoption, run the installed
+`/usr/local/sbin/openclaw-release-deploy --recover` with the same inherited FD9
+lock and existing private operator environment. Keep held agent directories in
+their witnessed archive.
+Successful full candidate acceptance retires the journal without restarting;
+ordinary recovery's failure/rollback behavior remains unchanged. This sequence
+does not deploy a new Gateway release or enable update timers.
+
+Do not use `--prepare-retained-repair` for this operation: that surface prepares
+a distinct same-schema repair release, rather than adopting a controller for
+native forward recovery. Do not remove the journal or install only the library.
+The approved shell, library and both helper files form one adoption closure even
+when only the library changes in this fix.
+
 ## Qualification still required
 
 `retained-repair-native-config.test.mjs` exercises reviewed-config preparation,
