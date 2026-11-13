@@ -215,6 +215,7 @@ export async function collectStatusScanOverview(params: {
   setProgressLabel("probingGateway");
   const gatewaySnapshot = await bootstrap.gatewayProbePromise;
   params.progress?.tick();
+  const signal = getAsyncWorkSignal();
   let runtimeDegradation: StatusScanOverviewResult["runtimeDegradation"] = null;
   if (gatewaySnapshot.gatewayReachable) {
     const status =
@@ -230,12 +231,12 @@ export async function collectStatusScanOverview(params: {
                   method: "status",
                   params: { includeChannelSummary: false, includeCliProjection: true },
                   timeoutMs: Math.min(5000, resolveStatusGatewayProbeTimeoutMs(params.opts)),
-                  signal: getAsyncWorkSignal(),
+                  signal,
                   ...gatewaySnapshot.gatewayCallOverrides,
                 }).catch(() => {
                   // A Ctrl+C cancels the pending read; keep the canonical abort
                   // outcome instead of reporting the scan as degraded.
-                  getAsyncWorkSignal()?.throwIfAborted();
+                  signal?.throwIfAborted();
                   return null;
                 }),
               ),
@@ -301,12 +302,12 @@ export async function collectStatusScanOverview(params: {
               timeoutMs: Math.min(8000, timeoutMs),
             },
             timeoutMs,
-            signal: getAsyncWorkSignal(),
+            signal,
             ...(useGatewayCallOverrides === true ? (gatewayCallOverrides ?? {}) : {}),
           }).catch(() => {
             // A Ctrl+C cancels the pending channel read; keep the canonical abort
             // outcome instead of printing a degraded report late.
-            getAsyncWorkSignal()?.throwIfAborted();
+            signal?.throwIfAborted();
             return null;
           });
         }

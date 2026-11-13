@@ -48,6 +48,7 @@ export async function scanStatusJsonGateway(
   if (!gatewaySnapshot.gatewayReachable) {
     return { gatewaySnapshot };
   }
+  const signal = getAsyncWorkSignal();
   const status = await measureCliCommandStartup(
     "status.gateway-projection",
     () => {
@@ -62,11 +63,11 @@ export async function scanStatusJsonGateway(
         method: "status",
         params: { includeChannelSummary: false, includeCliProjection: true },
         timeoutMs,
-        signal: getAsyncWorkSignal(),
+        signal,
       }).catch((error: unknown) => {
         // A Ctrl+C cancels the pending projection read; keep the canonical abort
         // outcome instead of recording a degraded projection error.
-        getAsyncWorkSignal()?.throwIfAborted();
+        signal?.throwIfAborted();
         projectionError = error instanceof Error ? error.message : String(error);
         return null;
       });

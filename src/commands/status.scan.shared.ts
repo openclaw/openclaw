@@ -205,12 +205,12 @@ export async function resolveGatewayProbeSnapshot(params: {
             timeoutMs,
             mode: GATEWAY_CLIENT_MODES.BACKEND,
             clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-            signal: getAsyncWorkSignal(),
+            signal,
           });
         })
         .catch(() => {
           // A Ctrl+C cancels the pending fallback read; keep the canonical abort outcome.
-          getAsyncWorkSignal()?.throwIfAborted();
+          signal?.throwIfAborted();
           return null;
         });
       if (status) {

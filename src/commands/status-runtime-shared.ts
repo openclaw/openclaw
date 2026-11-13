@@ -71,16 +71,10 @@ async function queryStatusGateway<T>(
     ...buildRequest(),
     timeoutMs,
     config: params.config,
-    signal: getAsyncWorkSignal(),
     ...params.callOverrides,
   }).then<Result<T, StatusGatewayFailure>, Result<T, StatusGatewayFailure>>(
     (value) => ({ ok: true, value }),
-    (cause: unknown) => {
-      // A Ctrl+C cancels the pending read; keep the canonical abort outcome
-      // instead of folding the interruption into a request failure line.
-      getAsyncWorkSignal()?.throwIfAborted();
-      return { ok: false, error: { kind: "request", cause } };
-    },
+    (cause: unknown) => ({ ok: false, error: { kind: "request", cause } }),
   );
 }
 
