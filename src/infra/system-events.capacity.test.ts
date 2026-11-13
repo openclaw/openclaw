@@ -3,6 +3,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import {
   consumeSelectedSystemEventEntries,
   enqueueAutomationSystemEvent,
+  enqueueRequiredSystemEventEntry,
   prepareAutomationSystemEvents,
   enqueueSystemEvent,
   enqueueSystemEventEntry,
@@ -67,6 +68,23 @@ it("refuses overflow without invalidating pending occurrences or removal receipt
     Array.from({ length: 18 }, (_, index) => `Reminder ${index + 1}`),
   );
   expect(texts(sessionKey)).toEqual(["Revised reminder", "Admitted after consumption"]);
+});
+
+it("bounds passive notices separately from the turn-owned occurrences that resume a session", () => {
+  const sessionKey = "agent:main:capacity-pools";
+  for (let index = 0; index < 20; index++) {
+    enqueueSystemEvent(`Exec completed ${index}`, { sessionKey, contextKey: `exec:${index}` });
+  }
+  expect(enqueueSystemEvent("Unadmitted notice", { sessionKey, contextKey: "exec:20" })).toBe(
+    false,
+  );
+  for (let index = 0; index < 20; index++) {
+    expect(enqueueRequiredSystemEventEntry(`Resume ${index}`, { sessionKey })).not.toBeNull();
+  }
+  expect(() => enqueueRequiredSystemEventEntry("Unadmitted resume", { sessionKey })).toThrow(
+    "queue is full",
+  );
+  expect(texts(sessionKey)).toHaveLength(40);
 });
 
 it("coalesces deferred duplicates only within the same selected scheduled slot", async () => {

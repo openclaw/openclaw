@@ -30,13 +30,28 @@ final class ChatScrollFollowState {
     var hasNewerContentBelow = false
 }
 
+/// Keeps the end of the transcript in view while it follows the latest content.
+/// `defaultScrollAnchor(_:for: .sizeChanges)` alone left the offset at 0 while a reply grew
+/// thousands of points below the composer, and live words change no timeline revision that
+/// could re-scroll. Pin the bottom edge on every height change instead: edge scrolling does not
+/// depend on estimated row heights, so later changes (the final row replacing the live bubble,
+/// lazy rows measuring) converge on the real end. It runs here, outside the transcript body.
 struct ChatScrollFollowAnchorModifier: ViewModifier {
     let scroll: ChatScrollFollowState
+    @State private var position = ScrollPosition()
 
     func body(content: Content) -> some View {
-        content.defaultScrollAnchor(
-            self.scroll.followTarget == .latest && !self.scroll.isUserScrolling ? .bottom : nil,
-            for: .sizeChanges)
+        content
+            .defaultScrollAnchor(self.follows ? .bottom : nil, for: .sizeChanges)
+            .scrollPosition(self.$position)
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { _, _ in
+                guard self.follows else { return }
+                withTransaction(Transaction(animation: nil)) { self.position.scrollTo(edge: .bottom) }
+            }
+    }
+
+    private var follows: Bool {
+        self.scroll.followTarget == .latest && !self.scroll.isUserScrolling
     }
 }
 

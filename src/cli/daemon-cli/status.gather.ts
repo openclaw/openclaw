@@ -539,7 +539,7 @@ async function gatherDaemonStatusImpl(
 
   return {
     cli: projection.cli,
-    logFile: resolveConfiguredLogFilePath(cliCfg),
+    logFile: await resolveConfiguredLogFilePath(cliCfg),
     service: {
       inspectionReason: serviceState.inspectionReason,
       label: formatServiceLabel(service.label, runtime),
@@ -555,7 +555,13 @@ async function gatherDaemonStatusImpl(
       ...projection.runtimeIntent,
       ...(serviceLayout ? { layout: serviceLayout } : {}),
       ...(installationDrift
-        ? { installationDrift: formatGatewayServiceInstallationDrift(installationDrift) }
+        ? {
+            installationDrift: formatGatewayServiceInstallationDrift(
+              installationDrift,
+              process.env,
+              { command },
+            ),
+          }
         : {}),
       runtime: runtime?.inspectionFailure
         ? {

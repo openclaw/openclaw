@@ -182,11 +182,8 @@ it.each([
   expect(context.gateway.setSessionKey).not.toHaveBeenCalled();
   expect(context.agentSelection.set).not.toHaveBeenCalled();
   expect(flow.message).toBe("");
-  expect(flow.completedSubmission?.key).toBe("agent:main:dashboard:accepted");
-  expect(flow.pendingMessage?.content).toContainEqual({
-    type: "text",
-    text: "Create without moving my current session",
-  });
+  expect(flow.completedSubmission).toBeNull();
+  expect(flow.pendingMessage).toBeNull();
 });
 
 it.each([
@@ -262,6 +259,8 @@ it("previews a background start on its route, retries in place, and admits the r
   await vi.waitFor(() => expect(create).toHaveBeenCalledOnce());
   const key = create.mock.calls[0]?.[0]?.key ?? "";
   expect(key).toMatch(/^agent:main:dashboard:[\da-f-]{36}$/u);
+  expect(flow.pendingMessage).toBeNull();
+  expect(flow.message).toBe("Fix the automation timing");
   const creation = context.chatSubmissions.creationFor(key);
   expect(creation).toEqual({ sessionKey: key, admitted: false });
   expect(context.chatSubmissions.readCreateMessage(key)?.content).toEqual([
@@ -272,6 +271,8 @@ it("previews a background start on its route, retries in place, and admits the r
   await submission;
   const failure = context.chatSubmissions.readCreateFor(key)?.failure;
   expect(failure?.error).toBe("Couldn't create the session.");
+  expect(flow.message).toBe("Fix the automation timing");
+  expect(flow.pendingMessage).toBeNull();
   expect(creation?.admitted).toBe(false);
 
   const accepted = createDeferred<Awaited<ReturnType<typeof context.sessions.createResult>>>();

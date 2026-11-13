@@ -1,2 +1,0 @@
-# Visible spawned sessions keep native tools and exit wakes while inherited denies, delegated-authority revocation and spawn admission still apply.
-111

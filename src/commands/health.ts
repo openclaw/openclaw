@@ -2,7 +2,7 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { styleHealthChannelLine } from "../../packages/terminal-core/src/health-style.js";
 import { isRich } from "../../packages/terminal-core/src/theme.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
-import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
+import { listReadOnlyChannelPluginsForConfigAsync } from "../channels/plugins/read-only.js";
 import { probeGatewayStatus } from "../cli/daemon-cli/probe.js";
 import { DEFAULT_RESTART_HEALTH_TIMEOUT_MS } from "../cli/daemon-cli/restart-health.constants.js";
 import { withProgress } from "../cli/progress.js";
@@ -228,7 +228,7 @@ export async function healthCommand(
     const agents = Array.isArray(summary.agents) ? summary.agents : [];
     const collectLocalAgents = agents.length === 0 && localAgents.ordered.length > 0;
     const channelBindings = buildChannelAccountBindings(cfg);
-    const displayPlugins = listReadOnlyChannelPluginsForConfig(cfg, {
+    const displayPlugins = await listReadOnlyChannelPluginsForConfigAsync(cfg, {
       includeSetupFallbackPlugins: false,
     });
     if (debugEnabled) {

@@ -218,6 +218,11 @@ Startup opens external input after recovery discovery installs each session's
 admission wait. Recovery admission continues in the background: a fresh turn for
 a recovering session waits until its resume input and retained FIFO inputs own
 their ordinary queue slots. Other sessions in the same agent can proceed.
+Incoming session events wait before reserving their FIFO position, so they cannot
+block the recovery input that must precede them. A shutdown marker still resumes
+the interrupted work when shutdown left the session marked as killed or when a
+completed reply had background commands; an empty queued-input list does not
+discard that continuation.
 Stores prepared later install these waits before publishing database admission.
 This also applies when several logical agents share the same physical store. Database
 reads and writes retain their normal admission rules; recovery does not borrow

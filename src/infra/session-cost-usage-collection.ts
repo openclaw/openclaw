@@ -177,6 +177,7 @@ export function resolveUsageCostTranscriptSourcePath(
     : resolveSessionArchiveReadPath(source.sourcePath, source.stats);
 }
 
+/** Discovery reads identities and mutation times; only refresh expands selected statistics. */
 export async function listUsageCountedTranscriptSources(
   agentId: string,
   params: {
@@ -184,26 +185,7 @@ export async function listUsageCountedTranscriptSources(
     sessionsDir?: string;
     storePath: string;
   } & UsageCostCollectionAccess,
-): Promise<UsageCostTranscriptSource[]>;
-/** Without statistics, SQLite entries carry only identity and their last mutation time. */
-export async function listUsageCountedTranscriptSources(
-  agentId: string,
-  params: {
-    minMtimeMs?: number;
-    sessionsDir?: string;
-    storePath: string;
-    statistics: false;
-  } & UsageCostCollectionAccess,
-): Promise<Array<UsageCostJsonlSource | UsageCostSqliteEntry>>;
-export async function listUsageCountedTranscriptSources(
-  agentId: string,
-  params: {
-    minMtimeMs?: number;
-    sessionsDir?: string;
-    storePath: string;
-    statistics?: false;
-  } & UsageCostCollectionAccess,
-): Promise<Array<UsageCostJsonlSource | UsageCostSqliteEntry | UsageCostSqliteFile>> {
+): Promise<Array<UsageCostJsonlSource | UsageCostSqliteEntry>> {
   const logicalAgentId = normalizeAgentId(agentId);
   const { storePath } = params;
   const sessionsDir = params.sessionsDir ?? resolveSessionArtifactDirectory(storePath);
@@ -222,38 +204,23 @@ export async function listUsageCountedTranscriptSources(
     sessionId: instance.sessionId,
     storePath,
   }));
-  const sqliteBacked: Array<UsageCostSqliteEntry | UsageCostSqliteFile> =
-    params.statistics === false
-      ? markers.map((marker, index) => {
-          const sourcePath = formatSqliteSessionFileMarker({
-            ...marker,
-            storePath: params.resolveSqliteStorePath(marker.agentId, marker.storePath),
-          });
-          return {
-            kind: "sqlite",
-            sourcePath,
-            sessionId: marker.sessionId,
-            mtimeMs: instances[index]!.updatedAtMs,
-          };
-        })
-      : (await readUsageCostSqliteFiles(markers, params)).filter((file) => file !== undefined);
+  const sqliteBacked = markers.map((marker, index): UsageCostSqliteEntry => {
+    const sourcePath = formatSqliteSessionFileMarker({
+      ...marker,
+      storePath: params.resolveSqliteStorePath(marker.agentId, marker.storePath),
+    });
+    return {
+      kind: "sqlite",
+      sourcePath,
+      sessionId: marker.sessionId,
+      mtimeMs: instances[index]!.updatedAtMs,
+    };
+  });
   const sqliteSessionIds = new Set(sqliteBacked.map((file) => file.sessionId).filter(Boolean));
   const canonicalFileBacked = fileBacked.filter(
     (file) => !file.sessionId || !sqliteSessionIds.has(file.sessionId),
   );
   return [...canonicalFileBacked, ...sqliteBacked];
-}
-
-export async function listUsageCountedTranscriptStats(
-  agentId: string,
-  params: {
-    minMtimeMs?: number;
-    sessionsDir?: string;
-    storePath: string;
-  } & UsageCostCollectionAccess,
-): Promise<UsageCostTranscriptFile[]> {
-  const sources = await listUsageCountedTranscriptSources(agentId, params);
-  return sources.map(usageCostTranscriptSourceFile);
 }
 
 /** Expand only the metadata sources selected by the refresh owner. */

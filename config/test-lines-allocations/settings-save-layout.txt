@@ -1,3 +1,0 @@
-# Exact net growth: 184 LF for Settings failed-write reachability, plus 11 LF
-# for the CI-exposed Logs return-to-tail case with a coalesced scroll event.
-195

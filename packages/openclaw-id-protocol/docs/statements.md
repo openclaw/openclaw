@@ -92,8 +92,16 @@ so that statements signed before epochs were removed still verify.
 
 Capabilities: `approve_device`, `bind`, `invite`, `manage_members`. R holds all of them.
 (`bind` stays a certificate capability, but bindings are signed by R alone: clients that pin
-only fp(R) must be able to verify them.) Member roles: `operator`, `viewer` (open question:
-final role set; invites grant at most `operator`).
+only fp(R) must be able to verify them.)
+
+Member roles are opaque names (`MemberRole`), validated by the exported `isMemberRole`:
+1–64 characters, lowercase ASCII letters, digits, `-` and `_`, starting with a letter
+(`^[a-z][a-z0-9_-]{0,63}$`). Names are not trimmed or normalized. This is deliberately stricter
+than the Gateway's `GatewayOperatorRoleNameSchema` (any trimmed 1–128 character string),
+because protocol names are signed, mirrored by Discovery and displayed in UIs. The protocol
+defines neither a role set nor an ordering or privilege ceiling; the Gateway defines their
+meaning. An invite names one exact role: approval with a different role is `target_mismatch`,
+even if a Gateway considers it less privileged.
 
 MembershipChange targets:
 
@@ -359,7 +367,10 @@ for request authentication.
 
 `MembershipTarget` adds `add_node { peer_key, label, invite_id }` and
 `remove_node { peer_key }`; both require R or a current owner with `manage_members`.
-`deny_invite` and peer-key revocations cover nodes too. `MembershipSnapshotBody` requires
+`deny_invite` and peer-key revocations cover nodes too. `add_owner_device` takes an optional
+`node { peer_key, label, description }`: an app approved as an owner device brings its node in
+the same decision (see [enrollment.md](enrollment.md#owner-device-node)). The member is optional
+(absent, not null), so changes without it are byte-for-byte unchanged. `MembershipSnapshotBody` requires
 `node_peer_keys: IrohEndpointKey[]` (empty when none), separate from `owner_peer_keys` and
 `members`. Existing snapshots must be re-signed by K_gw when consumers update this draft;
 never insert a field into an already signed envelope.

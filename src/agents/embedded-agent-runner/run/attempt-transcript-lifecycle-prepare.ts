@@ -41,6 +41,7 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle({
     sessionKey,
     sessionManager,
     sessionPersistence,
+    toolUsageRecorder,
     sessionTarget: originalSessionTarget,
     preparedSessionTarget: preparedTarget,
   },
@@ -60,6 +61,7 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle({
     | "sessionPersistence"
     | "sessionTarget"
     | "preparedSessionTarget"
+    | "toolUsageRecorder"
   > & { admittedRunContext?: EmbeddedRunAttemptParams["admittedRunContext"] };
   externalAbortController: {
     arm: () => void;
@@ -238,6 +240,10 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle({
           database,
         };
       }
+    }
+    await toolUsageRecorder?.bindTranscript(ownedTranscriptWriteContext.sessionActor?.database);
+    if (ownedTranscriptWriteContext.sessionActor) {
+      ownedTranscriptWriteContext.sessionActor.toolUsageRecorder = toolUsageRecorder;
     }
     externalAbortController.arm();
     await externalAbortController.throwIfFiredAfterPrepCleanup();

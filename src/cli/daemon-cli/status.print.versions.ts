@@ -42,7 +42,7 @@ export function printDaemonStatusVersions(
           terminalText`Warning: this OpenClaw command is version ${status.cli.version}, but the running Gateway is version ${gatewayVersion}.`,
         );
         out.printWarning(
-          "Check `openclaw --version`, `which openclaw`, and `openclaw gateway status --deep`; if this mismatch is unexpected, update PATH so `openclaw` points to the version you want, or reinstall the Gateway service from that same OpenClaw install.",
+          "Check `openclaw --version`, `which openclaw`, and `openclaw gateway status --deep`; use the CLI matching the running Gateway before repairing shared config or plugins.",
         );
       }
     } else if (serviceInstallLine) {
@@ -60,7 +60,11 @@ export function printDaemonStatusVersions(
         out.printWarning(
           terminalText`Warning: this OpenClaw command is version ${status.cli.version}, but the installed Gateway service is version ${serviceInstallVersion}.`,
         );
-        const guidance = resolveDaemonServiceInstallGuidance(status.service.targetRole);
+        const guidance = resolveDaemonServiceInstallGuidance(
+          undefined,
+          process.env,
+          status.service,
+        );
         if (guidance) {
           out.printWarning(guidance);
         }
