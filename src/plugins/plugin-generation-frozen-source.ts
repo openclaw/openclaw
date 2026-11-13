@@ -171,11 +171,6 @@ export function* createPluginFrozenGenerationSteps(
     frozenSource: true,
     assertFrozenModule,
     captureRecoverySource: markPluginSourceCaptureOperation(recover),
-    captureRecoverySourceAsync: artifact.captureRecoverySourceAsync
-      ? markPluginSourceCaptureOperation(async () =>
-          freezeCapturedRecovery(await artifact.captureRecoverySourceAsync!()),
-        )
-      : undefined,
     retainSourceCustody: markPluginSourceCaptureOperation(() => ({
       source: recover(),
       files: artifact.sourceSnapshotFacts!.files,

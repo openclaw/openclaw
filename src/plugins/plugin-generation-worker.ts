@@ -245,6 +245,7 @@ export async function preparePluginGenerationArtifact(
   });
   // The worker transfers retained bytes, not an executable graph of RPC methods.
   // Resolution, lazy acquisition and host aliases all stay in the consuming isolate.
+  // SAFETY: The artifact preparation command returns its retained source custody fork.
   const retained = prepared.value as PluginSourceCustodyFork;
   prepared.retainNative(retained.source.native);
   const sourceCapture = createPluginSourceCaptureState({

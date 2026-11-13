@@ -46,8 +46,17 @@ export function isPluginSourceCaptureOperation(operation: object): boolean {
 type SourceCustody = {
   source: PluginRecoverySource;
   files: ReadonlyMap<string, PluginCapturedSourceFact>;
+  modules?: ReadonlyMap<string, PluginInspectedModule>;
 };
-export type PluginSourceCustodyFork = Pick<SourceCustody, "source" | "files">;
+/** Plain inspection facts; executable lookup callbacks stay with each consuming capture. */
+export type PluginInspectedModule = {
+  staticImports: ReadonlySet<string>;
+  observed: ReadonlyMap<string, string | null | undefined>;
+  acquisitions: ReadonlyArray<
+    { kind: "file"; source: string } | { kind: "dependency"; importer: string; name: string }
+  >;
+};
+export type PluginSourceCustodyFork = SourceCustody;
 const sourceCustody = new AsyncLocalStorage<{
   closing: boolean;
   prepared: Map<object, Map<string, Promise<PreparedSourceCustody>>>;
@@ -247,40 +256,7 @@ export type PluginRecoverySource = {
   disposeAsync: () => Promise<void>;
 };
 
-function copyRecoverySource(
-  input: Parameters<typeof copyRecoverySourceSteps>[0],
-): PluginRecoverySource {
-  const steps = copyRecoverySourceSteps(input);
-  let step = steps.next();
-  while (!step.done) {
-    try {
-      fs.cpSync(step.value.source, step.value.target, step.value.options);
-    } catch (error) {
-      steps.throw(error);
-    }
-    step = steps.next();
-  }
-  return step.value;
-}
-
-async function copyRecoverySourceAsync(
-  input: Parameters<typeof copyRecoverySourceSteps>[0],
-): Promise<PluginRecoverySource> {
-  const steps = copyRecoverySourceSteps(input);
-  let step = steps.next();
-  while (!step.done) {
-    try {
-      await fs.promises.cp(step.value.source, step.value.target, step.value.options);
-    } catch (error) {
-      steps.throw(error);
-    }
-    step = steps.next();
-  }
-  return step.value;
-}
-
-// Both entry points share native leases, relocation, validation, and failure cleanup.
-function* copyRecoverySourceSteps({
+function copyRecoverySource({
   rootDir,
   sourceRoot,
   capturedRoot,
@@ -296,11 +272,7 @@ function* copyRecoverySourceSteps({
   sources: ReadonlyMap<string, string>;
   directories: ReadonlySet<string>;
   native?: PluginNativeRecovery;
-}): Generator<
-  { source: string; target: string; options: fs.CopySyncOptions },
-  PluginRecoverySource,
-  void
-> {
+}): PluginRecoverySource {
   let native = suppliedNative;
   let recovery: ReturnType<typeof createPluginSourceCapture> | undefined;
   try {
@@ -312,47 +284,43 @@ function* copyRecoverySourceSteps({
     const metrics = getPluginGenerationMetrics();
     let copiedBytes = 0;
     // Keep dependency links within the new capture without reopening installed packages.
-    yield {
-      source: boundaryRoot,
-      target: recovery.directory,
-      options: {
-        recursive: true,
-        verbatimSymlinks: true,
-        filter: (from, to) => {
-          const fact = native?.references.get(from);
-          if (!fact) {
-            const entry = fs.lstatSync(from);
-            if (metrics && entry.isFile()) {
-              copiedBytes += entry.size;
-            }
-            if (entry.isSymbolicLink()) {
-              const target = fs.readlinkSync(from);
-              const relative = path.isAbsolute(target)
-                ? relativePluginPathInsideRootSync(boundaryRoot, target)
-                : undefined;
-              if (relative !== undefined) {
-                // Windows junctions store absolute targets. A verbatim copy would
-                // point at the seed after custody disposes it, then fail on fork.
-                fs.mkdirSync(path.dirname(to), { recursive: true, mode: 0o700 });
-                fs.symlinkSync(
-                  path.relative(path.dirname(to), path.join(directory, relative)),
-                  to,
-                  fs.statSync(from).isDirectory() ? "junction" : "file",
-                );
-                return false;
-              }
-            }
-            return true;
+    fs.cpSync(boundaryRoot, recovery.directory, {
+      recursive: true,
+      verbatimSymlinks: true,
+      filter: (from, to) => {
+        const fact = native?.references.get(from);
+        if (!fact) {
+          const entry = fs.lstatSync(from);
+          if (metrics && entry.isFile()) {
+            copiedBytes += entry.size;
           }
-          const retained = { ...fact, sourceIdentity: fact.capturedIdentity };
-          if (linkPluginNativeReference(fact.capturedPath, to, retained) === "hardlink") {
-            hardlinkedTargets.set(to, retained);
+          if (entry.isSymbolicLink()) {
+            const target = fs.readlinkSync(from);
+            const relative = path.isAbsolute(target)
+              ? relativePluginPathInsideRootSync(boundaryRoot, target)
+              : undefined;
+            if (relative !== undefined) {
+              // Windows junctions store absolute targets. A verbatim copy would
+              // point at the seed after custody disposes it, then fail on fork.
+              fs.mkdirSync(path.dirname(to), { recursive: true, mode: 0o700 });
+              fs.symlinkSync(
+                path.relative(path.dirname(to), path.join(directory, relative)),
+                to,
+                fs.statSync(from).isDirectory() ? "junction" : "file",
+              );
+              return false;
+            }
           }
-          native!.references.set(from, retained);
-          return false;
-        },
+          return true;
+        }
+        const retained = { ...fact, sourceIdentity: fact.capturedIdentity };
+        if (linkPluginNativeReference(fact.capturedPath, to, retained) === "hardlink") {
+          hardlinkedTargets.set(to, retained);
+        }
+        native!.references.set(from, retained);
+        return false;
       },
-    };
+    });
     if (metrics) {
       metrics.copiedBytes += copiedBytes;
     }
@@ -446,20 +414,6 @@ export function createPluginGenerationSourceLookup({
     const captured = getCapturedSource(capturedPaths, rootDir, sourceRoot, source);
     return captured && isPathInside(capturedRoot, captured) ? captured : undefined;
   };
-  const recoveryInput = () => {
-    for (const captured of new Set(capturedPaths.values())) {
-      assertModuleAvailable(captured);
-    }
-    return {
-      rootDir,
-      sourceRoot,
-      capturedRoot,
-      boundaryRoot,
-      sources: new Map(capturedPaths),
-      directories: new Set(capturedDirectories),
-      native: captureNativeRecovery?.(),
-    };
-  };
   return {
     hasSource: (source: string) => resolveCaptured(source) !== undefined,
     resolve: markPluginSourcePreparationOperation((source: string, rejectHardlinks = false) => {
@@ -479,12 +433,20 @@ export function createPluginGenerationSourceLookup({
       assertModuleAvailable(captured);
       return captured;
     }),
-    captureRecoverySource: markPluginSourceCaptureOperation(() =>
-      copyRecoverySource(recoveryInput()),
-    ),
-    captureRecoverySourceAsync: markPluginSourceCaptureOperation(async () =>
-      copyRecoverySourceAsync(recoveryInput()),
-    ),
+    captureRecoverySource: markPluginSourceCaptureOperation(() => {
+      for (const captured of new Set(capturedPaths.values())) {
+        assertModuleAvailable(captured);
+      }
+      return copyRecoverySource({
+        rootDir,
+        sourceRoot,
+        capturedRoot,
+        boundaryRoot,
+        sources: new Map(capturedPaths),
+        directories: new Set(capturedDirectories),
+        native: captureNativeRecovery?.(),
+      });
+    }),
   };
 }
 

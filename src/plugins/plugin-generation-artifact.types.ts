@@ -17,8 +17,6 @@ export type PluginGenerationArtifact = {
   hasSource: (source: string) => boolean;
   resolve: (source: string, rejectHardlinks?: boolean) => string;
   captureRecoverySource: () => PluginSourceCustodyFork["source"];
-  /** Asynchronous copy of the same current graph; inline custody stays synchronous. */
-  captureRecoverySourceAsync?: () => Promise<PluginSourceCustodyFork["source"]>;
   retainSourceCustody: () => PluginSourceCustodyFork;
   sourceForCaptured: (file: string) => string | undefined;
   moduleFacts: (importer: string) => Readonly<PluginModuleCapture> | undefined;

@@ -23,6 +23,7 @@ import {
   createPluginSourceFacts,
   markPluginSourceCaptureOperation,
   type PluginSourceCustodyFork,
+  type PluginInspectedModule,
   createPluginGenerationModuleLookup,
 } from "./plugin-generation-source-lookup.js";
 import { drainPluginGenerationSteps } from "./plugin-generation-steps.js";
@@ -63,7 +64,6 @@ import {
   capturedPluginModuleUrl,
   createPluginPackageMapReferences,
   resolvePluginPackageMapTarget,
-  visitPluginSourceReferences,
 } from "./plugin-source-references.js";
 
 export type { PluginGenerationArtifact } from "./plugin-generation-artifact.types.js";
@@ -157,6 +157,7 @@ export function* createPluginGenerationArtifactSteps(
     return acquired;
   };
   const moduleCaptures = new Map<string, PluginModuleCapture>();
+  const inspectedModules = new Map<string, PluginInspectedModule>();
   const resolution = createPluginCaptureResolver();
   const resolveDependency = sourceFacts.resolveDependency;
   const copyPackage = (...args: Parameters<typeof copyPackageSteps>): string =>
@@ -382,11 +383,12 @@ export function* createPluginGenerationArtifactSteps(
         resolveDependency,
         linkDependency,
       );
+      const inspected = retained?.modules?.get(source);
       // Configured tsconfig mappings must be pinned before later source edits.
-      if (process.env.JITI_TSCONFIG_PATHS !== undefined) {
+      if (!inspected && process.env.JITI_TSCONFIG_PATHS !== undefined) {
         resolution.get(source);
       }
-      const captureReference = createPluginGenerationReferenceCapture({
+      const referenceCapture = createPluginGenerationReferenceCapture({
         source,
         rootDir,
         root,
@@ -401,6 +403,7 @@ export function* createPluginGenerationArtifactSteps(
         nativeAdmission,
         resolution,
         references,
+        inspected,
         scope,
         packageMap,
         capturedPaths,
@@ -428,19 +431,7 @@ export function* createPluginGenerationArtifactSteps(
             }
           : undefined,
       });
-      const observed = new Map<string, string | null | undefined>();
-      const captureObservedReference = (
-        reference: string,
-        kind: "asset" | "import" | "require",
-        conditions?: readonly string[],
-      ) => {
-        const key = `${kind}\0${reference}`;
-        // Uninspected external references are distinct from observed absent local inputs.
-        if (!observed.has(key) || (conditions && execute && observed.get(key) === null)) {
-          observed.set(key, captureReference(reference, kind, conditions));
-        }
-        return observed.get(key) ?? undefined;
-      };
+      const { observed, capture: captureObservedReference } = referenceCapture;
       const captureModule = (
         requestedSpecifier: string,
         conditions: readonly string[],
@@ -539,15 +530,16 @@ export function* createPluginGenerationArtifactSteps(
       };
       moduleCaptures.set(target, moduleCapture);
       // Only Bun previews need deferred-code facts without acquiring unresolved references.
-      if ((entry && !executableEntry) || process.versions.bun) {
-        moduleCapture.staticImports = visitPluginSourceReferences(
-          source,
-          readPluginCapturedCode(target, capturedDirectories.has(target)),
-          () => resolution.get(source),
-          entry && !executableEntry
-            ? captureObservedReference
-            : (reference, kind) => observed.set(`${kind}\0${reference}`, null),
+      if (inspected || (entry && !executableEntry) || process.versions.bun) {
+        const inspection = yield* referenceCapture.inspect(
+          () => readPluginCapturedCode(target, capturedDirectories.has(target)),
+          captureFileSteps,
         );
+        moduleCapture.staticImports = inspection.staticImports;
+        // Shared-host reload links keep their existing inline owner.
+        if (!bundledReloadSource) {
+          inspectedModules.set(source, inspection);
+        }
       }
     }
     const captureDependencies = () => drainPluginGenerationSteps(captureDependenciesSteps());
@@ -635,6 +627,7 @@ export function* createPluginGenerationArtifactSteps(
       metadataCapture,
       packages,
       resolution,
+      inspectedModules,
       capturedDirectories,
     ];
     const clearCaptures = () => captures.forEach((capture) => capture.clear());
@@ -670,9 +663,10 @@ export function* createPluginGenerationArtifactSteps(
           }
         : {}),
       ...sourceLookup,
-      retainSourceCustody: markPluginSourceCaptureOperation(() =>
-        sourceFacts.captureCustody(sourceLookup.captureRecoverySource),
-      ),
+      retainSourceCustody: markPluginSourceCaptureOperation(() => ({
+        ...sourceFacts.captureCustody(sourceLookup.captureRecoverySource),
+        modules: new Map(inspectedModules),
+      })),
       ...createPluginGenerationModuleLookup({
         capturedPaths,
         capturedDirectories,

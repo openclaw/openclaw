@@ -94,13 +94,6 @@ it("prepares independent runtime instances from worker-published immutable sourc
         } finally {
           await custody.source.disposeAsync();
         }
-        const recovery = await left.artifact.captureRecoverySourceAsync!();
-        try {
-          expect(recovery.frozenSource).toBeDefined();
-          expect(fs.readFileSync(recovery.resolve(entry), "utf8")).toContain("42");
-        } finally {
-          await recovery.disposeAsync();
-        }
         const outside = path.join(stateDir, "late.js");
         fs.writeFileSync(outside, "export const value = 'late';");
         expect(() => left.artifact.captureResolvedModule(outside)).toThrow(
