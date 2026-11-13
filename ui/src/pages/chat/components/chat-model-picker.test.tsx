@@ -381,7 +381,7 @@ it.each(["missing-auth", "auth-failed"] as const)(
       container.querySelector(".chat-controls__provider-heading .chat-controls__auth-meta"),
     ).toBeNull();
     expect(rows).toHaveLength(2);
-    expect(rows.every((row) => row.disabled)).toBe(true);
+    expect(rows.every((row) => row.getAttribute("aria-disabled") === "true")).toBe(true);
     expect(rows[0]!.classList.contains("chat-controls__inline-select-option--selected")).toBe(
       false,
     );

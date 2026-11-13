@@ -61,6 +61,7 @@ import { registerMeetingsEnglish } from "../../ui/src/i18n/locales/en-meetings.t
 import { registerMemoryImportEnglish } from "../../ui/src/i18n/locales/en-memory-import.ts";
 import { registerModelAccountsEnglish } from "../../ui/src/i18n/locales/en-model-accounts.ts";
 import { registerModelControlsEnglish } from "../../ui/src/i18n/locales/en-model-controls.ts";
+import { registerModelFavoritesEnglish } from "../../ui/src/i18n/locales/en-model-favorites.ts";
 import { registerModelSetupEnglish } from "../../ui/src/i18n/locales/en-model-setup.ts";
 import { registerNativeLinkMenuEnglish } from "../../ui/src/i18n/locales/en-native-link-menu.ts";
 import { registerNewSessionSetupEnglish } from "../../ui/src/i18n/locales/en-new-session-setup.ts";
@@ -185,6 +186,7 @@ const sourceFiles = [
   "en-model-account-list.ts",
   "en-model-accounts.ts",
   "en-model-controls.ts",
+  "en-model-favorites.ts",
   "en-model-setup.ts",
   "en-personal-instructions.ts",
   "en-provider-usage.ts",
@@ -672,6 +674,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerModelAccountsEnglish.catalog,
     registerCronScheduleEnglish.catalog,
     registerModelControlsEnglish.catalog,
+    registerModelFavoritesEnglish.catalog,
     registerModelSetupEnglish.catalog,
     registerPersonalInstructionsEnglish.catalog,
     registerSessionMachineEnglish.catalog,

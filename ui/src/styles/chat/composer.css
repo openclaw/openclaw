@@ -4134,7 +4134,8 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   flex: 0 1 auto;
 }
 
-.chat-controls__model-option:disabled {
+.chat-controls__model-option:disabled,
+.chat-controls__model-option[aria-disabled="true"] {
   opacity: 0.42;
   color: var(--muted);
   cursor: default;
@@ -5259,5 +5260,97 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 @media (prefers-reduced-motion: reduce) {
   .chat-controls__catalog-skeleton span {
     animation: none;
+  }
+}
+
+/* Favorites share the model row without stealing its selection action. */
+.chat-controls__model-favorite {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
+  margin-left: -2px;
+  padding: 0;
+  border: 0;
+  border-radius: min(7px, var(--radius-menu-item));
+  background: transparent;
+  color: var(--muted);
+  opacity: 0;
+  cursor: var(--cursor-action);
+}
+
+.chat-controls__model-menu .chat-controls__model-favorite > svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+}
+
+.chat-controls__model-favorite[aria-pressed="true"],
+.chat-controls__model-option:hover .chat-controls__model-favorite,
+.chat-controls__model-option[data-chat-model-highlighted] .chat-controls__model-favorite,
+.chat-controls__model-favorite:focus-visible {
+  opacity: 1;
+}
+
+.chat-controls__model-favorite[aria-pressed="true"] > svg {
+  fill: currentColor;
+}
+
+.chat-controls__model-favorite:hover {
+  color: var(--text-strong);
+  background: var(--menu-hover);
+}
+
+[data-chat-model-provider-group="$favorites"] .chat-controls__model-option-provider {
+  display: inline-flex;
+  visibility: visible;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .chat-controls__model-favorite {
+    transition:
+      opacity 140ms,
+      color 140ms;
+  }
+
+  .chat-controls__model-favorite[data-popped] > svg {
+    animation: chat-model-favorite-pop 360ms ease-out;
+  }
+}
+
+@keyframes chat-model-favorite-pop {
+  from {
+    transform: scale(0.5);
+  }
+  55% {
+    transform: scale(1.3);
+  }
+  to {
+    transform: scale(1);
+  }
+}
+
+@media (max-width: 640px) {
+  .chat-controls__model-option-wrap:has(.chat-controls__model-favorite)
+    .chat-controls__context-menu {
+    /* Reserve the trailing star's 28px box and the row's 12px gap. */
+    right: 76px;
+  }
+
+  .chat-controls__model-favorite {
+    order: 4;
+    flex-basis: 28px;
+    width: 28px;
+    height: 28px;
+    margin-left: 0;
+    border-radius: min(9px, var(--radius-menu-item));
+    opacity: 1;
+  }
+
+  .chat-controls__model-menu .chat-controls__model-favorite > svg {
+    width: 15px;
+    height: 15px;
   }
 }

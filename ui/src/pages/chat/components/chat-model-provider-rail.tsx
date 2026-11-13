@@ -3,6 +3,7 @@ import {
   providerDisplayLabel,
   type ProviderPresentation,
 } from "../../../components/provider-icon-data.ts";
+import { Icon } from "../../../components/solid/icon.tsx";
 import { Tooltip } from "../../../components/solid/tooltip.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { createMediaQuery } from "../../../lib/reactive/platform.ts";
@@ -12,6 +13,7 @@ import { loadModelProviderOrder, saveModelProviderOrder } from "./model-provider
 
 export function ChatModelProviderRail(props: {
   providers: string[];
+  favorites?: boolean;
   presentation: (provider: string) => ProviderPresentation | undefined;
   targets: readonly { id: string; label: string }[];
   active?: string;
@@ -25,6 +27,9 @@ export function ChatModelProviderRail(props: {
     ...props.providers.filter((id) => !order().includes(id)),
   ]);
   const items = createMemo(() => [
+    ...(props.favorites
+      ? [{ id: "$favorites", label: t("chat.modelFavorites.label"), draggable: false }]
+      : []),
     ...providers().map((id) => ({
       id,
       label: providerDisplayLabel(id, props.presentation(id)),
@@ -136,6 +141,10 @@ export function ChatModelProviderRail(props: {
                 style={{ "--rail-shift": `${shift(item().id)}px` }}
                 data-dragging={drag()?.from === providers().indexOf(item().id) ? "" : undefined}
                 onDragStart={(event) => {
+                  if (!item().draggable) {
+                    event.preventDefault();
+                    return;
+                  }
                   source = item().id;
                   dragOrigin = { x: event.clientX, y: event.clientY };
                   const index = providers().indexOf(source);
@@ -177,7 +186,9 @@ export function ChatModelProviderRail(props: {
                   }
                 }}
               >
-                {item().draggable ? (
+                {item().id === "$favorites" ? (
+                  <Icon name="star" class="chat-controls__provider-icon" />
+                ) : item().draggable ? (
                   <ChatModelProviderIcon
                     provider={item().id}
                     presentation={props.presentation(item().id)}
