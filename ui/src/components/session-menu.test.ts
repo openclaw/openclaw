@@ -77,7 +77,6 @@ describe("session menu", () => {
     const menu = await mountMenu();
     const rename = queryButton(menu, '[data-value="rename"]')!;
     const englishLabel = rename.getAttribute("aria-label");
-
     await i18n.setLocale("de");
     const translatedLabel = i18n.t("sessionsView.renameSessionMenu");
     expect(translatedLabel).not.toBe(englishLabel);
@@ -110,7 +109,6 @@ describe("session menu", () => {
     await waitForFast(() => expect(request).toHaveBeenCalledWith("users.list", {}));
     expect(menu.textContent).toContain("Loading");
     expectCurrentOwner();
-
     pending.reject(new Error("Directory is temporarily unavailable."));
     await waitForFast(() =>
       expect(menu.querySelector('[role="alert"]')?.textContent).toContain(
@@ -197,11 +195,9 @@ describe("session menu", () => {
     ["typed identity collision", ["Ada"], ["profile-ada"], true],
   ] as const)("gates assignment for %s", async (_name, names, agents, expected) => {
     const profiles = sessionOwnerProfiles(...names);
-    for (const profile of profiles.profiles) {
-      if (profile.displayName === "Merged") {
-        profile.mergedInto = "profile-ada";
-      }
-    }
+    profiles.profiles
+      .filter((profile) => profile.displayName === "Merged")
+      .forEach((profile) => Object.assign(profile, { mergedInto: "profile-ada" }));
     const owner = createSessionOwnerMenuHarness(() => profiles);
     owner.context.agents.state.agentsList!.agents = agents.map((id) => ({ id }));
     const menu = await mountMenu({ context: owner.context });
@@ -224,6 +220,19 @@ describe("session menu", () => {
     expect(menuItemLabels(menu)).toContain("Assign to…");
     pending.resolve(sessionOwnerProfiles("Ada"));
     await waitForFast(() => expect(menuItemLabels(menu)).not.toContain("Assign to…"));
+  });
+
+  it("filters owner names typed in another Unicode form", async () => {
+    const owner = createSessionOwnerMenuHarness(() => sessionOwnerProfiles("Jose\u0301", "Zoë"));
+    const menu = await mountMenu({ context: owner.context });
+    await waitForOwners(menu, ["Me", "Research", "Jose\u0301", "Zoë"]);
+    const search = (await openSubmenu(menu, "Assign to…")).querySelector("input")!;
+    const cases = { José: ["Jose\u0301"], "Zoe\u0308": ["Zoë"], x: [] };
+    for (const [query, labels] of Object.entries(cases)) {
+      search.value = query;
+      search.dispatchEvent(new InputEvent("input", { bubbles: true }));
+      await waitForFast(() => expectLabels(menuItem(menu, "Assign to…"), labels));
+    }
   });
 
   it.each([
@@ -250,7 +259,6 @@ describe("session menu", () => {
     });
     const pin = menuItem(menu, "Pin session");
     const deleteItem = menuItem(menu, "Delete…");
-
     expect(pin.disabled).toBe(true);
     expect(pin.getAttribute("title")).toBe("This action requires operator.write access.");
     expect(deleteItem.disabled).toBe(true);
@@ -314,15 +322,13 @@ describe("session menu", () => {
       expect(menuItem(menu, "Move to group").disabled).toBe(true);
       if (compact) {
         await selectMenuValue(menu, "compact:open-collections");
-      } else {
-        await openSubmenu(menu, "Add to section");
-      }
-      if (compact) {
         expect(menuItemLabels(menu)).toEqual(["Back", "Focus", "New section"]);
         expect(menuPanel(menu).querySelector('[role="menu"]')).toBeNull();
         await selectMenuValue(menu, "compact:back");
         expect(menuItemLabels(menu)).toContain("Move to group");
         await selectMenuValue(menu, "compact:open-collections");
+      } else {
+        await openSubmenu(menu, "Add to section");
       }
       await selectMenuValue(menu, "personal-collection:focus");
       await waitForFast(() =>
@@ -459,7 +465,6 @@ describe("session menu", () => {
       copyMarkdownAllowed: false,
       splitAllowed: false,
     });
-
     expect(menuItemLabels(menu)).not.toContain("Open in");
     await openAdvanced(menu, "Copy details");
     for (const label of ["Session ID", "Conversation as Markdown"]) {
@@ -485,8 +490,7 @@ describe("session menu", () => {
       session: { category: "Research", categoryClearReturnsToGroups: returnsToGroups },
       groups: ["Research", "Projects"],
     });
-    const pin = menuItem(menu, "Pin session");
-    press(pin, "1");
+    press(menuItem(menu, "Pin session"), "1");
     expect(onAction).not.toHaveBeenCalled();
     const submenu = await openSubmenu(menu, "Move to group");
     expect(
@@ -554,9 +558,7 @@ describe("session menu", () => {
     } else {
       await openAdvanced(menu, "Icon & color");
       for (const label of ["Red", "No color"]) {
-        const choice = menu.querySelector<HTMLButtonElement>(
-          `.session-menu__color-choice[aria-label="${label}"]`,
-        );
+        const choice = queryButton(menu, `.session-menu__color-choice[aria-label="${label}"]`);
         expect(choice?.disabled).toBe(true);
         choice?.click();
       }
@@ -613,7 +615,6 @@ describe("session menu", () => {
       );
     }
     choices[1]?.focus();
-
     press(choices[1]!, "ArrowLeft");
     expect(document.activeElement).toBe(choices[0]);
     press(choices[0]!, "ArrowRight");
@@ -663,13 +664,11 @@ describe("session menu", () => {
 
   it("ignores shortcut keys for disabled items and modified keystrokes", async () => {
     const { menu, onAction } = await actionMenu({ archiveAllowed: false, deleteAllowed: false });
-
     const pin = menuItem(menu, "Pin session");
     pin.focus();
     press(pin, "d");
     press(pin, "p", { metaKey: true });
     press(pin, "x");
-
     expect(onAction).not.toHaveBeenCalled();
   });
 
@@ -685,12 +684,10 @@ describe("session menu", () => {
       const panel = menuPanel(menu);
       const item = menuItem(menu, "Pin session");
       item.focus();
-
       expect(press(item, "Escape").defaultPrevented).toBe(true);
       expect(panel.matches(":popover-open")).toBe(false);
       expect(document.activeElement).toBe(trigger);
       expect(shell.navDrawerOpen).toBe(true);
-
       expect(press(trigger, "Escape").defaultPrevented).toBe(true);
       expect(shell.navDrawerOpen).toBe(false);
     } finally {

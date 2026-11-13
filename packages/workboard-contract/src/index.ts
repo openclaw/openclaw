@@ -350,6 +350,8 @@ export type WorkboardBoardSummary = Omit<WorkboardBoardMetadata, "createdAt" | "
 export type WorkboardOrchestrationSettings = {
   autoDecompose?: boolean;
   autoDecomposePerDispatch?: number;
+  /** Running or claimed cards one owner may hold while starting a card on this board. Default 1. */
+  maxActivePerOwner?: number;
   defaultAssignee?: string;
   orchestratorProfile?: string;
 };

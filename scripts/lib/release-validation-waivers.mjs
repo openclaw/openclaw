@@ -6,6 +6,19 @@ import { compareAscii } from "./canonical-json.mjs";
 /** @type {import("./release-validation-waivers.mjs").ReleaseValidationWaiver[]} */
 export const RELEASE_VALIDATION_WAIVERS = [
   {
+    targetVersion: "2026.11.5-beta.3",
+    childRole: "productPerformance",
+    jobName: "Kova mock provider performance",
+    reason:
+      "Dallin Romney explicitly authorized a release-wide 2026.11.5-beta.3 " +
+      "performance waiver on 2026-11-13 at 20:19 UTC, including CPU, latency " +
+      "and RSS, superseding the prior RSS-only scope. This matches only the " +
+      "exact release version, productPerformance role and failed Kova job. " +
+      "Retain raw failures and reports; there is no not-run exemption. " +
+      "Other jobs, missing or cancelled evidence, build/setup, crash, " +
+      "correctness, isolation, data-integrity and install/update gates remain blocking.",
+  },
+  {
     targetVersion: "2026.9.37",
     childRole: "productPerformance",
     jobName: "Kova mock provider performance",

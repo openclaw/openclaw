@@ -62,17 +62,21 @@ async function renderControls(
   return container;
 }
 
-function renderRuntimeModel(
-  entry: ModelCatalogEntry,
-  selectedRuntime?: string,
-  observedModel = false,
-) {
-  const result = createSessionsListResult({
+const sessionsFor = (entry: ModelCatalogEntry) =>
+  createSessionsListResult({
     model: entry.id,
     modelProvider: entry.provider,
     defaultsModel: entry.id,
     defaultsProvider: entry.provider,
   });
+
+function renderRuntimeModel(
+  entry: ModelCatalogEntry,
+  selectedRuntime?: string,
+  observedModel = false,
+) {
+  const result = sessionsFor(entry);
+  result.defaults.agentRuntime = entry.agentRuntime;
   if (selectedRuntime) {
     result.sessions[0]!.agentRuntime = { id: selectedRuntime, source: "session-key" };
   }
@@ -231,9 +235,9 @@ describe("chat model runtime choices", () => {
     expect(
       container.querySelector("[data-chat-model-select]")?.getAttribute("data-chat-model-tools"),
     ).toBe("unavailable");
-    expect(
-      container.querySelector(".chat-controls__model-capability-badge")?.textContent,
-    ).toContain("No tools");
+    const trigger = container.querySelector("[data-chat-model-select]");
+    expect(trigger?.getAttribute("aria-label")).toContain("No tools");
+    expect(trigger?.textContent).not.toContain("No tools");
   });
 
   it("labels an observed Codex default with an alternate runtime", async () => {
@@ -271,6 +275,14 @@ describe("chat model runtime choices", () => {
       expect(container.querySelector('[data-chat-thinking-option="high"]')).not.toBeNull(),
     );
     expect(container.querySelector('[data-chat-thinking-option="medium"]')).toBeNull();
+  });
+
+  it("groups a pinned session's Default under its configured runtime", async () => {
+    const opus = { ...model, id: "claude-opus-5-5", provider: "anthropic" };
+    const claudeCli = { id: "claude-cli", source: "model" } as const;
+    const container = await renderRuntimeModel({ ...opus, agentRuntime: claudeCli }, "codex");
+    const row = container.querySelector('[data-chat-model-default="true"]');
+    expect(row?.closest("section")?.dataset.chatModelProviderGroup).toBe("claude-cli");
   });
 
   it.each(["missing-auth", "unsupported-runtime", "locked"] as const)(
@@ -321,12 +333,7 @@ it("carries provider presentation from the admitted catalog into trigger and pic
     available: true,
     providerName: "Research Lab",
   };
-  const result = createSessionsListResult({
-    model: entry.id,
-    modelProvider: entry.provider,
-    defaultsModel: entry.id,
-    defaultsProvider: entry.provider,
-  });
+  const result = sessionsFor(entry);
   const onModelSelect = vi.fn(async () => {});
   const container = await renderControls(result, [entry], { onModelSelect });
   const group = () => container.querySelector('[data-chat-model-provider-group="workstation"]');

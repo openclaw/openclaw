@@ -259,16 +259,14 @@ export function SidebarPanel(props: SidebarPanelProps) {
           <div class="sidebar-header">
             <div class="sidebar-title">{title()}</div>
             <div class="sidebar-header__actions">
-              <openclaw-tooltip prop:content={t("chat.detailPanel.close")}>
-                <button
-                  onClick={() => props.onClose()}
-                  class="btn"
-                  type="button"
-                  aria-label={t("chat.detailPanel.close")}
-                >
-                  <Icon name="x" />
-                </button>
-              </openclaw-tooltip>
+              <button
+                onClick={() => props.onClose()}
+                class="btn"
+                type="button"
+                aria-label={t("chat.detailPanel.close")}
+              >
+                <Icon name="x" />
+              </button>
             </div>
           </div>
         </Show>

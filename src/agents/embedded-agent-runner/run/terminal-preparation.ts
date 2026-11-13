@@ -289,13 +289,13 @@ export function prepareEmbeddedRunTerminal(input: {
     payloads.some((payload) => getReplyPayloadMetadata(payload)?.toolErrorWarning)
   ) {
     const message = formatErrorMessage(promptError);
-    const failure = resolveReplyFailoverFacts(promptError, message);
+    const failure = resolveReplyFailoverFacts(promptError, message, runParams.config);
     const copy =
-      failure.reason === "rate_limit" || failure.reason === "overloaded"
+      failure.requestFailureText ??
+      (failure.reason === "rate_limit" || failure.reason === "overloaded"
         ? renderRateLimitOrOverloadedCopy({ reason: failure.reason, raw: message })
         : (failure.providerRequestError?.userMessage ??
-          failure.requestFailureText ??
-          renderAssistantRequestFailureCopy(failure));
+          renderAssistantRequestFailureCopy(failure)));
     if (copy) {
       const failurePayload = {
         text: sanitizeUserFacingText(copy, { errorContext: true }),
