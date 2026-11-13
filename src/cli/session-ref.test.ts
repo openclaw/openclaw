@@ -9,6 +9,7 @@ vi.mock("../gateway/call.js", async (importOriginal) => {
   return { ...actual, callGateway: callGatewayMock };
 });
 
+import { ExpectedCliError } from "./expected-cli-error.js";
 import {
   parseBareSessionInvocation,
   parseSessionTargetInput,
@@ -206,12 +207,12 @@ describe("session target resolution", () => {
   });
 
   it("rejects a second explicit URL", async () => {
-    await expect(
-      resolveSessionTarget({
-        raw: "https://gateway.example/dashboard/main/movies-a1166b81",
-        gateway: { url: "wss://other.example" },
-      }),
-    ).rejects.toThrow("pass one target");
+    const error = await resolveSessionTarget({
+      raw: "https://gateway.example/dashboard/main/movies-a1166b81",
+      gateway: { url: "wss://other.example" },
+    }).catch((caught) => caught);
+    expect(error).toBeInstanceOf(ExpectedCliError);
+    expect(String(error)).toContain("pass one target");
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
@@ -224,18 +225,10 @@ describe("session target resolution", () => {
       ].map(([key, displayName]) => ({ key, displayName })),
     });
 
-    await expect(resolveSessionTarget({ raw: "12345678" })).rejects.toThrow(
-      /Alpha\s+123456780aaa4000[\s\S]*Beta\s+123456780bbb4000/u,
-    );
+    const error = await resolveSessionTarget({ raw: "12345678" }).catch((caught) => caught);
+    expect(error).toBeInstanceOf(ExpectedCliError);
+    expect(String(error)).toMatch(/Alpha\s+123456780aaa4000[\s\S]*Beta\s+123456780bbb4000/u);
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("sends remote not-found recovery to the target Control UI, not the local session store", async () => {
-    callGatewayMock.mockRejectedValue(requestError("No session found: a1166b81"));
-
-    const error = await resolveRemote().catch(String);
-    expect(error).toContain("that gateway's Control UI (https://gateway.example)");
-    expect(error).not.toContain("sessions list --url");
   });
 
   it.each([
@@ -256,9 +249,13 @@ describe("session target resolution", () => {
       Object.assign(new Error("connect ENOTFOUND"), { code: "ENOTFOUND" }),
       /Could not reach gateway wss:\/\/gateway\.example[\s\S]*tailnet or SSH tunnel/u,
     ],
+    [requestError("No session found: a1166b81"), "Control UI (https://gateway.example)"],
   ])("provides recovery guidance for %s", async (error, expected) => {
     callGatewayMock.mockRejectedValue(error);
-    await expect(resolveRemote()).rejects.toThrow(expected);
+    const rejection = await resolveRemote().catch((caught) => caught);
+    expect(rejection).toBeInstanceOf(ExpectedCliError);
+    expect(String(rejection)).toMatch(expected);
+    expect(String(rejection)).not.toContain("sessions list --url");
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
   });
 
