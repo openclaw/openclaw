@@ -97,4 +97,15 @@ describe("docs-list", () => {
     expect(output).not.toContain("H2: Still hidden");
     expect(output).toContain("H1: Visible after close");
   });
+  it("preserves apostrophes in inline read_when arrays", () => {
+    const { root } = makeDocs({
+      "page.md": `---
+summary: "Inline array read_when page"
+read_when: ["It's ready"]
+---
+`,
+    });
+    const output = runDocsList(root);
+    expect(output).toContain("Read when: It's ready");
+  });
 });
