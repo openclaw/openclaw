@@ -6,6 +6,10 @@ import { expressionBuilder, sql, type RawBuilder, type QueryResult } from "kysel
 import { admitStoreSearch } from "../../infra/database-engine/adapters.js";
 import { DatabaseSearchCapabilityUnavailableError } from "../../infra/database-engine/capability-unavailable.js";
 import { engineStringPosition } from "../../infra/database-engine/scalar.js";
+import {
+  bindSqliteFullText,
+  sqliteFullTextLiteralQuery,
+} from "../../infra/database-engine/sqlite-full-text.js";
 import { hasFullTextWordTokens } from "../../infra/database-engine/text-tokens.worker.js";
 import {
   createSqliteQueryCache,
@@ -441,6 +445,7 @@ export function searchSessionTranscriptsReadOnlySync(
                     .orderBy(order),
                 ).rows;
               }
+              const nativeDatabase = database.db;
               const selected =
                 prepared && ftsMatch && substringTerms.length === 0
                   ? (prepared.hits ??= prepareSqliteQuerySync<
@@ -452,10 +457,10 @@ export function searchSessionTranscriptsReadOnlySync(
                       }
                     >(database.db, (parameter) =>
                       selectedHits(
-                        // The native capability owns literal escaping. Only its fixed
-                        // MATCH binding changes; table policy stays admitted here.
-                        /* kysely-allow-raw: native MATCH uses this admitted fixed index, with a fresh bound literal query. */
-                        sql<boolean>`${sql.raw(textIndex.table)} MATCH ${parameter((value) => value.match)}`,
+                        bindSqliteFullText(textIndex.store, nativeDatabase).matchBound(
+                          textIndex,
+                          parameter((value) => value.match),
+                        ),
                         parameter((value) => value.limit),
                         /* kysely-allow-raw: reuse the canonical encoded-set fragment with a bound value. */
                         sql<string>(
@@ -465,9 +470,7 @@ export function searchSessionTranscriptsReadOnlySync(
                       ),
                     ))({
                       keys: keys!.encoded,
-                      // SAFETY: the SQLite MATCH capability emits one string binding.
-                      // Compile only that small fragment; never duplicate its literal policy.
-                      match: ftsMatch.compile(db).parameters[0] as string,
+                      match: sqliteFullTextLiteralQuery(literalQuery),
                       limit: limit + 1,
                     }).rows
                   : executeSqliteQuerySync(database.db, selectedHits()).rows;

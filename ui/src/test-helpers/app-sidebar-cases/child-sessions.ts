@@ -457,7 +457,7 @@ describe("AppSidebar agent chip", () => {
       roots: ["agent:main:other"],
     },
   ])(
-    "restores the selected child with an off-page parent (archived: $archived)",
+    "preserves selection and active-sidebar visibility with an off-page parent (archived: $archived)",
     async ({ archived, parentKey, parentLabel, roots }) => {
       const childKey = "agent:worker:child";
       const request = vi.fn(async (_method: string, params: { key: string }) => ({
@@ -491,14 +491,17 @@ describe("AppSidebar agent chip", () => {
 
       await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
       await waitForFast(() =>
-        expect(sidebar.querySelector(childSelector(childKey))).not.toBeNull(),
+        expect(sidebar.sessionData.activeSessionLineageSelectedRow?.key).toBe(childKey),
       );
+      expect(sidebar.sessionKey).toBe(childKey);
       if (archived) {
+        expect(sidebar.sessionData.activeSessionLineageSelectedRow?.archived).toBe(true);
         expect(sidebar.querySelector(childSelector(parentKey))).toBeNull();
-        const child = sidebar.querySelector(childSelector(childKey));
-        expect(child?.querySelector(".sidebar-session__archive-glyph")).not.toBeNull();
-        expect(child?.classList.contains("sidebar-recent-session--active")).toBe(true);
+        expect(sidebar.querySelector(childSelector(childKey))).toBeNull();
       } else {
+        await waitForFast(() =>
+          expect(sidebar.querySelector(childSelector(childKey))).not.toBeNull(),
+        );
         expect(sidebar.querySelector(childSelector(parentKey))?.textContent).toContain(parentLabel);
       }
     },

@@ -1,8 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
-import { createFunctionModule, sql } from "kysely";
+import { createFunctionModule, sql, type RawBuilder } from "kysely";
 import type { FullTextCapability, TextIndex, TextQuery } from "./text-contract.js";
 
-function literalQuery(query: TextQuery): string {
+export function sqliteFullTextLiteralQuery(query: TextQuery): string {
   if (query.kind === "contains") {
     throw new Error("Literal contains requires the owner's SQLite substring policy");
   }
@@ -16,25 +16,35 @@ function literalQuery(query: TextQuery): string {
     separator = " ";
   }
   return query.clauses
-    .map((clause) => (clause.kind === "any" ? `(${literalQuery(clause)})` : literalQuery(clause)))
+    .map((clause) =>
+      clause.kind === "any"
+        ? `(${sqliteFullTextLiteralQuery(clause)})`
+        : sqliteFullTextLiteralQuery(clause),
+    )
     .join(separator);
 }
 
-export function bindSqliteFullText(store: object, db?: DatabaseSync): FullTextCapability {
+export function bindSqliteFullText(
+  store: object,
+  db?: DatabaseSync,
+): FullTextCapability & {
+  matchBound(index: TextIndex, value: RawBuilder<string>): RawBuilder<boolean>;
+} {
   const relation = (index: TextIndex) => {
     if (index.store !== store || (db && !db.isOpen)) {
       throw new Error("Text index is not admitted to this open store");
     }
     return index.alias ?? index.table;
   };
+  const match = (index: TextIndex, value: string | RawBuilder<string>) => {
+    const table = relation(index);
+    return index.matchField
+      ? /* kysely-allow-raw: Native MATCH uses the admitted table and field declarations. */ sql<boolean>`${sql.ref(`${table}.${index.matchField}`)} match ${value}`
+      : /* kysely-allow-raw: Native MATCH uses the admitted table and fixed rank clause. */ sql<boolean>`${sql.raw(table)} MATCH ${value}${sql.raw(index.hiddenRank ? ` AND ${table}.rank MATCH 'bm25()'` : "")}`;
+  };
   return {
-    match(index, query) {
-      const table = relation(index);
-      const value = literalQuery(query);
-      return index.matchField
-        ? /* kysely-allow-raw: Native MATCH uses the admitted table and field declarations. */ sql<boolean>`${sql.ref(`${table}.${index.matchField}`)} match ${value}`
-        : /* kysely-allow-raw: Native MATCH uses the admitted table and fixed rank clause. */ sql<boolean>`${sql.raw(table)} MATCH ${value}${sql.raw(index.hiddenRank ? ` AND ${table}.rank MATCH 'bm25()'` : "")}`;
-    },
+    match: (index, query) => match(index, sqliteFullTextLiteralQuery(query)),
+    matchBound: match,
     rank(index) {
       const table = relation(index);
       return {
