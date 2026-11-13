@@ -143,6 +143,31 @@ describe("nodes-cli coverage", () => {
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
+  it("prints each line of a multi-line nodes failure", async () => {
+    callGateway
+      .mockResolvedValueOnce({ nodes: [{ nodeId: "ios-node" }] })
+      .mockRejectedValueOnce(
+        new Error(
+          "gateway remote mode misconfigured: gateway.remote.url missing\n" +
+            "Config: /home/claw/.openclaw/openclaw.json\n" +
+            "Fix: set gateway.remote.url, or set gateway.mode=local.",
+        ),
+      );
+
+    await expectFailure(["nodes", "rename", "--node", "ios-node", "--name", "Desk"]);
+
+    expect(runtimeErrors).toEqual([
+      expect.stringContaining(
+        "nodes rename failed: gateway remote mode misconfigured: gateway.remote.url missing\n",
+      ),
+    ]);
+    const output = runtimeErrors.join("\n");
+    expect(output).toContain("Config: /home/claw/.openclaw/openclaw.json");
+    expect(output).toContain("Fix: set gateway.remote.url, or set gateway.mode=local.");
+    expect(output).not.toContain("\\n");
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
   it("explains unknown nodes approve request ids with the current pending requests", async () => {
     callGateway.mockResolvedValueOnce(pairingList("current-request"));
 
