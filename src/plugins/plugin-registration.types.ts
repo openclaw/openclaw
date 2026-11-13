@@ -405,7 +405,8 @@ export type OpenClawPluginServiceContext = {
       /** Refresh current policy and credential-owner facts; retired authorization never revives. */
       revalidate: () => Promise<void>;
       request: (
-        method: "server/discover" | "events/list" | "events/subscribe",
+        /** events/poll is accepted only for the persisted source's own event name and arguments. */
+        method: "server/discover" | "events/list" | "events/poll" | "events/subscribe",
         params: Record<string, unknown>,
         signal: AbortSignal,
       ) => Promise<unknown>;

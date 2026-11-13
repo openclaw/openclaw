@@ -1,0 +1,102 @@
+import assert from "node:assert/strict";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { requestMcpEvent } from "./mcp-event-request.js";
+// Load the lazily imported transport during collection, as the sibling suite does.
+import "./mcp-transport.js";
+
+const mocks = vi.hoisted(() => ({
+  lookup: vi.fn(),
+  fetch: vi.fn<(url: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(),
+}));
+vi.mock("node:dns/promises", () => ({ lookup: mocks.lookup }));
+// mock-isolation: Exercise the real guarded transport with deterministic external HTTP responses.
+vi.mock("../infra/net/undici-runtime.js", () => ({
+  createHttp1Agent: () => ({ close: async () => {}, destroy: async () => {} }),
+  createHttp1EnvHttpProxyAgent: () => ({ close: async () => {}, destroy: async () => {} }),
+  createHttp1ProxyAgent: () => ({ close: async () => {}, destroy: async () => {} }),
+  loadUndiciRuntimeDeps: () => ({ fetch: mocks.fetch }),
+}));
+// mock-isolation: This suite uses no OAuth; credential storage has separate proof.
+vi.mock("./mcp-oauth.js", () => ({
+  resolveMcpOAuthAccessToken: vi.fn(),
+  recordMcpOAuthAuthorizationRequired: vi.fn(),
+}));
+// mock-isolation: Transport diagnostics must not initialize global logging.
+vi.mock("../logger.js", () => ({ logDebug: vi.fn(), logWarn: vi.fn() }));
+
+beforeEach(() => {
+  // Select direct DNS; ambient proxy coverage belongs to mcp-http-fetch.test.ts.
+  for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"]) {
+    vi.stubEnv(key, "");
+    vi.stubEnv(key.toLowerCase(), "");
+  }
+  Object.values(mocks).forEach((mock) => mock.mockReset());
+  mocks.lookup.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+  mocks.fetch.mockImplementation(async (_url, init) => {
+    assert(typeof init?.body === "string", "Expected a JSON string request body");
+    const value: unknown = JSON.parse(init.body);
+    assert(isRecord(value), "Expected a JSON-RPC request");
+    return new Response(JSON.stringify({ jsonrpc: "2.0", id: value.id, result: { events: [] } }), {
+      headers: { "content-type": "application/json" },
+    });
+  });
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
+
+// SEP-3415 routes events/poll, subscribe, and unsubscribe by event name over Streamable HTTP.
+it.each([
+  ["comment.created", "comment.created"],
+  ["café", "=?base64?Y2Fmw6k=?="],
+])("routes events/poll by event name %s with Mcp-Name", async (name, header) => {
+  await requestMcpEvent({
+    serverName: "calendar",
+    server: { url: "https://mcp.example.com/events", transport: "streamable-http" },
+    method: "events/poll",
+    params: { name, arguments: {}, cursor: null },
+    assertCurrent: () => {},
+  });
+  const headers = new Headers(mocks.fetch.mock.calls[0]![1]?.headers);
+  expect([headers.get("mcp-method"), headers.get("mcp-name")]).toEqual(["events/poll", header]);
+});
+
+// The mcp-events plugin polls for up to 32 events of up to 256 KiB each. A full batch must fit
+// the transport's response cap: a rejected poll keeps its cursor, so the backlog would never drain.
+it.each([
+  [32, true],
+  [100, false],
+])("a poll batch of %i maximum-size events fits the response cap: %s", async (count, fits) => {
+  const occurrence = {
+    eventId: "evt",
+    name: "comment.created",
+    timestamp: "2026-10-01T11:59:00Z",
+    data: { text: "" },
+    cursor: "cursor-1",
+  };
+  occurrence.data.text = "x".repeat(256 * 1024 - JSON.stringify(occurrence).length);
+  const events = Array.from({ length: count }, () => occurrence);
+  mocks.fetch.mockImplementation(async (_url, init) => {
+    assert(typeof init?.body === "string", "Expected a JSON string request body");
+    const value: unknown = JSON.parse(init.body);
+    assert(isRecord(value), "Expected a JSON-RPC request");
+    const result = { events, cursor: "cursor-2", hasMore: true, truncated: false };
+    return new Response(JSON.stringify({ jsonrpc: "2.0", id: value.id, result }), {
+      headers: { "content-type": "application/json" },
+    });
+  });
+  const poll = requestMcpEvent({
+    serverName: "calendar",
+    server: { url: "https://mcp.example.com/events", transport: "streamable-http" },
+    method: "events/poll",
+    params: { name: "comment.created", arguments: {}, cursor: null, maxEvents: count },
+    assertCurrent: () => {},
+  });
+  if (fits) {
+    await expect(poll).resolves.toMatchObject({ events: { length: count } });
+  } else {
+    await expect(poll).rejects.toThrow("MCP HTTP response exceeds 10485760 bytes");
+  }
+});

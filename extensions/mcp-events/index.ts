@@ -5,7 +5,7 @@ import {
 import { asOptionalRecord as record } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMcpEventsConfig } from "./src/config.js";
 import { createCallbackHandler } from "./src/http.js";
-import { CALLBACK_PREFIX, MCP_EVENTS_PROFILE } from "./src/protocol.js";
+import { CALLBACK_PREFIX, MCP_EVENTS_POLL_PROFILE, MCP_EVENTS_PROFILE } from "./src/protocol.js";
 import { McpEventsService } from "./src/service.js";
 import type { EventCron } from "./src/types.js";
 
@@ -35,7 +35,8 @@ export function getMcpEventsDiagnostics(service: McpEventsService) {
       sourceIdentity: facts.sourceIdentity,
       serverName: facts.serverName,
       name: facts.definition.name,
-      profile: MCP_EVENTS_PROFILE,
+      delivery: facts.callbackUrl === undefined ? "poll" : "webhook",
+      profile: facts.callbackUrl === undefined ? MCP_EVENTS_POLL_PROFILE : MCP_EVENTS_PROFILE,
       status: !live
         ? "revoked"
         : facts.refreshBefore && facts.refreshBefore <= service.now
@@ -66,7 +67,7 @@ export function getMcpEventsDiagnostics(service: McpEventsService) {
 export default definePluginEntry({
   id: "mcp-events",
   name: "MCP Events",
-  description: "Authenticated MCP webhook events for authored automations.",
+  description: "Authenticated MCP events, by webhook or poll, for authored automations.",
   configSchema: { parse: resolveMcpEventsConfig },
   register(api) {
     api.registerTool(
@@ -76,7 +77,7 @@ export default definePluginEntry({
           name: "mcp_events",
           label: "MCP Events",
           description:
-            "List webhook events and subscription argument schemas from a configured MCP server. Use the descriptors to create an Automation event source; this tool does not schedule or subscribe by itself. Pass nextCursor as cursor for another page.",
+            "List webhook and poll events and their subscription argument schemas from a configured MCP server. Use the descriptors to create an Automation event source; this tool does not schedule or subscribe by itself. Pass nextCursor as cursor for another page.",
           parameters: McpEventsParameters,
           execute: async (_id, input) => {
             context.assertInvocationCurrent();
@@ -114,7 +115,7 @@ export default definePluginEntry({
     // Hooks carry change notifications, never retained caller-scoped scheduler handles.
     api.on("cron_changed", (event) => {
       if (event.action === "finished") {
-        service?.requestDrain(event.jobId);
+        service?.ingress.requestDrain(event.jobId);
       } else if (
         event.action === "added" ||
         event.action === "updated" ||

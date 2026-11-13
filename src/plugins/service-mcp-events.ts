@@ -481,6 +481,32 @@ export function createPluginServiceMcpEvents(params: {
                 ? { cursor: requestParams.cursor }
                 : {};
             let expiresAt: number | undefined;
+            if (method === "events/poll") {
+              const job = admitted.captured.job;
+              const { cursor, maxEvents } = requestParams;
+              if (
+                job.schedule.kind !== "event" ||
+                requestParams.name !== job.schedule.options.name ||
+                !isDeepStrictEqual(requestParams.arguments, job.schedule.options.arguments ?? {}) ||
+                !(cursor === null || (typeof cursor === "string" && cursor.length <= 16_384)) ||
+                !(
+                  maxEvents === undefined ||
+                  (typeof maxEvents === "number" &&
+                    Number.isSafeInteger(maxEvents) &&
+                    maxEvents > 0 &&
+                    maxEvents <= 1000)
+                )
+              ) {
+                throw new Error("MCP Events poll does not match its persisted source.");
+              }
+              // Poll holds no server-side subscription, so there is no cleanup identity to capture.
+              wireParams = {
+                name: requestParams.name,
+                arguments: requestParams.arguments,
+                cursor,
+                ...(maxEvents !== undefined ? { maxEvents } : {}),
+              };
+            }
             if (method === "events/subscribe") {
               const identity = subscriptionIdentity(requestParams);
               const job = admitted.captured.job;
@@ -596,7 +622,11 @@ export function createPluginServiceMcpEvents(params: {
             revalidate,
             dispose,
             request: async (method, requestParams, signal) => {
-              if (!["server/discover", "events/list", "events/subscribe"].includes(method)) {
+              if (
+                !["server/discover", "events/list", "events/poll", "events/subscribe"].includes(
+                  method,
+                )
+              ) {
                 throw new Error("Unsupported MCP Events method.");
               }
               return await execute(method, requestParams, signal);
