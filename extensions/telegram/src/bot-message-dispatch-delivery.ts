@@ -170,7 +170,9 @@ export async function sendPayload(
 ): Promise<LivePreviewDeliveryResult> {
   if (options?.durable) {
     sourceTurn.finalDeliveryError = undefined;
-    sourceTurn.finalDeliveryQueuedForRetry = undefined;
+    if (sourceTurn.finalHandoff === "delivery-queue") {
+      sourceTurn.finalHandoff = undefined;
+    }
   }
   if (sourceTurn.isSuperseded()) {
     await options?.promptContextSequence?.fail();
@@ -283,8 +285,9 @@ export async function sendPayload(
       // An unsent flood refusal that the delivery queue still holds is replayed by
       // recovery once Telegram allows; asking the user to resend would precede it.
       // Missing or released custody keeps the normal failure handling.
-      sourceTurn.finalDeliveryQueuedForRetry =
-        durable.retainedForRecovery === true && isTelegramRateLimitError(durable.error);
+      if (durable.retainedForRecovery === true && isTelegramRateLimitError(durable.error)) {
+        sourceTurn.finalHandoff = "delivery-queue";
+      }
       return await failPromptContextSequence(projectionSequence, durable.error);
     }
     if (durable.status === "handled_visible") {

@@ -320,7 +320,7 @@ export const dispatchTelegramMessage = async (
   // A flood-refused final that the delivery queue still holds is not a turn failure:
   // recovery owns its resend, so it must not trigger the "something went wrong" fallback.
   const isQueuedFinalRefusal = (err: unknown) =>
-    turn.finalDeliveryQueuedForRetry === true && err === turn.finalDeliveryError;
+    turn.finalHandoff === "delivery-queue" && err === turn.finalDeliveryError;
   try {
     turnDispatched = await runTelegramDispatchTurn(turn);
   } catch (err) {
@@ -383,8 +383,7 @@ export const dispatchTelegramMessage = async (
     (!suppressFailureFallback || turn.agentRunFailed) &&
     !turn.previewLifecycle.finalDelivered &&
     (terminalFailure ||
-      (!turn.progressContinuationAdopted &&
-        !turn.finalDeliveryQueuedForRetry &&
+      (turn.finalHandoff === undefined &&
         (deliverySummary.failedNonSilent > 0 ||
           (deliverySummary.skippedNonSilent > 0 && !turn.suppressSilentReplyFallback))));
   if (shouldSendFailureFallback) {
@@ -408,7 +407,7 @@ export const dispatchTelegramMessage = async (
     !deliverySummary.delivered &&
     !turn.suppressSilentReplyFallback &&
     !turn.finalDispatchClaimed &&
-    !turn.finalDeliveryQueuedForRetry &&
+    turn.finalHandoff === undefined &&
     turn.noVisibleReplyFallbackEligible
   ) {
     sentFallback = (await deliverFallback(turn, [{ text: EMPTY_RESPONSE_FALLBACK }], false))
@@ -428,16 +427,14 @@ export const dispatchTelegramMessage = async (
   const hasFinalResponse =
     intentionalNoResponse ||
     turn.previewLifecycle.finalDelivered ||
-    turn.progressContinuationAdopted ||
-    // The delivery queue owns a flood-refused final and resends it; do not re-run the turn.
-    turn.finalDeliveryQueuedForRetry === true ||
+    // The handoff owner delivers the final; do not re-run the turn.
+    turn.finalHandoff !== undefined ||
     sentFallback;
   const hasVisibleResponse = deliverySummary.delivered || sentFallback;
   const deliveryFailureWithoutFinalResponse =
     !intentionalNoResponse &&
     !turn.previewLifecycle.finalDelivered &&
-    !turn.progressContinuationAdopted &&
-    !turn.finalDeliveryQueuedForRetry &&
+    turn.finalHandoff === undefined &&
     (turn.previewLifecycle.finalFailed ||
       deliverySummary.skippedNonSilent > 0 ||
       deliverySummary.failedNonSilent > 0);

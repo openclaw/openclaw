@@ -174,13 +174,16 @@ export type TelegramDispatchTurn = TelegramDispatchTurnConfig &
   TelegramReplyStateSlice & {
     finalDispatchClaimed: boolean;
     finalDeliveryError?: unknown;
-    /** The failed final stays queued and will be resent; no "please ask again" notice. */
-    finalDeliveryQueuedForRetry?: boolean;
     agentRunFailed?: boolean;
     sendPolicyDenied?: boolean;
     noVisibleReplyFallbackEligible: boolean;
     suppressSilentReplyFallback: boolean;
     hadErrorReplyFailureOrSkip: boolean;
-    progressContinuationAdopted?: boolean;
+    /**
+     * Another owner now delivers this turn's final: a follow-up adopted the progress card,
+     * or the delivery queue holds a flood-refused final and resends it. Either way the
+     * turn must not send a failure fallback or ask the user to resend.
+     */
+    finalHandoff?: "progress-continuation" | "delivery-queue";
     dispatchError?: unknown;
   };
