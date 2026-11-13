@@ -18,6 +18,35 @@ import { hasSqliteWorkerOutcomeUnknown } from "./sqlite-worker-error.js";
 describe("scoped SQLite write receipts", () => {
   const { openDatabase, tempDirs } = useSqliteSchemaTestFixture();
 
+  it.each([false, true])("rejects thenables and restores write scope (tracked=%s)", (tracked) => {
+    const database = openDatabase();
+    if (tracked) {
+      readSqliteDatabaseScopedWriteToken(database, "entry");
+    }
+    const then = vi.fn();
+    // oxlint-disable-next-line unicorn/no-thenable -- Exercise rejection of structural thenables.
+    for (const value of [Promise.resolve(), { then }, Object.assign(() => {}, { then })]) {
+      expect(() =>
+        runSqliteImmediateTransactionSync(database, () => {
+          // Discarding the result must not hide it from the write-scope owner.
+          void withSqliteDatabaseWriteScope(database, ["entry"], () => {
+            database.exec("INSERT INTO original VALUES (1)");
+            return value;
+          });
+        }),
+      ).toThrow("SQLite write scopes cannot await work");
+      expect(database.prepare("SELECT id FROM original").all()).toEqual([]);
+    }
+    expect(then).not.toHaveBeenCalled();
+    const before = readSqliteDatabaseScopedWriteToken(database, "entry");
+    const sibling = readSqliteDatabaseScopedWriteToken(database, "sibling");
+    runSqliteImmediateTransactionSync(database, () => {
+      database.exec("INSERT INTO original VALUES (2)");
+    });
+    expect(readSqliteDatabaseScopedWriteToken(database, "entry")).not.toBe(before);
+    expect(readSqliteDatabaseScopedWriteToken(database, "sibling")).not.toBe(sibling);
+  });
+
   it("keeps prepared epochs settled, scoped, and bounded by their retained owner", () => {
     const location = path.join(tempDirs.make("prepared-write-revision-"), "state.sqlite");
     const database = openDatabase(undefined, true, location);

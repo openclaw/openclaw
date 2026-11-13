@@ -10,6 +10,10 @@ export const emptyPluginCapabilityEvidence = {
   grantsByPluginId: { audit: emptyCapabilitySummary.grants },
 };
 export const emptyPluginPlanEvidence = {
+  detectedFormat: "openclaw" as const,
+  mapped: [],
+  unavailable: [],
+  adapterIdentity: "openclaw/test",
   declaredCapabilities: emptyPluginCapabilityEvidence.declared,
   capabilityGrants: emptyPluginCapabilityEvidence.grants,
   capabilityGrantsByPluginId: emptyPluginCapabilityEvidence.grantsByPluginId,

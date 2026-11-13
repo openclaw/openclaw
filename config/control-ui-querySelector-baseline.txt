@@ -10,7 +10,7 @@ ui/src/components/lobster-image.ts	2
 ui/src/components/markdown-blocks-owner.ts	7
 ui/src/components/markdown-code-blocks.ts	3
 ui/src/components/markdown-mermaid.tsx	3
-ui/src/components/markdown-tables.ts	10
+ui/src/components/markdown-tables.ts	9
 ui/src/components/markdown.ts	1
 ui/src/components/session-progress-card-view.tsx	1
 ui/src/components/session-progress-card.ts	1

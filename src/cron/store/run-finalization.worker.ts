@@ -48,6 +48,7 @@ export function finalizeCronRunsInWorker(
             deps: {
               nowMs: () => policy.nowMs,
               cronConfig: policy.cronConfig,
+              defaultAgentId: policy.defaultAgentId,
               failureRepairTimeoutMs: policy.failureRepairTimeoutMs,
               log: createCronMutationLogger(outcome.logs),
             },
@@ -118,6 +119,30 @@ export function finalizeCronRunsInWorker(
               currentJob && ownsRunningMarker ? currentJob : structuredClone(completed.job);
             if (admissionDeferred) {
               if (currentJob && ownsRunningMarker) {
+                if (
+                  currentJob.schedule.kind !== "stream" &&
+                  !currentJob.state.runningScheduleChangeId
+                ) {
+                  const previous = currentJob.state.admissionDeferred;
+                  const attempts = (previous?.attempts ?? 0) + 1;
+                  currentJob.state.admissionDeferred = {
+                    reason:
+                      completed.summary ??
+                      completed.admissionDeferredReason ??
+                      "Admission unavailable",
+                    sinceMs: previous?.sinceMs ?? completed.endedAt,
+                    attempts,
+                    retryAtMs:
+                      completed.endedAt +
+                      Math.min(300_000, 30_000 * 2 ** Math.min(attempts - 1, 4)),
+                  };
+                  if (attempts === 5) {
+                    state.deps.log.warn(
+                      { jobId: currentJob.id, ...currentJob.state.admissionDeferred },
+                      "cron: admission remains deferred",
+                    );
+                  }
+                }
                 delete currentJob.state.queuedAtMs;
                 delete currentJob.state.runningAtMs;
                 delete currentJob.state.runningReceiptId;
@@ -153,9 +178,6 @@ export function finalizeCronRunsInWorker(
                     {
                       nowMs: policy.nowMs,
                       recomputeExpired: Boolean(completed.request),
-                      ...(completed.request?.preserveCadence
-                        ? { preserveExpiredPacedNextRunJobId: job.id }
-                        : {}),
                       deferredNotifications: outcome.notifications,
                     },
                     { reservations: new Map(), isJobActive: () => false },

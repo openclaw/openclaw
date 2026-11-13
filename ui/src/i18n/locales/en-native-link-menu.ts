@@ -4,9 +4,9 @@ import { en } from "./en.ts";
 const enNativeLinkMenu = {
   nativeLinkMenu: {
     label: "Link actions",
-    openInline: "Open in Browser Panel",
-    openExternal: "Open in Default Browser",
-    copy: "Copy Link",
+    openInline: "Open in browser panel",
+    openExternal: "Open in default browser",
+    copy: "Copy link",
   },
 } satisfies TranslationMap;
 

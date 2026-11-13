@@ -15,6 +15,7 @@ import {
   SettingsSection,
   SettingsSegmented,
 } from "../../components/solid/settings-ui.tsx";
+import { isChatFastModeProviderSupported } from "../../lib/chat/model-select-state.ts";
 import { formatThinkingOverrideLabel } from "../../lib/chat/thinking.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import {
@@ -52,6 +53,8 @@ export type DefaultModelsViewProps = {
   busy: Record<string, boolean>;
   defaultsSaving?: boolean;
   defaultsSavingField?: ModelDefaultsSaveField | null;
+  /** The last defaults write was acknowledged; later discovery runs in the background. */
+  defaultsSaved?: boolean;
   message?: ModelProviderRowMessage;
   onPrimaryChange: (model: string) => void;
   onFallbackChange: (model: string | null) => void;
@@ -116,7 +119,7 @@ function HelpTitle(params: {
               }
             }}
           >
-            <Icon name="info" />
+            <Icon name="circleQuestionMark" />
           </button>
           <div slot="content" class="settings-section__help-panel">
             <For each={params.paragraphs}>{(text) => <p>{text}</p>}</For>
@@ -188,6 +191,7 @@ function fastModeOptionValue(value: ReturnType<typeof formatFastModeValue>): Fas
 // Discovery progress does not change the saved selection or disable known models.
 function CatalogFeedback(props: {
   discovering: boolean;
+  saved?: boolean;
   error?: string;
   onRetry: () => void;
 }): JSX.Element {
@@ -196,7 +200,13 @@ function CatalogFeedback(props: {
       {props.discovering ? (
         <div class="model-providers__catalog-progress" role="status" aria-live="polite">
           <span class="btn__spinner" aria-hidden="true" />
-          <span>{t("modelProviders.defaults.discoveringMore")}</span>
+          <span>
+            {t(
+              props.saved
+                ? "modelProviders.defaults.savedDiscoveringMore"
+                : "modelProviders.defaults.discoveringMore",
+            )}
+          </span>
         </div>
       ) : undefined}
       {props.error ? (
@@ -233,8 +243,11 @@ function CatalogProgress(props: DefaultModelsViewProps): JSX.Element {
             reset();
           };
           return (
-            <Loading fallback={<CatalogFeedback discovering onRetry={retry} />}>
+            <Loading
+              fallback={<CatalogFeedback discovering saved={props.defaultsSaved} onRetry={retry} />}
+            >
               <CatalogFeedback
+                saved={props.defaultsSaved}
                 discovering={isPending(read) || Boolean(props.catalogDiscovering)}
                 error={isPending(read) ? undefined : formatUiError(failure())}
                 onRetry={retry}
@@ -246,6 +259,7 @@ function CatalogProgress(props: DefaultModelsViewProps): JSX.Element {
         <Loading
           fallback={
             <CatalogFeedback
+              saved={props.defaultsSaved}
               discovering={Boolean(receipt()) || Boolean(props.catalogDiscovering)}
               onRetry={() => props.onCatalogRetry()}
             />
@@ -253,6 +267,7 @@ function CatalogProgress(props: DefaultModelsViewProps): JSX.Element {
         >
           {latest(read)}
           <CatalogFeedback
+            saved={props.defaultsSaved}
             discovering={isPending(read) || Boolean(props.catalogDiscovering)}
             onRetry={() => props.onCatalogRetry()}
           />
@@ -351,20 +366,19 @@ export function DefaultModels(props: DefaultModelsViewProps) {
   );
   const fastModeOptions = createMemo(() => {
     const model = primaryModel();
-    const priority =
-      model?.supportsFastMode === true &&
-      (model.serviceTiers === undefined || model.serviceTiers.includes("priority"));
+    // Request support can be omitted by native catalogs; tier advertisements only gate Ultrafast.
+    const fast =
+      model?.supportsFastMode ??
+      (model?.available === true && isChatFastModeProviderSupported(model.provider));
     const ultrafast =
-      model?.supportsFastMode === true &&
-      model.available === true &&
-      model.serviceTiers?.includes("ultrafast") === true;
+      fast && model?.available === true && model.serviceTiers?.includes("ultrafast") === true;
     const options = [
       {
         value: "auto" as const,
         label: t("quickSettings.model.fastModes.auto"),
-        supported: priority,
+        supported: fast,
       },
-      { value: "on" as const, label: t("quickSettings.model.fastModes.on"), supported: priority },
+      { value: "on" as const, label: t("chat.modelControls.fast"), supported: fast },
       {
         value: "ultrafast" as const,
         label: t("chat.modelControls.ultrafast"),
@@ -450,15 +464,15 @@ export function DefaultModels(props: DefaultModelsViewProps) {
     return choices;
   });
 
+  // Discovery reports on the heading line, so the rows below it never move.
+  const catalogProgress = <CatalogProgress {...props} />;
   return (
     <SettingsSection
       title={t("modelProviders.defaults.title")}
       description={t("modelProviders.defaults.subtitle")}
+      actions={catalogProgress}
     >
       <div class="model-providers__defaults">
-        {!props.loading && props.models.length === 0 ? (
-          <div class="callout warning">{t("modelProviders.defaults.noModels")}</div>
-        ) : undefined}
         <SettingsRow
           title={t("modelProviders.defaults.primary")}
           control={
@@ -472,6 +486,37 @@ export function DefaultModels(props: DefaultModelsViewProps) {
               onChange={props.onPrimaryChange}
             />
           }
+        />
+        <FallbackModel
+          label={t("modelProviders.defaults.fallback")}
+          fallbacks={props.selection.fallbacks}
+          primary={props.selection.primary}
+          options={options()}
+          disabled={modelControlsDisabled() || saving() || !props.selection.primary}
+          title={title()}
+          onChange={props.onFallbackChange}
+        />
+        <BehaviorSetting
+          field={"thinking"}
+          view={props}
+          value={props.thinkingLevel ?? ""}
+          options={thinkingOptions()}
+          overridden={props.thinkingOverridden}
+          onChange={props.onThinkingChange}
+          onReset={props.onThinkingReset}
+        />
+        <BehaviorSetting<ReturnType<typeof formatFastModeValue>>
+          field={"fastMode"}
+          view={props}
+          value={fastMode()}
+          options={fastModeOptions()}
+          overridden={props.fastModeOverridden}
+          onChange={(value) => {
+            if (value !== fastMode()) {
+              props.onFastModeChange(fastModeOptionValue(value));
+            }
+          }}
+          onReset={props.onFastModeReset}
         />
         <SettingsRow
           title={
@@ -529,38 +574,6 @@ export function DefaultModels(props: DefaultModelsViewProps) {
             />
           }
         />
-        <FallbackModel
-          label={t("modelProviders.defaults.fallback")}
-          fallbacks={props.selection.fallbacks}
-          primary={props.selection.primary}
-          options={options()}
-          disabled={modelControlsDisabled() || saving() || !props.selection.primary}
-          title={title()}
-          onChange={props.onFallbackChange}
-        />
-        <BehaviorSetting
-          field={"thinking"}
-          view={props}
-          value={props.thinkingLevel ?? ""}
-          options={thinkingOptions()}
-          overridden={props.thinkingOverridden}
-          onChange={props.onThinkingChange}
-          onReset={props.onThinkingReset}
-        />
-        <BehaviorSetting<ReturnType<typeof formatFastModeValue>>
-          field={"fastMode"}
-          view={props}
-          value={fastMode()}
-          options={fastModeOptions()}
-          overridden={props.fastModeOverridden}
-          onChange={(value) => {
-            if (value !== fastMode()) {
-              props.onFastModeChange(fastModeOptionValue(value));
-            }
-          }}
-          onReset={props.onFastModeReset}
-        />
-        <CatalogProgress {...props} />
         {props.canMutate ? renderMutationMessage(props.message) : undefined}
       </div>
     </SettingsSection>

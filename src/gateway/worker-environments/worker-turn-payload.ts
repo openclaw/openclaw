@@ -206,6 +206,7 @@ export async function prepareWorkerAgentRuntimeIdentity(
     } satisfies AgentRuntimeIdentityTokenParams;
   });
   return {
+    capability,
     admittedRunContext,
     operationalRunInstance: admittedRunContext.operationalRunInstance,
     runtimeIdentity,

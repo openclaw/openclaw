@@ -64,6 +64,7 @@ export type BridgeWorkerData = {
   connectTimeoutMs: number;
   lockTimeoutMs: number;
   statementTimeoutMs: number;
+  readOnly?: boolean;
 };
 
 /** Prepare bindings and mutation hints without interpreting quoted text as SQL. */

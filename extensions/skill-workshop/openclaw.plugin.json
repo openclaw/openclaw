@@ -7,6 +7,17 @@
   "name": "Skill Workshop",
   "description": "Learned skills each agent saves from its own work.",
   "agentSkillsDir": "workshop-skills",
+  "activation": {
+    "onStartup": true,
+    "onCommands": [
+      "skills"
+    ]
+  },
+  "contracts": {
+    "tools": [
+      "skill_workshop"
+    ]
+  },
   "uiHints": {
     "autonomous.mode": {
       "label": "Skill Workshop Autonomous Mode",

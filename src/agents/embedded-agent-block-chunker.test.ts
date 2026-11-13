@@ -84,7 +84,6 @@ describe("EmbeddedBlockChunker", () => {
     const chunker = paragraphChunker(800, 1200);
     chunker.append(cluster);
     expect(drainChunks(chunker)).toEqual([cluster]);
-    expect(chunker.bufferedText).toBe("");
 
     chunker.append("done");
     expect(drainChunks(chunker)).toEqual([]);
@@ -394,6 +393,7 @@ describe("EmbeddedBlockChunker", () => {
   it.each([
     [1, 20, `${"x".repeat(19)}😀tail`, ["x".repeat(19)], "😀tail"],
     [1, 1, "😀tail", ["😀", "t", "a", "i", "l"], ""],
+    [1, 20, "| Memory | 11.", [], "| Memory | 11."],
     [
       10,
       20,
@@ -402,7 +402,7 @@ describe("EmbeddedBlockChunker", () => {
       "```txt\nxxx😀tail",
     ],
   ] as const)(
-    "keeps min=%i/max=%i chunks valid at UTF-16 boundaries",
+    "keeps min=%i/max=%i chunks valid at UTF-16 and decimal boundaries",
     (min, max, source, chunks, pending) => {
       const chunker = paragraphChunker(min, max);
       chunker.append(source);

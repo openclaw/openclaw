@@ -63,8 +63,11 @@ export function setMdOcPath(ast: MdAst, path: OcPath, newValue: string): MdAst {
   if (newValue.trim() === "") {
     throw new OcPathEditError("parse-error", "Markdown item fields require a nonblank value");
   }
+  if (item.textLine === null) {
+    throw new OcPathEditError("not-writable");
+  }
   const key = item.kv.key;
-  const offset = sourceLineOffset(ast.raw, item.line);
+  const offset = sourceLineOffset(ast.raw, item.textLine);
   const prefix = new RegExp(`^([\\s\\S]*?${escapeRegExp(item.kv.key)}[ \\t]*:\\s*)`).exec(
     ast.raw.slice(offset),
   )?.[1];
@@ -72,7 +75,7 @@ export function setMdOcPath(ast: MdAst, path: OcPath, newValue: string): MdAst {
     throw new OcPathEditError("unresolved");
   }
   const start = offset + prefix.length;
-  const lastLine = item.line + prefix.split("\n").length + item.kv.value.split("\n").length - 2;
+  const lastLine = item.textLine + prefix.split("\n").length + item.kv.value.split("\n").length - 2;
   const lineEnd = sourceLineOffset(ast.raw, lastLine + 1);
   const ending = ast.raw.slice(start, lineEnd).match(/\r?\n$/)?.[0] ?? "";
   const blockIdx = ast.blocks.indexOf(block);

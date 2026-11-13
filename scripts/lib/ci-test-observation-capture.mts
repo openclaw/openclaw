@@ -2,7 +2,9 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { collectTestObservations } from "./ci-test-observations.mjs";
+import { captureAdaptiveGraphDecision } from "./ci-adaptive-decision.mts";
+import { readCiTestLaunchInputs } from "./ci-test-launch-inputs.mts";
+import { collectTestObservations, compactTestObservations } from "./ci-test-observations.mjs";
 
 const MAX_BYTES = 8 * 1024 * 1024;
 const semanticEnv = [
@@ -105,6 +107,7 @@ export function createCiTestObservationCapture(options: {
     return undefined;
   }
   const startedAt = new Date().toISOString();
+  const launchInputs = readCiTestLaunchInputs(directory);
   const records: string[] = [];
   let bytes = 0;
   let disabled = false;
@@ -114,6 +117,8 @@ export function createCiTestObservationCapture(options: {
         recordedAt: string;
         observations: ReturnType<typeof collectTestObservations>;
         graphInputs: ReturnType<typeof graphInputs>;
+        launchInputs: ReturnType<typeof readCiTestLaunchInputs>;
+        decision: ReturnType<typeof captureAdaptiveGraphDecision>;
       }
     | undefined;
   const warn = () => console.warn("[adaptive-ci] observation export unavailable; tests unchanged");
@@ -175,12 +180,20 @@ export function createCiTestObservationCapture(options: {
             ]),
           };
           const observations = collectTestObservations(records.join("\n"), context);
+          const recordedAt = new Date().toISOString();
           preExecution = {
-            recordedAt: new Date().toISOString(),
+            recordedAt,
             observations,
+            launchInputs,
             graphInputs: options.graphConfiguration
               ? graphInputs(root, options.graphConfiguration, env)
               : null,
+            decision: captureAdaptiveGraphDecision({
+              repositoryRoot: root,
+              observations,
+              env,
+              recordedAt,
+            }),
           };
         }
         if (!preExecution) {
@@ -205,7 +218,7 @@ export function createCiTestObservationCapture(options: {
                 dependencies,
               );
         preparedAt = performance.now();
-        const output = JSON.stringify({
+        const exported = {
           version: 1,
           source: {
             runId: env.GITHUB_RUN_ID ?? null,
@@ -220,13 +233,36 @@ export function createCiTestObservationCapture(options: {
           // Excludes serialization/write, native recording, and cache misses.
           capturePreparationMs: captureMs + preparedAt - started,
           observations,
-        });
+        };
+        let output = JSON.stringify(exported);
+        let omittedDependencies = false;
+        if (kind === "run" && Buffer.byteLength(output) > MAX_BYTES) {
+          output = JSON.stringify({
+            ...exported,
+            observations: compactTestObservations(observations),
+          });
+        }
+        if (kind === "run" && Buffer.byteLength(output) > MAX_BYTES) {
+          // Native indexes can expand far beyond their on-disk size. Keep outcomes usable.
+          for (const invocation of observations.invocations) {
+            for (const file of invocation.files) {
+              file.dependencies = null;
+            }
+          }
+          output = JSON.stringify(exported);
+          omittedDependencies = true;
+        }
         if (Buffer.byteLength(output) > MAX_BYTES) {
           throw new Error("Observation export exceeds the byte limit");
         }
         const target = path.join(directory, "observations.json");
         writeFileSync(`${target}.tmp`, `${output}\n`);
         renameSync(`${target}.tmp`, target);
+        if (omittedDependencies) {
+          console.warn(
+            "[adaptive-ci] dependency export exceeds byte limit; terminal outcomes retained without dependencies",
+          );
+        }
       } catch {
         disabled = true;
         warn();

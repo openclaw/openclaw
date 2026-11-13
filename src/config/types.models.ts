@@ -29,6 +29,9 @@ export type ModelMediaInputConfig = ModelDataMediaInputConfig;
 /** Authentication mode expected by a configured model provider. */
 export type ModelProviderAuthMode = NonNullable<ModelProviderSchemaInput["auth"]>;
 
+/** Display-only provider artwork, resolved by the Gateway asset owner. */
+export type ModelProviderIconConfig = NonNullable<ModelProviderSchemaInput["icon"]>;
+
 export type ModelProviderLocalServiceConfig = NonNullable<ModelProviderSchemaInput["localService"]>;
 
 export type ModelDefinitionConfig = Omit<

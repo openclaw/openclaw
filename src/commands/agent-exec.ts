@@ -293,6 +293,7 @@ export async function agentExecCommand(
           timeout,
           modelFallbacksOverride: fallbacks.length > 0 ? fallbacks : undefined,
           cleanupBundleMcpOnRunEnd: true,
+          cleanupMemoryOnRunEnd: Boolean(temporaryStateDir),
           cleanupCliLiveSessionOnRunEnd: true,
           oneShotCliRun: true,
           operatorDirectRoot: true,

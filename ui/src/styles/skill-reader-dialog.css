@@ -13,7 +13,6 @@
   flex-shrink: 0;
   gap: var(--space-3);
   padding: var(--space-2) var(--skill-reader-inset);
-  border-bottom: 1px solid var(--border);
 }
 
 .skill-reader-dialog .exec-approval-header > .btn--icon {
@@ -51,7 +50,6 @@
   flex-shrink: 0;
   margin-top: 0;
   padding: var(--space-3) var(--skill-reader-inset);
-  border-top: 1px solid var(--border);
 }
 
 .skill-reader-dialog__notice {
@@ -88,4 +86,86 @@
   .exec-approval-card.skill-reader-dialog {
     --skill-reader-inset: var(--space-4);
   }
+}
+
+.skill-library-dialog__source {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  font-family: var(--mono);
+  resize: vertical;
+}
+
+.oc-dialog.skill-reader-dialog > .oc-dialog__body {
+  padding: var(--space-3) var(--overlay-modal-padding) var(--space-2);
+}
+
+.oc-dialog.skill-reader-dialog > .oc-dialog__body:last-child {
+  padding-block-end: var(--overlay-modal-padding);
+}
+
+.oc-dialog.skill-reader-dialog .exec-approval-title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font: inherit;
+}
+
+.skill-detail__panel,
+.skill-detail__key {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.skill-detail__description {
+  display: grid;
+  gap: var(--space-1);
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.skill-detail__description p {
+  margin: 0;
+}
+
+.skill-detail__panel:empty {
+  display: none;
+}
+
+.skill-detail__path {
+  font-family: var(--mono);
+}
+
+.skill-detail__warning-title {
+  margin-block-end: var(--space-1);
+  font-weight: var(--control-ui-font-weight-semibold);
+}
+
+.skill-detail__note {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.skill-library-details {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.skill-library-dialog .oc-dialog__body > p {
+  margin: 0;
+}
+
+.skill-library-details > .settings-disclosure__summary {
+  padding-inline: 0;
+}
+
+.skill-library-details dl {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
 }

@@ -26,6 +26,7 @@ describe("terminal ansi helpers", () => {
     ["ESC compatibility mixed prefixes", ["A\u001B(", "[31mB"]],
     ["trailing ESC before OSC", ["A\u001B", "]0;title\u0007B"]],
     ["OSC with stray ESC before BEL", ["A\u001B]0;title\u001B\u0007", "B"]],
+    ["visible runs around split CSI", ["A\u001B[31m\u001B[", "0mB"]],
   ])("strips chunked %s sequences incrementally", (_label, chunks) => {
     const stripper = new AnsiSequenceStripper();
     expect(chunks.map((chunk) => stripper.write(chunk)).join("") + stripper.finish()).toBe("AB");

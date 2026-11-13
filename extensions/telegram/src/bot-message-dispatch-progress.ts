@@ -83,7 +83,9 @@ export function createProgressState(
     compactToolRuns: true,
     commentaryItalics: false,
     updateOnLineChange: true,
-    shouldStartNow: (line) => typeof line !== "string" && Boolean(line?.toolName),
+    // Tool-log rows start the card; quiet work status keeps the startup delay.
+    shouldStartNow: (line) =>
+      typeof line === "object" && line.kind !== "operation-status" && Boolean(line.toolName),
     update: async (streamText, options) => {
       if (
         config.streamMode === "progress" &&

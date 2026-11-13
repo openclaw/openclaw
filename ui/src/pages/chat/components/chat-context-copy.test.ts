@@ -266,9 +266,11 @@ describe("chat content context copy", () => {
     open(owner.querySelector("code")!);
     document.querySelector<HTMLButtonElement>('[role="menuitem"]')!.click();
     await vi.waitFor(() =>
-      expect(document.querySelector('[role="menuitem"]')?.textContent).toBe("Copy failed"),
+      expect(document.querySelector('[role="menuitem"]')?.textContent).toBe(
+        "Couldn’t copy. Try again.",
+      ),
     );
-    await copy("Copy failed", "literal tool output");
+    await copy("Couldn’t copy. Try again.", "literal tool output");
     Reflect.deleteProperty(document, "execCommand");
   });
 });

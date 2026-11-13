@@ -20,16 +20,16 @@ import {
   type VisitorOnboardingCompareAndSet,
   type VisitorOnboardingUpdate,
 } from "./grant-record.js";
-import { expiryText, visitorInviteResult } from "./invite-result.js";
+import { visitorInviteResult } from "./invite-result.js";
 import type {
   VisitorInviteDetails,
   VisitorListDetails,
   VisitorRevokeDetails,
 } from "./tool-results.js";
 import { grantIdSchema, inviteSchema, parseVisitorInput, revokeSchema } from "./visitor-input.js";
+import { listVisitors } from "./visitor-list.js";
 
 const DAY_MS = 86_400_000;
-const LIST_MAX_CHARS = 12_000;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 type LiveVisitorGrant = {
@@ -385,6 +385,8 @@ export class VisitorAccessService {
         createdAt: previous?.createdAt ?? now,
         expiresAt,
       };
+      // Observe before effects: a completed grant must still settle if authority closes afterward.
+      const accountSeats = await this.policy.readAccountSeats(assertCurrent);
       let gatewayAccess = "";
       await this.policy.update(async (targets) => {
         const entries = await store.entries();
@@ -432,6 +434,7 @@ export class VisitorAccessService {
           : store,
       );
       return visitorInviteResult({
+        accountSeats,
         renewed: previous !== undefined,
         target,
         grant: { ...grant, grantId },
@@ -567,118 +570,24 @@ export class VisitorAccessService {
     }, assertCurrent);
   }
 
-  list(assertCurrent: () => void): Promise<{ text: string; details: VisitorListDetails }> {
-    return this.serialize(async () => {
-      const policy = await this.policy.read(assertCurrent);
-      const policyTargets = policy?.targets ?? [];
-      const targetKeys = new Set(policyTargets.map(visitorTargetKey));
-      const entries = (await this.store.entries()).toSorted((left, right) =>
-        left.key.localeCompare(right.key),
-      );
-      assertCurrent();
-      const managed = new Set(entries.map((entry) => entry.key));
-      const unmanaged = policyTargets
-        .filter((target) => !managed.has(visitorTargetKey(target)))
-        .toSorted((left, right) => visitorTargetKey(left).localeCompare(visitorTargetKey(right)));
-      const { maxVisitors } = this.readLimits();
-      const displayedTargets = [
-        ...entries.map(({ value }) => visitorGrantTarget(value)),
-        ...unmanaged,
-      ].slice(0, maxVisitors);
-      const access = await this.readAccess([
-        ...new Set(displayedTargets.filter((target) => typeof target === "number")),
-      ]);
-      assertCurrent();
-      const missing = entries.filter((entry) => !targetKeys.has(entry.key)).length;
-      const summary = `Visitors: ${entries.length} recorded; ${targetKeys.size} in policy. Drift: ${unmanaged.length} unmanaged, ${missing} missing from policy.`;
-      const lines = [summary];
-      const details: VisitorListDetails = {
-        counts: {
-          recorded: entries.length,
-          inPolicy: targetKeys.size,
-          unmanaged: unmanaged.length,
-          missingFromPolicy: missing,
-        },
-        grants: [],
-        unmanaged: [],
-        omitted: 0,
-      };
-      const rows: Array<
-        | { line: string; grant: VisitorListDetails["grants"][number] }
-        | { line: string; unmanaged: VisitorListDetails["unmanaged"][number] }
-      > = entries.map(({ value: grant }) => {
-        const target = visitorGrantTarget(grant);
-        const profileId = access.profileId(target);
-        const missingFromPolicy = !targetKeys.has(visitorTargetKey(target));
-        const expired = grant.expiresAt !== null && grant.expiresAt <= Date.now();
-        const state = missingFromPolicy
-          ? "MISSING FROM POLICY"
-          : expired
-            ? "EXPIRED; provider cleanup pending"
-            : "managed";
-        const gatewayAccess = access.describe(target);
-        const githubLogin = access.githubLogin(target);
-        const github = `Verified GitHub: ${githubLogin ? `@${githubLogin}` : "unavailable"}`;
-        // Grants recorded before onboarding metadata have no welcome progress until first sign-in.
-        const welcome = grant.onboarding && {
-          state: grant.onboarding.state,
-          ...(grant.onboarding.welcomeSessionKey
-            ? { sessionKey: grant.onboarding.welcomeSessionKey }
-            : {}),
-        };
-        const welcomeText = welcome
-          ? ` | welcome ${welcome.state}${welcome.sessionKey ? ` ${welcome.sessionKey}` : ""}`
-          : "";
-        return {
-          line: `${visitorTargetKey(target)} | ${github}${profileId ? ` | profileId ${profileId}` : ""}${grant.grantId ? ` | grantId ${grant.grantId}` : ""} | invited ${new Date(grant.createdAt).toISOString()} | grant expires ${expiryText(grant.expiresAt)} | ${state}${welcomeText} | ${gatewayAccess}`,
-          grant: {
-            ...(typeof target === "string" ? { email: target } : { githubAccountId: target }),
-            ...(grant.grantId ? { grantId: grant.grantId } : {}),
-            ...(profileId ? { profileId } : {}),
-            ...(githubLogin ? { githubLogin } : {}),
-            invitedAt: new Date(grant.createdAt).toISOString(),
-            expiresAt: grant.expiresAt === null ? null : new Date(grant.expiresAt).toISOString(),
-            state: missingFromPolicy ? "missing_from_policy" : expired ? "expired" : "managed",
-            ...(welcome ? { welcome } : {}),
-            gatewayAccess,
+  list(
+    assertCurrent: () => void,
+    raw: unknown = {},
+  ): Promise<{ text: string; details: VisitorListDetails }> {
+    return this.serialize(
+      () =>
+        listVisitors(raw, {
+          store: this.store,
+          policy: this.policy,
+          readAccess: this.readAccess,
+          readLimits: this.readLimits,
+          assertCurrent: () => {
+            this.assertOpen();
+            assertCurrent();
           },
-        };
-      });
-      rows.push(
-        ...unmanaged.map((target) => {
-          const gatewayAccess = access.describe(target);
-          return {
-            line: `${visitorTargetKey(target)} | UNMANAGED: no grant record; retained until explicit revoke. | ${gatewayAccess}`,
-            unmanaged: {
-              ...(typeof target === "string" ? { email: target } : { githubAccountId: target }),
-              gatewayAccess,
-            },
-          };
         }),
-      );
-      let length = summary.length;
-      let shown = 0;
-      for (const row of rows.slice(0, maxVisitors)) {
-        if (length + row.line.length + 1 > LIST_MAX_CHARS - 120) {
-          break;
-        }
-        lines.push(row.line);
-        if ("grant" in row) {
-          details.grants.push(row.grant);
-        } else {
-          details.unmanaged.push(row.unmanaged);
-        }
-        length += row.line.length + 1;
-        shown++;
-      }
-      if (shown < rows.length) {
-        details.omitted = rows.length - shown;
-        lines.push(
-          `${rows.length - shown} entries omitted by output limits. Inspect the policy; revoke by profileId, grantId, email, or GitHub login.`,
-        );
-      }
-      return { text: lines.join("\n"), details };
-    }, assertCurrent);
+      assertCurrent,
+    );
   }
 
   sweep(): Promise<void> {

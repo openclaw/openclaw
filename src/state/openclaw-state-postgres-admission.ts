@@ -3,6 +3,7 @@ import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-con
 import {
   assertSqliteDatabaseAdmissionWaitActive,
   readSqliteDatabaseAdmissionDeadline,
+  SqliteDatabaseAdmissionTimeoutError,
   withSqliteDatabaseAdmissionWait,
 } from "../infra/sqlite-worker-database-admission-relay.js";
 import { PostgresSchemaAdmissionUnavailableError } from "./openclaw-state-db-schema-version.js";
@@ -48,12 +49,18 @@ export function withPostgresSchemaAdmissionRetry<T>(
         if (canRetry?.() === false || !database.isOpen || database.isTransaction) {
           throw error;
         }
-        if (!getPostgresPhysicalFacts(database, { refresh: true })) {
-          continue;
-        }
         try {
+          if (!getPostgresPhysicalFacts(database, { refresh: true })) {
+            continue;
+          }
           return operation();
         } catch (retryError) {
+          if (
+            retryError instanceof SqliteDatabaseAdmissionTimeoutError &&
+            (performance.now() >= deadline || Date.now() >= deadlineAtMs)
+          ) {
+            throw error;
+          }
           if (
             !(retryError instanceof PostgresSchemaAdmissionUnavailableError) ||
             canRetry?.() === false ||

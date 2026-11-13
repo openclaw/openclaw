@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { flush } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
+import type { ApplicationContext } from "../app/context.ts";
 import { createGatewayHarness, client } from "../app/overlays-access.test-support.ts";
 import { disposeSidebarContextLifecycles } from "../test-helpers/app-sidebar-context-lifecycle.ts";
 import { createContext, createSessions } from "../test-helpers/app-sidebar.ts";
@@ -15,9 +16,9 @@ afterEach(() => {
 
 it.each([
   ["reconnecting", false, true, "Your message needs review"],
-  ["connected", false, false, "Your message wasn’t sent"],
+  ["connected", false, false, "Couldn’t send your message."],
   ["connected", true, true, "Your message needs review"],
-  ["connected", true, false, "Your command failed"],
+  ["connected", true, false, "Couldn’t complete your command."],
 ] as const)("reviews %s command=%s held=%s: %s", (phase, command, held, title) => {
   const request = vi.fn(async () => ({}));
   const harness = createGatewayHarness(client(request));
@@ -47,11 +48,12 @@ it.each([
       activate() {
         throw new Error("not used by renderer");
       },
+      refreshOpenClawId: vi.fn(),
       dismiss: vi.fn(),
       subscribe: () => () => {},
       dispose() {},
     },
-  };
+  } satisfies ApplicationContext;
   const { container } = mountSolid(() =>
     renderSidebarOutboxItem({ entry, onNavigate: navigate }, context),
   );
@@ -65,7 +67,7 @@ it.each([
   expect(tooltip?.content).toContain("review it");
   expect(container.querySelector("p, .sidebar-issues-panel__actions, button")).toBeNull();
   expect(container.querySelector(".sidebar-outbox-row__offline")?.textContent ?? null).toBe(
-    phase === "reconnecting" ? "· Offline" : null,
+    phase === "reconnecting" ? "· Disconnected" : null,
   );
   link.click();
   expect(navigate).toHaveBeenCalledExactlyOnceWith("chat", {

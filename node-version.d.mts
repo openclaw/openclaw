@@ -19,6 +19,7 @@ export const SUPPORTED_NODE_VERSION_RANGE: string;
 export function formatUnsupportedNodeVersionMessage(version: string | null): string;
 export function formatUnsupportedNodeDiagnosticWarning(version: string | null): string;
 export function formatNodeSecurityWarning(value: unknown): string | null;
+export function emitNodeSecurityWarning(value: unknown, write?: (message: string) => void): void;
 export function classifyUnsupportedNodeCommand(
   argv: readonly string[],
 ): "diagnostic" | "update" | null;

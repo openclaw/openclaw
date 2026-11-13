@@ -107,7 +107,7 @@ describe("config form map integrity", () => {
         });
       const getSelect = () =>
         expectElement(
-          container.querySelector<HTMLSelectElement>('select[aria-label="Code Mode"]'),
+          container.querySelector<HTMLSelectElement>('select[aria-label="Code mode"]'),
           "model Code Mode selector",
         );
 
@@ -245,7 +245,7 @@ describe("config form map integrity", () => {
       );
       expectElement(
         Array.from(container.querySelectorAll("button")).find(
-          (button) => button.textContent?.trim() === "Add Entry",
+          (button) => button.textContent?.trim() === "Add",
         ),
         "add entry",
       ).click();
@@ -265,7 +265,7 @@ describe("config form map integrity", () => {
       flush();
       expectElement(
         Array.from(draft.querySelectorAll("button")).find(
-          (button) => button.textContent?.trim() === "Add Entry",
+          (button) => button.textContent?.trim() === "Add entry",
         ),
         "commit entry",
       ).click();
@@ -278,7 +278,7 @@ describe("config form map integrity", () => {
       flush();
       expectElement(
         Array.from(draft.querySelectorAll("button")).find(
-          (button) => button.textContent?.trim() === "Add Entry",
+          (button) => button.textContent?.trim() === "Add entry",
         ),
         "commit valid entry",
       ).click();

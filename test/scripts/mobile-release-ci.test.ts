@@ -321,6 +321,13 @@ describe("mobile release CI tools", () => {
         platform === "ios"
           ? "apps/ios/WatchApp/Notifications.swift"
           : "apps/android/wear/src/main/Notifications.kt";
+      writeFile(seed, "README.md", "Older unrelated history\n");
+      let older = commit(seed, "Repository root");
+      const tree = git(seed, "rev-parse", "HEAD^{tree}");
+      for (let index = 0; index < 300; index++) {
+        older = git(seed, "commit-tree", tree, "-p", older, "-m", `Older change ${index}`);
+      }
+      git(seed, "update-ref", "refs/heads/main", older);
       writeFile(seed, phoneFile, "initial phone\n");
       writeFile(seed, wearFile, "initial watch\n");
       const phoneBaseline = commit(seed, "Initial release");
@@ -360,24 +367,10 @@ describe("mobile release CI tools", () => {
       git(checkout, "fetch", "--no-tags", "origin", "refs/heads/main");
       git(checkout, "merge-base", "--is-ancestor", source, currentMain);
       expect(git(checkout, "rev-parse", "--is-shallow-repository")).toBe("true");
-      const fetched = bash(
-        'git fetch --no-tags --filter=blob:none --unshallow origin "$GITHUB_SHA"',
-        { GITHUB_SHA: source },
-        { cwd: checkout },
-      );
-      expect(fetched.status, fetched.stderr).toBe(0);
-      expect(git(checkout, "rev-parse", "--is-shallow-repository")).toBe("false");
-      expect(git(checkout, "for-each-ref", "--format=%(refname)")).toBe("refs/remotes/origin/main");
-      expect(git(checkout, "rev-parse", "origin/main")).toBe(currentMain);
-      expect(
-        git(checkout, "cat-file", "--batch-all-objects", "--batch-check=%(objectname)"),
-      ).not.toContain(unrelated);
-      expect(git(checkout, "rev-parse", "FETCH_HEAD")).toBe(source);
       const staged = path.join(root, "staged");
       git(checkout, "worktree", "add", "--detach", staged, source);
       for (const { sha, ref } of baselines) {
-        git(staged, "fetch", "--no-tags", "origin", ref);
-        expect(git(staged, "rev-parse", "FETCH_HEAD")).toBe(sha);
+        git(staged, "fetch", "--no-tags", "--filter=blob:none", "--depth=1", "origin", ref);
         const options = {
           platform,
           baseline: sha,
@@ -388,6 +381,12 @@ describe("mobile release CI tools", () => {
         expect(expected.commits).toEqual(["Improve watch notifications", "Improve phone chat"]);
         expect(collectReleaseInventory({ ...options, rootDir: staged })).toEqual(expected);
       }
+      expect(git(staged, "rev-parse", "--is-shallow-repository")).toBe("true");
+      expect(git(checkout, "for-each-ref", "--format=%(refname)")).toBe("refs/remotes/origin/main");
+      expect(git(checkout, "rev-parse", "origin/main")).toBe(currentMain);
+      expect(
+        git(checkout, "cat-file", "--batch-all-objects", "--batch-check=%(objectname)"),
+      ).not.toContain(unrelated);
       expect(git(staged, "rev-parse", "HEAD")).toBe(source);
       expect(git(checkout, "rev-parse", "HEAD")).toBe(source);
       expect(git(staged, "status", "--porcelain")).toBe("");

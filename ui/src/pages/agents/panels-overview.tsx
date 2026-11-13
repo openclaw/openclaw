@@ -37,6 +37,7 @@ import {
   resolveModelPrimary,
 } from "../../lib/agents/display.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
+import type { AgentSettingsAccess } from "../../lib/agents/settings-access.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import { formatThinkingOverrideLabel } from "../../lib/chat/thinking.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -47,14 +48,13 @@ import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import type { AgentsPageView } from "./agents-page-state.ts";
 import { AvatarPicker } from "./avatar-picker.tsx";
-import { AgentConfigButtons, type AgentConfigActions } from "./config-actions.tsx";
 import type { AgentIdentityOutcome } from "./identity-actions.ts";
-import { renderAgentPanelFacts } from "./panel-ui.tsx";
+import { renderAgentPanelFacts, type AgentConfigState } from "./panel-ui.tsx";
 
 registerEnglishCatalog(registerSettingsEnglish);
 
 export function AgentOverview(
-  params: AgentConfigActions &
+  params: AgentConfigState &
     Omit<AgentsPageView["overview"], "modelSelectionPolicy" | "modelCatalogRetired"> &
     Partial<Pick<AgentsPageView["overview"], "modelSelectionPolicy" | "modelCatalogRetired">> &
     Pick<AgentsPageView, "readData"> & {
@@ -64,7 +64,7 @@ export function AgentOverview(
       agentFilesList: AgentsFilesListResult | null;
       agentIdentity: AgentIdentityResult | null;
       canUpdateIdentity: boolean;
-      identitySavePending: boolean;
+      panelAccess: AgentSettingsAccess["panels"];
       onSelectPanel: (panel: AgentsPanel) => void;
     },
 ) {
@@ -258,11 +258,6 @@ export function AgentOverview(
         title={t("agents.identity.title")}
         actions={
           <>
-            <Show when={params.identitySavePending}>
-              <span class="agent-identity-status" role="status">
-                {t("common.saving")}
-              </span>
-            </Show>
             <For
               each={params.readData().identityOutcome ? [params.readData().identityOutcome] : []}
             >
@@ -460,27 +455,38 @@ export function AgentOverview(
             />
           }
         />
-        <SettingsRow
-          title=""
-          description={params.configDirty ? t("agents.overview.unsavedConfig") : undefined}
-          control={
-            <div class="agent-overview__config-actions">
-              <AgentConfigButtons {...params} buttonType="button" />
-            </div>
-          }
-        />
       </SettingsSection>
       <SettingsSection title={t("agents.context.title")}>
-        <SettingsNavRow
-          title={t("agents.context.workspace")}
-          description={<span class="agent-overview__workspace">{context().workspace}</span>}
-          onClick={() => params.onSelectPanel("files")}
-        />
-        <SettingsNavRow
-          title={t("agents.context.skillsFilter")}
-          control={<SettingsValue value={context().skillsLabel} />}
-          onClick={() => params.onSelectPanel("skills")}
-        />
+        <Show
+          when={params.panelAccess.files === "available"}
+          fallback={
+            <SettingsRow
+              title={t("agents.context.workspace")}
+              control={<SettingsValue mono value={context().workspace} />}
+            />
+          }
+        >
+          <SettingsNavRow
+            title={t("agents.context.workspace")}
+            description={<span class="agent-overview__workspace">{context().workspace}</span>}
+            onClick={() => params.onSelectPanel("files")}
+          />
+        </Show>
+        <Show
+          when={params.panelAccess.skills === "available"}
+          fallback={
+            <SettingsRow
+              title={t("agents.context.skillsFilter")}
+              control={<SettingsValue value={context().skillsLabel} />}
+            />
+          }
+        >
+          <SettingsNavRow
+            title={t("agents.context.skillsFilter")}
+            control={<SettingsValue value={context().skillsLabel} />}
+            onClick={() => params.onSelectPanel("skills")}
+          />
+        </Show>
         <Show when={params.agent.thinkingDefault}>
           {(level) => (
             <SettingsRow

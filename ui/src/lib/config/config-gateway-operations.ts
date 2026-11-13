@@ -8,6 +8,7 @@ import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { copyToClipboard } from "../clipboard.ts";
 import { formatUiError, formatUiExternalText } from "../format-error.ts";
+import { isGatewayAccessDeniedError } from "../gateway-errors.ts";
 import { showToast } from "../toast.ts";
 import type { AppliedConfigRefresh } from "./applied-refresh.ts";
 import {
@@ -33,6 +34,7 @@ import {
   markConfigAwaitingApply,
   resolveEditableSnapshotConfig,
   type ConfigGatewayClient,
+  type ConfigReadResult,
   type LoadConfigOptions,
   type RuntimeConfigState,
   type RuntimeConfigGateway,
@@ -87,6 +89,8 @@ export type RuntimeConfigExternalMutationResult<T> =
       ok: false;
       reason: "conflict" | "error" | "rejected" | "suspended" | "unavailable";
       error: string;
+      /** With `saveStatus`: whether the shared save status shows this failure. */
+      reported?: boolean;
     };
 
 export type RuntimeConfigExternalMutationOptions<T = unknown> = {
@@ -97,6 +101,14 @@ export type RuntimeConfigExternalMutationOptions<T = unknown> = {
   shouldRefresh?: (value: T) => boolean;
   /** Select the persisted receipt for independent config.set/config.patch writes. */
   configWriteAck?: (value: T) => ConfigPatchAck;
+  /** Report this write through the shared save status, as an edit of its own. */
+  saveStatus?: ConfigExternalSaveStatus;
+};
+
+/** The owner of the edit answers the status's Retry and Discard. */
+export type ConfigExternalSaveStatus = {
+  retry: () => Promise<unknown>;
+  discard: () => void;
 };
 
 export type ConfigMethod =
@@ -179,6 +191,10 @@ export async function executeConfigExternalMutation<T>(
   let value: T;
   try {
     value = await task(client);
+    if (options.saveStatus && isCurrentConfigConnection(state, client, connectionEpoch)) {
+      // Whatever this write changed, the next read says whether it took effect.
+      markConfigAwaitingApply(state);
+    }
   } catch (error) {
     if (!isCurrentConfigConnection(state, client, connectionEpoch)) {
       return {
@@ -290,7 +306,7 @@ export function refreshConfigAfterMutation(
   });
 }
 
-export async function loadConfigSchema(state: RuntimeConfigState): Promise<Result<void, string>> {
+export async function loadConfigSchema(state: RuntimeConfigState): Promise<ConfigReadResult> {
   const client = state.client;
   if (
     !client ||
@@ -319,7 +335,7 @@ export async function loadConfigSchema(state: RuntimeConfigState): Promise<Resul
         state.configAutoSaveStatus = "error";
       }
     }
-    return failure(message);
+    return { ...failure(message), ...(isGatewayAccessDeniedError(err) ? { denied: true } : {}) };
   } finally {
     if (isCurrentConfigConnection(state, client, connectionEpoch)) {
       state.configSchemaLoading = false;
@@ -334,6 +350,22 @@ export type ConfigSubmission = ConfigSubmittedDraft & {
   rejected?: true;
 };
 export type ConfigSubmissionObserver = (submission: ConfigSubmission) => void;
+
+function persistedConfigReceipt(error: unknown): { ack: ConfigWriteAck; deferred: boolean } | null {
+  return error instanceof GatewayRequestError &&
+    isGatewayProtocolResponseError(error) &&
+    error.gatewayCode === ErrorCodes.UNAVAILABLE &&
+    isRecord(error.details) &&
+    error.details.publication !== "partial" &&
+    error.details.publication !== "complete" &&
+    isConfigWriteAck(error.details.persistedConfig)
+    ? {
+        ack: error.details.persistedConfig,
+        deferred:
+          isRecord(error.details.application) && error.details.application.status === "deferred",
+      }
+    : null;
+}
 
 export async function submitConfigDraft(
   state: RuntimeConfigState,
@@ -424,6 +456,15 @@ export async function submitConfigDraft(
     return true;
   } catch (err) {
     if (isCurrent()) {
+      const persisted = persistedConfigReceipt(err);
+      if (submission && persisted) {
+        onSubmitted?.({ ...submission, ack: persisted.ack });
+        const adoptedStatus = adoptConfigWriteAck(state, submission, persisted.ack);
+        state.configNeedsApply = true;
+        if (adoptedStatus === "conflict") {
+          return false;
+        }
+      }
       const outcome = configMutationFailure(state, err, submittedFormRaw);
       // A response can follow persistence without completing runtime apply.
       // Only a pre-write refusal or confirmed rollback retires the receipt.
@@ -435,7 +476,7 @@ export async function submitConfigDraft(
         onSubmitted?.({ ...submission, rejected: true });
       }
       state.lastError = outcome.message;
-      state.configAutoSaveStatus = outcome.status;
+      state.configAutoSaveStatus = persisted?.deferred ? "deferred" : outcome.status;
     }
     return false;
   } finally {
@@ -548,18 +589,11 @@ export async function patchConfig(
     return true;
   } catch (err) {
     if (isCurrentConfigConnection(state, client, connectionEpoch)) {
-      if (
-        err instanceof GatewayRequestError &&
-        isGatewayProtocolResponseError(err) &&
-        err.gatewayCode === ErrorCodes.UNAVAILABLE &&
-        isRecord(err.details) &&
-        err.details.publication !== "partial" &&
-        err.details.publication !== "complete" &&
-        isConfigWriteAck(err.details.persistedConfig)
-      ) {
+      const persisted = persistedConfigReceipt(err);
+      if (persisted) {
         // This negative response confirms persistence, not runtime application.
-        onSubmitted({ ...submitted, ack: err.details.persistedConfig });
-        const adoptedStatus = adoptConfigWriteAck(state, submitted, err.details.persistedConfig);
+        onSubmitted({ ...submitted, ack: persisted.ack });
+        const adoptedStatus = adoptConfigWriteAck(state, submitted, persisted.ack);
         state.configNeedsApply = true;
         if (adoptedStatus === "conflict") {
           return false;
@@ -567,7 +601,7 @@ export async function patchConfig(
       }
       const outcome = configMutationFailure(state, err);
       state.lastError = outcome.message;
-      state.configAutoSaveStatus = outcome.status;
+      state.configAutoSaveStatus = persisted?.deferred ? "deferred" : outcome.status;
     }
     return false;
   }
@@ -611,15 +645,15 @@ export async function openConfigFile(state: RuntimeConfigState): Promise<void> {
     let message = error;
     if (path) {
       message += (await copyToClipboard(path))
-        ? `\n\nFile path copied to clipboard: ${path}`
-        : `\n\nFile path: ${path}`;
+        ? `\n\n${t("configView.filePathCopied", { path })}`
+        : `\n\n${t("configView.filePath", { path })}`;
     }
     if (isCurrent()) {
       state.lastError = formatUiExternalText(message);
       if (state.configAutoSaveStatus === "rejected") {
         state.configAutoSaveStatus = "error";
       }
-      showToast({ message: state.lastError });
+      showToast({ severity: "error", message: state.lastError });
     }
   };
   try {
@@ -632,12 +666,12 @@ export async function openConfigFile(state: RuntimeConfigState): Promise<void> {
     }
     if (!res.ok) {
       await publishFailure(
-        formatUiExternalText(res.error, "Failed to open config file"),
+        formatUiExternalText(res.error, t("configView.fileOpenFailed")),
         res.path || state.configSnapshot?.path,
       );
       return;
     }
-    showToast({ message: t("configView.fileOpenedOnGateway") });
+    showToast({ severity: "success", message: t("configView.fileOpenedOnGateway") });
   } catch (err) {
     await publishFailure(formatUiError(err), state.configSnapshot?.path);
   }

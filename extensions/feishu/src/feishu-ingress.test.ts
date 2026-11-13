@@ -49,6 +49,7 @@ function createLifecycle(
     onDeferred: vi.fn(),
     onAdoptionFinalizing: vi.fn(),
     onAbandoned: vi.fn(async () => {}),
+    onDropped: vi.fn(async () => {}),
   };
   const transport: FeishuIngressLifecycle = {
     abortSignal: new AbortController().signal,
@@ -205,23 +206,38 @@ describe("Feishu durable ingress", () => {
     });
   });
 
-  it("retains completion so one event_id dispatches only once", async () => {
-    await withQueue(async (queue, startIngress) => {
-      const dispatch = vi.fn(async (data: ReturnType<typeof messageEnvelope>) => {
-        await ingress.resolveLifecycle({ ...data.header, ...data.event })?.onAdopted();
+  it.each(["adopted", "queue-cap-new"] as const)(
+    "retains %s so one event_id dispatches only once",
+    async (outcome) => {
+      await withQueue(async (queue, startIngress) => {
+        const dispatch = vi.fn(async (data: ReturnType<typeof messageEnvelope>) => {
+          const lifecycle = ingress.resolveLifecycle({ ...data.header, ...data.event })!;
+          if (outcome === "adopted") {
+            await lifecycle.onAdopted();
+          } else {
+            await lifecycle.onDropped?.(outcome);
+          }
+          return { kind: "deferred" };
+        });
+        const ingress = startIngress({ queue, dispatch });
+        ingress.start();
+        const envelope = messageEnvelope("evt-completed");
+
+        await ingress.invoke(envelope, { needCheck: false });
+        await ingress.waitForIdle();
+        await ingress.invoke(envelope, { needCheck: false });
+        await ingress.waitForIdle();
+
+        expect(dispatch).toHaveBeenCalledTimes(1);
+        expect(await queue.listClaims()).toEqual([]);
+        if (outcome !== "adopted") {
+          expect(await queue.listFailed?.()).toMatchObject([
+            { id: "evt-completed", reason: outcome },
+          ]);
+        }
       });
-      const ingress = startIngress({ queue, dispatch });
-      ingress.start();
-      const envelope = messageEnvelope("evt-completed");
-
-      await ingress.invoke(envelope, { needCheck: false });
-      await ingress.waitForIdle();
-      await ingress.invoke(envelope, { needCheck: false });
-      await ingress.waitForIdle();
-
-      expect(dispatch).toHaveBeenCalledTimes(1);
-    });
-  });
+    },
+  );
 
   it("admits later same-chat input while retaining a deferred input's claim", async () => {
     await withQueue(async (queue, startIngress) => {
@@ -422,32 +438,54 @@ describe("Feishu durable ingress", () => {
     });
   });
 
-  it("does not reopen adopted transport claims when a logical guard commit fails", async () => {
-    const onReplayCommitError = vi.fn();
-    const replayClaim = createReplayClaim("failing-adoption", async () => {
-      throw new Error("dedupe persistence failed");
-    });
-    const { lifecycle, calls } = createLifecycle({}, replayClaim, { onReplayCommitError });
-
-    await expect(lifecycle?.onAdopted()).resolves.toBeUndefined();
-
-    expect(calls.onAdopted).toHaveBeenCalledTimes(1);
-    expect(calls.onAbandoned).not.toHaveBeenCalled();
-    expect(onReplayCommitError).toHaveBeenCalledWith(
-      expect.objectContaining({ message: "dedupe persistence failed" }),
-    );
-  });
-
-  it("abandons logical claims when transport adoption persistence fails", async () => {
-    const replayClaim = createReplayClaim("transport-adoption-failure");
-    const { lifecycle, calls } = createLifecycle({ onAdopted: failAdoption }, replayClaim);
-
-    await expect(lifecycle?.onAdopted()).rejects.toThrow("queue completion failed");
-
+  it("preserves legacy abandonment without advertising terminal drops", async () => {
+    const replayClaim = createReplayClaim("legacy-drop");
+    const { lifecycle, calls } = createLifecycle({ onDropped: undefined }, replayClaim);
+    expect(lifecycle?.onDropped).toBeUndefined();
+    await lifecycle?.onAbandoned();
+    expect(calls.onAbandoned).toHaveBeenCalledOnce();
+    expect(replayClaim.release).toHaveBeenCalledOnce();
     expect(replayClaim.commit).not.toHaveBeenCalled();
-    expect(replayClaim.release).toHaveBeenCalledTimes(1);
-    expect(calls.onAbandoned).toHaveBeenCalledTimes(1);
   });
+
+  it.each(["onAdopted", "onDropped"] as const)(
+    "does not reopen %s transport claims when a logical guard commit fails",
+    async (outcome) => {
+      const onReplayCommitError = vi.fn();
+      const replayClaim = createReplayClaim("failing-adoption", async () => {
+        throw new Error("dedupe persistence failed");
+      });
+      const { lifecycle, calls } = createLifecycle({}, replayClaim, { onReplayCommitError });
+
+      await expect(lifecycle?.[outcome]?.("queue-cap-old")).resolves.toBeUndefined();
+
+      expect(calls[outcome]).toHaveBeenCalledTimes(1);
+      expect(calls.onAbandoned).not.toHaveBeenCalled();
+      expect(onReplayCommitError).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "dedupe persistence failed" }),
+      );
+    },
+  );
+
+  it.each(["onAdopted", "onDropped", "settle"] as const)(
+    "releases logical claims when transport %s persistence fails",
+    async (outcome) => {
+      const replayClaim = createReplayClaim("transport-adoption-failure");
+      const { lifecycle, settle, calls } = createLifecycle(
+        { [outcome === "settle" ? "onAdopted" : outcome]: failAdoption },
+        replayClaim,
+      );
+      const completion = outcome === "settle" ? settle() : lifecycle?.[outcome]?.("queue-cap-old");
+      await expect(completion).rejects.toThrow("queue completion failed");
+
+      expect(replayClaim.commit).not.toHaveBeenCalled();
+      expect(replayClaim.release).toHaveBeenCalledTimes(1);
+      expect(calls.onAbandoned).toHaveBeenCalledTimes(outcome === "onDropped" ? 0 : 1);
+      if (outcome === "settle") {
+        expect(calls.onAdoptionFinalizing).toHaveBeenCalledOnce();
+      }
+    },
+  );
 
   it("does not adopt while constituent abandonment is in progress", async () => {
     const abandonmentGate = createDeferred<void>();
@@ -470,15 +508,6 @@ describe("Feishu durable ingress", () => {
     expect(calls.onAdopted).not.toHaveBeenCalled();
     expect(replayClaim.commit).not.toHaveBeenCalled();
     expect(replayClaim.release).toHaveBeenCalledTimes(1);
-  });
-
-  it("abandons a gated claim when terminal completion persistence fails", async () => {
-    const { settle, calls } = createLifecycle({ onAdopted: failAdoption });
-
-    await expect(settle()).rejects.toThrow("queue completion failed");
-
-    expect(calls.onAdoptionFinalizing).toHaveBeenCalledTimes(1);
-    expect(calls.onAbandoned).toHaveBeenCalledTimes(1);
   });
 
   it("finalizes gated claims before persisting terminal completion", async () => {

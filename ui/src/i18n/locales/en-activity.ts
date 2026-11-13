@@ -6,7 +6,7 @@ import { en } from "./en.ts";
 const enActivity = {
   activity: {
     images: {
-      failed: "Couldn't load images",
+      failed: "Couldn’t load images. Try again.",
       older: "Older images",
       incomplete: "Images too large to preview here",
     },
@@ -34,7 +34,7 @@ const enActivity = {
     title: "Activity",
     visibleCount: "{visible} of {total}",
     search: "Search",
-    searchPlaceholder: "Filter by activity, summary, run, session",
+    searchPlaceholder: "Filter by activity, summary, reply, or session",
     filters: "Filters",
     toolFilter: "Tool",
     allTools: "All tools",
@@ -43,7 +43,8 @@ const enActivity = {
     expandAll: "Expand all",
     collapseAll: "Collapse all",
     clear: "Clear",
-    empty: "No activity yet. Only activity received while this view is open appears here.",
+    empty: "No activity yet.",
+    emptyDescription: "Activity appears here while this view is open.",
     emptyFiltered: "No activity matches these filters.",
     argumentHiddenOne: "1 argument hidden",
     argumentsHidden: "{count} arguments hidden",
@@ -57,8 +58,8 @@ const enActivity = {
       title: "Active sessions",
       loading: "Loading active sessions…",
       empty: "No active sessions.",
-      disconnected: "Connect to the Gateway to load active sessions.",
-      loadFailed: "Could not load active sessions.",
+      disconnected: "Reconnect to load active sessions.",
+      loadFailed: "Couldn’t load active sessions. Try again.",
       queued: "Queued",
       limit: "Showing {count} of {total} active sessions.",
     },
@@ -261,13 +262,12 @@ const enActivity = {
           description: "The durable projection will load when this browser reconnects.",
         },
         loading: {
-          title: "Loading run inspection",
+          title: "Loading run inspection…",
           description: "Reading the Gateway's retained identity projection…",
         },
         disconnected: {
-          title: "Gateway disconnected",
-          description:
-            "Run identity is durable on the Gateway, but it cannot be read while this browser is disconnected.",
+          title: "Disconnected",
+          description: "Run identity is saved. Reconnect to view it.",
         },
         unauthorized: {
           title: "Operator read access required",
@@ -317,7 +317,7 @@ const enActivity = {
     recapUpdating: "Updating recap…",
     recapStale: "New activity since this recap",
     recapUnavailable: "Recap unavailable",
-    recapRefreshFailed: "Couldn’t refresh recap",
+    recapRefreshFailed: "Couldn’t refresh the recap. Try again.",
     recapRetry: "Retry recap",
     recapUpdated: "Recap updated {time}",
     backToSessions: "Back to sessions",
@@ -325,7 +325,7 @@ const enActivity = {
     agentLabel: "Agent: {value}",
     online: "Online",
     idle: "Idle",
-    offline: "Offline",
+    offline: "Disconnected",
     unknownConnection: "Unknown client",
     connectionDetails: "Connection details · {count}",
     connectionOne: "1 connection",

@@ -18,6 +18,7 @@ import {
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
+import { installNativePluginMockGateway } from "../ui/src/test-helpers/control-ui-plugin-e2e.ts";
 import type { ProjectionFixtureFacts } from "../ui/src/test-helpers/control-ui-projection-fixture-contract.ts";
 import { createControlUiSandboxFixtureServer } from "../ui/src/test-helpers/control-ui-sandbox-fixture-server.ts";
 import { createTeamScaleSidebarListOwner } from "../ui/src/test-helpers/control-ui-sidebar-list-fixture.ts";
@@ -35,6 +36,7 @@ import {
 } from "./lib/control-ui-interaction-scenarios.ts";
 import {
   clipInteractionCpuProfile,
+  collectInteractionStyleSheets,
   summarizeInteractionSelectors,
   summarizeInteractionTrace,
   summarizeLongTaskCpuProfiles,
@@ -879,10 +881,14 @@ try {
               },
             };
             // Keep the same readiness contract with a timeout scaled for intentional throttling.
-            const gateway = await installMockGateway(
+            const installGateway = workboardSource
+              ? installNativePluginMockGateway
+              : installMockGateway;
+            const gateway = await installGateway(
               page,
               { ...fixture, awaitInitialRoster: false },
               {
+                nativeAssetLatencyMs: assetLatencyMs,
                 requestHandlers: {
                   ...defaultRequestHandlers,
                   ...scenario.createRequestHandlers?.(defaultRequestHandlers),
@@ -957,19 +963,7 @@ try {
               };
             }
             if (values["selector-stats"]) {
-              cdp.on(
-                "CSS.styleSheetAdded",
-                ({ header }: { header: InteractionStyleSheet & { styleSheetId: string } }) =>
-                  styleSheets.set(header.styleSheetId, {
-                    sourceURL: header.sourceURL,
-                    origin: header.origin,
-                    title: header.title,
-                    startLine: header.startLine,
-                    startColumn: header.startColumn,
-                  }),
-              );
-              await cdp.send("DOM.enable");
-              await cdp.send("CSS.enable");
+              await collectInteractionStyleSheets(cdp, styleSheets);
             }
             if (trace) {
               cdp.on("Tracing.dataCollected", ({ value }: { value: unknown[] }) =>

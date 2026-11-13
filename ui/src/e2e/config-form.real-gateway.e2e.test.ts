@@ -141,9 +141,9 @@ suite.define(() => {
       try {
         expect((await page.goto(url.toString()))?.status()).toBe(200);
         await waitForControlUiGatewayReady(page);
-        const level = page.getByRole("combobox", { name: "Log Level", exact: true });
+        const level = page.getByRole("combobox", { name: "Log level", exact: true });
         const selected = () => level.locator("option:checked").textContent();
-        await expect.poll(selected).toBe("info");
+        await expect.poll(selected).toBe("Info");
         expect(schemaReceived).toBe(true);
         expect(typeof loadedHash).toBe("string");
         const originalHash = loadedHash;
@@ -163,11 +163,11 @@ suite.define(() => {
         );
 
         hold = "ack";
-        await level.selectOption({ label: "warn" });
+        await level.selectOption({ label: "Warn" });
         await expect.poll(() => Boolean(release)).toBe(true);
         expect(saves).toEqual([{ baseHash: originalHash, level: "warn" }]);
         expect(await level.isEnabled()).toBe(true);
-        await level.selectOption({ label: "error" });
+        await level.selectOption({ label: "Error" });
         releaseHeldFrame();
         // Normal autosaves are silent; observe the existing owner's receipt, read-only.
         await expect
@@ -184,10 +184,10 @@ suite.define(() => {
         expect(await cliJson(["config", "get", "logging.level", "--json"])).toBe("error");
         expect((await page.reload())?.status()).toBe(200);
         await waitForControlUiGatewayReady(page);
-        await expect.poll(selected).toBe("error");
+        await expect.poll(selected).toBe("Error");
 
         hold = "write";
-        await level.selectOption({ label: "debug" });
+        await level.selectOption({ label: "Debug" });
         await expect.poll(() => Boolean(release)).toBe(true);
         // The fixture starts with error. This must be a real revision-changing writer.
         expect(await cliJson(["config", "get", "logging.consoleLevel", "--json"])).toBe("error");
@@ -198,7 +198,11 @@ suite.define(() => {
         await expect.poll(() => indicator.textContent()).toContain("Settings changed elsewhere");
         expect(await cliJson(["config", "get", "logging.level", "--json"])).toBe("error");
         await indicator.getByRole("button", { name: "Reload", exact: true }).click();
-        await expect.poll(selected).toBe("error");
+        await page
+          .getByRole("dialog")
+          .getByRole("button", { name: "Discard changes", exact: true })
+          .click();
+        await expect.poll(selected).toBe("Error");
         expect(await cliJson(["config", "get", "logging.consoleLevel", "--json"])).toBe("warn");
       } finally {
         releaseHeldFrame();

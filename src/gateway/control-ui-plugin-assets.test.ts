@@ -17,6 +17,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import * as userProfileCatalog from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { registerPluginCompilerLifecycleTests } from "./control-ui-plugin-assets.compiler.suite.js";
 import {
   handleControlUiPluginAssetRequest,
   listControlUiPluginCatalog,
@@ -221,6 +222,8 @@ beforeAll(async () => {
   // Compile the real Control UI owner during setup, before the HTTP request deadline starts.
   await import("./control-ui.js");
 });
+
+registerPluginCompilerLifecycleTests(activateFixture);
 
 it("omits settings-only presentations from activation while keeping ordinary plugins", async () => {
   const fixture = activateFixture();
@@ -973,4 +976,26 @@ it("snapshots plugin-relative panel SVGs and falls back without disabling browse
   expect((await reloadControlUiPluginCatalog(fixture.record.id)).plugins[0]).not.toHaveProperty(
     "panelIcon",
   );
+});
+
+it("removes the ID plugin catalog, grants and routes immediately when its Labs switch is off", async () => {
+  await withConfig(async () => {
+    const fixture = activateFixture();
+    fixture.record.id = "openclaw-id-access";
+    setRuntimeConfigSnapshot({ gateway: { openclawId: { enabled: true } } });
+    const entry = (await listControlUiPluginCatalog()).plugins[0]!;
+    expect(entry.pluginId).toBe("openclaw-id-access");
+    const server = assetServer("", AUTH_NONE);
+    await expectStatus(fetchAsset(server, entry.entryUrl), 200);
+    for (const openclawId of [undefined, { enabled: false }]) {
+      setRuntimeConfigSnapshot({ gateway: { openclawId } });
+      const catalog = await listControlUiPluginCatalog();
+      expect(catalog.plugins).toEqual([]);
+      expect(catalog.diagnostics).toEqual([]);
+      expect(listControlUiPluginTabAuthGrants(["operator.read"])).toEqual([]);
+      for (const asset of [entry.entryUrl, ...entry.styles]) {
+        await expectStatus(fetchAsset(server, asset), 404);
+      }
+    }
+  });
 });
