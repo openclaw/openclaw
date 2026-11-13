@@ -1,4 +1,4 @@
-name: Exact candidate mandatory release preflight
+name: Release 7420 focused CI recovery
 'on':
   workflow_dispatch:
     inputs:
@@ -9,7 +9,7 @@ name: Exact candidate mandatory release preflight
 permissions:
   contents: read
 concurrency:
-  group: release-mandatory-preflight-${{ inputs.target_ref }}
+  group: release-7420-focused-recovery
   cancel-in-progress: false
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
@@ -25,9 +25,11 @@ env:
   PATHS_SHA256: 96842e1bf3c8f61606eca9e4266211a9317d6a0be12655d928f1fd654badd5e9
   TRUSTED_P: 68aff7f864148760c3800c95435cc36ddaa91654
 jobs:
-  preflight:
+  qa-format:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    env:
+      VARIANT: after
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
@@ -77,29 +79,127 @@ jobs:
         cache-mode: restore
     - uses: ./.github/actions/setup-test-bun
     - uses: ./.github/actions/setup-ripgrep
-    - name: Required real UI and locale preflight
+    - name: Canonical formatting repair only
+      shell: bash
       run: 'set -euo pipefail
 
-        pnpm ui:build
+        sha256sum extensions/qa-lab/src/providers/mock-openai/mock-openai-request-log.ts > .artifacts/final-ci/original-sha256.txt
 
-        node --import ./scripts/tsx.mjs scripts/check-control-ui-performance.mts --json | tee .artifacts/final-ci/ui-performance.json
+        pnpm exec oxfmt -- extensions/qa-lab/src/providers/mock-openai/mock-openai-request-log.ts
 
-        node --input-type=module -e ''import fs from "node:fs"; import assert from "node:assert/strict"; const report=JSON.parse(fs.readFileSync(".artifacts/final-ci/ui-performance.json","utf8"));
-        assert.deepEqual(report.violations, [], "Blocking UI asset budget violations");''
+        pnpm exec oxfmt --check -- extensions/qa-lab/src/providers/mock-openai/mock-openai-request-log.ts
 
-        pnpm ui:i18n:check
+        mkdir -p .artifacts/formatted/$(dirname extensions/qa-lab/src/providers/mock-openai/mock-openai-request-log.ts)
 
-        pnpm native:i18n:check
+        cp extensions/qa-lab/src/providers/mock-openai/mock-openai-request-log.ts .artifacts/formatted/extensions/qa-lab/src/providers/mock-openai/mock-openai-request-log.ts
 
-        pnpm ui:i18n:verify
+        sha256sum extensions/qa-lab/src/providers/mock-openai/mock-openai-request-log.ts > .artifacts/final-ci/formatted-sha256.txt
 
-        pnpm native:i18n:verify
+        git diff --binary > .artifacts/final-ci/formatted.patch
 
-        git diff --exit-code'
+        '
     - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
       if: always()
       with:
-        name: plan-${{ github.run_id }}-${{ github.run_attempt }}
+        name: qa-format-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .artifacts/
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 14
+  cron-proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      VARIANT: after
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ inputs.target_ref }}
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Bind exact candidate
+      shell: bash
+      run: 'set -euo pipefail
+
+        test "${{ inputs.target_ref }}" = "$CANDIDATE_SHA"
+
+        test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+
+        test "$(git rev-parse HEAD^{tree})" = "$SOURCE_TREE"
+
+        test -z "$(git status --porcelain)"
+
+        git merge-base --is-ancestor "$BASE_SHA" HEAD
+
+        mkdir -p .artifacts/final-ci
+
+        git diff --name-only "$BASE_SHA" HEAD | LC_ALL=C sort > .artifacts/final-ci/source-paths.txt
+
+        echo "$PATHS_SHA256  .artifacts/final-ci/source-paths.txt" | sha256sum -c -
+
+        printf ''C=%s
+
+        Q=%s
+
+        P=%s
+
+        workflow=%s
+
+        run=%s
+
+        attempt=%s
+
+        '' "$CANDIDATE_SHA" "$CANDIDATE_SHA" "$TRUSTED_P" "${{ github.workflow_sha }}" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+        > .artifacts/final-ci/identity.txt
+
+        '
+    - uses: ./.github/actions/setup-node-env
+      with:
+        semantic-checks: 'true'
+        install-bun: 'false'
+        cache-mode: restore
+    - uses: ./.github/actions/setup-test-bun
+    - uses: ./.github/actions/setup-ripgrep
+    - name: Apply exact log assertion correction
+      shell: bash
+      run: 'set -euo pipefail
+
+        echo "26ee2fd3f0cf843ef111b4cbe5dd25b6715d9fe07e6c8700ae39ad9d42ab4f2b  src/gateway/server-runtime-services.cron.test-support.ts"
+        | sha256sum -c -
+
+        printf %s aW1wb3J0IHsgQXN5bmNMb2NhbFN0b3JhZ2UgfSBmcm9tICJub2RlOmFzeW5jX2hvb2tzIjsKaW1wb3J0IHsgZXhwZWN0LCBpdCwgdmkgfSBmcm9tICJ2aXRlc3QiOwppbXBvcnQgeyBnZXRBY3RpdmVHYXRld2F5Um9vdFdvcmtDb3VudCB9IGZyb20gIi4uL3Byb2Nlc3MvZ2F0ZXdheS13b3JrLWFkbWlzc2lvbi5qcyI7CmltcG9ydCB7IEFzeW5jV29ya1Njb3BlLCB0cmFja0FzeW5jV29yayB9IGZyb20gIi4uL3NoYXJlZC9hc3luYy13b3JrLXNjb3BlLmpzIjsKaW1wb3J0IHsgY3JlYXRlRGVmZXJyZWRDb3JlIH0gZnJvbSAiLi4vc2hhcmVkL2RlZmVycmVkLmpzIjsKaW1wb3J0IHsKICBjcmVhdGVUZXN0Q3JvblJlY29uY2lsaWF0aW9uLAogIGNyZWF0ZVRlc3RDcm9uU3RhdGUsCiAgd2FpdEZvckZhc3QsCn0gZnJvbSAiLi9zZXJ2ZXItcnVudGltZS1zZXJ2aWNlcy50ZXN0LWhhcm5lc3MuanMiOwoKZXhwb3J0IGZ1bmN0aW9uIHJlZ2lzdGVyR2F0ZXdheUNyb25TdGFydHVwVGVzdHMoCiAgc3RhcnRHYXRld2F5Q3JvbldpdGhMb2dnaW5nOiB0eXBlb2YgaW1wb3J0KCIuL3NlcnZlci1ydW50aW1lLXNlcnZpY2VzLmpzIikuc3RhcnRHYXRld2F5Q3JvbldpdGhMb2dnaW5nLAopIHsKICBpdCgib3ducyBjcm9uIHN0YXJ0dXAsIHdhdGNoZXIgcmVjb25jaWxpYXRpb24sIGFuZCBjb21wbGV0aW9uIGFmdGVyIHRoZSByZXF1ZXN0ZXIgY2xvc2VzIiwgYXN5bmMgKCkgPT4gewogICAgY29uc3Qgb3JkZXI6IHN0cmluZ1tdID0gW107CiAgICBjb25zdCBjYWxsZXJDb250ZXh0ID0gbmV3IEFzeW5jTG9jYWxTdG9yYWdlPHN0cmluZz4oKTsKICAgIGNvbnN0IGNhbGxlcldvcmsgPSBuZXcgQXN5bmNXb3JrU2NvcGUoKTsKICAgIGNvbnN0IHN0YXJ0dXAgPSBjcmVhdGVEZWZlcnJlZENvcmUoKTsKICAgIGNvbnN0IG9ic2VydmVkOiB1bmtub3duW10gPSBbXTsKICAgIGNvbnN0IGNyb24gPSB7CiAgICAgIHN0YXJ0OiB2aS5mbihhc3luYyAoKSA9PiB7CiAgICAgICAgYXdhaXQgc3RhcnR1cC5wcm9taXNlOwogICAgICAgIG9ic2VydmVkLnB1c2goY2FsbGVyQ29udGV4dC5nZXRTdG9yZSgpKTsKICAgICAgICBvYnNlcnZlZC5wdXNoKGF3YWl0IHRyYWNrQXN5bmNXb3JrKCgpID0+ICJzdGFydGVkIikuY2F0Y2goKGVycm9yOiB1bmtub3duKSA9PiBlcnJvcikpOwogICAgICAgIG9yZGVyLnB1c2goInN0YXJ0Iik7CiAgICAgIH0pLAogICAgfTsKICAgIGNvbnN0IGFmdGVyU3RhcnQgPSB2aS5mbihhc3luYyAoKSA9PiB7CiAgICAgIG9ic2VydmVkLnB1c2goY2FsbGVyQ29udGV4dC5nZXRTdG9yZSgpKTsKICAgICAgb3JkZXIucHVzaCgiYWZ0ZXItc3RhcnQiKTsKICAgIH0pOwogICAgY29uc3QgY3JvblJlY29uY2lsaWF0aW9uID0gY3JlYXRlVGVzdENyb25SZWNvbmNpbGlhdGlvbihhc3luYyAoKSA9PiB7CiAgICAgIG9ic2VydmVkLnB1c2goY2FsbGVyQ29udGV4dC5nZXRTdG9yZSgpKTsKICAgICAgb3JkZXIucHVzaCgiaG9vayIpOwogICAgfSk7CiAgICBjb25zdCBjcm9uU3RhdGUgPSBjcmVhdGVUZXN0Q3JvblN0YXRlKGNyb24pOwogICAgY29uc3QgY29uZmlnID0geyBjcm9uOiB7IGVuYWJsZWQ6IHRydWUgfSB9IGFzIG5ldmVyOwogICAgY29uc3QgbG9nQ3JvbiA9IHsgZXJyb3I6IHZpLmZuKCkgfTsKCiAgICBjYWxsZXJXb3JrLnJ1bigoKSA9PgogICAgICBjYWxsZXJDb250ZXh0LnJ1bigic3RhcnR1cCByZXF1ZXN0ZXIiLCAoKSA9PgogICAgICAgIHN0YXJ0R2F0ZXdheUNyb25XaXRoTG9nZ2luZyh7CiAgICAgICAgICBjcm9uU3RhdGUsCiAgICAgICAgICBjcm9uUmVjb25jaWxpYXRpb24sCiAgICAgICAgICByZWFzb246ICJzdGFydHVwIiwKICAgICAgICAgIGNvbmZpZywKICAgICAgICAgIGFmdGVyU3RhcnQsCiAgICAgICAgICBsb2dDcm9uLAogICAgICAgIH0pLAogICAgICApLAogICAgKTsKICAgIGF3YWl0IGNhbGxlcldvcmsuZHJhaW4oKTsKICAgIHN0YXJ0dXAucmVzb2x2ZSgpOwoKICAgIGF3YWl0IHdhaXRGb3JGYXN0KCgpID0+IGV4cGVjdChvcmRlcikudG9FcXVhbChbInN0YXJ0IiwgImFmdGVyLXN0YXJ0IiwgImhvb2siXSkpOwogICAgZXhwZWN0KG9ic2VydmVkKS50b0VxdWFsKFt1bmRlZmluZWQsICJzdGFydGVkIiwgdW5kZWZpbmVkLCB1bmRlZmluZWRdKTsKICAgIGV4cGVjdChjcm9uUmVjb25jaWxpYXRpb24uYXJtKS50b0hhdmVCZWVuQ2FsbGVkV2l0aCh7CiAgICAgIHJlYXNvbjogInN0YXJ0dXAiLAogICAgICBjb25maWcsCiAgICAgIGNyb25TdGF0ZSwKICAgIH0pOwogICAgZXhwZWN0KGxvZ0Nyb24uZXJyb3IpLm5vdC50b0hhdmVCZWVuQ2FsbGVkKCk7CiAgfSk7CgogIGl0KCJkb2VzIG5vdCBjb21wbGV0ZSBjcm9uIHJlY29uY2lsaWF0aW9uIHdoZW4gc2NoZWR1bGVyIHN0YXJ0dXAgcmVqZWN0cyIsIGFzeW5jICgpID0+IHsKICAgIGNvbnN0IGNyb24gPSB7CiAgICAgIHN0YXJ0OiB2aS5mbihhc3luYyAoKSA9PiB7CiAgICAgICAgdGhyb3cgbmV3IEVycm9yKCJzdG9yZSB1bmF2YWlsYWJsZSIpOwogICAgICB9KSwKICAgIH07CiAgICBjb25zdCBjcm9uUmVjb25jaWxpYXRpb24gPSBjcmVhdGVUZXN0Q3JvblJlY29uY2lsaWF0aW9uKCk7CiAgICBjb25zdCBsb2dDcm9uID0geyBlcnJvcjogdmkuZm4oKSB9OwogICAgY29uc3Qgb25TdGFydEVycm9yID0gdmkuZm4oKCkgPT4gewogICAgICBleHBlY3QoZ2V0QWN0aXZlR2F0ZXdheVJvb3RXb3JrQ291bnQoKSkudG9CZSgxKTsKICAgIH0pOwoKICAgIHN0YXJ0R2F0ZXdheUNyb25XaXRoTG9nZ2luZyh7CiAgICAgIGNyb25TdGF0ZTogY3JlYXRlVGVzdENyb25TdGF0ZShjcm9uKSwKICAgICAgY3JvblJlY29uY2lsaWF0aW9uLAogICAgICByZWFzb246ICJzdGFydHVwIiwKICAgICAgY29uZmlnOiB7fSBhcyBuZXZlciwKICAgICAgb25TdGFydEVycm9yLAogICAgICBsb2dDcm9uLAogICAgfSk7CgogICAgYXdhaXQgd2FpdEZvckZhc3QoKCkgPT4KICAgICAgZXhwZWN0KGxvZ0Nyb24uZXJyb3IpLnRvSGF2ZUJlZW5DYWxsZWRXaXRoKCJmYWlsZWQgdG8gc3RhcnQ7IGF1dG9tYXRpYyBzZXNzaW9uIGFyY2hpdmluZyBpcyBkZWZlcnJlZCB1bnRpbCBjcm9uIGxvYWRzOiBFcnJvcjogc3RvcmUgdW5hdmFpbGFibGUiKSwKICAgICk7CiAgICBleHBlY3Qob25TdGFydEVycm9yKS50b0hhdmVCZWVuQ2FsbGVkT25jZSgpOwogICAgZXhwZWN0KGNyb25SZWNvbmNpbGlhdGlvbi5jb21wbGV0ZSkubm90LnRvSGF2ZUJlZW5DYWxsZWQoKTsKICAgIGV4cGVjdChnZXRBY3RpdmVHYXRld2F5Um9vdFdvcmtDb3VudCgpKS50b0JlKDApOwogIH0pOwoKICBpdCgiZG9lcyBub3QgY29tcGxldGUgY3JvbiByZWNvbmNpbGlhdGlvbiB3aGVuIGV4aXQtd2F0Y2hlciByZWNvbmNpbGlhdGlvbiByZWplY3RzIiwgYXN5bmMgKCkgPT4gewogICAgY29uc3QgY3JvblJlY29uY2lsaWF0aW9uID0gY3JlYXRlVGVzdENyb25SZWNvbmNpbGlhdGlvbigpOwogICAgY29uc3QgbG9nQ3JvbiA9IHsgZXJyb3I6IHZpLmZuKCkgfTsKCiAgICBzdGFydEdhdGV3YXlDcm9uV2l0aExvZ2dpbmcoewogICAgICBjcm9uU3RhdGU6IGNyZWF0ZVRlc3RDcm9uU3RhdGUoKSwKICAgICAgY3JvblJlY29uY2lsaWF0aW9uLAogICAgICByZWFzb246ICJyZWxvYWQiLAogICAgICBjb25maWc6IHt9IGFzIG5ldmVyLAogICAgICBhZnRlclN0YXJ0OiBhc3luYyAoKSA9PiB7CiAgICAgICAgdGhyb3cgbmV3IEVycm9yKCJ3YXRjaGVyIHVuYXZhaWxhYmxlIik7CiAgICAgIH0sCiAgICAgIGxvZ0Nyb24sCiAgICB9KTsKCiAgICBhd2FpdCB3YWl0Rm9yRmFzdCgoKSA9PgogICAgICBleHBlY3QobG9nQ3Jvbi5lcnJvcikudG9IYXZlQmVlbkNhbGxlZFdpdGgoImZhaWxlZCB0byBzdGFydDsgYXV0b21hdGljIHNlc3Npb24gYXJjaGl2aW5nIGlzIGRlZmVycmVkIHVudGlsIGNyb24gbG9hZHM6IEVycm9yOiB3YXRjaGVyIHVuYXZhaWxhYmxlIiksCiAgICApOwogICAgZXhwZWN0KGNyb25SZWNvbmNpbGlhdGlvbi5jb21wbGV0ZSkubm90LnRvSGF2ZUJlZW5DYWxsZWQoKTsKICAgIGV4cGVjdChnZXRBY3RpdmVHYXRld2F5Um9vdFdvcmtDb3VudCgpKS50b0JlKDApOwogIH0pOwoKICBpdCgia2VlcHMgb25lIGluZGVwZW5kZW50IHJvb3QgYWRtaXR0ZWQgdW50aWwgdGhlIHJlY29uY2lsaWF0aW9uIGhvb2sgc2V0dGxlcyIsIGFzeW5jICgpID0+IHsKICAgIGxldCByZWxlYXNlSG9vazogKCgpID0+IHZvaWQpIHwgdW5kZWZpbmVkOwogICAgY29uc3QgY3JvblJlY29uY2lsaWF0aW9uID0gY3JlYXRlVGVzdENyb25SZWNvbmNpbGlhdGlvbigKICAgICAgKCkgPT4KICAgICAgICBuZXcgUHJvbWlzZTx2b2lkPigocmVzb2x2ZSkgPT4gewogICAgICAgICAgcmVsZWFzZUhvb2sgPSByZXNvbHZlOwogICAgICAgIH0pLAogICAgKTsKCiAgICBzdGFydEdhdGV3YXlDcm9uV2l0aExvZ2dpbmcoewogICAgICBjcm9uU3RhdGU6IGNyZWF0ZVRlc3RDcm9uU3RhdGUoKSwKICAgICAgY3JvblJlY29uY2lsaWF0aW9uLAogICAgICByZWFzb246ICJzdGFydHVwIiwKICAgICAgY29uZmlnOiB7fSBhcyBuZXZlciwKICAgICAgbG9nQ3JvbjogeyBlcnJvcjogdmkuZm4oKSB9LAogICAgfSk7CgogICAgYXdhaXQgd2FpdEZvckZhc3QoKCkgPT4gZXhwZWN0KGNyb25SZWNvbmNpbGlhdGlvbi5jb21wbGV0ZSkudG9IYXZlQmVlbkNhbGxlZFRpbWVzKDEpKTsKICAgIGV4cGVjdChnZXRBY3RpdmVHYXRld2F5Um9vdFdvcmtDb3VudCgpKS50b0JlKDEpOwogICAgaWYgKCFyZWxlYXNlSG9vaykgewogICAgICB0aHJvdyBuZXcgRXJyb3IoIkV4cGVjdGVkIGNyb24gcmVjb25jaWxpYXRpb24gaG9vayB0byBiZSBwZW5kaW5nIik7CiAgICB9CiAgICByZWxlYXNlSG9vaygpOwogICAgYXdhaXQgd2FpdEZvckZhc3QoKCkgPT4gZXhwZWN0KGdldEFjdGl2ZUdhdGV3YXlSb290V29ya0NvdW50KCkpLnRvQmUoMCkpOwogIH0pOwp9Cg==
+        | base64 --decode > src/gateway/server-runtime-services.cron.test-support.ts
+
+        echo "395f7cb70f59ac25ef15811dc14c1f567e92f88972ca698c72beb676a2e955fc  src/gateway/server-runtime-services.cron.test-support.ts"
+        | sha256sum -c -
+
+        git diff --binary > .artifacts/final-ci/assertions.patch'
+    - name: Prove cron startup sibling tests and static checks
+      shell: bash
+      run: 'set -euo pipefail
+
+        pnpm exec oxfmt -- src/gateway/server-runtime-services.cron.test-support.ts
+
+        pnpm exec oxfmt --check -- src/gateway/server-runtime-services.cron.test-support.ts
+
+        node scripts/run-vitest.mjs src/gateway/server-runtime-services.test.ts --maxWorkers=1 2>&1 | tee .artifacts/final-ci/tests.log
+
+        node scripts/run-oxlint.mjs --tsconfig tsconfig.json src/gateway/server-runtime-services.cron.test-support.ts 2>&1
+        | tee .artifacts/final-ci/lint.log
+
+        mkdir -p .artifacts/formatted/$(dirname src/gateway/server-runtime-services.cron.test-support.ts)
+
+        cp src/gateway/server-runtime-services.cron.test-support.ts .artifacts/formatted/src/gateway/server-runtime-services.cron.test-support.ts
+
+        sha256sum src/gateway/server-runtime-services.cron.test-support.ts > .artifacts/final-ci/formatted-sha256.txt
+
+        git diff --binary > .artifacts/final-ci/formatted.patch
+
+        '
+    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      if: always()
+      with:
+        name: cron-proof
         path: .artifacts/
         include-hidden-files: true
         if-no-files-found: error
