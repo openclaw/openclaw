@@ -49,6 +49,7 @@ import {
   formatSessionFlagsCell,
   formatSessionKeyCell,
   formatSessionModelCell,
+  formatSessionWorkspaceCell,
   toSessionDisplayRow,
 } from "./sessions-table.js";
 
@@ -514,6 +515,7 @@ export async function sessionsCommand(
         { key: "model", header: "Model" },
         { key: "runtime", header: "Runtime" },
         { key: "tokens", header: "Tokens (ctx %)" },
+        { key: "workspace", header: "Workspace" },
         { key: "flags", header: "Flags", flex: true },
       ].map((column) =>
         Object.assign(column, { header: colorize(rich, theme.heading, column.header) }),
@@ -531,6 +533,7 @@ export async function sessionsCommand(
           row.contextTokens ?? null,
           rich,
         ),
+        workspace: formatSessionWorkspaceCell(row.spawnedWorkspaceDir ?? row.spawnedCwd, rich),
         flags: formatSessionFlagsCell(row, rich),
       })),
     }).trimEnd(),
