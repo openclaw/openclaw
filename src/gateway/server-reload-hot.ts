@@ -267,14 +267,14 @@ export function createGatewayReloadHandlers(
         if (plan.restartCron) {
           assertCronReloadCurrent();
         }
-        // Plugin publication can reject its prepared registry. Keep config and
-        // secret rollback available until that selection succeeds.
+        // Keep config/secret rollback until the prepared plugin registry is accepted.
         publication?.assertInvokerOwned?.();
         if (runtime) {
           runtime.publish();
           params.setState(nextState);
           runtimeCommitted = true;
         }
+        nextConfig = publication ? getRuntimeConfig() : nextConfig;
         if (modelRuntime.required) {
           // Retire model/auth inputs together so requests cannot mix generations.
           preparedModelRuntimeReplacementGateId = markPreparedModelRuntimeSnapshotsStale(
