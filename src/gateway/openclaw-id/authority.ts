@@ -30,7 +30,7 @@ import {
   ROOT_EPOCH,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import { notifyListeners, registerListener } from "../../shared/listeners.js";
-import type { AuthorityAccepted, AuthorityRefusal } from "./authority-result.js";
+import { callerGone, type AuthorityAccepted, type AuthorityRefusal } from "./authority-result.js";
 import { verifyBinding } from "./binding-check.js";
 import {
   needsAllowlistUpgrade,
@@ -354,12 +354,13 @@ export function createOpenClawIdAuthority(
 
     /**
      * Pins R for good, admits owner device D1 and stores the ServerBinding.
-     * Only over direct loopback: relayed traffic never runs a root ceremony.
+     * Only on the `local_operator` ceremony channel: relayed traffic never runs a root
+     * ceremony. `expected.guard` throws once the caller's live ceremony authority is gone.
      */
     commitLink(
       input: LinkCommit,
       channel: Channel | undefined,
-      expected: { kSrv: IrohEndpointKey; kGw: Ed25519PublicKey },
+      expected: { kSrv: IrohEndpointKey; kGw: Ed25519PublicKey; guard?: () => void },
     ): Promise<AuthorityAccepted | AuthorityRefusal> {
       return serialize(async () => {
         if (channel !== "local_operator") {
@@ -381,13 +382,16 @@ export function createOpenClawIdAuthority(
         if (!added.ok) {
           return { ok: false, code: added.code, detail: added.detail };
         }
-        const binding = await verifyBinding(
-          added.state,
-          input.binding,
-          current,
-          { ...expected, bindingSeq: 1 },
-          now,
-        );
+        // The caller's live ceremony authority, last checked inside this serialized write.
+        const binding =
+          callerGone(expected.guard) ??
+          (await verifyBinding(
+            added.state,
+            input.binding,
+            current,
+            { ...expected, bindingSeq: 1 },
+            now,
+          ));
         if (!binding.ok) {
           return binding;
         }

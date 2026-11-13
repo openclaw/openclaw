@@ -752,11 +752,15 @@ export function createOpenClawIdService(params: {
 
     checkClawName,
 
-    /** Step 2: pin fp(R), admit owner device D1, store the binding, then publish. */
+    /**
+     * Step 2: pin fp(R), admit owner device D1, store the binding, then publish.
+     * `guard` throws once the caller's live ceremony authority is gone; checked before the write.
+     */
     async commitLink(
       channel: Channel | undefined,
       input: LinkCommit,
       enrollmentCode?: string,
+      guard?: () => void,
     ): Promise<(AuthorityAccepted & { publication?: PublishOutcome }) | AuthorityRefusal> {
       const kSrv = runningServerKey();
       if (!kSrv) {
@@ -766,7 +770,7 @@ export function createOpenClawIdService(params: {
       // A link write can persist and then lose both its acknowledgement and reconciliation.
       // Retain the running identity before awaiting settlement, not only after success.
       lastBoundEndpointKey = kSrv;
-      const result = await (await getAuthority()).commitLink(input, channel, { kSrv, kGw });
+      const result = await (await getAuthority()).commitLink(input, channel, { kSrv, kGw, guard });
       if (!result.ok) {
         return result;
       }
