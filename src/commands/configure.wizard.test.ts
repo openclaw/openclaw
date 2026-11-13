@@ -1,4 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  applyChannelAccountDeleteFollowUp,
+  splitChannelAccountDelete,
+} from "../channels/plugins/account-delete-follow-up.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { ConfigMutationConflictError } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -11,6 +15,13 @@ import {
   setupBaseWizardTestState as setupBaseWizardState,
   wizardTestMocks as mocks,
 } from "./configure.wizard.test-support.js";
+
+const followUpMocks = vi.hoisted(() => ({
+  persistAccountDeleteFollowUp: vi.fn(),
+}));
+
+// mock-isolation: Follow-up writes use real config IO, covered in account-delete-persistence.test.ts.
+vi.mock("./channels/account-delete-persistence.js", () => followUpMocks);
 
 const { configureCommandFromSectionsArg } = await import("./configure.commands.js");
 
@@ -230,6 +241,45 @@ describe("runConfigureWizard", () => {
     expect(hook).toHaveBeenCalledOnce();
     expect(mocks.writeConfigFile.mock.invocationCallOrder[0]!).toBeLessThan(
       hook.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("writes a channel delete's other changes to the committed file and adopts them", async () => {
+    const bindings = [{ agentId: "main", match: { channel: "telegram", accountId: "team" } }];
+    agentConfig({
+      channels: { telegram: { botToken: "tok-base", accounts: { team: {} } } },
+      bindings,
+    } as OpenClawConfig);
+    mocks.setupChannels.mockImplementationOnce(async (config, _runtime, _prompter, options) => {
+      const deleted = { ...config, channels: { telegram: { botToken: "tok-base" } } };
+      delete deleted.bindings;
+      const removed = splitChannelAccountDelete({ cfg: config, nextConfig: deleted });
+      options?.onAccountDeleteFollowUp?.(removed.followUp!);
+      return removed.config;
+    });
+    followUpMocks.persistAccountDeleteFollowUp.mockImplementationOnce(
+      async (followUp, _path, _runtime, configs: OpenClawConfig[]) => {
+        for (const config of configs) {
+          applyChannelAccountDeleteFollowUp(config, followUp);
+        }
+        return true;
+      },
+    );
+
+    await runConfigureWizard({ sections: ["channels"] });
+
+    expect(written()).toMatchObject({ channels: { telegram: { botToken: "tok-base" } }, bindings });
+    expect(written().channels?.telegram?.accounts).toBeUndefined();
+    const [followUp, configPath, , configs] =
+      followUpMocks.persistAccountDeleteFollowUp.mock.calls[0]!;
+    expect(followUp.paths).toEqual(["bindings"]);
+    expect(configPath).toBe("/tmp/openclaw.json");
+    expect(configs.map((config: OpenClawConfig) => config.bindings)).toEqual([
+      undefined,
+      undefined,
+    ]);
+    expect(mocks.writeConfigFile.mock.invocationCallOrder.at(-1)!).toBeLessThan(
+      followUpMocks.persistAccountDeleteFollowUp.mock.invocationCallOrder[0]!,
     );
   });
 

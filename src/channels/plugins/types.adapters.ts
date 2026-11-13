@@ -79,6 +79,14 @@ export type ChannelAccountLinkState = "linked" | "not-linked" | "unknown";
 
 export type ChannelConfigAdapter<ResolvedAccount> = {
   listAccountIds: (cfg: OpenClawConfig) => string[];
+  /**
+   * Whether the channel still serves a listed named account id from its configuration: its own
+   * account entry, or channel-level settings it intentionally serves the id with. Return false
+   * for ids listed only because another config surface, such as a routing binding, still names
+   * them. Called synchronously with a normalized id; throwing or any non-true result refuses.
+   * Omit when every listed id is served.
+   */
+  hasAccountConfig?: (cfg: OpenClawConfig, accountId: string) => boolean;
   resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) => ResolvedAccount;
   /** Operational account preparation; preferred over the synchronous compatibility hook. */
   resolveAccountAsync?: (
@@ -92,6 +100,12 @@ export type ChannelConfigAdapter<ResolvedAccount> = {
     accountId: string;
     enabled: boolean;
   }) => OpenClawConfig;
+  /**
+   * Returns the config without the account. `channels remove --delete` and `openclaw configure`
+   * save the changes under `channels` first. Any other change (such as bindings for the account)
+   * follows in a second write. That write is skipped when the delete or those values changed
+   * meanwhile; when it is skipped or fails, the delete is kept and the user is warned.
+   */
   deleteAccount?: (params: { cfg: OpenClawConfig; accountId: string }) => OpenClawConfig;
   isEnabled?: (account: ResolvedAccount, cfg: OpenClawConfig) => boolean;
   disabledReason?: (account: ResolvedAccount, cfg: OpenClawConfig) => string;

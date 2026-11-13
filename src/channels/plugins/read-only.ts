@@ -336,6 +336,7 @@ function rebindChannelPluginConfig(
   return {
     ...config,
     listAccountIds: withConfig(config.listAccountIds),
+    hasAccountConfig: withConfig(config.hasAccountConfig),
     resolveAccount: withConfig(config.resolveAccount),
     resolveAccountAsync: withConfig(config.resolveAccountAsync),
     inspectAccount: withConfig(config.inspectAccount),
