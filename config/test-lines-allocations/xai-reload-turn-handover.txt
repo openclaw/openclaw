@@ -1,0 +1,2 @@
+5
+# xAI reload turn handover: manifest declares reload.turnHandover so a reload does not wait for whole running turns.
