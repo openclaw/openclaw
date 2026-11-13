@@ -13,6 +13,7 @@ import { ignoreMissingPath } from "./errno.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import type { EngineConnection } from "./sql-connection.js";
+import { SCHEMA_DISCOVERY_OWNERSHIP_FILENAME } from "./sqlite-snapshot-retirement.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
 import {
   StateDatabaseDiscoverySchema,
@@ -22,7 +23,6 @@ import {
 } from "./update-candidate-paths.js";
 import type { UpdateCandidateBundledSource } from "./update-candidate-plugins.js";
 
-const SCHEMA_DISCOVERY_OWNERSHIP_FILENAME = "schema-discovery-ownership.json";
 const StateSchemaDiscoveryOwnershipSchema = z.record(
   z.string(),
   StateDatabaseDiscoverySchema.pick({ owners: true, registeredPaths: true }),
