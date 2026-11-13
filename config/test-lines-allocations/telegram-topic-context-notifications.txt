@@ -1,0 +1,3 @@
+116
+# Source b872638d295edc8bd050600a0b00bfdf7a7f26c7; extensions/telegram/src/message-cache.ts readNodes, around and buildTelegramConversationContext topic/root guards together. Independently carry cron notification-intents.ts owner snapshot/queue route and timer-outcomes.ts parent-gone owner fallback only where retained. Preserve explicit replies and selected-message semantics.
+# Exact net LF growth of independently justified retained regressions against frozen LOCAL11.8 baseline; no removed assertions or scalar change.
