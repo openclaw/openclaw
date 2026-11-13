@@ -388,7 +388,7 @@ export function terminateBrokerProcessGroup(pgid: number) {
     phase = "SIGKILL";
     clearTimeout(forceTimer);
     try {
-      process.kill(-pgid, phase);
+      process.kill(-pgid, phase); // nosemgrep: security.opengrep.ghsa-jfv4-h8mc-jcp8.immediate-process-tree-sigkill -- Private broker group; synchronous process-exit cleanup cannot await grace.
     } catch (error) {
       if (isDeniedProcessGroupProbe(error, phase)) {
         denied = error;

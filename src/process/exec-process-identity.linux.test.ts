@@ -49,7 +49,7 @@ function observeChild() {
     output: () => output,
     killRemainingFixture: () => {
       if (child?.pid && isChildProcessTreeAlive(child)) {
-        process.kill(-child.pid, "SIGKILL");
+        process.kill(-child.pid, "SIGKILL"); // nosemgrep: security.opengrep.ghsa-jfv4-h8mc-jcp8.immediate-process-tree-sigkill -- Test-owned group; last-resort cleanup follows abort and settlement.
       }
     },
   };
