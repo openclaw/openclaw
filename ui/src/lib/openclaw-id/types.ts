@@ -27,8 +27,15 @@ export type OpenClawIdStatusResult = {
     hostname?: string;
     rootPub?: string;
   };
-  /** How this browser reaches the Gateway: only `local_operator` may link. */
+  /** How this browser reaches the Gateway: direct loopback, the OpenClaw ID tunnel, or neither. */
   channel: "local_operator" | "tunnel" | null;
+  /**
+   * Whether this connection may turn on remote access: the loopback operator, an admin with
+   * a verified personal identity, or neither.
+   */
+  remoteAccessSetup: "local" | "personal_admin" | null;
+  /** The publication at Discovery, for a personal admin who is not an owner. */
+  publication?: OpenClawIdPublication;
   /**
    * How this connection signs in with OpenClaw ID: the loopback popup, the device grant
    * (a verified personal sign-in such as Tailscale), or not at all.

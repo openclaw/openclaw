@@ -4,16 +4,18 @@ import type { Ed25519PublicKey } from "../../../packages/openclaw-id-protocol/sr
 import { isEd25519PublicKey } from "../../../packages/openclaw-id-protocol/src/index.js";
 import { isOpenClawIdEnabled } from "../../shared/openclaw-id-policy.js";
 // OpenClaw ID remote access methods. The root ceremony (the link ceremony "Make
-// reachable") runs only for a direct-loopback client;
-// relayed clients can read status and send owner-signed membership changes, which
-// the authority verifies itself. Status is the same small summary for every client;
-// people, devices and activity come only from openclawId.people, for an owner.
+// reachable") runs for the direct-loopback operator or an admin with a verified personal
+// identity (openclaw-id-remote-access.ts); relayed clients never run it. They can read
+// status and send owner-signed membership changes, which the authority verifies itself.
+// Status is the same small summary for every client; people, devices and activity come only
+// from openclawId.people, for an owner.
 import { VERSION } from "../../version.js";
 import {
   createOpenClawIdSignIn,
   type OpenClawIdSignIn,
   type OpenClawIdSignInRefusal,
 } from "../openclaw-id/account-sign-in.js";
+import type { AuthorityRefusal } from "../openclaw-id/authority-result.js";
 import {
   resolveOpenClawIdClientChannel,
   resolveOpenClawIdClientPeerKey,
@@ -24,6 +26,12 @@ import { decodeInviteProofKey } from "../openclaw-id/invites-view.js";
 import { resolveOpenClawIdOwnerAccount } from "../openclaw-id/owner-account.js";
 import type { OpenClawIdService } from "../openclaw-id/service.js";
 import { hasCurrentPersonalGatewaySource } from "./gateway-personal-caller.js";
+import {
+  auditRemoteAccessSetup,
+  prepareRemoteAccessSetup,
+  resolveRemoteAccessSetupRoute,
+  type RemoteAccessSetup,
+} from "./openclaw-id-remote-access.js";
 import { preparePersonalProfileAction } from "./personal-profile-authorization.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 
@@ -87,12 +95,132 @@ function respondSignIn(
   opts.respond(true, result);
 }
 
+// Whether a ceremony caller's authority is still live.
+function isCurrent(setup: RemoteAccessSetup): boolean {
+  try {
+    setup.assertCurrent();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Runs a guarded ceremony write; a write the caller's lost authority stopped becomes a refusal.
+async function guarded<T>(
+  setup: RemoteAccessSetup,
+  run: () => Promise<T>,
+): Promise<T | AuthorityRefusal> {
+  try {
+    return await run();
+  } catch (error) {
+    if (!isCurrent(setup)) {
+      return { ok: false, code: "not_admin", detail: "this connection changed" };
+    }
+    throw error;
+  }
+}
+
+function refuseChanged(
+  opts: GatewayRequestHandlerOptions,
+  action: string,
+  setup: RemoteAccessSetup,
+) {
+  auditRemoteAccessSetup(opts, { action, setup, outcome: "denied", code: "not_admin" });
+  refuse(opts, { code: "not_admin", detail: "this connection changed" });
+}
+
+// Admits a step of Turn on remote access (check_name, prepare, commit), or refuses and
+// records the refusal.
+async function admitCeremony(
+  opts: GatewayRequestHandlerOptions,
+  action: string,
+): Promise<RemoteAccessSetup | undefined> {
+  const setup = await prepareRemoteAccessSetup(opts);
+  if ("ok" in setup) {
+    auditRemoteAccessSetup(opts, { action, setup: null, outcome: "denied", code: setup.code });
+    refuse(opts, setup);
+    return undefined;
+  }
+  return setup;
+}
+
+// A Discovery link code for the browser's signed-in account, so Turn on remote access and
+// Publish new keys need no pasted code. Only for a caller that may run the ceremony.
+async function handleLinkCode(
+  opts: GatewayRequestHandlerOptions,
+  discoveryUrl: string | undefined,
+  idToken: unknown,
+) {
+  const setup = await admitCeremony(opts, "link_code");
+  if (!setup) {
+    return;
+  }
+  if (!discoveryUrl) {
+    refuse(opts, { code: "unconfigured", detail: "set discoveryUrl to get a link code" });
+    return;
+  }
+  try {
+    const code = await accountSignIn.enrollmentCode({ discoveryUrl, idToken });
+    if (!isCurrent(setup)) {
+      refuseChanged(opts, "link_code", setup);
+      return;
+    }
+    const failed = "ok" in code ? code.code : undefined;
+    auditRemoteAccessSetup(opts, {
+      action: "link_code",
+      setup,
+      outcome: failed ? "failure" : "success",
+      ...(failed ? { code: failed } : {}),
+    });
+    respondSignIn(opts, code);
+  } catch (error) {
+    opts.respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.UNAVAILABLE, `OpenClaw ID sign-in failed: ${String(error)}`),
+    );
+  }
+}
+
+// After a personal admin's commit: links the OpenClaw ID this browser signed in with (a
+// sign-in this Gateway redeemed for the same profile, verifyHeldOpenClawIdSignIn from OCF-530)
+// to the admin's profile, so their owner devices arrive as them, and keeps its display claims
+// for the claw. Both sides are proven on this one connection, so there is no picker. The claw
+// stays linked whatever this returns: "linked", or why the profile was not linked.
+async function linkRunnerProfile(
+  opts: GatewayRequestHandlerOptions,
+  service: OpenClawIdService,
+  setup: RemoteAccessSetup,
+  idToken: unknown,
+): Promise<string> {
+  const held = verifyHeldOpenClawIdSignIn(opts, idToken);
+  if ("ok" in held) {
+    return held.code;
+  }
+  if (held.owner !== setup.profileId) {
+    return "not_admin";
+  }
+  try {
+    setup.assertCurrent();
+    await service.recordVerifiedAccount(held.account);
+    const { linkCanonicalOpenClawIdUserProfile } =
+      await import("../../state/user-profile-openclaw-id.js");
+    const linked = await linkCanonicalOpenClawIdUserProfile(
+      { profileId: held.owner, accountId: held.account.sub, email: held.account.email },
+      { assertCurrent: setup.assertCurrent },
+    );
+    return linked.ok ? "linked" : linked.code;
+  } catch {
+    return "not_admin";
+  }
+}
+
 // The Control UI's OpenClaw ID account on the direct-loopback operator, by action:
 // - account_begin: PKCE authorization URL for the sign-in popup (redirectUri
 //   ends with /openclaw-id/callback on the Control UI origin);
 // - account_complete: redeems the popup's code once; returns the account and ID token;
 // - account_link_code: a Discovery link code for the signed-in account, so Make
-//   reachable needs no pasted code.
+//   reachable needs no pasted code. Also for a personal admin (handleLinkCode).
 // Personal connections sign in through openclawId.account instead (handleDeviceAccount).
 async function handleAccount(opts: GatewayRequestHandlerOptions, action: string) {
   const config = opts.context.getRuntimeConfig().gateway?.openclawId;
@@ -102,6 +230,10 @@ async function handleAccount(opts: GatewayRequestHandlerOptions, action: string)
   }
   const route = resolveOpenClawIdSignInRoute(opts.client);
   const params = isRecord(opts.params) ? opts.params : {};
+  if (action === "account_link_code") {
+    await handleLinkCode(opts, config.discoveryUrl, params.idToken);
+    return;
+  }
   if (route !== "popup") {
     refuse(opts, {
       code: "not_local_operator",
@@ -136,20 +268,6 @@ async function handleAccount(opts: GatewayRequestHandlerOptions, action: string)
           state: params.state,
           code: params.code,
           onVerifiedAccount: (account) => service.recordVerifiedAccount(account),
-        }),
-      );
-      return;
-    }
-    if (action === "account_link_code") {
-      if (!config.discoveryUrl) {
-        refuse(opts, { code: "unconfigured", detail: "set discoveryUrl to get a link code" });
-        return;
-      }
-      respondSignIn(
-        opts,
-        await accountSignIn.enrollmentCode({
-          discoveryUrl: config.discoveryUrl,
-          idToken: params.idToken,
         }),
       );
       return;
@@ -394,8 +512,19 @@ export const openclawIdHandlers: GatewayRequestHandlers = {
       resolveOpenClawIdClientPeerKey(opts.client),
     );
     const link = await service.linkSummary();
+    // Who may turn on remote access here; a personal admin who is not an owner also sees the
+    // publication, for Publish new keys.
+    const remoteAccessSetup = resolveRemoteAccessSetupRoute(opts.client);
+    const setup =
+      remoteAccessSetup === "personal_admin" && link.linked && !ownerCheck()
+        ? await prepareRemoteAccessSetup(opts)
+        : undefined;
+    const publication =
+      setup && !("ok" in setup) ? (await service.linkStatus()).publication : undefined;
     const owner = ownerCheck();
     opts.respond(true, {
+      remoteAccessSetup,
+      ...(publication && setup && !("ok" in setup) && isCurrent(setup) ? { publication } : {}),
       status: service.status(),
       link,
       channel: resolveOpenClawIdClientChannel(opts.client) ?? null,
@@ -441,10 +570,14 @@ export const openclawIdHandlers: GatewayRequestHandlers = {
   },
 
   // Writes to the membership authority, by action:
-  // - check_name / prepare / commit: the local link ceremony ("Make reachable"),
-  //   direct loopback only. check_name and prepare take the owner's link code and
-  //   claw name; Discovery assigns the address "<name>-<account tag>.<domain>";
-  // - publish: (re)publish to Discovery, optionally with an enrollment code;
+  // - check_name / prepare / commit: the link ceremony ("Turn on remote access"), for the
+  //   direct-loopback operator or an admin with a verified personal identity, never over
+  //   the tunnel (openclaw-id-remote-access.ts). check_name and prepare take the owner's
+  //   link code and claw name; Discovery assigns the address "<name>-<account tag>.<domain>".
+  //   A personal admin's commit also takes `idToken` and links that OpenClaw ID to their
+  //   profile. Every step is audit-logged with who ran it and over which identity;
+  // - publish: (re)publish to Discovery, optionally with an enrollment code, for an owner
+  //   or a caller who may turn on remote access;
   // - submit: an owner-signed statement (MembershipChange, Revocation, root
   //   re-certification of a known device) sent directly over the tunnel or loopback.
   //   The authority verifies signature, capability and seq; the mailbox never
@@ -483,38 +616,72 @@ export const openclawIdHandlers: GatewayRequestHandlers = {
       enrollmentCode: optionalCode(params.enrollmentCode),
       name: optionalCode(params.name),
     };
-    if (params.action === "check_name") {
-      const result = await service.checkClawName(channel, nameRequest);
+    if (params.action === "check_name" || params.action === "prepare") {
+      const action = params.action;
+      const setup = await admitCeremony(opts, action);
+      if (!setup) {
+        return;
+      }
+      const result =
+        action === "check_name"
+          ? await service.checkClawName(setup.channel, nameRequest)
+          : await guarded(setup, () =>
+              service.prepareLink(setup.channel, { ...nameRequest, guard: setup.assertCurrent }),
+            );
       if ("ok" in result) {
+        auditRemoteAccessSetup(opts, {
+          action,
+          setup,
+          outcome: result.code === "not_admin" ? "denied" : "failure",
+          code: result.code,
+        });
         refuse(opts, result);
         return;
       }
-      opts.respond(true, result);
-      return;
-    }
-    if (params.action === "prepare") {
-      const result = await service.prepareLink(channel, nameRequest);
-      if ("ok" in result) {
-        refuse(opts, result);
+      if (!isCurrent(setup)) {
+        refuseChanged(opts, action, setup);
         return;
+      }
+      if (action === "prepare") {
+        auditRemoteAccessSetup(opts, { action, setup, outcome: "success" });
       }
       opts.respond(true, result);
       return;
     }
     if (params.action === "publish") {
-      // Publication results name the owner account, so only a current owner may publish.
+      // Publication results name the owner account: a current owner, or someone who may turn
+      // on remote access (publishing new keys with a link code is part of that ceremony).
       const ownerCheck = await service.prepareOwnerClientCheck(
         channel,
         resolveOpenClawIdClientPeerKey(opts.client),
       );
-      if (!ownerCheck()) {
+      const prepared = ownerCheck() ? undefined : await prepareRemoteAccessSetup(opts);
+      const setup = prepared && !("ok" in prepared) ? prepared : undefined;
+      const allowed = () => ownerCheck() || (setup !== undefined && isCurrent(setup));
+      if (!allowed()) {
+        if (prepared && "ok" in prepared) {
+          auditRemoteAccessSetup(opts, {
+            action: "publish",
+            setup: null,
+            outcome: "denied",
+            code: prepared.code,
+          });
+        }
         refuse(opts, { code: "not_owner", detail: "only an owner device of this claw publishes" });
         return;
       }
       const publication = await service.publish(optionalCode(params.enrollmentCode));
-      if (!ownerCheck()) {
+      if (!allowed()) {
         refuse(opts, { code: "not_owner", detail: "only an owner device of this claw publishes" });
         return;
+      }
+      if (setup) {
+        auditRemoteAccessSetup(opts, {
+          action: "publish",
+          setup,
+          outcome: publication?.state === "failed" ? "failure" : "success",
+          ...(publication?.state === "failed" ? { code: publication.code } : {}),
+        });
       }
       opts.respond(true, { publication: publication ?? null });
       return;
@@ -601,20 +768,50 @@ export const openclawIdHandlers: GatewayRequestHandlers = {
       refuse(opts, { code: "malformed", detail: "rootPub, ownerDevice and binding are required" });
       return;
     }
-    const result = await service.commitLink(
-      channel,
-      {
-        // SAFETY: checked by isEd25519PublicKey above.
-        root_pub: params.rootPub as Ed25519PublicKey,
-        owner_device: params.ownerDevice,
-        binding: params.binding,
-      },
-      optionalCode(params.enrollmentCode),
+    const setup = await admitCeremony(opts, "commit");
+    if (!setup) {
+      return;
+    }
+    const result = await guarded(setup, () =>
+      service.commitLink(
+        setup.channel,
+        {
+          // SAFETY: checked by isEd25519PublicKey above.
+          root_pub: params.rootPub as Ed25519PublicKey,
+          owner_device: params.ownerDevice,
+          binding: params.binding,
+        },
+        optionalCode(params.enrollmentCode),
+        setup.assertCurrent,
+      ),
     );
     if (!result.ok) {
+      auditRemoteAccessSetup(opts, {
+        action: "commit",
+        setup,
+        outcome: result.code === "not_admin" ? "denied" : "failure",
+        code: result.code,
+      });
       refuse(opts, result);
       return;
     }
-    opts.respond(true, { linked: true, publication: result.publication ?? null });
+    auditRemoteAccessSetup(opts, { action: "commit", setup, outcome: "success" });
+    const profileLink =
+      setup.route === "personal_admin"
+        ? await linkRunnerProfile(opts, service, setup, params.idToken)
+        : null;
+    if (profileLink) {
+      auditRemoteAccessSetup(opts, {
+        action: "link_profile",
+        setup,
+        outcome: profileLink === "linked" ? "success" : "failure",
+        ...(profileLink === "linked" ? {} : { code: profileLink }),
+      });
+    }
+    opts.respond(true, {
+      linked: true,
+      publication: result.publication ?? null,
+      profileLink,
+    });
   },
 };
