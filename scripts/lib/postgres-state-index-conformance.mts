@@ -23,7 +23,7 @@ const historicalTaskIndexes = [
   ["idx_task_runs_runtime_ended", "runtime, ended_at, created_at, task_id"],
 ] as const;
 
-/** Forward-DDL readiness only; shared-state PostgreSQL runtime admission remains disabled. */
+/** Verify forward-DDL index parity separately from shared-state runtime conformance. */
 export async function checkStateTaskIndexMigration(
   client: Client,
   namespace: string,

@@ -15,6 +15,7 @@ import { parseDevicePairingJoinRequestPath } from "../pairing/join-code.js";
 import { getWebhookLegacyListener } from "../plugins/http-legacy-listener.js";
 import { NODE_WORKER_BUNDLE_TRANSFER_PATH } from "../worker/node-bundle-install-protocol.js";
 import { resolveAssistantAgentId } from "./assistant-identity.js";
+import { parseBrowserPairRequestPath } from "./browser-pair-route.js";
 import { parseControlUiResourcePath } from "./control-ui-contract.js";
 import { respondNotFound, respondPlainText } from "./control-ui-http-utils.js";
 import {
@@ -24,7 +25,7 @@ import {
 import { controlUiPluginAssetRoot } from "./control-ui-plugin-assets-contract.js";
 import { resolveAssistantMediaRoutePath } from "./control-ui-resource-routes.js";
 import {
-  classifyControlUiRequest,
+  isControlUiHttpRequest,
   isControlUiApprovalDocumentPath,
   isControlUiPluginManagerRequest,
 } from "./control-ui-routing.js";
@@ -72,6 +73,7 @@ import {
 import {
   getNativeHookRelayModule,
   getControlUiModule,
+  getControlUiAssistantMediaHandler,
   getControlUiPluginAssetsModule,
   getCanvasServeModule,
   getBoardHttpModule,
@@ -85,6 +87,7 @@ import {
   getSessionHistoryHttpModule,
   getSessionKillHttpModule,
   getToolsInvokeHttpModule,
+  getBrowserPairHttpModule,
   getDevicePairingJoinHttpModule,
   getPluginNodeCapabilityAuthModule,
   getHttpAuthUtilsModule,
@@ -124,8 +127,7 @@ export function createGatewayHttpRequestHandler(
   } = opts;
   const getResolvedAuth = opts.getResolvedAuth ?? (() => resolvedAuth);
   const loadGatewayConfig = opts.getRuntimeConfig ?? getRuntimeConfig;
-  const controlUiRouteBasePath =
-    controlUiBasePath && controlUiBasePath !== "/" ? controlUiBasePath.replace(/\/$/, "") : "";
+  const controlUiRouteBasePath = normalizeControlUiBasePath(controlUiBasePath);
   const pluginAssetRoot = controlUiPluginAssetRoot(controlUiRouteBasePath);
   const publicSessionRoute = createControlUiSessionRoutes(opts);
   const handleServerRequest = (
@@ -201,11 +203,12 @@ export function createGatewayHttpRequestHandler(
     }
 
     try {
-      const requestPath = URL.parse(req.url ?? "/", "http://localhost")?.pathname;
-      if (requestPath === undefined) {
+      const requestUrl = URL.parse(req.url ?? "/", "http://localhost");
+      if (!requestUrl) {
         sendGatewayAuthFailure(res, { ok: false, reason: "unauthorized" });
         return undefined;
       }
+      const requestPath = requestUrl.pathname;
       // Share documents and images stay fetchable for previews, but never invite
       // indexing, including static, unavailable, and rejected responses.
       if (isControlUiSharePath(requestPath, controlUiRouteBasePath)) {
@@ -236,6 +239,18 @@ export function createGatewayHttpRequestHandler(
           getStartup,
         );
         return undefined;
+      }
+
+      const startup = probeKind === "outside" ? getStartup?.() : undefined;
+      if (
+        startup &&
+        startup.status !== "started" &&
+        (!remoteIngress || remoteRoute === "document")
+      ) {
+        const { serveControlUiStartupRequest } = await import("./control-ui-availability.js");
+        if (await serveControlUiStartupRequest(req, res, startup, requestUrl, opts)) {
+          return undefined;
+        }
       }
 
       if (probeKind === "outside" || probeKind === "namespace") {
@@ -333,22 +348,8 @@ export function createGatewayHttpRequestHandler(
         config: configSnapshot,
         ...routeAuth,
       };
-      const loadControlUi = () => {
-        const url = req.url ? new URL(req.url, "http://localhost") : undefined;
-        // Media owns its method/query policy, including explicit-allow POSTs.
-        // Classify the current URL so plugin fallthrough cannot load unrelated UI code.
-        return url &&
-          (url.pathname === resolveAssistantMediaRoutePath(controlUiBasePath) ||
-            classifyControlUiRequest({
-              basePath: normalizeControlUiBasePath(controlUiBasePath),
-              pathname: url.pathname,
-              search: url.search,
-              method: req.method,
-              accept: req.headers.accept,
-            }).kind !== "not-control-ui")
-          ? getControlUiModule()
-          : undefined;
-      };
+      const loadControlUi = () =>
+        isControlUiHttpRequest(req, controlUiRouteBasePath) ? getControlUiModule() : undefined;
       const handleControlUiRequest = async () =>
         (await loadControlUi())?.handleControlUiHttpRequest(req, res, {
           ...controlUiRouteOptions,
@@ -427,6 +428,19 @@ export function createGatewayHttpRequestHandler(
           (await getDevicePairingJoinHttpModule()).handleDevicePairingJoinHttpRequest({
             ...transferRequest,
             shortcode: devicePairingJoinShortcode,
+          }),
+        );
+      }
+
+      const browserPairAction = controlUiEnabled
+        ? parseBrowserPairRequestPath(scopedRequestPath, controlUiRouteBasePath)
+        : null;
+      if (browserPairAction) {
+        addAdmittedStage(true, async () =>
+          (await getBrowserPairHttpModule()).handleBrowserPairHttpRequest({
+            ...transferRequest,
+            action: browserPairAction,
+            config: configSnapshot,
           }),
         );
       }
@@ -685,7 +699,7 @@ export function createGatewayHttpRequestHandler(
       addRequestStage(
         scopedRequestPath === resolveAssistantMediaRoutePath(controlUiBasePath),
         async () =>
-          (await loadControlUi())?.handleControlUiAssistantMediaRequest(req, res, {
+          (await getControlUiAssistantMediaHandler(req.url, controlUiBasePath))?.(req, res, {
             ...controlUiRouteOptions,
             agentId: resolveAssistantAgentId(configSnapshot),
           }) ?? false,

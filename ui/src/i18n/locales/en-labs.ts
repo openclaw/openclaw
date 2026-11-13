@@ -17,8 +17,6 @@ const enLabs = {
         "Subagent details are unavailable. Counts include all accepted subagents.",
       otherGroups: "{count} more active groups",
     },
-    configure: "Configure",
-    configureFeature: "Configure {name}",
     decisionAssistance: {
       title: "Decision assistance",
       description: "Enable experimental assistance from your configured Decision model.",
@@ -42,10 +40,10 @@ const enLabs = {
       description:
         "Defer tool schemas and discover tools on demand. Enabled by default with structured tool calls; turning it off disables the global default.",
     },
-    advisor: {
-      title: "Advisor",
+    usageRankedToolIndex: {
+      title: "Usage-ranked tool index",
       description:
-        "Advisor reviews the conversation on the session’s own model every few tool calls or minutes. If the agent is going off course, it steers the active reply with one short correction. Adds model calls.",
+        "Prefer frequently and recently used tools in Code Mode and Tool Search prompt indexes. Off by default. Stores tool IDs, scores, and timestamps for 90 days in operator-owned storage, excluding incognito sessions. Changes apply at the next prompt-prefix boundary. Inspect, import, or reset with openclaw tools usage.",
     },
     composerPredictions: {
       title: "Composer predictions",
@@ -71,6 +69,11 @@ const enLabs = {
       title: "Desktop on the computer running OpenClaw",
       description:
         "Watch and control the computer running OpenClaw from the Desktop panel through its existing VNC or Screen Sharing server.",
+    },
+    openclawId: {
+      title: "OpenClaw ID remote access",
+      description:
+        "Open this claw from your other devices and invite people. To get started, sign in from the account menu and choose Turn on remote access. Manage who has access on the Access page. While off, this feature does not contact OpenClaw ID.",
     },
     workerDesktop: {
       title: "Cloud device desktop",

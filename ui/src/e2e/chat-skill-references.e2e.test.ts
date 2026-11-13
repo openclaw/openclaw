@@ -116,7 +116,9 @@ suite.define(() => {
 
         await composer.fill("/");
         await slashPicker.waitFor({ state: "visible" });
-        await expect.poll(() => page.getByRole("option", { name: /\/status/u }).count()).toBe(2);
+        await expect
+          .poll(() => page.getByRole("option", { name: /^(?:\/status|Status Report)\b/u }).count())
+          .toBe(2);
 
         const slashOptions = slashPicker.getByRole("option");
         await composer.fill("/sta");
@@ -125,7 +127,7 @@ suite.define(() => {
             const names = await slashOptions.locator(".slash-menu-name").allTextContents();
             return { first: names[0], last: names.at(-1) };
           })
-          .toEqual({ first: "/status", last: "/status_report" });
+          .toEqual({ first: "/status", last: "Status Report" });
         await composer.press("Tab");
         await draft("/status");
       },

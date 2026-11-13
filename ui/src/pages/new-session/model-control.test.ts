@@ -227,7 +227,7 @@ it("clears xhigh when an interactive model switch targets a profile ending at hi
     }),
   ]);
   control.load(context, "main", true);
-  await vi.waitFor(() => expect(find("model-option", "demo/limited")).not.toBeNull());
+  await vi.waitFor(() => expect(find("model-option", "kimi/k3")).not.toBeNull());
   control.selected = "kimi/k3";
   control.thinkingLevel = "xhigh";
   const search = draw().querySelector<HTMLInputElement>("[data-chat-model-search]")!;
@@ -260,6 +260,9 @@ it("retries failed discovery from the error action without refreshing models", a
   );
   control.load(context, "main", true);
   control.loadCatalogTargets(context, "main", true);
+  await vi.waitFor(() => expect(find("model-provider-toggle", "target:cliAgents")).not.toBeNull());
+  find("model-provider-toggle", "target:cliAgents")!.click();
+  flush();
   await vi.waitFor(() => expect(find("model-target-retry", "cliAgents")).not.toBeNull());
   control.loadCatalogTargets(context, "main", true);
   expect(catalogs).toHaveBeenCalledOnce();
@@ -531,7 +534,10 @@ it("clears speed when switching to a provider without a wire mapping", async () 
   ]);
   control.load(context, "main", true);
 
-  await vi.waitFor(() => expect(find("model-option", "ollama/llama-4")).not.toBeNull());
+  await vi.waitFor(() => expect(find("model-provider-toggle", "ollama")).not.toBeNull());
+  find("model-provider-toggle", "ollama")!.click();
+  flush();
+  expect(find("model-option", "ollama/llama-4")).not.toBeNull();
   find("speed-option", "on")?.click();
   expect(control.fastMode).toBe(true);
 
@@ -572,16 +578,13 @@ it.each(["blue", "red"])(
     find("model-option", "openai/" + id)!.click();
     const container = draw();
     expect(control.selected).toBe("openai/" + id);
-    expect(
-      find("speed-option", color === "blue" ? "on" : "off")?.getAttribute("aria-checked"),
-    ).toBe("true");
-    for (const option of container.querySelectorAll<HTMLButtonElement>(
-      "[data-chat-speed-option]",
-    )) {
-      expect(option.disabled).toBe(
-        color === "red" || option.dataset.chatSpeedOption === "ultrafast",
-      );
+    if (color === "blue") {
+      expect(find("speed-option", "on")?.getAttribute("aria-checked")).toBe("true");
+    } else {
+      expect(find("speed-option")).toBeNull();
     }
+    expect(find("speed-option", "ultrafast")).toBeNull();
+    expect(container.querySelector("[data-chat-speed-option]:disabled")).toBeNull();
     expect(find("thinking-slider")?.disabled).not.toBe(true);
   },
 );

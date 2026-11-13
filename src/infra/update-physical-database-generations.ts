@@ -27,6 +27,7 @@ export function readUpdatePhysicalDatabaseObservation(
     const observation = readUpdateDatabaseGeneration(
       pathname,
       (imagePath, sourcePath) => {
+        classificationFailed = false;
         try {
           engine = readBackupEngineImage(imagePath, sourcePath);
         } catch (error) {
@@ -135,14 +136,15 @@ export async function readUpdatePhysicalDatabaseGenerationPair(
   paths: readonly string[],
   pluginOwners?: DatabasePortPluginOwners,
 ) {
-  const postgres: string[] = [];
+  // A drained source's failed observation classifies again from its private copy.
+  const postgres = new Set<string>();
   // Classify the captured image without reacquiring the live source family.
   const result = readUpdateDatabaseGenerationPair(paths, (imagePath, sourcePath) => {
     if (readBackupEngineImage(imagePath, sourcePath).engine === "postgres") {
-      postgres.push(sourcePath);
+      postgres.add(sourcePath);
     }
   });
-  const fingerprints = await readUpdatePostgresDatabaseGenerations(postgres, pluginOwners);
+  const fingerprints = await readUpdatePostgresDatabaseGenerations([...postgres], pluginOwners);
   Object.assign(result.committed, fingerprints);
   Object.assign(result.physical, fingerprints);
   return result;

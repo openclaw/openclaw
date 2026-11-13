@@ -1,2 +1,0 @@
-54
-# Linux read-byte proof that usage archive inventory never walks transcript blobs.

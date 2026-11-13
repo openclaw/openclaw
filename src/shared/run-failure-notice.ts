@@ -18,7 +18,10 @@ export function readRunFailureCause(value: unknown): RunFailureCause | undefined
   return provider ? { provider, ...(failoverReason && { failoverReason }) } : undefined;
 }
 
-export function readRunFailureNotice(message: unknown): RunFailureNotice | undefined {
+export function readRunFailureNotice(
+  message: unknown,
+  options?: { audience: "desktop" },
+): RunFailureNotice | undefined {
   const notice = asOptionalRecord(asOptionalRecord(message)?.openclawRunError);
   if (
     typeof notice?.runId !== "string" ||
@@ -29,5 +32,11 @@ export function readRunFailureNotice(message: unknown): RunFailureNotice | undef
     return undefined;
   }
   const cause = readRunFailureCause(notice.cause);
-  return { runId: notice.runId, summary: notice.summary, ...(cause ? { cause } : {}) };
+  const summary =
+    options?.audience === "desktop" &&
+    typeof notice.desktopSummary === "string" &&
+    notice.desktopSummary.trim()
+      ? notice.desktopSummary
+      : notice.summary;
+  return { runId: notice.runId, summary, ...(cause ? { cause } : {}) };
 }

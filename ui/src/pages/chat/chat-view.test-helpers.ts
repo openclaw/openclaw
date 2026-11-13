@@ -97,6 +97,7 @@ export function createPasteEvent(
   const event = new Event("paste", { bubbles: true, cancelable: true });
   Object.defineProperty(event, "clipboardData", {
     value: {
+      files: [],
       items: Object.assign(Object.fromEntries(itemTypes.map((type, index) => [index, { type }])), {
         length: itemTypes.length,
       }),
@@ -383,7 +384,7 @@ export function getThinkingReasoningValueLabel(container: Element): string {
 
 export function createDragEvent(type: string, types = ["Files"]): Event {
   const event = new Event(type, { bubbles: true, cancelable: true });
-  Object.defineProperty(event, "dataTransfer", { value: { types } });
+  Object.defineProperty(event, "dataTransfer", { value: { types, files: [], getData: () => "" } });
   return event;
 }
 
@@ -417,10 +418,10 @@ export function inputDraft(container: HTMLElement, value: string) {
   flush();
 }
 
-export function inputDraftAtEnd(container: HTMLElement, value: string) {
+export function inputDraftAtEnd(container: HTMLElement, value: string, caret = value.length) {
   const textarea = getComposerTextarea(container);
   textarea.value = value;
-  textarea.setSelectionRange(value.length, value.length);
+  textarea.setSelectionRange(caret, caret);
   textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
   flush();
 }
@@ -481,7 +482,7 @@ export function createReactiveDraftHarness({
     });
   };
   renderCurrent();
-  return { container, renderCurrent };
+  return { container, readDraft: () => draft, renderCurrent };
 }
 
 export function createSlashRerenderHarness() {

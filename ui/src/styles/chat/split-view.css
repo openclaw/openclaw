@@ -65,13 +65,16 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
   color: var(--text);
 }
 
+/* Cached panes keep their mounted state without participating in rendering. */
 .chat-pane-cache__pane {
   opacity: 0;
+  content-visibility: hidden;
   grid-area: 1 / 1;
 }
 
 .chat-pane-cache__pane--visible {
   opacity: 1;
+  content-visibility: visible;
   z-index: 1;
 }
 
@@ -153,7 +156,7 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
   padding: 3px 5px;
   margin-inline: -5px;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: transparent;
   text-align: left;
 }

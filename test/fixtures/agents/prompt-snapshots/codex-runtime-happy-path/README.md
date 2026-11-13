@@ -26,7 +26,7 @@ node --import tsx scripts/generate-prompt-snapshots.ts --materialize discord-gro
 
 Use `telegram-direct` to inspect the complete base catalog.
 
-These snapshots are still not a byte-for-byte raw OpenAI request capture. Codex-owned native `AGENTS.md`, environment context, memories, app/plugin instructions, and built-in collaboration-mode instructions can be added inside the Codex runtime after OpenClaw sends thread and turn params.
+These snapshots are still not a byte-for-byte raw OpenAI request capture. Codex-owned native `AGENTS.md`, environment context, memories, and app/plugin instructions can be added inside the Codex runtime after OpenClaw sends thread and turn params. Ordinary managed sessions suppress native Default-mode rendering; the snapshots include the managed collaboration policy in OpenClaw developer instructions.
 
 Regenerate with:
 

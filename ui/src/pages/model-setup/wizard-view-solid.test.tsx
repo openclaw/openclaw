@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { createSignal, flush, untrack } from "solid-js";
-import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
 import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
@@ -12,6 +12,7 @@ import { ModelSetupWizard } from "./wizard-view-solid.tsx";
 registerEnglishCatalog(registerModelSetupEnglish);
 
 beforeEach(() => onTestFinished(installDialogPolyfill()));
+afterEach(() => vi.useRealTimers());
 
 const wizardDefaults = {
   mode: "auth" as const,
@@ -97,6 +98,7 @@ it("shows live sign-in activity and focuses the primary action as each step chan
   ));
   flush();
   await container.querySelector("openclaw-modal-dialog")!.updateComplete;
+  const wizard = container.querySelector(".model-setup-wizard");
   expect(document.activeElement?.textContent).toContain("Continue");
   const deviceStep = {
     id: "device-code",
@@ -130,6 +132,10 @@ it("shows live sign-in activity and focuses the primary action as each step chan
   expect(container.querySelector("code")).toBe(code);
   setState({ phase: "done" });
   flush();
+  expect(container.querySelectorAll(".model-setup-wizard")).toHaveLength(1);
+  expect(container.querySelector(".model-setup-wizard")).toBe(wizard);
+  expect(wizard?.textContent).toContain("Provider is connected");
+  expect(container.querySelector(".wizard-sign-in")).toBeNull();
   const primary = container.querySelector<HTMLButtonElement>("[data-login-start-chat]")!;
   expect(document.activeElement).toBe(primary);
   expect(container.querySelector(".wizard-step__spinner")).toBeNull();
@@ -150,9 +156,6 @@ const redirectStep = {
 
 it("presents browser sign-in as a provider badge with quiet recovery and corner cancel", async () => {
   vi.useFakeTimers();
-  onTestFinished(() => {
-    vi.useRealTimers();
-  });
   const cancel = vi.fn();
   const { container } = mountSolid(() => (
     <ModelSetupWizard
@@ -201,9 +204,6 @@ it("presents browser sign-in as a provider badge with quiet recovery and corner 
 
 it("shows device-code expiry only near the end and retires an expired code", async () => {
   vi.useFakeTimers();
-  onTestFinished(() => {
-    vi.useRealTimers();
-  });
   const { container } = mountSolid(() => (
     <ModelSetupWizard
       {...wizardDefaults}

@@ -36,10 +36,10 @@ type EnglishCatalog = TranslationMap & {
   pluginsPage: TranslationMap & Record<"installed" | "official" | "install", string>;
   mcpApp: TranslationMap;
   linkReader: TranslationMap;
+  openclawId: TranslationMap;
   agentTools: TranslationMap;
   githubPublication: TranslationMap & Record<"newAction" | "capacity", string>;
-  githubConnections: TranslationMap &
-    Record<"title" | "mine" | "system" | "forMe" | "forSystem", string>;
+  githubConnections: TranslationMap & Record<"title" | "mine" | "system", string>;
   board: TranslationMap & { announcement: TranslationMap; widget: TranslationMap };
   browser: TranslationMap & { errors: TranslationMap; annotatePrompt: TranslationMap };
   pluginUi: TranslationMap & { surface: TranslationMap };
@@ -98,8 +98,7 @@ type EnglishCatalog = TranslationMap & {
           | "automationRecovery"
           | "gatewayRestarted"
           | "cliHarnessContext"
-          | "claudeCliTaskNotification"
-          | "pluginSteering",
+          | "claudeCliTaskNotification",
           TranslationMap
         >;
       mermaid: TranslationMap;
@@ -253,6 +252,11 @@ type EnglishCatalog = TranslationMap & {
   palette: TranslationMap & {
     placeholder: string;
     attachmentPrompt: string;
+    searchPlaceholder: string;
+    composePlaceholder: string;
+    modeLabel: string;
+    modes: { search: string; compose: string };
+    modeSwitch: { search: string; compose: string };
     categories: TranslationMap & { navigation: string };
   };
   sessionsView: TranslationMap &
@@ -320,6 +324,7 @@ type EnglishCatalog = TranslationMap & {
       | "incognito"
       | "incognitoLabel"
       | "incognitoDescription"
+      | "incognitoDescriptionTooltip"
       | "incognitoLimits"
       | "cloudWorkerPlacement"
       | "placementWorkspaceConflict"
@@ -377,6 +382,8 @@ const startupEnglish = {
     dashboard: "Dashboard",
   },
   common: {
+    reportBug: "Report a bug",
+    suggestFeature: "Suggest a feature",
     showDetails: "Show details",
     uploadsDisabled: "File and image uploads are disabled.",
     ok: "OK",
@@ -465,6 +472,7 @@ const startupEnglish = {
     colorMode: "Color mode",
     colorModeOption: "Color mode: {mode}",
     search: "Search",
+    clearSearch: "Clear search",
     pickerNoMatches: "No matches",
     save: "Save",
     saving: "Saving…",
@@ -753,6 +761,8 @@ const startupEnglish = {
     incognitoLabel: "Incognito",
     incognitoDescription:
       "Incognito session. History expires 24 hours after creation or when the Gateway restarts, whichever comes first.",
+    incognitoDescriptionTooltip:
+      "History expires after 24 hours or a Gateway restart, whichever comes first.",
     incognitoLimits:
       "Your model provider still processes messages. Tools, plugins, and uploads may save data.",
     cloudWorkerPlacement: "Placement: {state}",
@@ -949,20 +959,14 @@ const startupEnglish = {
     stop: {},
     profile: {},
     title: "Browser",
-    open: "Open",
-    openPanel: "Open browser panel",
     moreActions: "More actions",
     copyUrl: "Copy URL",
-    openNewTab: "Open in new tab",
-    openWithinOpenClaw: "Open in OpenClaw",
     toggle: "Toggle browser panel",
     close: {},
     resize: {},
     newTab: "New tab",
     closeTab: "Close tab",
     untitledTab: {},
-    tweetPost: "Post on X",
-    openPost: "Open post",
     back: {},
     forward: {},
     reload: {},
@@ -989,6 +993,7 @@ const startupEnglish = {
   desktop: {
     title: "Desktop",
     openWindow: "Open desktop in new window",
+    openWindowTooltip: "Open in new window",
     unavailable: "Desktop viewing is unavailable for this connection.",
     toggle: "Toggle desktop panel",
     reconnect: "Reconnect",
@@ -1161,12 +1166,14 @@ const startupEnglish = {
     saveErrorTitle: "Couldn’t save this setting. Try again.",
     saveFailed: "The feature setting could not be saved.",
     decisionAssistance: {},
+    usageRankedToolIndex: {},
     codeMode: {},
 
     swarm: {},
     toolSearch: {},
 
     hostDesktop: {},
+    openclawId: {},
     workerDesktop: {},
   },
   aboutPage: {
@@ -1222,15 +1229,11 @@ const startupEnglish = {
       loadFailed: "Could not open details. Try again, or open this person’s Activity page.",
       ariaLabel: "Activity for {name}",
       person: "Person",
-      onlineFor: "Online for",
-      where: "Where",
-      reportedTimeZone: "Reported time zone: {zone}",
-      lastActivity: "Last interaction",
-      notObserved: "Activity unavailable",
+      idleFor: "Idle for",
+      localTime: "{time} local time",
       viewingNow: "Viewing now",
       recentSessions: "Recent sessions",
       noRecentSessions: "No recent visible sessions.",
-      ago: "ago",
       viewActivity: "View activity",
       web: "Web app",
       cli: "Command line",
@@ -1250,9 +1253,7 @@ const startupEnglish = {
   githubConnections: {
     title: "GitHub accounts",
     mine: "My GitHub",
-    system: "System GitHub",
-    forMe: "For me",
-    forSystem: "For the system",
+    system: "Shared agent account",
   },
   profilePage: {
     personalInstructions: {
@@ -1329,6 +1330,47 @@ const startupEnglish = {
     suspending: "Suspending…",
     suspended: "Suspended",
     retryNow: "Retry now",
+    workspace: {
+      header: "OpenClaw",
+      tryAgain: "Try again",
+      reloadAction: "Reload",
+      connecting: {
+        title: "Connecting to OpenClaw",
+        description: "Your workspace opens as soon as the Gateway answers.",
+      },
+      starting: {
+        title: "OpenClaw is starting",
+        description: "Hang on while the Gateway gets ready.",
+      },
+      restarting: {
+        title: "OpenClaw is restarting",
+        description: "Back in a moment. Your drafts are safe.",
+      },
+      reconnecting: {
+        title: "Still connecting",
+        description: "No answer from the Gateway yet. We’ll keep trying.",
+      },
+      pausing: {
+        title: "OpenClaw is pausing",
+        description: "Finishing what it was doing first.",
+      },
+      paused: {
+        title: "OpenClaw is paused",
+        description: "Your workspace opens when it resumes.",
+      },
+      restoring: {
+        title: "Welcome back",
+        description: "Loading your conversations.",
+      },
+      offline: {
+        title: "Couldn’t reach the Gateway",
+        description: "Check that it’s running, then try again.",
+      },
+      reload: {
+        title: "OpenClaw was updated",
+        description: "Reload to get the latest version.",
+      },
+    },
     queued: "{count} queued",
     offlineChangesDiscarded: "Offline changes discarded: {count}",
     offlineChangesReloadBlocked:
@@ -1364,6 +1406,12 @@ const startupEnglish = {
   commandPalette: {},
   palette: {
     placeholder: "Search or start a task…",
+    modeLabel: "Command palette mode",
+    modes: { search: "Search", compose: "Compose" },
+    // Footer key hint: "Tab compose" switches to the other mode.
+    modeSwitch: { search: "search", compose: "compose" },
+    searchPlaceholder: "Search…",
+    composePlaceholder: "Write a message…",
     attachmentPrompt: "What would you like to do with these files?",
     categories: { navigation: "Navigation" },
   },
@@ -1508,7 +1556,6 @@ const startupEnglish = {
       billingProblem: "{provider} reports a billing problem",
       openModels: "Open Models",
       failedRepeatCount: "{count} times",
-      failedHelp: "Automatic recovery has stopped. Check any completed work before trying again.",
       tryAgain: "Try again",
       continuePrompt:
         "Continue from where you stopped. Check which actions already completed before retrying anything.",
@@ -1645,7 +1692,7 @@ const startupEnglish = {
     codeBlock: {},
     workspaceConflict: {},
     compaction: {
-      savedTokens: "saved {count} tokens",
+      savedTokensWithPercent: "saved {count} tokens ({percent}%)",
     },
     sessionReset: {
       label: "Session reset",
@@ -1689,7 +1736,6 @@ const startupEnglish = {
       gatewayRestarted: {},
       cliHarnessContext: {},
       claudeCliTaskNotification: {},
-      pluginSteering: {},
     },
     skillLearned: {},
     progressLabels: {},
@@ -1754,7 +1800,6 @@ const startupEnglish = {
       queue: "Queue",
       queueMessage: "Queue message",
       stop: "Stop",
-      stopWithShortcut: "Stop (Esc)",
       stopGenerating: "Stop generating",
       send: "Send",
       sendMessage: "Send message",
@@ -1827,6 +1872,7 @@ const startupEnglish = {
       hideChat: "Hide this conversation",
       conversationEmpty: "The conversation for this task.",
       minimize: "Minimize side panel",
+      minimizeTooltip: "Minimize",
       resize: "Resize side panel",
       review: "Review",
       reviewEmpty: "Open a change, file, image, or tool result to review it here.",
@@ -1884,6 +1930,7 @@ const startupEnglish = {
     },
     permissions: {},
     toolCards: {
+      tool: "Tool",
       activity: {},
       review: {},
       verbs: {},
@@ -1935,6 +1982,8 @@ const startupEnglish = {
     title: "Link reader",
     urlPlaceholder: "Supported link URL",
   },
+
+  openclawId: {},
 } satisfies TranslationMap;
 
 export const en: typeof startupEnglish & EnglishCatalog = startupEnglish;

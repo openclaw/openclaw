@@ -42,6 +42,7 @@ function preview(url = href): ControlUiLinkReaderPreview {
     subtitle: "openclaw/openclaw #99816",
     badge: { label: "Merged", tone: "accent" },
     author: "reviewer",
+    createdAt: "2026-07-05T07:00:00Z",
     updatedAt: "2026-07-05T09:55:00Z",
     metadata: [
       { label: "", value: "+101" },
@@ -108,7 +109,8 @@ describe("openclaw-link-reader-hovercard-provider", () => {
     expect(card()?.textContent).toContain("+101");
     expect(card()?.textContent).toContain("−12");
     expect(card()?.textContent).toContain("3 files");
-    expect(card()?.textContent).toContain("5m ago");
+    expect(card()?.textContent).toContain("3h ago");
+    expect(card()?.textContent).not.toContain("5m ago");
     expect(card()?.querySelector("img")?.src).toBe(preview().imageUrl);
     expect(anchor.href).toBe(url);
     expect(anchor.getAttribute("aria-controls")).toBe(card()?.id);

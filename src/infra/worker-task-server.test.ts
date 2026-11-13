@@ -55,9 +55,10 @@ vi.mock("./worker-idle-gc.js", () => ({
   cancelWorkerIdleGc: vi.fn(),
   scheduleWorkerIdleGc: vi.fn(),
 }));
-const exitCode = process.exitCode;
+const exitCode = process.exitCode ?? 0;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => {
+  process.exitCode = exitCode;
   vi.resetModules();
   vi.clearAllMocks();
   boundary.closeMemory.mockReset();

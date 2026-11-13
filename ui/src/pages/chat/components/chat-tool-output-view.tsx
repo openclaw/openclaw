@@ -4,11 +4,8 @@ import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { registerChatToolContentEnglish } from "../../../i18n/locales/en-chat-tool-content.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
-import {
-  isLegacyToolOutputUnavailable,
-  toolOutputSourceLabel,
-  formatToolOutput,
-} from "../../../lib/chat/tool-output.ts";
+import { isLegacyToolOutputUnavailable } from "../../../lib/chat/tool-output-text.ts";
+import { toolOutputSourceLabel, formatToolOutput } from "../../../lib/chat/tool-output.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { JSX } from "../../../types/solid-elements.d.ts";
 import type {

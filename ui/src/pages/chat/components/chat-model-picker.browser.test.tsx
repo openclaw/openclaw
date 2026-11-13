@@ -1,5 +1,5 @@
 import { createSignal } from "solid-js";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { registerMenuShortcuts } from "../../../components/menu-shortcuts.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
@@ -227,6 +227,7 @@ it("preserves composition ownership and ordinary model-search keyboard behavior"
   params.modelOptions = [
     modelOption("example", "alpha", { label: "Alpha" }),
     modelOption("other", "gamma", { label: "Gamma" }),
+    modelOption("other", "delta", { label: "Delta" }),
   ];
   update();
   for (const composition of ["active", "keyCode229", "none"]) {
@@ -237,13 +238,13 @@ it("preserves composition ownership and ordinary model-search keyboard behavior"
         expect(picker.querySelectorAll("[data-chat-model-option]"), label).toHaveLength(1),
       );
       const other = picker.querySelector<HTMLButtonElement>(
-        '[data-chat-model-provider-group="other"] [data-chat-model-provider-toggle]',
+        '[data-chat-model-provider-toggle="other"]',
       )!;
       if (key.startsWith("Arrow")) {
         await userEvent.click(other);
       }
       const search = getSearch();
-      const query = key.startsWith("Arrow") ? "" : "other";
+      const query = key.startsWith("Arrow") ? "" : "gamma";
       if (query) {
         search.value = query;
         search.dispatchEvent(new InputEvent("input", { bubbles: true }));
@@ -307,8 +308,10 @@ it("preserves composition ownership and ordinary model-search keyboard behavior"
         search.value = "";
         search.dispatchEvent(new InputEvent("input", { bubbles: true }));
         flush();
-        if (other.ariaExpanded === "true") {
-          await userEvent.click(other);
+        if (other.ariaSelected === "true") {
+          await userEvent.click(
+            picker.querySelector<HTMLButtonElement>('[data-chat-model-provider-toggle="example"]')!,
+          );
         }
         await toggle(() => userEvent.click(trigger));
         expect(picker.open, label).toBe(false);
@@ -366,13 +369,11 @@ it.each(["trigger", "Escape", "selection"])(
     await open();
     const search = getSearch();
     const providerToggle = (provider: string) =>
-      picker.querySelector<HTMLButtonElement>(
-        `[data-chat-model-provider-group="${provider}"] [data-chat-model-provider-toggle]`,
-      )!;
+      picker.querySelector<HTMLButtonElement>(`[data-chat-model-provider-toggle="${provider}"]`)!;
     const selectedToggle = providerToggle("example"),
       otherToggle = providerToggle("other");
     const expectExpanded = () =>
-      expect([selectedToggle.ariaExpanded, otherToggle.ariaExpanded]).toEqual(["false", "true"]);
+      expect([selectedToggle.ariaSelected, otherToggle.ariaSelected]).toEqual(["false", "true"]);
     await userEvent.click(selectedToggle);
     await userEvent.click(otherToggle);
     expectExpanded();
@@ -441,6 +442,8 @@ it("windows a large catalog while keeping keyboard choices and accessible positi
     const clip = viewport.getBoundingClientRect();
     expect(bounds.top).toBeGreaterThanOrEqual(clip.top);
     expect(bounds.bottom).toBeLessThanOrEqual(clip.bottom);
+    const heading = container.querySelector<HTMLElement>("[data-chat-model-heading]")!;
+    expect(heading.getBoundingClientRect().top).toBe(clip.top);
     expect(rows().length).toBeLessThan(40);
   });
   search.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
@@ -462,4 +465,169 @@ it("windows a large catalog while keeping keyboard choices and accessible positi
   expect(search.getAttribute("aria-activedescendant")).toBe(rows()[0]?.id);
   search.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   expect(params.onModelSelect).toHaveBeenCalledWith("example/model-999", "main", undefined);
+});
+
+it("keeps the desktop panel fixed above its model chip across provider and search views", async () => {
+  await page.viewport(1280, 900);
+  container.style.cssText =
+    "position:fixed;bottom:16px;right:16px;width:min(600px, calc(100vw - 32px))";
+  const { toggle, trigger, picker } = mountPicker();
+  try {
+    await toggle(async () => trigger.click());
+    const menu = picker.querySelector<HTMLElement>(".chat-controls__model-menu")!;
+    const surface = picker.querySelector<HTMLElement>(".chat-picker-overlay")!;
+    await vi.waitFor(() => {
+      const panel = menu.getBoundingClientRect();
+      const bounds = surface.getBoundingClientRect();
+      expect(bounds.height).toBe(350);
+      expect(bounds.bottom).toBe(trigger.getBoundingClientRect().top - 8);
+      expect(panel.bottom).toBeLessThanOrEqual(bounds.bottom);
+      expect(menu.scrollHeight).toBeLessThanOrEqual(menu.clientHeight);
+      expect(option("example/beta").getBoundingClientRect().bottom).toBeLessThanOrEqual(
+        panel.bottom - 8,
+      );
+    });
+    const beta = option("example/beta");
+    const background = getComputedStyle(beta).backgroundColor;
+    const highlighted = getSearch().getAttribute("aria-activedescendant");
+    await page.getByText("Beta", { exact: true }).hover();
+    await vi.waitFor(() => expect(getComputedStyle(beta).backgroundColor).not.toBe(background));
+    expect(getSearch().getAttribute("aria-activedescendant")).toBe(highlighted);
+    await page.getByRole("tab", { name: "Other", exact: true }).click();
+    await vi.waitFor(() => expect(option("other/gamma")?.checkVisibility()).toBe(true));
+    const search = getSearch();
+    search.value = "no matching model";
+    search.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    flush();
+    await vi.waitFor(() => {
+      expect(picker.querySelector('[role="tablist"]')).toBeNull();
+      expect(
+        picker.querySelector<HTMLElement>("[data-chat-model-search-empty]")?.checkVisibility(),
+      ).toBe(true);
+      expect(surface.getBoundingClientRect().height).toBe(350);
+    });
+  } finally {
+    container.removeAttribute("style");
+  }
+});
+
+it.each(["cancel", "drop"])(
+  "keeps the dragged provider visible and restores tabs on %s",
+  async (end) => {
+    await page.viewport(1280, 900);
+    const { picker, open, params, update } = mountPicker();
+    params.modelOptions.push(modelOption("third", "delta", { label: "Delta" }));
+    update();
+    await open();
+    const tabs = [...picker.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+    expect(tabs).toHaveLength(3);
+    const selected = tabs[0]!;
+    const dragged = tabs[1]!;
+    const orderKey = "openclaw.control.modelProviderOrder.v1";
+    const previousOrder = localStorage.getItem(orderKey);
+    onTestFinished(() => {
+      if (previousOrder === null) {
+        localStorage.removeItem(orderKey);
+      } else {
+        localStorage.setItem(orderKey, previousOrder);
+      }
+    });
+    const bounds = dragged.getBoundingClientRect();
+    const point = { clientX: Math.round(bounds.x + 18), clientY: Math.round(bounds.y + 18) };
+    const destination = { ...point, clientY: point.clientY + 40 };
+    dragged.dispatchEvent(new DragEvent("dragstart", { ...point, bubbles: true }));
+    flush();
+    // Hit the painted destination, rather than dispatching to a preselected node.
+    const target = () => document.elementFromPoint(destination.clientX, destination.clientY)!;
+    target().dispatchEvent(new DragEvent("dragover", { ...destination, bubbles: true }));
+    // Native source drag events can carry zero coordinates.
+    dragged.dispatchEvent(new DragEvent("drag", { bubbles: true }));
+    flush();
+    await vi.waitFor(() => {
+      expect(dragged.checkVisibility({ checkOpacity: true })).toBe(true);
+      expect(selected.ariaSelected).toBe("true");
+    });
+    if (end === "drop") {
+      target().dispatchEvent(new DragEvent("dragover", { ...destination, bubbles: true }));
+      flush();
+      target().dispatchEvent(new DragEvent("drop", { ...destination, bubbles: true }));
+    }
+    dragged.dispatchEvent(new DragEvent("dragend", { bubbles: true }));
+    flush();
+    await vi.waitFor(() => {
+      for (const tab of tabs) {
+        expect(tab.checkVisibility({ checkOpacity: true })).toBe(true);
+      }
+    });
+    expect([...picker.querySelectorAll('[role="tab"]')].map((tab) => tab.ariaLabel)).toEqual(
+      end === "drop" ? ["Example", "Third", "Other"] : ["Example", "Other", "Third"],
+    );
+  },
+);
+
+it("reveals the selected provider on open, vertical navigation and reorder", async () => {
+  await page.viewport(1280, 900);
+  const { picker, params, update, toggle, trigger } = mountPicker();
+  const key = "openclaw.control.modelProviderOrder.v1";
+  const savedOrder = localStorage.getItem(key);
+  onTestFinished(() => {
+    if (savedOrder === null) {
+      localStorage.removeItem(key);
+    } else {
+      localStorage.setItem(key, savedOrder);
+    }
+  });
+  params.modelOptions = Array.from({ length: 12 }, (_, index) =>
+    modelOption(`provider-${index}`, "model", { label: `Model ${index}` }),
+  );
+  params.selectedModelValue = "provider-11/model";
+  update();
+  await toggle(async () => trigger.click());
+  const rail = picker.querySelector<HTMLElement>('[role="tablist"]')!;
+  const assertSelectedVisible = async () => {
+    await vi.waitFor(() => {
+      const selected = rail.querySelector<HTMLButtonElement>('[aria-selected="true"]')!;
+      const bounds = rail.getBoundingClientRect();
+      const item = selected.getBoundingClientRect();
+      expect(item.top).toBeGreaterThanOrEqual(bounds.top - 1);
+      expect(item.bottom).toBeLessThanOrEqual(bounds.bottom + 1);
+    });
+  };
+  await assertSelectedVisible();
+  rail.querySelector<HTMLButtonElement>('[role="tab"]')!.focus();
+  for (let index = 0; index < 11; index++) {
+    await userEvent.keyboard("{ArrowDown}");
+  }
+  await assertSelectedVisible();
+  await userEvent.keyboard("{Alt>}{ArrowUp}{/Alt}");
+  await assertSelectedVisible();
+  expect(document.activeElement?.getAttribute("aria-selected")).toBe("true");
+});
+
+it("keeps the account heading below the provider's model choices", async () => {
+  await page.viewport(1280, 900);
+  const { picker, params, update, toggle, trigger } = mountPicker();
+  params.accountSection = {
+    onClose() {},
+    viewProps: (startIndex) => ({
+      selectionKind: "automatic",
+      disabled: false,
+      selectedIdentity: "Current account",
+      options: [{ value: "current", label: "Current account" }],
+      currentValue: "current",
+      open: false,
+      error: null,
+      startIndex,
+      onToggle() {},
+      onSelect() {},
+    }),
+  };
+  update();
+  await toggle(async () => trigger.click());
+  await vi.waitFor(() => {
+    const account = picker.querySelector<HTMLElement>("[data-chat-account-group-toggle]")!;
+    expect(account.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+      option("example/beta").getBoundingClientRect().bottom - 1,
+    );
+  });
 });

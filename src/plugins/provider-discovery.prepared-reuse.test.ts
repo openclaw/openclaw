@@ -1,7 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { expect, it, vi } from "vitest";
 import * as catalogContext from "../agents/models-config.providers.catalog-context.js";
 import * as discoveryAuth from "../agents/models-config.providers.discovery-auth.runtime.js";
@@ -13,6 +11,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as modelCatalog from "../model-catalog/index.js";
 import { buildCatalogModel } from "../plugin-sdk/provider-catalog.test-support.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { collectForRetentionCheck } from "../test-utils/retention.js";
 import { getPluginMetadataSnapshotCache, retirePluginCache } from "./plugin-cache.js";
 import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
 import * as providerCatalog from "./provider-catalog.js";
@@ -294,12 +293,7 @@ it("does not retain a registry or its old load context through prepared provenan
     return { prepared, registry: new WeakRef(registry), context: new WeakRef(context) };
   };
   const retained = await prepare();
-  const control = new WeakRef({});
-  for (let pass = 0; pass < 3; pass++) {
-    await nextTurn();
-    queryObjects(WeakRef);
-  }
-  expect(control.deref()).toBeUndefined();
+  await collectForRetentionCheck("prepared-provenance", 3);
   expect(retained.registry.deref()).toBeUndefined();
   expect(retained.context.deref()).toBeUndefined();
   using plans = vi.spyOn(modelCatalog, "planEffectiveModelCatalogRows");

@@ -358,13 +358,8 @@ it.each(["connection", "scope", "provider", "cancel"])(
 );
 
 it("rechecks live authority after exchanging proof and before storing the link", async () => {
-  let finish!: (identity: { senderId: string }) => void;
-  exchange.mockImplementationOnce(
-    () =>
-      new Promise((resolve) => {
-        finish = resolve;
-      }),
-  );
+  const finish = createDeferred<{ senderId: string }>();
+  exchange.mockReturnValueOnce(finish.promise);
   const observer = {
     ...alice,
     connId: "observer",
@@ -375,7 +370,7 @@ it("rechecks live authority after exchanging proof and before storing the link",
   expect(callback(flow, cookie)).toBe(200);
   await vi.waitFor(() => expect(exchange).toHaveBeenCalledOnce());
   clients.delete(alice);
-  finish({ senderId: "123456789012345678" });
+  finish.resolve({ senderId: "123456789012345678" });
   expect((await terminal(flow, observer)).status).toBe("failed");
   expect(await listCanonicalUserChannelIdentities(owner(alice))).toEqual([]);
 });

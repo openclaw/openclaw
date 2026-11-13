@@ -503,6 +503,8 @@ export class StorageBase {
             }
             if (!prior || prior.hash !== r.hash || prior.path !== r.path) {
               this.recordObservation(db, key, r, prior ? "external-edit" : "observed");
+              // This revision was just recorded as non-agent; its writer is already known.
+              continue;
             }
             // Only journal-confirmed agent revisions may carry an agent byline.
             // Scope ownership alone is not authorship (operator/import/external edits).

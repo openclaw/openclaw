@@ -72,7 +72,6 @@ import { getShellEnvAppliedKeys, shouldEnableShellEnvFallback } from "../../infr
 import type { ProviderModelRouteCandidate } from "../../plugin-sdk/provider-model-types.js";
 import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
-import type { ProviderSyntheticAuthResult } from "../../plugins/provider-external-auth.types.js";
 import { prepareProviderSyntheticAuthWithPlugin } from "../../plugins/provider-runtime.js";
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../../plugins/synthetic-auth.runtime.js";
 import { type RuntimeEnv, writeRuntimeJson, writeRuntimeStdout } from "../../runtime.js";
@@ -80,7 +79,11 @@ import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveUserPath, shortenHomePath } from "../../utils.js";
 import { listUnavailableAuthProfiles } from "./auth-unavailability.js";
-import { getModelCatalogWarnings, readModelCatalog } from "./catalog-warnings.js";
+import {
+  getModelCatalogWarnings,
+  readModelCatalog,
+  runModelCatalogReadCommand,
+} from "./catalog-warnings.js";
 import {
   formatProviderAuthProfileCounts,
   resolveProviderAuthOverview,
@@ -88,7 +91,12 @@ import {
 import { groupByProvider, isRich } from "./list.format.js";
 import type { runAuthProbes } from "./list.probe.js";
 import { resolveStatusUtilityModel } from "./list.status-utility.js";
-import type { ProviderAuthOverview, StatusRuntimeAuthRoute } from "./list.types.js";
+import type {
+  ModelsStatusOptions,
+  ProviderAuthOverview,
+  StatusRuntimeAuthRoute,
+  StatusSyntheticAuth,
+} from "./list.types.js";
 import { loadModelsConfig } from "./load-config.js";
 import {
   DEFAULT_MODEL,
@@ -101,14 +109,6 @@ import {
 const listProbeRuntimeLoader = createLazyImportLoader(() => import("./list.probe.js"));
 
 const DISPLAY_MODEL_PARSE_OPTIONS = { allowPluginNormalization: false } as const;
-
-type StatusSyntheticAuth = {
-  value: string;
-  source: string;
-  credential?: string;
-  mode?: ProviderSyntheticAuthResult["mode"];
-  expiresAt?: number;
-};
 
 type StatusProviderUseRef = {
   provider: string;
@@ -203,24 +203,14 @@ function finishModelsStatusOutput(
   }
 }
 
-export async function modelsStatusCommand(
-  opts: {
-    json?: boolean;
-    plain?: boolean;
-    check?: boolean;
-    probe?: boolean;
-    probeProvider?: string;
-    probeProfile?: string | string[];
-    probeTimeout?: string;
-    probeConcurrency?: string;
-    probeMaxTokens?: string;
-    agent?: string;
-  },
+async function runModelsStatusCommand(
+  opts: ModelsStatusOptions,
   runtime: RuntimeEnv,
+  signal?: AbortSignal,
 ) {
   ensureFlagCompatibility(opts);
   if (opts.plain && opts.probe) {
-    throw new Error("--probe cannot be used with --plain output.");
+    throwExpectedCliError("--probe cannot be used with --plain output.");
   }
   const configPath = createConfigIO().configPath;
   const cfg = await loadModelsConfig({
@@ -235,7 +225,7 @@ export async function modelsStatusCommand(
     agentDirOverride: !explicitAgentId && envAgentDir ? resolveUserPath(envAgentDir) : undefined,
     kind: "read",
   });
-  const gatewayCatalog = await readModelCatalog(cfg, workspaceAgentId);
+  const gatewayCatalog = await readModelCatalog(cfg, workspaceAgentId, signal);
   for (const warning of getModelCatalogWarnings(gatewayCatalog)) {
     runtime.error(terminalText`${warning.message} ${warning.fixHint}`);
   }
@@ -1459,5 +1449,9 @@ export async function modelsStatusCommand(
     },
     { config: cfg, workspaceDir, env: process.env },
   );
+}
+
+export async function modelsStatusCommand(opts: ModelsStatusOptions, runtime: RuntimeEnv) {
+  await runModelCatalogReadCommand((signal) => runModelsStatusCommand(opts, runtime, signal));
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

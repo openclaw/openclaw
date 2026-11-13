@@ -81,6 +81,7 @@ const enNewSessionSetup = {
     followUpReloadBlocked: runtime.followUpReloadBlocked,
     followUpsPaused: runtime.followUpsPaused,
     followUpsAdmissionFailed: runtime.followUpsAdmissionFailed,
+    retrySetup: runtime.retrySetup,
     createFailed: runtime.createFailed,
     checkoutCurrentNote: "Works in the selected folder on its current branch.",
     preferenceSaveUnconfirmed: runtime.preferenceSaveUnconfirmed,
@@ -128,6 +129,7 @@ const enNewSessionSetup = {
     browseAccessDenied: "You don’t have permission to browse this folder. Ask an admin for access.",
     browseRequiresAdmin:
       "You need admin access to browse outside agent workspaces. Ask an admin for access.",
+    browseRequiresAdminTooltip: "Only admins can browse outside agent workspaces.",
     connectMachine: "Connect a device",
     browserUp: "Parent folder",
     browserUse: "Use this folder",
@@ -156,6 +158,8 @@ const enNewSessionSetup = {
     startInTerminal: "Start in terminal",
     nativeTerminalHint:
       "Starts the native CLI on the selected device using its own account and configuration. This doesn’t create an OpenClaw session.",
+    nativeTerminalHintTooltip:
+      "Opens the native CLI on the selected device with its own account and settings—not an OpenClaw session.",
     chooseNativeHost: "Choose a device for the native CLI",
     nativeHostsUnavailable:
       "No native CLI is available. Install it on this computer or connect a device with CLI access, then reconnect to the Gateway.",
@@ -189,9 +193,13 @@ const enNewSessionSetup = {
     checkoutRemoteLocked: "Paired and cloud devices use a worktree",
     local: "This computer",
     folderPlaceholder: "Agent workspace",
-    projects: "Projects",
+    localProjects: "Local projects",
+    noLocalProjects: "No local projects registered",
+    noLocalProjectMatches: "No local projects match",
+    noAdditionalGithubProjects: "No additional GitHub repositories",
     projectsAdminHint: "Admins can register projects from Browse folders",
     projectSearchPlaceholder: "Search projects or paste a Git URL",
+    searchProjects: "Search projects",
     githubProjects: "GitHub",
     githubTokenHint:
       "No GitHub account is configured for the Control UI or Gateway. Only public GitHub results are shown.",

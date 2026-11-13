@@ -48,6 +48,8 @@ export type EmbeddedAgentMeta = {
    * usage metadata.
    */
   compactionTokensAfter?: number;
+  /** Context size a native runtime reported before its most recent compaction. */
+  compactionTokensBefore?: number;
   /**
    * Prompt/context snapshot from the latest model request. Prefer this for
    * context-window utilization because provider usage totals can include cached

@@ -3,6 +3,7 @@
 // repositories can verify against the fixture without running TypeScript.
 import { bytesToHex, hexToBytes, utf8 } from "../bytes.js";
 import { ed25519SignerFromSeed, sha256, type StatementSigner } from "../crypto.js";
+import { deriveInviteProofKey, inviteSecretHash } from "../invites.js";
 import { canonicalize, type JsonValue } from "../jcs.js";
 import {
   displayFingerprint,
@@ -14,6 +15,11 @@ import {
   type KeyFingerprint,
 } from "../keys.js";
 import { deriveRootSeed, encodeKit } from "../kit.js";
+import {
+  buildNodeJoinLink,
+  computeNodeRedemptionProof,
+  nodeVerificationCode,
+} from "../node-invites.js";
 import { signingInput, signStatement } from "../statements/envelope.js";
 import type { BindingEvidence, ClawPin } from "../statements/pin.js";
 import {
@@ -35,7 +41,7 @@ export const VECTOR_CLAW_ID = "0123456789abcdef0123456789abcdef";
 export const VECTOR_HOST = "studio-k7x2q.crabd.me";
 
 /** Which verifier a vector exercises. */
-export type VectorVerifier = "owner" | "snapshot" | "redemption" | "reset";
+export type VectorVerifier = "owner" | "snapshot" | "redemption" | "reset" | "node_redemption";
 
 /** One statement vector. */
 export type StatementVector = {
@@ -91,6 +97,13 @@ export type StatementVectors = {
   valid: StatementVector[];
   invalid: InvalidStatementVector[];
   pins: PinVector[];
+  node_invite: {
+    secret_hex: string;
+    proof_key_hex: string;
+    proof: string;
+    link: string;
+    verification_code: string;
+  };
 };
 
 const KEY_NAMES = [
@@ -106,6 +119,7 @@ const KEY_NAMES = [
   "invitee",
   "mallory",
   "root-2",
+  "node",
 ] as const;
 type KeyName = (typeof KEY_NAMES)[number];
 
@@ -236,6 +250,33 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
     },
     signers["device-1"],
   );
+  const guestInvite = await signStatement(
+    "InviteCap",
+    { ...invite.body, role: "guest" },
+    signers["device-2"],
+  );
+  const guestAdd = await signStatement(
+    "MembershipChange",
+    {
+      ...change.body,
+      target: {
+        op: "add",
+        account_id: "acct_bob",
+        role: "guest",
+        peer_keys: [iroh("invitee")],
+        invite_id: invite.body.invite_id,
+      },
+    },
+    signers["device-1"],
+  );
+  const guestRoleChange = await signStatement(
+    "MembershipChange",
+    {
+      ...change.body,
+      target: { op: "set_role", account_id: "acct_bob", role: "support_team-2" },
+    },
+    signers["device-1"],
+  );
   const revocation = await signStatement(
     "Revocation",
     {
@@ -260,9 +301,18 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
         { device_pub: pub("device-2"), caps: [...allCaps].toSorted() },
       ].toSorted((a, b) => a.device_pub.localeCompare(b.device_pub)),
       owner_peer_keys: [iroh("device-1"), iroh("device-2")],
+      node_peer_keys: [iroh("node")],
       members: [{ account_id: "acct_bob", role: "operator", peer_keys: [iroh("invitee")] }],
       protocols: { statement: [1], descriptor: [1] },
       issued_at: VECTOR_ISSUED_AT,
+    },
+    signers.gateway,
+  );
+  const guestSnapshot = await signStatement(
+    "MembershipSnapshot",
+    {
+      ...snapshot.body,
+      members: [{ account_id: "acct_bob", role: "guest", peer_keys: [iroh("invitee")] }],
     },
     signers.gateway,
   );
@@ -278,6 +328,63 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
       requested_at: VECTOR_ISSUED_AT,
     },
     signers.invitee,
+  );
+
+  const nodeSecret = new Uint8Array(32).fill(42);
+  const nodeProofKey = await deriveInviteProofKey(nodeSecret);
+  const nodeParts = {
+    claw_id: VECTOR_CLAW_ID,
+    invite_id: "ffeeddccbbaa99887766554433221100",
+    peer_key: iroh("node"),
+  };
+  const nodeProof = await computeNodeRedemptionProof(nodeProofKey, nodeParts);
+  const nodeInvite = await signStatement(
+    "NodeInviteCap",
+    {
+      claw_id: nodeParts.claw_id,
+      invite_id: nodeParts.invite_id,
+      label: "build node",
+      created_at: VECTOR_ISSUED_AT,
+      expires_at: VECTOR_ISSUED_AT + 600,
+      secret_hash: await inviteSecretHash(nodeProofKey),
+    },
+    signers["device-1"],
+  );
+  const description = {
+    display_name: "Build node",
+    platform: "linux",
+    commands: ["system.run"],
+    caps: ["system"],
+  };
+  const nodeRedemption = await signStatement(
+    "NodeRedemption",
+    { ...nodeParts, description, proof: nodeProof, requested_at: VECTOR_NOW },
+    signers.node,
+  );
+  const nodeChange = await signStatement(
+    "MembershipChange",
+    {
+      claw_id: VECTOR_CLAW_ID,
+      seq: 3,
+      target: {
+        op: "add_node",
+        peer_key: iroh("node"),
+        label: "build node",
+        invite_id: nodeParts.invite_id,
+      },
+      issued_at: VECTOR_NOW,
+    },
+    signers["device-1"],
+  );
+  const nodeRemoval = await signStatement(
+    "MembershipChange",
+    {
+      claw_id: VECTOR_CLAW_ID,
+      seq: 4,
+      target: { op: "remove_node", peer_key: iroh("node") },
+      issued_at: VECTOR_NOW,
+    },
+    signers["device-1"],
   );
 
   // Forgeries and invalid statements.
@@ -357,6 +464,20 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
     description:
       "OpenClaw ID signed statement vectors. Regenerate with buildStatementVectors(); never edit by hand.",
     now: VECTOR_NOW,
+    node_invite: {
+      verification_code: await nodeVerificationCode(nodeRedemption.body),
+      secret_hex: bytesToHex(nodeSecret),
+      proof_key_hex: bytesToHex(nodeProofKey),
+      proof: nodeProof,
+      link: buildNodeJoinLink({
+        invite_id: nodeParts.invite_id,
+        secret: nodeSecret,
+        claw_id: VECTOR_CLAW_ID,
+        root_fp: rootFp,
+        hostname: VECTOR_HOST,
+        relay_url: "https://relay.example.test/",
+      }),
+    },
     kit: {
       secret_hex: bytesToHex(kitSecret),
       text: await encodeKit(kitSecret),
@@ -376,12 +497,32 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
       vector("root signs server binding seq 2 (new server key)", "owner", binding2),
       vector("owner device-2 signs invite", "owner", invite),
       vector("owner device-1 adds member", "owner", change),
+      vector("owner invites opaque guest role", "owner", guestInvite),
+      vector("owner approves exact guest role", "owner", guestAdd),
+      vector("owner changes opaque role", "owner", guestRoleChange),
+      vector("gateway mirrors opaque guest role", "snapshot", guestSnapshot),
       vector("owner device-2 revokes device-3", "owner", revocation),
       vector("gateway signs membership snapshot", "snapshot", snapshot),
       vector("invitee signs redemption request", "redemption", redemption),
       vector("gateway signs root reset to root-2", "reset", rootReset),
+      vector("owner invites a node", "owner", nodeInvite),
+      vector("node W signs redemption", "node_redemption", nodeRedemption),
+      vector("owner approves node", "owner", nodeChange),
+      vector("owner removes node", "owner", nodeRemoval),
     ],
     invalid: [
+      {
+        name: "node redemption signed by another W",
+        verifier: "node_redemption",
+        statement: await signStatement("NodeRedemption", nodeRedemption.body, signers.mallory),
+        expected_error: "wrong_signer",
+      },
+      {
+        name: "Gateway cannot invite nodes",
+        verifier: "owner",
+        statement: await signStatement("NodeInviteCap", nodeInvite.body, signers.gateway),
+        expected_error: "not_an_owner",
+      },
       {
         name: "binding signed by an unknown key (Discovery substitution)",
         verifier: "owner",

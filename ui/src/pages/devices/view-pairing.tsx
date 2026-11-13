@@ -3,6 +3,7 @@ import { action, createOptimistic, For, Show, until } from "solid-js";
 import { handleCopyButton } from "../../components/copy-button-state.ts";
 import "../../components/modal-dialog.tsx";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
+import { IconButton } from "../../components/solid/icon-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { Radio } from "../../components/solid/radio.tsx";
@@ -165,25 +166,23 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
             <h2 class="oc-dialog__title">{t("devices.pairing.title")}</h2>
             <div class="oc-dialog__header-actions">
               {/* Help is wanted at any step, so it sits beside close instead of under the title. */}
-              <openclaw-tooltip prop:content={t("devices.pairing.help")}>
-                <a
-                  class="oc-dialog__icon-button device-pair-setup__help"
-                  href={isNodeSetup() ? NODE_PAIRING_DOCS_URL : MOBILE_PAIRING_DOCS_URL}
-                  target={EXTERNAL_LINK_TARGET}
-                  rel={buildExternalLinkRel()}
-                  aria-label={t("devices.pairing.helpNewTab")}
-                >
-                  <Icon name="circleQuestionMark" />
-                </a>
-              </openclaw-tooltip>
-              <button
-                class="oc-dialog__close device-pair-setup__close"
-                type="button"
-                aria-label={t("common.dismiss")}
-                onClick={() => props.onClose()}
+              <a
+                class="oc-icon-button oc-icon-button--28 oc-dialog__icon-button device-pair-setup__help"
+                href={isNodeSetup() ? NODE_PAIRING_DOCS_URL : MOBILE_PAIRING_DOCS_URL}
+                target={EXTERNAL_LINK_TARGET}
+                rel={buildExternalLinkRel()}
+                aria-label={t("devices.pairing.helpNewTab")}
               >
-                <Icon name="x" />
-              </button>
+                <Icon name="circleQuestionMark" />
+              </a>
+              <IconButton
+                size={28}
+                class="oc-dialog__close device-pair-setup__close"
+                icon="x"
+                label={t("common.dismiss")}
+                tooltip={false}
+                onClick={() => props.onClose()}
+              />
             </div>
             {/* A finished state says its result once, in the body. */}
             <Show when={!outcome()}>

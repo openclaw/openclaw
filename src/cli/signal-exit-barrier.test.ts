@@ -124,6 +124,7 @@ it.skipIf(process.platform === "win32").each([
   { kind: "execa", signal: "SIGTERM" },
   { kind: "fallback", signal: "SIGINT" },
   { kind: "fallback", signal: "SIGTERM" },
+  { kind: "observer", signal: "SIGTERM" },
   { kind: "doctor", signal: "SIGTERM" },
 ])("preserves the $kind signal lifecycle ($signal)", ({ kind, signal }) => {
   const root = directories.make("cli-signal-owner-");
@@ -131,17 +132,13 @@ it.skipIf(process.platform === "win32").each([
     process.execPath,
     createNodeEvalArgs(
       `import { once } from 'node:events';
-         import { installCliSignalExitHandlers, installCliDoctorSignalExitHandlers, registerSignalExitBarrier } from ${JSON.stringify(new URL("./signal-exit-barrier.ts", import.meta.url).href)};
+         import { installCliSignalExitHandlers, installCliDoctorSignalExitHandlers, registerSignalExitBarrier, startSignalObserver } from ${JSON.stringify(new URL("./signal-exit-barrier.ts", import.meta.url).href)};
          const releaseSignals = installCliSignalExitHandlers();
-         if (${JSON.stringify(kind)} === 'fallback') {
-           installCliSignalExitHandlers();
-           releaseSignals();
-           releaseSignals();
-         }
+         if (${JSON.stringify(kind)} === 'fallback') { installCliSignalExitHandlers(); releaseSignals(); releaseSignals(); }
          const backstop = setTimeout(() => process.exit(99), 5000);
          registerSignalExitBarrier(async () => { clearTimeout(backstop); });
          process.once("beforeExit", () => {
-           if (${JSON.stringify(kind)} === "fallback" || ${JSON.stringify(kind)} === "doctor") process.stdout.write("|natural");
+           if (${JSON.stringify(["fallback", "observer", "doctor"].includes(kind))}) process.stdout.write("|natural");
          });
          if (${JSON.stringify(kind)} === 'doctor') {
            installCliDoctorSignalExitHandlers();
@@ -154,7 +151,8 @@ it.skipIf(process.platform === "win32").each([
            const { execa } = await import('execa');
            const child = execa(process.execPath, ['-e', 'setInterval(() => {}, 1000)']);
            await once(child.nodeChildProcess, 'spawn');
-         } else if (${JSON.stringify(kind)} === 'fallback') {
+         } else if (${JSON.stringify(["fallback", "observer"].includes(kind))}) {
+           if (${JSON.stringify(kind)} === 'observer') startSignalObserver(() => process.on('SIGTERM', () => {}));
            registerSignalExitBarrier(async () => {
              await Promise.resolve();
              process.stderr.write('fallback cleanup');
@@ -184,7 +182,7 @@ it.skipIf(process.platform === "win32").each([
   } else if (kind === "execa") {
     expect(result.signal, result.stderr).toBe("SIGTERM");
     expect(result.stderr).toBe("");
-  } else if (kind === "fallback") {
+  } else if (kind === "fallback" || kind === "observer") {
     expect(result, result.stderr).toMatchObject({
       status: signal === "SIGINT" ? 130 : 143,
       stdout: "fallback drained|natural",

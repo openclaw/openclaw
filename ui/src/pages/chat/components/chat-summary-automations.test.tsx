@@ -1,9 +1,10 @@
 /* @vitest-environment jsdom */
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
-import { createSignal } from "solid-js";
+import { Loading, createMemo, createSignal } from "solid-js";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { CronCompactJob, CronJobsListResult } from "../../../api/types.ts";
+import type { TooltipElement } from "../../../components/solid/tooltip.tsx";
 import { createApplicationGateway } from "../../../test-helpers/application-context.ts";
 import {
   createGatewayRequestMock,
@@ -19,6 +20,7 @@ import {
   ChatSummaryAutomations,
   createSessionAutomationInventory,
 } from "./chat-summary-automations.tsx";
+import { sessionAutomationNextRun } from "./session-automation-schedule-non-cron.ts";
 
 type Page = CronJobsListResult<CronCompactJob>;
 
@@ -280,6 +282,10 @@ it("updates a held automation's runtime state without rereading its inventory", 
   });
   await current.ready("Every 10 minutes");
   expect(current.element.textContent).not.toContain("Running");
+  expect(current.element.querySelector("openclaw-tooltip")).toHaveProperty(
+    "content",
+    sessionAutomationNextRun(600_003),
+  );
   expect(current.request).toHaveBeenCalledTimes(1);
   current.unmount();
 });
@@ -785,6 +791,47 @@ it("expands 25 retained jobs in tens independently of RPC pagination and resets 
   expect(current.request).toHaveBeenCalledTimes(3);
 });
 
+it("admits cron events and reveals rows while an async frame holds a derived session prop", async () => {
+  const jobs = Array.from({ length: 25 }, (_, index) =>
+    job({ id: `job-${index}`, name: `Automation ${index + 1}` }),
+  );
+  const current = source(sequence(page(jobs), page(jobs)));
+  const initial = { sessionKey: "agent:ops:task" };
+  const [details, setDetails] = createSignal(initial);
+  const held = createDeferred<string>();
+  const { container } = mountSolid(() => {
+    // A pending read keeps the replacement details object staged until it settles.
+    const frame = createMemo(() => (details() === initial ? "ready" : held.promise));
+    return (
+      <>
+        <Loading>{frame()}</Loading>
+        <ChatSummaryAutomations
+          gateway={current.gateway}
+          // Like Details, the compiler builds a fresh memo for this conditional on every read.
+          sessionKey={details().sessionKey ? details().sessionKey : ""}
+          desktop={{ expanded: true, onExpandedChange: vi.fn() }}
+          presented
+        />
+      </>
+    );
+  });
+  const rows = () => container.querySelectorAll(".chat-summary__automation");
+  await waitForSolid(() => expect(rows()).toHaveLength(10));
+  setDetails({ sessionKey: "agent:ops:task" });
+  flush();
+
+  current.publishEvent({ type: "event", event: "cron", payload: { action: "updated" } });
+  await waitForSolid(() => expect(current.request).toHaveBeenCalledTimes(2));
+  expect(current.request).toHaveBeenLastCalledWith(
+    "cron.list",
+    expect.objectContaining({ sessionKey: "agent:ops:task" }),
+  );
+  container.querySelector<HTMLButtonElement>(".chat-summary__automation-more")!.click();
+  held.resolve("ready");
+  await waitForSolid(() => expect(rows()).toHaveLength(20));
+  expect(current.request).toHaveBeenCalledTimes(2);
+});
+
 it("retains reconnect facts and distinguishes auto-disabled from paused and stale running", async () => {
   const pending = createDeferred<Page>();
   const current = component(
@@ -851,7 +898,7 @@ it("describes one-shot automations by local day and time instead of a full numer
   await current.ready("Renewal");
   const state = (id: string) =>
     current.element.querySelector<HTMLAnchorElement>(`a[href$="job=${id}"]`)!.textContent;
-  expect(state("today")).toContain("Today at 11:00 AM");
+  expect(state("today")).toBe("Verify main CI11:00 AM");
   expect(state("tomorrow")).toContain("Tomorrow at 9:00 AM");
   expect(state("later")).toContain(`Mar 3, ${year + 1} at 9:00 AM`);
   expect(current.element.textContent).not.toMatch(/At \d/);
@@ -890,4 +937,32 @@ it("describes cron weekdays and non-uniform minute steps without inventing a fix
     { timeout: 5_000 },
   );
   expect(minutes.textContent).not.toContain("Every 7 minutes");
+});
+
+const later = Date.now() + 10 * 86_400_000;
+const failing = { reason: "schedule-errors", atMs: 1, consecutiveErrors: 3 } as const;
+const idle = "Not scheduled to run again";
+it.each([
+  [{ nextRunAtMs: later }, sessionAutomationNextRun(later)],
+  [{ nextRunAtMs: null }, idle],
+  [{ enabled: false, nextRunAtMs: later }, idle],
+  [{ autoDisabled: failing, nextRunAtMs: later }, idle],
+] satisfies [Partial<CronCompactJob>, string][])(
+  "row tooltip shows only: %j",
+  async (state, text) => {
+    const current = component(jobsRequest(job(state)));
+    await current.ready("Check the task");
+    expect(current.element.querySelector<TooltipElement>("openclaw-tooltip")?.content).toBe(text);
+    current.unmount();
+  },
+);
+
+it.each([
+  [new Date(2026, 10, 4, 14, 6), "Next run today at 2:06 PM"],
+  [new Date(2026, 10, 5, 9, 0), "Next run tomorrow at 9:00 AM"],
+  [new Date(2027, 0, 3, 9, 0), "Next run on Jan 3, 2027 at 9:00 AM"],
+])("words the next run at %s in local terms", (at, expected) => {
+  vi.useFakeTimers({ toFake: ["Date"], now: new Date(2026, 10, 4, 9, 0) });
+  onTestFinished(() => void vi.useRealTimers());
+  expect(sessionAutomationNextRun(at.getTime())).toBe(expected);
 });

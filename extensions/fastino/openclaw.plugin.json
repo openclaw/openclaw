@@ -1,0 +1,105 @@
+{
+  "id": "fastino",
+  "name": "Fastino GLiDE",
+  "description": "Native GLiDE Boolean, Choice and Score decisions.",
+  "categories": [
+    "models"
+  ],
+  "enabledByDefault": false,
+  "activation": {
+    "onStartup": true
+  },
+  "providers": [
+    "fastino"
+  ],
+  "contracts": {
+    "decisionProviders": [
+      "fastino"
+    ]
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "fastino",
+        "envVars": [
+          "FASTINO_API_KEY"
+        ]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "fastino",
+      "method": "api-key",
+      "choiceId": "fastino-api-key",
+      "appGuidedSecret": true,
+      "choiceLabel": "Fastino API key",
+      "groupId": "fastino",
+      "groupLabel": "Fastino",
+      "optionKey": "fastinoApiKey",
+      "cliFlag": "--fastino-api-key",
+      "cliOption": "--fastino-api-key <key>",
+      "cliDescription": "Fastino API key",
+      "credentialOnly": true
+    }
+  ],
+  "modelCatalog": {
+    "providers": {
+      "fastino": {
+        "baseUrl": "https://api.fastino.ai/v1",
+        "models": [
+          {
+            "id": "fastino/GLiDE",
+            "name": "GLiDE (hosted)",
+            "inference": {
+              "chat": false,
+              "decision": {
+                "protocol": "fastino-systemone",
+                "input": [
+                  "text"
+                ],
+                "questions": {
+                  "boolean": {
+                    "probabilities": "boolean",
+                    "abstention": false
+                  },
+                  "choice": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 255
+                  },
+                  "score": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 255
+                  }
+                },
+                "confidence": "provider-specific",
+                "reasoning": {
+                  "modes": [
+                    "auto"
+                  ]
+                },
+                "limits": {
+                  "maxQuestions": 256,
+                  "maxStateAndQuestionTokens": 65536
+                },
+                "billing": {
+                  "unit": "tokens",
+                  "source": "provider-docs"
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

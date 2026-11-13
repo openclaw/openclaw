@@ -59,11 +59,12 @@ export function settleSessionControllerSourceInjectionOrder(
 /** Retains an early source through the exact native outcome, not just its ACK. */
 export function beginSessionControllerSourceInjection(
   input: SessionControllerInput,
-  options: { keepOrderOnDecline?: boolean } = {},
+  options: { keepOrderOnDecline?: boolean; retryWithdrawnSteer?: boolean } = {},
 ): SessionControllerSourceInjection {
   if (
     (input.phase !== "preparing" && input.phase !== "waiting") ||
-    input.injectionAttempted ||
+    (input.injectionAttempted &&
+      !(options.retryWithdrawnSteer && input.steerNow && input.custody.enqueued)) ||
     input.injection ||
     input.claim ||
     input.withdrawalHolds ||
@@ -272,6 +273,7 @@ export function retireSessionControllerInput(input: SessionControllerInput): voi
     return;
   }
   input.retirementRequested = true;
+  input.steerNow = undefined;
   if (
     input.cancelling ||
     input.withdrawalHolds ||

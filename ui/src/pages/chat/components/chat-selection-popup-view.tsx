@@ -70,10 +70,16 @@ export function showChatSelectionToolbar(
           ) : undefined}
           <button
             type="button"
-            aria-label={t("chat.messages.askInSideChat")}
             onClick={() => activate(() => actions.onAskSideChat(source, anchor))}
           >
             {t("chat.messages.askInSideChat")}
+          </button>
+          <button
+            type="button"
+            aria-label={t("chat.messages.askInNewSession")}
+            onClick={() => activate(() => actions.onAskNewSession(source))}
+          >
+            {t("chat.messages.newSessionOption")}
           </button>
         </div>
       </Portal>

@@ -152,7 +152,7 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
               <>
                 <button
                   class="btn"
-                  title={view().operatorAccess.canAdmin ? "" : t("worktrees.adminRequired")}
+                  title={view().operatorAccess.canAdmin ? "" : t("worktrees.adminRequiredTooltip")}
                   aria-expanded={view().createOpen ? "true" : "false"}
                   disabled={!view().operatorAccess.canAdmin || operation() === "create"}
                   onClick={() => model.toggleCreate()}
@@ -161,13 +161,11 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
                 </button>
                 <button
                   class="btn"
-                  title={view().operatorAccess.canAdmin ? "" : t("worktrees.adminRequired")}
+                  title={view().operatorAccess.canAdmin ? "" : t("worktrees.adminRequiredTooltip")}
                   disabled={!model.gateway.connected || !view().operatorAccess.canAdmin || busy()}
                   onClick={() => void mutate("gc", () => model.gc())}
                 >
-                  {operation() === "gc" || view().loading
-                    ? t("common.loading")
-                    : t("worktrees.cleanNow")}
+                  {operation() === "gc" ? t("common.loading") : t("worktrees.cleanNow")}
                 </button>
               </>
             }
@@ -295,7 +293,9 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
                             <button
                               class={["btn btn--sm", { danger: !record().removedAt }]}
                               title={
-                                view().operatorAccess.canAdmin ? "" : t("worktrees.adminRequired")
+                                view().operatorAccess.canAdmin
+                                  ? ""
+                                  : t("worktrees.adminRequiredTooltip")
                               }
                               aria-label={`${record().removedAt ? t("worktrees.restore") : t("common.delete")}: ${record().name}`}
                               disabled={

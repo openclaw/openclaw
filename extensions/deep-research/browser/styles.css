@@ -25,8 +25,7 @@
 }
 .deep-research-pane button,
 .deep-research-pane select,
-.deep-research-pane textarea,
-.deep-research-accessory {
+.deep-research-pane textarea {
   font: inherit;
   color: var(--text);
   background: var(--bg-elevated);
@@ -148,16 +147,17 @@
 .deep-research-report {
   white-space: pre-wrap;
   line-height: 1.65;
+  /* Report prose keeps macOS stem darkening: the Control UI's app-wide
+     antialiased smoothing renders long-form reading text thin. Pane chrome
+     keeps the app-wide smoothing. */
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
 }
 .deep-research-report .deep-research-citation {
   padding: 0 4px;
   color: var(--accent);
   display: inline;
   font-size: inherit;
-}
-.deep-research-accessory {
-  font-size: 0.8rem;
-  white-space: normal;
 }
 .deep-research-pane [hidden] {
   display: none;

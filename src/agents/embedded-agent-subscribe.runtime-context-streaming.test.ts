@@ -31,7 +31,15 @@ async function stream(text: string, size: number, inspect?: (visible: string) =>
   }
   return ctx.state.assistantStream?.text ?? "";
 }
-it.each(["", "MEDIA: ./chart.png\n", "See [[N]]. ", "x=[[1,2],[3,4]]; ", "a[[0]] "])(
+it.each([
+  "",
+  "MEDIA: ./chart.png\n",
+  "See [[N]]. ",
+  "x=[[1,2],[3,4]]; ",
+  "a[[0]] ",
+  "[[reply_to_current]]",
+  "[[audio_as_voice]]",
+])(
   "bounds stream work: %j",
   async (prefix) => {
     const text = prefix + source;

@@ -3,6 +3,7 @@ import "./attempt-spawn-workspace.tools-mock.test-support.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { vi } from "vitest";
@@ -439,9 +440,8 @@ vi.mock("../../cache-trace.js", () => ({
 }));
 
 // mock-isolation: Exercise attempt workspace routing without constructing unrelated tools.
-vi.mock("../../agent-tools.js", () => ({
+vi.mock("../../agent-tools.async.js", () => ({
   createOpenClawCodingToolsInternalAsync: hoisted.createOpenClawCodingToolsMock,
-  resolveToolLoopDetectionConfig: () => undefined,
 }));
 
 vi.mock("../../agent-bundle-mcp-tools.js", () => ({
@@ -984,6 +984,10 @@ export async function createContextEngineAttemptRunner(params: {
           },
         },
         ...params.attemptOverrides,
+      };
+      // This runner owns a fresh store per call, even when its fixture session ID is reused.
+      using _ = {
+        [Symbol.dispose]: () => cleanupSessionResources(attempt.sessionId),
       };
       const admittedRunContext = params.attemptOverrides?.admittedRunContext;
       const runAttempt = async (context: NonNullable<typeof admittedRunContext>) => {

@@ -339,7 +339,6 @@ suite.define(() => {
           expect(await gateway.getRequests("chat.send")).toHaveLength(0);
           await alert.waitFor();
           await alert
-            .locator("summary strong")
             .getByText("Couldn't finish this reply. Check the conversation before trying again.")
             .waitFor();
           expect(await alert.locator("details").getAttribute("open")).toBeNull();

@@ -2,7 +2,11 @@ import Foundation
 import Observation
 import OpenClawKit
 import OpenClawProtocol
+import SwiftUI
 import Testing
+#if os(macOS)
+import AppKit
+#endif
 @testable import OpenClawChatUI
 
 private func chatTextMessage(
@@ -8428,7 +8432,7 @@ struct ChatViewModelTests {
         #expect(await transport.sessionSettingsPatches().isEmpty)
     }
 
-    @Test func `write scope permits model but keeps effort settings admin only`() async throws {
+    @Test func `effort settings stay unchanged without effort access`() async throws {
         let writeCatalog = OpenClawChatComposerCapabilityCatalog(
             sessionSettingsAvailable: true,
             modelMutationAvailable: true,
@@ -8450,6 +8454,26 @@ struct ChatViewModelTests {
             vm.selectVerboseLevel("full")
         }
         try await Task.sleep(for: .milliseconds(20))
+        #expect(await transport.sessionSettingsPatches().isEmpty)
+    }
+
+    @Test func `write scope permits effort but keeps tool details admin only`() async throws {
+        let writeCatalog = OpenClawChatComposerCapabilityCatalog(
+            sessionSettingsAvailable: true,
+            modelMutationAvailable: true,
+            effortMutationAvailable: true)
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload(sessionId: "sess-main")],
+            sessionsResponses: [sessionsResponse([
+                sessionEntry(key: "main", updatedAt: 1, sessionId: "sess-main"),
+            ])],
+            composerCapabilityCatalog: writeCatalog)
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+        await vm.loadComposerCapabilities()
+
+        #expect(await MainActor.run { !vm.composerVerboseMutationAvailable })
+        await MainActor.run { vm.selectVerboseLevel("full") }
+        await vm.waitForPendingSessionSettings(for: vm.currentModelPatchTarget())
         #expect(await transport.sessionSettingsPatches().isEmpty)
     }
 
@@ -8935,6 +8959,40 @@ struct ChatViewModelTests {
             vm.toggleComposerWebSearch()
         }
         #expect(await transport.sessionSettingsPatches().isEmpty)
+    }
+
+    @Test func `health poll recovery reloads composer capabilities loaded before connect`() async throws {
+        let calls = AsyncCounter()
+        let writerCatalog = OpenClawChatComposerCapabilityCatalog(
+            sessionSettingsAvailable: true,
+            modelMutationAvailable: true,
+            effortMutationAvailable: true,
+            permissionMutationAvailable: true)
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload(sessionId: "sess-main")],
+            sessionsResponses: [sessionsResponse([
+                sessionEntry(key: "main", updatedAt: 1, sessionId: "sess-main"),
+            ])],
+            composerCapabilityCatalogHook: { _, _ in
+                // The composer's first load runs before the operator route exists.
+                await calls.increment() == 1 ? OpenClawChatComposerCapabilityCatalog() : writerCatalog
+            },
+            healthResponses: [false, true])
+        let bootstrap = try #require(await MainActor.run {
+            vm.load()
+            return vm.bootstrapTask
+        })
+        await bootstrap.value
+        await vm.loadComposerCapabilities()
+        #expect(await MainActor.run { !vm.healthOK && !vm.composerModelMutationAvailable })
+
+        // The chat's own health poll, not a gateway health event, observes the connection.
+        await vm.pollHealthIfNeeded(force: true)
+        await calls.wait { $0 >= 2 }
+        await waitForObservedState {
+            vm.composerModelMutationAvailable && vm.composerEffortMutationAvailable
+        }
+        #expect(await calls.current() == 2)
     }
 
     @Test func `composer capabilities fail closed and discard a stale catalog`() async throws {
@@ -14399,20 +14457,20 @@ struct ChatStreamPresentationTests {
             _ = vm.hasStreamingAssistantText
             _ = vm.timelineRevision
         } onChange: { transcript.count += 1 }
-        withObservationTracking { _ = vm.liveAssistantDisplayText } onChange: { bubble.count += 1 }
+        withObservationTracking { _ = vm.displayedStreamingAssistantText } onChange: { bubble.count += 1 }
         vm.updateStreamingAssistantText("First second")
         vm.updateStreamingAssistantText("First second third")
         #expect(vm.streamingAssistantText == "First second third")
-        #expect(vm.liveAssistantDisplayText == "First")
+        #expect(vm.displayedStreamingAssistantText == "First")
         #expect(bubble.count == 0)
         try vm.flushStreamingAssistantDisplay(scheduledID: #require(vm.streamPacing.scheduledID))
-        #expect(vm.liveAssistantDisplayText == "First second third")
+        #expect(vm.displayedStreamingAssistantText == "First second third")
         #expect(bubble.count == 1)
         #expect(transcript.count == 0)
         #expect(vm.timelineRevision == before)
         vm.updateStreamingAssistantText(nil)
         #expect(transcript.count == 1)
-        #expect(vm.liveAssistantDisplayText == nil)
+        #expect(vm.displayedStreamingAssistantText == nil)
     }
 
     @Test @MainActor func `retired callback cannot publish old or new session text`() throws {
@@ -14426,10 +14484,10 @@ struct ChatStreamPresentationTests {
         vm.updateStreamingAssistantText("New queued")
         let current = try #require(vm.streamPacing.scheduledID)
         vm.flushStreamingAssistantDisplay(scheduledID: retired)
-        #expect(vm.liveAssistantDisplayText == "New first")
+        #expect(vm.displayedStreamingAssistantText == "New first")
         #expect(vm.streamPacing.scheduledID == current)
         vm.flushStreamingAssistantDisplay(scheduledID: current)
-        #expect(vm.liveAssistantDisplayText == "New queued")
+        #expect(vm.displayedStreamingAssistantText == "New queued")
     }
 
     @Test @MainActor func `visibility changes invalidate shape and durable history suppresses live duplicates`() throws {
@@ -14444,13 +14502,12 @@ struct ChatStreamPresentationTests {
         #expect(transcript.count == 1)
         vm.replaceMessages([OpenClawChatMessage(
             role: "assistant", content: [.init(type: "text", text: "Ready")], timestamp: 1)])
-        #expect(vm.liveAssistantDisplayText == nil)
         #expect(vm.liveAssistantTextShape == nil)
         let restored = Fired()
         withObservationTracking { _ = vm.liveAssistantTextShape } onChange: { restored.count += 1 }
         vm.updateStreamingAssistantText("Ready now")
         try vm.flushStreamingAssistantDisplay(scheduledID: #require(vm.streamPacing.scheduledID))
-        #expect(vm.liveAssistantDisplayText == "Ready now")
+        #expect(vm.displayedStreamingAssistantText == "Ready now")
         #expect(restored.count == 1)
     }
 }
@@ -15344,3 +15401,35 @@ struct ChatHistoryMutationTests {
         #expect(model.messages.isEmpty)
     }
 }
+
+#if os(macOS)
+struct ChatObscuredStreamPacingTests {
+    @Test @MainActor func `covered chat paces live text slower until it is revealed`() {
+        _ = NSApplication.shared
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: TestChatTransport(historyResponses: []))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 640),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false)
+        window.isReleasedWhenClosed = false
+        func content(obscured: Bool) -> some View {
+            OpenClawChatView(viewModel: vm, showsComposer: false)
+                .environment(\.openClawChatIsObscured, obscured)
+        }
+        let host = NSHostingView(rootView: content(obscured: true))
+        window.contentView = host
+        defer {
+            vm.detachTransport()
+            window.contentView = nil
+            window.close()
+        }
+        host.layoutSubtreeIfNeeded()
+        #expect(vm.streamPacing.interval == 0.5)
+
+        host.rootView = content(obscured: false)
+        host.layoutSubtreeIfNeeded()
+        #expect(vm.streamPacing.interval == 0.15)
+    }
+}
+#endif

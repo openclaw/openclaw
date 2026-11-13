@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { closeOpenClawAgentDatabases } from "./openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabase, resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.js";
+import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
 const options = {
@@ -25,7 +26,13 @@ if (fixtureRoot) {
     throw new Error("Held database fixture must stay inside its private state root");
   }
 }
-const database = openOpenClawAgentDatabase(options);
+const maintenance =
+  process.argv[5] === "full"
+    ? createOpenClawDatabaseMaintenanceScope({ sqliteIntegrityCheck: "full" })
+    : undefined;
+const database = maintenance
+  ? maintenance.run(() => openOpenClawAgentDatabase(options))
+  : openOpenClawAgentDatabase(options);
 process.send?.("ready");
 process.on("message", (message) => {
   if (message === "begin-write") {
@@ -37,5 +44,5 @@ process.on("message", (message) => {
   }
   closeOpenClawAgentDatabases();
   closeOpenClawStateDatabaseForTest();
-  process.disconnect?.();
+  void Promise.resolve(maintenance?.close()).then(() => process.disconnect?.());
 });

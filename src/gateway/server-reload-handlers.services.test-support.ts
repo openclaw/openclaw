@@ -1,4 +1,6 @@
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi, type Mock } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   attachRuntimeConfigWriteApplication,
   createRuntimeConfigWriteApplication,
@@ -8,6 +10,7 @@ import { PluginRuntimeApplicationError } from "../plugins/lifecycle.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createServiceRegistration } from "../plugins/services.test-support.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import type { GatewayReloadHandlerParams } from "./server-reload-contracts.js";
 import { beginGatewayReloadLifecycle } from "./server-reload-generation.js";
 import {
   captureConfigWriteListener,
@@ -23,8 +26,103 @@ import * as modelRuntime from "./server-reload-model-runtime-scope.js";
 export function registerGatewayTargetedServiceReloadTests({
   createGatewayReloadHandlers,
   startManagedGatewayConfigReloader,
-}: ReloadTestFactories): void {
+  reloadMocks,
+}: ReloadTestFactories & {
+  reloadMocks: {
+    reloadEvents: string[];
+    refreshContextWindowCache: Mock;
+    markPreparedModelRuntimeSnapshotsStale: Mock;
+    refreshPreparedModelRuntimeSnapshots: Mock;
+  };
+}): void {
   describe("gateway targeted service reload", () => {
+    it("keeps mixed reload state old until the plugin replacement commit", async () => {
+      const events: string[] = [];
+      const started = createDeferred();
+      const release = createDeferred();
+      const sourceConfig: OpenClawConfig = {
+        plugins: { enabled: true },
+        hooks: { enabled: true, token: "token", path: "/next" },
+      };
+      const nextConfig: OpenClawConfig = {
+        ...sourceConfig,
+        plugins: {
+          enabled: true,
+          allow: ["external-plugin"],
+          entries: { "external-plugin": { enabled: true } },
+        },
+      };
+      const reloadPlugins = vi.fn<GatewayReloadHandlerParams["reloadPlugins"]>(async (params) => {
+        events.push("reload:start");
+        reloadMocks.reloadEvents.push("prepare-plugins");
+        started.resolve();
+        await release.promise;
+        await params.commitRuntime();
+        events.push("registry:replace");
+        reloadMocks.reloadEvents.push("replace-plugins");
+        return makePluginReloadResult();
+      });
+      const setState = vi.fn();
+      const handlers = createGatewayReloadHandlers({
+        setState,
+        startChannel: vi.fn(async () => new Map()),
+        stopChannel: vi.fn(async (channel) => {
+          events.push(`stop:${channel}`);
+        }),
+        reloadPlugins,
+      });
+
+      const reload = handlers.applyHotReload(
+        createHotTailPlan({
+          changedPaths: ["hooks.path", "plugins.enabled"],
+          hotReasons: ["hooks.path", "plugins.enabled"],
+          reloadHooks: true,
+          reloadPlugins: true,
+        }),
+        nextConfig,
+        {
+          sourceConfig,
+          isCurrent: () => true,
+          publish: async (commit) => {
+            events.push("runtime:publish");
+            setRuntimeConfigSnapshot(nextConfig, sourceConfig);
+            await commit();
+          },
+        },
+      );
+
+      await started.promise;
+      expect(events).toEqual(["reload:start"]);
+      expect(setState).not.toHaveBeenCalled();
+
+      release.resolve();
+      await reload;
+
+      expect(events).toEqual(["reload:start", "runtime:publish", "registry:replace"]);
+      expect(setState).toHaveBeenCalledTimes(1);
+      expect(reloadPlugins.mock.calls[0]?.[0].nextConfig).toBe(nextConfig);
+      expect(reloadPlugins.mock.calls[0]?.[0].sourceConfig).toBe(sourceConfig);
+      const firstPrepareIndex = reloadMocks.reloadEvents.indexOf("prepare-plugins");
+      expect(firstPrepareIndex).toBeGreaterThanOrEqual(0);
+      expect(reloadMocks.reloadEvents.slice(firstPrepareIndex)).toEqual([
+        "prepare-plugins",
+        "stale-prepared-model-runtime",
+        "replace-plugins",
+        "refresh-prepared-model-runtime",
+        "refresh-context-window",
+      ]);
+      expect(reloadMocks.refreshContextWindowCache).toHaveBeenCalledWith(nextConfig);
+      expect(reloadMocks.markPreparedModelRuntimeSnapshotsStale).toHaveBeenCalledWith(
+        "prepared model runtime owner is stale before config publication",
+        { waitForReplacement: true },
+      );
+      expect(reloadMocks.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(nextConfig, {
+        allowGatewaySubagentBinding: true,
+        catalogMode: "static",
+        joinSupersedingPublication: true,
+      });
+    });
+
     it("forwards the service owner through managed config publication", async () => {
       vi.useFakeTimers();
       const registry = createTestRegistry([]);
@@ -161,6 +259,7 @@ export function registerGatewayTargetedServiceReloadTests({
               sourceConfig: nextConfig,
               isCurrent: () => current,
               publish: async (commit) => {
+                setRuntimeConfigSnapshot(nextConfig, nextConfig);
                 await commit();
                 events.push("published");
               },

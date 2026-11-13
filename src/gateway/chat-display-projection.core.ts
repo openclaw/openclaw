@@ -490,8 +490,21 @@ function projectRunFailureNotices(
       const cause =
         readRunFailureNotice(message)?.cause ??
         readRunFailureCause(asOptionalRecord(message.details)?.cause);
+      const desktopNotice = asOptionalRecord(message.details)?.desktopNotice;
+      const desktopSummary =
+        typeof desktopNotice === "string" && desktopNotice.trim() ? desktopNotice : undefined;
       return runId && summary
-        ? [{ ...message, openclawRunError: { runId, summary, ...(cause ? { cause } : {}) } }]
+        ? [
+            {
+              ...message,
+              openclawRunError: {
+                runId,
+                summary,
+                ...(desktopSummary ? { desktopSummary } : {}),
+                ...(cause ? { cause } : {}),
+              },
+            },
+          ]
         : [message];
     }
     if (readSessionTranscriptRunId(message) && isPendingAssistantError(message)) {

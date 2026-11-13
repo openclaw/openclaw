@@ -71,6 +71,13 @@ beforeEach(() => {
   mock.rotate.mockReset().mockResolvedValue();
   mock.create.mockReset().mockImplementation(() =>
     createOwnedWorkerTaskPoolMock<OpenClawStateReadRequest, OpenClawStateReadReply>({
+      getSnapshot: () => ({
+        maxWorkers: 2,
+        workers: 0,
+        workersCreated: 0,
+        activeTasks: 0,
+        pendingTasks: 0,
+      }),
       runTask: mock.runTask,
       close: mock.closePool,
       closeResources: mock.closeResources,

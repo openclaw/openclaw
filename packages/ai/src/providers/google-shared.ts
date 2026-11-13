@@ -49,6 +49,7 @@ type GoogleThinkingOptions = {
 
 export type GoogleProviderOptions = StreamOptions & {
   topP?: number;
+  seed?: number;
   toolChoice?: "auto" | "none" | "any";
   thinking?: GoogleThinkingOptions;
 };
@@ -127,6 +128,7 @@ export function buildGoogleGenerateContentParams<T extends GoogleApiType>(
   const config: GenerateContentConfig = {
     ...(options.temperature !== undefined && { temperature: options.temperature }),
     ...(options.topP !== undefined && { topP: options.topP }),
+    ...(options.seed !== undefined && { seed: options.seed }),
     ...buildGoogleGenerationConfig(model, options.thinking, options.maxTokens),
     ...(options.stop !== undefined && options.stop.length > 0 && { stopSequences: options.stop }),
     ...(context.systemPrompt && {

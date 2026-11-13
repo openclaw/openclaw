@@ -168,6 +168,12 @@ describe("managed removal custody", () => {
   it.each(["local", "promisor", "unavailable", "corrupt"])("removal (%s)", async (state) => {
     const source = repo;
     await fs.writeFile(path.join(source, "second.txt"), "second blob\n");
+    // Cross Git's output buffer boundary and verify the final partial buffer too.
+    const batchFiles =
+      state === "local" ? Array.from({ length: 257 }, (_, i) => `batch-${i}.txt`) : [];
+    for (const name of batchFiles) {
+      await fs.writeFile(path.join(source, name), `${name}\n`);
+    }
     await git(source, "add", ".");
     await git(source, "commit", "-m", "two promised blobs");
     await git(source, "config", "uploadpack.allowFilter", "true");
@@ -216,6 +222,9 @@ describe("managed removal custody", () => {
       const restored = await service.restore({ id: created.id });
       expect(await read(restored.path)).toBe("base\n");
       expect(await read(restored.path, "second.txt")).toBe("second blob\n");
+      for (const name of batchFiles) {
+        expect(await read(restored.path, name)).toBe(`${name}\n`);
+      }
     }
     expect((await fs.readFile(trace, "utf8")).match(/built-in: git fetch /g) ?? []).toHaveLength(
       state === "promisor" || state === "unavailable" ? 1 : 0,
@@ -370,7 +379,7 @@ describe("managed removal custody", () => {
     expect((await service.gc()).snapshotsPruned).toBe(1);
     expect(registry(created.id)).toBeUndefined();
     await expect(git(repo, "show-ref", "--verify", pendingRef)).rejects.toThrow();
-    expect(await git(repo, "rev-parse", created.branch)).toBe(head);
+    expect(await git(repo, "branch", "--list", created.branch)).toBe("");
   });
 });
 
@@ -453,6 +462,33 @@ describe("managed exact-state retirement", () => {
     const retired = await retire(created, head);
     return { created, retired, head };
   }
+
+  it("retains the detached branch through recovery and deletes it at expiry", async () => {
+    const { created, head } = await retiredFixture("expiry");
+    expect(await exactGit(repo, "rev-parse", created.branch)).toBe(head);
+    await service.gc();
+    expect(await exactGit(repo, "rev-parse", created.branch)).toBe(head);
+    await updateRegistryWorktree(env, created.id, {
+      removedAt: Date.now() - 31 * 24 * 60 * 60 * 1000 - 1,
+    });
+    const lock = path.join(repo, ".git", `refs/heads/${created.branch}.lock`);
+    await fs.writeFile(lock, "", { flag: "wx" });
+    try {
+      const failed = await service.gc();
+      expect(failed.snapshotsPruned).toBe(0);
+      expect(failed.issues).toContainEqual(
+        expect.objectContaining({
+          reason: expect.stringContaining("Managed branch cleanup failed"),
+        }),
+      );
+      expect(getRegistryWorktree(env, created.id)).toBeDefined();
+    } finally {
+      await fs.unlink(lock);
+    }
+    expect((await service.gc()).snapshotsPruned).toBe(1);
+    expect(await exactGit(repo, "branch", "--list", created.branch)).toBe("");
+    expect(getRegistryWorktree(env, created.id)).toBeUndefined();
+  });
 
   it("round-trips detached HEAD, separate branch, split index and work bytes from snapshot objects", async () => {
     await fs.writeFile(path.join(repo, ".gitignore"), "saved.secret\ncache.tmp\nnode_modules/\n");
