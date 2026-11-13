@@ -108,10 +108,18 @@ export function mapRuntimeSlotPathToOrigin(
   return mapped && fsSync.existsSync(mapped) ? mapped : file;
 }
 
-/** The slot directory that does not hold the current runtime. */
+/** A selected slot that no Gateway has started yet; the running Gateway uses previous. */
+const neverStarted = (pointer: RuntimePointer) => pointer.trial === RUNTIME_SLOT_TRIAL_STARTS;
+
+/**
+ * The slot to stage: never one a Gateway may be running. A selected slot that has
+ * not started yet is replaced; otherwise the slot that does not hold current.
+ */
 export function selectInactiveSlot(dir: string, pointer: RuntimePointer): string {
-  const current = realpath(pointer.current);
-  const name = SLOT_NAMES.find((slot) => !isPathInside(realpath(path.join(dir, slot)), current));
+  const keep = realpath(
+    neverStarted(pointer) ? (pointer.previous ?? pointer.origin) : pointer.current,
+  );
+  const name = SLOT_NAMES.find((slot) => !isPathInside(realpath(path.join(dir, slot)), keep));
   return path.join(dir, name ?? "a");
 }
 
@@ -323,7 +331,8 @@ export function activateRuntimeSlot(dir: string, root: string): RuntimePointer {
   }
   const next = {
     current: realpath(root),
-    previous: pointer.current,
+    // A replaced slot that never started is no rollback target.
+    previous: neverStarted(pointer) ? (pointer.previous ?? pointer.origin) : pointer.current,
     origin: pointer.origin,
     trial: RUNTIME_SLOT_TRIAL_STARTS,
   };

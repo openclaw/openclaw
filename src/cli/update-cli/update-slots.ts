@@ -26,6 +26,7 @@ import {
   fetchRuntimeSlotGitTarget,
   readRuntimePointer,
   resolveRuntimeSlotsDir,
+  RUNTIME_SLOT_TRIAL_STARTS,
   selectInactiveSlot,
   smokeRuntimeSlot,
   stageRuntimeSlot,
@@ -234,7 +235,7 @@ async function runSlotUpdate(
   const pointer = await ensureRuntimeSlots({ dir, origin: root, packageRoot });
   const release = await acquireRuntimeSlotsLock(dir);
   try {
-    if (pointer.trial !== undefined) {
+    if (pointer.trial !== undefined && pointer.trial < RUNTIME_SLOT_TRIAL_STARTS) {
       defaultRuntime.error(
         `Warning: ${pointer.current} has not been confirmed by a Gateway start; it becomes the rollback target.`,
       );

@@ -113,3 +113,20 @@ it("keeps a slot that its Gateway confirmed", async () => {
   expect(JSON.parse(cli.stdout)).toMatchObject({ slot: "a", args: ["status"], trial: null });
   expect(readRuntimePointer(dir)?.trial).toBe(2);
 });
+
+it("never stages the slot that the running Gateway uses", async () => {
+  const { dir, origin } = await createLayout();
+  const first = selectInactiveSlot(dir, readRuntimePointer(dir)!);
+  writeSlot(first, "a", 0);
+  activateRuntimeSlot(dir, first);
+  // No Gateway started first: the origin still serves, so a second update replaces first.
+  expect(selectInactiveSlot(dir, readRuntimePointer(dir)!)).toBe(first);
+  activateRuntimeSlot(dir, first);
+  expect(readRuntimePointer(dir)).toMatchObject({ previous: origin, trial: 2 });
+  // Once first has started, it may be serving: the next update takes the other slot.
+  start(dir);
+  const second = selectInactiveSlot(dir, readRuntimePointer(dir)!);
+  expect(path.basename(second)).toBe("b");
+  activateRuntimeSlot(dir, second);
+  expect(readRuntimePointer(dir)).toMatchObject({ previous: fs.realpathSync(first), trial: 2 });
+});
