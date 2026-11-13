@@ -56,7 +56,20 @@ it.each(["live", "primary-revoked"] as const)(
   "a session-target job fails over to another provider's live account (%s)",
   async (kind) => {
     await withOpenClawTestState(
-      { label: "cron-session-cross-provider", env: { OPENAI_API_KEY: undefined } },
+      {
+        label: "cron-session-cross-provider",
+        // Both providers are loopback fixtures, not destinations for the host proxy.
+        env: {
+          OPENAI_API_KEY: undefined,
+          HTTP_PROXY: undefined,
+          HTTPS_PROXY: undefined,
+          ALL_PROXY: undefined,
+          http_proxy: undefined,
+          https_proxy: undefined,
+          all_proxy: undefined,
+          NODE_USE_ENV_PROXY: undefined,
+        },
+      },
       async (state) => {
         installPrivateUpdateHandoffStore(state.root);
         const hits = { primary: [] as string[], backup: [] as string[] };
@@ -162,6 +175,7 @@ it.each(["live", "primary-revoked"] as const)(
           // A removed recorded account refuses only its own candidate; it is never replaced.
           expect(hits.primary).toEqual(kind === "live" ? ["Bearer key-primary"] : []);
           expect(result.status, result.error).toBe("ok");
+          expect(result.errorClassification).toBeUndefined();
           expect(hits.backup).toEqual(["Bearer key-backup-other"]);
         } finally {
           await resetPreparedModelRuntimeSnapshotsForTest();
