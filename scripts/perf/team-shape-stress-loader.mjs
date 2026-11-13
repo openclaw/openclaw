@@ -74,7 +74,7 @@ if (isMainThread) {
             ? result.source
             : new TextDecoder().decode(result.source);
         for (const name of names) {
-          const declaration = new RegExp(`function ${name}\\([^)]*\\) \\{`);
+          const declaration = new RegExp(`function ${name}\\([^)]*\\)\\s*\\{`);
           if (declaration.test(source)) {
             installed.add(name);
             source = source.replace(

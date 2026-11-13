@@ -10,7 +10,7 @@ read_when:
 
 <AccordionGroup>
   <Accordion title="Where are logs?">
-    File logs (structured): `/tmp/openclaw/openclaw-YYYY-MM-DD.log` for the default profile, or `/tmp/openclaw/openclaw-<profile>-YYYY-MM-DD.log` for a named profile. Set a stable path via `logging.file`; file log level via `logging.level`; console verbosity via `--verbose` and `logging.consoleLevel`.
+    File logs (structured): `logs/openclaw-YYYY-MM-DD.log` under the selected state directory, or `logs/openclaw-<profile>-YYYY-MM-DD.log` for a named profile. See [log locations](/logging#where-logs-live) for fallbacks. Set a stable path via `logging.file`; file log level via `logging.level`; console verbosity via `--verbose` and `logging.consoleLevel`.
 
     Fastest tail:
 

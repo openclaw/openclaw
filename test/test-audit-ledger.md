@@ -623,9 +623,27 @@ agents-root test typecheck, typed lint, formatting and diff checks passed.
 Full dead-code scans and hosted/landing outcomes are tracked in
 [PR #197771](https://github.com/openclaw/openclaw/pull/197771).
 
+### CLI patch fixture cleanup on write failure
+
+At `9cfa4b5ff744da4e7133c53dfea287abdba1c223`, `readPatch` allocated its
+temporary directory and wrote the fixture before entering its cleanup block.
+An injected `ENOSPC` write failure preserved the original error but left the
+directory behind. Moving the write into the existing `try` gives allocation
+one cleanup owner even when fixture setup fails. No production code, test
+declarations, inputs or assertions change; all eight declarations and 13
+expanded cases remain.
+
+The repaired helper removes the directory under the same injected write
+failure and preserves the exact error. Baseline and repaired CLI suites pass
+all 13 cases (67.87 and 13.25 seconds respectively; different compiler cache
+states, not a measured speedup). Scoped CLI test typecheck, typed lint,
+formatting and diff checks pass. Independent preservation review found no
+coverage loss. Full local review and hosted outcomes are tracked in
+[PR #198020](https://github.com/openclaw/openclaw/pull/198020).
+
 ## Pending qualification and proof repairs
 
-- Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Pending: Twitch settled flag; it needs current-source and runtime keeper qualification.
+- Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Retain Twitch's pre-abort pending check: it protects the passive account lifecycle. Its post-await settled check remains a separate live-test cleanup candidate.
 - Transfer rows before consolidating Android loading/blank-auth, persisted outbox keys/epochs, terminal initial projection, and native PCM/decoder/reader cases. Keep typed host-error precedence and active-run settlement.
 - Retain the CodeMode worker-leg deadline case: its real warmed worker and interruption path are distinct from the cancellation table's typed host-error precedence. Both suites keep their active-run settlement checks; this is a source-only retention decision.
 - Repair Android runtime/model fixture custody through existing guaranteed closers; no measured leak is claimed. Retarget misleading coroutine/authority/streaming assertions. Qualify Android dropdown arithmetic, IPv6 URL, empty SMS defaults and component-state mapping against their stronger keepers.

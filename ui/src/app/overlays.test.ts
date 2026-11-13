@@ -170,6 +170,80 @@ describe("Control UI refresh nudge", () => {
 });
 
 describe("application approval overlays", () => {
+  it("leaves approval authority and presentation untouched by live tool output", async () => {
+    const request = successfulRequest();
+    const { harness, overlays } = fixture(request, ["operator.approvals"]);
+    await flushMicrotasks();
+    harness.emitApproval("pending", 1_000);
+    const snapshot = overlays.snapshot;
+    const publish = vi.fn();
+    overlays.subscribe(publish);
+    const authority = vi.spyOn(harness.gateway, "snapshot", "get");
+    request.mockClear();
+
+    for (let seq = 1; seq <= 512; seq += 1) {
+      for (const event of ["agent", "session.tool"]) {
+        harness.emitEvent(event, {
+          runId: "running",
+          seq,
+          stream: "tool",
+          data: {
+            phase: "update",
+            outputOnly: true,
+            toolCallId: "command",
+            partialResult: { text: `output ${seq}` },
+          },
+        });
+      }
+    }
+
+    expect(authority).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
+    expect(overlays.snapshot).toBe(snapshot);
+    expectQueue(overlays, "pending");
+  });
+
+  it.each([
+    { family: "exec", kind: "exec", request: { command: "echo approved" } },
+    { family: "plugin", kind: "plugin", request: { title: "Plugin action" } },
+    {
+      family: "openclaw",
+      kind: "system-agent",
+      request: {
+        title: "OpenClaw change",
+        description: "Set a test port",
+        command: "Set a test port",
+        proposalHash: "a".repeat(64),
+      },
+    },
+  ])("keeps $family approval events subject to current and observed authority", async (item) => {
+    const { harness, overlays } = fixture(successfulRequest(), ["operator.approvals"]);
+    await flushMicrotasks();
+    const payload = { ...approval("pending", 1_000), request: item.request };
+    harness.emitEvent(`${item.family}.approval.requested`, payload);
+    expect(overlays.snapshot.approvalQueue).toMatchObject([{ id: "pending", kind: item.kind }]);
+
+    const allowed = harness.gateway.snapshot.hello;
+    harness.replaceSnapshotWithoutPublishing({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.read"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    harness.emitEvent(`${item.family}.approval.resolved`, { id: "pending" });
+    harness.emitEvent(`${item.family}.approval.requested`, { ...payload, id: "denied" });
+    expectQueue(overlays, "pending");
+
+    harness.replaceSnapshotWithoutPublishing({ hello: allowed });
+    harness.emitEvent(`${item.family}.approval.resolved`, { id: "pending" });
+    expectQueue(overlays);
+
+    harness.setScopes(["operator.read"]);
+    harness.replaceSnapshotWithoutPublishing({ hello: allowed });
+    harness.emitEvent(`${item.family}.approval.requested`, payload);
+    expectQueue(overlays);
+  });
+
   it("shares remote names across pending approvals and drops names after the queue drains", async () => {
     const nodes = deferred<unknown>();
     const request = vi.fn<RequestFn>((method) =>
