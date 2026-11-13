@@ -446,3 +446,50 @@ describe("browser extension profile tab ops", () => {
     expect(fetchSignal?.aborted).toBe(true);
   });
 });
+
+it("keeps a protected extension tab visible and rejects control with its actual reason", async () => {
+  mockExtensionPage();
+  const reason = "Cannot access a chrome-extension:// URL of different extension";
+  globalThis.fetch = vi.fn(async () =>
+    Response.json([
+      {
+        id: "TARGET-41",
+        tabId: 41,
+        title: "Healthy",
+        url: "https://example.com/login",
+        type: "page",
+      },
+      {
+        id: "tab-42",
+        tabId: 42,
+        title: "Blocked",
+        url: "https://example.com/form",
+        type: "page",
+        automationBlockedReason: reason,
+      },
+      {
+        id: "tab-43",
+        tabId: 43,
+        title: "Unresolved",
+        url: "https://example.com/other",
+        type: "page",
+      },
+    ]),
+  );
+  const profile = createExtensionProfile();
+  const tabs = await profile.listTabs();
+  expect(tabs).toHaveLength(2);
+  expect(tabs[1]).toMatchObject({
+    targetId: "tab-42",
+    webExtensionTabId: 42,
+    automationBlockedReason: reason,
+  });
+  await expect(profile.ensureTabAvailable(tabs[1].tabId)).rejects.toThrow(
+    /Chrome blocked automation.*different extension/,
+  );
+  await expect(profile.focusTab(tabs[1].targetId)).rejects.toThrow(/Chrome blocked automation/);
+  await expect(profile.closeTab(tabs[1].targetId)).rejects.toThrow(/Chrome blocked automation/);
+  await expect(profile.ensureTabAvailable(tabs[0].tabId)).resolves.toMatchObject({
+    targetId: "TARGET-41",
+  });
+});

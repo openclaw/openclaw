@@ -86,6 +86,7 @@ type CdpTarget = {
 
 type ExtensionCdpTarget = CdpTarget & {
   tabId?: unknown;
+  automationBlockedReason?: string;
 };
 
 function normalizeWsUrl(raw: string | undefined, cdpBaseUrl: string): string | undefined {
@@ -179,47 +180,65 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
             : {}),
           ...(options?.signal ? { signal: options.signal } : {}),
         });
-        const webExtensionTabIds =
+        const extensionTargets =
           profile.driver === "extension"
             ? await fetchJson<ExtensionCdpTarget[]>(
                 appendCdpPath(cdpHttpBase, "/json/list"),
                 Math.min(timeoutMs, resolved.remoteCdpTimeoutMs),
                 options?.signal ? { signal: options.signal } : undefined,
                 ssrfPolicy,
-              )
-                .then(
-                  (targets) =>
-                    new Map(
-                      targets.flatMap((target) =>
-                        typeof target.id === "string" &&
-                        typeof target.tabId === "number" &&
-                        Number.isSafeInteger(target.tabId) &&
-                        target.tabId >= 0
-                          ? [[target.id, target.tabId] as const]
-                          : [],
-                      ),
-                    ),
-                )
-                .catch(() => {
-                  options?.signal?.throwIfAborted();
-                  return new Map<string, number>();
-                })
-            : undefined;
-        return pages.filter(isSelectableCdpBrowserTarget).map((p) => {
-          // Correlate only by the relay's exact CDP target id. The native Chrome
-          // tab id is runtime-scoped and must not replace OpenClaw's stable tN alias.
-          const webExtensionTabId = webExtensionTabIds?.get(p.targetId);
-          const tab: BrowserTab = {
-            targetId: p.targetId,
-            title: p.title,
-            url: p.url,
-            type: p.type,
-          };
-          if (webExtensionTabId !== undefined) {
-            tab.webExtensionTabId = webExtensionTabId;
-          }
-          return tab;
-        });
+              ).catch(() => {
+                options?.signal?.throwIfAborted();
+                return [];
+              })
+            : [];
+        const webExtensionTabIds = new Map(
+          extensionTargets.flatMap((target) =>
+            typeof target.id === "string" &&
+            typeof target.tabId === "number" &&
+            Number.isSafeInteger(target.tabId) &&
+            target.tabId >= 0
+              ? [[target.id, target.tabId] as const]
+              : [],
+          ),
+        );
+        // Restricted pages have no Playwright Page. Keep them in user inventory,
+        // not CDP's attachable target list, and never invent a native target id.
+        const blockedTabs: BrowserTab[] = extensionTargets.flatMap((target) =>
+          target.id &&
+          target.automationBlockedReason &&
+          isSelectableCdpBrowserTarget(target) &&
+          !pages.some((page) => page.targetId === target.id)
+            ? [
+                {
+                  targetId: target.id,
+                  title: target.title ?? "",
+                  url: target.url ?? "",
+                  type: target.type,
+                  webExtensionTabId: webExtensionTabIds.get(target.id),
+                  automationBlockedReason: target.automationBlockedReason,
+                },
+              ]
+            : [],
+        );
+        return [
+          ...pages.filter(isSelectableCdpBrowserTarget).map((p) => {
+            // Correlate only by the relay's exact CDP target id. The native Chrome
+            // tab id is runtime-scoped and must not replace OpenClaw's stable tN alias.
+            const webExtensionTabId = webExtensionTabIds?.get(p.targetId);
+            const tab: BrowserTab = {
+              targetId: p.targetId,
+              title: p.title,
+              url: p.url,
+              type: p.type,
+            };
+            if (webExtensionTabId !== undefined) {
+              tab.webExtensionTabId = webExtensionTabId;
+            }
+            return tab;
+          }),
+          ...blockedTabs,
+        ];
       }
     }
 

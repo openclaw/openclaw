@@ -103,6 +103,9 @@ function formatAgentTab(source: BrowserTab): Record<string, unknown> {
     ...(tabId ? { tabId } : {}),
     ...(webExtensionTabId !== undefined ? { webExtensionTabId } : {}),
     ...(label ? { label } : {}),
+    ...(source.automationBlockedReason
+      ? { automationBlockedReason: source.automationBlockedReason }
+      : {}),
     title: source.title,
     url: source.url,
     ...(source.urlUnavailableReason ? { urlUnavailableReason: source.urlUnavailableReason } : {}),

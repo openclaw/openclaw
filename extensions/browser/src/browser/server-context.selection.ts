@@ -59,6 +59,16 @@ function mergeOpenedTabSnapshot(
   return merged;
 }
 
+function assertTabAutomationAvailable(tab: BrowserTab): void {
+  if (tab.automationBlockedReason) {
+    throw new Error(
+      `Chrome blocked automation for this shared tab: ${tab.automationBlockedReason}. ` +
+        "Dismiss the interfering extension UI or restriction, then take a fresh snapshot. " +
+        "The interrupted action was not replayed.",
+    );
+  }
+}
+
 export function createProfileSelectionOps({
   profile,
   runtime,
@@ -178,6 +188,7 @@ export function createProfileSelectionOps({
     if (!chosen) {
       throw new BrowserTabNotFoundError({ input: targetId ?? stickyTargetId });
     }
+    assertTabAutomationAvailable(chosen);
     runtime.lastTargetId = chosen.targetId;
     return chosen;
   };
@@ -187,7 +198,9 @@ export function createProfileSelectionOps({
     options?: BrowserTabTargetOptions,
   ): Promise<string> => {
     const tabs = await listTabs(options);
-    return resolveBrowserTabOrThrow(targetId, tabs, options?.exactTargetId).targetId;
+    const tab = resolveBrowserTabOrThrow(targetId, tabs, options?.exactTargetId);
+    assertTabAutomationAvailable(tab);
+    return tab.targetId;
   };
 
   // /json/close answers 200 "Target is closing" once Chrome has requested the close,

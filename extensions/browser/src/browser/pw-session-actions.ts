@@ -452,6 +452,7 @@ export async function listPagesViaPlaywright(opts: {
               );
               if (
                 (opts.requireCompleteTargetList || resolvedPages.length === 0) &&
+                (!remainingTargetIds || remainingTargetIds.size > 0) &&
                 pageResults.some((result) => result.status === "unresolved")
               ) {
                 throw new Error("Playwright page target identities are temporarily unavailable.");

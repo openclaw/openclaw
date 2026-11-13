@@ -16,6 +16,12 @@ import {
   type RelayToExtensionMessage,
 } from "./relay-protocol.js";
 import { RelaySessionOwner, type RelaySessionClient } from "./relay-session-owner.js";
+import {
+  chromePageRefusal,
+  describeRelayTabs,
+  type RelayTabState,
+  type RelayTabDescriptor,
+} from "./relay-tab-state.js";
 
 const log = createSubsystemLogger("browser").child("extension-relay");
 
@@ -45,16 +51,7 @@ type PendingExtensionCommand = {
   timer: NodeJS.Timeout;
 };
 
-type TabState = {
-  info: RelayTabInfo;
-  claimants: Set<{ client: CdpClientState }>;
-  /** Target identity lasts until access/extension loss; only the session ends on detach. */
-  target?: { id: string; sessionId?: string };
-  attaching?: Promise<{ targetId: string; sessionId: string }>;
-  retiring?: Promise<void>;
-  /** Native or extension loss invalidated attachment work that auto-attach clients expect restored. */
-  restoreAttachment: boolean;
-};
+type TabState = RelayTabState<CdpClientState>;
 
 type CdpClientState = RelaySessionClient & {
   socket: BridgeSocket;
@@ -64,11 +61,7 @@ type CdpClientState = RelaySessionClient & {
   creating: Set<Promise<void>>;
 };
 
-type ExtensionIdentity = {
-  userAgent: string;
-  browserVersion: string;
-  extensionVersion: string;
-};
+type ExtensionIdentity = Omit<Extract<ExtensionToRelayMessage, { type: "hello" }>, "type" | "tabs">;
 
 function toErrorPayload(
   id: number | null,
@@ -167,15 +160,8 @@ export class ExtensionRelayBridge {
    * No per-target webSocketDebuggerUrl: all CDP traffic multiplexes over the
    * single browser endpoint (`/cdp`).
    */
-  devtoolsTargetDescriptors(): Array<RelayTabInfo & { id: string; type: string }> {
-    return [...this.tabs.values()].map((tab) => ({
-      tabId: tab.info.tabId,
-      url: tab.info.url,
-      title: tab.info.title,
-      active: tab.info.active,
-      id: tab.target?.id ?? `tab-${tab.info.tabId}`,
-      type: "page",
-    }));
+  devtoolsTargetDescriptors(): RelayTabDescriptor[] {
+    return describeRelayTabs(this.tabs.values());
   }
 
   get cdpClientCount(): number {
@@ -334,6 +320,7 @@ export class ExtensionRelayBridge {
       tab.attaching = undefined;
       tab.retiring = undefined;
       tab.target = undefined;
+      tab.automationBlockedReason = undefined;
     }
   }
 
@@ -414,6 +401,9 @@ export class ExtensionRelayBridge {
       const existing = this.tabs.get(info.tabId);
       const shouldAttach = !existing || existing.restoreAttachment;
       if (existing) {
+        if (existing.info.url !== info.url) {
+          existing.automationBlockedReason = undefined;
+        }
         existing.info = info;
       } else {
         this.tabs.set(info.tabId, { info, claimants: new Set(), restoreAttachment: false });
@@ -505,6 +495,8 @@ export class ExtensionRelayBridge {
     }
     // Even atomic creation completes in a continuation: the pending identity
     // must be installed before a detach or extension replacement can retire it.
+    tab.automationBlockedReason = undefined;
+    const attachmentUrl = tab.info.url;
     const attachment =
       createdTargetId !== undefined
         ? Promise.resolve({ targetId: createdTargetId })
@@ -559,11 +551,22 @@ export class ExtensionRelayBridge {
         },
       );
       current.restoreAttachment = false;
+      current.automationBlockedReason = undefined;
       return attached;
     });
     tab.attaching = attaching;
     try {
       return await attaching;
+    } catch (error) {
+      if (
+        this.extension === extension &&
+        this.tabs.get(tabId) === tab &&
+        tab.attaching === attaching &&
+        tab.info.url === attachmentUrl
+      ) {
+        tab.automationBlockedReason = chromePageRefusal(error);
+      }
+      throw error;
     } finally {
       // A replacement extension may already have started a fresh attach for this tab.
       if (tab.attaching === attaching) {
@@ -624,17 +627,9 @@ export class ExtensionRelayBridge {
               identities.set(tab, targetId);
             });
           } catch (error) {
-            // Exact Chromium page restrictions, not attachment conflicts,
-            // permission failures, timeouts, or retired tab generations.
-            if (
-              error instanceof Error &&
-              (error.message === "The extensions gallery cannot be scripted." ||
-                error.message === "Cannot access a chrome:// URL" ||
-                error.message ===
-                  "Cannot access a chrome-extension:// URL of different extension" ||
-                error.message === "Cannot attach to this target.")
-            ) {
-              skipped.set(tab, { url, reason: error.message });
+            const reason = chromePageRefusal(error);
+            if (reason) {
+              skipped.set(tab, { url, reason });
             }
           }
         }),
