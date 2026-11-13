@@ -3,6 +3,7 @@ import {
   providerDisplayLabel,
   type ProviderPresentation,
 } from "../../../components/provider-icon-data.ts";
+import { Tooltip } from "../../../components/solid/tooltip.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { createTabList } from "../../../lib/tabs.ts";
 import { ChatModelProviderIcon, ChatModelTargetIcon } from "./chat-model-picker-options.tsx";
@@ -75,90 +76,93 @@ export function ChatModelProviderRail(props: {
       <div
         ref={(element) => (root = element)}
         class="chat-controls__provider-rail"
+        data-dragging={drag() ? "" : undefined}
         role="tablist"
         aria-label={t("chat.selectors.model")}
         aria-orientation="vertical"
       >
         <For each={items()} keyed={(item) => item.id}>
           {(item) => (
-            <button
-              ref={[tabs.ref(item().id)]}
-              type="button"
-              role="tab"
-              class="chat-controls__provider-tab"
-              data-tab-value={item().id}
-              data-chat-model-provider-toggle={item().id}
-              aria-label={item().label}
-              aria-selected={props.active === item().id ? "true" : "false"}
-              tabindex={tabs.tabIndex(item().id)}
-              disabled={props.disabled}
-              draggable={item().draggable && !props.disabled ? "true" : "false"}
-              style={{ "--rail-shift": `${shift(item().id)}px` }}
-              data-dragging={drag()?.from === providers().indexOf(item().id) ? "" : undefined}
-              onDragStart={(event) => {
-                source = item().id;
-                const index = providers().indexOf(source);
-                setDrag({ from: index, to: index });
-                event.dataTransfer?.setData("text/plain", source);
-              }}
-              onDragOver={(event) => {
-                if (source && item().draggable) {
-                  event.preventDefault();
-                  setDrag({
-                    from: providers().indexOf(source),
-                    to: providers().indexOf(item().id),
-                  });
-                }
-              }}
-              onDrop={(event) => {
-                event.preventDefault();
-                if (source && item().draggable) {
-                  move(source, providers().indexOf(item().id));
-                }
-                endDrag();
-              }}
-              onDragEnd={endDrag}
-              onClick={(event) => {
-                event.stopPropagation();
-                tabs.onClick(event);
-              }}
-              onKeyDown={(event) => {
-                const offset = ["ArrowUp", "ArrowLeft"].includes(event.key)
-                  ? -1
-                  : ["ArrowDown", "ArrowRight"].includes(event.key)
-                    ? 1
-                    : 0;
-                if (event.altKey && offset && item().draggable) {
-                  event.preventDefault();
-                  const id = item().id;
-                  move(id, providers().indexOf(id) + offset);
-                  queueMicrotask(() => tabs.element(id)?.focus({ preventScroll: true }));
-                } else if (!event.altKey && ["ArrowUp", "ArrowDown"].includes(event.key)) {
-                  event.preventDefault();
-                  const values = items();
-                  const next =
-                    values[
-                      (values.findIndex(({ id }) => id === item().id) + offset + values.length) %
-                        values.length
-                    ];
-                  if (next) {
-                    props.onSelect(next.id);
-                    tabs.element(next.id)?.focus({ preventScroll: true });
+            <Tooltip content={item().label} disabled={props.active === item().id}>
+              <button
+                ref={[tabs.ref(item().id)]}
+                type="button"
+                role="tab"
+                class="chat-controls__provider-tab"
+                data-tab-value={item().id}
+                data-chat-model-provider-toggle={item().id}
+                aria-label={item().label}
+                aria-selected={props.active === item().id ? "true" : "false"}
+                tabindex={tabs.tabIndex(item().id)}
+                disabled={props.disabled}
+                draggable={item().draggable && !props.disabled ? "true" : "false"}
+                style={{ "--rail-shift": `${shift(item().id)}px` }}
+                data-dragging={drag()?.from === providers().indexOf(item().id) ? "" : undefined}
+                onDragStart={(event) => {
+                  source = item().id;
+                  const index = providers().indexOf(source);
+                  setDrag({ from: index, to: index });
+                  event.dataTransfer?.setData("text/plain", source);
+                }}
+                onDragOver={(event) => {
+                  if (source && item().draggable) {
+                    event.preventDefault();
+                    setDrag({
+                      from: providers().indexOf(source),
+                      to: providers().indexOf(item().id),
+                    });
                   }
-                } else {
-                  tabs.onKeyDown(event);
-                }
-              }}
-            >
-              {item().draggable ? (
-                <ChatModelProviderIcon
-                  provider={item().id}
-                  presentation={props.presentation(item().id)}
-                />
-              ) : (
-                <ChatModelTargetIcon />
-              )}
-            </button>
+                }}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  if (source && item().draggable) {
+                    move(source, providers().indexOf(item().id));
+                  }
+                  endDrag();
+                }}
+                onDragEnd={endDrag}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  tabs.onClick(event);
+                }}
+                onKeyDown={(event) => {
+                  const offset = ["ArrowUp", "ArrowLeft"].includes(event.key)
+                    ? -1
+                    : ["ArrowDown", "ArrowRight"].includes(event.key)
+                      ? 1
+                      : 0;
+                  if (event.altKey && offset && item().draggable) {
+                    event.preventDefault();
+                    const id = item().id;
+                    move(id, providers().indexOf(id) + offset);
+                    queueMicrotask(() => tabs.element(id)?.focus({ preventScroll: true }));
+                  } else if (!event.altKey && ["ArrowUp", "ArrowDown"].includes(event.key)) {
+                    event.preventDefault();
+                    const values = items();
+                    const next =
+                      values[
+                        (values.findIndex(({ id }) => id === item().id) + offset + values.length) %
+                          values.length
+                      ];
+                    if (next) {
+                      props.onSelect(next.id);
+                      tabs.element(next.id)?.focus({ preventScroll: true });
+                    }
+                  } else {
+                    tabs.onKeyDown(event);
+                  }
+                }}
+              >
+                {item().draggable ? (
+                  <ChatModelProviderIcon
+                    provider={item().id}
+                    presentation={props.presentation(item().id)}
+                  />
+                ) : (
+                  <ChatModelTargetIcon />
+                )}
+              </button>
+            </Tooltip>
           )}
         </For>
       </div>

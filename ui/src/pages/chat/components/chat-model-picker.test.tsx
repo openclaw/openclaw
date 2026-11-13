@@ -140,6 +140,7 @@ it.each([false, true])(
       modelOptions: [
         option("fixture", "lead", { recommended: true }),
         option("fixture", "rest", { disabled: restDisabled }),
+        option("other", "model"),
       ],
       selectedModelValue: "fixture/lead",
       triggerModelLabel: "lead",
@@ -160,7 +161,7 @@ it.each([false, true])(
     // Keyboard focus lands on the first selectable revealed model, else back on search.
     expect(document.activeElement).toBe(restDisabled ? control(container, "search") : rest());
 
-    group.click();
+    control(container, "provider-toggle", "other")!.click();
     flush();
     group.click();
     flush();

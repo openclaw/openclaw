@@ -3,6 +3,7 @@ import { providerDisplayLabel as defaultProviderLabel } from "../../../component
 import type { ProviderPresentation } from "../../../components/provider-icon-data.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { ProviderBrandIcon } from "../../../components/solid/provider-icon.tsx";
+import { Tooltip } from "../../../components/solid/tooltip.tsx";
 import { formatModelRuntimeLabel } from "../../../lib/model-runtime-label.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -265,14 +266,14 @@ function ModelOptionButton(
 export function ChatModelPickerOption(props: ChatModelPickerOptionProps) {
   const presentation = createOptionPresentation(props);
   return (
-    <Show
-      when={presentation().detail}
-      fallback={<ModelOptionButton {...props} presentation={presentation()} />}
+    <Tooltip
+      class="chat-controls__model-tooltip"
+      content={[presentation().modelLabel, presentation().detail].filter(Boolean).join(". ")}
+      delay={800}
+      describe={Boolean(presentation().detail)}
     >
-      <openclaw-tooltip prop:content={presentation().detail}>
-        <ModelOptionButton {...props} presentation={presentation()} />
-      </openclaw-tooltip>
-    </Show>
+      <ModelOptionButton {...props} presentation={presentation()} />
+    </Tooltip>
   );
 }
 

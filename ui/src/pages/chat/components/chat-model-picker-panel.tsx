@@ -1,7 +1,8 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, Errored, For, Loading, Show, useContext } from "solid-js";
+import { createMemo, createSignal, Errored, For, Loading, Show, useContext } from "solid-js";
 import { resolveModelRuntimeRoute } from "../../../../../src/shared/model-runtime-route.js";
 import { providerDisplayLabel as defaultProviderLabel } from "../../../components/provider-icon-data.ts";
+import { IconButton } from "../../../components/solid/icon-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerSettingsEnglish } from "../../../i18n/locales/en-settings.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -125,6 +126,8 @@ type ChatModelPickerPanelProps = {
 
 export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
   const search = useContext(ChatModelSearchContext);
+  // Restart CSS without remounting the list or disturbing a focused model row.
+  const [providerTransition, setProviderTransition] = createSignal(false);
   // Parent controls also publish effort and copy changes; retain unchanged model facts.
   const modelOptions = createMemo(() => panel.params.modelOptions);
   const providerPresentation = (provider: string) =>
@@ -466,18 +469,19 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
               </span>
             ) : undefined}
             {panel.params.onProviderSettings ? (
-              <button
+              <IconButton
+                icon="settings"
+                size={28}
+                tooltip={false}
                 class="chat-controls__provider-settings"
                 data-chat-model-provider-settings
                 type="button"
-                aria-label={t("chat.modelControls.configureModels")}
+                label={t("chat.modelControls.configureModels")}
                 onClick={(event) => {
                   event.stopPropagation();
                   panel.params.onProviderSettings?.(props.provider);
                 }}
-              >
-                <Icon name="settings" />
-              </button>
+              />
             ) : undefined}
           </div>
         ))}
@@ -591,18 +595,31 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
           ))}
           {state().hasOptions || panel.params.accountSection ? (
             <>
-              <div class="chat-controls__model-browser">
-                <ChatModelProviderRail
-                  providers={state().orderedProviderGroups.map(([provider]) => provider)}
-                  presentation={providerPresentation}
-                  targets={state().targetGroups}
-                  active={catalog().providers.find((provider) =>
-                    searchView?.providerOpen(provider),
-                  )}
-                  disabled={disabled()}
-                  onSelect={(provider) => searchView?.toggleProvider(provider)}
-                />
-                <div class="chat-controls__model-pane">
+              <div
+                class="chat-controls__model-browser"
+                data-single-provider={catalog().providers.length === 1 ? "" : undefined}
+              >
+                <Show when={catalog().providers.length !== 1 && !searchView?.filtering()}>
+                  <ChatModelProviderRail
+                    providers={state().orderedProviderGroups.map(([provider]) => provider)}
+                    presentation={providerPresentation}
+                    targets={state().targetGroups}
+                    active={catalog().providers.find((provider) =>
+                      searchView?.providerOpen(provider),
+                    )}
+                    disabled={disabled()}
+                    onSelect={(provider) => {
+                      if (!searchView?.providerOpen(provider)) {
+                        setProviderTransition((previous) => !previous);
+                      }
+                      searchView?.toggleProvider(provider);
+                    }}
+                  />
+                </Show>
+                <div
+                  class="chat-controls__model-pane"
+                  data-provider-transition={providerTransition() ? "a" : "b"}
+                >
                   <div
                     ref={window.bind}
                     class="chat-controls__model-options"

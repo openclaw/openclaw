@@ -467,11 +467,11 @@ it("windows a large catalog while keeping keyboard choices and accessible positi
   expect(params.onModelSelect).toHaveBeenCalledWith("example/model-999", "main", undefined);
 });
 
-it("keeps the complete model panel above the composer", async () => {
+it("keeps the desktop panel fixed above its model chip across provider and search views", async () => {
   await page.viewport(1280, 900);
   container.style.cssText =
     "position:fixed;bottom:16px;right:16px;width:min(600px, calc(100vw - 32px))";
-  const { toggle, trigger, picker, composer } = mountPicker();
+  const { toggle, trigger, picker } = mountPicker();
   try {
     await toggle(async () => trigger.click());
     const menu = picker.querySelector<HTMLElement>(".chat-controls__model-menu")!;
@@ -479,9 +479,8 @@ it("keeps the complete model panel above the composer", async () => {
     await vi.waitFor(() => {
       const panel = menu.getBoundingClientRect();
       const bounds = surface.getBoundingClientRect();
-      expect(bounds.bottom).toBeLessThanOrEqual(
-        composer.parentElement!.parentElement!.getBoundingClientRect().top - 8,
-      );
+      expect(bounds.height).toBe(350);
+      expect(bounds.bottom).toBe(trigger.getBoundingClientRect().top - 8);
       expect(panel.bottom).toBeLessThanOrEqual(bounds.bottom);
       expect(menu.scrollHeight).toBeLessThanOrEqual(menu.clientHeight);
       expect(option("example/beta").getBoundingClientRect().bottom).toBeLessThanOrEqual(
@@ -492,8 +491,21 @@ it("keeps the complete model panel above the composer", async () => {
     const background = getComputedStyle(beta).backgroundColor;
     const highlighted = getSearch().getAttribute("aria-activedescendant");
     await page.getByText("Beta", { exact: true }).hover();
-    expect(getComputedStyle(beta).backgroundColor).toBe(background);
+    await vi.waitFor(() => expect(getComputedStyle(beta).backgroundColor).not.toBe(background));
     expect(getSearch().getAttribute("aria-activedescendant")).toBe(highlighted);
+    await page.getByRole("tab", { name: "Other", exact: true }).click();
+    await vi.waitFor(() => expect(option("other/gamma")?.checkVisibility()).toBe(true));
+    const search = getSearch();
+    search.value = "no matching model";
+    search.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    flush();
+    await vi.waitFor(() => {
+      expect(picker.querySelector('[role="tablist"]')).toBeNull();
+      expect(
+        picker.querySelector<HTMLElement>("[data-chat-model-search-empty]")?.checkVisibility(),
+      ).toBe(true);
+      expect(surface.getBoundingClientRect().height).toBe(350);
+    });
   } finally {
     container.removeAttribute("style");
   }
