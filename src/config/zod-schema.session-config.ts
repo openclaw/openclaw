@@ -67,6 +67,25 @@ export const SessionSchema = z
         readOnly: z.boolean().optional(),
         suggest: z.boolean().optional(),
         drafts: z.boolean().optional(),
+        controlUiDefaultAccess: z.literal("creator").optional(),
+        accessPolicy: z
+          .strictObject({
+            default: z.literal("creator"),
+            groups: z
+              .array(
+                z.strictObject({
+                  agentId: z.string().trim().min(1),
+                  channel: z.string().trim().min(1),
+                  accountId: z.string().trim().min(1).optional(),
+                  chatType: z.enum(["group", "channel"]).optional(),
+                  peerId: z.string().trim().min(1),
+                  peerAliases: z.array(z.string().trim().min(1)).optional(),
+                  profileIds: z.array(z.string().trim().min(1)).max(1000),
+                }),
+              )
+              .optional(),
+          })
+          .optional(),
       })
       .optional(),
     maintenance: z

@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import {
   GATEWAY_OWNER_PROFILE_ID,
   type SessionCatalogHost,
@@ -5,17 +6,23 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { retainSessionCatalogSourceScope } from "../../plugins/session-catalog-source-scope.js";
 import type {
   SessionCatalogListProviderParams,
   SessionCatalogProvider,
 } from "../../plugins/session-catalog.js";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import { isIncognitoSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import {
   hasMultipleResidentSessionSharingIdentities,
   readResidentUserProfileAliases,
 } from "../../state/user-profile-list.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
-import { operatorSessionCap, resolveGatewayOperatorRoleActor } from "../operator-role-policy.js";
+import {
+  operatorSessionCap,
+  resolveGatewayOperatorRoleActor,
+  authorizeCurrentOperatorRoleScopes,
+  resolveOperatorRoleAgents,
+} from "../operator-role-policy.js";
 import { prepareSessionCreatorProfile } from "../session-creator.js";
 import { requireSessionRowProjection } from "../session-row-projection-access.js";
 import { sharingIdentity } from "../session-sharing-policy.js";
@@ -24,7 +31,11 @@ import { createSessionCatalogRequestEntrySnapshot } from "./session-catalog-entr
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 type SessionCatalogVisibility = { cacheKey: string } & (
-  | { kind: "unrestricted" }
+  | {
+      kind: "unrestricted";
+      isAdmin: boolean;
+      isCreator: ReturnType<typeof prepareSessionCreatorProfile>;
+    }
   | { kind: "restricted-unprofiled" }
   | {
       kind: "restricted-owner";
@@ -62,14 +73,16 @@ export function resolveSessionCatalogVisibility(
     profileAliases: profileAliases ? [...profileAliases].toSorted() : [],
     others: others ?? null,
   });
+  const isCreator = profileId
+    ? prepareSessionCreatorProfile(profileId, profileAliases)
+    : () => false;
   if (admin || (!multipleIdentities && !others)) {
-    return { cacheKey, kind: "unrestricted" };
+    return { cacheKey, kind: "unrestricted", isAdmin: admin, isCreator };
   }
   if (!profileId) {
     return { cacheKey, kind: "restricted-unprofiled" };
   }
   // The cache key and this synchronous publication use the same identity facts.
-  const isCreator = prepareSessionCreatorProfile(profileId, profileAliases);
   if (others === "invited") {
     return { cacheKey, kind: "restricted-invited", others, profileId, isCreator };
   }
@@ -88,7 +101,7 @@ export function isPublishedCatalogVisible(visibility: SessionCatalogVisibility):
 }
 
 function visibleCatalogSessionEntry(params: {
-  session: SessionCatalogSession;
+  session: Pick<SessionCatalogSession, "sessionKey"> & { createdActor?: { id?: string } };
   requestEntries: ReturnType<typeof createSessionCatalogRequestEntrySnapshot>;
   visibility: Extract<
     SessionCatalogVisibility,
@@ -104,6 +117,7 @@ function visibleCatalogSessionEntry(params: {
   // prove a foreign adopted thread is neither a draft nor incognito.
   return entry !== undefined &&
     entry.incognito !== true &&
+    params.requestEntries.canReadAccess(sessionKey, params.visibility.isCreator) &&
     (params.visibility.isCreator(entry.createdActor) ||
       (entry.visibility !== "draft" &&
         (params.visibility.kind === "restricted-shared" ||
@@ -111,6 +125,38 @@ function visibleCatalogSessionEntry(params: {
             params.requestEntries.isMember(sessionKey, params.visibility.profileId)))))
     ? entry
     : undefined;
+}
+
+function unrestrictedCatalogEntryVisible(
+  entry: SessionEntry,
+  key: string,
+  requestEntries: ReturnType<typeof createSessionCatalogRequestEntrySnapshot>,
+  visibility: Extract<SessionCatalogVisibility, { kind: "unrestricted" }>,
+): boolean {
+  return (
+    !entry.incognito &&
+    (entry.access === undefined ||
+      entry.visibility !== "draft" ||
+      visibility.isCreator(entry.createdActor)) &&
+    requestEntries.canReadAccess(key, visibility.isCreator)
+  );
+}
+
+function unrestrictedCatalogSessionVisible(
+  session: SessionCatalogSession,
+  requestEntries: ReturnType<typeof createSessionCatalogRequestEntrySnapshot>,
+  visibility: Extract<SessionCatalogVisibility, { kind: "unrestricted" }>,
+): boolean {
+  const key = requestEntries.sourceKeyForSession(session);
+  if (!key) {
+    return true; // Unadopted legacy native files keep their existing operator-read contract.
+  }
+  const entry = requestEntries.entryForSession(key);
+  return Boolean(
+    session.sessionKey === key &&
+    entry &&
+    unrestrictedCatalogEntryVisible(entry, key, requestEntries, visibility),
+  );
 }
 
 export function filterSessionCatalogHost(
@@ -121,11 +167,21 @@ export function filterSessionCatalogHost(
     requestEntries: ReturnType<typeof createSessionCatalogRequestEntrySnapshot>;
   },
 ): SessionCatalogHost {
-  if (visibility.kind === "unrestricted" || params.audience === "gateway-operators") {
+  if (params.audience === "gateway-operators") {
     return host;
   }
   if (params.audience === "session-viewers") {
     return isPublishedCatalogVisible(visibility) ? host : { ...host, sessions: [] };
+  }
+  if (visibility.kind === "unrestricted") {
+    return visibility.isAdmin
+      ? host
+      : {
+          ...host,
+          sessions: host.sessions.filter((session) =>
+            unrestrictedCatalogSessionVisible(session, params.requestEntries, visibility),
+          ),
+        };
   }
   if (visibility.kind === "restricted-unprofiled") {
     return { ...host, sessions: [] };
@@ -141,6 +197,7 @@ export function filterSessionCatalogHost(
 export type SessionCatalogThreadVisibility = {
   visibility: SessionCatalogVisibility;
   source?: { sessionKey: string; entry: SessionEntry };
+  sourceMatchesEntry?: (entry: SessionEntry, complete: boolean) => boolean | undefined;
 };
 
 export async function resolveSessionCatalogThreadVisibility(params: {
@@ -163,7 +220,7 @@ export async function resolveSessionCatalogThreadVisibility(params: {
   await projection.prepareMembership();
   let config = params.context.getRuntimeConfig();
   let visibility = resolveSessionCatalogVisibility(params.client, config);
-  if (visibility.kind === "unrestricted") {
+  if (visibility.kind === "unrestricted" && visibility.isAdmin) {
     return { visibility };
   }
   if (params.audience === "session-viewers" && params.access === "read") {
@@ -201,7 +258,7 @@ export async function resolveSessionCatalogThreadVisibility(params: {
     await projection.prepareMembership();
     config = params.context.getRuntimeConfig();
     visibility = resolveSessionCatalogVisibility(params.client, config);
-    if (visibility.kind === "unrestricted") {
+    if (visibility.kind === "unrestricted" && visibility.isAdmin) {
       return { visibility };
     }
     if (visibility.kind === "restricted-unprofiled" && params.audience !== "gateway-operators") {
@@ -226,6 +283,25 @@ export async function resolveSessionCatalogThreadVisibility(params: {
       // Method scopes and creation policy remain the read/mutation authority.
       if (params.audience === "gateway-operators") {
         return { visibility };
+      }
+      if (visibility.kind === "unrestricted") {
+        if (!unrestrictedCatalogSessionVisible(session, requestEntries, visibility)) {
+          return null;
+        }
+        const key = requestEntries.sourceKeyForSession(session);
+        const entry = key ? requestEntries.entryForSession(key) : undefined;
+        return {
+          visibility,
+          ...(key && entry
+            ? { source: { sessionKey: key, entry } }
+            : {
+                sourceMatchesEntry: retainSessionCatalogSourceScope(
+                  planningEntries.sessionEntries,
+                  params.hostId,
+                  params.threadId,
+                ),
+              }),
+        };
       }
       if (visibility.kind === "restricted-unprofiled") {
         return null;
@@ -272,5 +348,106 @@ export async function resolveSessionCatalogThreadVisibility(params: {
     }
     seenCursors.add(nextCursor);
     cursor = nextCursor;
+  }
+}
+
+/** Revalidate retained native output synchronously, without trusting provider planning or cached hosts. */
+export function isSessionCatalogThreadVisibilityCurrent(params: {
+  captured: SessionCatalogThreadVisibility;
+  audience?: SessionCatalogProvider["audience"];
+  client: GatewayClient | null;
+  context: GatewayRequestContext;
+  fallbackAgentId: string;
+  unboundSnapshot?: {
+    projection: ReturnType<typeof requireSessionRowProjection>;
+    sharingRevision: unknown;
+    selectionRevision: unknown;
+  };
+}): boolean {
+  try {
+    if (params.client?.invalidated || params.client?.connectionSignal?.aborted) {
+      return false;
+    }
+    if (params.unboundSnapshot) {
+      const projection = requireSessionRowProjection(params.context);
+      if (
+        projection !== params.unboundSnapshot.projection ||
+        projection.sharingRevision !== params.unboundSnapshot.sharingRevision ||
+        projection.state.revision !== params.unboundSnapshot.selectionRevision ||
+        projection.needsSelectionPreparation({ metadataOnly: true })
+      ) {
+        return false;
+      }
+    }
+    const cfg = params.context.getRuntimeConfig();
+    if (
+      params.client &&
+      (!authorizeOperatorScopesForRequiredScope("operator.read", params.client.connect.scopes ?? [])
+        .allowed ||
+        authorizeCurrentOperatorRoleScopes(params.client, cfg))
+    ) {
+      return false;
+    }
+    const sourceAgent = params.captured.source
+      ? resolveAgentIdFromSessionKey(params.captured.source.sessionKey, params.fallbackAgentId)
+      : params.fallbackAgentId;
+    const agents = resolveOperatorRoleAgents(params.client, cfg);
+    if (agents && !agents.includes(sourceAgent)) {
+      return false;
+    }
+    const visibility = resolveSessionCatalogVisibility(params.client, cfg);
+    if (params.audience === "gateway-operators") {
+      return true;
+    }
+    if (params.audience === "session-viewers") {
+      return isPublishedCatalogVisible(visibility);
+    }
+    const source = params.captured.source;
+    if (!source) {
+      return visibility.kind === "unrestricted";
+    }
+    const projection = requireSessionRowProjection(params.context);
+    if (projection.needsSelectionPreparation({ metadataOnly: true })) {
+      return false;
+    }
+    const requestEntries = createSessionCatalogRequestEntrySnapshot({
+      cfg,
+      projection,
+      fallbackAgentId: params.fallbackAgentId,
+      sessionKeys: [source.sessionKey],
+    });
+    const entry = requestEntries.entryForSession(source.sessionKey);
+    if (
+      !entry ||
+      entry.initializationPending ||
+      entry.incognito ||
+      entry.sessionId !== source.entry.sessionId ||
+      entry.lifecycleRevision !== source.entry.lifecycleRevision ||
+      entry.pluginOwnerId !== source.entry.pluginOwnerId ||
+      !isDeepStrictEqual(entry.createdActor, source.entry.createdActor)
+    ) {
+      return false;
+    }
+    if (visibility.kind === "unrestricted") {
+      return (
+        visibility.isAdmin ||
+        unrestrictedCatalogEntryVisible(entry, source.sessionKey, requestEntries, visibility)
+      );
+    }
+    if (visibility.kind === "restricted-unprofiled") {
+      return false;
+    }
+    return (
+      visibleCatalogSessionEntry({
+        session: {
+          sessionKey: source.sessionKey,
+          createdActor: { id: source.entry.createdActor?.id ?? "" },
+        },
+        requestEntries,
+        visibility,
+      }) !== undefined
+    );
+  } catch {
+    return false;
   }
 }

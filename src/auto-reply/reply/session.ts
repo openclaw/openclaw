@@ -14,6 +14,7 @@ import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveSessionParentSessionKey } from "../../channels/plugins/session-conversation.js";
 import { conversationIdentityFromSessionEntry } from "../../config/sessions/conversation-identity.js";
 import { conversationRouteContextFromMsgContext } from "../../config/sessions/conversation-route-context.js";
+import { inboundCreationVisibility } from "../../config/sessions/creation-inbound-visibility.js";
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import {
@@ -56,7 +57,6 @@ import { hasInternalHookListeners } from "../../hooks/internal-hooks.js";
 import { emitSessionAutoResetHook } from "../../hooks/session-auto-reset.js";
 import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
-import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
@@ -97,7 +97,7 @@ import { readBeforeResetMessages } from "./commands-reset-hooks.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import {
-  assertPreparedConversationBindingRouteCurrent,
+  touchPreparedSessionBinding,
   resolveSessionDefaultAccountId,
   resolveBoundAcpSessionForCommandReset,
 } from "./session-conversation-binding.js";
@@ -159,10 +159,8 @@ async function initSessionStateAttempt(params: InitSessionStateParams): Promise<
     resolveInitSessionStateAttemptContext(params, "initialization"),
   );
   params.signal?.throwIfAborted();
-  const binding = attemptContext.conversationBinding;
-  if (binding) {
-    await getSessionBindingService().touchAsync(binding.bindingId, undefined, binding.conversation);
-    await assertPreparedConversationBindingRouteCurrent(params.ctx);
+  if (attemptContext.conversationBinding) {
+    await touchPreparedSessionBinding(attemptContext.conversationBinding, params.ctx);
   }
   params.signal?.throwIfAborted();
   const parentSessionKey = await measureDiagnosticsTimelineSpan("reply.session.hydrate", () =>
@@ -606,6 +604,7 @@ async function initSessionStateAttemptLocked(
     ...baseEntry,
     ...preservedState,
     ...creationStamp,
+    ...(!entry ? inboundCreationVisibility(cfg, sessionKey, ctx.SessionCreation) : {}),
     sessionId,
     lifecycleRevision: isNewSession ? crypto.randomUUID() : baseEntry?.lifecycleRevision,
     updatedAt: retainPendingResetMarker

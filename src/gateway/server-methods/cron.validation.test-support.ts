@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { expect, onTestFinished, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   resolveCronListSnapshotRevision,
@@ -23,6 +25,12 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import type { CronCreatorAuthorityGrant } from "../cron-creator-authority-grant.types.js";
+import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import {
+  bindSessionRowProjection,
+  getSessionRowProjection,
+} from "../session-row-projection-access.js";
+import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 type MutationOptions = {
@@ -293,7 +301,8 @@ export function createCronCallerClient(
   }
   return {
     connect: {} as GatewayClient["connect"],
-    internal: { agentRuntimeIdentity: identity },
+    // This fixture models a host-owned runtime, not an authenticated human reader.
+    internal: { agentRuntimeIdentity: identity, operatorRoleActor: { kind: "system" } },
   };
 }
 
@@ -317,6 +326,12 @@ export function createCronTestInvoker(
   ) {
     const context = options.context ?? createCronTestContext(options.currentJob, getRuntimeConfig);
     const respond = options.respond ?? vi.fn();
+    // Raw writers own fail-fast database admission before any session-row read.
+    if (method !== "cron.add" && method !== "cron.update" && method !== "wake") {
+      const readContext = createDirectChatContext({ getRuntimeConfig: context.getRuntimeConfig });
+      await initializeSessionReadContext(readContext);
+      bindSessionRowProjection(context, () => getSessionRowProjection(readContext));
+    }
     await expectDefined(
       handlers[method],
       "cronHandlers[method] test invariant",
@@ -371,4 +386,76 @@ export function callerClientWithCronCreatorAuthority(
   client.internal!.agentRuntimeIdentity!.cronToolsAllowCapture = "final-executable-surface";
   client.internal!.agentRuntimeIdentity!.cronCreatorAuthorityGrant = grant;
   return client;
+}
+
+export async function seedCronDeclarationOwner(cfg: OpenClawConfig) {
+  await upsertSessionEntryCore(
+    {
+      agentId: "ops",
+      sessionKey: "agent:ops:main",
+      storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: "ops" }),
+    },
+    { sessionId: "declaration-owner", updatedAt: 1, visibility: "shared" },
+  );
+}
+
+export function registerCronDeclarationProjectionTest({
+  invokeCron,
+  createCronContext,
+  setRuntimeConfig,
+  getRuntimeConfig,
+}: {
+  invokeCron: ReturnType<typeof createCronTestInvoker>;
+  createCronContext: (
+    currentJobs?: CronJob | CronJob[],
+  ) => ReturnType<typeof createCronTestContext>;
+  setRuntimeConfig: (config: OpenClawConfig) => void;
+  getRuntimeConfig: () => OpenClawConfig;
+}) {
+  it("projects declaration metadata and existing run and delivery state in compact lists", async () => {
+    setRuntimeConfig({ agents: { entries: { main: {}, ops: {} } } });
+    const job = createCronJob({
+      declarationKey: "daily-report",
+      displayName: "Daily report",
+      owner: { agentId: "ops", sessionKey: "agent:ops:main" },
+      state: {
+        nextRunAtMs: 2000,
+        lastRunAtMs: 1000,
+        lastRunStatus: "error",
+        lastError: "boom",
+        lastDelivered: false,
+        lastDeliveryStatus: "not-delivered",
+        lastDeliveryError: "offline",
+        lastFailureNotificationDelivered: true,
+        lastFailureNotificationDeliveryStatus: "delivered",
+      },
+    });
+    const context = createCronContext(job);
+    const missing = await invokeCron("cron.list", { compact: true }, { context });
+    expectCronReply(missing.respond, expect.objectContaining({ jobs: [], total: 0 }));
+    await seedCronDeclarationOwner(getRuntimeConfig());
+    const { respond } = await invokeCron("cron.list", { compact: true }, { context });
+
+    expectCronReply(
+      respond,
+      expect.objectContaining({
+        jobs: [
+          expect.objectContaining({
+            declarationKey: "daily-report",
+            displayName: "Daily report",
+            owner: { agentId: "ops", sessionKey: "agent:ops:main" },
+            nextRunAtMs: 2000,
+            lastRunAtMs: 1000,
+            lastRunStatus: "error",
+            lastRunError: "boom",
+            lastDelivered: false,
+            lastDeliveryStatus: "not-delivered",
+            lastDeliveryError: "offline",
+            lastFailureNotificationDelivered: true,
+            lastFailureNotificationDeliveryStatus: "delivered",
+          }),
+        ],
+      }),
+    );
+  });
 }

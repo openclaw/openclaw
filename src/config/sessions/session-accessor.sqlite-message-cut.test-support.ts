@@ -64,7 +64,14 @@ export function useSessionMessageCutFixtures() {
     return scope;
   }
 
-  async function createSession(options: { activeLeafTarget?: string; incognito?: boolean } = {}) {
+  async function createSession(
+    options: {
+      activeLeafTarget?: string;
+      incognito?: boolean;
+      access?: InternalSessionEntry["access"];
+      visibility?: InternalSessionEntry["visibility"];
+    } = {},
+  ) {
     const stateDir = tempDirs.make("openclaw-message-cut-");
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
     const sessionId = "message-cut-source";
@@ -98,6 +105,8 @@ export function useSessionMessageCutFixtures() {
       providerOverride: "openai",
       sessionId,
       updatedAt: Date.now(),
+      ...(options.access ? { access: options.access } : {}),
+      ...(options.visibility ? { visibility: options.visibility } : {}),
     };
     await upsertSessionEntryCore(scope, entry);
     const startedAt = Date.parse("2026-07-18T00:00:00.000Z");

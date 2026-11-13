@@ -23,6 +23,8 @@ export type SessionMessageCutResult =
 
 export type SessionMessageCutIntent = {
   canonicalSourceKey: string;
+  creationVisibility?: SessionEntry["visibility"];
+  creationAccess?: SessionEntry["access"];
   creation?: SessionMessageCutMutationParams["creation"];
   forkWorkspace?: SessionMessageCutMutationParams["forkWorkspace"];
   entryId: string;

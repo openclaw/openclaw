@@ -34,6 +34,7 @@ function metadataAuthorityEntry(entry: SessionMetadataExpectedEntry): SessionMet
     lifecycleRevision: entry.lifecycleRevision,
     createdActor: entry.createdActor,
     visibility: entry.visibility,
+    access: entry.access,
     incognito: entry.incognito,
   };
 }

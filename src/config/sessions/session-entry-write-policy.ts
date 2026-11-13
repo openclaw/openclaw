@@ -13,6 +13,7 @@ export function applySessionEntryWritePolicy(
   canonicalPreviousEntry: SessionEntry | undefined,
   options: {
     allowStoredAliases?: boolean;
+    accessMutation?: boolean;
     providerReviewMutation?: boolean;
     profileInvolvement?: SessionEntry["profileInvolvement"];
     previousEntry?: SessionEntry | null;
@@ -127,10 +128,21 @@ export function applySessionEntryWritePolicy(
     // Same-lifecycle bookkeeping cannot cancel the one-time reset owed by legacy state.
     normalizedEntry.updatedAt = 0;
   }
-  // Fresh child installation can retain its current audience; other replacements clear it.
+  // A logical key retains confidentiality through stale bookkeeping and transcript replacement.
+  // Only the canonical access mutation owner may replace its committed ACL.
+  if (canonicalPreviousEntry && !options.allowStoredAliases && !options.accessMutation) {
+    if (canonicalPreviousEntry.access === undefined) {
+      delete normalizedEntry.access;
+    } else {
+      normalizedEntry.access = canonicalPreviousEntry.access;
+    }
+  }
   if (previousEntry && previousEntry.sessionId !== normalizedEntry.sessionId) {
+    // Fresh-child installation retains its current audience; a reset must not widen Draft.
     if (options.preserveVisibility && canonicalPreviousEntry?.visibility !== undefined) {
       normalizedEntry.visibility = canonicalPreviousEntry.visibility;
+    } else if (previousEntry.visibility === "draft" || normalizedEntry.visibility === "draft") {
+      normalizedEntry.visibility = "draft";
     } else {
       delete normalizedEntry.visibility;
     }

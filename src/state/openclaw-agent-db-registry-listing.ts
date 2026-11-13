@@ -29,6 +29,11 @@ import {
   type OpenClawRegisteredAgentDatabase,
 } from "./openclaw-agent-db-contract.js";
 import { readOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
+import {
+  recordAgentDatabaseRegistrationChange,
+  recordAgentDatabaseRegistrationPublication,
+  type AgentDatabaseRegistrationTransition,
+} from "./openclaw-agent-db-registration-provenance.js";
 import { readRegisteredAgentDatabaseRows } from "./openclaw-agent-db-registry.read.js";
 import {
   isStateDatabaseReadAdmissionInvalidatedError,
@@ -84,11 +89,7 @@ export function hasRegisteredOpenClawAgentDatabasePath(
   );
 }
 
-type RegistryTransition = {
-  operation: symbol;
-  phase: "begin" | "commit" | "finish";
-  mutation?: AgentDatabaseRegistryMutation;
-};
+type RegistryTransition = AgentDatabaseRegistrationTransition;
 
 type AgentDatabaseRegistryMemo = {
   pathname: string;
@@ -113,9 +114,11 @@ const registry = resolveGlobalSingleton<{
 export function emitOpenClawAgentDatabaseRegistryChange(
   agentId: string,
   database?: EngineConnection,
+  registration?: AgentDatabaseRegistryChange,
 ): void {
   const change: SessionRowChange = { all: true, scope: { agentId, topology: true } };
   registry.publications.add(change);
+  recordAgentDatabaseRegistrationPublication(change, registration);
   sessionChanges.emit(change, database);
 }
 
@@ -168,7 +171,11 @@ function advanceRegisteredAgentDatabasesMemo(
   // Only captured readers retain older nodes; the owner never keeps a backward history.
   previous.next = memo;
   registry.memo = memo;
-  return { previous: previous.token, current: memo.token };
+  const change = { previous: previous.token, current: memo.token };
+  if (transition) {
+    recordAgentDatabaseRegistrationChange(change, transition);
+  }
+  return change;
 }
 
 function captureRegistryMutation(
@@ -300,6 +307,7 @@ export function captureOpenClawAgentDatabaseRegistration(params: {
   const mutation = captureRegistryMutation(params.kind ?? "upsert", [
     { agentId: params.agentId, path: params.agentPath },
   ]);
+  let lastChange: AgentDatabaseRegistryChange | undefined;
   const advance = (phase: RegistryTransition["phase"]) => {
     const change = advanceRegisteredAgentDatabasesMemo(options.path, {
       operation,
@@ -307,6 +315,7 @@ export function captureOpenClawAgentDatabaseRegistration(params: {
       phase,
     });
     if (change) {
+      lastChange = change;
       params.onRegistryChange?.(change);
     }
   };
@@ -322,7 +331,7 @@ export function captureOpenClawAgentDatabaseRegistration(params: {
       }
       throw error;
     }
-    emitOpenClawAgentDatabaseRegistryChange(params.agentId);
+    emitOpenClawAgentDatabaseRegistryChange(params.agentId, undefined, lastChange);
   };
   return {
     begin() {

@@ -185,7 +185,7 @@ describe("queued chat input withdrawal", () => {
     await expect(check()).rejects.toMatchObject({
       message: "Message injection authority is no longer current",
       cause: {
-        message: expect.stringContaining("session is draft for this connection"),
+        message: `Session "${fixture.scope.sessionKey}" was not found.`,
       },
     });
     await patchSessionEntryCore(fixture.scope, () => ({ visibility: "shared" }));

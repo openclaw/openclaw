@@ -482,6 +482,7 @@ describe("spawnAcpDirect", () => {
     initializeSessionMock: hoisted.initializeSessionMock,
     upsertSessionEntryMock: hoisted.upsertSessionEntryMock,
     callGatewayMock: hoisted.callGatewayMock,
+    configureParentDelivery,
   });
 
   beforeEach(() => {

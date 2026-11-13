@@ -4,6 +4,7 @@ import {
   type SessionCatalogHost,
   type SessionCatalogSession,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
@@ -31,6 +32,7 @@ import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
+import { withConfidentialPi } from "./session-catalog-native-confidential.test-support.js";
 import { sessionCatalogHandlers } from "./session-catalog.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
@@ -639,4 +641,268 @@ describe("catalog delivery uses current canonical privacy", () => {
         expect(allowed.mock.calls[0]?.[0]).toBe(true);
       }),
   );
+});
+
+describe("adopted Pi catalog confidential access", () => {
+  it.each(["list", "resolve", "read"] as const)(
+    "refuses creator-only foreign native transcript through %s",
+    async (method) =>
+      withConfidentialPi(async ({ call }) => {
+        const result = await call(method);
+        if (method === "list") {
+          expect(result.ok).toBe(true);
+          const listed = result.payload.catalogs[0].hosts.flatMap((host: SessionCatalogHost) =>
+            host.sessions.map((entry) => entry.threadId),
+          );
+          expect(listed).not.toContain("private");
+        } else {
+          expect(result).toMatchObject({
+            ok: false,
+            payload: undefined,
+            error: { code: ErrorCodes.FORBIDDEN },
+          });
+        }
+        expect(JSON.stringify(result)).not.toContain("PRIVATE_NATIVE_private");
+      }),
+  );
+  it.each([
+    ["private", "alice"],
+    ["private", "admin"],
+    ["legacy", "bob"],
+    ["audience", "bob"],
+    ["source", "bob"],
+  ] as const)("retains authorized %s native read for %s", async (id, who) =>
+    withConfidentialPi(async ({ call, clients }) => {
+      const result = await call("read", id, clients[who]);
+      expect(result.ok, JSON.stringify(result.error)).toBe(true);
+      expect(result.payload.items).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ type: "agentMessage", text: "PRIVATE_NATIVE_" + id }),
+        ]),
+      );
+    }),
+  );
+  it.each(["audience", "source"] as const)("refuses excluded native %s audience", async (id) =>
+    withConfidentialPi(async ({ call, clients }) => {
+      expect(await call("read", id, clients.eve)).toMatchObject({
+        ok: false,
+        payload: undefined,
+        error: { code: ErrorCodes.FORBIDDEN },
+      });
+    }),
+  );
+  it.each(["audience", "source", "replacement", "role", "agent", "scope", "source-solo"] as const)(
+    "refuses native bytes after %s revocation during real provider read",
+    async (change) =>
+      withConfidentialPi(async ({ call, provider, cfg, clients, mutateAccess }) => {
+        const id =
+          change === "source" || change === "source-solo"
+            ? "source"
+            : change === "audience" || change === "replacement"
+              ? "audience"
+              : "legacy";
+        const entered = createDeferredCore(),
+          release = createDeferredCore();
+        const original = provider.read;
+        const role = cfg.gateway?.roles?.definitions?.reader ?? {
+          agents: "*" as const,
+          scopes: ["operator.read"],
+          sessions: { others: "view" as const },
+        };
+        const beforeRole = structuredClone(role);
+        let observedNativeBytes = false;
+        using _ = vi.spyOn(provider, "read").mockImplementation(async (request) => {
+          const page = await original(request);
+          observedNativeBytes = JSON.stringify(page).includes("PRIVATE_NATIVE_" + id);
+          entered.resolve();
+          await release.promise;
+          return page;
+        });
+        const pending = call("read", id);
+        try {
+          await awaitGateBeforeSettlement(entered.promise, pending, "real Pi native provider read");
+          if (change === "source" || change === "source-solo") {
+            cfg.session!.sharing!.accessPolicy!.groups![0]!.profileIds = [];
+            setRuntimeConfigSnapshot(cfg);
+          } else if (change === "role") {
+            role.sessions = { others: "none" };
+            setRuntimeConfigSnapshot(cfg);
+          } else if (change === "agent") {
+            role.agents = [];
+            setRuntimeConfigSnapshot(cfg);
+          } else if (change === "scope") {
+            role.scopes = [];
+            setRuntimeConfigSnapshot(cfg);
+          } else {
+            await mutateAccess(
+              { mode: change === "replacement" ? "unrestricted" : "creator" },
+              change === "replacement",
+            );
+          }
+        } finally {
+          release.resolve();
+        }
+        const denied = await pending;
+        expect(observedNativeBytes).toBe(true);
+        expect(denied).toMatchObject({
+          ok: false,
+          payload: undefined,
+          error: { code: ErrorCodes.FORBIDDEN },
+        });
+        expect(JSON.stringify(denied)).not.toContain("PRIVATE_NATIVE_" + id);
+        if (change === "source-solo") {
+          cfg.session!.sharing!.accessPolicy!.groups![0]!.profileIds = [
+            clients.bob.authenticatedUserProfile!.profileId,
+          ];
+          setRuntimeConfigSnapshot(cfg);
+          expect((await call("read", id, clients.bob)).ok).toBe(true);
+        } else {
+          cfg.gateway!.roles!.definitions!.reader = beforeRole;
+          setRuntimeConfigSnapshot(cfg);
+          expect((await call("read", id, clients.alice)).ok).toBe(true);
+        }
+        if (change === "replacement") {
+          expect((await call("read", id, clients.bob)).ok).toBe(true);
+        }
+      }, change === "source-solo"),
+  );
+  it("refuses resolve publication after its provider await loses confidential access", () =>
+    withConfidentialPi(async ({ call, provider, mutateAccess }) => {
+      const entered = createDeferredCore(),
+        release = createDeferredCore();
+      let observedNativeBytes = false;
+      provider.resolveGatewayConversation = async (request) => {
+        const page = await provider.read({ ...request, agentId: "main" });
+        observedNativeBytes = JSON.stringify(page).includes("PRIVATE_NATIVE_audience");
+        entered.resolve();
+        await release.promise;
+        return undefined;
+      };
+      const pending = call("resolve", "audience");
+      try {
+        await awaitGateBeforeSettlement(entered.promise, pending, "native resolver I/O");
+        await mutateAccess({ mode: "creator" });
+      } finally {
+        release.resolve();
+      }
+      expect(observedNativeBytes).toBe(true);
+      expect(await pending).toMatchObject({
+        ok: false,
+        payload: undefined,
+        error: { code: ErrorCodes.FORBIDDEN },
+      });
+    }));
+  it("rechecks source config at list publication after actual native enumeration", () =>
+    withConfidentialPi(async ({ call, provider, cfg }) => {
+      const original = provider.list,
+        entered = createDeferredCore(),
+        release = createDeferredCore();
+      using _ = vi.spyOn(provider, "list").mockImplementation(async (request) => {
+        const hosts = await original(request);
+        entered.resolve();
+        await release.promise;
+        return hosts;
+      });
+      const pending = call("list");
+      try {
+        await awaitGateBeforeSettlement(entered.promise, pending, "actual Pi enumeration");
+        cfg.session!.sharing!.accessPolicy!.groups![0]!.profileIds = [];
+        setRuntimeConfigSnapshot(cfg);
+      } finally {
+        release.resolve();
+      }
+      const result = await pending;
+      expect(result.ok).toBe(true);
+      const listed = result.payload.catalogs[0].hosts.flatMap((host: SessionCatalogHost) =>
+        host.sessions.map((entry) => entry.threadId),
+      );
+      expect(listed).toContain("legacy");
+      expect(listed).not.toContain("source");
+      expect(listed).not.toContain("private");
+    }));
+});
+
+describe("solo native catalog explicit ACL boundary", () => {
+  it.each(["list", "resolve", "read"] as const)(
+    "refuses unknown-creator explicit ACL through solo native %s",
+    async (method) =>
+      withConfidentialPi(async ({ call, clients, visibility }) => {
+        expect(visibility().kind).toBe("unrestricted");
+        expect(clients.bob.connect.scopes).not.toContain("operator.admin");
+        const result = await call(method);
+        if (method === "list") {
+          expect(result.ok).toBe(true);
+          const listed = result.payload.catalogs[0].hosts.flatMap((host: SessionCatalogHost) =>
+            host.sessions.map((entry) => entry.threadId),
+          );
+          expect(listed).not.toContain("private");
+        } else {
+          expect(result).toMatchObject({
+            ok: false,
+            payload: undefined,
+            error: { code: ErrorCodes.FORBIDDEN },
+          });
+        }
+        expect(JSON.stringify(result)).not.toContain("PRIVATE_NATIVE_private");
+      }, true),
+  );
+  it.each(["legacy", "audience", "source"] as const)(
+    "preserves eligible solo native %s bytes",
+    async (id) =>
+      withConfidentialPi(async ({ call, visibility }) => {
+        expect(visibility().kind).toBe("unrestricted");
+        const result = await call("read", id);
+        expect(result.ok).toBe(true);
+        expect(JSON.stringify(result.payload)).toContain("PRIVATE_NATIVE_" + id);
+      }, true),
+  );
+  it("refuses retained unbound native bytes after canonical adoption", () =>
+    withConfidentialPi(async ({ call, provider, adoptUnbound }) => {
+      const entered = createDeferredCore(),
+        release = createDeferredCore();
+      const original = provider.read;
+      let nativeBytes = false;
+      using _ = vi.spyOn(provider, "read").mockImplementation(async (request) => {
+        const page = await original(request);
+        nativeBytes = JSON.stringify(page).includes("PRIVATE_NATIVE_unbound");
+        entered.resolve();
+        await release.promise;
+        return page;
+      });
+      const pending = call("read", "pi-session");
+      try {
+        await awaitGateBeforeSettlement(entered.promise, pending, "unbound Pi native read");
+        await adoptUnbound();
+      } finally {
+        release.resolve();
+      }
+      const denied = await pending;
+      expect(nativeBytes).toBe(true);
+      expect(denied).toMatchObject({
+        ok: false,
+        payload: undefined,
+        error: { code: ErrorCodes.FORBIDDEN },
+      });
+      expect(JSON.stringify(denied)).not.toContain("PRIVATE_NATIVE_");
+      expect((await call("read", "pi-session")).ok).toBe(true);
+    }, true));
+});
+
+describe("solo native collaboration ceiling", () => {
+  it("does not let explicit audience override foreign Draft", () =>
+    withConfidentialPi(async ({ call, mutateVisibility }) => {
+      await mutateVisibility("audience");
+      expect(await call("read", "audience")).toMatchObject({
+        ok: false,
+        payload: undefined,
+        error: { code: ErrorCodes.FORBIDDEN },
+      });
+    }, true));
+  it("preserves prior roleless native Draft reads only for unset legacy ACL", () =>
+    withConfidentialPi(async ({ call, mutateVisibility }) => {
+      await mutateVisibility("legacy");
+      const result = await call("read", "legacy");
+      expect(result.ok).toBe(true);
+      expect(JSON.stringify(result.payload)).toContain("PRIVATE_NATIVE_legacy");
+    }, true));
 });

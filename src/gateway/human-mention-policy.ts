@@ -53,7 +53,7 @@ type MentionProfile = Extract<CurrentUserProfileDisplay, { kind: "resolved" }>;
 type MentionTarget = {
   agentId: string;
   sessionKey?: string;
-  entry: Pick<SessionEntry, "createdActor" | "visibility" | "incognito">;
+  entry: Pick<SessionEntry, "createdActor" | "visibility" | "incognito" | "access">;
 };
 type MentionReader = { profile: MentionProfile; canRead: (target: MentionTarget) => boolean };
 type MentionRanking = {
@@ -198,6 +198,7 @@ export function createHumanMentionPolicy(params: {
     const entryFilter = createProfileSessionEntryFilter({
       profileId: profile.profileId,
       sessionCap: policy?.sessions.others,
+      cfg,
     });
     return entryFilter(target.sessionKey, target.entry) ? profile : undefined;
   }
@@ -228,6 +229,7 @@ export function createHumanMentionPolicy(params: {
           createdActor: resolved.entry.createdActor,
           visibility: resolved.entry.visibility,
           incognito: resolved.entry.incognito,
+          access: resolved.entry.access,
         },
       };
       if (!target || !requester.canRead(target)) {
@@ -270,7 +272,10 @@ export function createHumanMentionPolicy(params: {
     target: {
       agentId: string;
       canonicalKey: string;
-      entry: Pick<SessionEntry, "sessionId" | "createdActor" | "visibility" | "incognito">;
+      entry: Pick<
+        SessionEntry,
+        "sessionId" | "createdActor" | "visibility" | "incognito" | "access"
+      >;
     } | null,
     cfg: OpenClawConfig,
   ): string[] {
@@ -414,7 +419,12 @@ export function createHumanMentionPolicy(params: {
         throw new Error("The mention directory has not been prepared.");
       }
       // Keystrokes reuse one bounded eligible roster; identity/session/role changes replace it.
-      const key = JSON.stringify([profileVersion, target, cfg.gateway?.roles]);
+      const key = JSON.stringify([
+        profileVersion,
+        target,
+        cfg.gateway?.roles,
+        cfg.session?.sharing?.accessPolicy,
+      ]);
       if (eligibleDirectory?.key !== key) {
         const users = directory.profiles.flatMap(({ id, logins }) => {
           const candidate = recipientProfile(id, target, cfg);

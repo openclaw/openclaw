@@ -249,14 +249,13 @@ describe("gateway method authorization", () => {
         expect(respond).toHaveBeenCalledWith(
           false,
           undefined,
-          expect.objectContaining({
-            details: expect.objectContaining({
-              code:
-                change === "reassignment"
-                  ? "SESSION_PARTICIPATION_REQUIRED"
-                  : "SESSION_MUTATION_AUTHORIZATION_CHANGED",
-            }),
-          }),
+          change === "reassignment"
+            ? { code: "INVALID_REQUEST", message: `Session "${sessionKey}" was not found.` }
+            : expect.objectContaining({
+                details: expect.objectContaining({
+                  code: "SESSION_MUTATION_AUTHORIZATION_CHANGED",
+                }),
+              }),
         );
         const current = loadSessionEntry({ agentId: "main", sessionKey });
         expect(current).toMatchObject({

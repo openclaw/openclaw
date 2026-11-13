@@ -1,4 +1,6 @@
 import { randomBytes } from "node:crypto";
+import { getRuntimeConfig } from "../config/io.js";
+import { resolveSessionAccess } from "../config/sessions/session-access.js";
 import {
   resolveSessionPublicShare,
   type SessionPublicShareGrant,
@@ -14,6 +16,10 @@ export function prepareSessionPublicShareGrant(
 ): SessionPublicShareGrant {
   if (entry.incognito || isIncognitoSessionKey(sessionKey)) {
     throw new Error("Incognito sessions cannot be published.");
+  }
+  const access = resolveSessionAccess(getRuntimeConfig(), sessionKey, entry);
+  if (access && access.mode !== "unrestricted") {
+    throw new Error("Confidential sessions cannot be published; explicitly change access first.");
   }
   const grant = resolveSessionPublicShare(entry) ?? {
     id: randomBytes(24).toString("hex"),

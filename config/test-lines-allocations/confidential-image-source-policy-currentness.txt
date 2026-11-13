@@ -1,0 +1,3 @@
+# Config-only source policy revocation during actual avatar/workspace icon HTTP reads.
+# Exact net regression LF after native-spawn duplicate consolidation; scalar/other ACL credits unchanged.
+212

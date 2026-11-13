@@ -5,7 +5,9 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { resolveSessionStorePathCore } from "../../config/sessions.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
+import { applySessionEntryCanonicalReplacements } from "../../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
@@ -17,6 +19,7 @@ const fixedStorePath = path.resolve("/stores/shared/sessions.sqlite");
 const templateStorePath = path.resolve("/stores/{agentId}.json");
 
 const searchSessionTranscriptsMock = vi.fn();
+const readSessionEntriesMock = vi.fn();
 const readSessionEntrySummariesMock = vi.fn();
 const resolveExistingAgentSessionStoreTargetsAsyncMock = vi.fn();
 
@@ -25,6 +28,7 @@ vi.mock("../../config/sessions/session-transcript-search.js", () => ({
 }));
 vi.mock("../../config/sessions/session-entry-read-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/sessions/session-entry-read-runtime.js")>()),
+  readSessionEntriesFromStoreInWorker: (...args: unknown[]) => readSessionEntriesMock(...args),
   readSessionEntrySummariesInWorker: (...args: unknown[]) => readSessionEntrySummariesMock(...args),
 }));
 vi.mock("../../config/sessions/targets-runtime.js", async (importOriginal) => ({
@@ -84,6 +88,7 @@ async function useRestrictedSearchMetadata(others: "none" | "view" = "none") {
   const sessions = await vi.importActual<typeof import("../../config/sessions/targets-runtime.js")>(
     "../../config/sessions/targets-runtime.js",
   );
+  readSessionEntriesMock.mockImplementation(accessor.readSessionEntriesFromStoreInWorker);
   readSessionEntrySummariesMock.mockImplementation(accessor.readSessionEntrySummariesInWorker);
   resolveExistingAgentSessionStoreTargetsAsyncMock.mockImplementation(
     sessions.resolveExistingAgentSessionStoreTargetsAsync,
@@ -120,6 +125,16 @@ async function useRestrictedSearchMetadata(others: "none" | "view" = "none") {
 
 const profileState = { scenario: "minimal", prepareProfileCatalog: true } as const;
 
+function useScopedSearchRows(sessionKeys: string[]) {
+  const rows = sessionKeys.map((sessionKey) => ({
+    sessionKey,
+    entry: { sessionId: sessionKey, updatedAt: 1, visibility: "shared" },
+  }));
+  readSessionEntriesMock.mockImplementation((params: { sessionKeys: string[] }) => ({
+    entries: rows.filter((row) => params.sessionKeys.includes(row.sessionKey)),
+  }));
+}
+
 describe("sessions.search gateway method", () => {
   beforeEach(() => {
     cfg = {
@@ -131,6 +146,8 @@ describe("sessions.search gateway method", () => {
     };
     searchSessionTranscriptsMock.mockReset();
     searchSessionTranscriptsMock.mockReturnValue({ hits: [], indexing: false });
+    readSessionEntriesMock.mockReset();
+    readSessionEntriesMock.mockResolvedValue({ entries: [] });
     readSessionEntrySummariesMock.mockReset();
     readSessionEntrySummariesMock.mockResolvedValue([]);
     resolveExistingAgentSessionStoreTargetsAsyncMock.mockReset();
@@ -243,6 +260,90 @@ describe("sessions.search gateway method", () => {
     });
   });
 
+  it("filters confidential rows before scoped and unscoped FTS for creator, selected and outsider", async () => {
+    await withOpenClawTestState(profileState, async () => {
+      const { viewer: selected, other: creator } = await useRestrictedSearchMetadata("view");
+      const outsider = ensureProfileForEmail("search-outsider@example.test");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      const sessionKey = "agent:main:confidential";
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: "confidential-search",
+          updatedAt: 1,
+          visibility: "shared",
+          access: { mode: "audience", profileIds: [selected.id] },
+          createdActor: { type: "human", source: "profile", id: creator.id },
+        },
+      );
+      for (const profile of [creator, selected, outsider]) {
+        for (const sessionKeys of [undefined, [sessionKey]]) {
+          searchSessionTranscriptsMock.mockClear();
+          const respond = await callSearch(
+            { query: "needle", ...(sessionKeys ? { sessionKeys } : {}) },
+            ["operator.read"],
+            profile.id,
+          );
+          const allowed = profile !== outsider;
+          expect(respond).toHaveBeenCalledWith(true, {
+            results: allowed ? [expect.objectContaining({ sessionKey })] : [],
+          });
+          if (allowed) {
+            expect(searchSessionTranscriptsMock).toHaveBeenCalledExactlyOnceWith(
+              expect.objectContaining({ sessionKeys: [sessionKey] }),
+            );
+          } else {
+            expect(searchSessionTranscriptsMock).not.toHaveBeenCalled();
+          }
+        }
+      }
+    });
+  });
+
+  it("rechecks confidential audience before publishing transcript hits", async () => {
+    await withOpenClawTestState(profileState, async () => {
+      const { viewer, other } = await useRestrictedSearchMetadata("view");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      const sessionKey = "agent:main:revoked-audience";
+      const entry = {
+        sessionId: "revoked-audience",
+        updatedAt: 1,
+        visibility: "shared" as const,
+        createdActor: { type: "human" as const, source: "profile" as const, id: other.id },
+      };
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey },
+        { ...entry, access: { mode: "audience", profileIds: [viewer.id] } },
+      );
+      searchSessionTranscriptsMock.mockImplementationOnce(async () => {
+        // Ordinary bookkeeping preserves access; only the canonical owner may revoke it.
+        await applySessionEntryCanonicalReplacements({
+          agentId: "main",
+          storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" }),
+          sessionKeys: [sessionKey],
+          update: (rows) => ({
+            result: undefined,
+            replacements: rows.map((row) => ({
+              ...row,
+              previousSessionKeys: [],
+              accessMutation: true,
+              entry: { ...row.entry, access: { mode: "creator" as const } },
+            })),
+          }),
+        });
+        return {
+          hits: [{ sessionKey, sessionId: entry.sessionId, messageId: "private", score: 1 }],
+          indexing: false,
+        };
+      });
+      const respond = await callSearch({ query: "needle" }, ["operator.read"], viewer.id);
+      expect(searchSessionTranscriptsMock).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ sessionKeys: [sessionKey] }),
+      );
+      expect(respond).toHaveBeenCalledWith(true, { results: [] });
+    });
+  });
+
   it("validates params and rejects whitespace-only queries", async () => {
     const invalidLimit = await callSearch({ query: "needle", limit: 26 });
     expect(invalidLimit).toHaveBeenCalledWith(
@@ -266,6 +367,7 @@ describe("sessions.search gateway method", () => {
       if (storePath) {
         cfg = { ...cfg, session: { store: storePath } };
       }
+      useScopedSearchRows(["agent:work:main", "agent:work:other"]);
       searchSessionTranscriptsMock.mockReturnValue({
         hits: [
           {
@@ -410,6 +512,7 @@ describe("sessions.search gateway method", () => {
   });
 
   it("uses agentId to disambiguate an unscoped store key", async () => {
+    useScopedSearchRows(["agent:work:main", "global"]);
     await callSearch({ agentId: "work", query: "needle", sessionKeys: ["main", "global"] });
 
     expect(searchSessionTranscriptsMock).toHaveBeenCalledWith({
@@ -432,7 +535,7 @@ describe("sessions.search gateway method", () => {
     expect(searchSessionTranscriptsMock).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])("deduplicates retired copies (identified: %s)", async (identified) => {
+  it.each([false, true])("deduplicates authorized retired copies (scoped: %s)", async (scoped) => {
     resolveExistingAgentSessionStoreTargetsAsyncMock.mockResolvedValue([
       { agentId: "retired", storePath: "/stores/retired-a/sessions.json" },
       { agentId: "retired", storePath: "/stores/retired-b/sessions.json" },
@@ -446,12 +549,7 @@ describe("sessions.search gateway method", () => {
       snippet: "needle",
       score: 3,
     };
-    readSessionEntrySummariesMock.mockResolvedValue([
-      {
-        sessionKey: duplicate.sessionKey,
-        entry: { sessionId: duplicate.sessionId, updatedAt: 1 },
-      },
-    ]);
+    // Admin transcript-copy deduplication is separate from canonical-row admission below.
     searchSessionTranscriptsMock
       .mockReturnValueOnce({
         hits: [duplicate, { ...duplicate, messageId: "message-2", score: 1 }],
@@ -468,11 +566,11 @@ describe("sessions.search gateway method", () => {
       {
         agentId: "retired",
         query: "needle",
-        ...(identified ? {} : { sessionKeys: ["main"] }),
+        ...(scoped ? { sessionKeys: ["main"] } : {}),
         limit: 3,
       },
-      identified ? ["operator.read"] : undefined,
-      identified ? "legacy-search-viewer" : undefined,
+      ["operator.admin"],
+      "legacy-search-administrator",
     );
 
     expect(searchSessionTranscriptsMock).toHaveBeenCalledTimes(2);
@@ -481,7 +579,7 @@ describe("sessions.search gateway method", () => {
       agentId: "retired",
       query: "needle",
       limit: 25,
-      sessionKeys: ["agent:retired:main"],
+      ...(scoped ? { sessionKeys: ["agent:retired:main"] } : {}),
       storePath: "/stores/retired-a/sessions.json",
     });
     expect(respond).toHaveBeenCalledWith(
@@ -498,7 +596,7 @@ describe("sessions.search gateway method", () => {
   });
 
   it.each(["main", "retired"])(
-    "delegates omitted-filter namespace selection to search for %s in a fixed store",
+    "filters omitted-key searches by current metadata and namespace for %s in a fixed store",
     async (agentId) => {
       cfg = {
         agents: { entries: { main: {} } },
@@ -507,13 +605,33 @@ describe("sessions.search gateway method", () => {
       resolveExistingAgentSessionStoreTargetsAsyncMock.mockResolvedValue([
         { agentId: "retired", storePath: fixedStorePath },
       ]);
+      const sessionKey = `agent:${agentId}:visible`;
+      readSessionEntrySummariesMock.mockResolvedValue([
+        { sessionKey, entry: { sessionId: "visible", visibility: "shared" } },
+        {
+          sessionKey: `agent:${agentId}:confidential`,
+          entry: { sessionId: "confidential", access: { mode: "creator" } },
+        },
+        { sessionKey: "agent:other:foreign", entry: { sessionId: "foreign" } },
+      ]);
       await callSearch({ ...(agentId === "retired" ? { agentId } : {}), query: "needle" });
 
-      expect(readSessionEntrySummariesMock).not.toHaveBeenCalled();
+      expect(readSessionEntrySummariesMock).toHaveBeenCalledTimes(2);
+      expect(readSessionEntrySummariesMock).toHaveBeenCalledWith({
+        agentId,
+        storePath: fixedStorePath,
+      });
+      const ftsCall = expectDefined(
+        searchSessionTranscriptsMock.mock.invocationCallOrder[0],
+        "FTS invocation",
+      );
+      expect(readSessionEntrySummariesMock.mock.invocationCallOrder[0]).toBeLessThan(ftsCall);
+      expect(readSessionEntrySummariesMock.mock.invocationCallOrder[1]).toBeGreaterThan(ftsCall);
       expect(searchSessionTranscriptsMock).toHaveBeenCalledWith({
         agentId,
         query: "needle",
         limit: agentId === "retired" ? 25 : undefined,
+        sessionKeys: [sessionKey],
         storePath: fixedStorePath,
       });
     },

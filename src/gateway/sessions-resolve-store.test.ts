@@ -48,6 +48,8 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
     fn: (ctx: { tempRoot: string; stateDir: string }) => Promise<T>,
   ): Promise<T> {
     return withRawStateDirEnv(prefix, async (ctx) => {
+      // Snapshot staging requires a private ancestor even under a permissive test umask.
+      await fs.chmod(ctx.stateDir, 0o700);
       try {
         return await fn(ctx);
       } finally {
@@ -176,7 +178,11 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
       await seedAgent(cfg, "main", {
         "agent:main:guildchat:direct:u1": entry("sess-stale-main", "stale-main"),
       });
-      await expectInvalid(cfg, { sessionId: "sess-stale-main" }, deletedMainError);
+      await expectInvalid(
+        cfg,
+        { sessionId: "sess-stale-main" },
+        "No session found: sess-stale-main",
+      );
     });
   });
 
@@ -186,8 +192,16 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
       await seedAgent(cfg, "main", {
         "agent:main:main": entry("sess-discovered-main", "discovered-main"),
       });
-      await expectInvalid(cfg, { sessionId: "sess-discovered-main" }, deletedMainError);
-      await expectInvalid(cfg, { label: "discovered-main" }, deletedMainError);
+      await expectInvalid(
+        cfg,
+        { sessionId: "sess-discovered-main" },
+        "No session found: sess-discovered-main",
+      );
+      await expectInvalid(
+        cfg,
+        { label: "discovered-main" },
+        "No session found with label: discovered-main",
+      );
     });
   });
 
@@ -195,9 +209,19 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
     {
       name: "ordinary reads leave lifecycle-bound legacy ACP metadata unavailable",
       repair: false,
+      stale: false,
     },
-    { name: "Doctor repairs ACP keys after session rows are canonical", repair: true },
-  ])("$name", async ({ repair }) => {
+    {
+      name: "Doctor repairs ACP keys after session rows are canonical",
+      repair: true,
+      stale: false,
+    },
+    {
+      name: "canonical ACP metadata from another lifecycle stays unavailable",
+      repair: false,
+      stale: true,
+    },
+  ])("$name", async ({ repair, stale }) => {
     await withStateDirEnv(
       "openclaw-sessions-resolve-acp-harness-partial-",
       async ({ tempRoot, stateDir }) => {
@@ -207,10 +231,12 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
         };
         const acpKey = "agent:claude:acp:44444444-4444-4444-8444-444444444444";
         const legacyAcpKey = "agent:CLAUDE:acp:44444444-4444-4444-8444-444444444444";
+        const ordinaryKey = "agent:claude:ordinary-deleted-owner";
         const claudeStorePath = resolveSessionStorePathCore(cfg.session?.store, {
           agentId: "claude",
         });
         await seedSessionStore(claudeStorePath, {
+          [ordinaryKey]: entry("sess-ordinary-deleted-owner", "claude-delegate-partial"),
           [acpKey]: {
             sessionId: "sess-acp-harness-partial",
             lifecycleRevision: "revision-acp-harness-partial",
@@ -219,8 +245,8 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
           },
         });
         writeAcpSessionMetaForMigration({
-          sessionKey: legacyAcpKey,
-          lifecycleRevision: "revision-acp-harness-partial",
+          sessionKey: stale ? buildAcpDatabaseSessionKey(acpKey, "claude") : legacyAcpKey,
+          lifecycleRevision: stale ? "stale-revision" : "revision-acp-harness-partial",
           meta: {
             backend: "acpx",
             agent: "claude",
@@ -235,7 +261,9 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
             .db.prepare("SELECT * FROM acp_sessions ORDER BY session_key")
             .all();
         const before = readRows();
-        expect(before).toMatchObject([{ session_key: legacyAcpKey }]);
+        expect(before).toMatchObject([
+          { session_key: stale ? buildAcpDatabaseSessionKey(acpKey, "claude") : legacyAcpKey },
+        ]);
 
         if (repair) {
           await expect(fs.access(claudeStorePath)).rejects.toMatchObject({ code: "ENOENT" });
@@ -271,14 +299,20 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
           { sessionId: "sess-acp-harness-partial" },
           { label: "claude-delegate-partial" },
         ]) {
-          await expect(resolve(cfg, selector)).resolves.toEqual(
+          const result = await resolve(cfg, selector);
+          expect(result).toEqual(
             repair
               ? resolved(acpKey, "claude")
               : {
                   ok: false,
                   error: {
                     code: ErrorCodes.INVALID_REQUEST,
-                    message: 'Agent "claude" no longer exists in configuration',
+                    message:
+                      "key" in selector
+                        ? 'Agent "claude" no longer exists in configuration'
+                        : "sessionId" in selector
+                          ? "No session found: sess-acp-harness-partial"
+                          : "No session found with label: claude-delegate-partial",
                   },
                 },
           );
@@ -286,8 +320,81 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
             expect(readRows()).toEqual(before);
           }
         }
+        await expectInvalid(
+          cfg,
+          { key: ordinaryKey },
+          'Agent "claude" no longer exists in configuration',
+        );
+        await expectInvalid(
+          cfg,
+          { sessionId: "sess-acp-harness-partial", agentId: "main" },
+          "No session found: sess-acp-harness-partial",
+        );
+        await expectInvalid(
+          cfg,
+          { label: "claude-delegate-partial", agentId: "main" },
+          "No session found with label: claude-delegate-partial",
+        );
       },
     );
+  });
+
+  it("ignores deleted-owner label collisions before selecting a configured row", async () => {
+    await withStateDirEnv("openclaw-sessions-resolve-deleted-collision-", async () => {
+      const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+      const liveKey = "agent:main:live-collision";
+      const deletedKey = "agent:claude:ordinary-collision";
+      await seedAgent(cfg, "main", { [liveKey]: entry("live-collision", "same-label") });
+      await seedAgent(
+        cfg,
+        "claude",
+        Object.fromEntries(
+          [0, 1, 2].map((index) => [
+            index === 0 ? deletedKey : `${deletedKey}-${index}`,
+            {
+              ...entry(
+                index === 0 ? "deleted-collision" : `deleted-collision-${index}`,
+                "same-label",
+              ),
+              updatedAt: Date.now() + 1000 + index,
+            },
+          ]),
+        ),
+      );
+      await expect(resolve(cfg, { label: "same-label" })).resolves.toEqual(resolved(liveKey));
+      await expectInvalid(
+        cfg,
+        { sessionId: "deleted-collision" },
+        "No session found: deleted-collision",
+      );
+      await expectInvalid(
+        cfg,
+        { key: deletedKey },
+        'Agent "claude" no longer exists in configuration',
+      );
+    });
+  });
+
+  it("does not discover raw sentinels from an unconfigured physical owner", async () => {
+    await withStateDirEnv("openclaw-sessions-resolve-deleted-sentinels-", async () => {
+      const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+      await seedAgent(cfg, "claude", {
+        global: entry("deleted-global-id", "deleted-global-label"),
+        unknown: entry("deleted-unknown-id", "deleted-unknown-label"),
+      });
+      for (const key of ["global", "unknown"]) {
+        await expectInvalid(
+          cfg,
+          { label: `deleted-${key}-label`, includeGlobal: true, includeUnknown: true },
+          `No session found with label: deleted-${key}-label`,
+        );
+        await expectInvalid(
+          cfg,
+          { sessionId: `deleted-${key}-id`, includeGlobal: true, includeUnknown: true },
+          `No session found: deleted-${key}-id`,
+        );
+      }
+    });
   });
 
   it("rejects an explicit listed deleted main key instead of remapping to the live default main", async () => {

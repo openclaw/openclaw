@@ -39,6 +39,10 @@ it.each([
       operatorRoleActor: { kind: "system" },
       atomicInitialization: atomic ? true : undefined,
       afterCreate: async (session) => {
+        expect(Object.hasOwn(session.entry, "access")).toBe(false);
+        const stored = loadSessionEntryReadOnly({ sessionKey: key });
+        expect(stored).toBeDefined();
+        expect(Object.hasOwn(stored!, "access")).toBe(false);
         if (atomic) {
           expect(session.entry.initializationPending).toBe(true);
           scope = await appendImportedMessage(session);

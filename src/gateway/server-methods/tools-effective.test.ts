@@ -11,6 +11,10 @@ import type { SandboxToolPolicy } from "../../agents/sandbox/types.js";
 import { createStubTool } from "../../agents/test-helpers/agent-tool-stubs.js";
 import { makeProviderModelFixture } from "../../agents/test-helpers/provider-model-fixture.js";
 import type { EffectiveToolInventoryResult as ToolsEffectivePayload } from "../../agents/tools-effective-inventory.types.js";
+import {
+  getRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -189,6 +193,10 @@ async function invokeTools(
   cfg: Record<string, unknown> = {},
   placementContext: SessionWorkerPlacementContext & { localEmbedded?: boolean } = {},
 ) {
+  // Reusing an in-flight fixture is not a new config publication or revocation.
+  if (getRuntimeConfigSnapshot() !== cfg) {
+    setRuntimeConfigSnapshot(cfg);
+  }
   const respond = vi.fn();
   await expectDefined(
     toolsEffectiveHandlers["tools.effective"],
@@ -274,7 +282,7 @@ function expectPayloadGroupIds(
 
 function expectResponsesOk(...responds: Array<ReturnType<typeof vi.fn>>): void {
   for (const respond of responds) {
-    expect(firstRespondCall(respond)?.[0]).toBe(true);
+    expect(firstRespondCall(respond)?.[0], JSON.stringify(firstRespondCall(respond))).toBe(true);
   }
 }
 
@@ -343,7 +351,7 @@ describe("tools.effective handler", () => {
   it("rejects unknown session keys", async () => {
     mockSession({}, { canonicalKey: "missing-session", entry: undefined });
     const respond = await invokeTools({ sessionKey: "missing-session" });
-    expectInvalidResponse(respond, 'unknown session key "missing-session"');
+    expectInvalidResponse(respond, 'Session "missing-session" was not found.');
   });
 
   it.each([
@@ -701,7 +709,11 @@ describe("tools.effective handler", () => {
     const ordinary = invokeTools({ sessionKey: "main:abc" }, cfg);
     mockSession({}, { cfg });
     const sandboxed = invokeTools({ sessionKey: "main:abc" }, cfg);
-    await awaitGateBeforeSettlement(started.promise, ordinary, "inventory did not start");
+    await awaitGateBeforeSettlement(
+      started.promise,
+      ordinary.then((respond) => expectResponsesOk(respond)),
+      "inventory did not start",
+    );
     release.resolve();
     const responses = await Promise.all([ordinary, sandboxed]);
     mockSession({ sandboxMode: "off" }, { cfg });

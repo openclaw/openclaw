@@ -36,6 +36,7 @@ import {
   bindChatSendPreparedMediaCustody,
   prepareChatSendAttachments,
 } from "./chat-send-attachments.js";
+import { createChatSendCreationDefaultGuard } from "./chat-send-creation.js";
 import { createChatSendDashboardAuthority } from "./chat-send-dashboard-authority.js";
 import { readChatSendDiagnostics, startChatSendDiagnostics } from "./chat-send-diagnostics.js";
 import { handleChatSendSetupError } from "./chat-send-dispatch-errors.js";
@@ -169,6 +170,15 @@ export async function handleChatSendWithStorage(
   };
   const cronCreatorAuthority = externalAuthorityAdmission?.resolve(externalAdmissionParams);
 
+  const { initialAttendedControlUi, assertCreationDefaultCurrent } =
+    createChatSendCreationDefaultGuard({
+      cfg,
+      sessionKey,
+      client,
+      inputProvenance: systemInputProvenance,
+      getRuntimeConfig: context.getRuntimeConfig,
+      hasSession: () => Boolean(entry || committedInput),
+    });
   const admissionStartedAt = Date.now();
   const commitInitialInput = req.method === "sessions.create";
   let commitFreshInput = admission.localInputAdmission || commitInitialInput;
@@ -179,6 +189,7 @@ export async function handleChatSendWithStorage(
   try {
     const assertCustodyLifetimeCurrent = () => {
       admission.assertWorkAdmissionCurrent();
+      assertCreationDefaultCurrent();
       if (sessionRoutingChanged(context.getRuntimeConfig())) {
         throw new Error("Session routing changed before input admission; refresh and retry.");
       }
@@ -649,6 +660,7 @@ export async function handleChatSendWithStorage(
         agentId: session.agentId,
         authorization: sessionMutationAuthorization,
         needsCreationBinding: needsSessionCreationBinding,
+        ...(initialAttendedControlUi ? { assertCreationDefaultCurrent } : {}),
         getSessionInitializationOptions: userTurn.getSessionInitializationOptions,
       }),
       externalAuthorityAdmission,

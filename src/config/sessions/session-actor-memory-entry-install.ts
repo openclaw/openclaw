@@ -18,6 +18,7 @@ export function installSessionActorMemoryEntry(
   options: {
     providerReviewMutation?: boolean;
     consumePendingReset?: boolean;
+    accessMutation?: boolean;
     preserveVisibility?: boolean;
   } = {},
 ): SessionEntry {
@@ -27,6 +28,9 @@ export function installSessionActorMemoryEntry(
     throw new Error("Refusing invalid memory session entry identity");
   }
   next = preserveCreationStamp(next, previous);
+  if (previous && !options.accessMutation) {
+    next.access = previous.access;
+  }
   next.createdAt ??= previous?.updatedAt ?? Date.now();
   const sameWindow = previous?.sessionId === next.sessionId;
   const sameLifecycle = sameWindow && previous?.lifecycleRevision === next.lifecycleRevision;

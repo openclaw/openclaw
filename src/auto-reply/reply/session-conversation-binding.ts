@@ -185,3 +185,12 @@ export async function resolveSessionConversationBinding(params: {
     conversationBinding,
   };
 }
+
+/** Touch the selected binding before rechecking that its route is still current. */
+export async function touchPreparedSessionBinding(
+  binding: SessionBindingRecord,
+  ctx: MsgContext,
+): Promise<void> {
+  await getSessionBindingService().touchAsync(binding.bindingId, undefined, binding.conversation);
+  await assertPreparedConversationBindingRouteCurrent(ctx);
+}

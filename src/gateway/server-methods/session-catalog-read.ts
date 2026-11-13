@@ -8,10 +8,6 @@ import {
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import { projectSessionParticipant } from "../session-identity-projection.js";
 import type { SessionActorProfileIdentity } from "../session-utils-contracts.js";
-import {
-  isPublishedCatalogVisible,
-  resolveSessionCatalogVisibility,
-} from "./session-catalog-visibility.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 export async function readAuthorizedSessionCatalog(params: {
@@ -21,20 +17,25 @@ export async function readAuthorizedSessionCatalog(params: {
   allowProcessHomeFallback: boolean;
   client: GatewayClient | null;
   context: Pick<GatewayRequestContext, "getRuntimeConfig">;
+  isCurrent: () => boolean;
 }): Promise<{ ok: true; page: SessionsCatalogReadResult } | { ok: false; error: ErrorShape }> {
   const { catalogId: _catalogId, ...providerRequest } = params.request;
+  if (!params.isCurrent()) {
+    return {
+      ok: false,
+      error: errorShape(
+        ErrorCodes.FORBIDDEN,
+        "session catalog thread is not visible to this caller",
+      ),
+    };
+  }
   const page = await params.provider.read({
     ...providerRequest,
     agentId: params.agentId,
     allowProcessHomeFallback: params.allowProcessHomeFallback,
   });
   // Source IO can outlive the caller's role grant; current policy owns data release.
-  if (
-    params.provider.audience === "session-viewers" &&
-    !isPublishedCatalogVisible(
-      resolveSessionCatalogVisibility(params.client, params.context.getRuntimeConfig()),
-    )
-  ) {
+  if (!params.isCurrent()) {
     return {
       ok: false,
       error: errorShape(

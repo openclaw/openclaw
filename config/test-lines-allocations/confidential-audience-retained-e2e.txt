@@ -1,0 +1,4 @@
+# Retain the real confidential-audience Gateway/provider proof in the CI-owned E2E path.
+# Shared Goal/native-child provider fixture preserves original role/agent controls; all support LF count.
+# Exact net retained regression growth, including optional allowlisted tracing and canonical byte checks.
+635

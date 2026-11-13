@@ -22,9 +22,11 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { captureSessionDiffBaseline } from "../../sessions/session-diff.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createMcpAppWorkspaceUploadProvider } from "../mcp-app-form-resources.js";
 import { prepareMcpAppHostFile, readMcpAppHostFile } from "../mcp-app-host-files.js";
+import { sharingPolicyClient } from "../session-sharing.test-utils.js";
 import { runtime as createMcpRuntime } from "./mcp-app.test-support.js";
 import * as openPath from "./open-path.js";
 import { loadSessionDiff } from "./sessions-diff.js";
@@ -46,6 +48,8 @@ let env: NodeJS.ProcessEnv;
 let workspace: string;
 let cfg: OpenClawConfig;
 let entry: SessionEntry;
+let admin: ReturnType<typeof sharingPolicyClient>;
+let reader: ReturnType<typeof sharingPolicyClient>;
 const invoke = createSessionFilesHandlerInvoker(sessionsFilesHandlers);
 const files = createSessionFilesClient(invoke, () => ({ sessionKey: key, context }));
 const context = {
@@ -68,6 +72,11 @@ beforeAll(async () => {
   env = { OPENCLAW_STATE_DIR: dirs.make("incognito-files-actor-") };
   setConfig({ agents: { entries: { main: { workspace } } }, mcp: { apps: { enabled: true } } });
   vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+  admin = sharingPolicyClient({
+    user: ensureProfileForEmail("incognito-admin@example.test").id,
+    scopes: ["operator.admin"],
+  });
+  reader = sharingPolicyClient({ user: ensureProfileForEmail("incognito-reader@example.test").id });
   storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
   execFileSync("git", ["init", "-q", "-b", "main", workspace]);
   await writeFile(path.join(workspace, "example.txt"), "before session\n");
@@ -111,8 +120,24 @@ it("serves unbound memory files and the complete diff baseline without opening h
         expect.objectContaining({ path: "example.txt", sessionKind: "modified" }),
       ]),
     );
+    const owner = memorySessionActorOwners.read({ agentId: "main", path: storePath });
+    expect(owner?.readSession(key, { assertCurrent() {}, authorize() {} })?.entry?.sessionId).toBe(
+      sid,
+    );
     const file = await files.ok("get", "example.txt");
     expect(file.file.content).toBe("after session\n");
+    expect((await files.ok("get", "example.txt", undefined, { client: admin })).file.content).toBe(
+      "after session\n",
+    );
+    const mediaRead = vi.spyOn(workspaceFs, "readWorkspaceFile");
+    await expect(
+      files.request("get", "example.txt", undefined, { client: reader }),
+    ).rejects.toMatchObject({
+      name: "SessionMutationAuthorizationChangedError",
+      error: { code: "INVALID_REQUEST", message: `Session "${key}" was not found.` },
+    });
+    expect(mediaRead).not.toHaveBeenCalled();
+    mediaRead.mockRestore();
     using connection = createSessionFileDownloadClient();
     const download = await files.ok("download", "example.txt", undefined, connection);
     const fetched = await connection.fetch(download.url);
@@ -143,12 +168,9 @@ it("serves unbound memory files and the complete diff baseline without opening h
 it("keeps MCP file and upload authority on the original actor when a same-ID actor replaces it", () =>
   withoutHostSql(async () => {
     using connection = createSessionFileDownloadClient();
+    Object.assign(connection.client, admin);
     const options = {
-      client: {
-        connId: "actor-file-view",
-        connect: { role: "operator", scopes: ["operator.admin"] },
-        connectionSignal: new AbortController().signal,
-      },
+      client: connection.client,
       context: { ...context, broadcastToConnIds() {} },
       hasCurrentClientAuthority: () => true,
     } as unknown as GatewayRequestHandlerOptions;
@@ -212,12 +234,16 @@ it("keeps MCP file and upload authority on the original actor when a same-ID act
           "MCP read skipped its file boundary",
         );
         memorySessionActorOwners.closeDatabase({ agentId: "main", path: storePath });
+        await replaceSessionEntry({ sessionKey: key, storePath }, entry);
+        await writeFile(path.join(workspace, "example.txt"), "replacement actor file\n");
       } finally {
         release.resolve();
         await Promise.allSettled([reading, rejected]);
       }
       await rejected;
-      await replaceSessionEntry({ sessionKey: key, storePath }, entry);
+      expect(
+        (await files.ok("get", "example.txt", undefined, { client: admin })).file.content,
+      ).toBe("replacement actor file\n");
       expect((await connection.fetch(download.url)).response.statusCode).toBe(404);
       await expect(read()).rejects.toThrow(/Incognito|incognito/);
       await expect(uploadText("refused.txt", "stale")).rejects.toThrow(/Incognito|incognito/);
@@ -259,8 +285,10 @@ it("preserves unbound memory and durable files while an absent memory namespace 
     await withoutHostSql(async () => {
       setConfig({ ...originalCfg });
       await withEnvAsync(absentEnv, async () => {
-        const missing = await files.error("get", "example.txt");
-        expect(missing).toMatchObject({ details: { type: "session_file_not_found" } });
+        await expect(files.request("get", "example.txt")).rejects.toMatchObject({
+          name: "SessionMutationAuthorizationChangedError",
+          error: { code: "INVALID_REQUEST", message: `Session "${key}" was not found.` },
+        });
       });
       expect(
         memorySessionActorOwners.read({

@@ -45,7 +45,7 @@ import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js"
 import { gatewayClientUploadPolicyError } from "../upload-policy.js";
 import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
 import { scheduleCreatedDashboardSessionTitle } from "./chat-send-background.js";
-import { isAttendedSessionCreator } from "./gateway-personal-caller.js";
+import { resolveSessionCreationCallerDefaults } from "./gateway-personal-caller.js";
 import { respondError } from "./response.js";
 import { resolveRegisteredCatalogCreateTarget } from "./session-catalog.js";
 import { emitSessionsChanged, emitSessionTitleChanged } from "./session-change-event.js";
@@ -149,8 +149,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       preparedCreation.via === "operator" && preparedCreation.requesterSessionKey !== undefined;
     const creationError = validateAgentToolSessionCreation(client, preparedCreation);
     if (creationError) {
-      respond(false, undefined, creationError);
-      return;
+      return respond(false, undefined, creationError);
     }
     const spawnRequesterSessionKey =
       preparedCreation.via === "spawn"
@@ -158,8 +157,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         : undefined;
     const spawnError = validateSessionCreateSpawnRequest(preparedCreation, p);
     if (spawnError) {
-      respond(false, undefined, spawnError);
-      return;
+      return respond(false, undefined, spawnError);
     }
     const requestedModel = normalizeOptionalString(p.model);
     let personalAccounts: Awaited<ReturnType<typeof prepareSessionModelAccountAccess>>;
@@ -216,8 +214,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const catalogId = normalizeOptionalString(p.catalogId);
     const catalogError = resolveSessionCreateCatalogSelectionError(p);
     if (catalogError) {
-      respond(false, undefined, catalogError);
-      return;
+      return respond(false, undefined, catalogError);
     }
     const explicitlyRequestedKey = normalizeOptionalString(p.key);
     const explicitlyRequestedAgent = resolveSessionCreateAgentId(cfg, {
@@ -262,8 +259,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const { attachments, hasInitialTurn, message } = initialTurn;
     const repositoryCreation = resolveSessionRepositoryCreation(p, hasInitialTurn);
     if (!repositoryCreation.ok) {
-      respond(false, undefined, repositoryCreation.error);
-      return;
+      return respond(false, undefined, repositoryCreation.error);
     }
     const repository = repositoryCreation.value;
     let sessionKey = explicitlyRequestedKey;
@@ -287,6 +283,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         message,
         mentions: p.mentions,
         visibility: p.visibility,
+        access: p.access,
         runId: initialRunId,
       });
       if (mentionError) {
@@ -320,8 +317,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       projectId: requestedProjectId,
     });
     if (projectPreparationError) {
-      respond(false, undefined, projectPreparationError);
-      return;
+      return respond(false, undefined, projectPreparationError);
     }
     const clientScopes = Array.isArray(client?.connect?.scopes) ? [...client.connect.scopes] : [];
     const preparedCwd = await prepareSessionCreateRequestedCwd({
@@ -516,6 +512,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       ...(requestingOperatorProfileId ? { requestingOperatorProfileId } : {}),
       ...(operatorRoleActor ? { operatorRoleActor } : {}),
       visibility: p.visibility,
+      access: p.access,
       allowExistingModelSelection: authorizeOperatorScopesForRequiredScope(
         ADMIN_SCOPE,
         clientScopes,
@@ -524,7 +521,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       spawnDepth: p.spawnDepth,
       ...resolveSessionCreateRootParameters(p, preparedRoot?.value),
       permissionMode: p.permissionMode,
-      applyAgentPermissionDefault: isAttendedSessionCreator(client),
+      ...resolveSessionCreationCallerDefaults(client),
       ...(p.toolOverrides !== undefined ? { toolOverrides: p.toolOverrides } : {}),
       ...(p.communication !== undefined ? { communication: p.communication } : {}),
       prepareLifecycle,

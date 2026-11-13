@@ -13,9 +13,8 @@ import { SessionLabelOwnerIndex } from "../../config/sessions/session-entry-sele
 import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
 import { runSessionMutation } from "../../sessions/session-controller.lifecycle.js";
 import type { UserModelAccountSelection } from "../model-account-authority.js";
-import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
+import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
-import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { recordSessionStatusModelPatchOutcome } from "../session-model-patch-origin.js";
 import { resolvePluginSessionOwnershipError } from "../session-plugin-ownership.js";
 import { invalidSessionRequest } from "../session-request-error.js";
@@ -36,6 +35,7 @@ import {
   createSessionPatchCatalogPreparation,
   type SessionPatchCatalogResult,
 } from "./sessions-patch-catalog-preparation.js";
+import { createPatchCreationPolicy } from "./sessions-patch-creation.js";
 import type { SessionPatchDiagnostics } from "./sessions-patch-diagnostics.js";
 import { discoverSessionPatchTargets } from "./sessions-patch-discovery.js";
 import * as patchEffects from "./sessions-patch-effects.js";
@@ -91,9 +91,7 @@ export async function executeSessionPatchMutations(params: {
   }
   const getCurrentConfig = params.context.getRuntimeConfig;
   const cfg = getCurrentConfig();
-  const operatorCreation = resolveOperatorSessionCreation(client);
-  const sandbox = resolveCreatorSandbox(cfg, operatorCreation);
-  const creation = { ...operatorCreation, ...(sandbox ? { sandbox } : {}) };
+  const creationPolicy = createPatchCreationPolicy({ cfg, client, getCurrentConfig });
   const archiveActor = gatewayClientSessionCreator(client);
   const callerScopes = client?.connect.scopes ?? [];
   const callerIsAdmin = client === null || callerScopes.includes(ADMIN_SCOPE);
@@ -433,7 +431,8 @@ export async function executeSessionPatchMutations(params: {
                         catalog: catalogPreparation,
                         projection: {
                           cfg,
-                          creation,
+                          creation: creationPolicy.creation,
+                          attendedProfileOperator: creationPolicy.attended(),
                           existingEntry,
                           isLabelInUse: (label) => labelOwners.isLabelInUse(label, candidateKeys),
                           storeKey: primaryKey,
@@ -550,6 +549,9 @@ export async function executeSessionPatchMutations(params: {
                         archiveTransitions.set(target.index, transition);
                       }
                       commitGuards.add(mutationTargets[target.index]!.commitGuard);
+                      if (!existingEntry && !target.fullPatch.access) {
+                        commitGuards.add(creationPolicy.commitGuard(primaryKey, target.key));
+                      }
                       if (executionPermissions.validate) {
                         commitGuards.add(executionPermissions.validate);
                       }

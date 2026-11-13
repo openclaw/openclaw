@@ -268,9 +268,9 @@ export function registerChatSteeringCommitCases(
         }
         await backingRun;
         await fixture.finishDispatch();
-        const sourceError = expect.stringContaining(
-          sessionRevoked ? "session is draft for this connection" : "Pending input ownership ended",
-        );
+        const sourceError = sessionRevoked
+          ? `Session "${scope.sessionKey}" was not found.`
+          : expect.stringContaining("Pending input ownership ended");
         expect(session.messages.at(-1)).toMatchObject({
           role: "assistant",
           stopReason: failed ? "error" : "stop",

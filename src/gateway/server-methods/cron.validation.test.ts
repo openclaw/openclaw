@@ -50,6 +50,7 @@ import { registerCronRunWaitTests } from "./cron-run-wait.test-support.js";
 import { loadGatewaySessionEntry } from "./cron-session-reader.test-support.js";
 import {
   createCronTestContext,
+  registerCronDeclarationProjectionTest,
   callerClientWithCronCreatorAuthority,
   expectCronSuccess,
   expectCronReply,
@@ -1618,47 +1619,11 @@ describe("cron method validation", () => {
     expectResponseError(respond, { code: "INVALID_REQUEST" });
   });
 
-  it("projects declaration metadata and existing run and delivery state in compact lists", async () => {
-    const job = createCronJob({
-      declarationKey: "daily-report",
-      displayName: "Daily report",
-      owner: { agentId: "ops", sessionKey: "agent:ops:main" },
-      state: {
-        nextRunAtMs: 2000,
-        lastRunAtMs: 1000,
-        lastRunStatus: "error",
-        lastError: "boom",
-        lastDelivered: false,
-        lastDeliveryStatus: "not-delivered",
-        lastDeliveryError: "offline",
-        lastFailureNotificationDelivered: true,
-        lastFailureNotificationDeliveryStatus: "delivered",
-      },
-    });
-    const context = createCronContext(job);
-    const { respond } = await invokeCron("cron.list", { compact: true }, { context });
-
-    expectCronReply(
-      respond,
-      expect.objectContaining({
-        jobs: [
-          expect.objectContaining({
-            declarationKey: "daily-report",
-            displayName: "Daily report",
-            owner: { agentId: "ops", sessionKey: "agent:ops:main" },
-            nextRunAtMs: 2000,
-            lastRunAtMs: 1000,
-            lastRunStatus: "error",
-            lastRunError: "boom",
-            lastDelivered: false,
-            lastDeliveryStatus: "not-delivered",
-            lastDeliveryError: "offline",
-            lastFailureNotificationDelivered: true,
-            lastFailureNotificationDeliveryStatus: "delivered",
-          }),
-        ],
-      }),
-    );
+  registerCronDeclarationProjectionTest({
+    invokeCron,
+    createCronContext,
+    setRuntimeConfig,
+    getRuntimeConfig,
   });
 
   it.each([

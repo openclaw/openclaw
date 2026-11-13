@@ -1,0 +1,4 @@
+# Option2: legacy unset access preserves existing role/visibility behavior.
+# New source bindings retain atomic publication and rule/config-removal denials.
+# Exact net regression growth after same-file fixture reuse; no shared scalar or base-debt credit.
+75

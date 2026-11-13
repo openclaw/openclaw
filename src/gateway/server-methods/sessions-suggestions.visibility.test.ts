@@ -262,40 +262,28 @@ it.each(["draft", "incognito"] as const)("enforces %s suggestion and typing priv
     if (!incognito) {
       addMember("member", key, sessionId);
     }
-    const request = requests(
-      key,
-      incognito ? client("owner", "Owner") : client("member", "Member"),
-    );
-    const expectHidden = (result: Awaited<ReturnType<typeof call>>) => {
-      expect(result.responses[0]).toMatchObject([
-        false,
-        undefined,
-        incognito
-          ? { message: `Incognito session "${key}" was not found.` }
-          : {
-              message: "session is draft for this connection",
-              details: {
-                code: "SESSION_PARTICIPATION_REQUIRED",
-                sessionKey: key,
-                visibility: "draft",
-              },
-            },
-      ]);
+    const reader = incognito ? client("owner", "Owner") : client("member", "Member");
+    const broadcast = vi.fn();
+    const request = requests(key, reader, context(broadcast));
+    const expectHidden = (
+      result: Awaited<ReturnType<typeof call>>,
+      message = `unknown session: ${key}`,
+    ) => {
+      expect(result.responses[0]).toEqual([false, undefined, { code: "INVALID_REQUEST", message }]);
     };
     expectHidden(await request("session.suggestions.list"));
     expectHidden(await request("session.suggestions.add", { text: "probe" }));
     expectHidden(await request("session.suggestions.resolve", { id, resolution: "dismiss" }));
     const typing = await request("session.typing", { sessionId, typing: true });
-    if (incognito) {
-      expectHidden(typing);
-    } else {
-      expect(typing.responses[0]?.[1]).toEqual({ ok: true, broadcast: false });
-    }
+    expectHidden(typing, incognito ? `Incognito session "${key}" was not found.` : undefined);
+    expect(broadcast).not.toHaveBeenCalled();
+    expect(mocks.handleChatSend).not.toHaveBeenCalled();
+    expect(await listSessionSuggestions({ agentId: "main", sessionKey: key })).toEqual([
+      expect.objectContaining({ id, text: id, state: "pending" }),
+    ]);
     for (const role of incognito ? ["admin"] : ["owner", "admin"]) {
-      const listed = await requests(
-        key,
-        client(role, role, role === "admin"),
-      )("session.suggestions.list");
+      const privileged = requests(key, client(role, role, role === "admin"));
+      const listed = await privileged("session.suggestions.list");
       expect(listed.responses[0]?.[1]).toMatchObject({ role, suggestions: [{ id, text: id }] });
     }
     if (!incognito) {
@@ -305,7 +293,6 @@ it.each(["draft", "incognito"] as const)("enforces %s suggestion and typing priv
       user: { id: profileId, identity: { type: "profile", id: profileId } },
       watchedSessions: [key],
     }));
-    const broadcast = vi.fn();
     const adminRequest = requests(key, client("admin", "Admin", true), context(broadcast));
     const preview = "private draft";
     const result = await adminRequest("session.typing", { sessionId, typing: true, preview });

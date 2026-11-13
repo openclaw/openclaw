@@ -1,5 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   ErrorCodes,
   type SessionCatalogTranscriptItem,
@@ -26,7 +26,10 @@ import {
 } from "../../sessions/session-upstream-links-runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
-import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  createOpenClawTestState,
+  withOpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { projectChatDisplayMessagesWithState } from "../chat-display-projection.js";
 import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import {
@@ -48,7 +51,6 @@ import {
 import { sessionSharingHandlers } from "./sessions-sharing.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
-let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
 let nextCatalog = 0;
 function expectSuccess(response: ReturnType<typeof vi.fn<RespondFn>>, fields: object) {
   expect(response).toHaveBeenCalledWith(true, expect.objectContaining(fields));
@@ -57,33 +59,34 @@ function expectSuccess(response: ReturnType<typeof vi.fn<RespondFn>>, fields: ob
 function expectFailure(response: ReturnType<typeof vi.fn<RespondFn>>, fields: object) {
   expect(response).toHaveBeenCalledWith(false, undefined, expect.objectContaining(fields));
 }
-beforeAll(async () => {
-  state = await createOpenClawTestState({ scenario: "minimal", label: "catalog-import" });
-});
-beforeEach(() => state.applyEnv());
-afterAll(async () => state.cleanup());
-
 async function withCatalog(
   run: (fixture: Awaited<ReturnType<typeof createCatalog>>) => Promise<void>,
-  restricted = false,
+  restricted: boolean | "solo" = false,
 ) {
-  const previousRegistry = getActivePluginRegistry() ?? createEmptyPluginRegistry();
-  const fixture = await createCatalog(restricted);
-  try {
-    await state.writeConfig(fixture.config);
-    await run(fixture);
-  } finally {
-    vi.restoreAllMocks();
-    fixture.projection.dispose();
-    setActivePluginRegistry(previousRegistry);
-  }
+  const runOwned = async (testState: Awaited<ReturnType<typeof createOpenClawTestState>>) => {
+    const previousRegistry = getActivePluginRegistry() ?? createEmptyPluginRegistry();
+    const fixture = await createCatalog(restricted, testState);
+    try {
+      await testState.writeConfig(fixture.config);
+      await run(fixture);
+    } finally {
+      vi.restoreAllMocks();
+      fixture.projection.dispose();
+      setActivePluginRegistry(previousRegistry);
+    }
+  };
+  // Each canonical fixture owns and drains its state, including background store publications.
+  await withOpenClawTestState({ scenario: "minimal", label: "catalog-import-case" }, runOwned);
 }
 
-async function createCatalog(restricted: boolean) {
+async function createCatalog(
+  restricted: boolean | "solo",
+  testState: Awaited<ReturnType<typeof createOpenClawTestState>>,
+) {
   const config: OpenClawConfig = {
     plugins: { enabled: false },
   };
-  if (restricted) {
+  if (restricted === true) {
     config.gateway = {
       roles: {
         default: "reader",
@@ -103,8 +106,11 @@ async function createCatalog(restricted: boolean) {
     ensureProfileForEmail("catalog-import@example.test").id,
   );
   client.connect.scopes = restricted ? ["operator.read", "operator.write"] : ["operator.admin"];
+  // A retained foreign actor need not have a resident profile in the solo compatibility case.
   const other = createSessionMutationTestClient(
-    ensureProfileForEmail("other-importer@example.test").id,
+    restricted === "solo"
+      ? "00000000-0000-4000-8000-000000000002"
+      : ensureProfileForEmail("other-importer@example.test").id,
   );
   const nativeKey = `agent:main:native-adopted-${id}`;
   const actor = (owner = client) => ({
@@ -124,7 +130,7 @@ async function createCatalog(restricted: boolean) {
       createdVia: "operator",
       createdActor: actor(),
     });
-  if (restricted) {
+  if (restricted === true) {
     await seedNative();
   }
   const source: SessionCatalogTranscriptItem[] = [
@@ -157,7 +163,9 @@ async function createCatalog(restricted: boolean) {
         sessions: [
           catalogSession(`thread-${id}`, {
             sourceHomeId: "home-a",
-            sessionKey: nativeKey,
+            ...(restricted !== "solo" || loadSessionEntryReadOnly(entryRef(nativeKey))
+              ? { sessionKey: nativeKey }
+              : {}),
             name: "Native source",
           }),
         ],
@@ -175,8 +183,8 @@ async function createCatalog(restricted: boolean) {
     entries: [],
     routeVariants: [],
     agentId: "main",
-    agentDir: state.agentDir(),
-    workspaceDir: state.workspaceDir,
+    agentDir: testState.agentDir(),
+    workspaceDir: testState.workspaceDir,
     catalogComplete: true,
     config,
     observationConfig: config,
@@ -661,6 +669,105 @@ describe("sessions.catalog.import with durable Gateway owners", () => {
       expect(fixture.entry()).toBeUndefined();
       expect(await fixture.transcript()).toEqual([]);
     }, true));
+
+  it("rejects an unbound source adopted privately after reauthorization before destination commit", () =>
+    withCatalog(async (fixture) => {
+      expect(loadSessionEntryReadOnly(fixture.entryRef(fixture.nativeKey))).toBeUndefined();
+      const create = sessionCreation.createGatewaySession;
+      vi.spyOn(sessionCreation, "createGatewaySession").mockImplementationOnce(async (params) => {
+        expect(fixture.read).toHaveBeenCalledOnce();
+        await fixture.updateNative({
+          sessionId: "late-private-source",
+          updatedAt: 2,
+          visibility: "shared",
+          pluginOwnerId: "fixture",
+          createdVia: "operator",
+          createdActor: fixture.actor(fixture.other),
+          access: { mode: "creator" },
+        });
+        await fixture.projection.ensureMaterialized();
+        await fixture.projection.prepareMembership();
+        return create(params);
+      });
+      expectFailure(await fixture.call(), {
+        message: expect.stringContaining("source visibility changed"),
+      });
+      expect(fixture.entry()).toBeUndefined();
+      expect(await fixture.transcript()).toEqual([]);
+    }, "solo"));
+
+  it("preserves unbound solo imports across their own destination writes", () =>
+    withCatalog(async (fixture) => {
+      await fixture.expectImport(true);
+      const before = await fixture.transcript();
+      expect(before).toHaveLength(3);
+      expect(JSON.stringify(before)).toContain("Synthetic imported answer");
+      await fixture.expectImport(false, 0);
+      expect(await fixture.transcript()).toEqual(before);
+      fixture.source.push({ type: "agentMessage", text: "Later legitimate native reply" });
+      await fixture.expectImport(false, 1, 3);
+      expect(await fixture.transcript()).toHaveLength(4);
+      expect(loadSessionEntryReadOnly(fixture.entryRef(fixture.nativeKey))).toBeUndefined();
+    }, "solo"));
+
+  it.each(["source adoption", "destination incarnation"] as const)(
+    "refuses stale bytes after own cold bootstrap and %s",
+    (change) =>
+      withCatalog(async (fixture) => {
+        expect(fixture.entry()).toBeUndefined();
+        expect(loadSessionEntryReadOnly(fixture.entryRef(fixture.nativeKey))).toBeUndefined();
+        const create = sessionCreation.createGatewaySession;
+        let bootstrapped = false;
+        let createdEntry: ReturnType<typeof fixture.entry>;
+        vi.spyOn(sessionCreation, "createGatewaySession").mockImplementationOnce((params) =>
+          create({
+            ...params,
+            afterCreate: async (target) => {
+              bootstrapped = true;
+              expect(target.isNew).toBe(true);
+              expect(fixture.entry()).toMatchObject({ createdActor: fixture.actor() });
+              createdEntry = structuredClone(fixture.entry());
+              if (change === "source adoption") {
+                await fixture.updateNative({
+                  sessionId: "adopted-after-bootstrap",
+                  updatedAt: 2,
+                  visibility: "shared",
+                  pluginOwnerId: "fixture",
+                  createdVia: "operator",
+                  createdActor: fixture.actor(fixture.other),
+                  access: { mode: "creator" },
+                });
+              } else {
+                await upsertSessionEntryCore(fixture.entryRef(), {
+                  sessionId: "taken-after-bootstrap",
+                  lifecycleRevision: "taken-lifecycle",
+                });
+              }
+              await fixture.projection.ensureMaterialized();
+              await fixture.projection.prepareMembership();
+              await params.afterCreate?.(target);
+            },
+          }),
+        );
+        expectFailure(await fixture.call(), { code: "INVALID_REQUEST" });
+        expect(bootstrapped).toBe(true);
+        expect(fixture.read).toHaveBeenCalledOnce();
+        expect(await fixture.transcript()).toEqual([]);
+        expect(
+          (await listSessionStateEventsSince(fixture.key, "main", 0)).events.filter(
+            (event) => event.kind === "imported",
+          ),
+        ).toEqual([]);
+        expect(fixture.entry()).toMatchObject({ createdActor: fixture.actor() });
+        expect(fixture.entry()?.access).toEqual(createdEntry?.access);
+        if (change === "destination incarnation") {
+          expect(fixture.entry()).toMatchObject({
+            sessionId: "taken-after-bootstrap",
+            lifecycleRevision: "taken-lifecycle",
+          });
+        }
+      }, "solo"),
+  );
 
   it("rejects source sharing revocation after history read before creating the destination", () =>
     withCatalog(async (fixture) => {

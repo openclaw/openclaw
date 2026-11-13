@@ -2,11 +2,14 @@
 // The agent-output input and RPC transport are test boundaries; no provider or channel send is claimed.
 import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { prepareAgentRunTerminalReply } from "../../agents/agent-run-terminal-reply.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/io.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveCronDeliveryPlan } from "../../cron/delivery-plan.js";
 import { dispatchCronDelivery } from "../../cron/isolated-agent/delivery-dispatch.js";
 import { readCronRunHistoryPageForTests } from "../../cron/run-history.test-support.js";
@@ -16,7 +19,9 @@ import type { CronServiceDeps } from "../../cron/service/state.js";
 import { loadCronStore } from "../../cron/store.js";
 import { cronStoreKey } from "../../cron/store/key.js";
 import type { CronJob } from "../../cron/types.js";
+import { createDirectChatContext } from "../../gateway/server-chat.agent-events.test-helpers.js";
 import { cronHandlers } from "../../gateway/server-methods/cron.js";
+import { initializeSessionReadContext } from "../../gateway/server-methods/sessions-read-cache.test-support.js";
 import type { RespondFn } from "../../gateway/server-methods/types.js";
 import {
   captureGatewayRootWorkReleaseObserver,
@@ -52,7 +57,7 @@ async function runCli(args: string[]) {
   const program = new Command();
   program.exitOverride();
   registerCronCli(program);
-  let exitCode: number | undefined;
+  let exitCode = 0;
   try {
     await program.parseAsync(["cron", ...args], { from: "user" });
   } catch (error) {
@@ -69,7 +74,14 @@ async function runCli(args: string[]) {
   };
 }
 
-function installGatewayTransport(cron: CronService, storePath: string) {
+async function installGatewayTransport(cron: CronService, storePath: string) {
+  const cfg = {};
+  const context = createDirectChatContext({
+    cron,
+    cronStorePath: storePath,
+    getRuntimeConfig: () => cfg,
+  });
+  await initializeSessionReadContext(context);
   const invoke = async (method: string, params: Record<string, unknown> = {}) => {
     const handler = expectDefined(cronHandlers[method], `missing Gateway method ${method}`);
     let response: { ok: boolean; payload?: unknown; error?: { message?: string } } | undefined;
@@ -81,7 +93,7 @@ function installGatewayTransport(cron: CronService, storePath: string) {
       client: null,
       params,
       respond,
-      context: { cron, cronStorePath: storePath, getRuntimeConfig: () => ({}) } as never,
+      context,
     } as never);
     const result = expectDefined(response, `${method} returned no response`);
     expect(result.ok, result.error?.message).toBe(true);
@@ -109,6 +121,7 @@ describe("cron CLI delivery suppression readback", () => {
       { layout: "home", prefix: "openclaw-cron-cli-suppression-" },
       async (state) => {
         await state.writeConfig({});
+        await captureRuntimeConfigAsyncReader()();
         const storePath = state.statePath("cron", "jobs.json");
         const events: CronEvent[] = [];
         let runReleased: Promise<"settled" | "reset"> | undefined;
@@ -139,6 +152,11 @@ describe("cron CLI delivery suppression readback", () => {
           const sessionId = randomUUID();
           const sessionKey = `agent:main:cron:${job.id}:run:${sessionId}`;
           const now = Date.now();
+          const lifecycleRevision = randomUUID();
+          await replaceSessionEntry(
+            { agentId: "main", sessionKey },
+            { sessionId, lifecycleRevision, updatedAt: now },
+          );
           const dispatch = await dispatchCronDelivery({
             deliveryAttemptFence,
             cfgWithAgentDefaults: {},
@@ -148,7 +166,7 @@ describe("cron CLI delivery suppression readback", () => {
             agentSessionKey: sessionKey,
             runSessionKey: sessionKey,
             sessionId,
-            lifecycleRevision: randomUUID(),
+            lifecycleRevision,
             sessionUpdatedAt: now,
             runStartedAt: now,
             timeoutMs: 5_000,
@@ -222,7 +240,7 @@ describe("cron CLI delivery suppression readback", () => {
             }
           },
         });
-        const invoke = installGatewayTransport(cron, storePath);
+        const invoke = await installGatewayTransport(cron, storePath);
         try {
           await cron.start();
           const job = await cron.add({
@@ -274,7 +292,20 @@ describe("cron CLI delivery suppression readback", () => {
                   ? "not-requested"
                   : "not-delivered";
             const delivered = phase === "execution-error" ? undefined : false;
-            expect(run.exitCode).toBe(failed ? 1 : 0);
+            const result = asOptionalRecord(run.json);
+            const resultRun = asOptionalRecord(result?.run);
+            expect(
+              run.exitCode,
+              JSON.stringify({
+                phase,
+                status: result?.status,
+                completionStatus: result?.completionStatus,
+                error: resultRun?.error,
+                errorKind: resultRun?.errorKind,
+                deliveryStatus: resultRun?.deliveryStatus,
+                deliveryError: resultRun?.deliveryError,
+              }),
+            ).toBe(failed ? 1 : 0);
             // CLI completion can observe history before the queued run releases its root.
             expect(
               await withinTest(

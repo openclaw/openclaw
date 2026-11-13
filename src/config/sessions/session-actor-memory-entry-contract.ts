@@ -56,6 +56,7 @@ export type SessionActorMemoryEntryReads = {
 
 /** Prepared overwrites compare the actual entry; typed patches need no read round trip. */
 type SessionActorMemoryEntryReplacement = {
+  accessMutation?: boolean;
   sessionKey: string;
   expected: SessionEntry | undefined;
   entry: SessionEntry | undefined;

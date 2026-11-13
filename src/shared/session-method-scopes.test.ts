@@ -35,6 +35,30 @@ it("allows session-scoped visibility mutations for single and batch patch", () =
   }
 });
 
+it.each([
+  { mode: "creator" },
+  { mode: "audience", profileIds: ["selected-profile"] },
+  { mode: "source" },
+  { mode: "unrestricted" },
+])("admits confidential access management to the session owner check %#", (access) => {
+  const patch = { access };
+  for (const [method, params] of [
+    ["sessions.patch", { ...target, expectedSessionId: "session-1", ...patch }],
+    ["sessions.patchMany", { targets: [{ ...target, expectedSessionId: "session-1" }], patch }],
+  ] as const) {
+    expect(scope(method, params)).toBe("operator.write");
+    expect(resolveSessionMethodScope(method, params)).toBe("operator.sessions.write");
+  }
+  for (const privileged of [
+    { access, permissionMode: "full" },
+    { access, sandboxMode: "off" },
+    { access, unknownMutation: true },
+  ]) {
+    expect(patchScope(privileged)).toBe("operator.admin");
+    expect(batchScope(privileged)).toBe("operator.admin");
+  }
+});
+
 it.each([{ contextWindow: "extended" }, { sandboxMode: null }])(
   "keeps privileged or unknown patch fields admin-scoped %#",
   (patch) => {

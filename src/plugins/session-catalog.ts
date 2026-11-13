@@ -13,6 +13,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import { readSessionCatalogAdoptedEntries } from "./session-catalog-source-scope.js";
 import type {
   SessionUpstreamJsonValue,
   SessionUpstreamKind,
@@ -318,7 +319,11 @@ export function listAdoptedSessionCatalogSessions(params: {
   const requestedAgentId = resolveCatalogAgentId(params);
   const requiresExplicitOwner = params.config.agents?.ownership === "explicit";
   // Avoid both an agent-wide filtered copy and iterator allocations on the frozen snapshot.
-  const entries = params.sessionEntries?.entriesForCatalog?.() ?? listSessionCatalogEntries(params);
+  const entries = readSessionCatalogAdoptedEntries(
+    params.sessionEntries,
+    { pluginId: params.pluginId, sourceFromEntry: params.sourceFromEntry },
+    () => params.sessionEntries?.entriesForCatalog?.() ?? listSessionCatalogEntries(params),
+  );
   // oxlint-disable-next-line typescript/prefer-for-of -- Frozen-array iterators allocate per row.
   for (let index = 0; index < entries.length; index++) {
     const { sessionKey, entry, agentId } = entries[index]!;

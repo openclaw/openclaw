@@ -11,13 +11,15 @@ import {
   loadSessionEntry,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
+import { sharingPolicyClient } from "../session-sharing.test-utils.js";
 import { createWorkerInferenceCancellationService } from "../worker-environments/inference-control.test-helpers.js";
 import { workerService } from "./environments.test-support.js";
 import { fixedStoreOwnershipConfig } from "./sessions-fixed-store.test-support.js";
-import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
+import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 const chatAbortMock = vi.fn();
 const resolveSessionForRunMock = vi.fn();
@@ -596,27 +598,42 @@ describe("sessions.abort agent scope", () => {
       agents: undefined,
     },
   ])("subscribes $name", async ({ params, agents }) => {
-    const subscribeSessionMessageEvents = vi.fn();
-    const context = createContext({
-      agents,
-      globalScope: true,
-      extra: { subscribeSessionMessageEvents },
-    });
-    const respond = await callSessions("sessions.messages.subscribe", params, {
-      context,
-      reqId: "req-sub-global",
-      client: { connId: "conn-sub" } as GatewayClient,
-    });
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const subscribeSessionMessageEvents = vi.fn();
+      const context = createContext({
+        agents,
+        globalScope: true,
+        extra: { subscribeSessionMessageEvents },
+      });
+      setRuntimeConfigSnapshot(context.getRuntimeConfig());
+      const profile = ensureProfileForEmail("global-subscriber@example.test");
+      replaceSessionEntrySync(
+        { agentId: "work", sessionKey: "global" },
+        {
+          sessionId: "global-subscription",
+          updatedAt: 1,
+          createdActor: { type: "human", source: "profile", id: profile.id },
+        },
+      );
+      const respond = await callSessions("sessions.messages.subscribe", params, {
+        context,
+        reqId: "req-sub-global",
+        client: {
+          ...sharingPolicyClient({ user: profile.id, scopes: ["operator.read"] }),
+          connId: "conn-sub",
+        },
+      });
 
-    expect(loadSessionEntryMock).not.toHaveBeenCalled();
-    expect(subscribeSessionMessageEvents).toHaveBeenCalledWith("conn-sub", "agent:work:global", {
-      provisional: true,
+      expect(loadSessionEntryMock).not.toHaveBeenCalled();
+      expect(subscribeSessionMessageEvents).toHaveBeenCalledWith("conn-sub", "agent:work:global", {
+        provisional: true,
+      });
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        { subscribed: true, key: "global", agentId: "work" },
+        undefined,
+      );
     });
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      { subscribed: true, key: "global", agentId: "work" },
-      undefined,
-    );
   });
 
   it("rejects key-based aborts when key agent does not match agentId", async () => {

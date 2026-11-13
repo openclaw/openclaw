@@ -163,10 +163,6 @@ it.each(["session ID", "lifecycle revision"] as const)(
         label: "native metadata",
       };
       const expectedEntry: Partial<InternalSessionEntry> = { ...newer };
-      if (replacement === "session ID") {
-        // Visibility belongs to the replaced session and does not copy into its successor.
-        delete expectedEntry.visibility;
-      }
       const expectedSharing = {
         sessionId: newer.sessionId,
         lifecycleRevision: newer.lifecycleRevision,

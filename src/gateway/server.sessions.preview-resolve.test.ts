@@ -141,7 +141,14 @@ test("sessions.resolve filters discovery selectors with sessions.list visibility
     expectResolved(await resolveSession(params, client), visibleKey);
   }
 
-  expectResolved(await resolveSession({ key: hiddenOnlyKey }, client), hiddenOnlyKey);
+  expect(await resolveSession({ key: hiddenOnlyKey }, client)).toMatchObject({
+    ok: false,
+    payload: undefined,
+    error: {
+      code: "INVALID_REQUEST",
+      message: `No session found: ${hiddenOnlyKey}`,
+    },
+  });
 
   for (const key of [hiddenOnlyKey, "agent:main:hidden-only"]) {
     const reference = await resolveSession(

@@ -4,6 +4,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -164,9 +165,18 @@ export const secretRequestParams = {
   questions: [secretRequestQuestion],
 };
 
+/** Prepare the real target inside the positive caller\'s isolated test state. */
+export async function prepareQuestionSourceFixture() {
+  await upsertSessionEntryCore(
+    { agentId: requestParams.agentId, sessionKey: requestParams.sessionKey },
+    { sessionId: "question-session", updatedAt: 1_000, visibility: "shared" },
+  );
+}
+
 export async function requestSecretQuestion(
   binding: NonNullable<QuestionRequestQuestion["secretStore"]> = secretRequestQuestion.secretStore,
 ): Promise<string> {
+  await prepareQuestionSourceFixture();
   const response = await callQuestionRpc(
     "question.request",
     {

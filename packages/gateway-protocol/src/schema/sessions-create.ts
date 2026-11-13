@@ -3,6 +3,7 @@ import { closedObject } from "./closed-object.js";
 import { HumanMentionsSchema } from "./human-mentions.js";
 import { ChatAttachmentsSchema } from "./logs-chat.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
+import { SessionAccessSchema } from "./session-access.js";
 import { SessionCommunicationPolicySchema } from "./sessions-communication.js";
 import {
   CyberAccessProgramSchema,
@@ -59,6 +60,7 @@ export const SessionsCreateParamsSchema = closedObject({
   toolOverrides: Type.Optional(SessionToolOverridesSchema),
   incognito: Type.Optional(Type.Boolean()),
   visibility: Type.Optional(SessionVisibilitySchema),
+  access: Type.Optional(SessionAccessSchema),
   catalogId: Type.Optional(NonEmptyString),
   parentSessionKey: Type.Optional(NonEmptyString),
   spawnDepth: Type.Optional(

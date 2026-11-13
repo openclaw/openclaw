@@ -17,6 +17,8 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { dispatchAuthorizationRequest } from "./server-methods.authorization.test-support.js";
+import { sessionMutationHandlers } from "./server-methods/sessions-mutations.js";
 import {
   initializeSessionReadContext,
   requestContext,
@@ -247,15 +249,17 @@ describe("session mutation authorization store caches", () => {
         });
         const context = await readyContext();
         const inventory = vi.spyOn(sessionAccessor, "listSessionEntriesCore");
+        const client = identifiedClient("viewer@example.test");
+        const requestParams =
+          method === "sessions.patchMany"
+            ? { targets: [{ key: sessionKey }], patch: { unread: false } }
+            : method === "sessions.patch"
+              ? { key: sessionKey, unread: false }
+              : { sessionKey };
         const result = await captureMutationAuthorization({
-          client: identifiedClient("viewer@example.test"),
+          client,
           method,
-          requestParams:
-            method === "sessions.patchMany"
-              ? { targets: [{ key: sessionKey }], patch: { unread: false } }
-              : method === "sessions.patch"
-                ? { key: sessionKey, unread: false }
-                : { sessionKey },
+          requestParams,
           context,
         });
         expect(result.error).toBeNull();
@@ -266,8 +270,20 @@ describe("session mutation authorization store caches", () => {
 
         await seedSession(sessionKey, { ...entry, updatedAt: 2, visibility: "draft" });
         expect(() => result.authorization!.assertCurrent()).toThrow(
-          "session is draft for this connection",
+          `Session "${sessionKey}" was not found.`,
         );
+        const hidden = await captureMutationAuthorization({
+          client,
+          method,
+          requestParams,
+          context,
+        });
+        expect(hidden.error).toMatchObject({
+          code: "INVALID_REQUEST",
+          message: `Session "${sessionKey}" was not found.`,
+        });
+        expect(hidden.authorization).toBeUndefined();
+        expect(inventory).not.toHaveBeenCalled();
       });
     },
   );
@@ -328,6 +344,7 @@ describe("session mutation authorization store caches", () => {
         }
         const context = await readyContext(cfg);
         const client = identifiedClient(`${viewer}@example.test`);
+        const selectedGuards: Array<() => void> = [];
         for (const requestParams of [
           { sessionKey: "global", agentId: "research" },
           { sessionKey: "agent:research:main" },
@@ -341,12 +358,20 @@ describe("session mutation authorization store caches", () => {
           if (viewer === "research") {
             expect(result.error).toBeNull();
             expect(result.authorization).toBeDefined();
-            expect(() => result.authorization?.assertCurrent()).not.toThrow();
+            expect(() => result.authorization!.assertCurrent()).not.toThrow();
+            selectedGuards.push(() => result.authorization!.assertCurrent());
           } else {
             expect(result.error).toMatchObject({
-              details: { code: "SESSION_PARTICIPATION_REQUIRED" },
+              code: "INVALID_REQUEST",
+              message: 'Session "global" was not found.',
             });
             expect(result.authorization).toBeUndefined();
+          }
+        }
+        if (viewer === "research") {
+          await seedSession("global", { sessionId: "replacement-research" }, "research");
+          for (const assertCurrent of selectedGuards) {
+            expect(assertCurrent).toThrow("session changed");
           }
         }
       });
@@ -389,20 +414,41 @@ describe("session mutation authorization store caches", () => {
       });
 
       const context = await readyContext();
-      const result = await captureMutationAuthorization({
-        method: "sessions.patchMany",
-        requestParams: {
-          targets: [{ key: sharedKey }, { key: draftKey }],
-          patch: { unread: false },
-        },
+      const options = {
+        client: identifiedClient("viewer@example.com"),
         context,
+        extraHandlers: sessionMutationHandlers,
+      };
+      const shared = await dispatchAuthorizationRequest(
+        "sessions.patchMany",
+        { targets: [{ key: sharedKey }], patch: { pinned: true } },
+        options,
+      );
+      expect(shared).toHaveBeenCalledWith(
+        true,
+        { outcomes: [{ ok: true, key: sharedKey }] },
+        undefined,
+      );
+      const published = sessionAccessor.loadSessionEntry({
+        agentId: "main",
+        sessionKey: sharedKey,
       });
-
-      expect(result.authorization).toBeUndefined();
-      expect(result.error).toMatchObject({
+      expect(published?.pinnedAt).toEqual(expect.any(Number));
+      const denied = await dispatchAuthorizationRequest(
+        "sessions.patchMany",
+        { targets: [{ key: sharedKey }, { key: draftKey }], patch: { pinned: false } },
+        options,
+      );
+      expect(denied).toHaveBeenCalledWith(false, undefined, {
         code: "INVALID_REQUEST",
-        details: { code: "SESSION_PARTICIPATION_REQUIRED", sessionKey: draftKey },
+        message: `Session "${draftKey}" was not found.`,
       });
+      expect(sessionAccessor.loadSessionEntry({ agentId: "main", sessionKey: sharedKey })).toEqual(
+        published,
+      );
+      expect(
+        sessionAccessor.loadSessionEntry({ agentId: "main", sessionKey: draftKey })?.pinnedAt,
+      ).toBeUndefined();
     });
   });
 

@@ -1,4 +1,7 @@
 import { expect, it, vi } from "vitest";
+import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
+import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   captureExternalSessionCommitGuard,
   composeSessionSourceAssertion,
@@ -9,6 +12,16 @@ import {
   type SessionSourceAssertion,
   type PreparedSessionSourceAuthority,
 } from "./session-source-authority.js";
+import {
+  admitSessionSourceEffects,
+  captureSessionSourceEffectAssertion,
+  observeSessionSourceEffects,
+  observePendingSessionSourceEffects,
+  publishSessionSourceEffects,
+  retainPendingSessionSourceEffect,
+  withNativeSessionSourceEffects,
+  type SessionSourceCommittedEffect,
+} from "./session-source-effects.js";
 
 const sourceWith = (methods: Partial<SessionSourceAssertion>) => Object.assign(() => {}, methods);
 
@@ -203,3 +216,214 @@ it("refuses a selected source replaced during effect preparation", async () => {
   await effect.release?.();
   expect(release).toHaveBeenCalledOnce();
 });
+
+it("certifies only actual successful admission, never a bare earlier source check", () => {
+  const observer = vi.fn();
+  const root = () => admitSessionSourceEffects(root);
+  const stop = observeSessionSourceEffects(root, observer);
+  const effect: SessionSourceCommittedEffect = {
+    agentId: "main",
+    storePath: "/synthetic/store",
+    databaseIdentity: "synthetic-db",
+    changes: [],
+  };
+  try {
+    root();
+    publishSessionSourceEffects(root, effect);
+    expect(observer).not.toHaveBeenCalled();
+    const guard = captureSessionSourceEffectAssertion(root);
+    guard();
+    publishSessionSourceEffects(guard, effect);
+    expect(observer).toHaveBeenCalledExactlyOnceWith(effect);
+  } finally {
+    stop();
+  }
+});
+
+it("does not attribute a nested unrelated admission to an outer write", () => {
+  const first = vi.fn(),
+    second = vi.fn();
+  const rootA = () => admitSessionSourceEffects(rootA),
+    rootB = () => admitSessionSourceEffects(rootB);
+  const stopA = observeSessionSourceEffects(rootA, first),
+    stopB = observeSessionSourceEffects(rootB, second);
+  const nested = captureSessionSourceEffectAssertion(rootB);
+  const outer = captureSessionSourceEffectAssertion(() => {
+    rootA();
+    nested();
+  });
+  const effect: SessionSourceCommittedEffect = {
+    agentId: "main",
+    storePath: "/synthetic/store",
+    databaseIdentity: "synthetic-db",
+    changes: [],
+  };
+  try {
+    outer();
+    publishSessionSourceEffects(outer, effect);
+    expect(first).toHaveBeenCalledExactlyOnceWith(effect);
+    expect(second).not.toHaveBeenCalled();
+    publishSessionSourceEffects(nested, effect);
+    expect(second).toHaveBeenCalledExactlyOnceWith(effect);
+  } finally {
+    stopA();
+    stopB();
+  }
+});
+
+it("retires an earlier certificate when the next guard fails after source admission", () => {
+  const observer = vi.fn();
+  const root = () => admitSessionSourceEffects(root);
+  const stop = observeSessionSourceEffects(root, observer);
+  let revoked = false;
+  const guard = captureSessionSourceEffectAssertion(() => {
+    root();
+    if (revoked) {
+      throw new Error("revoked");
+    }
+  });
+  const effect: SessionSourceCommittedEffect = {
+    agentId: "main",
+    storePath: "/synthetic/store",
+    databaseIdentity: "synthetic-db",
+    changes: [],
+  };
+  try {
+    guard();
+    revoked = true;
+    expect(guard).toThrow("revoked");
+    publishSessionSourceEffects(guard, effect);
+    expect(observer).not.toHaveBeenCalled();
+  } finally {
+    stop();
+  }
+});
+
+it("does not carry synchronous admission into an unrelated microtask", async () => {
+  const first = vi.fn(),
+    second = vi.fn();
+  const rootA = () => admitSessionSourceEffects(rootA),
+    rootB = () => admitSessionSourceEffects(rootB);
+  const stopA = observeSessionSourceEffects(rootA, first),
+    stopB = observeSessionSourceEffects(rootB, second);
+  const guard = captureSessionSourceEffectAssertion(() => {
+    rootA();
+    queueMicrotask(rootB);
+  });
+  try {
+    guard();
+    await Promise.resolve();
+    publishSessionSourceEffects(guard, {
+      agentId: "main",
+      storePath: "/synthetic/store",
+      databaseIdentity: "synthetic-db",
+      changes: [],
+    });
+    expect(first).toHaveBeenCalledOnce();
+    expect(second).not.toHaveBeenCalled();
+  } finally {
+    stopA();
+    stopB();
+  }
+});
+
+it("replays active final grants and releases exact owners rather than a matching key", () => {
+  const observer = vi.fn(),
+    changes = vi.fn();
+  const root = () => admitSessionSourceEffects(root);
+  const stop = observeSessionSourceEffects(root, observer);
+  const guard = captureSessionSourceEffectAssertion(root);
+  guard();
+  const fields = {
+    agentId: "main",
+    storePath: "/synthetic/store",
+    databaseIdentity: "synthetic-db",
+    keys: ["agent:main:same-key"],
+  };
+  const own = { ...fields, owner: {} },
+    foreign = { ...fields, owner: {} };
+  const releaseOwn = retainPendingSessionSourceEffect(own, guard);
+  const releaseForeign = retainPendingSessionSourceEffect(foreign);
+  const stopPending = observePendingSessionSourceEffects(observer, changes);
+  try {
+    expect(changes.mock.calls).toEqual([
+      [own, true, true],
+      [foreign, false, true],
+    ]);
+    releaseForeign();
+    expect(changes).toHaveBeenLastCalledWith(foreign, false, false);
+    releaseOwn();
+    expect(changes).toHaveBeenLastCalledWith(own, true, false);
+    const count = changes.mock.calls.length;
+    releaseForeign();
+    releaseOwn();
+    expect(changes).toHaveBeenCalledTimes(count);
+    stopPending();
+    const releaseLater = retainPendingSessionSourceEffect({ ...fields, owner: {} });
+    releaseLater();
+    expect(changes).toHaveBeenCalledTimes(count);
+  } finally {
+    releaseOwn();
+    releaseForeign();
+    stopPending();
+    stop();
+  }
+});
+
+it.each([false, true])(
+  "does not certify a nested same-database write as an outer native effect (caught=%s)",
+  async (caught) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const first = vi.fn(),
+        second = vi.fn();
+      const rootA = () => admitSessionSourceEffects(rootA),
+        rootB = () => admitSessionSourceEffects(rootB);
+      const stopA = observeSessionSourceEffects(rootA, first),
+        stopB = observeSessionSourceEffects(rootB, second);
+      const outer: SessionRowChange = {
+        agentId: "main",
+        sessionKey: "agent:main:outer",
+        scope: "transcript",
+        facts: { kind: "unchanged" },
+      };
+      const inner: SessionRowChange = {
+        agentId: "main",
+        sessionKey: "agent:main:inner",
+        scope: "transcript",
+        facts: { kind: "unchanged" },
+      };
+      try {
+        runOpenClawAgentWriteTransaction(
+          (database) => {
+            withNativeSessionSourceEffects(database, () => {
+              rootA();
+              sessionChanges.emit(outer, database.db);
+              try {
+                withNativeSessionSourceEffects(database, () => {
+                  rootB();
+                  sessionChanges.emit(inner, database.db);
+                  if (caught) {
+                    throw new Error("nested callback failed after mutation");
+                  }
+                });
+              } catch (error) {
+                expect(caught).toBe(true);
+                expect(error).toMatchObject({ message: "nested callback failed after mutation" });
+              }
+            });
+          },
+          { agentId: "main" },
+        );
+        expect(first).toHaveBeenCalledOnce();
+        expect(second).toHaveBeenCalledTimes(caught ? 0 : 1);
+        expect(first.mock.calls[0]![0].changes).toEqual([outer]);
+        if (!caught) {
+          expect(second.mock.calls[0]![0].changes).toEqual([inner]);
+        }
+      } finally {
+        stopA();
+        stopB();
+      }
+    });
+  },
+);

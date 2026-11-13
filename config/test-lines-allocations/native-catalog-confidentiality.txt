@@ -1,0 +1,4 @@
+# Native catalog confidential ACL and retained source-authority regression coverage.
+# Actual Pi adapter/JSONL with registered identities, legacy/solo controls, ACL/config/caller/identity revocation; required read-lease adapters.
+# Exact net new counted test LF against sealed standalone-media base213; shared scalar/checkers/prior allocations unchanged.
+1196

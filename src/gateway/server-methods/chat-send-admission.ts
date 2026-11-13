@@ -55,6 +55,7 @@ import {
   respondChatSendAdmissionError,
   respondChatSessionRoutingChanged,
 } from "./chat-send-admission-errors.js";
+import { prepareChatSendInitialEntry } from "./chat-send-creation.js";
 import {
   isLocalChatInputAdmission,
   resolveCodexGoalAdmission,
@@ -75,7 +76,6 @@ import {
 } from "./chat-send-reservation.js";
 import { bindChatSendPreparedSession } from "./chat-send-session-binding.js";
 import { captureAdmittedChatSendSessionSettings } from "./chat-send-session-settings.js";
-import { prepareChatSendSessionEntry } from "./chat-send-session.js";
 import {
   admitChatSendUploads,
   assertChatSendExclusiveAdmission,
@@ -178,16 +178,9 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
   }
   let retryComparison = reserved.retryComparison;
   const uploadAdmission = reserved.uploadAdmission;
-  const preparedGoalEntry =
-    request.goalOperation?.action === "start" && !entry && !requestedSessionId
-      ? await prepareChatSendSessionEntry({
-          cfg: session.cfg,
-          client,
-          agentId,
-          getRuntimeConfig: context.getRuntimeConfig,
-        }).catch(clearReservationAndThrow)
-      : undefined;
-  let admittedSessionId = preparedGoalEntry?.entry.sessionId ?? backingSessionId ?? clientRunId;
+  const preparedInitialEntry =
+    await prepareChatSendInitialEntry(params).catch(clearReservationAndThrow);
+  let admittedSessionId = preparedInitialEntry?.entry.sessionId ?? backingSessionId ?? clientRunId;
   let expectedActiveReplyOperation: ReplyOperation | undefined;
   let replyTargetsCaptured = false;
   let gatewayWorkAdmission: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
@@ -368,8 +361,8 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
           expectedActiveReplyOperation = admittedRunAbort.entry?.input.mailbox.owner.active;
           replyTargetsCaptured = true;
         }
-        if (request.goalOperation?.action === "start" && !latestEntry && !requestedSessionId) {
-          const prepared = preparedGoalEntry!;
+        if (preparedInitialEntry && !latestEntry && !requestedSessionId) {
+          const prepared = preparedInitialEntry;
           initialSessionEntry = prepared.entry;
           assertInitialSkillSelection = prepared.assertSkillSelection;
           admittedSessionId = initialSessionEntry.sessionId;

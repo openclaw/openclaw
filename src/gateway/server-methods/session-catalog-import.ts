@@ -4,6 +4,7 @@ import type {
   SessionsCatalogImportParams,
   SessionsCatalogImportResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { admitSessionSourceEffects } from "../../config/sessions/session-source-effects.js";
 import {
   preserveSessionCatalogHistory,
   readBoundedSessionCatalogHistory,
@@ -21,6 +22,7 @@ import {
   isSessionVisibilityAllowed,
 } from "../session-sharing-policy.js";
 import { readProjectedSessionMutationTarget } from "../session-sharing-target-read.js";
+import { retainCatalogImportSource } from "./session-catalog-import-source.js";
 import { readAuthorizedSessionCatalog } from "./session-catalog-read.js";
 import {
   isPublishedCatalogVisible,
@@ -38,18 +40,43 @@ export async function importAuthorizedSessionCatalog(params: {
   client: GatewayClient | null;
   context: GatewayRequestContext;
   reauthorize: () => Promise<SessionCatalogThreadVisibility | null>;
+  sourceVisibility: SessionCatalogThreadVisibility;
+  isCurrent: () => boolean;
+  isAuthorityCurrent: () => boolean;
   commitGuard?: () => void;
 }): Promise<
   { ok: true; result: SessionsCatalogImportResult } | { ok: false; error: ErrorShape } | null
 > {
   const { request, provider, agentId, context, client } = params;
   const { displayName, ...locator } = request;
+  const key = buildSessionCatalogImportKey(agentId, locator);
+  const initial = params.sourceVisibility;
+  const unbound =
+    !initial.source &&
+    !provider.audience &&
+    initial.visibility.kind === "unrestricted" &&
+    !initial.visibility.isAdmin;
+  if (unbound && !params.isCurrent()) {
+    throw new Error("Session catalog source visibility changed; retry the import");
+  }
+  using sourceLease = unbound
+    ? retainCatalogImportSource({
+        context,
+        agentId,
+        key,
+        creator: resolveOperatorSessionCreation(client)?.actor,
+        isAuthorityCurrent: params.isAuthorityCurrent,
+        sourceMatchesEntry: initial.sourceMatchesEntry,
+      })
+    : undefined;
+  const sourceIsCurrent = sourceLease ? sourceLease.isCurrent : params.isCurrent;
   const history = await readBoundedSessionCatalogHistory({
     limits: SESSION_CATALOG_TRANSCRIPT_IMPORT_LIMITS,
     read: async (page) => {
       params.commitGuard?.();
       const result = await readAuthorizedSessionCatalog({
         ...params,
+        isCurrent: sourceIsCurrent,
         request: { ...locator, ...page },
       });
       if (!result.ok) {
@@ -70,8 +97,15 @@ export async function importAuthorizedSessionCatalog(params: {
     sourceRef && projection
       ? readProjectedSessionMutationTarget(sourceRef, cfg, projection)
       : undefined;
+  // The retained lease spans every provider page, reauthorization, and destination effect.
+  if (!sourceIsCurrent()) {
+    throw new Error("Session catalog source visibility changed; retry the import");
+  }
   const assertSourceCurrent = () => {
     params.commitGuard?.();
+    if (!sourceIsCurrent()) {
+      throw new Error("Session catalog source visibility changed; retry the import");
+    }
     const currentConfig = context.getRuntimeConfig();
     const currentVisibility = resolveSessionCatalogVisibility(client, currentConfig);
     if (
@@ -99,8 +133,9 @@ export async function importAuthorizedSessionCatalog(params: {
         throw new Error("Session catalog source visibility changed; retry the import");
       }
     }
+    admitSessionSourceEffects(assertSourceCurrent);
   };
-  const key = buildSessionCatalogImportKey(agentId, locator);
+  sourceLease?.observe(assertSourceCurrent);
   // Import creates or reuses an ordinary keyed session, sharing sessions.create's
   // durable target authorization and creation-commit handoff.
   const destination = await resolveSessionMutationAuthorizationAsync({
@@ -141,7 +176,10 @@ export async function importAuthorizedSessionCatalog(params: {
       commitGuard,
       bindSharingCreation: (operation) =>
         authorization?.bindCreation?.({ sessionKey: key, agentId }, operation),
-      followSharingRegistration: authorization?.followRegistration,
+      followSharingRegistration: (target, change) => {
+        authorization?.followRegistration?.(target, change);
+        sourceLease?.followRegistration(target, change);
+      },
       onCreatedSessionCommitted: (target) => {
         authorization?.recordCreatedSession?.({
           agentId: target.agentId,
@@ -192,6 +230,8 @@ export async function importAuthorizedSessionCatalog(params: {
       },
       { assertCurrent: commitGuard },
     );
+    // An awaited diagnostic cannot publish a result under expired source or destination authority.
+    commitGuard?.();
     return {
       ok: true,
       result: {

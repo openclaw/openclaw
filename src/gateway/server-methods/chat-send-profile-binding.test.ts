@@ -51,9 +51,13 @@ function bindProfile(fixture: Fixture, native = false) {
   return bindChatProfile(fixture.client, "caller@example.test", native);
 }
 
-it.each([true, false])(
-  "authorizes the default-scope global alias against main (allowed: %s)",
-  async (mainAllowed) => {
+it.each([
+  { visibility: "shared", allowed: true },
+  { visibility: "read-only", allowed: false },
+  { visibility: "draft", allowed: false },
+] as const)(
+  "authorizes the default-scope global alias against main ($visibility)",
+  async ({ visibility, allowed: mainAllowed }) => {
     const fixture = await createFixture();
     const { successor: owner } = bindProfile(fixture);
     fixture.client.connect.scopes = ["operator.read", "operator.write"];
@@ -63,7 +67,7 @@ it.each([true, false])(
     await patchSessionEntryCore(fixture.scope, (entry) => ({
       ...entry,
       createdActor,
-      visibility: mainAllowed ? "shared" : "draft",
+      visibility,
     }));
     const literal = { ...fixture.scope, sessionKey: "global", sessionId: "literal-global" };
     await replaceSessionEntry(literal, {
@@ -90,7 +94,9 @@ it.each([true, false])(
       } else {
         expectRejected(respond, {
           code: "INVALID_REQUEST",
-          details: expect.objectContaining({ code: "SESSION_PARTICIPATION_REQUIRED" }),
+          ...(visibility === "draft"
+            ? { message: `Session "${fixture.scope.sessionKey}" was not found.` }
+            : { details: expect.objectContaining({ code: "SESSION_PARTICIPATION_REQUIRED" }) }),
         });
         expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
         expect(dispatchInboundMessageMock).not.toHaveBeenCalled();

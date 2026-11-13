@@ -1,25 +1,32 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../../config/runtime-snapshot.js";
-import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+  loadSessionEntry,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
+import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import {
   abandonTaskSuggestionAcceptance,
   beginTaskSuggestionAcceptance,
   completeTaskSuggestionAcceptance,
+  listTaskSuggestions,
 } from "../task-suggestion-registry.js";
+import * as taskSuggestionRegistry from "../task-suggestion-registry.js";
 import { sessionCreateHandlers } from "./sessions-create.js";
 import { sessionDeleteHandlers } from "./sessions-delete.js";
 import { sessionDispatchHandlers } from "./sessions-dispatch.js";
@@ -38,79 +45,74 @@ import {
 import type { GatewayClient, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
 const mocks = vi.hoisted(() => ({ handleChatSend: vi.fn() }));
-type TaskOperatorRole = "none" | "view" | "suggest" | "restricted";
-const taskRoleConfig = (role: TaskOperatorRole): OpenClawConfig => ({
-  gateway: {
-    roles: {
-      default: "guest",
-      definitions: {
-        guest: {
-          sessions: { others: role === "restricted" ? "write" : role },
-          agents: role === "restricted" ? ["allowed"] : "*",
-          scopes: ["operator.read", "operator.write"],
-        },
-      },
-    },
-  },
+const sourceEntry = (sessionKey: string) => ({
+  sessionId: sessionKey === SOURCE_SESSION_KEY ? "source-session" : sessionKey,
+  updatedAt: 1,
+  visibility: "shared" as const,
 });
+const it = test.extend<{ state: OpenClawTestState }>({
+  state: [
+    async ({ task: _task }, use) =>
+      withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        await captureRuntimeConfigAsyncReader()();
+        for (const sessionKey of ["agent:main:main", SOURCE_SESSION_KEY]) {
+          await upsertSessionEntryCore({ agentId: "main", sessionKey }, sourceEntry(sessionKey));
+        }
+        await use(state);
+      }),
+    { auto: true },
+  ],
+});
+type TaskOperatorRole = "none" | "view" | "suggest" | "restricted";
+const taskRoleConfig = (role: TaskOperatorRole): OpenClawConfig => {
+  const guest: GatewayOperatorRoleDefinition = {
+    sessions: { others: role === "restricted" ? "write" : role },
+    agents: role === "restricted" ? ["allowed"] : "*",
+    scopes: ["operator.read", "operator.write"],
+  };
+  return { gateway: { roles: { default: "guest", definitions: { guest } } } };
+};
 
 function taskRoleClient(profileId: string, admin = false): GatewayClient {
   const client = operatorClient();
   client.connect.scopes = admin ? ["operator.admin"] : ["operator.read", "operator.write"];
   client.authenticatedUserId = profileId;
-  client.authenticatedUserProfile = {
-    profileId,
-    displayName: null,
-    hasAvatar: false,
-    updatedAt: 1,
-  };
+  const profile = { profileId, displayName: null, hasAvatar: false, updatedAt: 1 };
+  client.authenticatedUserProfile = profile;
   return client;
 }
 
-function createSuggestion(
-  params: Record<string, unknown> = {},
-  overrides?: Parameters<typeof call>[3],
-) {
-  return call(
-    "taskSuggestions.create",
-    {
-      title: "Add coverage",
-      prompt: "Add the missing regression test.",
-      tldr: "The edge case is untested.",
-      cwd: GIT_CWD,
-      sessionKey: "agent:main:main",
-      ...params,
-    },
-    vi.fn(),
-    overrides,
-  );
+type CallOverrides = Parameters<typeof call>[3];
+function createSuggestion(params: Record<string, unknown> = {}, overrides?: CallOverrides) {
+  const payload = {
+    title: "Add coverage",
+    prompt: "Add the missing regression test.",
+    tldr: "The edge case is untested.",
+    cwd: GIT_CWD,
+    sessionKey: "agent:main:main",
+    ...params,
+  };
+  return call("taskSuggestions.create", payload, vi.fn(), overrides);
 }
 
-async function expectPending(taskId: string) {
-  expect(await listedSuggestions()).toMatchObject([{ id: taskId }]);
+async function expectPending(taskId: string, visible = true) {
+  const pending = [expect.objectContaining({ id: taskId })];
+  expect(listTaskSuggestions({})).toEqual(pending);
+  expect(await listedSuggestions()).toEqual(visible ? pending : []);
 }
 
-async function listedSuggestions() {
-  return (
-    requirePayload(await call("taskSuggestions.list", {})) as { suggestions: { id: string }[] }
-  ).suggestions;
-}
+const listedSuggestions = async () =>
+  (requirePayload(await call("taskSuggestions.list", {})) as { suggestions: { id: string }[] })
+    .suggestions;
 
-async function createTask(params: Record<string, unknown> = {}) {
-  return (requirePayload(await createSuggestion(params)) as { taskId: string }).taskId;
-}
+const createTask = async (params: Record<string, unknown> = {}) =>
+  (requirePayload(await createSuggestion(params)) as { taskId: string }).taskId;
 
-function accept(
-  taskId: string,
-  params: Record<string, unknown> = {},
-  overrides?: Parameters<typeof call>[3],
-) {
-  return call("taskSuggestions.accept", { taskId, ...params }, vi.fn(), overrides);
-}
+const accept = (taskId: string, params: Record<string, unknown> = {}, overrides?: CallOverrides) =>
+  call("taskSuggestions.accept", { taskId, ...params }, vi.fn(), overrides);
 
 function expectFailure(result: Awaited<ReturnType<typeof call>>, error: Record<string, unknown>) {
-  expect(result.response?.[0]).toBe(false);
-  expect(result.response?.[2]).toMatchObject(error);
+  expect(result.response).toMatchObject([false, undefined, error]);
 }
 
 type InspectParams = (params: GatewayRequestHandlerOptions["params"]) => void;
@@ -129,17 +131,16 @@ function mockCreatedSession(
   return Object.assign(session, { spy });
 }
 
-function mockDeletedSession(
+const mockDeletedSession = (
   inspect?: InspectParams,
   payload: { deleted: boolean; ok?: boolean } = { deleted: true },
-) {
-  return vi
+) =>
+  vi
     .spyOn(sessionDeleteHandlers, "sessions.delete")
     .mockImplementation(async ({ params, respond }) => {
       inspect?.(params);
       respond(true, payload, undefined);
     });
-}
 
 async function createTaskRoleScenario(role: TaskOperatorRole, ownsSource = false) {
   setRuntimeConfigSnapshot(taskRoleConfig(role));
@@ -174,96 +175,98 @@ afterEach(async () => {
   await dismissPendingTaskSuggestions();
   vi.restoreAllMocks();
   closeOpenClawAgentDatabasesForTest();
-  clearRuntimeConfigSnapshot();
 });
 
 it.each(["none", "suggest", "restricted"] as const)(
   "enforces %s role ownership, session access, and agent-creation boundaries",
   async (roleName) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const { owner, profile, taskId, request } = await createTaskRoleScenario(
-        roleName,
-        roleName === "restricted",
-      );
-      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-      if (roleName === "none") {
-        const ownSessionKey = "agent:main:dashboard:own-task-source";
-        await upsertSessionEntryCore(
-          { agentId: "main", sessionKey: ownSessionKey },
-          {
-            sessionId: "own-task-source",
-            updatedAt: 1,
-            createdActor: { type: "human", source: "profile", id: profile.id },
-          },
-        );
-        const ownTaskId = await createTask({ sessionKey: ownSessionKey, agentId: "main" });
-        expect((await request("list")).response?.[1]).toMatchObject({
-          suggestions: [{ id: ownTaskId }],
-        });
-        expect((await request("list", { sessionKey: SOURCE_SESSION_KEY })).response?.[1]).toEqual({
-          suggestions: [],
-        });
-        expect((await request("accept", { taskId, mode: "session" })).response?.[2]).toMatchObject({
-          code: "INVALID_REQUEST",
-          message: expect.stringContaining("was not found"),
-        });
-        const dismissed = await request("dismiss", { taskId });
-        expect(dismissed.response?.[1]).toEqual({ taskId, dismissed: false });
-        expect(dismissed.broadcast).not.toHaveBeenCalled();
-        expect(mocks.handleChatSend).not.toHaveBeenCalled();
-        const admin = await call("taskSuggestions.list", {}, vi.fn(), {
-          client: taskRoleClient(profile.id, true),
-          config: taskRoleConfig("none"),
-        });
-        expect(admin.response?.[1]).toMatchObject({
-          suggestions: [{ id: ownTaskId }, { id: taskId }],
-        });
-        return;
-      }
-      if (roleName === "restricted") {
-        const createSession = vi.spyOn(sessionCreateHandlers, "sessions.create");
-        for (const mode of ["worktree", "local", "cloud", "session"] as const) {
-          const accepted = await request("accept", { taskId, mode });
-          expect(accepted.response?.[2], mode).toMatchObject({
-            code: "FORBIDDEN",
-            message: expect.stringContaining('agent "main"'),
-          });
-        }
-        expect(createSession).not.toHaveBeenCalled();
-        expect(mocks.handleChatSend).not.toHaveBeenCalled();
-        expect((await request("list")).response?.[1]).toMatchObject({
-          suggestions: [{ id: taskId }],
-        });
-        return;
-      }
-      const rejected = await request("accept", { taskId, mode: "session" });
-      const dismissed = await request("dismiss", { taskId });
-      expect(rejected.response?.[2]).toMatchObject({
-        details: { code: "SESSION_PARTICIPATION_REQUIRED", visibility: "shared" },
-      });
-      expect(dismissed.response?.[1]).toEqual({ taskId, dismissed: false });
-      expect(mocks.handleChatSend).not.toHaveBeenCalled();
-      addSessionMember(
-        { agentId: "main", sessionKey: SOURCE_SESSION_KEY },
+    const { owner, profile, taskId, request } = await createTaskRoleScenario(
+      roleName,
+      roleName === "restricted",
+    );
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    if (roleName === "none") {
+      const ownSessionKey = "agent:main:dashboard:own-task-source";
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: ownSessionKey },
         {
-          identityId: profile.id,
-          addedBy: owner.id,
-          expectedSessionId: "shared-task-source",
+          sessionId: "own-task-source",
+          updatedAt: 1,
+          createdActor: { type: "human", source: "profile", id: profile.id },
         },
       );
-      const accepted = await request("accept", { taskId, mode: "session" });
-      const replay = await request("accept", { taskId, mode: "session" });
-      expect([accepted.response?.[1], replay.response?.[1]]).toEqual([
-        { taskId, key: SOURCE_SESSION_KEY },
-        { taskId, key: SOURCE_SESSION_KEY },
-      ]);
-      expect(mocks.handleChatSend).toHaveBeenCalledTimes(1);
+      const ownTaskId = await createTask({ sessionKey: ownSessionKey, agentId: "main" });
+      expect((await request("list")).response?.[1]).toMatchObject({
+        suggestions: [{ id: ownTaskId }],
+      });
+      expect((await request("list", { sessionKey: SOURCE_SESSION_KEY })).response?.[1]).toEqual({
+        suggestions: [],
+      });
+      expect((await request("accept", { taskId, mode: "session" })).response?.[2]).toMatchObject({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("was not found"),
+      });
+      const dismissed = await request("dismiss", { taskId });
+      expect(dismissed.response?.[1]).toEqual({ taskId, dismissed: false });
+      expect(dismissed.broadcast).not.toHaveBeenCalled();
+      expect(mocks.handleChatSend).not.toHaveBeenCalled();
+      const admin = await call("taskSuggestions.list", {}, vi.fn(), {
+        client: taskRoleClient(profile.id, true),
+        config: taskRoleConfig("none"),
+      });
+      expect(admin.response?.[1]).toMatchObject({
+        suggestions: [{ id: ownTaskId }, { id: taskId }],
+      });
+      return;
+    }
+    if (roleName === "restricted") {
+      const createSession = vi.spyOn(sessionCreateHandlers, "sessions.create");
+      for (const mode of ["worktree", "local", "cloud", "session"] as const) {
+        const accepted = await request("accept", { taskId, mode });
+        expect(accepted.response?.[2], mode).toMatchObject({
+          code: "FORBIDDEN",
+          message: expect.stringContaining('agent "main"'),
+        });
+      }
+      expect(createSession).not.toHaveBeenCalled();
+      expect(mocks.handleChatSend).not.toHaveBeenCalled();
+      expect((await request("list")).response?.[1]).toMatchObject({
+        suggestions: [{ id: taskId }],
+      });
+      return;
+    }
+    const rejected = await request("accept", { taskId, mode: "session" });
+    const dismissed = await request("dismiss", { taskId });
+    expect(rejected.response?.[2]).toMatchObject({
+      details: { code: "SESSION_PARTICIPATION_REQUIRED", visibility: "shared" },
     });
+    expect(dismissed.response?.[1]).toEqual({ taskId, dismissed: false });
+    expect(mocks.handleChatSend).not.toHaveBeenCalled();
+    addSessionMember(
+      { agentId: "main", sessionKey: SOURCE_SESSION_KEY },
+      {
+        identityId: profile.id,
+        addedBy: owner.id,
+        expectedSessionId: "shared-task-source",
+      },
+    );
+    const accepted = await request("accept", { taskId, mode: "session" });
+    const replay = await request("accept", { taskId, mode: "session" });
+    expect([accepted.response?.[1], replay.response?.[1]]).toEqual([
+      { taskId, key: SOURCE_SESSION_KEY },
+      { taskId, key: SOURCE_SESSION_KEY },
+    ]);
+    expect(mocks.handleChatSend).toHaveBeenCalledTimes(1);
   },
 );
 
-it("attributes a bare source session to the persisted fixed-store owner", async () => {
-  const config = fixedStoreOwnershipConfig("/tmp/shared-sessions.sqlite");
+it("attributes a bare source session to the persisted fixed-store owner", async ({ state }) => {
+  const storePath = state.statePath("shared-sessions.sqlite");
+  const config = fixedStoreOwnershipConfig(storePath);
+  await upsertSessionEntryCore(
+    { agentId: "ops", sessionKey: "global", storePath },
+    sourceEntry("global"),
+  );
   const created = await createSuggestion({ sessionKey: "global" }, config);
 
   expect(created.response?.[0]).toBe(true);
@@ -500,56 +503,51 @@ it("fully rolls back a cloud draft when dispatch fails", async () => {
 });
 
 it("sends an idle session acceptance as a new turn and replays its source key", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    setRuntimeConfigSnapshot({});
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey: SOURCE_SESSION_KEY },
-      { sessionId: "source-session", updatedAt: 1 },
-    );
-    const taskId = await createSourceSuggestion();
-    const client = operatorClient();
+  const taskId = await createSourceSuggestion();
+  const client = operatorClient();
 
-    const accepted = await call("taskSuggestions.accept", { taskId, mode: "session" }, vi.fn(), {
-      client,
-      context: {},
-    });
-    const replay = await call("taskSuggestions.accept", { taskId, mode: "session" });
-
-    expect(accepted.response?.[0]).toBe(true);
-    expect(accepted.response?.[1]).toEqual({ taskId, key: SOURCE_SESSION_KEY });
-    expect(replay.response?.[1]).toEqual({ taskId, key: SOURCE_SESSION_KEY });
-    expect(mocks.handleChatSend).toHaveBeenCalledTimes(1);
-    expect(mocks.handleChatSend).toHaveBeenCalledWith(
-      expect.objectContaining({
-        client,
-        params: {
-          sessionKey: SOURCE_SESSION_KEY,
-          agentId: "main",
-          sessionId: "source-session",
-          message: "Apply the focused fix in this session.",
-          queueMode: "steer",
-          idempotencyKey: `task-suggestion:${taskId}`,
-        },
-      }),
-    );
+  const accepted = await call("taskSuggestions.accept", { taskId, mode: "session" }, vi.fn(), {
+    client,
+    context: {},
   });
+  const replay = await call("taskSuggestions.accept", { taskId, mode: "session" });
+
+  expect(accepted.response?.[0]).toBe(true);
+  expect(accepted.response?.[1]).toEqual({ taskId, key: SOURCE_SESSION_KEY });
+  expect(replay.response?.[1]).toEqual({ taskId, key: SOURCE_SESSION_KEY });
+  expect(mocks.handleChatSend).toHaveBeenCalledTimes(1);
+  expect(mocks.handleChatSend).toHaveBeenCalledWith(
+    expect.objectContaining({
+      client,
+      params: {
+        sessionKey: SOURCE_SESSION_KEY,
+        agentId: "main",
+        sessionId: "source-session",
+        message: "Apply the focused fix in this session.",
+        queueMode: "steer",
+        idempotencyKey: `task-suggestion:${taskId}`,
+      },
+    }),
+  );
 });
 
 it.each([false, true])(
   "restores a source suggestion after failure (source exists: %s)",
   async (exists) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
+      const source = { agentId: "main", sessionKey: SOURCE_SESSION_KEY };
       if (exists) {
         setRuntimeConfigSnapshot({});
-        await upsertSessionEntryCore(
-          { agentId: "main", sessionKey: SOURCE_SESSION_KEY },
-          { sessionId: "source-session", updatedAt: 1 },
-        );
+        await upsertSessionEntryCore(source, sourceEntry(SOURCE_SESSION_KEY));
         mocks.handleChatSend.mockImplementationOnce(async ({ respond }: { respond: RespondFn }) => {
           respond(false, undefined, { code: "UNAVAILABLE", message: "delivery unavailable" });
         });
       }
+      expect(loadSessionEntry(source)?.sessionId).toBe(exists ? "source-session" : undefined);
       const taskId = await createSourceSuggestion();
+      const createSession = vi.spyOn(sessionCreateHandlers, "sessions.create");
+      const claim = vi.spyOn(taskSuggestionRegistry, "beginTaskSuggestionAcceptance");
       const deleteSession = vi.spyOn(sessionDeleteHandlers, "sessions.delete");
       const accepted = await accept(
         taskId,
@@ -560,13 +558,14 @@ it.each([false, true])(
         accepted,
         exists
           ? { message: "delivery unavailable" }
-          : {
-              code: "INVALID_REQUEST",
-              message: "source session no longer exists; start it in a new session instead",
-            },
+          : { code: "INVALID_REQUEST", message: "task suggestion was not found" },
       );
       expect(deleteSession).not.toHaveBeenCalled();
-      await expectPending(taskId);
+      expect(createSession).not.toHaveBeenCalled();
+      expect(claim).toHaveBeenCalledTimes(exists ? 1 : 0);
+      expect(mocks.handleChatSend).toHaveBeenCalledTimes(exists ? 1 : 0);
+      expect(loadSessionEntry(source)?.sessionId).toBe(exists ? "source-session" : undefined);
+      await expectPending(taskId, exists);
     });
   },
 );

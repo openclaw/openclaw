@@ -6,6 +6,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withLocalGatewayRequestScope } from "../gateway/local-request-context.js";
 import { cronHandlers } from "../gateway/server-methods/cron.js";
+import { initializeSessionReadContext } from "../gateway/server-methods/sessions-read-cache.test-support.js";
 import type { GatewayRequestContext, RespondFn } from "../gateway/server-methods/types.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { defaultRuntime, ExitError } from "../runtime.js";
@@ -128,6 +129,7 @@ async function withCronGateway(
         cron,
         cronStorePath: storePath,
       };
+      await initializeSessionReadContext(context);
       callGatewayFromCli.mockImplementation(
         async (method: string, _options: unknown, params: Record<string, unknown> = {}) => {
           const respond = vi.fn<RespondFn>();

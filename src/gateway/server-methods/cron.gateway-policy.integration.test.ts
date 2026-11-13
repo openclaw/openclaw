@@ -17,6 +17,7 @@ import {
   getRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createAccountCronScheduledToolPolicy } from "../../cron/scheduled-tool-policy.js";
 import { CronService } from "../../cron/service.js";
@@ -36,6 +37,8 @@ import { revokeCronCreatorAuthorityRunScope } from "../cron-creator-authority-gr
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
+import { bindSessionRowProjection } from "../session-row-projection-access.js";
+import { createSessionRowProjection } from "../session-row-projection.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { cronHandlers } from "./cron.js";
 import type { GatewayClient, RespondFn } from "./types.js";
@@ -191,6 +194,7 @@ function createPolicyFixture(storePath: string) {
   };
 
   return {
+    context,
     scheduler,
     cron,
     readJobs: () => loadCronStore(storePath),
@@ -198,12 +202,10 @@ function createPolicyFixture(storePath: string) {
     invoke,
     tool: (identity: AgentRuntimeIdentity) => {
       gatewayCall.mockImplementation(async (method: string, _options: unknown, params: unknown) => {
-        const caller = getGatewayToolCallerIdentity();
-        const response = await invoke(method, params as Record<string, unknown>, {
+        const [ok, value, error] = await invoke(method, params as Record<string, unknown>, {
           ...identity,
-          ...caller,
+          ...getGatewayToolCallerIdentity(),
         });
-        const [ok, value, error] = response;
         if (!ok) {
           throw new Error(error?.message ?? "cron request denied");
         }
@@ -222,10 +224,17 @@ async function withCron(run: (fixture: ReturnType<typeof createPolicyFixture>) =
   await withOpenClawTestState({ label: "cron-gateway-policy" }, async (state) => {
     setRuntimeConfigSnapshot({});
     const fixture = createPolicyFixture(state.statePath("cron", "jobs.json"));
+    const projection = await createSessionRowProjection({
+      cfg: {},
+      getConfig: fixture.context.getRuntimeConfig,
+      context: fixture.context,
+    });
+    bindSessionRowProjection(fixture.context, () => projection);
     try {
       await fixture.cron.start();
       await run(fixture);
     } finally {
+      projection.dispose();
       fixture.cron.stop();
       await fixture.scheduler.stop();
     }
@@ -282,6 +291,12 @@ describe("Gateway automation policy", () => {
     "allows %s to manage only the current conversation's jobs without a management policy",
     async (scope) => {
       await withCron(async ({ cron, invoke, readJobs }) => {
+        for (const sessionKey of ["agent:main:main", "agent:main:other"]) {
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey },
+            { sessionId: sessionKey, updatedAt: 1, visibility: "shared" },
+          );
+        }
         const owned = await addOwnedJob(cron);
         const foreign = await cron.add({
           ...jobInput,

@@ -231,7 +231,9 @@ describe("built-in session tool role authority", () => {
             label: "Selected participant write",
             user,
           });
-        await expect(patch(bob.profileId)).rejects.toThrow("session is draft for this connection");
+        await expect(patch(bob.profileId)).rejects.toThrow(
+          `Session "${PARTICIPANT_DRAFT}" was not found.`,
+        );
         expect(mainSession(PARTICIPANT_DRAFT)?.label).toBeUndefined();
         await expect(patch(alice.profileId)).resolves.toMatchObject({
           details: { status: "updated", sessionKey: PARTICIPANT_DRAFT },

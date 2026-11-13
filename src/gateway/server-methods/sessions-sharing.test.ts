@@ -527,9 +527,11 @@ it("revokes all member access while a session is draft and restores it when shar
         if (allowed) {
           expect(error, method).toBeNull();
         } else {
-          expect(error, method).toMatchObject({
-            details: { code: "SESSION_PARTICIPATION_REQUIRED" },
+          expect(error, method).toEqual({
+            code: "INVALID_REQUEST",
+            message: `Session "${sessionKey}" was not found.`,
           });
+          expect(result.authorization, method).toBeUndefined();
         }
       }
       expect(

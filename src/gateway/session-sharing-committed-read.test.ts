@@ -297,7 +297,7 @@ it.each([false, true])(
 
       replaceSessionEntrySync(scope, { ...shared, visibility: "draft", updatedAt: 2 });
       inWriterTransaction(owner.db, () =>
-        expectCurrent(authorization, "session is draft for this connection"),
+        expectCurrent(authorization, `Session "${sessionKey}" was not found.`),
       );
       replaceSessionEntrySync(scope, { ...shared, updatedAt: 3 });
       inWriterTransaction(owner.db, () => expectCurrent(authorization));

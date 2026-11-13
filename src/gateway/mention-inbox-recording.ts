@@ -64,7 +64,8 @@ export function createMentionInputRecorder(params: {
         current.entry.incognito === true ||
         current.canonicalKey !== resolved.canonicalKey ||
         current.storePath !== resolved.storePath ||
-        current.entry.visibility !== resolved.entry.visibility
+        current.entry.visibility !== resolved.entry.visibility ||
+        JSON.stringify(current.entry.access) !== JSON.stringify(resolved.entry.access)
       ) {
         throw new Error("Committed mention session changed before commit");
       }

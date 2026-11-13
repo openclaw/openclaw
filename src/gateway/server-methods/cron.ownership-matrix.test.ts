@@ -20,6 +20,7 @@ import {
   mintCronCreatorAuthorityGrant,
   revokeCronCreatorAuthorityRunScope,
 } from "../cron-creator-authority-grant.js";
+import { sharingPolicyClient } from "../session-sharing.test-utils.js";
 import { cronJobMatchesDeclarationScope, readCronCallerScope } from "./cron-caller-scope.js";
 import { createReadService } from "./cron-read.test-support.js";
 import {
@@ -276,7 +277,20 @@ describe("cron ownership access matrix", () => {
       }),
     );
     expect(JSON.stringify(respond.mock.calls)).not.toContain("fixture-marker");
-    const operatorGet = await invokeCron("cron.get", { id: "trusted-job" }, { context });
+    const anonymousGet = await invokeCron("cron.get", { id: "trusted-job" }, { context });
+    expect(anonymousGet.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ details: expect.objectContaining({ code: "CRON_JOB_NOT_FOUND" }) }),
+    );
+    const operatorGet = await invokeCron(
+      "cron.get",
+      { id: "trusted-job" },
+      {
+        context,
+        client: sharingPolicyClient({ scopes: ["operator.admin"] }),
+      },
+    );
     expectCronReply(operatorGet.respond, expect.objectContaining({ id: "trusted-job" }));
   });
 

@@ -11,16 +11,24 @@ import { resolveSessionStoreIdentity } from "../session-store-key.js";
 import { resolveCronJobOwnerAgentId } from "./cron-caller-scope.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
-type CronSessionVisibility = (sessionKey: string, agentId?: string) => boolean;
+type CronSessionVisibility = ((sessionKey: string, agentId?: string) => boolean) & {
+  allowUnbound: boolean;
+};
 
-function resolveCronEntryFilter(client: GatewayClient | null, cfg: OpenClawConfig) {
+function resolveCronVisibilityPolicy(client: GatewayClient | null, cfg: OpenClawConfig) {
   const identity = client?.internal?.agentRuntimeIdentity;
   if (identity && getCronManagementAuthority(identity)) {
     return undefined;
   }
   const sharing = prepareProjectedSessionSharing({ client, cfg, isMember: () => false });
-  return sharing.sessionCap === "none" || sharing.sessionCap === "invited"
-    ? sharing.entryFilter
+  // Role ceilings and independent confidentiality both select the projected read path.
+  return sharing.entryFilter
+    ? {
+        allowUnbound:
+          sharing.sessionCap !== "none" &&
+          sharing.sessionCap !== "invited" &&
+          !cfg.session?.sharing?.accessPolicy,
+      }
     : undefined;
 }
 
@@ -31,7 +39,7 @@ export function createCronSessionVisibility(
 ) {
   return {
     async prepare(): Promise<void> {
-      if (!resolveCronEntryFilter(client, context.getRuntimeConfig())) {
+      if (!resolveCronVisibilityPolicy(client, context.getRuntimeConfig())) {
         return undefined;
       }
       const projection = requireSessionRowProjection(context);
@@ -39,12 +47,13 @@ export function createCronSessionVisibility(
       await projection.prepareMembership();
     },
     resolve(): CronSessionVisibility | undefined {
-      if (!resolveCronEntryFilter(client, context.getRuntimeConfig())) {
+      const policy = resolveCronVisibilityPolicy(client, context.getRuntimeConfig());
+      if (!policy) {
         return undefined;
       }
-      return (sessionKey, agentId) => {
+      const visible = (sessionKey: string, agentId?: string) => {
         const cfg = context.getRuntimeConfig();
-        const filter = resolveCronEntryFilter(client, cfg);
+        const filter = resolveCronVisibilityPolicy(client, cfg);
         if (!filter) {
           return true;
         }
@@ -78,6 +87,7 @@ export function createCronSessionVisibility(
         });
         return Boolean(target && sharing.canReadTarget(target));
       };
+      return Object.assign(visible, { allowUnbound: policy.allowUnbound });
     },
   };
 }
@@ -107,5 +117,6 @@ export function cronJobIsVisible(
     return true;
   }
   const target = cronJobVisibilityTarget(job, defaultAgentId);
-  return Boolean(target && visibility(target.sessionKey, target.agentId));
+  // Legacy broad inventory includes ownerless jobs; their keyed runs still pass session ACLs.
+  return target ? visibility(target.sessionKey, target.agentId) : visibility.allowUnbound;
 }

@@ -25,6 +25,7 @@ import { invalidateOperatorRolePolicy } from "../../gateway/operator-role-policy
 import { createScheduledGatewayRunner } from "../../gateway/scheduled-run-gateway-context.js";
 import { createDirectChatContext } from "../../gateway/server-chat.agent-events.test-helpers.js";
 import { createGatewayCronAgentDeps } from "../../gateway/server-cron-agent-run.js";
+import { admitGatewayCronOccurrence } from "../../gateway/server-cron-event-dispatch.js";
 import { createGatewayInstanceRuntime } from "../../gateway/server-instance-runtime.js";
 import { createRequestGatewayMethodRegistry } from "../../gateway/server-methods.js";
 import { resetGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -112,6 +113,7 @@ export async function withCommandPlugin(
   await withAdminIngress(async (ingress) => {
     const { cfg, state, admins, context, gateway, resolveGatewayContext } = ingress;
     const sdkResources = new LegacyPluginSdkResourceHost();
+    sdkResources.bindScheduler(createTestGatewayScheduler());
     bindLegacyPluginSdkResourceHost(resolveGatewayContext, sdkResources);
     // The test state restores both bundled-plugin variables when it ends.
     const bundledDist = options.bundled ? state.path("openclaw-package", "dist") : undefined;
@@ -207,10 +209,11 @@ export async function withCommandPlugin(
     const previousSubagentRuns = new Set(subagentRuns.keys());
     let fixtureRef: Fixture | undefined;
     const runSchedulerOwned = createScheduledGatewayRunner(resolveGatewayContext, () => registry);
+    const resolveCronAgent = () => ({ agentId: "main", cfg });
     const gatewayCronAgentDeps = createGatewayCronAgentDeps({
       deps: {},
       storePath: cronStorePath,
-      resolveCronAgent: () => ({ agentId: "main", cfg }),
+      resolveCronAgent,
       resolveGatewayContext,
       resolvePluginRegistry: () => registry,
     });
@@ -224,6 +227,7 @@ export async function withCommandPlugin(
         log: createNoopLogger(),
         enqueueSystemEvent: vi.fn(),
         runSchedulerOwned,
+        admitScheduledOccurrence: ({ job }) => admitGatewayCronOccurrence(job, resolveCronAgent),
         // Present, as in the Gateway, so a misrouted command schedule would be observed here.
         runSessionEvent: async ({ text }) => {
           sessionEventPrompts.push(text);
@@ -262,27 +266,20 @@ export async function withCommandPlugin(
     const inbound = await context(admins[0]!.identity.senderId);
     expectDefined(getCommandOwnerAuthority(inbound)?.operatorAuthority, "real ingress authority");
     const sessionKey = expectDefined(inbound.SessionKey, "real ingress session key");
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey, storePath },
-      {
-        sessionId: "command-parent",
-        lifecycleRevision: "revision-1",
-        updatedAt: 1,
-        modelProvider: "openai",
-        model: "gpt-4.1",
-        authProfileOverride: "openai:schedule-fixture",
-        authProfileOverrideSource: "auto",
-      },
-    );
+    const parentTarget = { agentId: "main", sessionKey, storePath };
+    await upsertSessionEntryCore(parentTarget, {
+      sessionId: "command-parent",
+      lifecycleRevision: "revision-1",
+      updatedAt: 1,
+      modelProvider: "openai",
+      model: "gpt-4.1",
+      authProfileOverride: "openai:schedule-fixture",
+      authProfileOverrideSource: "auto",
+    });
     await state.writeConfig(cfg);
     const params = createPersistedPluginCommandParams(cfg, inbound, state, sessionKey, storePath);
     const transcriptContents = async (role: "user" | "assistant") => {
-      const events = await loadTranscriptEvents({
-        agentId: "main",
-        sessionKey,
-        storePath,
-        sessionId: "command-parent",
-      });
+      const events = await loadTranscriptEvents({ ...parentTarget, sessionId: "command-parent" });
       return events.flatMap((event) => {
         const record = asOptionalRecord(event);
         const message = asOptionalRecord(record?.message);
@@ -323,14 +320,11 @@ export async function withCommandPlugin(
           return record && getPluginInstanceIncarnation(record);
         },
         resetParent: () =>
-          upsertSessionEntryCore(
-            { agentId: "main", sessionKey, storePath },
-            {
-              sessionId: "replacement-parent",
-              lifecycleRevision: "revision-2",
-              updatedAt: Date.now(),
-            },
-          ),
+          upsertSessionEntryCore(parentTarget, {
+            sessionId: "replacement-parent",
+            lifecycleRevision: "revision-2",
+            updatedAt: Date.now(),
+          }),
         registry: loadedRegistry,
         reloadPlugin,
         params,
@@ -338,10 +332,10 @@ export async function withCommandPlugin(
         userInputs: () => transcriptContents("user"),
         assistantOutputs: () => transcriptContents("assistant"),
         restrictParentTools: () =>
-          upsertSessionEntryCore(
-            { agentId: "main", sessionKey, storePath },
-            { toolOverrides: { webSearch: false }, updatedAt: Date.now() },
-          ),
+          upsertSessionEntryCore(parentTarget, {
+            toolOverrides: { webSearch: false },
+            updatedAt: Date.now(),
+          }),
         readJobs: async () => (await loadCronStore(cronStorePath)).jobs,
         revokeOwner: () => setUserProfileRole(admins[0]!.profile.id, "member"),
         removeOwner: () => {
@@ -354,14 +348,13 @@ export async function withCommandPlugin(
         },
         installAgentTurnFacade: () => {
           const methodRegistry = createRequestGatewayMethodRegistry();
-          const runtime = createGatewayInstanceRuntime({
+          agentTurnRuntime = createGatewayInstanceRuntime({
             getContext: () => gateway,
             getMethodRegistry: () => methodRegistry,
             isDispatchAvailable: () => true,
           });
-          agentTurnRuntime = runtime;
-          gateway.createAgentTurnFacade = runtime.createAgentTurnFacade;
-          gateway.lifecycleRuntime = runtime.lifecycle;
+          gateway.createAgentTurnFacade = agentTurnRuntime.createAgentTurnFacade;
+          gateway.lifecycleRuntime = agentTurnRuntime.lifecycle;
           gateway.getGatewayMethodRegistry = () => methodRegistry;
         },
       };
@@ -394,9 +387,9 @@ export async function withCommandPlugin(
         expect
           .soft(
             loadSessionEntry({
+              ...parentTarget,
               agentId: child.childAgentId ?? "main",
               sessionKey: child.childSessionKey,
-              storePath,
             }),
             "revoked queued child session is physically deleted before fixture retirement",
           )
@@ -410,18 +403,15 @@ export async function withCommandPlugin(
         await disposePlugin();
       }
       await expect(waitForPluginCacheRetirement()).resolves.toMatchObject({ failures: [] });
+      await sdkResources.scheduler.stop();
       await sdkResources.close();
     }
   });
 }
 
 export function commandInvocation(fixture: Fixture, body = "/review-panel") {
-  return createPluginCommandInvocation(fixture.params(body), [
-    "sessions_spawn",
-    "agents_wait",
-    "automations",
-    "read",
-  ]);
+  const toolsAllow = ["sessions_spawn", "agents_wait", "automations", "read"];
+  return createPluginCommandInvocation(fixture.params(body), toolsAllow);
 }
 
 export function scheduleRequest(overrides: { requestId?: string; maxRuns?: number } = {}) {
@@ -435,13 +425,13 @@ export function scheduleRequest(overrides: { requestId?: string; maxRuns?: numbe
   };
 }
 
+export const scheduledTurns = (ctx: PluginCommandContext, why = "schedule capability") =>
+  expectDefined(ctx.runtimeContext?.scheduledTurns, why);
+
 export async function createContinuation(fixture: Fixture) {
   let accepted: { jobId: string } | undefined;
   fixture.handler.mockImplementation(async (ctx) => {
-    accepted = await expectDefined(
-      ctx.runtimeContext?.scheduledTurns,
-      "schedule capability",
-    ).schedule(scheduleRequest());
+    accepted = await scheduledTurns(ctx).schedule(scheduleRequest());
     return { text: "scheduled" };
   });
   expect((await commandInvocation(fixture).run())?.reply?.text).toBe("scheduled");

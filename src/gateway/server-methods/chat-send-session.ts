@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -42,7 +41,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
-import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
 import { waitForAgentInputAdmission } from "../../state/agent-database-preparation-context.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
@@ -63,8 +61,8 @@ import {
   prepareDeletedAgentSessionCheck,
   resolveSessionModelRef,
 } from "../session-utils.js";
-import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
 import { readIncognitoActivePath } from "./chat-send-active-leaf.js";
+import { prepareChatSendSessionEntry } from "./chat-send-creation.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import { roundedChatSendTimingMs } from "./chat-server-timing.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -171,46 +169,6 @@ function chatSendPreparationConfig(
     reset: cfg.session?.reset,
     resetByType: cfg.session?.resetByType,
     resetByChannel: cfg.session?.resetByChannel,
-  };
-}
-
-// Preparing the canonical creator defaults does not itself persist a session.
-export async function prepareChatSendSessionEntry(params: {
-  cfg: OpenClawConfig;
-  client: GatewayRequestHandlerOptions["client"];
-  agentId: string;
-  getRuntimeConfig: () => OpenClawConfig;
-}): Promise<{ entry: SessionEntry; assertSkillSelection: () => void }> {
-  const { cfg, client, agentId, getRuntimeConfig } = params;
-  const creationError = authorizeGatewaySessionCreation({ cfg, client, agentId });
-  if (creationError) {
-    throw new Error(creationError.message);
-  }
-  const creation = await prepareSkillLibrarySessionCreation(
-    client,
-    getRuntimeConfig,
-    resolveOperatorSessionCreation(client),
-  );
-  const assertSkillSelection = () =>
-    assertPreparedSkillLibrarySelection(creation.skillLibrarySelections);
-  const createdAt = Date.now();
-  // A caller's retry ID must never revive a retained transcript window.
-  const sessionId = randomUUID();
-  return {
-    entry: {
-      ...buildSessionCreationStamp({
-        ...creation,
-        sandbox: resolveCreatorSandbox(cfg, creation),
-        now: createdAt,
-      }),
-      sessionId,
-      lifecycleRevision: randomUUID(),
-      updatedAt: createdAt,
-      sessionStartedAt: createdAt,
-      lastInteractionAt: createdAt,
-      chatType: "direct",
-    },
-    assertSkillSelection,
   };
 }
 
@@ -656,7 +614,9 @@ export async function prepareChatSendNativeRuntimeRestriction(params: {
   }
   const prepared = await prepareChatSendSessionEntry({
     cfg,
+    sessionKey,
     client,
+    inputProvenance: request.systemInputProvenance,
     agentId,
     getRuntimeConfig: context.getRuntimeConfig,
   });

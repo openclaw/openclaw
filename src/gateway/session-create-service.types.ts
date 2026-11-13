@@ -137,6 +137,7 @@ export type CreateGatewaySessionParams = {
   pendingWorktree?: InternalSessionEntry["pendingWorktree"];
   incognito?: boolean;
   visibility?: SessionVisibility;
+  access?: SessionEntry["access"];
   /** Trusted creation default; existing keyed sessions retain their current visibility. */
   defaultVisibility?: SessionVisibility;
   /** Trusted catalog-owned model/runtime pair, persisted and locked together. */
@@ -164,6 +165,8 @@ export type CreateGatewaySessionParams = {
   permissionMode?: SessionEntry["permissionMode"];
   /** Direct profiled operator creation only; never inherited by autonomous callers. */
   applyAgentPermissionDefault?: boolean;
+  /** Host-attested direct Control UI profile, never accepted from public params. */
+  attendedControlUiProfile?: boolean;
   toolOverrides?: SessionToolOverrides;
   communication?: SessionEntry["communication"];
   /** Prepares session-owned resources while the target lifecycle fence is held. */

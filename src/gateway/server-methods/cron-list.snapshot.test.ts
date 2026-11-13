@@ -8,7 +8,13 @@ import type { CronListPageOptions } from "../../cron/service/list-page-types.js"
 import type { CronJob } from "../../cron/types.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { serializeGatewayFrame } from "../serialized-json.js";
+import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import {
+  bindSessionRowProjection,
+  getSessionRowProjection,
+} from "../session-row-projection-access.js";
 import { cronListHandler } from "./cron-list.js";
+import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 it("reuses immutable rows across list variants until the owner or default agent changes", async () => {
@@ -51,6 +57,9 @@ it("reuses immutable rows across list variants until the owner or default agent 
     getRuntimeConfig: () => config,
     logGateway: { warn: vi.fn() },
   } as unknown as GatewayRequestContext;
+  const readContext = createDirectChatContext({ getRuntimeConfig: () => config });
+  await initializeSessionReadContext(readContext);
+  bindSessionRowProjection(context, () => getSessionRowProjection(readContext));
   const read = async (compact: boolean, offset = 0, query?: string) => {
     const params = { compact, includeDeliveryPreviews: false, offset, query };
     const respond = vi.fn<RespondFn>();

@@ -1,9 +1,12 @@
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import type { OpenClawConfig } from "../types.openclaw.js";
 import type { GroupKeyResolution, SessionEntry } from "./types.js";
 
 export type RecordInboundSessionMetaParams = {
+  /** Explicit producer config; Gateway callers otherwise use the published runtime snapshot. */
+  cfg?: OpenClawConfig;
   /** Set false to only patch existing entries; missing sessions stay absent. */
   createIfMissing?: boolean;
   ctx: MsgContext;

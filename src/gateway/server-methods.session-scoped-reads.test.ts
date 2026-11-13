@@ -348,11 +348,8 @@ describe("narrow session read owners", () => {
             isWebchatConnect: () => false,
             extraHandlers: sessionReadHandlers,
           });
-          expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
-            session: roles
-              ? null
-              : expect.objectContaining({ key: "agent:main:read-foreign-draft" }),
-          });
+          // Confidential Drafts stay hidden from identified outsiders without named roles too.
+          expect(respond).toHaveBeenCalledExactlyOnceWith(true, { session: null });
         },
         { cfg: roles ? rolePolicyConfig() : {} },
       );
@@ -800,16 +797,22 @@ describe("narrow session read owners", () => {
     ["sessions.branches.list", "narrow"],
     ["sessions.files.get", "solo"],
     ["sessions.files.get", "internal"],
-  ] as const)("%s keeps missing-row access for %s callers", async (method, identity) => {
+    ["sessions.files.get", "anonymous"],
+  ] as const)("%s checks missing-row workspace access for %s callers", async (method, identity) => {
     await withOpenClawTestState(profileState, async () => {
       const cfg = identity === "narrow" ? rolePolicyConfig() : {};
       setRuntimeConfigSnapshot(cfg);
       const client =
-        identity === "internal"
+        identity === "anonymous"
           ? null
           : identity === "solo"
             ? sharingPolicyClient({ user: GATEWAY_OWNER_PROFILE_ID, scopes: ["operator.read"] })
-            : roleClient("view", "missing-reader");
+            : identity === "internal"
+              ? {
+                  ...sharingPolicyClient({ scopes: ["operator.read"] }),
+                  internal: { operatorRoleActor: { kind: "system" as const } },
+                }
+              : roleClient("view", "missing-reader");
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       if (client) {
         prepareGatewayRecipientProfile(client);
@@ -826,11 +829,10 @@ describe("narrow session read owners", () => {
         }),
         respond,
       });
-      expect(io).toHaveBeenCalledTimes(identity === "narrow" ? 0 : 1);
-      expect(respond.mock.calls[0]?.[0]).toBe(
-        identity !== "narrow" || method === "sessions.branches.list",
-      );
-      if (identity === "narrow") {
+      const denied = identity === "narrow" || identity === "anonymous";
+      expect(io).toHaveBeenCalledTimes(denied ? 0 : 1);
+      expect(respond.mock.calls[0]?.[0]).toBe(!denied || method === "sessions.branches.list");
+      if (denied) {
         expect(respond.mock.calls[0]?.[1]).toEqual(
           method === "sessions.branches.list" ? { branches: [] } : undefined,
         );

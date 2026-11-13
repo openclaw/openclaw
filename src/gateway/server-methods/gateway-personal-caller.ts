@@ -23,6 +23,22 @@ export function isAttendedSessionCreator(client: GatewayClient | null): boolean 
   );
 }
 
+/** Only a directly authenticated Control UI profile receives WebUI creation defaults. */
+export function isAttendedControlUiSessionCreator(client: GatewayClient | null): boolean {
+  return Boolean(
+    isAttendedSessionCreator(client) &&
+    client?.internal?.authenticatedControlUi === true &&
+    resolveAuthenticatedPersonalGatewayProfileId(client),
+  );
+}
+
+export function resolveSessionCreationCallerDefaults(client: GatewayClient | null) {
+  return {
+    applyAgentPermissionDefault: isAttendedSessionCreator(client),
+    attendedControlUiProfile: isAttendedControlUiSessionCreator(client),
+  };
+}
+
 /** Handshake-attested person identity; callers still own current request and target authority. */
 export function resolveAuthenticatedPersonalGatewayProfileId(
   client: GatewayClient | null,

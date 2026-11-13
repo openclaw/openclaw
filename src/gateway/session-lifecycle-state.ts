@@ -33,6 +33,7 @@ type GatewaySessionLifecycleEventParams = {
   clientRunId?: string;
   event: LifecycleEventLike;
   assertCommitAllowed?: () => void;
+  assertTranscriptWriteAllowed?: () => void;
   expectedWriter?: {
     allowUnstartedFailure?: true;
     requireYielded?: true;
@@ -245,13 +246,16 @@ async function persistPreparedGatewaySessionLifecycleEvent(
       notice,
       desktopNotice,
       errorObservation,
-      assertCommitAllowed: params.assertCommitAllowed,
+      assertCommitAllowed: composeSessionSourceAssertion([
+        params.assertCommitAllowed,
+        params.assertTranscriptWriteAllowed,
+      ]),
     };
-    // An accepted terminal owns its receipt, independently of an ambient requester turn.
+    // Terminal settlement stays independent; diagnostic writes retain their source fence.
     await withOwnedSessionTranscriptWrites(
       {
         sessionTarget: receipt.target,
-        assertCommitAllowed: params.assertCommitAllowed,
+        assertCommitAllowed: receipt.assertCommitAllowed,
         withTranscriptWrite: trackAsyncWork,
       },
       () => recordGatewaySessionRunFailure(receipt),

@@ -62,6 +62,7 @@ function sendNative(
   client = nativeClient(),
   sessionKey = "agent:main:main",
   isWebchat = true,
+  systemInputProvenance?: { kind: "internal_system"; sourceTool: string },
 ) {
   const respond = vi.fn<RespondFn>();
   const context = createDirectChatContext({ getRuntimeConfig: () => config });
@@ -69,7 +70,13 @@ function sendNative(
   const send = () =>
     handler({
       req: { type: "req", id: "native-consent-request", method: "chat.send" },
-      params: { sessionKey, agentId: "main", message: "pending", idempotencyKey: "consent" },
+      params: {
+        sessionKey,
+        agentId: "main",
+        message: "pending",
+        idempotencyKey: "consent",
+        ...(systemInputProvenance ? { systemInputProvenance } : {}),
+      },
       respond,
       context,
       client,
@@ -163,6 +170,48 @@ it.each([false, true])("gates native input persistence (existing=%s)", (preseed)
     }
     expect(rpcSourceTesting.size).toBe(0);
   }),
+);
+
+it.each([
+  { input: "ordinary", provenance: undefined, expectedAccess: { mode: "creator" } },
+  {
+    input: "system",
+    provenance: { kind: "internal_system" as const, sourceTool: "test" },
+    expectedAccess: undefined,
+  },
+])(
+  "uses the correct creation default for $input native confirmation",
+  ({ provenance, expectedAccess }) =>
+    withNative(
+      async (config, client) => {
+        const sessionKey = "agent:main:dashboard:privacy-consent";
+        const { respond, send } = sendNative(config, client, sessionKey, true, provenance);
+        await send();
+        restricted(respond, "tool-policy");
+        const persisted = expectDefined(
+          entries().find((row) => row.sessionKey === sessionKey)?.entry,
+          "real consent-bound session",
+        );
+        expect(persisted.access).toEqual(expectedAccess);
+        expect(persisted.nativeRuntimeConsent).toBeUndefined();
+        expect(
+          await readVisibleSessionTranscriptMessageEntries({
+            agentId: "main",
+            sessionKey,
+            sessionId: persisted.sessionId,
+          }),
+        ).toEqual([]);
+        expect(rpcSourceTesting.size).toBe(0);
+      },
+      (config) => {
+        config.session = { sharing: { controlUiDefaultAccess: "creator" } };
+        const profile = ensureProfileForEmail("privacy-consent@example.test");
+        return {
+          ...nativeClient(undefined, profile.id),
+          internal: { authenticatedOperator: true, authenticatedControlUi: true },
+        };
+      },
+    ),
 );
 
 it.each([

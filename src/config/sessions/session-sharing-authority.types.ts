@@ -3,7 +3,7 @@ import type { SessionEntry } from "./types.js";
 
 export type SessionSharingExpectedEntry = Pick<
   SessionEntry,
-  "sessionId" | "createdActor" | "visibility" | "incognito"
+  "sessionId" | "createdActor" | "visibility" | "incognito" | "access"
 >;
 
 /** Only the authenticated human-input owner prepares this effect; transcript metadata is not authority. */

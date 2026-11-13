@@ -38,7 +38,10 @@ import type { PreparedChatSendAttachments } from "./chat-send-attachments.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { resolveChatSendCallerContext } from "./gateway-client-identity.js";
-import { isSyntheticGatewayCaller } from "./gateway-personal-caller.js";
+import {
+  isAttendedControlUiSessionCreator,
+  isSyntheticGatewayCaller,
+} from "./gateway-personal-caller.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
 const audioPreflightLoader = createLazyImportLoader(
@@ -253,6 +256,13 @@ export function prepareChatSendUserTurn(params: {
   const { originatingChannel, originatingTo, accountId, messageThreadId, explicitDeliverRoute } =
     admission.originatingRoute;
   const creation = resolveOperatorSessionCreation(client);
+  const attendedProfileOperator =
+    (!request.systemInputProvenance || request.systemInputProvenance.kind === "external_user") &&
+    isAttendedControlUiSessionCreator(client) &&
+    creation.via === "operator" &&
+    creation.actor?.type === "human" &&
+    creation.actor.source === "profile" &&
+    creation.actor.id === client?.authenticatedUserProfile?.profileId;
   admission.assertWorkAdmissionCurrent?.();
   const sandbox = session.cfg ? resolveCreatorSandbox(session.cfg, creation) : undefined;
   // Current and historical turns must reach the single LLM timestamp boundary
@@ -286,7 +296,7 @@ export function prepareChatSendUserTurn(params: {
         },
     ...(request.suppressCommandInterpretation ? { CommandInterpretationSuppressed: true } : {}),
     MessageSid: session.clientRunId,
-    SessionCreation: { ...creation, ...(sandbox ? { sandbox } : {}) },
+    SessionCreation: { ...creation, attendedProfileOperator, ...(sandbox ? { sandbox } : {}) },
     ...resolveChatSendCallerContext(client, request.clientInfo, originatingChannel),
     GatewayRunToolBindings: request.toolBindings,
     GatewayUiCommandTarget: gatewayUiCommandTarget,
@@ -409,7 +419,11 @@ export function prepareChatSendUserTurn(params: {
           library,
         );
         admission.assertWorkAdmissionCurrent?.();
-        ctx.SessionCreation = { ...prepared, ...(sandbox ? { sandbox } : {}) };
+        ctx.SessionCreation = {
+          ...prepared,
+          attendedProfileOperator,
+          ...(sandbox ? { sandbox } : {}),
+        };
       }
     },
     applyApprovedText: (text: string) => {

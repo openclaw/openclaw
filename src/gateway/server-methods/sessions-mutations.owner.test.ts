@@ -874,7 +874,13 @@ describe("sessions.assignOwner", () => {
         const result = await invoke(params, requestClient, cfg);
         expect(result.responses[0]?.[2]).toMatchObject({ code, message });
       };
-      await reject(client("profile-viewer"), request, "session is not visible to this connection");
+      const hidden = await invoke(request, client("profile-viewer"), cfg);
+      expect(hidden.authorization.error).toMatchObject({
+        code: "INVALID_REQUEST",
+        message: `Session "${sessionKey}" was not found.`,
+      });
+      expect(hidden.responses).toEqual([]);
+      expect(readEntry(state.env, sessionKey)?.owner).toBeUndefined();
       await reject(client(), humanRequest);
       await reject({ ...client(), internal: { agentToolCaller: toolCaller } }, request);
       await reject(

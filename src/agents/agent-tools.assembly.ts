@@ -33,7 +33,7 @@ import {
   projectAgentToolsExecPolicy,
 } from "./agent-tools.execution-policy.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
-import { captureChildToolAllowlist } from "./agent-tools.inheritance.js";
+import { captureChildToolAllowlist, childToolDenylist } from "./agent-tools.inheritance.js";
 import {
   assertMemoryFlushPersistenceToolAvailable,
   projectMemoryFlushTools,
@@ -333,8 +333,10 @@ export function* assembleOpenClawCodingTools(
     capabilityProfile.policy.inheritedToolPolicy?.deny ?? [],
     ownerOnlyCoreToolDenylist,
   );
-  const inheritedToolDenylist = requesterToolDenylist.concat(
-    capabilityProfile.policy.inheritedToolPolicyForSpawn?.deny ?? [],
+  const inheritedToolDenylist = childToolDenylist(
+    options,
+    requesterToolDenylist,
+    capabilityProfile,
   );
   const delegatedToolDenyFloor = prepareDelegatedToolDenyFloor(
     capabilityProfile,
