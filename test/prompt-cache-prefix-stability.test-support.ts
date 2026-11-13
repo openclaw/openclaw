@@ -212,7 +212,9 @@ export function usePrefixStabilityJourney() {
               args: { sessionKey: TARGET, message: "INTER-SESSION ping", timeoutSeconds: 0 },
             };
       }
-      const child = /session=(agent:main:subagent:\S+)/.exec(request.text)?.[1];
+      // The request's own session leads its system prompt; later text can name the child.
+      const session = /session=(\S+)/.exec(request.text)?.[1];
+      const child = session?.startsWith("agent:main:subagent:") ? session : undefined;
       if (child) {
         childKey ??= child;
         if (child === childKey) {
