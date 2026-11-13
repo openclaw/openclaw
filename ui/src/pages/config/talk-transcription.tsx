@@ -30,9 +30,9 @@ const SOURCE_STATUS_KEYS = {
   "media-understanding": "talkPage.transcription.sourceMediaUnderstanding",
 } as const;
 
-/** The picked model drives Talk only on the media-understanding path; older Gateways omit `source`. */
+/** The picked model drives Talk only on the media-understanding path. */
 function talkUsesPickedModel(source: TalkTranscriptionCatalog["source"]) {
-  return source !== "streaming" && source !== "voice-model";
+  return source === "media-understanding";
 }
 
 type AudioModelEntry = { provider: string; model: string };
@@ -133,16 +133,14 @@ function TranscriptionStatusRow(props: { catalog: TranscriptionProps["catalog"] 
       kind: catalog.ready ? ("ok" as const) : ("warn" as const),
       label: t(catalog.ready ? "talkPage.status.ready" : "talkPage.status.notReady"),
       // A ready route without a provider id is a local CLI model, not a missing one.
-      description: catalog.activeProvider
-        ? t(
-            catalog.source ? SOURCE_STATUS_KEYS[catalog.source] : "talkPage.status.activeProvider",
-            { provider: catalog.activeProvider },
-          )
-        : t(
-            catalog.ready
-              ? "talkPage.transcription.readyWithoutProvider"
-              : "talkPage.transcription.noProvider",
-          ),
+      description:
+        catalog.activeProvider && catalog.source
+          ? t(SOURCE_STATUS_KEYS[catalog.source], { provider: catalog.activeProvider })
+          : t(
+              catalog.ready
+                ? "talkPage.transcription.readyWithoutProvider"
+                : "talkPage.transcription.noProvider",
+            ),
     };
   };
   return (
@@ -158,12 +156,9 @@ function TranscriptionStatusRow(props: { catalog: TranscriptionProps["catalog"] 
  * The catalog entry for the preferred model's provider, whose `configured`
  * flag is the picked model's readiness. `configured: false` covers a missing
  * credential and a provider with no transcription support alike, so the hint
- * names both causes. When Talk uses a streaming or voice-model source, the
- * picked model still serves voice notes, so it is looked up in
- * `mediaProviders` rather than that path's providers. An older Gateway omits
- * `source`; a preferred provider that shares an id with a streaming provider
- * is then reported against that entry, which is an accepted, visible
- * imprecision.
+ * names both causes. When Talk uses another path, the picked model still
+ * serves voice notes, so it is looked up in `mediaProviders` rather than that
+ * path's providers.
  */
 function preferredProviderEntry(
   catalog: TranscriptionProps["catalog"],
@@ -183,18 +178,17 @@ export function TalkTranscriptionSection(props: TranscriptionProps) {
   const context = useApplication();
   const [rejectedModel, setRejectedModel] = createSignal<string | null>(null);
   const selection = createMemo(() => resolveTalkTranscriptionSelection(props.configObject));
-  const source = () => {
-    const catalog = props.catalog;
-    return typeof catalog === "object" && !("failed" in catalog) ? catalog.source : undefined;
-  };
   const preferredProvider = createMemo(() =>
     preferredProviderEntry(props.catalog, selection().preferredModel),
   );
   const modelDescription = () => {
+    const catalog = props.catalog;
+    // Until the catalog answers, the page states the precedence rule instead
+    // of a path it does not know yet.
     const usage =
-      source() === undefined
+      typeof catalog !== "object" || "failed" in catalog
         ? t("talkPage.transcription.modelDescription")
-        : talkUsesPickedModel(source())
+        : talkUsesPickedModel(catalog.source)
           ? t("talkPage.transcription.modelDescriptionTalk")
           : t("talkPage.transcription.modelDescriptionVoiceNotes");
     const provider = preferredProvider();

@@ -449,10 +449,9 @@ const enSettings = {
         "Used for Talk dictation and voice notes. Automatic tries configured audio models in order.",
       modelDescriptionVoiceNotes:
         "Used for voice notes only: Talk dictation uses the provider named above. Automatic tries configured audio models in order.",
-      sourceStreaming:
-        "Talk uses {provider}, the streaming transcription provider set in the Voice Call plugin.",
+      sourceStreaming: "Talk uses {provider}, a streaming transcription provider.",
       sourceVoiceModel: "Talk uses {provider} from the speech-to-text voice-model default.",
-      sourceMediaUnderstanding: "Talk uses {provider} from the speech-to-text model below.",
+      sourceMediaUnderstanding: "Talk uses {provider} from the configured speech-to-text models.",
       invalidModel:
         "“{value}” isn’t a provider/model reference, so it wasn’t saved. Use provider/model, for example openrouter/openai/whisper-large-v3-turbo.",
       automatic: "Automatic",
