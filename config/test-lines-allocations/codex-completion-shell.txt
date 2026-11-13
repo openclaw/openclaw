@@ -1,0 +1,2 @@
+# Finite-cap continuation: retained Gateway shell binding, real command, deny control.
+40

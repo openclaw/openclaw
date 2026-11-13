@@ -663,8 +663,10 @@ async function addShellDynamicTools(
       additions.push(createSandboxShellProjection(processTool, "process"));
     }
   }
+  // A finite-cap continuation disables native Code Mode but retains the thread's
+  // registered Gateway aliases. Their executors still use the current host tool
+  // policy; native shell availability must not remove those admitted bindings.
   if (
-    input.nativeToolSurfaceEnabled === true &&
     input.sandbox?.enabled !== true &&
     executionPolicy.nativeToolSurfaceAllowed &&
     executionPolicy.effectiveExecHost === "gateway" &&

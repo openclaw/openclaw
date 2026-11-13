@@ -1283,3 +1283,43 @@ it.each([
   },
 );
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+it("retains registered Gateway shell aliases on an authorized finite-cap continuation", async () => {
+  await fs.mkdir(workspaceDir, { recursive: true });
+  params.execOverrides = { host: "gateway" };
+  await bindProductionCodexHostCapabilities(params, hostCapabilityClosers);
+  const initialTools = await buildTools({ sandbox: null, nativeToolSurfaceEnabled: true });
+  const initialBridge = createBridge(initialTools);
+  params.toolsAllow = ["exec", "process", "message"];
+  const nativeEnabled = await nativeSurface(params, null);
+  expect(nativeEnabled).toBe(false);
+  const continuationTools = await buildTools({
+    sandbox: null,
+    nativeToolSurfaceEnabled: nativeEnabled,
+  });
+  const continuationBridge = createBridge(continuationTools, {
+    registeredSpecs: initialBridge.specs,
+  });
+  expect(continuationBridge.availableTools.map((tool) => tool.name)).toContain("gateway_exec");
+  expect(continuationBridge.availableTools.map((tool) => tool.name)).toContain("gateway_process");
+  const result = await call(continuationBridge, "gateway_exec", {
+    command: "echo continuation-shell-ok",
+  });
+  expect(result).toMatchObject({
+    success: true,
+    contentItems: expect.arrayContaining([
+      expect.objectContaining({
+        type: "inputText",
+        text: expect.stringContaining("continuation-shell-ok"),
+      }),
+    ]),
+  });
+  params.toolsAllow = ["message"];
+  const deniedTools = await buildTools({ sandbox: null, nativeToolSurfaceEnabled: false });
+  const deniedBridge = createBridge(deniedTools, { registeredSpecs: initialBridge.specs });
+  expect(
+    await call(deniedBridge, "gateway_exec", { command: "echo continuation-shell-ok" }),
+  ).toMatchObject({
+    success: false,
+  });
+});
