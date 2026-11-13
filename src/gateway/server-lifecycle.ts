@@ -417,7 +417,6 @@ export async function prepareGatewayLifecycle(params: {
     worktreeRunEnd.beginClose();
     sandboxRegistry.beginClose();
     talkClose.beginClose();
-    void stopModelAccountsForClose();
     void closeAuthProfileUsage(params.sdkResourceHost);
     void runtimeState.maintenance?.stopPeriodicTasks();
     healthWork.beginClose();
@@ -526,6 +525,8 @@ export async function prepareGatewayLifecycle(params: {
     lifecycle.closePreludeStarted = true;
     requestEntryLifetime.beginClose();
     runtime.scheduler.fence();
+    // Cancel sign-in IO at admission fencing; join accepted credential writes before teardown.
+    void stopModelAccountsForClose();
     // The inbox closes admission synchronously and drains its accepted work independently.
     void mentionInbox.dispose();
     cronReconciliation.invalidate();
