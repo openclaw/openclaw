@@ -43,7 +43,7 @@ it.each([
     gateway("session-history-worker-reader"),
     [
       ...gateway(
-        "session-utils-store-sources chat-history-reply-messages current-user-profile-display",
+        "session-utils-store-sources session-utils-store-candidates chat-history-reply-messages current-user-profile-display",
       ),
       ...paths("src/cron/store/", "job-name.kernel paths"),
       ...sessions("store-target-inventory"),

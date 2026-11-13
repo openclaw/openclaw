@@ -8,7 +8,7 @@ import type {
 import type { prepareCliSessionHistoryReader } from "./cli-session-history.js";
 import type { PreparedSessionHistoryReadTarget } from "./session-history-read.types.js";
 import { createReadonlySessionHistoryReader } from "./session-history-readonly-reader.js";
-import { resolveGatewaySessionStoreReadSources } from "./session-utils-store-candidates.js";
+import type { GatewaySessionStoreReadSources } from "./session-utils-store.types.js";
 
 /** Dispatch only inside the history worker's admitted database lifetime. */
 export async function readSessionHistoryRequest(
@@ -16,13 +16,14 @@ export async function readSessionHistoryRequest(
   readTarget: PreparedSessionHistoryReadTarget,
 ): Promise<SessionHistoryWorkerResult> {
   const { sourceDiscovery, ...readerTarget } = readTarget;
+  let resolveSourceDatabases: (() => GatewaySessionStoreReadSources) | undefined;
+  if (sourceDiscovery) {
+    const { resolveGatewaySessionStoreReadSources } =
+      await import("./session-utils-store-candidates.js");
+    resolveSourceDatabases = () => resolveGatewaySessionStoreReadSources(sourceDiscovery).sources;
+  }
   const options = {
-    readers: createReadonlySessionHistoryReader(
-      readerTarget,
-      sourceDiscovery
-        ? () => resolveGatewaySessionStoreReadSources(sourceDiscovery).sources
-        : undefined,
-    ),
+    readers: createReadonlySessionHistoryReader(readerTarget, resolveSourceDatabases),
     readOnly: true,
     deferProfileDisplay: true,
     resolveCronJobName: () => undefined,
