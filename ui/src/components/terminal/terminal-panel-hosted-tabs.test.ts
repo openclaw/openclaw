@@ -309,6 +309,7 @@ describe("Terminal panel hosted tabs", () => {
       const id = panel.activeHostedTabId!;
       const closing = panel.closeHostedTab(id);
       if (outcome === "cancel") {
+        await import("../confirm-dialog-view.tsx");
         await waitForFast(() => expect(document.querySelector('[role="dialog"]')).not.toBeNull());
         const cancel = [
           ...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button'),
