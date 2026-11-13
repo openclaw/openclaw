@@ -1,18 +1,19 @@
 ---
 doc-schema-version: 1
-summary: "Subscribe to MCP events and run existing Automations from signed webhooks"
+summary: "Subscribe to MCP events and run existing Automations from signed webhooks or polling"
 read_when:
   - Connecting an MCP event source to an automation
   - Configuring or troubleshooting signed MCP Events callbacks
+  - Receiving MCP events by poll without exposing the Gateway
   - Testing subscription renewal, duplicate delivery, or restart recovery
 title: "MCP Events"
 ---
 
 MCP Events connects a remote MCP server to [Automations](/automation/cron-jobs).
-The MCP server filters changes and sends signed webhooks. OpenClaw durably accepts
-them and runs the automation's existing instructions, tool policy, delivery, and
-history. Events do not introduce another scheduler or require an MCP App view to
-remain open.
+The MCP server filters changes and either sends signed webhooks or answers polls.
+OpenClaw durably accepts each event and runs the automation's existing
+instructions, tool policy, delivery, and history, once per event. Events do not
+introduce another scheduler or require an MCP App view to remain open.
 
 ## Supported profile
 
@@ -23,14 +24,81 @@ MCP protocol `2026-07-28`, `server/discover`, `events/list`,
 It uses OpenClaw's existing configured MCP connections and authentication.
 Legacy MCP tool connections keep their existing handshake.
 
-This is a versioned integration with an experimental specification, not a claim
-of support for every draft Events feature. Polling, push streams, and the draft's
-`gap` and `terminated` webhook notifications are not part of this profile.
+It also implements poll delivery (`events/poll`) from the MCP
+[Events extension](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/3415)
+(SEP-3415, `io.modelcontextprotocol/events`). Servers that advertise either the
+extension entry or the earlier top-level `events` capability are accepted.
+
+This is a versioned integration, not a claim of support for every Events feature.
+Push streams (`events/stream`) and the `gap` and `terminated` webhook
+notifications are not implemented.
+
+## Choose a delivery mode
+
+Each event type lists the delivery modes its server offers. OpenClaw picks one
+when it creates the subscription:
+
+- **Webhook**, when `callbackOrigin` is configured and the event offers webhook.
+  Lowest latency, but the server must reach a public HTTPS route to the Gateway.
+- **Poll**, otherwise, when the event offers poll. No public route is needed: the
+  Gateway calls the server. Latency is the server's recommended poll interval.
+
+An event that offers only webhook needs `callbackOrigin`. Adding or removing
+`callbackOrigin` later replaces affected subscriptions with the other mode on
+the next reconciliation; the replacement starts from now, so events between the
+two are not replayed.
+
+## Receive events by poll
+
+Connect the server through the existing [MCP settings](/tools/mcp) and enable
+the plugin without a callback:
+
+```json5
+{
+  mcp: {
+    servers: {
+      reviews: {
+        transport: "streamable-http",
+        url: "https://mcp.example.com/mcp",
+      },
+    },
+  },
+  plugins: {
+    entries: {
+      "mcp-events": { enabled: true },
+    },
+  },
+}
+```
+
+OpenClaw runs one poll loop per event automation, using the Gateway scheduler:
+
+- The first poll sends a `null` cursor, which means "start from now". Earlier
+  events are not replayed.
+- Each poll's events go into the same durable ingress queue as webhook
+  deliveries, in the order the server returned them. OpenClaw persists the
+  returned cursor only after the events are queued, so a crash re-polls the
+  batch and duplicate event IDs are dropped.
+- When the result has `hasMore: true` and carries events, OpenClaw polls again at
+  once. Otherwise it waits `nextPollMs`, with a 1-second floor and a one-hour
+  ceiling.
+- The cursor survives Gateway restarts: polling resumes from it, and OpenClaw
+  does not send `maxAgeMs`, so a long outage replays everything the server still
+  retains, one automation run per event.
+- A failed poll retries with backoff capped at five minutes, including
+  `Forbidden`, while the automation stays enabled. `NotFound` or `Unsupported`
+  means the event type changed: OpenClaw discards the cursor, reads `events/list`
+  again, and starts a new subscription from now, backing off if the server keeps
+  refusing. Events larger than 256 KiB or that fail envelope or `payloadSchema`
+  validation are skipped with a warning.
+- Poll keeps no server-side subscription, so pausing or removing the automation
+  just stops polling. There is nothing to unsubscribe.
 
 ## Configure the callback
 
-Connect the server through the existing [MCP settings](/tools/mcp), then enable
-the plugin with a public HTTPS callback origin:
+For webhook delivery, connect the server through the existing
+[MCP settings](/tools/mcp), then enable the plugin with a public HTTPS callback
+origin:
 
 ```json5
 {
@@ -73,7 +141,7 @@ bearer tokens or webhook signing secrets in the automation's instructions.
 ## Create an event automation
 
 The plugin exposes the `mcp_events` discovery tool, which lists one page of
-webhook events and their argument schemas for a configured `serverName`. It does
+webhook and poll events and their argument schemas for a configured `serverName`. It does
 not create a separate subscription or scheduling system. The same catalog is
 available in the Automation editor.
 
@@ -120,6 +188,9 @@ sending events. Event names, descriptions, and schemas come from that server and
 are not trusted authorization facts.
 
 ## Subscription lifecycle
+
+This section covers webhook subscriptions; poll is described in
+[Receive events by poll](#receive-events-by-poll).
 
 OpenClaw prepares a callback binding and signing secret before subscribing. The
 server can therefore send its signed verification challenge before returning the

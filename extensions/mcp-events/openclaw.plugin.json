@@ -12,13 +12,10 @@
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "required": [
-      "callbackOrigin"
-    ],
     "properties": {
       "callbackOrigin": {
         "type": "string",
-        "description": "Public HTTPS origin forwarding only /plugins/mcp-events/callback/* to the Gateway. No automatic tunnel or admin exposure."
+        "description": "Public HTTPS origin forwarding only /plugins/mcp-events/callback/* to the Gateway, for webhook delivery. Omit it to receive events by poll, with no public route. No automatic tunnel or admin exposure."
       },
       "maxPendingEvents": {
         "type": "integer",

@@ -102,6 +102,9 @@ describe("MCP Events callback and subscription lifecycle", () => {
   let deps: McpEventsDependencies;
   let subscribed: Array<Record<string, unknown>>;
   let unsubscribed: Array<Record<string, unknown>>;
+  let offered: string[];
+  let polled: Array<Record<string, unknown>>;
+  let pollReplies: Array<Record<string, unknown> | Error>;
   let rejectedWrites: number;
   let rejectedDeletes: number;
   let beforeReply: (() => Promise<void>) | undefined;
@@ -172,6 +175,9 @@ describe("MCP Events callback and subscription lifecycle", () => {
     schedules = new Map();
     subscribed = [];
     unsubscribed = [];
+    offered = ["webhook"];
+    polled = [];
+    pollReplies = [];
     const assertCurrent = () => {
       if (!sources[0]?.enabled || sources[0].sourceIdentity !== "generation-a") {
         throw new Error("Source revoked");
@@ -256,7 +262,21 @@ describe("MCP Events callback and subscription lifecycle", () => {
               return { supportedVersions: ["2026-07-28"], capabilities: { events: {} } };
             }
             if (method === "events/list") {
-              return { events: [definition] };
+              return { events: [{ ...definition, delivery: offered }] };
+            }
+            if (method === "events/poll") {
+              polled.push(params);
+              const next = pollReplies.shift() ?? {
+                events: [],
+                cursor: params.cursor ?? "cursor-0",
+                truncated: false,
+                hasMore: false,
+                nextPollMs: 30_000,
+              };
+              if (next instanceof Error) {
+                throw next;
+              }
+              return next;
             }
             subscribed.push(params);
             subscription = {
@@ -486,7 +506,7 @@ describe("MCP Events callback and subscription lifecycle", () => {
     ]);
     expect(await pending()).toMatchObject([{ attempts: 0 }, { attempts: 0 }]);
     expect(schedules.get("drain")?.atMs).toBeGreaterThan(now);
-    current!.requestDrain("authored-job");
+    current!.ingress.requestDrain("authored-job");
     await runSchedule("drain");
     expect(await pending()).toMatchObject([{ attempts: 0 }, { attempts: 0 }]);
     expect(deps.cron.runEvent).toHaveBeenCalledTimes(2);
@@ -653,6 +673,102 @@ describe("MCP Events callback and subscription lifecycle", () => {
     await expectEvent(410);
     expect(unsubscribed).toHaveLength(1);
     expect(await pending()).toHaveLength(0);
+  });
+
+  it("polls without a callback, honoring hasMore and nextPollMs, and resumes its cursor after restart", async () => {
+    deps = { ...deps, config: { maxPendingEvents: 2 } };
+    offered = ["webhook", "poll"];
+    current = new McpEventsService(deps);
+    await current.start();
+    const [binding] = diagnostics();
+    assert(binding && "bindingId" in binding, "Missing poll binding");
+    expect(binding).toMatchObject({ delivery: "poll", status: "active", replayAvailable: true });
+    expect(subscribed).toHaveLength(0);
+    expect(polled).toEqual([
+      {
+        name: "comment.created",
+        arguments: { document_id: "doc-1" },
+        cursor: null,
+        maxEvents: 100,
+      },
+    ]);
+    const key = "refresh:" + binding.bindingId;
+    expect(scheduled(key).atMs - now).toBe(30_000);
+    // An Automation change elsewhere must not pull the next poll forward.
+    await current.reconcile();
+    expect(polled).toHaveLength(1);
+    expect(scheduled(key).atMs - now).toBe(30_000);
+    const batch = { cursor: "cursor-2", truncated: false, hasMore: true, nextPollMs: 30_000 };
+    const invalid = { ...event("evt-invalid"), data: { text: 1 } };
+    const oversized = { ...event("evt-oversized"), data: { text: "x".repeat(262_144) } };
+    pollReplies.push(
+      { ...batch, events: [event("evt-1"), invalid, oversized, event("evt-2")] },
+      { ...batch, events: [event("evt-2")], cursor: "cursor-3", hasMore: false, nextPollMs: 10 },
+    );
+    await runSchedule(key, true);
+    expect(polled.at(-1)?.cursor).toBe("cursor-0");
+    expect(scheduled(key).atMs).toBe(now);
+    await runSchedule(key, true);
+    expect(polled.at(-1)?.cursor).toBe("cursor-2");
+    expect(scheduled(key).atMs - now).toBe(1_000);
+    expect(deps.logger.warn).toHaveBeenCalledWith(expect.stringContaining("skipped 2 polled"));
+    // hasMore with an empty batch makes no progress, so it waits for the floor instead of spinning.
+    pollReplies.push({ ...batch, events: [], cursor: "cursor-3", nextPollMs: 0 });
+    await runSchedule(key, true);
+    expect(scheduled(key).atMs - now).toBe(1_000);
+    // The repeated evt-2 is deduplicated by the same ingress queue webhook callbacks use.
+    expect((await pending()).map((row) => row.payload.eventId)).toEqual(["evt-1", "evt-2"]);
+    // Like the Cron owner, consume the claim with the run receipt so the lane moves on.
+    vi.mocked(deps.cron.runEvent).mockImplementation(async (_jobId, input) => {
+      const { id, token } = input.claim!;
+      expect(await queue().complete({ id, claim: { token } })).toBe(true);
+      return { kind: "transferred", receiptId: "receipt", runId: "run" };
+    });
+    await runSchedule("drain");
+    expect(await pending()).toHaveLength(1);
+    await runSchedule("drain", true);
+    expect(vi.mocked(deps.cron.runEvent).mock.calls).toEqual([
+      ["authored-job", expect.objectContaining({ eventId: "evt-1" })],
+      ["authored-job", expect.objectContaining({ eventId: "evt-2" })],
+    ]);
+    expect(
+      (await post(JSON.stringify(event()), "evt-1", undefined, binding.bindingId)).status,
+    ).toBe(410);
+    await current.stop();
+    deps = { ...deps, scheduler: createScheduler() };
+    current = new McpEventsService(deps);
+    await current.start();
+    expect(polled.at(-1)?.cursor).toBe("cursor-3");
+    expect(diagnostics()).toMatchObject([{ bindingId: binding.bindingId, delivery: "poll" }]);
+  });
+
+  it("backs off failed polls and rediscovers after NotFound without unsubscribing", async () => {
+    offered = ["poll"];
+    await current!.start();
+    const [first] = diagnostics();
+    assert(first && "bindingId" in first, "Missing poll binding");
+    // Poll is chosen when the event offers no webhook, even with a callback configured.
+    expect(first).toMatchObject({ delivery: "poll" });
+    const key = "refresh:" + first.bindingId;
+    pollReplies.push(Object.assign(new Error("Upstream unavailable"), { code: -32603 }));
+    await runSchedule(key, true);
+    expect(diagnostics()).toMatchObject([{ lastError: "poll_failed", failures: 1 }]);
+    expectBoundedRetry(key);
+    pollReplies.push(Object.assign(new Error("Event type removed"), { code: -32023 }));
+    await runSchedule(key, true);
+    await runSchedule("cleanup:" + first.bindingId);
+    const polls = polled.length;
+    await runSchedule("reconcile");
+    const [second] = diagnostics();
+    assert(second && "bindingId" in second, "Missing replacement binding");
+    expect(second.bindingId).not.toBe(first.bindingId);
+    // The replacement's first poll backs off, so a server that keeps refusing cannot spin a rebind loop.
+    expect(polled).toHaveLength(polls);
+    expectBoundedRetry("refresh:" + second.bindingId);
+    await runSchedule("refresh:" + second.bindingId, true);
+    expect(polled.at(-1)?.cursor).toBeNull();
+    expect(diagnostics()).toMatchObject([{ delivery: "poll", status: "active" }]);
+    expect(unsubscribed).toHaveLength(0);
   });
 });
 

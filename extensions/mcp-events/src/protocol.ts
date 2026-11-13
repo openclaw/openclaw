@@ -8,15 +8,23 @@ import { sha256Hex as hashText } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { generateSecureToken } from "openclaw/plugin-sdk/secure-random-runtime";
 import { asOptionalRecord as record } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-/** OpenAI's webhook profile, not the experimental polling/streaming extensions. */
+/** OpenAI's webhook profile. */
 export const MCP_EVENTS_PROFILE = "openai-webhook-2026-07-28";
+/** SEP-3415 poll delivery (`events/poll`), identified by the extension it belongs to. */
+export const MCP_EVENTS_POLL_PROFILE = "io.modelcontextprotocol/events";
+const MIN_POLL_INTERVAL_MS = 1_000;
+// Polls hold no server state; re-checking at least hourly bounds a server's oversized interval.
+const MAX_POLL_INTERVAL_MS = 60 * 60_000;
 export const MAX_EVENT_BYTES = 256 * 1024;
 export const CALLBACK_PREFIX = "/plugins/mcp-events/callback/";
 const MAX_CLOCK_SKEW_MS = 5 * 60_000;
 
+export type DeliveryMode = "webhook" | "poll";
 export type EventDefinition = {
   name: string;
   description?: string;
+  /** Modes OpenClaw can use; absent on bindings stored before poll delivery, which are webhook. */
+  delivery?: DeliveryMode[];
   inputSchema: JsonSchemaObject | boolean;
   payloadSchema: JsonSchemaObject | boolean;
 };
@@ -26,6 +34,15 @@ export type ApplicationEvent = {
   timestamp: string;
   data: Record<string, unknown>;
   cursor: string | null;
+};
+export type PollResult = {
+  events: ApplicationEvent[];
+  /** Occurrences that failed envelope or payloadSchema validation; skipped, never queued. */
+  rejected: number;
+  cursor: string | null;
+  truncated: boolean;
+  /** When to poll next: at once while hasMore, else nextPollMs with a 1 s floor. */
+  delayMs: number;
 };
 export type SubscriptionResult = {
   id: string;
@@ -173,14 +190,28 @@ export function parseCallback(
     }
     return { kind: "verification", challenge: value.challenge };
   }
+  if (value.eventId !== webhookId || !(value.cursor === null || isCursor(value.cursor))) {
+    throw new CallbackError(400, "Invalid event envelope");
+  }
+  return { kind: "event", event: parseOccurrence(value, definition, value.cursor) };
+}
+
+function isCursor(value: unknown): value is string {
+  return boundedString(value, 16 * 1024);
+}
+
+/** One EventOccurrence, shared by webhook bodies and poll results. */
+function parseOccurrence(
+  value: Record<string, unknown>,
+  definition: EventDefinition,
+  cursor: string | null,
+): ApplicationEvent {
   const data = record(value.data);
   if (
     !boundedString(value.eventId) ||
-    value.eventId !== webhookId ||
     value.name !== definition.name ||
     !isoTimestamp(value.timestamp) ||
-    !data ||
-    !(value.cursor === null || boundedString(value.cursor, 16 * 1024))
+    !data
   ) {
     throw new CallbackError(400, "Invalid event envelope");
   }
@@ -189,15 +220,72 @@ export function parseCallback(
     throw new CallbackError(400, "Event data does not match payloadSchema");
   }
   return {
-    kind: "event",
-    event: {
-      eventId: value.eventId,
-      name: definition.name,
-      timestamp: value.timestamp,
-      data,
-      cursor: value.cursor,
-    },
+    eventId: value.eventId,
+    name: definition.name,
+    timestamp: value.timestamp,
+    data,
+    cursor,
   };
+}
+
+/** SEP-3415 `events/poll` result. An absent cursor means null; poll occurrences carry no cursor. */
+export function parsePollResult(value: unknown, definition: EventDefinition): PollResult {
+  const result = record(value);
+  const cursor = result?.cursor ?? null;
+  if (
+    !result ||
+    !Array.isArray(result.events) ||
+    result.events.length > 1000 ||
+    !(cursor === null || isCursor(cursor)) ||
+    typeof result.truncated !== "boolean" ||
+    typeof result.hasMore !== "boolean" ||
+    typeof result.nextPollMs !== "number" ||
+    !Number.isFinite(result.nextPollMs) ||
+    result.nextPollMs < 0
+  ) {
+    throw new Error("Invalid MCP events/poll result");
+  }
+  const events: ApplicationEvent[] = [];
+  let rejected = 0;
+  for (const input of result.events) {
+    const occurrence = record(input);
+    try {
+      // The same per-event bound as a webhook body, so one oversized event cannot stall the lane.
+      if (!occurrence || Buffer.byteLength(JSON.stringify(occurrence)) > MAX_EVENT_BYTES) {
+        throw new CallbackError(400, "Expected one event object within the size limit");
+      }
+      events.push(parseOccurrence(occurrence, definition, null));
+    } catch (error) {
+      if (!(error instanceof CallbackError)) {
+        throw error;
+      }
+      rejected++;
+    }
+  }
+  return {
+    events,
+    rejected,
+    cursor,
+    truncated: result.truncated,
+    // An empty batch that claims hasMore makes no progress; the floor stops it spinning.
+    delayMs:
+      result.hasMore && result.events.length > 0
+        ? 0
+        : Math.min(MAX_POLL_INTERVAL_MS, Math.max(MIN_POLL_INTERVAL_MS, result.nextPollMs)),
+  };
+}
+
+/** SEP-3415 extension entry, or the top-level key from the design sketch that preceded it. */
+export function advertisesEvents(discovered: unknown): boolean {
+  const result = record(discovered);
+  const capabilities = record(result?.capabilities);
+  return (
+    Array.isArray(result?.supportedVersions) &&
+    result.supportedVersions.includes("2026-07-28") &&
+    capabilities !== undefined &&
+    (Object.hasOwn(capabilities, "events") ||
+      Object.hasOwn(record(capabilities.extensions) ?? {}, "io.modelcontextprotocol/events"))
+  );
 }
 
 export function parseSubscriptionResult(value: unknown, now: number): SubscriptionResult {
@@ -253,7 +341,9 @@ export function parseEventCatalog(value: unknown): {
     ) {
       throw new Error("Invalid MCP event definition");
     }
-    if (!event.delivery.includes("webhook")) {
+    const offered: unknown[] = event.delivery;
+    const delivery = (["webhook", "poll"] as const).filter((mode) => offered.includes(mode));
+    if (delivery.length === 0) {
       continue;
     }
     // Compile now: a broken catalog must not create a subscription that can never accept data.
@@ -261,6 +351,7 @@ export function parseEventCatalog(value: unknown): {
     validateJsonSchemaValue({ schema: payloadSchema, value: {} });
     events.push({
       name: event.name,
+      delivery,
       inputSchema,
       payloadSchema,
       ...(typeof event.description === "string"
