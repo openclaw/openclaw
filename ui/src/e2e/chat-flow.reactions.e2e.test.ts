@@ -265,6 +265,23 @@ suite.define(() => {
       const replyBounds = await finalReply.boundingBox();
       await finalReply.hover();
       expect(await finalReply.boundingBox()).toEqual(replyBounds);
+      // An open picker keeps its row revealed, so moving into it cannot carry it sideways.
+      const ownPicker = ownGroup.locator(":scope > .chat-group-footer .chat-reaction-action");
+      await ownPicker.locator(".trigger").click();
+      const palette = ownPicker.locator('.chat-reaction-picker[data-phase="open"]');
+      const opened = (await palette.boundingBox())!;
+      await page.mouse.move(opened.x + opened.width / 2, opened.y + opened.height / 2, {
+        steps: 8,
+      });
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          }),
+      );
+      expect((await palette.boundingBox())?.x).toBe(opened.x);
+      await page.keyboard.press("Escape");
+      await palette.waitFor({ state: "detached" });
       await finalReply.click();
       const replyPreview = page.locator(".chat-reply-preview");
       await expect

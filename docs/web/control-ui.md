@@ -263,7 +263,7 @@ The saved sidebar also retains the session rows for its initial viewport, along 
 
 The Online sidebar loads people's open and running session counts when you open it. Switching to Sessions or Pages stops those count refreshes; opening Online again loads current counts. Restoring a Sessions sidebar does not wait for Online counts.
 
-Message reactions appear in a compact tab on the message bubble. Open the tab to see each emoji count, including in read-only sessions. Desktop Chat Details lists automations after session information and task progress so arriving automation results keep those sections in place. The mobile composer reserves one activity row so arriving task and subagent status does not move the transcript.
+Message reactions appear in a compact tab on the message bubble. Flat agent replies have no bubble, so their tab leads the row under the reply and stays in place while the name, time and actions appear on hover. Open the tab to see each emoji count, including in read-only sessions. Desktop Chat Details lists automations after session information and task progress so arriving automation results keep those sections in place. The mobile composer reserves one activity row so arriving task and subagent status does not move the transcript.
 
 The desktop **Subagents** tab places nested subagents beneath the subagent that started them. Each row keeps its own activity and controls. Floating **Details** and the mobile list remain compact, direct-child views.
 
