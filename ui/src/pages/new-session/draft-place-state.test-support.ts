@@ -18,7 +18,9 @@ export function createRepositoryFixture(
 ) {
   if (typeof HTMLDialogElement !== "undefined" && !HTMLDialogElement.prototype.show) {
     // JSDOM lacks show(); keep this nonmodal-dialog shim local to picker tests.
-    onTestFinished(() => Reflect.deleteProperty(HTMLDialogElement.prototype, "show"));
+    onTestFinished(() => {
+      Reflect.deleteProperty(HTMLDialogElement.prototype, "show");
+    });
     Object.defineProperty(HTMLDialogElement.prototype, "show", {
       configurable: true,
       value(this: HTMLDialogElement) {

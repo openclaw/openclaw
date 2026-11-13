@@ -21,9 +21,12 @@ export function createPickerNavigation() {
     if (row) {
       row.id ||= `${id}-option-${encodeURIComponent(row.dataset.value ?? `row-${nextId++}`)}`;
       row.setAttribute("data-highlighted", "");
+      // The active row remains a button (including Browse), owned by the focused searchbox.
+      input?.setAttribute("aria-owns", row.id);
       input?.setAttribute("aria-activedescendant", row.id);
     } else {
       input?.removeAttribute("aria-activedescendant");
+      input?.removeAttribute("aria-owns");
     }
   };
   return {
@@ -47,12 +50,17 @@ export function createPickerNavigation() {
       }
     },
     keydown(event: KeyboardEvent) {
-      if (isComposingKeyboardEvent(event)) {
+      if (
+        isComposingKeyboardEvent(event) ||
+        (event.key !== "Enter" && event.key !== "ArrowDown" && event.key !== "ArrowUp")
+      ) {
         return false;
       }
       const rows = [...options]
         .filter(available)
-        .sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
+        .toSorted((a, b) =>
+          a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
+        );
       const index = active ? rows.indexOf(active) : -1;
       if (event.key === "Enter" && index >= 0) {
         event.preventDefault();

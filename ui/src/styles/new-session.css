@@ -1593,6 +1593,13 @@ div.new-session-page__project-search {
   padding-inline: calc(var(--new-session-tray-edge) - 10px);
 }
 
+/* The device path and its explanation need their own content-sized row. */
+.new-session-page__context-tray
+  .new-session-page__triggers:has(> .new-session-page__device-folder) {
+  flex-wrap: wrap;
+  height: auto;
+}
+
 .new-session-page__context-tray .new-session-page__workspace {
   gap: 2px;
   border: 0;
