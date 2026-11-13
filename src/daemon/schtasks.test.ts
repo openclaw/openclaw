@@ -129,6 +129,37 @@ describe("readScheduledTaskCommand", () => {
   );
 
   it.each([
+    [
+      "a .vbs program used directly",
+      "C:\\Users\\test\\.openclaw\\gateway.vbs",
+      "Unrecognized Scheduled Task launcher",
+    ],
+    [
+      "a quoted action path",
+      '"C:\\Users\\test\\.openclaw\\gateway.vbs"',
+      "Scheduled Task launcher path is not absolute and literal",
+    ],
+    [
+      "an unsupported action program",
+      "C:\\Users\\test\\.openclaw\\gateway.ps1",
+      "Unsupported Scheduled Task action",
+    ],
+  ])("names the refused task action shape for %s", async (_kind, actionPath, reason) => {
+    // A .vbs used as the Task Command instead of wscript.exe "<launcher>.vbs" reaches the
+    // launcher parser and is refused; the surface message must say why, not just fail.
+    mockRegisteredTask([taskAction(actionPath)], "\\Custom\\Gateway");
+    mockLauncherFiles(new Map([[actionPath, 'Set shell = CreateObject("WScript.Shell")']]));
+    await expect(
+      readScheduledTaskCommand(
+        { OPENCLAW_WINDOWS_TASK_NAME: "\\Custom\\Gateway" },
+        { requireEffective: true, requireLoaded: true },
+      ),
+    ).rejects.toThrow(
+      `${inspectionError} The task action was refused: ${reason}. Accepted Scheduled Task action shapes: a native .exe; cmd.exe /d /s /c "<launcher>.cmd"; wscript.exe "<launcher>.vbs".`,
+    );
+  });
+
+  it.each([
     "cmd",
     "cmd executable",
     "wscript executable",

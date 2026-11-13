@@ -211,6 +211,25 @@ async function readTaskLaunchers(
   return launchers;
 }
 
+/**
+ * Refusals raised while resolving the Task action. Each entry is a fixed string (never a
+ * launcher path or its text), and every one of them means the action shape was rejected.
+ */
+const TASK_ACTION_SHAPE_REFUSALS = new Set([
+  "Unsupported Scheduled Task action",
+  "Scheduled Task launcher path is not absolute and literal",
+  "Unrecognized Startup launcher",
+  "Unrecognized Scheduled Task launcher",
+  "Scheduled Task action cannot be inspected",
+  "Scheduled Task launcher arguments cannot be inspected",
+  "Scheduled Task executable arguments cannot be inspected",
+  "Startup launchers select different Gateway scripts",
+]);
+
+/** The action shapes this inspector accepts, so an operator can compare what they have. */
+const ACCEPTED_TASK_ACTION_SHAPES =
+  'a native .exe; cmd.exe /d /s /c "<launcher>.cmd"; wscript.exe "<launcher>.vbs"';
+
 export async function readScheduledTaskCommand(
   env: GatewayServiceEnv,
   options?: GatewayServiceReadOptions & {
@@ -265,6 +284,9 @@ async function readWindowsTaskCommand(
     startupEntryPath !== undefined
       ? "Startup service command could not be inspected."
       : "Effective Scheduled Task service command could not be inspected.";
+  // A refused action shape is a closed, fixed string, so naming it on the surface message
+  // cannot leak a launcher path, its arguments, or a credential.
+  let refusedActionShape: string | undefined;
   const launcherParseError = (
     lineNumber: number,
     reason:
@@ -542,6 +564,9 @@ async function readWindowsTaskCommand(
     if (error instanceof ServiceInspectionError) {
       throw error;
     }
+    if (error instanceof Error && TASK_ACTION_SHAPE_REFUSALS.has(error.message)) {
+      refusedActionShape = error.message;
+    }
     if (!requireEffective) {
       return null;
     }
@@ -569,7 +594,11 @@ async function readWindowsTaskCommand(
     }
   }
   // Native failures can contain raw service credentials; expose only the closed diagnostic.
-  throw new Error(inspectionFailureMessage);
+  throw new Error(
+    refusedActionShape === undefined
+      ? inspectionFailureMessage
+      : `${inspectionFailureMessage} The task action was refused: ${refusedActionShape}. Accepted Scheduled Task action shapes: ${ACCEPTED_TASK_ACTION_SHAPES}.`,
+  );
 }
 
 function createLauncherScriptLines(
