@@ -217,9 +217,9 @@
 
 /* The search icon and text sit on the rows' icon and label columns. */
 .palette-session-settings__heading {
-  --header-search-gap: 11px;
+  --header-search-gap: 16px;
 
-  padding-inline: 10px 2px;
+  padding-inline: 15px 2px;
 }
 
 .palette-session-settings__choices {
