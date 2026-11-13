@@ -23,12 +23,17 @@ async function migrated() {
   write(pathname, "migrated by Doctor");
   const env = { HOME: stateDir, OPENCLAW_STATE_DIR: stateDir };
   const to = await readUpdateDatabaseGenerationsIsolated([pathname], { env });
-  const backup = {
-    databases: [{ path: pathname }],
+  const backup: UpdateDatabaseBackup = {
+    directory: "/backup",
+    sourcePaths: [pathname],
+    warnings: [],
+    databases: [
+      { path: pathname, snapshotPath: "/backup/s", userVersion: 1, sha256: "", sizeBytes: 0 },
+    ],
     missingPaths: [],
     sourceGenerations: {},
     migration: { name: "openclaw doctor", backup: "/backup", from: {}, to },
-  } as UpdateDatabaseBackup;
+  };
   return { pathname, env, backup, to };
 }
 
