@@ -376,9 +376,12 @@ describe("channel-final transcript mirrors", () => {
       const rotate = historyLane.pool.rotate.bind(historyLane.pool);
       const cleanup =
         phase === "entry cleanup"
-          ? vi
-              .spyOn(sessionStoreLane.pool, "closeResources")
-              .mockImplementation((key) => (holdsWriter() ? waitForWriter() : close(key)))
+          ? vi.spyOn(sessionStoreLane.pool, "closeResources").mockImplementation((key) => {
+              if (holdsWriter()) {
+                following ??= runOpenClawAgentWriteAdmission(database, () => {});
+              }
+              return close(key);
+            })
           : vi
               .spyOn(historyLane.pool, "rotate")
               .mockImplementation(() => (holdsWriter() ? waitForWriter() : rotate()));
@@ -413,6 +416,10 @@ describe("channel-final transcript mirrors", () => {
           ]),
         ).resolves.toMatchObject({ ok: true });
         expect(refusedLatest).toBe(phase === "latest-message refusal");
+        if (phase === "entry cleanup") {
+          expect(following).toBeDefined();
+          await following;
+        }
       } finally {
         releaseRetirement.resolve();
         await Promise.allSettled([appending, following]);

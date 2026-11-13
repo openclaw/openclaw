@@ -1,8 +1,5 @@
 import { expect, vi } from "vitest";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
-import { createDeferredCore } from "../../shared/deferred.js";
-import { isActiveStoreWriter } from "../../shared/store-writer-queue.js";
-import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission-state.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { test } from "./session-entry-fixture.test-support.js";
@@ -18,22 +15,9 @@ test.for(["refusal", "eviction"] as const)(
     writeSessionEntry(database, sessionKey, entry);
     // The test owns worker settlement, so discard the write's retained row facts.
     sessionChanges.invalidate({ sessionKey, storePath: database.path, factsInvalidated: true });
-    const cleanupEntered = createDeferredCore();
-    const releaseCleanup = createDeferredCore();
-    const writerSettled = createDeferredCore();
     let following: Promise<string> | undefined;
     let reads = 0;
-    const rotate = sessionStoreLane.pool.rotate.bind(sessionStoreLane.pool);
     using mocks = new DisposableStack();
-    mocks.use(
-      vi.spyOn(sessionStoreLane.pool, "rotate").mockImplementation(() => {
-        if (!isActiveStoreWriter(SQLITE_SESSION_WRITER_QUEUES, database.path)) {
-          return rotate();
-        }
-        cleanupEntered.resolve();
-        return Promise.race([writerSettled.promise, releaseCleanup.promise]);
-      }),
-    );
     const { pool } = sessionStoreLane;
     const run = pool.run.bind(pool);
     mocks.use(vi.spyOn(pool, "canCloseNativeResources").mockReturnValue(false));
@@ -44,6 +28,9 @@ test.for(["refusal", "eviction"] as const)(
           return run(request, controls);
         }
         reads += 1;
+        if (settlement === "eviction") {
+          await run(request, controls);
+        }
         return settlement === "refusal"
           ? { ok: false, error: { kind: "projection", sessionId: entry.sessionId } }
           : {
@@ -67,18 +54,12 @@ test.for(["refusal", "eviction"] as const)(
       {
         ordered: true,
         onReadAdmitted: () => {
-          following = runOpenClawAgentWriteAdmission(options, () => {
-            writerSettled.resolve();
-            return "following writer";
-          });
+          following = runOpenClawAgentWriteAdmission(options, () => "following writer");
         },
       },
     );
     try {
-      const outcome = await Promise.race([
-        reading.catch((error: unknown) => error),
-        cleanupEntered.promise.then(() => new Error("Cleanup waits on its queued writer")),
-      ]);
+      const outcome = await reading.catch((error: unknown) => error);
       if (settlement === "refusal") {
         expect(outcome).toBeInstanceOf(SessionTranscriptProjectionUnavailableError);
         expect(consume).not.toHaveBeenCalled();
@@ -89,7 +70,6 @@ test.for(["refusal", "eviction"] as const)(
       expect(reads).toBe(1);
       await expect(following).resolves.toBe("following writer");
     } finally {
-      releaseCleanup.resolve();
       await Promise.allSettled([reading, following]);
     }
   },

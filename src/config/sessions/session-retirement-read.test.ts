@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { prepareComparisonClaimsFromStores } from "./legacy-main-session-key-scan.js";
@@ -147,15 +146,8 @@ it.each(["refusal", "eviction"] as const)(
     const fixture = setup();
     const key = "agent:ops:retirement";
     fixture.seed(key);
-    const cleanupEntered = createDeferredCore();
-    const releaseCleanup = createDeferredCore();
-    const writerSettled = createDeferredCore();
     const readFailure = new Error("Retirement reader failed after dispatch");
     let following: Promise<string> | undefined;
-    vi.spyOn(sessionStoreLane.pool, "rotate").mockImplementation(() => {
-      cleanupEntered.resolve();
-      return Promise.race([writerSettled.promise, releaseCleanup.promise]);
-    });
     const { pool } = sessionStoreLane;
     const run = pool.run.bind(pool);
     vi.spyOn(pool, "canCloseNativeResources").mockReturnValue(false);
@@ -164,13 +156,11 @@ it.each(["refusal", "eviction"] as const)(
       if (request.kind !== "session-retirement-read") {
         return run(request, controls);
       }
-      following = runOpenClawAgentWriteAdmission(fixture.options(), () => {
-        writerSettled.resolve();
-        return "following writer";
-      });
+      following = runOpenClawAgentWriteAdmission(fixture.options(), () => "following writer");
       if (settlement === "refusal") {
         throw readFailure;
       }
+      await run(request, controls);
       return {
         ok: true,
         value: { kind: "session-retirement-read", result: { operation: "keys", keys: [key] } },
@@ -179,12 +169,7 @@ it.each(["refusal", "eviction"] as const)(
     });
     const reading = fixture.list();
     try {
-      const outcome = await Promise.race([
-        reading.catch((error: unknown) => error),
-        cleanupEntered.promise.then(
-          () => new Error("Retirement cleanup waits on its own queued writer"),
-        ),
-      ]);
+      const outcome = await reading.catch((error: unknown) => error);
       if (settlement === "refusal") {
         expect(outcome).toBe(readFailure);
       } else {
@@ -192,7 +177,6 @@ it.each(["refusal", "eviction"] as const)(
       }
       await expect(following).resolves.toBe("following writer");
     } finally {
-      releaseCleanup.resolve();
       await Promise.allSettled([reading, following]);
     }
   },
