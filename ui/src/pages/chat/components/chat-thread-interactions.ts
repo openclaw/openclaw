@@ -68,6 +68,7 @@ export type ChatThreadState = Parameters<typeof createAsyncQuestionPresentation>
   threadElement?: HTMLElement;
   commentPins?: ChatCommentPinsHandle;
   turnRecapWatch: TurnRecapWatch | null;
+  observedWorkRun?: { sessionKey: string; runId: string };
   search: TranscriptSearchState;
   transcriptRenderDependencies: readonly unknown[];
   transcriptRenderContext: {
@@ -185,6 +186,12 @@ export type ChatThreadProps = Omit<
     onDismissPendingInput?: (inputId: string) => void;
     waitingApproval?: boolean;
     questionPrompts?: readonly QuestionPrompt[];
+    onGatewayQuestionChange?: () => void;
+    onGatewayQuestionSubmit?: (
+      id: string,
+      answers: Record<string, string[]>,
+    ) => void | Promise<void>;
+    onGatewayQuestionSkip?: (id: string) => void | Promise<void>;
     sessions: SessionsListResult | null;
     senderAgentAvatars?: ReadonlyMap<string, string | null>;
     /** Configured main-session key; an agent's main source labels as the agent. */
@@ -301,6 +308,7 @@ export function resetTranscriptSession(paneId: string, owner?: ParentNode): void
   }
   if (state) {
     state.asyncQuestionDrafts = new Map();
+    state.observedWorkRun = undefined;
     // Search input belongs to the outgoing transcript; pane preferences survive.
     state.search.reset();
   }

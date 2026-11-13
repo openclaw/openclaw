@@ -554,6 +554,7 @@ export function createAskUserTool(params: {
               {
                 id: questionId,
                 questions: normalized.questions,
+                blocking: true,
                 ...(params.agentId ? { agentId: params.agentId } : {}),
                 ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
                 ...(params.runId ? { runId: params.runId } : {}),

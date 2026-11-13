@@ -336,9 +336,7 @@ it.each(["structured", "serialized"])("keeps %s captions out of collapsed rows",
   const container = await mountCard(card, { ...options, expanded: false });
 
   const summary = query(container, "button.chat-tool-msg-summary");
-  expect(textOf(container, ".chat-tool-msg-summary__label")).toBe(
-    shape === "serialized" ? "Message" : undefined,
-  );
+  expect(summary?.textContent).toContain("Message");
   expect(query(summary, ".chat-tool-msg-summary__icon")?.getAttribute("aria-label")).toBe(
     "message",
   );
@@ -608,6 +606,8 @@ it("keeps command progress neutral across the row, expanded body, and sidebar un
   expect(query(container, ".chat-tool-failure")).toBeNull();
   expect(cardPart(container, "outcome")).toMatchObject({ textContent: "Running" });
   expect(container.textContent).toContain(card.outputText);
+  expect(textOf(container, ".chat-tool-row__cmd")).toBe("diagnostic");
+  expect(query(container, ".chat-tool-term__cmd")).toBeNull();
   cardPart(container, "action-btn")?.click();
   expect(onOpenSidebar).toHaveBeenCalledWith(
     expect.objectContaining({ kind: "tool-output", card }),
@@ -656,11 +656,11 @@ it("keeps diagnostics inside expanded tool details", async () => {
       container,
     );
   await show();
-  expect(container.textContent).toContain("Sign in to GitHub");
+  expect(container.textContent).toContain("gh auth login");
   expect(container.textContent).not.toContain(diagnostic);
   expect(textOf(container, ".chat-tool-msg-summary")).toContain(outcome);
   expect(container.textContent).not.toContain(output);
-  expect(container.textContent).not.toContain("gh auth login");
+  expect(container.textContent).not.toContain("Sign in to GitHub");
   expect(query(container, ".chat-tool-msg-body")).toBeNull();
   query(container, ".chat-tool-msg-summary")?.click();
   await settleToolBridges(container);
@@ -934,4 +934,52 @@ it("previews live command output without inferring completion and retains detail
   expect(container.textContent).toContain("fifth");
   await mountCard(card, { ...options, inlineCommands: undefined }, container);
   expect(query(container, ".chat-command-trail__preview")).toBeNull();
+});
+
+it.each(["printf a\n  printf b", `printf ${"long argument ".repeat(25)}`])(
+  "keeps the complete command available when its row uses a compact preview",
+  async (command) => {
+    const container = await mountTool("exec", {
+      args: { command },
+      inputText: JSON.stringify({ command }),
+      outputText: "Result preserved",
+      completed: true,
+    });
+    expect(textOf(container, ".chat-tool-term__cmd code")).toBe(command);
+    expect(container.textContent).toContain("Result preserved");
+  },
+);
+
+it("opens the original execution receipt without repeating it in the expanded child", async () => {
+  const execution: ToolCard = {
+    id: "execution",
+    name: "exec",
+    args: { code: "return await exec({command: 'npm test'})" },
+    inputText: JSON.stringify({ code: "return await exec({command: 'npm test'})" }),
+    outputText: "Original wrapper receipt",
+    completed: true,
+  };
+  const onOpenSidebar = vi.fn();
+  const container = await mountTool(
+    "exec",
+    {
+      args: { command: "npm test" },
+      outputText: "Tests passed",
+      completed: true,
+    },
+    { executionCards: [execution], onOpenSidebar },
+  );
+  expect(container.textContent).toContain("Tests passed");
+  expect(container.textContent).not.toContain("Original wrapper receipt");
+  const inspect = [...container.querySelectorAll("button")].find(
+    (button) => button.textContent === "Execution details",
+  );
+  expect(inspect).toBeDefined();
+  inspect!.click();
+  expect(onOpenSidebar).toHaveBeenCalledWith(
+    expect.objectContaining({
+      kind: "tool-output",
+      card: execution,
+    }),
+  );
 });

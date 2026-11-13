@@ -76,7 +76,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   private appliedHeaderHeight = 0;
   readonly initialRange: TranscriptInitialRange;
   private readonly endAnchor = new TranscriptEndAnchor(
-    (fn) => this.canAutoFollow() && this.renderer.queueAfterCommit(fn),
+    (fn) => this.canFollowEnd && this.renderer.queueAfterCommit(fn),
   );
   private readonly recordEndLayoutCorrection = (before: number, after: number) => {
     this.endAnchor.recordLayoutCorrection(before, after);
@@ -102,7 +102,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       if (!this.initialRange.pending) {
         this.endAnchor.reconcile(
           this.scrollElement,
-          this.canAutoFollow(),
+          this.canFollowEnd,
           this.offsetState.pendingScrollOffset !== null || this.offsetState.touchActive,
           this.followEnd,
         );
@@ -228,7 +228,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
         const moved = redraw && inner && this.layout.commitRange(inner, view.getTotalSize() + top);
         // Native resize delivery can read a fast scroll before its scroll event.
         // Keep its position, but replace observed rows outside the delivery cycle.
-        const defer = redraw && !(moved || this.canAutoFollow() || offsetState.hasPendingAnchor);
+        const defer = redraw && !(moved || this.canFollowEnd || offsetState.hasPendingAnchor);
         this.presentation.commitChange(
           () => (redraw ? (this.renderPreviousRows ?? invalidate) : invalidate)(),
           offsetState.measuringOffset || (defer && !sync),
@@ -256,7 +256,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
             getScrollElement: () => this.scrollElement,
             prependAnchor: this.prependAnchor,
             endAnchor: this.endAnchor,
-            canFollowEnd: () => this.canAutoFollow(),
+            canFollowEnd: () => this.canFollowEnd,
             isProgrammaticScroll: () => this.isProgrammaticScroll,
             cancelScroll: (preserveEnd) => this.cancelScroll(preserveEnd),
             onLayoutCorrection: this.recordEndLayoutCorrection,
@@ -363,7 +363,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     const correction = this.endAnchor.commitComposerResize(
       this.scrollElement,
       changed,
-      this.canAutoFollow(),
+      this.canFollowEnd,
       this.offsetState.pendingScrollOffset !== null ||
         this.offsetState.pendingInteractionAnchor !== null ||
         (this.offsetState.scrollCommand?.target ?? "end") !== "end" ||
@@ -537,14 +537,9 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
         this.renderPreviousRows = () => this.renderCommittedRows(snapshot, false);
         // Capture only after the unmount gate permits the projection to commit.
         if (capturePrepend) {
-          this.prependAnchor.capture(
-            this.scrollElement,
-            this.offsetState.hasPendingAnchor ||
-              Boolean(this.callbacks.hasPendingScrollCommand?.()),
-            // A peer append can add attribution above a bubble inside an
-            // existing run row. Row-height compensation alone cannot hold it.
-            rowModelChanged && !this.canAutoFollow(),
-          );
+          // A peer append can add attribution above a bubble inside an
+          // existing run row. Row-height compensation alone cannot hold it.
+          this.preserveReaderPosition(rowModelChanged && !this.canFollowEnd);
         }
         // Structural changes can alter the end without a virtualizer notification.
         if (rowModelChanged || this.headerHeight !== (header?.height ?? 0)) {
@@ -605,8 +600,8 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   get isMaintenanceScroll(): boolean {
     return (
       // Intermediate end-command movement remains owned until native input cancels it.
-      (this.offsetState.scrollCommand?.target === "end" && this.canAutoFollow()) ||
-      (this.endAnchor.isResizeAnchor(this.scrollElement) && this.canAutoFollow()) ||
+      (this.offsetState.scrollCommand?.target === "end" && this.canFollowEnd) ||
+      (this.endAnchor.isResizeAnchor(this.scrollElement) && this.canFollowEnd) ||
       isTranscriptMaintenanceScroll(this.offsetState, this.scrollElement)
     );
   }
@@ -619,7 +614,15 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     return this.layout.ready && !this.initialRange.pending && !this.offsetState.pendingScrollOffset;
   }
 
-  private canAutoFollow(): boolean {
+  preserveReaderPosition(includeAppends = true): void {
+    this.prependAnchor.capture(
+      this.scrollElement,
+      this.offsetState.hasPendingAnchor || Boolean(this.callbacks.hasPendingScrollCommand?.()),
+      includeAppends,
+    );
+  }
+
+  get canFollowEnd(): boolean {
     const command = this.offsetState.scrollCommand;
     return (!command || command.target === "end") && (this.callbacks.canFollowEnd?.() ?? true);
   }
@@ -630,7 +633,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     if (source !== "auto") {
       // End-follow must not let speculative history measurements move its target.
       this.initialRange.finish(true);
-    } else if (this.offsetState.pendingScrollOffset || !this.canAutoFollow()) {
+    } else if (this.offsetState.pendingScrollOffset || !this.canFollowEnd) {
       return false;
     }
     scrollTranscriptToEnd(
@@ -767,7 +770,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       return;
     }
     if (
-      this.canAutoFollow() &&
+      this.canFollowEnd &&
       !(this.offsetState.pendingInteractionAnchor || this.offsetState.touchActive)
     ) {
       const behavior = this.offsetState.scrollCommand?.behavior ?? "instant";

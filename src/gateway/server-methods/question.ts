@@ -312,6 +312,7 @@ export function createQuestionHandlers(
                 : {}),
             ...(sessionKey ? { sessionKey } : {}),
             ...(request.runId ? { runId: request.runId } : {}),
+            ...(request.blocking !== undefined ? { blocking: request.blocking } : {}),
             timeoutMs: request.timeoutMs ?? DEFAULT_QUESTION_TIMEOUT_MS,
             isRequesterActive,
             sessionAccess,

@@ -10,7 +10,7 @@ import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
 import { reduceChatSessionProjection } from "./history-merge.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream-snapshot.ts";
-import { resetToolStream } from "./tool-stream-state.ts";
+import { resetToolStream, resetToolStreamRun } from "./tool-stream-state.ts";
 import {
   agentEvent,
   createHost,
@@ -164,6 +164,34 @@ it.each(["live", "history"] as const)(
     resetToolStream(host);
   },
 );
+
+it("keeps every operation in a long live run until that run is reconciled", () => {
+  useToolStreamFakeTimers();
+  const host = createHost({ chatRunId: "run-1" });
+  const callIds = Array.from({ length: 60 }, (_, index) => `call-${index}`);
+  for (const [index, toolCallId] of callIds.entries()) {
+    emitEvent(host, "run-1", index * 2 + 1, "tool", {
+      phase: "start",
+      name: "read",
+      toolCallId,
+      args: { path: `file-${index}.ts` },
+    });
+    emitEvent(host, "run-1", index * 2 + 2, "tool", {
+      phase: "result",
+      name: "read",
+      toolCallId,
+      result: `Contents of file ${index}`,
+    });
+  }
+  expect(
+    host.chatToolMessages.flatMap((message) =>
+      extractToolCardsCached(message).map((card) => card.callId),
+    ),
+  ).toEqual(callIds);
+  resetToolStreamRun(host, "run-1");
+  expect(host.chatToolMessages).toEqual([]);
+  resetToolStream(host);
+});
 
 it("clears partial stdout when a structured command receipt has empty text", () => {
   const host = createHost({ chatRunId: "run-1" });
@@ -330,7 +358,7 @@ describe("app-tool-stream approval lifecycle", () => {
       const activity = messages.flatMap(readPreparedActivity);
       expect(activity).toEqual([completed]);
       expect(summarizeToolGroup(activity)).toBe(
-        withResult ? "1 other operation" : "1 other operation · 1 unknown",
+        withResult ? "Called Process" : "Called Process · Outcome unknown",
       );
       expect(activity[0]).not.toHaveProperty("diagnostic");
       expect(completedEvent.diagnostic).toEqual({ source: "native-tool" });

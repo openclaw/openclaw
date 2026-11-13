@@ -316,6 +316,13 @@
   white-space: nowrap;
 }
 
+/* Expanded commands keep their full preview readable even on narrow panes. */
+.chat-tool-msg-collapse.is-open > .chat-tool-row .chat-tool-disclosure__content,
+.chat-tool-msg-collapse.is-open > .chat-tool-row .chat-tool-row__cmd {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .chat-tool-msg-summary__names,
 .chat-tool-msg-summary__preview,
 .chat-progress-card-receipt__text {
@@ -1020,12 +1027,6 @@
 .chat-work-group .chat-activity-group__label {
   color: inherit;
   font-weight: var(--control-ui-font-weight-semibold);
-}
-
-.chat-work-group__total {
-  flex: none;
-  white-space: nowrap;
-  color: var(--muted);
 }
 
 .chat-activity-group__label.chat-activity-group__label--live {

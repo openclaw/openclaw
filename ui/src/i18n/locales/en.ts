@@ -1938,8 +1938,6 @@ const startupEnglish = {
     workRun: {
       workedFor: "Worked for {duration}",
       worked: "Worked",
-      toolCallsOne: "1 tool call",
-      toolCallsMany: "{count} tool calls",
     },
     sessionDiff: {
       title: "Changes",

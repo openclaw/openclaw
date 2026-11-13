@@ -308,9 +308,9 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
     }
     const message = owner.source.message;
     const metadata = asRecord(message["__openclaw"]);
-    // History already composed durable activity. An earlier live echo must not
-    // drag it across an intervening stream or above its parent call.
-    const index = readTranscriptDisplayPosition(metadata?.transcriptPosition)?.activity
+    // Durable placement owns both the call and its children. An earlier live echo
+    // must not move a parent ahead of the narration in its persisted message.
+    const index = readTranscriptDisplayPosition(metadata?.transcriptPosition)
       ? owner.source.index
       : invocation.first;
     const result = invocation.result;

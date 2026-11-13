@@ -14,6 +14,7 @@ import {
   createMessageEntry,
   createToolCall,
   createToolGroup,
+  createToolResultBlock,
 } from "./components/chat-message.test-support.ts";
 import { ChatToolCard } from "./components/chat-tool-cards.solid.tsx";
 import { settleToolBridges } from "./components/chat-tool-render.test-support.ts";
@@ -102,7 +103,7 @@ describe("a launched subagent", () => {
     ).toBe(coder.key);
   });
 
-  it("counts a launch that opened a session in its own right with the other operations", async () => {
+  it("keeps subagent and child-chat launches as standalone activity", async () => {
     const calls = [
       { id: "story", args: { label, task: "Write it." } },
       { id: "opened", args: { label: "Opened", task: "Write it.", visible: true } },
@@ -120,7 +121,14 @@ describe("a launched subagent", () => {
       createMessageEntry(
         "launches:entry",
         createAssistantMessage(
-          calls.map(({ id, args }) => createToolCall(id, "sessions_spawn", args)),
+          calls.flatMap(({ id, args }) => [
+            createToolCall(id, "sessions_spawn", args),
+            createToolResultBlock(
+              id,
+              "sessions_spawn",
+              accepted(`agent:main:${id === "opened" ? "dashboard" : "subagent"}:${id}`),
+            ),
+          ]),
           { activity },
         ),
       ),
@@ -135,11 +143,12 @@ describe("a launched subagent", () => {
       },
       container,
     );
-    await waitForSolid(() =>
-      expect(container.querySelector(".chat-activity-group__label")?.textContent).toBe(
-        "1 other operation · 1 subagent",
-      ),
-    );
+    await settleToolBridges(container);
+    await waitForSolid(() => {
+      expect(container.querySelector(".chat-activity-group__summary")).toBeNull();
+      expect(container.textContent).toContain(`Launched subagent${label}`);
+      expect(container.textContent).toContain("Opened child chatOpened");
+    });
   });
 
   it("shows its name and duration, and opens its session without toggling the row", async () => {
@@ -195,14 +204,65 @@ describe("a launched subagent", () => {
     expect(failed?.textContent).toBe("failed");
     expect(failed?.classList.contains("chat-tool-row__subagent-state--failed")).toBe(true);
     expect((await state({ ...story, status: "killed" }))?.textContent).toBe("stopped");
-    // Without its session the row is the ordinary disclosure, still named.
-    const unlinked = await mount([]);
-    expect(unlinked.querySelector(".chat-tool-row__subagent-link")).toBeNull();
-    expect(unlinked.querySelector("button.chat-tool-row .chat-tool-row__title")?.textContent).toBe(
-      label,
-    );
-    expect(unlinked.querySelector(".chat-tool-row__subagent-state")).toBeNull();
+    // A confirmed child key can open directly before roster hydration; no child status is invented.
+    const unlisted = await mount([]);
+    unlisted.querySelector<HTMLButtonElement>(".chat-tool-row__subagent-link")!.click();
+    expect(onOpenSession).toHaveBeenCalledExactlyOnceWith(story.key);
+    expect(unlisted.querySelector(".chat-tool-row__subagent-state")).toBeNull();
   });
+
+  it.each([
+    { runActive: false, status: undefined, expected: "Subagent launch outcome unknown" },
+    { runActive: true, status: "failed" as const, expected: "Couldn't launch subagent" },
+    { runActive: true, status: "running" as const, expected: "Launching subagent" },
+  ])(
+    "uses the recorded launch outcome with an incomplete raw card ($expected)",
+    async ({ runActive, status, expected }) => {
+      const card = launch({
+        completed: undefined,
+        live: true,
+        activity: {
+          itemId: "tool:spawn",
+          toolCallId: "spawn",
+          kind: "tool",
+          name: "sessions_spawn",
+          title: "Sub-agent",
+          phase: "start",
+          status,
+          unpairedCall: status === undefined,
+        },
+      });
+      const container = document.createElement("div");
+      mountSolid(
+        ChatToolCard,
+        {
+          card,
+          options: { messageKey: "launch", expanded: false, runActive, onToggleExpanded: vi.fn() },
+        },
+        container,
+      );
+      await settleToolBridges(container);
+      await waitForSolid(() => {
+        expect(container.querySelector(".chat-tool-disclosure__content")?.textContent).toContain(
+          expected,
+        );
+      });
+      if (status) {
+        const item: AgentActivityItem = {
+          itemId: "tool:spawn",
+          toolCallId: "spawn",
+          kind: "tool",
+          phase: "start",
+          status,
+          name: "sessions_spawn",
+          title: "Sub-agent",
+        };
+        expect(selectActivityHeadline([item], new Map([[card, item]]))?.title).toBe(
+          expected + " " + label,
+        );
+      }
+    },
+  );
 
   it("names the live headline instead of listing its launch settings", () => {
     const card = launch();
@@ -216,18 +276,20 @@ describe("a launched subagent", () => {
       title: `Sub-agent label ${label}, task name demo-mini-story, timeout 180`,
       meta: `label ${label}, task name demo-mini-story, timeout 180`,
     };
-    expect(
-      selectActivityHeadline([item], [{ card, children: [] }], new Map([[card, item]])),
-    ).toMatchObject({ title: label, name: "sessions_spawn" });
+    expect(selectActivityHeadline([item], new Map([[card, item]]))).toMatchObject({
+      title: `Subagent launch outcome unknown ${label}`,
+      name: "sessions_spawn",
+    });
     // The launch's result carries its own prepared item; the headline can hold either.
-    expect(
-      selectActivityHeadline([{ ...item }], [{ card, children: [] }], new Map([[card, item]])),
-    ).toMatchObject({ title: label });
+    const resultItem = { ...item };
+    expect(selectActivityHeadline([resultItem], new Map([[card, resultItem]]))).toMatchObject({
+      title: `Subagent launch outcome unknown ${label}`,
+    });
     // A session opened in its own right is not named like a subagent.
     const opened = launch({ args: { ...(card.args as object), visible: true } });
-    expect(
-      selectActivityHeadline([item], [{ card: opened, children: [] }], new Map([[opened, item]])),
-    ).toMatchObject({ title: item.meta });
+    expect(selectActivityHeadline([item], new Map([[opened, item]]))).toMatchObject({
+      title: `Child chat creation outcome unknown ${label}`,
+    });
   });
 
   it("names the subagent a call addresses instead of its key's suffix", () => {
@@ -250,15 +312,14 @@ describe("a launched subagent", () => {
         meta: "…7ef3",
       };
       return (rows?: GatewaySessionRow[]) =>
-        selectActivityHeadline([item], [{ card, children: [] }], new Map([[card, item]]), rows)
-          ?.title;
+        selectActivityHeadline([item], new Map([[card, item]]), rows)?.title;
     };
     const send = address(
       "sessions_send",
       { sessionKey: addressedChild.key, message: "Hi" },
       "Send to session",
     );
-    expect(send([addressedChild])).toBe(label);
+    expect(send([addressedChild])).toContain(label);
     // Before the roster holds it, the action stands in; the key never does.
     expect(send([])).toBe("Send to session");
     // Through the catalog dispatcher, and for history reads and steering.
@@ -268,14 +329,14 @@ describe("a launched subagent", () => {
         { id: "sessions_send", args: { sessionKey: addressedChild.key, message: "Hi" } },
         "Send to session",
       )([addressedChild]),
-    ).toBe(label);
+    ).toContain(label);
     expect(
       address(
         "sessions_history",
         { sessionKey: addressedChild.key },
         "Read session history",
       )([addressedChild]),
-    ).toBe(label);
+    ).toContain(label);
     expect(
       address("subagents", { action: "steer", target: addressedChild.key }, "Send to subagent")([]),
     ).toBe("Send to subagent");
@@ -283,7 +344,7 @@ describe("a launched subagent", () => {
     const unlabeled = address("sessions_spawn", { task: "Write" }, "Start subagent", {
       outputText: accepted(addressedChild.key),
     });
-    expect(unlabeled([addressedChild])).toBe(label);
+    expect(unlabeled([addressedChild])).toContain(label);
     expect(unlabeled([])).toBe("Start subagent");
   });
 });

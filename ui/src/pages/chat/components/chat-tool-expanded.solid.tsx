@@ -19,7 +19,7 @@ import { formatToolDetail, resolveToolDisplay } from "../../../lib/chat/tool-dis
 import { isLegacyToolOutputUnavailable } from "../../../lib/chat/tool-output-text.ts";
 import { TOOL_OUTPUT_PREVIEW_CHARS, formatToolOutput } from "../../../lib/chat/tool-output.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { HighlightedCommand } from "./chat-command-highlight.solid.tsx";
+import { HighlightedCommand, shellCommandPreview } from "./chat-command-highlight.solid.tsx";
 import { DiffBlock } from "./chat-diff-render.solid.tsx";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import type { ToolCardContentProps } from "./chat-tool-card-types.ts";
@@ -101,15 +101,17 @@ function WorkspaceFilePath(props: {
   );
 }
 
-function TerminalBlock(props: { command: string; output?: string }) {
+function TerminalBlock(props: { command: string; output?: string; commandInRow?: boolean }) {
   return (
     <div class="chat-tool-term">
-      <div class="chat-tool-term__cmd">
-        <span class="chat-tool-term__prompt">$</span>
-        <code>
-          <HighlightedCommand command={props.command} />
-        </code>
-      </div>
+      <Show when={!props.commandInRow || shellCommandPreview(props.command) !== props.command}>
+        <div class="chat-tool-term__cmd">
+          <span class="chat-tool-term__prompt">$</span>
+          <code>
+            <HighlightedCommand command={props.command} />
+          </code>
+        </div>
+      </Show>
       <Show when={props.output !== undefined}>
         <pre class="chat-tool-term__out">
           <code>{props.output}</code>
@@ -259,7 +261,7 @@ function prepareOutput(
 }
 type ContentState = ReturnType<typeof prepareContent>;
 
-function CommandBody(props: { state: ContentState; output?: string }) {
+function CommandBody(props: { state: ContentState; output?: string; commandInRow?: boolean }) {
   const sourceKey = () =>
     props.state.view.code
       ? asNullableRecord(props.state.card.args)?.code === props.state.view.code
@@ -275,7 +277,13 @@ function CommandBody(props: { state: ContentState; output?: string }) {
     <>
       <Show
         when={props.state.view.code}
-        fallback={<TerminalBlock command={props.state.view.command!} output={props.output} />}
+        fallback={
+          <TerminalBlock
+            command={props.state.view.command!}
+            output={props.output}
+            commandInRow={props.commandInRow}
+          />
+        }
       >
         <Show when={sourceKey() !== "input"}>
           <ToolDataBlock label={t("chat.toolCards.toolInput")} text={props.state.view.code!} />
@@ -416,7 +424,7 @@ export function ExpandedToolCardContent(props: ToolCardContentProps) {
             <div class="chat-tool-card__actions">{sidebarAction()}</div>
           </Show>
           {variant === "command" ? (
-            <CommandBody state={state()} output={output().text} />
+            <CommandBody state={state()} output={output().text} commandInRow={props.commandInRow} />
           ) : variant === "diff" ? (
             <Show
               when={output().text !== undefined}

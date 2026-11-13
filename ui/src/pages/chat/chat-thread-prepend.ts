@@ -1,5 +1,6 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
+import { isInlineBlockingQuestion } from "./chat-question-placement.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
 import { displayChatHistory, type ChatItemsFacts } from "./chat-thread-facts.ts";
 import type { ChatInputOrderState } from "./chat-thread-inputs.ts";
@@ -23,7 +24,9 @@ function isIdleTranscript(input: BuildChatItemsProps): boolean {
     !input.subagentWait &&
     !input.runWorking &&
     !input.runActive &&
-    !input.questionPrompts?.some((prompt) => prompt.status !== "pending")
+    !input.questionPrompts?.some(
+      (prompt) => prompt.status !== "pending" || isInlineBlockingQuestion(prompt, input.sessionKey),
+    )
   );
 }
 

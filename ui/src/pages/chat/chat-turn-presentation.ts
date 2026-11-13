@@ -45,6 +45,13 @@ export function isActivityMessageGroup(group: MessageGroup, bubbleMode = false):
     bubbleMode ||
     group.messages.length > 1 ||
     cards.length > 1 ||
+    // Even a lone retired activity must pass through its visibility projection.
+    // Rendering it as a raw card would resurrect routine work above narration.
+    (cards.length > 0 &&
+      group.messages.some(
+        ({ message }) =>
+          Array.isArray(asRecord(message)?.activity) && !hasVisiblePreparedActivity(message),
+      )) ||
     (cards.length === 0 &&
       group.messages.some(({ message }) => hasVisiblePreparedActivity(message))) ||
     cards.some((card) => readToolApprovalReviews(card.details).length > 0)
@@ -544,7 +551,9 @@ export function joinActivityRuns(
         : undefined;
   const before = groupsOf(first);
   const after = groupsOf(next);
-  return before && after ? activityRun([...before, ...after]) : undefined;
+  return before && after && !after[0]?.startsActivityGroup
+    ? activityRun([...before, ...after])
+    : undefined;
 }
 
 /** Presentation-only rollup for tool groups separated by projected turn boundaries. */
@@ -567,6 +576,9 @@ export function coalesceActivityRuns(
   };
   for (const item of items) {
     if (item.kind === "group" && isActivityGroup(item)) {
+      if (item.startsActivityGroup) {
+        flush();
+      }
       groups.push(item);
       continue;
     }

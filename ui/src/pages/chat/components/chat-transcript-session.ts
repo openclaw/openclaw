@@ -67,6 +67,9 @@ export type ChatTranscriptSession = {
   readonly contentElement: HTMLDivElement | null;
   readonly expandedAssistantMessages: Map<string, AssistantMessageExpansionState>;
   readonly liveAnnouncementText: string;
+  readonly canFollowEnd: boolean;
+  /** Retain the visible message through a structural change inside its existing row. */
+  preserveReaderPosition(): void;
   readonly scrollElementRef: (element?: Element) => void;
   render<T>(
     rows: readonly TranscriptRow<T>[],

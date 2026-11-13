@@ -8,6 +8,7 @@ export type ToolCardOptions = ToolRenderOptions & {
   onToggleExpanded: (id: string) => void;
   showApprovalReviews?: boolean;
   activityCards?: readonly ToolCard[];
+  executionCards?: readonly ToolCard[];
 };
 export type ToolCardProps = {
   card: ToolCard;
@@ -18,6 +19,8 @@ export type ToolCardProps = {
 
 export type ToolCardContentProps = {
   card: ToolCard;
+  /** The adjacent disclosure already presents this command's compact form. */
+  commandInRow?: boolean;
   output?: ToolCardOutput;
   options: ToolRenderOptions;
 };

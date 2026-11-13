@@ -46,7 +46,8 @@ export type RenderMessageGroupOptions = Omit<
     activeContinuation?: { parts: StreamGroupPart[]; options: StreamGroupOptions };
     /** Only this run may supply live copy for an activity disclosure. */
     activityRunId?: string | null;
-    activityGroupKey?: string;
+    /** Null means the transcript tail is no longer an activity group. */
+    activityGroupKey?: string | null;
     bubbleActivityGroupKey?: string;
     turnRecap?: TurnRecap;
     turnDurations?: ReadonlyMap<string, number>;

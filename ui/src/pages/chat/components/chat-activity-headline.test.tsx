@@ -1,16 +1,9 @@
 /* @vitest-environment jsdom */
 
-import { createSignal, flush } from "solid-js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { flush } from "solid-js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { AgentActivityItem } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { projectAgentToolActivity } from "../../../../../src/infra/agent-activity-events.js";
-import { ContentPresentation } from "../../../lib/solid/presentation.ts";
-import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import type { ActivityHeadline } from "./chat-activity-headline-selection.ts";
-import {
-  ChatActivityHeadline,
-  type ChatActivityHeadlineProps,
-} from "./chat-activity-headline.solid.tsx";
 import { createActivityGroupHarness } from "./chat-message-native.test-support.tsx";
 import {
   createAssistantMessage,
@@ -20,23 +13,17 @@ import {
   createToolResultMessage,
 } from "./chat-message.test-support.ts";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
+import { projectTranscriptActivity } from "./chat-transcript-activity.ts";
 
 let container: HTMLDivElement;
 let activityRoot: ReturnType<typeof createActivityGroupHarness>;
-let headlineRoot: ReturnType<typeof mountSolid> | undefined;
-let updateHeadline: ((props: ChatActivityHeadlineProps) => void) | undefined;
-let presentHeadline: ((active: boolean) => void) | undefined;
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(10_000);
   container = document.createElement("div");
   activityRoot = createActivityGroupHarness(container);
-  headlineRoot = undefined;
-  updateHeadline = undefined;
-  presentHeadline = undefined;
 });
 afterEach(() => {
-  headlineRoot?.unmount();
   activityRoot.unmount();
   container.remove();
   vi.useRealTimers();
@@ -75,44 +62,6 @@ function toolActivity(
   });
 }
 
-function operation(key: string, status: ActivityHeadline["status"] = "running"): ActivityHeadline {
-  return { key, title: "Read " + key, status };
-}
-
-function drawHeadline(props: ChatActivityHeadlineProps) {
-  if (!updateHeadline) {
-    headlineRoot = mountSolid(
-      () => {
-        const [current, setCurrent] = createSignal(props);
-        const [active, setActive] = createSignal(true);
-        updateHeadline = setCurrent;
-        presentHeadline = setActive;
-        return (
-          <ContentPresentation value={active}>
-            <button>
-              <ChatActivityHeadline {...current()} />
-            </button>
-          </ContentPresentation>
-        );
-      },
-      { container },
-    );
-  } else {
-    updateHeadline(props);
-    flush();
-  }
-  return {
-    setConnected: (active: boolean) => {
-      presentHeadline?.(active);
-      flush();
-    },
-  };
-}
-
-function update(activity: ActivityHeadline | undefined, scope = "session:run") {
-  return drawHeadline({ scope, activity, summary: "2 reads" });
-}
-
 function label() {
   return query("label")?.textContent;
 }
@@ -120,68 +69,6 @@ function label() {
 function query(part: string) {
   return container.querySelector<HTMLElement>(`.chat-activity-group__${part}`);
 }
-
-describe("activity headline cadence", () => {
-  it("holds new copy for three seconds and replaces pending work instead of replaying a backlog", () => {
-    update(operation("first"));
-    advanceTimersByTime(400);
-    update(operation("discarded"));
-    advanceTimersByTime(400);
-    update(operation("latest"));
-    expectAfter(2_199, "Read first…");
-    expectAfter(1, "Read latest…");
-    expect(vi.getTimerCount()).toBe(0);
-
-    update(operation("next"));
-    expectAfter(2_999, "Read latest…");
-    expectAfter(1, "Read next…");
-    expectAfter(30_000, "Read next…");
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("keeps outcome labels with a held purpose and drops them beside the count", () => {
-    const draw = (activity: ActivityHeadline) =>
-      drawHeadline({
-        scope: "session:run",
-        activity,
-        summary: "2 reads · 1 unknown",
-        outcomes: ["1 unknown"],
-      });
-    const outcomes = () =>
-      [...container.querySelectorAll(".chat-activity-group__outcome")].map(
-        (node) => node.textContent,
-      );
-    draw(operation("first"));
-    advanceTimersByTime(100);
-    draw({ ...operation("untitled"), title: "" });
-    expect(label()).toBe("Read first…");
-    expect(outcomes()).toEqual(["1 unknown"]);
-    expectAfter(2_900, "2 reads · 1 unknown");
-    expect(outcomes()).toEqual([]);
-  });
-
-  it("starts a fresh dwell when a new scope reuses the same operation identity", () => {
-    update(operation("first"));
-    advanceTimersByTime(2_000);
-    update(operation("stale"));
-    update(operation("first"), "new-scope");
-    update(operation("next"), "new-scope");
-    expectAfter(2_999, "Read first…");
-    expectAfter(1, "Read next…");
-  });
-
-  it("cancels its timer while disconnected and resumes with only the latest pending operation", () => {
-    const root = update(operation("first"));
-    update(operation("pending"));
-    expect(vi.getTimerCount()).toBe(1);
-    root.setConnected(false);
-    expect(vi.getTimerCount()).toBe(0);
-    expectAfter(3_000, "Read first…");
-    root.setConnected(true);
-    expect(label()).toBe("Read pending…");
-    expect(vi.getTimerCount()).toBe(0);
-  });
-});
 
 function entryGroup(
   key: string,
@@ -191,12 +78,21 @@ function entryGroup(
   return createToolGroup(key, [createMessageEntry(key + ":entry", message)], options);
 }
 
-function group(key: string, activity: AgentActivityItem[], runId = "active-run") {
+function group(
+  key: string,
+  activity: AgentActivityItem[],
+  runId = "active-run",
+  args?: Record<string, unknown>,
+) {
   return entryGroup(
     key,
     createAssistantMessage(
       activity.map((item) =>
-        createToolCall(item.toolCallId!, item.name!, { path: "/repo/file.ts" }),
+        createToolCall(
+          item.toolCallId!,
+          item.name!,
+          args ?? { path: `/repo/${item.toolCallId}.ts` },
+        ),
       ),
       { runId, activity },
     ),
@@ -235,12 +131,12 @@ function nestedStep(childName: string, parent: AgentActivityItem, child: AgentAc
 }
 
 it.each([
-  ["exec", { title: "Inspect", code: "return null" }, "start", "Inspect…"],
-  ["web_search", { query: "new plugin APIs" }, "start", 'for "new plugin APIs"…'],
-  ["lookup_record", { query: "release notes" }, "start", "release notes…"],
-  ["exec", { title: "Inspect source", code: "return null" }, "result", "Inspect source"],
-  ["exec", {}, "result", "Exec"],
-  ["session_status", {}, "result", "1 other operation"],
+  ["exec", { title: "Inspect", code: "return null" }, "start", "Running code…"],
+  ["web_search", { query: "new plugin APIs" }, "start", 'Web Search for "new plugin APIs"…'],
+  ["lookup_record", { query: "release notes" }, "start", "Lookup Record release notes…"],
+  ["exec", { title: "Inspect source", code: "return null" }, "result", "Code execution"],
+  ["exec", {}, "result", "Code execution"],
+  ["session_status", {}, "result", "Session Status"],
 ] as const)("renders accessible %s activity", async (name, args, phase, expected) => {
   const activity = projectAgentToolActivity({
     toolCallId: "purpose",
@@ -253,7 +149,7 @@ it.each([
         ? { status: "unknown" }
         : {}),
   });
-  await renderActivityFixture([group("current", [activity])], liveOptions);
+  await renderActivityFixture([group("current", [activity], "active-run", args)], liveOptions);
   const summary = query("summary")!;
   const icon = summary.querySelector('.chat-activity-group__icon[role="img"]');
   expect(label()).toBe(expected);
@@ -265,26 +161,67 @@ it.each([
   }
 });
 
-it("keeps the icon paired with the held purpose and restores the aggregate icon", async () => {
+it("names prepared-only activity when the raw call is unavailable", async () => {
+  const activity = toolActivity("session_status", {});
+  await renderActivityFixture(
+    [
+      entryGroup(
+        "current",
+        createAssistantMessage([], { runId: "active-run", activity: [activity] }),
+      ),
+    ],
+    liveOptions,
+  );
+  expect(label()).toBe("Called Session Status");
+});
+
+it("shows a command once when its live activity group is expanded", async () => {
+  const command = "pnpm test transcript";
+  const activity = toolActivity("exec", { command });
+  await renderActivityFixture([group("current", [activity], "active-run", { command })], {
+    ...liveOptions,
+    isToolMessageExpanded: () => true,
+  });
+  expect(query("summary")?.textContent).not.toContain(command);
+  expect(container.textContent?.split(command)).toHaveLength(2);
+});
+
+it("keeps the icon paired with the current action and restores the aggregate icon", async () => {
   const exec = toolActivity("exec", { title: "Inspect source", code: "return null" });
   const search = toolActivity("web_search", { query: "API docs" });
   const draw = async (items: AgentActivityItem[], runActive = true) =>
-    await renderActivityFixture([group("current", items)], { ...liveOptions, runActive });
+    await renderActivityFixture(
+      [
+        entryGroup(
+          "current",
+          createAssistantMessage(
+            items.map((item) =>
+              createToolCall(
+                item.toolCallId!,
+                item.name!,
+                item.name === "exec" ? { code: "return null" } : { query: "API docs" },
+              ),
+            ),
+            { runId: "active-run", activity: items },
+          ),
+        ),
+      ],
+      { ...liveOptions, runActive },
+    );
   const icon = () => query("icon");
   await draw([exec]);
   expect(icon()?.getAttribute("aria-label")).toBe("exec");
   const execSvg = icon()?.innerHTML;
   advanceTimersByTime(100);
   await draw([exec, search]);
-  expect(label()).toBe("Inspect source…");
-  expect(icon()?.getAttribute("aria-label")).toBe("exec");
-  advanceTimersByTime(2_900);
   await settleToolBridges(container);
-  expect(label()).toBe('for "API docs"…');
+  expect(icon()?.getAttribute("aria-label")).toBe("exec");
+  advanceTimersByTime(900);
+  expect(label()).toBe('Web Search for "API docs"…');
   expect(icon()?.getAttribute("aria-label")).toBe("web_search");
   expect(icon()?.innerHTML).not.toBe(execSvg);
   await draw([exec, search], false);
-  expect(label()).toBe("1 command · 1 search");
+  expect(label()).toBe("Code execution, attempted searches");
   expect(icon()?.getAttribute("aria-hidden")).toBe("true");
   expect(icon()?.getAttribute("aria-label")).toBeNull();
 });
@@ -296,7 +233,7 @@ const liveOptions = {
   activityRunId: "active-run",
 };
 
-it("keeps the headline and its dwell across disclosure toggles with accessible controls", () => {
+it("keeps accessible disclosure identity while the current action advances", () => {
   let expanded = false;
   const onToggle = vi.fn();
   const draw = (activity: AgentActivityItem[]) =>
@@ -317,15 +254,14 @@ it("keeps the headline and its dwell across disclosure toggles with accessible c
   draw([prepared("first", "completed")]);
   expanded = true;
   draw([prepared("first", "completed"), prepared("next")]);
-  expect(label()).toBe("Read first");
+  expect(label()).toBe("Read files");
   expect(summary.getAttribute("aria-expanded")).toBe("true");
   expect(body.hidden).toBe(false);
-  expectAfter(1_999, "Read first");
-  expectAfter(1, "Read next…");
+
   expect(query("label")).toBe(headline);
   expanded = false;
   draw([prepared("first", "completed"), prepared("next", "completed")]);
-  expect(label()).toBe("Read next");
+  expect(label()).toBe("Read next.ts");
   expect(summary.getAttribute("aria-expanded")).toBe("false");
 });
 
@@ -340,12 +276,33 @@ it("selects only visible activity from the matching run and newest eligible grou
     group("peer", [prepared("peer")], "peer-run"),
   ];
   activityRoot.render(groups, { ...liveOptions, activityGroupKey: "current" });
-  expect(label()).toBe("Read current…");
+  expect(label()).toBe("Reading current.ts…");
   activityRoot.render(groups, { ...liveOptions, activityGroupKey: "newer-group" });
-  expect(label()).toBe("3 reads");
+  expect(label()).toBe("Read files");
   activityRoot.render(groups, { ...liveOptions, activityRunId: "absent-run" });
-  expect(label()).toBe("3 reads");
-  expectAfter(3_000, "3 reads");
+  expect(label()).toBe("Read files");
+  expectAfter(3_000, "Read files");
+});
+
+it("settles an earlier activity headline when narration follows in the same live run", () => {
+  const activity = group("current", [prepared("current")]);
+  const narration = {
+    kind: "stream" as const,
+    key: "narration",
+    text: "The file is open; checking the result next.",
+    startedAt: 10_000,
+    isStreaming: true,
+    runId: "active-run",
+  };
+  const props = { runId: "active-run", runActive: true };
+  const before = projectTranscriptActivity([activity], props);
+  activityRoot.render([activity], { ...liveOptions, ...before });
+  expect(before.activityGroupKey).toBe("current");
+  const after = projectTranscriptActivity([activity, narration], props);
+  expect(after.activityGroupKey).toBeNull();
+  activityRoot.render([activity], { ...liveOptions, ...after });
+  expect(container.querySelector(".text-shimmer")).toBeNull();
+  expect(label()).toBe("Attempted file reads");
 });
 
 it("uses the newest group's live card label without inheriting an earlier failure", async () => {
@@ -386,47 +343,46 @@ it("uses the newest group's live card label without inheriting an earlier failur
   expect(activitySummary.getAttribute("aria-expanded")).toBe("false");
   expect(activitySummary.getAttribute("aria-label")).toBeNull();
   expect(activitySummary.classList.contains("chat-activity-group__summary--error")).toBe(false);
-  expect(label()).toBe("in /repo/src/a.ts…");
+  expect(label()).toBe("Editing a.ts…");
 
   await renderActivityFixture(groups, { ...opts, runActive: false });
-  expect(activitySummary.textContent?.replace(/\s+/gu, " ").trim()).toBe("1 read · 1 edit");
+  expect(activitySummary.textContent?.replace(/\s+/gu, " ").trim()).toBe(
+    "Attempted file reads, attempted file edits",
+  );
 });
 
 it.each(["failed", "blocked"] as const)(
-  "preserves a nested child's %s urgency under its parent purpose",
+  "preserves a nested child's %s action and urgency",
   async (status) => {
     await renderActivityFixture([group("current", [prepared("first")])], liveOptions);
-    const parent = { ...prepared("parent"), name: "exec", title: "Build the snake game" };
+    const parent = { ...prepared("parent"), name: "exec", title: "Executed code" };
     const nested = nestedStep("write", parent, prepared("child", status));
     await renderActivityFixture([nested], liveOptions);
-    expect(label()).toBe("Build the snake game");
-    expect(vi.getTimerCount()).toBe(0);
-    // A reviewer's block is a decision worth surfacing; a failed attempt mid-run is not.
+    expect(label()).toBe("Write index.html");
+    // Failures and reviewer blocks remain distinguishable while other work continues.
     const summary = query("summary")?.textContent;
     if (status === "blocked") {
-      expect(summary).toContain("1 blocked");
+      expect(summary).toContain("Blocked");
     } else {
-      expect(summary).not.toContain("failed");
+      expect(summary).toContain("failed");
     }
   },
 );
 
-it("keeps the live row for a step with a routine nested call until the run settles", async () => {
+it("keeps routine-only execution containers hidden throughout the run", async () => {
   const step = (status: AgentActivityItem["status"]) =>
     nestedStep(
       "progress_card",
-      { ...prepared("parent", status), name: "exec", title: "Build the snake game" },
+      { ...prepared("parent", status), name: "exec", title: "Executed code" },
       { ...prepared("child", "completed"), hideFromChannelProgress: true },
     );
   await renderActivityFixture([step("running")], liveOptions);
-  expect(label()).toBe("Build the snake game…");
+  expect(query("summary")).toBeNull();
   await renderActivityFixture([step("completed")], liveOptions);
-  expect(label()).toBe("Build the snake game");
+  expect(query("summary")).toBeNull();
   await renderActivityFixture([step("completed")], { ...liveOptions, runActive: false });
   expect(query("summary")).toBeNull();
-  expect(container.querySelector(".chat-tool-row__title")?.textContent).toBe(
-    "Build the snake game",
-  );
+  expect(container.querySelector(".chat-tool-row__title")).toBeNull();
 });
 
 it.each([false, true])(
@@ -440,10 +396,116 @@ it.each([false, true])(
     ];
     if (duplicateStart) {
       activityRoot.render([group("current", settled)], liveOptions);
-      expect(label()).toBe("Read first");
+      expect(label()).toBe("Read first.ts");
     }
     activityRoot.render([group("current", [...settled, prepared("next")])], liveOptions);
-    expect(container.querySelector(".text-shimmer")?.textContent).toBe("Read first");
-    expectAfter(2_800, "Read next…");
+    expect(container.querySelector(".text-shimmer")).toBeNull();
+    expect(label()).toBe("Read first.ts");
+    advanceTimersByTime(799);
+    expect(label()).toBe("Read first.ts");
+    advanceTimersByTime(1);
+    expect(container.querySelector(".text-shimmer")?.textContent).toBe("Reading next.ts…");
+    expect(label()).toBe("Reading next.ts…");
   },
 );
+
+it("coalesces fast completed calls without replaying a queue or delaying their outcomes", () => {
+  const items = [prepared("first")];
+  const draw = () => activityRoot.render([group("current", items)], liveOptions);
+  draw();
+  const headline = query("label");
+  advanceTimersByTime(20);
+  items[0] = prepared("first", "completed");
+  draw();
+  expect(label()).toBe("Read first.ts");
+  expect(container.querySelector(".text-shimmer")).toBeNull();
+  for (let index = 1; index <= 30; index++) {
+    advanceTimersByTime(20);
+    items.push(prepared(`fast-${index}`, "completed"));
+    draw();
+    expect(label()).toBe("Read first.ts");
+    expect(query("label")).toBe(headline);
+  }
+  advanceTimersByTime(380);
+  expect(label()).toBe("Read fast-30.ts");
+  // A continuous burst must still advance; waiting for a quiet gap would starve it.
+  for (let index = 31; index <= 52; index++) {
+    advanceTimersByTime(50);
+    items.push(prepared(`fast-${index}`, "completed"));
+    draw();
+  }
+  expect(label()).not.toBe("Read fast-30.ts");
+  expect(container.querySelector(".text-shimmer")).toBeNull();
+  advanceTimersByTime(20);
+  items.push(prepared("blocked", "blocked"));
+  draw();
+  expect(label()).toBe("Read blocked.ts");
+  expect(query("summary")?.textContent).toContain("Blocked");
+  activityRoot.render([group("current", items)], { ...liveOptions, runActive: false });
+  expect(label()).toBe("Read files · Blocked");
+  expectAfter(3_000, "Read files · Blocked");
+});
+
+it("defers transient replacements and refreshes a held container after its children arrive", () => {
+  const read = prepared("first", "completed");
+  const wrapper = (status: AgentActivityItem["status"]) => ({
+    ...prepared("parent", status),
+    name: "exec",
+    title: "Executed code",
+  });
+  const draw = (parent?: AgentActivityItem, child?: AgentActivityItem) => {
+    const items = [read, ...(parent ? [parent] : []), ...(child ? [child] : [])];
+    activityRoot.render(
+      [
+        entryGroup(
+          "current",
+          createAssistantMessage(
+            [
+              createToolCall("first", "read", { path: "first.ts" }),
+              ...(parent
+                ? [
+                    createToolCall("parent", "exec", {
+                      code: "await tools.read({ path: 'child.ts' })",
+                    }),
+                  ]
+                : []),
+              ...(child
+                ? [
+                    createToolCall(
+                      "child",
+                      "read",
+                      { path: "child.ts" },
+                      { parentToolCallId: "parent" },
+                    ),
+                  ]
+                : []),
+            ],
+            { runId: "active-run", activity: items },
+          ),
+        ),
+      ],
+      liveOptions,
+    );
+  };
+  draw();
+  advanceTimersByTime(1_500);
+  draw(wrapper("running"));
+  expect(label()).toBe("Read first.ts");
+  advanceTimersByTime(40);
+  draw(wrapper("running"), prepared("child"));
+  expect(label()).toBe("Read first.ts");
+  advanceTimersByTime(200);
+  expect(label()).toBe("Reading child.ts…");
+
+  // An initial container can already be visible before its actual child is known.
+  activityRoot.unmount();
+  activityRoot = createActivityGroupHarness(container);
+  draw(wrapper("running"));
+  expect(label()).toBe("Running code…");
+  advanceTimersByTime(40);
+  draw(wrapper("completed"), prepared("child"));
+  expect(label()).toBe("Ran code");
+  expect(container.querySelector(".text-shimmer")).toBeNull();
+  advanceTimersByTime(960);
+  expect(label()).toBe("Reading child.ts…");
+});

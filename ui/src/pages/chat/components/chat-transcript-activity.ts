@@ -24,22 +24,22 @@ export function projectTranscriptActivity(
     chatItems,
     [generation, activityRunId, props.runActive],
     () => {
+      // A later narrative, question, or notice closes the activity segment.
+      // The working indicator is status for the run, not another transcript action.
       const group =
         props.runActive && activityRunId
-          ? chatItems.findLast(
-              (item) =>
-                item.kind === "group" &&
-                item.messages.some(
-                  ({ message }) =>
-                    transcriptRunId(message) === activityRunId &&
-                    readPreparedActivity(message).some(
-                      (activity) =>
-                        !activity.hideFromChannelProgress && !activity.suppressChannelProgress,
-                    ),
-                ),
-            )
+          ? chatItems.findLast((item) => item.kind !== "reading-indicator")
           : undefined;
-      if (group?.kind !== "group") {
+      if (
+        group?.kind !== "group" ||
+        !group.messages.some(
+          ({ message }) =>
+            transcriptRunId(message) === activityRunId &&
+            readPreparedActivity(message).some(
+              (activity) => !activity.hideFromChannelProgress && !activity.suppressChannelProgress,
+            ),
+        )
+      ) {
         return undefined;
       }
       const calls = new Map(
@@ -73,7 +73,7 @@ export function projectTranscriptActivity(
   return {
     workingIndicator,
     activityRunId,
-    activityGroupKey: activityGroup?.key,
+    activityGroupKey: activityGroup?.key ?? null,
     runningActivityGroupKey: activityGroup?.running ? activityGroup.key : undefined,
     runOutputTokens,
   };

@@ -243,6 +243,8 @@ export type ChatItem =
       showTimestamp?: true;
       /** Structural only: separates a handed-off run from its resumption. Never rendered. */
       handoffBoundary?: true;
+      /** Invisible narration boundary, consumed before rendered rows are built. */
+      activityBoundary?: true;
       /** A background skill review's changes; rendered as a native row instead of `text`. */
       skillChanges?: SkillWorkshopChangeNotice;
       runError?: RunFailureNotice;
@@ -360,6 +362,8 @@ export function accumulatedStreamText(
 
 /** A group of consecutive messages from the same role (Slack-style layout) */
 export type MessageGroup = {
+  /** A hidden narrative message separates this activity from preceding tools. */
+  startsActivityGroup?: true;
   kind: "group";
   key: string;
   role: string;

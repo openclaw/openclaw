@@ -1,4 +1,11 @@
 import { For } from "solid-js";
+import { stripShellPreamble } from "../../../../../src/agents/tool-display-exec-shell.js";
+import { commandPreview } from "./chat-tool-row-presentation.ts";
+
+/** Detailed shell formatting loads with the command renderer, never chat boot. */
+export function shellCommandPreview(command: string): string {
+  return commandPreview(stripShellPreamble(command).command || command);
+}
 
 type CommandToken = { text: string; cls: "name" | "flag" | "str" | "num" | "op" | "plain" | "ws" };
 

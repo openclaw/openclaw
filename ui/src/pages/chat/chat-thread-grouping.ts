@@ -329,7 +329,18 @@ export function groupMessages(
       item.replyToMessage = message;
     }
   }
-  return result;
+  let activityBoundary = false;
+  return result.flatMap((item) => {
+    if (item.kind === "notice" && item.activityBoundary) {
+      activityBoundary = true;
+      return [];
+    }
+    if (activityBoundary && item.kind === "group") {
+      activityBoundary = false;
+      return [{ ...item, startsActivityGroup: true as const }];
+    }
+    return [item];
+  });
 }
 
 function groupChatItemSegment(

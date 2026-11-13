@@ -78,12 +78,22 @@ composer; unarchive the session to continue the conversation.
 Commentary written alongside tool calls stays in place as its own row, and those
 calls join the activity group that follows it instead of appearing as separate rows.
 
-Tool activity shows a tool-specific icon beside its purpose or details instead of
-repeating the tool name. When no distinct purpose or detail is available, the row
-shows the tool label instead of leaving the text blank. Activity summaries stay
-dimmed until hover or keyboard focus brightens their text, without an icon tooltip;
-screen readers retain the exact tool identity. Expanding an activity group keeps the individual tool details
-and outcomes available. Completed group summaries retain their operation counts.
+Tool activity names the recorded action and its target, such as a file, command,
+or conversation. Consecutive eligible actions share a factual summary such as
+**Read files, ran commands**. Expand the group to inspect individual inputs,
+outputs, and outcomes. Narration and events with their own placement separate
+activity groups.
+
+Recorded actions inside Code Mode follow the same presentation rules. Their
+execution title and source remain available in the call details; starting another
+Code Mode execution does not by itself start another visual group. Activity
+summaries stay dimmed until hover or keyboard focus brightens their text, without
+an icon tooltip; screen readers retain the exact tool identity. The **Worked for**
+header shows elapsed time without adding a tool-call counter when expanded.
+When a run finishes while you are reading earlier work, that work stays open
+and your reading position is preserved. If you are following the end of the
+conversation, completed work folds above the answer. Opening saved history keeps
+completed work folded until you expand it.
 The **Worked for** summary and reply metadata use the same saved elapsed time,
 from the initiating message to the last recorded output for that run. This includes
 request preparation and waiting, not just model execution. Starting another turn
@@ -131,6 +141,13 @@ subagents** when that child has delegated work of its own. Select a row to open
 that subagent in the **Subagents** panel, or its session when the panel does not
 list it. The rows reuse the chat's loaded subagent list; they do not load each
 child's transcript.
+
+When this session asks a blocking question with `ask_user`, the question appears
+in the transcript beside the agent's work, with the composer still available.
+An asynchronous question stays in the question dock and replaces the composer
+while its panel is open. Answering or skipping uses the same question controls;
+closing the panel does not answer the question. Requests without a recorded
+blocking state keep their existing placement.
 
 When a direct child session, such as a visible session started with
 `sessions_spawn`, asks with `ask_user`, its pending question also docks above

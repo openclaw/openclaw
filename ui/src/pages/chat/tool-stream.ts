@@ -45,7 +45,6 @@ const PROVIDER_POLICY_PRECEDENCE = {
   escalated: 3,
   unavailable: 3,
 } as const;
-const TOOL_STREAM_LIMIT = 50;
 const RUN_USAGE_LIMIT = 50;
 const TOOL_STREAM_THROTTLE_MS = 80;
 const TOOL_OUTPUT_CHAR_LIMIT = 120_000;
@@ -134,12 +133,8 @@ function publishToolStreamEntry(
   } else {
     refreshToolStreamMessage(entry);
   }
-  if (host.toolStreamOrder.length > TOOL_STREAM_LIMIT) {
-    const overflow = host.toolStreamOrder.length - TOOL_STREAM_LIMIT;
-    for (const id of host.toolStreamOrder.splice(0, overflow)) {
-      host.toolStreamById.delete(id);
-    }
-  }
+  // Live calls stay until durable history or run cleanup replaces them. Dropping
+  // a prefix here removes visible operations before their saved rows are loaded.
   if (force) {
     flushToolStreamSync(host);
     return;

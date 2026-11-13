@@ -246,7 +246,6 @@ export function createChatComposerContext(
       : undefined;
   const showComposer =
     !questionPanelProps ||
-    questionPanelProps.model.nonBlocking === true ||
     questionPanelProps.model.requestedBySession !== undefined ||
     questionPanelProps.model.collapsed;
 

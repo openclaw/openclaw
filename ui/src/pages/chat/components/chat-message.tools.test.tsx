@@ -61,7 +61,7 @@ describe("grouped chat rendering", () => {
     return widget;
   }
 
-  it("counts one exec and one wait across completed history, live snapshots, and separated activity groups", async () => {
+  it("deduplicates exec and wait across completed history, live snapshots, and separated activity groups", async () => {
     const messages: TestMessage[] = [];
     const toolMessages: TestMessage[] = [];
     for (const [index, name] of ["exec", "wait"].entries()) {
@@ -105,9 +105,7 @@ describe("grouped chat rendering", () => {
     expect(items.filter((item) => item.kind === "stream")).toHaveLength(1);
     renderActivityGroup(groups, { showReasoning: false, isToolMessageExpanded: () => true });
     await settleToolBridges(harness.view);
-    expect(elementText(".chat-activity-group__label")?.trim()).toBe(
-      "1 command · 1 other operation",
-    );
+    expect(elementText(".chat-activity-group__label")?.trim()).toBe("Ran commands, called Wait");
     expectCount(".chat-tool-row", 2);
   });
 
@@ -139,7 +137,7 @@ describe("grouped chat rendering", () => {
       unpairedCall: true,
     });
     expect(unknown.activity[0]?.items[0]).not.toHaveProperty("status");
-    expect(elementText(".chat-activity-group__label")).toBe("1 command");
+    expect(elementText(".chat-activity-group__label")).toBe("Attempted commands");
     expect(harness.view.textContent).not.toContain("Outcome unknown");
     expect(harness.view.textContent).toContain("No result available.");
     expectAbsent(".chat-tool-row--running");
@@ -153,7 +151,7 @@ describe("grouped chat rendering", () => {
       }),
     ]);
     expect(completed.activity[0]?.items[0]).toMatchObject({ phase: "end", status: "completed" });
-    expect(elementText(".chat-activity-group__label")).toBe("1 command");
+    expect(elementText(".chat-activity-group__label")).toBe("Ran commands");
     expect(harness.view.textContent).not.toContain("outcome unknown");
     expect(harness.view.textContent).toContain("Workspace checked.");
     expectCount(".chat-tool-row", 1);
@@ -208,7 +206,7 @@ describe("grouped chat rendering", () => {
       renderToolMessage(message, { isToolExpanded: () => expanded });
     await show(false);
 
-    expect(elementText(".chat-tool-msg-summary__label")?.trim()).toBe("Example Deck");
+    expect(elementText(".chat-tool-row__title")?.trim()).toBe("Presentation Create");
     expectAbsent(".chat-tool-msg-summary__names");
     expect(elementText(".chat-tool-msg-summary")).not.toContain("with Example Deck");
 

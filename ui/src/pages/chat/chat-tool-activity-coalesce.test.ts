@@ -119,3 +119,28 @@ it.each(["text", "thinking"])("keeps %s apart from its calls and prepared activi
   expect(cards.map((list) => list.map((card) => card.callId))).toEqual([[], ["active"], [], ["b"]]);
   expect(rows.flatMap(readPreparedActivity)).toEqual([activity()]);
 });
+
+it.each([false, true])(
+  "keeps a persisted call after its narration when an earlier live echo is present (split=%s)",
+  (split) => {
+    const live = call("completed", true);
+    const prose = { type: "text", text: "Inspecting the project." };
+    const fields = {
+      __openclaw: {
+        id: "same-assistant",
+        runId: "run",
+        transcriptPosition: { source: "source", rawSeq: 5 },
+      },
+    };
+    const persisted = split
+      ? [
+          execution([prose], { ...fields, activity: undefined }, "narration"),
+          execution([activeCall], fields, "persisted"),
+        ]
+      : [execution([prose, activeCall], fields, "persisted")];
+    const rows = messages([live, ...persisted]);
+    expect(
+      rows.map((message) => extractToolCardsCached(message).map((card) => card.callId)),
+    ).toEqual([[], ["active"]]);
+  },
+);
