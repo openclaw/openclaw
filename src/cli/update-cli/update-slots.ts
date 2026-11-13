@@ -192,37 +192,26 @@ async function runSlotUpdate(
     unchanged = sha === (await readHead(current));
   }
   const version = target.version;
-  const downgrade = version && before ? (compareSemverStrings(version, before) ?? 0) < 0 : false;
-  if (downgrade && !opts.yes && !opts.dryRun) {
-    return {
-      status: "error",
-      mode,
-      reason: "downgrade",
-      before,
-      after: version,
-      message: `${version} is older than ${before}. Rerun with --yes to install it.`,
-    };
+  const refuse = (status: "error" | "skipped", reason: string, message: string) =>
+    ({ status, mode, reason, before, after: version, message }) satisfies SlotUpdateResult;
+  if (version && before && (compareSemverStrings(version, before) ?? 0) < 0 && !opts.yes) {
+    return refuse(
+      "error",
+      "downgrade",
+      `${version} is older than ${before}. Rerun with --yes to install it.`,
+    );
   }
   if (unchanged) {
-    return {
-      status: "skipped",
-      mode,
-      reason: "already-current",
-      before,
-      after: before,
-      message: `Already on ${before}.`,
-    };
+    return refuse("skipped", "already-current", `Already on ${before}.`);
   }
   if (opts.dryRun) {
     const label = source.kind === "npm" ? source.spec : source.sha;
-    return {
-      status: "skipped",
-      mode,
-      reason: "dry-run",
-      before,
-      after: version,
-      message: `Would stage ${label} into ${selectInactiveSlot(dir, existing ?? { current: root, origin: root })} and restart the Gateway.`,
-    };
+    const slot = selectInactiveSlot(dir, existing ?? { current: root, origin: root });
+    return refuse(
+      "skipped",
+      "dry-run",
+      `Would stage ${label} into ${slot} and restart the Gateway.`,
+    );
   }
   if (requested) {
     await persistRequestedUpdateChannel({ configSnapshot: snapshot, requestedChannel: requested });
@@ -257,29 +246,30 @@ async function runSlotUpdate(
     log(`Staged ${reported}; selecting it.`);
     activateRuntimeSlot(dir, staged);
     log(`Selected ${staged}.`);
+    const done = (
+      status: SlotUpdateResult["status"],
+      restart: NonNullable<SlotUpdateResult["restart"]>,
+      message: string,
+    ): SlotUpdateResult => ({
+      status,
+      mode,
+      ...(status === "error" ? { reason: "rolled-back" } : {}),
+      before,
+      after,
+      slot: staged,
+      restart,
+      message,
+    });
     if (opts.restart === false) {
-      return {
-        status: "ok",
-        mode,
-        before,
-        after,
-        slot: staged,
-        restart: "next-start",
-        message: "Update applies on the next Gateway start.",
-      };
+      return done("ok", "next-start", "Update applies on the next Gateway start.");
     }
     const restart = await restartGateway(env);
     if (!restart) {
-      return {
-        status: "ok",
-        mode,
-        before,
-        after,
-        slot: staged,
-        restart: "next-start",
-        message:
-          "No running Gateway or service answered; the update applies on the next Gateway start.",
-      };
+      return done(
+        "ok",
+        "next-start",
+        "No running Gateway or service answered; the update applies on the next Gateway start.",
+      );
     }
     log(
       restart === "requested"
@@ -287,30 +277,19 @@ async function runSlotUpdate(
         : "Restarted the service; waiting for the Gateway to confirm the new slot.",
     );
     const outcome = await waitForRuntimeSlotOutcome(dir, staged, DEFAULT_RESTART_WAIT_MS);
-    if (outcome === "rolled-back") {
-      return {
-        status: "error",
-        mode,
-        reason: "rolled-back",
-        before,
-        after,
-        slot: staged,
-        restart: outcome,
-        message: `The Gateway did not start on ${after}; the launcher returned to ${before}.`,
-      };
-    }
-    return {
-      status: "ok",
-      mode,
-      before,
-      after,
-      slot: staged,
-      restart: outcome,
-      message:
-        outcome === "confirmed"
-          ? `Gateway is running ${after}.`
-          : `Restart requested; ${after} applies when the Gateway restarts.`,
-    };
+    return outcome === "rolled-back"
+      ? done(
+          "error",
+          outcome,
+          `The Gateway did not start on ${after}; the launcher returned to ${before}.`,
+        )
+      : done(
+          "ok",
+          outcome,
+          outcome === "confirmed"
+            ? `Gateway is running ${after}.`
+            : `Restart requested; ${after} applies when the Gateway restarts.`,
+        );
   } finally {
     await release();
   }

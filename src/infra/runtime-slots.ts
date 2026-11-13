@@ -260,7 +260,10 @@ export async function stageRuntimeSlot(params: {
   return slot;
 }
 
-/** Fetches the target ref into the shared object store and returns its commit. */
+/**
+ * Fetches the target into the shared object store and returns its commit. A
+ * private ref, not FETCH_HEAD: the running Gateway's update check also fetches.
+ */
 export async function fetchRuntimeSlotGitTarget(params: {
   repo: string;
   remote: string;
@@ -276,16 +279,10 @@ export async function fetchRuntimeSlotGitTarget(params: {
     env: runtimeSlotEnv(params.node, params.env),
     timeoutMs: params.timeoutMs,
   };
-  await run(
-    command,
-    ["git", "-C", params.repo, "fetch", "--tags", params.remote, params.ref],
-    options,
-  );
-  return await run(
-    command,
-    ["git", "-C", params.repo, "rev-parse", "--verify", "FETCH_HEAD^{commit}"],
-    options,
-  );
+  const target = "refs/openclaw/runtime-slot-target";
+  const git = (...args: string[]) => run(command, ["git", "-C", params.repo, ...args], options);
+  await git("fetch", "--no-tags", params.remote, `+${params.ref}:${target}`);
+  return await git("rev-parse", "--verify", `${target}^{commit}`);
 }
 
 /** A slot that cannot print its version under the service's Node never becomes current. */
