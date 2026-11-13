@@ -21,6 +21,11 @@ const DOCUMENT_MIME =
   /^application\/(?:pdf|msword|x-cfb|vnd\.(?:apple\.(?:keynote|numbers|pages)|ms-.+|oasis\.opendocument\..+|openxmlformats-officedocument\..+))$/;
 const ARCHIVE_MIME =
   /^application\/(?:gzip|vnd\.rar|x-7z-compressed|x-gzip|x-rar-compressed|x-tar|x-zip-compressed|zip)$/;
+/**
+ * A well-formed `type/subtype` essence. A bare token such as `plain` (a malformed
+ * `Content-Type` we recover text from later) is not a MIME verdict about the bytes.
+ */
+const MIME_ESSENCE = /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/i;
 const WORDISH_CHAR = /[\p{L}\p{N}]/u;
 
 export function attachmentClassFromMime(mime?: string | null): AttachmentClass {
@@ -176,6 +181,17 @@ export async function classifyAttachmentBytes(params: {
     // Text resolved by extension can still be BOM-less UTF-16; dropping the
     // detected charset here would decode it downstream as UTF-8 mojibake.
     return charset ? { mime, class: detectedClass, charset } : { mime, class: detectedClass };
+  }
+  // A MIME that already resolves to a concrete binary type (SQLite, ELF, PE, Java class,
+  // OTF, WASM, …) is a magic-byte verdict about the payload, not an extension guess. Guessing
+  // a UTF-16 charset from the NUL ratio below would decode those bytes into garbage and inline
+  // them into the model prompt as text (#198289). A BOM is the one signal that outranks it, so
+  // genuine BOM-prefixed UTF-16 text still reaches the decoder branch.
+  // The essence must be a well-formed `type/subtype`: a malformed hint like `plain` classifies
+  // as "binary" for lack of a recognised prefix, but it says nothing about the payload, so
+  // short-circuiting on it would skip the text recovery this branch exists to preserve.
+  if (mime && MIME_ESSENCE.test(mime) && detectedClass === "binary" && !hasUtf16Bom) {
+    return { mime, class: "binary" };
   }
   const signature = params.buffer.length >= 4 ? params.buffer.readUInt32BE(0) : 0;
   if (signature === 0x504b0304 || signature === 0x504b0102 || signature === 0x504b0506) {

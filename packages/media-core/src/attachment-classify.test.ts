@@ -72,6 +72,53 @@ describe("classifyAttachmentBytes", () => {
   });
 });
 
+describe("magic-byte binary signatures outrank a NUL-driven UTF-16 guess", () => {
+  // Padding with NULs makes the NUL ratio alone look like UTF-16 text, which is exactly the
+  // shape that used to inline decoded binary garbage into the model prompt (#198289).
+  const padded = (header: Buffer): Buffer =>
+    Buffer.concat([header, Buffer.alloc(4096 - header.length)]);
+  const pe = Buffer.concat([
+    Buffer.from("MZ", "latin1"),
+    Buffer.alloc(58),
+    Buffer.from([0x40, 0, 0, 0]),
+    Buffer.from("PE\0\0", "latin1"),
+  ]);
+
+  it.each([
+    ["SQLite", padded(Buffer.from("SQLite format 3\0", "latin1")), "t.db", "application/x-sqlite3"],
+    [
+      "SQLite behind a text name",
+      padded(Buffer.from("SQLite format 3\0", "latin1")),
+      "notes.txt",
+      "application/x-sqlite3",
+    ],
+    [
+      "an ELF executable",
+      padded(Buffer.from("7f454c46020101000000000000000000", "hex")),
+      "a.out",
+      "application/x-elf",
+    ],
+    ["a PE executable", padded(pe), "tool.exe", "application/x-msdownload"],
+    [
+      "a Java class",
+      padded(Buffer.from("cafebabe00000034", "hex")),
+      "Main.class",
+      "application/java-vm",
+    ],
+    ["an OpenType font", padded(Buffer.from("4f54544f00010000", "hex")), "font.otf", "font/otf"],
+    [
+      "a WebAssembly module",
+      padded(Buffer.from("0061736d01000000", "hex")),
+      "mod.wasm",
+      "application/wasm",
+    ],
+  ] as const)("keeps %s binary", async (_label, buffer, name, mime) => {
+    await expect(
+      classifyAttachmentBytes({ buffer, declaredMime: "application/octet-stream", name }),
+    ).resolves.toEqual({ mime, class: "binary" });
+  });
+});
+
 it("matches a configured text/yaml allowlist against classified .yaml files", async () => {
   const classified = await classifyAttachmentBytes({
     buffer: Buffer.from("key: value\nitems:\n  - one\n", "utf8"),
