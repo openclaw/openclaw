@@ -9,10 +9,6 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
-import {
-  closeOpenClawStateDatabaseByPathAsync,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
 import { gatewayDirectStopEntrypoints } from "../cli-entrypoint.test-support.js";
 import { formatCliProcessFailure } from "../cli-process-child.test-helpers.js";
 import { createProcessFixtures } from "./run-loop-process.test-support.js";
@@ -42,12 +38,25 @@ const childScript = `
   import { writeSync } from "node:fs";
   import { runGatewayLoop } from ${JSON.stringify(moduleUrl(gatewayDirectStopEntrypoints.runLoop))};
   import { writeGatewayRestartIntentSync } from ${JSON.stringify(moduleUrl(gatewayDirectStopEntrypoints.restartIntent))};
+  import { beginGatewayBootLifecycle, completeGatewayBootLifecycle } from ${JSON.stringify(moduleUrl(gatewayDirectStopEntrypoints.bootLifecycle))};
   import { PluginRuntimeCloseRetainedError } from ${JSON.stringify(pathToFileURL(path.resolve("src/plugins/runtime-close-error.ts")).href)};
 
   const trace = (line) => writeSync(1, "process proof: " + line + "\\n");
   let starts = 0;
+  let bootId;
   const code = await runGatewayLoop({
     ownsProcessLifecycle: true,
+    // Match CLI startup: the child owns boot publication before reporting ready.
+    beginBoot: async (startedAtMs) => {
+      const boot = await beginGatewayBootLifecycle(process.env, startedAtMs);
+      assert(boot.id, "fixture boot publication failed");
+      bootId = boot.id;
+    },
+    completeBoot: (completion) => {
+      const completedBootId = bootId;
+      bootId = undefined;
+      return completeGatewayBootLifecycle(completedBootId, completion);
+    },
     onProcessResourcesSettled: (outcome) => {
       trace("custody:" + outcome);
     },
@@ -98,10 +107,6 @@ posixIt.for(["SIGTERM", "SIGUSR2"] as const)(
       OPENCLAW_NO_RESPAWN: "1",
       VITEST: undefined,
     };
-    if (stopSignal === "SIGUSR2") {
-      const database = openOpenClawStateDatabase({ env });
-      await closeOpenClawStateDatabaseByPathAsync(database.path);
-    }
     const child = spawn(
       process.execPath,
       ["--import", "tsx", "--input-type=module", "--eval", childScript, stopSignal],
