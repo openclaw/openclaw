@@ -296,13 +296,20 @@ export async function smokeRuntimeSlot(params: {
   expectedVersion?: string;
   command?: RuntimeSlotCommand;
 }): Promise<string> {
+  // A release without the launcher never confirms its trial and would be rolled back later.
+  if (!fsSync.existsSync(path.join(params.root, "scripts", "openclaw-runtime-launcher.mjs"))) {
+    throw new Error(
+      `${params.root} predates runtime slots; install that release with your package manager instead.`,
+    );
+  }
   const output = await run(
     params.command ?? runSlotCommand,
     [params.node, runtimeEntry(params.root), "--version"],
     {
       cwd: params.root,
       env: { ...runtimeSlotEnv(params.node, params.env), [RUNTIME_SLOT_ENV]: params.root },
-      timeoutMs: 60_000,
+      // The first run completes a package lifecycle that npm skipped.
+      timeoutMs: 5 * 60_000,
     },
   );
   if (params.expectedVersion && !output.includes(params.expectedVersion)) {

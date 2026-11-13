@@ -1038,6 +1038,42 @@ the Node executable in a service definition does not update its OpenClaw package
 openclaw update
 ```
 
+### Runtime slots (Linux and macOS)
+
+On Linux and macOS, `openclaw update` for an npm or git install never changes
+the running files. It keeps two runtime slots in `<state>/runtime/` and a
+pointer, `slots.json`, that selects one of them:
+
+1. The update installs the target into the slot that is not running:
+   `npm install --prefix <slot>` for npm installs, or a Git worktree of your
+   checkout for git installs (it shares the object store; no copy, no pack
+   limit).
+2. It runs `<slot> --version` with the Node executable that the service uses.
+   A slot that fails this check is never selected.
+3. It replaces `slots.json` with one atomic rename and gives the new slot two
+   trial starts.
+4. It asks the Gateway to restart. The service manager starts it again on the
+   new slot. If the Gateway does not answer, it runs `systemctl --user restart`
+   or `launchctl kickstart -k`. If neither works, the update applies on the next
+   Gateway start; that is not a failure.
+
+The installed service runs your original install, as before. Its first step
+starts the selected slot through `<state>/runtime/launcher.mjs`, a small
+launcher that updates never rewrite. Updates do not rewrite the systemd unit
+or LaunchAgent. When a new slot fails to reach "gateway ready" on two starts,
+the launcher returns to the previous slot and `openclaw update` reports the
+rollback. The CLI on your `PATH` follows the selected slot too, so
+`openclaw --version` reports the running version.
+
+The updater needs no user session bus, `XDG_RUNTIME_DIR`, `PATH` entry for
+Node, or particular umask; it works from cron. Disk use is the original install
+plus two slots. The first update after upgrading to this release creates the
+layout; nothing is copied.
+
+Chat `/update` is not available for a slot install yet; run `openclaw update`
+on the Gateway host. Windows, Homebrew, system packages, the macOS app and
+container images keep their existing update paths.
+
 Starting with the release that adds [candidate-owned admission](/cli/update#candidate-owned-admission),
 package updates privately stage the target and let its code judge configuration,
 database schema, Node requirements, and plugin availability before activation.
