@@ -41,6 +41,7 @@ import {
   formatSecretDegradationRetryHint,
   redactSecretDegradationReason,
 } from "../secrets/runtime-degraded-state.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import type { StatusSummary } from "../status/summary.js";
 import { VERSION } from "../version.js";
 import { isServiceRepairExternallyManaged } from "./doctor-service-repair-policy.js";
@@ -410,6 +411,7 @@ export async function checkGatewayHealth(params: {
   const { bindAgentToolGatewayRequest } = await import("../agents/tools/in-process-gateway.js");
   const requestGateway = bindAgentToolGatewayRequest({ hostedOnly: true });
   const timeoutMs = DEFAULT_RESTART_HEALTH_TIMEOUT_MS;
+  const signal = getAsyncWorkSignal();
   let healthOk = false;
   let status: StatusSummary | undefined;
   let gatewaySnapshot: GatewayHello["snapshot"] | undefined;
@@ -419,6 +421,7 @@ export async function checkGatewayHealth(params: {
         config: params.cfg,
         timeoutMs,
         serviceMode: isServiceRepairExternallyManaged() ? "external" : "native",
+        signal,
       },
       params.runtime,
     );
@@ -432,6 +435,7 @@ export async function checkGatewayHealth(params: {
       timeoutMs: remainingMs,
       sharedStateMode: "read-only",
       config: params.cfg,
+      signal,
       onHelloOk: ({ snapshot }: GatewayHello) => {
         gatewaySnapshot = snapshot;
         noteGatewayStateDirectory(snapshot, "live Gateway");
@@ -507,6 +511,7 @@ export async function checkGatewayHealth(params: {
         timeoutMs: diagnosticsTimeoutMs,
         sharedStateMode: "read-only",
         config: params.cfg,
+        signal,
       }),
       requestGateway({
         method: "diagnostics.stability",
@@ -514,8 +519,11 @@ export async function checkGatewayHealth(params: {
         timeoutMs: diagnosticsTimeoutMs,
         sharedStateMode: "read-only",
         config: params.cfg,
+        signal,
       }),
     ]);
+    // A Ctrl+C cancels the pending reads; end the check instead of reporting them as warnings.
+    signal?.throwIfAborted();
     if (channelsResult.status === "fulfilled") {
       const issues = collectChannelStatusIssues(channelsResult.value);
       if (issues.length > 0) {
@@ -574,6 +582,7 @@ export async function checkGatewayHealth(params: {
     }
     return { healthOk, authenticated: true, status };
   } catch (err) {
+    signal?.throwIfAborted();
     if (!gatewaySnapshot?.stateDir) {
       await noteInstalledGatewayStateDirectory(params.cfg, timeoutMs);
     }
@@ -595,6 +604,7 @@ export async function checkGatewayHealth(params: {
         preauthHandshakeTimeoutMs: probeDetails.preauthHandshakeTimeoutMs,
         config: params.cfg,
         json: true,
+        signal,
       });
       if (gatewayProbeResultSawGateway(probe)) {
         if (gatewayProbeResultWasRateLimited(probe)) {
@@ -653,6 +663,7 @@ export async function probeGatewayMemoryStatus(params: {
       timeoutMs: 8_000,
       sharedStateMode: "read-only",
       config: params.cfg,
+      signal: getAsyncWorkSignal(),
     });
     if (payload.health) {
       return {
