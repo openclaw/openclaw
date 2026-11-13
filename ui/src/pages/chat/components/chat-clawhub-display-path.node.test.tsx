@@ -1,5 +1,8 @@
 /* @vitest-environment jsdom */
 
+// Node-driven integration: real Gateway transcript producers feed the UI reducer
+// and renderer. Its server/state imports must not enter the browser module graph.
+
 import { For } from "solid-js";
 import { beforeEach, expect, it } from "vitest";
 import { projectChatDisplayMessagesWithState } from "../../../../../src/gateway/chat-display-projection.js";
@@ -45,13 +48,17 @@ it.each(["history", "live", "live-before-run-adoption"])(
     // Synthetic persisted shape: the message tool stores model text separately
     // from display-only blocks, and final:false is an intermediate source reply.
     const persisted = [
-      row(57, { content: [text("I will show the Travel Themes review card.")] }),
+      row(57, {
+        content: [
+          text("Expedia is installed but disabled; ask me to enable it when you are ready."),
+        ],
+      }),
       row(58, {
         api: "openclaw-transcript",
         provider: "openclaw",
         model: "delivery-mirror",
-        content: [text("Travel Themes: Available to install.")],
-        openclawDisplayContent: [recommendation, text("Travel Themes: Available to install.")],
+        content: [],
+        openclawDisplayContent: [recommendation],
         openclawDeliveryMirror: { kind: "message-tool-source-reply", final: false },
         openclawDelivery: { mediaUrls: [] },
       }),
@@ -171,6 +178,7 @@ it.each(["history", "live", "live-before-run-adoption"])(
       "View details",
     );
     expect(view.container.textContent).toContain("Where would you like to go?");
+    expect(view.container.textContent).not.toContain("Travel Themes: Available to install.");
     expect(request.mock.calls.map(([method, params]) => [method, params])).toContainEqual([
       "plugins.catalog.get",
       { id: recommendation.id },

@@ -143,7 +143,8 @@ it.each([
       diagnostics: [],
       mutationAllowed: true,
     });
-    const { result, recommendations } = await search({ plugin: ` ${packageName} ` });
+    const { result, reply, recommendations } = await search({ plugin: ` ${packageName} ` });
+    expect(reply?.text).toBeUndefined();
     expect(registry.detail).toHaveBeenCalledWith({ packageName });
     expect(registry.plugins).not.toHaveBeenCalled();
     expect(registry.skills).not.toHaveBeenCalled();
@@ -157,6 +158,21 @@ it.each([
     expectNotice(result, `${displayName}: Installed.`);
   },
 );
+it("shows an uninstalled community card without redundant status text", async () => {
+  registry.detail.mockResolvedValue({
+    ...remotePlugin,
+    packageName: "openclaw-travel-themes",
+    displayName: "Travel Themes",
+    isOfficial: false,
+  });
+  const { result, reply, recommendations } = await search({ plugin: "openclaw-travel-themes" });
+  expect(reply?.text).toBeUndefined();
+  expect(recommendations).toMatchObject([
+    { name: "Travel Themes", installed: false, official: false },
+  ]);
+  // Status remains in the private tool receipt so the agent knows what was sent.
+  expectNotice(result, "Travel Themes: Available to install.");
+});
 it.each([
   [
     "a package that is missing or not a plugin",

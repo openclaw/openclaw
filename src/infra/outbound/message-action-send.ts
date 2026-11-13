@@ -94,6 +94,7 @@ function resolveReplyMediaAttachmentType(value: unknown): ReplyMediaAttachment["
 export async function buildMessagePayload(params: {
   actionParams: Record<string, unknown>;
   input: MessageActionInput;
+  resolvedChannelData?: ReplyPayload["channelData"];
   channel?: ChannelId;
   target?: string;
   accountId?: string | null;
@@ -139,9 +140,10 @@ export async function buildMessagePayload(params: {
   const voiceText = readToolStringParam(actionParams, "voiceText");
   const voiceProvider = readToolStringParam(actionParams, "voiceProvider");
   const voiceId = readToolStringParam(actionParams, "voiceId");
+  const needsText = !(hasMediaHint || hasPresentation || hasInteractive || location || voiceText);
   let message =
     readToolStringParam(actionParams, "message", {
-      required: !hasMediaHint && !hasPresentation && !hasInteractive && !location && !voiceText,
+      required: needsText && !params.resolvedChannelData,
       allowEmpty: true,
       trim: false,
     }) ?? "";
@@ -280,6 +282,7 @@ export async function buildMessagePayload(params: {
       presentation: actionParams.presentation,
       interactive: actionParams.interactive,
       location,
+      channelData: params.resolvedChannelData,
     })
   ) {
     throw new Error("send requires text or media or location");
@@ -304,7 +307,7 @@ export async function buildMessagePayload(params: {
     rawDelivery && typeof rawDelivery === "object" && !Array.isArray(rawDelivery)
       ? (rawDelivery as ReplyPayloadDelivery)
       : undefined;
-  const channelData = asOptionalRecord(actionParams.channelData);
+  const channelData = params.resolvedChannelData ?? asOptionalRecord(actionParams.channelData);
   const presentation = normalizeMessagePresentation(actionParams.presentation);
   const interactive = normalizeLegacyInteractiveReply(actionParams.interactive);
   const payload: ReplyPayload = {
