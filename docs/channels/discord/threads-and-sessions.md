@@ -63,6 +63,10 @@ failed chunk may have been delivered, so inspect the thread before retrying.
     When the bounded session transcript confirms a completed answer, unchanged
     requests with matching message IDs are not quoted again. Edits, unseen discussion,
     unfinished requests, and attachments remain eligible; reply targets stay separate.
+    Reconciliation follows the selected message IDs through at most 10,000 canonical
+    message rows and 64 MiB of captured transcript data, so internal runtime activity
+    does not consume a per-candidate two-row allowance. Lookup stops at an omitted
+    oversized row; requests without completion evidence inside these bounds stay eligible.
 
     Human replies carry the selected parent message independently of `allowBots`.
     Missing or empty nested reply payloads are fetched from Discord. If the parent
