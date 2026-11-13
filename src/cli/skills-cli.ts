@@ -29,6 +29,7 @@ import {
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeAgentIdStrict } from "../routing/session-key.js";
 import { defaultRuntime, ExitError } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { resolveSkillStatusEntry, type SkillStatusReport } from "../skills/discovery/status.js";
 import {
   installSkillFromClawHub,
@@ -501,6 +502,7 @@ export function registerSkillsCli(program: Command) {
             }),
             logger: skillInstallLogger,
             config: target.config,
+            signal: getAsyncWorkSignal(),
           });
           if (results.some((result) => result.ok && result.changed)) {
             await refreshLocalGatewaySkills(target);

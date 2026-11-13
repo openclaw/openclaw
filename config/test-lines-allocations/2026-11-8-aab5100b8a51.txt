@@ -1,0 +1,2 @@
+7
+# Prove an aborted skills update starts no additional install without deleting existing coverage.

@@ -227,4 +227,11 @@ export function registerRemoteClawHubTests(getWorkspaceDir: () => string) {
       });
     });
   });
+
+  it("starts no skill update once interrupted", async () => {
+    await writeTrackedSkill(getWorkspaceDir(), "weather", { installedVersion: "0.9.0" });
+    const signal = AbortSignal.abort();
+    expect(await updateTestSkill(getWorkspaceDir(), undefined, { signal })).toEqual([]);
+    expect(fetchClawHubSkillInstallResolutionMock).not.toHaveBeenCalled();
+  });
 }
