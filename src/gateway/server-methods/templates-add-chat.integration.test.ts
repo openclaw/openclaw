@@ -1,6 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { resolveEffectiveToolPolicy } from "../../agents/agent-tools.policy.js";
+import { isToolAllowedByPolicies } from "../../agents/tool-policy-match.js";
+import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../agents/tool-policy.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { listConfiguredMcpServers } from "../../config/mcp-config.js";
 import {
@@ -210,6 +213,7 @@ async function withGateway(
     workspace: (agentId: string) => string;
   }) => Promise<void>,
   entries: NonNullable<OpenClawConfig["agents"]>["entries"] = {},
+  tools?: OpenClawConfig["tools"],
 ) {
   await withOpenClawTestState(
     {
@@ -223,6 +227,7 @@ async function withGateway(
     },
     async (state) => {
       let config: OpenClawConfig = {
+        ...(tools ? { tools } : {}),
         gateway: { controlUi: { experimental: { templates: true } } },
         agents: {
           entries: { main: { workspace: state.path("existing-workspace") }, ...entries },
@@ -308,6 +313,83 @@ function deliver(source: Awaited<ReturnType<typeof writeTemplate>>) {
 
 const chatAdd = { mode: "chat", source: coordinate, agentId: "travel-copilot" };
 const sessionKey = "agent:travel-copilot:main";
+
+// Resolve the saved agent through the same profile/config layers used by tool construction.
+it.each<{
+  name: string;
+  tools?: OpenClawConfig["tools"];
+  operatorDeny?: string[];
+  operatorAllow?: string[];
+}>([
+  {
+    name: "Travel Copilot profile plus alsoAllow",
+    tools: {
+      profile: "minimal",
+      alsoAllow: [
+        "read",
+        "write",
+        "edit",
+        "search_stays",
+        "search_flights",
+        "eg_travel_signup",
+        "eg_travel_verify",
+        "exec",
+      ],
+      fs: { workspaceOnly: true },
+    },
+  },
+  { name: "explicit allow", tools: { allow: ["web_fetch"] } },
+  { name: "no Template tools policy", tools: undefined },
+  { name: "Template deny", tools: { profile: "minimal", deny: ["plugins"] } },
+  { name: "operator deny", tools: undefined, operatorDeny: ["message"] },
+  { name: "operator allow ceiling", tools: undefined, operatorAllow: ["read"] },
+])(
+  "makes setup tools effectively available without overriding explicit denies: $name",
+  async ({ tools, ...scenario }) => {
+    await withGateway(
+      async (gateway) => {
+        deliver(
+          await writeTemplate(gateway.root, {
+            schemaVersion: 1,
+            agent: { id: "travel-copilot", name: "Travel Copilot", ...(tools ? { tools } : {}) },
+          }),
+        );
+        const [ok, result] = await gateway.add(chatAdd);
+        expect(ok, JSON.stringify(result)).toBe(true);
+        const stored = (await readConfigFileSnapshot()).config;
+        const effective = resolveEffectiveToolPolicy({ config: stored, agentId: "travel-copilot" });
+        const policies = [
+          mergeAlsoAllowPolicy(
+            resolveToolProfilePolicy(effective.profile),
+            effective.profileAlsoAllow,
+          ),
+          effective.globalPolicy,
+          effective.agentPolicy,
+        ];
+        for (const tool of ["read", "automations", "plugins", "message"]) {
+          const denied = tools?.deny?.includes(tool) || scenario.operatorDeny?.includes(tool);
+          const excluded = scenario.operatorAllow && !scenario.operatorAllow.includes(tool);
+          expect(isToolAllowedByPolicies(tool, policies), tool).toBe(!denied && !excluded);
+        }
+        if (tools?.fs) {
+          expect(stored.agents!.entries!["travel-copilot"]!.tools?.fs).toEqual({
+            workspaceOnly: true,
+          });
+          for (const tool of tools.alsoAllow ?? []) {
+            expect(isToolAllowedByPolicies(tool, policies), tool).toBe(true);
+          }
+        }
+      },
+      {},
+      {
+        profile: "minimal",
+        alsoAllow: ["web_fetch"],
+        ...(scenario.operatorDeny ? { deny: scenario.operatorDeny } : {}),
+        ...(scenario.operatorAllow ? { allow: scenario.operatorAllow, alsoAllow: undefined } : {}),
+      },
+    );
+  },
+);
 
 it("creates the Template's agent without a plan, then hands the outcome to its first turn", async () => {
   await withGateway(async (gateway) => {

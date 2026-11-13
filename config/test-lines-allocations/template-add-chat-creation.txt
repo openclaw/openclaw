@@ -1,4 +1,6 @@
 # Chat-based Template Add: the Gateway request-seam suite drives real admission,
 # workspace, skill, bundled-plugin, MCP and rollback owners against a Template
 # fixture, and the Control UI suite covers the plan-free Add and its rollback.
-120
+# Follow-up policy cases resolve effective grants across profile/allow/deny layers;
+# deferred-detail cases protect immediate chat and stale-connection non-mutation.
+200

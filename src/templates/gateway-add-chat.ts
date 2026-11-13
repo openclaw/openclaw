@@ -41,26 +41,34 @@ type VerifiedTemplateSource = Extract<TemplateReadResult, { ok: true }>;
 type TemplateAgentConfig = TemplateAddPlan["agent"]["config"];
 
 const MANIFEST_FILE = "CLAW.md";
-/** The agent's own conversation finishes setup with these tools. */
-const SETUP_TOOLS = ["automations", "plugins", "message"];
+/** The agent reads its manifest and finishes setup in its own conversation. */
+const SETUP_TOOLS = ["read", "automations", "plugins", "message"];
 
 /**
- * Add what the Template's own allowlist omits. A Template without an allowlist
- * inherits the operator's policy, which this agent entry does not narrow. A tool
- * the Template explicitly denies stays denied: creation adds grants, it does not
- * lift an author's restriction.
+ * The planner freezes declared profiles into full + allow. Extend that bounded
+ * policy, or extend the inherited profile additively when no allowlist exists.
+ * Global allow/deny and the Template's explicit denies still intersect these grants.
  */
-function allowSetupTools(tools: TemplateAgentConfig["tools"]): TemplateAgentConfig["tools"] {
+function allowSetupTools(
+  tools: TemplateAgentConfig["tools"],
+  inheritedTools: OpenClawConfig["tools"],
+): TemplateAgentConfig["tools"] {
   const allow = tools?.allow;
-  return allow
-    ? {
-        ...tools,
-        allow: [
-          ...allow,
-          ...SETUP_TOOLS.filter((tool) => !isToolAllowedByPolicyName(tool, { allow })),
-        ],
-      }
-    : tools;
+  if (allow) {
+    return {
+      ...tools,
+      allow: [
+        ...allow,
+        ...SETUP_TOOLS.filter((tool) => !isToolAllowedByPolicyName(tool, { allow })),
+      ],
+    };
+  }
+  return {
+    ...tools,
+    alsoAllow: [
+      ...new Set([...(tools?.alsoAllow ?? inheritedTools?.alsoAllow ?? []), ...SETUP_TOOLS]),
+    ],
+  };
 }
 
 function withoutAgent(config: OpenClawConfig, agentId: string): OpenClawConfig {
@@ -194,13 +202,14 @@ export async function createTemplateAgentFromChat(
     };
     // Only the agent and its files decide whether creation proceeds, and only they
     // are bound into the retry checkpoint. Dependencies are planned once it exists.
+    const config = (await input.getPlanningContext()).config;
     const planned = await buildGatewayTemplateAddPlan(
       {
         ...source,
         manifest: { ...source.manifest, skills: [], plugins: [], mcpServers: {}, automations: [] },
       },
       {
-        config: withoutAgent((await input.getPlanningContext()).config, agentId),
+        config: withoutAgent(config, agentId),
         sourceMcpServers: {},
         agentId,
         admittedWorkspace: admitted.workspace,
@@ -218,7 +227,10 @@ export async function createTemplateAgentFromChat(
       ...planned,
       agent: {
         ...planned.agent,
-        config: { ...planned.agent.config, tools: allowSetupTools(planned.agent.config.tools) },
+        config: {
+          ...planned.agent.config,
+          tools: allowSetupTools(planned.agent.config.tools, config.tools),
+        },
       },
       actions: [
         // The planner turns a legacy heartbeat declaration and its HEARTBEAT.md into an
