@@ -41,7 +41,7 @@ it.each([
   const item: Extract<ChatItem, { kind: "notice" }> = {
     kind: "notice",
     key: "plugin-steering",
-    icon: "spark",
+    icon: "compass",
     label,
     timestamp: new Date(2026, 9, 16, 14, 37).getTime(),
     text: "Check the **rollback path** before continuing.",

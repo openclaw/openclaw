@@ -53,7 +53,7 @@ const systemNoticeKinds: Readonly<Record<string, SystemNoticeKind>> = {
 };
 
 const pluginSteeringNotice: SystemNoticeKind = {
-  icon: "spark",
+  icon: "compass",
   collapsedBody: true,
   showTimestamp: true,
   startsTurn: false,

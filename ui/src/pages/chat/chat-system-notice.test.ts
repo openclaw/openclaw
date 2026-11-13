@@ -257,7 +257,7 @@ describe("plugin steering notices", () => {
         { kind: "group", role: "user", messages: [{ message: before }] },
         {
           kind: "notice",
-          icon: "spark",
+          icon: "compass",
           label: name,
           text: steering.content,
           timestamp: 1000,
