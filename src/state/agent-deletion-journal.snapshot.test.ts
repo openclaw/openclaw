@@ -325,34 +325,7 @@ it.each(["runtime", "runtime-discovery", "maintenance"] as const)(
   },
 );
 
-it("publishes recovery hold additions and restorations to prepared runtime discovery", async () => {
-  await withState({ scenario: "minimal" }, async (state) => {
-    const options = { env: state.env };
-    const held = { agentId: "held", path: state.statePath("held.sqlite") };
-    openStateDb(options);
-    const prepared = prepareSnapshot(options, "runtime-discovery");
-    await prepared.read();
-    const statePath = stateSqlitePath(state.env);
-    expect(getPreparedAgentDeletionDiscovery(statePath)).toEqual({ status: "empty" });
-    writeState((database) => recordAgentDeletionRecoveryHolds(database, [held]), options);
-    expect(getPreparedAgentDeletionDiscovery(statePath)).toBeUndefined();
-    await prepared.readWithCurrentAdmission();
-    expect(getPreparedAgentDeletionDiscovery(statePath)).toEqual({
-      status: "present",
-      entries: [],
-      held: [held],
-    });
-    writeState(
-      (database) => resolveAgentDeletionRecoveryHolds(database, held.agentId, [held.path]),
-      options,
-    );
-    expect(getPreparedAgentDeletionDiscovery(statePath)).toBeUndefined();
-    await prepared.readWithCurrentAdmission();
-    expect(getPreparedAgentDeletionDiscovery(statePath)).toEqual({ status: "empty" });
-  });
-});
-
-it("excludes held custom stores before discovering configured physical owners", async () => {
+it("refreshes held custom-store discovery before inspecting owners and after restoration", async () => {
   await withState({ scenario: "minimal" }, async (state) => {
     const options = { env: state.env };
     const cfg = {
@@ -377,12 +350,22 @@ it("excludes held custom stores before discovering configured physical owners", 
     });
     await closeOpenClawAgentDatabaseByPathAsync(heldPath);
     unregisterDatabase({ ...options, agentId: "held", path: heldPath });
+    const prepared = prepareSnapshot(options, "runtime-discovery");
+    await prepared.read();
+    const statePath = stateSqlitePath(state.env);
+    expect(getPreparedAgentDeletionDiscovery(statePath)).toEqual({ status: "empty" });
     writeState(
       (database) =>
         recordAgentDeletionRecoveryHolds(database, [{ agentId: "held", path: heldPath }]),
       options,
     );
-    const { snapshot } = await prepareSnapshot(options, "runtime-discovery").read();
+    expect(getPreparedAgentDeletionDiscovery(statePath)).toBeUndefined();
+    const { snapshot } = await prepared.readWithCurrentAdmission();
+    expect(getPreparedAgentDeletionDiscovery(statePath)).toEqual({
+      status: "present",
+      entries: [],
+      held: [{ agentId: "held", path: heldPath }],
+    });
     const inspectOwner = vi.spyOn(ownerRead, "inspectOpenClawAgentDatabaseOwner");
     try {
       const matches = createGatewayRetainedStoreMatcher(cfg, { env: state.env, snapshot });
@@ -392,5 +375,12 @@ it("excludes held custom stores before discovering configured physical owners", 
     } finally {
       inspectOwner.mockRestore();
     }
+    writeState(
+      (database) => resolveAgentDeletionRecoveryHolds(database, "held", [heldPath]),
+      options,
+    );
+    expect(getPreparedAgentDeletionDiscovery(statePath)).toBeUndefined();
+    await prepared.readWithCurrentAdmission();
+    expect(getPreparedAgentDeletionDiscovery(statePath)).toEqual({ status: "empty" });
   });
 });

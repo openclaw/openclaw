@@ -6,18 +6,30 @@ import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.j
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
-import { completeAgentDeletionJournalInDatabase } from "../state/agent-deletion-journal.js";
 import { readAgentDeletionRecoveryHoldsInWorker } from "../state/agent-deletion-journal.read.js";
+import { completeDeletion } from "../state/agent-deletion-journal.test-support.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { assertOpenClawDatabasesReady } from "../state/openclaw-database-preflight.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import {
   createAgentTestState,
   prepareRecoveryHolds,
 } from "./agent-create.integration.test-support.js";
 import { createAgent } from "./agent-create.js";
+
+function acquireOwner(state: Awaited<ReturnType<typeof createAgentTestState>>) {
+  return acquireGatewayStateOwner({
+    databasePath: resolveOpenClawStateSqlitePath(state.env),
+    payload: {
+      pid: process.pid,
+      role: "gateway",
+      createdAt: new Date().toISOString(),
+      configPath: state.configPath,
+      processNamespace: readGatewayLockProcessNamespace(),
+    },
+  });
+}
 
 it("keeps current-schema held agents unavailable until explicit live restoration releases selected paths", async () => {
   const state = await createAgentTestState("live-held-admission");
@@ -36,16 +48,7 @@ it("keeps current-schema held agents unavailable until explicit live restoration
     { agentId: "retired", path: state.path("parked", "openclaw-agent.sqlite") },
     { agentId: "kept", path: path.join(state.agentDir("kept"), "openclaw-agent.sqlite") },
   ]);
-  const owner = acquireGatewayStateOwner({
-    databasePath: resolveOpenClawStateSqlitePath(state.env),
-    payload: {
-      pid: process.pid,
-      role: "gateway",
-      createdAt: new Date().toISOString(),
-      configPath: state.configPath,
-      processNamespace: readGatewayLockProcessNamespace(),
-    },
-  });
+  const owner = acquireOwner(state);
   try {
     await owner.run(async () => {
       await assertOpenClawDatabasesReady({
@@ -120,18 +123,7 @@ it.each(["recovery-hold", "retained-deletion"] as const)(
           "DELETE FROM migration_sources WHERE source_key = 'agent-deletion-journal-reconstruction'",
         );
       });
-      const deletion = beginAgentDeletionJournal({
-        agentId,
-        operationId: "retained-schema",
-        agentDir: state.agentDir(agentId),
-        workspaceDir: state.path("workspace-retired"),
-        sessionsDir: state.sessionsDir(agentId),
-        databasePaths: [pathname],
-        deleteFiles: false,
-      });
-      runOpenClawStateWriteTransaction((database) =>
-        completeAgentDeletionJournalInDatabase(database, agentId, deletion.operationId),
-      );
+      completeDeletion(state, agentId, state.path("workspace-retired"));
     }
     {
       using database = openNodeSqliteDatabase(pathname);
@@ -147,16 +139,7 @@ it.each(["recovery-hold", "retained-deletion"] as const)(
       });
       expect(await fs.readFile(pathname)).toEqual(original);
     }
-    const owner = acquireGatewayStateOwner({
-      databasePath: resolveOpenClawStateSqlitePath(state.env),
-      payload: {
-        pid: process.pid,
-        role: "gateway",
-        createdAt: new Date().toISOString(),
-        configPath: state.configPath,
-        processNamespace: readGatewayLockProcessNamespace(),
-      },
-    });
+    const owner = acquireOwner(state);
     try {
       await expect(owner.run(() => createAgent(params))).resolves.toMatchObject({
         status: "error",

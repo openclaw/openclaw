@@ -15,7 +15,7 @@ import { recordUpdateDoctorDeferredInspectionChecks } from "../../infra/update-d
 import * as updateHistory from "../../infra/update-run-ledger.js";
 import { listUpdateRuns } from "../../infra/update-run-reader.js";
 import { defaultRuntime } from "../../runtime.js";
-import { completeAgentDeletionJournalInDatabase } from "../../state/agent-deletion-journal.js";
+import { completeDeletion } from "../../state/agent-deletion-journal.test-support.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { unregisterOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
@@ -24,9 +24,7 @@ import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-con
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
-import { beginAgentDeletionJournal } from "../../test-utils/agent-deletion-journal.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as readiness from "../daemon-cli/restart-health-probe.js";
 import * as sharedUpdate from "./shared.js";
@@ -66,21 +64,7 @@ it.each(["current", "old-schema", "wrong-owner", "unregistered-old-schema"] as c
         using held = new DatabaseSync(heldPath);
         held.exec(`PRAGMA user_version=${OPENCLAW_AGENT_SCHEMA_VERSION - 1}`);
       }
-      beginAgentDeletionJournal(
-        {
-          agentId: "retired",
-          operationId: "delete-retired",
-          agentDir: heldDir,
-          workspaceDir: state.path("retired-workspace"),
-          sessionsDir: state.sessionsDir("retired"),
-          deleteFiles: false,
-        },
-        { env: state.env },
-      );
-      runOpenClawStateWriteTransaction(
-        (database) => completeAgentDeletionJournalInDatabase(database, "retired", "delete-retired"),
-        { env: state.env },
-      );
+      completeDeletion(state, "retired", state.path("retired-workspace"));
       await closeOpenClawStateDatabaseAsync();
       const heldBytes = await fs.readFile(heldPath);
       const heldTime = (await fs.stat(heldPath)).mtimeMs;
