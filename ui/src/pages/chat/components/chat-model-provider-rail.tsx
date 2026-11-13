@@ -5,6 +5,7 @@ import {
 } from "../../../components/provider-icon-data.ts";
 import { Tooltip } from "../../../components/solid/tooltip.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { createMediaQuery } from "../../../lib/reactive/platform.ts";
 import { createTabList } from "../../../lib/tabs.ts";
 import { ChatModelProviderIcon, ChatModelTargetIcon } from "./chat-model-picker-options.tsx";
 import { loadModelProviderOrder, saveModelProviderOrder } from "./model-provider-order.ts";
@@ -17,6 +18,7 @@ export function ChatModelProviderRail(props: {
   disabled: boolean;
   onSelect: (provider: string) => void;
 }) {
+  const horizontal = createMediaQuery("(max-width: 640px)");
   const [order, setOrder] = createSignal(loadModelProviderOrder());
   const providers = createMemo(() => [
     ...order().filter((id) => props.providers.includes(id)),
@@ -87,7 +89,7 @@ export function ChatModelProviderRail(props: {
         }}
         role="tablist"
         aria-label={t("chat.selectors.model")}
-        aria-orientation="vertical"
+        aria-orientation={horizontal() ? "horizontal" : "vertical"}
         onDragOver={(event) => {
           if (source) {
             setDragOffset({

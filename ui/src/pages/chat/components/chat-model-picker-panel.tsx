@@ -10,7 +10,12 @@ import {
   ChatModelAccountOptions,
   ChatModelAccountSectionView,
 } from "./chat-model-account-control.tsx";
-import { ChatModelCatalogRefresh, ChatModelCatalogState } from "./chat-model-catalog-state.tsx";
+import { ChatModelAuthState, modelAuthState } from "./chat-model-auth-state.tsx";
+import {
+  ChatModelCatalogRefresh,
+  ChatModelCatalogState,
+  isModelCatalogLoading,
+} from "./chat-model-catalog-state.tsx";
 import {
   isModelPickerOptionSelected,
   modelProviderId,
@@ -107,6 +112,11 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
       selectedAgentRuntime: selectedAgentRuntime(),
     }),
   );
+  const showBrowser = createMemo(
+    () =>
+      state().hasOptions ||
+      (panel.params.accountSection && !isModelCatalogLoading(panel.params.modelCatalogState)),
+  );
   const accounts = createMemo(() =>
     panel.params.accountSection?.viewProps(
       state().orderedOptions.length + state().targetOptionCount,
@@ -135,7 +145,6 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
       selectedModelValue: selectedModelValue(),
       selectedAgentRuntime: selectedAgentRuntime(),
       sessionModelPinned: sessionModelPinned(),
-      onModelSetup: onModelSetup(),
     };
     return {
       activeProvider: current.activeProvider,
@@ -200,6 +209,14 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
   });
   const searchView =
     search && createChatModelSearchView(search, catalog, (key) => window.reveal(key));
+  const activeAuth = createMemo(() => {
+    const group = state().orderedProviderGroups.find(([provider]) =>
+      searchView?.providerOpen(provider),
+    );
+    return group && !searchView?.filtering()
+      ? modelAuthState([...group[1].lead, ...group[1].more])
+      : undefined;
+  });
   const layout = createMemo<string[]>(() => {
     if (searchView?.filtering()) {
       return [
@@ -296,6 +313,21 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
   const renderCatalogStatus = createMemo(
     () => panel.params.renderModelCatalogStatus ?? renderDirect,
   );
+  function CatalogStatus() {
+    return (
+      <Show when={!activeAuth() || panel.params.modelCatalogState?.status !== "ready"}>
+        {renderCatalogStatus()(() => (
+          <ChatModelCatalogState
+            loadingSkeleton
+            state={panel.params.modelCatalogState}
+            hasOptions={modelOptions().length > 0}
+            hasSelectableOptions={state().hasSelectableModelOptions}
+            onModelSetup={onModelSetup()}
+          />
+        ))}
+      </Show>
+    );
+  }
   function TargetOptions(props: { group: ChatModelPickerTargetGroup }) {
     const options = createMemo(() => props.group.completion.promise);
     return (
@@ -367,7 +399,6 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
             selectedAgentRuntime={selectedAgentRuntime()}
             sessionModelPinned={sessionModelPinned()}
             onSelect={selectModel}
-            onModelSetup={onModelSetup()}
             contextWindow={panel.params.contextWindow}
             sessionKey={panel.params.sessionKey}
           />
@@ -396,14 +427,11 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
     const showAuth = createMemo(
       () =>
         Boolean(auth()) &&
-        !(
-          auth()?.kind === "missing" &&
-          options().some(
-            (option) =>
-              option.disabled &&
-              (option.unavailableReason === "missing-auth" ||
-                option.unavailableReason === "auth-failed"),
-          )
+        !options().some(
+          (option) =>
+            option.disabled &&
+            (option.unavailableReason === "missing-auth" ||
+              option.unavailableReason === "auth-failed"),
         ),
     );
     const authLabel = () =>
@@ -489,16 +517,24 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
       class="chat-controls__inline-select-menu chat-controls__model-menu"
       aria-label={t("chat.selectors.model")}
       data-chat-model-filtering={searchView?.filtering() ? "" : undefined}
+      data-chat-model-compact={
+        modelSelectionLocked() ||
+        (!state().hasOptions &&
+          panel.params.modelCatalogState?.status === "ready" &&
+          !isModelCatalogLoading(panel.params.modelCatalogState) &&
+          panel.params.modelCatalogState.modelSelectionPolicy?.restricted)
+          ? ""
+          : undefined
+      }
     >
       {modelSelectionLocked() ? (
         <div class="chat-controls__locked-model" aria-label={t("chat.selectors.modelLockedLabel")}>
-          <span class="oc-menu-heading__label">{t("chat.selectors.modelSection")}</span>
           <span class="chat-controls__locked-model-value">{panel.params.triggerModelLabel}</span>
           <span class="chat-controls__locked-model-badge">{t("chat.selectors.modelLocked")}</span>
         </div>
       ) : (
         <>
-          {state().hasOptions || panel.params.accountSection ? (
+          {showBrowser() || isModelCatalogLoading(panel.params.modelCatalogState) ? (
             <div class="chat-controls__model-search-wrap">
               <Icon name="search" />
               <input
@@ -533,25 +569,8 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
               ) : undefined}
             </div>
           ) : undefined}
-          {renderCatalogStatus()(() => (
-            <ChatModelCatalogState
-              state={panel.params.modelCatalogState}
-              hasOptions={modelOptions().length > 0}
-              hasSelectableOptions={state().hasSelectableModelOptions}
-              onModelSetup={onModelSetup()}
-              emptyLabel={
-                modelOptions().some(
-                  (option) =>
-                    option.unavailableReason === "missing-auth" &&
-                    resolveModelRuntimeRoute(option.provider, option.agentRuntimeId) ===
-                      "claudeCli",
-                )
-                  ? t("chat.modelControls.claudeCliNotReady")
-                  : undefined
-              }
-            />
-          ))}
-          {state().hasOptions || panel.params.accountSection ? (
+          {!showBrowser() ? <CatalogStatus /> : undefined}
+          {showBrowser() ? (
             <>
               <div
                 class="chat-controls__model-browser"
@@ -577,6 +596,7 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
                 <div
                   class="chat-controls__model-pane"
                   data-provider-transition={providerTransition() ? "a" : "b"}
+                  data-auth-blocked={activeAuth() ? "" : undefined}
                 >
                   <div
                     ref={window.bind}
@@ -628,6 +648,9 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
                       </For>
                     </div>
                   </div>
+                  <Show when={activeAuth()}>
+                    {(auth) => <ChatModelAuthState state={auth()} onSetup={onModelSetup()} />}
+                  </Show>
                   <Show when={!searchView?.filtering()}>
                     <ChatModelSettings
                       params={panel.params}
@@ -665,6 +688,7 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
                   >
                     {t("chat.modelControls.noMatchingModels")}
                   </div>
+                  <CatalogStatus />
                 </div>
               </div>
             </>
@@ -672,12 +696,13 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
         </>
       )}
       {modelSelectionLocked() && panel.params.accountSection ? (
-        <div class="chat-controls__model-options">
+        <div class="chat-controls__model-settings-block">
           <ChatModelAccountSectionView {...accounts()!} startIndex={0} />
         </div>
       ) : undefined}
-      {panel.params.modelCatalogState?.modelSelectionPolicy?.restricted ? (
-        <div class="chat-controls__model-catalog-state" data-chat-model-policy>
+      {panel.params.modelCatalogState?.modelSelectionPolicy?.restricted &&
+      (modelSelectionLocked() || state().hasOptions) ? (
+        <div class="chat-controls__model-policy-note" data-chat-model-policy>
           {t("chat.modelControls.restrictedModelsHelp")}
         </div>
       ) : undefined}

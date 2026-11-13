@@ -181,7 +181,8 @@ it("keeps Anthropic runtime choices under one provider tab", async () => {
     selectedModelValue: "anthropic/claude-opus-4-8",
     triggerModelLabel: "claude-opus-4-8",
     providerAuth: new Map<string, ModelProviderAuthLabel>([
-      ["anthropic", { kind: "subscription", label: "Claude Max", detail: "you@example.com" }],
+      ["claude-cli", { kind: "subscription", label: "Claude Max", detail: "you@example.com" }],
+      ["anthropic", { kind: "api", label: "API" }],
     ]),
   });
   await waitForMenu(container);
@@ -191,7 +192,7 @@ it("keeps Anthropic runtime choices under one provider tab", async () => {
     "anthropic",
     "anthropic",
   ]);
-  // Both runtimes use the Anthropic account label.
+  // The shared provider tab keeps the selected runtime's account identity.
   expect(
     container.querySelector(
       '[data-chat-model-provider-group="anthropic"] .chat-controls__auth-meta-label',
@@ -292,6 +293,42 @@ it("keeps search live while targets load, then ranks model, target, and account 
   expect(selectAccount).not.toHaveBeenCalled();
 });
 
+it("keeps account recovery searchable with an empty catalog", async () => {
+  const selectAccount = vi.fn();
+  const { container } = mountPicker({
+    open: true,
+    modelOptions: [],
+    modelCatalogState: { hasSnapshot: true, status: "ready" },
+    accountSection: accountSection(selectAccount),
+  });
+  await waitForMenu(container);
+  const search = container.querySelector<HTMLInputElement>(modelControlSelector("search"));
+  expect(search).not.toBeNull();
+  searchFor(search!, "needle");
+  keydown(search!, "Enter");
+  expect(selectAccount).toHaveBeenCalledWith("current", expect.any(MouseEvent));
+});
+
+it("retains setup recovery when every model has an unsupported runtime", async () => {
+  const onModelSetup = vi.fn();
+  const { container } = mountPicker({
+    open: true,
+    modelOptions: [
+      option("fixture", "unavailable", {
+        disabled: true,
+        unavailableReason: "unsupported-runtime",
+      }),
+    ],
+    modelCatalogState: { hasSnapshot: true, status: "ready" },
+    onModelSetup,
+  });
+  await waitForMenu(container);
+  const setup = control(container, "setup");
+  expect(setup).not.toBeNull();
+  setup!.click();
+  expect(onModelSetup).toHaveBeenCalledOnce();
+});
+
 it("persists keyboard rail order without moving the selected provider", async () => {
   localStorage.clear();
   const params = pickerProps({
@@ -319,4 +356,74 @@ it("persists keyboard rail order without moving the selected provider", async ()
       .dataset.chatModelProviderToggle,
   ).toBe("second");
   localStorage.clear();
+});
+
+it.each(["missing-auth", "auth-failed"] as const)(
+  "keeps %s rows inert with one provider recovery action",
+  async (unavailableReason) => {
+    const onModelSetup = vi.fn();
+    const onModelSelect = vi.fn(async () => {});
+    const { container } = mountPicker({
+      open: true,
+      modelOptions: [
+        option("openai", "one", { disabled: true, unavailableReason }),
+        option("openai", "two", { disabled: true, unavailableReason }),
+      ],
+      selectedModelValue: "openai/one",
+      providerAuth: new Map([["openai", { kind: "missing", label: "Sign-in needed" }]]),
+      modelCatalogState: { hasSnapshot: true, status: "ready" },
+      onModelSetup,
+      onModelSelect,
+    });
+    await waitForMenu(container);
+    const rows = [...container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]")];
+    expect(
+      container.querySelector(".chat-controls__provider-heading .chat-controls__auth-meta"),
+    ).toBeNull();
+    expect(rows).toHaveLength(2);
+    expect(rows.every((row) => row.disabled)).toBe(true);
+    expect(rows[0]!.classList.contains("chat-controls__inline-select-option--selected")).toBe(
+      false,
+    );
+    expect(rows[0]!.hasAttribute("data-chat-model-highlighted")).toBe(false);
+    expect(rows[0]!.querySelector(".chat-controls__inline-select-check")).toBeNull();
+    rows[0]!.click();
+    expect(onModelSetup).not.toHaveBeenCalled();
+    expect(onModelSelect).not.toHaveBeenCalled();
+    expect(container.querySelectorAll("[data-chat-model-auth-state] button")).toHaveLength(1);
+    container.querySelector<HTMLButtonElement>("[data-chat-model-auth-state] button")!.click();
+    expect(onModelSetup).toHaveBeenCalledOnce();
+    expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
+  },
+);
+
+it("renders the Claude login command as code and omits the redundant empty restriction note", async () => {
+  const view = mountPicker({
+    open: true,
+    modelOptions: [
+      option("anthropic", "claude", {
+        agentRuntime: "claude-cli",
+        disabled: true,
+        unavailableReason: "missing-auth",
+      }),
+    ],
+    modelCatalogState: { hasSnapshot: true, status: "ready" },
+  });
+  await waitForMenu(view.container);
+  expect(view.container.querySelector("[data-chat-model-auth-state] code")?.textContent).toBe(
+    "claude auth login",
+  );
+  view.update(
+    pickerProps({
+      open: true,
+      modelOptions: [],
+      modelCatalogState: {
+        hasSnapshot: true,
+        status: "ready",
+        modelSelectionPolicy: { restricted: true, defaultModel: null },
+      },
+    }),
+  );
+  expect(view.container.textContent).toContain("No models are permitted by your admin.");
+  expect(view.container.querySelector("[data-chat-model-policy]")).toBeNull();
 });

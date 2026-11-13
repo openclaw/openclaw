@@ -3,7 +3,7 @@ import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { registerMenuShortcuts } from "../../../components/menu-shortcuts.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { focusChatComposerFromKeydown } from "../chat-pane-shared.ts";
 import "../../../styles/base.css";
 import "../../../styles/chat/composer.css";
@@ -78,6 +78,11 @@ function mountPicker(optionsReady = true) {
     await new Promise(requestAnimationFrame);
     if (picker.open) {
       await waitForModelMenu(picker);
+      if (params.modelOptions.length) {
+        await waitForSolid(() =>
+          expect(picker.querySelector("[data-chat-model-option]")).not.toBeNull(),
+        );
+      }
     }
   };
   const open = () => toggle(() => page.getByText("Alpha", { exact: true }).first().click());
@@ -130,8 +135,9 @@ it("opens during activation and preserves filter focus and query across catalog 
   expect(search.value).toBe("beta");
   expect(composer.value).toBe("Keep this draft");
   expect(option("example/alpha")).toBeNull();
+  // Windowed results publish after the sheet's layout measurement.
+  await waitForSolid(() => expect(option("example/beta")).toMatchObject({ hidden: false }));
   const beta = option("example/beta");
-  expect(beta).toMatchObject({ hidden: false });
   expect(beta.checkVisibility()).toBe(true);
   beta.focus();
   expect(document.activeElement).toBe(beta);
@@ -683,7 +689,11 @@ it("explains every OpenAI runtime in segment order with the generic detail", asy
     [...container.querySelectorAll(".chat-controls__runtime-option")].map((el) => el.textContent),
   ).toEqual(["OpenClaw", "Codex"]);
   expect(
-    [...card.querySelectorAll(".chat-controls__runtime-details-content > div")].map((el) => [
+    [
+      ...card.querySelectorAll(
+        ".chat-controls__runtime-details-content > div:not(.chat-controls__runtime-details-header)",
+      ),
+    ].map((el) => [
       el.querySelector(".chat-controls__runtime-detail-label")?.textContent,
       el.querySelector(".chat-controls__runtime-detail-copy")?.textContent,
     ]),

@@ -2418,7 +2418,7 @@ describe("chat model controls", () => {
     },
   );
 
-  it.each([false, true])("does not duplicate a row sign-in warning (%s)", async (rowWarning) => {
+  it.each([false, true])("shows one sign-in warning (%s)", async (rowWarning) => {
     const { state } = createChatHeaderState({
       models: [
         {
@@ -2443,14 +2443,9 @@ describe("chat model controls", () => {
       },
     });
 
-    expect(
-      container
-        .querySelector('[data-chat-model-provider="openai"]')
-        ?.textContent?.includes("Sign-in needed"),
-    ).toBe(!rowWarning);
-    expect(container.querySelectorAll("[data-chat-model-auth-warning]").length > 0).toBe(
-      rowWarning,
-    );
+    const heading = container.querySelector('[data-chat-model-provider="openai"]');
+    expect(heading?.textContent?.includes("Sign-in needed")).toBe(!rowWarning);
+    expect(container.querySelectorAll("[data-chat-model-auth-state]").length > 0).toBe(rowWarning);
   });
 
   it.each([2])(
@@ -2717,19 +2712,16 @@ describe("chat model controls", () => {
     ]);
     expect(options[0]?.textContent).toContain("GPT-5.6 Sol");
     expect(options[0]?.textContent).toContain("Default");
-    expect([...options].every((option) => !option.disabled)).toBe(true);
-    expect([...options].every((option) => option.dataset.chatModelSetup === "true")).toBe(true);
+    expect([...options].every((option) => option.disabled)).toBe(true);
     for (const option of options) {
-      const warning = option.querySelector("[data-chat-model-auth-warning]");
-      expect(warning?.textContent?.trim()).toBe("Sign-in needed");
-      expect(warning?.querySelector("svg")).not.toBeNull();
+      expect(option.getAttribute("aria-label")).toContain("Sign-in needed");
       expect(option.querySelector(".chat-controls__model-option-meta")).toBeNull();
       expect(option.textContent).not.toContain("1M");
     }
-    expect(
-      container.querySelector('[data-chat-model-catalog-state="ready"]')?.textContent,
-    ).toContain("No models available");
-    expect(container.textContent).toContain("Manage models");
+    expect(container.querySelector("[data-chat-model-auth-state]")?.textContent).toContain(
+      "Sign-in needed",
+    );
+    expect(container.querySelector('[data-chat-model-setup="true"]')?.textContent).toBe("Set up");
     container.querySelector<HTMLButtonElement>('[data-chat-model-setup="true"]')?.click();
     expect(onModelSetup).toHaveBeenCalledOnce();
   });
@@ -2756,20 +2748,25 @@ describe("chat model controls", () => {
       ],
     });
     const onModelSetup = vi.fn();
-    const container = await renderModelControls(state, { onModelSetup });
+    const onProviderSettings = vi.fn();
+    const container = await renderModelControls(state, { onModelSetup, onProviderSettings });
     const cold = container.querySelector<HTMLButtonElement>(
       '[data-chat-model-option="openai/gpt-5.6-luna"]',
     );
     const recovering = container.querySelector<HTMLButtonElement>(
       '[data-chat-model-option="codex/gpt-5.6-luna"]',
     );
-    expect(cold?.dataset.chatModelSetup).toBe("true");
+    expect(cold?.disabled).toBe(true);
+    expect(cold?.getAttribute("aria-label")).toContain("Sign-in needed");
     expect(recovering?.disabled).toBe(true);
     expect(recovering?.textContent).not.toContain("Sign-in needed");
     recovering?.click();
     expect(onModelSetup).not.toHaveBeenCalled();
     cold?.click();
-    expect(onModelSetup).toHaveBeenCalledOnce();
+    expect(onModelSetup).not.toHaveBeenCalled();
+    container.querySelector<HTMLButtonElement>("[data-chat-model-provider-settings]")?.click();
+    expect(onProviderSettings).toHaveBeenCalledWith("openai");
+    expect(onModelSetup).not.toHaveBeenCalled();
   });
 
   it("hides the context-window switch when the active session's model declares none", async () => {
@@ -2819,7 +2816,7 @@ describe("chat model controls", () => {
     expect(container.querySelector("[data-chat-model-context-badge]")).toBeNull();
   });
 
-  it("clears a session pin when its matching default is unavailable", async () => {
+  it("keeps a session pin unchanged when its matching default needs authentication", async () => {
     const model = "gpt-5";
     const { state } = createChatHeaderState({
       model,
@@ -2845,9 +2842,9 @@ describe("chat model controls", () => {
     );
     expect(defaultRow?.dataset.chatModelDefault).toBe("true");
     expect(defaultRow?.getAttribute("aria-selected")).toBe("true");
-    expect(defaultRow?.disabled).toBe(false);
+    expect(defaultRow?.disabled).toBe(true);
     defaultRow?.click();
-    expect(onModelSelect).toHaveBeenCalledWith("", "main", null);
+    expect(onModelSelect).not.toHaveBeenCalled();
     expect(onModelSetup).not.toHaveBeenCalled();
     container.remove();
   });
