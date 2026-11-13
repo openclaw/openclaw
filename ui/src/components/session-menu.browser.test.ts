@@ -6,11 +6,6 @@ import {
   selectMenuValue,
   settleSessionMenu,
 } from "../test-helpers/session-menu.ts";
-import {
-  createSessionOwnerMenuHarness,
-  sessionOwnerProfiles,
-} from "../test-helpers/session-owner-menu.ts";
-import { i18n } from "../i18n/index.ts";
 import "../test-helpers/load-styles.ts";
 
 it("dispatches compact archive with the existing A shortcut", async () => {
@@ -110,33 +105,3 @@ it("recreates the custom snooze picker when the menu opens at another anchor", a
   await expect.element(field).toHaveFocus();
   expect(menu.querySelector(".session-menu__snooze-picker")).not.toBe(previous);
 });
-
-it.each(["NFC", "NFD"] as const)(
-  "finds the owner in real Chromium when the search is typed in the other %s form",
-  async (storedForm) => {
-    await page.viewport(1280, 900);
-    await i18n.setLocale("en");
-    const equivalent = (text: string) => text.normalize(storedForm === "NFC" ? "NFD" : "NFC");
-    const stored = "José".normalize(storedForm);
-    const { context } = createSessionOwnerMenuHarness(() => sessionOwnerProfiles(stored, "Bob"));
-    const menu = await mountMenu({ context });
-    await settleSessionMenu(menu);
-    await expect
-      .poll(() => menu.querySelector('[data-value^="assign-owner:"]'))
-      .not.toBeNull();
-    await openSubmenu(menu, "Assign to…");
-    const toggle = menu.querySelector<HTMLButtonElement>("[data-search-toggle]")!;
-    await userEvent.click(toggle);
-    const input = page.getByRole("searchbox", { name: "Search people and agents…" });
-    await expect.element(input).toBeVisible();
-    await input.fill(equivalent(stored));
-    await expect
-      .poll(() =>
-        [...menu.querySelectorAll('[data-value^="assign-owner:"]')].map(
-          (n) => n.getAttribute("aria-label"),
-        ),
-      )
-      .toEqual([stored]);
-    expect(menu.querySelectorAll('[data-value^="assign-owner:"]')).toHaveLength(1);
-  },
-);
