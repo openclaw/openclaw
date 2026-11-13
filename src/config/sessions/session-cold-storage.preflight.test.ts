@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db.js";
 import {
@@ -12,7 +13,6 @@ import {
 import { upsertSessionEntryCore } from "./session-accessor.entry.js";
 import type { SessionColdArchive } from "./session-accessor.sqlite-archive-types.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
-import type { SessionColdReadPreparation } from "./session-cold-storage-read.js";
 import { restoreSessionColdTranscript as restore } from "./session-cold-storage.js";
 import type { SessionHistoryWorkerDatabase } from "./session-transcript-worker.types.js";
 
@@ -73,13 +73,23 @@ function scope() {
 
 function preparedRestore(
   target: ReturnType<typeof scope>,
-  readMetadata: SessionColdReadPreparation["readMetadata"],
+  readMetadata: (
+    phase: "initial" | "queued",
+  ) => Promise<Omit<SessionColdArchive, "archive_blob"> | undefined>,
   signal?: AbortSignal,
 ) {
+  const readIdentity = readDatabasePathIdentitySync(resolveOpenClawAgentSqlitePath(target));
   return restore(
     target,
     undefined,
-    { target: { ...target, path: resolveOpenClawAgentSqlitePath(target) }, readMetadata },
+    {
+      target: { ...target, path: resolveOpenClawAgentSqlitePath(target) },
+      readMetadata: async (phase) => ({
+        kind: "cold-metadata",
+        archive: await readMetadata(phase),
+        source: { readIdentity },
+      }),
+    },
     undefined,
     signal,
   );
@@ -101,7 +111,13 @@ it("retains the captured source through queued worker metadata", async () => {
     target.env.OPENCLAW_STATE_DIR = path.join(originalStateDir, "replacement");
     expect(observed.release).not.toHaveBeenCalled();
   } finally {
-    initial.resolve({ kind: "cold-metadata", archive });
+    initial.resolve({
+      kind: "cold-metadata",
+      archive,
+      source: {
+        readIdentity: readDatabasePathIdentitySync(resolveOpenClawAgentSqlitePath(target)),
+      },
+    });
     await expect(pending).resolves.toBeUndefined();
   }
   expect(observed.readMetadata).toHaveBeenCalledTimes(2);
@@ -133,12 +149,24 @@ it.each([
     }
   };
   if (phase === "queued") {
-    observed.readMetadata.mockResolvedValueOnce({ kind: "cold-metadata", archive });
+    observed.readMetadata.mockResolvedValueOnce({
+      kind: "cold-metadata",
+      archive,
+      source: {
+        readIdentity: readDatabasePathIdentitySync(resolveOpenClawAgentSqlitePath(target)),
+      },
+    });
   }
   if (phase !== "preparation") {
     observed.readMetadata.mockImplementationOnce(async () => {
       revoke();
-      return { kind: "cold-metadata", archive };
+      return {
+        kind: "cold-metadata",
+        archive,
+        source: {
+          readIdentity: readDatabasePathIdentitySync(resolveOpenClawAgentSqlitePath(target)),
+        },
+      };
     });
   }
   const pending = restore(target, assertCurrent);

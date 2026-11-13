@@ -7,12 +7,14 @@ import type { WorkerOptions } from "node:worker_threads";
 import type { RetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
 import {
   installDatabaseEngineSelection,
   withDatabaseEngineSelection,
 } from "./database-engine/context.js";
 import { resetDatabaseEngineSelectionForTest } from "./database-engine/context.test-support.js";
 import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
+import { prepareSqliteDatabaseAdmissionAsync } from "./sqlite-database-admission.js";
 import type {
   AdmissionTaskInput,
   AdmissionTaskResult,
@@ -281,7 +283,9 @@ it("answers an earlier task's synchronous host exchange while servicing a queued
   read(second.release({ retire: true }));
 });
 
-it("services a sibling pool's database facts while the host event loop is blocked", async () => {
+it("services a sibling pool's database facts while the host event loop is blocked", async ({
+  signal,
+}) => {
   const blockedPool = fixture();
   const admissionPool = createPool<AdmissionTaskInput, AdmissionTaskResult>(
     "./sqlite-database-admission.task.test-support.ts",
@@ -291,6 +295,11 @@ it("services a sibling pool's database facts while the host event loop is blocke
   const database = new DatabaseSync(location);
   database.exec("CREATE TABLE proof (value INTEGER)");
   database.close();
+  await prepareSqliteDatabaseAdmissionAsync({
+    location,
+    assertCurrent: () => signal.throwIfAborted(),
+  });
+  using observed = observeMainThreadFs();
   const barrier = blockingInput();
   const blocked = blockedPool.startTask(barrier.input, {});
   const admission = admissionPool.startTask({ path: location }, {});
@@ -306,6 +315,7 @@ it("services a sibling pool's database facts while the host event loop is blocke
     read(blocked);
     read(blocked.release());
   }
+  expect(observed.calls()).toEqual({});
 });
 
 it("serializes resource cleanup after an asynchronous task without cancelling it", async () => {

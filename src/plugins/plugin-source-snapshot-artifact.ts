@@ -5,8 +5,10 @@ import path from "node:path";
 import { createFileSync, createRootFileOpenBatchSync } from "@openclaw/fs-safe/advanced";
 import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { hasErrnoCode } from "../infra/errno.js";
-import { isPathInside } from "../infra/path-guards.js";
-import { retireSqliteDatabaseAdmissionForPath } from "../infra/sqlite-database-admission.js";
+import {
+  prepareOwnedSqliteDatabaseAdmission,
+  retireSqliteDatabaseAdmissionForPath,
+} from "../infra/sqlite-database-admission.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { createPrivateSqliteTempDirectorySync } from "../infra/sqlite-private-directory.js";
 import {
@@ -14,6 +16,7 @@ import {
   SQLITE_STAGING_TOKEN_FILES,
   type SqliteStagingToken,
 } from "../infra/sqlite-staging-token.js";
+import { readDatabaseIdentityBirthtime } from "../infra/sqlite-worker-identity.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { PluginGenerationArtifact } from "./plugin-generation-artifact.types.js";
 import { retainPluginSourceCaptureRoot } from "./plugin-source-capture-context.js";
@@ -23,11 +26,18 @@ import {
   PLUGIN_SOURCE_SNAPSHOT_STAGING_PREFIX,
   resolvePluginSourceCapturesDirectory,
 } from "./plugin-source-capture-path.js";
-import { hashPluginSourceFile, pluginSourceStatIdentity } from "./plugin-source-file.js";
+import { pluginSourceStatIdentity } from "./plugin-source-file.js";
 import {
+  assertPrivatePluginSnapshotEntry as assertPrivateEntry,
   capturePluginSnapshotPayload,
   digestPluginSnapshotClosure,
+  failPluginSourceSnapshot as fail,
+  PluginSourceSnapshotValidationError,
+  privatePluginSnapshotEntry as privateEntry,
+  relativePluginSnapshotMember as relativeMember,
+  scanPluginSnapshotPayload as scanPayload,
   resolvePluginSnapshotLink,
+  type PluginSnapshotPayloadEntry as Entry,
 } from "./plugin-source-snapshot-payload.js";
 import type {
   PluginSourceSnapshotBinding,
@@ -38,11 +48,6 @@ const PLUGIN_SOURCE_SNAPSHOT_FORMAT = 1;
 const MANIFEST = "manifest.json";
 const PAYLOAD = "payload";
 const MAX_MANIFEST_BYTES = 64 * 1024 * 1024;
-type Entry = { path: string; identity: string } & (
-  | { kind: "directory" }
-  | { kind: "file"; contentHash: string; sizeBytes: number; mode: number }
-  | { kind: "link"; target: string }
-);
 type Manifest = PluginSourceSnapshotBinding & {
   formatVersion: number;
   generation: string;
@@ -66,25 +71,13 @@ const digest = (value: string) => createHash("sha256").update(value).digest("hex
 const ownerIdentity = (stat: fs.BigIntStats) =>
   `${stat.dev}:${stat.ino}:${stat.uid}:${stat.gid}:${stat.mode}`;
 
-export class PluginSourceSnapshotValidationError extends Error {
-  readonly code = "PLUGIN_SOURCE_SNAPSHOT_INVALID";
-  constructor(
-    readonly artifactPath: string,
-    detail: string,
-    options?: ErrorOptions,
-  ) {
-    super(`Installed plugin source snapshot is invalid at ${artifactPath}: ${detail}`, options);
-    this.name = "PluginSourceSnapshotValidationError";
-  }
-}
-
-function fail(root: string, detail: string): never {
-  throw new PluginSourceSnapshotValidationError(root, detail);
-}
-
 function tokenIdentity(root: string): string {
   const tokenPath = path.join(root, SQLITE_STAGING_TOKEN_FILES[0]);
-  const stat = fs.lstatSync(tokenPath, { bigint: true });
+  return assertTokenIdentity(root, fs.lstatSync(tokenPath, { bigint: true }));
+}
+
+function assertTokenIdentity(root: string, stat: fs.BigIntStats): string {
+  const tokenPath = path.join(root, SQLITE_STAGING_TOKEN_FILES[0]);
   if (
     !stat.isFile() ||
     stat.nlink !== 1n ||
@@ -94,102 +87,6 @@ function tokenIdentity(root: string): string {
     fail(root, `unsafe token ownership or permissions: ${tokenPath}`);
   }
   return ownerIdentity(stat);
-}
-
-function privateEntry(file: string, root: string, kind: "directory" | "file" | "link") {
-  const stat = fs.lstatSync(file, { bigint: true });
-  if (
-    !(kind === "directory"
-      ? stat.isDirectory()
-      : kind === "file"
-        ? stat.isFile()
-        : stat.isSymbolicLink()) ||
-    (process.getuid && stat.uid !== BigInt(process.getuid())) ||
-    (kind !== "link" && process.platform !== "win32" && (stat.mode & 0o077n) !== 0n) ||
-    (kind === "file" && stat.nlink !== 1n) ||
-    (process.platform === "win32" && (stat.dev === 0n || stat.ino === 0n))
-  ) {
-    fail(root, `unsafe ${kind} ownership, permissions or identity: ${file}`);
-  }
-  return stat;
-}
-
-function relativeMember(root: string, member: string): string {
-  const relative = path.relative(root, member);
-  if (!relative || !isPathInside(root, member)) {
-    fail(root, `member leaves its payload: ${member}`);
-  }
-  return relative;
-}
-
-function scanPayload(
-  root: string,
-  opened: ReturnType<typeof createRootFileOpenBatchSync>,
-  publishedPayload = root,
-): Entry[] {
-  const entries: Entry[] = [];
-  const visit = (directory: string) => {
-    const before = privateEntry(directory, root, "directory");
-    for (const name of fs.readdirSync(directory).toSorted()) {
-      const file = path.join(directory, name);
-      const stat = fs.lstatSync(file, { bigint: true });
-      const relative = relativeMember(root, file);
-      if (stat.isSymbolicLink()) {
-        privateEntry(file, root, "link");
-        const target = resolvePluginSnapshotLink(root, file, publishedPayload, (detail) =>
-          fail(root, detail),
-        );
-        if (
-          pluginSourceStatIdentity(stat) !==
-          pluginSourceStatIdentity(privateEntry(file, root, "link"))
-        ) {
-          fail(root, `dependency link changed while validating: ${file}`);
-        }
-        entries.push({
-          path: relative,
-          kind: "link",
-          target: relativeMember(root, target),
-          identity: pluginSourceStatIdentity(stat),
-        });
-      } else if (stat.isDirectory()) {
-        privateEntry(file, root, "directory");
-        entries.push({
-          path: relative,
-          kind: "directory",
-          identity: pluginSourceStatIdentity(stat),
-        });
-        visit(file);
-      } else {
-        privateEntry(file, root, "file");
-        const content = hashPluginSourceFile(
-          file,
-          root,
-          undefined,
-          undefined,
-          opened.openFile.bind(opened),
-        );
-        const after = privateEntry(file, root, "file");
-        if (pluginSourceStatIdentity(stat) !== pluginSourceStatIdentity(after)) {
-          fail(root, `file changed while validating: ${file}`);
-        }
-        entries.push({
-          path: relative,
-          kind: "file",
-          identity: pluginSourceStatIdentity(after),
-          ...content,
-          mode: Number(after.mode & 0o777n),
-        });
-      }
-    }
-    if (
-      pluginSourceStatIdentity(before) !==
-      pluginSourceStatIdentity(privateEntry(directory, root, "directory"))
-    ) {
-      fail(root, `directory changed while validating: ${directory}`);
-    }
-  };
-  visit(root);
-  return entries;
 }
 
 /** Logical closure facts exclude ephemeral capture paths and inode identities. */
@@ -366,17 +263,83 @@ export async function stagePluginSourceSnapshot(params: {
 
 function assertArtifactPath(stateDir: string, artifactPath: string) {
   const parent = fs.realpathSync.native(resolvePluginSourceCapturesDirectory(stateDir));
+  assertArtifactNamespace(artifactPath, parent);
+  if (fs.realpathSync.native(artifactPath) !== artifactPath) {
+    fail(artifactPath, "artifact is outside the private capture owner");
+  }
+  privateEntry(parent, artifactPath, "directory");
+}
+
+function assertArtifactNamespace(artifactPath: string, parent: string) {
   if (path.basename(artifactPath).startsWith(PLUGIN_SOURCE_SNAPSHOT_STAGING_PREFIX)) {
     fail(artifactPath, "unfinished snapshot staging namespace");
   }
   if (
     path.dirname(artifactPath) !== parent ||
-    !path.basename(artifactPath).startsWith(PLUGIN_SOURCE_SNAPSHOT_PREFIX) ||
-    fs.realpathSync.native(artifactPath) !== artifactPath
+    !path.basename(artifactPath).startsWith(PLUGIN_SOURCE_SNAPSHOT_PREFIX)
   ) {
     fail(artifactPath, "artifact is outside the private capture owner");
   }
-  privateEntry(parent, artifactPath, "directory");
+}
+
+/** Prepare host descriptor custody before this snapshot consumes the preparation worker. */
+export async function preparePluginSourceSnapshotAdmission(params: {
+  stateDir: string;
+  descriptor: PluginSourceSnapshotDescriptor;
+  assertCurrent: () => void;
+}): Promise<void> {
+  params.assertCurrent();
+  const root = params.descriptor.artifact.path;
+  let checkingAuthority = false;
+  const assertCurrent = () => {
+    checkingAuthority = true;
+    params.assertCurrent();
+    checkingAuthority = false;
+  };
+  try {
+    const parent = await fsPromises.realpath(resolvePluginSourceCapturesDirectory(params.stateDir));
+    assertArtifactNamespace(root, parent);
+    if ((await fsPromises.realpath(root)) !== root) {
+      fail(root, "artifact is outside the private capture owner");
+    }
+    assertPrivateEntry(parent, root, "directory", await fsPromises.lstat(parent, { bigint: true }));
+    const rootIdentity = assertPrivateEntry(
+      root,
+      root,
+      "directory",
+      await fsPromises.lstat(root, { bigint: true }),
+    );
+    if (ownerIdentity(rootIdentity) !== params.descriptor.artifact.identity) {
+      fail(root, "artifact root identity changed");
+    }
+    const location = path.join(root, SQLITE_STAGING_TOKEN_FILES[0]);
+    const token = await fsPromises.lstat(location, { bigint: true });
+    if (assertTokenIdentity(root, token) !== params.descriptor.artifact.tokenIdentity) {
+      fail(root, "snapshot token identity changed");
+    }
+    assertCurrent();
+    await prepareOwnedSqliteDatabaseAdmission({
+      location,
+      expectedIdentity: {
+        key: `file:${token.dev}:${token.ino}`,
+        birthtime: readDatabaseIdentityBirthtime(token),
+      },
+      assertCurrent,
+    });
+    assertCurrent();
+  } catch (error) {
+    if (
+      checkingAuthority ||
+      (error instanceof PluginSourceSnapshotValidationError && error.artifactPath === root)
+    ) {
+      throw error;
+    }
+    throw new PluginSourceSnapshotValidationError(
+      root,
+      `snapshot validation failed: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
+  }
 }
 
 function validateSnapshot(stateDir: string, descriptor: PluginSourceSnapshotDescriptor): Manifest {
@@ -538,9 +501,20 @@ export async function acquirePluginSourceSnapshot(params: {
   try {
     assertArtifactPath(params.stateDir, root);
     if (!held) {
-      const expectedToken = tokenIdentity(root);
+      const tokenFile = fs.lstatSync(path.join(root, SQLITE_STAGING_TOKEN_FILES[0]), {
+        bigint: true,
+      });
+      const expectedToken = assertTokenIdentity(root, tokenFile);
+      if (expectedToken !== params.descriptor.artifact.tokenIdentity) {
+        fail(root, "snapshot token identity changed");
+      }
       held = {
-        token: acquireSqliteStagingToken(root, "read"),
+        token: acquireSqliteStagingToken(root, "read", {
+          expectedIdentity: {
+            key: `file:${tokenFile.dev}:${tokenFile.ino}`,
+            birthtime: readDatabaseIdentityBirthtime(tokenFile),
+          },
+        }),
         tokenIdentity: expectedToken,
         references: 0,
       };

@@ -60,6 +60,7 @@ const CHILD_OPERATIONS = [
   "shell.snapshot",
   "service.relay",
   "service.manager",
+  "plugin.capture-reclamation",
   "worktree.filesystem",
   "worktree.cleanup",
   "worktree.maintenance",

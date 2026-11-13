@@ -76,6 +76,7 @@ export type ManagedProcess = {
   terminationRequested: boolean;
   child: SandboxChild | null;
   startPromise?: Promise<void>;
+  inputTail?: Promise<void>;
   evictionTimer?: ReturnType<typeof setTimeout>;
   waiters: Array<() => void>;
   emitNotification: (method: string, params: JsonObject) => void;

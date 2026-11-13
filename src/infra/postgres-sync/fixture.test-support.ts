@@ -4,10 +4,10 @@ import { createSqliteWorkerOperationAdmission } from "../sqlite-worker-operation
 import { PostgresSyncConnection } from "./connection.js";
 
 export function usePostgresFixture() {
-  const cleanups: Array<() => void> = [];
-  afterEach(() => {
+  const cleanups: Array<() => void | Promise<void>> = [];
+  afterEach(async () => {
     for (const cleanup of cleanups.splice(0).toReversed()) {
-      cleanup();
+      await cleanup();
     }
     vi.restoreAllMocks();
   });

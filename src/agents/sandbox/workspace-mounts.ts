@@ -134,7 +134,6 @@ export async function ensureReadOnlyWorkspaceSkillMountSources(
     const directory = await createWorkspaceRoot(ancestor, {
       mutationSymlinks: "reject",
       assertBeforeMutation: () => {
-        assertCurrent?.();
         if (
           resolveSandboxHostPathViaExistingAncestor(path.resolve(mount.rootDir)) !==
             canonicalRoot ||
@@ -145,6 +144,7 @@ export async function ensureReadOnlyWorkspaceSkillMountSources(
             `Sandbox skill mount source changed during preparation: ${mount.hostPath}`,
           );
         }
+        assertCurrent?.();
       },
     });
     await directory.mkdir(path.relative(ancestor, canonicalSource));

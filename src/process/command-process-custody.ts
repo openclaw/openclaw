@@ -1,6 +1,6 @@
-import { getProcessInstanceStartTime } from "../shared/pid-alive.js";
 import { isChildProcessTreeAlive } from "./child-process-tree.js";
 import type { CommandProcessIdentity } from "./command-process-custody.types.js";
+import { readCommandProcessStartTime } from "./command-process-identity.js";
 import { waitForCommandProcessGroupExit } from "./exec-spawn.js";
 import { killProcessTree } from "./kill-tree.js";
 
@@ -25,12 +25,18 @@ export async function settleCommandProcessGroups(
           return undefined;
         }
         // An orphaned group has no leader whose start identity can authorize a signal.
-        if (startedAt === null || getProcessInstanceStartTime(pid) !== startedAt) {
+        if (
+          startedAt === null ||
+          (await readCommandProcessStartTime(pid, { instance: true })) !== startedAt
+        ) {
           return unresolved("Recorded process identity could not be confirmed");
         }
+        if (!isChildProcessTreeAlive(identity)) {
+          return undefined;
+        }
         killProcessTree(pid, { detached: true, force: true });
-        const exit = await waitForCommandProcessGroupExit(pid, () => {
-          const current = getProcessInstanceStartTime(pid);
+        const exit = await waitForCommandProcessGroupExit(pid, async () => {
+          const current = await readCommandProcessStartTime(pid, { instance: true });
           return current === null || current === startedAt;
         });
         if (exit === "replaced") {

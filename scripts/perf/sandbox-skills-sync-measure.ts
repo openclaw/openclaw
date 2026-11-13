@@ -15,7 +15,9 @@
  * --background-files 62000 adds 1.116 GB of unrelated synthetic workspace files.
  * --concurrency 50 --iterations 50 measures a burst across distinct destinations.
  * --payload-bytes sets each of the eight supporting-file sizes (default 4096).
- * Counters cover Node realpathSync.native/lstatSync, not native-internal syscalls.
+ * Counters cover Node realpathSync.native/lstatSync/fstatSync, not native-internal syscalls.
+ * Use --untraced for timings and allocation without the filesystem counters.
+ * --worker selects a live compiled discovery worker owned by the invoking harness.
  * Allocation sampling includes collected objects on the main thread only;
  * process CPU and memory also include the discovery worker. No forced GC.
  */
@@ -23,12 +25,14 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { Session } from "node:inspector/promises";
+import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { monitorEventLoopDelay, performance, PerformanceObserver } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import workerThreads from "node:worker_threads";
 import { listDirectoryTreeStrict } from "../../src/infra/directory-walk.js";
 import type { syncWorkspaceSkills } from "../../src/skills/loading/workspace-skill-sync.runtime.js";
 import { recordGcCollections } from "../lib/perf-gc-collections.ts";
@@ -36,12 +40,14 @@ import { recordGcCollections } from "../lib/perf-gc-collections.ts";
 const { values } = parseArgs({
   options: {
     owner: { type: "string" },
+    worker: { type: "string" },
     output: { type: "string" },
     iterations: { type: "string", default: "10" },
     concurrency: { type: "string", default: "1" },
     "payload-bytes": { type: "string", default: "4096" },
     mode: { type: "string", default: "all" },
     allocations: { type: "boolean", default: false },
+    untraced: { type: "boolean", default: false },
     skills: { type: "string", default: "40" },
     "background-files": { type: "string", default: "0" },
     custody: { type: "boolean", default: false },
@@ -79,6 +85,22 @@ const ownerPath = values.owner
   : fileURLToPath(
       new URL("../../src/skills/loading/workspace-skill-sync.runtime.ts", import.meta.url),
     );
+const Worker = workerThreads.Worker;
+if (values.worker) {
+  const worker = pathToFileURL(path.resolve(values.worker));
+  workerThreads.Worker = class extends Worker {
+    constructor(
+      filename: ConstructorParameters<typeof Worker>[0],
+      options?: workerThreads.WorkerOptions,
+    ) {
+      super(
+        String(filename).endsWith("/discovery.worker.ts") ? worker : filename,
+        String(filename).endsWith("/discovery.worker.ts") ? { ...options, execArgv: [] } : options,
+      );
+    }
+  };
+  syncBuiltinESMExports();
+}
 const owner = (await import(pathToFileURL(ownerPath).href)) as {
   syncWorkspaceSkills: typeof syncWorkspaceSkills;
 };
@@ -109,7 +131,7 @@ const custody = values.custody
       },
     })
   : undefined;
-const assertOwner = custody ? await captureSandboxStateOwner() : undefined;
+const stateOwner = custody ? await captureSandboxStateOwner() : undefined;
 let checks = 0;
 
 function distribution(samples: number[]) {
@@ -171,10 +193,11 @@ try {
       targetWorkspaceDir,
       readOnlyTarget: true,
       skillsSnapshot: snapshot,
-      assertCurrent: assertOwner
+      stateOwnerPath: stateOwner?.stateOwnerPath,
+      assertCurrent: stateOwner
         ? () => {
             checks++;
-            assertOwner();
+            stateOwner.assertCurrent();
           }
         : undefined,
     });
@@ -259,20 +282,30 @@ try {
       checks = 0;
       let realpaths = 0;
       let lstats = 0;
+      let fstats = 0;
       const realpath = fs.realpathSync.native;
       const lstat = fs.lstatSync;
-      fs.realpathSync.native = new Proxy(realpath, {
-        apply(target, receiver, args) {
-          realpaths++;
-          return Reflect.apply(target, receiver, args);
-        },
-      });
-      fs.lstatSync = new Proxy(lstat, {
-        apply(target, receiver, args) {
-          lstats++;
-          return Reflect.apply(target, receiver, args);
-        },
-      });
+      const fstat = fs.fstatSync;
+      if (!values.untraced) {
+        fs.realpathSync.native = new Proxy(realpath, {
+          apply(target, receiver, args) {
+            realpaths++;
+            return Reflect.apply(target, receiver, args);
+          },
+        });
+        fs.lstatSync = new Proxy(lstat, {
+          apply(target, receiver, args) {
+            lstats++;
+            return Reflect.apply(target, receiver, args);
+          },
+        });
+        fs.fstatSync = new Proxy(fstat, {
+          apply(target, receiver, args) {
+            fstats++;
+            return Reflect.apply(target, receiver, args);
+          },
+        });
+      }
       eventLoop.enable();
       started = performance.now();
       try {
@@ -293,6 +326,7 @@ try {
       } finally {
         fs.realpathSync.native = realpath;
         fs.lstatSync = lstat;
+        fs.fstatSync = fstat;
       }
       ended = performance.now();
       eventLoop.disable();
@@ -332,8 +366,9 @@ try {
         ...(mode === "restarted" ? { rewrittenFiles } : {}),
         iterations,
         authorityChecksPerSync: checks / iterations,
-        nodeRealpathsPerSync: realpaths / iterations,
-        nodeLstatsPerSync: lstats / iterations,
+        nodeRealpathsPerSync: values.untraced ? undefined : realpaths / iterations,
+        nodeLstatsPerSync: values.untraced ? undefined : lstats / iterations,
+        nodeFstatsPerSync: values.untraced ? undefined : fstats / iterations,
         elapsedMs: ended - started,
         eventLoopDelayMs: { p95: eventLoop.percentile(95) / 1e6, max: eventLoop.max / 1e6 },
         latency: distribution(latency),
@@ -361,6 +396,8 @@ try {
     }
   }
   const result = {
+    runtime: process.version,
+    untraced: values.untraced,
     ownerPath,
     skillCount,
     concurrency,
@@ -377,5 +414,7 @@ try {
   custody?.release();
   inspector?.disconnect();
   await drainGlobalSingletonLifecycleState();
+  workerThreads.Worker = Worker;
+  syncBuiltinESMExports();
   await rm(fixture, { recursive: true, force: true });
 }

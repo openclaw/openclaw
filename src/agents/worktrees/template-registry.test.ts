@@ -12,7 +12,7 @@ import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerOperations } from "../../state/openclaw-state-worker-contract.js";
-import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
+import * as stateWorkerStore from "../../state/openclaw-state-worker-store.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { expectNoMainThreadSql as withoutMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { useWorktreeStateRoots } from "./state-fixture.test-support.js";
@@ -45,8 +45,8 @@ function worker(databasePath?: string, revokeAtCommit = false) {
   return {
     read: (command: Parameters<typeof executeExistingOpenClawStateRead>[1]) =>
       executeExistingOpenClawStateRead(location, command, { context, current: true }),
-    run: (operation: Parameters<typeof runOpenClawStateWorkerOperation>[1]) =>
-      runOpenClawStateWorkerOperation(context, operation, {
+    run: (operation: Parameters<typeof stateWorkerStore.runOpenClawStateWorkerOperation>[1]) =>
+      stateWorkerStore.runOpenClawStateWorkerOperation(context, operation, {
         createAdmission: () => ({
           nativeLocations: [context.admission.databasePath],
           admission: createSqliteWorkerOperationAdmission((request, grant) => {
@@ -79,6 +79,72 @@ beforeEach(() => {
     lastUsedAt: 10,
   };
 });
+
+it.each(["reserve", "retain", "ready", "release"] as const)(
+  "refuses template %s after its selected state alias changes and preserves the original owner",
+  async (operation) => {
+    const original = env.OPENCLAW_STATE_DIR!;
+    const alias = `${original}-alias`;
+    const other = `${original}-other`;
+    await fs.mkdir(original, { recursive: true });
+    await fs.mkdir(other);
+    await fs.symlink(original, alias, process.platform === "win32" ? "junction" : "dir");
+    env.OPENCLAW_STATE_DIR = alias;
+    await reserve();
+    await ready(template.id, 20);
+    await retain({ id: template.id, key: "held-reader", owner });
+    const authority = { stateOwnerPath: { path: alias, canonicalPath: await fs.realpath(alias) } };
+    const run = () => {
+      switch (operation) {
+        case "reserve":
+          return registry.reserveTemplateAsync(
+            env,
+            { ...template, id: "generation-2", cacheKey: "second-volume" },
+            guard,
+            authority,
+          );
+        case "retain":
+          return registry.retainTemplateReaderAsync(
+            env,
+            { id: template.id, key: "next-reader", owner },
+            guard,
+            authority,
+          );
+        case "ready":
+          return registry.markTemplateReadyAsync(env, template.id, 30, guard, undefined, authority);
+        default:
+          return registry.releaseTemplateReaderAsync(env, "held-reader", guard, authority);
+      }
+    };
+    const dispatch = stateWorkerStore.runOpenClawStateWorkerOperation;
+    using _ = vi
+      .spyOn(stateWorkerStore, "runOpenClawStateWorkerOperation")
+      .mockImplementationOnce(async (...args) => {
+        await fs.unlink(alias);
+        await fs.symlink(other, alias, process.platform === "win32" ? "junction" : "dir");
+        return dispatch(...args);
+      });
+    try {
+      await expect(run()).rejects.toThrow("Sandbox workspace preparation cannot run");
+    } finally {
+      await fs.unlink(alias);
+      await fs.symlink(original, alias, process.platform === "win32" ? "junction" : "dir");
+    }
+    expect(await read()).toEqual(published());
+    expect(await registry.hasTemplateReadersAsync(env, template.id, guard, authority)).toBe(true);
+    await run();
+    if (operation === "reserve") {
+      expect(await list()).toHaveLength(2);
+    } else if (operation === "ready") {
+      expect((await read())?.lastUsedAt).toBe(30);
+    } else {
+      await release("held-reader");
+      expect(await registry.hasTemplateReadersAsync(env, template.id, guard, authority)).toBe(
+        operation === "retain",
+      );
+    }
+  },
+);
 
 it("reads absent templates without writer queueing and recovers on the first mutation", async ({
   onTestFinished,

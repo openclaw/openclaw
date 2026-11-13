@@ -381,13 +381,22 @@ async function runArchiveSessionRequest(
   let response: SqliteArchiveSessionResponse;
   if (request.operation === "cold-prepare") {
     const { prepareSessionColdBatchInWorker } = await import("./session-cold-storage-prepare.js");
+    const { assertSessionColdSourceCurrent } = await import("./session-cold-storage-worker.js");
     const scope = new OpenClawAgentDatabaseReadOnlyScope();
     try {
       response = {
         type: "cold-prepared",
         results: [
-          await scope.run(request.input.databaseOptions, () =>
-            prepareSessionColdBatchInWorker(request.input),
+          await scope.run(
+            {
+              ...request.input.databaseOptions,
+              assertSourceCurrent: () =>
+                assertSessionColdSourceCurrent(
+                  request.input.databaseOptions.path,
+                  request.input.source,
+                ),
+            },
+            () => prepareSessionColdBatchInWorker(request.input),
           ),
         ],
       };
@@ -584,8 +593,14 @@ if (isRecord(workerData) && workerData.type === "sqlite-transcript-archive-v2") 
       bindSqliteDatabaseAdmissionUpstream(admissionPort);
       try {
         await withSqliteDatabaseAdmissionExchange(
-          (admissions, location, create) =>
-            exchangeSqliteDatabaseAdmissions(admissionPort, admissions, location, create),
+          (admissions, location, create, observedLocation) =>
+            exchangeSqliteDatabaseAdmissions(
+              admissionPort,
+              admissions,
+              location,
+              create,
+              observedLocation,
+            ),
           () => run(workerPort),
         );
       } finally {

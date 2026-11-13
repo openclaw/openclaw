@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
+import { observeSqliteDatabaseAdmissionLocation } from "../infra/sqlite-database-admission.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import type { SqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
@@ -493,6 +494,9 @@ function createSharedStateWorkerOwner() {
             getSqliteWorkerActorIdentity(store).identity,
           );
           entry.bound = true;
+        }
+        if (admission !== entry.context.admission) {
+          observeSqliteDatabaseAdmissionLocation(admission.databasePath, admission.identity);
         }
       } catch (error) {
         return retireAfterFailure(entry, error, "binding");

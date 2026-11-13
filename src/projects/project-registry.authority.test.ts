@@ -178,7 +178,7 @@ vi.mock("../state/openclaw-state-worker-store.js", () => ({
         },
       });
     } finally {
-      retained.admission.finish();
+      await retained.admission.finish();
       fixture.afterCallback();
     }
   },

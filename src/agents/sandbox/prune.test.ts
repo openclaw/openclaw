@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -159,6 +161,30 @@ beforeEach(async () => {
 });
 
 describe("maybePruneSandboxes", () => {
+  it.skipIf(process.platform === "win32")(
+    "keeps scheduled pruning bound to its captured state alias",
+    async () => {
+      const first = roots.make("sandbox-prune-first-");
+      const second = roots.make("sandbox-prune-second-");
+      const alias = path.join(roots.make("sandbox-prune-alias-"), "selected");
+      await fs.symlink(first, alias, "dir");
+      await withEnvAsync({ OPENCLAW_STATE_DIR: alias }, async () => {
+        using firstOwner = acquireSandboxGatewayOwner(first);
+        const captured = await captureSandboxStateOwner();
+        await fs.unlink(alias);
+        await fs.symlink(second, alias, "dir");
+        using _ = acquireSandboxGatewayOwner(second);
+        firstOwner.assertCurrent();
+        const { runSandboxPrune } = await import("./prune.js");
+        await expect(runSandboxPrune(captured.assertCurrent, {}, captured)).rejects.toMatchObject({
+          code: "GATEWAY_STATE_OWNER_REQUIRED",
+        });
+        expect(registryMocks.readRegistry).not.toHaveBeenCalled();
+        expect(backendMocks.removeRuntime).not.toHaveBeenCalled();
+      });
+    },
+  );
+
   it("advances past more than a batch of persistently failing runtimes", async () => {
     let now = Date.now();
     vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -347,7 +373,7 @@ describe("maybePruneSandboxes", () => {
     const root = roots.make("sandbox-prune-custody-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
       const owner = acquireSandboxGatewayOwner(root);
-      const assertCurrent = await captureSandboxStateOwner();
+      const { assertCurrent } = await captureSandboxStateOwner();
       const registryRead = createEnteredGate();
       const staleRegistry = await registryMocks.readRegistry();
       registryMocks.readRegistry.mockImplementationOnce(async () => {

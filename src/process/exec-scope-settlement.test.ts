@@ -30,6 +30,8 @@ vi.mock("../shared/pid-alive.js", () => ({
   getFileLockProcessStartTime: () => 1,
   getProcessInstanceStartTime: () => 1,
 }));
+// mock-isolation: Synthetic children have no operating-system birth identity.
+vi.mock("./command-process-identity.js", () => ({ readCommandProcessStartTime: () => 1 }));
 vi.mock("./kill-tree.js", () => ({ killProcessTree: vi.fn() }));
 // mock-isolation: Synthetic process groups must not leave real reaper work in the shared test worker.
 vi.mock("./scoped-child-reaper.js", () => ({ scheduleAdoptedChildZombieReapAfterExit: vi.fn() }));

@@ -18,6 +18,7 @@ const SANDBOX_CHILD_INTERRUPT_POLL_MS = 50;
 type SandboxChildOutcome = { exitCode: number; signal: NodeJS.Signals | number | null };
 
 export type SandboxChildOwner = {
+  prepareCurrent?: () => Promise<void>;
   /** Retained input uses the same captured authority as process admission. */
   assertCurrent: () => void;
   exited: Promise<SandboxChildOutcome>;
@@ -44,6 +45,7 @@ type SandboxChildStartParams = {
   cwd?: string;
   usePty?: boolean;
   assertCurrent?: () => void;
+  prepareCurrent?: () => Promise<void>;
   finalizeExec?: NonNullable<SandboxContext["backend"]>["finalizeExec"];
   finalizeToken?: unknown;
   finalizeStatus: (outcome: SandboxChildOutcome) => "completed" | "failed";
@@ -120,6 +122,7 @@ export async function spawnSandboxChild(params: SandboxChildStartParams): Promis
   };
   let terminationPromise: Promise<SandboxChildOutcome> | undefined;
   const owner: SandboxChildOwner = {
+    prepareCurrent: params.prepareCurrent,
     assertCurrent,
     exited: exited.promise,
     closed: closed.promise,
@@ -206,6 +209,7 @@ export async function spawnSandboxChild(params: SandboxChildStartParams): Promis
             "Sandbox process interrupt timed out waiting for remote process admission",
           );
         }
+        await params.prepareCurrent?.();
         assertCurrent();
         if (await interruptRemote(remainingMs)) {
           return;
@@ -234,7 +238,7 @@ export async function spawnSandboxChild(params: SandboxChildStartParams): Promis
       );
       pty = await spawnTerminalPty(
         { file: command, args, cwd: params.cwd, env, cols: 80, rows: 24 },
-        { assertCurrent },
+        { assertCurrent, prepareCurrent: params.prepareCurrent },
       );
       pty.onExit(({ exitCode, signal }) => {
         // node-pty leaves exitCode at zero on a signal; native PTY execution reports failure.
@@ -242,6 +246,7 @@ export async function spawnSandboxChild(params: SandboxChildStartParams): Promis
       });
       return { ...owner, pty, interrupt };
     }
+    await params.prepareCurrent?.();
     assertCurrent();
     child = spawn(command, args, {
       detached: process.platform !== "win32",

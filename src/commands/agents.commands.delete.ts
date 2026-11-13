@@ -381,8 +381,8 @@ export async function agentsDeleteCommand(opts: AgentsDeleteOptions) {
         `Skipped workspace removal (shared with other agents${workspaceSharedWith.length ? `: ${workspaceSharedWith.join(", ")}` : ""}): ${workspaceDir}`,
       );
     } else if (deleteFiles && !purgeFailed) {
-      const legacyPlan = prepareLegacyWorkspaceStateReset(workspaceDir);
-      const statePlan = prepareWorkspaceStateDeletion(workspaceDir);
+      const legacyPlan = await prepareLegacyWorkspaceStateReset(workspaceDir);
+      const statePlan = await prepareWorkspaceStateDeletion(workspaceDir);
       const workspaceResult = await removePath(workspaceDir);
       if ("removed" in workspaceResult) {
         try {

@@ -3,6 +3,7 @@ import { MessageChannel } from "node:worker_threads";
 import { describe, expect, it } from "vitest";
 import { renderStorageFailureSummary } from "../agents/failover/assistant-request-failure-copy.js";
 import { McpOAuthStoreCorruptionError } from "../agents/mcp-oauth-store-error.js";
+import { SandboxStateOwnerRequiredError } from "../agents/sandbox/state-owner-path.js";
 import { WorktreeRemovalContentionError } from "../agents/worktrees/errors.js";
 import { SqliteTranscriptMutationConflictError } from "../config/sessions/session-mutation-conflict-error.js";
 import {
@@ -358,6 +359,11 @@ describe("shared-state worker error transport", () => {
       causeType: Error,
     },
     { error: new GatewayStateOwnerContentionError(path), fields: { databasePath: path } },
+    {
+      error: new SandboxStateOwnerRequiredError(syntaxCause),
+      fields: { code: "GATEWAY_STATE_OWNER_REQUIRED", cause: { message: syntaxCause.message } },
+      causeType: SyntaxError,
+    },
   ];
   it.each(cases)(
     "preserves $error.name identity and recovery fields: $fields",

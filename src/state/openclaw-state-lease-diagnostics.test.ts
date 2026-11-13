@@ -144,7 +144,7 @@ it.each(["native", "existing", "worker"] as const)(
       release();
       expect(readOpenClawStateLease(peer, identity)).toBeUndefined();
     } finally {
-      admission.finish();
+      await admission.finish();
       peer.close();
       await closeOpenClawStateDatabaseAsync();
     }
@@ -196,7 +196,7 @@ it.each([
       }
       expect(readOpenClawStateLease(db, identity)?.owner).toBe(expectedOwner);
     } finally {
-      admission.finish();
+      await admission.finish();
       await closeOpenClawStateDatabaseAsync();
     }
   },

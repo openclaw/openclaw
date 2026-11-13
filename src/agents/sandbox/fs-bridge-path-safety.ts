@@ -86,7 +86,8 @@ export class SandboxFsPathGuard {
       containerRoot: mount.containerRoot,
       writable: mount.writable,
       source: mount.source,
-      canonicalHostRoot: resolveSandboxHostPathViaExistingAncestor(mount.hostRoot),
+      canonicalHostRoot:
+        mount.canonicalHostRoot ?? resolveSandboxHostPathViaExistingAncestor(mount.hostRoot),
     }));
     this.runCommand = params.runCommand;
     this.containerOnlyMounts = params.containerOnlyMounts ?? [];

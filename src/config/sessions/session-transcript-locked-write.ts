@@ -137,14 +137,14 @@ export async function withWorkerTranscriptWriteLock<T>(
                     writer.runExisting(source, (worker) =>
                       executeSessionMessageRewriteOperation(worker, database.agentId, {
                         type: "session.transcript.lock.cold",
-                        input: { scope: resolved },
+                        input: { scope: resolved, readCustody: source.readCustody },
                       }),
                     ),
                   );
                   if (!metadata) {
                     throw new Error("Locked transcript lost its admitted database");
                   }
-                  return metadata.archive;
+                  return metadata;
                 },
               },
               {

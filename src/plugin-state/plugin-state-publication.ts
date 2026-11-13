@@ -472,17 +472,21 @@ export function withPluginStatePublication(
 ): SqliteWorkerAdmissionFactory {
   let submitted = values;
   return (operation) => {
-    const owner = createAdmission(operation);
-    let pending: ReturnType<typeof beginPluginStatePublication>;
+    const pending = beginPluginStatePublication(
+      () => context.admission.identity.key,
+      context.assertPublicationCurrent ?? context.admission.assertCurrent,
+      scope,
+      effect,
+    );
+    let owner: ReturnType<SqliteWorkerAdmissionFactory>;
     try {
-      pending = beginPluginStatePublication(
-        () => context.admission.identity.key,
-        context.assertPublicationCurrent ?? context.admission.assertCurrent,
-        scope,
-        effect,
-      );
+      owner = createAdmission(operation);
     } catch (error) {
-      owner.admission.finish();
+      try {
+        pending.finish("completed");
+      } catch {
+        // The writer never started; preserve the original constructor failure.
+      }
       throw error;
     }
     let installed = false;

@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { lstatSync, statSync } from "node:fs";
 import path from "node:path";
 import type { Result } from "@openclaw/normalization-core/result";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
@@ -11,7 +10,6 @@ import {
   publishSqliteDatabaseAdmission,
   type SqliteDatabaseAdmissionKey,
 } from "../infra/sqlite-database-admission.js";
-import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import {
   createSqliteLifecycleAggregateError,
   throwSqliteLifecycleErrors,
@@ -32,7 +30,10 @@ import {
   type OpenClawRegisteredAgentDatabase,
 } from "./openclaw-agent-db-contract.js";
 import { readOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
-import { readRegisteredAgentDatabaseRows } from "./openclaw-agent-db-registry.read.js";
+import {
+  hasUnavailableMissingSqlitePath,
+  readRegisteredAgentDatabaseRows,
+} from "./openclaw-agent-db-registry.read.js";
 import {
   isStateDatabaseReadAdmissionInvalidatedError,
   type OpenClawStateDatabaseReadAdmission,
@@ -421,43 +422,6 @@ function cloneRegisteredAgentDatabases(
     : cloned.filter((entry) => entry.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION);
 }
 
-function hasUnavailableMissingSqlitePath(pathname: string): boolean {
-  for (const candidate of resolveSqliteDatabaseFilePaths(pathname)) {
-    try {
-      lstatSync(candidate);
-      return true;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        return true;
-      }
-    }
-  }
-
-  let ancestor = path.dirname(pathname);
-  while (true) {
-    try {
-      const stat = lstatSync(ancestor);
-      if (!stat.isSymbolicLink()) {
-        return !stat.isDirectory();
-      }
-      try {
-        return !statSync(ancestor).isDirectory();
-      } catch {
-        return true;
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        return true;
-      }
-    }
-    const parent = path.dirname(ancestor);
-    if (parent === ancestor) {
-      return false;
-    }
-    ancestor = parent;
-  }
-}
-
 type AgentDatabaseRegistryListOptions = OpenClawStateDatabaseOptions & {
   includeIncompatibleSchemaVersions?: boolean;
 };
@@ -685,6 +649,23 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
         if (invalidated || registry.memo?.pathname !== cursor.pathname) {
           invalidated = true;
           throw new Error("Agent registration cannot replace an invalidated registry read");
+        }
+        let receipt = cursor;
+        while (receipt.token !== change.current && receipt.next) {
+          receipt = receipt.next;
+        }
+        if (receipt.token === change.current) {
+          while (cursor.token !== change.previous && cursor.token !== change.current) {
+            const preceding = cursor.next;
+            if (
+              !preceding?.transition ||
+              (preceding.transition.phase === "commit" && !unchanged(preceding.transition.mutation))
+            ) {
+              invalidated = true;
+              throw new Error("Agent registration cannot replace an invalidated registry read");
+            }
+            cursor = preceding;
+          }
         }
         const next = cursor.token === change.current ? cursor : cursor.next;
         if (

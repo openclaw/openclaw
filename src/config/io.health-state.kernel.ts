@@ -4,7 +4,7 @@ import type { Insertable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import {
-  getOrLoadSqliteDatabaseAdmissionForPath,
+  peekSqliteDatabaseAdmissionForPath,
   publishSqliteDatabaseAdmission,
   type SqliteDatabaseAdmissionKey,
 } from "../infra/sqlite-database-admission.js";
@@ -27,7 +27,7 @@ const healthReceipt: SqliteDatabaseAdmissionKey<object> = {
 };
 
 export function readConfigHealthReceipt(databasePath: string): object | undefined {
-  return getOrLoadSqliteDatabaseAdmissionForPath(databasePath, healthReceipt, () => ({}));
+  return peekSqliteDatabaseAdmissionForPath(databasePath, healthReceipt);
 }
 
 export function publishConfigHealthChanged(db: EngineConnection): void {

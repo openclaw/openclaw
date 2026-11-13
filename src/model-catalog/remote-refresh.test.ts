@@ -6,13 +6,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
+import * as machineRows from "../state/config-machine-state-row.js";
 import * as machineState from "../state/config-machine-state-write.js";
 import { readConfigMachineState as readState } from "../state/config-machine-state.js";
 import { recordOpenClawStateDatabaseOpenFailure } from "../state/openclaw-state-db-cache.js";
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import * as stateDb from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext as workerContext } from "../state/openclaw-state-worker-context.js";
+import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import * as bundledStamp from "./bundled-catalog-stamp.js";
 import { resolveRemoteCatalogUrl } from "./remote-config.js";
@@ -292,11 +295,33 @@ describe("remote model catalog store", () => {
   it("keeps snapshots detached across stores, commits, and retirement", async () => {
     const { db, read, write, check, put } = store();
     const other = store();
-    put("fixture.unrelated", true);
+    using filesystem = observeMainThreadFs();
+    const receipt = machineRows.readRemoteModelCatalogReceipt;
+    let receiptFilesystemCalls = 0;
+    using receipts = vi
+      .spyOn(machineRows, "readRemoteModelCatalogReceipt")
+      .mockImplementation((pathname) => {
+        const before = filesystem.count();
+        try {
+          return receipt(pathname);
+        } finally {
+          receiptFilesystemCalls += filesystem.count() - before;
+        }
+      });
+    using operations = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
     expect(await read()).toBeUndefined();
-    expect(await read()).toBeUndefined(); // Retain the cached-absence branch.
+    expect(receipts).toHaveBeenCalled();
+    expect(receiptFilesystemCalls).toBe(0);
+    put("fixture.unrelated", true);
+    operations.mockClear();
+    expect(await read()).toBeUndefined();
+    expect(await read()).toBeUndefined();
+    expect(operations).toHaveBeenCalledTimes(2);
     await write(initial);
+    operations.mockClear();
     expect(await read()).toEqual({ id: 1, ...initial });
+    expect(await read()).toEqual({ id: 1, ...initial });
+    expect(operations).toHaveBeenCalledTimes(1);
     expect(await other.read()).toBeUndefined();
     const retained = await read();
     retained!.checked_at = -1;
@@ -326,6 +351,7 @@ describe("remote model catalog store", () => {
     recordOpenClawStateDatabaseOpenFailure(db.path, new Error("catalog database refused"));
     await expect(readAsync(beforeFailure)).rejects.toThrow();
     await expect(read()).rejects.toThrow();
+    expect(receiptFilesystemCalls).toBe(0);
   });
 
   it("stores one machine-state snapshot and rejects stale refreshes", async () => {

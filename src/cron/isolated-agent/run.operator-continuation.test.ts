@@ -518,9 +518,8 @@ it.each([
   let merged = false;
   let reads = 0;
   const writes: unknown[] = [];
-  const github = vi
-    .spyOn(publicationTransport, "runPublicationCommand")
-    .mockImplementation(async (argv, options) => {
+  vi.spyOn(publicationTransport, "runPublicationCommand").mockImplementation(
+    async (argv, options) => {
       options?.beforeRun?.();
       if (selfRemoving) {
         expect(context.cron.getJob(job.id)).toBeUndefined();
@@ -549,7 +548,8 @@ it.each([
         }
       }
       return publicationCommandResult(merged);
-    });
+    },
+  );
   const restartEntered = createDeferredCore();
   const restartContinue = createDeferredCore();
   let entered = 0;
@@ -947,8 +947,8 @@ it.each([
       scenario !== "role revoked during merge"
     ) {
       expect(writes).toEqual([]);
-      expect(github).not.toHaveBeenCalled();
-      expect(receipt).not.toHaveBeenCalled();
+      expect(reads).toBe(0);
+      expect(merged).toBe(false);
     }
     if (recurring) {
       const valid = expectDefined((await fixture.read())[0], "stored continuation");

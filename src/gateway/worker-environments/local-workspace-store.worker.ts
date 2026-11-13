@@ -1,7 +1,12 @@
 import { deserialize } from "node:v8";
 import { inflateRawSync } from "node:zlib";
+import { assertSandboxStateOwnerPathCurrent } from "../../agents/sandbox/state-owner-path.js";
+import { assertWorkspaceFilesystemEvidence } from "../../agents/workspace-state-guard.js";
 import { assertWorktreeRegistryPredicates } from "../../agents/worktrees/registry-run-end.worker.js";
-import type { WorktreeRegistryPredicate } from "../../agents/worktrees/types.js";
+import type {
+  WorktreeRegistryPredicate,
+  WorktreeWorkerAuthority,
+} from "../../agents/worktrees/types.js";
 import { deferSqliteWorkerCommitReceipt } from "../../infra/sqlite-worker-operation-admission.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { assertOpenClawStateLeasesWorkerOwnedInTransaction } from "../../state/openclaw-state-lease-worker.js";
@@ -50,7 +55,7 @@ export const localWorkspaceOperations = {
       { database: open() },
     ),
   "localWorkspace.mutate": (
-    input: {
+    input: Pick<WorktreeWorkerAuthority, "workspaceEvidence" | "stateOwnerPath"> & {
       id: string;
       mutation: LocalWorkspaceMutation | Uint8Array;
       preparationEpoch: number | undefined;
@@ -76,6 +81,12 @@ export const localWorkspaceOperations = {
       ({ db }) => {
         const committed =
           mutateLocalWorkspaceProjection(db, input.id, mutation, input.preparationEpoch) ?? null;
+        for (const evidence of input.workspaceEvidence ?? []) {
+          assertWorkspaceFilesystemEvidence(evidence);
+        }
+        if (input.stateOwnerPath) {
+          assertSandboxStateOwnerPathCurrent(input.stateOwnerPath);
+        }
         assertOpenClawStateLeasesWorkerOwnedInTransaction(db, input.leases, "commit");
         assertWorktreeRegistryPredicates(db, input.predicates);
         deferSqliteWorkerCommitReceipt(db, committed);

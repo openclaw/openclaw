@@ -247,7 +247,6 @@ function withGitHubPublicationReceipt(
   publish?: (facts: unknown) => void,
 ): SqliteWorkerAdmissionFactory {
   return (operation) => {
-    const owner = createAdmission(operation);
     let pending: ReturnType<typeof publication.begin>;
     const lifecycleOwner = ownerFor(context.admission.identity.key);
     const previousDeletion = lifecycleOwner.pendingDeletion;
@@ -262,11 +261,19 @@ function withGitHubPublicationReceipt(
         // Deletion owns personal/repository tombstones, never shared or replacement rows.
         mutation ? undefined : (key, fact) => isPublicationFact(key, fact, false),
       );
-    } catch (error) {
-      owner.admission.finish();
-      throw error;
     } finally {
       lifecycleOwner.pendingDeletion = previousDeletion;
+    }
+    let owner: ReturnType<SqliteWorkerAdmissionFactory>;
+    try {
+      owner = createAdmission(operation);
+    } catch (error) {
+      try {
+        pending.finish(true, true);
+      } catch {
+        // The writer never started; preserve the original constructor failure.
+      }
+      throw error;
     }
     observeSqliteWorkerAdmissionFinish(owner.admission, () => {
       if (owner.admission.settlement) {

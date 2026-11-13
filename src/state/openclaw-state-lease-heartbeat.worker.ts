@@ -80,13 +80,14 @@ async function startHeartbeat(
       ? error.loss
       : { reason: "storage-failed" as const };
   function withDatabaseAdmission<T>(operation: () => T): T {
-    return withSqliteDatabaseAdmissionExchange((admissions, location, create) => {
+    return withSqliteDatabaseAdmissionExchange((admissions, location, create, observedLocation) => {
       try {
         return exchangeSqliteDatabaseAdmissions(
           params.databaseAdmissionPort,
           admissions,
           location,
           create,
+          observedLocation,
         );
       } catch (error) {
         throw admissionFailure(error);

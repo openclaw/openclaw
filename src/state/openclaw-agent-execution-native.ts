@@ -5,7 +5,7 @@ import { isDeepStrictEqual } from "node:util";
 import { MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
-import { captureGatewayStateOwner } from "../infra/gateway-state-owner.js";
+import type { captureGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
@@ -60,8 +60,11 @@ import type {
   AgentDatabaseNativeStore as Store,
   AgentDatabaseOperations,
 } from "./openclaw-agent-execution-contract.js";
-import { createSharedAgentDatabasePreparation } from "./openclaw-agent-execution-preparation.js";
-import { publishOpenClawStateDatabaseWorkerAdmission } from "./openclaw-state-db-cache.js";
+import {
+  createSharedAgentDatabasePreparation,
+  receiveAgentDatabaseSharedOwnerReceipt,
+} from "./openclaw-agent-execution-preparation.js";
+import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
 /** A logical execution owner can replace this generation only after its native close settles. */
@@ -69,6 +72,7 @@ export function createAgentDatabaseNativeGeneration(
   agentId: string,
   pathname: string,
   context: OpenClawStateWorkerContext,
+  processOwner: ReturnType<typeof captureGatewayStateOwner>,
   logicalLifetime: Int32Array<SharedArrayBuffer>,
   assertLogicalCurrent: () => void,
   assertCleanupOwned: () => void,
@@ -83,7 +87,6 @@ export function createAgentDatabaseNativeGeneration(
 ): AgentDatabaseNativeGeneration {
   const inPreparation = AsyncLocalStorage.snapshot();
   const validationSource = { agentId, path: pathname, canonicalPath: pathname };
-  const processOwner = captureGatewayStateOwner(context.admission.databasePath);
   const startupSignal = startupPreparation ? resolveSqliteInspectionSignal() : undefined;
   const startupCancellation = startupSignal
     ? new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT))
@@ -263,23 +266,12 @@ export function createAgentDatabaseNativeGeneration(
           }
           try {
             assertSourceCurrent();
-            publishOpenClawStateDatabaseWorkerAdmission(context.admission);
-            const received = facts.lease;
-            if (
-              !isRecord(received) ||
-              (received.ownerStartTime !== null && typeof received.ownerStartTime !== "number")
-            ) {
-              throw new Error("Agent worker lease differs from its captured native owner");
-            }
-            lease = {
-              leaseId: input.leaseId,
-              agentId: input.agentId,
-              path: pathname,
-              ownerPid: process.pid,
-              ownerStartTime: received.ownerStartTime,
-              sharedStatePath: context.admission.databasePath,
-              sharedStateIdentity: context.admission.identity.key,
-            };
+            lease = receiveAgentDatabaseSharedOwnerReceipt(
+              facts,
+              context.admission,
+              input.leaseId,
+              validationSource,
+            );
             receiveValidation = captureOpenClawAgentDatabaseAdmissionPublication(validationSource);
             const preparation = {
               integrityRevoked: hasRevokedOpenClawAgentDatabaseValidation(validationSource),
@@ -556,6 +548,13 @@ export function createAgentDatabaseNativeGeneration(
               openingFailure = "open-refused";
             }
           }
+          if (lease) {
+            try {
+              await openClawStateDatabaseCache.reconcileFailedWorkerAdmission(context.admission);
+            } catch {
+              // Replacement revokes the captured admission; retain the original opening refusal.
+            }
+          }
           throw error;
         })
         .finally(() => {
@@ -673,6 +672,13 @@ export function createAgentDatabaseNativeGeneration(
       return {
         identity: captured.physicalIdentity,
         incarnation: captured.incarnation,
+        authority: {
+          logical: logicalLifetime,
+          native: lifetime.state,
+          physicalIdentity: captured.physicalIdentity,
+          incarnation: captured.incarnation,
+          birthtime: captured.birthtime,
+        },
         assertCurrent() {
           assertBorrowed();
           assertCurrent();

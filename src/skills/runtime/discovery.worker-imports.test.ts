@@ -9,11 +9,13 @@ import {
 } from "./discovery-worker-contract.js";
 
 const worker = vi.hoisted(() => ({
-  read: undefined as ((input: SkillsDiscoveryInput) => SkillsDiscoveryOutput) | undefined,
+  read: undefined as
+    | ((input: SkillsDiscoveryInput) => SkillsDiscoveryOutput | Promise<SkillsDiscoveryOutput>)
+    | undefined,
 }));
 vi.mock("../../infra/worker-task-server.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/worker-task-server.js")>()),
-  serveWorkerTasks: (read: (input: SkillsDiscoveryInput) => SkillsDiscoveryOutput) => {
+  serveWorkerTasks: (read: NonNullable<typeof worker.read>) => {
     worker.read = read;
   },
 }));
@@ -45,8 +47,9 @@ it("scans workspace and prepared plugin skills without loading metadata discover
   if (!worker.read) {
     throw new Error("Discovery worker did not register its task handler");
   }
-  const result = worker.read({
+  const result = await worker.read({
     kind: "scan",
+    nativeMode: "auto",
     path: "",
     requests: [
       {
@@ -119,4 +122,11 @@ it("scans workspace and prepared plugin skills without loading metadata discover
       ]),
     },
   });
+  await expect(
+    worker.read({
+      kind: "library",
+      nativeMode: "off",
+      input: { kind: "selection", selections: [], revisions: [], stateDir: workspaceDir },
+    }),
+  ).resolves.toEqual({ kind: "library", result: { kind: "selection", entries: [] } });
 });

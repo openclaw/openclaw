@@ -1,3 +1,4 @@
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import type { LeaseHeartbeatCarrier } from "./openclaw-state-lease-heartbeat-carrier.js";
 
 export type LeaseHeartbeatCleanup = {
@@ -5,11 +6,29 @@ export type LeaseHeartbeatCleanup = {
   close(): Promise<void>;
 };
 
-export function createLeaseHeartbeatCleanup(params: { cancel: () => void }) {
+export function createLeaseHeartbeatCleanup(params: {
+  cancel: () => void;
+  finish: () => void | Promise<void>;
+  release: () => void;
+}) {
   let carrier: LeaseHeartbeatCarrier | undefined;
   const startupRenewals = new Set<Promise<unknown>>();
   let closed = false;
   let stopping: Promise<number> | undefined;
+  let releasing: Promise<void> | undefined;
+  let released = false;
+  const finish = () =>
+    (releasing ??= Promise.resolve()
+      .then(async () => {
+        try {
+          await params.finish();
+        } finally {
+          params.release();
+        }
+      })
+      .finally(() => {
+        released = true;
+      }));
 
   const cancel = () => {
     closed = true;
@@ -21,6 +40,7 @@ export function createLeaseHeartbeatCleanup(params: { cancel: () => void }) {
       stopping = Promise.resolve().then(async () => {
         const exitCode = await carrier?.close();
         await Promise.allSettled(startupRenewals);
+        await finish();
         return exitCode ?? 0;
       });
       void stopping.catch(() => {
@@ -35,7 +55,8 @@ export function createLeaseHeartbeatCleanup(params: { cancel: () => void }) {
       return (
         (!closed && carrier === undefined) ||
         carrier?.pending === true ||
-        startupRenewals.size !== 0
+        startupRenewals.size !== 0 ||
+        (releasing !== undefined && !released)
       );
     },
     async close() {
@@ -59,14 +80,33 @@ export function createLeaseHeartbeatCleanup(params: { cancel: () => void }) {
       const settled = () => startupRenewals.delete(operation);
       void operation.then(settled, settled);
     },
-    start(acquire: () => LeaseHeartbeatCarrier) {
+    start(acquire: () => LeaseHeartbeatCarrier, onFinishFailure: (error: Error) => void) {
       assertOpen();
       carrier = acquire();
+      void carrier.closed
+        .then(finish)
+        .catch((error: unknown) =>
+          onFinishFailure(toErrorObject(error, "State lease heartbeat admission cleanup failed")),
+        );
       return carrier;
     },
-    failStartup(error: unknown): never {
+    failStartup(error: unknown, abort: () => void): never {
+      let failure = error;
+      try {
+        try {
+          abort();
+        } finally {
+          params.release();
+        }
+      } catch (cleanupError) {
+        failure = new AggregateError(
+          [error, cleanupError],
+          "State lease heartbeat construction cleanup failed",
+          { cause: error },
+        );
+      }
       cancel();
-      throw error;
+      throw failure;
     },
   };
 }

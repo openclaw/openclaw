@@ -1,10 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import type { PreparedSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { resolveUserPath } from "../utils.js";
 import {
+  createWorkspaceStateAliases,
   resolveCanonicalWorkspacePath,
+  resolveCanonicalWorkspacePathAsync,
   WorkspaceAliasRepointedError,
 } from "./workspace-state-identity.js";
 
@@ -16,6 +19,18 @@ export type WorkspaceFilesystemEvidence = {
   root: (RootFact | undefined)[];
   names?: string[];
 };
+
+/** Session writers carry the original target to their existing physical custody boundary. */
+export function createWorkspaceFilesystemSource(
+  evidence: WorkspaceFilesystemEvidence,
+  assertCurrent: () => void,
+): PreparedSessionSourceAssertion {
+  const prepared = { assertCurrent, checks: [], workspaceEvidence: [evidence] };
+  return Object.assign(() => assertCurrent(), {
+    prepareSessionSource: async () => prepared,
+    prepareSessionSourceEffect: async () => prepared,
+  });
+}
 
 function rootFact(stat: fs.BigIntStats | undefined): RootFact | undefined {
   return stat && { dev: stat.dev, ino: stat.ino, mode: stat.mode, isDirectory: stat.isDirectory() };
@@ -46,6 +61,24 @@ function captureObservation(dir: string, content: boolean): WorkspaceFilesystemE
     canonical,
     root,
     names: content ? names : undefined,
+  };
+}
+
+export async function captureWorkspaceFilesystemEvidence(
+  workspaceDir: string,
+  content = false,
+): Promise<WorkspaceFilesystemEvidence> {
+  const dir = path.resolve(resolveUserPath(workspaceDir));
+  return {
+    workspaceDir: dir,
+    canonical: await resolveCanonicalWorkspacePathAsync(dir),
+    root: [
+      rootFact(await fs.promises.lstat(dir, { bigint: true }).catch(ignoreMissing)),
+      rootFact(await fs.promises.stat(dir, { bigint: true }).catch(ignoreMissing)),
+    ],
+    names: content
+      ? ((await fs.promises.readdir(dir).catch(ignoreMissing)) ?? []).toSorted()
+      : undefined,
   };
 }
 
@@ -90,12 +123,34 @@ export function assertWorkspaceFilesystemEvidence(evidence: WorkspaceFilesystemE
   );
 }
 
-/** Request-local filesystem evidence; stored NFC keys never select filesystem paths. */
-export function captureWorkspaceStateFilesystemGuard(
-  workspaceDir: string,
-  content = true,
-): () => void {
+export async function validateWorkspaceFilesystemEvidence(
+  evidence: WorkspaceFilesystemEvidence,
+): Promise<void> {
+  assertObservation(
+    evidence,
+    await captureWorkspaceFilesystemEvidence(evidence.workspaceDir, evidence.names !== undefined),
+  );
+}
+
+export function installWorkspaceFilesystemEvidence(
+  target: readonly WorkspaceFilesystemEvidence[],
+  observed: readonly Pick<WorkspaceFilesystemEvidence, "root">[],
+): void {
+  for (let index = 0; index < target.length; index++) {
+    const initial = target[index]!;
+    for (let root = 0; root < initial.root.length; root++) {
+      initial.root[root] ??= observed[index]!.root[root];
+    }
+  }
+}
+
+export async function prepareWorkspaceStateRead(workspaceDir: string) {
   const dir = path.resolve(resolveUserPath(workspaceDir));
-  const initial = captureObservation(dir, content);
-  return () => assertWorkspaceFilesystemEvidence(initial);
+  const initial = await captureWorkspaceFilesystemEvidence(dir);
+  return {
+    evidence: initial,
+    canonicalPath: initial.canonical,
+    aliases: createWorkspaceStateAliases(dir, initial.canonical),
+    assertCurrent: () => validateWorkspaceFilesystemEvidence(initial),
+  };
 }

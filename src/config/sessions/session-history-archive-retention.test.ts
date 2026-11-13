@@ -139,6 +139,7 @@ function interceptArchives(
         (reclaim, assertCurrent, prepared, archives) =>
           run(reclaim, assertCurrent, prepared, { ...archives, ...wrap(archives) }),
         assertCallerCurrent,
+        args[3],
       );
     },
   );

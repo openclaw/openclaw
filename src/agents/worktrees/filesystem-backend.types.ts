@@ -1,6 +1,10 @@
+import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
+import type { WorktreeWorkerAuthority } from "./types.js";
+
 export type WorktreeFilesystemOptions = {
   signal?: AbortSignal;
-  commitGuard: () => void;
+  commitGuard: SessionSourceAssertion;
+  workerAuthority?: WorktreeWorkerAuthority;
 };
 
 export interface WorktreeFilesystemBackend {

@@ -22,7 +22,7 @@ import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
 import {
-  captureOpenClawAgentDatabaseExecution,
+  captureOpenClawAgentDatabaseExecutionAsync,
   supportsOpenClawAgentDatabaseExecution,
 } from "../../state/openclaw-agent-execution.js";
 import { agentTranscriptSearchSchema } from "../../state/openclaw-agent-search-schema.js";
@@ -138,7 +138,7 @@ export async function searchSessionTranscripts(
     try {
       // Retain writer admission while the search checks projection readiness.
       if (supportsOpenClawAgentDatabaseExecution(options)) {
-        execution = captureOpenClawAgentDatabaseExecution(options);
+        execution = await captureOpenClawAgentDatabaseExecutionAsync(options);
       }
     } catch (error) {
       statusOwnerFailure = { error };

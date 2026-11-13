@@ -1101,6 +1101,7 @@ src/infra/gateway-state-owner-errors.ts
 src/infra/gateway-state-owner-heartbeat.runtime.ts
 src/infra/gateway-state-owner-heartbeat.ts
 src/infra/gateway-state-owner-heartbeat.worker.ts
+src/infra/gateway-state-owner-lifecycle.ts
 src/infra/gateway-state-owner-record.ts
 src/infra/gateway-state-owner.ts
 src/infra/gateway-process-argv.ts
@@ -1242,6 +1243,7 @@ src/infra/sqlite-busy-timeout.ts
 src/infra/sqlite-clean-close-seal.ts
 src/infra/sqlite-commit-receipt.ts
 src/infra/sqlite-database-admission-context.ts
+src/infra/sqlite-database-admission-descriptor.ts
 src/infra/sqlite-database-admission-key.ts
 src/infra/sqlite-database-admission-read.ts
 src/infra/sqlite-database-admission-delta.ts
@@ -1475,6 +1477,7 @@ src/infra/update-state-inspection-protocol.ts
 src/infra/update-step-identity.ts
 src/infra/utf8-input.ts
 src/infra/warning-filter.ts
+src/infra/windows-appcontainer-spawn-log.runtime.ts
 src/infra/windows-appcontainer-spawn.ts
 src/infra/windows-encoding.ts
 src/infra/windows-install-roots.ts

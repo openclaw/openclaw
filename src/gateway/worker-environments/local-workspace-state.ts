@@ -1,15 +1,14 @@
 import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
 import type { LocalWorkspacePausePhase } from "../../agents/sandbox/local-workspace-quiescence.js";
+import { nativeWorktreeFilesystem } from "../../agents/worktrees/filesystem-native.js";
 import { requireGit, runGit } from "../../agents/worktrees/git.js";
-import type { WorktreeWorkerAuthority } from "../../agents/worktrees/types.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   assertLocalWorkspaceDirectory,
   initializeLocalWorkspaceProjection,
-  localWorkspaceProjectionPath,
 } from "./local-workspace-checkout.js";
 import {
   pendingLocalWorkspaceDirection as pendingDirection,
@@ -34,7 +33,10 @@ import type {
   LocalWorkspaceManifestAction,
   LocalWorkspaceManifestCheckpoint,
 } from "./local-workspace-manifest-scan.js";
-import { assertLocalWorkspaceProjectionOwner } from "./local-workspace-owner-identity.js";
+import {
+  assertLocalWorkspaceProjectionOwner,
+  bindLocalWorkspaceAuthority,
+} from "./local-workspace-owner-identity.js";
 import type { LocalWorkspaceStore, LocalWorkspaceProjection } from "./local-workspace-store.js";
 import type { LocalWorkspaceCapture, LocalWorkspaceOwner } from "./local-workspace-types.js";
 import {
@@ -67,6 +69,7 @@ export function projectionOperations(
   owner: LocalWorkspaceOwner,
   store: LocalWorkspaceStore,
   initialRow: LocalWorkspaceProjection | undefined,
+  projectionPath: string,
   quiescence?: {
     pause: () => Promise<void>;
     resume: () => Promise<void>;
@@ -75,7 +78,6 @@ export function projectionOperations(
   },
 ) {
   const signal = store.signal;
-  const projectionPath = localWorkspaceProjectionPath(owner);
   let row = initialRow;
   const selectCurrent = (assertCurrent: (() => void) | undefined) => {
     if (!row) {
@@ -91,15 +93,7 @@ export function projectionOperations(
   const current = () => selectCurrent(owner.assertCurrent);
   // Subprocess input admission requires an undefined result.
   const assertCurrent = () => void current();
-  const workerAuthority: WorktreeWorkerAuthority = {
-    ...store.workerAuthority,
-    predicates: owner.workerAuthority?.predicates ?? store.workerAuthority.predicates,
-    assertCurrent: () => {
-      selectCurrent(
-        owner.workerAuthority ? owner.workerAuthority.assertCurrent : owner.assertCurrent,
-      );
-    },
-  };
+  const workerAuthority = bindLocalWorkspaceAuthority(owner, store.workerAuthority, selectCurrent);
   const update = async (
     patch: Parameters<typeof store.update>[1],
     manifest?: Parameters<typeof store.update>[3],
@@ -264,6 +258,7 @@ export function projectionOperations(
         journal: { ...plan, basePack: selected.journal_pack },
         buildCacheInputs: await buildCacheInputs(),
         assertCurrent,
+        workerAuthority,
       });
     }
     await update({ journal_json: null, journal_pack: null });
@@ -278,6 +273,7 @@ export function projectionOperations(
       root: owner.worktree.repoRoot,
       stagedResultRef: selected.pending_ref,
       assertCurrent,
+      workerAuthority,
     });
     await update({
       pending_ref: null,
@@ -376,6 +372,7 @@ export function projectionOperations(
           currentManifestRaw: snapshot?.currentManifestRaw ?? legacy!.rawManifest,
           buildCacheInputs: snapshot?.buildCacheInputs ?? (await buildCacheInputs()),
           assertCurrent,
+          workerAuthority,
         },
         { target, refresh, snapshot, current, signal },
       );
@@ -427,6 +424,7 @@ export function projectionOperations(
           reconciliation: snapshot.reconciliation,
           current: snapshot.current,
           assertCurrent,
+          workerAuthority,
           freezeTarget: target === "projection" ? quiescence?.pause : undefined,
           onPhase: quiescence?.markPhase,
           ...createLocalWorkspaceCheckpointAcceptance({
@@ -525,6 +523,7 @@ export function projectionOperations(
         baseCommit: selected.base_commit,
         signal,
         assertCurrent,
+        workerAuthority,
         buildCacheInputs,
         dependencies,
       });
@@ -650,6 +649,7 @@ export function projectionOperations(
           currentManifestRef: accepted.manifestRef,
           buildCacheInputs: await buildCacheInputs(),
           assertCurrent,
+          workerAuthority,
         });
       }, current().baseline_ref ?? undefined);
       current();
@@ -724,8 +724,11 @@ export function projectionOperations(
         });
         await cleanupAccepted();
       }
-      current();
-      await fs.rm(parent, { recursive: true, force: true });
+      await nativeWorktreeFilesystem.remove(parent, {
+        commitGuard: composeSessionSourceAssertion([assertCurrent, workerAuthority.assertCurrent]),
+        signal,
+        workerAuthority,
+      });
       await store.delete(current(), owner.workerAuthority);
     },
     rememberPaused: (value: string | null) => update({ paused_runtimes_json: value }),

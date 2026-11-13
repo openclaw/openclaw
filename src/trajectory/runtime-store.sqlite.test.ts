@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi, onTestFinished } from "vitest";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import {
@@ -95,7 +95,8 @@ function admitted<T>(operation: (owner: SqliteWorkerOperationContext) => T) {
   try {
     return { owner, window: withSqliteWorkerOperationAdmission(owner, () => operation(owner)) };
   } finally {
-    admission.finish();
+    const finishing = admission.finish();
+    onTestFinished(() => finishing);
   }
 }
 

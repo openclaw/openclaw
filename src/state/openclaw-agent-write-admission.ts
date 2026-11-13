@@ -8,6 +8,8 @@ import {
   canShareSqliteDatabaseAdmissions,
   getSqliteDatabaseAdmissionIdentityForPath,
   hasSqliteDatabaseSchemaAdmissionForIdentity,
+  getSqliteDatabaseAdmissionSourceForPath,
+  prepareSqliteDatabaseAdmissionAsync,
   retainSqliteDatabaseAdmissionForPath,
 } from "../infra/sqlite-database-admission.js";
 import {
@@ -213,21 +215,30 @@ export function runOpenClawAgentPreparedWriteAdmission<
   T,
 >(
   prepare: () => Promise<Source>,
-  run: (source: Source) => Promise<T> | T,
+  run: (
+    source: Source,
+    identity: DatabasePathIdentity,
+    assertCurrent: () => void,
+  ) => Promise<T> | T,
   reentrant = false,
+  request?: { signal?: AbortSignal; caller?: DirectReservationCaller },
 ): Promise<T> {
-  return acquireAgentDatabaseWriter(undefined, prepare, (source) =>
-    runAgentDatabasePathWriteAdmission(
-      resolveOpenClawAgentSqlitePath(source.options),
-      () => run(source),
-      reentrant,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      true,
-      source.identity,
-    ),
+  return acquireAgentDatabaseWriter(
+    undefined,
+    prepare,
+    (source) =>
+      runAgentDatabasePathWriteAdmission(
+        resolveOpenClawAgentSqlitePath(source.options),
+        (identity, assertCurrent) => run(source, identity, assertCurrent),
+        reentrant,
+        undefined,
+        request?.signal,
+        request?.caller,
+        undefined,
+        true,
+        source.identity,
+      ),
+    request?.signal,
   );
 }
 
@@ -263,8 +274,9 @@ async function runAgentDatabasePathWriteAdmission<T>(
   worker = false,
   preparedIdentity?: DatabasePathIdentity,
 ): Promise<T> {
+  const sharedWorker = worker && canShareSqliteDatabaseAdmissions();
   const admitted = getSqliteDatabaseAdmissionIdentityForPath(pathname);
-  const retained =
+  let retained =
     canShareSqliteDatabaseAdmissions() &&
     admitted &&
     hasSqliteDatabaseSchemaAdmissionForIdentity(admitted)
@@ -272,18 +284,23 @@ async function runAgentDatabasePathWriteAdmission<T>(
       : undefined;
   const reserve = (identity: DatabasePathIdentity, observed: ReservationTiming) => {
     const storePath = identity.canonicalPath;
+    let currentIdentity = identity;
     const assertCurrent = () => {
+      signal?.throwIfAborted();
       if (retained) {
         if (!retained.isCurrent()) {
           throw new Error("Agent database target changed before write admission");
         }
-      } else if (identity.key.startsWith("file:")) {
+      } else if (!sharedWorker && identity.key.startsWith("file:")) {
         try {
           assertExistingDatabaseIdentity(pathname, identity.key, identity.birthtime);
         } catch (cause) {
           throw new Error("Agent database target changed before write admission", { cause });
         }
-      } else if (readDatabasePathIdentitySync(pathname).canonicalPath !== storePath) {
+      } else if (
+        !sharedWorker &&
+        readDatabasePathIdentitySync(pathname).canonicalPath !== storePath
+      ) {
         throw new Error("Agent database target changed before write admission");
       }
     };
@@ -314,13 +331,41 @@ async function runAgentDatabasePathWriteAdmission<T>(
                       cause,
                     });
                   }
-                } else if ((await readDatabasePathIdentity(pathname)).canonicalPath !== storePath) {
-                  throw new Error("Agent database target changed before write admission");
+                } else {
+                  currentIdentity = await readDatabasePathIdentity(pathname);
+                  if (currentIdentity.canonicalPath !== storePath) {
+                    throw new Error("Agent database target changed before write admission");
+                  }
                 }
-              } else {
+                if (sharedWorker) {
+                  const prepared = await prepareSqliteDatabaseAdmissionAsync({
+                    location: pathname,
+                    identity: currentIdentity,
+                    expectedIdentity: identity.key.startsWith("file:") ? identity : undefined,
+                    assertCurrent: () => signal?.throwIfAborted(),
+                  });
+                  if (!prepared || prepared.canonicalPath !== storePath) {
+                    throw new Error("Agent database target changed before write admission");
+                  }
+                  currentIdentity = prepared;
+                  if (prepared.key.startsWith("file:")) {
+                    const source = getSqliteDatabaseAdmissionSourceForPath(pathname);
+                    if (
+                      !source ||
+                      source.identity.key !== prepared.key ||
+                      source.identity.birthtime !== prepared.birthtime
+                    ) {
+                      throw new Error("Agent database target changed before write admission");
+                    }
+                    retained = retainSqliteDatabaseAdmissionForPath(pathname);
+                  }
+                }
+              }
+              signal?.throwIfAborted();
+              if (!worker || retained) {
                 assertCurrent();
               }
-              return await run(identity, assertCurrent);
+              return await run(currentIdentity, assertCurrent);
             } finally {
               queue.holder = previousHolder;
             }
@@ -334,6 +379,14 @@ async function runAgentDatabasePathWriteAdmission<T>(
     );
   };
   try {
+    if (
+      preparedIdentity?.key.startsWith("file:") &&
+      retained &&
+      (retained.identity.key !== preparedIdentity.key ||
+        retained.identity.birthtime !== preparedIdentity.birthtime)
+    ) {
+      throw new Error("Agent database target changed before write admission");
+    }
     return await observeWriteAdmission(
       "direct",
       timing,

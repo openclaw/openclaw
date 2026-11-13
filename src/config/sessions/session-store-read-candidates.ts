@@ -8,6 +8,7 @@ import {
 import { resolveIdentityPathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import {
   assertDatabasePathIdentity,
+  assertExistingDatabaseIdentity,
   type DatabasePathIdentity,
   inspectDatabasePathIdentitySync,
   readDatabasePathIdentitySync,
@@ -57,6 +58,24 @@ export type SessionStoreReadCustody = {
   sourcePath: string;
   candidates: readonly SessionStoreReadCandidate[];
 };
+
+/** Registry receipts must retain the captured file generation through every spelling. */
+export function isSessionStoreSourceGenerationCurrent(
+  captured: { path: string; identity: string; birthtime?: string },
+  source: { path: string; physicalPath: string },
+): boolean {
+  if (captured.birthtime === undefined) {
+    return false;
+  }
+  try {
+    for (const pathname of new Set([captured.path, source.path, source.physicalPath])) {
+      assertExistingDatabaseIdentity(pathname, captured.identity, captured.birthtime);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /** Capture exact candidates before discovery yields; sibling families have no file identity. */
 export function captureSessionStoreCandidateIdentities(

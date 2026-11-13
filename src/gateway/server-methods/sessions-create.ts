@@ -381,7 +381,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const preparedRoot =
       repository || emptyWorkspace || deviceFolder || p.worktree === true
         ? undefined
-        : prepareSessionCreateFilesystemRoot({
+        : await prepareSessionCreateFilesystemRoot({
             cfg,
             enforceSandboxContainment: Boolean(sessionCwd && !requestedExecNode),
             requestedExecNode,
@@ -390,6 +390,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
             sessionKey,
             targetAgentId: sessionAgentId,
           });
+    commitGuard();
     if (preparedRoot && !preparedRoot.ok) {
       respond(false, undefined, preparedRoot.error);
       return;

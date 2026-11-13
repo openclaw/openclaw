@@ -1,5 +1,4 @@
 import { isUtf8 } from "node:buffer";
-import type { Root } from "@openclaw/fs-safe/root";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { openLocalFileSafely, readLocalFileSafely } from "../infra/fs-safe.js";
@@ -17,7 +16,9 @@ export type InstalledSkill = CodeModeSkill & {
   promptListed?: boolean;
   assertCurrent?: () => void;
   /** Only the local placement owner may grant access to this pinned skill directory. */
-  resourceRoot?: Promise<Root>;
+  resourceRoot?: Promise<{
+    read(relativePath: string, maxBytes: number): Promise<{ buffer: Buffer }>;
+  }>;
   /** The owner must bound I/O before allocating the returned content. */
   readSearchContent?: (maxBytes: number, signal?: AbortSignal) => Promise<string>;
 };
@@ -384,11 +385,7 @@ export async function readInstalledSkill(
     const root = await skill.resourceRoot;
     signal?.throwIfAborted();
     skill.assertCurrent?.();
-    const { buffer } = await root.read(relativePath, {
-      maxBytes: MAX_SKILL_INSTRUCTION_BYTES,
-      symlinks: "reject",
-      hardlinks: "reject",
-    });
+    const { buffer } = await root.read(relativePath, MAX_SKILL_INSTRUCTION_BYTES);
     if (buffer.includes(0) || !isUtf8(buffer)) {
       throw new ToolInputError("Skill companions must be UTF-8 text without NUL bytes.");
     }

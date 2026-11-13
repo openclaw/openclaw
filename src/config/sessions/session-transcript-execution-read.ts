@@ -9,7 +9,9 @@ import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.pa
 import type { AgentDatabaseGenerationClaim } from "../../state/openclaw-agent-execution-admission-contract.js";
 import type { AgentDatabaseExecutionScope } from "../../state/openclaw-agent-execution-contract.js";
 import { decodeSessionTranscriptWorkerReadError } from "./session-history-worker-errors.js";
+import type { SessionStoreReadCustody } from "./session-store-read-candidates.js";
 import type { SessionTranscriptExecutionReadResult } from "./session-transcript-execution-read.types.js";
+import type { SessionColdMetadataWorkerResult } from "./session-transcript-inventory.types.js";
 import { withTranscriptLockSettlement } from "./session-transcript-lock-settlement.js";
 import type { SessionHistoryWorkerDatabase } from "./session-transcript-worker.types.js";
 
@@ -95,6 +97,7 @@ export function runLockedSessionTranscriptRead<T>(
 /** Ordinary reads use WAL snapshots; an active transcript lock lends its ordered connection. */
 export function createPreparedSessionTranscriptReads(params: {
   expectedIdentity: DatabasePathIdentity;
+  readCustody?: readonly SessionStoreReadCustody[];
   assertCurrent: () => void;
   reader: PreparedSessionTranscriptReads;
 }): PreparedSessionTranscriptReads {
@@ -185,20 +188,32 @@ export function createPreparedSessionTranscriptReads(params: {
         { signal },
       ),
     ),
-    readColdMetadata: async (input, signal) => ({
-      kind: "cold-metadata",
-      archive: await read(
-        (worker) =>
-          worker.execute(
+    readColdMetadata: (input, signal) =>
+      read<SessionColdMetadataWorkerResult>(
+        async (worker) => {
+          const result = await worker.execute(
             {
               type: "session.transcript.coldMetadata.read",
               input: { sessionId: input.sessionId, expectedIdentity },
             },
             { signal },
-          ),
-        async () => (await params.reader.readColdMetadata(input, signal)).archive,
+          );
+          if (!result.ok) {
+            return result;
+          }
+          return {
+            ok: true,
+            value: result.value
+              ? {
+                  kind: "cold-metadata",
+                  archive: result.value,
+                  source: { readIdentity: expectedIdentity, readCustody: params.readCustody },
+                }
+              : { kind: "cold-metadata", archive: undefined },
+          };
+        },
+        () => params.reader.readColdMetadata(input, signal),
         signal,
       ),
-    }),
   };
 }

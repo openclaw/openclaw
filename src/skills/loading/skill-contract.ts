@@ -3,6 +3,8 @@ import type { SourceInfo } from "../../agents/sessions/source-info.js";
 import { decodeXml, escapeXml } from "../../shared/xml.js";
 import { resolveSkillReadPath } from "../workspace-skill-read-path.js";
 
+export type SkillResourceRootIdentity = { realPath: string; dev: string; ino: string };
+
 export interface Skill {
   name: string;
   /** Human-readable title from the first Markdown H1, falling back to the identifier. */
@@ -14,6 +16,8 @@ export interface Skill {
   readContent?: string;
   /** Prepared runtime identity of instruction bytes, or the complete delivered bundle tree. */
   contentHash?: string;
+  /** Runtime-only directory admission supplied by the Gateway snapshot owner. */
+  resourceRootIdentity?: SkillResourceRootIdentity | { error: string };
   filePath: string;
   baseDir: string;
   /** Discovery provenance for collision diagnostics, never read authority. */

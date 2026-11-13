@@ -277,7 +277,7 @@ async function send(request: SqliteWorkerRequest): Promise<SqliteWorkerReply> {
     });
     return await response.promise;
   } finally {
-    admission?.finish();
+    await admission?.finish();
   }
 }
 
@@ -407,7 +407,7 @@ it("settles eager native factory creation synchronously", async () => {
       },
     );
   } finally {
-    admission.finish();
+    await admission.finish();
   }
 });
 
@@ -503,7 +503,7 @@ it.each([
       }
     } finally {
       wait.mockRestore();
-      admission.finish();
+      await admission.finish();
     }
   },
 );

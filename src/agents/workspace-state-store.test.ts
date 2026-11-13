@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, expect, it, onTestFinished } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { defaultPayload } from "../infra/gateway-state-owner-record.js";
 import {
   acquireGatewayStateOwner,
@@ -114,7 +114,7 @@ function attest(nowMs: number, hashes: [string, string][]) {
 }
 
 async function deleteState(targetDir: string): Promise<void> {
-  await deleteWorkspaceState(prepareWorkspaceStateDeletion(targetDir));
+  await deleteWorkspaceState(await prepareWorkspaceStateDeletion(targetDir));
 }
 
 function insertPersistedAttestationHash(filename: string, sha256: string): void {
@@ -223,7 +223,7 @@ it("refuses a retired Gateway's pending deletion and lets its successor delete s
   const before = await read(dir);
   const filePath = path.join(dir, "AGENTS.md");
   writeWorkspaceFileCache({ filePath, content: "cached", identity: "identity" });
-  const pending = deleteWorkspaceState(prepareWorkspaceStateDeletion(dir), captured);
+  const pending = deleteWorkspaceState(await prepareWorkspaceStateDeletion(dir), captured);
   owner.release();
   const successor = acquireGatewayStateOwner({ databasePath, payload });
   onTestFinished(() => successor.release());
@@ -234,7 +234,7 @@ it("refuses a retired Gateway's pending deletion and lets its successor delete s
   expect(await read(dir)).toEqual(before);
   expect(readWorkspaceFileCache(filePath, "identity")).toBe("cached");
   await deleteWorkspaceState(
-    prepareWorkspaceStateDeletion(dir),
+    await prepareWorkspaceStateDeletion(dir),
     captureGatewayStateOwner(databasePath)!,
   );
   expect((await read(dir, { readOnly: true })).setupExists).toBe(false);
@@ -262,7 +262,7 @@ it("registers and retires aliases in the captured caller-selected state database
   expect((await read(alias)).setupExists).toBe(false);
 
   const selectedPath = resolveOpenClawStateSqlitePath(env);
-  const deletion = deleteWorkspaceState(prepareWorkspaceStateDeletion(alias), { env });
+  const deletion = deleteWorkspaceState(await prepareWorkspaceStateDeletion(alias), { env });
   env.OPENCLAW_STATE_DIR = process.env.OPENCLAW_STATE_DIR!;
   await deletion;
   expect((await read(dir, { path: selectedPath })).setupExists).toBe(false);
@@ -282,7 +282,11 @@ it("cleans current state and only the stale association for a repointed alias", 
   fs.unlinkSync(alias);
   fs.symlinkSync(replacement, alias, process.platform === "win32" ? "junction" : "dir");
 
-  const deletion = prepareWorkspaceStateDeletion(alias);
+  using realpath = vi.spyOn(fs.realpathSync, "native");
+  using stat = vi.spyOn(fs, "lstatSync");
+  const deletion = await prepareWorkspaceStateDeletion(alias);
+  expect(realpath.mock.calls.filter(([pathname]) => pathname === alias)).toHaveLength(0);
+  expect(stat.mock.calls.filter(([pathname]) => pathname === alias)).toHaveLength(0);
   fs.unlinkSync(alias);
   await deleteWorkspaceState(deletion);
 

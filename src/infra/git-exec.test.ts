@@ -1,10 +1,16 @@
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
+import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { isMainThread, threadId } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createEnteredGate } from "../agents/entered-gate.test-support.js";
+import {
+  captureWorkspaceFilesystemEvidence,
+  createWorkspaceFilesystemSource,
+} from "../agents/workspace-state-guard.js";
 import { requireGitBuffer } from "../agents/worktrees/git.js";
 import { readCommandProcessFailure } from "../process/exec-result.js";
 import * as processRunner from "../process/exec-runner.js";
@@ -261,6 +267,48 @@ it("overrides maintenance.autoDetach only for an explicitly owned Git command", 
     await expect(requireGitCommand(root, ["config", "--get", key], { env })).resolves.toBe("true");
   });
 });
+
+it.each(["text", "bytes", "buffered", "text-wait", "bytes-wait"] as const)(
+  "refuses an alias retargeted during %s credential admission without synchronous path checks",
+  async (mode) => {
+    await withTestDir({ prefix: "openclaw-git-source-" }, async (root) => {
+      const selected = path.join(root, "selected");
+      const successor = path.join(root, "successor");
+      const alias = path.join(root, "alias");
+      for (const directory of [selected, successor]) {
+        await fs.mkdir(directory);
+        await requireGitCommand(directory, ["init"]);
+      }
+      await fs.symlink(selected, alias, "junction");
+      const beforeRun = createWorkspaceFilesystemSource(
+        await captureWorkspaceFilesystemEvidence(alias),
+        () => {},
+      );
+      const config = path.join(successor, ".git", "config");
+      const before = await fs.readFile(config);
+      const stats = vi.spyOn(syncFs, "lstatSync");
+      const execute =
+        mode === "buffered"
+          ? executeGitCommandBuffered
+          : mode.startsWith("bytes")
+            ? executeGitCommandBytes
+            : executeGitCommand;
+      await expect(
+        execute(alias, ["config", "--local", "synthetic.bound", "changed"], {
+          beforeRun,
+          waitForExit: mode.endsWith("-wait"),
+          startRun: async <T>(run: () => T): Promise<Awaited<T>> => {
+            await fs.unlink(alias);
+            await fs.symlink(successor, alias, "junction");
+            return await run();
+          },
+        }),
+      ).rejects.toThrow(/alias points to a different/);
+      expect(await fs.readFile(config)).toEqual(before);
+      expect(stats.mock.calls.filter(([pathname]) => pathname === alias)).toHaveLength(0);
+    });
+  },
+);
 
 it("reports the applied 120-second Git timeout", async () => {
   const seconds = 120;

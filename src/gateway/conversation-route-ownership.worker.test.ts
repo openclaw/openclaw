@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it, vi, onTestFinished } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import type { ChannelMessagingAdapter } from "../channels/plugins/types.core.js";
@@ -280,7 +280,8 @@ it.each(["final", "queued"] as const)(
               request.facts.publication.kind === "conversation-authority"
             ) {
               refusedGrants++;
-              admission.finish();
+              const finishing = admission.finish();
+              onTestFinished(() => finishing);
             }
             admit(request, grant);
           }, attachment);

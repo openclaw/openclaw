@@ -37,7 +37,7 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
   isRawModelRun: boolean;
 }) {
   const { attempt } = params;
-  const bootstrapWorkspaceDir = resolveRunBootstrapWorkspaceDir({
+  const bootstrapWorkspaceDir = await resolveRunBootstrapWorkspaceDir({
     ...attempt,
     workspaceDir: params.setup.resolvedWorkspace,
     agentId: params.setup.sessionAgentId,

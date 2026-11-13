@@ -2,6 +2,7 @@ import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
+import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
@@ -558,6 +559,46 @@ function observeTerminal(worker: V2Worker) {
   worker.terminalSignal.addEventListener("abort", () => terminal.resolve(), { once: true });
   return terminal.promise;
 }
+
+it("V2 aborts a throwing admission observer before dispatch and permits a following write", async () => {
+  const db = proofDatabase();
+  const refusal = new Error("controlled admission observer refusal");
+  const observed: admission.SqliteWorkerOperationAdmission[] = [];
+  const onAdmitted = vi.fn();
+  let refuse = true;
+  const worker = await openV2Worker({
+    onAdmitted,
+    observeAdmission(owner) {
+      if (refuse) {
+        observed.push(owner);
+        throw refusal;
+      }
+    },
+  });
+  using dispatch = vi.spyOn(Worker.prototype, "postMessage");
+
+  await expect(worker.execute(append("refused"), allow)).rejects.toBe(refusal);
+  expect(observed).toHaveLength(1);
+  const failed = observed[0];
+  if (!failed) {
+    throw new Error("Expected the actual worker-store admission observer");
+  }
+  expect(() => failed.observeRequests(allow)).toThrow(
+    "SQLite request observation is already bound or closed",
+  );
+  expect(
+    dispatch.mock.calls.some(
+      ([message]) => isRecord(message) && message.operationAdmission === failed.port,
+    ),
+  ).toBe(false);
+  expect(onAdmitted).not.toHaveBeenCalled();
+  expectValues(db, []);
+
+  refuse = false;
+  expect(await worker.execute(append("follower"), allow)).toBeGreaterThan(0);
+  expectValues(db, ["follower"]);
+  await worker.close();
+});
 
 it.each([false, true])(
   "V2 preserves absence and prepares alongside a captured creator: %s",

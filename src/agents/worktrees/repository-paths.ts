@@ -35,7 +35,7 @@ export async function resolveCheckoutRootFromRealPath(
         }
       }
     }
-    if (insideGitCheckout(requested)) {
+    if (await insideGitCheckout(requested)) {
       throw new Error(
         `Git metadata is unavailable for ${requested}; checkout preserved. Restore the original repository metadata, then use git worktree repair from that repository. Do not recreate its index or delete the checkout to bypass recovery.`,
       );

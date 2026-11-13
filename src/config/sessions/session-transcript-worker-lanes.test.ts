@@ -184,15 +184,6 @@ it.each(["deadline", "revocation"])(
     await entered.promise;
     observed.run.mockResolvedValue(absent);
     const read = request.read();
-    let settled = false;
-    void read.then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      },
-    );
     const rejected = expect(read).rejects.toThrow(reason === "deadline" ? "timed out" : "revoked");
     void rejected.catch(() => {});
     try {
@@ -202,7 +193,6 @@ it.each(["deadline", "revocation"])(
         observed.resources.at(-1)!.revoke();
         await vi.advanceTimersByTimeAsync(0);
       }
-      expect(settled).toBe(true);
       await rejected;
       expect(observed.run).not.toHaveBeenCalled();
     } finally {

@@ -96,7 +96,7 @@ function mutate(
 
 it.each(["progress", "required", "transient"] as const)(
   "settles %s update receipts when the host policy check exceeds commit admission",
-  (kind) => {
+  async (kind) => {
     const command = retentionCommand(false);
     command.input.step = {
       step: kind === "required" ? "finalize:checkpoint" : "candidate-state-snapshot",
@@ -136,7 +136,7 @@ it.each(["progress", "required", "transient"] as const)(
       }
       expect(commits).toBe(kind === "transient" ? 2 : 3);
     } finally {
-      admission.finish();
+      await admission.finish();
     }
     const saved = getUpdateRun(runId, options);
     expect(saved?.steps.some((step) => step.step === command.input.step.step)).toBe(

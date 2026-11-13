@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate as yieldTurn } from "node:timers/promises";
 import { resolveStateDir } from "../../config/paths.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import { ProjectCheckoutBusyError } from "../../projects/project-checkout.js";
 import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease-error.js";
@@ -383,10 +384,10 @@ export async function withWorktreeSource<T>(
     withSource,
     params.waitBudget,
     (source) => {
-      const commitGuard = () => {
-        params.commitGuard?.();
-        source.assertCurrent();
-      };
+      const commitGuard = composeSessionSourceAssertion(
+        [params.commitGuard, source.assertCurrent].filter((assertion) => assertion !== undefined),
+        (assertSources) => assertSources(),
+      );
       commitGuard();
       const signal =
         params.signal && source.signal
@@ -398,6 +399,12 @@ export async function withWorktreeSource<T>(
       };
       const workerAuthority = {
         ...params.workerAuthority,
+        workspaceEvidence: [
+          ...(params.workerAuthority?.workspaceEvidence ?? []),
+          ...(source.workerAuthority?.workspaceEvidence ?? []),
+        ],
+        stateOwnerPath:
+          source.workerAuthority?.stateOwnerPath ?? params.workerAuthority?.stateOwnerPath,
         assertCurrent: () => {
           signal?.throwIfAborted();
           (params.workerAuthority ? params.workerAuthority.assertCurrent : params.commitGuard)?.();

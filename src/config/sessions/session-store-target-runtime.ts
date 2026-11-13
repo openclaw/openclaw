@@ -7,15 +7,16 @@ import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sql
 import type { SessionStoreRegistryRead } from "./session-sqlite-target.js";
 import type { SessionStoreReadCustody } from "./session-store-read-candidates.js";
 import type {
-  SessionStoreTargetInventoryRequest,
   SessionStoreTargetInventoryResult,
   SessionStoreTargetReadRequest,
   SessionStoreTargetReadResult,
 } from "./session-store-target-inventory.js";
+import type { SessionStoreTargetInventoryRequest } from "./session-store-target-routing.js";
 import {
   targetDiscoveryLane,
   prepareSessionStoreCandidatesInWorker,
   withSessionHistoryWorkerReadCandidates,
+  type SessionHistoryWorkerLane,
 } from "./session-transcript-worker-resources.js";
 
 type DeepReadonly<T> = { readonly [K in keyof T]: DeepReadonly<T[K]> };
@@ -37,14 +38,11 @@ export function prepareSessionStoreTargetInventoryRead(
   request: Omit<SessionStoreTargetInventoryRequest, "registeredDatabases">,
   unchangedBy?: Parameters<typeof prepareOpenClawAgentDatabaseRegistrySnapshotRead>[1],
   registeredDatabases?: SessionStoreRegistryRead,
+  registry = prepareOpenClawAgentDatabaseRegistrySnapshotRead({ env: request.env }, unchangedBy),
 ) {
   const { candidates, ...prepared } = request;
   // Security-scoped inventories can supply a stricter witness. Ordinary discovery
   // keeps its selected registry snapshot; later registrations affect the next read.
-  const registry = prepareOpenClawAgentDatabaseRegistrySnapshotRead(
-    { env: request.env },
-    unchangedBy,
-  );
   const assertRegistryCurrent = unchangedBy
     ? registry.assertCurrent
     : registry.assertAdmissionCurrent;
@@ -95,6 +93,8 @@ export async function withSessionStoreTarget<T>(
   operation: (target: PreparedStoreTarget, owner: StoreTargetReadOwner) => Promise<T>,
   assertCallerCurrent?: () => void,
   onReadError?: (error: unknown, assertCurrent: () => void) => Promise<T>,
+  signal?: AbortSignal,
+  lane: SessionHistoryWorkerLane = targetDiscoveryLane,
 ): Promise<T> {
   assertCallerCurrent?.();
   const { candidates, ...targetRequest } = {
@@ -115,7 +115,7 @@ export async function withSessionStoreTarget<T>(
         registeredDatabases: { status: "deferred" },
       });
       if (read.ok && read.value.kind === "session-target-registry-required") {
-        const { result } = await registry.read();
+        const { result } = await registry.read(signal);
         read = await discovery.readStoreTargetResult({
           ...targetRequest,
           registeredDatabases:
@@ -153,7 +153,8 @@ export async function withSessionStoreTarget<T>(
         },
       });
     },
-    targetDiscoveryLane,
+    lane,
+    signal,
   );
 }
 

@@ -41,11 +41,11 @@ import {
 } from "./session-store-read-candidates.js";
 import type {
   SessionStoreTargetPreparationRequest,
-  SessionStoreTargetInventoryRequest,
   SessionStoreTargetReadRequest,
   SessionStoreTargetReadResult,
   SessionStoreTargetInventoryResult,
 } from "./session-store-target-inventory.js";
+import type { SessionStoreTargetInventoryRequest } from "./session-store-target-routing.js";
 import {
   createSessionTranscriptHistoryPool,
   createUsageCostPool,
@@ -55,7 +55,7 @@ import {
 } from "./session-transcript-read-pools.js";
 import {
   createSessionStoreTargetReaders,
-  sessionDiscoveryConfig,
+  prepareSessionStoreTargetDiscovery,
 } from "./session-transcript-worker-readers.js";
 import type {
   SessionHistoryWorkerInput,
@@ -506,8 +506,7 @@ export function acquireSessionTranscriptReadResource(storePath: string): History
 export async function prepareSessionStoreCandidatesInWorker(
   request: SessionStoreTargetPreparationRequest,
 ) {
-  const prepared =
-    "config" in request ? { ...request, config: sessionDiscoveryConfig(request.config) } : request;
+  const { request: prepared, inputBytes } = prepareSessionStoreTargetDiscovery(request);
   const lane = targetDiscoveryLane;
   clearDatabaseWorkerIdleRetirement(lane);
   lane.pending++;
@@ -516,7 +515,7 @@ export async function prepareSessionStoreCandidatesInWorker(
       () => ({ kind: "session-target-prepare", request: prepared }),
       {
         diagnosticOperation: "session-target-prepare",
-        inputBytes: JSON.stringify(prepared).length * 2,
+        inputBytes,
         timeoutMs: 60_000,
       },
     );

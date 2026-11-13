@@ -4,6 +4,7 @@ import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
 import { sleepWithAbort } from "../infra/backoff.js";
 import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { captureGatewayStateOwnerAsync } from "../infra/gateway-state-owner.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { resolveAgentDatabaseIdleHandleTtlMs } from "../infra/sqlite-handle-lifecycle.js";
 import {
@@ -15,7 +16,6 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGatewayShutdownCleanupSignal } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
-import { notifyListeners } from "../shared/listeners.js";
 import * as creationClaims from "./agent-creation-claim.js";
 import { AgentDatabaseExecutionAdmissionClosedError } from "./agent-database-admission-error.js";
 import {
@@ -85,7 +85,6 @@ export function createAgentDatabaseExecution(
   const lifetime = new AgentDatabaseExecutionLifetime();
   let borrowers = 0;
   const acceptedWork = createAgentDatabaseAcceptedWork();
-  const terminalListeners = new Set<(reason: Error) => void>();
   let creationIdentity = expectedCreationIdentity;
   let creationBorrowers = 0;
   let generation: AgentDatabaseNativeGeneration | undefined;
@@ -121,19 +120,6 @@ export function createAgentDatabaseExecution(
     } catch {
       // The resource owner still retains the cleanup failure.
     }
-  };
-  const reportTerminal = (error: unknown) => {
-    if (terminalListeners.size === 0) {
-      return;
-    }
-    const reason = error instanceof Error ? error : new Error(formatErrorMessage(error));
-    const listeners = [...terminalListeners];
-    terminalListeners.clear();
-    // Never join this notification from close/run: their accepted work must settle first.
-    void Promise.resolve().then(async () => {
-      await Promise.allSettled(acceptedWork.pending.keys());
-      notifyListeners(listeners, reason);
-    });
   };
   const finishRetirement = () => {
     lifetime.retire();
@@ -194,6 +180,7 @@ export function createAgentDatabaseExecution(
   };
   // Persistent generation callbacks must not capture a request's source or operation frame.
   function createGeneration(
+    processOwner: Awaited<ReturnType<typeof captureGatewayStateOwnerAsync>>,
     expectedIdentity?: AgentDatabaseExecutionFileIdentity,
     creatingTarget?: DatabasePathIdentity,
   ): AgentDatabaseNativeGeneration {
@@ -201,6 +188,7 @@ export function createAgentDatabaseExecution(
       agentId,
       identity.canonicalPath,
       context,
+      processOwner,
       lifetime.state,
       assertCurrent,
       () => {
@@ -210,7 +198,7 @@ export function createAgentDatabaseExecution(
       },
       expectedIdentity ?? fileIdentity ?? toAgentExecutionConstraints(identity).expectedIdentity,
       acceptFileIdentity,
-      reportTerminal,
+      acceptedWork.reportTerminal,
       fileIdentity ? undefined : (creationIdentity ?? creatingTarget),
       creationClaim?.witness,
       retainAgentDatabaseStartupWorker(agentId, { env: context.environment }, () =>
@@ -261,7 +249,14 @@ export function createAgentDatabaseExecution(
       assertCallerCurrent();
       signal?.throwIfAborted();
     }
-    generation ??= createGeneration(expectedIdentity, creatingTarget);
+    if (!generation) {
+      const processOwner = await captureGatewayStateOwnerAsync(context.admission);
+      assertCurrent();
+      source.assertCurrent();
+      assertCallerCurrent();
+      signal?.throwIfAborted();
+      generation ??= createGeneration(processOwner, expectedIdentity, creatingTarget);
+    }
     const current = generation;
     let entered = false;
     try {
@@ -286,7 +281,7 @@ export function createAgentDatabaseExecution(
       if (generation === current && (nativeFailure || retireNativeOnFailure)) {
         try {
           if (nativeFailure === "native" && !contended && !nativeClosing) {
-            reportTerminal(error);
+            acceptedWork.reportTerminal(error);
             await owner.close();
           } else {
             // A lost carrier invalidates native claims, not other chats' logical borrowers.
@@ -361,6 +356,13 @@ export function createAgentDatabaseExecution(
       return creationIdentity;
     },
     getPendingPreparation: () => generation?.getPendingPreparation(),
+    getOpeningIdentity() {
+      return generation?.getPendingNativeOpen() &&
+        identity.key.startsWith("file:") &&
+        identity.birthtime !== undefined
+        ? identity
+        : undefined;
+    },
     borrow(borrowedPath, expected, creating, requestedPath, observedIdentity) {
       const cleanup = getAgentDeletionDatabaseCleanup({ ...executionOptions, path: borrowedPath });
       const expectedIdentity = expected ? Object.freeze({ ...expected }) : undefined;
@@ -426,10 +428,7 @@ export function createAgentDatabaseExecution(
       const borrowed: OpenClawAgentDatabaseExecution = {
         agentId,
         path: borrowedPath,
-        onTerminal(listener) {
-          terminalListeners.add(listener);
-          return () => terminalListeners.delete(listener);
-        },
+        onTerminal: acceptedWork.onTerminal,
         get fileIdentity() {
           assertBorrowed();
           return fileIdentity;
@@ -659,7 +658,7 @@ export function createAgentDatabaseExecution(
     lifetime.revoke();
     acceptedWork.cancelReadAdmissions();
     clearIdleTimer();
-    reportTerminal(
+    acceptedWork.reportTerminal(
       new AgentDatabaseExecutionAdmissionClosedError("Agent database execution admission revoked"),
     );
   };
@@ -705,7 +704,7 @@ export function createAgentDatabaseExecution(
     unregisterShared = registerOpenClawStateDatabaseAsyncResource({
       admission: context.admission,
       close: async () => {
-        reportTerminal(
+        acceptedWork.reportTerminal(
           new AgentDatabaseExecutionAdmissionClosedError("Agent database state admission closed"),
         );
         await acceptedWork.closeAccepted(() => owner.close());

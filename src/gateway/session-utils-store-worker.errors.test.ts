@@ -3,10 +3,8 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  readSessionStoreTargetInventory,
-  type SessionStoreTargetInventoryRequest,
-} from "../config/sessions/session-store-target-inventory.js";
+import { readSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
+import type { SessionStoreTargetInventoryRequest } from "../config/sessions/session-store-target-routing.js";
 import { formatErrorMessageForDisplay } from "../infra/error-diagnostics.js";
 import * as agentDatabase from "../state/openclaw-agent-db-readonly.js";
 import { errorShapeFromError } from "./error-shape.js";

@@ -3,6 +3,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { Worker } from "node:worker_threads";
 import { expect, onTestFinished, test, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import * as boundaryPath from "../../infra/boundary-path.js";
 import { runSqliteMutationWorkerRequest } from "./session-accessor.sqlite-worker-request.js";
 
 const createWorker = (script: string) => {
@@ -74,58 +75,93 @@ test("joins native exit before rejecting a Worker initialization error", async (
   expect(withWriteAdmission).not.toHaveBeenCalled();
 });
 
-test("joins queued admission after Worker exit without granting the dead Worker", async () => {
-  const worker = createWorker(
-    `const { parentPort } = require("node:worker_threads");
-     parentPort.on("message", () => {});
-     parentPort.postMessage({ type: "admission-request", operationId: 8 });`,
-  );
-  const queued = createDeferred();
-  const releaseAdmission = createDeferred();
-  const postMessage = vi.spyOn(worker, "postMessage");
-  const onCommitRequest = vi.fn();
-  let admissionSettled = false;
-  let requestSettled = false;
-  let admissionTask: Promise<void> | undefined;
-  const outcome = runSqliteMutationWorkerRequest({
-    transport: { kind: "dedicated", channel: worker },
-    operationId: 8,
-    completion: "result",
-    onCommitRequest,
-    withWriteAdmission: (run) => {
-      admissionTask = (async () => {
-        queued.resolve();
-        await releaseAdmission.promise;
-        await run();
-        admissionSettled = true;
-      })();
-      return admissionTask;
-    },
-  })
-    .catch((error: unknown) => error)
-    .finally(() => {
-      requestSettled = true;
-    });
-  try {
-    await Promise.race([queued.promise, outcome]);
-    expect(requestSettled).toBe(false);
-    const exitCode = await worker.terminate();
-    expect(worker.threadId).toBe(-1);
-    await nextTurn();
-    expect(requestSettled).toBe(false);
-    expect(admissionSettled).toBe(false);
+test.each(["queued", "qualification"])(
+  "joins %s admission after Worker exit without granting the dead Worker",
+  async (phase) => {
+    const worker = createWorker(
+      `const { parentPort } = require("node:worker_threads");
+       parentPort.on("message", () => {});
+       parentPort.postMessage({ type: "admission-request", operationId: 8 });`,
+    );
+    const queued = createDeferred();
+    const releaseAdmission = createDeferred();
+    const postMessage = vi.spyOn(worker, "postMessage");
+    if (phase === "qualification") {
+      const resolve = vi
+        .spyOn(boundaryPath, "resolveIdentityPathViaExistingAncestor")
+        .mockImplementation(async (pathname) => {
+          queued.resolve();
+          await releaseAdmission.promise;
+          return pathname;
+        });
+      onTestFinished(() => resolve.mockRestore());
+    }
+    const onCommitRequest = vi.fn();
+    let admissionSettled = false;
+    let requestSettled = false;
+    let admissionTask: Promise<void> | undefined;
+    const outcome = runSqliteMutationWorkerRequest({
+      transport: { kind: "dedicated", channel: worker },
+      operationId: 8,
+      completion: "result",
+      onCommitRequest,
+      databaseAuthority:
+        phase === "qualification"
+          ? {
+              // Only the state access boundary is substituted; transport and settlement are real.
+              stateAccess: {
+                canonicalPath: "/synthetic/retired-worker/state.sqlite",
+                processOwner: undefined,
+                prepareAccess: async () => () => {},
+                assertReadAllowed() {},
+              },
+              creationPaths: ["/synthetic/retired-worker/agent.sqlite"],
+              assertCurrent() {},
+            }
+          : undefined,
+      withWriteAdmission: (run) => {
+        admissionTask = (async () => {
+          if (phase === "queued") {
+            queued.resolve();
+            await releaseAdmission.promise;
+          }
+          try {
+            await run();
+          } finally {
+            admissionSettled = true;
+          }
+        })();
+        return admissionTask;
+      },
+    })
+      .catch((error: unknown) => error)
+      .finally(() => {
+        requestSettled = true;
+      });
+    try {
+      await Promise.race([queued.promise, outcome]);
+      expect(requestSettled).toBe(false);
+      const exitCode = await worker.terminate();
+      expect(worker.threadId).toBe(-1);
+      await nextTurn();
+      expect(requestSettled).toBe(false);
+      expect(admissionSettled).toBe(false);
 
-    releaseAdmission.resolve();
-    await expect(outcome).resolves.toMatchObject({
-      message: `SQLite transcript archive worker exited with code ${exitCode}`,
-    });
-    expect(admissionSettled).toBe(true);
-    expect(postMessage).not.toHaveBeenCalled();
-    expect(onCommitRequest).not.toHaveBeenCalled();
-  } finally {
-    releaseAdmission.resolve();
-    await worker.terminate();
-    await Promise.allSettled([outcome, admissionTask]);
-    postMessage.mockRestore();
-  }
-});
+      releaseAdmission.resolve();
+      await expect(outcome).resolves.toMatchObject({
+        message:
+          phase === "queued"
+            ? `SQLite transcript archive worker exited with code ${exitCode}`
+            : "SQLite reclamation creation grant is no longer current",
+      });
+      expect(admissionSettled).toBe(true);
+      expect(postMessage).not.toHaveBeenCalled();
+      expect(onCommitRequest).not.toHaveBeenCalled();
+    } finally {
+      releaseAdmission.resolve();
+      await worker.terminate();
+      await Promise.allSettled([outcome, admissionTask]);
+      postMessage.mockRestore();
+    }
+  },
+);

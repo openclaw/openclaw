@@ -8,7 +8,11 @@ import type { OpenClawPluginToolFactory } from "../plugins/tool-types.js";
 import { buildSkillSnapshot } from "../skills/loading/workspace-skill-prompt.js";
 import { readWorkspaceSkillSources } from "../skills/loading/workspace-skill-source-reader.js";
 import { syncWorkspaceSkills } from "../skills/loading/workspace-skill-sync.runtime.js";
-import { closeSkillsWatchers, refreshSkillsDiscovery } from "../skills/runtime/refresh.js";
+import {
+  closeSkillsWatchers,
+  prepareSandboxFsContext,
+  refreshSkillsDiscovery,
+} from "../skills/runtime/refresh.js";
 import { writeSkill } from "../skills/test-support/e2e-test-helpers.js";
 import {
   restoreMockSkillsHomeEnv,
@@ -108,6 +112,7 @@ it.each(
         targetWorkspaceDir: sandboxDir,
         skillsSnapshot: snapshot,
       });
+      sandbox.fsPreparation = await prepareSandboxFsContext(sandbox);
       const prepared = resolveSandboxSkillRuntimeInputs({
         sandbox,
         skillsAnchorWorkspace: workspace,

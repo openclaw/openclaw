@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import { validateWorkspaceFilesystemEvidence } from "../../agents/workspace-state-guard.js";
 import { parseAgentSessionKey, toAgentStoreSessionKey } from "../../routing/session-key.js";
 import type { ConversationReadQuery } from "./conversation-registry.types.js";
 import type {
@@ -242,6 +243,9 @@ export function createMemorySessionActorOwner(
                     await prepareSessionStoreCandidatesInWorker({
                       validate: { readCustody: authority.readCustody, candidates: [], sources: [] },
                     });
+                  }
+                  for (const evidence of authority.workspaceEvidence ?? []) {
+                    await validateWorkspaceFilesystemEvidence(evidence);
                   }
                   // This is the sole effect boundary; no asynchronous work runs inside it.
                   authority.authorize("commit", structuredClone(working.hot));

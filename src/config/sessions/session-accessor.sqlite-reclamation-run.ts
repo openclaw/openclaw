@@ -355,7 +355,11 @@ export async function runSqliteSessionReclamation(
           }
           const claim = execution.captureGenerationClaim();
           return await runWorker(claim, identity.nativeLocation, {
-            source: { agentId: execution.agentId, path: identity.nativeLocation },
+            source: {
+              agentId: execution.agentId,
+              path: identity.nativeLocation,
+              canonicalPath: identity.nativeLocation,
+            },
             claim,
           });
         }
@@ -384,7 +388,11 @@ export async function runSqliteSessionReclamation(
           databaseOptions,
           expectedSource,
           async (worker) => {
-            const validationSource = { agentId: execution.agentId, path: databaseOptions.path };
+            const validationSource = {
+              agentId: execution.agentId,
+              path: databaseOptions.path,
+              canonicalPath: expectedSource.canonicalPath,
+            };
             const receiveValidation =
               captureOpenClawAgentDatabaseValidationTransfer(validationSource);
             const prepared = await worker.prepare({

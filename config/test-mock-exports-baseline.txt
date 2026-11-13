@@ -4061,7 +4061,6 @@
 ["src/config/sessions/session-accessor.sqlite-worker-request.lifetime.test.ts","../../state/openclaw-agent-db-validation-cache.js","cb6fbdccb5332447f6fedfd8971bca27d970e49fa2ee4daa14a3173e1cea5d09",1]
 ["src/config/sessions/session-accessor.sqlite-worker-request.lifetime.test.ts","../../state/openclaw-state-db.paths.js","adbac1ba7af51b6377cdfd9745a08aa1f6cc3c8f1184562ff4c571b492b51831",1]
 ["src/config/sessions/session-cold-storage-read.test.ts","./session-cold-storage.js","7ab279a05ebd52245fe94fd4dd6e759b598d3f09cf78942530c6f6835c53d85e",1]
-["src/config/sessions/session-cold-storage.publication.test.ts","../../state/openclaw-agent-db-readonly.js","b1b9dcdcc4bf89f6f781e556eaec0adb92a75ba228909f661035c21752f009f8",1]
 ["src/config/sessions/session-cold-storage.publication.test.ts","../../state/openclaw-agent-db.js","736c78d2e00f1ee51a788cbb27d0f3859dcfc8f6e3f21ec80e5620d0c87cee50",1]
 ["src/config/sessions/session-cold-storage.publication.test.ts","../../state/openclaw-state-worker-context.js","f2758876e706bceceebaf7a3157bfa159a974cb1ee9f28ade2494b8aee1e6399",1]
 ["src/config/sessions/session-cold-storage.publication.test.ts","./session-accessor.sqlite-archive.js","e312cfe4c91c38ce8c2bd6efbd89ccb425bd20d24b808c9272a264f5342a53e2",1]

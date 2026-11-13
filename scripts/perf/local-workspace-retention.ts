@@ -191,13 +191,16 @@ Object.assign(globalThis, {
       createdAdmissions++;
       const finish = admission.finish.bind(admission);
       let finished = false;
-      admission.finish = () => {
-        finishCalls++;
-        finish();
+      const complete = () => {
         if (!finished) {
           finished = true;
           finishedAdmissions++;
         }
+      };
+      admission.finish = (outcome) => {
+        finishCalls++;
+        const pending = finish(outcome);
+        return pending ? pending.then(complete) : complete();
       };
       admissions.push(new WeakRef(admission));
       if (values["retain-admissions"]) {

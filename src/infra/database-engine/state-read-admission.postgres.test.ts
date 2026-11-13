@@ -98,7 +98,7 @@ it.skipIf(!connection).each([false, true])(
             Atomics.notify(new Int32Array(gate), 0);
             await result.catch(() => {});
             active = false;
-            relay.finish();
+            await relay.finish();
             anchor.close();
           }
         };

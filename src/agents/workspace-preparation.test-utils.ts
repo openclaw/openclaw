@@ -1,10 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { withinTest } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as workspaceBootstrap from "./workspace-bootstrap-publish.js";
 import { holdWorkspacePreparationSnapshot } from "./workspace-preparation-queue.test-support.js";
+import { runWorkspacePreparation } from "./workspace-preparation.js";
+import * as workspaceGuard from "./workspace-state-guard.js";
 import { WorkspaceAliasRepointedError } from "./workspace-state-identity.js";
 import {
   readWorkspaceStateSnapshot,
@@ -36,6 +38,85 @@ export function registerWorkspacePreparationTests({
   expectPathMissing: (filePath: string) => Promise<void>;
 }) {
   describe("workspace preparation ownership", () => {
+    it.for(["same-path", "alias", "failed-discovery"] as const)(
+      "preserves invocation order through held discovery: %s",
+      async (kind, { signal }) => {
+        const { state, tempDir } = getFixture();
+        const alias = state.path("discovery-alias");
+        const independent = state.path("independent-discovery");
+        await fs.symlink(tempDir, alias, process.platform === "win32" ? "junction" : "dir");
+        await fs.mkdir(independent);
+        const followerDir = kind === "alias" ? alias : tempDir;
+        const facts = new Map(
+          await Promise.all(
+            [tempDir, alias, independent].map(
+              async (dir) =>
+                [dir, await workspaceGuard.captureWorkspaceFilesystemEvidence(dir)] as const,
+            ),
+          ),
+        );
+        const discovering = createDeferred();
+        const releaseDiscovery = createDeferred();
+        const working = createDeferred();
+        const releaseWork = createDeferred();
+        const failure = new Error("Discovery failed");
+        let firstCapture = true;
+        using _ = vi
+          .spyOn(workspaceGuard, "captureWorkspaceFilesystemEvidence")
+          .mockImplementation(async (dir) => {
+            if (firstCapture) {
+              firstCapture = false;
+              discovering.resolve();
+              await releaseDiscovery.promise;
+              if (kind === "failed-discovery") {
+                throw failure;
+              }
+            }
+            return facts.get(dir)!;
+          });
+        const order: string[] = [];
+        const first = runWorkspacePreparation(tempDir, async () => {
+          working.resolve();
+          await releaseWork.promise;
+          order.push("first");
+        });
+        void first.catch(() => {});
+        let follower: Promise<void> | undefined;
+        try {
+          await withinTest(discovering.promise, signal);
+          follower = runWorkspacePreparation(followerDir, async () => {
+            order.push("follower");
+          });
+          // Let an incorrectly unsequenced follower enqueue before releasing discovery.
+          await Promise.resolve();
+          releaseDiscovery.resolve();
+          if (kind === "failed-discovery") {
+            await expect(first).rejects.toBe(failure);
+          } else {
+            await withinTest(working.promise, signal);
+          }
+          await withinTest(
+            runWorkspacePreparation(independent, async () => {
+              order.push("independent");
+            }),
+            signal,
+          );
+          releaseWork.resolve();
+          if (kind !== "failed-discovery") {
+            await withinTest(first, signal);
+          }
+          await withinTest(follower, signal);
+          expect(order.filter((entry) => entry !== "independent")).toEqual(
+            kind === "failed-discovery" ? ["follower"] : ["first", "follower"],
+          );
+        } finally {
+          releaseDiscovery.resolve();
+          releaseWork.resolve();
+          await Promise.allSettled([first, follower]);
+        }
+      },
+    );
+
     it("does not mistake the shipped template for user content after other workspace files disappear", async () => {
       const { tempDir } = getFixture();
       const historicalAgents = await fs.readFile(

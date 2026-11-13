@@ -184,7 +184,7 @@ describe("read pin custody", () => {
       assertOpen.mockClear();
       const pin = retainer.borrowForRead(database.path);
       expect(pin).toBeDefined();
-      expect(assertOpen).toHaveBeenCalledExactlyOnceWith(database.path, undefined);
+      expect(assertOpen).toHaveBeenCalledExactlyOnceWith(database.path, undefined, undefined);
       expect(isOpenClawDatabaseMaintenanceResourceOwned(database.db, scope)).toBe(true);
       reference?.release();
       expect(retire).not.toHaveBeenCalled();

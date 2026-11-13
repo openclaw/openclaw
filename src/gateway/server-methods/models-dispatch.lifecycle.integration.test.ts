@@ -14,7 +14,6 @@ import {
   expectAssistantReply,
   writeCatalogPlugin,
 } from "./models-catalog-fixture.test-support.js";
-import { createModelListFailureDiagnostics } from "./models-failure-diagnostics.test-support.js";
 import {
   closeModelsEndpoint,
   createModelsTestState,
@@ -63,7 +62,6 @@ async function withDispatchLifecycle(
     list: (refresh?: boolean, view?: "all" | "default") => Promise<ModelsListResult>;
     send: (model: string, name: string, missing?: boolean) => Promise<void>;
   }) => Promise<void>,
-  diagnostics?: ReturnType<typeof createModelListFailureDiagnostics>,
 ) {
   await using state = await createModelsTestState("models-dispatch-lifecycle", {
     env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined },
@@ -89,12 +87,6 @@ async function withDispatchLifecycle(
         const key = request.headers.authorization?.replace(/^Bearer /, "");
         discoveryAccounts.push(key);
         const held = heldDiscovery;
-        diagnostics?.note({
-          branch: "discovery-request",
-          held: held !== undefined,
-          account:
-            key === "account-a-key" ? "first" : key === "account-b-key" ? "replacement" : "other",
-        });
         if (held) {
           held.started.resolve();
           await held.release.promise;
@@ -189,7 +181,6 @@ async function withDispatchLifecycle(
     });
     await state.writeConfig(cfg);
     await saveAccount("account-a-key");
-    await diagnostics?.install();
     const start = async () => {
       const started = await startModelsGateway(state, cfg, token, { hotReloadRecovery });
       gateway = started;
@@ -197,15 +188,13 @@ async function withDispatchLifecycle(
       return started;
     };
     let active = await start();
-    const readModels = (refresh = false, view: "all" | "default" = "all") => {
-      const listResponse = active.client.request<ModelsListResult>("models.list", {
+    const readModels = (refresh = false, view: "all" | "default" = "all") =>
+      active.client.request<ModelsListResult>("models.list", {
         agentId: "main",
         provider: "opencode",
         view,
         refresh,
       });
-      return diagnostics ? diagnostics.observeRpcList(listResponse) : listResponse;
-    };
     await run({
       get client() {
         return active.client;
@@ -374,96 +363,75 @@ it("models.list retains executable rows on failed refresh and replaces them afte
 it("models.authRefresh revokes old executable rows before discovery and config.patch applies current policy and transport", async ({
   signal,
 }) => {
-  const diagnostics = createModelListFailureDiagnostics();
-  let passed = false;
-  await withDispatchLifecycle(
-    signal,
-    async (fixture) => {
-      await fixture.list(true);
-      await fixture.send("account-a-only", "before-replacement");
-      expect(fixture.requests[0]).toMatchObject({ authorization: "Bearer account-a-key" });
+  await withDispatchLifecycle(signal, async (fixture) => {
+    await fixture.list(true);
+    await fixture.send("account-a-only", "before-replacement");
+    expect(fixture.requests[0]).toMatchObject({ authorization: "Bearer account-a-key" });
 
-      diagnostics.begin();
-      const held = fixture.holdDiscovery();
-      try {
-        diagnostics.note({ branch: "save-replacement-enter" });
-        await fixture.saveAccount("account-b-key");
-        diagnostics.note({ branch: "save-replacement-return" });
-        diagnostics.note({ branch: "auth-refresh-request" });
-        await fixture.client.request("models.authRefresh", { agentId: "main", operation: "login" });
-        diagnostics.note({ branch: "auth-refresh-response" });
-        await withTestTimeout(held.started, 30_000, "Replacement account discovery did not start");
-        diagnostics.note({ branch: "held-observed" });
-        expect((await fixture.list()).models).not.toContainEqual(
-          expect.objectContaining({ provider: "opencode", id: "account-a-only" }),
-        );
-        await fixture.send("account-a-only", "during-replacement", true);
-        expect(fixture.requests).toHaveLength(1);
-      } finally {
-        held.release();
-      }
-      await expect
-        .poll(async () => providerModels(await fixture.list()).map((model) => model.id), {
-          timeout: 30_000,
-        })
-        .toEqual(["account-b-only", "account-b-sibling"]);
-      await fixture.send("account-b-only", "after-replacement");
-      expectDispatch(fixture.requests, 1, "account-b-only", "account-b-key");
+    const held = fixture.holdDiscovery();
+    try {
+      await fixture.saveAccount("account-b-key");
+      await fixture.client.request("models.authRefresh", { agentId: "main", operation: "login" });
+      await withTestTimeout(held.started, 30_000, "Replacement account discovery did not start");
+      expect((await fixture.list()).models).not.toContainEqual(
+        expect.objectContaining({ provider: "opencode", id: "account-a-only" }),
+      );
+      await fixture.send("account-a-only", "during-replacement", true);
+      expect(fixture.requests).toHaveLength(1);
+    } finally {
+      held.release();
+    }
+    await expect
+      .poll(async () => providerModels(await fixture.list()).map((model) => model.id), {
+        timeout: 30_000,
+      })
+      .toEqual(["account-b-only", "account-b-sibling"]);
+    await fixture.send("account-b-only", "after-replacement");
+    expectDispatch(fixture.requests, 1, "account-b-only", "account-b-key");
 
-      const config = await fixture.client.request<{ hash: string }>("config.get", {});
-      await fixture.client.request("config.patch", {
-        baseHash: config.hash,
-        replacePaths: ["agents.defaults.modelPolicy.allow"],
-        raw: JSON.stringify({
-          agents: { defaults: { modelPolicy: { allow: ["opencode/account-b-only"] } } },
-          models: {
-            providers: {
-              opencode: { request: { headers: { "X-Dispatch-Request": "reloaded-transport" } } },
-            },
+    const config = await fixture.client.request<{ hash: string }>("config.get", {});
+    await fixture.client.request("config.patch", {
+      baseHash: config.hash,
+      replacePaths: ["agents.defaults.modelPolicy.allow"],
+      raw: JSON.stringify({
+        agents: { defaults: { modelPolicy: { allow: ["opencode/account-b-only"] } } },
+        models: {
+          providers: {
+            opencode: { request: { headers: { "X-Dispatch-Request": "reloaded-transport" } } },
           },
-        }),
-      });
-      await expect
-        .poll(
-          async () => {
-            const publication = await fixture.list(false, "default");
-            return {
-              pending: publication.pendingProviders ?? [],
-              models: providerModels(publication).map(({ id, contextWindow, available }) => ({
-                id,
-                contextWindow,
-                available,
-              })),
-            };
-          },
-          { timeout: 30_000 },
-        )
-        .toEqual({
-          pending: [],
-          models: [{ id: "account-b-only", contextWindow: 32768, available: true }],
-        });
-      await expect(
-        fixture.client.request("sessions.create", {
-          agentId: "main",
-          key: "agent:main:denied-after-reload",
-          model: "opencode/account-b-sibling",
-        }),
-      ).rejects.toThrow("model not allowed");
-      expect(fixture.requests).toHaveLength(2);
-      await fixture.send("account-b-only", "after-config-reload");
-      expectDispatch(fixture.requests, 2, "account-b-only", "account-b-key", "reloaded-transport");
-    },
-    diagnostics,
-  )
-    .then(() => {
-      passed = true;
-    })
-    .finally(() => {
-      diagnostics.stop();
-      if (!passed) {
-        diagnostics.emitFailure();
-      }
+        },
+      }),
     });
+    await expect
+      .poll(
+        async () => {
+          const publication = await fixture.list(false, "default");
+          return {
+            pending: publication.pendingProviders ?? [],
+            models: providerModels(publication).map(({ id, contextWindow, available }) => ({
+              id,
+              contextWindow,
+              available,
+            })),
+          };
+        },
+        { timeout: 30_000 },
+      )
+      .toEqual({
+        pending: [],
+        models: [{ id: "account-b-only", contextWindow: 32768, available: true }],
+      });
+    await expect(
+      fixture.client.request("sessions.create", {
+        agentId: "main",
+        key: "agent:main:denied-after-reload",
+        model: "opencode/account-b-sibling",
+      }),
+    ).rejects.toThrow("model not allowed");
+    expect(fixture.requests).toHaveLength(2);
+    await fixture.send("account-b-only", "after-config-reload");
+    expectDispatch(fixture.requests, 2, "account-b-only", "account-b-key", "reloaded-transport");
+  });
 }, 180_000);
 
 it(

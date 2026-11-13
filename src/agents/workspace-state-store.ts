@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -8,26 +8,32 @@ import {
 import type { AgentDeletionWorkerAuthority } from "../state/agent-deletion-worker.types.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
-import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import {
+  captureOpenClawStateReadWorkerContext,
+  captureOpenClawStateWorkerContext,
+} from "../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import { resolveUserPath } from "../utils.js";
 import { retireWorkspaceFileCache } from "./workspace-file-cache.js";
+import { assertNoUnmigratedWorkspaceState } from "./workspace-legacy-state.js";
 import { readCachedWorkspaceStateSnapshot } from "./workspace-state-cache.js";
-import { captureWorkspaceStateFilesystemGuard } from "./workspace-state-guard.js";
 import {
-  resolveCanonicalWorkspacePath,
-  resolveWorkspaceStateAliases,
-  resolveWorkspaceStateIdentity,
+  captureWorkspaceFilesystemEvidence,
+  installWorkspaceFilesystemEvidence,
+  prepareWorkspaceStateRead,
+  validateWorkspaceFilesystemEvidence,
+  type WorkspaceFilesystemEvidence,
+} from "./workspace-state-guard.js";
+import {
+  createWorkspaceStateAliases,
+  resolveCanonicalWorkspacePathAsync,
 } from "./workspace-state-identity.js";
 import {
   withWorkspaceStatePublication,
   workspaceStatePublication,
   readWorkspaceStateReceipt,
 } from "./workspace-state-publication.js";
-import {
-  workspacePathEntryExists,
-  type WorkspaceAttestationInput,
-} from "./workspace-state-store.kernel.js";
+import type { WorkspaceAttestationInput } from "./workspace-state-store.kernel.js";
 import type {
   WorkspaceStateDeletionPlan,
   WorkspaceStateGuard,
@@ -58,9 +64,11 @@ export {
   type WorkspaceStateSnapshot,
 } from "./workspace-state-types.js";
 
-type WorkspaceStateOperationOptions = { assertCurrent?: () => void } & Pick<
+type WorkspaceStateOperationOptions = {
+  assertCurrent?: () => void;
+} & Pick<
   WorkspaceStateGuard,
-  "recoveryHoldPredicate" | "beforeLegacyApply"
+  "recoveryHoldPredicate" | "beforeLegacyApply" | "filesystem" | "stateOwnerPath"
 >;
 
 async function runWorkspaceStateOperation<
@@ -68,29 +76,32 @@ async function runWorkspaceStateOperation<
 >(
   command: { type: K; input: WorkspaceStateWorkerOperations[K]["input"] },
   options: OpenClawStateDatabaseOptions & WorkspaceStateOperationOptions,
+  filesystem?: Awaited<ReturnType<typeof prepareWorkspaceStateRead>>,
 ): Promise<WorkspaceStateWorkerOperations[K]["output"]> {
+  const context = captureOpenClawStateWorkerContext({
+    ...options,
+    path: options.database?.path ?? options.path,
+  });
+  const assertCurrent = () => {
+    context.admission.assertCurrent();
+    options.assertCurrent?.();
+  };
+  const evidence =
+    filesystem?.evidence ??
+    (await captureWorkspaceFilesystemEvidence(
+      command.input.workspaceDir,
+      command.type !== "workspace.snapshotAndRegister" &&
+        command.type !== "workspace.replaceAttestation",
+    ));
+  assertCurrent();
   const capturedCommand = {
     ...command,
     input: {
       ...command.input,
       recoveryHoldPredicate: options.recoveryHoldPredicate,
+      filesystem: [...(options.filesystem ?? []), evidence],
+      stateOwnerPath: options.stateOwnerPath,
     },
-  };
-  const context = captureOpenClawStateWorkerContext({
-    ...options,
-    path: options.database?.path ?? options.path,
-  });
-  const assertFilesystem =
-    command.type === "workspace.replaceAttestation"
-      ? undefined
-      : captureWorkspaceStateFilesystemGuard(
-          command.input.workspaceDir,
-          command.type !== "workspace.snapshotAndRegister",
-        );
-  const assertCurrent = () => {
-    context.admission.assertCurrent();
-    options.assertCurrent?.();
-    assertFilesystem?.();
   };
   const result = await runOpenClawStateWorkerOperation(
     context,
@@ -106,6 +117,11 @@ async function runWorkspaceStateOperation<
             throw new Error("Workspace state requires transaction admission");
           }
           assertCurrent();
+          // SAFETY: These are the paired workspace worker's observations for this command.
+          const facts = request.facts as {
+            filesystem: readonly Pick<WorkspaceFilesystemEvidence, "root">[];
+          };
+          installWorkspaceFilesystemEvidence(capturedCommand.input.filesystem, facts.filesystem);
           grant();
         });
         if (command.type === "workspace.expire") {
@@ -127,20 +143,49 @@ async function runWorkspaceStateOperation<
 
 export async function readWorkspaceStateSnapshot(
   workspaceDir: string,
-  options: OpenClawStateDatabaseOptions & WorkspaceStateOperationOptions = {},
+  options: OpenClawStateDatabaseOptions &
+    WorkspaceStateOperationOptions & { checkLegacySources?: boolean } = {},
 ): Promise<WorkspaceStateSnapshot> {
   const capturedWorkspaceDir = path.resolve(resolveUserPath(workspaceDir));
-  if (options.readOnly) {
-    const assertFilesystem = captureWorkspaceStateFilesystemGuard(capturedWorkspaceDir, false);
-    const reply = await executeExistingOpenClawStateRead(options, {
-      type: "workspace.snapshot",
-      workspaceDir: capturedWorkspaceDir,
-    });
+  const context = (
+    options.readOnly ? captureOpenClawStateReadWorkerContext : captureOpenClawStateWorkerContext
+  )({
+    ...options,
+    path: options.database?.path ?? options.path,
+  });
+  const assertCurrent = () => {
+    context.admission.assertCurrent();
     options.assertCurrent?.();
-    assertFilesystem();
+  };
+  const filesystem = await prepareWorkspaceStateRead(capturedWorkspaceDir);
+  assertCurrent();
+  const validateFilesystem = async () => {
+    for (const evidence of [filesystem.evidence, ...(options.filesystem ?? [])]) {
+      await validateWorkspaceFilesystemEvidence(evidence);
+      assertCurrent();
+    }
+  };
+  if (options.checkLegacySources) {
+    await assertNoUnmigratedWorkspaceState({
+      workspaceDir: capturedWorkspaceDir,
+      canonicalPath: filesystem.canonicalPath,
+    });
+  }
+  assertCurrent();
+  if (options.readOnly) {
+    const reply = await executeExistingOpenClawStateRead(
+      options,
+      {
+        type: "workspace.snapshot",
+        workspaceDir: capturedWorkspaceDir,
+      },
+      { context },
+    );
+    await validateFilesystem();
+    assertCurrent();
     return (
       reply?.snapshot ?? {
-        identity: resolveWorkspaceStateIdentity(capturedWorkspaceDir),
+        identity: filesystem.aliases.at(-1)!,
         setupExists: false,
         setup: { version: WORKSPACE_SETUP_STATE_VERSION },
       }
@@ -150,24 +195,16 @@ export async function readWorkspaceStateSnapshot(
     runWorkspaceStateOperation(
       { type: "workspace.snapshotAndRegister", input: { workspaceDir: capturedWorkspaceDir } },
       options,
+      filesystem,
     );
   // Recovery predicates require the worker's current journal check. Ordinary
   // preparation reuses state until its owning writer publishes a change.
-  if (options.recoveryHoldPredicate || options.beforeLegacyApply) {
-    return read();
-  }
-  const context = captureOpenClawStateWorkerContext({
-    ...options,
-    path: options.database?.path ?? options.path,
-  });
-  const assertFilesystem = captureWorkspaceStateFilesystemGuard(capturedWorkspaceDir, false);
-  const snapshot = await readCachedWorkspaceStateSnapshot(
-    context,
-    JSON.stringify(resolveWorkspaceStateAliases(capturedWorkspaceDir)),
-    read,
-  );
-  options.assertCurrent?.();
-  assertFilesystem();
+  const snapshot =
+    options.recoveryHoldPredicate || options.beforeLegacyApply
+      ? await read()
+      : await readCachedWorkspaceStateSnapshot(context, JSON.stringify(filesystem.aliases), read);
+  await validateFilesystem();
+  assertCurrent();
   return snapshot;
 }
 
@@ -241,13 +278,19 @@ export async function clearExpiredWorkspaceStateForVanishedWorkspace(
 }
 
 /** Capture workspace identity before the filesystem entry is removed. */
-export function prepareWorkspaceStateDeletion(workspaceDir: string): WorkspaceStateDeletionPlan {
-  const aliases = resolveWorkspaceStateAliases(workspaceDir);
+export async function prepareWorkspaceStateDeletion(
+  workspaceDir: string,
+): Promise<WorkspaceStateDeletionPlan> {
+  const cacheRoot = await resolveCanonicalWorkspacePathAsync(workspaceDir);
+  const aliases = createWorkspaceStateAliases(workspaceDir, cacheRoot);
   return {
-    cacheRoot: resolveCanonicalWorkspacePath(workspaceDir),
+    cacheRoot,
     lexicalAlias: aliases[0]!,
     currentCanonicalIdentity: aliases.at(-1)!,
-    pathEntryExisted: workspacePathEntryExists(workspaceDir),
+    pathEntryExisted: await fs.lstat(path.resolve(resolveUserPath(workspaceDir))).then(
+      () => true,
+      () => false,
+    ),
   };
 }
 
@@ -307,12 +350,6 @@ export async function deleteWorkspaceState(
     assertHost?.();
   };
   assertCurrent();
-  // Delete-only cleanup must not recreate state after reset/uninstall removed
-  // the canonical database successfully or partially.
-  if (!existsSync(context.admission.databasePath)) {
-    retireWorkspaceFileCache(plan.cacheRoot);
-    return;
-  }
   const result = await runOpenClawStateWorkerOperation(
     context,
     (scope) => scope.execute({ type: "workspace.delete", input: { plan } }),

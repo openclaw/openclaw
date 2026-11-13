@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import {
   normalizeGitPathForFilesystem,
   requireGitCommandOutput,
@@ -78,7 +79,11 @@ function assertOwned(options: WorktreeFilesystemOptions) {
 function gitOptions(options: WorktreeFilesystemOptions) {
   return {
     signal: options.signal,
-    beforeRun: () => assertOwned(options),
+    beforeRun: composeSessionSourceAssertion([options.commitGuard], (assertSource) => {
+      options.signal?.throwIfAborted();
+      assertSource();
+    }),
+    stateOwnerPath: options.workerAuthority?.stateOwnerPath,
     killProcessTree: true,
   };
 }
@@ -126,7 +131,13 @@ async function prepareTemplate(options: CheckoutOptions) {
         .update(`${options.commonDir}\n${options.worktreeRoot}\n${git.sourceOnly}`)
         .digest("hex");
       if (options.useWarmPool !== false && !options.deferGitCheckout) {
-        const existing = await readTemplateAsync(options.env, cacheKey, options.commitGuard);
+        const existing = await readTemplateAsync(
+          options.env,
+          cacheKey,
+          options.commitGuard,
+          undefined,
+          options.workerAuthority,
+        );
         if (
           existing?.status === "ready" &&
           existing.backend === backend.id &&

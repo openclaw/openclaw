@@ -284,6 +284,8 @@ export function withLocalWorkspaceStore<T>(
                                 mutation: wireMutation!,
                                 preparationEpoch,
                                 predicates,
+                                workspaceEvidence: guard.workspaceEvidence,
+                                stateOwnerPath: guard.stateOwnerPath,
                                 leases: write.identities,
                               },
                             }),

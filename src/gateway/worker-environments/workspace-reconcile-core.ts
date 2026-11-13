@@ -1,6 +1,9 @@
 import fs from "node:fs/promises";
 import { FsSafeError, root as openFsSafeRoot } from "../../infra/fs-safe.js";
-import { stagedInputDirectoriesFromEntries } from "../../media/staged-inputs.js";
+import {
+  createStagedInputPathMatcher,
+  stagedInputDirectoriesFromEntries,
+} from "../../media/staged-inputs.js";
 import { activeWorkspaceHashContext, withWorkspaceHashMemo } from "./workspace-hash-memo.js";
 import {
   hasPathAncestor,
@@ -140,45 +143,53 @@ export function createWorkspaceManifestVerifier(
   return () => (memo ? withWorkspaceHashMemo(memo, verify, metrics) : verify());
 }
 
-export async function applyWorkspaceDirectoryChanges(params: {
-  root: string;
+export function prepareWorkspaceDirectoryChanges(params: {
   baseNodes: ReturnType<typeof manifestNodes>;
   currentNodes: ReturnType<typeof manifestNodes>;
   applyPaths: ReadonlySet<string>;
-  assertCurrent?: () => void;
-}): Promise<void> {
-  const workspaceRoot = await openFsSafeRoot(params.root, {
-    mode: 0o700,
-    assertBeforeMutation: params.assertCurrent,
-  });
+}) {
   const { baseNodes, currentNodes } = params;
   const directoryPaths = [...params.applyPaths].filter(
     (entryPath) =>
       baseNodes.get(entryPath)?.type === "directory" ||
       currentNodes.get(entryPath)?.type === "directory",
   );
-  const retainedDirectories = new Set(directoryPaths);
-  // Git prunes empty ancestors when deleting their last leaf. Recreate only
-  // ancestors of admitted changes that the worker still retains as directories.
+  const retained = new Set(directoryPaths);
+  // Git prunes empty ancestors when deleting their last leaf. Preserve only
+  // directories that the already-admitted current manifest still owns.
   for (const entryPath of params.applyPaths) {
     for (const ancestor of workspacePathAncestors(entryPath)) {
       if (currentNodes.get(ancestor)?.type === "directory") {
-        retainedDirectories.add(ancestor);
+        retained.add(ancestor);
       }
     }
   }
-  for (const entryPath of [...retainedDirectories].toSorted()) {
-    const currentDirectory = currentNodes.get(entryPath);
-    if (currentDirectory?.type === "directory") {
-      await workspaceRoot.mkdir(entryPath);
-    }
+  return {
+    retained: [...retained]
+      .filter((entryPath) => currentNodes.get(entryPath)?.type === "directory")
+      .toSorted(),
+    removed: directoryPaths
+      .filter(
+        (entryPath) =>
+          baseNodes.get(entryPath)?.type === "directory" && !currentNodes.has(entryPath),
+      )
+      .toSorted((left, right) => right.localeCompare(left)),
+  };
+}
+
+export async function applyWorkspaceDirectoryChanges(params: {
+  root: string;
+  directories: ReturnType<typeof prepareWorkspaceDirectoryChanges>;
+  assertCurrent?: () => void;
+}): Promise<void> {
+  const workspaceRoot = await openFsSafeRoot(params.root, {
+    mode: 0o700,
+    assertBeforeMutation: params.assertCurrent,
+  });
+  for (const entryPath of params.directories.retained) {
+    await workspaceRoot.mkdir(entryPath);
   }
-  const removedDirectoryPaths = directoryPaths.filter(
-    (entryPath) => baseNodes.get(entryPath)?.type === "directory" && !currentNodes.has(entryPath),
-  );
-  for (const entryPath of removedDirectoryPaths.toSorted((left, right) =>
-    right.localeCompare(left),
-  )) {
+  for (const entryPath of params.directories.removed) {
     let directoryState;
     try {
       directoryState = await workspaceRoot.stat(entryPath);
@@ -220,4 +231,30 @@ export function retainedConflictPaths(
   return [...conflicts]
     .filter((entryPath) => !hasPathAncestor(blockingConflicts, entryPath))
     .toSorted();
+}
+
+export async function assertWorkspaceInputOwnership({
+  root,
+  stagedInputDirectories,
+  candidates,
+}: import("./workspace-manifest-computation.js").WorkspaceReconciliationOperations["workspace.reconcile.ownership"]["input"]): Promise<void> {
+  const workspaceRoot = await openFsSafeRoot(root);
+  const isRetainedInput = createStagedInputPathMatcher(workspaceRoot);
+  const unownedInputDirectories = new Set<string>();
+  for (const directory of stagedInputDirectories) {
+    if ((await workspaceRoot.exists(directory)) && !(await isRetainedInput(directory))) {
+      unownedInputDirectories.add(directory);
+    }
+  }
+  // Producer markers cannot enroll local project data or overwrite its ownership.
+  for (const { path: entryPath, directory, changesMarker, isNew } of candidates) {
+    if (!unownedInputDirectories.has(directory)) {
+      continue;
+    }
+    if (changesMarker || (isNew && (await workspaceRoot.exists(entryPath)))) {
+      throw new ConcurrentWorkspacePathError(
+        `Cloud input conflicts with an unowned Gateway directory: ${directory}. Keep the project directory unchanged and reattach the input.`,
+      );
+    }
+  }
 }

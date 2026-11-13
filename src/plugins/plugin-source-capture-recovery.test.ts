@@ -25,7 +25,10 @@ import {
   retainPluginNativeCapturePath,
   retainPluginSourceCaptureInstance,
 } from "./plugin-source-capture-directory.js";
-import { sweepPluginSourceCapturesForTest } from "./plugin-source-capture-directory.test-support.js";
+import {
+  interceptPluginCaptureReclamation,
+  sweepPluginSourceCapturesForTest,
+} from "./plugin-source-capture-directory.test-support.js";
 import { writeArtifact as write } from "./public-surface.test-support.js";
 
 const temp = useAutoCleanupTempDirTracker((cleanup) =>
@@ -152,7 +155,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it.each(["failed removal", "maintenance failed removal", "identity-change return"] as const)(
+it.each(["failed removal", "identity-change return"] as const)(
   "preserves reclamation errors and closes the original token after %s",
   async (mode) => {
     const root = path.join(stateDir, "tmp", "plugin-captures", "released-producer");
@@ -196,14 +199,9 @@ it.each(["failed removal", "maintenance failed removal", "identity-change return
       }
       await remove(target, options);
     });
-    const warning = vi.spyOn(process, "emitWarning");
-    warning.mockClear();
-    const collectWarnings = async () => {
-      if (mode !== "maintenance failed removal") {
-        await sweepPluginSourceCapturesForTest(stateDir);
-        return warning.mock.calls.map(([message]) => String(message));
-      }
-      return duringMaintenance(async (scope) => {
+    // The physical reclaim owner is shared with the child; inject close faults here.
+    const collectWarnings = () =>
+      duringMaintenance(async (scope) => {
         const result = await captureDirectory.prunePluginNativeCaptureDirectories(
           stateDir,
           new Set(),
@@ -211,7 +209,6 @@ it.each(["failed removal", "maintenance failed removal", "identity-change return
         );
         return result.warnings;
       });
-    };
     try {
       const messages = await collectWarnings();
       expect(messages).toEqual([expect.stringContaining(cleanup.message)]);
@@ -231,7 +228,7 @@ it.each(["failed removal", "maintenance failed removal", "identity-change return
     age(root);
     const after = await collectWarnings();
     expectExists(root);
-    expect(after.length).toBe(mode === "maintenance failed removal" ? 0 : 1);
+    expect(after).toEqual([]);
   },
 );
 
@@ -464,10 +461,16 @@ it("reclaims aged tokenless roots and retries locked roots", async () => {
   const fresh = create(tmpdir(), "openclaw-plugin-build-fresh");
   // Filesystem timestamps use the real clock even when Date is faked.
   fs.utimesSync(fresh, new Date(), new Date());
-  const remove = fsPromises.rm.bind(fsPromises);
-  const probe = vi
-    .spyOn(fsPromises, "rm")
-    .mockImplementation(refusePath(remove, (target) => target === busy));
+  const probe = interceptPluginCaptureReclamation(`
+    import promises from 'node:fs/promises';
+    const remove = promises.rm.bind(promises);
+    promises.rm = async (target, options) => {
+      if (target === ${JSON.stringify(busy)}) {
+        throw Object.assign(new Error('Fixture cleanup cannot finish'), { code: 'EACCES' });
+      }
+      return remove(target, options);
+    };
+  `);
   await sweepPluginSourceCapturesForTest(stateDir);
   expectExists(old);
   expectExists(unrelated, true);

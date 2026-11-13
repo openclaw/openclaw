@@ -5,6 +5,7 @@ import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { sleep } from "../utils/sleep.js";
 import { isChildProcessTreeAlive } from "./child-process-tree.js";
+import { readCommandProcessStartTime } from "./command-process-identity.js";
 import {
   COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS,
   COMMAND_PROCESS_TREE_KILL_GRACE_MS,
@@ -22,7 +23,7 @@ type TerminationChild = Pick<ChildProcess, "pid" | "exitCode" | "signalCode" | "
 export function createCommandTerminationController(params: {
   child: TerminationChild;
   /** Remote process identity arrives before a pending termination can target its tree. */
-  spawned?: Promise<void>;
+  spawned?: Promise<number | null | void>;
   cancelController: AbortController;
   baseEnv?: NodeJS.ProcessEnv;
   env?: NodeJS.ProcessEnv;
@@ -39,11 +40,20 @@ export function createCommandTerminationController(params: {
   let cleanup: "normal" | "cooperative" | "forced" | "uncertain" = "normal";
   const readOriginalStart = () =>
     params.processTree && params.child.pid && process.platform !== "win32"
-      ? getFileLockProcessStartTime(params.child.pid)
+      ? readCommandProcessStartTime(params.child.pid, { child: params.child })
       : null;
-  let awaitingSpawn = params.spawned !== undefined;
+  const preparation =
+    params.spawned ??
+    ((process.platform === "linux" || process.platform === "android") && params.processTree
+      ? Promise.resolve(undefined)
+      : undefined);
+  let awaitingSpawn = preparation !== undefined;
   let terminateWhenSpawned = false;
-  let originalStart = awaitingSpawn ? null : readOriginalStart();
+  let originalStart: number | null = null;
+  if (!preparation && params.processTree && params.child.pid && process.platform !== "win32") {
+    originalStart = getFileLockProcessStartTime(params.child.pid);
+  }
+  let identityReady: Promise<void> | undefined;
   let windowsTerminationPromise: Promise<void> | undefined;
 
   const isDirectChildAlive = () =>
@@ -89,7 +99,10 @@ export function createCommandTerminationController(params: {
   const terminate = (): boolean => {
     if (awaitingSpawn) {
       terminateWhenSpawned = true;
-      return false;
+      // The live direct handle still authorizes graceful cancellation during birth preparation.
+      if (params.child.pid === undefined || !isDirectChildAlive()) {
+        return false;
+      }
     }
     const childPid = params.child.pid;
     const directChildAlive = isDirectChildAlive();
@@ -112,7 +125,11 @@ export function createCommandTerminationController(params: {
       }
       const groupAlive = () => isChildProcessTreeAlive({ pid: childPid });
       const forceAndObserve = async () => {
-        const start = getFileLockProcessStartTime(childPid);
+        if (identityReady) {
+          await identityReady;
+        }
+        const observed = readCommandProcessStartTime(childPid);
+        const start = observed instanceof Promise ? await observed : observed;
         if (start !== null && start !== originalStart) {
           cleanup = "uncertain";
           if (isDirectChildAlive()) {
@@ -120,13 +137,16 @@ export function createCommandTerminationController(params: {
           }
           return;
         }
+        if (!isDirectChildAlive() && !groupAlive()) {
+          return;
+        }
         cleanup = "forced";
         terminateProcessTree(childPid, { force: true, detached: true });
         scheduleAdoptedChildZombieReapAfterExit(params.child, true);
         // Signal delivery is not exit. Observe only this group; never re-signal a retired PID.
         cleanup =
-          (await waitForCommandProcessGroupExit(childPid, () => {
-            const current = getFileLockProcessStartTime(childPid);
+          (await waitForCommandProcessGroupExit(childPid, async () => {
+            const current = await readCommandProcessStartTime(childPid);
             return current === null || current === originalStart;
           })) === "exited"
             ? "forced"
@@ -185,6 +205,7 @@ export function createCommandTerminationController(params: {
   };
 
   const settle = async (): Promise<"normal" | "cooperative" | "forced" | "uncertain"> => {
+    await identityReady;
     if (windowsTerminationPromise) {
       await windowsTerminationPromise;
       return "forced";
@@ -193,13 +214,16 @@ export function createCommandTerminationController(params: {
     return cleanup;
   };
 
-  if (params.spawned) {
-    void params.spawned.then(
-      () => {
-        originalStart = readOriginalStart();
+  if (preparation) {
+    identityReady = preparation.then(
+      async (prepared) => {
+        const observed =
+          typeof prepared === "number" || prepared === null ? prepared : readOriginalStart();
+        originalStart = observed instanceof Promise ? await observed : observed;
         awaitingSpawn = false;
-        if (terminateWhenSpawned && !terminate()) {
-          params.cancelController.abort();
+        if (terminateWhenSpawned) {
+          // The runner owns cancellation; an ordinary early exit only requests tree settlement.
+          terminate();
         }
       },
       () => {

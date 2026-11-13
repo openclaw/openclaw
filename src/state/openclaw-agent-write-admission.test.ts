@@ -437,7 +437,7 @@ it("reserves an admitted database without filesystem probes and refuses a replac
     import { openNodeSqliteDatabase } from ${JSON.stringify(new URL("../infra/node-sqlite.ts", import.meta.url).href)};
     import { admitSqliteSchema } from ${JSON.stringify(new URL("../infra/sqlite-schema-facts.ts", import.meta.url).href)};
     import { readDatabasePathIdentitySync } from ${JSON.stringify(new URL("../infra/sqlite-worker-identity.ts", import.meta.url).href)};
-    import { runOpenClawAgentPathWriteAdmission, runOpenClawAgentWriteAdmissions } from ${JSON.stringify(new URL("./openclaw-agent-write-admission.ts", import.meta.url).href)};
+    import { runOpenClawAgentPathWriteAdmission, runOpenClawAgentWriteAdmissions, runOpenClawAgentPreparedWriteAdmission } from ${JSON.stringify(new URL("./openclaw-agent-write-admission.ts", import.meta.url).href)};
     const pathname = ${JSON.stringify(options.path)};
     using database = openNodeSqliteDatabase(pathname);
     database.exec("CREATE TABLE proof(value INTEGER)");
@@ -461,6 +461,16 @@ it("reserves an admitted database without filesystem probes and refuses a replac
       fs.renameSync(pathname, pathname + ".retired");
       using replacement = openNodeSqliteDatabase(pathname);
       assert.throws(assertCurrent, /database target changed/);
+      replacement.exec("CREATE TABLE successor(value INTEGER)");
+      admitSqliteSchema(replacement);
+      let entered = false;
+      await assert.rejects(runOpenClawAgentPreparedWriteAdmission(
+        async () => ({ options: { agentId: "usage", path: pathname }, identity: expected }),
+        () => { entered = true; replacement.exec("INSERT INTO successor VALUES (1)"); },
+        true,
+      ), /Agent database target changed before write admission/);
+      assert.equal(entered, false, "prepared original file must not adopt the admitted successor");
+      assert.equal(replacement.prepare("SELECT COUNT(*) AS count FROM successor").get().count, 0);
     });
   `,
       { imports: [import.meta.resolve("tsx/esm")] },

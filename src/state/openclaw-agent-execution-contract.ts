@@ -63,6 +63,7 @@ export type AgentDatabaseFileExecutionOwner = {
   readonly creationIdentity?: DatabasePathIdentity;
   readonly fileIdentity?: AgentDatabaseExecutionFileIdentity;
   getPendingPreparation(): Promise<void> | undefined;
+  getOpeningIdentity(): Readonly<DatabasePathIdentity> | undefined;
   borrow(
     pathname: string,
     expectedIdentity?: AgentDatabaseExecutionFileIdentity,

@@ -112,11 +112,15 @@ describe("ExecApprovalManager lifetime", () => {
         authority: {},
         assertCurrent: () => {},
       }).createAdmission({ settled: Promise.resolve({ kind: outcome, error }) });
+      let finishing: void | Promise<void> = undefined;
       try {
-        retained.admission.finish(outcome === "not-entered" ? "not-entered" : undefined);
+        finishing = retained.admission.finish(
+          outcome === "not-entered" ? "not-entered" : undefined,
+        );
         expect(isCurrent()).toBe(outcome === "not-entered");
       } finally {
-        retained.admission.finish();
+        await finishing;
+        await retained.admission.finish();
       }
     },
   );

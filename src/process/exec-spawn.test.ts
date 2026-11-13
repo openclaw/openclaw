@@ -7,6 +7,7 @@ import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promis
 import * as processIdentity from "../shared/pid-alive.js";
 import { killPidIfAlive } from "../test-utils/process-tree.js";
 import { isChildProcessTreeAlive } from "./child-process-tree.js";
+import * as commandIdentity from "./command-process-identity.js";
 import { runCommandWithTimeout } from "./exec-runner.js";
 import { spawnCommand, withCommandProcessScope } from "./exec-spawn.js";
 
@@ -182,7 +183,10 @@ describe.skipIf(process.platform === "win32")("terminal command process ownershi
     let descendantPid: number | undefined;
     let retiredSignals: MockInstance<typeof process.kill> | undefined;
     const failure = new Error("scope fixture failure");
-    const identityProbe = vi.spyOn(processIdentity, "getFileLockProcessStartTime");
+    const identityProbe =
+      process.platform === "linux" || process.platform === "android"
+        ? vi.spyOn(commandIdentity, "readCommandProcessStartTime")
+        : vi.spyOn(processIdentity, "getFileLockProcessStartTime");
     if (identity === "initially-missing") {
       identityProbe.mockReturnValueOnce(null);
     } else if (identity === "reused-after-exit" || identity === "reused-after-extinction") {

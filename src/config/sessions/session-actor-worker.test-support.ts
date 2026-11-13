@@ -234,10 +234,10 @@ export function createSessionActorWorkerFixture<Database extends OpenClawAgentDa
       database = reopen(context.options);
     },
     closeActor: () => actor.close(),
-    close() {
+    async close() {
       actor.close();
       wire.mockRestore();
-      admission.finish();
+      await admission.finish();
       port1.close();
       port2.close();
     },
@@ -259,7 +259,7 @@ export async function withActor(run: (fixture: Fixture) => void | Promise<void>)
     try {
       await run(fixture);
     } finally {
-      fixture.close();
+      await fixture.close();
     }
   });
 }

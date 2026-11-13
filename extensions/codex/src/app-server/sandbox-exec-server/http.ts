@@ -108,6 +108,7 @@ async function runSandboxHttpRequest(
       argv: execSpec.argv,
       env: execSpec.env,
       cwd: execSpec.cwd,
+      prepareCurrent: execSpec.prepareCurrent,
       assertCurrent: () => {
         notifications.signal.throwIfAborted();
         execSpec.assertCurrent?.();
@@ -305,6 +306,7 @@ async function runSandboxHttpRequest(
     if (notifications.signal.aborted) {
       abortOnSessionClose();
     } else {
+      await owner.prepareCurrent?.();
       owner.assertCurrent();
       child.stdin.end(JSON.stringify(params));
     }

@@ -434,7 +434,15 @@ async function createOpenClawAgentSqliteWorkerStore<Operations extends SqliteWor
           try {
             worker.observeAdmission?.(admission, retained);
           } catch (error) {
-            admission.finish();
+            try {
+              admission.abortConstruction();
+            } catch (cleanupError) {
+              throw createSqliteLifecycleAggregateError(
+                [error, cleanupError],
+                "Agent publication construction and cleanup failed",
+                error,
+              );
+            }
             throw error;
           }
           return { nativeLocations: binding.nativeLocations, admission };

@@ -173,6 +173,7 @@ export async function removeSandboxRuntimeGeneration(params: {
     runtime.entry,
     assertCurrent,
     params.database,
+    engine.stateGuard,
   );
 }
 

@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect } from "vitest";
+import { expect, onTestFinished } from "vitest";
 import {
   takeSqliteWorkerOperationAdmissionAttachment,
   withSqliteWorkerOperationAdmission,
@@ -79,12 +79,14 @@ export function expiryAdmission(scope: WorkerLeaseScope) {
         return expiresAt;
       },
       [Symbol.dispose]() {
-        admission.finish();
+        const finishing = admission.finish();
+        onTestFinished(() => finishing);
         settled.resolve({ kind: "completed" });
       },
     };
   } catch (error) {
-    admission.finish();
+    const finishing = admission.finish();
+    onTestFinished(() => finishing);
     settled.resolve({ kind: "completed" });
     throw error;
   }

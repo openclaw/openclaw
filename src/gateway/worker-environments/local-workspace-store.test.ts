@@ -12,6 +12,8 @@ import {
   trackSqliteStatementExecutions,
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { acquireSandboxGatewayOwner } from "../../agents/sandbox/registry.test-support.js";
+import { captureSandboxStateOwner } from "../../agents/sandbox/state-owner.js";
 import {
   WORKTREE_CREATE_LEASE_SCOPE,
   WORKTREE_MUTATION_LEASE_SCOPE,
@@ -33,6 +35,7 @@ import type { OpenClawStateLeaseIdentity } from "../../state/openclaw-state-leas
 import * as stateRead from "../../state/openclaw-state-read-operation.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../../state/openclaw-state-worker-store.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { decodeLocalWorkspaceTree, localWorkspaceDigestBytes } from "./local-workspace-cas.js";
 import {
   readLocalWorkspaceSweepCandidates,
@@ -972,3 +975,33 @@ it("converts a v31 projection online without changing its root and recovers its 
     });
   });
 });
+
+it.skipIf(process.platform === "win32")(
+  "rolls back local workspace publication after its captured state alias retargets",
+  async () => {
+    const first = dirs.make("local-workspace-state-first-");
+    const second = dirs.make("local-workspace-state-second-");
+    const alias = path.join(dirs.make("local-workspace-state-alias-"), "selected");
+    await fs.symlink(first, alias, "dir");
+    const worktreeId = randomUUID();
+    const selectedEnv = { ...env, OPENCLAW_STATE_DIR: first };
+    await withEnvAsync({ OPENCLAW_STATE_DIR: alias }, async () => {
+      using _ = acquireSandboxGatewayOwner(first);
+      const captured = await captureSandboxStateOwner();
+      await withLocalWorkspaceStore(
+        { worktreeId, env: selectedEnv, workerAuthority: captured },
+        async (store) => {
+          const initial = await store.create(localWorkspaceProjectionFixture(worktreeId, first));
+          await fs.unlink(alias);
+          await fs.symlink(second, alias, "dir");
+          await expect(
+            store.update(initial, { pending_ref: "refs/openclaw/results/refused" }),
+          ).rejects.toMatchObject({ code: "GATEWAY_STATE_OWNER_REQUIRED" });
+          expect(() => store.get()).toThrow("Local workspace custody has ended");
+        },
+      );
+    });
+    expect((await readLocalWorkspaceProjection(worktreeId, selectedEnv))?.pending_ref).toBeNull();
+    expect(await fs.readdir(second)).toEqual([]);
+  },
+);

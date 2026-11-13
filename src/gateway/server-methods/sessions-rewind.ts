@@ -462,7 +462,7 @@ async function mutatePreparedSessionAtMessage({
       }
       const forkWorkspace =
         action === "fork"
-          ? prepareSessionForkFilesystemRoot({
+          ? await prepareSessionForkFilesystemRoot({
               cfg,
               parent: current.entry,
               targetAgentId: current.agentId,
@@ -470,6 +470,7 @@ async function mutatePreparedSessionAtMessage({
               sandboxRequired: sandbox === "required",
             })
           : undefined;
+      assertMutationCurrent();
       if (forkWorkspace && !forkWorkspace.ok) {
         respond(false, undefined, forkWorkspace.error);
         return;

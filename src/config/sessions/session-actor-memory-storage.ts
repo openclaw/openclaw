@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { validateWorkspaceFilesystemEvidence } from "../../agents/workspace-state-guard.js";
 import { BoardValidationError } from "../../boards/board-layout.js";
 import { parseAgentSessionKey, toAgentStoreSessionKey } from "../../routing/session-key.js";
 import { SessionGoalOperationError } from "./goals-operations.types.js";
@@ -262,7 +263,14 @@ export function createSessionActorMemoryStorage(options: {
               validate: { readCustody: authority.readCustody, candidates: [], sources: [] },
             });
           }
-          if (observer?.beforeCommit || authority.readCustody?.length) {
+          for (const evidence of authority.workspaceEvidence ?? []) {
+            await validateWorkspaceFilesystemEvidence(evidence);
+          }
+          if (
+            observer?.beforeCommit ||
+            authority.readCustody?.length ||
+            authority.workspaceEvidence?.length
+          ) {
             // Physical observation and companion I/O precede the final logical grant.
             reauthorize();
           }

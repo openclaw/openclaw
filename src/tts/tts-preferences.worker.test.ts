@@ -7,6 +7,7 @@ import { ttsHandlers } from "../gateway/server-methods/tts.js";
 import { closeDefaultRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
 import { withPluginRuntimePluginScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
+import * as machineRows from "../state/config-machine-state-row.js";
 import {
   deleteConfigMachineState,
   importConfigMachineState,
@@ -14,6 +15,7 @@ import {
 } from "../state/config-machine-state-write.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { shouldAttemptTtsPayload, shouldCleanTtsDirectiveText } from "./tts-config.js";
@@ -124,6 +126,19 @@ it("carries the worker-read path through delivery and plugin prompts without cal
     "current host TTS prompt-hint API",
   );
   const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+  using filesystem = observeMainThreadFs();
+  const readPath = machineRows.getTtsMachinePathAdmission;
+  const pathFilesystemCalls = { prefix: 0, installation: 0 };
+  using paths = vi
+    .spyOn(machineRows, "getTtsMachinePathAdmission")
+    .mockImplementation((pathname, load) => {
+      const before = filesystem.count();
+      try {
+        return readPath(pathname, load);
+      } finally {
+        pathFilesystemCalls[load ? "installation" : "prefix"] += filesystem.count() - before;
+      }
+    });
   const sql = observeMainThreadSql();
   sql.calibrate();
   try {
@@ -200,18 +215,41 @@ it("carries the worker-read path through delivery and plugin prompts without cal
     importConfigMachineState([["tts.prefsPath", firstPath]]);
     expect(await prepareTtsPreferences()).toEqual(preparedTtsPreferences);
     expect(reads).toHaveBeenCalledTimes(2);
+    expect(paths.mock.calls.some(([, load]) => load !== undefined)).toBe(true);
+    expect(pathFilesystemCalls).toEqual({ prefix: 0, installation: 0 });
   } finally {
     sql.restore();
   }
 });
 
 it("carries missing machine state without creating a store or falling back to a sync read", async () => {
+  using reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+  using filesystem = observeMainThreadFs();
+  const readPath = machineRows.getTtsMachinePathAdmission;
+  let pathFilesystemCalls = 0;
+  using paths = vi
+    .spyOn(machineRows, "getTtsMachinePathAdmission")
+    .mockImplementation((...args) => {
+      const before = filesystem.count();
+      try {
+        return readPath(...args);
+      } finally {
+        pathFilesystemCalls += filesystem.count() - before;
+      }
+    });
   const preparedTtsPreferences = await prepareTtsPreferences();
+  expect(reads).toHaveBeenCalledTimes(1);
+  expect(await prepareTtsPreferences()).toEqual(preparedTtsPreferences);
+  expect(reads).toHaveBeenCalledTimes(2);
+  expect(paths).toHaveBeenCalled();
+  expect(pathFilesystemCalls).toBe(0);
   expect(await buildTtsSystemPromptHintAsync({})).toBeUndefined();
   expect(resolveTtsPrefsPath(resolveTtsConfig({}))).toBe(path.join(root, "settings", "tts.json"));
   expect(await resolveTtsPrefsPathAsync(resolveTtsConfig({}))).toBeTruthy();
   expect(await shouldAttemptTtsPayload({ cfg: {}, preparedTtsPreferences })).toBe(false);
   expect(existsSync(path.join(root, "state", "openclaw.sqlite"))).toBe(false);
+  expect(paths.mock.calls.every(([, load]) => load === undefined)).toBe(true);
+  expect(pathFilesystemCalls).toBe(0);
 });
 
 it("keeps legacy hints synchronous and warns once per method while explicit awaited hints skip machine state", async () => {

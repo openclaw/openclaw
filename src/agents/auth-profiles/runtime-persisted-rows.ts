@@ -26,7 +26,7 @@ type Entry = {
 const entries = new Map<string, Entry>();
 const hasCurrentSource = (databasePath: string, entry: Entry) =>
   getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath(databasePath) === entry.revision &&
-  readAuthProfileRowsReceipt(databasePath, entry.identity) === entry.receipt;
+  readAuthProfileRowsReceipt(databasePath) === entry.receipt;
 export const runtimeAuthProfileRowsCache = {
   hasSource(databasePath: string): boolean {
     const entry = entries.get(databasePath);
@@ -48,7 +48,7 @@ export const runtimeAuthProfileRowsCache = {
     const source = store && structuredClone(store);
     entries.set(databasePath, {
       identity,
-      receipt: readAuthProfileRowsReceipt(databasePath, identity),
+      receipt: readAuthProfileRowsReceipt(databasePath),
       revision: getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath(databasePath),
       canonical: false,
       // Persisted values precede runtime secret overlays but omit private lifetimes.
@@ -96,7 +96,7 @@ export const runtimeAuthProfileRowsCache = {
   },
   rebase(databasePath: string) {
     const entry = entries.get(databasePath);
-    if (entry && readAuthProfileRowsReceipt(databasePath, entry.identity) === entry.receipt) {
+    if (entry && readAuthProfileRowsReceipt(databasePath) === entry.receipt) {
       entry.revision = getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath(databasePath);
     }
   },
@@ -111,7 +111,7 @@ export const runtimeAuthProfileRowsCache = {
         reader.assertCurrent();
         const revision = getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath(databasePath);
         const entry = entries.get(databasePath);
-        const receipt = readAuthProfileRowsReceipt(databasePath, reader.identity);
+        const receipt = readAuthProfileRowsReceipt(databasePath);
         if (
           entry?.identity === reader.identity &&
           entry?.revision === revision &&

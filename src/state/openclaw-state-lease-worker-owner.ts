@@ -34,7 +34,7 @@ export type OpenClawStateLeaseWorkerAuthority = {
 export type WorkerLeaseScope = {
   identity: OpenClawStateLeaseIdentity;
   assertCurrent(this: void): void;
-  createAdmission: SqliteWorkerAdmissionFactory;
+  createAdmission: ReturnType<typeof createLeaseAdmissionFactory>;
 };
 type WorkerLeasesScope = Omit<WorkerLeaseScope, "identity"> & {
   identities: readonly OpenClawStateLeaseIdentity[];
@@ -109,12 +109,12 @@ function createLeaseAdmissionFactory(
     expiryObservation?: SharedArrayBuffer;
     beforeTransaction?: () => void;
   } = {},
-): SqliteWorkerAdmissionFactory {
+) {
   const firstScope = scopes[0];
   if (!firstScope) {
     throw new Error("State lease admission requires a retained owner");
   }
-  return (retained) => {
+  return (retained: Parameters<SqliteWorkerAdmissionFactory>[0]) => {
     assertCurrent();
     // All original owners retain the same native outcome before a port can escape.
     for (const scope of scopes) {

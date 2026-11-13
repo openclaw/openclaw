@@ -466,7 +466,7 @@ it("refreshes planner stats without changing snapshots or indexes", async () => 
   } finally {
     statements.mockRestore();
     dispatch.mockRestore();
-    admission.finish();
+    await admission.finish();
     if (reader.isTransaction) {
       reader.exec("ROLLBACK");
     }

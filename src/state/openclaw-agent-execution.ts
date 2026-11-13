@@ -60,6 +60,13 @@ export function getPendingOpenClawAgentDatabasePreparation(
     : pending;
 }
 
+/** Borrow the opener's original file fact without granting read or write admission. */
+export function readPendingOpenClawAgentDatabaseIdentity(pathname: string) {
+  const owner = executions.get(pathname);
+  const identity = owner?.getOpeningIdentity();
+  return owner && identity ? { agentId: owner.agentId, identity } : undefined;
+}
+
 /** Only the deleted agent's store needs a fresh, exclusive cleanup owner. */
 export async function captureAgentDeletionDatabaseExecution(
   options: OpenClawAgentDatabaseOptions,

@@ -103,7 +103,7 @@ it.each([false, true])(
         origin: { sessionKey: "competing-writer" },
       });
     } finally {
-      admission.finish();
+      await admission.finish();
       competitor.close();
       writer.close();
     }

@@ -1,3 +1,4 @@
+import type { PreparedStateDatabaseReadAccess } from "../infra/gateway-state-owner.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
@@ -32,7 +33,11 @@ export function createStateDatabaseRetainer(
     cachedDatabases: Map<string, OpenClawStateDatabase>;
   },
   operations: {
-    assertOpen(pathname: string, ownership?: "cached-read"): void;
+    assertOpen(
+      pathname: string,
+      ownership?: "cached-read",
+      access?: PreparedStateDatabaseReadAccess,
+    ): void;
     capture(pathname: string): { assertCurrent(): void };
     retire(database: OpenClawStateDatabase, retireAdmission: boolean): void;
     retainFailed(database: OpenClawStateDatabase): void;
@@ -40,14 +45,18 @@ export function createStateDatabaseRetainer(
     touch(database: OpenClawStateDatabase): void;
   },
 ) {
-  const admit = (pathname: string, ownership?: "cached-read") => {
+  const admit = (
+    pathname: string,
+    ownership?: "cached-read",
+    access?: PreparedStateDatabaseReadAccess,
+  ) => {
     const scope = getOpenClawDatabaseMaintenanceScope();
     if (ownership === "cached-read") {
       scope?.assertReadAdmission();
     } else {
       scope?.assertAdmission();
     }
-    operations.assertOpen(pathname, ownership);
+    operations.assertOpen(pathname, ownership, access);
     return scope;
   };
   // Only the synchronous entry points below can reach this already-admitted step.
@@ -210,13 +219,17 @@ export function createStateDatabaseRetainer(
     scope?.own(retainedReference, "shared-references", () => retainedReference.releaseAsync());
     return retainedReference;
   };
-  const findReadDatabase = (pathname: string, ownership?: "cached-read") => {
+  const findReadDatabase = (
+    pathname: string,
+    ownership?: "cached-read",
+    access?: PreparedStateDatabaseReadAccess,
+  ) => {
     const resolvedPath = resolveDatabasePath({ path: pathname });
     const database = state.cachedDatabases.get(resolvedPath);
     if (!database?.db.isOpen) {
       return { database: undefined, scope: undefined };
     }
-    return { database, scope: admit(resolvedPath, ownership) };
+    return { database, scope: admit(resolvedPath, ownership, access) };
   };
   const retainReadReference = (
     database: OpenClawStateDatabase,
@@ -240,12 +253,22 @@ export function createStateDatabaseRetainer(
   };
   return {
     retain: (database: OpenClawStateDatabase) => retain(database, admit(database.path)),
-    retainForIndependentRead(this: void, pathname: string, ownership?: "cached-read") {
-      const { database, scope } = findReadDatabase(pathname, ownership);
+    retainForIndependentRead(
+      this: void,
+      pathname: string,
+      ownership?: "cached-read",
+      access?: PreparedStateDatabaseReadAccess,
+    ) {
+      const { database, scope } = findReadDatabase(pathname, ownership, access);
       return database ? retainReadReference(database, scope) : undefined;
     },
-    borrowForRead(this: void, pathname: string, ownership?: "cached-read") {
-      const { database, scope } = findReadDatabase(pathname, ownership);
+    borrowForRead(
+      this: void,
+      pathname: string,
+      ownership?: "cached-read",
+      access?: PreparedStateDatabaseReadAccess,
+    ) {
+      const { database, scope } = findReadDatabase(pathname, ownership, access);
       if (!database) {
         return undefined;
       }

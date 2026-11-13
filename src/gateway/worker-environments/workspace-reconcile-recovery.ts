@@ -2,7 +2,9 @@ import { createHash, randomBytes } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { WorktreeWorkerAuthority } from "../../agents/worktrees/types.js";
 import { root as openFsSafeRoot } from "../../infra/fs-safe.js";
+import { hasGitWorkerContext } from "../../infra/git-worker-context.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { ownedWorkerBytes } from "../../infra/worker-transfer-bytes.js";
 import {
@@ -21,7 +23,9 @@ import type {
 import {
   computeWorkspaceManifest,
   prepareWorkspaceTreeInput,
+  prepareWorkspaceTemporaryDirectory,
   readWorkspaceNodes,
+  runWorkspaceFilesystemComputation,
 } from "./workspace-manifest-worker.js";
 import {
   MAX_RECONCILIATION_FILE_BYTES,
@@ -505,7 +509,32 @@ export async function recoverWorkerWorkspaceReconciliation(params: {
   journal: WorkerWorkspaceReconciliationJournal;
   buildCacheInputs?: string[];
   assertCurrent?: () => void;
+  workerAuthority?: WorktreeWorkerAuthority;
 }): Promise<void> {
+  if (!hasGitWorkerContext()) {
+    const temporary = await prepareWorkspaceTemporaryDirectory(
+      "openclaw-workspace-recovery-input-",
+    );
+    try {
+      const basePackPath = path.join(temporary, "base.pack");
+      const { basePack, ...journal } = params.journal;
+      await fs.writeFile(basePackPath, basePack);
+      return await runWorkspaceFilesystemComputation(
+        {
+          type: "workspace.reconcile.recover",
+          input: {
+            root: params.root,
+            journal,
+            basePackPath,
+            buildCacheInputs: params.buildCacheInputs,
+          },
+        },
+        params,
+      );
+    } finally {
+      await fs.rm(temporary, { recursive: true, force: true });
+    }
+  }
   if (params.journal.appliedManifestRef) {
     throw new Error("Cloud workspace result is already applied and awaits fence acceptance");
   }

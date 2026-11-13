@@ -1,5 +1,6 @@
 import type { WorkspaceFilesystemEvidence } from "../agents/workspace-state-guard.js";
 import type { SessionStoreReadCustody } from "../config/sessions/session-store-read-candidates.js";
+import type { SqliteWorkerExecutionAuthority } from "../infra/sqlite-worker-contract.js";
 import type {
   SqliteWorkerAdmissionFactory,
   SqliteWorkerAdmissionRequest,
@@ -10,6 +11,7 @@ import type { AgentDatabaseRegistryChange } from "./openclaw-agent-db-contract.j
 export type AgentDatabaseGenerationClaim = {
   readonly identity: string;
   readonly incarnation: string;
+  readonly authority: SqliteWorkerExecutionAuthority;
   assertCurrent(): void;
 };
 

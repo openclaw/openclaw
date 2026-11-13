@@ -1,11 +1,23 @@
+import { isMainThread } from "node:worker_threads";
 import { afterEach, expect, it as baseIt, vi } from "vitest";
 import { INGRESS_CLAIM_LEASE_MS } from "../../channels/message/ingress-claim-owner.js";
 import { createChannelIngressQueue } from "../../channels/message/ingress-queue.js";
+import {
+  countFailedDeliveryQueueEntries,
+  pruneExpiredDeliveryQueueTombstones,
+} from "../../infra/delivery-queue-sqlite.js";
 import { seedDeliveryQueueEntry } from "../../infra/delivery-queue-sqlite.test-support.js";
+import * as deliveryWorker from "../../infra/delivery-queue-worker-store.js";
+import { pruneOrphanedDeliveryQueueMedia } from "../../infra/outbound/delivery-queue-media-spool.js";
+import { hasBoundWebPushSubscriptions } from "../../infra/push-web-store.js";
+import * as admission from "../../infra/sqlite-database-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
 import * as stateRead from "../../state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import * as stateWorker from "../../state/openclaw-state-worker-store.js";
+import { observeMainThreadFs } from "../../test-utils/main-thread-fs-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { buildDeliveryQueueHealthSummary as readHealth } from "./delivery-queue.js";
 
@@ -97,3 +109,68 @@ it.for(["failed", "pressure"])("retains %s invalidations", async (kind, { stateD
     expect(updated?.ingressPressure).toMatchObject([claimedLane]);
   }
 });
+
+const receiptCases = [
+  {
+    fact: "state.failed-delivery-queue-health",
+    run: countFailedDeliveryQueueEntries,
+    expected: [],
+  },
+  {
+    fact: "state.next-delivery-queue-tombstone-expiry",
+    run: pruneExpiredDeliveryQueueTombstones,
+    expected: undefined,
+  },
+  {
+    fact: "state.oldest-delivery-queue-media-stage",
+    run: (stateDir: string) => pruneOrphanedDeliveryQueueMedia({ stateDir }),
+    expected: undefined,
+  },
+  {
+    fact: "state.web-push-bound-subscriptions",
+    run: hasBoundWebPushSubscriptions,
+    expected: false,
+  },
+];
+
+it.for(receiptCases)(
+  "keeps optional $fact lookup off the filesystem",
+  async ({ fact, run, expected }, { stateDir }) => {
+    expect(isMainThread).toBe(true);
+    const databasePath = resolveOpenClawStateSqlitePath({
+      ...process.env,
+      OPENCLAW_STATE_DIR: stateDir,
+    });
+    expect(admission.getSqliteDatabaseAdmissionIdentityForPath(databasePath)).toBeUndefined();
+    const getOrLoad = admission.getOrLoadSqliteDatabaseAdmissionForPath;
+    const peek = admission.peekSqliteDatabaseAdmissionForPath;
+    const filesystemCalls: number[] = [];
+    const observe = <Value>(key: string, read: () => Value): Value => {
+      if (key !== fact) {
+        return read();
+      }
+      const filesystem = observeMainThreadFs();
+      try {
+        return read();
+      } finally {
+        filesystem[Symbol.dispose]();
+        filesystemCalls.push(filesystem.count());
+      }
+    };
+    vi.spyOn(admission, "getOrLoadSqliteDatabaseAdmissionForPath").mockImplementation((...args) =>
+      observe(args[1].name, () => getOrLoad(...args)),
+    );
+    vi.spyOn(admission, "peekSqliteDatabaseAdmissionForPath").mockImplementation((...args) =>
+      observe(args[1].name, () => peek(...args)),
+    );
+    const delivery = vi.spyOn(deliveryWorker, "executeDeliveryQueueOperation");
+    const push = vi.spyOn(stateWorker, "executeOpenClawStateWorker");
+    expect(await run(stateDir)).toEqual(expected);
+    expect(delivery.mock.calls.length + push.mock.calls.length).toBe(1);
+    delivery.mockClear();
+    push.mockClear();
+    expect(await run(stateDir)).toEqual(expected);
+    expect(delivery.mock.calls.length + push.mock.calls.length).toBe(0);
+    expect(filesystemCalls).toEqual([0, 0]);
+  },
+);

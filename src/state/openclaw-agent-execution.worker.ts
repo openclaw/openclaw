@@ -1,4 +1,4 @@
-import { MessageChannel, receiveMessageOnPort, type Transferable } from "node:worker_threads";
+import type { Transferable } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { Result } from "@openclaw/normalization-core/result";
 import { isSessionActorCommand } from "../config/sessions/session-actor-command.js";
@@ -77,6 +77,7 @@ import {
 import {
   agentDatabaseStartupInspectionSignal,
   readAgentDatabaseRequestPreparation,
+  prepareAgentDatabaseSharedOwner,
 } from "./openclaw-agent-execution-preparation.js";
 import { prepareAgentTranscript } from "./openclaw-agent-execution-transcript.worker.js";
 import type { AgentWorkerOperationContext } from "./openclaw-agent-operation-context.js";
@@ -234,38 +235,11 @@ function openAgentDatabaseBackend(
       admitOpen();
       const sharedDatabase = openShared();
       const lease = prepareOpenClawAgentDatabaseWorkerLease(options, sharedDatabase, input.leaseId);
-      const { port1, port2 } = new MessageChannel();
-      try {
-        requestSqliteWorkerOperationAdmission(
-          {
-            stage: "prepare",
-            facts: {
-              kind: "shared-owner",
-              identity: requireOpenClawStateDatabaseIdentity(sharedDatabase),
-              lease: lease.receipt,
-              validationPort: port2,
-            },
-          },
-          [port2],
-        );
-        // The host posts before granting admission; shared revocation remains live after transfer.
-        // SAFETY: this private port receives only the host's typed validation receipt.
-        const preparation = receiveMessageOnPort(port1)?.message as {
-          validation?: OpenClawAgentDatabaseValidation;
-          integrityRevoked: boolean;
-        };
-        lease.validation = preparation.validation;
-        lease.integrityRevoked = preparation.integrityRevoked;
-        lease.startupIntegrityRequired = startup?.startupIntegrityRequired;
-        lease.startupRepair = startup?.startupJournal
-          ? maintenance.repairStartupIntegrity.bind(undefined, lease.receipt)
-          : undefined;
-      } catch (error) {
-        throw new SqliteWorkerOpenRefusedError(error);
-      } finally {
-        port1.close();
-        port2.close();
-      }
+      prepareAgentDatabaseSharedOwner(sharedDatabase, lease);
+      lease.startupIntegrityRequired = startup?.startupIntegrityRequired;
+      lease.startupRepair = startup?.startupJournal
+        ? maintenance.repairStartupIntegrity.bind(undefined, lease.receipt)
+        : undefined;
       assertFileIdentity();
       let registration: OpenClawAgentDatabaseRegistrationCommit | undefined;
       let openingResult: Result<OpenClawAgentDatabase, unknown>;

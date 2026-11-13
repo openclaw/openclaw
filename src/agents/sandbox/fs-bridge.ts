@@ -51,7 +51,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
 
   constructor(sandbox: MountedSandboxFsBridgeContext, containerOnlyMounts?: readonly string[]) {
     this.sandbox = sandbox;
-    this.mounts = buildSandboxFsMounts(sandbox);
+    this.mounts = sandbox.fsPreparation?.mounts ?? buildSandboxFsMounts(sandbox);
     this.containerOnlyMounts =
       containerOnlyMounts ??
       resolveSandboxTmpfsMounts(sandbox.docker.tmpfs).map((mount) => mount.containerPath);

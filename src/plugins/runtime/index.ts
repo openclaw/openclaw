@@ -146,7 +146,7 @@ function createRuntimeWorktrees(): PluginRuntime["worktrees"] {
   return {
     async resolveCheckoutRoot(params) {
       const { findGitCheckoutRoot } = await import("../../agents/worktrees/git.js");
-      return findGitCheckoutRoot(params.path) ?? undefined;
+      return (await findGitCheckoutRoot(params.path)) ?? undefined;
     },
     async hasSelfContainedCheckoutMetadata(params) {
       const { hasSelfContainedGitMetadata } = await import("../../agents/worktrees/git.js");

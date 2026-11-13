@@ -1,10 +1,12 @@
 import {
   assertStateDatabaseAccessAllowed,
   assertStateDatabaseReadAllowed,
+  type PreparedStateDatabaseReadAccess,
 } from "../infra/gateway-state-owner.js";
 import { registerNodeSqliteKyselyQueryErrorHandler } from "../infra/kysely-sync-cache-state.js";
 import { registerProcessExitCleanup } from "../infra/process-exit-cleanup.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
+import { observeSqliteDatabaseAdmissionLocation } from "../infra/sqlite-database-admission.js";
 import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
@@ -206,8 +208,8 @@ export const {
   borrowForRead: borrowOpenClawStateDatabaseForAsyncRead,
   retainForIndependentRead: retainOpenClawStateDatabaseForIndependentRead,
 } = createStateDatabaseRetainer(stateDatabaseLifecycle, {
-  assertOpen(pathname, ownership) {
-    assertOpenClawStateDatabaseOpenAllowed(pathname, ownership);
+  assertOpen(pathname, ownership, access) {
+    assertOpenClawStateDatabaseOpenAllowed(pathname, ownership, access);
     assertExistingOpenClawStateSchemaCacheAdmission(pathname, stateDatabaseLifecycle);
   },
   capture: (pathname) => asyncResources.capture(pathname),
@@ -424,11 +426,19 @@ export async function getOpenClawStateDatabaseTerminalFailureAsync(
 }
 
 /** Reject shared-state access after a process-local terminal failure. */
-function assertOpenClawStateDatabaseOpenAllowed(pathname: string, ownership?: "cached-read"): void {
+function assertOpenClawStateDatabaseOpenAllowed(
+  pathname: string,
+  ownership?: "cached-read",
+  access?: PreparedStateDatabaseReadAccess,
+): void {
   const resolvedPath = resolveDatabasePath({ path: pathname });
   const assertAllowed =
     ownership === "cached-read" ? assertStateDatabaseReadAllowed : assertStateDatabaseAccessAllowed;
-  assertAllowed(pathname);
+  if (ownership === "cached-read" && access) {
+    access.assertReadAllowed();
+  } else {
+    assertAllowed(pathname);
+  }
   const { identity } = asyncResources.capture(resolvedPath);
   const terminalFailure = terminalOpenLatch.get(resolvedPath);
   if (terminalFailure) {
@@ -597,6 +607,7 @@ export function publishOpenClawStateDatabaseWorkerAdmission(
   }
   asyncResources.publish(admission.databasePath, preparedIdentity);
   admission.assertCurrent();
+  observeSqliteDatabaseAdmissionLocation(admission.databasePath, admission.identity);
 }
 
 /** Drain worker resources before native checkpoint/close at one exact path. */
@@ -687,6 +698,12 @@ export const openClawStateDatabaseCache = {
   publishOpenClawStateDatabase,
   recordOpenClawStateDatabaseOpenFailure,
   recordOpenClawStateDatabaseLifecycleOpenError,
+  async reconcileFailedWorkerAdmission(
+    admission: OpenClawStateDatabaseReadAdmission,
+  ): Promise<void> {
+    await asyncResources.retireChangedAdmission(admission);
+    admission.assertCurrent();
+  },
   touchStateDatabase,
 };
 

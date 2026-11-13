@@ -1,7 +1,12 @@
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { UI_RAIL_SHORTCUTS_PREFERENCE_KEY } from "../../../packages/gateway-protocol/src/schema/ui-navigation-preferences.js";
+import {
+  captureWorkspaceFilesystemEvidence,
+  createWorkspaceFilesystemSource,
+} from "../../agents/workspace-state-guard.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { setCanonicalUserPreferences } from "../../state/user-preferences.js";
@@ -227,6 +232,44 @@ describe("generic session entry APIs with actor memory storage", () => {
       expect(await mutate()).toMatchObject({ kind: "committed" });
     },
   );
+
+  it("refuses incognito creation after its workspace alias moves without synchronous filesystem checks", async () => {
+    const { actor, binding, scope, creationScope } = await fixture("workspace-source");
+    const root = pinDirs.make();
+    const original = path.join(root, "original");
+    const replacement = path.join(root, "replacement");
+    const alias = path.join(root, "workspace");
+    await fs.mkdir(original);
+    await fs.mkdir(replacement);
+    await fs.symlink(original, alias, "junction");
+    const source = createWorkspaceFilesystemSource(
+      await captureWorkspaceFilesystemEvidence(alias),
+      () => {},
+    );
+    const stats = vi.spyOn(syncFs, "lstatSync");
+    await bindStorage(binding, async () => {
+      await expect(
+        createEntry(
+          creationScope,
+          async () => {
+            await fs.unlink(alias);
+            await fs.symlink(replacement, alias, "junction");
+            return { ok: true, entry: { sessionId: "uncommitted", updatedAt: 20 } };
+          },
+          { commitGuard: source },
+        ),
+      ).rejects.toMatchObject({ name: "WorkspaceAliasRepointedError" });
+      expect(loadSessionEntryReadOnly(scope)).toMatchObject({
+        sessionId: "workspace-source",
+        label: "Original",
+      });
+      expect(await readHistory(actor.storage!)).toMatchObject({
+        kind: "full",
+        snapshot: { events: [] },
+      });
+    });
+    expect(stats.mock.calls.filter(([pathname]) => pathname === alias)).toHaveLength(0);
+  });
 
   it("creates over an existing entry with its transcript, owner, and explicit label together", async () => {
     const { actor, binding, scope, creationScope } = await fixture("creation");

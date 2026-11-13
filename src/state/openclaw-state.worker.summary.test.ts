@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi, onTestFinished } from "vitest";
 import { readConfigHealthStateInDatabase } from "../config/io.health-state.kernel.js";
 import {
   acquireStateDatabaseSchemaLease,
@@ -135,7 +135,8 @@ function admitted<T>(context: Context, run: () => T, bindAuthority = false): T {
     );
   } finally {
     dispatch.mockRestore();
-    admission.finish();
+    const finishing = admission.finish();
+    onTestFinished(() => finishing);
   }
 }
 

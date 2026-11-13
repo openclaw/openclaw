@@ -1,6 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
+import {
+  resolveIdentityPathViaExistingAncestor,
+  resolveIdentityPathViaExistingAncestorSync,
+} from "../infra/boundary-path.js";
 import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import { tryReadDiskSpace } from "../infra/disk-space.js";
 import { normalizeWindowsPathPreservingCase } from "../infra/path-guards.js";
@@ -17,6 +20,13 @@ export function resolvePluginSourceCapturesDirectory(stateDir: string): string {
 
 export function resolvePluginSourceCaptureFallbackPrefix(stateDir: string): string {
   const identity = resolveIdentityPathViaExistingAncestorSync(stateDir);
+  return `openclaw-plugin-captures-${sha256HexPrefixCore(identity, 32)}-`;
+}
+
+export async function resolvePluginSourceCaptureFallbackPrefixAsync(
+  stateDir: string,
+): Promise<string> {
+  const identity = await resolveIdentityPathViaExistingAncestor(stateDir);
   return `openclaw-plugin-captures-${sha256HexPrefixCore(identity, 32)}-`;
 }
 

@@ -10,9 +10,13 @@ import fs, {
 import { syncBuiltinESMExports } from "node:module";
 import { dirname, join } from "node:path";
 import { backup, type DatabaseSync } from "node:sqlite";
+import { Worker } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
+import * as admissionReceipts from "../../infra/sqlite-database-admission.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
+import { NativeWorker } from "../../infra/worker-native-handle.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../../state/openclaw-agent-db-readonly-scope.js";
 import {
@@ -24,6 +28,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { SessionMetadataUnavailableError } from "../../state/session-metadata-unavailable-error.js";
+import { observeMainThreadFs } from "../../test-utils/main-thread-fs-spies.test-support.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as entryReads from "./session-accessor.sqlite-entry-read.js";
@@ -32,6 +37,7 @@ import {
   loadSessionEntryReadOnlyInScope,
   loadSessionEntryReadOnlyResultInScope,
   replaceSessionEntrySync,
+  patchSessionEntryCore,
 } from "./session-accessor.sqlite-entry.js";
 import { captureCanonicalSessionReaderContinuation } from "./session-canonical-key.js";
 import { assertSessionEntryCurrentAdmission } from "./session-entry-current-admission.js";
@@ -40,6 +46,7 @@ import type { SessionEntryCurrentCheck } from "./session-entry-current.types.js"
 import { readSessionEntryList } from "./session-entry-list.worker.js";
 import {
   readSessionEntryReadOnlyInWorker,
+  readSessionEntriesFromStoreInWorker,
   withSessionEntryReadOnlyInWorker,
 } from "./session-entry-read-runtime.js";
 import { readSessionRuntimeTargetWorkerRequest } from "./session-runtime-target-read.worker.js";
@@ -604,5 +611,62 @@ it.each(["logical", "omitted", "empty", "handoff"] as const)(
       symlinkSync(dirname(original.path), alias, linkType);
       await expect(current.readCurrent()).resolves.toMatchObject({ sessionId: entry.sessionId });
       expect(() => current.assertSourceCurrent()).not.toThrow();
+    }),
+);
+
+it.each(["single", "batch"] as const)(
+  "admits cold %s reads through their worker before retaining invalidation facts",
+  (kind) =>
+    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const { database, scope } = createEntryFixture(state.env);
+      const coldPath = state.path("cold-rows.sqlite");
+      await backup(requireNativeSqliteDatabase(database.db), coldPath);
+      const cold = { ...scope, storePath: coldPath };
+      expect(admissionReceipts.getSqliteDatabaseAdmissionIdentityForPath(coldPath)).toBeUndefined();
+      using filesystem = observeMainThreadFs();
+      const token = admissionReceipts.readSqliteDatabaseWriteTokenForPath;
+      let tokenLookups = 0;
+      using observation = vi
+        .spyOn(admissionReceipts, "readSqliteDatabaseWriteTokenForPath")
+        .mockImplementation((...args) => {
+          const before = filesystem.count();
+          try {
+            return token(...args);
+          } finally {
+            tokenLookups += filesystem.count() - before;
+          }
+        });
+      using messages = vi.spyOn(NativeWorker.prototype, "postMessage");
+      using workerMessages = vi.spyOn(Worker.prototype, "postMessage");
+      const requests = () =>
+        [...messages.mock.calls, ...workerMessages.mock.calls].filter(
+          ([message]) =>
+            isRecord(message) &&
+            isRecord(message.input) &&
+            (message.input.kind === "session-entry-read" ||
+              message.input.kind === "session-exact-entries"),
+        ).length;
+      const read = async () =>
+        kind === "single"
+          ? readSessionEntryReadOnlyInWorker(cold)
+          : (
+              await readSessionEntriesFromStoreInWorker({
+                ...cold,
+                sessionKeys: [scope.sessionKey],
+              })
+            ).entries[0]?.entry;
+      expect(await read()).toMatchObject({ sessionId: "original" });
+      const first = requests();
+      expect(await read()).toMatchObject({ sessionId: "original" });
+      const second = requests();
+      expect(await read()).toMatchObject({ sessionId: "original" });
+      expect(requests()).toBe(second);
+      expect(observation).toHaveBeenCalled();
+      expect(tokenLookups).toBe(0);
+      expect(first).toBe(1);
+      expect(second).toBe(2);
+      await patchSessionEntryCore(cold, () => ({ label: "worker-committed" }));
+      expect(await read()).toMatchObject({ label: "worker-committed" });
+      expect(tokenLookups).toBe(0);
     }),
 );

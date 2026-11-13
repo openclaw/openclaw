@@ -68,7 +68,10 @@ export function createSubagentSweeperHarness(
                 return execute(owner, (scope) => scope.execute(command, executeOptions), options);
               }
               // Scheduling tests exercise publication through the real owner; native CAS has worker coverage.
-              acknowledgeMockSubagentRegistryWrite(options?.createAdmission, command.input.writeId);
+              await acknowledgeMockSubagentRegistryWrite(
+                options?.createAdmission,
+                command.input.writeId,
+              );
             },
           ),
       });

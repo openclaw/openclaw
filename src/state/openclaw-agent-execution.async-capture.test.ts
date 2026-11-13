@@ -16,11 +16,17 @@ import {
   captureOpenClawAgentDatabaseExecution as capture,
   captureOpenClawAgentDatabaseExecutionAsync as captureAsync,
 } from "./openclaw-agent-execution.js";
+import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
+import { captureOpenClawStateReadContext } from "./openclaw-state-worker-context.js";
 
 it("keeps cold async capture and borrower assertions off main-thread filesystem calls", async () => {
   const options = fixture();
   let publicationLookups = 0;
+  let sharedPublicationLookups = 0;
   const observe = (target: unknown) => {
+    if (new Error().stack?.includes("publishOpenClawStateDatabaseWorkerAdmission")) {
+      sharedPublicationLookups++;
+    }
     if (
       target === options.path &&
       /captureRegistryMutation|captureValidationTransfer/.test(new Error().stack ?? "")
@@ -80,6 +86,7 @@ it("keeps cold async capture and borrower assertions off main-thread filesystem 
     expect(grants).toBeGreaterThan(0);
     expect(callbackLookups).toBe(0);
     expect(publicationLookups).toBe(0);
+    expect(sharedPublicationLookups).toBe(0);
     expect(execution.fileIdentity).toBeDefined();
   } finally {
     spies.forEach((spy) => spy.mockRestore());
@@ -348,5 +355,76 @@ it("prepares an explicit creation witness for a preexisting file without adding 
     expect(execution.capturedIdentity).toEqual(captured);
   } finally {
     await execution.release();
+  }
+});
+
+it("refuses shared-state replacement at its cold native publication boundary", async () => {
+  const options = fixture();
+  const shared = openOpenClawStateDatabase({ env: options.env });
+  shared.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  const replacement = fs.readFileSync(shared.path);
+  const retained = `${shared.path}.retained`;
+  const originalAdmission = captureOpenClawStateReadContext(shared.path).admission;
+  const originalIdentity = originalAdmission.identity.key;
+  const execution = await captureAsync(options);
+  let replaced = false;
+  let reconciliationLookups = 0;
+  const observeReconciliation = () => {
+    if (new Error().stack?.includes("retireChangedAdmission")) {
+      reconciliationLookups++;
+    }
+  };
+  const originalStat = fs.statSync;
+  const originalRealpath = fs.realpathSync.native;
+  const spies = [
+    vi.spyOn(fs, "statSync").mockImplementation((...args: Parameters<typeof fs.statSync>) => {
+      observeReconciliation();
+      return Reflect.apply(originalStat, fs, args);
+    }),
+    vi
+      .spyOn(fs.realpathSync, "native")
+      .mockImplementation((...args: Parameters<typeof fs.realpathSync.native>) => {
+        observeReconciliation();
+        return Reflect.apply(originalRealpath, fs.realpathSync, args);
+      }),
+  ];
+  syncBuiltinESMExports();
+  try {
+    await expect(
+      execution.prepare(
+        source((request) => {
+          if (
+            !replaced &&
+            request.stage === "prepare" &&
+            isRecord(request.facts) &&
+            request.facts.kind === "shared-owner"
+          ) {
+            fs.renameSync(shared.path, retained);
+            fs.writeFileSync(shared.path, replacement);
+            replaced = true;
+          }
+        }),
+      ),
+    ).rejects.toThrow("SQLite database file identity changed before existing-only open");
+    expect(replaced).toBe(true);
+    expect(reconciliationLookups).toBe(0);
+    expect(fs.readFileSync(shared.path)).toEqual(replacement);
+    expect(fs.existsSync(options.path)).toBe(false);
+    expect(originalAdmission.assertCurrent).toThrow(/admission changed/);
+    const freshAdmission = captureOpenClawStateReadContext(shared.path).admission;
+    expect(freshAdmission.identity.key).not.toBe(originalIdentity);
+    expect(freshAdmission.identity).toEqual(readDatabasePathIdentitySync(shared.path));
+    freshAdmission.assertCurrent();
+  } finally {
+    try {
+      await execution.release();
+    } finally {
+      spies.forEach((spy) => spy.mockRestore());
+      syncBuiltinESMExports();
+      if (replaced) {
+        fs.unlinkSync(shared.path);
+        fs.renameSync(retained, shared.path);
+      }
+    }
   }
 });

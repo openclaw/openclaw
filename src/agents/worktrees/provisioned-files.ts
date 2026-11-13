@@ -20,7 +20,7 @@ import type { ProvisionedFileState } from "./types.js";
 export async function provisionIncludedFiles(
   repoRoot: string,
   worktreePath: string,
-  options: { signal?: AbortSignal; assertCurrent?: () => void } = {},
+  options: Parameters<typeof copyProvisionedPathsInWorker>[3] = {},
 ): Promise<string[]> {
   const inspection = await timeWorktreePreparationPhase("provisionInspect", () =>
     runGitWorkerOperation(

@@ -11,7 +11,7 @@ import { escapeRegExp as escapeRegExpValue } from "./shared/regexp.js";
 export { isPlainObject } from "./infra/plain-object.js";
 export { escapeRegExp } from "./shared/regexp.js";
 export { sleep } from "./utils/sleep.js";
-export { pathExists } from "@openclaw/fs-safe/advanced";
+export { pathExists } from "./infra/fs-safe.js";
 export { isRecord } from "@openclaw/normalization-core/record-coerce";
 export { resolveConfigDir, resolveUserPath };
 

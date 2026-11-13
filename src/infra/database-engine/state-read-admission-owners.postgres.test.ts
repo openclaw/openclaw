@@ -156,8 +156,7 @@ it.skipIf(!connection).each(["open", "ensure", "raw-fragment"] as const)(
             release(readerGate, index);
           }
           await Promise.allSettled([published, read]);
-          publisherRelay.finish();
-          readerRelay.finish();
+          await Promise.all([publisherRelay.finish(), readerRelay.finish()]);
           publisher.anchor.close();
           reader.anchor.close();
         }

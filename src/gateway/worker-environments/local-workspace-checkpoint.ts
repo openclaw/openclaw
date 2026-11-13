@@ -1,12 +1,19 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { nativeWorktreeFilesystem } from "../../agents/worktrees/filesystem-native.js";
+import {
+  nativeWorktreeFilesystem,
+  prepareWorktreeFilesystemMutation,
+} from "../../agents/worktrees/filesystem-native.js";
 import { timeWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
 import {
   captureWorktreeRunEndContext,
   withWorktreeRunEnd,
 } from "../../agents/worktrees/run-end-lifecycle.js";
+import {
+  composeSessionSourceAssertion,
+  prepareSessionSourceEffect,
+} from "../../config/sessions/session-source-authority.js";
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -75,8 +82,13 @@ export async function retireLocalWorkspaceCheckpointCapture(
 ) {
   const parent = path.dirname(projectionPath);
   const retired = path.join(parent, `checkpoint-retired-${randomUUID()}`);
+  const source = await prepareSessionSourceEffect(
+    composeSessionSourceAssertion([options.commitGuard, options.workerAuthority?.assertCurrent]),
+  );
+  await using _ = { [Symbol.asyncDispose]: async () => await source.release?.() };
+  await prepareWorktreeFilesystemMutation(options, source);
   options.signal?.throwIfAborted();
-  options.commitGuard();
+  source.assertCurrent();
   try {
     await fs.rename(path.join(parent, "checkpoint-capture"), retired);
   } catch (error) {
@@ -85,7 +97,7 @@ export async function retireLocalWorkspaceCheckpointCapture(
     }
     throw error;
   }
-  options.commitGuard();
+  source.assertCurrent();
   const { context, key } = captureRemovalOwner(projectionPath, options.env);
   // Unique names prevent a delayed child from deleting a later checkpoint.
   // Caller cancellation cannot revoke an already transferred artifact.

@@ -1,3 +1,7 @@
+import {
+  composeSessionSourceAssertion,
+  prepareSessionSourceEffect,
+} from "../../config/sessions/session-source-authority.js";
 import { withOpenClawStateLeasesWorkerAdmission } from "../../state/openclaw-state-lease-worker-owner.js";
 import {
   OpenClawStateLeaseError,
@@ -177,6 +181,10 @@ async function withWorktreeLease<T>(
   let finishRelease: (() => void) | undefined;
   try {
     params.commitGuard?.();
+    const source = params.commitGuard
+      ? await prepareSessionSourceEffect(params.commitGuard)
+      : undefined;
+    await using _ = { [Symbol.asyncDispose]: async () => await source?.release?.() };
     const captured = captureWorktreeRunEndContext(params.env);
     const inherited = params.workerAuthority?.leaseSet;
     const context = inherited?.context ?? captured;
@@ -219,14 +227,24 @@ async function withWorktreeLease<T>(
               // The lease owner checks its live phase, token custody, and shared heartbeat expiry.
               authority.assertCurrent();
             };
-            const commitGuard = () => {
-              assertOwned();
-              signal.throwIfAborted();
-              params.commitGuard?.();
-            };
+            const commitGuard = composeSessionSourceAssertion(
+              params.commitGuard ? [params.commitGuard] : [],
+              (assertSource) => {
+                assertOwned();
+                signal.throwIfAborted();
+                assertSource();
+              },
+            );
             const workerAuthority = {
+              ...params.workerAuthority,
               leaseSet,
               predicates: params.workerAuthority?.predicates,
+              workspaceEvidence: [
+                ...new Set([
+                  ...(params.workerAuthority?.workspaceEvidence ?? []),
+                  ...(source?.workspaceEvidence ?? []),
+                ]),
+              ],
               assertCurrent: () => {
                 captured.admission.assertCurrent();
                 signal.throwIfAborted();
