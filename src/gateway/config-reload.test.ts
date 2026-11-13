@@ -555,29 +555,52 @@ describe("buildGatewayReloadPlan", () => {
       "targets changed named accounts",
       ["accounts.alpha.enabled", "accounts.beta.commands"],
       ["alpha", "beta"],
+      [],
     ],
-    ["promotes accounts.default changes", ["accounts.default.commands"], []],
+    ["promotes accounts.default changes", ["accounts.default.commands"], [], []],
+    [
+      "keeps removed accounts alongside other scoped targets",
+      ["accounts.alpha.enabled", "accounts.removed"],
+      ["alpha", "removed"],
+      ["removed"],
+    ],
     [
       "lets an unlisted account replace earlier scoped targets",
-      ["accounts.alpha.enabled", "accounts.removed.enabled"],
+      ["accounts.alpha.enabled", "accounts.unknown"],
+      [],
       [],
     ],
     [
       "lets a mixed global change replace scoped targets",
       ["accounts.alpha.enabled", "botToken"],
       [],
+      [],
     ],
-  ] satisfies [string, string[], string[]][])("%s", (_label, suffixes, accounts) => {
-    const paths = suffixes.map((suffix) => `channels.mattermost.${suffix}`);
-    const plan = buildGatewayReloadPlan(paths, { candidateConfig: mattermostAccountConfig });
-    expect(plan.restartChannels).toEqual(
-      new Set<ChannelKind>(accounts.length ? [] : ["mattermost"]),
-    );
-    expect(plan.restartChannelAccounts).toEqual(
-      new Map<ChannelKind, Set<string>>(accounts.length ? [["mattermost", new Set(accounts)]] : []),
-    );
-    expect(isNoopGatewayReloadPlan(plan)).toBe(false);
-  });
+  ] satisfies [string, string[], string[], string[]][])(
+    "%s",
+    (_label, suffixes, accounts, removed) => {
+      const paths = suffixes.map((suffix) => `channels.mattermost.${suffix}`);
+      const plan = buildGatewayReloadPlan(paths, {
+        previousConfig: removed.length
+          ? {
+              channels: {
+                mattermost: { accounts: Object.fromEntries(removed.map((id) => [id, {}])) },
+              },
+            }
+          : undefined,
+        candidateConfig: mattermostAccountConfig,
+      });
+      expect(plan.restartChannels).toEqual(
+        new Set<ChannelKind>(accounts.length ? [] : ["mattermost"]),
+      );
+      expect(plan.restartChannelAccounts).toEqual(
+        new Map<ChannelKind, Set<string>>(
+          accounts.length ? [["mattermost", new Set(accounts)]] : [],
+        ),
+      );
+      expect(isNoopGatewayReloadPlan(plan)).toBe(false);
+    },
+  );
 
   it.each([
     ["inspects unresolved account secrets", "available", false, true],
