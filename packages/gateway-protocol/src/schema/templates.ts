@@ -285,14 +285,25 @@ export const TemplatesAddPlanParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
 });
 
-export const TemplatesAddApplyParamsSchema = closedObject({
-  source: TemplateCatalogCoordinateSchema,
-  agentId: Type.Optional(NonEmptyString),
-  planIntegrity: Type.Optional(NonEmptyString),
-  acknowledgeClawHubRisk: Type.Optional(Type.Boolean()),
-  acknowledgeCapabilities: Type.Optional(Type.Array(TemplatePluginAcknowledgementSchema)),
-  acknowledgeSkillWarnings: Type.Optional(Type.Array(TemplateSkillAcknowledgementSchema)),
-});
+export const TemplatesAddApplyParamsSchema = Type.Union([
+  closedObject({
+    source: TemplateCatalogCoordinateSchema,
+    agentId: Type.Optional(NonEmptyString),
+    planIntegrity: Type.Optional(NonEmptyString),
+    acknowledgeClawHubRisk: Type.Optional(Type.Boolean()),
+    acknowledgeCapabilities: Type.Optional(Type.Array(TemplatePluginAcknowledgementSchema)),
+    acknowledgeSkillWarnings: Type.Optional(Type.Array(TemplateSkillAcknowledgementSchema)),
+  }),
+  // Chat-based Add has no reviewed plan: the Gateway creates the agent and the
+  // agent's own conversation continues setup. agentId is the preferred id; the
+  // Gateway answers with the unused id it chose.
+  closedObject({
+    mode: Type.Literal("chat"),
+    source: TemplateCatalogCoordinateSchema,
+    agentId: NonEmptyString,
+    acknowledgeClawHubRisk: Type.Optional(Type.Boolean()),
+  }),
+]);
 
 export const TemplatesUpdatePlanParamsSchema = closedObject({
   agentId: NonEmptyString,

@@ -27,7 +27,10 @@ import {
   OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
 } from "../../shared/transcript-only-openclaw-assistant.js";
 import { verifySetupInferenceConfig } from "../../system-agent/setup-inference-turn.js";
-import { TEMPLATE_AGENT_OPENING_MESSAGE } from "../../templates/conversation.js";
+import {
+  buildTemplateOpeningMessage,
+  type TemplateSetupReport,
+} from "../../templates/conversation.js";
 import { waitForAgentJob } from "../agent-turn/agent-job.js";
 import { resolveGatewayOperatorRoleActor } from "../operator-role-policy.js";
 import { startSessionCreateDiagnostics } from "../session-create-diagnostics.js";
@@ -341,6 +344,8 @@ export async function startAgentOnboardingConversation(
   agentId: string,
   sessionKey: string,
   opening: "new-agent" | "template" = "new-agent",
+  /** Chat-based Template Add only: creation has finished and this is its outcome. */
+  templateSetup?: TemplateSetupReport,
 ): Promise<void> {
   const releaseAuthorization = options.sessionMutationAuthorization?.retain?.();
   using _ = { [Symbol.dispose]: () => releaseAuthorization?.() };
@@ -357,7 +362,7 @@ export async function startAgentOnboardingConversation(
             agentId,
             message:
               opening === "template"
-                ? TEMPLATE_AGENT_OPENING_MESSAGE
+                ? buildTemplateOpeningMessage(templateSetup)
                 : [
                     "A short introduction has already been saved in this agent’s conversation. Ask the user in plain text: What role would you like me to take on?",
                     "Offer these four single-agent roles: Chief of staff (coordinates work and priorities), Researcher (finds and summarizes evidence), Writer (turns notes and sources into drafts), and Reviewer (checks work against requirements). Invite the user to describe a different role if they prefer. Do not offer a team. Ask only about the role in this opening turn; do not ask for their goal or mention a later follow-up yet. End the message there and wait for their reply.",

@@ -17,6 +17,8 @@ export type AdmittedTemplateAgent = {
   workspaceIdentity: string;
   configured?: Initialization["configured"];
   preparing?: Initialization["preparing"];
+  /** This request created the agent and chat, so it alone may remove them. */
+  createdByRequest?: true;
 };
 
 /** Adapt installer checkpoints to the existing pending-session owner, not a second ledger. */

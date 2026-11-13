@@ -25,6 +25,11 @@ import { withResolvedClawHubSource, type ClawHubCoordinate } from "./clawhub-sou
 import type { TemplateCronGateway, PersistedTemplateCronRef } from "./cron.js";
 import { digestTemplateValue } from "./digest.js";
 import {
+  createTemplateAgentFromChat,
+  selectChatTemplateAgentId,
+  type ChatTemplateAddInput,
+} from "./gateway-add-chat.js";
+import {
   templateInitializationCheckpoints,
   type AdmittedTemplateAgent,
   type PreparedAgentChat,
@@ -71,6 +76,12 @@ export async function applyTemplateAddForGateway(
   input: ClawHubFetchOptions & {
     source: ClawHubCoordinate;
     agentId?: string;
+    /**
+     * Chat-based Add: no reviewed plan. `agentId` is the preferred id and the
+     * agent's own conversation continues setup; see `createTemplateAgentFromChat`.
+     */
+    mode?: "chat";
+    onAgentCreated?: ChatTemplateAddInput["onAgentCreated"];
     planIntegrity?: string;
     acknowledgeClawHubRisk?: boolean;
     acknowledgeCapabilities?: readonly TemplatePluginAcknowledgement[];
@@ -142,10 +153,14 @@ export async function applyTemplateAddForGateway(
         (error: unknown) => ({ ok: false as const, error }),
       );
       try {
+        const admissionAgentId =
+          input.mode === "chat"
+            ? await selectChatTemplateAgentId(admissionContext, input)
+            : normalizeAgentId(input.agentId);
         await withOpenClawStateLeaseAsync(
           {
             scope: "core:agent-deletion",
-            key: normalizeAgentId(input.agentId),
+            key: admissionAgentId,
             leaseMs: 60_000,
             waitMs: 5_000,
             heartbeat: "worker",
@@ -168,7 +183,7 @@ export async function applyTemplateAddForGateway(
             assertCurrent();
 
             assertTemplatesLabsEnabled(config);
-            const agentId = normalizeAgentId(input.agentId!);
+            const agentId = admissionAgentId;
             const workspace = await selectTemplateAgentWorkspace(config, agentId);
 
             const existingConfig = config.agents?.entries?.[agentId];
@@ -234,6 +249,7 @@ export async function applyTemplateAddForGateway(
                       chat,
                       workspaceIdentity: identity,
                       config: structuredClone(result.config.agents!.entries![agentId]!),
+                      createdByRequest: true,
                     };
                     readySessionKey = resolveAgentMainSessionKey({ cfg: result.config, agentId });
                   },
@@ -263,6 +279,13 @@ export async function applyTemplateAddForGateway(
       } finally {
         await admissionContext;
       }
+    }
+
+    if (input.mode === "chat") {
+      // That path settles or removes its own admission; the handling below is plan-based.
+      const admission = admitted;
+      admitted = undefined;
+      return await createTemplateAgentFromChat(input, admission, readySessionKey, stateContext);
     }
 
     const resolved = await withResolvedClawHubSource({

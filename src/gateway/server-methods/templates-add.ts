@@ -167,17 +167,63 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
           );
         }
       };
+      const publishProgress = (
+        stage: "agent-admitted" | "agent-ready",
+        agent: { agentId: string; sessionKey: string },
+      ) => {
+        if (options.client?.connId) {
+          context.broadcastToConnIds(
+            "templates.add.progress",
+            { requestId: options.req.id, stage, ...agent },
+            new Set([options.client.connId]),
+          );
+        }
+      };
       const result = await applyTemplateAddForGateway({
         source: params.source,
         ...(params.agentId ? { agentId: params.agentId } : {}),
-        planIntegrity: params.planIntegrity,
         ...(params.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
-        ...(params.acknowledgeCapabilities
-          ? { acknowledgeCapabilities: params.acknowledgeCapabilities }
-          : {}),
-        ...(params.acknowledgeSkillWarnings
-          ? { acknowledgeSkillWarnings: params.acknowledgeSkillWarnings }
-          : {}),
+        ...("mode" in params
+          ? {
+              mode: params.mode,
+              // Creation has finished: the first turn starts now, with its outcome, and
+              // nothing was installed here that needs an installer card in the chat.
+              onAgentCreated: async (agent, report) => {
+                assertCurrent();
+                publishProgress("agent-ready", agent);
+                await startAgentOnboardingConversation(
+                  options,
+                  agent.agentId,
+                  agent.sessionKey,
+                  "template",
+                  report,
+                );
+              },
+            }
+          : {
+              planIntegrity: params.planIntegrity,
+              ...(params.acknowledgeCapabilities
+                ? { acknowledgeCapabilities: params.acknowledgeCapabilities }
+                : {}),
+              ...(params.acknowledgeSkillWarnings
+                ? { acknowledgeSkillWarnings: params.acknowledgeSkillWarnings }
+                : {}),
+              onAgentReady: async (agent) => {
+                assertCurrent();
+                publishProgress("agent-ready", agent);
+                await startAgentOnboardingConversation(
+                  options,
+                  agent.agentId,
+                  agent.sessionKey,
+                  "template",
+                );
+              },
+              onSetupEvent: async (event) => {
+                assertCurrent();
+                await publishTemplateInstallEvent(options.context, event, assertCurrent);
+                assertCurrent();
+              },
+            }),
         getPlanningContext: async () => {
           assertCurrent();
           const config = await readCurrentConfigForPolicyCheckAsync({
@@ -221,20 +267,9 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
           }
           return outcome;
         },
-        onAgentAdmitted: async ({ agentId, sessionKey }) => {
+        onAgentAdmitted: async (agent) => {
           assertCurrent();
-          if (options.client?.connId) {
-            context.broadcastToConnIds(
-              "templates.add.progress",
-              {
-                requestId: options.req.id,
-                stage: "agent-admitted",
-                agentId,
-                sessionKey,
-              },
-              new Set([options.client.connId]),
-            );
-          }
+          publishProgress("agent-admitted", agent);
         },
         waitForAgentRuntime: async (retainedAgent) => {
           if (retainedAgent) {
@@ -250,27 +285,6 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
             );
           }
           return outcome;
-        },
-        onAgentReady: async ({ agentId, sessionKey }) => {
-          assertCurrent();
-          if (options.client?.connId) {
-            context.broadcastToConnIds(
-              "templates.add.progress",
-              {
-                requestId: options.req.id,
-                stage: "agent-ready",
-                agentId,
-                sessionKey,
-              },
-              new Set([options.client.connId]),
-            );
-          }
-          await startAgentOnboardingConversation(options, agentId, sessionKey, "template");
-        },
-        onSetupEvent: async (event) => {
-          assertCurrent();
-          await publishTemplateInstallEvent(options.context, event, assertCurrent);
-          assertCurrent();
         },
         prepareAgentChat: async (agentId, config, pending) => {
           assertCurrent();
