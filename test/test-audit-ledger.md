@@ -641,6 +641,30 @@ formatting and diff checks pass. Independent preservation review found no
 coverage loss. Full local review and hosted outcomes are tracked in
 [PR #198020](https://github.com/openclaw/openclaw/pull/198020).
 
+### Plugin install fixture setup cleanup
+
+At `ee854a1d757943482bb6361c7ccd4f560c8fc92e`, four temporary roots in
+`plugins-install-config.test.ts` perform fallible setup before entering their
+cleanup blocks. They now register with the existing per-test temp directory
+tracker before setup. The cwd spy keeps its own restoration. All 20
+declarations, 23 expanded cases, inputs and assertions remain; test code shrinks
+by 11 lines, with no production or support changes.
+
+The normal suite passes all 23 cases before and after the repair. Under four
+injected fixture-write failures, both revisions report the same four errors
+and preserve the other 19 cases. An `onTestFinished` observation finds all four
+roots still present on the base and none after the repair. The runner already
+reclaims its entire namespace at process exit; this repairs per-case retention,
+not a permanent host leak. Temporary instrumentation was restored byte for
+byte. Independent preservation review found no lost coverage. Focused checks,
+full local review and hosted outcomes are tracked in
+[PR #198138](https://github.com/openclaw/openclaw/pull/198138).
+
+Adjacent source review retains the existing custody in `dns-cli.test.ts`,
+`node-cli/identity.test.ts`, `plugins-control-ui-build.test.ts` and
+`secrets-store-input.test.ts`. Their roots are registered before setup, or their
+database/FIFO owners settle before removal; no runtime claim is made for them.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Retain Twitch's pre-abort pending check: it protects the passive account lifecycle. Its post-await settled check remains a separate live-test cleanup candidate.
