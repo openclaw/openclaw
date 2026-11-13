@@ -53,6 +53,69 @@ describe("classifyAttachmentBytes", () => {
     expect(result).toEqual({ mime: "text/plain", class: "text", charset: "utf-16le" });
   });
 
+  describe("byte-detected binary signatures", () => {
+    const sqlitePage = (fill: (page: Buffer) => void) => {
+      const page = Buffer.alloc(4096);
+      Buffer.from("SQLite format 3\0", "latin1").copy(page);
+      fill(page);
+      return page;
+    };
+    const elf = Buffer.concat([
+      Buffer.from([0x7f, 0x45, 0x4c, 0x46, 2, 1, 1, 0]),
+      Buffer.alloc(4088),
+    ]);
+    const schema = Buffer.from(
+      Array.from({ length: 100 }, (_, i) => `CREATE TABLE t${i}(name text, notes text);`).join(
+        "\n",
+      ),
+    );
+    it.each([
+      ["NUL-heavy SQLite", sqlitePage(() => {}), "t.db"],
+      [
+        "SQLite with a text-heavy schema page",
+        sqlitePage((page) => schema.copy(page, 100)),
+        "t.sqlite",
+      ],
+      ["ELF with zero blocks", elf, undefined],
+    ] as const)("keeps %s binary", async (_name, buffer, name) => {
+      const result = await classifyAttachmentBytes({
+        buffer,
+        declaredMime: "application/octet-stream",
+        name,
+      });
+      expect(result.class).toBe("binary");
+      expect(result).not.toHaveProperty("charset");
+    });
+
+    it("keeps NUL-heavy bytes without a known signature from decoding as UTF-16", async () => {
+      const buffer = Buffer.concat([Buffer.alloc(1024), Buffer.from([0x9c, 0xfe, 0x01, 0x80])]);
+      await expect(classifyAttachmentBytes({ buffer })).resolves.toEqual({
+        mime: undefined,
+        class: "binary",
+      });
+    });
+
+    it.each([
+      ["utf-16le", Buffer.from("meeting notes for tomorrow", "utf16le")],
+      ["utf-16be", Buffer.from("meeting notes for tomorrow", "utf16le").swap16()],
+    ] as const)("still decodes unnamed BOM-less %s text", async (charset, buffer) => {
+      await expect(classifyAttachmentBytes({ buffer })).resolves.toEqual({
+        mime: "text/plain",
+        class: "text",
+        charset,
+      });
+    });
+
+    it("still infers Windows-1252 and UTF-8 text", async () => {
+      await expect(
+        classifyAttachmentBytes({ buffer: Buffer.from("Café notes: résumé et météo.", "latin1") }),
+      ).resolves.toEqual({ mime: "text/plain", class: "text", charset: "windows-1252" });
+      await expect(
+        classifyAttachmentBytes({ buffer: Buffer.from("a,b\n1,2\n"), name: "data" }),
+      ).resolves.toEqual({ mime: "text/csv", class: "text" });
+    });
+  });
+
   it.each([
     ["image/png", png, "image"],
     ["application/zip", Buffer.from("PK\u0003\u0004payload"), "archive"],

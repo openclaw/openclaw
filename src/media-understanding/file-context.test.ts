@@ -90,6 +90,25 @@ describe("remote document charset", () => {
 });
 
 describe("renderInboundDocumentContext", () => {
+  it.each([
+    [
+      "NUL-heavy SQLite",
+      Buffer.concat([Buffer.from("SQLite format 3\0", "latin1"), Buffer.alloc(8192)]),
+    ],
+    [
+      "ELF with zero blocks",
+      Buffer.concat([Buffer.from([0x7f, 0x45, 0x4c, 0x46, 2, 1, 1, 0]), Buffer.alloc(8192)]),
+    ],
+  ])("keeps %s out of the prompt as an unsupported document", async (_name, bytes) => {
+    const context = await renderInboundDocumentContext(
+      await localDocument(bytes, "t.db", "application/octet-stream", true),
+    );
+
+    expect(context.text).toContain("[Unsupported document format");
+    expect(context.text).not.toContain("EXTERNAL_UNTRUSTED_CONTENT");
+    expect(context.text.length).toBeLessThan(400);
+  });
+
   it.each(["", " Application/Octet-Stream; charset=binary "])(
     "retains inferred legacy encoding through prepared content type %j",
     async (mime) => {

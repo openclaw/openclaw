@@ -185,7 +185,21 @@ export async function classifyAttachmentBytes(params: {
   if (detectedClass === "text" && bomCharset && isCleanText(params.buffer, bomCharset)) {
     return { mime, class: "text", charset: bomCharset };
   }
-  const charset = resolveUtf16Charset(params.buffer) ?? sniffTextCharset(params.buffer);
+  // A magic-byte signature (SQLite, ELF, PE, wasm, ...) is authoritative: never guess text.
+  if (
+    mime &&
+    detectedClass === "binary" &&
+    mime === (await detectMime({ buffer: params.buffer }))
+  ) {
+    return { mime, class: "binary" };
+  }
+  const utf16 = resolveUtf16Charset(params.buffer);
+  // BOM-less UTF-16 is a NUL-ratio guess; binary with many NULs must decode as clean text.
+  const validUtf16 =
+    utf16 &&
+    (hasUtf16Bom ||
+      isCleanText(params.buffer.subarray(0, Math.min(params.buffer.length, 4096) & ~1), utf16));
+  const charset = (validUtf16 ? utf16 : undefined) ?? sniffTextCharset(params.buffer);
   if (!charset) {
     return { mime, class: "binary" };
   }
