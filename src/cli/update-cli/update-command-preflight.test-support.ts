@@ -5,7 +5,6 @@ import { withinTest } from "../../../test/helpers/promise.js";
 import { readRestartSentinelReadOnly } from "../../infra/restart-sentinel.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import type { RetainUpdateRuntime } from "../../infra/update-retained-runtime.js";
-import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { UpdateActivationTimeoutError } from "./update-command-activation.js";
