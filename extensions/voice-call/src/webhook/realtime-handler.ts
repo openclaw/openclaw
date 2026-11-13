@@ -719,7 +719,7 @@ export class RealtimeCallHandler {
         : undefined;
     // Providers may close synchronously before createBridge returns; no consult can exist yet.
     let nativeConsultOwner: ActiveRealtimeVoiceBridge | undefined = undefined;
-    let reading: ReturnType<typeof attachRealtimeReading>;
+    let reading: ReturnType<typeof attachRealtimeReading> = undefined;
     const { audioPacer, pendingMarkAcks, outboundGreeting, audioController, activity, hostSpeech } =
       createRealtimeCallPlayback({
         ws,
@@ -728,7 +728,7 @@ export class RealtimeCallHandler {
         adapter,
         harness,
         initialGreetingInstructions,
-        isReading: () => Boolean(reading),
+        isReading: () => reading?.isActive(),
         onPlaybackReset: () => reading?.interrupt(),
         hostOwnsOpening,
         holdOpeningMaxMs: this.holdOpeningMaxMs,
@@ -1115,9 +1115,6 @@ export class RealtimeCallHandler {
           return;
         }
         if (event.type === "input_audio_buffer.speech_started" && !outboundGreeting.isBlocked()) {
-          if (interruptResponseOnInputAudio !== false) {
-            reading?.interrupt();
-          }
           transcriptStartedAt.user = Date.now();
           outboundGreeting.claim();
           activity.noteSpeech();
@@ -1262,9 +1259,6 @@ export class RealtimeCallHandler {
         activity.noteSpeech();
       }
       if (speechDetector.accept({ rms: inputRms, peak: 0 })) {
-        if (interruptResponseOnInputAudio !== false) {
-          reading?.interrupt();
-        }
         audioController.noteCallerSpeech();
         outboundGreeting.claim();
         if (localBargeIn && !activity.isPaused()) {

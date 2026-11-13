@@ -63,6 +63,7 @@ function createRealtimeReading(params: {
       }
     },
     cancel,
+    isActive: () => phase === "generating" || phase === "playing",
     interrupt() {
       if (phase !== "ready") {
         cancel();

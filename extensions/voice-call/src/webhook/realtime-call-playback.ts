@@ -25,7 +25,7 @@ export function createRealtimeCallPlayback(params: {
   adapter: StreamFrameAdapter;
   harness: RealtimeVoiceSessionHarness;
   initialGreetingInstructions?: string;
-  isReading?: () => boolean;
+  isReading?: () => boolean | undefined;
   onPlaybackReset?: () => void;
   /** True when the host, not the bridge's ready trigger, decides when the opening is spoken. */
   hostOwnsOpening: boolean;
@@ -160,10 +160,8 @@ export function createRealtimeCallPlayback(params: {
     harness,
     isOpen: () => !params.isClosed() && ws.readyState === WebSocket.OPEN,
     isBlocked: () => outboundGreeting.isBlocked() && !hostSpeech.isActive(),
-    isOpening: () =>
-      !params.isReading?.() &&
-      Boolean(initialGreetingInstructions) &&
-      !outboundGreeting.isBlocked(),
+    isOpening: () => Boolean(initialGreetingInstructions) && !outboundGreeting.isBlocked(),
+    isOpeningPending: params.isReading,
     onAudibleOutput: outboundGreeting.claim,
     pendingMarkAcks,
     providerCallId: callSid,

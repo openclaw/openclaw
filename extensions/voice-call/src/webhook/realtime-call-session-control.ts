@@ -280,6 +280,8 @@ export function createRealtimeCallAudioController(params: {
   isOpen: () => boolean;
   isBlocked?: () => boolean;
   isOpening?: () => boolean;
+  /** Segmented openings own their lifetime through the final carrier acknowledgment. */
+  isOpeningPending?: () => boolean | undefined;
   onAudibleOutput?: () => void;
   pendingMarkAcks: Map<string, () => void>;
   providerCallId: string;
@@ -288,6 +290,10 @@ export function createRealtimeCallAudioController(params: {
   let greetingPending = true;
   let greetingResponseDone = false;
   const isGreetingPlaying = (): boolean => {
+    const openingPending = params.isOpeningPending?.();
+    if (openingPending !== undefined) {
+      return openingPending;
+    }
     const playing = params.harness.talk.outputAudioActive || params.audioPacer.hasPlaybackAudio(0);
     if (greetingResponseDone && !playing) {
       greetingPending = false;
