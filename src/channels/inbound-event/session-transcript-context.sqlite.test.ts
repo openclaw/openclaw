@@ -186,3 +186,80 @@ it.each([false, true])(
     }
   },
 );
+
+it.each([
+  ["internal runtime exchanges", "internal", 6],
+  ["tool-progress rows in newer turns", "tool-progress", 6],
+  ["one long tool-progress turn", "long-tool-turn", 6],
+  ["internal runtime exchanges in a full window", "internal", 100],
+] as const)(
+  "omits an answered recent row crowded past twice the candidate count by %s",
+  async (_label, filler, candidateCount) => {
+    const scope = {
+      agentId: "main",
+      sessionId: `crowded-${filler}-${candidateCount}`,
+      sessionKey: `agent:main:discord:channel:crowded-${filler}-${candidateCount}`,
+      storePath: path.join(sessionDirs.make(), "sessions.json"),
+    };
+    const sessionEntry = { sessionId: scope.sessionId, chatType: "channel" as const, updatedAt: 1 };
+    await replaceSessionEntry(scope, sessionEntry);
+    const append = (...messages: unknown[]) =>
+      persistTurn(scope, {
+        updateMode: "none",
+        messages: messages.map((message) => ({ message })),
+      });
+    const answer = (text: string) => ({ role: "assistant", content: text, stopReason: "stop" });
+    const ids = [
+      "target",
+      ...Array.from({ length: candidateCount - 1 }, (_, i) => `newer-${i + 1}`),
+    ];
+    for (const [index, messageId] of ids.entries()) {
+      await persistUserTurnTranscript({
+        ...scope,
+        sessionEntry,
+        input: {
+          text: `question ${messageId}`,
+          timestamp: Date.now(),
+          transport: { channel: "discord", messageId },
+        },
+      });
+      const progressRows =
+        index === 0
+          ? 0
+          : filler === "long-tool-turn"
+            ? index === ids.length - 1
+              ? 50
+              : 0
+            : filler === "tool-progress"
+              ? 1
+              : 0;
+      for (let row = 0; row < progressRows; row++) {
+        await append({ role: "assistant", content: "Checking", stopReason: "toolUse" });
+      }
+      await append(answer(`answer ${messageId}`));
+      if (filler === "internal" && index < 2) {
+        await persistUserTurnTranscript({
+          ...scope,
+          sessionEntry,
+          input: { text: "Continue the OpenClaw runtime event.", timestamp: Date.now() },
+        });
+        await append(answer("NO_REPLY"));
+      }
+    }
+    const ctx: FinalizedMsgContext = {
+      Body: "A new current question",
+      RawBody: "A new current question",
+      SessionKey: scope.sessionKey,
+      AgentId: scope.agentId,
+      Provider: "discord",
+      CommandAuthorized: false,
+      SessionTranscriptContext: { historyLimit: 20, historyKind: "recent" },
+      InboundHistory: [
+        { messageId: "unseen", sender: "Bob", body: "unseen side discussion" },
+        ...ids.map((messageId) => ({ messageId, sender: "Alice", body: `question ${messageId}` })),
+      ],
+    };
+    await mergeSessionTranscriptContext({ ...scope, ctx });
+    expect(ctx.InboundHistory?.map((entry) => entry.messageId)).toEqual(["unseen"]);
+  },
+);
