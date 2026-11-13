@@ -31,9 +31,8 @@ process.env.OPENCLAW_STATE_DIR = path.join(root, "state");
 process.env.OPENCLAW_CONFIG_PATH = path.join(root, "openclaw.json");
 const iterations = Number(values.iterations);
 assert(Number.isSafeInteger(iterations) && iterations > 0);
-const [{ KnowledgeStorage }, { VaultScanner }, { SqliteIdentityStore }] = await Promise.all([
+const [{ KnowledgeStorage }, { SqliteIdentityStore }] = await Promise.all([
   import("../../extensions/knowledge/src/storage.ts"),
-  import("../../extensions/knowledge/src/vault-scan.ts"),
   import("../../extensions/knowledge/src/identity-store.ts"),
 ]);
 let counts = { lstat: 0, readdir: 0, scanMs: 0, databaseMs: 0, authority: 0 };
@@ -50,18 +49,8 @@ fs.readdirSync = new Proxy(fs.readdirSync, {
   },
 });
 syncBuiltinESMExports();
-// oxlint-disable-next-line typescript/unbound-method -- The wrapper calls apply with the original receiver.
-const scan = VaultScanner.prototype.scan;
-VaultScanner.prototype.scan = async function (...args) {
-  const started = performance.now();
-  try {
-    return await scan.apply(this, args);
-  } finally {
-    counts.scanMs += performance.now() - started;
-  }
-};
-// oxlint-disable-next-line typescript/unbound-method -- The proxy forwards the original receiver.
-SqliteIdentityStore.prototype.withDatabase = new Proxy(SqliteIdentityStore.prototype.withDatabase, {
+const identities = new SqliteIdentityStore(path.join(root, "knowledge.sqlite"));
+identities.withDatabase = new Proxy(identities.withDatabase.bind(identities), {
   apply(target, receiver, args) {
     const started = performance.now();
     try {
@@ -72,13 +61,30 @@ SqliteIdentityStore.prototype.withDatabase = new Proxy(SqliteIdentityStore.proto
   },
 });
 const manifest = JSON.parse(fs.readFileSync(path.join(root, "vault/vault.json"), "utf8"));
-const storage = new KnowledgeStorage({
-  root: path.join(root, "vault"),
-  statePath: path.join(root, "knowledge.sqlite"),
-  vaultId: manifest.vaultId,
-  publicationId: manifest.publicationId,
-  writesEnabled: false,
-});
+const storage = new KnowledgeStorage(
+  {
+    root: path.join(root, "vault"),
+    statePath: path.join(root, "knowledge.sqlite"),
+    vaultId: manifest.vaultId,
+    publicationId: manifest.publicationId,
+    writesEnabled: false,
+  },
+  identities,
+);
+const storageRun = storage.run.bind(storage);
+storage.run = (access, operation) =>
+  storageRun(access, (vault) => {
+    const scan = vault.scan.bind(vault);
+    vault.scan = async (...args) => {
+      const started = performance.now();
+      try {
+        return await scan(...args);
+      } finally {
+        counts.scanMs += performance.now() - started;
+      }
+    };
+    return operation(vault);
+  });
 let expected: string | undefined;
 const run = async () => {
   counts = { lstat: 0, readdir: 0, scanMs: 0, databaseMs: 0, authority: 0 };

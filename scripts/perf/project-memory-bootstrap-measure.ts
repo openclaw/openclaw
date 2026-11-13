@@ -278,15 +278,17 @@ record.kind = "memory";
 record.memorySlotSelected = true;
 registry.registry.plugins.push(record);
 const nativeRuntime = createKnowledgeMemoryRuntime(stores);
-const { StoreRuntime } = await import("../../extensions/knowledge/src/store-runtime.js");
 let storagePhases = { queueMs: 0, operationMs: 0 };
-// oxlint-disable-next-line typescript/unbound-method -- The proxy forwards the original receiver.
-StoreRuntime.prototype.enqueue = new Proxy(StoreRuntime.prototype.enqueue, {
-  apply(target, receiver, [check, operation]) {
-    const queued = performance.now();
-    return Reflect.apply(target, receiver, [
-      check,
-      async () => {
+const measuredRuntimes = new WeakSet();
+const openStore = stores.open.bind(stores);
+stores.open = async (...args) => {
+  const opened = await openStore(...args);
+  if (opened.kind === "ready" && !measuredRuntimes.has(opened.runtime)) {
+    measuredRuntimes.add(opened.runtime);
+    const enqueue = opened.runtime.enqueue.bind(opened.runtime);
+    opened.runtime.enqueue = (check, operation) => {
+      const queued = performance.now();
+      return enqueue(check, async () => {
         const started = performance.now();
         storagePhases.queueMs += started - queued;
         try {
@@ -294,10 +296,11 @@ StoreRuntime.prototype.enqueue = new Proxy(StoreRuntime.prototype.enqueue, {
         } finally {
           storagePhases.operationMs += performance.now() - started;
         }
-      },
-    ]);
-  },
-});
+      });
+    };
+  }
+  return opened;
+};
 const pendingProviders = new Set<Promise<void>>();
 let providerOpens = 0;
 let candidateCalls = 0;
@@ -437,7 +440,7 @@ const run = async (cold = false) => {
     skipDiagnosticCount,
     cpuMs: (used.user + used.system) / 1000,
     mainCpuMs: (main.user + main.system) / 1000,
-    storagePhases,
+    storagePhases: { ...storagePhases },
     phases,
   };
 };
