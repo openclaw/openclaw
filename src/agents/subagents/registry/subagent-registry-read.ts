@@ -387,11 +387,14 @@ export function listSubagentRunsForRequester(
   options?: Parameters<typeof listRunsForRequesterFromRuns>[2],
 ): SubagentRunRecord[] {
   // Request-run lifetime scoping must observe the raw live map, including rows not persisted yet.
+  const lookup = getSubagentSessionReadLookup(subagentRuns);
   return listRunsForRequesterFromRuns(
     subagentRuns,
     requesterSessionKey,
     options,
-    getSubagentRunsForRequesterSession(requesterSessionKey.trim()),
+    lookup
+      .selectReadScope([requesterSessionKey], lookup, false)
+      .map((runId) => subagentRuns.get(runId)!),
     {
       getLatestSubagentRun: (key, agentId) =>
         getLatestLiveSubagentRunByChildSessionKey(key, undefined, agentId),

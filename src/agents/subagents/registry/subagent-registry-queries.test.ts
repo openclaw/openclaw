@@ -490,7 +490,7 @@ describe("subagent registry query regressions", () => {
     },
   );
 
-  it("reads requester incarnations from live buckets without scanning unrelated runs", () => {
+  it("preserves requester registration order and incarnations without scanning unrelated runs", () => {
     const root = "agent:main:bucket-requester";
     const child = makeRun("bucket-child", {
       requesterSessionKey: root,
@@ -503,6 +503,10 @@ describe("subagent registry query regressions", () => {
       childAgentId: "research",
       generation: 2,
     });
+    const sibling = makeRun("bucket-sibling", {
+      requesterSessionKey: root,
+      completionRequesterSessionId: "incarnation",
+    });
     const successor = makeRun("bucket-successor", {
       childSessionKey: child.childSessionKey,
       childAgentId: "main",
@@ -511,6 +515,7 @@ describe("subagent registry query regressions", () => {
     });
     const rows = [
       child,
+      sibling,
       otherAgent,
       ...Array.from({ length: 100 }, (_, i) => makeRun(`bucket-${i}`)),
     ];
@@ -520,11 +525,13 @@ describe("subagent registry query regressions", () => {
       }
       using scans = vi.spyOn(subagentRuns, "values");
       const read = () => listSubagentRunsForRequester(root, { requesterSessionId: "incarnation" });
-      expect(read()).toEqual([subagentRuns.get(child.runId)]);
+      expect(read()).toEqual([subagentRuns.get(child.runId), subagentRuns.get(sibling.runId)]);
+      subagentRuns.set(child.runId, { ...child, task: "updated task" });
+      expect(read()).toEqual([subagentRuns.get(child.runId), subagentRuns.get(sibling.runId)]);
       subagentRuns.set(successor.runId, successor);
-      expect(read()).toEqual([]);
+      expect(read()).toEqual([subagentRuns.get(sibling.runId)]);
       subagentRuns.delete(successor.runId);
-      expect(read()).toEqual([subagentRuns.get(child.runId)]);
+      expect(read()).toEqual([subagentRuns.get(child.runId), subagentRuns.get(sibling.runId)]);
       expect(scans).not.toHaveBeenCalled();
     } finally {
       for (const row of [...rows, successor]) {

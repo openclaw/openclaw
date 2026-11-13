@@ -39,8 +39,6 @@ const mocks = vi.hoisted(() => {
 // mock-isolation: Scoped reads use fixture rows without initializing the live registry owner.
 vi.mock("./subagent-registry-memory.js", () => ({
   getSubagentRunsForChildSession: mocks.getSubagentRunsForChildSession,
-  getSubagentRunsForRequesterSession: (key: string) =>
-    [...mocks.liveRuns.values()].filter((run) => run.requesterSessionKey === key),
   getSubagentSessionReadLookup: (runs: ReadonlyMap<string, SubagentRunRecord>) =>
     new SubagentSessionReadLookup(runs),
   immutableSubagentRunSessionList: (entry: SubagentRunRecord) =>
