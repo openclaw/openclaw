@@ -315,6 +315,7 @@ export async function authorizeGatewayConnectDevice(
             publicKey: devicePublicKey,
             commands: connectParams.commands ?? [],
             caps: connectParams.caps ?? [],
+            permissions: connectParams.permissions,
             accessMetadata: clientAccessMetadata,
             isCurrent: isConnectAuthorizationCurrent,
           });
