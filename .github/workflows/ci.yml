@@ -5597,7 +5597,10 @@ jobs:
             swift_test_args+=(--experimental-maximum-parallelization-width "$swift_test_width")
             # Isolate app activation and menu focus from parallel suites.
             if [[ "$HISTORICAL_TARGET" != "true" || -f apps/macos/Tests/OpenClawIPCTests/QuickChatCatalogPresentationTests.swift ]]; then
-              run_check "macOS default profile" run_apple_command_logged "$native_test_log_dir/default-$native_test_log_id.log" node scripts/test-macos-native.mts default "${swift_test_args[@]}" --skip "AppStateIsolationTests|ProfileChatPreferencesTests|QuickChatCatalogPresentationTests"
+              run_check "macOS default profile" run_apple_command_logged "$native_test_log_dir/default-$native_test_log_id.log" node scripts/test-macos-native.mts default "${swift_test_args[@]}" --skip "AppStateIsolationTests|ProfileChatPreferencesTests|QuickChatCatalogPresentationTests|DashboardExperienceTests"
+              if [[ "$HISTORICAL_TARGET" != "true" || -f apps/macos/Tests/OpenClawIPCTests/DashboardExperienceTests.swift ]]; then
+                run_check "macOS default profile Dashboard experience" run_apple_command_logged "$native_test_log_dir/default-dashboard-$native_test_log_id.log" node scripts/test-macos-native.mts default "${swift_test_args[@]}" --filter "DashboardExperienceTests"
+              fi
               run_check "macOS default profile rendered chat" run_apple_command_logged "$native_test_log_dir/default-rendered-$native_test_log_id.log" node scripts/test-macos-native.mts default "${swift_test_args[@]}" --filter "QuickChatCatalogPresentationTests"
             else
               run_check "macOS default profile" run_apple_command_logged "$native_test_log_dir/default-$native_test_log_id.log" node scripts/test-macos-native.mts default "${swift_test_args[@]}" --skip "AppStateIsolationTests|ProfileChatPreferencesTests"

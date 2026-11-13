@@ -5,10 +5,8 @@ import {
   agentVitestProjectOwners,
   embeddedAgentVitestProjectOwners,
 } from "../../test/vitest/vitest.agents-paths.mjs";
-import {
-  databaseWorkerCoreTestFiles,
-  isDatabaseWorkerCoreTestFile,
-} from "../../test/vitest/vitest.database-worker-core-paths.mjs";
+import { cliProcessTestFiles } from "../../test/vitest/vitest.cli-process-paths.mjs";
+import { databaseWorkerCoreTestFiles } from "../../test/vitest/vitest.database-worker-core-paths.mjs";
 import {
   gatewayDatabaseWorkerTestFiles,
   gatewayPluginTestFiles,
@@ -2052,7 +2050,11 @@ function resolveInfraShardName(file: string): string {
 
 function createInfraSplitShards(): NodeTestSplitShard[] {
   const groups = groupBy(
-    listTrackedTestFiles("src/infra").filter((file) => !isDatabaseWorkerCoreTestFile(file)),
+    listScopedOwnerTestFiles({
+      root: "src/infra",
+      include: ["src/infra/**/*.test.ts"],
+      exclude: [...databaseWorkerCoreTestFiles, ...boundaryTestFiles, ...cliProcessTestFiles],
+    }),
     resolveInfraShardName,
   );
   groups.set("core-runtime-infra-storage-state", [

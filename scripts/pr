@@ -671,6 +671,18 @@ try {
       const name = row.slice(row.indexOf("\t") + 1);
       return name === ".pr-bootstrap" || name.startsWith(".pr-bootstrap/");
     })) throw new Error("Selected source overlaps the reserved bootstrap directory");
+  } else if (operation === "revisions") {
+    // Resolve the inventory in one tree walk, rather than walking from the
+    // commit root again for each of the thousands of revision:path queries.
+    const wanted = new Set(paths), hashes = new Map();
+    const listing = git(repository, ["ls-tree", "-r", "-t", "-z", "--full-tree", revision]);
+    for (const row of listing.toString("utf8").split("\0")) {
+      const tab = row.indexOf("\t"), name = row.slice(tab + 1);
+      if (wanted.has(name)) hashes.set(name, row.slice(0, tab).split(" ")[2]);
+    }
+    const selected = paths.map(path => hashes.get(path));
+    if (selected.some(hash => !oid.test(hash ?? ""))) throw new Error("Incomplete revisions");
+    process.stdout.write(selected.join("\n") + "\n");
   } else if (operation === "differences") {
     const queries = paths.flatMap(path => [`HEAD:${path}`, `${revision}:${path}`]);
     const rows = git(repository, ["cat-file", "--batch-check=%(objectname)"], queries.join("\n") + "\n")
@@ -1228,10 +1240,10 @@ elif common_git_dir=$(pr_git -C "$script_parent_dir" rev-parse --path-format=abs
       exit 1
     fi
     linked_wrapper_revision=$(
-      pr_git -C "$script_parent_dir" rev-parse "${pr_wrapper_components[@]/#/HEAD:}" 2>/dev/null || true
+      pr_batch_wrapper_git revisions "$script_parent_dir" HEAD "${pr_wrapper_components[@]}" 2>/dev/null || true
     )
     canonical_wrapper_revision=$(
-      pr_git -C "$canonical_repo_root" rev-parse "${pr_wrapper_components[@]/#/HEAD:}" 2>/dev/null || true
+      pr_batch_wrapper_git revisions "$canonical_repo_root" HEAD "${pr_wrapper_components[@]}" 2>/dev/null || true
     )
     if [ "$script_self" != "$canonical_self" ] && [ -z "$PR_WORKFLOW_PR" ] && [ -n "$linked_wrapper_revision" ] &&
       [ "$linked_wrapper_revision" = "$canonical_wrapper_revision" ] &&
@@ -1262,10 +1274,10 @@ elif common_git_dir=$(pr_git -C "$script_parent_dir" rev-parse --path-format=abs
         anchor_components+=("$anchor_component")
       done <<< "$anchor_inventory"
       anchor_wrapper_revision=$(
-        pr_git -C "$script_parent_dir" rev-parse "${anchor_components[@]/#/$anchor_commit:}" 2>/dev/null || true
+        pr_batch_wrapper_git revisions "$script_parent_dir" "$anchor_commit" "${anchor_components[@]}" 2>/dev/null || true
       )
       canonical_wrapper_revision=$(
-        pr_git -C "$canonical_repo_root" rev-parse "${anchor_components[@]/#/HEAD:}" 2>/dev/null || true
+        pr_batch_wrapper_git revisions "$canonical_repo_root" HEAD "${anchor_components[@]}" 2>/dev/null || true
       )
     fi
     linked_matches_anchor=0
