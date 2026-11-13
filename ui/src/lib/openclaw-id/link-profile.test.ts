@@ -77,3 +77,13 @@ it("reports any other refusal instead of starting a device sign-in", async () =>
   });
   expect(dialog.show).not.toHaveBeenCalled();
 });
+
+it("does not start a device sign-in when the user signed out while the Gateway answered", async () => {
+  const request = vi.fn(async () => {
+    localStorage.removeItem("openclaw.openclawId.account");
+    localStorage.setItem("openclaw.openclawId.signedOut", "later");
+    throw await refusal("sign_in_not_held");
+  });
+  await expect(linkWith(fresh(), request as never)).rejects.toThrow("signed out");
+  expect(dialog.show).not.toHaveBeenCalled();
+});
