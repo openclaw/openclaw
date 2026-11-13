@@ -223,28 +223,38 @@ describe("public session document", () => {
     expect(unavailableMain.querySelector(".colophon")).toBeNull();
     expect(unavailable).not.toContain('http-equiv="refresh"');
   });
-  it("keeps the public header and provides access status and recovery", () => {
+  it("keeps access-check decorations inert and provides status and recovery", () => {
     const entryUrl = "/control/__openclaw__/session-entry?path=%2Fcontrol%2Fchat%2Fmain%2Ftopic";
     const pending = fragment([], {
       entryUrl,
       title: "Conversation unavailable",
       unavailable: true,
     });
+    const frame = pending.querySelector(".app-frame")!;
+    expect(frame.getAttribute("aria-hidden")).toBe("true");
+    expect(frame.textContent).toBe("");
+    expect(frame.querySelector(".list-current")).toBeNull();
+    expect(frame.querySelectorAll("a, button, [tabindex]")).toHaveLength(0);
     const status = pending.querySelector('[role="status"]')!;
     expect(status.querySelector("svg")?.closest('[aria-hidden="true"]')).toBeTruthy();
     expect(status.querySelector("h1")?.textContent).toBe("Loading conversation");
     expect(status.querySelector("p")?.textContent).toBe("Checking access…");
     expect(status.querySelector("button[data-public-reload]")?.textContent).toBe("Reload");
     const reader = fragment([], { entryUrl });
+    const readerFrame = reader.querySelector(".app-frame")!;
+    expect(readerFrame.getAttribute("aria-hidden")).toBe("true");
     for (const page of [pending, reader]) {
-      expect(page.querySelector(".app-frame, .ghost-panel")).toBeNull();
-      expect(page.querySelector("header .brand")?.getAttribute("href")).toBe("https://openclaw.ai");
-      expect(page.querySelector("header .brand .wordmark")?.getAttribute("aria-label")).toBe(
-        "OpenClaw",
-      );
+      const rail = page.querySelector(".app-rail")!;
+      expect(rail.textContent).toBe("");
+      expect(rail.querySelectorAll("svg, img, a, button, [tabindex]")).toHaveLength(0);
+      expect(rail.querySelectorAll("i")).toHaveLength(8);
+      expect(page.querySelectorAll(".list-rows > .list-row")).toHaveLength(13);
+      expect(page.querySelectorAll(".list-rows > .ghost-bar")).toHaveLength(3);
+      expect(page.querySelector(".list-header > .list-brand")).not.toBeNull();
     }
-    expect(reader.querySelector(".reader-title b")?.textContent).toBe("A shared conversation");
-    expect(reader.querySelector(".reader-title .live")?.textContent).toBe("Live");
+    expect(readerFrame.querySelectorAll("a, button, [tabindex]")).toHaveLength(0);
+    expect(readerFrame.querySelector(".list-current")?.textContent).toBe("A shared conversation");
+    expect(reader.querySelector(".ghost-panel")?.getAttribute("aria-hidden")).toBe("true");
     expect(reader.querySelector(".reader-title .reader-badge")?.textContent).toBe("Public session");
     expect(reader.querySelector(".article-head .reader-badge")?.textContent).toBe("Public session");
     expect(reader.querySelector(".reader-login")?.getAttribute("href")).toBe(entryUrl);
