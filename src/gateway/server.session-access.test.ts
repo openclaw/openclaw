@@ -914,7 +914,9 @@ test("shows linked Telegram members group roots and topics without personal part
     // Explicit source-audience access survives membership removal for its configured topic.
     for (const key of keys) {
       const sourceAudienceAllows = key === keys[2];
-      expect(afterLeave.payload?.sessions.some((row) => row.key === key)).toBe(sourceAudienceAllows);
+      expect(afterLeave.payload?.sessions.some((row) => row.key === key)).toBe(
+        sourceAudienceAllows,
+      );
       const history = await rpcReq(member, "chat.history", { sessionKey: key, limit: 10 });
       expect(JSON.stringify(history.payload ?? {}).includes(text)).toBe(sourceAudienceAllows);
     }

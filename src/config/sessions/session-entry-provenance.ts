@@ -349,6 +349,8 @@ export function projectSessionSharingDelivery(
       chatType: origin.chatType,
       accountId: origin.accountId,
       nativeChannelId: origin.nativeChannelId,
+      nativeDirectUserId: origin.nativeDirectUserId,
+      threadId: origin.threadId,
     },
   };
 }

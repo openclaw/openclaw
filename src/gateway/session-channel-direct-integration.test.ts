@@ -1,5 +1,6 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { resolveSessionCreationVisibility } from "../config/sessions/creation-visibility.js";
+import { projectSessionSharingEntry } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { SessionSchema } from "../config/zod-schema.session-config.js";
@@ -178,3 +179,23 @@ it("does not bypass source ACL when the source policy excludes the profile", asy
   expect(f.sharing.canReadDirectTarget(target(base, row))).toBe(false);
   f.controller.abort();
 });
+
+it.each(["nativeDirectUserId", "threadId"] as const)(
+  "keeps a conflicting DM %s denied after sharing projection",
+  async (field) => {
+    const f = await fixture();
+    const row = entry(42);
+    if (row.delivery?.kind !== "external") {
+      throw new Error("expected external route");
+    }
+    if (field === "nativeDirectUserId") {
+      row.delivery.origin.nativeDirectUserId = "456";
+    } else {
+      row.delivery.origin.threadId = 99;
+    }
+    const key = `${base}:thread:${peer}:42`;
+    expect(f.sharing.canReadTarget(target(key, row))).toBe(false);
+    expect(f.sharing.canReadTarget(target(key, projectSessionSharingEntry(row)))).toBe(false);
+    f.controller.abort();
+  },
+);

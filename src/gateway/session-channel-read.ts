@@ -166,7 +166,7 @@ export async function prepareTelegramSessionReads(params: {
       owner.revision++;
     }
   });
-  const refresh = async (groups: readonly Group[]) => {
+  const refresh = async (groups: readonly Group[], force = false) => {
     const selected = [...new Map(groups.map((group) => [groupKey(group), group])).values()].map(
       (group) => {
         const key = groupKey(group);
@@ -178,7 +178,11 @@ export async function prepareTelegramSessionReads(params: {
         return read;
       },
     );
-    const idle = selected.filter((read) => !read.pending);
+    const idle = selected.filter(
+      (read) =>
+        !read.pending &&
+        (force || !read.fact?.isCurrent() || Date.now() - read.checkedAt >= FRESH_MS),
+    );
     if (idle.length) {
       const batch = prepareTelegramGroupMemberships({
         cfg: owner.runtimeConfig,
@@ -221,7 +225,7 @@ export async function prepareTelegramSessionReads(params: {
         const groups = [...owner.groups.values()]
           .filter((read) => read.fact?.isCurrent())
           .map((read) => read.group);
-        void refresh(groups).then(schedule, () => owner.stop());
+        void refresh(groups, true).then(schedule, () => owner.stop());
       }, REFRESH_MS),
     );
     owner.timer.unref();

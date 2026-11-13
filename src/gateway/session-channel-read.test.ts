@@ -375,3 +375,34 @@ it("joins simultaneous preparations on one connection without leaking duplicate 
   controller.abort();
   expect(vi.getTimerCount()).toBe(0);
 });
+
+it("reuses fresh group authority across reads and still refreshes and revokes", async () => {
+  const { client, controller } = makeConnection();
+  const cfg = config();
+  const group = { accountId: "default", groupId: "-123" };
+  const params = { client, cfg, getConfig: () => cfg, groups: [group] };
+  let current = true;
+  mocks.prepareMemberships.mockImplementation(async () =>
+    factsFor(
+      [group],
+      makeFact(() => current),
+    ),
+  );
+
+  await prepareReads(params);
+  await prepareReads(params);
+  await prepareReads(params);
+  expect(mocks.prepareMemberships).toHaveBeenCalledTimes(1);
+  expect(isMember(client, cfg, group)).toBe(true);
+
+  await vi.advanceTimersByTimeAsync(30_000);
+  expect(mocks.prepareMemberships).toHaveBeenCalledTimes(2);
+  expect(isMember(client, cfg, group)).toBe(true);
+
+  current = false;
+  expect(isMember(client, cfg, group)).toBe(false);
+  await prepareReads(params);
+  expect(mocks.prepareMemberships).toHaveBeenCalledTimes(3);
+  expect(isMember(client, cfg, group)).toBe(false);
+  controller.abort();
+});
