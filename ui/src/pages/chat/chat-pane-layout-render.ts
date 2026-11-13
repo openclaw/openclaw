@@ -8,6 +8,7 @@ import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
 import { resolveChatPaneDesktopTarget } from "../../components/desktop/desktop-source.ts";
 import { latestBrowserTabCards } from "../../lib/chat/browser-tab-preview.ts";
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
+import { focusComposerInput } from "../../lib/composer-input.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { resolveSessionWorkspace } from "../../lib/sessions/workspace.ts";
@@ -25,7 +26,6 @@ import { createChatToolIcons, type PluginToolIcons } from "./chat-tool-icon-cont
 import type { ChatProps } from "./chat-view.tsx";
 import { publishChatWorkContext } from "./chat-work-context.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
-import type { ChatDetailsElements } from "./components/chat-details.tsx";
 import type { SidebarRegionCallbacks } from "./components/chat-sidebar-region-types.ts";
 import { resolveAssistantDisplayAvatar } from "./components/chat-welcome.ts";
 import { resolveChatLinkFaviconFetcher } from "./link-favicon-loader.ts";
@@ -68,7 +68,7 @@ type ChatPaneLayoutRenderParams = {
 };
 
 export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
-  private readonly detailsElements: ChatDetailsElements = {
+  private readonly detailsElements: import("./components/chat-details.tsx").ChatDetailsElements = {
     getComposerInput: () => getChatComposerState(this.presentationId).composerInput,
   };
 
@@ -99,7 +99,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
     if (!this.active || !composer?.isConnected || composer.disabled) {
       return false;
     }
-    composer.focus({ preventScroll: true });
+    focusComposerInput(composer, { preventScroll: true });
     return true;
   }
 
