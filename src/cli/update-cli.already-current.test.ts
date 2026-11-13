@@ -59,7 +59,7 @@ describe("update-cli", () => {
     );
   }
   function expectNoActivation() {
-    expectNoServiceMutation(mocks.candidateValidation);
+    expectNoServiceMutation(mocks.candidateCheck);
     expect(proof.packageInstallCommandCall()?.[0]).toBeUndefined();
   }
   async function installRecord(
@@ -162,7 +162,7 @@ describe("update-cli", () => {
       expect(mocks.serviceStop).toHaveBeenCalledTimes(1);
       expect(proof.freshRestartCalls()).toHaveLength(1);
       expect(proof.packageInstallCommandCall()).toBeUndefined();
-      expect(mocks.candidateValidation).not.toHaveBeenCalled();
+      expect(mocks.candidateCheck).not.toHaveBeenCalled();
       const message =
         "Service membership unverifiable on this host; using managed stop/update/start.";
       expect(output().steps).toContainEqual(
@@ -387,7 +387,7 @@ describe("update-cli", () => {
     await updateCommand({ channel: "stable", yes: true, restart: false, json: true });
 
     proof.expectPackageInstallSpec(`openclaw@${VERSION}`);
-    expect(mocks.candidateValidation).toHaveBeenCalled();
+    expect(mocks.candidateCheck).toHaveBeenCalled();
     await expect(fs.readFile(path.join(pkgRoot, "dist", "index.js"), "utf8")).resolves.toBe(
       "package runtime\n",
     );

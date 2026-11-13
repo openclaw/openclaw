@@ -3,14 +3,13 @@ import { Command } from "commander";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { isUpdateAdmissionAuthorityEnvKey } from "../../infra/update-admission-contract.js";
-import type { CanaryResult } from "../../infra/update-candidate-canary-commands.js";
 import { defaultRuntime } from "../../runtime.js";
 import { registerUpdateCli } from "../update-cli.js";
 
-const { canary } = vi.hoisted(() => ({ canary: vi.fn() }));
+const { check } = vi.hoisted(() => ({ check: vi.fn() }));
 // mock-isolation: tests receipt mapping without spawning the candidate; the built CLI test covers startup.
-vi.mock("../../infra/update-candidate-canary.js", () => ({
-  validateUpdateCandidateCanary: canary,
+vi.mock("../../infra/update-candidate-check.js", () => ({
+  checkUpdateCandidate: check,
 }));
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -46,41 +45,21 @@ async function invoke() {
 }
 
 it.each([
-  { status: "ok", phase: "readiness", exitCode: 0, expected: "ready", code: 0 },
-  { status: "error", phase: "config", exitCode: 1, expected: "blocked", code: 3 },
-  { status: "ok", phase: "runtime", exitCode: undefined, expected: "unverified", code: 2 },
-  { status: "ok", phase: "readiness", exitCode: null, expected: "unverified", code: 2 },
-] as const)("reports $expected for $status/$phase/$exitCode", async (testCase) => {
-  const result: CanaryResult = {
-    ...(testCase.status === "error"
-      ? { status: "error", reason: "runtime-verification-failed" }
-      : { status: "ok" }),
-    phase: testCase.phase,
-    durationMs: 1,
-    logTail: [],
-    steps:
-      testCase.exitCode === undefined
-        ? []
-        : [
-            {
-              name: "candidate-gateway-startup",
-              command: "gateway run",
-              cwd: ".",
-              durationMs: 1,
-              exitCode: testCase.exitCode,
-            },
-          ],
-  };
-  canary.mockResolvedValue(result);
+  { status: "ok", expected: "ready", code: 0 },
+  { status: "error", expected: "blocked", code: 3 },
+] as const)("reports $expected when the candidate check is $status", async (testCase) => {
+  check.mockResolvedValue({ status: testCase.status, steps: [] });
 
   await invoke();
 
+  expect(check).toHaveBeenCalledWith(expect.objectContaining({ requireRuntime: true }));
   expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
     expect.objectContaining({
       protocol: 1,
       mode: "preflight",
       status: testCase.expected,
-      coverage: "isolated-core-startup",
+      phase: "runtime",
+      coverage: "candidate-runtime",
     }),
   );
   expect(process.exitCode).toBe(testCase.code);
@@ -91,7 +70,7 @@ it("refuses inherited updater authority before inspecting the profile", async ()
 
   await invoke();
 
-  expect(canary).not.toHaveBeenCalled();
+  expect(check).not.toHaveBeenCalled();
   expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
     expect.objectContaining({
       protocol: 1,
@@ -103,8 +82,8 @@ it("refuses inherited updater authority before inspecting the profile", async ()
   expect(process.exitCode).toBe(2);
 });
 
-it("emits only an unverified receipt when canary cleanup fails", async () => {
-  canary.mockRejectedValue(new Error("Candidate cleanup could not be verified"));
+it("emits only an unverified receipt when check cleanup fails", async () => {
+  check.mockRejectedValue(new Error("Update check process cleanup could not be confirmed."));
 
   await invoke();
 

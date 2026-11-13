@@ -165,7 +165,7 @@ it.each([
     expect(mocks.legacyConfigRepairMocks.repairLegacyConfigForUpdateChannel).toHaveBeenCalledTimes(
       1,
     );
-    checks.expectNoSideEffects(mocks.serviceStop, mocks.serviceRestart, mocks.candidateValidation);
+    checks.expectNoSideEffects(mocks.serviceStop, mocks.serviceRestart, mocks.candidateCheck);
     expect(mocks.updateNpmInstalledPlugins).toHaveBeenCalledOnce();
     expect(mocks.updateNpmInstalledPlugins).toHaveBeenCalledWith(
       expect.objectContaining({ coreVersion: VERSION, updateChannel: channel ?? "stable" }),
@@ -204,7 +204,7 @@ it("refuses a foreign legacy caller without an explicit channel request", async 
   checks.expectNoSideEffects(
     mocks.serviceStop,
     mocks.serviceRestart,
-    mocks.candidateValidation,
+    mocks.candidateCheck,
     cli.replaceConfigFile,
     mocks.updateNpmInstalledPlugins,
     mocks.legacyConfigRepairMocks.repairLegacyConfigForUpdateChannel,
@@ -240,7 +240,7 @@ it.each(["caller", "service"] as const)(
       expect(selected.config).not.toEqual(selected.sourceConfig);
       selectedConfig = selected.config;
     }
-    mocks.candidateValidation.mockImplementationOnce(async (options) => {
+    mocks.candidateCheck.mockImplementationOnce(async (options) => {
       if (owner === "caller") {
         expect(options.config.gateway.bind).toBe("loopback");
         expect(await fs.readFile(configPath, "utf8")).toBe(before);
@@ -256,9 +256,9 @@ it.each(["caller", "service"] as const)(
       () => expectUpdateFailure({ channel: "beta", yes: true, restart: false, json: true }),
       owner === "service" ? { OPENCLAW_PROFILE: "personal" } : {},
     );
-    expect(mocks.candidateValidation).toHaveBeenCalledTimes(1);
+    expect(mocks.candidateCheck).toHaveBeenCalledTimes(1);
     if (owner === "service") {
-      expect(mocks.candidateValidation.mock.calls[0]?.[0].config).toEqual(selectedConfig);
+      expect(mocks.candidateCheck.mock.calls[0]?.[0].config).toEqual(selectedConfig);
     }
     expect(await fs.readFile(configPath, "utf8")).toBe(before);
     checks.expectNoSideEffects(

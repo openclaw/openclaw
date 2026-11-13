@@ -505,12 +505,9 @@ it.each([
       executor.assertCurrent();
       return true;
     });
-    mocks.validateCanary.mockResolvedValue({
+    mocks.checkCandidate.mockResolvedValue({
       status: "ok",
-      phase: "readiness",
       steps: [],
-      durationMs: 0,
-      logTail: [],
       candidateSchemaVersions: candidateSchemas,
       doctorConfigWrites: true,
     });

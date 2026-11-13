@@ -3013,7 +3013,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
 
     const targets = [
       PRIVATE_QA_TOOLING_TEST,
-      "src/infra/update-candidate-canary.integration.test.ts",
+      "src/infra/update-managed-service-handoff-lifecycle.test.ts",
     ];
     spyTimings().mockReturnValue(
       Object.fromEntries(defaultShards.map((shard) => [shard.shardName, 1])),

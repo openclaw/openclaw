@@ -121,8 +121,6 @@ type InitialSnapshotParams = {
   config: OpenClawConfig;
   stateDir: string;
   env: NodeJS.ProcessEnv;
-  /** Volume holding activation-time database backups, independent of candidate scratch. */
-  backupDirectory?: string;
 };
 
 /** Measure known SQLite families without allocating state or reading the candidate plugin inventory. */
@@ -152,8 +150,9 @@ export async function resolveUpdateCandidateAdmissionTimeoutMs(
   return Math.min(params.stepTimeoutMs, timeoutMs);
 }
 
+/** Before anything changes, refuse an update whose activation database backup cannot fit. */
 export async function assessInitialUpdateSnapshotCapacity(
-  params: InitialSnapshotParams,
+  params: InitialSnapshotParams & { backupDirectory: string },
 ): Promise<UpdateStepResult> {
   const started = Date.now();
   const step = {
@@ -162,63 +161,32 @@ export async function assessInitialUpdateSnapshotCapacity(
     cwd: params.stateDir,
   };
   try {
-    const { capacity, size } = await measureInitialUpdateSnapshotState(params);
-    // Refuse only at the existing allocator's data-at-risk boundary: every
-    // eligible destination is known to be too small for the private state copy.
-    const refused =
-      capacity.candidates.length > 0 &&
-      capacity.candidates.every(
-        (candidate) =>
-          candidate.availableBytes !== null && candidate.availableBytes < capacity.requiredBytes,
+    const { size } = await measureInitialUpdateSnapshotState(params);
+    const diagnostics = size.families
+      .toSorted((left, right) => right.bytes - left.bytes)
+      .map(
+        (family) =>
+          `SQLite family ${family.path}: ${formatDiskSpaceBytes(family.bytes)} (database and supporting files).`,
       );
-    const diagnostics = [
-      "Snapshot size estimate: plugin copies and registered external databases are measured after staging.",
-      `Initial snapshot needs ${formatDiskSpaceBytes(capacity.requiredBytes)} for ${formatDiskSpaceBytes(capacity.sqliteBytes)} of known SQLite files and temporary working space.`,
-      ...capacity.candidates.map(
-        (candidate) =>
-          `${candidate.kind} ${candidate.directory}: ${formatDiskSpaceBytes(capacity.requiredBytes)} needed; ${candidate.availableBytes === null ? "free space unknown" : `${formatDiskSpaceBytes(candidate.availableBytes)} free`}.`,
-      ),
-      ...size.families
-        .toSorted((left, right) => right.bytes - left.bytes)
-        .map(
-          (family) =>
-            `SQLite family ${family.path}: ${formatDiskSpaceBytes(family.bytes)} (database and supporting files).`,
-        ),
-    ];
-    if (refused) {
+    let warnings: string[];
+    try {
+      const backup = await checkUpdateDatabaseBackupSpace(params.backupDirectory, size, params);
+      diagnostics.push(...backup.diagnostics);
+      warnings = backup.warnings;
+    } catch (error) {
+      if (!(error instanceof UpdateCaptureSpaceError)) {
+        throw error;
+      }
       return {
         ...step,
         durationMs: Date.now() - started,
         exitCode: 1,
         stderrTail: [
-          "snapshot-capacity-insufficient: no eligible directory has enough free space for the required state snapshot.",
+          "snapshot-capacity-insufficient: activation database backup or rollback cannot fit before validation.",
+          error.message,
           ...diagnostics,
-          "Free space on a reported filesystem or set TMPDIR to a writable directory with enough space, then retry the update.",
         ].join("\n"),
-        snapshotCapacity: capacity,
       };
-    }
-    let warnings: string[] = [];
-    if (params.backupDirectory) {
-      try {
-        const backup = await checkUpdateDatabaseBackupSpace(params.backupDirectory, size, params);
-        diagnostics.push(...backup.diagnostics);
-        warnings = backup.warnings;
-      } catch (error) {
-        if (!(error instanceof UpdateCaptureSpaceError)) {
-          throw error;
-        }
-        return {
-          ...step,
-          durationMs: Date.now() - started,
-          exitCode: 1,
-          stderrTail: [
-            "snapshot-capacity-insufficient: activation database backup or rollback cannot fit before validation.",
-            error.message,
-            ...diagnostics,
-          ].join("\n"),
-        };
-      }
     }
     return {
       ...step,
@@ -233,7 +201,7 @@ export async function assessInitialUpdateSnapshotCapacity(
       durationMs: Date.now() - started,
       exitCode: 0,
       warnings: [
-        "Initial snapshot capacity could not be measured; continuing to the update snapshot check.",
+        "Database backup space could not be measured before the update; activation checks it again.",
       ],
     };
   }

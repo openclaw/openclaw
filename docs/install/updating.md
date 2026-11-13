@@ -1508,7 +1508,11 @@ to another volume. Database snapshots use its physical directory so the backup's
 parent-directory durability check can complete. The installed updater must
 contain this fix; a newer candidate cannot repair an older updater's capture.
 
-The canary uses a temporary loopback Gateway port and suppresses background
+Current updaters do not boot a candidate canary before activation; they load
+the candidate's recovery runtime and prove Doctor and Gateway startup after
+activation, with rollback (see [How updates run](/cli/update/how-updates-run#validation-and-activation)).
+Older installed updaters still run the canary described here against this
+version. The canary uses a temporary loopback Gateway port and suppresses background
 listeners, including the MCP Apps sandbox, browser control, and channel services.
 This lets validation run while the serving Gateway keeps its configured ports.
 Doctor and policy checks use the copied deployment settings, so an accepted

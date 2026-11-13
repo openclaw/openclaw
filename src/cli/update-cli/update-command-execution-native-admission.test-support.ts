@@ -49,7 +49,7 @@ async function executeOwned(
 
 function expectBeforeActivation() {
   expect(mocks.serviceStopped).toBe(false);
-  expect(mocks.validateCanary).not.toHaveBeenCalled();
+  expect(mocks.checkCandidate).not.toHaveBeenCalled();
 }
 
 export function registerNativeAdmissionTests() {

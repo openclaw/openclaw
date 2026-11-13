@@ -140,8 +140,6 @@ export type ManagedServiceStopParams = {
     Partial<Pick<PreManagedServiceStop, "stopped">>;
   allowInstallRootChange?: boolean;
   onStopped?: (state: PreManagedServiceStop) => void;
-  /** Inspection-only selection; never copied into recovery or finalizer records. */
-  onOwnedStartupRuntime?: (executable: string | undefined) => void;
   /** Doctor restores this same native instance after its offline repair. */
   retainNativeIdentity?: boolean;
   assertCurrent?: (phase?: "restore") => void;

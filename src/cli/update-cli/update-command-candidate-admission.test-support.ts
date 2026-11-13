@@ -40,7 +40,7 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
     serviceRestart,
     mockGetSelfAndAncestorPidsSync,
     pluginAvailabilityPreflight,
-    candidateValidation,
+    candidateCheck,
     nodeVersionSatisfiesEngine,
     databasePreflightMocks,
     readConfigFileSnapshot,
@@ -134,7 +134,7 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
         expect(events).toEqual(["admission"]);
         expect(fsSync.existsSync(databasePath)).toBe(false);
         expect(lastWriteJsonCall()).toMatchObject({ status: "error", reason: "invalid-config" });
-        expectNoSideEffects(candidateValidation, replaceConfigFile, serviceStop);
+        expectNoSideEffects(candidateCheck, replaceConfigFile, serviceStop);
         await expectVersion(pkgRoot, "1.0.0");
       } else {
         expect(events.slice(0, marker ? 3 : 2)).toEqual(
@@ -202,7 +202,7 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
         serviceStop,
         serviceStart,
         serviceRestart,
-        candidateValidation,
+        candidateCheck,
         replaceConfigFile,
       );
       expect(doctorCommandCall()).toBeUndefined();
@@ -371,7 +371,7 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
         status: "ok",
         run: { admission: { owner: "candidate" }, origin: { candidateAdmission: verdict } },
       });
-      expect(candidateValidation).toHaveBeenCalledWith(
+      expect(candidateCheck).toHaveBeenCalledWith(
         expect.objectContaining({ nodeRunner: recoveredNode }),
       );
     },
@@ -405,7 +405,7 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
     expect(process.exitCode).toBe(75);
     expect(listUpdateRuns({ limit: 1 })[0]).toMatchObject({ status: "running" });
     expect(getTriageFailures()).toEqual([]);
-    expectNoSideEffects(serviceStop, serviceStart, serviceRestart, candidateValidation);
+    expectNoSideEffects(serviceStop, serviceStart, serviceRestart, candidateCheck);
   });
 
   it("candidate admission: stages the package with the managed service Node on PATH", async () => {
@@ -442,7 +442,7 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
       status: "error",
       reason: "managed-service-preflight",
     });
-    expectNoSideEffects(spawn, serviceStop, serviceStart, serviceRestart, candidateValidation);
+    expectNoSideEffects(spawn, serviceStop, serviceStart, serviceRestart, candidateCheck);
   });
 
   it("candidate admission: keeps dry-run on installed checks without staging", async () => {
@@ -460,7 +460,7 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
         expect.objectContaining({ reason: "preflight-node-runtime-incompatible" }),
       ]),
     });
-    expectNoSideEffects(serviceStop, candidateValidation);
+    expectNoSideEffects(serviceStop, candidateCheck);
   });
 
   it("refuses incompatible shared caller and managed schemas before stopping the package service", async () => {
@@ -543,7 +543,7 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
     );
 
     expectNoSideEffects(updateGitCheckout, defaultRuntime.exit);
-    expectNoSideEffects(serviceStop, candidateValidation);
+    expectNoSideEffects(serviceStop, candidateCheck);
     expect(stages).toEqual([]);
     expect(contexts).toEqual([]);
     expect(packageInstallCommandCall()?.[0]).toBeUndefined();

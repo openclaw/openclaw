@@ -87,7 +87,7 @@ describe("family admission precedes mutable update preparation", () => {
       expect(published).toBe(false);
       expect(mocks.prepareMutableUpdate).not.toHaveBeenCalled();
       expect(mocks.serviceStopped).toBe(false);
-      expect(mocks.validateCanary).not.toHaveBeenCalled();
+      expect(mocks.checkCandidate).not.toHaveBeenCalled();
     },
   );
 });

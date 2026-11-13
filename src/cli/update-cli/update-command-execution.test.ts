@@ -289,7 +289,7 @@ describe("mutable update execution", () => {
         packageTargetVersion: "2026.9.2",
       });
 
-      expect(mocks.validateCanary).toHaveBeenCalledOnce();
+      expect(mocks.checkCandidate).toHaveBeenCalledOnce();
       expect(execution).toMatchObject({
         mutationStarted: false,
         result: { status: "error", reason: "database-schema-preflight" },
@@ -583,7 +583,7 @@ describe("mutable update execution", () => {
           },
         );
 
-        expect(mocks.validateCanary).not.toHaveBeenCalled();
+        expect(mocks.checkCandidate).not.toHaveBeenCalled();
         expect(events).toEqual([]);
         expect(execution, JSON.stringify(execution?.failure)).toMatchObject({
           mutationStarted: false,

@@ -81,7 +81,7 @@ const managedUpdateHandoff = vi.hoisted(() => ({
   transfer: vi.fn(),
   cancel: vi.fn(),
 }));
-const candidateValidation = vi.hoisted(() => vi.fn());
+const candidateCheck = vi.hoisted(() => vi.fn());
 const retainUpdateRuntime = vi.hoisted(() => vi.fn<RetainUpdateRuntime>());
 const systemdPolicy = vi.hoisted(() =>
   vi.fn<typeof import("../daemon/systemd-maintenance.js").prepareSystemdGatewayMaintenance>(),
@@ -193,10 +193,11 @@ vi.mock("../infra/update-managed-service-handoff-current.js", async (importOrigi
 vi.mock("../infra/update-repair-agent.js", () => ({
   runUpdateRepairLoop: inferenceRepair,
 }));
-vi.mock("../infra/update-candidate-canary.js", () => ({
-  validateUpdateCandidateCanary: candidateValidation,
+// mock-isolation: the candidate check spawns a staged package worker these fixtures do not build.
+vi.mock("../infra/update-candidate-check.js", () => ({
+  checkUpdateCandidate: candidateCheck,
 }));
-// The activated-release boot is a process boundary like the canary above.
+// The activated-release boot is a process boundary like the candidate check above.
 vi.mock(import("../infra/update-activated-gateway-check.js"), async (original) => ({
   ...(await original()),
   checkActivatedGatewayStartup: async ({ result }) => result,
@@ -685,7 +686,7 @@ vi.mock("../commands/triage-failure.js", () => ({ triageAfterFailure }));
 export {
   commandTransport,
   managedUpdateHandoff,
-  candidateValidation,
+  candidateCheck,
   retainUpdateRuntime,
   systemdPolicy,
   sourceRuntimeCompletion,

@@ -3,10 +3,7 @@ import {
   markPackagePostInstallDoctorAdvisory,
 } from "../../infra/package-update-verification-step.js";
 import type { UpdateDatabaseBackup } from "../../infra/update-database-backup.js";
-import {
-  formatUpdateDoctorConfigWriteRefusal,
-  type UpdateDoctorConfigChange,
-} from "../../infra/update-doctor-config.js";
+import { formatUpdateDoctorConfigWriteRefusal } from "../../infra/update-doctor-config.js";
 import type { UpdatePostInstallDoctorResult } from "../../infra/update-doctor-result.js";
 import type { UpdateDoctorSectionTiming } from "../../infra/update-doctor-section-timing.js";
 import {
@@ -27,7 +24,7 @@ export function createPackageUpdateDoctorCompletion(params: {
   progress: UpdateStepProgress;
   results: UpdateStepResult[];
   onConfigSnapshot?: (snapshot: UpdateConfigSnapshot) => void;
-  context?: { changes: UpdateDoctorConfigChange[]; databaseBackup?: UpdateDatabaseBackup };
+  context?: { databaseBackup?: UpdateDatabaseBackup };
   configSnapshot?: UpdateConfigSnapshot;
   sectionTiming: UpdateDoctorSectionTiming;
   assertCurrent: () => void;
@@ -51,17 +48,7 @@ export function createPackageUpdateDoctorCompletion(params: {
     try {
       const refusal = doctorResult?.configWriteRefusal;
       const configWriteRefusal = refusal
-        ? {
-            ...refusal,
-            keys: [
-              ...new Set([
-                ...refusal.keys,
-                ...(context?.changes.flatMap((change) =>
-                  change.kind === "key" ? [change.key] : [],
-                ) ?? []),
-              ]),
-            ].toSorted(),
-          }
+        ? { ...refusal, keys: [...new Set(refusal.keys)].toSorted() }
         : undefined;
       Object.assign(
         doctorStep,
