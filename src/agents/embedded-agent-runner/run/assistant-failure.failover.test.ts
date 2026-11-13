@@ -91,7 +91,8 @@ describe("assistant failure recovery", () => {
         retryAfterMs === 3 * 86_400_000
           ? "⚠️ anthropic/test-model is rate-limited. The provider says to retry in 3 days (Nov 16, 2026 at 6:00 AM PST). Choose another model in the model picker, or configure Model fallbacks in Settings (`agents.defaults.model.fallbacks`)."
           : "⚠️ The AI service needs a short break. Please try again in a few minutes.";
-      expect(failure?.message).toBe(expected);
+      // Node and Bun's ICU versions differ in the date/time separator.
+      expect([expected, expected.replace("2026 at", "2026,")]).toContain(failure?.message);
       expect(
         buildKnownAgentRunFailureReplyPayload({
           err: failure,
@@ -99,7 +100,7 @@ describe("assistant failure recovery", () => {
           resolvedVerboseLevel: "off",
           config,
         })?.text,
-      ).toBe(expected);
+      ).toBe(failure?.message);
     },
   );
 
