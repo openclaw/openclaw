@@ -36,6 +36,8 @@ export type MuseRuntime = {
   closing: boolean;
   users: number;
   timer?: ReturnType<typeof setTimeout>;
+  /** Restarts the idle-close countdown; set only while no lease is held. */
+  idle?: () => void;
   close: () => Promise<void>;
 };
 type MuseLease = { runtime: MuseRuntime; release: () => void };
@@ -200,19 +202,24 @@ export class MusePool {
       return this.acquire(workspace, apiKey, readOnly, signal);
     }
     clearTimeout(runtime.timer);
+    runtime.idle = undefined;
     runtime.users++;
     return {
       runtime,
       release: () => {
         runtime.users--;
         if (runtime.users === 0 && !runtime.closing) {
-          runtime.timer = setTimeout(() => {
-            if (this.entries.get(key) === entry) {
-              this.entries.delete(key);
-            }
-            void runtime.close();
-          }, 300_000);
-          runtime.timer.unref();
+          runtime.idle = () => {
+            clearTimeout(runtime.timer);
+            runtime.timer = setTimeout(() => {
+              if (this.entries.get(key) === entry) {
+                this.entries.delete(key);
+              }
+              void runtime.close();
+            }, 300_000);
+            runtime.timer.unref();
+          };
+          runtime.idle();
         }
       },
     };
@@ -276,7 +283,15 @@ export class MusePool {
           if (event.method === "session/tokenUsage") {
             runtime.usageObservers.get(sessionId)?.(event.params);
           }
-          runtime.sessions.get(sessionId)?.apply(event);
+          const session = runtime.sessions.get(sessionId);
+          if (session) {
+            session.apply(event);
+            // Muse runs follow-up work on its own (after background workflows) with
+            // no lease held; idle means no session activity, not no OpenClaw turn.
+            if (runtime.users === 0) {
+              runtime.idle?.();
+            }
+          }
         }
       });
       host.connection.onProtocolError(() => {
