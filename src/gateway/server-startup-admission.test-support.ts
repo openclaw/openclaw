@@ -48,7 +48,7 @@ export function registerGatewayStartupAdmissionTests(params: {
       .spyOn(owner, "resumeMarkedSessions")
       .mockImplementation(async ({ onPrepared }) => {
         await discovery.run();
-        onPrepared?.();
+        await onPrepared?.();
         await resume.run();
       });
     const unlockStartupMethods = vi.fn(() => unlocked.resolve());

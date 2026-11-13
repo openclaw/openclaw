@@ -39,8 +39,7 @@ type EnglishCatalog = TranslationMap & {
   openclawId: TranslationMap;
   agentTools: TranslationMap;
   githubPublication: TranslationMap & Record<"newAction" | "capacity", string>;
-  githubConnections: TranslationMap &
-    Record<"title" | "mine" | "system" | "forMe" | "forSystem", string>;
+  githubConnections: TranslationMap & Record<"title" | "mine" | "system", string>;
   board: TranslationMap & { announcement: TranslationMap; widget: TranslationMap };
   browser: TranslationMap & { errors: TranslationMap; annotatePrompt: TranslationMap };
   pluginUi: TranslationMap & { surface: TranslationMap };
@@ -1159,6 +1158,7 @@ const startupEnglish = {
     saveErrorTitle: "Couldn’t save this setting. Try again.",
     saveFailed: "The feature setting could not be saved.",
     decisionAssistance: {},
+    usageRankedToolIndex: {},
     codeMode: {},
 
     swarm: {},
@@ -1249,9 +1249,7 @@ const startupEnglish = {
   githubConnections: {
     title: "GitHub accounts",
     mine: "My GitHub",
-    system: "System GitHub",
-    forMe: "For me",
-    forSystem: "For the system",
+    system: "Shared agent account",
   },
   profilePage: {
     personalInstructions: {
@@ -1923,6 +1921,7 @@ const startupEnglish = {
     },
     permissions: {},
     toolCards: {
+      tool: "Tool",
       activity: {},
       review: {},
       verbs: {},

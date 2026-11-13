@@ -244,10 +244,10 @@ describe("accountless node authority", () => {
       await claw.authority.registerNodeInvite({ cap, proofKey: new Uint8Array(32) }, "tunnel"),
     ).toMatchObject({ ok: false, code: "bad_proof" });
     await claw.authority.registerNodeInvite({ cap, proofKey }, "tunnel");
-    await claw.authority.redeemNode(redemption);
+    vi.useFakeTimers({ toFake: ["Date"] });
     const deadline = nowSeconds() + PENDING_REDEMPTION_TTL_SECONDS;
+    await claw.authority.redeemNode(redemption);
     expect(claw.authority.nextPeopleExpiry()).toBe(deadline);
-    vi.useFakeTimers();
     vi.setSystemTime(deadline * 1000);
     expect((await claw.authority.ownerView(claw.w1))?.node_invites[0]?.status).toBe("expired");
     expect(await claw.authority.submit(await approve(), "tunnel")).toMatchObject({

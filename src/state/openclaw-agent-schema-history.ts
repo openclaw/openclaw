@@ -31,6 +31,10 @@ import {
   withoutSessionEntrySnapshotsSchema,
 } from "./openclaw-agent-session-snapshots-schema.js";
 import { withLegacyAgentStorageSchema } from "./openclaw-agent-storage-schema.js";
+import {
+  AGENT_TOOL_USAGE_SCHEMA_VERSION,
+  withoutAgentToolUsage,
+} from "./openclaw-agent-tool-usage-schema.js";
 import { withoutTrajectoryPayloadColumns } from "./openclaw-agent-trajectory-storage-migration.js";
 
 // Schema 21–24 kept every raw writer observable through this required trigger group.
@@ -315,8 +319,10 @@ function withLegacyAgentWriteLayout(schema: string): string {
     );
 }
 
-const AGENT_SCHEMA_BEFORE_ACTIVE_EVENT_FACTS =
-  withoutAgentActiveEventFacts(OPENCLAW_AGENT_SCHEMA_SQL);
+const AGENT_SCHEMA_BEFORE_TOOL_USAGE = withoutAgentToolUsage(OPENCLAW_AGENT_SCHEMA_SQL);
+const AGENT_SCHEMA_BEFORE_ACTIVE_EVENT_FACTS = withoutAgentActiveEventFacts(
+  AGENT_SCHEMA_BEFORE_TOOL_USAGE,
+);
 const AGENT_SCHEMA_BEFORE_CREATION_OPERATIONS = withoutAgentCreationOperations(
   AGENT_SCHEMA_BEFORE_ACTIVE_EVENT_FACTS,
 );
@@ -337,7 +343,9 @@ export function getOpenClawAgentMigrationSchema(targetVersion: number): string {
         ? AGENT_SCHEMA_BEFORE_CREATION_OPERATIONS
         : targetVersion < AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION
           ? AGENT_SCHEMA_BEFORE_ACTIVE_EVENT_FACTS
-          : OPENCLAW_AGENT_SCHEMA_SQL;
+          : targetVersion < AGENT_TOOL_USAGE_SCHEMA_VERSION
+            ? AGENT_SCHEMA_BEFORE_TOOL_USAGE
+            : OPENCLAW_AGENT_SCHEMA_SQL;
   const navigationSchemaSql =
     targetVersion < AGENT_COLD_NAVIGATION_SCHEMA_VERSION
       ? withoutAgentColdNavigation(schemaSql)

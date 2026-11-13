@@ -25,7 +25,10 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
-async function mount(overrides: Partial<PickerParams<PickerOption>> = {}) {
+async function mount(
+  overrides: Partial<PickerParams<PickerOption>> = {},
+  containerTag: "div" | "label" = "div",
+) {
   const params: PickerParams<PickerOption> = {
     label: "Model",
     value: "fixture/anchor",
@@ -34,7 +37,7 @@ async function mount(overrides: Partial<PickerParams<PickerOption>> = {}) {
     onChange: vi.fn(),
     ...overrides,
   };
-  const container = document.createElement("div");
+  const container = document.createElement(containerTag);
   document.body.append(container);
   const mountTarget = document.createElement("div");
   container.append(mountTarget);
@@ -92,6 +95,51 @@ async function mount(overrides: Partial<PickerParams<PickerOption>> = {}) {
 }
 
 describe("Picker", () => {
+  it("consumes option clicks inside a native label without reactivating its trigger", async () => {
+    const { page } = await import("vitest/browser");
+    const p = await mount({ searchable: false, renderLeading: () => "●" }, "label");
+    const labelText = document.createElement("span");
+    labelText.textContent = "Model field";
+    p.container.prepend(labelText);
+    if (!(p.container instanceof HTMLLabelElement)) {
+      throw new Error("Expected a native field label");
+    }
+    expect(p.container.control).toBe(p.trigger);
+    const bubbled = vi.fn();
+    p.container.addEventListener("click", bubbled);
+    for (const part of [".picker-select__label", ".picker-select__leading"]) {
+      await page.elementLocator(labelText).click();
+      await expect.element(p.trigger).toHaveAttribute("aria-expanded", "true");
+      const row = p.rows().find((option) => option.dataset.value === "fixture/aurora-large")!;
+      await page.elementLocator(row.querySelector<HTMLElement>(part)!).click();
+      await expect.element(p.trigger).toHaveAttribute("aria-expanded", "false");
+    }
+    expect(p.params.onChange).toHaveBeenCalledTimes(2);
+    expect(p.params.onChange).toHaveBeenLastCalledWith("fixture/aurora-large");
+    await page.elementLocator(p.trigger).click();
+    await expect.element(p.trigger).toHaveAttribute("aria-expanded", "true");
+    const disabled = p.rows().find((option) => option.getAttribute("aria-disabled") === "true")!;
+    disabled.click();
+    await p.picker.updateComplete;
+    expect(p.trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(p.params.onChange).toHaveBeenCalledTimes(2);
+    expect(
+      bubbled.mock.calls.some(([event]) => event.target === disabled && event.defaultPrevented),
+    ).toBe(true);
+  });
+
+  it("commits native keyboard selection once inside a label and retains trigger activation", async () => {
+    const { userEvent } = await import("vitest/browser");
+    const p = await mount({ searchable: false, options: options.slice(0, 3) }, "label");
+    p.trigger.focus();
+    await userEvent.keyboard("{ArrowDown}{ArrowDown}{Enter}");
+    await expect.element(p.trigger).toHaveAttribute("aria-expanded", "false");
+    expect(p.params.onChange).toHaveBeenCalledExactlyOnceWith("fixture/aurora-large");
+    await userEvent.keyboard(" ");
+    await expect.element(p.trigger).toHaveAttribute("aria-expanded", "true");
+    expect(p.params.onChange).toHaveBeenCalledOnce();
+  });
+
   it("opens long lists as a phone sheet and keeps short or opted-out lists anchored", async () => {
     const media = window.matchMedia("(max-width: 640px)");
     const long = Array.from({ length: 9 }, (_, index) => ({

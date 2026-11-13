@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
 import {
   TUI_PTY_BUILT_CLI_CANARY_PATTERN,
+  resolveCiVitestWorkerPreset,
   shouldUseRuntimeOnlyVitestWorkers,
   shouldUseToolingOnlyVitestWorkers,
 } from "../../scripts/lib/vitest-runtime-selection.mts";
@@ -13,6 +14,7 @@ const doctor = "test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.
 const sqlite = "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts";
 const nativeHost = "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts";
 const discord = "test/e2e/qa-lab/plugins/discord-show-widget-contextual-presenter.e2e.test.ts";
+const execApproval = "src/agents/bash-tools.exec-gateway-approval.e2e.test.ts";
 const local = "src/tui/tui-pty-local.e2e.test.ts";
 const built = { OPENCLAW_TUI_PTY_USE_BUILT_CLI: "1" };
 const reply = "test/vitest/vitest.auto-reply.config.ts";
@@ -28,10 +30,45 @@ const doctorCommandFiles = [
 it.each([
   { name: "Doctor commands", config: commands, files: doctorCommandFiles, runtime: true },
   {
-    name: "Doctor update schema",
+    name: "Doctor infra",
     config: "test/vitest/vitest.infra.config.ts",
-    files: ["src/flows/doctor-health.update-schema.test.ts"],
+    files: [
+      "src/flows/doctor-health.update-schema.test.ts",
+      "src/flows/doctor-health.managed-admission.test.ts",
+      "src/flows/doctor-health.managed-approvals.test.ts",
+      "src/flows/doctor-health.managed-settlement.test.ts",
+      "src/flows/doctor-health.readonly-config.test.ts",
+    ],
     runtime: true,
+  },
+  {
+    name: "Doctor unit",
+    config: "test/vitest/vitest.unit.config.ts",
+    files: [
+      "src/flows/doctor-health.migration-refusal.test.ts",
+      "src/flows/doctor-health.nocow.test.ts",
+      "src/flows/doctor-health.plugin-load.test.ts",
+      "src/flows/doctor-health.readonly-filesystem.test.ts",
+    ],
+    runtime: true,
+  },
+  {
+    name: "broad unit",
+    config: "test/vitest/vitest.unit.config.ts",
+    files: [],
+    runtime: false,
+  },
+  {
+    name: "mixed Doctor unit",
+    config: "test/vitest/vitest.unit.config.ts",
+    files: ["src/flows/doctor-health.nocow.test.ts", "src/flows/unknown.test.ts"],
+    runtime: false,
+  },
+  {
+    name: "mixed Doctor infra",
+    config: "test/vitest/vitest.infra.config.ts",
+    files: ["src/flows/doctor-health.managed-settlement.test.ts", "src/flows/unknown.test.ts"],
+    runtime: false,
   },
   { name: "broad Doctor commands", config: commands, files: [], runtime: false },
   {
@@ -48,6 +85,21 @@ it.each([
       "src/plugins/loader.runtime-registry.test.ts",
     ],
     runtime: true,
+  },
+  {
+    name: "plugin reload product",
+    config: "test/vitest/vitest.gateway-server.config.ts",
+    files: [
+      "src/gateway/server.plugin-reload-send-continuation.product.test.ts",
+      "src/gateway/server.plugin-reload-send-revocation.product.test.ts",
+    ],
+    runtime: true,
+  },
+  {
+    name: "mixed plugin reload product",
+    config: "test/vitest/vitest.gateway-server.config.ts",
+    files: ["src/gateway/server.plugin-reload-send-revocation.product.test.ts", "unknown.test.ts"],
+    runtime: false,
   },
   { name: "reply delivery", config: reply, files: [delivery], runtime: true },
   { name: "broad reply", config: reply, files: [], runtime: false },
@@ -67,6 +119,7 @@ it.each([
   { name: "SQLite", config: e2e, files: [sqlite], runtime: true },
   { name: "native host", config: e2e, files: [nativeHost], runtime: true },
   { name: "Discord attachment", config: e2e, files: [discord], runtime: true },
+  { name: "exec approval", config: e2e, files: [execApproval], runtime: true },
   {
     name: "all built proofs",
     config: e2e,
@@ -139,6 +192,19 @@ it.each([
   },
 ])("keeps the compiler scope for $name", ({ config, files, env = {}, pattern, runtime }) => {
   expect(shouldUseRuntimeOnlyVitestWorkers(config, ["run", ...files], env, pattern)).toBe(runtime);
+});
+
+it.each([
+  { targets: [execApproval, delivery], extraArgs: false, preset: "runtime" },
+  { targets: [execApproval, "unknown.test.ts"], extraArgs: false, preset: "full" },
+  { targets: [execApproval], extraArgs: true, preset: "full" },
+])("keeps CI target workers $preset for $targets", ({ targets, extraArgs, preset }) => {
+  expect(
+    resolveCiVitestWorkerPreset(
+      targets.map((target) => ({ target })),
+      extraArgs,
+    ),
+  ).toBe(preset);
 });
 
 it("retains full workers when the boundary inventory gains an unqualified owner", () => {

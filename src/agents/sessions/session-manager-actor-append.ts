@@ -15,6 +15,7 @@ import {
   wrapSqliteWorkerError,
 } from "../../infra/sqlite-worker-contract.js";
 import { recordModelFallbackStop } from "../model-fallback-stop.js";
+import type { RunToolUsageRecorder } from "../tool-usage-recorder.js";
 import { captureSessionMessageAdmission } from "./session-manager-message-admission.js";
 import { SessionManagerActorCommittedError } from "./session-manager-persistence-error.js";
 import { unwrapSessionManagerPublication } from "./session-manager-publication.js";
@@ -27,6 +28,7 @@ type CommittedAppend = Extract<SessionActorOutcome<AppendValue>, { kind: "commit
 /** One prepared append, with native commit evidence retained before caller publication. */
 export async function appendSessionManagerActor(input: {
   actor: SessionActor;
+  toolUsageRecorder?: RunToolUsageRecorder;
   append: SessionActorAppend;
   toolResult: boolean;
   message: { role: string; idempotencyKey?: unknown } | null;
@@ -37,7 +39,7 @@ export async function appendSessionManagerActor(input: {
   committed: SessionActorAppendCommitted;
   failure?: SessionManagerActorCommittedError;
 }> {
-  const { actor, assertCurrent } = input;
+  const { actor, assertCurrent, toolUsageRecorder: recorder } = input;
   const admission = captureSessionMessageAdmission(assertCurrent, input, input.message);
   const append: SessionActorAppend =
     input.append.kind === "message"
@@ -60,6 +62,10 @@ export async function appendSessionManagerActor(input: {
     },
   };
   assertCurrent();
+  const toolUsage = recorder?.takeAppend();
+  if (toolUsage) {
+    append.toolUsage = toolUsage;
+  }
   let captured: CommittedAppend | undefined;
   let outcome: SessionActorOutcome<AppendValue>;
   try {
@@ -67,6 +73,10 @@ export async function appendSessionManagerActor(input: {
       committed: (value: CommittedAppend) => {
         captured = value;
         if (value.receipt.transcript.append) {
+          const generation = value.receipt.transcript.append.toolUsageGeneration;
+          if (generation !== undefined) {
+            recorder?.committed(generation);
+          }
           input.onCommitted?.(value.receipt.transcript.append);
         }
       },
@@ -125,6 +135,9 @@ export async function appendSessionManagerActor(input: {
       throw error;
     }
     let failure = cause;
+    if (committed.toolUsageGeneration !== undefined) {
+      recorder?.committed(committed.toolUsageGeneration);
+    }
     try {
       admission.publish(committed.value.pendingInputReceipt);
     } catch (error) {

@@ -16,6 +16,7 @@ export { defaultTitle, normalizeToolDisplayName } from "./tool-display-name.js";
 type ToolDisplayProgressSpec = {
   label: string;
   detailKeys: string[];
+  referenceKey?: string;
 };
 
 type ToolDisplayActionSpec = {

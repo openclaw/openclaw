@@ -216,6 +216,9 @@ describe("production lint suppressions", () => {
         "scripts/perf/idle-gateway-measure-preload.mjs|no-underscore-dangle|2",
         // Node BroadcastChannel.postMessage has no target-origin parameter.
         "scripts/perf/idle-gateway-measure-preload.mjs|unicorn/require-post-message-target-origin|1",
+        // The observer preserves native listener identity and explicitly restores each method's receiver.
+        "scripts/perf/inline-command-opt-in-probe-proof.mjs|unicorn/prefer-add-event-listener|2",
+        "scripts/perf/inline-command-opt-in-probe.mjs|typescript/unbound-method|2",
         // The stack probe compares V8's formatter callback identity without invoking it.
         "scripts/perf/jiti-stack-format.ts|typescript/unbound-method|1",
         "scripts/perf/lease-main-thread-renewal.mjs|typescript/unbound-method|3",
@@ -243,6 +246,8 @@ describe("production lint suppressions", () => {
         "scripts/perf/session-entry-patch-payload.ts|unicorn/require-post-message-target-origin|1",
         // The setup probe executes an expression from the same trusted source input it imports.
         "scripts/perf/session-history-reader-setup-measure.mjs|typescript/no-implied-eval|1",
+        // Setup observes the native work scope through a receiver-preserving Proxy and restores track before measurement.
+        "scripts/perf/session-pr-currency-measure.ts|typescript/unbound-method|1",
         // The subscription probe forwards track with the original AsyncWorkScope receiver.
         "scripts/perf/session-pr-subscriptions-measure.ts|typescript/unbound-method|1",
         // The admission-charge probe forwards runTask with the original pool receiver.
@@ -353,6 +358,8 @@ describe("production lint suppressions", () => {
         "src/hooks/module-loader.ts|typescript/no-unnecessary-type-parameters|1",
         "src/infra/device-pairing-row-mapping.ts|typescript/no-unnecessary-type-parameters|1",
         "src/infra/json-file.ts|typescript-eslint/no-unnecessary-type-parameters|1",
+        // Exact JSON byte accounting must include every escaped C0 control character.
+        "src/infra/json-utf8-bytes.ts|eslint/no-control-regex|1",
         "src/infra/net/fetch-guard.ts|no-warning-comments|1",
         "src/infra/net/undici-dispatcher-options.ts|typescript/unbound-method|1",
         "src/infra/outbound/sanitize-text.ts|eslint/no-control-regex|1",
@@ -446,6 +453,8 @@ describe("production lint suppressions", () => {
         "ui/src/components/solid/sanitized-html.tsx|solid/no-innerhtml|1",
         // JSON materializes the bounded preview; structuredClone retains sliced string backing storage.
         "ui/src/pages/activity/tool-activity.ts|unicorn/prefer-structured-clone|1",
+        // Browser preview selection reverses only freshly collected private arrays.
+        "ui/src/pages/chat/components/chat-tool-cards.ts|unicorn/no-array-reverse|2",
         // A fresh one-shot MessageChannel port uses onmessage to start delivery and closes both ports.
         "ui/src/pages/chat/yield-chat-task.ts|unicorn/prefer-add-event-listener|1",
         // PanelRefreshStatus keeps its shared className prop across rendering callers.

@@ -4,6 +4,7 @@ import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { inlineCommandPresentation } from "../chat-inline-command-presentation.ts";
 import { groupMessages } from "../chat-thread-grouping.ts";
 import { ActivityGroup, MessageGroup as MessageGroupView } from "./chat-message-group-view.tsx";
 
@@ -55,6 +56,8 @@ describe("browser tool results", () => {
     ["activity", true],
     ["message", false],
     ["message", true],
+    ["inline", false],
+    ["inline", true],
   ] as const)(
     "keeps %s browser output without preview cards (bubbles: %s)",
     async (route, bubbleMode) => {
@@ -63,16 +66,18 @@ describe("browser tool results", () => {
         browserResult("verify-b", "tab-2", "https://example.com/pull/1"),
       ];
       const groups = [browserResultGroup(messages)];
+      const inlineCommands = route === "inline" ? await inlineCommandPresentation() : undefined;
       const options = (expanded: boolean) => ({
         showReasoning: false,
         bubbleMode,
+        inlineCommands,
         isToolMessageExpanded: () => expanded,
         isToolExpanded: () => expanded,
       });
       const view = mountSolid(
         (props: { expanded: boolean }) => (
           <>
-            {route === "activity" ? (
+            {route !== "message" ? (
               <ActivityGroup
                 groups={groups}
                 options={options(props.expanded)}

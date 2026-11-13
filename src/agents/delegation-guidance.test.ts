@@ -72,6 +72,24 @@ describe("buildSubagentPromptGuidance", () => {
       expect(section).not.toContain("Announcing spawns notify when the run ends");
     },
   );
+
+  it("renders the same session routing whether or not the turn holds the task-suggestion grant", () => {
+    const render = (granted: boolean) =>
+      buildSubagentPromptGuidance({
+        mode: "prefer",
+        isMinimal: false,
+        availableTools: new Set([
+          "sessions_spawn",
+          "sessions_create",
+          ...(granted ? ["suggest_task", "dismiss_task"] : []),
+        ]),
+        sessionKey: "agent:main:dashboard:project",
+        resolveToolName: (name) => name,
+      }).delegationSection.join("\n");
+
+    expect(render(true)).toContain("## Session routing");
+    expect(render(true)).toBe(render(false));
+  });
 });
 
 describe("buildDelegationGuidanceSection", () => {

@@ -32,7 +32,6 @@ import type { GatewayKernelRuntime } from "./server-kernel-request-runtime.js";
 import { clearGatewayMaintenanceHandles } from "./server-maintenance-lifecycle.js";
 import { refreshConnectedNodeSurfaceCaches } from "./server-methods/nodes.read.js";
 import { assertGatewayRuntimeSecurityConfig } from "./server-runtime-config.js";
-import { logGatewayReady } from "./server-startup-readiness.js";
 import { startGatewayTlsRenewal } from "./server-tls-renewal.js";
 import type { GatewayHttpTransport } from "./server-transport-bridge.js";
 import { startWorkerHumanPresence } from "./server/client-human-presence.js";
@@ -387,11 +386,13 @@ export async function finishGatewayStartup(params: {
       ? []
       : await startupTrace.measure("runtime.worker-pool-metrics", collectGatewayWorkerPoolMetrics)),
   ]);
-  if (getReadiness().ready) {
+  const preparedReadiness = await getReadiness.prepare();
+  if (!lifecycle.closePreludeStarted && preparedReadiness.publish().ready) {
     startupTrace.mark("ready");
-    logGatewayReady(
-      { getReadiness, log },
-      opts.updateCanary ? "candidate gateway ready; autonomous sidecars suppressed" : undefined,
+    log.info(
+      opts.updateCanary
+        ? "candidate gateway ready; autonomous sidecars suppressed"
+        : "gateway ready",
     );
   }
   finishGatewayRestartTrace("restart.ready", collectGatewayProcessMemoryUsageMb());
