@@ -270,12 +270,13 @@ it("backfills direct, bare-name dispatch, and Code Mode MCP calls from server ev
     since: 0,
     before: 1000,
   });
-  const mcpDetails = { mcpServer: "granola", mcpTool: "list_meetings" };
+  const mcp = { mcpServer: "granola" };
+  const append = (message: unknown, at = 120) => scan.append({ type: "message", message }, at);
   const nested = (
     toolCallId: string,
     parentToolCallId: string,
     toolName: string,
-    details = mcpDetails,
+    details: Record<string, unknown> = mcp,
   ) =>
     createNestedToolActivity({
       runId: "synthetic",
@@ -291,79 +292,41 @@ it("backfills direct, bare-name dispatch, and Code Mode MCP calls from server ev
       startedAt: 110,
       timestamp: 120,
     });
-  scan.append(
+  const call = (id: string, name: string, args: Record<string, unknown> = {}) => ({
+    type: "toolCall",
+    id,
+    name,
+    arguments: args,
+  });
+  append(
     {
-      type: "message",
-      message: {
-        role: "assistant",
-        content: [
-          { type: "toolCall", id: "direct", name: "granola__list_meetings", arguments: {} },
-          { type: "toolCall", id: "unproven", name: "granola__get_notes", arguments: {} },
-          {
-            type: "toolCall",
-            id: "bare",
-            name: "dispatch_action",
-            arguments: { id: "granola__list_meetings" },
-          },
-          { type: "toolCall", id: "code", name: "exec", arguments: { code: "await MCP.x()" } },
-        ],
-      },
+      role: "assistant",
+      content: [
+        call("direct", "granola__list_meetings"),
+        call("unproven", "granola__get_notes"),
+        call("bare", "dispatch_action", { id: "granola__list_meetings" }),
+        call("code", "exec", { code: "await MCP.x()" }),
+      ],
     },
     100,
   );
-  for (const [toolCallId, details] of [
-    ["direct", mcpDetails],
-    ["unproven", {}],
-  ] as const) {
-    scan.append(
-      {
-        type: "message",
-        message: {
-          role: "toolResult",
-          toolCallId,
-          toolName: toolCallId === "direct" ? "granola__list_meetings" : "granola__get_notes",
-          isError: false,
-          details,
-        },
-      },
-      120,
-    );
-  }
-  scan.append(
-    { type: "message", message: nested("n-bare", "bare", "granola__list_meetings") },
-    120,
-  );
-  scan.append(
-    { type: "message", message: nested("n-code", "code", "granola__list_meetings") },
-    120,
-  );
+  const result = (toolCallId: string, toolName: string, details?: unknown) => ({
+    role: "toolResult",
+    toolCallId,
+    toolName,
+    isError: false,
+    details,
+  });
+  append(result("direct", "granola__list_meetings", mcp));
+  append(result("unproven", "granola__get_notes"));
+  append(nested("n-bare", "bare", "granola__list_meetings"));
+  append(nested("n-code", "code", "granola__list_meetings"));
   // A name the native catalog owns never falls back to MCP evidence.
-  scan.append({ type: "message", message: nested("n-shadow", "code", "granola__shadow") }, 120);
+  append(nested("n-shadow", "code", "granola__shadow"));
   // A failed MCP call is excluded even with server evidence.
-  scan.append(
-    {
-      type: "message",
-      message: nested("n-failed", "code", "granola__list_meetings", {
-        ...mcpDetails,
-        status: "error",
-      } as typeof mcpDetails),
-    },
-    120,
-  );
-  for (const toolCallId of ["bare", "code"]) {
-    scan.append(
-      {
-        type: "message",
-        message: {
-          role: "toolResult",
-          toolCallId,
-          toolName: toolCallId === "bare" ? "dispatch_action" : "exec",
-          isError: false,
-        },
-      },
-      130,
-    );
-  }
+  append(nested("n-failed", "code", "granola__list_meetings", { ...mcp, status: "error" }));
+  append(result("bare", "dispatch_action"), 130);
+  append(result("code", "exec"), 130);
   expect(scan.result()).toMatchObject({
     rows: [
       { toolId: "mcp:granola:granola__list_meetings", score: 3 },

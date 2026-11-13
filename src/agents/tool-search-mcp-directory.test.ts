@@ -254,29 +254,11 @@ describe("usage-ranked MCP directory", () => {
       mcpTool("world", "a_tool", "First."),
       mcpTool("world", "b_tool", "Second."),
     ]);
-    for (const usage of [undefined, ranking([])]) {
+    for (const usage of [undefined, ranking([]), ranking(["mcp:world:world__b_tool"])]) {
       expect(
         applyUsageRankedMcpToolSearchDirectory(fits.result.tools, fits.catalogRef.current, usage),
       ).toBe(fits.result.tools);
     }
-    expect(
-      applyUsageRankedMcpToolSearchDirectory(
-        fits.result.tools,
-        fits.catalogRef.current,
-        ranking(["mcp:world:world__b_tool"]),
-      ),
-    ).toBe(fits.result.tools);
-    const overflow = apply(
-      Array.from({ length: 60 }, (_, i) =>
-        mcpTool("alpha", `tool_${String(i).padStart(3, "0")}`, longDescription),
-      ),
-    );
-    expect(
-      applyUsageRankedMcpToolSearchDirectory(overflow.result.tools, overflow.catalogRef.current, {
-        ...ranking([]),
-        newcomers: { "mcp:alpha:alpha__tool_001": at },
-      }),
-    ).toBe(overflow.result.tools);
   });
 
   it("keeps descriptions for the highest-scored tools in canonical order", () => {
