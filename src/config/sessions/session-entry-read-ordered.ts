@@ -1,5 +1,6 @@
 import path from "node:path";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import {
   getSqliteDatabaseAdmissionIdentityForPath,
   readSqliteDatabaseWriteTokenForPath,
@@ -239,6 +240,7 @@ export async function withOrderedSessionEntriesInWorker<T>(
     signal?: AbortSignal;
   },
 ): Promise<T> {
+  using phase = observeDiagnosticsTimelinePhases("session.entry.read.source_prepare");
   const selected: Array<{
     input: SessionEntryWorkerRead;
     owner: SessionHistoryWorkerDatabase;
@@ -258,9 +260,11 @@ export async function withOrderedSessionEntriesInWorker<T>(
         }
       });
     }
+    phase.mark("session.entry.read.ordered_admission");
     return runOpenClawAgentWriteAdmissions(
       selected.map(({ database }) => database),
       async () => {
+        phase.mark("session.entry.read.read_barrier");
         // Synchronous SDK writers bypass the FIFO and may not publish row changes.
         const assertNativeCurrent = captureSessionEntryNativeMutationWitness(
           selected.map(({ database }) => database),
@@ -326,6 +330,8 @@ export async function withOrderedSessionEntriesInWorker<T>(
           onReadAdmitted?.();
           const reads: PreparedSessionEntryWorkerRead[] = [];
           for (const { input: selectedInput, owner, database, continuation } of selected) {
+            // Includes admitted source checks and cache lookup, not a SQLite lock-wait timer.
+            phase.mark("session.entry.read.read_barrier");
             assertCurrent();
             const request = captureSessionEntryWorkerRequest(selectedInput);
             const before =
@@ -333,6 +339,9 @@ export async function withOrderedSessionEntriesInWorker<T>(
                 ? readSqliteDatabaseWriteTokenForPath(database.path)
                 : undefined;
             const cached = readRetainedSessionEntryFacts(database, request);
+            if (!cached) {
+              phase.mark("session.entry.read.history_reader");
+            }
             const result =
               cached ??
               (await owner.readExactEntries(
@@ -343,6 +352,7 @@ export async function withOrderedSessionEntriesInWorker<T>(
                 },
                 signal,
               ));
+            phase[Symbol.dispose]();
             assertCurrent();
             if (!cached) {
               retainSessionEntryReadFacts(database, request, result, before);
@@ -367,5 +377,5 @@ export async function withOrderedSessionEntriesInWorker<T>(
       signal,
     );
   };
-  return enter(0);
+  return await enter(0);
 }
