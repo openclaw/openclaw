@@ -75,7 +75,6 @@ suite.define(() => {
         const trigger = page.locator("[data-chat-model-select]");
         await trigger.click();
         const panel = page.locator(".chat-picker-overlay:popover-open");
-        await page.locator("[data-chat-model-provider-toggle]").first().click();
         await page.locator("[data-chat-model-more-toggle]").click();
         const options = panel.locator(".chat-controls__model-options");
         await options.evaluate((node) => node.scrollTo(0, node.scrollHeight));
