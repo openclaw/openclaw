@@ -219,7 +219,9 @@ extension DashboardManager {
         endpoint: GatewayConnection.EndpointSnapshot,
         mode: AppState.ConnectionMode,
         target: DashboardGatewayTarget,
-        token: String?) async throws
+        token: String?,
+        operatorDashboardProvider: (URL) -> (url: URL, cookie: HTTPCookie)? =
+            MacOpenClawIDOperatorRoute.dashboardRoute) async throws
         -> (configuration: WindowConfiguration, endpoint: GatewayConnection.EndpointSnapshot)
     {
         var endpoint = endpoint
@@ -228,8 +230,9 @@ extension DashboardManager {
         try browserSession?.validate(for: config.url)
         // The OpenClaw ID operator proxy is this Mac's dashboard route; never the claw's
         // browser sign-in origin, which would need a separate browser approval.
-        let operatorDashboard = endpoint.openClawIDSession == nil
-            ? nil : MacOpenClawIDOperatorRoute.dashboardRoute(for: config.url)
+        // Ready-state notifications omit the native session. Resolve the proxy and its
+        // cookie together, so every path loading the proxy uses its isolated store.
+        let operatorDashboard = operatorDashboardProvider(config.url)
         // A route retired since the endpoint resolved reopens once its replacement is ready.
         if endpoint.openClawIDSession != nil, operatorDashboard == nil { throw CancellationError() }
         let advertisedIdentityURL = operatorDashboard == nil && (mode == .remote || endpoint.tls != nil)
@@ -261,7 +264,8 @@ extension DashboardManager {
         }
         // Device grants remain challenge-only. Shared startup credentials retain
         // the released UI contract, but come only from the native accepted binding.
-        let dashboardConfig: GatewayConnection.Config = (url: config.url, token: nil, password: nil)
+        let dashboardConfig: GatewayConnection.Config = (
+            url: operatorDashboard?.url ?? config.url, token: nil, password: nil)
         let remoteBasePath = mode == .remote && identityURL == nil
             ? try await controlUiBasePathProvider(target, config)
             : nil
