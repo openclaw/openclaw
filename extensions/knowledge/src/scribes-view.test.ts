@@ -476,7 +476,7 @@ it("asks an earlier scribe's conversation to update it once and offers an edited
   const legacy = { ...reviewJob, sessionKey: "s-review", payload: { kind: "agentTurn" } };
   const legacyJob = {
     ...legacy,
-    payload: { kind: "agentTurn", message: earlier, thinking: "high" },
+    payload: { kind: "agentTurn", message: earlier, thinking: "high", toolsAllow: ["read"] },
     idleOnly: true,
   };
   const unedited = fixture({ sessions: reviewSession, jobs: [legacyJob] });
@@ -514,7 +514,7 @@ it("asks an earlier scribe's conversation to update it once and offers an edited
   const prompt = String(sent[0]![1]!.message);
   expect(prompt).toMatch(/^Update the Knowledge scribe "Knowledge Consolidation"/);
   expect(prompt).toContain(
-    'exactly as written: `{"thinking":"high","idleOnly":true,"failureAlert":{"after":2}}`',
+    'exactly as written: `{"thinking":"high","toolsAllow":["read"],"idleOnly":true,"failureAlert":{"after":2}}`. Pass `toolsAllowMode: "exact"`',
   );
   expect(prompt).toContain("- delivery and failure alert: as saved on the current automation");
   expect(prompt).toContain("Leave `enabled` out");
@@ -535,7 +535,7 @@ it("asks an earlier scribe's conversation to update it once and offers an edited
     sessionTarget: "current",
     payload: { kind: "agentTurn", message: differing },
   };
-  const { render, ui, calls, page, events } = fixture({
+  const { render, ui, calls, page, events, request } = fixture({
     sessions: reviewSession,
     jobs: [job],
     runs: [{ ts: 1_793_000_000_000, status: "ok", runId: "r1", sessionKey: "s-run" }],
@@ -560,8 +560,28 @@ it("asks an earlier scribe's conversation to update it once and offers an edited
     expect.stringMatching(/^\+ 3\. End your reply .*left unchanged>`\.\n$/),
     "− Also tidy page titles.\n",
   ]);
+  // A lost response: confirming again repeats the same request, not a second turn.
+  const answerReplace = request.getMockImplementation()!;
+  let lost = false;
+  request.mockImplementation(async (method, params) => {
+    const result = await answerReplace(method, params);
+    if (method === "chat.send" && !lost) {
+      lost = true;
+      throw new Error("connection lost");
+    }
+    return result;
+  });
   buttonNamed(confirm, "Replace with new").click();
-  await vi.waitFor(() => expect(calls.at(-1)?.[0]).toBe("chat.send"));
+  await vi.waitFor(() => expect(lost).toBe(true));
+  await vi.waitFor(() =>
+    expect(buttonNamed(confirm, "Replace with new").hasAttribute("disabled")).toBe(false),
+  );
+  buttonNamed(confirm, "Replace with new").click();
+  await vi.waitFor(() =>
+    expect(calls.filter(([method]) => method === "chat.send")).toHaveLength(2),
+  );
+  const [first, second] = calls.filter(([method]) => method === "chat.send");
+  expect(second![1]!.idempotencyKey).toBe(first![1]!.idempotencyKey);
   expect(String(calls.at(-1)![1]!.message).endsWith(`\`\`\`text\n${runMessage}\n\`\`\``)).toBe(
     true,
   );

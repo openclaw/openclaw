@@ -98,13 +98,15 @@ export async function repairScribe(
 }
 
 // Payload fields a scribe prompt sets itself, or the scheduler derives; the rest are run options.
-const DECLARED_PAYLOAD = new Set(["kind", "message", "toolsAllow", "toolsAllowIsDefault"]);
+// An explicit tool list (not a generated default) is a saved option too: it caps the runs.
+const DECLARED_PAYLOAD = new Set(["kind", "message", "toolsAllowIsDefault"]);
 
 /** Options saved on the automation that a re-declaration would drop unless passed again. */
 function savedOptions(job: ScribeJob) {
   const saved: Record<string, unknown> = {};
   for (const [field, value] of Object.entries(job.payload ?? {})) {
-    if (!DECLARED_PAYLOAD.has(field) && value !== undefined) {
+    const generatedTools = field === "toolsAllow" && job.payload?.toolsAllowIsDefault === true;
+    if (!DECLARED_PAYLOAD.has(field) && !generatedTools && value !== undefined) {
       saved[field] = value;
     }
   }

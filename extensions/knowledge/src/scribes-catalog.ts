@@ -571,7 +571,7 @@ export function repairPrompt(
   const repair = purpose === "repair";
   const saved =
     current.saved && Object.keys(current.saved).length
-      ? `- also these options saved on the current automation, exactly as written: \`${JSON.stringify(current.saved)}\``
+      ? `- also these options saved on the current automation, exactly as written: \`${JSON.stringify(current.saved)}\`${"toolsAllow" in current.saved ? '. Pass `toolsAllowMode: "exact"` so its tool list stays exactly as saved' : ""}`
       : undefined;
   const healthy = `this conversation owns it, its session target is \`${SCRIBE_SESSION_TARGET}\` with this conversation's session key, its message is the run message below`;
   return [

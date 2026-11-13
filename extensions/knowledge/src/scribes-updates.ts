@@ -217,21 +217,30 @@ export function updateNotice(
   }
   const replace = button(
     "Replace with new…",
-    () =>
+    () => {
+      // One request per dialog: confirming again after a failed send repeats the same request.
+      const attempt = crypto.randomUUID();
       openConfirmDialog(
         "Replace with the new run instructions?",
         `Later runs of ${scribe.title} follow the new run message. These lines change; the saved message is not kept.`,
         "Replace with new",
         async () => {
-          const send = () =>
-            updateScribe(ui.s.context.host, snapshot, job, agentId, next, crypto.randomUUID());
-          await send();
-          markUpdating(ui, job, agentId, (read) => read.job?.payload?.message === next, send);
+          await updateScribe(ui.s.context.host, snapshot, job, agentId, next, attempt);
+          // Try again is a new attempt.
+          markUpdating(
+            ui,
+            job,
+            agentId,
+            (read) => read.job?.payload?.message === next,
+            () =>
+              updateScribe(ui.s.context.host, snapshot, job, agentId, next, crypto.randomUUID()),
+          );
           ui.announce(`${scribe.title}: replacing the run message…`);
           void ui.load();
         },
         diff,
-      ),
+      );
+    },
     "knowledge-button knowledge-small",
   );
   replace.disabled = !ui.s.context.host.connection.canWrite;

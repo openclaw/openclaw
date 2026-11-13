@@ -172,8 +172,9 @@ made directly from the page would drop it. The update:
   the new one for the same settings.
 - Keeps the schedule, and keeps a paused scribe paused.
 - Keeps options saved on the automation that the prompt doesn't set, such as a
-  model or thinking override, active hours, pacing, idle-only, a trigger,
-  delivery and the failure alert, by passing them to the re-declaration.
+  model or thinking override, an explicit tool list (kept exact), active hours,
+  pacing, idle-only, a trigger, delivery and the failure alert, by passing them
+  to the re-declaration.
 - Only touches this agent's automations; another agent's scribe with the same
   declaration key is left alone.
 
