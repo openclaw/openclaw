@@ -1,140 +1,146 @@
-name: Release 11.4 FIFO and hardkill committed-candidate diagnostics
+name: Matrix public-message-actions collision diagnostic
 'on':
   workflow_dispatch:
     inputs:
-      target_ref:
-        required: true
+      runner_group:
         type: string
+        default: ''
+        description: Existing release runner group; empty preserves default
 permissions:
   contents: read
-concurrency:
-  group: release-114-fifo-hardkill-73bef956-diagnostics
-  cancel-in-progress: false
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+  NODE_VERSION: 24.22.1
+  OPENCLAW_CI_OPENAI_MODEL: ${{ vars.OPENCLAW_CI_OPENAI_MODEL || 'openai/gpt-5.6-luna' }}
+  OPENCLAW_CI_OPENAI_FALLBACK_MODEL: ${{ vars.OPENCLAW_CI_OPENAI_FALLBACK_MODEL || 'openai/gpt-5.4' }}
+  OPENCLAW_BUILD_PRIVATE_QA: '1'
+  OPENCLAW_ENABLE_PRIVATE_QA_CLI: '1'
   EXPECTED_TARGET: 73bef956a886abbbe6aef0c87efd5bcbfd6f8921
 jobs:
-  proof:
-    runs-on: blacksmith-32vcpu-ubuntu-2404
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      max-parallel: 2
-      matrix:
-        lane:
-        - fifo
-        - hardkill
+  matrix_diagnostic:
+    name: Matrix collision diagnostic (not qualification)
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group),
+      toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND
+      == 'github' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404') }}
+    timeout-minutes: 90
+    concurrency:
+      group: matrix-collision-diagnostic-73bef956a886abbbe6aef0c87efd5bcbfd6f8921
+      cancel-in-progress: false
+      queue: max
+    environment: qa-live-shared
     steps:
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+    - name: Checkout selected ref
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
-        ref: ${{ inputs.target_ref }}
-        fetch-depth: 1
         persist-credentials: false
-    - name: Bind committed candidate and exact diagnostic overlay
+        ref: 73bef956a886abbbe6aef0c87efd5bcbfd6f8921
+        fetch-depth: 1
+    - name: Bind candidate and diagnostic-only overlay
       shell: bash
       env:
-        INPUT_TARGET: ${{ inputs.target_ref }}
         WORKFLOW_SHA: ${{ github.workflow_sha }}
-        LANE: ${{ matrix.lane }}
-      run: |
-        set -euo pipefail
-        test "$INPUT_TARGET" = "$EXPECTED_TARGET"
-        test "$(git rev-parse HEAD)" = "$EXPECTED_TARGET"
-        test -z "$(git status --porcelain)"
-        proof=.artifacts/drained-repair-proof
+      run: 'set -euo pipefail
+
+        proof=.artifacts/matrix-collision-binding
+
         mkdir -p "$proof"
-        printf 'source=%s
-        workflow=%s
-        run=%s
-        attempt=%s
-        lane=%s
-        ' "$EXPECTED_TARGET" "$WORKFLOW_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$LANE" > "$proof/identity.txt"
-        base64 --decode > "$proof/diagnostic.patch" <<'BOUND_0'
-        ZGlmZiAtLWdpdCBhL3Rlc3QvZ2F0ZXdheS1zdGVlci1maWZvLmUyZS50ZXN0LnRzIGIvdGVzdC9nYXRld2F5LXN0ZWVyLWZpZm8uZTJlLnRlc3QudHMKLS0tIGEvdGVzdC9nYXRld2F5LXN0ZWVyLWZpZm8uZTJlLnRlc3QudHMKKysrIGIvdGVzdC9nYXRld2F5LXN0ZWVyLWZpZm8uZTJlLnRlc3QudHMKQEAgLTg3OSw3ICs4NzksMTYgQEAKIAogICAgICAgZml4dHVyZS5tb2RlbFNlcnZlci5yZWxlYXNlRmlyc3QoImZpbmFsIik7CiAKLSAgICAgIGF3YWl0IHZpLndhaXRGb3IoKCkgPT4gZXhwZWN0KGZpeHR1cmUubW9kZWxTZXJ2ZXIucmVxdWVzdHMpLnRvSGF2ZUxlbmd0aCgzKSwgV0FJVF9PUFRTKTsKKyAgICAgIHRyeSB7CisgICAgICAgIGF3YWl0IHZpLndhaXRGb3IoKCkgPT4gZXhwZWN0KGZpeHR1cmUubW9kZWxTZXJ2ZXIucmVxdWVzdHMpLnRvSGF2ZUxlbmd0aCgzKSwgV0FJVF9PUFRTKTsKKyAgICAgIH0gY2F0Y2ggKGVycm9yKSB7CisgICAgICAgIHRocm93IG5ldyBFcnJvcigKKyAgICAgICAgICAidGVybWluYWwgQSBhbmQgb3JkaW5hcnkgQiBkaWQgbm90IHJlYWNoIHRoZSBtb2NrIHByb3ZpZGVyXG4iICsKKyAgICAgICAgICAgICJjaGF0IGVycm9ycz0iICsgSlNPTi5zdHJpbmdpZnkoZml4dHVyZS5jaGF0RXJyb3JzKSArICJcbiIgKworICAgICAgICAgICAgcmVkYWN0ZWRGaXh0dXJlTG9ncyhmaXh0dXJlLmluc3RhbmNlKSwKKyAgICAgICAgICB7IGNhdXNlOiBlcnJvciB9LAorICAgICAgICApOworICAgICAgfQogICAgICAgYXdhaXQgd2FpdEZvclJ1blRlcm1pbmFsKGZpeHR1cmUsIGZpcnN0LnJ1bklkKTsKICAgICAgIGF3YWl0IHdhaXRGb3JTZXNzaW9uSWRsZShmaXh0dXJlLCBpZGxlQmFzZWxpbmUubGFzdFNlcSA/PyAwKTsKIApkaWZmIC0tZ2l0IGEvc3JjL2F1dG8tcmVwbHkvcmVwbHkvcXVldWUvZHJhaW4udHMgYi9zcmMvYXV0by1yZXBseS9yZXBseS9xdWV1ZS9kcmFpbi50cwotLS0gYS9zcmMvYXV0by1yZXBseS9yZXBseS9xdWV1ZS9kcmFpbi50cworKysgYi9zcmMvYXV0by1yZXBseS9yZXBseS9xdWV1ZS9kcmFpbi50cwpAQCAtMTA0MCw3ICsxMDQwLDcgQEAKICAgICAgICAgICAvLyByZXRpcmVzIHRoZSBxdWV1ZSBhYm92ZTsgcm9sbGJhY2sgbGVhdmVzIGl0IGhlcmUgZm9yIG5vcm1hbCByZXRyeS4KICAgICAgICAgICBhd2FpdCB3YWl0Rm9yR2F0ZXdheVJlc3RhcnRGZW5jZVNldHRsZW1lbnQoKTsKICAgICAgICAgfSBlbHNlIHsKLSAgICAgICAgICBkZWZhdWx0UnVudGltZS5lcnJvcj8uKGBmb2xsb3d1cCBxdWV1ZSBkcmFpbiBmYWlsZWQgZm9yICR7a2V5fTogJHtTdHJpbmcoZXJyKX1gKTsKKyAgICAgICAgICBkZWZhdWx0UnVudGltZS5lcnJvcj8uKGBmb2xsb3d1cCBxdWV1ZSBkcmFpbiBmYWlsZWQgZm9yICR7a2V5fTogJHtlcnIgaW5zdGFuY2VvZiBFcnJvciA/IGVyci5zdGFjayA6IFN0cmluZyhlcnIpfWApOwogICAgICAgICB9CiAgICAgICB9CiAgICAgfSBmaW5hbGx5IHsKQEAgLTEwNzgsNyArMTA3OCw3IEBACiAgICAgaWYgKCFkcmFpblN0YXJ0ZWQgJiYgRk9MTE9XVVBfUVVFVUVTLmdldChrZXkpID09PSBxdWV1ZSkgewogICAgICAgcXVldWUuZHJhaW5pbmcgPSBmYWxzZTsKICAgICB9Ci0gICAgZGVmYXVsdFJ1bnRpbWUuZXJyb3I/LihgZm9sbG93dXAgcXVldWUgZHJhaW4gYWRtaXNzaW9uIGZhaWxlZCBmb3IgJHtrZXl9OiAke1N0cmluZyhlcnIpfWApOworICAgIGRlZmF1bHRSdW50aW1lLmVycm9yPy4oYGZvbGxvd3VwIHF1ZXVlIGRyYWluIGFkbWlzc2lvbiBmYWlsZWQgZm9yICR7a2V5fTogJHtlcnIgaW5zdGFuY2VvZiBFcnJvciA/IGVyci5zdGFjayA6IFN0cmluZyhlcnIpfWApOwogICB9KTsKIH0KIC8qIG94bGludC1kaXNhYmxlIG1heC1saW5lcyAtLSBUT0RPOiBzcGxpdCB0aGlzIGdyYW5kZmF0aGVyZWQgb3ZlcnNpemVkIGZpbGUuICovCg==
-        BOUND_0
-        base64 --decode > "$proof/source.sha256" <<'BOUND_1'
-        MTM4NTJkYjgxYWYwNWZiYzkxYTZkZTJiMTI1ZmQ2NWNmZGNjYWFiYjQ4ZWFjMGRlMDlhMDY4OTRlZGY3NTg2ZSAgZG9jcy9wbHVnaW5zL3Nkay1ydW50aW1lLm1kCmMyMGY5MDY3OThlMTk1NTAyNGNhNDk1YTgxOWFiODIyZmVhMTc5NTFjNjc0OWU2YjlkMWRmMGFhYTRmOGJlZTQgIHNyYy9hZ2VudHMvY29kZS1tb2RlLmJyaWRnZS5ob3N0LWRlbmlhbC50ZXN0LnRzCjc3MWU2OTQ4NTVjMWFiOWUzN2U2ODg0ZTA2YWI0NGRhYTYwNWM4NTFiN2JmYjI4Yjk4NWNhMDJlNjkyYjMyMjcgIHNyYy9jb21tYW5kcy9kb2N0b3ItY29uZmlnLXByZWZsaWdodC5yZWZ1c2FsLnByb2Nlc3MudGVzdC50cwphYTAzNjM5ODIwNTdhNjEwYjI1MDhlMDRiYjFmYmYzN2U1NDM5YmRhNWExOTk2ZGFjMmJkZTZlNjQ3ZjhlOGRmICBzcmMvZmxvd3MvZG9jdG9yLWhlYWx0aC50ZXN0LnRzCmI4ZjU4N2NlNDI5NzgwMWEwOGE3N2U0MDcwNTE3Y2MzOTUzMjI1ZmNiNDRjMzUwM2ZkOWViNDkzOWM1YjI5YmIgIHNyYy9nYXRld2F5L3dvcmtlci1lbnZpcm9ubWVudHMvd29ya2VyLXR1cm4tdHJhbnNjcmlwdC1mb290cHJpbnQudGVzdC50cwpmNDQxZWM1Y2QzYjE3ZGViMzFmYTdhMGZiZDhmOGY4YzZlOWE5NGUyNTZjOWZmZjNhMTQ4MzY4ZjU3NzM2NmNhICBzcmMvcGx1Z2lucy9wbHVnaW4taW52b2NhdGlvbi1zY29wZS50ZXN0LnRzCmIzOTkzZWZlYzQzYzc1YzZmOWU0ODM5N2FkMWNhMzE1ZWRiMjYyYmEwYjQ3NmM4MzZiOWZlNmY3Yzc0MzNmZDQgIHNyYy9wbHVnaW5zL3BsdWdpbi1pbnZvY2F0aW9uLXNjb3BlLnRzCjRhMTA2ODcwYzBkZWEyNDc3NGI3NmU4OGFiOTU5MDEyYWE2MTA2YTE3N2Q4NDdiYzI5NDQxNWEwMmJiYzIzNDkgIHNyYy90cmFuc2NyaXB0cy9jYXB0dXJlLXN0b3AudGVzdC50cwpmZmRkYTRmMzVhNjQxYTk2NThjMGE4NjQzNzU3NjM2Zjk0NGIwN2JjZjI2N2U2MTMxNzJiMjk0OTI1NGQwY2E3ICB0ZXN0L2dhdGV3YXktc3RlZXItZmlmby5lMmUudGVzdC50cwo2Y2NlOGIwY2MxN2QyYjY5OTBmYmZjNzNkOTJmOTQwOTdkYjlkZmFhNjBiMTNiYWM2Zjk1OTY2NTA0MmFkZjc1ICBzcmMvYXV0by1yZXBseS9yZXBseS9xdWV1ZS9kcmFpbi50cwo=
-        BOUND_1
-        base64 --decode > "$proof/overlays.sha256" <<'BOUND_2'
-        MTM4NTJkYjgxYWYwNWZiYzkxYTZkZTJiMTI1ZmQ2NWNmZGNjYWFiYjQ4ZWFjMGRlMDlhMDY4OTRlZGY3NTg2ZSAgZG9jcy9wbHVnaW5zL3Nkay1ydW50aW1lLm1kCmMyMGY5MDY3OThlMTk1NTAyNGNhNDk1YTgxOWFiODIyZmVhMTc5NTFjNjc0OWU2YjlkMWRmMGFhYTRmOGJlZTQgIHNyYy9hZ2VudHMvY29kZS1tb2RlLmJyaWRnZS5ob3N0LWRlbmlhbC50ZXN0LnRzCjc3MWU2OTQ4NTVjMWFiOWUzN2U2ODg0ZTA2YWI0NGRhYTYwNWM4NTFiN2JmYjI4Yjk4NWNhMDJlNjkyYjMyMjcgIHNyYy9jb21tYW5kcy9kb2N0b3ItY29uZmlnLXByZWZsaWdodC5yZWZ1c2FsLnByb2Nlc3MudGVzdC50cwphYTAzNjM5ODIwNTdhNjEwYjI1MDhlMDRiYjFmYmYzN2U1NDM5YmRhNWExOTk2ZGFjMmJkZTZlNjQ3ZjhlOGRmICBzcmMvZmxvd3MvZG9jdG9yLWhlYWx0aC50ZXN0LnRzCmI4ZjU4N2NlNDI5NzgwMWEwOGE3N2U0MDcwNTE3Y2MzOTUzMjI1ZmNiNDRjMzUwM2ZkOWViNDkzOWM1YjI5YmIgIHNyYy9nYXRld2F5L3dvcmtlci1lbnZpcm9ubWVudHMvd29ya2VyLXR1cm4tdHJhbnNjcmlwdC1mb290cHJpbnQudGVzdC50cwpmNDQxZWM1Y2QzYjE3ZGViMzFmYTdhMGZiZDhmOGY4YzZlOWE5NGUyNTZjOWZmZjNhMTQ4MzY4ZjU3NzM2NmNhICBzcmMvcGx1Z2lucy9wbHVnaW4taW52b2NhdGlvbi1zY29wZS50ZXN0LnRzCmIzOTkzZWZlYzQzYzc1YzZmOWU0ODM5N2FkMWNhMzE1ZWRiMjYyYmEwYjQ3NmM4MzZiOWZlNmY3Yzc0MzNmZDQgIHNyYy9wbHVnaW5zL3BsdWdpbi1pbnZvY2F0aW9uLXNjb3BlLnRzCjRhMTA2ODcwYzBkZWEyNDc3NGI3NmU4OGFiOTU5MDEyYWE2MTA2YTE3N2Q4NDdiYzI5NDQxNWEwMmJiYzIzNDkgIHNyYy90cmFuc2NyaXB0cy9jYXB0dXJlLXN0b3AudGVzdC50cwo4NjBlYjk1YzU1YTkyOGVjNjZjZjEyYzc1NjE4ZGZlYTY4N2MwNDlmZTk5OTlhN2UxNzQ1NTA4ZWJlNjgwODljICB0ZXN0L2dhdGV3YXktc3RlZXItZmlmby5lMmUudGVzdC50cwpjZmVjMWZiMGJmNzAxNDlmODJiMzhlYzgxMDJmOTUzMjhhZDk1YWZmMGM1NzI4ZjEwZDljNjQzMTc4NDgxNTdmICBzcmMvYXV0by1yZXBseS9yZXBseS9xdWV1ZS9kcmFpbi50cwo=
-        BOUND_2
-        base64 --decode > "$proof/source-paths.txt" <<'BOUND_3'
-        ZG9jcy9wbHVnaW5zL3Nkay1ydW50aW1lLm1kCnNyYy9hZ2VudHMvY29kZS1tb2RlLmJyaWRnZS5ob3N0LWRlbmlhbC50ZXN0LnRzCnNyYy9jb21tYW5kcy9kb2N0b3ItY29uZmlnLXByZWZsaWdodC5yZWZ1c2FsLnByb2Nlc3MudGVzdC50cwpzcmMvZmxvd3MvZG9jdG9yLWhlYWx0aC50ZXN0LnRzCnNyYy9nYXRld2F5L3dvcmtlci1lbnZpcm9ubWVudHMvd29ya2VyLXR1cm4tdHJhbnNjcmlwdC1mb290cHJpbnQudGVzdC50cwpzcmMvcGx1Z2lucy9wbHVnaW4taW52b2NhdGlvbi1zY29wZS50ZXN0LnRzCnNyYy9wbHVnaW5zL3BsdWdpbi1pbnZvY2F0aW9uLXNjb3BlLnRzCnNyYy90cmFuc2NyaXB0cy9jYXB0dXJlLXN0b3AudGVzdC50cwp0ZXN0L2dhdGV3YXktc3RlZXItZmlmby5lMmUudGVzdC50cwpzcmMvYXV0by1yZXBseS9yZXBseS9xdWV1ZS9kcmFpbi50cwo=
-        BOUND_3
-        base64 --decode > "$proof/diagnostic-paths.txt" <<'BOUND_4'
-        c3JjL2F1dG8tcmVwbHkvcmVwbHkvcXVldWUvZHJhaW4udHMKdGVzdC9nYXRld2F5LXN0ZWVyLWZpZm8uZTJlLnRlc3QudHMK
-        BOUND_4
-        base64 --decode > "$proof/prerequisites.sha256" <<'BOUND_5'
-        MjNkYzg2MGJlZWM3MjNhZDliYWI1YTc0NTg2MDBjYzJhYmNlMjlhNzQ0MWU5ODkxNWZiZGVlZWNjMGUyNGVjYiAgcGFja2FnZS5qc29uCjA1OWE2MjBlZDgyNjFkN2I4ZjU5OWEzZTEzYTZjMTAxZWM1MjcxYjAzMDAyZGJmNDgxNDRjZTI1OTI0ZTI4YmEgIHBucG0tbG9jay55YW1sCjQ1Mjk3YTExZDgwMWU2MzY0NDE4OTNhZmJmNzMwYzI2ZGJkNDM0ZjdlODAzMGY1MzYxYTU3Njc5NzAyYjkyNjggIC5naXRodWIvYWN0aW9ucy9zZXR1cC1ub2RlLWVudi9hY3Rpb24ueW1sCmNiOGE4OWEyNjA0MjE4OTg0MDJlMWM5NDI3YzI2YWNjMmZhZjlkNWVhYTZmZjFmM2ZjOWI5MjI5Mzk1NTczZDEgIC5naXRodWIvYWN0aW9ucy9zZXR1cC10ZXN0LWJ1bi9hY3Rpb24ueW1sCjgzM2QxY2U0NjgwYTIwNzRmYWNiMjAwNGFmZGUxNTk0MmIzMmY4ZTFiYWQxN2Q5Zjc0ZmQ4NzQzOTQ5NDhiOTUgIC5naXRodWIvYWN0aW9ucy9zZXR1cC1yaXBncmVwL2FjdGlvbi55bWwKNDdmMWQ2MWJlYThiNWFiYWQ1MmI0OGU1OTEwMDY4ZDkyNGMyYWEyMmRlNTUzMWNhNzhkYzM4YzdjM2U1OWUzOCAgdGVzdC92aXRlc3Qvdml0ZXN0LmUyZS5jb25maWcudHMKN2Y4NzZmNTVkOGExMmVmNWYwYjBkMjdhNjU1ZWVkZmEyMjNlZjZiMjE0YzAxODBlYWRjZDQ1OTFlMTNlNDg2MSAgdGVzdC92aXRlc3Qvdml0ZXN0LmUyZS5nbG9iYWwtc2V0dXAudHMKMjczNjM4OGVhMmU1YjMwZmM0N2E2MmMxNTU3MDJjNzFiNzkwMzkzNzcwYTcyMjA2ZWFkZmE2ZTNkMjk2NWM1NCAgc2NyaXB0cy9saWIvdml0ZXN0LWJ1aWxkLXByZXJlcXVpc2l0ZXMubXRzCmVlZjQwNzMzZjU0M2FlNDk2NjM1YTAxZWQ4ZGMxNDViYzNiMjY1NjAyNWMzMjhhYTFlOTlhMzgzMmE0YzNjMDEgIHNjcmlwdHMvcnVuLXZpdGVzdC5tanMKMDU0OTVlMjcyZTJjNjRmMDQ4OTg3Y2UwMmNmNTBhNTljNDYyN2Y0MGJmODljYTdjZTBiMDg3MmQyNGFlYzBlOSAgc2NyaXB0cy9wcmVwYXJlLXZpdGVzdC1ydW50aW1lLm1qcwo1ODZjMDUyNGVlNTk3N2M4YzNhZDk4YzVjYmQwYjM5ODZiYzdlNDg2ZDUwYWQxMmJmZDM0NDg3MzU4YWZhYzhhICBzY3JpcHRzL3RzZG93bi1idWlsZC5tdHMKZmZkZGE0ZjM1YTY0MWE5NjU4YzBhODY0Mzc1NzYzNmY5NDRiMDdiY2YyNjdlNjEzMTcyYjI5NDkyNTRkMGNhNyAgdGVzdC9nYXRld2F5LXN0ZWVyLWZpZm8uZTJlLnRlc3QudHMKMjFjZWEyNzE5ZjYxMDg0NzIzNzJiYTY3NWMxYTNmYWIzMzRiNmM4YWM2NmUwODA4OTU0YjM3NjIxNGI0NjY1YyAgZXh0ZW5zaW9ucy9xYS1sYWIvc3JjL2dhdGV3YXkta2lsbC1yZXN0YXJ0LXNlbmQuZTJlLnRlc3QudHMK
-        BOUND_5
-        sha256sum --check --strict "$proof/source.sha256"
+
+        env | grep -E "^(EXPECTED_TARGET|WORKFLOW_SHA|GITHUB_RUN_ID|GITHUB_RUN_ATTEMPT)=" > "$proof/identity.txt"
+
+        test "$(git rev-parse HEAD)" = "$EXPECTED_TARGET"
+
+        test -z "$(git status --porcelain)"
+
+        base64 --decode > "$proof/collision-observability.patch" <<''BOUND''
+
+        LS0tIGEvc3JjL2dhdGV3YXkvc2VydmVyL2h0dHAtbGlzdGVuLnRzCisrKyBiL3NyYy9nYXRld2F5L3NlcnZlci9odHRwLWxpc3Rlbi50cwpAQCAtMSwxMCArMSw3MiBAQAogLy8gR2F0ZXdheSBIVFRQIHNlcnZlciBsaXN0ZW4gaGVscGVyIHdpdGggcmV0cnkgYW5kIGxvY2stYXdhcmUgZXJyb3JzLgoraW1wb3J0IHsgcmVhZGRpclN5bmMsIHJlYWRGaWxlU3luYywgcmVhZGxpbmtTeW5jIH0gZnJvbSAibm9kZTpmcyI7CiBpbXBvcnQgdHlwZSB7IFNlcnZlciBhcyBIdHRwU2VydmVyIH0gZnJvbSAibm9kZTpodHRwIjsKIGltcG9ydCB7IEdhdGV3YXlMb2NrRXJyb3IgfSBmcm9tICIuLi8uLi9pbmZyYS9nYXRld2F5LWxvY2suanMiOwogaW1wb3J0IHsgc2xlZXAgfSBmcm9tICIuLi8uLi91dGlscy5qcyI7CiAKIGNvbnN0IEVBRERSSU5VU0VfTUFYX1JFVFJJRVMgPSAyMDsKIGNvbnN0IEVBRERSSU5VU0VfUkVUUllfSU5URVJWQUxfTVMgPSA1MDA7CisKKy8vIFRlbXBvcmFyeSBDSSBkaWFnbm9zdGljIG92ZXJsYXk7IGRvIG5vdCBzaGlwLiBObyBhcmd2LCBlbnZpcm9ubWVudCwgcmVtb3RlIGFkZHJlc3NlcywKKy8vIG9yIG1lc3NhZ2UgY29udGVudC4gU2FtcGxlIGFsbCBUQ1Agc3RhdGVzOiBhbiBvdXRnb2luZyBzb2NrZXQgY2FuIGJsb2NrIGJpbmQgdG9vLgorZnVuY3Rpb24gcmVjb3JkUWFCaW5kQ29sbGlzaW9uKHBvcnQ6IG51bWJlciwgYXR0ZW1wdDogbnVtYmVyKSB7CisgIGlmIChwcm9jZXNzLnBsYXRmb3JtICE9PSAibGludXgiKSB7CisgICAgcmV0dXJuOworICB9CisgIGNvbnN0IHN0YXJ0ZWQgPSBEYXRlLm5vdygpOworICBjb25zdCBzb2NrZXRzOiBBcnJheTx7IGZhbWlseTogc3RyaW5nOyBzdGF0ZTogc3RyaW5nOyBpbm9kZTogc3RyaW5nIH0+ID0gW107CisgIGNvbnN0IG93bmVyczogQXJyYXk8eyBwaWQ6IG51bWJlcjsgcHBpZDogbnVtYmVyOyBpbm9kZTogc3RyaW5nIH0+ID0gW107CisgIGxldCBpbmNvbXBsZXRlID0gZmFsc2U7CisgIHRyeSB7CisgICAgZm9yIChjb25zdCBmYW1pbHkgb2YgWyJ0Y3AiLCAidGNwNiJdKSB7CisgICAgICBjb25zdCByb3dzID0gcmVhZEZpbGVTeW5jKCIvcHJvYy9uZXQvIiArIGZhbWlseSwgInV0ZjgiKS50cmltKCkuc3BsaXQoIlxuIikuc2xpY2UoMSk7CisgICAgICBmb3IgKGNvbnN0IHJvdyBvZiByb3dzKSB7CisgICAgICAgIGNvbnN0IGZpZWxkcyA9IHJvdy50cmltKCkuc3BsaXQoL1xzKy91KTsKKyAgICAgICAgaWYgKE51bWJlci5wYXJzZUludChmaWVsZHNbMV0/LnNwbGl0KCI6IilbMV0gPz8gIiIsIDE2KSA9PT0gcG9ydCkgeworICAgICAgICAgIHNvY2tldHMucHVzaCh7IGZhbWlseSwgc3RhdGU6IGZpZWxkc1szXSA/PyAiIiwgaW5vZGU6IGZpZWxkc1s5XSA/PyAiIiB9KTsKKyAgICAgICAgfQorICAgICAgfQorICAgIH0KKyAgICBjb25zdCBpbm9kZXMgPSBuZXcgU2V0KHNvY2tldHMubWFwKChlbnRyeSkgPT4gZW50cnkuaW5vZGUpLmZpbHRlcigoaW5vZGUpID0+IGlub2RlICE9PSAiMCIpKTsKKyAgICBjb25zdCBwaWRzID0gcmVhZGRpclN5bmMoIi9wcm9jIikuZmlsdGVyKChwaWQpID0+IC9eXGQrJC91LnRlc3QocGlkKSk7CisgICAgaW5jb21wbGV0ZSA9IHBpZHMubGVuZ3RoID4gMTAyNDsKKyAgICBmb3IgKGNvbnN0IHBpZCBvZiBwaWRzLnNsaWNlKDAsIDEwMjQpKSB7CisgICAgICBpZiAoaW5vZGVzLnNpemUgPT09IDApIHsKKyAgICAgICAgYnJlYWs7CisgICAgICB9CisgICAgICBpZiAoRGF0ZS5ub3coKSAtIHN0YXJ0ZWQgPiAyNTApIHsKKyAgICAgICAgaW5jb21wbGV0ZSA9IHRydWU7CisgICAgICAgIGJyZWFrOworICAgICAgfQorICAgICAgdHJ5IHsKKyAgICAgICAgY29uc3QgZmRzID0gcmVhZGRpclN5bmMoIi9wcm9jLyIgKyBwaWQgKyAiL2ZkIik7CisgICAgICAgIGluY29tcGxldGUgfHw9IGZkcy5sZW5ndGggPiAxMDI0OworICAgICAgICBmb3IgKGNvbnN0IGZkIG9mIGZkcy5zbGljZSgwLCAxMDI0KSkgeworICAgICAgICAgIHRyeSB7CisgICAgICAgICAgICBjb25zdCBpbm9kZSA9IHJlYWRsaW5rU3luYygiL3Byb2MvIiArIHBpZCArICIvZmQvIiArIGZkKS5tYXRjaCgvXnNvY2tldDpcWyhcZCspXF0kL3UpPy5bMV07CisgICAgICAgICAgICBpZiAoaW5vZGUgJiYgaW5vZGVzLmhhcyhpbm9kZSkpIHsKKyAgICAgICAgICAgICAgY29uc3Qgc3RhdCA9IHJlYWRGaWxlU3luYygiL3Byb2MvIiArIHBpZCArICIvc3RhdCIsICJ1dGY4Iik7CisgICAgICAgICAgICAgIGNvbnN0IHBwaWQgPSBOdW1iZXIoc3RhdC5zbGljZShzdGF0Lmxhc3RJbmRleE9mKCIpIikgKyAyKS5zcGxpdCgiICIpWzFdKTsKKyAgICAgICAgICAgICAgb3duZXJzLnB1c2goeyBwaWQ6IE51bWJlcihwaWQpLCBwcGlkLCBpbm9kZSB9KTsKKyAgICAgICAgICAgICAgaW5vZGVzLmRlbGV0ZShpbm9kZSk7CisgICAgICAgICAgICB9CisgICAgICAgICAgfSBjYXRjaCB7CisgICAgICAgICAgICAvLyBBIHByb2Nlc3MgbWF5IGNsb3NlIGEgZGVzY3JpcHRvciB3aGlsZSB0aGlzIGJvdW5kZWQgc25hcHNob3QgaXMgdGFrZW4uCisgICAgICAgICAgfQorICAgICAgICB9CisgICAgICB9IGNhdGNoIHsKKyAgICAgICAgaW5jb21wbGV0ZSA9IHRydWU7CisgICAgICB9CisgICAgfQorICAgIGluY29tcGxldGUgfHw9IGlub2Rlcy5zaXplID4gMDsKKyAgfSBjYXRjaCB7CisgICAgaW5jb21wbGV0ZSA9IHRydWU7CisgIH0KKyAgcHJvY2Vzcy5zdGRlcnIud3JpdGUoSlNPTi5zdHJpbmdpZnkoeworICAgIGRpYWdub3N0aWM6ICJxYS1iaW5kLWNvbGxpc2lvbiIsIGF0OiBuZXcgRGF0ZSgpLnRvSVNPU3RyaW5nKCksCisgICAgcGlkOiBwcm9jZXNzLnBpZCwgcHBpZDogcHJvY2Vzcy5wcGlkLCBwb3J0LCBhdHRlbXB0LCBzb2NrZXRzLCBvd25lcnMsIGluY29tcGxldGUsCisgIH0pICsgIlxuIik7Cit9CiAKIGFzeW5jIGZ1bmN0aW9uIGNsb3NlU2VydmVyUXVpZXRseShodHRwU2VydmVyOiBIdHRwU2VydmVyKTogUHJvbWlzZTx2b2lkPiB7CiAgIGF3YWl0IG5ldyBQcm9taXNlPHZvaWQ+KChyZXNvbHZlKSA9PiB7CkBAIC01OSw2ICsxMjEsOSBAQAogICAgICAgcmV0dXJuOwogICAgIH0gY2F0Y2ggKGVycikgewogICAgICAgY29uc3QgY29kZSA9IChlcnIgYXMgTm9kZUpTLkVycm5vRXhjZXB0aW9uKS5jb2RlOworICAgICAgaWYgKGNvZGUgPT09ICJFQUREUklOVVNFIiAmJiAoYXR0ZW1wdCA9PT0gMCB8fCBhdHRlbXB0ID09PSBtYXhSZXRyaWVzKSkgeworICAgICAgICByZWNvcmRRYUJpbmRDb2xsaXNpb24ocG9ydCwgYXR0ZW1wdCk7CisgICAgICB9CiAgICAgICBpZiAoY29kZSA9PT0gIkVBRERSSU5VU0UiICYmIGF0dGVtcHQgPCBtYXhSZXRyaWVzKSB7CiAgICAgICAgIC8vIFBvcnQgbWF5IHN0aWxsIGJlIGluIFRJTUVfV0FJVCBhZnRlciBhIHJlY2VudCBwcm9jZXNzIGV4aXQ7IHJldHJ5LgogICAgICAgICBhd2FpdCBjbG9zZVNlcnZlclF1aWV0bHkoaHR0cFNlcnZlcik7Ci0tLSBhL2V4dGVuc2lvbnMvcWEtbGFiL3NyYy9nYXRld2F5LWNoaWxkLXNldHVwLnRzCisrKyBiL2V4dGVuc2lvbnMvcWEtbGFiL3NyYy9nYXRld2F5LWNoaWxkLXNldHVwLnRzCkBAIC0zMjEsNiArMzIxLDE2IEBACiAgIGxldCBjZmchOiBPcGVuQ2xhd0NvbmZpZzsKICAgbGV0IGVudjogTm9kZUpTLlByb2Nlc3NFbnYgfCBudWxsID0gbnVsbDsKIAorICAvLyBUZW1wb3JhcnkgQ0kgb3ZlcmxheSBwYWlyZWQgd2l0aCB0aGUgZmlyc3QvZmluYWwgYmluZC1lcnJvciBrZXJuZWwgc25hcHNob3RzLgorICBjb25zdCByZWNvcmRQb3J0UGhhc2UgPSAocGhhc2U6IHN0cmluZykgPT4geworICAgIGNvbnN0IGJ1ZmZlciA9IEJ1ZmZlci5mcm9tKEpTT04uc3RyaW5naWZ5KHsKKyAgICAgIGRpYWdub3N0aWM6ICJxYS1wb3J0LWhhbmRvZmYiLCBhdDogbmV3IERhdGUoKS50b0lTT1N0cmluZygpLAorICAgICAgcGlkOiBwcm9jZXNzLnBpZCwgcGhhc2UsIHBvcnQ6IGdhdGV3YXlQb3J0LCBwYWNrYWdlZDogdXNlc1BhY2thZ2VkQ2FuZGlkYXRlLAorICAgIH0pICsgIlxuIik7CisgICAgb3V0cHV0LnB1c2goImludGVybmFsIiwgYnVmZmVyKTsKKyAgICBzdGRvdXRMb2cud3JpdGUoYnVmZmVyKTsKKyAgfTsKKwogICBjb25zdCBub2RlRXhlY1BhdGggPSBnYXRld2F5RXhlY3V0YWJsZVBhdGggPz8gcHJvY2Vzcy5leGVjUGF0aDsKICAgY29uc3QgY2xpQXJnc1ByZWZpeCA9IGdhdGV3YXlDb21tYW5kPy5wcm9jZXNzQm91bmRhcnkKICAgICA/IGdhdGV3YXlBcmdzUHJlZml4CkBAIC0zNjksNiArMzc5LDcgQEAKICAgICAgIGxpZmV0aW1lLmFzc2VydE9wZW4oKTsKICAgICAgIGxpZmV0aW1lLnBvcnRSZXNlcnZhdGlvbiA9IGF3YWl0IHJlc2VydmVRYUdhdGV3YXlQb3J0KG5ldC5jcmVhdGVTZXJ2ZXIoKSk7CiAgICAgICBnYXRld2F5UG9ydCA9IGxpZmV0aW1lLnBvcnRSZXNlcnZhdGlvbi5wb3J0OworICAgICAgcmVjb3JkUG9ydFBoYXNlKCJyZXNlcnZlZCIpOwogICAgICAgYmFzZVVybCA9IGBodHRwOi8vMTI3LjAuMC4xOiR7Z2F0ZXdheVBvcnR9YDsKICAgICAgIHdzVXJsID0gYHdzOi8vMTI3LjAuMC4xOiR7Z2F0ZXdheVBvcnR9YDsKICAgICAgIGNmZyA9IGF3YWl0IGJ1aWxkU3RhZ2VkR2F0ZXdheUNvbmZpZyhnYXRld2F5UG9ydCk7CkBAIC00NDAsOCArNDUxLDEwIEBACiAgICAgICB9KTsKICAgICAgIC8vIEJvb3RzdHJhcCBjb21tYW5kcyBtdXN0IGluc3BlY3QgdGhpcyBjaGlsZCdzIHBvcnQgd2l0aG91dCBvdXIgcGxhY2Vob2xkZXIgbGlzdGVuZXIuCiAgICAgICBlbnYuT1BFTkNMQVdfR0FURVdBWV9QT1JUID0gU3RyaW5nKGdhdGV3YXlQb3J0KTsKKyAgICAgIHJlY29yZFBvcnRQaGFzZSgicmVsZWFzaW5nIik7CiAgICAgICBhd2FpdCBsaWZldGltZS5wb3J0UmVzZXJ2YXRpb24/LnJlbGVhc2UoKTsKICAgICAgIGxpZmV0aW1lLnBvcnRSZXNlcnZhdGlvbiA9IG51bGw7CisgICAgICByZWNvcmRQb3J0UGhhc2UoInJlbGVhc2VkIik7CiAgICAgICBjb25zdCBtb2NrQXV0aFByb3ZpZGVycyA9IHJlc29sdmVkUHJvdmlkZXIubW9ja0F1dGhQcm92aWRlcnM7CiAgICAgICBpZiAodXNlc1BhY2thZ2VkQ2FuZGlkYXRlICYmIGdhdGV3YXlDb21tYW5kICYmIG1vY2tBdXRoUHJvdmlkZXJzPy5sZW5ndGgpIHsKICAgICAgICAgY29uc3QgY2Fub25pY2FsQ29uZmlnID0gYXdhaXQgZnMucmVhZEZpbGUoY29uZmlnUGF0aCk7CkBAIC00OTEsNiArNTA0LDcgQEAKICAgICAgICAgKTsKICAgICAgIH0KICAgICAgIGxpZmV0aW1lLmFzc2VydE9wZW4oKTsKKyAgICAgIHJlY29yZFBvcnRQaGFzZSgiYm9vdHN0cmFwLWNvbXBsZXRlIik7CiAgICAgICByZXR1cm4geyBjZmcsIGVudiwgZ2F0ZXdheVBvcnQsIGJhc2VVcmwsIHdzVXJsIH07CiAgICAgfSwKICAgfTsK
+
+        BOUND
+
+        base64 --decode > "$proof/originals.sha256" <<''BOUND''
+
+        YWI4OTg4Y2U5ZTU4NzU5NmZmNDE3Y2QyN2FhNWVjNzAzMjMwMzExZjA3ZDU0MGMzYTk3ODYxMTAxNTk3YTgyZCAgc3JjL2dhdGV3YXkvc2VydmVyL2h0dHAtbGlzdGVuLnRzCjhjOTgxMzI3OWJjZmQwZTNmNjY5OTE3YjJkNjY0ODA0ZWE1MDk0ZTg3MmI0MzdmZGM4ZDU3MjkxNTc3YWIxMjMgIGV4dGVuc2lvbnMvcWEtbGFiL3NyYy9nYXRld2F5LWNoaWxkLXNldHVwLnRzCg==
+
+        BOUND
+
+        base64 --decode > "$proof/overlays.sha256" <<''BOUND''
+
+        MmEwYWQ5Yjk3YzI5YjMyZWU5ZTcwYWQ2YTRkN2Y3OTcwMjg2YTI3NDE3N2U3MGU5M2ZjNzA1NDE2NDA2N2M4MyAgc3JjL2dhdGV3YXkvc2VydmVyL2h0dHAtbGlzdGVuLnRzCmQzZmFhYWUyOTQ2MmIyZTI5NWM4OWQ0Y2M0MTEzY2I0OWNkYjRmZGEzMTUyZGI3NjhkNDAyOTk4ODA0MDljM2IgIGV4dGVuc2lvbnMvcWEtbGFiL3NyYy9nYXRld2F5LWNoaWxkLXNldHVwLnRzCg==
+
+        BOUND
+
+        base64 --decode > "$proof/prerequisites.sha256" <<''BOUND''
+
+        MjNkYzg2MGJlZWM3MjNhZDliYWI1YTc0NTg2MDBjYzJhYmNlMjlhNzQ0MWU5ODkxNWZiZGVlZWNjMGUyNGVjYiAgcGFja2FnZS5qc29uCjA1OWE2MjBlZDgyNjFkN2I4ZjU5OWEzZTEzYTZjMTAxZWM1MjcxYjAzMDAyZGJmNDgxNDRjZTI1OTI0ZTI4YmEgIHBucG0tbG9jay55YW1sCjQ1Mjk3YTExZDgwMWU2MzY0NDE4OTNhZmJmNzMwYzI2ZGJkNDM0ZjdlODAzMGY1MzYxYTU3Njc5NzAyYjkyNjggIC5naXRodWIvYWN0aW9ucy9zZXR1cC1ub2RlLWVudi9hY3Rpb24ueW1sCjUxNDAyNDQ0Y2U5ZGU3ZjA1ZTQzYmRhYzMyNDhiNzNkMTRmODUxNmQ4NGRiM2E5NGU3ZDIwNDcwOWZlMTJmNWUgIC5naXRodWIvd29ya2Zsb3dzL3FhLWxpdmUtdHJhbnNwb3J0cy1jb252ZXgueW1sCjkzZmE2ZTljOGIzMThhOTI5MjA5MjQ1MmNkMjkyMGFhZThlNDdlMjVmYzY1NWRmZjYzZWE2ZmMwMTU5MzVhZjggIHFhL3NjZW5hcmlvcy9jaGFubmVscy9tYXRyaXgtcHVibGljLW1lc3NhZ2UtYWN0aW9ucy55YW1sCjQ2ZWVmNTRhYTk3YmRkNjMxZWQzMDNhYjdmMGY1OGIzMTUyYzI3YjhmZGZmZmQ0NmZjM2Q3YTVlOTUyZmIzMTUgIGV4dGVuc2lvbnMvcWEtbGFiL3NyYy9nYXRld2F5LXBvcnQtcmVzZXJ2YXRpb24udHMKMzEzZDg2NDgyOTNkYzJjOWI0ODY3Mzk2Y2M3YjhhNjRiNjRjYWI0NzJjNGRjN2Y4ZDMzNDlhZjU4ODRjNTU4ZiAgZXh0ZW5zaW9ucy9xYS1sYWIvc3JjL2dhdGV3YXktY2hpbGQudHMK
+
+        BOUND
+
+        echo "290b71f104ae73e8eb6c8a7318aa17668d51a8ae3f27936057c81c5c048d0697  $proof/collision-observability.patch" | sha256sum
+        --check --strict
+
+        sha256sum --check --strict "$proof/originals.sha256"
+
         sha256sum --check --strict "$proof/prerequisites.sha256"
-        while IFS= read -r path; do
-          mkdir -p "$proof/source/$(dirname "$path")"
-          cp "$path" "$proof/source/$path"
-        done < "$proof/source-paths.txt"
-        printf '%s  %s\n' '28513b7477a4142c79b69f391847da6b65edfe924e293f8caec8be7474ed06a0' "$proof/diagnostic.patch" | sha256sum --check --strict
-        git apply --check "$proof/diagnostic.patch"
-        git apply "$proof/diagnostic.patch"
+
+        git apply --check "$proof/collision-observability.patch"
+
+        git apply "$proof/collision-observability.patch"
+
         sha256sum --check --strict "$proof/overlays.sha256"
-        git diff --name-only | LC_ALL=C sort > "$proof/actual-diagnostic-paths.txt"
-        diff -u "$proof/diagnostic-paths.txt" "$proof/actual-diagnostic-paths.txt"
+
         git diff --check
-        git diff --binary --full-index > "$proof/combined-diagnostic.patch"
-        while IFS= read -r path; do
-          mkdir -p "$proof/overlays/$(dirname "$path")"
-          cp "$path" "$proof/overlays/$path"
-        done < "$proof/source-paths.txt"
-        # No build bypass or inherited prebuilt runtime.
-        test -z "${OPENCLAW_E2E_SKIP_BUILD:-}"
-        test -z "${OPENCLAW_E2E_USE_PREBUILT_DIST:-}"
-    - uses: ./.github/actions/setup-node-env
+
+        git diff --binary --full-index > "$proof/applied.patch"
+
+        git diff --name-only | LC_ALL=C sort > "$proof/changed-paths.txt"
+
+        echo ''extensions/qa-lab/src/gateway-child-setup.ts
+
+        src/gateway/server/http-listen.ts'' > "$proof/expected-paths.txt"
+
+        diff -u "$proof/expected-paths.txt" "$proof/changed-paths.txt"
+
+        '
+    - name: Setup Node environment
+      uses: ./.github/actions/setup-node-env
       with:
-        semantic-checks: 'true'
-        install-bun: 'false'
         cache-mode: restore
-    - uses: ./.github/actions/setup-test-bun
-    - uses: ./.github/actions/setup-ripgrep
-    - name: Canonical fifo E2E diagnostic
-      if: matrix.lane == 'fifo'
+        node-version: ${{ env.NODE_VERSION }}
+        install-bun: 'true'
+    - name: Build private QA runtime
+      env:
+        NODE_OPTIONS: --max-old-space-size=12288
+      run: pnpm build
+    - name: Run Matrix live lane
+      id: run_lane
       shell: bash
-      run: |
-        set -euo pipefail
-        proof=.artifacts/drained-repair-proof
-        node --version
-        set +e
-        OPENCLAW_E2E_VERBOSE=1 OPENCLAW_E2E_WORKERS=1 pnpm test:e2e:gateway test/gateway-steer-fifo.e2e.test.ts -t "dispatches terminal A before a later ordinary B queued during the same turn" 2>&1 | tee "$proof/fifo.log"
-        statuses=("${PIPESTATUS[@]}")
-        set -e
-        printf 'canonical_e2e_exit=%s
-        log_exit=%s
-        ' "${statuses[0]}" "${statuses[1]}" > "$proof/fifo-status.txt"
-        if (( statuses[0] != 0 )); then exit "${statuses[0]}"; fi
-        exit "${statuses[1]}"
-    - name: Canonical hardkill E2E diagnostic
-      if: matrix.lane == 'hardkill'
-      shell: bash
-      run: |
-        set -euo pipefail
-        proof=.artifacts/drained-repair-proof
-        node --version
-        set +e
-        OPENCLAW_E2E_VERBOSE=1 OPENCLAW_E2E_WORKERS=1 pnpm test:e2e:gateway extensions/qa-lab/src/gateway-kill-restart-send.e2e.test.ts 2>&1 | tee "$proof/hardkill.log"
-        statuses=("${PIPESTATUS[@]}")
-        set -e
-        printf 'canonical_e2e_exit=%s
-        log_exit=%s
-        ' "${statuses[0]}" "${statuses[1]}" > "$proof/hardkill-status.txt"
-        if (( statuses[0] != 0 )); then exit "${statuses[0]}"; fi
-        exit "${statuses[1]}"
-    - name: Preserve exact source and failure diagnostics
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      env:
+        OPENCLAW_QA_REDACT_PUBLIC_METADATA: '1'
+        FAIL_FAST: 'false'
+        INPUT_SCENARIO: matrix-public-message-actions
+        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        OPENCLAW_LIVE_OPENAI_KEY: ${{ secrets.OPENAI_API_KEY }}
+      run: "set -euo pipefail\n\noutput_dir=\".artifacts/qa-e2e/matrix-live-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}\"\nmkdir\
+        \ -p \"${output_dir}\"\n\nmatrix_args=(\n  --repo-root . \\\n  --output-dir \"${output_dir}\" \\\n  --provider-mode\
+        \ mock-openai \\\n  --fast\n)\nif [[ -n \"${INPUT_SCENARIO// }\" ]]; then\n  IFS=',' read -r -a raw_scenarios <<<\"\
+        ${INPUT_SCENARIO}\"\n  for raw in \"${raw_scenarios[@]}\"; do\n    scenario=\"$(printf '%s' \"${raw}\" | sed -e 's/^[[:space:]]*//'\
+        \ -e 's/[[:space:]]*$//')\"\n    if [[ -n \"${scenario}\" ]]; then\n      matrix_args+=(--scenario \"${scenario}\"\
+        )\n    fi\n  done\nfi\nif [[ \"$FAIL_FAST\" == \"true\" ]] && pnpm openclaw qa matrix --help 2>/dev/null | grep -F\
+        \ -q -- \"--fail-fast\"; then\n  matrix_args+=(--fail-fast)\nfi\npnpm openclaw qa matrix \"${matrix_args[@]}\"\n"
+    - name: Upload Matrix QA artifacts
+      id: upload_artifacts
       if: always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
       with:
-        name: release-114-fifo-hardkill-73bef956-${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
-        path: |
-          .artifacts/
-          test-results/
-        include-hidden-files: true
-        if-no-files-found: error
+        name: matrix-collision-raw-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .artifacts/qa-e2e/matrix-live-${{ github.run_id }}-${{ github.run_attempt }}
         retention-days: 14
+        if-no-files-found: error
+    - name: Upload binding and raw diagnostic overlay
+      if: always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: matrix-collision-binding-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .artifacts/matrix-collision-binding
+        retention-days: 14
+        if-no-files-found: error
