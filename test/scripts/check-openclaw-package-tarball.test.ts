@@ -1129,6 +1129,14 @@ syncBuiltinESMExports();
       ],
     },
     {
+      name: "rejects the patched Bonjour runtime when it is not bundled",
+      options: { packageJson: { dependencies: { "@homebridge/ciao": "1.3.12" } } },
+      status: "nonzero",
+      stderr: [
+        "package.json dependencies.@homebridge/ciao must be listed in bundleDependencies because its patched runtime must not be replaced by the registry package",
+      ],
+    },
+    {
       name: "accepts separately published private workspace dependencies by default",
       version: "2026.6.11",
       options: { packageJson: { dependencies: { "@openclaw/ai": "2026.6.11" } } },

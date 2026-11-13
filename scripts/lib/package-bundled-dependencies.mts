@@ -160,8 +160,11 @@ export function collectBundledDependencyErrors({
   const errors: string[] = [];
   const dependencies = isRecord(packageJson.dependencies) ? packageJson.dependencies : {};
   const bundledDependencies = new Set(listBundleDependencies(packageJson));
+  const patchedRuntime = "its patched runtime must not be replaced by the registry package";
   const required = new Map<string, string>([
-    [PATCHED_MCP_NAME, "its patched runtime must not be replaced by the registry package"],
+    [PATCHED_MCP_NAME, patchedRuntime],
+    // Bonjour imports the patch-only @homebridge/ciao/native.js entry.
+    ["@homebridge/ciao", patchedRuntime],
   ]);
   if (requireBundledWorkspaceDeps) {
     required.set("@openclaw/ai", "it is private to the OpenClaw workspace");
