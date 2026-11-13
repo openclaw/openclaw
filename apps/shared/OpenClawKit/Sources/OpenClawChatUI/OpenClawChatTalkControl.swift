@@ -32,6 +32,9 @@ public struct OpenClawChatTalkControl {
     public var flipCamera: (@MainActor () -> Void)?
     public var toggle: @MainActor (_ sessionKey: String) -> Void
 
+    private let levelProvider: (@MainActor () -> Double)?
+
+    /// When supplied, `levelProvider` overrides `level` only for live waveform rendering.
     public init(
         isEnabled: Bool,
         isListening: Bool,
@@ -40,6 +43,7 @@ public struct OpenClawChatTalkControl {
         statusText: String,
         providerLabel: String,
         level: Double = 0,
+        levelProvider: (@MainActor () -> Double)? = nil,
         isMicrophoneMuted: Bool = false,
         toggleMicrophone: (@MainActor () -> Void)? = nil,
         partialTranscript: String = "",
@@ -58,6 +62,7 @@ public struct OpenClawChatTalkControl {
         self.statusText = statusText
         self.providerLabel = providerLabel
         self.level = level
+        self.levelProvider = levelProvider
         self.isMicrophoneMuted = isMicrophoneMuted
         self.toggleMicrophone = toggleMicrophone
         self.partialTranscript = partialTranscript
@@ -68,5 +73,10 @@ public struct OpenClawChatTalkControl {
         self.cameraFacing = cameraFacing
         self.flipCamera = flipCamera
         self.toggle = toggle
+    }
+
+    /// Resolve only in the waveform leaf, never while constructing the enclosing chat view.
+    @MainActor var resolvedLevel: Double {
+        self.levelProvider?() ?? self.level
     }
 }

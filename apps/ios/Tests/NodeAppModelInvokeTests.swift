@@ -2,6 +2,7 @@ import Foundation
 import GRDB
 import Observation
 import OpenClawProtocol
+import Synchronization
 import Testing
 import UIKit
 import UserNotifications
@@ -3989,13 +3990,30 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             "draft from speech",
             isFinal: false,
             captureId: captureId)
+        let tabInvalidated = Mutex(false)
+        let control = withObservationTracking {
+            ChatProTab.dictationControl(appModel: appModel)
+        } onChange: {
+            tabInvalidated.withLock { $0 = true }
+        }
+        let waveformInvalidated = Mutex(false)
+        let row = ChatDictationActivityRow(control: control, onCancel: control.cancel)
+        withObservationTracking {
+            _ = row.body
+        } onChange: {
+            waveformInvalidated.withLock { $0 = true }
+        }
         talkMode.micLevel = 0.6
+        #expect(!tabInvalidated.withLock { $0 })
+        #expect(waveformInvalidated.withLock { $0 })
+        #expect(control.resolvedLevel == 0.6)
         #expect(appModel.chatDictationPartialTranscript == "draft from speech")
         #expect(appModel.chatDictationLevel == 0.6)
 
-        appModel.finishChatDictation()
+        control.finish()
         #expect(appModel.chatDictationPhase == .processing)
         #expect(appModel.chatDictationLevel == 0)
+        #expect(control.resolvedLevel == 0)
         let transcript = try await transcription.value
         #expect(transcript == "draft from speech")
         #expect(!appModel.isChatDictationActive)
