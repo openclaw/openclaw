@@ -82,6 +82,71 @@ function createGaFetch(callId: string) {
 }
 
 describe("GPT-Live offer broker", () => {
+  it("uses each browser session's provider-config acknowledgement on the speakable channel", async () => {
+    const { realtime, sockets } = createBroker();
+    try {
+      for (const [acknowledgement, expected] of [
+        [undefined, undefined],
+        ['  Checking "the lights" now.  ', 'Checking "the lights" now.'],
+        ["I will check the next task.", "I will check the next task."],
+        ["", undefined],
+        [" \t ", undefined],
+      ] as const) {
+        const runAgentConsult = vi.fn(async () => ({ text: "Done" }));
+        const reservation = await realtime.broker.createBrowserSession(
+          {
+            providerConfig: { acknowledgement },
+            model: "gpt-live-1-codex",
+            clientControl: { owner: "gateway" },
+            gatewayControl: { bindControl: vi.fn(), handleDelegationInput: () => "consult" },
+            runAgentConsult,
+          },
+          { type: "api-key", token: "fixture-key" },
+        );
+        if (reservation.transport !== "webrtc") {
+          throw new Error("Expected WebRTC reservation");
+        }
+        const response = createResponseHarness();
+        await realtime.handler(
+          createRequest({ token: reservation.clientSecret, body: AUDIO_ONLY_SDP }),
+          response.res,
+        );
+        expect(response.res.statusCode).toBe(200);
+        const socket = sockets.at(-1);
+        if (!socket) {
+          throw new Error("Expected browser sideband socket");
+        }
+        emitSideband(socket, {
+          type: "delegation.created",
+          item: {
+            type: "delegation",
+            target: "client",
+            id: "check-lights",
+            content: [{ type: "input_text", text: "Check the lights." }],
+          },
+        });
+        expect(parseSent(socket)).toContainEqual({
+          type: "session.context.append",
+          channel: "speakable",
+          content: [
+            {
+              type: "input_text",
+              text: expect.stringContaining(
+                expected === undefined
+                  ? "in your own words"
+                  : `Status: ${JSON.stringify(expected)}`,
+              ),
+            },
+          ],
+        });
+        expect(runAgentConsult).toHaveBeenCalledOnce();
+        await realtime.broker.cancelBrowserSession(reservation);
+      }
+    } finally {
+      await realtime.cleanup();
+    }
+  });
+
   it("waits for the GA sideband before returning an audio-only SDP answer and hangs up once", async () => {
     const { promise: sidebandReady, resolve: releaseSideband } = Promise.withResolvers<void>();
     const bridge = makeBridge({ connect: vi.fn(async () => await sidebandReady) });

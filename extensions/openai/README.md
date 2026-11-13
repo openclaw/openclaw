@@ -29,3 +29,16 @@ than Codex's native custom tools. GPT-5-family models keep the Codex runtime.
 See the [OpenAI setup guide](https://docs.openclaw.ai/providers/openai/setup) and
 [authentication comparison](https://docs.openclaw.ai/providers/openai/authentication)
 to choose the appropriate access method.
+
+## Talk acknowledgment
+
+For GPT-Live Talk sessions with Gateway-owned agent delegation, set
+`talk.realtime.providers.openai.acknowledgement` to a fixed launch phrase:
+
+```bash
+openclaw config set talk.realtime.providers.openai.acknowledgement "One moment."
+```
+
+An unset or blank value keeps the default natural acknowledgment. Start a new
+Talk session to use a changed phrase. See [Talk realtime sessions](https://docs.openclaw.ai/nodes/talk/realtime-sessions)
+for transport coverage, configuration reload behavior, and limitations.

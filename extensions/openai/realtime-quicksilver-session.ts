@@ -51,6 +51,7 @@ import {
   createOpenAIRealtimeSessionLease,
   type OpenAIRealtimeSession,
 } from "./realtime-session-retirement.js";
+import { normalizeProviderConfig } from "./realtime-voice-session-policy.js";
 export const OPENAI_QUICKSILVER_OFFER_PATH = "/plugins/openai/realtime/calls";
 
 const OPENAI_QUICKSILVER_PENDING_TTL_MS = 60_000;
@@ -519,6 +520,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(
           getSocket: () => connected.socket,
           logger: params.logger,
           model: offer.request.model,
+          acknowledgement: normalizeProviderConfig(offer.request.providerConfig).acknowledgement,
           onError: (error) => offer.request.gatewayControl?.onError?.(error),
           onFatalError: (error) => {
             if (session) {

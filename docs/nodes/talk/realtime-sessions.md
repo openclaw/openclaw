@@ -114,6 +114,25 @@ speech transcription. A full control queue produces a spoken refusal; retry afte
 the pending controls finish. A task receipt is not confirmation that a model or
 tool has started, and submitting a spoken result is not proof of audible delivery.
 
+For GPT-Live calls with Gateway-owned delegation, you can replace the natural
+launch acknowledgment with a fixed phrase:
+
+```bash
+openclaw config set talk.realtime.providers.openai.acknowledgement "One moment."
+```
+
+This provider setting applies to both browser WebRTC and Gateway-relay calls,
+regardless of the client platform. It does not change GA Realtime, native
+speech/TTS fallback, status or cancellation responses, or the agent's final answer.
+Surrounding whitespace is trimmed. An unset, empty, or whitespace-only value
+keeps the natural acknowledgment above; blank does not disable acknowledgment.
+Choose wording that does not claim the task has been accepted or completed.
+
+Start a new Talk session after saving the setting; existing calls keep their
+selected acknowledgment. With the default `gateway.reload.mode: "hybrid"`, no
+rebuild or Gateway restart is needed. If configuration reload is off, the saved
+change takes effect after the next Gateway restart.
+
 Closing a native transport fences new delegations and late provider delivery;
 already accepted agent work retains its own cancellation lifetime. Spoken run
 cancellation is separate from ending the audio connection. Gateway-controlled

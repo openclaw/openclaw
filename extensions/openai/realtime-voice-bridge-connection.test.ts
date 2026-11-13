@@ -73,6 +73,67 @@ const {
 } = createOpenAIRealtimeTestSupport({ ...mocks, buildOpenAIRealtimeVoiceProvider });
 
 describe("OpenAI realtime voice bridge connection", () => {
+  it("reads the acknowledgement from provider config for each new GPT-Live relay session", async () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    for (const [acknowledgement, expected] of [
+      [undefined, undefined],
+      ['  Checking "the lights" now.  ', 'Checking "the lights" now.'],
+      ["I will check the next task.", "I will check the next task."],
+      ["", undefined],
+      [" \t ", undefined],
+    ] as const) {
+      const runAgentConsult = vi.fn(async () => ({ text: "Delegated answer" }));
+      const socketIndex = FakeWebSocket.instances.length;
+      const bridge = provider.createBridge({
+        providerConfig: { apiKey: "fixture-key", model: "gpt-live-1", acknowledgement },
+        audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+        onAudio: vi.fn(),
+        onClearAudio: vi.fn(),
+        handleDelegationInput: () => "consult",
+        runAgentConsult,
+      });
+      try {
+        const connecting = bridge.connect();
+        await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(socketIndex + 1));
+        const socket = requireSocket(socketIndex);
+        openSocket(socket);
+        await vi.waitFor(() =>
+          expect(parseSent(socket)).toContainEqual(
+            expect.objectContaining({ type: "session.start" }),
+          ),
+        );
+        emitServerEvent(socket, { type: "session.started", session: {} });
+        await connecting;
+        emitServerEvent(socket, {
+          type: "session.input_transcript.delta",
+          delta: "Check the lights.",
+          start_ms: 0,
+          end_ms: 100,
+        });
+        emitServerEvent(socket, {
+          type: "session.delegation.created",
+          offset_ms: 100,
+          delegation: { id: "check-lights", type: "delegation", target: "client" },
+        });
+        expect(parseSent(socket)).toContainEqual({
+          type: "session.commentary.append",
+          delegation_id: null,
+          content: expect.stringContaining(
+            expected === undefined ? "in your own words" : `Status: ${JSON.stringify(expected)}`,
+          ),
+        });
+        expect(runAgentConsult).toHaveBeenCalledOnce();
+      } finally {
+        const closing = bridge.close();
+        const socket = FakeWebSocket.instances[socketIndex];
+        if (socket && !socket.closed) {
+          emitServerEvent(socket, { type: "session.closed", reason: "close_requested" });
+        }
+        await closing;
+      }
+    }
+  });
+
   beforeEach(() => {
     resetTestState();
   });
