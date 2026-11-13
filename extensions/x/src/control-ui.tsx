@@ -1,5 +1,5 @@
 /** @jsxImportSource @solidjs/web */
-import { render } from "@solidjs/web";
+import { render, type JSX } from "@solidjs/web";
 import { defineControlUiPlugin, type ControlUiView } from "openclaw/plugin-sdk/control-ui";
 import {
   createMemo,
@@ -13,16 +13,45 @@ import {
 } from "solid-js";
 import type { XAllowlistSnapshot } from "./admin.js";
 import "./control-ui.css";
+import { createTranslator } from "./i18n/index.ts";
+
+type Notice = "" | "added" | "removed" | "guestsBlocked" | "guestsOn" | "guestsOff";
 
 type RepliesState = {
   accountId: string | undefined;
   snapshot: XAllowlistSnapshot | undefined;
   username: string;
   busy: boolean;
-  notice: string;
+  notice: Notice;
   connected: boolean;
   canAdmin: boolean;
+  locale: string;
 };
+
+const failureKinds = {
+  "x.allowlist.list": "list",
+  "x.allowlist.add": "add",
+  "x.allowlist.remove": "remove",
+  "x.guests.set": "guests",
+} as const;
+
+type RequestMethod = keyof typeof failureKinds;
+
+/** Keeps the failed action for the summary; the server message stays secondary detail. */
+class RequestFailure extends Error {
+  readonly kind: (typeof failureKinds)[RequestMethod];
+  constructor(kind: RequestFailure["kind"], cause: unknown) {
+    super(cause instanceof Error ? cause.message : "", { cause });
+    this.kind = kind;
+  }
+}
+
+/** Places inline elements at `{name}` placeholders in translated copy. */
+function withSlots(text: string, slots: Record<string, JSX.Element>): JSX.Element[] {
+  return text
+    .split(/\{(\w+)\}/)
+    .map((part, index) => (index % 2 ? (slots[part] ?? `{${part}}`) : part));
+}
 
 type SnapshotIdentityFields = {
   accountId?: XAllowlistSnapshot["accountId"];
@@ -37,7 +66,7 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
   let snapshot: XAllowlistSnapshot | undefined;
   let username = "";
   let busy = false;
-  let notice = "";
+  let notice: Notice = "";
   let generation = 0;
   let disposed = false;
   let available = false;
@@ -51,7 +80,9 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
     notice,
     connected: host.connection.connected,
     canAdmin: host.connection.canAdmin,
+    locale: host.locale,
   });
+  const t = createTranslator(() => view.locale);
   const canManage = () => host.connection.connected && host.connection.canAdmin;
   const usd = new Intl.NumberFormat(host.locale, {
     style: "currency",
@@ -64,7 +95,7 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
   const isCurrent = (id: number) =>
     !disposed && !context.signal.aborted && generation === id && canManage();
 
-  function request(method: string, params: Record<string, unknown> = {}) {
+  function request(method: RequestMethod, params: Record<string, unknown> = {}) {
     if (busy || !canManage()) {
       return;
     }
@@ -87,19 +118,19 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
         accountId = result.accountId;
         if (method === "x.allowlist.add") {
           username = "";
-          notice = "Account added. Its mentions can now receive replies.";
+          notice = "added";
         } else if (method === "x.allowlist.remove") {
-          notice = "Stored entry removed. Any other allowlist source still applies.";
+          notice = "removed";
         } else if (method === "x.guests.set") {
           notice = result.guests.enabled
             ? result.guests.blockedReason
-              ? "Guest mode is on. Complete the setup below before guests can receive replies."
-              : "Guest mode is on. Guest replies use the configured repository restrictions and limits."
-            : "Guest mode is off. Only maintainers can receive replies.";
+              ? "guestsBlocked"
+              : "guestsOn"
+            : "guestsOff";
         }
       } catch (cause) {
         if (isCurrent(id)) {
-          throw cause;
+          throw new RequestFailure(failureKinds[method], cause);
         }
       } finally {
         if (isCurrent(id)) {
@@ -119,8 +150,8 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
       <section class="x-replies" aria-labelledby="x-replies-title">
         <header class="x-replies__header">
           <div>
-            <h1 id="x-replies-title">X replies</h1>
-            <p>Choose whose mentions the bot can answer publicly.</p>
+            <h1 id="x-replies-title">{t("xReplies.title")}</h1>
+            <p>{t("xReplies.subtitle")}</p>
           </div>
           <button
             class="btn"
@@ -128,18 +159,18 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
             disabled={view.busy || !view.connected || !view.canAdmin}
             onClick={() => request("x.allowlist.list")}
           >
-            Refresh
+            {t("xReplies.refresh")}
           </button>
         </header>
         {!view.connected ? (
-          <p role="status">Connect to the Gateway to manage X replies.</p>
+          <p role="status">{t("xReplies.disconnected")}</p>
         ) : !view.canAdmin ? (
-          <p role="status">Administrator access is required to manage X replies.</p>
+          <p role="status">{t("xReplies.adminRequired")}</p>
         ) : (
           <>
             <div class="x-replies__controls">
               <label class="x-replies__field">
-                <span>Bot account</span>
+                <span>{t("xReplies.agentAccount")}</span>
                 <select
                   value={view.accountId ?? ""}
                   disabled={view.busy || !view.snapshot}
@@ -153,7 +184,7 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
                     when={view.snapshot}
                     fallback={
                       <option value={view.accountId ?? ""}>
-                        {view.accountId ?? "Select an account"}
+                        {view.accountId ?? t("xReplies.selectAccount")}
                       </option>
                     }
                   >
@@ -164,8 +195,12 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
                             value={account().accountId}
                             selected={account().accountId === view.accountId}
                           >
-                            {account().username ? `@${account().username}` : account().accountId} (
-                            {account().accountId})
+                            {t("xReplies.accountOption", {
+                              account: account().username
+                                ? `@${account().username}`
+                                : account().accountId,
+                              accountId: account().accountId,
+                            })}
                           </option>
                         )}
                       </For>
@@ -181,11 +216,11 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
                 }}
               >
                 <label class="x-replies__field">
-                  <span>Add by X handle</span>
+                  <span>{t("xReplies.addByHandle")}</span>
                   <input
                     name="username"
                     autocomplete="off"
-                    placeholder="@handle"
+                    placeholder={t("xReplies.handlePlaceholder")}
                     maxlength="16"
                     required
                     value={view.username}
@@ -197,25 +232,24 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
                   />
                 </label>
                 <button class="btn primary" type="submit" disabled={view.busy}>
-                  Add account
+                  {t("xReplies.addAccount")}
                 </button>
               </form>
             </div>
-            <p class="x-replies__hint">
-              Handle lookup costs $0.01. Config entries are read-only here.
-            </p>
+            <p class="x-replies__hint">{t("xReplies.lookupHint")}</p>
             <Loading on={completion()}>
               <Errored
                 fallback={(error) => {
-                  const message = () => {
+                  const failure = () => {
                     const cause = error();
-                    return host.redact(
-                      cause instanceof Error ? cause.message : "The request failed. Try again.",
-                    );
+                    return cause instanceof RequestFailure ? cause : undefined;
                   };
                   return (
                     <p class="x-replies__error" role="alert">
-                      {message()}
+                      {t(`xReplies.errors.${failure()?.kind ?? "list"}`)}
+                      <Show when={failure()?.message}>
+                        {(detail) => <small> {host.redact(detail())}</small>}
+                      </Show>
                     </p>
                   );
                 }}
@@ -224,7 +258,11 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
               </Errored>
             </Loading>
             <div aria-live="polite">
-              {view.busy ? <p>Updating X replies…</p> : view.notice ? <p>{view.notice}</p> : null}
+              {view.busy ? (
+                <p>{t("xReplies.updating")}</p>
+              ) : view.notice ? (
+                <p>{t(`xReplies.notices.${view.notice}`)}</p>
+              ) : null}
             </div>
             <Show when={view.snapshot}>
               {(currentSnapshot) => (
@@ -232,14 +270,14 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
                   <section class="x-replies__guests" aria-labelledby="x-guests-title">
                     <div class="x-replies__guest-header">
                       <div>
-                        <h2 id="x-guests-title">Guest mode</h2>
-                        <p>Let anyone ask questions about the OpenClaw repository.</p>
+                        <h2 id="x-guests-title">{t("xReplies.guests.title")}</h2>
+                        <p>{t("xReplies.guests.subtitle")}</p>
                       </div>
                       <button
                         class="x-replies__switch"
                         type="button"
                         role="switch"
-                        aria-label="Guest mode"
+                        aria-label={t("xReplies.guests.title")}
                         aria-checked={currentSnapshot().guests.enabled ? "true" : "false"}
                         disabled={view.busy}
                         onClick={() =>
@@ -249,33 +287,37 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
                         }
                       >
                         <span class="x-replies__switch-track" aria-hidden="true"></span>
-                        <span>{currentSnapshot().guests.enabled ? "On" : "Off"}</span>
+                        <span>
+                          {t(
+                            currentSnapshot().guests.enabled
+                              ? "xReplies.guests.on"
+                              : "xReplies.guests.off",
+                          )}
+                        </span>
                       </button>
                     </div>
                     <dl class="x-replies__guest-counts">
                       <div>
-                        <dt>Per guest, per UTC day</dt>
-                        <dd>{currentSnapshot().guests.maxMentionsPerAuthorPerDay} mentions</dd>
+                        <dt>{t("xReplies.guests.perGuestLimit")}</dt>
+                        <dd>{currentSnapshot().guests.maxMentionsPerAuthorPerDay}</dd>
                       </div>
                       <div>
-                        <dt>Admitted today</dt>
+                        <dt>{t("xReplies.guests.admittedToday")}</dt>
                         <dd>{currentSnapshot().guests.admittedToday}</dd>
                       </div>
                       <div>
-                        <dt>Rate-limited today</dt>
+                        <dt>{t("xReplies.guests.rateLimitedToday")}</dt>
                         <dd>{currentSnapshot().guests.rateLimitedToday}</dd>
                       </div>
                     </dl>
                     <p class="x-replies__hint">
-                      Applies to the selected bot account. Guests get repository answers with hidden
-                      helpers of the same agent. No writes, commands, visible work sessions, or
-                      other agents. Maintainers keep their normal access.{" "}
+                      {t("xReplies.guests.hint")}{" "}
                       <a
                         href="https://docs.openclaw.ai/channels/x#guest-mode"
                         target="_blank"
                         rel="noreferrer"
                       >
-                        Guest setup and limits
+                        {t("xReplies.guests.docsLink")}
                       </a>
                     </p>
                     {currentSnapshot().guests.blockedReason ? (
@@ -284,41 +326,45 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
                       </p>
                     ) : null}
                   </section>
-                  <dl class="x-replies__spend" aria-label="X API spend">
+                  <dl class="x-replies__spend" aria-label={t("xReplies.spend.label")}>
                     <div>
-                      <dt>Today (UTC)</dt>
+                      <dt>{t("xReplies.spend.today")}</dt>
                       <dd>
                         <strong>{usd.format(currentSnapshot().spend.dayUsd)}</strong>
                         <span> / {usd.format(currentSnapshot().spend.dailyLimitUsd)}</span>
                       </dd>
                     </div>
                     <div>
-                      <dt>Billing cycle since {currentSnapshot().spend.cycleStart}</dt>
+                      <dt>
+                        {t("xReplies.spend.cycle", { date: currentSnapshot().spend.cycleStart })}
+                      </dt>
                       <dd>
                         <strong>{usd.format(currentSnapshot().spend.cycleUsd)}</strong>
                         <span> / {usd.format(currentSnapshot().spend.monthlyLimitUsd)}</span>
                       </dd>
                     </div>
                   </dl>
-                  {currentSnapshot().spend.exhaustedUntil ? (
-                    <p class="x-replies__budget" role="status">
-                      X API budget reached. Paid requests resume at{" "}
-                      <time datetime={currentSnapshot().spend.exhaustedUntil}>
-                        {currentSnapshot().spend.exhaustedUntil}
-                      </time>
-                      .
-                    </p>
-                  ) : null}
+                  <Show when={currentSnapshot().spend.exhaustedUntil}>
+                    {(until) => (
+                      <p class="x-replies__budget" role="status">
+                        {withSlots(t("xReplies.spend.exhausted"), {
+                          time: <time datetime={until()}>{until()}</time>,
+                        })}
+                      </p>
+                    )}
+                  </Show>
                   <div class="x-replies__list" aria-busy={view.busy ? "true" : "false"}>
                     {currentSnapshot().entries.length ? (
                       <table>
                         <thead>
                           <tr>
-                            <th>Account</th>
-                            <th>Source</th>
-                            <th>Added by</th>
+                            <th>{t("xReplies.allowlist.account")}</th>
+                            <th>{t("xReplies.allowlist.source")}</th>
+                            <th>{t("xReplies.allowlist.addedBy")}</th>
                             <th>
-                              <span class="x-replies__sr-only">Actions</span>
+                              <span class="x-replies__sr-only">
+                                {t("xReplies.allowlist.actions")}
+                              </span>
                             </th>
                           </tr>
                         </thead>
@@ -334,11 +380,13 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
                                   {entry.username ? <small>{entry.userId}</small> : null}
                                 </td>
                                 <td>
-                                  {entry.configured
-                                    ? entry.editable
-                                      ? "Config + stored"
-                                      : "Config"
-                                    : "Stored"}
+                                  {t(
+                                    entry.configured
+                                      ? entry.editable
+                                        ? "xReplies.allowlist.configAndStored"
+                                        : "xReplies.allowlist.config"
+                                      : "xReplies.allowlist.stored",
+                                  )}
                                 </td>
                                 <td>{entry.addedBy ?? "—"}</td>
                                 <td>
@@ -346,7 +394,11 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
                                     <button
                                       class="btn"
                                       type="button"
-                                      aria-label={`Remove stored entry for ${entry.username ? `@${entry.username}` : entry.userId}`}
+                                      aria-label={t("xReplies.allowlist.removeLabel", {
+                                        account: entry.username
+                                          ? `@${entry.username}`
+                                          : entry.userId,
+                                      })}
                                       disabled={view.busy}
                                       onClick={() =>
                                         request("x.allowlist.remove", {
@@ -354,10 +406,12 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
                                         })
                                       }
                                     >
-                                      Remove
+                                      {t("xReplies.allowlist.remove")}
                                     </button>
                                   ) : (
-                                    <span class="x-replies__hint">Read-only</span>
+                                    <span class="x-replies__hint">
+                                      {t("xReplies.allowlist.readOnly")}
+                                    </span>
                                   )}
                                 </td>
                               </tr>
@@ -366,10 +420,7 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
                         </tbody>
                       </table>
                     ) : (
-                      <p class="x-replies__empty">
-                        No manual entries yet. Add a maintainer above or set <code>allowFrom</code>{" "}
-                        in config.
-                      </p>
+                      <p class="x-replies__empty">{t("xReplies.allowlist.empty")}</p>
                     )}
                   </div>
                   <Show when={currentSnapshot().verifiedFromGitHub}>
@@ -380,39 +431,49 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
                       });
                       return (
                         <section class="x-replies__github" aria-labelledby="x-github-title">
-                          <h2 id="x-github-title">From GitHub</h2>
+                          <h2 id="x-github-title">{t("xReplies.github.title")}</h2>
                           <p>
-                            Verified through{" "}
-                            <a
-                              href={`https://github.com/${github().repo}`}
-                              target="_blank"
-                              rel="noreferrer"
-                            >
-                              {github().repo}
-                            </a>
-                            . To enable yourself, add your X handle to your GitHub profile.{" "}
+                            {withSlots(t("xReplies.github.verifiedThrough"), {
+                              repo: (
+                                <a
+                                  href={`https://github.com/${github().repo}`}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  {github().repo}
+                                </a>
+                              ),
+                            })}{" "}
                             <a
                               href="https://docs.openclaw.ai/channels/x#enable-yourself"
                               target="_blank"
                               rel="noreferrer"
                             >
-                              Profile setup
+                              {t("xReplies.github.profileSetup")}
                             </a>
                           </p>
                           <p class="x-replies__hint" role="status">
-                            {github().stale ? "Sync is stale. " : ""}
-                            <Show when={lastSync()} fallback="No successful sync yet.">
+                            {github().stale ? `${t("xReplies.github.stale")} ` : ""}
+                            <Show
+                              when={lastSync()}
+                              fallback={`${t("xReplies.github.neverSynced")} `}
+                            >
                               {(date) => (
                                 <>
-                                  Last successful sync:{" "}
-                                  <time datetime={date().toISOString()}>
-                                    {dateTime.format(date())}
-                                  </time>
-                                  . {github().stale ? "The last good set remains active. " : ""}
+                                  {withSlots(t("xReplies.github.lastSync"), {
+                                    time: (
+                                      <time datetime={date().toISOString()}>
+                                        {dateTime.format(date())}
+                                      </time>
+                                    ),
+                                  })}{" "}
+                                  {github().stale
+                                    ? `${t("xReplies.github.lastGoodSetActive")} `
+                                    : ""}
                                 </>
                               )}
                             </Show>
-                            Entries update automatically and are read-only here.
+                            {t("xReplies.github.readOnly")}
                           </p>
                           <Show when={github().message}>
                             {(message) => (
@@ -423,11 +484,11 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
                           </Show>
                           {github().unresolvedHandles.length ? (
                             <p class="x-replies__hint">
-                              Could not resolve on X:{" "}
-                              {github()
-                                .unresolvedHandles.map((handle) => `@${handle}`)
-                                .join(", ")}
-                              . Check the declared profiles.
+                              {t("xReplies.github.unresolved", {
+                                handles: github()
+                                  .unresolvedHandles.map((handle) => `@${handle}`)
+                                  .join(", "),
+                              })}
                             </p>
                           ) : null}
                           <div class="x-replies__list">
@@ -435,10 +496,10 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
                               <table>
                                 <thead>
                                   <tr>
-                                    <th>X account</th>
-                                    <th>GitHub account</th>
-                                    <th>Permission</th>
-                                    <th>Last sync</th>
+                                    <th>{t("xReplies.github.xAccount")}</th>
+                                    <th>{t("xReplies.github.githubAccount")}</th>
+                                    <th>{t("xReplies.github.permission")}</th>
+                                    <th>{t("xReplies.github.lastSyncColumn")}</th>
                                   </tr>
                                 </thead>
                                 <tbody>
@@ -470,7 +531,7 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
                                 </tbody>
                               </table>
                             ) : (
-                              <p class="x-replies__empty">No GitHub-derived accounts yet.</p>
+                              <p class="x-replies__empty">{t("xReplies.github.empty")}</p>
                             )}
                           </div>
                         </section>
@@ -478,11 +539,13 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
                     }}
                   </Show>
                   <p class="x-replies__hint">
-                    {currentSnapshot().guests.enabled
-                      ? currentSnapshot().guests.blockedReason
-                        ? "Guest replies are blocked until the setup above is complete."
-                        : "Allowlisted users are maintainers. Other users receive limited guest replies."
-                      : "Guest mode is off. Only allowlisted maintainers receive replies."}
+                    {t(
+                      currentSnapshot().guests.enabled
+                        ? currentSnapshot().guests.blockedReason
+                          ? "xReplies.footer.guestsBlocked"
+                          : "xReplies.footer.guestsOn"
+                        : "xReplies.footer.guestsOff",
+                    )}
                   </p>
                 </>
               )}
@@ -511,6 +574,7 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
           notice,
           connected: host.connection.connected,
           canAdmin: host.connection.canAdmin,
+          locale: host.locale,
         };
       });
     }
@@ -552,14 +616,15 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
 export default defineControlUiPlugin({
   id: "x",
   activate(host) {
+    const t = createTranslator(() => host.locale);
     const disposePage = host.ui.registerPage({
       id: "replies",
-      label: "X replies",
+      label: t("xReplies.title"),
       mount: mountXReplies,
     });
     const disposeNavigation = host.ui.registerNavigation({
       id: "replies",
-      label: "X replies",
+      label: t("xReplies.title"),
       page: { id: "replies" },
       icon: "at-sign",
       order: 40,
