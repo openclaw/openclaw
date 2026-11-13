@@ -2535,7 +2535,7 @@ describe("chat model controls", () => {
     });
     idReads = 0;
     const container = await renderModelControls(state);
-    const rows = container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]");
+    const rows = container.querySelectorAll<HTMLElement>("[data-chat-model-option]");
     expect(rows.length).toBeGreaterThan(0);
     expect(rows.length).toBeLessThan(size);
     expect(rows[0]?.dataset.chatModelOption).toBe("example/model-0");
@@ -2705,15 +2705,15 @@ describe("chat model controls", () => {
       onModelSetup,
     });
 
-    const options = container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]");
+    const options = container.querySelectorAll<HTMLElement>("[data-chat-model-option]");
     expect([...options].map((option) => option.dataset.chatModelOption)).toEqual([
       "openai/gpt-5.6-sol",
       "openai/gpt-5.6-luna",
     ]);
     expect(options[0]?.textContent).toContain("GPT-5.6 Sol");
     expect(options[0]?.textContent).toContain("Default");
-    expect([...options].every((option) => option.disabled)).toBe(true);
     for (const option of options) {
+      expect(option.getAttribute("aria-disabled")).toBe("true");
       expect(option.getAttribute("aria-label")).toContain("Sign-in needed");
       expect(option.querySelector(".chat-controls__model-option-meta")).toBeNull();
       expect(option.textContent).not.toContain("1M");
@@ -2750,15 +2750,15 @@ describe("chat model controls", () => {
     const onModelSetup = vi.fn();
     const onProviderSettings = vi.fn();
     const container = await renderModelControls(state, { onModelSetup, onProviderSettings });
-    const cold = container.querySelector<HTMLButtonElement>(
+    const cold = container.querySelector<HTMLElement>(
       '[data-chat-model-option="openai/gpt-5.6-luna"]',
     );
-    const recovering = container.querySelector<HTMLButtonElement>(
+    const recovering = container.querySelector<HTMLElement>(
       '[data-chat-model-option="codex/gpt-5.6-luna"]',
     );
-    expect(cold?.disabled).toBe(true);
+    expect(cold?.getAttribute("aria-disabled")).toBe("true");
     expect(cold?.getAttribute("aria-label")).toContain("Sign-in needed");
-    expect(recovering?.disabled).toBe(true);
+    expect(recovering?.getAttribute("aria-disabled")).toBe("true");
     expect(recovering?.textContent).not.toContain("Sign-in needed");
     recovering?.click();
     expect(onModelSetup).not.toHaveBeenCalled();
@@ -2837,12 +2837,12 @@ describe("chat model controls", () => {
     const onModelSetup = vi.fn();
     const container = await renderModelControls(state, { onModelSelect, onModelSetup });
     document.body.append(container);
-    const defaultRow = container.querySelector<HTMLButtonElement>(
+    const defaultRow = container.querySelector<HTMLElement>(
       `[data-chat-model-option="openai/${model}"]`,
     );
     expect(defaultRow?.dataset.chatModelDefault).toBe("true");
     expect(defaultRow?.getAttribute("aria-selected")).toBe("true");
-    expect(defaultRow?.disabled).toBe(true);
+    expect(defaultRow?.getAttribute("aria-disabled")).toBe("true");
     defaultRow?.click();
     expect(onModelSelect).not.toHaveBeenCalled();
     expect(onModelSetup).not.toHaveBeenCalled();
@@ -3039,7 +3039,7 @@ describe("chat model controls", () => {
     });
 
     const modelOption = Array.from(
-      container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]"),
+      container.querySelectorAll<HTMLElement>("[data-chat-model-option]"),
     ).find(
       (button) =>
         button.getAttribute("aria-selected") === "false" && button.dataset.chatModelOption !== "",

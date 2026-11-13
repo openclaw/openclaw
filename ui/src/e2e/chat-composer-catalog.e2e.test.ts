@@ -232,7 +232,7 @@ suite.define(() => {
       await textarea.fill(draft);
       const picker = composer.locator("details.chat-controls__model-picker");
       const options = picker.locator(
-        "button[data-chat-model-option]:not([data-chat-model-target])",
+        '[role="option"][data-chat-model-option]:not([data-chat-model-target])',
       );
       await picker.locator("summary").click();
       await gateway.waitForRequest("models.list");
@@ -256,7 +256,9 @@ suite.define(() => {
         .toBe(true);
       await expect
         .poll(() =>
-          options.evaluateAll((rows) => rows.every((row) => row.hasAttribute("disabled"))),
+          options.evaluateAll((rows) =>
+            rows.every((row) => row.getAttribute("aria-disabled") === "true"),
+          ),
         )
         .toBe(true);
       await expectText(composer.locator("[data-chat-model-auth-state]"), "Sign-in needed");

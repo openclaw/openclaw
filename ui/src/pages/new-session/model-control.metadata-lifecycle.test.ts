@@ -344,7 +344,7 @@ it("enables a cooled-down model on reopen without a catalog event", async () => 
   const option = () => find("model-option", "example/model");
   onTestFinished(() => clock.mockRestore());
   load();
-  await vi.waitFor(() => expect(option()?.disabled).toBe(true));
+  await vi.waitFor(() => expect(option()?.getAttribute("aria-disabled")).toBe("true"));
   request.mockResolvedValueOnce({
     models: [
       { ...model, available: true, unavailableReason: undefined, unavailableUntil: undefined },
@@ -352,7 +352,7 @@ it("enables a cooled-down model on reopen without a catalog event", async () => 
   });
   clock.mockReturnValue(12_000);
   find("model-select", "true")!.click();
-  await vi.waitFor(() => expect(option()?.disabled).toBe(false));
+  await vi.waitFor(() => expect(option()?.getAttribute("aria-disabled")).toBeNull());
 });
 
 it("selects a usable retained account after refresh failure without changing saved preferences", async () => {
