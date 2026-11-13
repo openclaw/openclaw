@@ -190,7 +190,7 @@ it("relays the candidate's receipts in order and returns its result", async () =
 });
 
 it("answers a receipt only after the updater has committed it", async () => {
-  const committed = createDeferredCore<void>();
+  const committed = createDeferredCore();
   fixture.pending = true;
   const result = run({ onProgress: () => committed.promise });
   await spawned.promise;
