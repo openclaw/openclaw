@@ -135,6 +135,7 @@ function retainedAccountDraft(mode?: "retire" | "permitted-default" | "provider-
   const chooseAccount = async () => {
     await vi.waitFor(() => expect(blocked()).toContain("No account is available for this model."));
     await waitForModelControl(control, context, "main", agent);
+    await vi.waitFor(() => expect(accountToggle()).not.toBeNull());
     openAccounts();
     await vi.waitFor(() => expect(draw().textContent).toContain(account.label));
     select(`account:${account.authProfileId}`);
@@ -436,7 +437,9 @@ it("retains its neutral auth gate through pending, rejected and failed refreshes
   await vi.waitFor(() => {
     const container = draw();
     expect(find("model-select", "true")?.getAttribute("aria-busy")).toBe("false");
-    expect(container.textContent).toContain("No models available");
+    expect(container.querySelector("[data-chat-model-auth-state]")?.textContent).toContain(
+      "Authentication failed",
+    );
   });
   expect(blocked()).toContain("Authentication failed");
   request.mockResolvedValueOnce({
@@ -531,7 +534,15 @@ describe("model selection policy", () => {
         }
         if (attempt === 1) {
           expect(checking.querySelector('[data-chat-model-catalog-state="error"]')).toBeNull();
-          expect(checking.querySelector(".btn__spinner")).not.toBeNull();
+          if (clearsChoices) {
+            expect(
+              checking
+                .querySelector('[data-chat-model-catalog-state="loading"]')
+                ?.getAttribute("aria-label"),
+            ).toBe("Loading models…");
+          } else {
+            expect(checking.querySelector(".btn__spinner")).not.toBeNull();
+          }
         }
         if (clearsChoices) {
           expect(blocked()).toBe("Loading models…");

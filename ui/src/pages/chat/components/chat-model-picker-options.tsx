@@ -80,22 +80,17 @@ function optionPresentation(options: ModelPresentationProps) {
   const chatOnlyHelp =
     options.entry.supportsTools === false ? t("chat.modelControls.chatOnlyHelp") : "";
   const detail = [routeDetail, chatOnlyHelp].filter(Boolean).join(" ");
-  // Resetting a recorded pin remains possible even when its default model is unavailable.
+  // Auth-blocked rows stay inert; other unavailable defaults can reset a recorded pin.
   const resetsPin = options.entry.isDefault && options.sessionModelPinned;
   const needsAuth = optionNeedsAuth(options.entry);
-  const onModelSetup = needsAuth ? options.onModelSetup : undefined;
   const context =
     selected && (options.contextWindow?.options.length ?? 0) > 1
       ? options.contextWindow
       : undefined;
   const contextOption = context?.options.find((option) => option.id === context.selected);
-  const modelMeta =
-    contextOption?.label ??
-    (needsAuth
-      ? runtime?.detail !== undefined
-        ? runtimeLabel
-        : ""
-      : formatModelContextMeta(options.entry, t));
+  const modelMeta = needsAuth
+    ? ""
+    : (contextOption?.label ?? formatModelContextMeta(options.entry, t));
   const accessibleStatus = needsAuth
     ? t("modelSetup.candidates.signInNeeded")
     : options.entry.unavailableReason === "unsupported-runtime"
@@ -110,7 +105,6 @@ function optionPresentation(options: ModelPresentationProps) {
     detail,
     resetsPin,
     needsAuth,
-    onModelSetup,
     modelMeta,
     accessibleStatus,
   };
@@ -132,7 +126,6 @@ export function modelOptionSearchRow(
   const runtimeLabel =
     formatModelRuntimeLabel(options.entry.provider, options.entry.agentRuntimeId)?.label ?? "";
   const resetsPin = options.entry.isDefault && options.sessionModelPinned;
-  const onModelSetup = optionNeedsAuth(options.entry) ? options.onModelSetup : undefined;
   return {
     key: modelPickerOptionKey(options.entry),
     name: formatModelLabel(options.entry).toLocaleLowerCase(),
@@ -150,7 +143,10 @@ export function modelOptionSearchRow(
     reference: options.entry.value,
     selected,
     hasShortcut: !selected,
-    disabled: options.disabled || Boolean(options.entry.disabled && !onModelSetup && !resetsPin),
+    disabled:
+      options.disabled ||
+      optionNeedsAuth(options.entry) ||
+      Boolean(options.entry.disabled && !resetsPin),
   };
 }
 
@@ -177,13 +173,14 @@ function ModelOptionButton(
       class={[
         "chat-controls__inline-select-option chat-controls__model-option",
         {
-          "chat-controls__inline-select-option--selected": props.presentation.selected,
+          "chat-controls__inline-select-option--selected":
+            props.presentation.selected && !props.presentation.needsAuth,
         },
       ]}
       data-chat-model-option={props.entry.value}
       data-chat-model-key={key()}
       data-chat-model-rank={rank()}
-      data-chat-model-highlighted={highlighted() ? "" : undefined}
+      data-chat-model-highlighted={highlighted() && !props.presentation.needsAuth ? "" : undefined}
       style={{ "--chat-model-rank": rank() }}
       data-chat-model-runtime={props.entry.agentRuntime ?? undefined}
       data-chat-model-default={props.entry.isDefault ? "true" : undefined}
@@ -216,18 +213,11 @@ function ModelOptionButton(
       type="button"
       disabled={
         props.disabled ||
-        Boolean(
-          props.entry.disabled && !props.presentation.onModelSetup && !props.presentation.resetsPin,
-        )
+        props.presentation.needsAuth ||
+        Boolean(props.entry.disabled && !props.presentation.resetsPin)
       }
-      data-chat-model-setup={props.presentation.onModelSetup ? "true" : undefined}
+      data-chat-model-auth-blocked={props.presentation.needsAuth ? "" : undefined}
       onClick={(event) => {
-        // Auth-gated rows lead to setup rather than trapping a click on a disabled model.
-        if (props.entry.disabled && !props.presentation.resetsPin) {
-          event.stopPropagation();
-          props.presentation.onModelSetup?.();
-          return;
-        }
         props.onSelect(props.entry, event);
       }}
     >
@@ -243,12 +233,6 @@ function ModelOptionButton(
           <Show when={props.entry.isDefault}>
             <span class="chat-controls__model-state-label chat-controls__model-state-label--default">
               {defaultLabel()}
-            </span>
-          </Show>
-          <Show when={props.presentation.needsAuth}>
-            <span class="chat-controls__model-option-auth-warning" data-chat-model-auth-warning>
-              <Icon name="alertTriangle" />
-              <span>{props.presentation.accessibleStatus}</span>
             </span>
           </Show>
           <Show when={props.entry.supportsTools === false}>
@@ -272,10 +256,12 @@ function ModelOptionButton(
         </span>
       </span>
       <span class="chat-controls__model-option-action">
-        <Show when={props.presentation.selected} fallback={<ModelShortcut rowKey={key()} />}>
-          <span class="chat-controls__inline-select-check" aria-hidden="true">
-            <Icon name="check" />
-          </span>
+        <Show when={!props.presentation.needsAuth}>
+          <Show when={props.presentation.selected} fallback={<ModelShortcut rowKey={key()} />}>
+            <span class="chat-controls__inline-select-check" aria-hidden="true">
+              <Icon name="check" />
+            </span>
+          </Show>
         </Show>
       </span>
     </button>

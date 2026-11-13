@@ -60,7 +60,9 @@ function seedCatalog(
 }
 
 const menuReady = (container: HTMLElement) =>
-  waitForSolid(() => expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull());
+  waitForSolid(() =>
+    expect(container.querySelector(".chat-controls__model-menu[aria-label]")).not.toBeNull(),
+  );
 
 function composerControls(state: ChatPageHost) {
   return renderControls(state, {
@@ -327,18 +329,23 @@ describe("chat pane composer controls", () => {
       flush();
       expect(state.chatModelsLoading).toBe(true);
       expect(container.querySelector('[data-chat-model-catalog-state="error"]')).toBeNull();
-      expect(container.querySelector(".btn__spinner")).not.toBeNull();
+
       expect(container.textContent).not.toContain(failureLabel);
       if (retained) {
         expect(container.querySelector("[data-chat-model-refresh]")).not.toBeNull();
         expect(container.textContent).toContain("Refreshing models…");
+        expect(container.querySelector(".btn__spinner")).not.toBeNull();
         expect(
           container.querySelector<HTMLButtonElement>("[data-chat-model-option]")?.disabled,
         ).toBe(false);
         expect(container.textContent).toContain("Cached Model");
       } else {
         expect(container.querySelector('[data-chat-model-catalog-state="loading"]')).not.toBeNull();
-        expect(container.textContent).toContain("Loading models…");
+        expect(
+          container
+            .querySelector('[data-chat-model-catalog-state="loading"]')
+            ?.getAttribute("aria-label"),
+        ).toBe("Loading models…");
       }
 
       checking.reject(new Error("Runtime preparation still failed"));
