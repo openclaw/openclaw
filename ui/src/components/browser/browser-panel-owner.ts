@@ -29,7 +29,11 @@ import type { BrowserPanelMode, BrowserPanelState } from "./browser-panel-state.
 import { BrowserPanelStream } from "./browser-panel-stream.ts";
 import { BrowserPanelViewportOwner } from "./browser-panel-viewport-owner.ts";
 import { browserRouteKey, type BrowserRoute } from "./browser-target.ts";
-import { normalizeBrowserUrlDraft, resolveBrowserAddressInput } from "./browser-url.ts";
+import {
+  normalizeBrowserUrlDraft,
+  normalizeChromePageUrlDraft,
+  resolveBrowserAddressInput,
+} from "./browser-url.ts";
 
 registerBrowserEnglish();
 
@@ -435,6 +439,14 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
         panel.resetBrowserState();
       } else if (targetId === panel.activeTargetId && !route) {
         return;
+      } else if (
+        options?.focusBrowserTab === false &&
+        stream.ownsView(panel.activeTargetId) &&
+        panel.tabs.find((tab) => tab.id === targetId || tab.targetId === targetId)?.id ===
+          panel.activeTargetId
+      ) {
+        // A newer session result for the tab already streaming here keeps the live view.
+        return;
       }
       const client = operations.captureClient();
       const previous = { targetId: panel.activeTargetId, view: panel.view };
@@ -575,7 +587,8 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
         return;
       }
       const url = panel.view?.metrics?.url || panel.view?.url || panel.urlDraft;
-      const normalized = normalizeBrowserUrlDraft(url);
+      // Chrome pages open only in a new tab, so reload repaints them instead of navigating.
+      const normalized = normalizeChromePageUrlDraft(url) ? null : normalizeBrowserUrlDraft(url);
       if (panel.activeTargetId) {
         void (normalized
           ? panel.openUrl(normalized, { newTab: false })
@@ -607,11 +620,16 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
       if (!panel.urlDraft.trim()) {
         return true;
       }
-      const url = address ?? resolveBrowserAddressInput(panel.urlDraft);
+      // The search resolver rejects chrome:, so a typed Chrome page is checked first.
+      const chromePage = address === undefined ? normalizeChromePageUrlDraft(panel.urlDraft) : null;
+      const url = address ?? chromePage ?? resolveBrowserAddressInput(panel.urlDraft);
       if (!url) {
         return false;
       }
-      void panel.openUrl(url, { newTab: panel.pendingNewTab || panel.tabs.length === 0 });
+      // Chrome pages always get their own tab, so a tab the agent uses never turns into one.
+      void panel.openUrl(url, {
+        newTab: chromePage !== null || panel.pendingNewTab || panel.tabs.length === 0,
+      });
       return true;
     },
 

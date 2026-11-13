@@ -494,9 +494,15 @@ suite.define(() => {
                     expect(
                       await card.evaluate((node) => getComputedStyle(node).transitionDuration),
                     ).toBe("1e-05s");
-                    expect(
-                      await menu.evaluate((node) => node.getAnimations({ subtree: true }).length),
-                    ).toBe(0);
+                    // Copy feedback can restart the permitted 0.01 ms CSS transitions.
+                    for (const timing of await menu.evaluate((node) =>
+                      node
+                        .getAnimations({ subtree: true })
+                        .map((animation) => animation.effect?.getComputedTiming()),
+                    )) {
+                      expect(timing?.duration).toBeLessThanOrEqual(0.01);
+                      expect(timing?.delay).toBeLessThanOrEqual(0.01);
+                    }
                   }
                   publication = {
                     state: "published",

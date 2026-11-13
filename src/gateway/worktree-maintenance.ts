@@ -277,6 +277,7 @@ export function startWorktreeMaintenance(params: {
                         scratchPressure = await hasIoPressure();
                       },
                       cursor: scratchCursor,
+                      signal: scheduler.signal,
                       onProgress: (progress) => {
                         current.scratch = progress;
                       },

@@ -2698,13 +2698,18 @@ struct GatewayProcessManagerTests {
         try await self.withLaunchAgentEnvironment {
             let port = GatewayEnvironment.gatewayPort()
             let url = try #require(URL(string: "ws://example.invalid"))
-            let session = GatewayTestWebSocketSession { self.gatewayTask(healthSucceedsAfter: 0) }
+            let session = GatewayTestWebSocketSession { self.gatewayTask(healthSucceedsAfter: 1) }
             let probes = Mutex(0)
+            let clock = ManualTestClock()
+            let deadline = clock.now.advanced(by: .seconds(1))
+            // The budget admits probes at 0, 300, 600, and 900 milliseconds.
+            let probeGates = (0..<4).map { _ in AsyncTestGate() }
             let connection = GatewayConnection(
                 endpointProvider: {
                     let probe = probes.withLock { $0 += 1
                         return $0
                     }
+                    await probeGates[probe - 1].wait()
                     if probe == 2 {
                         // The first real handshake could not read or create an identity.
                         #expect(session.latestTask()?.snapshotSendCount() == 0)
@@ -2717,7 +2722,6 @@ struct GatewayProcessManagerTests {
                 supportsSharedEndpointRecovery: false,
                 activationBindingKeyProvider: { nil },
                 sessionBox: WebSocketSessionBox(session: session))
-            let clock = ManualTestClock()
             let manager = GatewayProcessManager(readinessClock: clock)
             manager.setTestingConnection(connection)
             manager.setTestingSkipControlChannelRefresh(true)
@@ -2732,13 +2736,23 @@ struct GatewayProcessManagerTests {
                     await manager.waitForGatewayReady(timeout: 1)
                 }
             }
-            await clock.waitForSleep(until: clock.now.advanced(by: .milliseconds(300)))
-            clock.advance(by: .milliseconds(300))
-            if !maintenanceFinishes {
-                await clock.waitForSleep(until: clock.now.advanced(by: .milliseconds(300)))
-                clock.advance(by: .milliseconds(700))
+            let clockDriver = Task {
+                for gate in probeGates {
+                    await clock.waitForSleep(until: deadline)
+                    guard !Task.isCancelled else { return }
+                    let probeRegistration = clock.sleepRegistrations
+                    gate.open()
+                    let retryAt = min(clock.now.advanced(by: .milliseconds(300)), deadline)
+                    // The final retry shares the probe deadline, but owns a later timer.
+                    await clock.waitForSleep(until: retryAt, after: probeRegistration)
+                    guard !Task.isCancelled else { return }
+                    clock.advance(by: clock.now.duration(to: retryAt))
+                }
             }
             let ready = await readiness.value
+            clockDriver.cancel()
+            probeGates.forEach { $0.open() }
+            await clockDriver.value
             #expect(probes.withLock { $0 } >= 2)
             #expect(ready == maintenanceFinishes)
             #expect(!manager._testHasLaunchAgentReadinessFailure())

@@ -100,6 +100,7 @@ vi.mock("./attempt-transcript-helpers.js", () => ({
   resolveAttemptTrajectorySessionFile: mocks.trajectoryPath,
 }));
 
+import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import { persistSessionSystemPrompt } from "../session-prompt-state.js";
 import { prepareEmbeddedAttemptSessionRuntime } from "./attempt-session-runtime-prepare.js";
 import {
@@ -428,7 +429,8 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
             runtime.toolSearchCatalogRef?.current?.entries ?? [],
           ),
         };
-        await owner.persistSessionToolSurface(prepared.sessionPromptState, (customType, data) =>
+        (await prepared.prepareSystemPromptUpdate!("listing proof")).commit?.();
+        await owner.persistSessionSystemPrompt(prepared.sessionPromptState, (customType, data) =>
           fixture.appendCustomEntryAsync(customType, structuredClone(data)),
         );
         return result;
@@ -521,6 +523,45 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
     await fixture.prepare();
     expect(render.mock.calls[0]?.[0]?.()).toBe(snapshot);
   });
+
+  it.each([
+    ["proxy", "claude-opus-5", "anthropic-messages", "https://proxy.example.test"],
+    ["custom-openai", "gpt-5.4-mini", "openai-completions", "https://compat.example.test/v1"],
+    ["google", "gemini-3-pro", "google-generative-ai", "https://generativelanguage.googleapis.com"],
+    [
+      "amazon-bedrock",
+      "anthropic.claude-opus-5",
+      "bedrock-converse-stream",
+      "https://bedrock-runtime.us-east-1.amazonaws.com",
+    ],
+  ] as const)(
+    "pins the session prompt on %s %s (%s) without in-history system messages",
+    async (provider, id, api, baseUrl) => {
+      const fixture = createHistoryFixture();
+      const model = makeProviderModelFixture({ provider, id, api, baseUrl });
+      const policy = resolveTranscriptPolicy({
+        config: {},
+        directApiKey: true,
+        provider: model.provider,
+        modelApi: model.api,
+        modelId: model.id,
+        model,
+      });
+      expect(policy.inHistorySystemUpdates).toBeFalsy();
+      Object.assign(fixture.transcriptPolicy, policy);
+      const userTurn = await prepareEmbeddedAttemptSessionRuntime(fixture.input);
+      const admitted = await userTurn.prepareSystemPromptUpdate!(
+        "## Tooling\n- exec\n- suggest_task",
+      );
+      admitted.commit?.();
+      await fixture.persist(userTurn);
+      // An inter-session turn renders without the task-suggestion grant.
+      const sendTurn = await prepareEmbeddedAttemptSessionRuntime(fixture.input);
+      const next = await sendTurn.prepareSystemPromptUpdate!("## Tooling\n- exec");
+      expect(next.systemPrompt).toBe(admitted.systemPrompt);
+      expect(next.update?.content).toContain("## Tooling\n- exec");
+    },
+  );
 
   it("clears an unsent prompt without reading history when prompt updates remain enabled", async () => {
     const fixture = createHistoryFixture();

@@ -3,7 +3,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { readToolApprovalReviews } from "../../lib/chat/tool-approval-reviews.ts";
 import { readPreparedActivity, summarizeToolGroup } from "../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached, resolveToolCardOutcome } from "../../lib/chat/tool-cards.ts";
-import * as inlineCommands from "./chat-activity-segments.ts";
+import { inlineActivityDisclosureCalls } from "./chat-activity-segments.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { activeChatRunStartupStatus, chatStartupStatusLabel } from "./chat-run-startup.ts";
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
@@ -99,7 +99,7 @@ it.each(["live", "history"] as const)(
     expect(entry?.output).toBe("Legacy progress");
     host.settings = { chatInlineCommands: true };
     expect(handleAgentEvent(host, progress, "history")).toBe(false);
-    host.inlineCommandPresentation = inlineCommands;
+    host.inlineCommandPresentation = { inlineActivityDisclosureCalls };
     expect(handleAgentEvent(host, progress, "history")).toBe(true);
     expect(entry?.output).toBe("Optional stdout");
     vi.advanceTimersByTime(80);
@@ -471,13 +471,8 @@ describe("app-tool-stream approval lifecycle", () => {
     expect(card).toMatchObject({
       completed: true,
       live: true,
-      preview: {
-        kind: "browser-tab",
-        profile: "managed",
-        target: "host",
-        targetId: "tab-1",
-        title: "Example",
-      },
+      browserTab: { profile: "managed", target: "host", targetId: "tab-1" },
+      preview: undefined,
     });
     resetToolStream(host);
   });
@@ -514,7 +509,7 @@ describe("app-tool-stream approval lifecycle", () => {
       completed: true,
       outputText: "CLI result",
       browserTab: { profile: "shared", target: "node", node: "node-1", targetId: "tab-shared" },
-      preview: { kind: "browser-tab", profile: "shared", target: "node", targetId: "tab-shared" },
+      preview: undefined,
     });
     resetToolStream(host);
   });

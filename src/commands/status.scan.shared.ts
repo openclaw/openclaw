@@ -205,9 +205,14 @@ export async function resolveGatewayProbeSnapshot(params: {
             timeoutMs,
             mode: GATEWAY_CLIENT_MODES.BACKEND,
             clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+            signal,
           });
         })
-        .catch(() => null);
+        .catch(() => {
+          // A Ctrl+C cancels the pending fallback read; keep the canonical abort outcome.
+          signal?.throwIfAborted();
+          return null;
+        });
       if (status) {
         const auth = gatewayProbe.auth;
         gatewayProbe = {

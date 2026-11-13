@@ -267,6 +267,32 @@ describe("Browser toolbar", () => {
     );
   });
 
+  it("opens a typed Chrome settings page in a new tab instead of searching", async () => {
+    stubScreenshotMedia();
+    const page = createBrowserPageClient("asset", "https://assets.test/a.png");
+    const panel = panelFor(page.client);
+    mountSolid(() => panel);
+    await waitForSolid(() => expect(panel.querySelector(".bp-shot")).not.toBeNull());
+    const input = panel.querySelector<HTMLInputElement>(".bp-url")!;
+    input.focus();
+    input.value = "chrome://settings/payments";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    const requests = () =>
+      page.request.mock.calls
+        .map(([, params]) => params as { path: string; body?: { url?: string } })
+        .filter((params) => params.path === "/tabs/open" || params.path === "/navigate");
+    await waitForSolid(() =>
+      expect(requests()).toEqual([
+        expect.objectContaining({
+          path: "/tabs/open",
+          body: { url: "chrome://settings/payments" },
+        }),
+      ]),
+    );
+    expect(panel.querySelector(".bp-toolbar-hint")).toBeNull();
+  });
+
   it("renders the download's Gateway error and HTTP status", async () => {
     const panel = await mountToolbar();
     const error = { error: { message: "Unauthorized", type: "unauthorized" } };

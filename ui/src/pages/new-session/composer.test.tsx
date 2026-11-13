@@ -33,7 +33,7 @@ function getComposerTextarea(composer: HTMLElement): HTMLTextAreaElement {
 function createDragEvent(type: string, files: File[] = [], types = ["Files"]): Event {
   const event = new Event(type, { bubbles: true, cancelable: true });
   Object.defineProperty(event, "dataTransfer", {
-    value: { files, types },
+    value: { files, types, getData: () => "" },
   });
   return event;
 }
@@ -337,7 +337,7 @@ describe("new-session composer keyboard submission", () => {
     flush();
     expect(composer.querySelector(".skill-menu")).toBeNull();
 
-    enter(textarea);
+    enter(getComposerTextarea(composer));
     expect(onSubmit).toHaveBeenCalledOnce();
   });
 
