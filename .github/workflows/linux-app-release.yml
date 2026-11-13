@@ -140,6 +140,7 @@ jobs:
           sparse-checkout: |
             apps/linux/src-tauri/tauri.conf.json
             scripts/lib/record-shared.mjs
+            scripts/lib/plain-gh.mjs
             scripts/release-tooling-identity.mjs
             scripts/linux-updater-manifest.mjs
             scripts/lib/release-version.mjs
@@ -1026,6 +1027,7 @@ jobs:
             scripts/linux-app-channel.mjs
             scripts/release-tooling-identity.mjs
             scripts/lib/record-shared.mjs
+            scripts/lib/plain-gh.mjs
             scripts/lib/release-version.mjs
             apps/linux/src-tauri/tauri.conf.json
           sparse-checkout-cone-mode: false

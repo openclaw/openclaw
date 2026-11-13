@@ -206,7 +206,9 @@ it("derived backlinks deduplicate passages, reflect edits, exclude unavailable r
   const c = connections(data, { id: "a" });
   expect(c.connections.filter((r) => r.direction === "backlinks").length).toBe(1);
   expect(c.connections.filter((r) => r.direction === "outgoing").length).toBe(1);
-  expect(connections(data, { id: "s", direction: "links" }).connections[0]!.record.id).toBe("a");
+  expect(connections(data, { id: "s", direction: "links" }).connections[0]).toMatchObject({
+    id: "a",
+  });
   expect(connections(data, { id: "a" }, new Set(["s"])).total).toBe(0);
   s.body = "No longer linked.";
   expect(connections(data, { id: "a", direction: "backlinks" }).total).toBe(0);

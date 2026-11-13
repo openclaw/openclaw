@@ -1,3 +1,0 @@
-118
-# Browser regression for Activity follow/pause/resume at phone, tablet, landscape, and desktop sizes.
-# The shared parameterized scenario exercises the real responsive scroll owner; helper-only tests cannot.

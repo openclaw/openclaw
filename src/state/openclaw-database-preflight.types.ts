@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SqliteCleanCloseSealRefusal } from "../infra/sqlite-clean-close-seal.js";
 import type { SqliteSchemaIssue } from "../infra/sqlite-schema-contract.js";
 import type { PreparedAgentDatabaseMigrationDiscovery } from "../infra/state-migrations.media-persistence-targets.js";
 import type { AgentDatabaseAdmissionRefusal } from "./agent-database-admission.js";
@@ -15,6 +16,7 @@ export type AgentDatabasePreflightStats = {
   stateIntegrityCheckCount?: number;
   stateIntegrityMs?: number;
   stateSealCount?: number;
+  stateIntegrityReason?: SqliteCleanCloseSealRefusal | "maintenance" | "startup-not-ready";
 };
 
 export type IncompatibleOpenClawDatabase = {

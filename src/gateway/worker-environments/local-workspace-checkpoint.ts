@@ -7,6 +7,7 @@ import {
   captureWorktreeRunEndContext,
   withWorktreeRunEnd,
 } from "../../agents/worktrees/run-end-lifecycle.js";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
@@ -18,6 +19,9 @@ import type {
   LocalWorkspaceRejectedResult,
 } from "./local-workspace-store.types.js";
 import type { LocalWorkspaceCapture } from "./local-workspace-types.js";
+import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
+import { serializeWorkerWorkspaceReconciliationPlan } from "./workspace-manifest.js";
+import type { applyStagedWorkerWorkspace } from "./workspace-reconcile-apply.js";
 import { isLocalWorkspaceBaseRefreshRef } from "./workspace-result-inventory.js";
 import {
   workerWorkspaceResultRef,
@@ -179,6 +183,7 @@ export async function prepareLocalWorkspaceCheckpointCapture(
       }
       diagnostics.reason = "clone-unavailable";
       diagnostics.cloneError = code;
+      await pause();
       await run();
       return;
     }
@@ -369,6 +374,7 @@ export async function stageLocalWorkspaceCheckpoint(
 }
 
 export async function prepareLocalWorkspaceCheckpoint(params: {
+  operation: "prepare" | "reuse";
   baselineRef: string | null;
   synchronize: (
     target: LocalWorkspaceSyncTarget,
@@ -377,13 +383,17 @@ export async function prepareLocalWorkspaceCheckpoint(params: {
   current: () => LocalWorkspaceProjection;
   signal: AbortSignal;
 }) {
+  const phase = `attempt.setup.sandbox.workspace_selection.${params.operation}.reconcile.checkpoint`;
+  using phases = observeDiagnosticsTimelinePhases(`${phase}.directory`);
   await assertLocalWorkspaceDirectory(params.current().projection_path);
   const selected = params.current();
   if (selected.rejectedResult && selected.pending_target === "projection") {
     // Preparation can import a corrected host source before exporting guest edits.
+    phases.mark(`${phase}.repair`);
     await params.synchronize("projection", { captureRejected: true });
   }
   if (params.baselineRef) {
+    phases.mark(`${phase}.canonical`);
     try {
       await timeWorktreePreparationPhase("synchronizeCanonical", () =>
         params.synchronize("canonical"),
@@ -401,8 +411,84 @@ export async function prepareLocalWorkspaceCheckpoint(params: {
       return params.current().projection_path;
     }
   }
+  phases.mark(`${phase}.projection`);
   await timeWorktreePreparationPhase("synchronizeProjection", () =>
     params.synchronize("projection"),
   );
   return params.current().projection_path;
+}
+
+export function createLocalWorkspaceCheckpointAcceptance(params: {
+  current: () => LocalWorkspaceProjection;
+  update: (
+    patch: Parameters<LocalWorkspaceStore["update"]>[1],
+    manifest?: Parameters<LocalWorkspaceStore["update"]>[3],
+  ) => Promise<void>;
+  replaceBaseline: (
+    raw: string,
+    ref: string,
+    patch: Parameters<LocalWorkspaceStore["update"]>[1],
+  ) => Promise<void>;
+  checkpoint?: LocalWorkspaceManifestCheckpoint;
+  target: LocalWorkspaceSyncTarget;
+  refreshBaseCommit?: string;
+  rawManifest: string;
+  manifestRef: string;
+  beforeCommit: () => void;
+}): Pick<Parameters<typeof applyStagedWorkerWorkspace>[0], "journal" | "acceptance"> {
+  let conflictPaths: string[] | undefined;
+  return {
+    journal: {
+      load: async () => undefined,
+      begin: async (journal) => {
+        await params.update({
+          journal_json: serializeWorkerWorkspaceReconciliationPlan(journal),
+          journal_pack: journal.basePack,
+        });
+      },
+      abort: async () => {
+        await params.update({ journal_json: null, journal_pack: null });
+      },
+      commit: async () => {
+        params.beforeCommit();
+        if (!conflictPaths) {
+          throw new Error("Local workspace acceptance is missing");
+        }
+        // A conflicting result remains a durable pending receipt. No guest
+        // bytes are discarded or silently replaced by the canonical side.
+        try {
+          if (conflictPaths.length) {
+            await params.update({ journal_json: null, journal_pack: null });
+          } else if (params.refreshBaseCommit && params.target === "canonical") {
+            await params.update({
+              pending_target: "projection",
+              journal_json: null,
+              journal_pack: null,
+            });
+          } else {
+            const patch = {
+              ...(params.refreshBaseCommit ? { base_commit: params.refreshBaseCommit } : {}),
+              pending_target: null,
+              journal_json: null,
+              journal_pack: null,
+            };
+            if (params.checkpoint) {
+              await params.update(patch, params.checkpoint);
+            } else {
+              await params.replaceBaseline(params.rawManifest, params.manifestRef, patch);
+            }
+          }
+        } catch (error) {
+          throw new AcceptedWorkspacePublicationIndeterminateError("commit", error);
+        }
+      },
+    },
+    acceptance: {
+      kind: "reconcile",
+      publish: async (value) => {
+        params.current();
+        conflictPaths = value.conflictPaths;
+      },
+    },
+  };
 }

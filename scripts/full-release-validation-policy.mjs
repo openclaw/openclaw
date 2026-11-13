@@ -451,6 +451,17 @@ export function isReleaseGhServerError(error) {
   return GH_SERVER_ERROR_PATTERN.test(releaseGhTransportErrorText(error));
 }
 
+export function releaseWatcherJobName(name) {
+  switch (name) {
+    case "Release Decision / Watch":
+      return "Release Decision";
+    case "Diagnostic Drain / Watch":
+      return "Diagnostic Drain";
+    default:
+      return name;
+  }
+}
+
 export async function readReleaseJobListing(
   readListing,
   pageSizes = RELEASE_JOB_LISTING_PAGE_SIZES,

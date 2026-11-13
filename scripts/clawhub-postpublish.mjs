@@ -376,7 +376,7 @@ function identityFromReceipt(receipt) {
  * @param {boolean} [options.verifyPublication]
  * @param {unknown} [options.recoveryManifest]
  * @param {string} [options.plugins]
- * @param {Omit<Parameters<typeof executeClawHubRecoveryManifest>[0], "manifest" | "revalidateAuthority"> & {
+ * @param {Omit<Parameters<typeof executeClawHubRecoveryManifest>[0], "manifest" | "revalidateAuthority" | "onProgress"> & {
  *   revalidateAuthority: (manifest: ReturnType<typeof validateClawHubRecoveryManifest>) => void | Promise<void>
  * }} [options.recover]
  */
@@ -746,6 +746,15 @@ export async function verifyClawHubPostpublish({
       ...recover,
       manifest: selectedManifest,
       revalidateAuthority: () => recover.revalidateAuthority(selectedManifest),
+      onProgress: async ({ recovered }) => {
+        for (const record of recovered) {
+          Object.assign(
+            evidence.publicationAttempts.find((entry) => entry.name === record.name),
+            record,
+          );
+        }
+        await save();
+      },
     });
   }
   // One scan worker turn (25 minutes) plus its five-minute scheduled admission.

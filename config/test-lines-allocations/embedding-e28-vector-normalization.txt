@@ -1,2 +1,0 @@
-# Independent vector value, sparse-hole, and input-ownership contracts for in-place normalization.
-45

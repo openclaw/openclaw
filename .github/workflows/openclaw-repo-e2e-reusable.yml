@@ -70,8 +70,8 @@ jobs:
     runs-on: &linux_runner_xlarge >-
       ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
       toJSON(inputs.runner_group), toJSON(inputs.use_github_hosted_runners && 'ubuntu-24.04' ||
-      'blacksmith-8vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' ||
-      'blacksmith-8vcpu-ubuntu-2404') }}
+      vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' && 'boat-xlarge' || 'blacksmith-8vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' ||
+      vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' && 'boat-xlarge' || 'blacksmith-8vcpu-ubuntu-2404') }}
     timeout-minutes: 90
     outputs:
       artifact_id: ${{ steps.upload.outputs.artifact-id }}

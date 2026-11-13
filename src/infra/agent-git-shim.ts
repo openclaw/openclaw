@@ -21,7 +21,9 @@ is_probe() {
   no_lazy_fetch=
   filter_fetch=
   projection_fetch=
+  multiple_fetch=
   explicit_filter=
+  unfiltered_fetch=
   fetch_filter=
   fetch_depth=
   shallow_change=
@@ -37,30 +39,42 @@ is_probe() {
       fetch|pull)
         command=$1
         shift
+        fetch_remote=
+        all_fetch=
+        skip_value=
+        literal=
         for arg do
+          if [ "$skip_value" = 1 ]; then skip_value=; continue; fi
+          if [ "$literal" = 1 ]; then
+            [ -n "$fetch_remote" ] || fetch_remote=$arg
+            break
+          fi
           case $arg in
-            --) break ;;
+            --) literal=1; continue ;;
+            -j|-o|-s|-X) skip_value=1; continue ;;
+            -m) multiple_fetch=1; continue ;;
             --?*)
               name=\${arg%%=*}
               for option in --depth --deepen --shallow-since --shallow-exclude --unshallow --update-shallow; do
                 case $option in "$name"*) shallow_change=1 ;; esac
+              done
+              case --filter in "$name"*) explicit_filter=1; unfiltered_fetch= ;; esac
+              case --no-filter in "$name"*) explicit_filter=1; unfiltered_fetch=1 ;; esac
+              case --all in "$name"*) all_fetch=1 ;; esac
+              case --no-all in "$name"*) all_fetch= ;; esac
+              case --multiple in "$name"*) multiple_fetch=1 ;; esac
+              case --no-multiple in "$name"*) multiple_fetch= ;; esac
+              case $arg in *=*) continue ;; esac
+              for option in --upload-pack --jobs --depth --shallow-since --shallow-exclude --deepen --submodule-prefix --recurse-submodules-default --refmap --server-option --negotiation-tip --filter --strategy --strategy-option --cleanup; do
+                case $option in "$name"*) skip_value=1 ;; esac
               done ;;
+            -*) ;;
+            *) [ -n "$fetch_remote" ] || fetch_remote=$arg ;;
           esac
         done
-        [ "$command" = fetch ] || return 1
-        for arg do
-          case $arg in
-            --) break ;;
-            --all|--multiple) return 1 ;;
-            --filter|--filter=*|--no-filter) explicit_filter=1 ;;
-          esac
-        done
+        [ "$all_fetch" = 1 ] && multiple_fetch=1
         projection_fetch=1
-        for arg do
-          case $arg in
-            https://github.com/*|git@github.com:*|ssh://git@github.com/*) filter_fetch=1 ;;
-          esac
-        done
+        case $fetch_remote in https://github.com/*|git@github.com:*|ssh://git@github.com/*) filter_fetch=1 ;; esac
         return 1 ;;
       cat-file)
         prepare_history=1
@@ -68,8 +82,13 @@ is_probe() {
         for arg do case $arg in -e|-t) return 0 ;; esac; done
         return 1 ;;
       rev-parse)
+        # Batch records are line-delimited; newline arguments retain native handling.
+        prepare_history=1
         shift
-        for arg do case $arg in --verify) return 0 ;; esac; done
+        for arg do
+          case $arg in --verify) return 0 ;; *'
+'*) prepare_history= ;; esac
+        done
         return 1 ;;
       merge-base)
         prepare_history=1
@@ -77,7 +96,7 @@ is_probe() {
         shift
         for arg do case $arg in --is-ancestor) return 0 ;; esac; done
         return 1 ;;
-      show|diff|log|rev-list|restore|checkout|switch|reset|merge|rebase|cherry-pick|revert|blame|show-branch|archive|ls-tree|format-patch|diff-tree|diff-index|read-tree)
+      show|diff|log|grep|rev-list|restore|checkout|switch|reset|merge|rebase|cherry-pick|revert|blame|show-branch|archive|ls-tree|format-patch|diff-tree|diff-index|read-tree)
         prepare_history=1; return 1 ;;
       *) return 1 ;;
     esac
@@ -103,27 +122,352 @@ query_repository() {
         if [ -f "$linked" ]; then return 0; fi
       done
       return 1 ;;
-    blobless) git "$@" config --get-regexp '^remote\\..*\\.partialclonefilter$' '^blob:none$' >/dev/null 2>&1 ;;
+    blobless)
+      remote_settings=$(git "$@" config --get-regexp '^remote\\..*\\.(url|promisor|partialclonefilter)$' 2>/dev/null) || return 1
+      remote_settings="
+$remote_settings
+"
+      case $remote_settings in *'.partialclonefilter blob:none
+'*) ;; *) return 1 ;; esac ;;
+    register_remotes)
+      remotes=$(git "$@" remote) || return 1
+      fetch_cwd=
+      if [ -n "$fetch_remote" ] && [ "$multiple_fetch" != 1 ]; then
+        case "
+$remotes
+" in *"
+$fetch_remote
+"*) ;;
+          *)
+            if ! git "$@" config --get-all "remotes.$fetch_remote" >/dev/null 2>&1; then
+              remotes="$remotes
+$fetch_remote"
+            fi ;;
+        esac
+      fi
+      while IFS= read -r remote; do
+        [ -n "$remote" ] || continue
+        url=$(git "$@" ls-remote --get-url "$remote") || return 1
+        case $url in /*) ;; *)
+          # A colon is an SSH separator only before the first slash.
+          case \${url%%:*} in "$url"|*/*)
+            if [ -z "$fetch_cwd" ]; then
+              if [ "$command" = pull ]; then
+                fetch_cwd=$(git "$@" rev-parse --show-toplevel) || return 1
+              else
+                # Let Git own -C, explicit gitdirs and bare-repository setup.
+                fetch_cwd=$(git "$@" -c 'alias.openclaw-fetch-cwd=!pwd -P' openclaw-fetch-cwd) || return 1
+              fi
+            fi
+            raw_url=$url
+            case $remote_settings in *"
+remote.$remote.url "*)
+              raw_url=\${remote_settings#*"
+remote.$remote.url "}
+              raw_url=\${raw_url%%"
+"*} ;;
+            esac
+            # Preserve other fetch/push URLs while anchoring the first fetch URL.
+            git "$@" config --local --fixed-value --replace-all "remote.$remote.url" "$fetch_cwd/$url" "$raw_url" || return 1 ;;
+          esac ;;
+        esac
+        # Native multi/group selection rejects --filter; keep each remote's promises usable later.
+        for setting in promisor:true partialclonefilter:blob:none; do
+          key=remote.$remote.\${setting%%:*}
+          value=\${setting#*:}
+          case $remote_settings in *"
+$key "*)
+            # Last config value wins, including command-local overrides.
+            actual=\${remote_settings##*"
+$key "}
+            actual=\${actual%%"
+"*}
+            [ "$actual" = "$value" ] && continue ;;
+          esac
+          git "$@" config --local "$key" "$value" || return 1
+        done
+      done <<EOF
+$remotes
+EOF
+      ;;
     objects) GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL= exec git "$@" cat-file --batch-check='%(objectname) %(objecttype)' 2>/dev/null ;;
     resolve) GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL= exec git "$@" rev-parse --verify --end-of-options "$revision" 2>/dev/null ;;
-    fetch)
-      GIT_NO_LAZY_FETCH=1 git "$@" -c fetch.negotiationAlgorithm=consecutive fetch --filter=blob:none --no-tags --no-write-fetch-head --no-auto-maintenance --recurse-submodules=no origin --stdin <<EOF
+    revisions)
+      marker='HEAD^{commit}'
+      while :; do
+        case $revisions in *"$marker"*) marker="$marker^{commit}" ;; *) break ;; esac
+      done
+      set -- "$@" rev-parse --revs-only --no-flags --symbolic --end-of-options
+      while IFS= read -r expression; do set -- "$@" "$expression"; done <<EOF
+$revisions
+EOF
+      resolved=$(GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL= git "$@" "$marker" 2>/dev/null) || return 1
+      [ "\${resolved##*
+}" = "$marker" ] ;;
+    revision)
+      if [ -z "$revision_marker" ]; then
+        revision_format=$(git "$@" rev-parse --show-object-format 2>/dev/null) || return 1
+        case $revision_format in
+          sha256) revision_marker=0000000000000000000000000000000000000000000000000000000000000000 ;;
+          *) revision_marker=0000000000000000000000000000000000000000 ;;
+        esac
+      fi
+      resolved=$(GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL= git "$@" rev-parse --revs-only --no-flags --end-of-options "$revision" "$revision_marker" 2>/dev/null) || return 1
+      # A path consumes the marker too; a valid revision leaves it as the last ID.
+      [ "\${resolved##*
+}" = "$revision_marker" ] ;;
+    fetch|fetch_blobs)
+      negotiation=consecutive
+      # A have commit implies its blobs exist. For known missing blobs that can
+      # suppress explicit wants; blob-only roots need no history negotiation.
+      [ "$query" != fetch_blobs ] || negotiation=noop
+      GIT_NO_LAZY_FETCH=1 git "$@" -c fetch.negotiationAlgorithm=$negotiation fetch --quiet --filter=blob:none --no-tags --no-write-fetch-head --no-auto-maintenance --recurse-submodules=no origin --stdin <<EOF
 $missing
 EOF
       ;;
+    history_blobs)
+      # Raw changes include both sides of range/limit boundaries without opening blobs.
+      [ "$blob_literal" != 1 ] || set -- "$@" --no-literal-pathspecs
+      case $blob_verb in
+        grep) set -- "$@" rev-list --objects --no-walk --missing=print ;;
+        diff) set -- "$@" diff ;;
+        log) set -- "$@" log ;;
+        *) set -- "$@" log -m ;;
+      esac
+      while IFS= read -r arg; do [ -z "$arg" ] || set -- "$@" "$arg"; done <<EOF
+$blob_args
+EOF
+      if [ "$blob_verb" != grep ]; then
+        set -- "$@" --format= --no-patch --raw --no-abbrev --no-renames --no-ext-diff --no-textconv --color=never
+      fi
+      set -- "$@" --
+      while IFS= read -r arg; do [ -z "$arg" ] || set -- "$@" "$arg"; done <<EOF
+$blob_paths
+EOF
+      { GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL= git "$@" 2>/dev/null && echo complete; } | LC_ALL=C awk -v verb="$blob_verb" '
+        BEGIN { speculative = verb == "show" || verb == "blame" }
+        function add(oid, mode) {
+          if (mode == "160000" || oid ~ /^0+$/ || seen[oid]++) return
+          if (speculative && (++count > 2048 || (bytes += length(oid) + 1) > 131072)) exit
+        }
+        { if (speculative && (scanned += length($0) + 1) > 8388608) exit }
+        /^\\?/ { add(substr($1, 2), "100644") }
+        /^:[0-7]+ [0-7]+ [0-9a-f]+ [0-9a-f]+ / {
+          add($3, substr($1, 2)); add($4, $2)
+        }
+        /^complete$/ { complete=1 }
+        END { if (!complete) print "skip"; else for (oid in seen) print oid }
+      '
+      ;;
   esac
+}
+blob_arguments() {
+  blob_args=
+  blob_paths=
+  blob_literal=
+  blob_expression=
+  blob_patch=
+  blob_pickaxe=
+  blob_limits=
+  blob_pattern=
+  blob_separator=
+  shift "$global_count"
+  blob_verb=$1; shift
+  case $blob_verb in
+    show)
+      # A path-history batch also serves repeated show rev:path reads from loops.
+      [ "$#" = 1 ] || return 1
+      case $1 in -*|:*) return 1 ;; *:*) ;; *) return 1 ;; esac
+      blob_expression=$1
+      blob_args="HEAD
+\${1%%:*}"
+      blob_paths=\${1#*:}
+      case $blob_paths in
+        ./*|../*) blob_paths=":(literal)$blob_paths" ;;
+        *) blob_paths=":(top,literal)$blob_paths" ;;
+      esac
+      blob_literal=1
+      return 0 ;;
+    blame) blob_patch=1 ;;
+    log) ;;
+    diff|grep) blob_patch=1 ;;
+    *) return 1 ;;
+  esac
+  while [ "$#" -gt 0 ]; do
+    arg=$1; shift
+    if [ "$blob_separator" = 1 ]; then
+      blob_paths="$blob_paths$arg
+"
+      continue
+    fi
+    if [ "$blob_verb" = blame ]; then
+      case $arg in --porcelain|--line-porcelain|--incremental|--show-name|--show-number|--show-email|-p|-t|-l|-s|-n|-f|-e) continue ;; esac
+    fi
+    if [ "$blob_verb" = grep ]; then
+      case $arg in
+        -e) [ "$#" -gt 0 ] || return 1; shift; blob_pattern=1; continue ;;
+        -e?*|--regexp=*) blob_pattern=1; continue ;;
+        -n|-i|-I|-v|-w|-l|-L|-q|-h|-H|-G|-E|-F|-P|--all-match|--and|--or|--not|'('|')') continue ;;
+        -*) ;;
+        *) if [ "$blob_pattern" != 1 ]; then blob_pattern=1; continue; fi ;;
+      esac
+    fi
+    case $arg in
+      --) blob_separator=1; continue ;;
+      -p|--patch|--stat|--stat=*|--numstat|--patch-with-stat) blob_patch=1; continue ;;
+      --no-patch|-s) blob_patch=; continue ;;
+      -S|-G)
+        [ "$#" -gt 0 ] || return 1
+        shift; blob_pickaxe=1; continue ;;
+      -S?*|-G?*) blob_pickaxe=1; continue ;;
+      --pickaxe-regex|--pickaxe-all) continue ;;
+      --format=*|--pretty=*|--oneline|--color=*|--no-color) continue ;;
+      -n|--max-count|--skip)
+        [ "$blob_verb" = log ] && [ "$#" -gt 0 ] || return 1
+        blob_limits="$blob_limits$arg
+$1
+"; shift; continue ;;
+      --max-count=*|--skip=*|-[0-9]*) blob_limits="$blob_limits$arg
+"; continue ;;
+      --since|--until|--after|--before)
+        [ "$blob_verb" = log ] && [ "$#" -gt 0 ] || return 1
+        blob_args="$blob_args$arg
+$1
+"; shift; continue ;;
+      -L)
+        [ "$blob_verb" = blame ] && [ "$#" -gt 0 ] || return 1
+        shift; continue ;;
+      --since=*|--until=*|--after=*|--before=*|--first-parent|--all|--branches|--tags|--remotes|--not|--reverse|--no-merges|--merges)
+        [ "$blob_verb" = log ] || return 1 ;;
+      -*) return 1 ;;
+    esac
+    if [ "$blob_verb" = blame ] && [ "$#" = 0 ]; then
+      blob_paths=$arg
+    else
+      blob_args="$blob_args$arg
+"
+    fi
+  done
+  # Pickaxe counts matching commits, so limits cannot bound the content scan.
+  [ "$blob_pickaxe" = 1 ] || blob_args="$blob_args$blob_limits"
+  [ "$blob_patch$blob_pickaxe" != "" ] || return 1
+  [ "$blob_verb" != blame ] || [ -n "$blob_paths" ] || return 1
+  [ "$blob_verb" != grep ] || [ -n "$blob_args" ] || return 1
+  return 0
+}
+prepare_blobs() (
+  [ "$no_lazy_fetch" != 1 ] || return 0
+  case \${GIT_NO_LAZY_FETCH:-} in 1|true|yes|on) return 0 ;; esac
+  # This portable shell helper uses line-delimited arguments and object IDs.
+  for arg do case $arg in *'
+'*) return 0 ;; esac; done
+  blob_arguments "$@" || return 0
+  if [ -n "$blob_expression" ]; then
+    object=$(query_repository objects "$@" <<EOF
+$blob_expression
+EOF
+    )
+    case $object in *' missing') ;; *) return 0 ;; esac
+  fi
+  query_repository blobless "$@" || return 0
+  candidates=$(query_repository history_blobs "$@")
+  case $candidates in ''|skip) return 0 ;; esac
+  missing=$(query_repository objects "$@" <<EOF | awk '$2 == "missing" { print $1 }'
+$candidates
+EOF
+  )
+  [ -n "$missing" ] || return 0
+  query_repository shared "$@" || return 0
+  # Serialize across linked worktrees, then inspect the objects under the lock:
+  # overlapping callers fetch only the part not already supplied by the leader.
+  lock=$common/openclaw-history-blobs.lock
+  attempts=0
+  until mkdir "$lock" 2>/dev/null; do
+    attempts=$((attempts + 1))
+    [ "$attempts" -lt 300 ] || return 0
+    # A large live batch may exceed thirty seconds; do not start lazy fetches
+    # beside it. Only an ownerless lock retains the bounded fallback.
+    if read -r owner 2>/dev/null < "$lock/pid"; then
+      if kill -0 "$owner" 2>/dev/null; then
+        attempts=0
+      else
+        rm -f "$lock/pid"
+        rmdir "$lock" 2>/dev/null && continue
+      fi
+    fi
+    sleep 0.1
+  done
+  trap 'rm -f "$lock/pid"; rmdir "$lock" 2>/dev/null' 0
+  trap 'exit 1' HUP INT TERM
+  echo $$ > "$lock/pid"
+  missing=$(query_repository objects "$@" <<EOF | awk '$2 == "missing" { print $1 }'
+$missing
+EOF
+  )
+  [ -n "$missing" ] || return 0
+  count=$(printf '%s\n' "$missing" | wc -l)
+  if [ "$count" -ge 2048 ]; then
+    echo "OpenClaw: fetching $count missing Git objects for this content search." >&2
+  fi
+  # Keep large searches under the shared lock, with bounded pack construction.
+  if [ "$count" -gt 2048 ]; then
+    printf '%s\\n' "$missing" | (
+      IFS= read -r missing || exit 0
+      count=1
+      while IFS= read -r oid; do
+        if [ "$count" = 2048 ]; then
+          query_repository fetch_blobs "$@" 2>/dev/null || exit 0
+          missing=$oid
+          count=1
+        else
+          missing="$missing
+$oid"
+          count=$((count + 1))
+        fi
+      done
+      query_repository fetch_blobs "$@" 2>/dev/null || :
+    )
+    return
+  fi
+  query_repository fetch_blobs "$@" 2>/dev/null || :
+)
+append_revision_roots() {
+  arg=$1
+  traverse=
+  case \${arg%%:*} in
+    *...*) left=\${arg%%...*}; right=\${arg#*...}; traverse=1 ;;
+    *..*) left=\${arg%%..*}; right=\${arg#*..} ;;
+    *) left=$arg; right= ;;
+  esac
+  for revision in "$left" "$right"; do
+    revision=\${revision#^}
+    # Plain endpoints print IDs; three-dot ranges traverse both endpoints.
+    if [ "$verb" = rev-parse ]; then
+      case $revision in *:*|*^*|*~*) ;; *) [ "$traverse" = 1 ] || continue ;; esac
+    fi
+    revision=\${revision%%:*}
+    revision=\${revision%%[~^]*}
+    case $revision in ''|*[[:space:]]*) continue ;; esac
+    revisions="$revisions$revision
+"
+  done
 }
 revision_roots() {
   revisions=
+  revision_separator=
   shift "$global_count"
   verb=$1; shift
+  if [ "$verb" = grep ]; then
+    # Its first positional argument is a pattern, not a revision.
+    return
+  fi
   while [ "$#" -gt 0 ]; do
     arg=$1; shift
     case $verb:$arg in
       checkout:-b|checkout:-B|switch:-c|switch:-C|merge:-m|merge:-F|cherry-pick:-m|revert:-m|log:-n|show:-n|rev-list:-n)
         [ "$#" -gt 0 ] && shift; continue ;;
       cat-file:blob|cat-file:tree|cat-file:commit|cat-file:tag) continue ;;
-      diff:--no-index|archive:--remote|archive:--remote=*) revisions=; return ;;
+      rev-parse:--sq-quote|rev-parse:--parseopt|diff:--no-index|archive:--remote|archive:--remote=*) revisions=; return ;;
       archive:--format|ls-tree:--format|format-patch:-o|format-patch:--cc) [ "$#" -gt 0 ] && shift; continue ;;
       restore:-S|merge:-S|rebase:-S|cherry-pick:-S|revert:-S) continue ;;
     esac
@@ -138,38 +482,28 @@ revision_roots() {
         fi
         [ "$#" -gt 0 ] || break; arg=$1; shift ;;
       -s*) [ "$verb" = restore ] || continue; arg=\${arg#-s} ;;
-      --grep|--grep-reflog|--author|--committer|--since|--since-as-filter|--until|--after|--before|--max-count|--max-count-oldest|--max-age|--min-age|--skip|--output|--output-directory|--path|--pathspec-from-file|--date|--encoding|--diff-filter|--find-object|--strategy|--strategy-option|--message|--file|--mainline|--glob|--exclude|--exclude-hidden|--create|--force-create|--conflict|--contents|--ignore-revs-file|--exec|--into-name|--subject-prefix|--signature|--signature-file|--suffix|--to|--in-reply-to|--add-header|--prefix|--src-prefix|--dst-prefix|--line-prefix|--anchored|--word-diff-regex|-G|-S|-L|-O|-X|--orphan)
+      --grep|--grep-reflog|--author|--committer|--since|--since-as-filter|--until|--after|--before|--max-count|--max-count-oldest|--max-age|--min-age|--skip|--output|--output-directory|--path|--pathspec-from-file|--date|--encoding|--diff-filter|--find-object|--strategy|--strategy-option|--message|--file|--mainline|--glob|--exclude|--exclude-hidden|--create|--force-create|--conflict|--contents|--ignore-revs-file|--default|--git-path|--resolve-git-dir|--exec|--into-name|--subject-prefix|--signature|--signature-file|--suffix|--to|--in-reply-to|--add-header|--prefix|--src-prefix|--dst-prefix|--line-prefix|--anchored|--word-diff-regex|-G|-S|-L|-O|-X|--orphan)
         [ "$#" -gt 0 ] && shift; continue ;;
       -*) continue ;;
       *) [ "$verb" != restore ] || continue ;;
     esac
-    # Paths and revision suffixes are consumed by Git after their root is present.
-    arg=\${arg%%:*}
-    case $arg in
-      *...*) left=\${arg%%...*}; right=\${arg#*...} ;;
-      *..*) left=\${arg%%..*}; right=\${arg#*..} ;;
-      *) left=$arg; right= ;;
-    esac
-    for revision in "$left" "$right"; do
-      revision=\${revision#^}
-      revision=\${revision%%[~^]*}
-      case $revision in ''|*[[:space:]]*) continue ;; esac
-      revisions="$revisions$revision
-"
-    done
+    if [ "$verb" = rev-parse ]; then
+      revisions="$revisions$revision_separator$arg"
+      revision_separator='
+'
+    else
+      append_revision_roots "$arg"
+    fi
   done
 }
-prepare_commits() {
-  [ "$no_lazy_fetch" != 1 ] || return 0
-  case \${GIT_NO_LAZY_FETCH:-} in 1|true|yes|on) return 0 ;; esac
-  revision_roots "$@"
+prepare_roots() {
+  missing=
   [ -n "$revisions" ] || return 0
   # Inspect raw types so present blob/tree arguments remain ordinary content reads.
   objects=$(query_repository objects "$@" <<EOF
 $revisions
 EOF
   ) || return 0
-  missing=
   while read -r revision kind; do
     [ "$kind" = missing ] || continue
     oid=$(query_repository resolve "$@") || continue
@@ -189,6 +523,33 @@ EOF
   echo 'OpenClaw: could not fetch the requested object from origin with history negotiation; command not run. Fetch it explicitly from the remote that owns it, then retry.' >&2
   return 1
 }
+prepare_commits() {
+  revision_marker=
+  [ "$no_lazy_fetch" != 1 ] || return 0
+  case \${GIT_NO_LAZY_FETCH:-} in 1|true|yes|on) return 0 ;; esac
+  revision_roots "$@"
+  if [ "$verb" = grep ] && blob_arguments "$@"; then
+    while IFS= read -r arg; do append_revision_roots "$arg"; done <<EOF
+$blob_args
+EOF
+  fi
+  [ "$verb" = rev-parse ] || { prepare_roots "$@"; return $?; }
+  [ -n "$revisions" ] || return 0
+  query_repository revisions "$@" && return 0
+  expressions=$revisions
+  while IFS= read -r revision; do
+    query_repository revision "$@" && continue
+    expression=$revision
+    revisions=
+    append_revision_roots "$expression"
+    prepare_roots "$@" || return 1
+    [ -n "$missing" ] || break
+    revision=$expression
+    query_repository revision "$@" || break
+  done <<EOF
+$expressions
+EOF
+}
 check_shared_shallow() {
   # Both the primary checkout and its linked worktrees share this shallow file.
   if query_repository shared "$@"; then
@@ -197,7 +558,16 @@ check_shared_shallow() {
   fi
 }
 fetch_defaults() {
-  if [ "$(query_repository projection "$@")" = true ]; then
+  if query_repository blobless "$@" && query_repository shared "$@"; then
+    if [ "$unfiltered_fetch" = 1 ]; then
+      echo 'OpenClaw: unfiltered fetch would add ordinary packs to the shared partial clone; command not run. Fetch with --filter=blob:none instead.' >&2
+      return 1
+    fi
+    query_repository register_remotes "$@" || return 1
+  elif [ "$command" = pull ]; then
+    return 0
+  elif [ "$(query_repository projection "$@")" = true ]; then
+    [ "$multiple_fetch" = 1 ] && return 0
     [ "$shallow_change" = 1 ] || fetch_depth=64
     [ "$explicit_filter" = 1 ] || fetch_filter=blob:none
   elif [ "$filter_fetch" = 1 ] && [ "$explicit_filter" != 1 ] && query_repository blobless "$@"; then
@@ -205,8 +575,11 @@ fetch_defaults() {
   fi
 }
 if ! is_probe "$@"; then
-  if [ "$prepare_history" = 1 ]; then prepare_commits "$@" || exit 2; fi
-  if [ "$projection_fetch" = 1 ]; then fetch_defaults "$@"; fi
+  if [ "$prepare_history" = 1 ]; then
+    prepare_commits "$@" || exit 2
+    case $verb in log|blame|show|diff|grep) prepare_blobs "$@" ;; esac
+  fi
+  if [ "$projection_fetch" = 1 ]; then fetch_defaults "$@" || exit 2; fi
   if [ "$shallow_change" = 1 ] || [ -n "$fetch_depth" ]; then
     check_shared_shallow "$@" || exit 2
   fi

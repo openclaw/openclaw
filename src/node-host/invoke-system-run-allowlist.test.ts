@@ -253,9 +253,10 @@ describe("resolveSystemRunExecArgv", () => {
   it.runIf(process.platform !== "win32")(
     "rewrites safe-bin shell payloads that end in whitespace",
     async () => {
-      const { safeBins, safeBinProfiles, trustedSafeBinDirs } = resolveExecSafeBinRuntimePolicy({
-        global: { safeBins: ["head"] },
-      });
+      const { safeBins, safeBinProfiles, trustedSafeBinDirs } =
+        await resolveExecSafeBinRuntimePolicy({
+          global: { safeBins: ["head"] },
+        });
       const approvals = resolveExecApprovalsFromFile({
         agentId: "main",
         file: {

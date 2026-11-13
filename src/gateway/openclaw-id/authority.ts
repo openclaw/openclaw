@@ -58,6 +58,7 @@ import {
 } from "./member-profiles.js";
 import { createNodeInviteOperations, listNodeInviteViews } from "./node-invites.js";
 import type { OwnerDeviceView } from "./owner-devices-view.js";
+import { createRebindOperations } from "./rebind-operations.js";
 import type { OpenClawIdTunnelPrincipal } from "./tunnel-principal.js";
 
 /** What the local link ceremony signs for: the claw's identity and keys. */
@@ -112,7 +113,7 @@ export type DeviceTokenRef = { deviceId: string; role: string; peerKey: string }
 export function createOpenClawIdAuthority(
   store: {
     read: () => Promise<StoredClaw | undefined>;
-    write: (record: StoredClaw) => Promise<void>;
+    write: (record: StoredClaw, assertCurrent?: () => void) => Promise<void>;
     profiles?: OpenClawIdMemberProfiles;
   } = {
     read: readStoredClaw,
@@ -180,11 +181,12 @@ export function createOpenClawIdAuthority(
     return next;
   };
 
-  const commit = async (candidate: StoredClaw) => {
+  const commit = async (candidate: StoredClaw, assertCurrent?: () => void) => {
     const next = await retainMemberProfiles(record, candidate, profiles);
     const previous = record;
+    assertCurrent?.();
     try {
-      await store.write(next);
+      await store.write(next, assertCurrent);
     } catch (error) {
       // A rejected acknowledgement can follow a durable commit. Withdraw cached authority
       // before reconciliation; no synchronous admission or later write may use a stale row.
@@ -328,6 +330,8 @@ export function createOpenClawIdAuthority(
       kSrv: IrohEndpointKey;
       kGw: Ed25519PublicKey;
       hostname: string;
+      /** Throws once the caller's ceremony authority is gone; checked at the write. */
+      guard?: () => void;
     }): Promise<LinkPreparation | AuthorityRefusal> {
       return serialize(async () => {
         const current = await load();
@@ -337,7 +341,7 @@ export function createOpenClawIdAuthority(
         const next = current ?? emptyRecord(bytesToHex(randomBytes(16)));
         const hostname = params.hostname;
         if (next !== current || next.hostname !== hostname) {
-          await commit({ ...next, hostname });
+          await commit({ ...next, hostname }, params.guard);
         }
         return {
           claw_id: next.claw_id,
@@ -352,12 +356,14 @@ export function createOpenClawIdAuthority(
 
     /**
      * Pins R for good, admits owner device D1 and stores the ServerBinding.
-     * Only over direct loopback: relayed traffic never runs a root ceremony.
+     * Only on the `local_operator` ceremony channel: relayed traffic never runs a root
+     * ceremony. `expected.guard` throws once the caller's live ceremony authority is gone;
+     * it is checked at the write, which then rejects.
      */
     commitLink(
       input: LinkCommit,
       channel: Channel | undefined,
-      expected: { kSrv: IrohEndpointKey; kGw: Ed25519PublicKey },
+      expected: { kSrv: IrohEndpointKey; kGw: Ed25519PublicKey; guard?: () => void },
     ): Promise<AuthorityAccepted | AuthorityRefusal> {
       return serialize(async () => {
         if (channel !== "local_operator") {
@@ -389,7 +395,11 @@ export function createOpenClawIdAuthority(
         if (!binding.ok) {
           return binding;
         }
-        await commit({ ...current, authority: added.state, binding: binding.statement });
+        // The caller's live ceremony authority is checked at the durable write itself.
+        await commit(
+          { ...current, authority: added.state, binding: binding.statement },
+          expected.guard,
+        );
         return {
           ok: true,
           status: "applied",
@@ -476,6 +486,8 @@ export function createOpenClawIdAuthority(
     },
 
     ...createNodeInviteOperations({ serialize, load, commit }),
+
+    ...createRebindOperations({ serialize, load, commit }),
 
     /** Records an invite redemption from the mailbox as pending (it admits nothing). */
     redeem(

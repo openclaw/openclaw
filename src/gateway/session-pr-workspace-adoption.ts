@@ -12,10 +12,15 @@ import {
   captureSessionTarget,
   runSessionMutation,
 } from "../sessions/session-controller.lifecycle.js";
+import type { ProjectRequester } from "./project-access.js";
 import { emitSessionsChanged } from "./server-methods/session-change-event.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { prepareSessionFileWorkspace } from "./session-file-workspace.js";
 import { commitPreparedSessionWorkspace } from "./session-lifecycle-preparation.js";
+import {
+  resolvePullRequestProjectSource,
+  resolveSessionProjectRootForRecord,
+} from "./session-project-source.js";
 import { prepareSessionWorktree } from "./session-worktree-preparation.js";
 
 /** The yielded caller owns admission; siblings keep their original shared source. */
@@ -26,6 +31,7 @@ export async function adoptUnboundPullRequestWorkspace(params: {
   sandbox: SandboxContext;
   assertCurrent: () => void;
   verifyBeforeBinding?: () => Promise<void>;
+  projectSource?: { host: string; repository: string; requester: ProjectRequester };
   signal?: AbortSignal;
 }) {
   const { context, target, entry, sandbox } = params;
@@ -159,10 +165,25 @@ export async function adoptUnboundPullRequestWorkspace(params: {
           "The conversation's message boundary is unavailable; retry PR preparation.",
         );
       }
+      const source = params.projectSource;
+      const project = source ? await resolvePullRequestProjectSource(cfg, source) : undefined;
+      const projectRoot = project
+        ? await resolveSessionProjectRootForRecord(project, true)
+        : undefined;
+      assertIdle();
+      if (projectRoot && !projectRoot.ok) {
+        throw new Error(projectRoot.error.message);
+      }
       const prepared = await prepareSessionWorktree({
         cfg,
-        target: { ...target, key: target.sessionKey, entry },
-        workspace: { kind: "empty" },
+        target: {
+          ...target,
+          key: target.sessionKey,
+          entry,
+          projectId: project?.id,
+          sandboxRequired: true,
+        },
+        workspace: projectRoot?.value ?? { kind: "empty" },
         runSetupScript: false,
         signal: params.signal,
         commitGuard: assertIdle,
@@ -184,6 +205,7 @@ export async function adoptUnboundPullRequestWorkspace(params: {
       }
       const bound = await commitPreparedSessionWorkspace({
         prepared: prepared.value,
+        projectId: project?.id,
         signal: params.signal,
         priorWorkspace: {
           worktreeId: worktree.id,

@@ -1,6 +1,7 @@
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { isCoreCodingSurfaceToolName, isRunGrantedCoreToolId } from "./core-tool-facts.js";
 import { isLocalModelLeanEnabled } from "./local-model-lean.js";
 import {
   applyToolCatalogCompaction,
@@ -23,13 +24,18 @@ import type {
   ToolSearchCatalogSession,
   ToolSearchToolContext,
 } from "./tool-search-types.js";
+import {
+  hasToolUsageRanking,
+  selectUsageRankedToolRows,
+  type ToolUsageRankingSnapshot,
+} from "./tool-usage-ranking.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 const MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS = 18_000;
 const TOOL_DIRECTORY_IDENTIFIER_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/u;
 // About 1k tokens: less than one measured tool_search result (~5.8 kB), which
 // is also re-sent on every later request of the conversation.
-export const MAX_MCP_TOOL_DIRECTORY_BYTES = 4_096;
+const MAX_MCP_TOOL_DIRECTORY_BYTES = 4_096;
 const MCP_TOOL_DIRECTORY_DESCRIPTION_CHARS = 96;
 const MCP_TOOL_DIRECTORY_CACHE_KEY = "mcp-tool-search";
 const MCP_TOOL_DIRECTORY_HEADING =
@@ -69,6 +75,7 @@ export function buildToolSchemaDirectoryPrompt(
   options?: CatalogVisibilityOptions & {
     contextTokenBudget?: number;
     toolSearchDirectoryLean?: boolean;
+    usageRanking?: ToolUsageRankingSnapshot;
   },
 ): string {
   const config = resolveToolSearchConfig(ctx.runtimeConfig ?? ctx.config);
@@ -86,7 +93,10 @@ export function buildToolSchemaDirectoryPrompt(
   // Lean filtering must not buy longer descriptions for the remaining tools.
   const descriptionMaxChars =
     (options?.toolSearchDirectoryLean ?? isLocalModelLeanEnabled(ctx)) ? 0 : 180;
-  const cacheKey = `${config.mode}:${options?.includeMcp === false ? "without-mcp" : "all"}:${maxChars}:${descriptionMaxChars}`;
+  const usageRanking = hasToolUsageRanking(options?.usageRanking)
+    ? options.usageRanking
+    : undefined;
+  const cacheKey = `${config.mode}:${options?.includeMcp === false ? "without-mcp" : "all"}:${maxChars}:${descriptionMaxChars}:${usageRanking ? JSON.stringify(usageRanking) : ""}`;
   let cachedPrompts = toolSchemaDirectoryPromptCache.get(catalog.entries);
   // Caller-owned filters may change in place; cached text must not bypass them.
   const cachedPrompt = options?.allowedIds ? undefined : cachedPrompts?.get(cacheKey);
@@ -98,6 +108,7 @@ export function buildToolSchemaDirectoryPrompt(
     config.mode,
     maxChars,
     descriptionMaxChars,
+    usageRanking,
   );
   if (options?.allowedIds) {
     return prompt;
@@ -109,6 +120,50 @@ export function buildToolSchemaDirectoryPrompt(
   cachedPrompts.set(cacheKey, prompt);
   pruneMapToMaxSize(cachedPrompts, 12);
   return prompt;
+}
+
+/**
+ * A run-granted core tool exists only on turns whose requester granted it, so a
+ * system-started wake of the same session lacks it. The cached directory omits
+ * these rows; the granting turn lists them beside its own input instead.
+ */
+function isRunGrantedDirectoryEntry(entry: ToolSearchCatalogEntry): boolean {
+  return entry.source === "openclaw" && isRunGrantedCoreToolId(entry.name);
+}
+
+/** Deferred run-granted tools for this turn's runtime context, or undefined when none. */
+export function buildRunGrantedToolDirectory(
+  catalogRef: ToolSearchCatalogRef | undefined,
+): string | undefined {
+  const entries = catalogRef?.current?.entries ?? [];
+  const nameCounts = new Map<string, number>();
+  for (const entry of entries) {
+    nameCounts.set(entry.name, (nameCounts.get(entry.name) ?? 0) + 1);
+  }
+  const rows = entries
+    .filter((entry) => !entry.directVisible && isRunGrantedDirectoryEntry(entry))
+    .map((entry) => {
+      const row = prepareToolDirectoryRow(entry);
+      // A bare name that collides or needs an exact id would fail lookup; list the id.
+      if (!row || (!entry.requiresExactId && nameCounts.get(entry.name) === 1)) {
+        return row;
+      }
+      const id = formatToolDirectoryIdentifier(entry.id);
+      if (!id) {
+        return undefined;
+      }
+      row.label = `- ${id}`;
+      return row;
+    })
+    .filter((row): row is NativeToolDirectoryRow => row !== undefined)
+    .toSorted((left, right) => (left.label < right.label ? -1 : 1));
+  if (rows.length === 0) {
+    return undefined;
+  }
+  return [
+    "Deferred tools granted for this turn (use them like the deferred-schema tools in the system prompt):",
+    ...rows.map((row) => formatToolDirectoryRow(row, 180)),
+  ].join("\n");
 }
 
 export function resolveToolSearchCatalogTool(
@@ -149,8 +204,11 @@ function formatToolDirectoryIdentifier(value: string | undefined): string | unde
 }
 
 type ToolDirectoryRow = { label: string; description: string };
+type NativeToolDirectoryRow = ToolDirectoryRow & { id: string; pinned: boolean };
 
-function prepareToolDirectoryRow(entry: ToolSearchCatalogEntry): ToolDirectoryRow | undefined {
+function prepareToolDirectoryRow(
+  entry: ToolSearchCatalogEntry,
+): NativeToolDirectoryRow | undefined {
   if (entry.source !== "openclaw") {
     return undefined;
   }
@@ -160,6 +218,8 @@ function prepareToolDirectoryRow(entry: ToolSearchCatalogEntry): ToolDirectoryRo
   }
   const ownerName = formatToolDirectoryIdentifier(entry.sourceName);
   return {
+    id: entry.id,
+    pinned: entry.id === `openclaw:core:${entry.name}` && isCoreCodingSurfaceToolName(entry.name),
     label: `- ${name}${ownerName ? ` (${ownerName})` : ""}`,
     description: entry.description,
   };
@@ -178,8 +238,11 @@ function formatToolSearchCatalogDirectory(
   mode: ToolSearchMode,
   maxChars: number,
   initialDescriptionMaxChars: number,
+  usageRanking?: ToolUsageRankingSnapshot,
 ): string {
-  const deferredEntries = entries.filter((entry) => !entry.directVisible);
+  const deferredEntries = entries.filter(
+    (entry) => !entry.directVisible && !isRunGrantedDirectoryEntry(entry),
+  );
   if (deferredEntries.length === 0) {
     return "Available deferred-schema tools: none.";
   }
@@ -197,7 +260,7 @@ function formatToolSearchCatalogDirectory(
     );
   const rows = listedEntries
     .map(prepareToolDirectoryRow)
-    .filter((row): row is ToolDirectoryRow => row !== undefined);
+    .filter((row): row is NativeToolDirectoryRow => row !== undefined);
   let descriptionMaxChars = initialDescriptionMaxChars;
   const renderRows = () => rows.map((row) => formatToolDirectoryRow(row, descriptionMaxChars));
   let lines = renderRows();
@@ -210,11 +273,10 @@ function formatToolSearchCatalogDirectory(
   const omittedLabel = " additional tools omitted. ";
   // Each line includes its newline; three fixed separators remain outside the rows.
   let lineChars = lines.reduce((chars, line) => chars + line.length + 1, 0);
-  let omitted =
-    deferredEntries.filter((entry) => entry.source === "openclaw").length - lines.length;
-  let guidance: string;
-  for (;;) {
-    guidance =
+  const total = deferredEntries.filter((entry) => entry.source === "openclaw").length;
+  const footerForCount = (included: number) => {
+    const omitted = total - included;
+    let guidance =
       omitted > 0
         ? "Use tool_search to find a tool and its input signature; use tool_describe when a full schema is needed."
         : "Use tool_search for a compact input signature or tool_describe for a full schema.";
@@ -225,12 +287,12 @@ function formatToolSearchCatalogDirectory(
       guidance +=
         " Call a unique deferred tool name directly, or use dispatch_action with its id and args.";
     }
-    const footerChars =
-      guidance.length + (omitted > 0 ? String(omitted).length + omittedLabel.length : 0);
-    if (
-      heading.length + lineChars + notice.length + footerChars + 3 <= maxChars ||
-      lines.length === 0
-    ) {
+    return omitted > 0 ? `${omitted}${omittedLabel}${guidance}` : guidance;
+  };
+  const overheadChars = (included: number) =>
+    heading.length + notice.length + footerForCount(included).length + 3;
+  for (;;) {
+    if (lineChars + overheadChars(lines.length) <= maxChars || lines.length === 0) {
       break;
     }
     // Preserve capability names before dropping rows; full descriptions remain searchable.
@@ -240,13 +302,24 @@ function formatToolSearchCatalogDirectory(
       lineChars = lines.reduce((chars, line) => chars + line.length + 1, 0);
       continue;
     }
+    if (hasToolUsageRanking(usageRanking)) {
+      lines = selectUsageRankedToolRows(
+        rows.map((row) => ({
+          id: row.id,
+          pinned: row.pinned,
+          line: formatToolDirectoryRow(row, 0),
+        })),
+        usageRanking,
+        maxChars,
+        overheadChars,
+      ).map((row) => row.line);
+      break;
+    }
     // SAFETY: this renderer owns the nonempty, dense formatted-line array.
     // Remove excluded rows before materializing the bounded directory.
     lineChars -= lines.pop()!.length + 1;
-    omitted += 1;
   }
-  const footer = omitted > 0 ? `${omitted}${omittedLabel}${guidance}` : guidance;
-  return [heading, ...lines, "", notice, footer].join("\n");
+  return [heading, ...lines, "", notice, footerForCount(lines.length)].join("\n");
 }
 
 type McpDirectoryServer = { name: string; rows: ToolDirectoryRow[]; unlisted: number };
@@ -255,7 +328,7 @@ type McpDirectoryServer = { name: string; rows: ToolDirectoryRow[]; unlisted: nu
  * One-line, bounded projection of untrusted server-provided text. Rows cannot
  * start new lines, so a description cannot fake the trusted heading or footer.
  */
-export function sanitizeMcpToolDirectoryDescription(description: string): string {
+function sanitizeMcpToolDirectoryDescription(description: string): string {
   const maxChars = MCP_TOOL_DIRECTORY_DESCRIPTION_CHARS;
   // Bound the scanned prefix before normalization; attacker-sized text costs bounded work.
   const prefix = truncateUtf16Safe(description, maxChars * 4);

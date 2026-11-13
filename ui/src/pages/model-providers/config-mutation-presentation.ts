@@ -42,7 +42,17 @@ export function createModelProviderMutationPresentation(deps: {
       field: ModelDefaultsSaveField;
       retired: Promise<void>;
     } | null>(null);
-    return { owner, defaultsSaving, setDefaultsSaving, saving, setSaving };
+    // An acknowledged defaults write turns the discovery its publication starts into background work.
+    const [defaultsSaved, setDefaultsSaved] = createSignal(false);
+    return {
+      owner,
+      defaultsSaving,
+      setDefaultsSaving,
+      defaultsSaved,
+      setDefaultsSaved,
+      saving,
+      setSaving,
+    };
   });
   const isCurrent = (view: ReturnType<typeof presentation>, retired: Promise<void>) =>
     deps.isCurrent(view.owner) && retired === lifetime.promise;
@@ -128,6 +138,7 @@ export function createModelProviderMutationPresentation(deps: {
           if (defaultsSave && isCurrent(view, retired)) {
             // Publish the initiating field with admission, before the owner's busy frame.
             view.setDefaultsSaving(defaultsSave);
+            view.setDefaultsSaved(false);
           }
         });
         // Let owner publication and any just-opened modal settle before joining.
@@ -135,7 +146,11 @@ export function createModelProviderMutationPresentation(deps: {
           onSettled(resolve);
         });
         await present(view, kind, pending, retired);
-        return await pending;
+        const result = await pending;
+        if (defaultsSave && isCurrent(view, retired) && view.defaultsSaving() === defaultsSave) {
+          view.setDefaultsSaved(result === true);
+        }
+        return result;
       } catch (error) {
         if (isCurrent(view, retired)) {
           reportError(error);
@@ -149,5 +164,6 @@ export function createModelProviderMutationPresentation(deps: {
     },
     defaultsSaving: () => currentDefaultsSave() !== null,
     defaultsSavingField: () => currentDefaultsSave()?.field ?? null,
+    defaultsSaved: () => presentation().defaultsSaved(),
   };
 }

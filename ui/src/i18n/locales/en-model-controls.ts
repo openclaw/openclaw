@@ -6,6 +6,7 @@ const enModelControls = {
     modelControls: {
       subscription: "Subscription",
       api: "API",
+      nativeLogin: "Native login",
       default: "Default",
       defaultModel: "Default model",
       routes: {

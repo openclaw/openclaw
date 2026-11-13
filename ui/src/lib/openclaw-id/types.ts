@@ -1,5 +1,8 @@
 // Response shapes of the OpenClaw ID Gateway methods (openclawId.*) the Control UI reads.
-import type { SignedStatement } from "../../../../packages/openclaw-id-protocol/src/index.ts";
+import type {
+  MemberRole,
+  SignedStatement,
+} from "../../../../packages/openclaw-id-protocol/src/index.ts";
 import type { OpenClawIdLinkPreparation } from "./link.ts";
 
 export type OpenClawIdPublication =
@@ -24,8 +27,20 @@ export type OpenClawIdStatusResult = {
     hostname?: string;
     rootPub?: string;
   };
-  /** How this browser reaches the Gateway: only `local_operator` may link or sign in. */
+  /** How this browser reaches the Gateway: direct loopback, the OpenClaw ID tunnel, or neither. */
   channel: "local_operator" | "tunnel" | null;
+  /**
+   * Whether this connection may turn on remote access: the loopback operator, an admin with
+   * a verified personal identity, or neither.
+   */
+  remoteAccessSetup: "local" | "personal_admin" | null;
+  /** The publication at Discovery, for a personal admin who is not an owner. */
+  publication?: OpenClawIdPublication;
+  /**
+   * How this connection signs in with OpenClaw ID: the loopback popup, the device grant
+   * (a verified personal sign-in such as Tailscale), or not at all.
+   */
+  accountSignIn: "popup" | "device" | null;
   /** Whether `openclawId.people` answers this client (loopback operator or an owner device). */
   owner?: boolean;
   /** Active owner devices, returned only to an owner. */
@@ -57,7 +72,7 @@ type OpenClawIdConnection =
     }
   | {
       kind: "member";
-      role: "operator" | "viewer";
+      role: MemberRole;
       accountId: string;
       email: string | null;
       displayName: string | null;
@@ -69,6 +84,8 @@ export type OpenClawIdPeopleLink = OpenClawIdStatusResult["link"] & {
   seq?: number;
   /** Active owner devices only; removed and expired ones are not listed. */
   ownerDevices?: OpenClawIdOwnerDevice[];
+  /** The last publication to Discovery, while one was attempted. */
+  publication?: OpenClawIdPublication;
 };
 
 /** An active owner device as `openclawId.people` lists it. */

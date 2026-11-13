@@ -44,7 +44,7 @@ it("provisions an empty store and retains published evidence across a stopped se
   const restarted = createKnowledgeService(host.api);
   expect(await restarted.save_page(draft, context)).toEqual(receipt);
   expect(await restarted.attach(upload, context)).toEqual(attached);
-  const read = await restarted.record({ id: receipt.id, includeEvidence: true }, context);
+  const read = await restarted.record_detail({ id: receipt.id, includeEvidence: true }, context);
   expect(read.record?.body).toBe(draft.body);
   expect(read.evidence?.[0]?.verified).toBe(true);
   const original = await restarted.attachment(
@@ -56,5 +56,5 @@ it("provisions an empty store and retains published evidence across a stopped se
     context,
   );
   expect(Buffer.from(original.data, "base64")).toEqual(bytes);
-  expect((await restarted.records({}, context)).total).toBe(1);
+  expect((await restarted.records_detail({}, context)).total).toBe(1);
 });

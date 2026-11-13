@@ -1,14 +1,13 @@
-import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import type { SessionPermissionMode } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type {
   AdmittedRunOperatorAuthority,
   OperationalRunInstanceRef,
 } from "../agents/admitted-run-context.js";
 import type { MessagingToolSend } from "../agents/embedded-agent-messaging.types.js";
-import type { LlmBoundaryOptions } from "../agents/embedded-agent-runner/run/attempt-llm-boundary.types.js";
 import type { ReplyCompletion, ReplyExpectation } from "../agents/reply-completion.types.js";
 import type { RequesterOrigin } from "../agents/requester-origin.js";
 import type { resolveAgentTurnExecutionStatus } from "../auto-reply/reply/agent-runner-execution-status.js";
+import type { ReplyMessageInjectionOutcome } from "../auto-reply/reply/message-injection-authority.js";
 import type { FollowupQueueDisposition } from "../auto-reply/reply/queue-policy.js";
 import type { FollowupRunPayload } from "../auto-reply/reply/queue/followup-run-payload.types.js";
 import type { QueueSettings } from "../auto-reply/reply/queue/queue-settings.types.js";
@@ -21,7 +20,6 @@ import type { SessionAdmissionTransition } from "../config/sessions/session-admi
 import type { SessionEntryCohortReader } from "../config/sessions/session-entry-read-runtime.types.js";
 import type { AgentRunDelegatedAuthority } from "../infra/agent-run-authority.types.js";
 import type { DiagnosticEmbeddedRunOwner } from "../infra/diagnostic-model-request-provenance.js";
-import type { Context, Model } from "../llm/types.js";
 import type { Deferred, createDeferredCore } from "../shared/deferred.js";
 import type { OpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
@@ -34,7 +32,6 @@ import type { AgentWorkAdmissionIdentity } from "./session-agent-work-admission.
 import type {
   ReplyBackendQueueMessageOptions,
   ReplyMessageInjectionResolution,
-  ReplyMessageInjectionRejectionReason,
   ReplyToolAuthorityRoute,
   ReplyToolAuthorityOverlay,
   ReplyToolAuthorityRequester,
@@ -54,6 +51,9 @@ import type {
   SessionControllerWatchdogAttempt,
   SessionControllerWatchdog,
 } from "./session-controller.watchdog.js";
+import type { SessionForkContextSnapshot } from "./session-fork-context.types.js";
+
+export type { ReplyMessageInjectionOutcome } from "../auto-reply/reply/message-injection-authority.js";
 
 export type {
   ReplyBackendCancelReason,
@@ -128,13 +128,6 @@ export type ReplyRunInterruptTarget = {
   readonly [replyRunInterruptTargetOperation]: ReplyOperation;
 };
 
-export type ReplyMessageInjectionOutcome =
-  | { status: "indeterminate"; errorMessage: string }
-  | { status: "accepted" }
-  /** Terminal authority failure; the separately recorded acceptance stays unchanged. */
-  | { status: "failed"; error: Error }
-  | { status: "rejected"; reason: ReplyMessageInjectionRejectionReason; errorMessage?: string };
-
 export type ReplyMessageInjectionAttempt = {
   /** Native run identity captured with the opaque execution owner. */
   targetRunId: string | undefined;
@@ -200,6 +193,16 @@ export type ReplyOperation = {
   readonly terminalProducerBlocked: boolean;
   /** Set when a stale-watchdog expiry forced this operation's run_stalled result. */
   readonly staleExpiryReason?: ReplyOperationStaleReason;
+  /**
+   * Semantic cause a stuck-session recovery acted on when it aborted the embedded
+   * run (e.g. `blocked_tool_call`). Recorded by the controller's authoritative
+   * stall-stop path (expireOwner -> abortForStall) before the abort commits, so
+   * both the watchdog-timer-driven and diagnostics-triggered stops carry it into
+   * cron finalization; diagnostics supplies the precise cause when available, and
+   * the controller falls back to the watchdog decision reason otherwise. Absent
+   * when recovery did not abort the run or supplied no classification.
+   */
+  recoveryClassification?: string;
   readonly startedAtMs: number;
   readonly lastActivityAtMs: number;
   /** True when this operation has owned the supplied session ID. */
@@ -768,18 +771,7 @@ export type EmbeddedAgentQueueHandle = {
   messageInjectionV2?: ReplyBackendMessageInjectionV2;
   isStreaming: () => boolean;
   /** Borrow current model context only while this attempt owns the session. */
-  readSessionForkContext?: () =>
-    | {
-        model: Model;
-        systemPrompt: string;
-        tools: Context["tools"];
-        messages: AgentMessage[];
-        projectMessages?: (messages: AgentMessage[]) => AgentMessage[];
-        sessionVersion?: number;
-        boundary?: LlmBoundaryOptions;
-        blockImages?: boolean;
-      }
-    | undefined;
+  readSessionForkContext?: () => SessionForkContextSnapshot | undefined;
   isStopped?: () => boolean;
   /** True after this handle has accepted an abort, even while cleanup retains it. */
   isAborted?: () => boolean;

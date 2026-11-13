@@ -29,6 +29,7 @@ function createLevelDirectiveExtractor<T, Field extends string>(
   names: readonly string[],
   field: Field,
   normalize: (raw?: string) => T | undefined,
+  spacedAlias?: RegExp,
 ): (body?: string, options?: LevelDirectiveParseOptions) => NamedLevelDirective<T, Field> {
   const namePattern = names.map(escapeRegExp).join("|");
   const pattern = new RegExp(`(?<!\\S)\\/(?:${namePattern})(?=$|\\s|:)`, "i");
@@ -43,7 +44,10 @@ function createLevelDirectiveExtractor<T, Field extends string>(
       const start = match.index;
       const directiveEnd = start + match[0].length;
       const prefixEnd = directiveEnd + skipDirectiveArgPrefix(body.slice(directiveEnd));
-      const argument = (options?.strict ? /^\s*(\S+)/ : /^\s*([\w-]+)/).exec(body.slice(prefixEnd));
+      const remainder = body.slice(prefixEnd);
+      const argument =
+        spacedAlias?.exec(remainder) ??
+        (options?.strict ? /^\s*(\S+)/ : /^\s*([\w-]+)/).exec(remainder);
       const end = prefixEnd + (argument?.[0].length ?? 0);
       const candidate = argument?.[1];
       if (
@@ -69,6 +73,7 @@ export const extractThinkDirective = createLevelDirectiveExtractor(
   ["thinking", "think", "t"],
   "thinkLevel",
   normalizeThinkLevel,
+  /^\s*(extra\s+high)(?=$|\s)/i,
 );
 export const extractVerboseDirective = createLevelDirectiveExtractor(
   ["verbose", "v"],

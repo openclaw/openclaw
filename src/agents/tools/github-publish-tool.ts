@@ -24,6 +24,7 @@ import {
 import { captureExecRequestOwners } from "../../infra/exec-request-context.js";
 import { resolveReplyRunForCurrentSessionId } from "../../sessions/session-controller.identity.js";
 import { findSessionControllerOperationByRunId } from "../../sessions/session-controller.queries.js";
+import { bindAgentToolListingScope } from "../agent-tool-metadata.js";
 import {
   canPrepareGitHubPullRequest,
   canRefreshGitHubPublicationBase,
@@ -114,6 +115,14 @@ export function describeGitHubPublishToolPreview(parameters: unknown): string {
 // Tool construction runs every turn; one schema object per availability combination keeps
 // identity-keyed schema normalization and prepared-descriptor caches warm.
 const githubPublishParameterSchemas = new Map<string, AnyAgentTool["parameters"]>();
+const githubPublicationObservationParameters = Type.Object(
+  {
+    action: stringEnum(["readiness"]),
+    publishingSessionKey: GitHubPublicationActionSchema.properties.publishingSessionKey,
+    requestId: GitHubPublicationActionSchema.properties.requestId,
+  },
+  { additionalProperties: false },
+);
 
 function resolveGitHubPublishParameters(params: {
   publicationAvailable: boolean;
@@ -172,6 +181,8 @@ function resolveGitHubPublishParameters(params: {
 export function createGitHubPublishTool(
   options: {
     publicationAvailable?: boolean;
+    /** Known absent writer configuration: retain credential-free receipt observation only. */
+    observationOnly?: boolean;
     /** Inventory only: expose conditional action declarations without an execution path. */
     preview?: true;
     sandbox?: SandboxContext | null;
@@ -184,9 +195,11 @@ export function createGitHubPublishTool(
     "inheritedToolAllowlist" | "inheritedToolDenylist" | "sessionPermissionPolicy"
   > = {},
 ): AnyAgentTool {
-  const publicationAvailable = options.publicationAvailable !== false;
+  const publicationSupported = options.publicationAvailable !== false;
+  const publicationAvailable = !options.observationOnly && publicationSupported;
   const workspacePreparationAvailable = !options.sandbox;
-  const prepareAvailable = options.preview || canPrepareGitHubPullRequest(options.sandbox);
+  const prepareSupported = options.preview || canPrepareGitHubPullRequest(options.sandbox);
+  const prepareAvailable = !options.observationOnly && prepareSupported;
   // An unbound sandboxed conversation prepares by yielding and adopting a managed workspace.
   const adopting = prepareAvailable && options.sandbox?.workspaceSource !== "managed-worktree";
   const refreshBaseAvailable = options.preview || canRefreshGitHubPublicationBase(options.sandbox);
@@ -204,32 +217,37 @@ export function createGitHubPublishTool(
   }
   const requestOwners = captureExecRequestOwners(options);
   const tool: AnyAgentTool = {
-    label: "GitHub Publish",
+    label: options.observationOnly ? "GitHub Publication Readiness" : "GitHub Publish",
     name: githubPublishToolDefinition.name,
     // An unbound sandboxed preparation yields this turn. Like sessions_yield, it stays a direct
     // call: a Code Mode exec cannot carry a turn handoff.
-    ...(adopting || (publicationAvailable && workspacePreparationAvailable)
+    ...((prepareSupported && options.sandbox?.workspaceSource !== "managed-worktree") ||
+    (publicationSupported && workspacePreparationAvailable)
       ? { async: false as const, catalogMode: "direct-only" as const }
       : {}),
-    description: options.preview
-      ? "Work with GitHub pull requests through the Gateway."
-      : describeGitHubPublishTool(
+    description: options.observationOnly
+      ? "Observe publication readiness and existing receipts without credentials, refresh, publication, or recovery. Send action readiness and retain the original requestId for accepted or uncertain work; never resubmit it. This listing offers no authenticated GitHub actions; configuration or tool refresh re-evaluates them. For current identity status or setup, ask the operator to check GitHub in Settings → Agents → Tools. Readiness does not establish write authority, authentication, CI, or mergeability."
+      : options.preview
+        ? "Work with GitHub pull requests through the Gateway."
+        : describeGitHubPublishTool(
+            publicationAvailable,
+            prepareAvailable,
+            refreshBaseAvailable,
+            evidenceAvailable,
+          ) +
+          (publicationAvailable && workspacePreparationAvailable
+            ? " For a local task checkout, supply workspacePath after committing its changes. Publication uses a separate task checkout and returns here without changing this conversation's workspace."
+            : ""),
+    parameters: options.observationOnly
+      ? githubPublicationObservationParameters
+      : resolveGitHubPublishParameters({
           publicationAvailable,
           prepareAvailable,
           refreshBaseAvailable,
           evidenceAvailable,
-        ) +
-        (publicationAvailable && workspacePreparationAvailable
-          ? " For a local task checkout, supply workspacePath after committing its changes. Publication uses a separate task checkout and returns here without changing this conversation's workspace."
-          : ""),
-    parameters: resolveGitHubPublishParameters({
-      publicationAvailable,
-      prepareAvailable,
-      refreshBaseAvailable,
-      evidenceAvailable,
-      workspacePreparationAvailable,
-      workspaceActions,
-    }),
+          workspacePreparationAvailable,
+          workspaceActions,
+        }),
     execute: async (toolCallId, rawArgs, signal) => {
       if (options.preview) {
         throw new Error("GitHub tool previews cannot execute actions.");
@@ -254,6 +272,11 @@ export function createGitHubPublishTool(
           baseCommit?: string;
         };
       const action = input.action ?? "publish";
+      if (options.observationOnly && action !== "readiness") {
+        throw new Error(
+          "Only publication readiness and existing receipt observation are available.",
+        );
+      }
       if (
         input.workspacePath !== undefined &&
         (action !== "publish" || !workspacePreparationAvailable)
@@ -592,5 +615,15 @@ export function createGitHubPublishTool(
       return jsonResult(result);
     },
   };
+  bindAgentToolListingScope(
+    tool,
+    [
+      publicationSupported,
+      prepareSupported,
+      refreshBaseAvailable,
+      evidenceAvailable,
+      workspacePreparationAvailable,
+    ].join(":"),
+  );
   return tool;
 }

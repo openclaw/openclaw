@@ -66,7 +66,7 @@ it.each([
   });
   expect(container.querySelector(".chat-send-btn--stop")).not.toBeNull();
   if (status) {
-    expect(workingStatus(container)).toContain(status);
+    await waitForSolid(() => expect(workingStatus(container)).toContain(status));
     expect(container.querySelector(".chat-error")).toBeNull();
   } else {
     await waitForSolid(() => expect(container.textContent).toContain("The answer is ready."));
@@ -92,7 +92,7 @@ it("waits for startup progress rather than claiming preparation before the first
 
 it.each(["submitting", "sending", "waiting-model"] as const)(
   "awaits %s without Stop",
-  (sendState) => {
+  async (sendState) => {
     const container = renderChatView({
       runActive: false,
       canAbort: false,
@@ -101,7 +101,7 @@ it.each(["submitting", "sending", "waiting-model"] as const)(
         { id: "pending-send", sessionKey: "main", text: "Continue", createdAt: 1, sendState },
       ],
     });
-    expect(workingStatus(container)).toContain("Working…");
+    await waitForSolid(() => expect(workingStatus(container)).toContain("Working…"));
     expect(container.querySelector(".chat-send-btn--stop")).toBeNull();
   },
 );

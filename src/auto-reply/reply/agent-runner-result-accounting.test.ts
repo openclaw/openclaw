@@ -1,4 +1,5 @@
 import { beforeEach, expect, it, vi } from "vitest";
+import * as modelsConfig from "../../agents/models-config-state.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   createDefaults,
@@ -65,7 +66,9 @@ it.each([
 ] as const)(
   "forwards a source-less pin with compaction count %s as %s during fallback queue refresh",
   async (authProfileOverrideCompactionCount, expectedSource) => {
+    using preparation = vi.spyOn(modelsConfig, "captureModelsJsonCostSource");
     await accountFollowupTurn(createParams(authProfileOverrideCompactionCount));
+    expect(preparation).not.toHaveBeenCalled();
 
     expect(mocks.refreshQueuedFollowupSession).toHaveBeenCalledOnce();
     expect(mocks.refreshQueuedFollowupSession).toHaveBeenCalledWith(
