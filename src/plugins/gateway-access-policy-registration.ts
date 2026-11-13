@@ -1,11 +1,34 @@
 import { types } from "node:util";
 import type { GatewayOperatorAccessCause } from "../../packages/gateway-protocol/src/connect-error-details.js";
+import {
+  assertOperatorAccessDecision,
+  type OperatorAccessDecision,
+} from "../infra/operator-access-decision.js";
 import type {
   PluginGatewayAccessAuthority,
   PluginGatewayAccessPolicy,
 } from "./gateway-access-policy.types.js";
 import { PluginInstanceUnavailableError } from "./plugin-instance-error.js";
-import type { PluginInstanceHandle } from "./plugin-instance-scope.js";
+import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
+import { pluginInvocationContext, type PluginInstanceHandle } from "./plugin-instance-scope.js";
+
+const accessInstances = new WeakMap<PluginGatewayAccessAuthority, PluginInstanceHandle>();
+
+/** Sharing a policy result never bypasses the invocation's own plugin admission. */
+export function assertBoundGatewayAccessDecision(
+  authority: PluginGatewayAccessAuthority,
+  decision: OperatorAccessDecision | undefined,
+  assertCurrent: () => void,
+): void {
+  const instance = accessInstances.get(authority);
+  if (!instance || !instance.acceptingCalls || instance.owner?.revoked) {
+    return assertCurrent();
+  }
+  const scope = pluginInvocationContext.getStore();
+  // enter() performs this lookup even for an active call: closed scopes must refuse.
+  scope?.lookup(instance);
+  assertOperatorAccessDecision(decision, assertCurrent, scope, pluginInstanceInvocation.getStore());
+}
 
 // Native AbortSignal composition stores internal WeakRefs. Recursively proxying
 // those values makes Node's eventual GC cleanup call a retired plugin instance.
@@ -83,7 +106,7 @@ function bindAccessAuthority(
     authority.assertCurrent();
   };
   let failureCause: GatewayOperatorAccessCause | undefined;
-  return {
+  const bound: PluginGatewayAccessAuthority = {
     grantId,
     signal: bindAccessSignal(authority.signal, instance, (cause) => {
       failureCause ??= cause;
@@ -104,6 +127,8 @@ function bindAccessAuthority(
       }
     },
   };
+  accessInstances.set(bound, instance);
+  return bound;
 }
 
 /** Preserve native signals while every plugin callback retains its original owner. */
