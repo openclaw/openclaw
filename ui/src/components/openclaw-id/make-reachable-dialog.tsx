@@ -329,7 +329,7 @@ export function showMakeReachableDialog(params: {
             {
               relayOnline: () => readRelayOnline(params.client),
               sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-              active: () => !modal.settled && lifetime.signal?.aborted !== true,
+              active: () => !modal.settled && !lifetime.signal?.aborted,
               now: () => Date.now(),
             },
             t("openclawId.stepRelayOffline"),

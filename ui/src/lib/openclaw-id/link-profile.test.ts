@@ -19,11 +19,7 @@ async function refusal(code: string) {
 }
 
 // account.ts reads the stored account when it loads, so each case loads it afresh.
-async function linkWith(
-  stored: { exp: number } | null,
-  request: GatewayBrowserClient["request"],
-  signal?: AbortSignal,
-) {
+async function linkWith(stored: { exp: number } | null, request: GatewayBrowserClient["request"]) {
   localStorage.clear();
   if (stored) {
     localStorage.setItem(
@@ -39,7 +35,7 @@ async function linkWith(
   }
   vi.resetModules();
   const { linkOpenClawIdToProfile } = await import("./link-profile.ts");
-  return await linkOpenClawIdToProfile({ request } as unknown as GatewayBrowserClient, signal);
+  return await linkOpenClawIdToProfile({ request } as unknown as GatewayBrowserClient);
 }
 
 const fresh = () => ({ exp: Math.floor(Date.now() / 1000) + 3600 });
@@ -90,15 +86,5 @@ it("does not start a device sign-in when the user signed out while the Gateway a
     throw await refusal("sign_in_not_held");
   });
   await expect(linkWith(fresh(), request as never)).rejects.toThrow("signed out");
-  expect(dialog.show).not.toHaveBeenCalled();
-});
-
-it("opens no device sign-in once the caller has gone while the Gateway answered", async () => {
-  const gone = new AbortController();
-  const request = vi.fn(async () => {
-    gone.abort();
-    throw await refusal("sign_in_not_held");
-  });
-  expect(await linkWith(fresh(), request as never, gone.signal)).toBeNull();
   expect(dialog.show).not.toHaveBeenCalled();
 });

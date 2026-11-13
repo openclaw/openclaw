@@ -11,13 +11,9 @@ import { resolveControlUiPaths } from "../../app/browser.ts";
 import { openClawIdAccount, readOpenClawIdSignOutGeneration } from "./account.ts";
 import type { OpenClawIdLinkOutcome } from "./device-sign-in.ts";
 
-/**
- * Resolves with what linking did, or null when the sign-in dialog was closed first or `signal`
- * aborted before it opened.
- */
+/** Resolves with what linking did, or null when the sign-in dialog was closed first. */
 export async function linkOpenClawIdToProfile(
   client: GatewayBrowserClient,
-  signal?: AbortSignal,
 ): Promise<OpenClawIdLinkOutcome | null> {
   const signedIn = openClawIdAccount();
   if (signedIn) {
@@ -46,10 +42,6 @@ export async function linkOpenClawIdToProfile(
   }
   const { showDeviceSignInDialog } =
     await import("../../components/openclaw-id/device-sign-in-dialog.tsx");
-  // A caller that closed while the Gateway answered gets no sign-in dialog.
-  if (signal?.aborted) {
-    return null;
-  }
   const done = await showDeviceSignInDialog({
     client,
     basePath: resolveControlUiPaths(window.location.pathname)[0],

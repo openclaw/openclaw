@@ -44,10 +44,10 @@ vi.mock("../../lib/openclaw-id/link.ts", () => ({
   }),
 }));
 
-// The profile link the dialog offers after setup; its device sign-in has its own dialog and tests.
+// The device sign-in behind Link your profile; it has its own dialog and tests.
+const showDeviceSignInDialog = vi.hoisted(() => vi.fn());
 // mock-isolation: the device sign-in dialog is replaced so the setup dialog's outcome handling runs alone.
-const linkOpenClawIdToProfile = vi.hoisted(() => vi.fn());
-vi.mock("../../lib/openclaw-id/link-profile.ts", () => ({ linkOpenClawIdToProfile }));
+vi.mock("./device-sign-in-dialog.tsx", () => ({ showDeviceSignInDialog }));
 
 // Click only enabled controls, so assertions follow the actual wizard gates.
 async function click(label: string) {
@@ -192,7 +192,7 @@ describe("Make reachable over a personal sign-in", () => {
   afterEach(() => {
     cleanupSolid();
     keyEvents.length = 0;
-    linkOpenClawIdToProfile.mockReset();
+    showDeviceSignInDialog.mockReset();
     localStorage.removeItem("openclaw.openclawId.account");
     window.dispatchEvent(new StorageEvent("storage", { key: "openclaw.openclawId.account" }));
   });
@@ -277,7 +277,7 @@ describe("Make reachable over a personal sign-in", () => {
       expect(Boolean(action)).toBe(canLink);
       await click(expected ? "Close" : "Done");
       expect(await done).toBe(true);
-      expect(linkOpenClawIdToProfile).not.toHaveBeenCalled();
+      expect(showDeviceSignInDialog).not.toHaveBeenCalled();
     },
   );
 
@@ -288,8 +288,8 @@ describe("Make reachable over a personal sign-in", () => {
   ])(
     "links the profile with a fresh sign-in after sign_in_not_held (outcome $outcome)",
     async ({ outcome, expected }) => {
-      const linking = Promise.withResolvers<string | null>();
-      linkOpenClawIdToProfile.mockReturnValueOnce(linking.promise);
+      const linking = Promise.withResolvers<{ signedIn: unknown; link: string } | null>();
+      showDeviceSignInDialog.mockReturnValueOnce(linking.promise);
       const request = gateway("sign_in_not_held");
       signIn();
       const done = showMakeReachableDialog({
@@ -300,15 +300,16 @@ describe("Make reachable over a personal sign-in", () => {
       });
       await completeSetup();
       await click("Link your profile");
-      expect(linkOpenClawIdToProfile).toHaveBeenCalledExactlyOnceWith(
-        { request },
-        expect.any(AbortSignal),
+      await vi.waitFor(() => expect(showDeviceSignInDialog).toHaveBeenCalledOnce());
+      expect(showDeviceSignInDialog).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ client: { request }, link: true }),
       );
       const action = [...document.querySelectorAll("button")].find(
         (button) => button.textContent?.trim() === "Link your profile",
       );
       expect(action?.disabled).toBe(true);
-      linking.resolve(outcome);
+      // A closed sign-in dialog resolves null and keeps the note.
+      linking.resolve(outcome === null ? null : { signedIn, link: outcome });
       if (expected) {
         await vi.waitFor(() => expect(notice()?.textContent).toContain(expected));
         close();
@@ -320,8 +321,9 @@ describe("Make reachable over a personal sign-in", () => {
     },
   );
 
-  it("cancels a pending profile link when setup closes", async () => {
-    linkOpenClawIdToProfile.mockReturnValueOnce(new Promise(() => {}));
+  it("ignores a profile link that finishes after setup closes", async () => {
+    const linking = Promise.withResolvers<{ signedIn: unknown; link: string } | null>();
+    showDeviceSignInDialog.mockReturnValueOnce(linking.promise);
     const request = gateway("sign_in_not_held");
     signIn();
     const done = showMakeReachableDialog({
@@ -332,15 +334,16 @@ describe("Make reachable over a personal sign-in", () => {
     });
     await completeSetup();
     await click("Link your profile");
-    const signal = linkOpenClawIdToProfile.mock.calls[0]?.[1] as AbortSignal;
-    expect(signal.aborted).toBe(false);
+    await vi.waitFor(() => expect(showDeviceSignInDialog).toHaveBeenCalledOnce());
     await click("Close");
     expect(await done).toBe(true);
-    await vi.waitFor(() => expect(signal.aborted).toBe(true));
+    linking.resolve({ signedIn, link: "linked" });
+    await linking.promise;
+    expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
   });
 
   it("keeps the note and offers the link again when the sign-in fails", async () => {
-    linkOpenClawIdToProfile.mockRejectedValueOnce(new Error("Sign-in timed out. Try again."));
+    showDeviceSignInDialog.mockRejectedValueOnce(new Error("Sign-in timed out. Try again."));
     const request = gateway("sign_in_not_held");
     signIn();
     const done = showMakeReachableDialog({
@@ -354,7 +357,7 @@ describe("Make reachable over a personal sign-in", () => {
     // The sign-in failure replaces the note, mapped like any other sign-in error.
     await vi.waitFor(() => expect(notice()?.textContent).toContain("Start sign-in again"));
     await click("Link your profile");
-    expect(linkOpenClawIdToProfile).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(showDeviceSignInDialog).toHaveBeenCalledTimes(2));
     close();
     expect(await done).toBe(true);
   });
