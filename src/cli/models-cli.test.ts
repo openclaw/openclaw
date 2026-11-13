@@ -153,10 +153,10 @@ describe("models cli", () => {
 
   it("maps --device-code to the provider device-code auth method", async () => {
     await runModelsCommand("models auth login --provider openai --device-code");
-
-    expectCommandOptions(mocks.modelsAuthLoginCommand, {
-      provider: "openai",
-      method: "device-code",
+    expectCommandOptions(mocks.modelsAuthLoginCommand, { method: "device-code" });
+    const conflict = runModelsCommand("models auth login --device-code --method password");
+    await expect(conflict).rejects.toMatchObject({
+      humanOutput: "--device-code cannot be combined with --method unless method is device-code.",
     });
   });
 
