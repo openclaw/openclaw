@@ -50,6 +50,7 @@ export function createTestPreparedRunAdmission(runId: string): PreparedAgentRunA
     operationalRunInstance: admitted.operationalRunInstance,
     admit: async () => admitted,
     assertSourceCurrent: () => {},
+    assertCurrent: () => {},
     close: () => {},
   });
 }

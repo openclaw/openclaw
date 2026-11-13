@@ -491,8 +491,8 @@ export class MemoryFileWatcher {
       capacityCode
         ? "memory watcher capacity exhausted (" +
             capacityCode +
-            "); watching disabled, memory will refresh on search"
-        : "memory watcher unavailable; memory will refresh on search: " + String(error),
+            "); watching disabled, periodic memory recovery remains active"
+        : "memory watcher unavailable; periodic memory recovery remains active: " + String(error),
     );
     const retirement = this.retire([...this.observations.values()]);
     this.recovering = retirement.finally(() => {

@@ -2,6 +2,7 @@ import { parentPort, workerData } from "node:worker_threads";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { createSqliteWorkerTransferOwner } from "../infra/sqlite-worker-transfer.js";
 import { serveOwnedWorkerTasks } from "../infra/worker-task-server.js";
+import { assertOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import { withFreshOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly-open.js";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../state/openclaw-agent-db-readonly-scope.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
@@ -29,11 +30,16 @@ if (parentPort && workerData?.pluginCatalogRead === true) {
       const scope = new OpenClawAgentDatabaseReadOnlyScope();
       let catalogs;
       try {
-        const result = scope.read(
-          ({ db }) =>
-            readPluginModelCatalogEntries(db, PLUGIN_MODEL_CATALOG_CACHE_SCOPE, input.pluginIds),
-          input,
-        );
+        const result = scope.read((database) => {
+          if (input.expectedIdentity) {
+            assertOpenClawAgentDatabaseIdentity(database, input.expectedIdentity);
+          }
+          return readPluginModelCatalogEntries(
+            database.db,
+            PLUGIN_MODEL_CATALOG_CACHE_SCOPE,
+            input.pluginIds,
+          );
+        }, input);
         catalogs = result.found ? result.value : [];
       } catch (error) {
         // Report ordinary refusal only after native cleanup succeeds; failed close retires the worker.

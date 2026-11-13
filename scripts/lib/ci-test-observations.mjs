@@ -12,7 +12,7 @@ export const isObservationPath = (value) =>
   !/^[A-Za-z]:/u.test(value) &&
   value.split("/").every((part) => part !== "" && part !== "." && part !== "..");
 
-function fileIdentity(value) {
+export function observationFile(value) {
   assert(object(value) && isObservationPath(value.file), "Invalid observation file path");
   assert(
     typeof value.project === "string" && typeof value.pool === "string",
@@ -21,22 +21,26 @@ function fileIdentity(value) {
   return { file: value.file, project: value.project, pool: value.pool };
 }
 
-function contextIdentity(context) {
+export function observationContext(context) {
   assert(object(context), "Missing CI context");
   assert(/^[\w.-]+\/[\w.-]+$/u.test(context.repository), "Invalid repository");
-  const result = { repository: context.repository };
   for (const name of ["revision", "tree"]) {
     assert(
       typeof context[name] === "string" && /^[a-f0-9]{40}$/iu.test(context[name]),
       `Invalid ${name}`,
     );
-    result[name] = context[name];
   }
   for (const name of ["configDigest", "lockDigest", "environmentDigest"]) {
     assert(typeof context[name] === "string" && digest.test(context[name]), `Invalid ${name}`);
-    result[name] = context[name];
   }
-  return result;
+  return {
+    repository: context.repository,
+    revision: context.revision,
+    tree: context.tree,
+    configDigest: context.configDigest,
+    lockDigest: context.lockDigest,
+    environmentDigest: context.environmentDigest,
+  };
 }
 
 function dependenciesFor(record, file, root) {
@@ -82,7 +86,7 @@ function dependenciesFor(record, file, root) {
  * @param {unknown} [dependencyRecord]
  */
 export function collectTestObservations(log, context, dependencyRecord = null) {
-  const identity = contextIdentity(context);
+  const identity = observationContext(context);
   const invocations = new Map();
   for (const raw of stripVTControlCharacters(log).split("\n")) {
     const line = raw.replace(/^\d{4}-\d{2}-\d{2}T\S+\s+/u, "").replace(/^\[shard:[^\]]+\]\s*/u, "");
@@ -113,7 +117,7 @@ export function collectTestObservations(log, context, dependencyRecord = null) {
         "Invalid dependency root",
       );
       assert(Array.isArray(event.files), "Missing inventory");
-      const files = event.files.map(fileIdentity);
+      const files = event.files.map(observationFile);
       const fileIds = new Set(files.map(observationFileId));
       assert(fileIds.size === files.length, "Duplicate inventory file");
       invocations.set(event.invocation, { event, files, fileIds, outcomes: new Map(), end: null });
@@ -125,7 +129,7 @@ export function collectTestObservations(log, context, dependencyRecord = null) {
         invocation.end = event;
       } else {
         assert(!invocation.end, "Outcome after run completion");
-        const file = fileIdentity({ ...event, file: event.observationFile });
+        const file = observationFile({ ...event, file: event.observationFile });
         const id = observationFileId(file);
         assert(invocation.fileIds.has(id), "Unknown outcome file");
         assert(!invocation.outcomes.has(id), "Duplicate outcome file");
@@ -212,6 +216,70 @@ export function collectTestObservations(log, context, dependencyRecord = null) {
         complete: observations.length > 0 && observations.every((file) => file.complete),
         elapsedMs: Number.isFinite(end?.elapsedMs) && end.elapsedMs >= 0 ? end.elapsedMs : null,
         files: observations,
+      };
+    }),
+  };
+}
+
+// Large native graphs repeat the same paths across many files. Compact only the
+// exchange representation; selection and model code keep resolved path arrays.
+export function compactTestObservations(observations) {
+  const indexes = new Map();
+  const dependencyPaths = [];
+  return {
+    ...observations,
+    version: 2,
+    dependencyPaths,
+    invocations: observations.invocations.map((invocation) => ({
+      ...invocation,
+      files: invocation.files.map((file) => ({
+        ...file,
+        dependencies:
+          file.dependencies?.map((dependency) => {
+            if (!indexes.has(dependency)) {
+              indexes.set(dependency, dependencyPaths.length);
+              dependencyPaths.push(dependency);
+            }
+            return indexes.get(dependency);
+          }) ?? null,
+      })),
+    })),
+  };
+}
+
+/** @returns {ReturnType<typeof collectTestObservations>} */
+export function decodeTestObservations(observations) {
+  assert(object(observations), "Missing observations");
+  if (observations.version === 1) {
+    return observations;
+  }
+  assert(observations.version === 2, "Unsupported observation version");
+  const paths = observations.dependencyPaths;
+  assert(
+    Array.isArray(paths) && paths.every(isObservationPath) && new Set(paths).size === paths.length,
+    "Invalid dependency path table",
+  );
+  assert(Array.isArray(observations.invocations), "Missing observation invocations");
+  return {
+    version: 1,
+    context: observations.context,
+    invocations: observations.invocations.map((invocation) => {
+      assert(object(invocation) && Array.isArray(invocation.files), "Missing observation files");
+      return {
+        ...invocation,
+        files: invocation.files.map((file) => {
+          assert(object(file), "Invalid observation file");
+          const indexes = file.dependencies;
+          assert(
+            indexes === null ||
+              (Array.isArray(indexes) &&
+                indexes.every(
+                  (index) => Number.isSafeInteger(index) && index >= 0 && index < paths.length,
+                )),
+            "Invalid dependency path index",
+          );
+          return { ...file, dependencies: indexes?.map((index) => paths[index]) ?? null };
+        }),
       };
     }),
   };

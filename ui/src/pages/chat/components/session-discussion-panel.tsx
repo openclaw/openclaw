@@ -14,6 +14,7 @@ import type {
   SessionDiscussionState,
 } from "../../../../../packages/gateway-protocol/src/index.js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { InlineAlert } from "../../../components/solid/inline-alert.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
@@ -266,7 +267,7 @@ function DiscussionPanel(props: DiscussionProps, host: SolidBridgeElement<Discus
       <Errored
         fallback={(error) => (
           <div class="session-discussion__empty">
-            <div class="callout danger">{formatUiError(error())}</div>
+            <InlineAlert tone="danger">{formatUiError(error())}</InlineAlert>
           </div>
         )}
       >

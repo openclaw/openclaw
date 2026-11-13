@@ -112,6 +112,7 @@ function resolvePayloadTelegramControls(
     },
     {
       allowWebAppButtons: resolveTelegramTargetChatType(String(turn.context.chatId)) === "direct",
+      supportsDisabled: turn.richMessages,
       onDroppedControl: (control) => droppedControls.push(control),
       questionOptionIndices: resolveAskUserQuestionOptionIndices(payload),
     },
@@ -488,7 +489,7 @@ async function deliverReplyWithNormalization(
       if (!suppressProgressAnswerBlock) {
         turn.progressCompositor.resetActivity();
       }
-      return toTelegramReplyDeliveryResult(turn, true);
+      return toTelegramReplyDeliveryResult(turn, !suppressProgressAnswerBlock);
     }
 
     if (segment.lane === "answer" && info.kind === "block") {

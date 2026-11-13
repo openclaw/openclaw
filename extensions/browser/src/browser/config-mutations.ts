@@ -87,7 +87,7 @@ export async function createBrowserProfileConfig(params: {
       } else {
         const usedPorts = getUsedPorts(latestProfileSource.profiles);
         const rangeSource = useRebasedPortRange ? latestRootResolved : params.resolved;
-        const cdpPort = allocateCdpPort(usedPorts, {
+        const cdpPort = await allocateCdpPort(usedPorts, {
           start: rangeSource.cdpPortRangeStart,
           end: rangeSource.cdpPortRangeEnd,
         });

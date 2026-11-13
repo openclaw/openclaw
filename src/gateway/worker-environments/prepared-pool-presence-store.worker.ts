@@ -116,3 +116,10 @@ export function writePreparedPoolPresenceDemandInDatabase(
   );
   return prepared;
 }
+
+export const preparedPoolPresenceReadOperations = {
+  "preparedPoolPresence.read": (_input: undefined, db: EngineConnection) => ({
+    type: "preparedPoolPresence.read" as const,
+    demand: readPreparedPoolPresenceDemandInDatabase(db),
+  }),
+};

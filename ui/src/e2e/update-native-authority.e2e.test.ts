@@ -106,7 +106,7 @@ suite.define(() => {
           }
           await expect
             .poll(async () => (await copy.getByRole("alert").allTextContents()).join(" "))
-            .toContain("Administrator access is required");
+            .toContain("You need admin access");
         }
         expect(await gateway.getRequests("update.run")).toHaveLength(0);
       });

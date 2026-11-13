@@ -1,5 +1,6 @@
 import { Errored, For, Loading, Show, createMemo, createUniqueId, latest } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
+import { MenuHeading } from "../../components/solid/menu-heading.tsx";
 import { Menu, type MenuEntry, type MenuItem } from "../../components/solid/menu.tsx";
 import { registerSystemsEnglish } from "../../i18n/locales/en-systems.ts";
 import { prettifyPlatform } from "../../lib/platform-label.ts";
@@ -8,8 +9,8 @@ import { projectOwner } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import type { SystemsInventoryRow } from "./systems-data.ts";
 import { createSystemsRead } from "./systems-read.ts";
-import type { Systems, SystemsSortMode, SystemsStatusFilter } from "./systems-state.ts";
 import "../../styles/systems.css";
+import type { Systems, SystemsSortMode, SystemsStatusFilter } from "./systems-state.ts";
 
 registerEnglishCatalog(registerSystemsEnglish);
 
@@ -53,12 +54,25 @@ function shortId(id: string): string {
   return id.slice(id.lastIndexOf(":") + 1, id.lastIndexOf(":") + 7);
 }
 
-export function systemKind(row: SystemsInventoryRow): "host" | "worker" | "node" {
-  return row.environment.id === "gateway"
-    ? "host"
-    : row.environment.type === "node"
-      ? "node"
-      : "worker";
+function systemKind(row: SystemsInventoryRow): "host" | "worker" | "node" | "device" {
+  if (row.environment.id === "gateway") {
+    return "host";
+  }
+  if (row.environment.type === "node") {
+    return "node";
+  }
+  // Provider metadata distinguishes provisioned cloud devices from generic workers.
+  return row.environment.worker && row.environment.worker.providerId !== "device"
+    ? "worker"
+    : "device";
+}
+
+export function systemKindLabel(row: SystemsInventoryRow): string {
+  const kind = systemKind(row);
+  const profile = row.environment.worker?.profileId;
+  return kind === "worker" && profile
+    ? t("systems.cloudProfile", { profile })
+    : t("systems." + kind);
 }
 
 export function systemStatus(row: SystemsInventoryRow): string {
@@ -156,7 +170,7 @@ function SystemsInventory(props: { controller: Systems }) {
     {
       kind: "content",
       id: "sort-heading",
-      content: <div class="sidebar-session-sort-menu__title">{t("systems.sortBy")}</div>,
+      content: <MenuHeading label={t("systems.sortBy")} />,
     },
     ...sortOptions.map((option) =>
       filterItem("sort", option, controller().state.sortMode === option.value),
@@ -167,7 +181,7 @@ function SystemsInventory(props: { controller: Systems }) {
       content: (
         <>
           <div class="session-menu__separator" role="separator" />
-          <div class="sidebar-session-sort-menu__title">{t("systems.status")}</div>
+          <MenuHeading label={t("systems.status")} />
         </>
       ),
     },
@@ -268,14 +282,22 @@ function SystemsInventory(props: { controller: Systems }) {
           </p>
         ) : null}
         <For each={rows().filter((row) => systemKind(row) === "host")}>{renderRow}</For>
-        <For each={["node", "worker"] as const}>
+        <For each={["node", "worker", "device"] as const}>
           {(kind) => {
             const group = createMemo(() => rows().filter((row) => systemKind(row) === kind));
             return (
               <Show when={group().length}>
                 <section class="systems-group">
                   <h3>
-                    <span>{t(kind === "node" ? "systems.nodes" : "systems.workers")}</span>
+                    <span>
+                      {t(
+                        kind === "node"
+                          ? "systems.nodes"
+                          : kind === "worker"
+                            ? "systems.workers"
+                            : "systems.devices",
+                      )}
+                    </span>
                     <span class="systems-group__count">{group().length}</span>
                   </h3>
                   <For each={group()}>{renderRow}</For>

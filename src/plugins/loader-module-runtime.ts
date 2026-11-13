@@ -71,6 +71,7 @@ const LAZY_RUNTIME_PROPERTIES = {
   webSearch: true,
   modelConfig: true,
   capabilities: true,
+  skills: true,
 } satisfies Record<keyof PluginRuntime, true>;
 
 export function runPluginRegisterSyncInRegistry(
@@ -148,6 +149,8 @@ export function createPluginModuleLoader(options: {
   loaderFilename?: string;
   installNativeSdkResolver?: boolean;
   expectedSourceDigests?: Readonly<Record<string, string>>;
+  /** Explicit development reload targets; empty unless the Gateway opted in. */
+  bundledCodeReloadPluginIds?: readonly string[];
 }) {
   const cache = getPluginCache();
   const captured = {
@@ -191,6 +194,9 @@ export function createPluginModuleLoader(options: {
           inspectionSourceIdentity: owner.immutableInstallIdentity,
           inspectionRetention: nativeAdmissionStateFor(cache).inspectionNativeEsm,
         };
+  const reloadsBundledCode = (owner: Owner) =>
+    owner.record.origin === "bundled" &&
+    captured.bundledCodeReloadPluginIds?.includes(owner.record.id) === true;
   const binding = (
     modulePath: string,
     owner: Owner,
@@ -201,6 +207,7 @@ export function createPluginModuleLoader(options: {
     source: modulePath,
     rootDir: owner.rootDir,
     standalone: owner.standalone,
+    reloadBundledCode: reloadsBundledCode(owner),
     expectedSourceDigest: captured.expectedSourceDigests?.[owner.record.id],
     ...inspection(owner),
     devSourceRoot: captured.devSourceRoot,
@@ -242,14 +249,15 @@ export function createPluginModuleLoader(options: {
         return;
       }
       await withPluginCache(cache, async () => {
+        const bundledCodeReload = reloadsBundledCode(owner);
         const bundledCapture =
-          owner.record.origin === "bundled"
+          owner.record.origin === "bundled" && !bundledCodeReload
             ? resolveBundledPluginStateOperationCapture({
                 rootDir: owner.rootDir,
                 source: modulePath,
               })
             : undefined;
-        if (owner.record.origin === "bundled" && !bundledCapture) {
+        if (owner.record.origin === "bundled" && !bundledCapture && !bundledCodeReload) {
           return;
         }
         const { preparePluginGenerationArtifact } = await import("./plugin-generation-worker.js");
@@ -258,6 +266,7 @@ export function createPluginModuleLoader(options: {
             rootDir: owner.rootDir,
             source: modulePath,
             standalone: owner.standalone,
+            bundledReload: bundledCodeReload,
           },
         );
         if (cache.retirement || isPluginRegistryRetired(owner.registry)) {
@@ -315,6 +324,7 @@ export function createLazyPluginRuntime(params: {
   const cache = params.inspectionResources ? new WeakRef(getPluginCache()) : getPluginCache();
   type RuntimeModule = {
     createPluginRuntime?: PluginRuntimeFactory;
+    enqueueSessionEventForHost?: Parameters<typeof createRuntimeBase>[0];
   };
   const resolveRuntimeModule = (): RuntimeModule => {
     const resolution = resolvePluginRuntimeModulePathWithDiagnostics({
@@ -348,7 +358,21 @@ export function createLazyPluginRuntime(params: {
     });
   };
 
-  const base = createRuntimeBase();
+  let enqueueSessionEventForHost: RuntimeModule["enqueueSessionEventForHost"];
+  const base = createRuntimeBase((...args) => {
+    if (!enqueueSessionEventForHost) {
+      const owner = cache instanceof WeakRef ? cache.deref() : cache;
+      if (!owner) {
+        throw new PluginInventoryRetiredError();
+      }
+      const runtime = withPluginCache(owner, resolveRuntimeModule);
+      if (typeof runtime.enqueueSessionEventForHost !== "function") {
+        throw new Error("Plugin runtime module missing enqueueSessionEventForHost export");
+      }
+      enqueueSessionEventForHost = runtime.enqueueSessionEventForHost;
+    }
+    return enqueueSessionEventForHost(...args);
+  });
   let resolvedRuntime: PluginRuntime | null = null;
   const resolveRuntime = (): PluginRuntime => {
     if (resolvedRuntime) {

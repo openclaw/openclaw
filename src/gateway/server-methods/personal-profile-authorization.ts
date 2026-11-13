@@ -1,5 +1,6 @@
 import { intersectOperatorScopes, roleScopesAllow } from "../../shared/operator-scope-compat.js";
 import { prepareUserProfileRolePolicyAuthority } from "../../state/user-channel-identity-operations.js";
+import { currentOwnerDevicePrincipal } from "../openclaw-id/tunnel-principal.js";
 import { hasCurrentGatewayOperatorAccess } from "../operator-access-policy.js";
 import {
   resolveOperatorRolePolicy,
@@ -44,17 +45,21 @@ export function currentPersonalProfileClient(
   }
   const cfg = context.getRuntimeConfig();
   const profileId = typeof owner === "string" ? owner : owner?.profileId;
+  // An owner device attributed to its linked profile keeps owner authority (OCF-510) while
+  // its owner certificate is current; a stale one falls back to the person's role.
   const policy =
-    typeof owner === "object"
-      ? resolveOperatorRolePolicyForAssignment(
-          owner.profileId,
-          owner.role,
-          cfg,
-          owner.githubLogin ?? null,
-        )
-      : profileId
-        ? resolveOperatorRolePolicyForProfile(profileId, cfg)
-        : resolveOperatorRolePolicy(client, cfg);
+    currentOwnerDevicePrincipal(client) !== undefined
+      ? undefined
+      : typeof owner === "object"
+        ? resolveOperatorRolePolicyForAssignment(
+            owner.profileId,
+            owner.role,
+            cfg,
+            owner.githubLogin ?? null,
+          )
+        : profileId
+          ? resolveOperatorRolePolicyForProfile(profileId, cfg)
+          : resolveOperatorRolePolicy(client, cfg);
   const granted = client.connect.scopes ?? [];
   const scopes = policy ? intersectOperatorScopes(granted, policy.scopes) : granted;
   if (

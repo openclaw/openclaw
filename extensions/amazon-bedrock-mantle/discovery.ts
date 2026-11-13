@@ -238,7 +238,7 @@ export async function discoverMantleModels(params: {
   const cached = discoveryCache.get(region);
   if (
     cached?.bearerToken === bearerToken &&
-    Date.now() - cached.fetchedAt < DEFAULT_REFRESH_INTERVAL_SECONDS * 1000
+    performance.now() - cached.fetchedAt < DEFAULT_REFRESH_INTERVAL_SECONDS * 1000
   ) {
     return cached.models;
   }
@@ -289,7 +289,7 @@ export async function discoverMantleModels(params: {
         })
         .toSorted((left, right) => left.id.localeCompare(right.id));
 
-      discoveryCache.set(region, { bearerToken, models, fetchedAt: Date.now() });
+      discoveryCache.set(region, { bearerToken, models, fetchedAt: performance.now() });
       return models;
     } finally {
       await release();

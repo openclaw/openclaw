@@ -1,0 +1,29 @@
+title: Cloud worker admission and authority before worker I/O
+
+scenario:
+  id: cloud-worker-admission-authority
+  surface: gateway
+  category: gateway.session-apis
+  objective: Prove that a paired-node worker turn with a valid user admission reaches the worker and completes, and that revoking run or placement authority while the launch is in flight stops the turn before any worker turn I/O.
+  successCriteria:
+    - A managed-worktree qa-channel session dispatches to a real paired-node worker through an isolated Gateway.
+    - A chat.send turn, admitted through the worker turn-admission RPC, sends one worker launch, reaches the mock model once, completes, and records its reply.
+    - A qa-channel inbound turn on the same worker session does the same; the verdict records whether its user row was already in the transcript when the launch reached the node.
+    - Cancelling the run while its launch frame is held on the node makes the Gateway cancel the launch before the node handles it; no worker process starts, the model sees no request, and no worker transcript or live event is acknowledged.
+    - Reclaiming the placement at the same point has the same result and the placement ends reclaimed.
+  docsRefs:
+    - docs/gateway/cloud-workers/session-lifecycle.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - src/gateway/worker-environments/worker-turn-execution.ts
+    - src/gateway/worker-environments/worker-turn-user-message.ts
+    - src/gateway/worker-environments/admission.ts
+    - test/e2e/qa-lab/runtime/cloud-worker-admission-authority-proof.ts
+  execution:
+    kind: script
+    path: test/e2e/qa-lab/runtime/cloud-worker-admission-authority-proof.ts
+    summary: Dispatches a managed-worktree qa-channel session to a proof-owned paired-node worker, runs a valid turn, then revokes run and placement authority while each launch frame is in flight and verifies no worker turn I/O follows.
+    timeoutMs: 900000
+    args:
+      - --artifact-base
+      - ${outputDir}

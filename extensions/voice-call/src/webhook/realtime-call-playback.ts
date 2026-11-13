@@ -160,12 +160,14 @@ export function createRealtimeCallPlayback(params: {
     pendingMarkAcks,
     providerCallId: callSid,
   });
+  const idleHangupMs =
+    params.idleHangupMs ?? (callRecord.direction === "outbound" ? 30_000 : undefined);
   const activity = createRealtimeCallActivityController({
-    idleHangupMs: params.idleHangupMs,
+    idleHangupMs,
     isPaused: () => outboundGreeting.isBlocked() || hostSpeech.isActive(),
     onIdle: () => {
       console.warn(
-        `[voice-call] Realtime speech idle timeout callId=${callId} providerCallId=${callSid} timeoutMs=${params.idleHangupMs}`,
+        `[voice-call] Realtime speech idle timeout callId=${callId} providerCallId=${callSid} timeoutMs=${idleHangupMs}`,
       );
       params.closeForInactivity();
       if (ws.readyState === WebSocket.OPEN) {

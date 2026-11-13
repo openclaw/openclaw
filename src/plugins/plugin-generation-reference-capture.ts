@@ -39,6 +39,7 @@ export function createPluginGenerationReferenceCapture({
   captureExecutableFile,
   owner,
   sourceLinks,
+  linkSharedModule,
 }: {
   source: string;
   rootDir: string;
@@ -65,6 +66,8 @@ export function createPluginGenerationReferenceCapture({
   captureExecutableFile: (filename: string) => string | undefined;
   owner: Pick<PluginPackageCapture, "state">;
   sourceLinks: Pick<ReturnType<typeof createPluginSourceLinkCapture>, "contains">;
+  /** Bundled development reload keeps host-shared modules canonical; true means handled. */
+  linkSharedModule?: (source: string, local: string, value: string) => boolean;
 }) {
   return (
     reference: string,
@@ -173,6 +176,9 @@ export function createPluginGenerationReferenceCapture({
       module && path.isAbsolute(value) && isPathInside(lexicalBoundary, requested)
         ? path.join(boundary, path.relative(lexicalBoundary, requested))
         : requested;
+    if (module && linkSharedModule?.(source, local, value)) {
+      return undefined;
+    }
     if (module && !isPathInside(boundary, local)) {
       if (!conditions || !execute) {
         return null;

@@ -1121,10 +1121,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     try {
       if (queuedAfter) {
         try {
-          await Promise.race([
-            waitForQueuedLocalRun(queuedAfter, runId),
-            waitForAbortSignal(controller.signal),
-          ]);
+          await waitForAbortSignal(controller.signal, waitForQueuedLocalRun(queuedAfter, runId));
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : String(error);
           this.emitChatTerminal(

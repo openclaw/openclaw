@@ -98,6 +98,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
+  RELEASE_PUBLISH_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.22.1"
 
@@ -147,14 +149,6 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
-
-      - name: Validate npm release request
-        env:
-          BYPASS_EXTENDED_STABLE_GUARD: ${{ inputs.bypass_extended_stable_guard }}
-          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
-          RELEASE_TAG: ${{ inputs.tag }}
-          NPM_WORKFLOW_REF: ${{ inputs.release_candidate_branch != '' && format('refs/heads/{0}', inputs.release_candidate_branch) || github.ref }}
-        run: node scripts/openclaw-npm-extended-stable-release.mjs validate-request
 
       - name: Require trusted workflow ref for publish
         env:
@@ -344,6 +338,15 @@ jobs:
             --source-digest "$EXPECTED_WORKFLOW_SHA" \
             --source-ref "$EXPECTED_WORKFLOW_FULL_REF" \
             --deny-self-hosted-runners
+
+      - name: Validate npm release request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BYPASS_EXTENDED_STABLE_GUARD: ${{ inputs.bypass_extended_stable_guard }}
+          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          NPM_WORKFLOW_REF: ${{ inputs.release_candidate_branch != '' && format('refs/heads/{0}', inputs.release_candidate_branch) || github.ref }}
+        run: node trusted-workflow/scripts/openclaw-npm-extended-stable-release.mjs validate-request
 
   approve_openclaw_npm_release:
     needs: validate_publish_request
@@ -921,11 +924,12 @@ jobs:
 
       - name: Recheck npm release request
         env:
+          GH_TOKEN: ${{ github.token }}
           BYPASS_EXTENDED_STABLE_GUARD: ${{ inputs.bypass_extended_stable_guard }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           RELEASE_TAG: ${{ inputs.tag }}
           NPM_WORKFLOW_REF: ${{ inputs.release_candidate_branch != '' && format('refs/heads/{0}', inputs.release_candidate_branch) || github.ref }}
-        run: node scripts/openclaw-npm-extended-stable-release.mjs validate-request
+        run: node trusted-workflow/scripts/openclaw-npm-extended-stable-release.mjs validate-request
 
       - name: Wait for the release parent's npm authorization
         if: needs.validate_publish_request.outputs.parent_approval == 'receipt'
@@ -1010,7 +1014,7 @@ jobs:
     if: ${{ always() && !cancelled() && github.repository == 'openclaw/openclaw' && github.event_name == 'workflow_dispatch' && !inputs.preflight_only && (needs.publish_openclaw_npm.outputs.openclaw_publication != '' || needs.publish_openclaw_npm.outputs.gateway_protocol_publication != '') }}
     continue-on-error: true
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:

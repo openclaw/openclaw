@@ -467,7 +467,7 @@ export async function drainPendingPrefs(
             // unwritable outbox entry; other preferences must still be allowed to drain.
             sync.applyServerPrefsPatch({ sidebarEntries: localPins });
             sync.updateRetainedLocalKeys(sync.pendingScope, ["sidebarEntries"], true);
-            showToast({ message: result.error });
+            showToast({ placement: "top-right", severity: "error", message: result.error });
           }
           sync.publishPreferenceWrites();
         }

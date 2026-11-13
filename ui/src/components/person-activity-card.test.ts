@@ -73,7 +73,8 @@ const links = () => [
 ];
 
 it("retains loaded selection and focused nodes across pending roster refreshes", async () => {
-  const initial = ["one", "two", "three", "four"].map((key, index) => session(key, 3 - index));
+  const initial = ["subagent:a", "one", "two", "three", "four"].map((k, i) => session(k, 4 - i));
+  initial[2]!.spawnedBy = "agent:main:one"; // Interactive children stay; view-only ones do not.
   const openSession = vi.fn();
   show();
   expect(links()).toHaveLength(0);
@@ -105,9 +106,8 @@ it("retains loaded selection and focused nodes across pending roster refreshes",
   refresh.resolve(
     input({
       sessionData: data([
-        { ...initial[1]!, label: "two updated", updatedAt: 4 },
-        initial[2]!,
-        initial[3]!,
+        { ...initial[2]!, label: "two updated", updatedAt: 4 },
+        ...initial.slice(3),
       ]),
       openSession,
     }),
@@ -161,12 +161,11 @@ it("exposes the activity link while presence is offline", () => {
     sessionData: data([session("one", 1)]),
   });
   expect(card("status")?.textContent).toContain("Offline");
-  expect(card("facts")).toBeNull();
   const link = getQueriesForElement(container).getByRole("link", { name: "View activity" });
   expect(link.getAttribute("href")).toBe("/ui/activity/alice");
 });
 
-it("localizes connection and session labels without replacing the focused link", async () => {
+it("localizes session labels without replacing the focused link", async () => {
   const restoreI18n = captureI18nStateForTesting();
   try {
     await i18n.setLocale("en");
@@ -176,16 +175,16 @@ it("localizes connection and session labels without replacing the focused link",
     });
     flush();
     const link = links()[0]!;
-    const labels = () => [card("facts dd > span")?.textContent, card("session-name")?.textContent];
-    expect(labels()).toEqual(["Web app", "Automation: Daily check"]);
+    const title = () => card("session-name")?.textContent;
+    expect(title()).toBe("Automation: Daily check");
     link.focus();
-    for (const [locale, connection, title] of [
-      ["de", "Web-App", "Automatisierung: Daily check"],
-      ["en", "Web app", "Automation: Daily check"],
+    for (const [locale, localized] of [
+      ["de", "Automatisierung: Daily check"],
+      ["en", "Automation: Daily check"],
     ] as const) {
       await i18n.setLocale(locale);
       flush();
-      expect(labels()).toEqual([connection, title]);
+      expect(title()).toBe(localized);
       expect(links()[0]).toBe(link);
       expect(document.activeElement).toBe(link);
     }

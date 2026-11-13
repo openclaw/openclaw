@@ -92,7 +92,6 @@ it("retains scoped display-only thumbnail bytes without authorizing a read or ac
 });
 
 it("records displayed bytes only from HTTP cache without replacing the live image", async () => {
-  vi.stubGlobal("IntersectionObserver", undefined);
   const source = `media://inbound/${crypto.randomUUID()}.png`;
   const key = JSON.stringify([null, source, 480]);
   const [facts, setFacts] = createSignal<ChatRowDisplayFacts>({});

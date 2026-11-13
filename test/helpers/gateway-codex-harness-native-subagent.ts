@@ -12,7 +12,11 @@ import {
 } from "../../scripts/lib/managed-child-process.mts";
 import type { GatewayClient } from "../../src/gateway/client.js";
 import { extractFirstTextBlock } from "../../src/shared/chat-message-content.js";
-import type { CapturedAgentEvent } from "./gateway-codex-harness.js";
+import {
+  assertCodexHarnessReply,
+  type CodexHarnessAgentResult,
+  type CapturedAgentEvent,
+} from "./gateway-codex-harness.js";
 
 type NativeSubagentProbeParams = {
   annotate: TestContext["annotate"];
@@ -36,7 +40,7 @@ type NativeSubagentProbeHarness = {
       includeAllSessions?: boolean;
       message: string;
     },
-  ) => Promise<{ runId: string; text: string; events: CapturedAgentEvent[] }>;
+  ) => Promise<CodexHarnessAgentResult>;
   recordCodexAttemptIdentity: (params: {
     events: CapturedAgentEvent[];
     runId: string;
@@ -304,7 +308,9 @@ export async function verifyCodexNativeSubagentBridgeProbe(
       runId: followup.runId,
       sessionKey: params.sessionKey,
     });
-    expect(followup.text.trim()).toBe(`${followupParentToken} ${followupToken}`);
+    assertCodexHarnessReply(followup, () =>
+      expect(followup.text.trim()).toBe(`${followupParentToken} ${followupToken}`),
+    );
     expect(observedCodexThreadIds.get(params.sessionKey)).toBe(parentThreadId);
     const thread = await observeAssignment(followupToken);
     const turns = threadTurns(thread);

@@ -57,7 +57,7 @@ suite.define(() => {
         writeFileSync(artifacts + "/schedule.png", frame.png);
         const summaryText = await summary.textContent();
         writeFileSync(artifacts + "/observed.txt", summaryText ?? "");
-        expect(summaryText).toContain("Next run at 10/30/2026, 12:10 PM");
+        expect(summaryText).toContain("Next activity at 10/30/2026, 12:10 PM");
         expect(summaryText).not.toContain("Runs once at");
         await page.locator("#cron-name").fill("Check the fictional build again");
         await page.locator('[data-test-id="cron-submit"]').click();
@@ -72,7 +72,7 @@ suite.define(() => {
         await page.locator('[data-test-id="cron-row-one-shot-proof"] .cron-table__name').click();
         await expect
           .poll(() => summary.textContent())
-          .toContain("Next run at 10/30/2026, 12:10 PM");
+          .toContain("Next activity at 10/30/2026, 12:10 PM");
       },
     );
   });

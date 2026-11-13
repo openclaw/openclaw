@@ -130,6 +130,74 @@ async function replaceStore(options: Options, ...names: string[]) {
 }
 
 describe("resident profile display and reference catalog", () => {
+  it("uses verified handles for unnamed profiles and never an authentication email", async () => {
+    const options = fixture();
+    const github = syncAccount(options, "private-login@example.test", 301, "public-handle");
+    const emailOnly = ensureProfileForEmail("other-private-login@example.test", options);
+    setDisplayName(github.id, null, options);
+    setDisplayName(emailOnly.id, null, options);
+    await prepareCatalog(options);
+    const queries = spyOnQueries(options);
+
+    expect(options.display(github.id).displayName).toBe("public-handle");
+    expect(options.display(emailOnly.id).displayName).toBe(`Person ${emailOnly.id.slice(0, 8)}`);
+    expect(profiles.listResidentUserProfileDisplayFacts(options)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: github.id, label: "public-handle" }),
+        expect.objectContaining({
+          id: emailOnly.id,
+          label: `Person ${emailOnly.id.slice(0, 8)}`,
+        }),
+      ]),
+    );
+    expect(queries).not.toHaveBeenCalled();
+  });
+
+  it("presents opaque proxy subjects without changing their authentication bindings", async () => {
+    const options = fixture();
+    const subject =
+      "https://identity.example.test/realms/team#00000000-0000-4000-8000-000000000003";
+    const profile = ensureProfileForEmail(subject, options);
+    expect(profile.displayName).toBeNull();
+    expect(
+      openOpenClawStateDatabase(options)
+        .db.prepare("SELECT display_name FROM user_profiles WHERE id = ?")
+        .get(profile.id),
+    ).toEqual({ display_name: null });
+    // Earlier versions saved the complete authentication subject as the default name.
+    setDisplayName(profile.id, subject, options);
+    const catalog = await prepareCatalog(options);
+    const bindings = options.bindings(profile.id);
+    expect(catalog.readCurrentAuthority(profile.id, true)?.listItem).toMatchObject({
+      displayName: null,
+      emails: [],
+    });
+    expect(options.display(profile.id).displayName).toBe(`Person ${profile.id.slice(0, 8)}`);
+    expect(options.access(profile.id).readCurrentFacts().emails).toEqual([subject]);
+    expect(ensureProfileForEmail(subject, options).id).toBe(profile.id);
+    expect(options.bindings(profile.id)).toEqual(bindings);
+
+    expect(setDisplayName(profile.id, "Test Person", options)).toMatchObject({
+      displayName: "Test Person",
+      emails: [],
+    });
+    expect(setAvatar(profile.id, new Uint8Array([1, 2, 3]), "image/png", options)).toMatchObject({
+      ok: true,
+      value: { displayName: "Test Person", emails: [] },
+    });
+    expect(options.access(profile.id).readCurrentFacts().emails).toEqual([subject]);
+    expect(options.bindings(profile.id)).toEqual(bindings);
+
+    linkEmail("person@example.test", profile.id, options);
+    expect(catalog.readCurrentAuthority(profile.id, true)?.listItem).toMatchObject({
+      displayName: "Test Person",
+      emails: ["person@example.test"],
+    });
+    expect(options.access(profile.id).readCurrentFacts().emails).toEqual(
+      [subject, "person@example.test"].toSorted(),
+    );
+  });
+
   it("does not join hydration from before a committed profile change", async () => {
     const options = fixture();
     const profile = ensureProfileForEmail("changing@example.test", options);
@@ -520,6 +588,22 @@ describe("resident profile display and reference catalog", () => {
       expect(native).not.toHaveBeenCalled();
     },
   );
+
+  it("resolves a nameless GitHub profile to its verified login without exposing its email", async () => {
+    const options = fixture();
+    const profile = syncAccount(options, "private-name@example.test", 42, "octocat");
+    setDisplayName(profile.id, null, options);
+    await prepareCatalog(options);
+    const display = options.display(profile.id);
+    expect(display.displayName).toBe("octocat");
+    expect(getUserProfileDisplaysNative([profile.id], options).get(profile.id)?.displayName).toBe(
+      "octocat",
+    );
+    setDisplayName(profile.id, "My saved name", options);
+    expect(options.display(profile.id).displayName).toBe("My saved name");
+    expect(display).not.toHaveProperty("emails");
+    expect(display).not.toHaveProperty("role");
+  });
 
   it("keeps aliases stable across cosmetics and same-head GitHub refresh", async () => {
     const options = fixture();

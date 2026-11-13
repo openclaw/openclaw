@@ -1,13 +1,18 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { performance } from "node:perf_hooks";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { createQueuedDiagnosticPhaseEmitter } from "../../infra/diagnostic-events.js";
 import { recordDiagnosticsTimelineDuration } from "../../infra/diagnostics-timeline.js";
+import type { ProvisionCopyDetails } from "../../infra/fs-safe-copy-worker-contract.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { LocalWorkspacePausePhase } from "../sandbox/local-workspace-quiescence.js";
 
 type PreparationPhase =
+  | `reuse.${LocalWorkspacePausePhase | "probeCanonical" | "probeProjection" | "capturePreparation"}`
   | "allocate"
   | "allocationWait"
   | "mutationWait"
+  | "workspaceWait"
   | "capacityWait"
   | "repository"
   | "sources"
@@ -33,8 +38,10 @@ type PreparationPhase =
   | "warmPoolApply"
   | "templateRelease"
   | "provision"
+  | "provisionEstimate"
   | "provisionInspect"
   | "provisionCopy"
+  | "provisionCopyWait"
   | "publication"
   | "indexRefresh"
   | "indexCopy"
@@ -45,6 +52,8 @@ type PreparationPhase =
   | "templatePrepare"
   | "templateRetire"
   | "templateValidate"
+  | "templateClone"
+  | "templateValidateOutput"
   | "templateApply"
   | "snapshot"
   | "synchronizeCanonical"
@@ -56,6 +65,14 @@ type PreparationPhase =
 type TemplateState = "warm" | "cold" | "unavailable" | "reused";
 type TemplateDetails = {
   reason?: string;
+  missReason?:
+    | "no-generation"
+    | "commit-changed"
+    | "backend-changed"
+    | "content-changed"
+    | "invalid";
+  priorSourceCommit?: string;
+  requestedSourceCommit?: string;
   backend?: string;
   cloneBytes?: number;
   errorCode?: string;
@@ -64,6 +81,7 @@ type PreparationTimingState = {
   enabled: boolean;
   template: TemplateState;
   templateDetails: TemplateDetails;
+  copyDetails?: ProvisionCopyDetails;
   phases: Partial<Record<PreparationPhase, number>>;
   activePhases: number;
   coveredSince: number;
@@ -90,6 +108,24 @@ export function setWorktreePreparationTemplate(
       current.template = template;
     }
     Object.assign(current.templateDetails, details);
+  }
+}
+
+export function recordWorktreePreparationFailure(phase: PreparationPhase, error: unknown) {
+  const current = preparation.getStore();
+  // Preserve the innermost failing phase as the error crosses enclosing waits.
+  if (
+    current &&
+    (!current.failure || !collectNestedErrorCandidates(error).includes(current.failure.error))
+  ) {
+    current.failure = { error, phase };
+  }
+}
+
+export function setWorktreePreparationCopyDetails(details: ProvisionCopyDetails) {
+  const current = preparation.getStore();
+  if (current) {
+    current.copyDetails = details;
   }
 }
 
@@ -121,11 +157,7 @@ export async function timeWorktreePreparationPhase<T>(
   try {
     return await run();
   } catch (error) {
-    const current = preparation.getStore();
-    // Preserve the innermost failing phase as the error crosses enclosing waits.
-    if (current && (!current.failure || current.failure.error !== error)) {
-      current.failure = { error, phase };
-    }
+    recordWorktreePreparationFailure(phase, error);
     throw error;
   } finally {
     finish();
@@ -165,7 +197,8 @@ export async function withWorktreePreparationTiming<T>(
             ? {
                 errorClass: failure instanceof Error ? failure.name : typeof failure,
                 errorPhase:
-                  current.failure && current.failure.error === failure
+                  current.failure &&
+                  collectNestedErrorCandidates(failure).includes(current.failure.error)
                     ? current.failure.phase
                     : "unattributed",
               }
@@ -178,6 +211,9 @@ export async function withWorktreePreparationTiming<T>(
         const phaseDurationsMs = Object.fromEntries(
           Object.entries(current.phases).map(([phase, duration]) => [phase, Math.round(duration)]),
         );
+        const reuseDominantPhase = Object.entries(current.phases)
+          .filter(([phase]) => phase.startsWith("reuse."))
+          .toSorted((a, b) => b[1] - a[1])[0]?.[0];
         recordDiagnosticsTimelineDuration(`worktree.${kind}`, end - start);
         for (const [phase, duration] of Object.entries(current.phases)) {
           recordDiagnosticsTimelineDuration(`worktree.${kind}.${phase}`, duration);
@@ -187,15 +223,17 @@ export async function withWorktreePreparationTiming<T>(
           Math.max(0, end - start - coveredMs),
         );
         log.info("managed worktree preparation", {
-          consoleMessage: `managed worktree preparation kind=${kind} template=${current.template} templateDetails=${JSON.stringify(current.templateDetails)} outcome=${outcome} errorDetails=${JSON.stringify(errorDetails)} durationMs=${durationMs} unattributedMs=${unattributedMs} phaseDurationsMs=${JSON.stringify(phaseDurationsMs)}`,
+          consoleMessage: `managed worktree preparation kind=${kind} template=${current.template} templateDetails=${JSON.stringify(current.templateDetails)} copyDetails=${JSON.stringify(current.copyDetails ?? {})} outcome=${outcome} errorDetails=${JSON.stringify(errorDetails)} durationMs=${durationMs} unattributedMs=${unattributedMs} reuseDominantPhase=${reuseDominantPhase ?? "none"} phaseDurationsMs=${JSON.stringify(phaseDurationsMs)}`,
           kind,
           template: current.template,
           templateDetails: current.templateDetails,
+          copyDetails: current.copyDetails,
           outcome,
           ...errorDetails,
           durationMs,
           unattributedMs,
           phaseDurationsMs,
+          reuseDominantPhase,
         });
         emit?.({
           name: "worktree.preparation",
@@ -212,7 +250,14 @@ export async function withWorktreePreparationTiming<T>(
               ]),
             ),
             outcome,
+            ...Object.fromEntries(
+              Object.entries(current.copyDetails ?? {}).map(([key, value]) => [
+                `copy.${key}`,
+                value,
+              ]),
+            ),
             ...errorDetails,
+            ...(reuseDominantPhase ? { reuseDominantPhase } : {}),
             unattributedMs,
             ...phaseDurationsMs,
           },

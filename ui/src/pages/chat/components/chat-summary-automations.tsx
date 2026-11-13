@@ -15,6 +15,7 @@ import { pathForRoute } from "../../../app-route-paths.ts";
 import { gatewayPresentationScope } from "../../../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { Tooltip } from "../../../components/solid/tooltip.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { isCronInventoryInvalidation } from "../../../lib/cron/inventory-connection.ts";
 import { loadCompactCronJobsPage, retireCronJobsRequest } from "../../../lib/cron/jobs.ts";
@@ -35,6 +36,7 @@ import type { ChatDetailsSnapshot } from "../session-details-snapshot-schema.ts"
 import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { createSessionAutomationSchedule } from "./session-automation-schedule-loader.ts";
+import { sessionAutomationNextRun } from "./session-automation-schedule-non-cron.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -403,7 +405,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
                 ? undefined
                 : (inventory.connected() && job.enabled && !job.autoDisabled) || undefined,
             state: jobState(job),
-            timezone: job.schedule?.kind === "cron" ? job.schedule.tz : undefined,
+            nextRunAtMs: job.enabled && !job.autoDisabled ? job.nextRunAtMs : null,
           }))
       : (cached()?.rows ?? []),
   );
@@ -545,74 +547,74 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
           const search = () => `?${new URLSearchParams({ job: job().id })}`;
           const running = () => job().running;
           const state = () => job().state;
-          const metadataTitle = () => {
-            const value = job();
-            const timezone = value.timezone;
-            return timezone ? `${state()} (${timezone})` : props.desktop ? undefined : state();
+          // Older cached snapshots lack nextRunAtMs; show no tooltip rather than guess.
+          const nextRun = () => {
+            const at = job().nextRunAtMs;
+            return at === undefined ? undefined : sessionAutomationNextRun(at);
           };
           return (
-            <a
-              ref={[
-                (element) => {
-                  row = element;
-                },
-                elementRef(registerJobLink(job().id)),
-              ]}
-              class="chat-summary__automation"
-              href={`${pathForRoute("cron", context?.basePath ?? "")}${search()}`}
-              title={props.desktop ? undefined : job().name.trim() || job().id}
-              onClick={(event) => {
-                if (shouldHandleNavigationClick(event) && (props.onNavigate || context)) {
-                  event.preventDefault();
-                  if (props.onNavigate) {
-                    props.onNavigate(job().id);
-                  } else {
-                    context?.navigate("cron", { search: search() });
+            <Tooltip content={nextRun()} disabled={nextRun() === undefined}>
+              <a
+                ref={[
+                  (element) => {
+                    row = element;
+                  },
+                  elementRef(registerJobLink(job().id)),
+                ]}
+                class="chat-summary__automation"
+                href={`${pathForRoute("cron", context?.basePath ?? "")}${search()}`}
+                onClick={(event) => {
+                  if (shouldHandleNavigationClick(event) && (props.onNavigate || context)) {
+                    event.preventDefault();
+                    if (props.onNavigate) {
+                      props.onNavigate(job().id);
+                    } else {
+                      context?.navigate("cron", { search: search() });
+                    }
                   }
-                }
-              }}
-            >
-              <span class="chat-summary__automation-icon" aria-hidden="true">
-                <Icon name="clock" />
-                {job().disabled && !job().autoDisabled && (
-                  <span class="chat-summary__automation-paused">
-                    <Icon name="pause" />
-                  </span>
-                )}
-                {job().autoDisabled && <span class="chat-summary__automation-attention" />}
-              </span>
-              <span class="chat-summary__automation-copy">
-                <span class="chat-summary__automation-heading">
-                  <HoverMarquee
-                    class="chat-summary__automation-title"
-                    content={job().name.trim() || job().id}
-                    options={{ host: () => row }}
-                  />
-                  {state() && (
-                    <span
-                      class={[
-                        "chat-summary__automation-state",
-                        { "is-attention": Boolean(job().autoDisabled) },
-                      ]}
-                      title={metadataTitle()}
-                    >
-                      {running() ? (
-                        <>
-                          <span class="session-run-spinner" aria-hidden="true" />
-                          <span class="sr-only">{state()}</span>
-                        </>
-                      ) : (
-                        <HoverMarquee
-                          class="chat-summary__automation-metadata"
-                          content={state()}
-                          options={{ host: () => row, stationary: true }}
-                        />
-                      )}
+                }}
+              >
+                <span class="chat-summary__automation-icon" aria-hidden="true">
+                  <Icon name="clock" />
+                  {job().disabled && !job().autoDisabled && (
+                    <span class="chat-summary__automation-paused">
+                      <Icon name="pause" />
                     </span>
                   )}
+                  {job().autoDisabled && <span class="chat-summary__automation-attention" />}
                 </span>
-              </span>
-            </a>
+                <span class="chat-summary__automation-copy">
+                  <span class="chat-summary__automation-heading">
+                    <HoverMarquee
+                      class="chat-summary__automation-title"
+                      content={job().name.trim() || job().id}
+                      options={{ host: () => row }}
+                    />
+                    {state() && (
+                      <span
+                        class={[
+                          "chat-summary__automation-state",
+                          { "is-attention": Boolean(job().autoDisabled) },
+                        ]}
+                      >
+                        {running() ? (
+                          <>
+                            <span class="session-run-spinner" aria-hidden="true" />
+                            <span class="sr-only">{state()}</span>
+                          </>
+                        ) : (
+                          <HoverMarquee
+                            class="chat-summary__automation-metadata"
+                            content={state()}
+                            options={{ host: () => row, stationary: true }}
+                          />
+                        )}
+                      </span>
+                    )}
+                  </span>
+                </span>
+              </a>
+            </Tooltip>
           );
         }}
       </For>

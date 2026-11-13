@@ -37,6 +37,7 @@ export function createUpdatesViewProps(overrides: UpdatesViewOverrides = {}): Up
     onChannelChange: vi.fn(),
     onUpdateChecksChange: vi.fn(),
     onAutomaticUpdatesChange: vi.fn(),
+    onAutomaticScheduleChange: vi.fn(),
     onUpdateNow: vi.fn(async () => undefined),
     onHoldUpdate: vi.fn(async () => true),
     onCheckStatus: vi.fn(async () => true),

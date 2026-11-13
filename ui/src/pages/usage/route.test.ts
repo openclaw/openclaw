@@ -89,7 +89,7 @@ describe("usage route", () => {
     await router.navigate("usage", context);
     expect(usageCalls()).toEqual([]);
     expect(router.getState().matches[0]?.data?.error).toContain(
-      "Ask the person who manages OpenClaw for access.",
+      "Ask an admin to grant read access.",
     );
   });
 

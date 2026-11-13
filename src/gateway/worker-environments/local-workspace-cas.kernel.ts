@@ -14,7 +14,10 @@ import {
   LOCAL_WORKSPACE_CONTENT_BATCH,
   type LocalWorkspacePreparation,
 } from "./local-workspace-cas.js";
-import type { LocalWorkspaceManifestMutation } from "./local-workspace-store.types.js";
+import type {
+  LocalWorkspaceCheckpointReceipt,
+  LocalWorkspaceManifestMutation,
+} from "./local-workspace-store.types.js";
 
 const packs = "local_workspace_tree_packs";
 const pathSets = "local_workspace_source_path_sets";
@@ -201,7 +204,7 @@ export function beginLocalWorkspaceSweepInDatabase(db: EngineConnection): number
 
 export type LocalWorkspaceSweepCandidates = { packs: Uint8Array[]; paths: Uint8Array[] };
 
-/** Select unreachable old content in the existing read worker's snapshot. */
+/** Select unreachable old content with bounded reads in the existing worker. */
 export function readLocalWorkspaceSweepCandidates(
   db: EngineConnection,
   epoch: number,
@@ -212,83 +215,130 @@ export function readLocalWorkspaceSweepCandidates(
   }
   const reachable = new Set<string>();
   const paths = new Set<string>();
-  const roots = new Set<string>();
-  for (const row of executeSqliteQuerySync(
-    db,
-    query(db)
-      .selectFrom("local_workspace_projections")
-      .select(["tree_root_digest", "source_paths_digest", "checkpoint_json"]),
-  ).rows) {
-    if (row.tree_root_digest) {
-      roots.add(localWorkspaceDigestReference(row.tree_root_digest));
-    }
-    if (row.source_paths_digest) {
-      paths.add(localWorkspaceDigestReference(row.source_paths_digest));
-    }
-    if (row.checkpoint_json) {
-      // SAFETY: The projection owner writes this recovery document with its pending receipt.
-      const checkpoint = JSON.parse(row.checkpoint_json) as LocalWorkspaceManifestMutation;
-      if (checkpoint.treeRoot) {
-        roots.add(checkpoint.treeRoot);
+  // Immutable links and the preparation epoch protect publications between pages.
+  // Release each read so this maintenance pass cannot pin a WAL checkpoint.
+  let projectionCursor: string | undefined;
+  for (;;) {
+    const rows = executeSqliteQuerySync(
+      db,
+      query(db)
+        .selectFrom("local_workspace_projections")
+        .select(["worktree_id", "tree_root_digest", "source_paths_digest", "checkpoint_json"])
+        .$if(projectionCursor !== undefined, (statement) =>
+          statement.where("worktree_id", ">", projectionCursor!),
+        )
+        .orderBy("worktree_id")
+        .limit(LOCAL_WORKSPACE_CONTENT_BATCH),
+    ).rows;
+    for (const row of rows) {
+      if (row.tree_root_digest) {
+        reachable.add(localWorkspaceDigestReference(row.tree_root_digest));
       }
-      if (checkpoint.previousTreeRoot) {
-        roots.add(checkpoint.previousTreeRoot);
+      if (row.source_paths_digest) {
+        paths.add(localWorkspaceDigestReference(row.source_paths_digest));
+      }
+      if (row.checkpoint_json) {
+        // SAFETY: The projection owner writes this recovery document with its pending receipt.
+        const receipt = JSON.parse(row.checkpoint_json) as LocalWorkspaceCheckpointReceipt;
+        const checkpoint =
+          receipt.kind === "rejected"
+            ? receipt.checkpoint
+              ? (JSON.parse(receipt.checkpoint) as LocalWorkspaceManifestMutation) // SAFETY: Preserved owner-written checkpoint.
+              : undefined
+            : receipt;
+        if (checkpoint?.treeRoot) {
+          reachable.add(checkpoint.treeRoot);
+        }
+        if (checkpoint?.previousTreeRoot) {
+          reachable.add(checkpoint.previousTreeRoot);
+        }
       }
     }
+    if (rows.length < LOCAL_WORKSPACE_CONTENT_BATCH) {
+      break;
+    }
+    projectionCursor = rows.at(-1)!.worktree_id;
   }
-  // Traverse the union once: revisions and projections share most of their graph.
-  // GC reads only child-pack arrays, never record payloads or decoded manifest maps.
-  const pending = new Set(roots);
-  while (pending.size) {
-    const batch = [...pending].slice(0, LOCAL_WORKSPACE_CONTENT_BATCH);
+  // One growing set deduplicates queued and visited packs. Do not exhaust its
+  // iterator: a partial batch can append children after the current last entry.
+  const pending = reachable.values();
+  let consumed = 0;
+  while (consumed < reachable.size) {
+    const batch: string[] = [];
+    const count = Math.min(LOCAL_WORKSPACE_CONTENT_BATCH, reachable.size - consumed);
+    for (let index = 0; index < count; index++) {
+      batch.push(pending.next().value!);
+    }
+    consumed += count;
     const rows = executeSqliteQuerySync(
       db,
       query(db)
         .selectFrom(packs)
-        .select(["tree_digest", "children_json"])
+        .select("children_json")
         .where("tree_digest", "in", batch.map(localWorkspaceDigestBytes)),
     ).rows;
     if (rows.length !== batch.length) {
       throw new Error("Local workspace baseline nodes are missing");
     }
     for (const row of rows) {
-      const ref = localWorkspaceDigestReference(row.tree_digest);
-      reachable.add(ref);
-      pending.delete(ref);
       // SAFETY: The pack owner records immutable child digests beside its payload.
       for (const childRef of JSON.parse(row.children_json) as string[]) {
-        if (!reachable.has(childRef)) {
-          pending.add(childRef);
-        }
+        reachable.add(childRef);
       }
     }
   }
-  for (const row of executeSqliteQuerySync(
-    db,
-    query(db)
-      .selectFrom(packs)
-      .select("tree_digest")
-      .where("sweep_epoch", "<", epoch - 1),
-  ).rows) {
-    if (!reachable.has(localWorkspaceDigestReference(row.tree_digest))) {
-      result.packs.push(row.tree_digest);
+  let packCursor: Uint8Array = new Uint8Array();
+  for (;;) {
+    const rows = executeSqliteQuerySync(
+      db,
+      query(db)
+        .selectFrom(packs)
+        .select(["tree_digest", "sweep_epoch"])
+        .where("tree_digest", ">", packCursor)
+        .orderBy("tree_digest")
+        .limit(LOCAL_WORKSPACE_CONTENT_BATCH),
+    ).rows;
+    for (const row of rows) {
+      if (
+        row.sweep_epoch < epoch - 1 &&
+        !reachable.has(localWorkspaceDigestReference(row.tree_digest))
+      ) {
+        result.packs.push(row.tree_digest);
+      }
     }
+    if (rows.length < LOCAL_WORKSPACE_CONTENT_BATCH) {
+      break;
+    }
+    packCursor = rows.at(-1)!.tree_digest;
   }
-  for (const row of executeSqliteQuerySync(
-    db,
-    query(db)
-      .selectFrom(pathSets)
-      .select("path_digest")
-      .where("sweep_epoch", "<", epoch - 1),
-  ).rows) {
-    if (!paths.has(localWorkspaceDigestReference(row.path_digest))) {
-      result.paths.push(row.path_digest);
+  let pathCursor: Uint8Array = new Uint8Array();
+  for (;;) {
+    const rows = executeSqliteQuerySync(
+      db,
+      query(db)
+        .selectFrom(pathSets)
+        .select(["path_digest", "sweep_epoch"])
+        .where("path_digest", ">", pathCursor)
+        .orderBy("path_digest")
+        .limit(LOCAL_WORKSPACE_CONTENT_BATCH),
+    ).rows;
+    for (const row of rows) {
+      if (
+        row.sweep_epoch < epoch - 1 &&
+        !paths.has(localWorkspaceDigestReference(row.path_digest))
+      ) {
+        result.paths.push(row.path_digest);
+      }
     }
+    if (rows.length < LOCAL_WORKSPACE_CONTENT_BATCH) {
+      break;
+    }
+    pathCursor = rows.at(-1)!.path_digest;
   }
   return result;
 }
 
-/** The epoch predicate protects content reused after the read snapshot. */
+/** The epoch predicate protects content reused during candidate discovery. */
 export function deleteLocalWorkspaceSweepBatchInDatabase(
   db: EngineConnection,
   epoch: number,

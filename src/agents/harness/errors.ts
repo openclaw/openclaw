@@ -1,3 +1,21 @@
+import { recordModelFallbackStop } from "../model-fallback-stop.js";
+
+export const MODEL_REQUEST_POLICY_DENIED_TEXT =
+  "The deployment rejected this model request. Ask the administrator to check the model access policy and request settings.";
+
+/** A native transport confirmed a deployment gate refusal, rather than a provider login failure. */
+export class AgentHarnessModelRequestPolicyError extends Error {
+  // The code is diagnostic; only this host-created Error owns the terminal decision.
+  readonly code = "model_request_policy_denied";
+  readonly status = 403;
+
+  constructor() {
+    super(MODEL_REQUEST_POLICY_DENIED_TEXT);
+    this.name = "AgentHarnessModelRequestPolicyError";
+    recordModelFallbackStop(this);
+  }
+}
+
 export class MissingAgentHarnessError extends Error {
   constructor(harnessId: string) {
     super(`Requested agent harness "${harnessId}" is not registered.`);
@@ -33,15 +51,18 @@ export class AgentHarnessPreflightError extends Error {
   readonly scope?: "harness";
   /** Owner-authored public explanation; message and cause remain diagnostic. */
   readonly userMessage?: string;
+  /** Optional public detail for desktop chat viewers, never channel replies. */
+  readonly desktopMessage?: string;
 
   constructor(
     message: string,
-    options?: ErrorOptions & { scope?: "harness"; userMessage?: string },
+    options?: ErrorOptions & { scope?: "harness"; userMessage?: string; desktopMessage?: string },
   ) {
     super(message, options);
     this.name = "AgentHarnessPreflightError";
     this.scope = options?.scope;
     this.userMessage = options?.userMessage;
+    this.desktopMessage = options?.desktopMessage;
   }
 }
 

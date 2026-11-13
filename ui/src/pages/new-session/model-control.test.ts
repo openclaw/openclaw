@@ -341,7 +341,7 @@ it.each([true, false])("checks cloud execution support: %s", (supported) => {
   });
   expect(
     control.cloudRuntimeUnsupportedReason({ id: "aws", providerId: "crabbox", executionModes }),
-  ).toBe(supported ? undefined : "The codex runtime does not support cloud workers.");
+  ).toBe(supported ? undefined : "The codex runtime doesn’t support cloud devices.");
 });
 it.each([true, false])(
   "requires device-placement metadata despite a support flag: %s",
@@ -356,7 +356,7 @@ it.each([true, false])(
         : undefined,
     });
     expect(control.devicePlacementUnsupportedReason()).toBe(
-      supported ? undefined : "This runtime does not support paired devices",
+      supported ? undefined : "This runtime doesn’t support paired devices",
     );
   },
 );
@@ -572,16 +572,13 @@ it.each(["blue", "red"])(
     find("model-option", "openai/" + id)!.click();
     const container = draw();
     expect(control.selected).toBe("openai/" + id);
-    expect(
-      find("speed-option", color === "blue" ? "on" : "off")?.getAttribute("aria-checked"),
-    ).toBe("true");
-    for (const option of container.querySelectorAll<HTMLButtonElement>(
-      "[data-chat-speed-option]",
-    )) {
-      expect(option.disabled).toBe(
-        color === "red" || option.dataset.chatSpeedOption === "ultrafast",
-      );
+    if (color === "blue") {
+      expect(find("speed-option", "on")?.getAttribute("aria-checked")).toBe("true");
+    } else {
+      expect(find("speed-option")).toBeNull();
     }
+    expect(find("speed-option", "ultrafast")).toBeNull();
+    expect(container.querySelector("[data-chat-speed-option]:disabled")).toBeNull();
     expect(find("thinking-slider")?.disabled).not.toBe(true);
   },
 );

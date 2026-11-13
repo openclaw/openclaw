@@ -17,7 +17,7 @@ const tokenMarker = new RegExp(`^${SQLITE_SNAPSHOT_PREFIX}${suffix}`, "u");
 // fs-safe stages publication beside the target using a lowercase randomUUID().
 const fsSafeTemporaryPayload =
   /^\.fs-safe-[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}\.tmp$/u;
-const SQLITE_SNAPSHOT_LEGACY_AGE_MS = 24 * 60 * 60 * 1000;
+export const SQLITE_SNAPSHOT_LEGACY_AGE_MS = 24 * 60 * 60 * 1000;
 function releaseTokens(tokens: Iterable<SqliteStagingToken>): void {
   const failures = collectSynchronousErrors(tokens, (token) => token());
   if (failures.length) {
@@ -40,7 +40,7 @@ export function acquireSqliteSnapshotToken(
 /** Hold every nested lifetime before selecting payload; a parent lock alone cannot fence children. */
 export function beginSqliteSnapshotRetirement(
   directory: string,
-  options: { token?: SqliteStagingToken; cutoff?: number } = {},
+  options: { token?: SqliteStagingToken; cutoff?: number; allowLegacy?: boolean } = {},
 ) {
   const tokens: SqliteStagingToken[] = [];
   const payload: string[] = [];
@@ -62,6 +62,9 @@ export function beginSqliteSnapshotRetirement(
       throw new Error("Snapshot directory ownership is unknown");
     }
     const legacy = !layout && SQLITE_SNAPSHOT_LEGACY_MARKER.test(path.basename(current));
+    if (!layout && options.allowLegacy === false && !tokenMarker.test(path.basename(current))) {
+      throw new Error("Legacy or unrecognized snapshot requires offline operator cleanup");
+    }
     // Owned cleanup follows joined work; abandoned legacy workers instead retain
     // their full grace period, even below a current-generation parent.
     const cutoff =
@@ -107,8 +110,12 @@ export function beginSqliteSnapshotRetirement(
         if (
           options.cutoff !== undefined &&
           ((!nested &&
-            !["openclaw", "openclaw-state", "openclaw-state/state"].includes(childLayout)) ||
-            (nested && layout !== "" && layout !== "openclaw"))
+            !["openclaw", "openclaw-state", "openclaw-state/state"].includes(childLayout) &&
+            !/^openclaw\/sqlite-[a-f0-9]{24}$/u.test(childLayout)) ||
+            (nested &&
+              layout !== "" &&
+              layout !== "openclaw" &&
+              !/^openclaw\/sqlite-[a-f0-9]{24}$/u.test(layout)))
         ) {
           throw new Error("Unrecognized snapshot directory");
         }
@@ -124,7 +131,10 @@ export function beginSqliteSnapshotRetirement(
               (/^(?:first|database\.sqlite(?:\.partial)?(?:-wal|-shm|-journal)?)$/u.test(
                 entry.name,
               ) ||
-                fsSafeTemporaryPayload.test(entry.name))))
+                fsSafeTemporaryPayload.test(entry.name) ||
+                /^inspection-result-[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}\.json$/u.test(
+                  entry.name,
+                ))))
       ) {
         bytes += item.size;
         if (lock) {

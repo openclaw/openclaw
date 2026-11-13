@@ -187,14 +187,32 @@ describe("operator approval store", () => {
     ).toEqual(["plugin-new"]);
   });
 
-  it("filters an audience before applying the replay limit", async () => {
+  it.each([
+    {
+      name: "filters an audience before applying the replay limit",
+      unrelatedPrefix: "unrelated",
+      unrelatedBindings: { audienceSessionKeys: ["agent:main:other"] },
+      targetId: "target-after-first-page",
+      targetBindings: { audienceSessionKeys: ["agent:main:target"] },
+      selection: { audienceSessionKey: "agent:main:target" },
+    },
+    {
+      name: "filters reviewers before the replay limit",
+      unrelatedPrefix: "unrelated-reviewer",
+      unrelatedBindings: { reviewerDeviceIds: ["unrelated-device"] },
+      targetId: "authorized-after-first-page",
+      targetBindings: { reviewerDeviceIds: ["authorized-device"] },
+      selection: { reviewerDeviceId: "authorized-device" },
+    },
+  ])("$name", async (scenario) => {
+    const { unrelatedPrefix, unrelatedBindings, targetId, targetBindings, selection } = scenario;
     const databaseOptions = getSuiteDatabaseOptions();
     for (let index = 0; index < 256; index += 1) {
-      const id = `unrelated-${String(index).padStart(3, "0")}`;
+      const id = `${unrelatedPrefix}-${String(index).padStart(3, "0")}`;
       expect(
         await insertOperatorApproval({
           approval: approval(id, {
-            audienceSessionKeys: ["agent:main:other"],
+            ...unrelatedBindings,
             createdAtMs: 1_000 + index,
           }),
           databaseOptions,
@@ -203,8 +221,8 @@ describe("operator approval store", () => {
     }
     expect(
       await insertOperatorApproval({
-        approval: approval("target-after-first-page", {
-          audienceSessionKeys: ["agent:main:target"],
+        approval: approval(targetId, {
+          ...targetBindings,
           createdAtMs: 2_000,
         }),
         databaseOptions,
@@ -213,46 +231,12 @@ describe("operator approval store", () => {
 
     expect(
       await listPendingOperatorApprovals({
-        audienceSessionKey: "agent:main:target",
+        ...selection,
         limit: 1,
         nowMs: 3_000,
         databaseOptions,
       }),
-    ).toMatchObject([{ id: "target-after-first-page" }]);
-  });
-
-  it("filters reviewers before the replay limit", async () => {
-    const databaseOptions = getSuiteDatabaseOptions();
-    for (let index = 0; index < 256; index += 1) {
-      const id = `unrelated-reviewer-${String(index).padStart(3, "0")}`;
-      expect(
-        await insertOperatorApproval({
-          approval: approval(id, {
-            reviewerDeviceIds: ["unrelated-device"],
-            createdAtMs: 1_000 + index,
-          }),
-          databaseOptions,
-        }),
-      ).toMatchObject({ outcome: "inserted" });
-    }
-    expect(
-      await insertOperatorApproval({
-        approval: approval("authorized-after-first-page", {
-          reviewerDeviceIds: ["authorized-device"],
-          createdAtMs: 2_000,
-        }),
-        databaseOptions,
-      }),
-    ).toMatchObject({ outcome: "inserted" });
-
-    expect(
-      await listPendingOperatorApprovals({
-        reviewerDeviceId: "authorized-device",
-        limit: 1,
-        nowMs: 3_000,
-        databaseOptions,
-      }),
-    ).toMatchObject([{ id: "authorized-after-first-page" }]);
+    ).toMatchObject([{ id: targetId }]);
   });
 
   it("maintains ordered session pages from committed receipts until the database closes", async () => {

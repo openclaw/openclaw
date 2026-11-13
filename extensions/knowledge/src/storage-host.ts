@@ -2,6 +2,7 @@ import type { MessagePort } from "node:worker_threads";
 import type { VaultAccess } from "./access.js";
 import { catalogFacts } from "./catalog.js";
 import { inspectRecord, inspectOntology } from "./inspection.js";
+import { LiveState } from "./live-state.js";
 import { mergeCandidates as findMergeCandidates } from "./merge.js";
 import type { LoadedRecord } from "./model.js";
 import type { Receipt } from "./mutation-contract.js";
@@ -188,6 +189,9 @@ export const operations = {
   ) => s.memoryCandidates(input, a),
   memoryIndex: (s: Storage, a: Access, input: In<Storage["memoryIndex"]>) =>
     s.memoryIndex(input, a),
+  gateIndex: (s: Storage, a: Access) => s.gateIndex(a),
+  gateCandidates: (s: Storage, a: Access, input: In<Storage["gateCandidates"]>) =>
+    s.gateCandidates(input, a),
   memoryHealth: (s: Storage, a: Access) =>
     s.run(a, async (vault) => {
       const data = await vault.scan();
@@ -202,12 +206,24 @@ export type StorageOperations = typeof operations;
 
 /** Serve storage calls one at a time. Authority checks block this worker on a
  * shared flag while the main thread re-evaluates the caller's live authority. */
-export function serve(port: MessagePort, init: { config: StoreConfig; signal: SharedArrayBuffer }) {
+export function serve(
+  port: MessagePort,
+  init: { config: StoreConfig; signal: SharedArrayBuffer; watch?: boolean },
+) {
   const storage = new KnowledgeStorage(init.config),
+    live = new LiveState(init.config.root, () =>
+      port.postMessage({ type: "changed" } satisfies WorkerMessage),
+    ),
     signal = new Int32Array(init.signal);
+  // Linux recursive fs.watch synchronously traverses the tree. Keep setup and
+  // recovery beside the store's filesystem work, never on the Gateway thread.
+  if (init.watch) {
+    live.start();
+  }
   let queue: Promise<void> = Promise.resolve();
   port.on("message", (message: HostMessage<keyof StorageOperations>) => {
     if (message.type !== "call") {
+      live.invalidate();
       return;
     }
     queue = queue.then(async () => {
@@ -227,6 +243,9 @@ export function serve(port: MessagePort, init: { config: StoreConfig; signal: Sh
         },
       };
       try {
+        if (message.op === "catalog" && message.scope.visibility === "private") {
+          live.ensureWatching();
+        }
         // SAFETY: messages name only operations in this table, sent by StorageClient.
         const run = operations[message.op] as (s: Storage, a: Access, input: unknown) => unknown;
         port.postMessage({
@@ -236,6 +255,7 @@ export function serve(port: MessagePort, init: { config: StoreConfig; signal: Sh
           value: await storage.trackRead(access, message.op, () =>
             run(storage, access, message.input),
           ),
+          live: live.state,
         } satisfies WorkerMessage);
       } catch (error) {
         port.postMessage({
