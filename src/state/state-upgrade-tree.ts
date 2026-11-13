@@ -311,7 +311,7 @@ export function pruneGenerations(
   return removed;
 }
 
-function textColumns(db: DatabaseSync): Array<{ table: string; column: string; type: string }> {
+function textColumns(db: DatabaseSync): Array<{ table: string; column: string }> {
   const tables = db
     .prepare(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND sql NOT LIKE 'CREATE VIRTUAL TABLE%'",
@@ -327,7 +327,7 @@ function textColumns(db: DatabaseSync): Array<{ table: string; column: string; t
       }>
     )
       .filter((column) => column.hidden === 0 && !/INT|REAL|BLOB/iu.test(column.type))
-      .map((column) => ({ table: quote(name), column: quote(column.name), type: column.type })),
+      .map((column) => ({ table: quote(name), column: quote(column.name) })),
   );
 }
 
@@ -336,16 +336,33 @@ function textColumns(db: DatabaseSync): Array<{ table: string; column: string; t
  * the copy see text. Runs on private copies only.
  */
 export function normalizeSqliteText(db: DatabaseSync): void {
-  for (const { table, column, type } of textColumns(db)) {
-    if (!/CHAR|CLOB|TEXT/iu.test(type)) {
-      continue;
-    }
-    try {
-      db.prepare(
-        `UPDATE ${table} SET ${column} = CAST(${column} AS TEXT) WHERE typeof(${column}) = 'blob'`,
-      ).run();
-    } catch {
-      // A constraint on the decoded value leaves the row for the copy to set aside.
+  // Keys change type in place; their parents and children are decoded in the same pass.
+  db.exec("PRAGMA foreign_keys = OFF");
+  const quote = (name: string) => `"${name.replaceAll('"', '""')}"`;
+  const tables = db
+    .prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND sql NOT LIKE 'CREATE VIRTUAL TABLE%'",
+    )
+    .all() as Array<{ name: string }>;
+  for (const { name } of tables) {
+    const columns = db.prepare(`PRAGMA table_xinfo(${quote(name)})`).all() as Array<{
+      name: string;
+      type: string;
+      hidden: number;
+    }>;
+    for (const column of columns) {
+      // Declared BLOB and typeless columns may hold real bytes.
+      if (column.hidden !== 0 || column.type === "" || /BLOB/iu.test(column.type)) {
+        continue;
+      }
+      const c = quote(column.name);
+      try {
+        db.prepare(
+          `UPDATE ${quote(name)} SET ${c} = CAST(${c} AS TEXT) WHERE typeof(${c}) = 'blob'`,
+        ).run();
+      } catch {
+        // A constraint on the decoded value leaves the row for the copy to set aside.
+      }
     }
   }
 }
