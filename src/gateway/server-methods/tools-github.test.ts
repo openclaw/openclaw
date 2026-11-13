@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { getRuntimeConfigWriteApplication } from "../../config/runtime-write-application.js";
 import { GitHubCliUnavailableError } from "../github-cli-preflight.js";
 import { toolsGitHubHandlers } from "./tools-github.js";
 
@@ -146,6 +147,7 @@ describe("tools.github handlers", () => {
       scope: "system",
       agentId: "reviewer",
       expectedIdentity: null,
+      writeOptions: expect.any(Object),
     });
     expect(github.status).toHaveBeenCalledWith({
       config: { next: true },
@@ -182,6 +184,7 @@ describe("tools.github handlers", () => {
         gitAuthor: { name: "Managed Author", email: "managed@example.test" },
       },
       expectedIdentity: null,
+      writeOptions: expect.any(Object),
     });
     expect(github.status).toHaveBeenLastCalledWith({
       config: { next: true },
@@ -221,6 +224,7 @@ describe("tools.github handlers", () => {
         },
       },
       expectedIdentity: null,
+      writeOptions: expect.any(Object),
     });
   });
 
@@ -252,7 +256,29 @@ describe("tools.github handlers", () => {
       scope: "agent",
       agentId: "main",
       expectedIdentity: null,
+      writeOptions: expect.any(Object),
     });
+    expect(respond).toHaveBeenCalledWith(true, status);
+  });
+
+  it("replies only after the Gateway applies the written identity", async () => {
+    let settle: ((status: "applied") => void) | undefined;
+    github.updateConfig.mockImplementation(async ({ writeOptions }) => {
+      // The config reload owner claims the write receipt and settles it once applied.
+      settle = getRuntimeConfigWriteApplication(writeOptions)?.claim()?.settle;
+      return { next: true };
+    });
+    let respond: ReturnType<typeof vi.fn> | undefined;
+    const reply = invoke("tools.github.configure", {
+      scope: "system",
+      agentId: "main",
+      mode: "inherit",
+    }).then((value) => (respond = value));
+    await vi.waitFor(() => expect(settle).toBeDefined());
+    await Promise.resolve();
+    expect(respond).toBeUndefined();
+    settle?.("applied");
+    await reply;
     expect(respond).toHaveBeenCalledWith(true, status);
   });
 
@@ -270,6 +296,7 @@ describe("tools.github handlers", () => {
       scope: "system",
       agentId: "main",
       expectedIdentity: { profileId, kind: "oauth" },
+      writeOptions: expect.any(Object),
     });
     expect(oauth.retireProfileAsync).toHaveBeenCalledWith(profileId);
   });

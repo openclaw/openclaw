@@ -518,7 +518,7 @@ describe("session menu", () => {
       "Automation",
       "Design",
       "Docs",
-      "Support",
+      "Mu\u0308nchen",
     ];
     const { menu, onAction } = await actionMenu({ session: { category: "Issues" }, groups });
     const submenu = await openSubmenu(menu, "Move to group");
@@ -528,15 +528,15 @@ describe("session menu", () => {
       search.value = value;
       search.dispatchEvent(new Event("input", { bubbles: true }));
       await settleSessionMenu(menu);
+      return menuItemLabels(submenu);
     };
-    await type("pr re");
-    expect(menuItemLabels(submenu)).toEqual(["PR reviews", "Remove from group", "New group"]);
-    await type("zzz");
-    expect(menuItemLabels(submenu)).toEqual(["Remove from group", "New group"]);
+    expect(await type("pr re")).toEqual(["PR reviews", "Remove from group", "New group"]);
+    expect(await type("zzz")).toEqual(["Remove from group", "New group"]);
     expect(submenu.textContent).toContain("No groups match your search.");
-    await type("pull");
-    await selectMenuValue(menu, `move-to-group:${encodeURIComponent("Pull requests")}`);
-    expect(onAction).toHaveBeenCalledWith({ kind: "move-to-group", category: "Pull requests" });
+    expect(await type("mu\u0308nchen")).toContain("Mu\u0308nchen");
+    await type("m\u00fcnchen");
+    await selectMenuValue(menu, `move-to-group:${encodeURIComponent("Mu\u0308nchen")}`);
+    expect(onAction).toHaveBeenCalledWith({ kind: "move-to-group", category: "Mu\u0308nchen" });
 
     await reopen(menu);
     const reopened = await openSubmenu(menu, "Move to group");

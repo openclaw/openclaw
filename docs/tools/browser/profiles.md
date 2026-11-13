@@ -61,6 +61,23 @@ screenshots for node-routed browsers, Chrome MCP existing-session profiles,
 missing Playwright, or stream connection failures. Navigation rules apply to
 the stream: navigating to a blocked address stops it and clears the view.
 
+### Chrome settings and passwords
+
+You can open `chrome://settings` (for example `chrome://settings/payments`) and
+`chrome://password-manager` from the panel's address bar, to add a payment card
+or manage saved passwords yourself. They always open in a new tab, and only
+your authenticated Control UI connection can list, view or use them. The agent's
+browser tool, the `openclaw browser` CLI and other Gateway clients cannot open,
+list, read, capture or interact with these pages, including while you have one
+open. Other `chrome://` pages stay blocked for everyone.
+
+This works for locally managed and CDP-attached Chromium profiles on the Gateway
+host. It is not available for node-routed browsers, Chrome MCP existing-session
+profiles or the browser extension, and a profile that runs Chrome's headless
+shell has no settings pages to open. Chrome may ask for your device password
+before showing a saved password; that prompt appears on the computer running the
+browser, not in the panel.
+
 After an established stream disconnects, the panel refreshes its screenshot
 and retries the stream automatically after a short delay. Annotation and
 inspection keep their captured image until you return to interaction mode.
