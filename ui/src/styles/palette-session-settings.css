@@ -1,4 +1,4 @@
-/* The composer's chip family, so these read as peers of model and Speed. */
+/* Agent, project, and model share the existing composer chip family. */
 .palette-session-settings__chip,
 .cmd-palette .palette-session-settings__agent .agent-select--compact .agent-select__trigger {
   display: flex;
@@ -73,11 +73,9 @@
   opacity: 0.5;
 }
 
-/* Phone width keeps every picker reachable as its glyph. */
+/* Keep the project readable; only the agent name and narrow chevrons are omitted. */
 @media (max-width: 560px) {
-  .palette-session-settings__chip-label,
   .palette-session-settings__chip-chevron,
-  .cmd-palette .palette-session-settings__agent .agent-select__label,
   .cmd-palette .palette-session-settings__agent .agent-select__chevron {
     display: none;
   }
@@ -104,8 +102,7 @@
   padding-top: 4px;
 }
 
-.palette-session-settings__row,
-.palette-session-settings__remember {
+.palette-session-settings__row {
   display: grid;
   grid-template-columns: 26px minmax(0, 1fr) auto;
   align-items: center;
@@ -193,28 +190,6 @@
   height: var(--chat-composer-chip-icon);
 }
 
-/* A sunken band docked to the menu's bottom edge, like the palette's own footer. */
-.palette-session-settings__footer {
-  margin: 3px -5px -5px;
-  padding: 7px 5px 8px;
-  border-top: 1px solid var(--border);
-  border-radius: 0 0 11px 11px;
-  background: var(--bg-muted);
-}
-
-.palette-session-settings__remember {
-  grid-template-columns: 26px minmax(0, 1fr);
-  min-height: 24px;
-  padding-top: 0;
-  padding-bottom: 0;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.palette-session-settings__remember input {
-  justify-self: center;
-}
-
 /* The search icon and text sit on the rows' icon and label columns. */
 .palette-session-settings__heading {
   --header-search-gap: 16px;
@@ -232,9 +207,20 @@
   margin-top: 12px;
 }
 
-.palette-session-settings__error {
-  padding: 6px 10px 0;
-  color: var(--danger);
-  font-size: 12px;
-  white-space: normal;
+.cmd-palette .palette-session-settings__agent .agent-select__label {
+  display: none;
+}
+
+.cmd-palette .agent-chat__composer-lead {
+  min-width: 0;
+}
+
+.cmd-palette .palette-session-settings__chip-label {
+  max-width: min(180px, 25vw);
+}
+
+.palette-session-settings__worktree {
+  margin-top: 5px;
+  border-top: 1px solid var(--border);
+  border-radius: 0 0 var(--menu-item-radius) var(--menu-item-radius);
 }

@@ -8,10 +8,7 @@ import { en } from "./en.ts";
 const enCommandPalette = {
   commandPalette: {
     newSessionSettings: "New session settings",
-    rememberSettings: "Remember settings for {shortcut}",
-    rememberSettingsNoShortcut: "Remember these settings",
-    rememberUnavailable: "Reconnect to remember settings.",
-    settingsSaveFailed: "Couldn’t save settings. Try again.",
+    lastUsedSaveFailed: "Session created, but its settings couldn’t be remembered.",
   },
   palette: {
     placeholder: en.palette.placeholder,

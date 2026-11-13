@@ -128,7 +128,7 @@ it("clears the final selection while preserving other agents", () => {
   expect(load()).toBeNull();
   expect(loadBrowserPreferences(gateway)).toEqual({ research: { folder: "/research" } });
 });
-it("preserves cleared placement fields without taking over model defaults or one-use names", () => {
+it("preserves cleared placement and model choices without taking over effort or one-use names", () => {
   const selection = {
     workspace: "/workspace",
     folder: "/workspace",
@@ -145,13 +145,17 @@ it("preserves cleared placement fields without taking over model defaults or one
       selection: {
         ...selection,
         worktreeName: "foreground-task",
-        model: "do-not-restore",
+        model: "example/fast",
+        agentRuntime: "openclaw",
         thinkingLevel: "high",
         fastMode: true,
         cyberAccessProgram: "daybreak_blue",
       },
     }),
-  ).toEqual({ agentId: "main", selection });
+  ).toEqual({
+    agentId: "main",
+    selection: { ...selection, model: "example/fast", agentRuntime: "openclaw" },
+  });
   expect(decodePalettePreference(null)).toBeNull();
   expect(decodePalettePreference({ agentId: "", selection: { worktree: true } })).toBeNull();
   expect(decodePalettePreference({ agentId: "main", selection: "invalid" })).toBeNull();

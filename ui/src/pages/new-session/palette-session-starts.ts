@@ -14,6 +14,8 @@ export class PaletteDraftSlot {
   readonly draft: NewSessionDraft;
   /** The Gateway created the session; its notice and destination own the outcome. */
   accepted = false;
+  /** Keep the preference binding alive until this accepted start saves its choices. */
+  preferenceWrite: Promise<void> | undefined;
   running = false;
   /** Presentation owner at release; notices never cross to another account or Gateway. */
   scope: unknown;
@@ -105,6 +107,12 @@ export class PaletteReleasedStarts {
   private retire(slot: PaletteDraftSlot) {
     this.starts.delete(slot);
     // Settlement publishes from inside the draft's own submission; disconnect after it returns.
-    queueMicrotask(() => slot.draft.disconnect());
+    queueMicrotask(() => {
+      if (slot.preferenceWrite) {
+        void slot.preferenceWrite.finally(() => slot.draft.disconnect());
+      } else {
+        slot.draft.disconnect();
+      }
+    });
   }
 }

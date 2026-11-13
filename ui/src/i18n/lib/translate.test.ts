@@ -13,7 +13,7 @@ import type { TranslationMap } from "./types.ts";
 const german = { common: { health: "Gesundheit" } } satisfies TranslationMap;
 const spanish = { common: { health: "Salud" } } satisfies TranslationMap;
 const settingsKey = "commandPalette.newSessionSettings";
-const rememberKey = "commandPalette.rememberUnavailable";
+const saveFailureKey = "commandPalette.lastUsedSaveFailed";
 const offline = new Error("offline");
 const loadTranslation = vi.fn<(locale: Locale) => Promise<TranslationMap | null>>();
 const subscriber = vi.fn<(locale: Locale) => void>();
@@ -67,10 +67,12 @@ it("prepares registered English namespaces before publishing a locale without lo
   const changing = manager.setLocale("de");
   expect(manager.getLocale()).toBe("en");
   expect(loadHints).not.toHaveBeenCalled();
-  page.resolve({ default: { commandPalette: { rememberUnavailable: "Erneut verbinden" } } });
+  page.resolve({
+    default: { commandPalette: { lastUsedSaveFailed: "Einstellungen nicht gespeichert" } },
+  });
   await changing;
   expect(subscriber).toHaveBeenCalledExactlyOnceWith("de");
-  expect(manager.t(rememberKey)).toBe("Erneut verbinden");
+  expect(manager.t(saveFailureKey)).toBe("Einstellungen nicht gespeichert");
   expect(manager.t("common.health")).toBe("Gesundheit");
   expect(manager.translateActive(settingsKey)).toBe("Neue Sitzung");
   expect(manager.translateActive("common.connected")).toBeUndefined();

@@ -184,8 +184,7 @@ suite.define(() => {
           const popup = palette.locator(".oc-popover.palette-session-settings");
           const folder = palette.locator(".palette-session-settings__trigger");
           await changePicker(popup, "overlay-after-show", () => folder.click());
-          const remember = popup.getByRole("checkbox", { name: /Remember settings for/ });
-          expect(await remember.isVisible()).toBe(true);
+          expect(await popup.getByRole("checkbox", { name: /Remember/ }).count()).toBe(0);
           const search = popup.getByRole("searchbox", { name: "Search", exact: true });
           await search.waitFor({ state: "visible" });
           await expectPaletteProjectGrouping(popup);
@@ -294,10 +293,14 @@ suite.define(() => {
           expect(page.url()).toBe(url);
 
           if (destination === "local") {
+            await changePicker(settings, "overlay-after-show", () =>
+              palette.locator(".palette-session-settings__trigger").click(),
+            );
             const worktree = palette.getByRole("switch", { name: "New worktree", exact: true });
             if ((await worktree.getAttribute("aria-checked")) !== "true") {
               await worktree.click();
             }
+            await changePicker(settings, "overlay-after-hide", () => page.keyboard.press("Escape"));
           }
           if (destination === "device") {
             await gateway.waitForRequest("environments.list");

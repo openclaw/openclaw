@@ -1,11 +1,11 @@
 import type { Locator } from "playwright";
 import { expect } from "vitest";
 
-/** Agent, folder, and worktree are one chip family on one centerline. */
+/** Agent, folder, and model are one chip family on one centerline. */
 export async function expectPaletteChipsAligned(palette: Locator) {
   const chips = await palette
     .locator(
-      ".agent-chat__composer-controls :is(.agent-select__trigger, .palette-session-settings__chip)",
+      ".agent-chat__composer-footer :is(.agent-select__trigger, .palette-session-settings__chip, .chat-controls__model-trigger)",
     )
     .evaluateAll((elements) =>
       elements.map((element) => {

@@ -8,6 +8,7 @@ import {
   PaletteSessionAttachments,
   PaletteSessionAuxiliary,
   PaletteSessionControls,
+  PaletteSessionModel,
 } from "../pages/new-session/palette-session-draft-view.tsx";
 import { PaletteSessionDraft } from "../pages/new-session/palette-session-draft.ts";
 import { mountSolid } from "./mount-solid.ts";
@@ -26,11 +27,9 @@ export class PaletteDraftHost {
   readonly coldOutcome = createDeferred();
   observeColdSubmission = false;
   private updated() {
-    const remember = this.querySelector<HTMLInputElement>(
-      ".palette-session-settings__remember input",
-    );
+    const preferences = this.draft.settingsView()?.options.draft.gateway.preferenceState;
     const worktree = this.querySelector<HTMLButtonElement>('[role="switch"]');
-    if (remember && !remember.disabled && worktree && !worktree.disabled) {
+    if (preferences?.mode === "remote" && worktree && !worktree.disabled) {
       this.settingsReady.resolve();
     }
     if (this.observeColdSubmission && (!this.draft.messageLocked || this.draft.submitting)) {
@@ -79,6 +78,7 @@ export class PaletteDraftHost {
           <>
             <textarea aria-label="Palette prompt" value={message()} />
             <PaletteSessionControls draft={this.draft} revision={revision()} />
+            <PaletteSessionModel draft={this.draft} revision={revision()} />
             <PaletteSessionAuxiliary draft={this.draft} revision={revision()} />
             <PaletteSessionAttachments draft={this.draft} revision={revision()} />
           </>

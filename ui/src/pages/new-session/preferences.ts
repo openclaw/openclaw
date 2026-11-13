@@ -26,15 +26,13 @@ export function decodePalettePreference(value: unknown): PaletteSessionPreferenc
     return null;
   }
   // Empty placement fields are explicit overrides, not permission to inherit a /new choice.
-  for (const key of ["folder", "projectId", "baseRef"] as const) {
+  for (const key of ["folder", "projectId", "baseRef", "model"] as const) {
     const field = value.selection[key];
     if (typeof field === "string") {
       selection[key] = field.trim();
     }
   }
-  // The palette owns placement knobs; model/thinking continue to follow ordinary defaults.
-  delete selection.model;
-  delete selection.agentRuntime;
+  // The palette remembers placement and model; effort keeps following ordinary defaults.
   delete selection.thinkingLevel;
   delete selection.fastMode;
   delete selection.cyberAccessProgram;
