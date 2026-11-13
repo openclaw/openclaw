@@ -22,6 +22,7 @@ import {
   type StateDatabaseDiscovery,
 } from "./update-candidate-paths.js";
 import type { UpdateCandidateBundledSource } from "./update-candidate-plugins.js";
+import type { UpdateStateSchemaInspectionPlanSchema } from "./update-candidate-state.js";
 
 const StateSchemaDiscoveryOwnershipSchema = z.record(
   z.string(),
@@ -51,26 +52,35 @@ export async function writeUpdateStateSchemaOwnership(
 }
 
 export async function rehydrateUpdateStateSchemaOwnership(
-  files: Map<string, StateDatabaseDiscovery>,
-  sharedIdentity: string,
-  stagingRoot: string | undefined,
-): Promise<void> {
+  input: { stateDir: string; stagingRoot?: string },
+  plan: z.infer<typeof UpdateStateSchemaInspectionPlanSchema>,
+) {
+  const { stagingRoot } = input;
   const record = stagingRoot
     ? await fs
         .readFile(path.join(stagingRoot, SCHEMA_DISCOVERY_OWNERSHIP_FILENAME), "utf8")
         .catch(ignoreMissingPath)
     : undefined;
   const ownership = record ? StateSchemaDiscoveryOwnershipSchema.parse(JSON.parse(record)) : {};
-  for (const [identity, discovery] of files) {
-    if (discovery.owners?.length || discovery.registeredPaths?.length) {
-      continue;
-    }
-    if (ownership[identity]) {
-      files.set(identity, { ...discovery, ...ownership[identity] });
-    } else if (identity === sharedIdentity) {
-      files.set(identity, { ...discovery, owners: [{ role: "global" }] });
-    }
-  }
+  const sharedIdentity = resolveUpdateCandidateStateIdentity(
+    input.stateDir,
+    path.resolve(input.stateDir, "state", "openclaw.sqlite"),
+  );
+  return {
+    ...plan,
+    files: plan.files.map(([identity, discovery]): [string, StateDatabaseDiscovery] => {
+      if (discovery.owners?.length || discovery.registeredPaths?.length) {
+        return [identity, discovery];
+      }
+      if (ownership[identity]) {
+        return [identity, { ...discovery, ...ownership[identity] }];
+      }
+      return [
+        identity,
+        identity === sharedIdentity ? { ...discovery, owners: [{ role: "global" }] } : discovery,
+      ];
+    }),
+  };
 }
 
 export type StateInput = {

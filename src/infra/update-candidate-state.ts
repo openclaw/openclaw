@@ -59,7 +59,6 @@ import {
   collectSupplementalStateDatabasePaths,
   readSharedDatabaseVersion,
   readUpdateStoreSchemaVersion,
-  rehydrateUpdateStateSchemaOwnership,
   type StateInput,
 } from "./update-candidate-state.shared.js";
 import {
@@ -327,9 +326,6 @@ export async function readUpdateStateSchemaVersionsInProcess(
     ? new Map(input.inspectionPlan.files)
     : await collectSupplementalStateDatabasePaths(input, await collectStateDatabasePaths(input));
   const sharedIdentity = resolveUpdateCandidateStateIdentity(input.stateDir, shared);
-  if (input.inspectionPlan) {
-    await rehydrateUpdateStateSchemaOwnership(files, sharedIdentity, input.stagingRoot);
-  }
   // Inspect each identity once, then publish every spelling for released rollback baselines.
   const inspected = new Map<string, Omit<UpdateStateSchemaVersion, "path">>();
   for (const [identity, discovery] of files) {
