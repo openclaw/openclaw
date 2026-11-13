@@ -384,7 +384,14 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
     const providerLabel = () => providerDisplayLabel(props.provider);
     const groupLabel = () => t("chat.modelControls.providerModels", { provider: providerLabel() });
     const options = () => [...props.lead, ...props.more];
-    const auth = () => panel.params.providerAuth?.get(props.provider);
+    const auth = createMemo(() => {
+      const authProvider =
+        resolveModelRuntimeRoute(props.provider, providerRuntime(props.provider) ?? undefined) ===
+        "claudeCli"
+          ? "claude-cli"
+          : props.provider;
+      return panel.params.providerAuth?.get(authProvider);
+    });
     const authKind = () => auth()?.kind;
     const showAuth = createMemo(
       () =>
@@ -636,8 +643,9 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
                         }
                         if (
                           entry &&
-                          (entry.value === selectedModelValue() ||
-                            (entry.isDefault && !selectedModelValue()))
+                          entry.value ===
+                            (selectedModelValue() ||
+                              modelOptions().find((option) => option.isDefault)?.value)
                         ) {
                           void panel.params.onModelSelect(
                             entry.commitValue,

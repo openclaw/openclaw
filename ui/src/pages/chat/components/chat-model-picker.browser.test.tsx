@@ -760,3 +760,29 @@ it("keeps an unknown configured runtime distinct from explicit OpenClaw", async 
   await userEvent.click(inherited);
   expect(params.onModelSelect).toHaveBeenLastCalledWith("openai/sample", "main", null);
 });
+
+it("switches an inherited Default model to an available runtime with one click", async () => {
+  const { params, update, open, picker } = mountPicker();
+  params.modelOptions = [
+    modelOption("openai", "sample", {
+      isDefault: true,
+      commitValue: "",
+      agentRuntime: "openclaw",
+      agentRuntimeId: "openclaw",
+    }),
+    modelOption("openai", "sample", {
+      agentRuntime: "codex",
+      agentRuntimeId: "codex",
+      runtimeOverride: "codex",
+    }),
+  ];
+  params.selectedModelValue = "";
+  update();
+  await open();
+  const runtime = picker.querySelector<HTMLButtonElement>(
+    '.chat-controls__runtime-option[data-chat-model-runtime="codex"]',
+  )!;
+  expect(runtime.getAttribute("aria-disabled")).toBe("false");
+  await userEvent.click(runtime);
+  expect(params.onModelSelect).toHaveBeenCalledExactlyOnceWith("openai/sample", "main", "codex");
+});

@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createUniqueId, For, Show, useContext } from "solid-js";
+import { createMemo, createUniqueId, For, Show, useContext } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Popover } from "../../../components/solid/popover.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -47,8 +47,11 @@ export function ChatModelAccountOptions(
   props: ReturnType<ChatModelAccountSection["viewProps"]> & { renderRow?: ModelPickerRowRenderer },
 ) {
   const search = useContext(ChatModelSearchContext);
-  const row = (key: string, render: () => JSX.Element) =>
-    props.renderRow ? props.renderRow(key, render) : render();
+  const renderRow = createMemo(() => props.renderRow);
+  const row = (key: string, render: () => JSX.Element) => {
+    const renderer = renderRow();
+    return renderer ? renderer(key, render) : render();
+  };
   return (
     <>
       <div
@@ -60,9 +63,10 @@ export function ChatModelAccountOptions(
       >
         <For each={props.options} keyed={(option) => option.value}>
           {(option, index) => {
+            const key = createMemo(() => `account:${option().value}`);
             return (
               <>
-                {row(`account:${option().value}`, () => (
+                {row(key(), () => (
                   <div
                     class={
                       option().value === "manage" ? "chat-controls__account-footer" : undefined

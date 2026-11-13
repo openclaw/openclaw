@@ -146,13 +146,11 @@ export function ChatModelSettings(props: {
         <ChatModelRuntimeControl
           options={options()}
           model={
-            options().some(
+            options().find(
               (option) =>
                 option.value === props.params.selectedModelValue ||
                 (option.isDefault && !props.params.selectedModelValue),
-            )
-              ? props.params.selectedModelValue
-              : options()[0]!.value
+            )?.value ?? options()[0]!.value
           }
           selected={props.runtime(props.provider!)}
           disabled={props.params.disabled}
