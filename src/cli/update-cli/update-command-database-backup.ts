@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { resolveStateDir } from "../../config/paths.js";
 import { resolveDatabaseFamilyEngines } from "../../infra/database-engine/registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -8,6 +9,7 @@ import { hasActiveGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
 import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
+import { readUpdateDatabaseGenerationsIsolated } from "../../infra/update-candidate-state.inspection.js";
 import {
   createUpdateDatabaseBackup,
   type UpdateDatabaseBackup,
@@ -240,6 +242,39 @@ export async function captureUpdateDatabases(params: {
   await reportUpdateStepCompletion(execution.progress, { ...step, index: 0, total: 0 });
   assertCurrent();
   return { backup: restorable ? backup : undefined, step };
+}
+
+/**
+ * The activated-release boot is this update's own writer: it records boot and
+ * config bookkeeping. When nothing else wrote since Doctor, attribute the boot's
+ * writes to the update so a failed boot can still restore the baseline.
+ * Accepted: another writer during the boot window is attributed the same way.
+ */
+export async function adoptUpdateBootDatabaseWrites(
+  backup: UpdateDatabaseBackup,
+  env: NodeJS.ProcessEnv,
+  boot: () => Promise<UpdateRunResult>,
+): Promise<UpdateRunResult> {
+  const paths = [
+    ...new Set([...backup.databases.map((entry) => entry.path), ...backup.missingPaths]),
+  ];
+  // An unreadable generation leaves the existing refusal in place.
+  const read = () =>
+    readUpdateDatabaseGenerationsIsolated(paths, { env, pluginOwners: backup.pluginOwners }).catch(
+      () => undefined,
+    );
+  const expected = backup.migration?.to ?? backup.sourceGenerations;
+  const unchanged = isDeepStrictEqual(await read(), expected);
+  const result = await boot();
+  const booted = unchanged && result.status === "error" ? await read() : undefined;
+  if (booted) {
+    if (backup.migration) {
+      backup.migration.to = booted;
+    } else {
+      backup.sourceGenerations = booted;
+    }
+  }
+  return result;
 }
 
 /** Called only before this update admits a candidate Gateway, after its child has settled. */
