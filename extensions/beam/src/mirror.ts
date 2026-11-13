@@ -343,7 +343,7 @@ export function createBeamMirrorRunner(params: {
     } finally {
       // The mirror uses only the status; cancel the ignored payload so slow
       // receiver responses cannot retain connection slots across poll retries.
-      await response.body?.cancel().catch(() => undefined);
+      void response.body?.cancel().catch(() => undefined);
       await release();
     }
   };
