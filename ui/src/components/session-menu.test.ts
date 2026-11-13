@@ -226,10 +226,7 @@ describe("session menu", () => {
     const owner = createSessionOwnerMenuHarness(() => sessionOwnerProfiles("Jose\u0301", "Zoë"));
     const menu = await mountMenu({ context: owner.context });
     await waitForOwners(menu, ["Me", "Research", "Jose\u0301", "Zoë"]);
-    const panel = await openSubmenu(menu, "Assign to…");
-    panel.querySelector<HTMLButtonElement>(".header-search__toggle")!.click();
-    await settleSessionMenu(menu);
-    const search = panel.querySelector("input")!;
+    const search = (await openSubmenu(menu, "Assign to…")).querySelector("input")!;
     const cases = { José: ["Jose\u0301"], "Zoe\u0308": ["Zoë"], x: [] };
     for (const [query, labels] of Object.entries(cases)) {
       search.value = query;
