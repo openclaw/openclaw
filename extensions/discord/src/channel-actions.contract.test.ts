@@ -41,6 +41,39 @@ describe("discord actions contract", () => {
         expectedActions: ["send", "poll", "react", "reactions", "emoji-list"],
         expectedCapabilities: ["presentation"],
       },
+      {
+        name: "advertises delivery-pin only when message pins are enabled",
+        cfg: {
+          channels: {
+            discord: {
+              token: "Bot token-main",
+              actions: {
+                polls: false,
+                reactions: false,
+                permissions: false,
+                messages: false,
+                pins: true,
+                threads: false,
+                search: false,
+                stickers: false,
+                memberInfo: false,
+                roleInfo: false,
+                emojiUploads: false,
+                stickerUploads: false,
+                channelInfo: false,
+                channels: false,
+                voiceStatus: false,
+                events: false,
+                roles: false,
+                moderation: false,
+                presence: false,
+              },
+            },
+          },
+        } as OpenClawConfig,
+        expectedActions: ["send", "pin", "unpin", "list-pins"],
+        expectedCapabilities: ["presentation", "delivery-pin"],
+      },
     ],
   });
 

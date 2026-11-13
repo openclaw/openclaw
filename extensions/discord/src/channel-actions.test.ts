@@ -98,8 +98,19 @@ describe("discordMessageActions", () => {
       }),
     });
 
-    expect(discovery?.capabilities).toEqual(["presentation"]);
+    expect(discovery?.capabilities).toEqual(["presentation", "delivery-pin"]);
     expect(discovery?.actions).toEqual(expectedDiscordActions());
+  });
+
+  it("withholds delivery-pin when message pins are disabled", () => {
+    const discovery = discordMessageActions.describeMessageTool?.({
+      cfg: discordCfg({
+        token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
+        actions: { pins: false },
+      }),
+    });
+
+    expect(discovery?.capabilities).toEqual(["presentation"]);
   });
 
   it("requires trusted requester sender for privileged guild admin actions from tool contexts", () => {
