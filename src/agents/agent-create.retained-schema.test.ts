@@ -93,13 +93,13 @@ it.each(["recovery-hold", "retained-deletion"] as const)(
     const pathname = path.join(state.agentDir(agentId), "openclaw-agent.sqlite");
     const target = { agentId, path: pathname };
     await state.writeConfig({
-      agents: {
-        ownership: "explicit",
-        entries: {
-          main: { workspace: state.workspaceDir },
-          ...(kind === "recovery-hold" ? { retired: {} } : {}),
-        },
-      },
+      agents:
+        kind === "recovery-hold"
+          ? {
+              ownership: "explicit",
+              entries: { main: { workspace: state.workspaceDir }, retired: {} },
+            }
+          : { defaults: { workspace: state.workspaceDir } },
       gateway: { mode: "local" },
     });
     await prepareRecoveryHolds(state, agentId, [target]);

@@ -57,12 +57,18 @@ export function selectedRecoveryPaths(
 export async function migrateRetainedAgentStores(params: {
   agentId: string;
   paths: readonly string[];
+  allowRestore: boolean;
   assertCurrent: () => void;
 }): Promise<void> {
   const env = process.env;
   const targets = [...new Set(params.paths)].filter((pathname) =>
     statSync(pathname, { throwIfNoEntry: false })?.isFile(),
   );
+  if (targets.length > 0 && !params.allowRestore) {
+    throw new DuplicateAgentError(
+      `Agent ${params.agentId} has retained databases. Run openclaw agents add ${params.agentId} to restore the preserved store explicitly.`,
+    );
+  }
   const migrations: NonNullable<OpenClawDatabaseSchemaPreflight["pendingMigrations"]> = [];
   await using inspector = createAgentSchemaInspectionWorker();
   for (const pathname of targets) {
@@ -154,6 +160,9 @@ export async function migrateRetainedAgentStores(params: {
               await migrateOpenClawAgentDatabaseForMaintenance(
                 { agentId: params.agentId, pathname: migration.path, env },
                 owner,
+              );
+              result.changes.push(
+                `Upgraded agent database schema in ${migration.path}: v${migration.foundVersion} -> v${migration.supportedVersion}.`,
               );
             }
             completeDoctorMigrationBackups(env, targets);

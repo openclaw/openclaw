@@ -379,13 +379,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
           agentId,
         );
       }
-      if (automaticBootstrap && deletion && !deletion.deleteFiles) {
-        return createError(
-          "already-exists",
-          `Agent ${agentId} has retained databases. Run openclaw agents add ${agentId} to restore the preserved store explicitly.`,
-          agentId,
-        );
-      }
+      const restoringRetained = recoveryPaths.length > 0 || deletion?.deleteFiles === false;
       let tombstoneClaimed = false;
       const committed = await transformConfig<CreateAgentSuccess>({
         afterWrite: { mode: "auto" },
@@ -426,9 +420,10 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
           const currentEntries = bootstrappingFirstAgent ? [] : listAgentEntries(currentConfig);
           const existingIndex = findAgentEntryIndex(currentEntries, agentId);
           const existingEntry = currentEntries[existingIndex];
-          if (existingIndex >= 0 && (recoveryPaths.length > 0 || deletion?.cleanupCompleted)) {
+          if (existingIndex >= 0 && restoringRetained) {
             await migrateRetainedAgentStores({
               agentId,
+              allowRestore: !automaticBootstrap,
               paths:
                 recoveryPaths.length > 0
                   ? recoveryPaths
@@ -438,12 +433,12 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
                     }).map((target) => target.path),
               assertCurrent: beforePersistentApply,
             });
-            if (deletion?.cleanupCompleted) {
-              if (!(await claimCompletedAgentDeletion(agentId, deletion.operationId))) {
-                throw new Error(`agent "${agentId}" deletion tombstone changed during creation`);
-              }
-              tombstoneClaimed = true;
+          }
+          if (existingIndex >= 0 && deletion?.cleanupCompleted) {
+            if (!(await claimCompletedAgentDeletion(agentId, deletion.operationId))) {
+              throw new Error(`agent "${agentId}" deletion tombstone changed during creation`);
             }
+            tombstoneClaimed = true;
           }
           if (
             isBootstrapMain &&
@@ -548,9 +543,10 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
             agentId,
             assertCurrent: beforePersistentApply,
           });
-          if (recoveryPaths.length > 0 || deletion?.cleanupCompleted) {
+          if (restoringRetained) {
             await migrateRetainedAgentStores({
               agentId,
+              allowRestore: !automaticBootstrap,
               paths:
                 recoveryPaths.length > 0
                   ? recoveryPaths
