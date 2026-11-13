@@ -1,7 +1,7 @@
 import { createRouter } from "@openclaw/uirouter";
 import { createComponent } from "solid-js";
 import { vi } from "vitest";
-import type { TemplateLifecyclePlanResult } from "../../../../packages/gateway-protocol/src/schema/templates.ts";
+import { retainGatewayResponsePayload } from "../../../../packages/gateway-client/src/protocol-request.js";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { AgentIdentityResult, AgentsListResult } from "../../api/types.ts";
 import type { RouteId } from "../../app-route-paths.ts";
@@ -20,7 +20,6 @@ import {
 } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { createPluginDeclaredSurface } from "../../test-helpers/plugins-e2e-fixtures.test-support.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { TemplatesPage } from "../templates/page.tsx";
 
@@ -52,8 +51,6 @@ type PageOptions = {
   templateIconUrl?: string;
   workspaceFileNames?: string[];
   riskConsentRequired?: boolean;
-  reviewRequiredOnce?: "plugin" | "skill";
-  bundledReview?: boolean;
   clawHubTrustWarning?: string;
   applyWait?: Promise<void>;
 };
@@ -62,7 +59,6 @@ const disposers: Array<() => void> = [];
 
 export function createPage(options: PageOptions = {}) {
   const ensureConfigLoaded = vi.fn(async () => undefined);
-  let addCount = 0;
   const addedAgents: Array<{ id: string; name: string }> = [];
   const lifetime = new AbortController();
   const runtimeConfigListeners = new Set<() => void>();
@@ -80,12 +76,6 @@ export function createPage(options: PageOptions = {}) {
     subscribe: (listener: () => void) => {
       runtimeConfigListeners.add(listener);
       return () => runtimeConfigListeners.delete(listener);
-    },
-  };
-  const capabilityGrants = {
-    hooks: {
-      allowPromptInjection: { effective: false },
-      allowConversationAccess: { effective: true },
     },
   };
   const request = createGatewayRequestMock(async (method, params) => {
@@ -146,6 +136,7 @@ export function createPage(options: PageOptions = {}) {
           ...workflowOperator,
           iconUrl: options.templateIconUrl,
           version: "1.2.0",
+          agentId: "workflow-operator",
           agentName: "Workflow Operator",
           workspaceFiles: instructions.length,
           skills: 1,
@@ -183,84 +174,13 @@ export function createPage(options: PageOptions = {}) {
     if (method === "plugins.list") {
       return { plugins: [], diagnostics: [], mutationAllowed: true };
     }
-    if (method === "templates.add.plan") {
-      const agentId = addCount === 0 ? "workflow-operator" : `workflow-operator-${addCount + 1}`;
-      return {
-        schemaVersion: "openclaw.templatesGatewayPlan.v1",
-        target: { agentId, name: "Workflow Operator", targetVersion: "1.2.0" },
-        actions: [],
-        capabilities: [],
-        blockers: [],
-        riskAcknowledgementRequired: options.riskConsentRequired ?? false,
-        ...(options.riskConsentRequired
-          ? {
-              trustWarning:
-                options.clawHubTrustWarning ?? "Review this ClawHub release before adding it.",
-            }
-          : {}),
-        operation: "add",
-        planIntegrity: "sha256:reviewed-plan",
-        pluginReviews:
-          options.reviewRequiredOnce === "plugin"
-            ? [
-                {
-                  actionId: "plugin:@openclaw/workflow-tools",
-                  pluginId: "workflow-tools",
-                  ...(options.bundledReview
-                    ? {
-                        source: "bundled",
-                        path: "plugins/workflow-tools",
-                        digest: `sha256:${"a".repeat(64)}`,
-                      }
-                    : {
-                        source: "clawhub",
-                        ref: "@openclaw/workflow-tools",
-                        version: "1.2.0",
-                        integrity: `sha256-${"A".repeat(43)}=`,
-                      }),
-                  ownerAction: "install",
-                  declaredCapabilities: {
-                    ...createPluginDeclaredSurface(),
-                    tools: ["workflow.start"],
-                  },
-                  capabilityGrants,
-                  capabilityGrantsByPluginId: { "workflow-tools": capabilityGrants },
-                  reviewToken: "review-workflow-tools",
-                  riskWarning: "This plugin can access conversations.",
-                },
-              ]
-            : [],
-        skillReviews:
-          options.reviewRequiredOnce === "skill"
-            ? [
-                {
-                  actionId: "skill:@openclaw/research",
-                  ...(options.bundledReview
-                    ? {
-                        source: "bundled",
-                        path: "skills/research",
-                        name: "research",
-                        digest: `sha256:${"b".repeat(64)}`,
-                      }
-                    : {
-                        source: "clawhub",
-                        ref: "@openclaw/research",
-                        version: "1.2.0",
-                        integrity: "sha256:reviewed-skill",
-                      }),
-                  riskWarning: "This skill needs your trust.",
-                  reviewToken: "review-research",
-                },
-              ]
-            : [],
-      } satisfies TemplateLifecyclePlanResult;
-    }
     if (method === "templates.add.apply") {
-      const agentId = ++addCount === 1 ? "workflow-operator" : `workflow-operator-${addCount}`;
+      // The Gateway answers with the id it chose; here the requested one is always free.
+      const agentId = "agentId" in args ? String(args.agentId) : "";
       await options.applyWait;
       const acknowledged = "acknowledgeClawHubRisk" in args && args.acknowledgeClawHubRisk === true;
       if (options.riskConsentRequired && !acknowledged) {
-        throw new GatewayRequestError({
+        const refusal = new GatewayRequestError({
           code: "INVALID_REQUEST",
           message: "Explicit acknowledgement is required for this ClawHub release.",
           details: {
@@ -268,17 +188,9 @@ export function createPage(options: PageOptions = {}) {
             warning: options.clawHubTrustWarning ?? "Review this ClawHub release before adding it.",
           },
         });
-      }
-      const reviewed =
-        options.reviewRequiredOnce === "plugin"
-          ? "acknowledgeCapabilities" in args
-          : "acknowledgeSkillWarnings" in args;
-      if (options.reviewRequiredOnce && !reviewed) {
-        throw new GatewayRequestError({
-          code: "INVALID_REQUEST",
-          message: "Review the included dependencies before adding.",
-          details: { code: "TEMPLATE_REVIEW_REQUIRED", kind: options.reviewRequiredOnce },
-        });
+        // A correlated Gateway answer, not a lost request.
+        retainGatewayResponsePayload(refusal, undefined);
+        throw refusal;
       }
       addedAgents.push({ id: agentId, name: "Workflow Operator" });
       return {
@@ -301,7 +213,6 @@ export function createPage(options: PageOptions = {}) {
             "openclaw.chat",
             "templates.catalog.search",
             "templates.catalog.detail",
-            "templates.add.plan",
             "templates.add.apply",
           ],
           ["operator.read", "operator.admin"],
@@ -382,6 +293,7 @@ export function createPage(options: PageOptions = {}) {
   });
   return {
     page: view.container,
+    unmountPage: view.unmount,
     wrapper: solidProvider.wrapper,
     context,
     request,

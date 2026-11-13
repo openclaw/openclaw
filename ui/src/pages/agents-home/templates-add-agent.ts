@@ -1,5 +1,14 @@
+import {
+  isGatewayProtocolResponseError,
+  readClawHubRiskAcknowledgementRequiredError,
+} from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { routeIdFromPath } from "../../app-route-paths.ts";
+import {
+  selectNextTemplateAgentId,
+  templateAgentCopyNumber,
+} from "../../../../src/templates/add-agent-id.js";
+import { toGatewayErrorInfo } from "../../api/gateway-connect-errors.ts";
+import { pathForTemplateCatalogEntry, routeIdFromPath } from "../../app-route-paths.ts";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
@@ -16,27 +25,77 @@ import { retainCreatedComposer } from "../new-session/creation-composer-registry
 import { CreationComposer } from "../new-session/creation-composer.ts";
 import {
   applyTemplateAdd,
-  type TemplateAddReviewPlan,
+  type TemplateCatalogEntry,
   type TemplateCatalogSource,
 } from "./templates-catalog-client.ts";
+
+/** An Add the Gateway undid: nothing was kept, so its catalog card explains why. */
+export type TemplateAddFailure = {
+  entry: TemplateCatalogEntry;
+  message: string;
+  /** ClawHub flagged this release; adding it needs the user's acknowledgement. */
+  trustWarning?: string;
+};
+
+// The catalog page that started an Add is gone once its chat opens. A failure
+// waits here until a catalog page showing that Template accepts it.
+type FailureReceiver = (failure: TemplateAddFailure) => boolean;
+type FailureMailbox = { waiting?: TemplateAddFailure; receivers: Set<FailureReceiver> };
+const failureMailboxes = new WeakMap<ApplicationContext, FailureMailbox>();
+
+function failureMailbox(context: ApplicationContext): FailureMailbox {
+  let mailbox = failureMailboxes.get(context);
+  if (!mailbox) {
+    mailbox = { receivers: new Set() };
+    failureMailboxes.set(context, mailbox);
+  }
+  return mailbox;
+}
+
+/** `receive` answers whether its page shows the failed Template. */
+export function receiveTemplateAddFailures(
+  context: ApplicationContext,
+  receive: FailureReceiver,
+): () => void {
+  const mailbox = failureMailbox(context);
+  mailbox.receivers.add(receive);
+  if (mailbox.waiting && receive(mailbox.waiting)) {
+    mailbox.waiting = undefined;
+  }
+  return () => mailbox.receivers.delete(receive);
+}
 
 /** Like sidebar New agent, the application owns the handoff after its initiating page closes. */
 export async function addTemplateAgent(
   context: ApplicationContext,
-  source: TemplateCatalogSource,
-  plan: TemplateAddReviewPlan,
+  template: {
+    entry: TemplateCatalogEntry;
+    source: TemplateCatalogSource;
+    /** The Template's own agent id and name, from its catalog detail. */
+    agentId: string;
+    agentName?: string;
+  },
   acknowledgeClawHubRisk: boolean,
 ) {
+  const { source } = template;
   const client = context.gateway.snapshot.client;
   const scopeKey = gatewayPresentationScope(context.gateway).key;
   const isCurrent = () =>
     context.gateway.snapshot.client === client &&
     gatewayPresentationScope(context.gateway).key === scopeKey;
-  const agentId = plan.target.agentId;
-  if (!client || !agentId) {
+  if (!client) {
     throw new Error(t("templatesCatalog.addFailed"));
   }
-  const name = plan.target.name ?? agentId;
+  // Ask for an id this roster does not use, so the chat opened below is the new
+  // agent's. The Gateway still chooses: on a stale roster it answers with another id
+  // and the admitted chat replaces this route once it is ready.
+  const agentId = selectNextTemplateAgentId(
+    template.agentId,
+    context.agents.state.agentsList?.agents.map((agent) => agent.id) ?? [],
+  );
+  const copy = templateAgentCopyNumber(template.agentId, agentId);
+  const baseName = template.agentName ?? template.entry.displayName;
+  const name = copy > 1 ? `${baseName} ${copy}` : baseName;
   const pending = context.agents.beginCreation({ id: agentId, name });
   if (!pending) {
     return;
@@ -55,6 +114,8 @@ export async function addTemplateAgent(
     admitted: false,
   };
   let durable = false;
+  // A retry continues the agent the Gateway admitted, whatever id it chose.
+  let requestAgentId = agentId;
   const target = sessionNavigationTarget({
     context,
     face: "chat",
@@ -87,6 +148,7 @@ export async function addTemplateAgent(
       return;
     }
     durable = true;
+    requestAgentId = saved.agentId;
     composer.accept(
       { key: saved.sessionKey, initialRun: { status: "idle" } },
       { initializationPending: true },
@@ -140,6 +202,7 @@ export async function addTemplateAgent(
       return;
     }
     applying = true;
+    const retry = durable;
     if (composer.recovery) {
       composer.recovery.pending = true;
       composer.error = null;
@@ -167,7 +230,7 @@ export async function addTemplateAgent(
     });
     try {
       const result = await applyTemplateAdd(client, source, {
-        reviewPlan: plan,
+        agentId: requestAgentId,
         acknowledgeClawHubRisk,
         onSent: (id) => {
           requestId = id;
@@ -190,7 +253,44 @@ export async function addTemplateAgent(
         throw new Error(result.error?.message ?? t("templatesCatalog.addFailed"));
       }
     } catch (error) {
-      if (isCurrent()) {
+      // A first request answered with an error kept nothing: the Gateway removed the
+      // agent and chat it had admitted. A lost connection or a retry proves no such thing.
+      if (isCurrent() && !retry && !creation.admitted && isGatewayProtocolResponseError(error)) {
+        const foreground = ownsForeground();
+        const admitted = durable;
+        durable = false;
+        composer.dispose();
+        if (admitted) {
+          void context.agents.refreshList();
+        }
+        const trustWarning = acknowledgeClawHubRisk
+          ? undefined
+          : readClawHubRiskAcknowledgementRequiredError(toGatewayErrorInfo(error))?.warning;
+        const failure: TemplateAddFailure = {
+          entry: template.entry,
+          message: formatUiError(error),
+          ...(trustWarning ? { trustWarning } : {}),
+        };
+        if (foreground) {
+          const mailbox = failureMailbox(context);
+          const shown = [...mailbox.receivers].filter((receive) => receive(failure));
+          mailbox.waiting = shown.length > 0 ? undefined : failure;
+          // Back to the catalog page Add was clicked on. An Add started elsewhere, from
+          // a Template link in a chat, returns to that Template's own catalog page.
+          context.replace(
+            "templates",
+            initialRoute === "templates"
+              ? initialLocation
+              : {
+                  pathname: pathForTemplateCatalogEntry(source.packageName, context.basePath),
+                  search: `?${new URLSearchParams({ version: source.version })}`,
+                  hash: "",
+                },
+          );
+        } else {
+          showToast({ severity: "error", message: failure.message, durationMs: 12_000 });
+        }
+      } else if (isCurrent()) {
         if (durable && !creation.admitted) {
           composer.error = formatUiError(error);
           composer.recovery = {

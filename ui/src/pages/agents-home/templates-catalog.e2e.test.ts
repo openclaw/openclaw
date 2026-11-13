@@ -108,7 +108,6 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
         "templates.catalog.search",
         "templates.catalog.detail",
         "templates.catalog.preview",
-        "templates.add.plan",
         "templates.add.apply",
         "plugins.list",
         "plugins.catalog.get",
@@ -138,6 +137,7 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
             ...entry,
             ...detailPublisher,
             version: "1.2.0",
+            agentId: "workflow-operator",
             agentName: "Workflow Operator",
             workspaceFiles: 2,
             skills: 1,
@@ -186,18 +186,6 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
           ],
           diagnostics: [],
           mutationAllowed: true,
-        },
-        "templates.add.plan": {
-          schemaVersion: "openclaw.templatesGatewayPlan.v1",
-          operation: "add",
-          planIntegrity: "sha256:template-e2e",
-          target: { agentId: "workflow-operator", name: "Workflow Operator" },
-          actions: [],
-          capabilities: [],
-          pluginReviews: [],
-          skillReviews: [],
-          blockers: [],
-          riskAcknowledgementRequired: false,
         },
         "templates.add.apply": {
           agentId: "workflow-operator",
@@ -645,34 +633,59 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     await page.getByText("No templates yet.", { exact: true }).waitFor();
   });
 
-  it("prepares the authoritative Add review while the Template detail opens", async () => {
+  it("offers Add from the Template detail without requesting a plan", async () => {
     const { page, gateway } = await fixture();
     const detail = await openDetail(page);
-    await expect.poll(() => gateway.getRequests("templates.add.plan")).toHaveLength(1);
     await expect
       .poll(() => detail.locator("[data-templates-confirm] button").isEnabled())
       .toBe(true);
+    expect(await gateway.getRequests("templates.add.plan")).toHaveLength(0);
     expect(await gateway.getRequests("templates.add.apply")).toHaveLength(0);
   });
 
-  it("retries a failed prepared review without applying the Template", async () => {
-    const { page, gateway } = await fixture();
-    await gateway.deferNext("templates.add.plan");
-    const detail = await openDetail(page);
-    await gateway.waitForRequest("templates.add.plan");
-    expect(await detail.locator("[data-templates-confirm] button").isDisabled()).toBe(true);
-    await gateway.rejectDeferred("templates.add.plan", {
-      code: "UNAVAILABLE",
-      message: "Review temporarily unavailable",
-    });
-    const alert = detail.getByRole("alert");
-    await alert.getByText("Review temporarily unavailable", { exact: true }).waitFor();
-    await alert.getByRole("button", { name: "Retry", exact: true }).click({ timeout: 1500 });
-    await expect
-      .poll(() => detail.locator("[data-templates-confirm] button").isEnabled())
-      .toBe(true);
-    expect(await gateway.getRequests("templates.add.apply")).toHaveLength(0);
-  });
+  it.each([400, 1280])(
+    "returns a rolled-back Add to the catalog with the error on its card at %i px",
+    async (width) => {
+      const { page, gateway } = await fixture({ width, height: 900 });
+      const card = page.locator("[data-templates-explore] [data-templates-entry]").first();
+      const add = card.getByRole("button", { name: "Add", exact: false });
+      await card.waitFor();
+      await gateway.deferNext("templates.add.apply");
+      await add.click();
+      const apply = await gateway.waitForRequest("templates.add.apply");
+      await page.waitForURL(/\/chat\/workflow-operator(?:\?|$)/u);
+      const pending = page.locator("openclaw-pending-session-create");
+      await pending.getByText("Creating new agent…", { exact: true }).waitFor();
+      // The Gateway admitted the agent and chat, then could not fetch the Template.
+      await gateway.emitGatewayEvent("templates.add.progress", {
+        requestId: apply.id,
+        stage: "agent-admitted",
+        agentId: "workflow-operator",
+        sessionKey: "agent:workflow-operator:main",
+      });
+      await gateway.rejectDeferred("templates.add.apply", {
+        code: "UNAVAILABLE",
+        message: "ClawHub could not deliver this Template.",
+      });
+      await page.waitForURL(/\/templates(?:\?|$)/u);
+      const alert = card.getByRole("alert");
+      await alert.getByText("ClawHub could not deliver this Template.", { exact: true }).waitFor();
+      await capture(page, `template-add-${width}-rolled-back`, card);
+      expect(await pending.count()).toBe(0);
+      expect(await page.locator(".templates-add-consent").count()).toBe(0);
+      // The message stays inside its card and the page does not scroll sideways.
+      const [cardBox, alertBox] = await Promise.all([card.boundingBox(), alert.boundingBox()]);
+      expect(alertBox!.x).toBeGreaterThanOrEqual(cardBox!.x);
+      expect(alertBox!.x + alertBox!.width).toBeLessThanOrEqual(cardBox!.x + cardBox!.width);
+      expect(alertBox!.y + alertBox!.height).toBeLessThanOrEqual(cardBox!.y + cardBox!.height);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+        width,
+      );
+      await expect.poll(() => add.isEnabled()).toBe(true);
+      expect(await gateway.getRequests("templates.add.apply")).toHaveLength(1);
+      expect(await gateway.getRequests("templates.add.plan")).toHaveLength(0);
+    },
+  );
 
   it.each([400, 820, 1280])(
     "adds a personal Template directly from its card with stable chat and retained input at %i px",
@@ -690,10 +703,6 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       await card.waitFor();
       expect(await card.textContent()).toContain("@openclaw");
       expect(await card.getByRole("button", { name: "Add", exact: false }).isEnabled()).toBe(true);
-      await gateway.setMethodResponse("agents.list", {
-        ...agentsList,
-        agents: [...agentsList.agents, { id: "workflow-operator", name: "Workflow Operator" }],
-      });
       await gateway.deferNext("templates.add.apply");
       await page.evaluate(() => {
         const frames: Array<{
@@ -748,6 +757,12 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       await capture(page, `template-add-${width}-catalog`, card);
       await card.getByRole("button", { name: "Add", exact: false }).click();
       const apply = await gateway.waitForRequest("templates.add.apply");
+      // The roster names the agent only once the Gateway has it; Add asked for an id
+      // the roster did not use.
+      await gateway.setMethodResponse("agents.list", {
+        ...agentsList,
+        agents: [...agentsList.agents, { id: "workflow-operator", name: "Workflow Operator" }],
+      });
       await page.waitForURL(/\/chat\/workflow-operator(?:\?|$)/u);
       const pending = page.locator("openclaw-pending-session-create");
       await pending.getByText("Creating new agent…", { exact: true }).waitFor();
@@ -791,12 +806,17 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       });
       expect(await composer.inputValue()).toBe("Keep my draft while setup finishes");
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-      expect(apply.params).toMatchObject({
+      // One Add request, with no plan digest or acknowledgements, and no review first.
+      expect(apply.params).toEqual({
+        mode: "chat",
         source: { packageName: community.packageName, version: "1.2.0" },
-        planIntegrity: "sha256:template-e2e",
+        agentId: "workflow-operator",
       });
-      expect(await gateway.getRequests("templates.add.plan")).toHaveLength(1);
-      expect(await gateway.getRequests("templates.catalog.detail")).toHaveLength(0);
+      expect(await gateway.getRequests("templates.add.apply")).toHaveLength(1);
+      expect(await gateway.getRequests("templates.add.plan")).toHaveLength(0);
+      expect(await page.locator(".templates-add-consent").count()).toBe(0);
+      // A card names no agent, so its Add reads the release detail once.
+      expect(await gateway.getRequests("templates.catalog.detail")).toHaveLength(1);
       expect(await gateway.getRequests("templates.status")).toHaveLength(0);
       const frames = await page.evaluate(() => {
         Reflect.set(window, "templateAddRecording", false);
