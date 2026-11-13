@@ -12,6 +12,7 @@ import {
 import { hasErrnoCode } from "../../infra/errno.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
+  runtimeNeedsTypeScriptLoader,
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "../../infra/runtime-worker-url.js";
@@ -170,6 +171,10 @@ export class SpawnBrokerHost {
     return this.resourceClaims.capture(
       {
         ...input,
+        ...(input.moduleUrl.startsWith("file:") &&
+        runtimeNeedsTypeScriptLoader(fileURLToPath(input.moduleUrl))
+          ? { sourceLoaderUrl: import.meta.resolve("tsx/esm/api") }
+          : {}),
         ...this.resourceAuthority,
         generation: this.generation - 1,
         startupDeadline: this.available ? undefined : this.startupDeadline,
