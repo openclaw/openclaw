@@ -21,6 +21,7 @@ import {
   PreparedModelRuntimePublicationSupersededError,
   ownerKey,
   normalizePreparedModelRuntimeInput,
+  preparedModelRuntimeCatalogConfigsCompatible,
   preparedModelRuntimeConfigsMatch,
   publishModelRuntimeSnapshot,
   rebindInputToCommittedConfiguredOwner,
@@ -445,7 +446,11 @@ async function acquirePreparedModelRuntimeLeaseAttempt(
           };
     const catalogOwner =
       configuredOwner &&
-      ownerKey(catalogInput(configuredOwner.input)) === ownerKey(catalogInput(inventoryInput))
+      ownerKey(catalogInput(configuredOwner.input)) === ownerKey(catalogInput(inventoryInput)) &&
+      preparedModelRuntimeCatalogConfigsCompatible(
+        configuredOwner.input.config,
+        inventoryInput.config,
+      )
         ? configuredOwner
         : owner;
     snapshot = capturePreparedModelRuntimeCatalog(snapshot, catalogOwner.snapshot);

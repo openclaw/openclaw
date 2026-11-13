@@ -1,4 +1,5 @@
 import path from "node:path";
+import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import {
   getRuntimeConfigSnapshot,
@@ -183,6 +184,49 @@ export function preparedModelRuntimeConfigsMatch(
   }
   try {
     return modelRuntimeConfigFingerprint(left) === modelRuntimeConfigFingerprint(right);
+  } catch {
+    return false;
+  }
+}
+
+function sameConfiguredModelRefs(left: OpenClawConfig, right: OpenClawConfig): boolean {
+  const leftRefs = collectConfiguredModelRefs(left);
+  const rightRefs = collectConfiguredModelRefs(right);
+  return (
+    leftRefs.length === rightRefs.length &&
+    leftRefs.every((ref, index) => {
+      const other = rightRefs[index]!;
+      return (
+        ref.path === other.path &&
+        ref.value === other.value &&
+        ref.kind === other.kind &&
+        ref.capability === other.capability
+      );
+    })
+  );
+}
+
+/**
+ * A read-only setup probe borrows the configured agent's published catalog when its config
+ * agrees on everything the catalog build consumes. The configured config may differ only by
+ * the setup execution projection (the SYSTEM_AGENT_ID entry's params/tools), which the catalog
+ * never reads. Model selection refs (agents/tools/channels/hooks/tts), the models section
+ * (mode + provider static configs), and the plugins section (manifest provider availability)
+ * must all match for the published inventory to stay valid.
+ */
+export function preparedModelRuntimeCatalogConfigsCompatible(
+  left: OpenClawConfig,
+  right: OpenClawConfig,
+): boolean {
+  if (left === right) {
+    return true;
+  }
+  try {
+    return (
+      sameConfiguredModelRefs(left, right) &&
+      hashRuntimeConfigValue({ models: left.models, plugins: left.plugins } as OpenClawConfig) ===
+        hashRuntimeConfigValue({ models: right.models, plugins: right.plugins } as OpenClawConfig)
+    );
   } catch {
     return false;
   }
