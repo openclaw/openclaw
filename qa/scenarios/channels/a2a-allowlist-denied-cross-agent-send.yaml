@@ -23,6 +23,7 @@ scenario:
           channel: qa-channel
           accountId: "*"
     tools:
+      toolSearch: false
       agentToAgent:
         allow: [qa]
   successCriteria:
