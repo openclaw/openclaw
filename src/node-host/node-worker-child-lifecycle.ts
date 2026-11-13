@@ -151,6 +151,7 @@ export class NodeWorkerChildLifecycle {
         state: "failed",
         errorText,
       });
+    const binding = nodeWorkerEnvironmentBinding(params.input);
     let adapter: NodeWorkerChildAdapter;
     let container: NodeWorkerContainerIdentity | undefined;
     let cleanupMode: NodeWorkerCleanupMode | null;
@@ -164,6 +165,7 @@ export class NodeWorkerChildLifecycle {
         nativeInferenceSnapshot: this.options.nativeInferenceSnapshot,
         input: params.input,
         descriptor: params.descriptor,
+        placement: binding,
         planHash: params.turn.claim.planHash,
         supervisor: params.supervisor,
         connectionFailure,
@@ -214,7 +216,7 @@ export class NodeWorkerChildLifecycle {
     const { promise: journalReady, resolve: releaseJournal } = createDeferredCore();
     const active = {
       state: "running",
-      binding: nodeWorkerEnvironmentBinding(params.input),
+      binding,
       turn: params.turn,
       retiring: false,
       idleRetention: params.idleRetention,
