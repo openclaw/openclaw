@@ -4,10 +4,12 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
+import { isAbortError } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { ExecPolicyScopeSnapshot } from "../infra/exec-approvals-effective.js";
 import { decodeUtf8Input } from "../infra/utf8-input.js";
 import { defaultRuntime } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { rethrowExpectedCliError } from "./failure-output.js";
 
 export const EXEC_APPROVALS_STDIN_MAX_BYTES = 1024 * 1024;
@@ -45,6 +47,10 @@ export async function runApprovalsAction(
   try {
     await action();
   } catch (err) {
+    // Cancelled reads belong to root cleanup; uncancelled mutation failures remain visible.
+    if (getAsyncWorkSignal()?.aborted && isAbortError(err)) {
+      return;
+    }
     failApprovalsCommand(err, opts);
   }
 }

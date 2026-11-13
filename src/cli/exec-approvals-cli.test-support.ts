@@ -5,6 +5,7 @@ import type { ClientSocketRecord } from "../infra/client-credential-store.js";
 import { applyExecApprovalsUpdate } from "../infra/exec-approvals-mutation.kernel.js";
 import type { ExecApprovalsSnapshot } from "../infra/exec-approvals.js";
 import { registerExecApprovalsCli } from "./exec-approvals-cli.js";
+import type { GatewayRpcExtraOptions } from "./gateway-rpc.runtime.js";
 
 const mocks = await vi.hoisted(async () => {
   const { createCliRuntimeMock } = await import("./test-runtime-mock.js");
@@ -15,7 +16,7 @@ const mocks = await vi.hoisted(async () => {
         method: string,
         _opts: unknown,
         params?: unknown,
-        _extra?: unknown,
+        _extra?: GatewayRpcExtraOptions,
       ): Promise<unknown> => {
         if (method === "config.get") {
           return { config: { tools: { exec: { security: "full", ask: "off" } } } };

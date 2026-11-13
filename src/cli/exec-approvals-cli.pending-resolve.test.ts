@@ -1,6 +1,8 @@
 import { Command } from "commander";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { registerExecApprovalsCli } from "./exec-approvals-cli.js";
 
 const mocks = await vi.hoisted(async () => {
@@ -468,4 +470,83 @@ describe("exec approvals pending and resolve CLI", () => {
     expect(output).not.toContain("\u001B");
     expectOutput("revoked by ops\\u{1B}", "night\\u{1B}", "\\u{1B}]52;c;steal");
   });
+
+  it.each([
+    {
+      label: "pending",
+      args: ["approvals", "pending"],
+      methods: ["exec.approval.list", "plugin.approval.list", "openclaw.approval.list"],
+    },
+    {
+      label: "get",
+      args: ["approvals", "get", "--gateway"],
+      methods: ["exec.approvals.get", "config.get"],
+    },
+    {
+      label: "grants list",
+      args: ["approvals", "grants", "list"],
+      methods: ["exec.approval.grants.list"],
+    },
+    { label: "resolve lookup", args: resolveArgs("cancel-1", "deny"), methods: ["approval.get"] },
+  ])("cancels $label reads with the ambient CLI signal", async ({ args, methods }) => {
+    vi.useFakeTimers();
+    const scope = new AsyncWorkScope();
+    const read = createDeferredCore();
+    callGatewayFromCli.mockImplementation(
+      async (
+        method: string,
+        _opts: unknown,
+        _params: unknown,
+        extra?: { signal?: AbortSignal },
+      ) => {
+        if (method === "exec.approvals.get") {
+          return { file: { version: 1 }, hash: "hash-1", path: "approvals.json" };
+        }
+        if (extra?.signal) {
+          const { signal } = extra;
+          signal.addEventListener("abort", () => read.reject(signal.reason), { once: true });
+        }
+        return read.promise;
+      },
+    );
+    const settled = vi.fn();
+    const running = scope.track(() => runApprovalsCommand(args));
+    void running.then(() => settled(), settled);
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(callGatewayFromCli.mock.calls.map(([method]) => method)).toEqual(methods);
+      for (const call of callGatewayFromCli.mock.calls) {
+        expect((call[3] as { signal?: AbortSignal } | undefined)?.signal).toBe(scope.signal);
+      }
+      scope.beginClose(new DOMException("CLI stopping (SIGINT)", "AbortError"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toHaveBeenCalledExactlyOnceWith();
+      for (const output of [
+        defaultRuntime.log,
+        defaultRuntime.error,
+        defaultRuntime.exit,
+        defaultRuntime.writeJson,
+      ]) {
+        expect(output).not.toHaveBeenCalled();
+      }
+    } finally {
+      read.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      await scope.drain();
+    }
+  });
+
+  it("keeps the resolve mutation outside interrupt cancellation", async () => {
+    const scope = new AsyncWorkScope();
+    mockResolution("boundary-1", "deny");
+
+    await scope.track(() => runApprovalsCommand(resolveArgs("boundary-1", "deny", "--json")));
+
+    const calls = callGatewayFromCli.mock.calls;
+    expect((calls[0]?.[3] as { signal?: AbortSignal } | undefined)?.signal).toBe(scope.signal);
+    expect((calls[1]?.[3] as { signal?: AbortSignal } | undefined)?.signal).toBeUndefined();
+    expect(writtenJson()).toMatchObject({ applied: true, alreadyResolved: false });
+  });
 });
+
+afterEach(vi.useRealTimers);

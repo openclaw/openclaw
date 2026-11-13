@@ -7,7 +7,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { SESSION_EXEC_OVERRIDES_NOTE } from "../infra/exec-approvals-effective.js";
 import * as execApprovals from "../infra/exec-approvals.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
+import type { GatewayRpcExtraOptions } from "./gateway-rpc.runtime.js";
 
 const {
   callGatewayFromCli,
@@ -220,28 +222,54 @@ describe("exec approvals CLI", () => {
     expect(runtimeErrors).toHaveLength(0);
   });
 
-  it("writes host-native node approvals with the current hash", async () => {
-    const policyPath = policyFile(nativePolicy);
-    callGatewayFromCli.mockImplementation(
-      async (method: string, _opts: unknown, params?: unknown) => {
-        if (method === "exec.approvals.node.get") {
-          return nativeSnapshot;
-        }
-        return { method, params };
-      },
-    );
+  it.each([
+    { interruptWrite: false, outcome: "untouched" },
+    { interruptWrite: true, outcome: "interrupted during the write" },
+  ])(
+    "writes host-native node approvals with the current hash ($outcome)",
+    async ({ interruptWrite }) => {
+      const scope = new AsyncWorkScope();
+      const args = [...nativeFileArgs(policyFile(nativePolicy)), "--json"];
+      callGatewayFromCli.mockImplementation(
+        async (
+          method: string,
+          _opts: unknown,
+          params?: unknown,
+          extra?: GatewayRpcExtraOptions,
+        ) => {
+          if (method === "exec.approvals.node.set") {
+            if (interruptWrite) {
+              // SIGINT lands while this unsignalled write is still pending.
+              scope.beginClose(new DOMException("CLI stopping (SIGINT)", "AbortError"));
+            }
+            return { applied: true };
+          }
+          // A read admitted onto an already-closed ambient scope is rejected by the real client.
+          if (extra?.signal?.aborted) {
+            throw extra.signal.reason;
+          }
+          return method === "exec.approvals.node.get" ? nativeSnapshot : { method, params };
+        },
+      );
 
-    await runApprovalsCommand([...nativeFileArgs(policyPath), "--json"]);
+      await scope.track(() => runApprovalsCommand(args));
+      await scope.drain();
 
-    expect(callGatewayFromCli.mock.calls[1]?.[0]).toBe("exec.approvals.node.set");
-    expect(callGatewayFromCli.mock.calls[1]?.[2]).toEqual({
-      nodeId: "node-1",
-      native: nativePolicy,
-      baseHash: "sha256:current",
-    });
-    expect(callGatewayFromCli.mock.calls[2]?.[0]).toBe("exec.approvals.node.get");
-    expect(runtimeErrors).toHaveLength(0);
-  });
+      const calls = callGatewayFromCli.mock.calls;
+      expect(calls.map((call) => [call[0], call[3]?.signal])).toEqual([
+        ["exec.approvals.node.get", scope.signal],
+        ["exec.approvals.node.set", undefined],
+        ["exec.approvals.node.get", undefined],
+      ]);
+      expect(calls[1]?.[2]).toEqual({
+        nodeId: "node-1",
+        native: nativePolicy,
+        baseHash: "sha256:current",
+      });
+      expect(writtenJson()).toMatchObject(nativeSnapshot);
+      expect(runtimeErrors).toHaveLength(0);
+    },
+  );
 
   it.each([
     [{ ...nativeSnapshot, ...nativePolicy }, "hostname"],
