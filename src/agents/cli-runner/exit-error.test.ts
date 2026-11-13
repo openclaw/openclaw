@@ -76,3 +76,23 @@ describe("createCliExitFailoverError resume rejection", () => {
     expect(error.reason).toBe("unknown");
   });
 });
+
+describe("createCliExitFailoverError subscription limits", () => {
+  const notice = "You've hit your session limit · resets 2:50pm (America/New_York)";
+
+  it("classifies Claude Code's session-limit notice as a rate limit", () => {
+    const error = classifyExit([notice], {});
+    expect(error.reason).toBe("rate_limit");
+    expect(error.message).toContain("resets 2:50pm");
+  });
+
+  it("reads the session-limit notice out of the structured result record", () => {
+    const record = JSON.stringify({
+      type: "result",
+      subtype: "error_during_execution",
+      is_error: true,
+      errors: [notice],
+    });
+    expect(classifyExit([record], {}).reason).toBe("rate_limit");
+  });
+});

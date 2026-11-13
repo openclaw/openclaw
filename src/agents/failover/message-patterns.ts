@@ -74,8 +74,11 @@ export function isPreDispatchToolCallRejectionMessage(errorMessage?: string): bo
     GATEWAY_INVALID_TOOL_INPUT_RE.test(errorMessage.trim())
   );
 }
+// Claude Code reports an exhausted subscription window as prose that names
+// the reset time ("You've hit your session limit · resets 3pm", "You've hit
+// your limit · resets 5pm"). The reset hint is what marks it as a usage window.
 const PERIODIC_USAGE_LIMIT_RE =
-  /\b(?:daily|weekly|monthly)(?:\/(?:daily|weekly|monthly))* (?:usage )?limit(?:s)?(?: (?:exhausted|reached|exceeded))?\b|已达到 Token Plan 用量上限|已达到每[日周月天](?:\/每[日周月天])*使用上限|(?:配额|额度)已用尽/i;
+  /\bhit your (?:[\w-]+ ){0,2}limit\b[^\n]{0,40}\bresets?\b|\b(?:daily|weekly|monthly)(?:\/(?:daily|weekly|monthly))* (?:usage )?limit(?:s)?(?: (?:exhausted|reached|exceeded))?\b|已达到 Token Plan 用量上限|已达到每[日周月天](?:\/每[日周月天])*使用上限|(?:配额|额度)已用尽/i;
 
 const HIGH_CONFIDENCE_AUTH_PERMANENT_PATTERNS = [
   /api[_ ]?key[_ ]?(?:revoked|deactivated|deleted)/i,
