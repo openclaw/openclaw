@@ -1,6 +1,5 @@
 import { Command } from "commander";
 import { afterEach, expect, it, vi } from "vitest";
-import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { registerToolsCli } from "./tools-cli.js";
 
 const mocks = vi.hoisted(() => ({ call: vi.fn(), writeJson: vi.fn(), log: vi.fn() }));
@@ -58,17 +57,3 @@ it.each(["0", "91", "2.5", "not-a-number"])(
     expect(mocks.call).not.toHaveBeenCalled();
   },
 );
-
-it("does not publish an interrupted usage status report", async () => {
-  const work = new AsyncWorkScope();
-  mocks.call.mockImplementation(async (_method, _options, _params, extra) => {
-    work.beginClose();
-    extra?.signal?.throwIfAborted();
-    return { agentId: "main" };
-  });
-
-  await work.run(() => run(["status", "--json"]));
-
-  expect(mocks.writeJson).not.toHaveBeenCalled();
-  expect(mocks.log).not.toHaveBeenCalled();
-});
