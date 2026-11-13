@@ -25,6 +25,9 @@ enum OnboardingOpenClawIDAction {
          requestChat
     case pasteNodeInvitation(discoveryOrigin: String)
     case approveFromDevice, useRecoveryKit, chooseKitFile, retry, back
+    /// Member join: open the invite step, read the copied invite link, send the request, or stop
+    /// waiting and forget this Mac's request keys.
+    case joinWithInvite, pasteInvite, requestJoin, cancelJoin
     /// The person's own comparison of the six digits on this Mac.
     case confirmCode(matches: Bool)
     /// The typed recovery code. It is passed straight to the enrollment and not kept in view state.
@@ -59,6 +62,13 @@ enum OnboardingOpenClawIDStep: Equatable {
     case ownerCompareCode(claw: String, device: String, code: String, approvalURL: URL?, confirmed: Bool)
     case recoveryKitEntry(claw: String)
     case ownerConnected(claw: String, device: String, approvedWith: String)
+    /// A member joins with an owner's invite link. `claw` is the member claw picked, if any.
+    case inviteEntry(claw: String?)
+    /// The pasted invite is for `claw`; nothing is sent until the person asks to join.
+    case memberRequest(claw: String, device: String, account: String)
+    /// The request is with the claw; the service waits for an owner's approval on its own.
+    case memberPending(claw: String, device: String)
+    case memberConnected(claw: String, device: String, role: String)
     case problem(OnboardingOpenClawIDProblem)
 }
 
@@ -68,16 +78,28 @@ enum OnboardingOpenClawIDProblem: Equatable {
     case expired(claw: String)
     case kitInvalid(claw: String)
     case notInvited(account: String)
-    /// A claw this account joined as a member: a new Mac needs its own invite.
-    case memberNeedsInvite(claw: String)
+    /// The copied text is not a working invite link, or Discovery does not know its claw.
+    case inviteInvalid
+    /// No owner decided on this Mac's request within the invite's seven days.
+    case inviteExpired(claw: String)
     case signInFailed
 }
 
 extension OnboardingOpenClawIDStep {
     /// The code is shown and the service is waiting for the owner's decision.
     var isAwaitingApproval: Bool {
-        if case .ownerCompareCode = self { return true }
-        return false
+        switch self {
+        case .ownerCompareCode, .memberPending: true
+        default: false
+        }
+    }
+
+    /// The join finished; completing it (primary connection, dashboard) may need a retry.
+    var isJoined: Bool {
+        switch self {
+        case .ownerConnected, .memberConnected: true
+        default: false
+        }
     }
 }
 
@@ -140,7 +162,7 @@ final class OnboardingOpenClawIDModel {
         case .signIn, .switchAccount: self.step = .signingIn
         default: break
         }
-        if case .retry = action, case .ownerConnected = self.step {
+        if case .retry = action, self.step.isJoined {
             return self.run { self.step }
         }
         return self.run { try await self.service.perform(action) }
@@ -182,14 +204,14 @@ final class OnboardingOpenClawIDModel {
         self.step = step
         switch step {
         case let .nodeConnection(claw, true): self.onNodeConnected(claw)
-        case let .ownerConnected(claw, _, _): try self.onJoined(claw)
-        case .ownerCompareCode: self.awaitApproval()
+        case let .ownerConnected(claw, _, _), let .memberConnected(claw, _, _): try self.onJoined(claw)
+        case .ownerCompareCode, .memberPending: self.awaitApproval()
         default: break
         }
     }
 
-    /// Waits for the approving device without blocking the sheet, so the person can still switch
-    /// to the recovery kit. Any other action cancels the wait.
+    /// Waits for the approving device or owner without blocking the sheet, so the person can still
+    /// switch to the recovery kit or cancel a member request. Any other action cancels the wait.
     private func awaitApproval() {
         self.wait = Task { @MainActor in
             do {

@@ -38,7 +38,7 @@ struct OnboardingOpenClawIDView: View {
 
     var body: some View {
         VStack(spacing: 20) {
-            if self.model.error != nil, case .ownerConnected = self.model.step {
+            if self.model.error != nil, self.model.step.isJoined {
                 Image(systemName: "exclamationmark.triangle").font(.largeTitle).foregroundStyle(.orange)
             } else {
                 OnboardingOpenClawIDContent(
@@ -51,7 +51,7 @@ struct OnboardingOpenClawIDView: View {
             if self.model.busy { ProgressView("Working…") }
             if let error = self.model.error {
                 Text(error).foregroundStyle(.orange).font(.callout)
-                if case .ownerConnected = self.model.step {
+                if self.model.step.isJoined {
                     Button("Try again") { self.model.perform(.retry) }.disabled(self.model.busy)
                 }
             }
@@ -140,6 +140,7 @@ struct OnboardingOpenClawIDContent: View {
                 }
                 .buttonStyle(.plain).disabled(!claw.online)
             }
+            Button("Join with an invite link") { self.action(.joinWithInvite) }
             Button("Use a different account") { self.action(.switchAccount) }
                 .buttonStyle(.link)
         case let .recoveryKit(hostname, saved):
@@ -298,6 +299,58 @@ struct OnboardingOpenClawIDContent: View {
                 "Opening the dashboard…",
                 detail: "Signed in through OpenClaw ID. No VPN or Gateway token.",
                 icon: "rectangle.and.hand.point.up.left")
+        case let .inviteEntry(claw):
+            self.heading(
+                "Join with an invite",
+                subtitle: claw.map { "Ask an owner of \($0) for an invite for this Mac." }
+                    ?? "Ask an owner of the claw for an invite for this Mac.")
+            Image(systemName: "envelope.open").font(.system(size: 48)).foregroundStyle(.tint)
+            Text("Copy the invite link the owner sent you, then paste it here.")
+                .foregroundStyle(.secondary)
+            Button("Paste invite link") { self.action(.pasteInvite) }.buttonStyle(.borderedProminent)
+            self.note("The link is read only when you choose Paste. It isn’t shown here or saved.", font: .caption)
+            Button("Back") { self.action(.back) }.buttonStyle(.link)
+        case let .memberRequest(claw, device, account):
+            self.heading("Join \(claw)?", subtitle: "You’re signed in as \(account).")
+            self.row(device, detail: "macOS · this device", icon: "laptopcomputer")
+            self.row(
+                "An owner approves it",
+                detail: "Your request goes to \(claw). You join once an owner approves it, with the access they chose.",
+                icon: "person.badge.shield.checkmark")
+            self.row(
+                "Chat and the dashboard only",
+                detail: "Your assistant can’t use this Mac’s commands, screen or camera.",
+                icon: "bubble.left.and.bubble.right")
+            Button("Ask to join") { self.action(.requestJoin) }.buttonStyle(.borderedProminent)
+            Button("Back") { self.action(.back) }.buttonStyle(.link)
+        case let .memberPending(claw, device):
+            self.heading("Waiting for approval", subtitle: "An owner of \(claw) needs to approve \(device).")
+            HStack(spacing: 10) {
+                ProgressView().controlSize(.small)
+                Text("Waiting for an owner…").foregroundStyle(.secondary)
+            }
+            self.note("""
+            Let the owner know you asked to join. They approve it in \(claw)’s Control UI, under People. \
+            You can close this window; open OpenClaw ID sign-in again to finish joining.
+            """)
+            HStack(spacing: 12) {
+                Button("Check again") { self.action(.retry) }
+                Button("Cancel request") { self.action(.cancelJoin) }
+            }
+        case let .memberConnected(claw, device, role):
+            self.heading("You’re all set!", subtitle: "\(device) joined \(claw).")
+            self.row(
+                "Joined as \(role)",
+                detail: "Chat and the dashboard, with the access the owner chose.",
+                icon: "checkmark.seal")
+            self.row(
+                "No tools on this Mac",
+                detail: "Your assistant can’t use this Mac’s commands, screen or camera.",
+                icon: "wrench.and.screwdriver")
+            self.row(
+                "Opening the dashboard…",
+                detail: "Signed in through OpenClaw ID. No VPN or Gateway token.",
+                icon: "rectangle.and.hand.point.up.left")
         case let .problem(problem):
             self.problemContent(problem)
         }
@@ -344,14 +397,21 @@ struct OnboardingOpenClawIDContent: View {
                 or set up OpenClaw on this Mac.
                 """,
                 icon: "person.crop.circle.badge.questionmark")
+            Button("Join with an invite link") { self.action(.joinWithInvite) }.buttonStyle(.borderedProminent)
             Button("Use a different account") { self.action(.switchAccount) }
                 .buttonStyle(.link)
-        case let .memberNeedsInvite(claw):
+        case .inviteInvalid:
             self.problemHeading(
-                "Ask for an invite to \(claw)",
-                detail: "You joined \(claw) as a member. Each of your devices joins with its own invite from an owner.",
+                "That invite link didn’t work",
+                detail: "Copy the whole link from the owner’s invite and try again, or ask them for a new one.",
                 icon: "envelope.badge")
-            Button("Choose another claw") { self.action(.back) }.buttonStyle(.link)
+            Button("Try again") { self.action(.joinWithInvite) }.buttonStyle(.borderedProminent)
+        case let .inviteExpired(claw):
+            self.problemHeading(
+                "The request expired",
+                detail: "No owner of \(claw) approved this Mac within seven days. Ask an owner for a new invite.",
+                icon: "clock.badge.exclamationmark")
+            Button("Join with a new invite") { self.action(.joinWithInvite) }.buttonStyle(.borderedProminent)
         case .signInFailed:
             self.problemHeading(
                 "Sign-in didn’t finish",
