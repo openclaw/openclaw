@@ -29,7 +29,9 @@ export type LiveBinding = SourceBinding & {
 const REQUEST_TTL_MS = 60 * 60_000;
 const ROTATION_WINDOW_MS = 5 * 60_000;
 const MAX_CLEANUP_RETRIES = 8;
-const MAX_POLL_EVENTS = 100;
+// The MCP transport rejects a response over 10 MiB before parsing, and a rejected poll retries
+// the same cursor, so a full batch of MAX_EVENT_BYTES events (32 x 256 KiB = 8 MiB) must fit.
+const MAX_POLL_EVENTS = 32;
 // SEP-3415 NotFound and Unsupported: the event type changed, so rediscover it and start again.
 const REDISCOVER_ERROR_CODES = new Set([-32023, -32026]);
 

@@ -689,7 +689,7 @@ describe("MCP Events callback and subscription lifecycle", () => {
         name: "comment.created",
         arguments: { document_id: "doc-1" },
         cursor: null,
-        maxEvents: 100,
+        maxEvents: 32,
       },
     ]);
     const key = "refresh:" + binding.bindingId;

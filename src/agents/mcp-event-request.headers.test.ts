@@ -62,3 +62,41 @@ it.each([
   const headers = new Headers(mocks.fetch.mock.calls[0]![1]?.headers);
   expect([headers.get("mcp-method"), headers.get("mcp-name")]).toEqual(["events/poll", header]);
 });
+
+// The mcp-events plugin polls for up to 32 events of up to 256 KiB each. A full batch must fit
+// the transport's response cap: a rejected poll keeps its cursor, so the backlog would never drain.
+it.each([
+  [32, true],
+  [100, false],
+])("a poll batch of %i maximum-size events fits the response cap: %s", async (count, fits) => {
+  const occurrence = {
+    eventId: "evt",
+    name: "comment.created",
+    timestamp: "2026-10-01T11:59:00Z",
+    data: { text: "" },
+    cursor: "cursor-1",
+  };
+  occurrence.data.text = "x".repeat(256 * 1024 - JSON.stringify(occurrence).length);
+  const events = Array.from({ length: count }, () => occurrence);
+  mocks.fetch.mockImplementation(async (_url, init) => {
+    assert(typeof init?.body === "string", "Expected a JSON string request body");
+    const value: unknown = JSON.parse(init.body);
+    assert(isRecord(value), "Expected a JSON-RPC request");
+    const result = { events, cursor: "cursor-2", hasMore: true, truncated: false };
+    return new Response(JSON.stringify({ jsonrpc: "2.0", id: value.id, result }), {
+      headers: { "content-type": "application/json" },
+    });
+  });
+  const poll = requestMcpEvent({
+    serverName: "calendar",
+    server: { url: "https://mcp.example.com/events", transport: "streamable-http" },
+    method: "events/poll",
+    params: { name: "comment.created", arguments: {}, cursor: null, maxEvents: count },
+    assertCurrent: () => {},
+  });
+  if (fits) {
+    await expect(poll).resolves.toMatchObject({ events: { length: count } });
+  } else {
+    await expect(poll).rejects.toThrow("MCP HTTP response exceeds 10485760 bytes");
+  }
+});
