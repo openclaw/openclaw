@@ -112,6 +112,7 @@ async function requestVerification(
 async function promptBaseUrlAndKey(params: {
   prompter: WizardPrompter;
   config: OpenClawConfig;
+  workspaceDir?: string;
   secretInputMode?: SecretInputMode;
   initialBaseUrl?: string;
 }): Promise<{ baseUrl: string; apiKey?: SecretInput; resolvedApiKey: string; noAuth: boolean }> {
@@ -132,6 +133,7 @@ async function promptBaseUrlAndKey(params: {
     const resolvedApiKey = normalizeSecretInput(
       await ensureApiKeyFromEnvOrPrompt({
         config: params.config,
+        workspaceDir: params.workspaceDir,
         provider: providerHint,
         envLabel: "CUSTOM_API_KEY",
         promptMessage: t("wizard.customProvider.apiKeyPrompt"),
@@ -190,6 +192,7 @@ export async function promptCustomApiConfig(params: {
   let { baseUrl, apiKey, resolvedApiKey, noAuth } = await promptBaseUrlAndKey({
     prompter,
     config,
+    workspaceDir: params.target?.workspaceDir,
     secretInputMode: params.secretInputMode,
   });
 
@@ -310,6 +313,7 @@ export async function promptCustomApiConfig(params: {
       ({ baseUrl, apiKey, resolvedApiKey, noAuth } = await promptBaseUrlAndKey({
         prompter,
         config,
+        workspaceDir: params.target?.workspaceDir,
         secretInputMode: params.secretInputMode,
         initialBaseUrl: baseUrl,
       }));
@@ -381,6 +385,7 @@ export async function promptCustomApiConfig(params: {
     let compatKeyInput: SecretInput | undefined;
     resolvedApiKey = await ensureApiKeyFromEnvOrPrompt({
       config,
+      workspaceDir: params.target?.workspaceDir,
       provider: buildEndpointIdFromUrl(baseUrl) || "custom",
       envLabel: "CUSTOM_API_KEY",
       promptMessage: t("wizard.customProvider.apiKeyPrompt"),

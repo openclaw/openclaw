@@ -333,7 +333,12 @@ describe("promptAuthConfig", () => {
         confirm: vi.fn().mockResolvedValue(false),
       });
 
-      const config = agentConfig({ model: defaultModel }, agentModel, explicit, {});
+      const config = agentConfig(
+        { model: defaultModel },
+        agentModel,
+        explicit,
+        explicit ? { main: {} } : {},
+      );
       const result = await promptAuthConfig(config, makeRuntime(), prompter, target);
 
       const modelOwner = explicit ? result.agents?.entries?.OPS : result.agents?.defaults;
