@@ -145,7 +145,7 @@ describe("PaletteSessionDraft", () => {
 
   it("omits the worktree setting for a non-Git workspace", async () => {
     const { host } = await mount();
-    await vi.waitFor(() => expect(setting(host, "workspace")).not.toBeNull());
+    await vi.waitFor(() => expect(setting(host, "trigger")).not.toBeNull());
     expect(host.querySelector('[role="switch"][aria-label="New worktree"]')).toBeNull();
   });
 
@@ -170,10 +170,6 @@ describe("PaletteSessionDraft", () => {
       );
     await waitForSolid(() => expect(ensure).toHaveBeenLastCalledWith(["main"]));
 
-    setting(host, "trigger")!.click();
-    await waitForSolid(() =>
-      expect(host.querySelector(".palette-session-settings")?.matches(":popover-open")).toBe(true),
-    );
     ensure.mockClear();
     trigger.click();
     await waitForSolid(() => {
@@ -227,8 +223,8 @@ describe("PaletteSessionDraft", () => {
           : {},
     });
     const select = async (machine: string, project = "") => {
-      await vi.waitFor(() => expect(setting(host, "workspace")).not.toBeNull());
-      expectDefined(setting(host, "workspace"), "workspace picker").click();
+      await vi.waitFor(() => expect(setting(host, "trigger")).not.toBeNull());
+      expectDefined(setting(host, "trigger"), "workspace picker").click();
       await host.updateComplete;
       const row = () =>
         host.querySelector<HTMLButtonElement>(
@@ -241,12 +237,14 @@ describe("PaletteSessionDraft", () => {
 
     await select("local", "registered");
     await select("runtime:agentsapi");
-    expect(setting(host, "workspace")?.textContent).toContain("Hosted workspace");
-    expect(setting(host, "workspace")?.textContent).toContain("OpenAI (Agents API)");
+    expect(setting(host, "trigger")?.textContent).toContain("Hosted workspace");
+    expect(
+      host.querySelector('[data-machine="runtime:agentsapi"]')?.getAttribute("aria-pressed"),
+    ).toBe("true");
     expect(setting(host, "worktree")).toBeNull();
     await select("local", "registered");
-    expect(setting(host, "workspace")?.textContent).toContain("Local project");
-    expect(setting(host, "workspace")?.textContent).not.toContain("Agents API");
+    expect(setting(host, "trigger")?.textContent).toContain("Local project");
+    expect(setting(host, "trigger")?.textContent).not.toContain("Agents API");
     await select("runtime:agentsapi");
     create.mockResolvedValue({
       key: "agent:main:hosted-palette",
@@ -755,7 +753,7 @@ describe("palette-only remembered settings", () => {
     remember().click();
     await host.updateComplete;
     expect(select().value).toBe("main");
-    expect(setting(host, "workspace")?.textContent).toContain("updated-default");
+    expect(setting(host, "trigger")?.textContent).toContain("updated-default");
     checkPrompt();
     await vi.waitFor(() => expect(entries[PALETTE_PREFERENCE_KEY]).toBeUndefined());
     expect(entries["new-session.v1:main"]).toMatchObject({ folder: "/updated-default" });
@@ -854,7 +852,6 @@ describe("palette-only remembered settings", () => {
     async (composition) => {
       const { host } = await mountPreferences();
       setting(host, "trigger")!.click();
-      expectDefined(setting(host, "workspace"), "workspace picker").click();
       await host.updateComplete;
       const search = expectDefined(
         host.querySelector<HTMLInputElement>(".palette-session-settings__search"),

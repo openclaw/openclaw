@@ -109,6 +109,28 @@ describe("host database engine selection", () => {
     },
   );
 
+  it.each([undefined, "state-directory", "installation"] as const)(
+    "keeps server captures independent of ownership: %s",
+    async (ownership) => {
+      const database = {
+        engine: "postgres" as const,
+        postgres: {
+          connection,
+          recoveryCaptures: "server" as const,
+          ...(ownership ? { ownership } : {}),
+        },
+      };
+      const expected = {
+        connection,
+        schemaPrefix: "openclaw",
+        serverRecoveryCaptures: true,
+        ...(ownership === "installation" ? { ownership } : {}),
+      };
+      expect((await select(database)).postgres).toEqual(expected);
+      await expect(input(database)).resolves.toEqual(expected);
+    },
+  );
+
   it.each([
     undefined,
     unavailable,
