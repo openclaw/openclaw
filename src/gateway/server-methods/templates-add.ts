@@ -37,6 +37,7 @@ import {
   assertTemplatesLabsEnabled,
   TemplatesLabsDisabledError,
 } from "../../templates/labs-gate.js";
+import { buildTemplateOpeningMessage } from "../../templates/setup-prompt.js";
 import type { TemplateAddPlan } from "../../templates/types.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { deleteAgentConfigEntry } from "./agents-config-mutations.js";
@@ -186,18 +187,19 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
         ...("mode" in params
           ? {
               mode: params.mode,
+              ...(params.resume ? { resume: true as const } : {}),
               // Creation has finished: the first turn starts now, with its outcome, and
               // nothing was installed here that needs an installer card in the chat.
               onAgentCreated: async (agent, report) => {
                 assertCurrent();
-                publishProgress("agent-ready", agent);
                 await startAgentOnboardingConversation(
                   options,
                   agent.agentId,
                   agent.sessionKey,
                   "template",
-                  report,
+                  buildTemplateOpeningMessage(report, agent),
                 );
+                publishProgress("agent-ready", agent);
               },
             }
           : {

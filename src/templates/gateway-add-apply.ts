@@ -47,6 +47,7 @@ import { bindTemplatePluginInstallConsent } from "./gateway-plugin-consent.js";
 import { bindTemplateSkillWarningConsent } from "./gateway-skill-consent.js";
 import { assertTemplatesLabsEnabled } from "./labs-gate.js";
 import { assertTemplatePluginRequirementsEnabled } from "./plugin-runtime.js";
+import { continueTemplateSetup } from "./setup-continuation.js";
 import type { TemplateAddPlan } from "./types.js";
 
 export class TemplateGatewayPlanChangedError extends Error {
@@ -72,6 +73,7 @@ export async function applyTemplateAddForGateway(
      * agent's own conversation continues setup; see `createTemplateAgentFromChat`.
      */
     mode?: "chat";
+    resume?: true;
     onAgentCreated?: ChatTemplateAddInput["onAgentCreated"];
     planIntegrity?: string;
     acknowledgeClawHubRisk?: boolean;
@@ -134,6 +136,12 @@ export async function applyTemplateAddForGateway(
     };
   };
   try {
+    if (input.mode === "chat" && input.agentId) {
+      const resumed = await continueTemplateSetup(input, input.agentId, stateContext);
+      if (resumed) {
+        return resumed;
+      }
+    }
     // A reviewed UI target is an ordinary creation request, not trust in Template bytes.
     // Local durable identity and an empty guarded chat precede all remote source reads.
     if (input.agentId && input.prepareAgentChat && input.waitForAgentRuntime) {

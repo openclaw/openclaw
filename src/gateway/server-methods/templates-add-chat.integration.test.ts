@@ -17,8 +17,8 @@ import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../../plug
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { ClawHubSourceError } from "../../templates/clawhub-source-artifact.js";
 import type { withResolvedClawHubSource } from "../../templates/clawhub-source.js";
-import type { TemplateSetupReport } from "../../templates/conversation.js";
 import { readTemplateManifestFile } from "../../templates/reader.js";
+import { buildTemplateOpeningMessage } from "../../templates/setup-prompt.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -470,7 +470,10 @@ it("creates the Template's agent without a plan, then hands the outcome to its f
       "travel-copilot",
       sessionKey,
       "template",
-      { failures: [], mcpServers: ["docs"] } satisfies TemplateSetupReport,
+      buildTemplateOpeningMessage(
+        { failures: [], mcpServers: ["docs"] },
+        { agentId: "travel-copilot", sessionKey },
+      ),
     ]);
     expect(atGreeting).toEqual({ skill: true, mcp: true, pending: undefined });
     expect(gateway.events).toEqual([
@@ -526,16 +529,16 @@ it("keeps the agent and reports each dependency it could not set up", async () =
     expect(listed.ok && listed.mcpServers.docs).toMatchObject({
       url: "https://internal.example.com/docs",
     });
-    const report = greeting.mock.calls[0]![4] as TemplateSetupReport;
-    expect(report.mcpServers).toEqual(["search"]);
-    expect(report.failures).toEqual([
-      {
-        kind: "skill",
-        name: "@steipete/goplaces",
-        reason: "Skill @steipete/goplaces@1.0.0 was not found on ClawHub.",
-      },
-      { kind: "mcpServer", name: "docs", reason: expect.stringContaining("already exists") },
-    ]);
+    const prompt = greeting.mock.calls[0]![4] as string;
+    expect(prompt).toContain('The Gateway added these servers: ["search"]');
+    const report = (
+      await readSessionEntryReadOnlyInWorker({ agentId: "travel-copilot", sessionKey })
+    )?.templateSetup?.report;
+    // The successful setup receipt is consumed, not a permanent Template manager.
+    expect(report).toBeUndefined();
+    expect(prompt).toContain('"kind":"skill","name":"@steipete/goplaces"');
+    expect(prompt).toContain("Skill @steipete/goplaces@1.0.0 was not found on ClawHub.");
+    expect(prompt).toContain('"kind":"mcpServer","name":"docs"');
   });
 });
 
@@ -630,4 +633,57 @@ it("gives the new agent an unused id when the Template's id is taken", async () 
     },
     { "travel-copilot": existing },
   );
+});
+
+it("retries only the hidden setup after a failed first turn, preserving files and dependencies", async () => {
+  await withGateway(async (gateway) => {
+    deliver(await writeTemplate(gateway.root));
+    greeting.mockRejectedValueOnce(new Error("Fixture first turn failed"));
+    const [ok, first] = await gateway.add(chatAdd);
+    expect(ok).toBe(true);
+    expect(first).toMatchObject({
+      agentId: "travel-copilot",
+      status: "partial",
+      agentRetained: true,
+      initializationPending: true,
+    });
+    const workspace = gateway.workspace("travel-copilot");
+    await fs.writeFile(path.join(workspace, "SOUL.md"), "User-edited identity\n");
+    const installs = skills.install.mock.calls.length;
+    const sourceReads = resolveSource.mock.calls.length;
+    const firstPrompt = greeting.mock.calls[0]![4];
+    const release = Promise.withResolvers<void>();
+    greeting.mockImplementationOnce(() => release.promise);
+    const retry = gateway.add({ ...chatAdd, resume: true });
+    await vi.waitFor(() => expect(greeting).toHaveBeenCalledTimes(2));
+    const concurrent = gateway.add({ ...chatAdd, resume: true });
+    release.resolve();
+    const [retryOk, result] = await retry;
+    const [concurrentOk, concurrentResult] = await concurrent;
+    expect(concurrentOk, JSON.stringify(concurrentResult)).toBe(true);
+    expect(concurrentResult).toMatchObject({ agentId: "travel-copilot", status: "complete" });
+    expect(retryOk, JSON.stringify(result)).toBe(true);
+    expect(result).toMatchObject({ agentId: "travel-copilot", status: "complete", sessionKey });
+    expect(Object.keys(gateway.config().agents!.entries!)).toEqual(["main", "travel-copilot"]);
+    expect(await fs.readFile(path.join(workspace, "SOUL.md"), "utf8")).toBe(
+      "User-edited identity\n",
+    );
+    expect(skills.install).toHaveBeenCalledTimes(installs);
+    expect(resolveSource).toHaveBeenCalledTimes(sourceReads);
+    expect(greeting).toHaveBeenCalledTimes(2);
+    expect(greeting.mock.calls[1]![4]).toBe(firstPrompt);
+
+    // The client can miss completion and retain its Retry action after the
+    // one-shot setup receipt has been consumed. Reconcile, never create a copy.
+    const [replayOk, replay, replayError] = await gateway.add({ ...chatAdd, resume: true });
+    expect(replayOk, JSON.stringify(replayError)).toBe(true);
+    expect(replay).toMatchObject({ agentId: "travel-copilot", status: "complete", sessionKey });
+    expect(Object.keys(gateway.config().agents!.entries!)).toEqual(["main", "travel-copilot"]);
+    expect(resolveSource).toHaveBeenCalledTimes(sourceReads);
+    expect(skills.install).toHaveBeenCalledTimes(installs);
+    expect(greeting).toHaveBeenCalledTimes(2);
+    const [missingOk] = await gateway.add({ ...chatAdd, agentId: "removed-agent", resume: true });
+    expect(missingOk).toBe(false);
+    expect(Object.keys(gateway.config().agents!.entries!)).toEqual(["main", "travel-copilot"]);
+  });
 });

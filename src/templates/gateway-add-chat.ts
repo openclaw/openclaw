@@ -35,6 +35,7 @@ import type { GatewayTemplateAddApplyResult } from "./gateway-add-result.js";
 import { installTemplateMcpServersStateless } from "./mcp.js";
 import { installTemplatePackages } from "./packages.js";
 import { templateManifestWorkspaceConflictsWithPath } from "./schema.js";
+import { continueTemplateSetup } from "./setup-continuation.js";
 import type { TemplateAddPlan, TemplateAddPlanAction, TemplateReadResult } from "./types.js";
 
 type VerifiedTemplateSource = Extract<TemplateReadResult, { ok: true }>;
@@ -117,6 +118,8 @@ class KeptTemplateAgentError extends Error {
 
 export type ChatTemplateAddInput = ClawHubFetchOptions & {
   source: ClawHubCoordinate;
+  /** Retry the admitted agent; never allocate another identity. */
+  resume?: true;
   acknowledgeClawHubRisk?: boolean;
   getPlanningContext: () => Promise<GatewayTemplateAddPlanningContext>;
   assertCurrent: () => void;
@@ -146,7 +149,7 @@ export async function selectChatTemplateAgentId(
   admissionContext: Promise<
     { ok: true; value: GatewayTemplateAddPlanningContext } | { ok: false; error: unknown }
   >,
-  input: Pick<ChatTemplateAddInput, "source" | "assertCurrent"> & { agentId?: string },
+  input: Pick<ChatTemplateAddInput, "source" | "assertCurrent" | "resume"> & { agentId?: string },
 ): Promise<string> {
   const context = await admissionContext;
   if (!context.ok) {
@@ -154,10 +157,18 @@ export async function selectChatTemplateAgentId(
   }
   const { config } = context.value;
   const preferredId = normalizeAgentId(input.agentId);
-  return config.agents?.entries?.[preferredId] &&
-    (await isRetainedTemplateInitialization(config, preferredId, input.source, input.assertCurrent))
-    ? preferredId
-    : selectNextTemplateAgentId(preferredId, listAgentIds(config));
+  const retained =
+    config.agents?.entries?.[preferredId] &&
+    (await isRetainedTemplateInitialization(
+      config,
+      preferredId,
+      input.source,
+      input.assertCurrent,
+    ));
+  if (input.resume && !retained) {
+    throw new Error("The Template creation checkpoint changed; Retry cannot create another agent.");
+  }
+  return retained ? preferredId : selectNextTemplateAgentId(preferredId, listAgentIds(config));
 }
 
 /**
@@ -286,11 +297,7 @@ export async function createTemplateAgentFromChat(
       },
       ...templateInitializationCheckpoints(admitted, input.source),
       ...(input.waitForAgentRuntime ? { waitForAgentRuntime: input.waitForAgentRuntime } : {}),
-      // The chat becomes ordinary here; its first turn still waits for the report.
-      onAgentReady: async () => {
-        await admitted.chat.complete?.();
-        initialized = true;
-      },
+      // Dependencies finish before finalization transfers the report to the ordinary chat.
       ...(input.configWriteOptions ? { configWriteOptions: input.configWriteOptions } : {}),
       // No digest was reviewed in this path; the installer only requires its own plan's.
       consentPlanIntegrity: plan.planIntegrity,
@@ -395,6 +402,8 @@ export async function createTemplateAgentFromChat(
             const options = await configure(source, lease);
             configured = true;
             await installDependencies(source, options);
+            await admitted.chat.complete?.({ source: input.source, report });
+            initialized = true;
             finished = true;
           },
         ),
@@ -451,10 +460,11 @@ export async function createTemplateAgentFromChat(
       throw error;
     }
   }
-  try {
-    await input.onAgentCreated?.({ agentId, sessionKey }, report);
-  } catch (error) {
-    return kept({ code: "template_opening_failed", message: coerceErrorMessage(error) });
-  }
-  return kept();
+  return (
+    (await continueTemplateSetup(input, agentId, stateContext)) ??
+    kept({
+      code: "template_opening_failed",
+      message: "Template setup continuation was not saved; the agent and conversation were kept.",
+    })
+  );
 }

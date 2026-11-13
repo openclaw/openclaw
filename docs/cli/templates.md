@@ -352,18 +352,38 @@ agent's pending chat immediately, and the Gateway creates the agent:
 5. It installs the declared skills, from ClawHub or bundled in the package.
 6. It installs plugins bundled in the package.
 7. It adds the declared MCP servers.
-8. It adds `automations`, `plugins`, and `message` to the agent's tool allowlist
-   when the Template's allowlist leaves them out. A tool the Template denies
-   stays denied.
+8. It grants `read`, `automations`, `plugins`, and `message` additively for setup.
+   Explicit Template denies and operator policy ceilings still apply.
 
-The agent's first response starts after these steps finish. Sending becomes
-available then; a message you type earlier stays in the composer.
+After creation, the Gateway starts one hidden setup turn in that chat, with the
+agent's ordinary tools. The agent reads declarations from the persisted `CLAW.md`
+and responds in this order:
 
-This Add does not create the Template's automations. It also does not install,
-enable, download, or inspect plugins the Template references on ClawHub, so a
-plugin that is missing, disabled, blocked by policy, or at another version never
-stops it. Set those up with the agent in its chat, or from **Plugins** and
-**Automations**.
+1. A brief greeting in its own voice.
+2. Declared automations, created **paused**, bound to this conversation. Existing
+   matching automations are left unchanged, including ones you already enabled.
+3. Added MCP servers and any sign-in needed in **Settings → MCP**.
+4. Plugin state and exact-package ClawHub cards for missing plugins. Official
+   cards offer **Install**; community cards offer **View details** for normal
+   plugin review. Unknown packages produce a not-found result, not a card.
+5. Creation failures, by name and reason. Successful skills are not listed.
+6. The author's opening from `BOOTSTRAP.md`, last in the same turn.
+
+Neither creation nor this turn installs or enables a plugin referenced on
+ClawHub, or enables an automation. A missing or disabled referenced plugin never
+stops agent creation. You choose installation or enabling afterwards.
+Intermediate text and card sends are non-final; the final reply closes setup.
+Sending becomes available when setup finishes; a message typed earlier stays in
+the composer.
+
+If that first turn fails or is interrupted, **Retry setup** runs only that turn
+with a fresh run ID in the existing chat. It does not re-create the agent,
+rewrite its files, fetch the Template again, or reinstall dependencies. The
+ordinary session retains the creation report until the turn completes; a retry
+cannot start a second setup while the first still owns the agent's setup lease.
+Retry explicitly targets the admitted agent. If setup completed while the client
+was disconnected, Retry reconciles that existing chat without adding another copy.
+The CLI Add flow and its no-tools opening are unchanged.
 
 If the Gateway cannot fetch the Template or write its workspace files, it removes
 the new agent and chat, and the catalog shows the error on that Template's card.

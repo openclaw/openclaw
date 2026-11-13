@@ -1,3 +1,7 @@
+import {
+  createCronCreatorAuthorityCapability,
+  runWithCronCreatorAuthorityCapability,
+} from "../../agents/cron-creator-authority-context.js";
 import type { SessionGoalOperation } from "../../config/sessions/goals-operations.js";
 import {
   retireProviderReviewAcknowledgment,
@@ -7,6 +11,7 @@ import type { ChatSendExternalAuthorityAdmission } from "./chat-send-external-au
 import { handleChatSendWithStorage } from "./chat-send-input-dispatch.js";
 import type { ChatSendInternalOptions } from "./chat-send-options.js";
 import { runChatSendWithStorage } from "./chat-send-storage.js";
+import { resolveGatewayTemplateSetupCronAuthorityAdmission } from "./cron-creator-authority-admission.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 async function handleChatSendWithOptions(
@@ -74,12 +79,37 @@ export async function handleTrustedInternalChatSend(
     | "transcript"
     | "toolsAllow"
     | "deferWorkspaceBootstrap"
+    | "templateSetup"
     | "prepareAssistantTranscriptMessage"
     | "beforeDispatch"
     | "stageCreatedInput"
   >,
 ): Promise<void> {
-  await handleChatSendWithOptions(options, onAdmissionOwned, undefined, {
+  const setupAuthority: ChatSendExternalAuthorityAdmission | undefined = inputOptions?.templateSetup
+    ? {
+        allowsDashboardReads: () => false,
+        resolve: (params) => {
+          const admitted = resolveGatewayTemplateSetupCronAuthorityAdmission({
+            ...params,
+            resolvedSessionKey: params.sessionKey,
+          });
+          return admitted
+            ? createCronCreatorAuthorityCapability(
+                admitted.runId,
+                admitted.callerOrigin,
+                admitted.managementEntitlement,
+                admitted.isCurrent,
+                undefined,
+                admitted.requesterOwner,
+                admitted.callerScopedCreation,
+              )
+            : undefined;
+        },
+        run: (capability, run, signal) =>
+          runWithCronCreatorAuthorityCapability(capability, run, signal),
+      }
+    : undefined;
+  await handleChatSendWithOptions(options, onAdmissionOwned, setupAuthority, {
     ...inputOptions,
     trustedSystemInput: true,
   });

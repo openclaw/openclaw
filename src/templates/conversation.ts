@@ -10,8 +10,7 @@ export const TEMPLATE_AGENT_OPENING_MESSAGE = [
 
 /** One thing chat-based Add could not finish; the agent kept everything else. */
 export type TemplateSetupFailure = {
-  /** `manifest` is the Template's CLAW.md copy at the workspace root. */
-  kind: "skill" | "plugin" | "mcpServer" | "manifest";
+  kind: "skill" | "plugin" | "mcpServer";
   name: string;
   reason: string;
 };
@@ -26,6 +25,7 @@ export type TemplateSetupReport = {
   /** Declared MCP servers now present in config, by name. */
   mcpServers: string[];
 };
+<<<<<<< HEAD
 
 /**
  * The opening turn's hidden instruction. `report` is present only for chat-based
@@ -56,3 +56,15 @@ export function buildTemplateOpeningMessage(report?: TemplateSetupReport): strin
     JSON.stringify(outcomes),
   ].join("\n\n");
 }
+||||||| parent of 98800fc5154 (feat(templates): finish Add through retryable hidden setup)
+
+/**
+ * The opening turn's hidden instruction. `report` is present only for chat-based
+ * Add, after creation has finished; plan-based Add has none because its
+ * installer is still running.
+ */
+export function buildTemplateOpeningMessage(_report?: TemplateSetupReport): string {
+  return TEMPLATE_AGENT_OPENING_MESSAGE;
+}
+=======
+>>>>>>> 98800fc5154 (feat(templates): finish Add through retryable hidden setup)

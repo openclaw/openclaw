@@ -23,6 +23,7 @@ import type { AgentRunRequest } from "./agent-request-types.js";
 import {
   isDirectGatewayChatUserTurn,
   resolveGatewayChatCronCreatorAuthorityAdmission,
+  resolveGatewayTemplateSetupCronAuthorityAdmission,
   resolveGatewayCronCreatorAuthorityAdmission,
 } from "./cron-creator-authority-admission.js";
 import type { GatewayClient } from "./shared-types.js";
@@ -238,3 +239,35 @@ it.each([
 ] as const)("rejects chat ingress from %s", (_label, overrides) => {
   expect(admitChat(overrides)).toBeUndefined();
 });
+
+it.each(["setup", "ordinary internal", "non-admin", "claimed UI", "synthetic"] as const)(
+  "admits automation creation only for the real administrator Template setup: %s",
+  (kind) => {
+    const client = createClient(
+      {
+        isLocalClient: undefined,
+        ...(kind !== "claimed UI" ? { controlUiAdmin: true as const } : {}),
+        ...(kind === "synthetic" ? { syntheticClient: true } : {}),
+      },
+      kind === "non-admin" ? ["operator.write"] : ["operator.admin"],
+    );
+    const admission = resolveGatewayTemplateSetupCronAuthorityAdmission({
+      ...createChatParams({ client }),
+      isIncognitoEntry: false,
+      isSystemGenerated: true,
+      inputProvenance: {
+        kind: "internal_system",
+        sourceTool:
+          kind === "ordinary internal" ? "agents_create_onboarding" : "template_add_setup",
+      },
+    });
+    if (kind === "setup") {
+      expect(admission).toMatchObject({
+        callerScopedCreation: true,
+        managementEntitlement: { source: "control-ui-admin" },
+      });
+    } else {
+      expect(admission).toBeUndefined();
+    }
+  },
+);

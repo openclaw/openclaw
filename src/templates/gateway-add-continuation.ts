@@ -6,7 +6,7 @@ import type { ClawHubCoordinate } from "./clawhub-source.js";
 type Initialization = NonNullable<SessionEntry["templateInitialization"]>;
 export type PreparedAgentChat = (() => Promise<void>) & {
   assertCurrent?: () => Promise<void>;
-  complete?: () => Promise<void>;
+  complete?: (templateSetup?: SessionEntry["templateSetup"]) => Promise<void>;
   checkpoint?: (initialization: Initialization) => Promise<void>;
 };
 export type AdmittedTemplateAgent = {

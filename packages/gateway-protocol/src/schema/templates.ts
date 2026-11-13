@@ -301,6 +301,8 @@ export const TemplatesAddApplyParamsSchema = Type.Union([
     mode: Type.Literal("chat"),
     source: TemplateCatalogCoordinateSchema,
     agentId: NonEmptyString,
+    // Retry targets this admitted agent, even if the setup receipt was consumed.
+    resume: Type.Optional(Type.Literal(true)),
     acknowledgeClawHubRisk: Type.Optional(Type.Boolean()),
   }),
 ]);
