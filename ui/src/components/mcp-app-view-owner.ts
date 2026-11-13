@@ -20,7 +20,6 @@ import {
   waitForMcpAppHandlerRegistration,
   waitForMcpAppInitialization,
 } from "./mcp-app-frame.ts";
-import { requestMcpAppDisplayMode } from "./mcp-app-launch.ts";
 import {
   buildMcpAppHostCapabilities,
   dispatchMcpAppMessage,
@@ -31,6 +30,7 @@ import {
   type McpAppContextEventDetail,
   MCP_APP_VIEW_EXPIRED_EVENT,
 } from "./mcp-app-security.ts";
+import { requestMcpAppDisplayMode } from "./mcp-app-sidebar.ts";
 import type {
   McpAppBinding,
   McpAppResources,
@@ -74,6 +74,7 @@ export function createMcpAppView(
   let titleInput: string | undefined;
   let surfaceInput: McpAppViewProps["surface"] | undefined;
   let presentedMode: McpAppViewProps["displayMode"] | undefined;
+  let appIdentity: McpAppViewPayload["appIdentity"];
 
   function inputChanged() {
     if (!started || disposed || inputFlushPending) {
@@ -248,8 +249,7 @@ export function createMcpAppView(
     confirmation.update();
     if (presentedMode !== host.displayMode) {
       presentedMode = host.displayMode;
-      const claimed = requestMcpAppDisplayMode(host);
-      host.toggleAttribute("data-sidebar", claimed && host.displayMode === "fullscreen");
+      requestMcpAppDisplayMode(host, appIdentity);
     }
     if (host.displayMode === "fullscreen") {
       promoteToPopoverTopLayer(host, () => [host]);
@@ -421,6 +421,7 @@ export function createMcpAppView(
     let resources: McpAppResources | null = null;
     try {
       const payload = await requestOwner<McpAppViewPayload>(binding, "mcp.app.view", {}, signal);
+      appIdentity = payload.appIdentity;
       const mount = mountElement;
       signal.throwIfAborted();
       setInactive(payload.messageSupported === false ? "reconstructed" : null);

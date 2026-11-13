@@ -323,22 +323,8 @@ export function createChatPaneMcpApps(options: {
     if (!owner) {
       return;
     }
-    const { view, mode } = event.detail;
-    if (mode === "fullscreen") {
-      event.preventDefault();
-      owner.state.handleOpenSidebar({
-        kind: "mcp-app-preview",
-        title: view.title || t("mcpApp.title"),
-        view,
-      });
-      owner.openAppPanel?.();
-    } else if (
-      owner.state.sidebarContent?.kind === "mcp-app-preview" &&
-      owner.state.sidebarContent.view === view
-    ) {
-      event.preventDefault();
-      owner.state.handleCloseSidebar("detail");
-    }
+    event.preventDefault();
+    event.detail.present(owner);
   }
 
   const element = options.element;

@@ -1,46 +1,63 @@
 import { expect, it, vi, onTestFinished } from "vitest";
 import { presentMcpAppInSidebar } from "../../../components/mcp-app-sidebar.ts";
+import { createReviewFixture } from "../../../test-helpers/chat-pane-embedded-panels.ts";
 import { setNativeGatewayTestState } from "../../../test-helpers/native-gateways.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { createChatSidebarContainer } from "./chat-sidebar.test-support.ts";
-import "./chat-detail-panel.tsx";
+import { openSlot } from "../sidebar-layout.ts";
+import "../../../components/mcp-app-view.tsx";
 
-it("re-expands the retained frame when Review is reopened", () => {
+it.each([true, false])(
+  "presents the App's own label and optional icon through the production detail slot (%s)",
+  async (configuredIcon) => {
+    setNativeGatewayTestState(null);
+    const fixture = createReviewFixture();
+    onTestFinished(() => {
+      fixture.mount.remove();
+      vi.restoreAllMocks();
+    });
+    const icon =
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nPcAAAAASUVORK5CYII=";
+    fixture.state.sidebarContent = {
+      kind: "mcp-app-preview",
+      title: "Excalidraw",
+      view: document.createElement("mcp-app-view"),
+      appIdentity: { label: "Excalidraw", icons: configuredIcon ? [{ src: icon }] : [] },
+    };
+    fixture.state.sidebarLayout = openSlot({ columns: [] }, "detail");
+    await fixture.renderPanels();
+    const tab = () => fixture.mount.querySelector('.side-panel__header [role="tab"]');
+    await waitForSolid(() => expect(tab()?.textContent).toContain("Excalidraw"));
+    await waitForSolid(() =>
+      expect(tab()?.querySelector("img")?.getAttribute("src")).toBe(
+        configuredIcon ? icon : undefined,
+      ),
+    );
+    expect(Boolean(tab()?.querySelector("svg"))).toBe(!configuredIcon);
+    fixture.state.sidebarContent = {
+      kind: "mcp-app-preview",
+      title: "Second App",
+      view: document.createElement("mcp-app-view"),
+    };
+    await fixture.renderPanels();
+    await waitForSolid(() => expect(tab()?.textContent).toContain("Second App"));
+    expect(tab()?.querySelector("img")).toBeNull();
+    fixture.state.sidebarContent = { kind: "markdown", content: "Ordinary Review content" };
+    await fixture.renderPanels();
+    await waitForSolid(() => expect(tab()?.textContent).toContain("Review"));
+  },
+);
+
+it("re-expands the retained frame when Review is reopened and restores owned geometry", () => {
   const view = document.createElement("mcp-app-view");
   const target = document.createElement("div");
   view.displayMode = "inline";
+  view.style.width = "420px";
   const close = presentMcpAppInSidebar(view, target);
   expect(view.displayMode).toBe("fullscreen");
   close();
   expect(view.displayMode).toBe("inline");
+  expect(view.style.width).toBe("420px");
   const closeAgain = presentMcpAppInSidebar(view, target);
   expect(view.displayMode).toBe("fullscreen");
   closeAgain();
-});
-
-it("returns each expanded App inline when its sidebar is replaced or closed", async () => {
-  setNativeGatewayTestState(null);
-  const container = createChatSidebarContainer();
-  document.body.append(container);
-  onTestFinished(() => container.remove());
-  onTestFinished(() => vi.restoreAllMocks());
-  const panel = document.createElement("openclaw-chat-detail-panel");
-  const first = document.createElement("mcp-app-view");
-  const second = document.createElement("mcp-app-view");
-  const retireFirst = vi.fn();
-  const retireSecond = vi.fn();
-  const presentFirst = vi.fn(() => retireFirst);
-  first.presentInSidebar = presentFirst;
-  const presentSecond = vi.fn(() => retireSecond);
-  second.presentInSidebar = presentSecond;
-  panel.content = { kind: "mcp-app-preview", title: "First diagram", view: first };
-  container.append(panel);
-  await panel.updateComplete;
-  await waitForSolid(() => expect(presentFirst).toHaveBeenCalledOnce());
-  panel.content = { kind: "mcp-app-preview", title: "Second diagram", view: second };
-  await panel.updateComplete;
-  await waitForSolid(() => expect(presentSecond).toHaveBeenCalledOnce());
-  expect(retireFirst).toHaveBeenCalledOnce();
-  panel.remove();
-  await waitForSolid(() => expect(retireSecond).toHaveBeenCalledOnce());
 });

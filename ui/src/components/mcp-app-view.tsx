@@ -36,7 +36,7 @@ export const McpAppView = defineSolidBridge<McpAppViewProps, ViewMethods>(
     const relaunch = () => (read().inactive === "ended" ? props.onRelaunch : undefined);
     return (
       <>
-        <Show when={props.displayMode === "fullscreen"}>
+        <Show when={props.displayMode === "fullscreen" && !props.sidebar}>
           <button
             class="exit-fullscreen"
             onClick={() => {
@@ -98,6 +98,7 @@ export const McpAppView = defineSolidBridge<McpAppViewProps, ViewMethods>(
       onHeightChange: { default: undefined, attribute: false },
       relaunching: { default: false },
       displayMode: { default: "inline", attribute: "display-mode", reflect: true },
+      sidebar: { default: false, attribute: false },
     },
     propertyChanged: (host) => owners.get(host)?.inputChanged(),
     methods: {

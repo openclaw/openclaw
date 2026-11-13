@@ -203,6 +203,7 @@ function McpAppSidebarTarget(props: { view: McpAppViewElement }) {
   return (
     <div
       class="mcp-app-sidebar-target"
+      style={{ width: "100%", height: "100%", "min-height": "160px" }}
       ref={(element) => {
         target = element;
       }}

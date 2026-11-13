@@ -348,12 +348,17 @@ function LinkReaderPanel(props: Props) {
   );
 }
 
-function DetailPanel(props: SidebarPanelData) {
+function DetailPanel(props: SidebarPanelData & PanelHostProps) {
   const presented = usePanePresentation(() => props.detailPresentation);
   const active = usePanePresentation(() => props.detailPresented ?? props.detailPresentation);
   return (
     <Show when={presented()}>
-      <ChatDetailSlot {...props.detail} active={active()} content={props.detailContent!} />
+      <ChatDetailSlot
+        {...props.detail}
+        active={active()}
+        content={props.detailContent!}
+        registerPanelHost={props.registerPanelHost}
+      />
     </Show>
   );
 }
