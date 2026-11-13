@@ -1,5 +1,6 @@
 import { clearPreparedEmbeddedAgentSettings } from "../../agents/agent-project-settings.js";
 import { clearPromptCacheObservations } from "../../agents/embedded-agent-runner/prompt-cache-observability.js";
+import { clearSessionPrefixSeries } from "../../agents/embedded-agent-runner/session-prefix-owner.js";
 import { clearEmbeddedSessionPromptStates } from "../../agents/embedded-agent-runner/session-prompt-state.js";
 import { killSessionSubagentRuns } from "../../agents/subagents/registry/subagent-control-kill.js";
 import { retainPreparedSessionGenerationFacts } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
@@ -167,6 +168,7 @@ export function clearSessionResetRuntimeState(
   clearPreparedEmbeddedAgentSettings([opts.activeReplySessionId]);
   if (opts.activeReplySessionId) {
     clearPromptCacheObservations(opts.activeReplySessionId);
+    clearSessionPrefixSeries(opts.activeReplySessionId);
   }
   const cleared = clearSessionQueues(keys, opts.controllerTarget, undefined, opts.assertCurrent);
   for (const key of cleared) {

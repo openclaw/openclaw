@@ -1,3 +1,4 @@
+import { registerSessionResourceCleanup } from "@openclaw/ai/internal/runtime";
 import type { Context, Message } from "../../llm/types.js";
 
 /**
@@ -15,7 +16,8 @@ import type { Context, Message } from "../../llm/types.js";
  * - the route or system prompt changes (`prefix`: a model or provider switch, a rebuilt system
  *   prompt after compaction, `/new` or a tool-policy change, or a side request with its own prefix);
  * - the proposed log no longer extends the sent log by entry identity (`history`: compaction,
- *   `/new`, `/reset`);
+ *   `/new`, `/reset`), or a sent tool result changed (a late real result replaced its placeholder:
+ *   a correction the model must see, never drift);
  * - a caller requested it (`declared`: a provider rejected replayed history, context-overflow
  *   truncation, or idle pruning after the cache expired).
  *
@@ -55,6 +57,8 @@ export function clearSessionPrefixSeries(sessionId?: string): void {
   sessions.delete(sessionId);
   pendingRebuilds.delete(sessionId);
 }
+// Session reset, Gateway shutdown and fork teardown release the sent prefix; warm turns keep it.
+registerSessionResourceCleanup(clearSessionPrefixSeries);
 
 function encode(value: object): string {
   let text = encoded.get(value);
@@ -115,7 +119,13 @@ export function admitSessionPrefix(
         ? { kind: "first" }
         : { kind: "rebuild", reason: lineages.has(lineage) ? "declared" : "prefix" };
   } else {
-    const divergence = sent.ids.findIndex((id, index) => ids[index] !== id);
+    const divergence = sent.ids.findIndex(
+      (id, index) =>
+        ids[index] !== id ||
+        (sent.messages[index]!.role === "toolResult" &&
+          sent.messages[index] !== proposed[index] &&
+          encode(sent.messages[index]!) !== encode(proposed[index]!)),
+    );
     if (divergence >= 0) {
       report = { kind: "rebuild", reason: "history", index: divergence };
     } else {
@@ -141,7 +151,8 @@ export function admitSessionPrefix(
           : { kind: "extended" };
     }
   }
-  const tools = sent?.tools ?? context.tools;
+  // A new series (no sent snapshot, or a history rebuild) sends the proposed tools.
+  const tools = sent && report.kind !== "rebuild" ? sent.tools : context.tools;
   if (sent && report.kind !== "rebuild") {
     const frozen = new Set((sent.tools ?? []).map((tool) => tool.name));
     const added = (context.tools ?? [])

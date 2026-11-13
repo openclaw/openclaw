@@ -321,8 +321,11 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
       // role-alternating transports would merge the later turn into this one. It is dropped only
       // when another assistant turn follows, so the two are never merged (#99620). It is kept
       // while it is the newest stored row, because the current prompt is appended after replay.
-      const next = messages.slice(index + 1).find((later) => later?.role !== "custom");
-      normalized = normalizeAssistantReplayMessage(message, next?.role !== "assistant");
+      let next = index + 1;
+      while (messages[next]?.role === "custom") {
+        next += 1;
+      }
+      normalized = normalizeAssistantReplayMessage(message, messages[next]?.role !== "assistant");
     } else if (normalized === undefined) {
       normalized =
         message.role === "user"

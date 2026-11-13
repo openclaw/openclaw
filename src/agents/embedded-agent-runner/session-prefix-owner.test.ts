@@ -1,3 +1,4 @@
+import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import type { AssistantMessage, Context, Message, UserMessage } from "../../llm/types.js";
 import {
@@ -78,6 +79,32 @@ describe("admitSessionPrefix", () => {
     const admitted = admitSessionPrefix("s", { ...model, id: "other" }, context(repaired));
     expect(admitted.report).toEqual({ kind: "rebuild", reason: "declared" });
     expect(admitted.context.messages).toEqual(repaired);
+  });
+
+  it("starts a new series when a sent tool result is corrected, with the proposed tools", () => {
+    const result = (text: string): Message => ({
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolName: "read",
+      content: [{ type: "text", text }],
+      isError: text === "missing",
+      timestamp: 3,
+    });
+    const call = assistant([{ type: "toolCall", id: "call_1", name: "read", arguments: {} }], 2);
+    admitSessionPrefix(
+      "s",
+      model,
+      context([user("a", 1), call, result("missing")], [tool("x")]),
+    ).commit();
+    // The pairing owner replaced the placeholder with the late real result.
+    const corrected = [user("a", 1), call, result("real"), user("b", 4)];
+    const admitted = admitSessionPrefix("s", model, context(corrected, [tool("x"), tool("y")]));
+    expect(admitted.report).toEqual({ kind: "rebuild", reason: "history", index: 2 });
+    expect(admitted.context.messages).toEqual(corrected);
+    expect(admitted.context.tools?.map(({ name }) => name)).toEqual(["x", "y"]);
+    admitted.commit();
+    cleanupSessionResources("s");
+    expect(admitSessionPrefix("s", model, context(corrected)).report).toEqual({ kind: "first" });
   });
 
   it("does not hold a retry to the bytes of a request the provider never accepted", () => {
