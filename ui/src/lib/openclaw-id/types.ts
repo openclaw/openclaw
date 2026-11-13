@@ -97,6 +97,8 @@ export type OpenClawIdOwnerDevice = {
   peerKeys: string[];
   /** Who approved it: "root" (the recovery kit) or the approving device's fingerprint. */
   approvedBy: string;
+  /** The node key bound to this device's approval, if it also runs tools for the claw. */
+  nodePeerKey?: string;
   /** When the claw last admitted it (or added it), unix seconds. */
   lastSeen: number;
   /** Its OwnerDeviceCert: public and signed. */
