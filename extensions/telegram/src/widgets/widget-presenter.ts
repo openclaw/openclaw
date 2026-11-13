@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveTelegramAccount } from "../accounts.js";
 import { parseTelegramTarget } from "../targets.js";
@@ -41,6 +42,7 @@ type TelegramWidgetRoute = {
   accountId: string;
   to: string;
   chatId: string;
+  messageThreadId?: number;
 };
 
 const unavailable = (message: string) => ({
@@ -68,16 +70,31 @@ function resolveTelegramWidgetRoute(
     return undefined;
   }
   const target = parseTelegramTarget(to);
-  // Taps are routed back without a thread, so topics (bot-created or DM topics) stay unrouted.
-  const threadId = context.deliveryContext?.threadId;
+  const deliveryThread = context.deliveryContext?.threadId;
+  const deliveryThreadId =
+    deliveryThread == null ? undefined : parseStrictPositiveInteger(deliveryThread);
+  const deliveryTo = context.deliveryContext?.to?.trim();
+  const deliveryTarget = deliveryTo ? parseTelegramTarget(deliveryTo) : undefined;
   if (
     target.chatType !== "direct" ||
     target.directMessagesTopicId !== undefined ||
-    target.messageThreadId !== undefined ||
-    (threadId !== undefined && threadId !== null && String(threadId) !== "")
+    (deliveryThread != null && deliveryThreadId === undefined) ||
+    (deliveryTarget !== undefined &&
+      (deliveryTarget.chatType !== "direct" ||
+        deliveryTarget.chatId !== target.chatId ||
+        deliveryTarget.directMessagesTopicId !== undefined ||
+        (deliveryTarget.messageThreadId !== undefined &&
+          deliveryTarget.messageThreadId !== (target.messageThreadId ?? deliveryThreadId)))) ||
+    (target.messageThreadId !== undefined &&
+      deliveryThreadId !== undefined &&
+      target.messageThreadId !== deliveryThreadId) ||
+    (context.accountId &&
+      context.deliveryContext?.accountId &&
+      context.accountId !== context.deliveryContext.accountId)
   ) {
     return undefined;
   }
+  const messageThreadId = target.messageThreadId ?? deliveryThreadId;
   const account = resolveTelegramAccount({
     cfg,
     accountId: context.accountId ?? context.deliveryContext?.accountId,
@@ -86,7 +103,13 @@ function resolveTelegramWidgetRoute(
   if (!account.enabled || account.tokenStatus !== "available" || account.config.widgets !== true) {
     return undefined;
   }
-  return { cfg, accountId: account.accountId, to, chatId: target.chatId };
+  return {
+    cfg,
+    accountId: account.accountId,
+    chatId: target.chatId,
+    to: messageThreadId === undefined ? to : `${target.chatId}:topic:${messageThreadId}`,
+    ...(messageThreadId !== undefined ? { messageThreadId } : {}),
+  };
 }
 
 function widgetReceipt(messageId: number | string) {
@@ -118,6 +141,10 @@ async function presentTelegramWidget(
           messageId: tap.messageId,
         })
       : undefined;
+  // A tap belongs to the sent message's recorded chat and topic, even when sending new code.
+  if (tap && (!tapped || tapped.messageThreadId !== route.messageThreadId)) {
+    return presentationError("The tapped widget's original chat or topic is unavailable.");
+  }
   // A tap turn updates the tapped widget while its code is unchanged; anything else is a new message.
   // The tap names its widget; models often re-derive a different name, so only the code must match.
   const updatesTapped =

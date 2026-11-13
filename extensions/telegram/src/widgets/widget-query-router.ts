@@ -126,12 +126,24 @@ export function createTelegramWidgetQueryRouter({
       chatId: String(chatId),
       messageId: query.message_id,
     });
+    // Queries do not carry a topic: only the original sent-widget record can supply it.
+    if (
+      !sent ||
+      (sent.messageThreadId !== undefined &&
+        (!Number.isSafeInteger(sent.messageThreadId) || sent.messageThreadId <= 0))
+    ) {
+      logVerbose(`telegram: widget request dropped; missing or invalid origin for ${widgetKey}`);
+      return;
+    }
     const widgetMessage: Message = {
       message_id: query.message_id,
       date: resolveTelegramUpdateReceivedAtSeconds(ctx.update),
       chat: query.chat,
       from: ctx.me,
-      ...(sent ? { caption: sent.title } : {}),
+      caption: sent.title,
+      ...(sent.messageThreadId !== undefined
+        ? { message_thread_id: sent.messageThreadId, is_topic_message: true }
+        : {}),
     };
     const threadSpec = resolveTelegramMessageThreadSpec(widgetMessage, false);
     const senderId = String(query.from.id);

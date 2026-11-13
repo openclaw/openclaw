@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramCallbackMessageRuntime } from "../bot-handlers.callback-router-controls.js";
 
 const lookupTelegramSentWidget = vi.hoisted(() => vi.fn());
@@ -79,7 +79,11 @@ describe("readTelegramWidgetQuery", () => {
 });
 
 describe("widget query router", () => {
-  runtimeConfig.current = { channels: { telegram: { botToken: "123:abc", widgets: true } } };
+  beforeEach(() => {
+    lookupTelegramSentWidget.mockReset();
+    lookupTelegramSentWidget.mockResolvedValue({ name: "vote", title: "Vote", sourceHash: "h" });
+    runtimeConfig.current = { channels: { telegram: { botToken: "123:abc", widgets: true } } };
+  });
   const query = {
     id: "q1",
     from: { id: 7, is_bot: false, first_name: "A" },
@@ -95,7 +99,11 @@ describe("widget query router", () => {
       params: { accountId: "default", runtime: { error: vi.fn() } } as never,
       message: { processMessageWithReplyChain },
       authorization: {
-        resolveTelegramEventAuthorizationContext: async () => ({ storeAllowFrom: [] }),
+        resolveTelegramEventAuthorizationContext: async ({
+          threadSpec,
+        }: {
+          threadSpec: unknown;
+        }) => ({ storeAllowFrom: [], threadSpec }),
         authorizeTelegramEventSender: async () => authorized,
       } as never,
     });
@@ -131,6 +139,61 @@ describe("widget query router", () => {
       }
     }
   });
+  it("routes widgets from two private topics back to their own threads", async () => {
+    const process = vi.fn();
+    const router = createRouter(process);
+    for (const [messageId, threadId] of [
+      [10, 42],
+      [11, 84],
+    ] as const) {
+      lookupTelegramSentWidget.mockResolvedValueOnce({
+        name: "vote",
+        title: "Vote",
+        sourceHash: "h",
+        messageThreadId: threadId,
+      });
+      await router.route(
+        {
+          update: {
+            update_id: messageId,
+            widget_query: {
+              ...query,
+              id: `q${messageId}`,
+              message_id: messageId,
+            },
+          },
+          me: { id: 1 },
+          getFile: vi.fn(),
+        } as never,
+        vi.fn(),
+      );
+    }
+    for (const [index, threadId] of [
+      [1, 42],
+      [2, 84],
+    ] as const) {
+      expect(process).toHaveBeenNthCalledWith(
+        index,
+        expect.objectContaining({
+          msg: expect.objectContaining({
+            message_thread_id: threadId,
+            reply_to_message: expect.objectContaining({ message_thread_id: threadId }),
+          }),
+          options: expect.objectContaining({ threadSpec: { scope: "dm", id: threadId } }),
+        }),
+      );
+    }
+  });
+
+  it.each([undefined, { name: "vote", title: "Vote", sourceHash: "h", messageThreadId: 0 }])(
+    "does not route a widget with a missing or invalid origin",
+    async (widget) => {
+      lookupTelegramSentWidget.mockResolvedValueOnce(widget);
+      const process = vi.fn();
+      await createRouter(process).route(ctx, vi.fn());
+      expect(process).not.toHaveBeenCalled();
+    },
+  );
 
   it("drops every tap while widgets are disabled for the account", async () => {
     runtimeConfig.current = { channels: { telegram: { botToken: "123:abc" } } };
@@ -144,7 +207,6 @@ describe("widget query router", () => {
 
   it("drops a tap from a sender outside the allowlist before any agent turn", async () => {
     const process = vi.fn();
-    lookupTelegramSentWidget.mockResolvedValueOnce(undefined);
     await createRouter(process, false).route(ctx, vi.fn());
     expect(process).not.toHaveBeenCalled();
   });
@@ -161,7 +223,6 @@ describe("widget query router", () => {
 
   it("records a retryable dispatch outcome for the ingress owner", async () => {
     recordResult.mockClear();
-    lookupTelegramSentWidget.mockResolvedValueOnce(undefined);
     const failure = { kind: "failed-retryable" as const, error: new Error("session busy") };
     await createRouter(async () => failure).route(ctx, vi.fn());
     expect(recordResult).toHaveBeenCalledWith(failure);
