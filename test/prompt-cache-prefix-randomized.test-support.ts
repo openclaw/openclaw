@@ -115,7 +115,7 @@ export function usePrefixRandomizedJourney() {
     const seen: string[] = [];
     let step = -1;
     let ordinal = 0;
-    const script = (request: WireRequest): Reply => {
+    const script = (request: WireRequest, thinkingEnabled: boolean): Reply => {
       const latest = lastMessage(request);
       const toolResult = hasToolResult(latest);
       if (request.tools === "[]") {
@@ -145,8 +145,9 @@ export function usePrefixRandomizedJourney() {
         };
       }
       if (latest.includes("STEP-THINKING-TOOL")) {
+        // A model returns signed thinking only when the request enables it.
         return {
-          thinking: "Reading the notes first.",
+          ...(thinkingEnabled ? { thinking: "Reading the notes first." } : {}),
           calls: [{ tool: "read", args: { path: "notes.txt" } }],
         };
       }
@@ -177,8 +178,10 @@ export function usePrefixRandomizedJourney() {
         body += chunk;
       });
       request.on("end", () => {
-        const wire = readWireRequest(api, JSON.parse(body) as Record<string, unknown>);
-        const reply = script(wire);
+        const parsed = JSON.parse(body) as Record<string, unknown>;
+        const wire = readWireRequest(api, parsed);
+        const thinking = parsed.thinking as { type?: string } | undefined;
+        const reply = script(wire, Boolean(thinking?.type && thinking.type !== "disabled"));
         const session = /session=(\S+)/.exec(wire.text)?.[1] ?? "?";
         seen.push(`${session} last=${lastMessage(wire).slice(-200)} -> ${JSON.stringify(reply)}`);
         writeReply(api, response, reply, ++ordinal);
@@ -216,6 +219,7 @@ export function usePrefixRandomizedJourney() {
       const cfg = fixture.config(
         provider,
         {
+          thinkingDefault: "low",
           compaction: {
             mode: "default",
             keepRecentTokens: 1,
