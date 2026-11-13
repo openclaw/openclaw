@@ -5,7 +5,10 @@ import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { getProcessSupervisor } from "../../process/supervisor/index.js";
-import { CLI_STREAM_JSON_OUTPUT_LIMITS } from "../cli-output-stream-limits.js";
+import {
+  CLI_STREAM_JSON_OUTPUT_LIMITS,
+  streamJsonOutputLimitErrorText,
+} from "../cli-output-stream-limits.js";
 import { buildContext } from "./execute-events.tool-result-args.test-support.js";
 import { executePreparedCliRun as executePreparedCliRunImpl } from "./execute.js";
 import {
@@ -93,7 +96,7 @@ describe("CLI stream-json output limit", () => {
       const failure = expect(run).rejects.toMatchObject({
         name: "FailoverError",
         reason: "format",
-        message: `CLI JSONL line exceeded ${maxPendingLineChars} characters; refusing to parse output.`,
+        message: `CLI JSONL line exceeded ${maxPendingLineChars} characters; the turn stopped parsing at this line. Work already performed by the agent (writes, commits) is kept; check those effects before continuing with a smaller request — the session remains usable.`,
       });
       await waiting.promise;
       try {
@@ -137,11 +140,30 @@ describe("CLI stream-json output limit", () => {
     await expect(executePreparedCliRun(context)).rejects.toMatchObject({
       name: "FailoverError",
       reason: "format",
-      message: `CLI JSONL output exceeded ${maxTurnRawChars} characters; refusing to parse output.`,
+      message: `CLI JSONL output exceeded ${maxTurnRawChars} characters for this turn; the turn stopped and a finished result may have been discarded even though the work completed. The flood guard does not roll back work already performed; check those effects (writes, commits) before continuing with a smaller request — the session remains usable.`,
     });
     // The record that crosses the budget is the last one pulled from the CLI.
     expect(yielded).toBe(Math.floor(maxTurnRawChars / recordChars) + 1);
     expect(aborted).toBe(true);
     expect(closed).toBe(true);
+  });
+});
+describe("streamJsonOutputLimitErrorText wording (#186967)", () => {
+  it("tells the user the per-turn guard kept their work and the session", () => {
+    const text = streamJsonOutputLimitErrorText("lines", 20000);
+    expect(text).toContain("exceeded 20000 lines for this turn");
+    expect(text).toContain("The flood guard does not roll back work already performed");
+    expect(text).toContain("the work completed");
+    expect(text).toContain("the session remains usable");
+  });
+
+  // The per-line and per-turn raw variants are pinned verbatim by the runner
+  // assertions above; only the line-count message lacks runner coverage.
+  it("states the turn stopped and gives a recovery step for the line-count variant", () => {
+    const text = streamJsonOutputLimitErrorText("lines", 20000);
+    expect(text).toContain("the turn stopped");
+    expect(text).toContain("check those effects");
+    expect(text).toContain("smaller request");
+    expect(text).toContain("the session remains usable");
   });
 });
