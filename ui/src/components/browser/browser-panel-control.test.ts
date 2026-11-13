@@ -66,4 +66,31 @@ describe("BrowserPanel take control", () => {
 
     expect(controller.controlAvailable).toBe(available);
   });
+
+  it.each([
+    [{ target: "host", profile: "openclaw" } as const, true],
+    [{ target: "node", node: "browser-node", profile: "openclaw" } as const, false],
+  ])("offers Take control after following a preferred tab on %o: %s", async (route, available) => {
+    stubScreenshotMedia();
+    // A node-routed request reaches the routes without the panel's Control UI connection.
+    const { controller } = panelScenario(undefined, undefined, {
+      "/tabs": async () => ({ running: true, tabs: [makeTab("stable-tab", FIRST_URL, "Page")] }),
+      "/tabs/focus": async () => ({ ok: true }),
+      "/control": async (request) => ({
+        available: request.target !== "node",
+        controlled: false,
+        byYou: false,
+      }),
+      "/screenshot": async () => ({ path: "/fresh.png", targetId: "raw-stable", url: FIRST_URL }),
+      "/act": async () => metrics(FIRST_URL),
+    });
+
+    // The panel follows an agent's tab through selectTab, without refreshAll.
+    await controller.selectTab("stable-tab", route);
+    await vi.waitFor(() => expect(controller.activeTargetId).toBe("stable-tab"));
+    await Promise.resolve();
+
+    expect(controller.operations.route).toEqual(route);
+    expect(controller.controlAvailable).toBe(available);
+  });
 });

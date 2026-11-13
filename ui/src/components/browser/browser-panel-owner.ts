@@ -491,6 +491,8 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
         if (!selectedTargetId) {
           return;
         }
+        // Following an agent's tab skips refreshAll; ask about takeover for this route here too.
+        control.probe(actionClient);
         if (options?.focusBrowserTab !== false) {
           await focusBrowserTab(actionClient, selectedTargetId);
         }
