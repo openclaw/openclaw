@@ -103,6 +103,7 @@ import {
   prepareAuthenticatedProfile,
   prepareProfileMutationAccess,
   prepareUserProfileAdministration,
+  resolveUserRoleAssignmentError,
 } from "./users-profile-access.js";
 import {
   assertValidParams,
@@ -689,13 +690,11 @@ export const usersHandlers: GatewayRequestHandlers = {
       return;
     }
     const { profileId, role } = params;
-    const isConfiguredRole = () => {
-      const definitions = context.getRuntimeConfig().gateway?.roles?.definitions;
-      return role === null || (definitions !== undefined && Object.hasOwn(definitions, role));
-    };
-    const unknownRoleMessage = `unknown operator role "${role}"; define it under gateway.roles.definitions before assigning it`;
-    if (!isConfiguredRole()) {
-      respondError(respond, ErrorCodes.INVALID_REQUEST, unknownRoleMessage);
+    const roleAssignmentError = () =>
+      resolveUserRoleAssignmentError(() => context.getRuntimeConfig(), role);
+    const assignmentError = roleAssignmentError();
+    if (assignmentError) {
+      respondError(respond, ErrorCodes.INVALID_REQUEST, assignmentError);
       return;
     }
     try {
@@ -704,8 +703,9 @@ export const usersHandlers: GatewayRequestHandlers = {
       const profile = await setCanonicalUserProfileRole(profileId, role, {
         assertCurrent: () => {
           assertCurrent();
-          if (!isConfiguredRole()) {
-            throw new Error(unknownRoleMessage);
+          const error = roleAssignmentError();
+          if (error) {
+            throw new Error(error);
           }
         },
         onCommitted: (canonicalProfileId) => {

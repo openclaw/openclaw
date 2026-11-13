@@ -156,6 +156,87 @@ describe("Make reachable publication outcome", () => {
   );
 });
 
+describe("Make reachable over a personal sign-in", () => {
+  afterEach(() => {
+    cleanupSolid();
+    keyEvents.length = 0;
+    localStorage.removeItem("openclaw.openclawId.account");
+    window.dispatchEvent(new StorageEvent("storage", { key: "openclaw.openclawId.account" }));
+  });
+
+  it.each([
+    { linkProfile: true, profileLink: "linked", warned: false },
+    { linkProfile: true, profileLink: "already_linked", warned: true },
+    { linkProfile: false, profileLink: null, warned: false },
+  ])(
+    "links the admin's profile at commit (linkProfile $linkProfile, result $profileLink)",
+    async ({ linkProfile, profileLink, warned }) => {
+      const request = vi.fn(async (method: string, params: { action?: string }) => {
+        if (method === "openclawId.status") {
+          return { status: { state: "on", tunnel: { state: "running", relayOnline: true } } };
+        }
+        if (params.action === "account_link_code") {
+          return { code: "synthetic-code" };
+        }
+        if (params.action === "commit") {
+          return { publication: { state: "published" }, profileLink };
+        }
+        return { claw_id: "synthetic-claw", hostname: "studio-test.claws.test", available: true };
+      });
+      installSafeLocalStorageForTesting().setItem(
+        "openclaw.openclawId.account",
+        JSON.stringify(signedIn),
+      );
+      window.dispatchEvent(
+        new StorageEvent("storage", {
+          key: "openclaw.openclawId.account",
+          newValue: JSON.stringify(signedIn),
+        }),
+      );
+      const done = showMakeReachableDialog({
+        client: { request } as unknown as GatewayBrowserClient,
+        loaderDomain: "claws.test",
+        signedIn,
+        linkProfile,
+      });
+      await click("Continue");
+      await vi.waitFor(() =>
+        expect(document.querySelector('input[type="checkbox"]')).not.toBeNull(),
+      );
+      (document.querySelector('input[type="checkbox"]') as HTMLInputElement).click();
+      await click("Continue");
+      await vi.waitFor(() =>
+        expect(request).toHaveBeenCalledWith(
+          "openclawId.authority",
+          expect.objectContaining({ action: "commit" }),
+        ),
+      );
+      const commit = request.mock.calls.find(([, params]) => params.action === "commit")?.[1];
+      // The ID token leaves the browser only when the admin's setup links the profile.
+      if (linkProfile) {
+        expect(commit).toMatchObject({ idToken: "synthetic" });
+      } else {
+        expect(commit).not.toHaveProperty("idToken");
+      }
+      await vi.waitFor(() => expect(document.body.textContent).toContain("Your claw address"));
+      const pin = () =>
+        document.querySelectorAll<HTMLElement>(".openclaw-id-steps__item")[1]?.dataset.state;
+      await vi.waitFor(() => expect(pin()).toBe(warned ? "warning" : "done"));
+      if (warned) {
+        expect(
+          document
+            .querySelector('.openclaw-id-steps__item[data-state="warning"] button')
+            ?.getAttribute("aria-label"),
+        ).toContain("isn't linked to your profile yet");
+      }
+      document
+        .querySelector("openclaw-modal-dialog")!
+        .dispatchEvent(new CustomEvent("modal-cancel", { cancelable: true }));
+      expect(await done).toBe(true);
+    },
+  );
+});
+
 describe("Make reachable preparation", () => {
   afterEach(() => {
     cleanupSolid();

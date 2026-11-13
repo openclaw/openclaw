@@ -15,7 +15,7 @@ import {
   LOCAL_SDK_ROOT,
 } from "./extension-boundary-inputs.mts";
 import { createDeclarationInputBoundary } from "./local-check-runtime.mts";
-import { readNativeTypeScriptConfig } from "./native-typescript-config.mts";
+import { createNativeTypeScriptConfigReader } from "./native-typescript-config.mts";
 import { createNativeTypeScriptProjectAsync } from "./native-typescript.mts";
 import { isRecord } from "./record-shared.mjs";
 
@@ -28,6 +28,9 @@ function exportTargets(value: unknown): string[] {
 
 /** Build-only leaf projects retain the shared package config and its SDK aliases. */
 export function prepareExtensionBoundaryProjects(rootDir: string, extensionIds: string[]) {
+  if (extensionIds.length === 0) {
+    return [];
+  }
   const inventory = new Map(
     collectBundledPluginBuildEntries({
       cwd: rootDir,
@@ -35,6 +38,7 @@ export function prepareExtensionBoundaryProjects(rootDir: string, extensionIds: 
       includeExternalSourceEntries: true,
     }).map((entry) => [entry.id, entry]),
   );
+  using configReader = createNativeTypeScriptConfigReader({ cwd: rootDir });
   return extensionIds.map((extensionId) => {
     const entry = inventory.get(extensionId);
     if (!entry) {
@@ -49,10 +53,7 @@ export function prepareExtensionBoundaryProjects(rootDir: string, extensionIds: 
       matches.add(source);
       candidates.set(key, matches);
     };
-    const parsed = readNativeTypeScriptConfig({
-      cwd: rootDir,
-      configFileName: path.join(pluginRoot, "tsconfig.json"),
-    });
+    const parsed = configReader.read(path.join(pluginRoot, "tsconfig.json"));
     const declarations = parsed.fileNames.filter((source) => /\.d\.[cm]?ts$/u.test(source));
     for (const source of sources) {
       const relative = portableRelativePath(pluginRoot, source);

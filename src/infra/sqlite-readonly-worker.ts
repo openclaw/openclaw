@@ -11,6 +11,7 @@ import type { SpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
 import type { PreservedOrphanTaskDelivery } from "../state/openclaw-state-db-task-delivery-recovery-preservation.js";
+import { readCustodiedDrainedSqliteSource } from "../state/openclaw-state-maintenance-context.js";
 import {
   assertChildRuntimeAvailable,
   classifyChildRuntimeFailure,
@@ -329,7 +330,9 @@ export function runSqliteReadOnlyWorker(
     (inputOptions.mode === "auth-profile-rows" || inputOptions.mode === "operation") &&
     inputOptions.source === "canonical" &&
     isArtifactPreservingStateRead("agent", pathname)
-      ? { ...inputOptions, artifactPreserving: true }
+      ? inputOptions.mode === "auth-profile-rows" && readCustodiedDrainedSqliteSource(pathname)
+        ? { ...inputOptions, artifactPreserving: true, immutable: true }
+        : { ...inputOptions, artifactPreserving: true }
       : inputOptions;
   return runScopedSqliteInspection(options.signal, (signal) => {
     const scope = readOnlyWorkerScope.getStore();

@@ -765,7 +765,14 @@ describe("presence recipient projection", () => {
       }
       pending.connect.scopes = ["operator.admin"];
       expect(project(pending)).toEqual(presence);
-      const cfg: OpenClawConfig = { gateway: { roles: { definitions: {} } } };
+      const cfg: OpenClawConfig = {
+        gateway: {
+          roles: {
+            default: "denied",
+            definitions: { denied: { agents: [], scopes: [], sessions: { others: "none" } } },
+          },
+        },
+      };
       policy = cfg;
       const restrictedProject = createPresenceRecipientProjection({ cfg, presence, projection });
       expect(restrictedProject(solo)).toEqual([person, idle]);

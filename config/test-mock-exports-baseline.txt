@@ -4447,7 +4447,6 @@
 ["src/gateway/mcp-oauth-callback.test.ts","../agents/mcp-oauth-store.js","dc691449bee52ab522216dbfe4713bc21dbb681f1ba9b7e4ee90a7014e41f1fd",1]
 ["src/gateway/mcp-oauth-callback.test.ts","../agents/mcp-oauth.js","3c1bb3242b60222aa1a3bcd8c1275a1e3e98924a4f819347c01e201ffc7d0fdc",1]
 ["src/gateway/mcp-oauth-callback.test.ts","../state/openclaw-state-worker-context.js","56e282604a5b5d2b8a2b9b01c0189c1034a9f0cb65377a9b6f4052a0d73b1f78",1]
-["src/gateway/node-agent-cli-runtime.test.ts","../plugins/runtime/gateway-request-scope.js","55372a2f399ddaac1c8f7e0207200155073bd9a6a8163f9d4dbb693d0ece3557",1]
 ["src/gateway/node-invoke-plugin-policy.test.ts","../infra/approval-turn-source.js","d61d2c7806eb4c24fe588c3c4c6eca407ca20ff50580f12b540adff3e4dfb3f4",1]
 ["src/gateway/openai-compatible-agent-run.test.ts","../commands/agent.js","af3e22db2333a5801e62ec614a1700bd86743d09eb00461b5a42622c45613d1e",1]
 ["src/gateway/operator-approvals-client.test.ts","./client-bootstrap.js","cf52de6c0fe9c7c1535e5ec238845f9408e4073522c7bde36cd3e75617bc4f4f",1]

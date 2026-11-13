@@ -66,6 +66,9 @@ it.each([
   await expect.element(body).toBeVisible();
   expect(body.textContent?.trim()).toBe("Check the rollback path before continuing.");
   expect(body.querySelector("strong")?.textContent).toBe("rollback path");
+  const chevron = row.querySelector<HTMLElement>(".chat-notice-inline__chevron")!;
+  // The rotating chevron extends past the summary mid-transition at narrow widths.
+  await Promise.all(chevron.getAnimations().map((animation) => animation.finished));
   expect(row.scrollWidth).toBeLessThanOrEqual(row.clientWidth);
   // The row reads as part of the agent's turn: body text starts at the row's left edge, not centered.
   expect(getComputedStyle(body).textAlign).not.toBe("center");

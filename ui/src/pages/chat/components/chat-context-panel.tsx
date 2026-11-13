@@ -269,7 +269,6 @@ function ContextInspector(props: {
             type="button"
             class="chat-context__refresh"
             aria-label={t("common.refresh")}
-            title={t("common.refresh")}
             disabled={!props.connected || props.loading}
             onClick={() => props.onRefresh()}
           >

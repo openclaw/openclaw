@@ -21,6 +21,7 @@ import {
 } from "../test-utils/gateway-scheduler-clock.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { prepareScratchMaintenanceTargets } from "./scratch-maintenance-custody.js";
+import { sweepLocalWorkspaceManifests } from "./worker-environments/local-workspace-gc.js";
 import {
   notifyGatewayWorktreeArchive,
   requestGatewayWorktreeMaintenance,
@@ -352,6 +353,37 @@ it.each(["stop", "configuration"])("withdraws refill authority on %s", async (ch
   await stopping;
   expect(prewarm).toHaveBeenCalledOnce();
   expect(fixture.onError).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("refill failed"));
+});
+
+it("includes archives during scratch cleanup without repeating the upcoming GC census", async () => {
+  await using fixture = maintenanceFixture();
+  const entered = createDeferred();
+  const release = createDeferred();
+  vi.mocked(prepareScratchMaintenanceTargets).mockImplementationOnce(async () => {
+    entered.resolve();
+    await release.promise;
+    return { targets: [], release: () => {} };
+  });
+  const gc = vi.spyOn(managedWorktrees, "gc").mockResolvedValue(completedResult());
+  fixture.start().request();
+  const running = fixture.run();
+  try {
+    await awaitCleanup(entered.promise, running);
+    notifyGatewayWorktreeArchive(fixture.getRuntimeConfig);
+  } finally {
+    release.resolve();
+  }
+  await running;
+  await fixture.run();
+  expect(gc).toHaveBeenCalledOnce();
+  vi.mocked(sweepLocalWorkspaceManifests).mockClear();
+  for (let request = 0; request < 6; request++) {
+    notifyGatewayWorktreeArchive(fixture.getRuntimeConfig);
+    await fixture.run();
+    await fixture.clock.advanceBy(10 * 60_000);
+    await fixture.run();
+  }
+  expect(sweepLocalWorkspaceManifests).toHaveBeenCalledOnce();
 });
 
 it("coalesces archives in the maintenance context and sweeps again after in-flight commits", async () => {

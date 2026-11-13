@@ -16,6 +16,7 @@ import {
   type prepareGatewayLocalUserIngress,
 } from "../../local-user-ingress.js";
 import { hasGatewayOperatorAccessPolicies } from "../../operator-access-policy.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "../../operator-role-enforcement.js";
 import { WEBSOCKET_OPEN_READY_STATE } from "../../server-constants.js";
 import { syncTrustedProxyGitCoauthor } from "../../trusted-proxy-git-coauthor.js";
 import { formatForLog } from "../../ws-log.js";
@@ -230,7 +231,7 @@ export async function resolveGatewayConnectProfileAdmission(params: {
   }
   const profileRequired =
     Boolean(state.authResult.delegation) ||
-    Boolean(context.configSnapshot.gateway?.roles) ||
+    isNamedOperatorRoleEnforcementEnabled(context.configSnapshot) ||
     hasGatewayOperatorAccessPolicies(context.configSnapshot);
   if (
     !ownerProfileExpected &&
