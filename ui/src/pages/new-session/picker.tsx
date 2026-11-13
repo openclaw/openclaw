@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { Errored, Loading, onSettled } from "solid-js";
+import { Errored, For, Loading, onSettled } from "solid-js";
 import {
   isStaleChunkImportError,
   retryStaleChunkReloadWhenReachable,
@@ -137,7 +137,9 @@ export function SessionPicker(props: {
               />
             )}
           >
-            <Loading fallback={<div role="status">{t("common.loading")}</div>}>
+            <Loading
+              fallback={<PickerSkeleton tray checkout={props.params.place.checkoutVisible} />}
+            >
               {props.children}
             </Loading>
           </Errored>
@@ -193,5 +195,40 @@ export function createPickerScrollRef(presented: () => boolean, content: () => u
       element.toggleAttribute("data-fade-end", !state.atEnd);
     },
     { presented, content },
+  );
+}
+
+/** Shared geometry for pending controls and pending panel rows. */
+export function PickerSkeleton(props: { tray?: boolean; checkout?: boolean; section?: string }) {
+  return (
+    <div
+      class={[
+        "new-session-page__skeletons",
+        {
+          "new-session-page__skeletons--tray": props.tray,
+          "new-session-page__environment-skeletons": Boolean(props.section),
+        },
+      ]}
+      data-section={props.section}
+    >
+      <span class="sr-only" role="status">
+        {t("common.loading")}
+      </span>
+      <For
+        each={props.tray ? (props.checkout ? [112, 84, 72] : [112, 84]) : [148, 116, 132]}
+        keyed={(width) => width}
+      >
+        {(width, index) => (
+          <span
+            class="new-session-page__skeleton-row"
+            aria-hidden="true"
+            style={{ "animation-delay": `${index() * 90}ms` }}
+          >
+            <span class="new-session-page__skeleton-icon" />
+            <span class="new-session-page__skeleton-bar" style={{ width: `${width()}px` }} />
+          </span>
+        )}
+      </For>
+    </div>
   );
 }

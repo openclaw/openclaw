@@ -14,7 +14,7 @@ import {
   environmentPlacementRuntime,
   environmentCloudDisabledReason,
 } from "./hosted-environments.ts";
-import { createPickerScrollRef, PickerBack } from "./picker.tsx";
+import { createPickerScrollRef, PickerBack, PickerSkeleton } from "./picker.tsx";
 import { environmentCapabilityLabels } from "./place-facts.ts";
 import { DevicePoolIcon, EnvironmentDeviceIcon } from "./where-chip-icons.tsx";
 import type { WhereChipProps } from "./where-chip.tsx";
@@ -27,21 +27,6 @@ function ConnectDeviceIcon() {
     </StrokeIcon>
   );
 }
-function renderEnvironmentSkeletons(section: "devices" | "cloud") {
-  return (
-    <div
-      class="new-session-page__environment-skeletons"
-      role="status"
-      aria-label={t("common.loading")}
-      aria-busy="true"
-      data-section={section}
-    >
-      <span class="skeleton new-session-page__environment-skeleton-row" aria-hidden="true" />
-      <span class="skeleton new-session-page__environment-skeleton-row" aria-hidden="true" />
-    </div>
-  );
-}
-
 function EnvironmentHeading(props: {
   label: string;
   action: "connect-machine" | "manage-cloud-workers";
@@ -332,9 +317,9 @@ export function WherePickerContent(props: Omit<WhereChipProps, "ref">) {
           <Loading
             on={cloudProfilesCompletion()}
             fallback={
-              props.params.place.canWrite() && view().devices.length === 0
-                ? renderEnvironmentSkeletons("devices")
-                : undefined
+              props.params.place.canWrite() && view().devices.length === 0 ? (
+                <PickerSkeleton section="devices" />
+              ) : undefined
             }
           >
             {cloudProfilesRead()}
@@ -367,9 +352,7 @@ export function WherePickerContent(props: Omit<WhereChipProps, "ref">) {
             </For>
           }
           {view().showHostedSetup && view().hostedLoading ? (
-            <div role="status" class="new-session-page__environment-empty">
-              {t("common.loading")}
-            </div>
+            <PickerSkeleton />
           ) : view().showHostedSetup && !view().hosted.some((entry) => entry.id === "agentsapi") ? (
             <a
               class="session-menu__item new-session-page__environment-option"
@@ -447,9 +430,9 @@ export function WherePickerContent(props: Omit<WhereChipProps, "ref">) {
             fallback={
               props.params.place.isAdmin() &&
               props.params.place.canWrite() &&
-              view().cloudProfiles.length === 0
-                ? renderEnvironmentSkeletons("cloud")
-                : undefined
+              view().cloudProfiles.length === 0 ? (
+                <PickerSkeleton section="cloud" />
+              ) : undefined
             }
           >
             {cloudProfilesRead()}

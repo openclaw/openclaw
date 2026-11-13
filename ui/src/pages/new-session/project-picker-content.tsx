@@ -24,7 +24,7 @@ import { SessionMenuItem } from "./cloud-target-view.tsx";
 import { findBrowsableDeviceFolderHost } from "./device-placement.ts";
 import type { BrowserProjectRegistration } from "./draft-place-browser.ts";
 import { parentFolderDisplayName } from "./path.ts";
-import { createPickerScrollRef, PickerBack } from "./picker.tsx";
+import { createPickerScrollRef, PickerBack, PickerSkeleton } from "./picker.tsx";
 import { PlaceBrowser } from "./place-browser.tsx";
 import { disambiguate } from "./place-labels.ts";
 import { projectCloneInput } from "./project-chip.ts";
@@ -436,9 +436,7 @@ export function ProjectPickerContent(props: ProjectChipProps) {
                 label={t("newSession.localProjects")}
               />
               <Show when={!projectsReady() && !projectCatalogError()}>
-                <div class="new-session-page__project-status" role="status">
-                  {t("common.loading")}
-                </div>
+                <PickerSkeleton />
               </Show>
               <Loading on={projectsReady()}>
                 <For
@@ -446,7 +444,7 @@ export function ProjectPickerContent(props: ProjectChipProps) {
                   keyed={(project) => project.id}
                   fallback={
                     <Show when={projectsReady() && !projectCatalogError()}>
-                      <div class="new-session-page__menu-note">
+                      <div class="new-session-page__menu-note new-session-page__empty">
                         {view().query
                           ? t("newSession.noLocalProjectMatches")
                           : t("newSession.noLocalProjects")}
@@ -500,14 +498,7 @@ export function ProjectPickerContent(props: ProjectChipProps) {
                     </div>
                   )}
                 >
-                  <Loading
-                    on={projectSearchRead()}
-                    fallback={
-                      <div class="new-session-page__project-status" role="status">
-                        {t("common.loading")}
-                      </div>
-                    }
-                  >
+                  <Loading on={projectSearchRead()} fallback={<PickerSkeleton />}>
                     {projectSearchResult()?.credential === "missing" ? (
                       <div class="new-session-page__menu-note">
                         {t("newSession.githubTokenHint")}
@@ -519,7 +510,7 @@ export function ProjectPickerContent(props: ProjectChipProps) {
                         keyed={(project) => project.cloneUrl}
                         fallback={
                           <Show when={projectSearchResult()}>
-                            <div class="new-session-page__menu-note">
+                            <div class="new-session-page__menu-note new-session-page__empty">
                               {t("newSession.noAdditionalGithubProjects")}
                             </div>
                           </Show>
