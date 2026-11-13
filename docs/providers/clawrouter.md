@@ -457,13 +457,19 @@ different key or silently replacing the configured search provider.
 ## Image generation
 
 The bundled plugin also registers ClawRouter with the native image runtime,
-`image_generate` tool, and `openclaw infer image generate` CLI. Text-only requests
+`image_generate` tool, and `openclaw infer image generate` CLI. Select an explicitly
+granted image model; there is no implicit ClawRouter image default. Support
+depends on the deployment, the selected key’s live catalog, and its budget.
+
+### OpenAI images
+
+OpenAI text-only requests
 use `/v1/images/generations`; requests with reference images use the JSON
 `/v1/images/edits` route without changing the selected model. The ClawRouter
 deployment must support the requested route. Masks, variations, and streaming
 are not supported; plugin readiness alone does not establish key access.
 
-Supported wire-model IDs are `openai/gpt-image-2.5-flare`,
+Supported OpenAI wire-model IDs are `openai/gpt-image-2.5-flare`,
 `openai/gpt-image-2.5-sunburst`, and their `-2026-09-08` snapshots. These IDs are
 protocol support, not grants. Text-only generation is advertised only when the
 same key's live `/v1/catalog` contains its `image.generation` capability and an
@@ -487,18 +493,47 @@ openclaw infer image generate \
   --size 1024x1024 --output-format png --output ./square.png
 ```
 
-The tool sends authorized reference bytes as inline PNG, JPEG, or WebP—not file
+For OpenAI edits, the tool sends authorized reference bytes as inline PNG, JPEG, or WebP—not file
 paths, remote URLs, or file IDs. Before purchase, it enforces at most 16 references,
 4 MiB decoded per image, and 8 MiB for the entire JSON request, including base64 encoding.
+
+### Native Google images
+
+Qualified native Google offers support text-to-image generation and reference
+editing with `google/gemini-3.1-flash-image` and `google/gemini-3-pro-image`.
+Select the full reference, for example
+`clawrouter/google/gemini-3.1-flash-image`, in `image_generate` or the image CLI.
+For editing, pass an authorized uploaded image through the tool’s `image` or
+`images` parameter with the requested change as the prompt.
+
+These models require an eligible native `google-gemini` offer with the
+`image.generate` capability, `google.image_generate` request format, and
+`google.image` response format. Both generation and editing use
+`POST /v1/native/google-gemini/v1beta/models/<upstream-model>:generateContent`;
+an OpenAI image offer or a Google model name alone does not enable this route.
+Client support does not activate the service or grant a key access.
+
+The native slice accepts a prompt of 1–32,000 characters and up to five inline
+PNG, JPEG, or WebP references within an **8 MiB total JSON request**, including
+base64 encoding. Size, aspect ratio, resolution, quality, output-format,
+background, and provider-specific controls are not supported. Remote result
+URLs, masks, variations, and streaming are not supported either.
+
+Gemini has no native output-count parameter. The adapter retains all completed
+returned images, up to four and **4 MiB decoded in total**, without retrying a
+paid request to reach a requested count. Output bytes and MIME types are checked;
+incomplete, blocked, or malformed responses fail without another purchase.
+
+### Shared credential and transport behavior
 
 Generation/editing and the immediately preceding catalog check use the same resolved
 ClawRouter credential, including a configured auth-profile binding. A missing
 or rejected bound profile does not switch to another profile or an upstream
-OpenAI key. HTTP failures preserve their status and do not retry a paid image
+OpenAI or Google key. HTTP failures preserve their status and do not retry a paid image
 request. Result URLs are fetched without provider credentials, with bounded
 downloads and private-network checks. Cancellation and the request deadline
 cover catalog lookup, generation, and result downloads. Prompt, image-count, and
-explicit size bounds come from that model’s current catalog generation limits;
+explicit size bounds for OpenAI come from that model’s current catalog generation limits;
 unknown limits do not authorize generation.
 
 ## Native Gradium speech
