@@ -3,11 +3,8 @@ import { visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
 import type { CronJob } from "../../cron/types.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import {
-  ExpectedCliError,
-  formatCliFailureLines,
-  formatCliJsonFailure,
-} from "../failure-output.js";
+import { ExpectedCliError } from "../expected-cli-error.js";
+import { formatCliFailureLines, formatCliJsonFailure } from "../failure-output.js";
 import { CronCliError } from "./cron-cli-error.js";
 import { resolveCronCreateScheduleFromArgs as createSchedule } from "./schedule-options.js";
 import {
@@ -171,8 +168,8 @@ const disabled = (reason: "consecutive-failures" | "schedule-errors", count: num
   });
 it.each`
   name                                     | job                                                                                                                                                                                                                                       | list                                   | show                                                              | listNot      | json
-  ${"extended ISO year"}                   | ${makeJob({ schedule: { kind: "at", at: "+010000-01-15T12:34:56.789Z" }, state: {} })}                                                                                                                                                    | ${["at +010000-01-15 12:34Z"]}         | ${[]}                                                             | ${undefined} | ${undefined}
-  ${"invalid ISO time"}                    | ${makeJob({ schedule: { kind: "at", at: "not-a-time" }, state: {} })}                                                                                                                                                                     | ${["at -"]}                            | ${[]}                                                             | ${undefined} | ${undefined}
+  ${"extended ISO year"}                   | ${makeJob({ schedule: { kind: "at", at: "+010000-01-15T14:34:56.789+02:00" }, state: {} })}                                                                                                                                               | ${["at +010000-01-15 12:34Z"]}         | ${["schedule: at +010000-01-15 12:34:56.789Z"]}                   | ${undefined} | ${undefined}
+  ${"invalid ISO time"}                    | ${makeJob({ schedule: { kind: "at", at: "not-a-time" }, trigger: { script: "json({ fire: true })" }, state: {} })}                                                                                                                        | ${["at -+trigger"]}                    | ${["schedule: at -+trigger"]}                                     | ${undefined} | ${undefined}
   ${"malformed row"}                       | ${{ id: "malformed-job", enabled: true } as unknown as CronJob}                                                                                                                                                                           | ${["malformed-job"]}                   | ${[]}                                                             | ${undefined} | ${undefined}
   ${"staggered cron"}                      | ${makeJob({ schedule: { kind: "cron", expr: "* * * * *", staggerMs: 1_001 }, state: {} })}                                                                                                                                                | ${["cron * * * * * (stagger 1s 1ms)"]} | ${["schedule: cron * * * * * (stagger 1s 1ms)"]}                  | ${undefined} | ${undefined}
   ${"exact cron"}                          | ${makeJob({ schedule: { kind: "cron", expr: "0 7 * * *", staggerMs: 0 }, state: {} })}                                                                                                                                                    | ${["cron 0 7 * * * (exact)"]}          | ${["schedule: cron 0 7 * * * (exact)"]}                           | ${undefined} | ${undefined}

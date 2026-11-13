@@ -14,7 +14,13 @@ function generationValidPrivateFieldsForSameSession(
     return undefined;
   }
   const state: Partial<InternalSessionEntry> = {
+    ...(existingEntry.localWorkspaceHandoff
+      ? { localWorkspaceHandoff: existingEntry.localWorkspaceHandoff }
+      : {}),
     ...(existingEntry.priorWorkspace ? { priorWorkspace: existingEntry.priorWorkspace } : {}),
+    ...(existingEntry.scheduledMemoryParent
+      ? { scheduledMemoryParent: existingEntry.scheduledMemoryParent }
+      : {}),
     ...(existingEntry.cliHistoryBoundary
       ? { cliHistoryBoundary: existingEntry.cliHistoryBoundary }
       : {}),

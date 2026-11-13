@@ -19,6 +19,9 @@ active-path row outside the current view opens that original closed interval and
 not mix later post-reset turns.
 
 Anchored reads use `limit` to bound the surrounding messages. Omit `offset` when using an anchor.
+Large transcript windows may return fewer messages to stay within the source byte limit.
+Jump-to-message reads retain the requested message, and directional history cursors continue
+through adjacent large messages without skipping them or reporting a false end of history.
 For SQLite transcript history, a missing or off-path message returns empty history rather than
 the newest tail; a `sessionId` that does not belong to the selected session key is rejected.
 These rules also apply in local embedded mode, without a running Gateway.
@@ -44,6 +47,11 @@ Queries must contain text and cannot exceed 4,096 UTF-16 code units. A search
 returns at most 25 hits. The tool trims each excerpt to 300 UTF-16 code units
 plus an ellipsis when needed, within a 32 KiB result budget. Query words are
 literal text; punctuation does not become database query syntax.
+
+Broad searches discover the current visible session inventory once, including archived
+sessions, using summary metadata. Discovery runs on demand; it does not retain an
+authorization snapshot between searches. Gateway list diagnostics label these requests
+with `source=sessions-search`. Passing `sessionKey` skips inventory discovery.
 
 Each transcript search request allows up to 90 seconds, leaving dispatch and
 authorization headroom around the reader's 60-second budget, including worker admission.
@@ -100,6 +108,11 @@ word, phrase, and prefix matching. Its native ranking is engine-local, so scores
 and result order can differ from SQLite. See
 [PostgreSQL search](/reference/database-engines#search-on-postgresql) for extension
 requirements and supported modes.
+
+If a durable transcript search returns no word matches, Chinese, Japanese, and
+Korean terms are retried as literal substrings. Other terms keep their word or
+prefix matching. This retry scans text in the selected scope, so narrow the session
+selection for large histories. It does not expand searches that already found hits.
 
 Agent namespace prefixes are literal, including underscores in agent IDs.
 The default-agent PostgreSQL RPC search uses a planner-selective prefix predicate

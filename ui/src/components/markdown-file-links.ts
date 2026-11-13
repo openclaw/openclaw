@@ -1,3 +1,5 @@
+import { MARKDOWN_LINK_START_BOUNDARY_SOURCE } from "./markdown-link-boundary.ts";
+
 const HOST_LOCAL_FILE_HREF_RE =
   /^(?:~\/|\/(?:Users|home|tmp|private\/tmp|var\/folders|private\/var\/folders)\/|\/[A-Za-z]:\/|[A-Za-z]:[\\/])/;
 const FILE_SEGMENT_SOURCE = "[\\p{L}\\p{M}\\p{N}_.@#+-]+";
@@ -22,17 +24,22 @@ function fileGrammar(extension: string, segment = FILE_SEGMENT_SOURCE) {
   const end = "(?!\\.?[\\p{L}\\p{M}\\p{N}_])";
   const multiSegment = `(?:${prefixed}|${windowsAbsolute}|${unprefixed})(?:${FILE_LINE_SUFFIX_SOURCE})?${end}`;
   const bareWithLine = `${name}${FILE_LINE_SUFFIX_SOURCE}${end}`;
+  const source = `${multiSegment}|${bareWithLine}`;
   return {
-    scan: new RegExp(`${multiSegment}|${bareWithLine}`, "gu"),
+    source,
     exact: new RegExp(`^(?:${multiSegment}|${bareWithLine})$`, "u"),
     bare: new RegExp(`^${segment}\\.(${SCANNED_EXTENSION_SOURCE})$`, "u"),
   };
 }
 const SCANNED_FILE = fileGrammar(SCANNED_EXTENSION_SOURCE);
 const AUTHORED_FILE = fileGrammar(AUTHORED_EXTENSION_SOURCE, AUTHORED_FILE_SEGMENT_SOURCE);
-export const MARKDOWN_FILE_LINK_SCAN_RE = SCANNED_FILE.scan;
+// Reject impossible starts before walking a long path candidate.
+export const MARKDOWN_FILE_LINK_SCAN_RE = new RegExp(
+  `${MARKDOWN_LINK_START_BOUNDARY_SOURCE}(?:${SCANNED_FILE.source})`,
+  "gu",
+);
 const FILE_LINE_SUFFIX_RE = /:(\d{1,6})(?:[-:]\d{1,6})?$/;
-const BARE_FILE_EXTENSIONS = new Set([
+const AUTOLINK_FILE_EXTENSIONS = new Set([
   "astro",
   "bash",
   "c",
@@ -147,7 +154,7 @@ function isAllowlistedBareFilename(raw: string, grammar: RegExp): boolean {
     return false;
   }
   const match = grammar.exec(raw);
-  return Boolean(match?.[1] && BARE_FILE_EXTENSIONS.has(match[1].toLowerCase()));
+  return Boolean(match?.[1] && AUTOLINK_FILE_EXTENSIONS.has(match[1].toLowerCase()));
 }
 
 export function parseMarkdownFileLinkTarget(
@@ -159,7 +166,18 @@ export function parseMarkdownFileLinkTarget(
   if (!grammar.exact.test(target) && !isAllowlistedBareFilename(target, grammar.bare)) {
     return null;
   }
-  return splitMarkdownFileLineSuffix(target);
+  const parsed = splitMarkdownFileLineSuffix(target);
+  // Unprefixed paths are ambiguous with repository names ("openclaw/openclaw.ai").
+  // An explicit path prefix or authored link keeps uncommon extensions addressable.
+  if (
+    !options?.authored &&
+    parsed.path.includes("/") &&
+    !/^(?:~\/|\.{1,2}\/|\/|[A-Za-z]:[\\/])/.test(parsed.path) &&
+    !AUTOLINK_FILE_EXTENSIONS.has(parsed.path.slice(parsed.path.lastIndexOf(".") + 1).toLowerCase())
+  ) {
+    return null;
+  }
+  return parsed;
 }
 
 export function isHostLocalMarkdownFileHref(href: string): boolean {

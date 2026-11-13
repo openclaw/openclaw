@@ -43,7 +43,7 @@ import {
   prepareProjectedSessionSharing,
   prepareSessionSharingProfiles,
 } from "../session-sharing-read.js";
-import { createSessionListEntryFilter, isGatewayAdmin } from "../session-sharing.js";
+import { createSessionListEntryFilter } from "../session-sharing.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { loadUsageStatusStaleWhileRevalidate } from "./models-auth-status-usage-cache.js";
 import { respondError } from "./response.js";
@@ -51,16 +51,15 @@ import type { GatewayRequestHandlers } from "./types.js";
 import { formatDateLabel, resolveDayBucket } from "./usage-date-range.js";
 import {
   createUsageOverviewReporter,
+  prepareUsageOverviewUsage,
   withVisibleUsageOverviewRows,
 } from "./usage-overview-report.js";
 import {
   resolveSessionUsageFileOrRespond,
   resolveUsageDateRangeOrRespond,
+  usageCostHandler,
 } from "./usage-request.js";
-import {
-  loadCostUsageSummaryCached,
-  loadSessionsUsageSnapshotCached,
-} from "./usage-result-cache.js";
+import { loadSessionsUsageSnapshotCached } from "./usage-result-cache.js";
 import {
   loadUsageOverviewSummaries,
   loadUsageSessionSummaries,
@@ -97,64 +96,7 @@ export const usageHandlers: GatewayRequestHandlers = {
     });
     respond(true, summary, undefined);
   },
-  "usage.cost": async ({ respond, params, context, client }) => {
-    const dateRange = resolveUsageDateRangeOrRespond(params ?? {}, respond);
-    if (!dateRange) {
-      return;
-    }
-    const { interpretation: dateInterpretation, range } = dateRange;
-    const config = context.getRuntimeConfig();
-    if (
-      !isGatewayAdmin(client ?? null) &&
-      ["none", "invited"].includes(operatorSessionCap(client ?? null, config) ?? "")
-    ) {
-      respondError(
-        respond,
-        ErrorCodes.FORBIDDEN,
-        "Aggregate usage includes sessions hidden by your operator role; ask an administrator to review Gateway-wide usage.",
-      );
-      return;
-    }
-    const { startMs, endMs } = range;
-    const requestedAgentId = params?.agentId;
-    const requestedAgentScope = params?.agentScope;
-    if (requestedAgentId !== undefined && typeof requestedAgentId !== "string") {
-      respondError(respond, ErrorCodes.INVALID_REQUEST, "agentId must be a string");
-      return;
-    }
-    if (requestedAgentScope !== undefined && requestedAgentScope !== "all") {
-      respondError(respond, ErrorCodes.INVALID_REQUEST, "agentScope must be 'all' when provided");
-      return;
-    }
-    const agentId = normalizeOptionalString(requestedAgentId);
-    if (requestedAgentScope === "all" && agentId) {
-      respondError(
-        respond,
-        ErrorCodes.INVALID_REQUEST,
-        "agentScope=all cannot be combined with agentId",
-      );
-      return;
-    }
-    const agentScope = requestedAgentScope === "all" ? "all" : undefined;
-    let effectiveAgentId = agentId;
-    if (!agentScope && !effectiveAgentId) {
-      const requestedAgent = resolveRequestedSessionAgentId(config, "main");
-      if (!requestedAgent.ok) {
-        respond(false, undefined, requestedAgent.error);
-        return;
-      }
-      effectiveAgentId = requestedAgent.agentId;
-    }
-    const summary = await loadCostUsageSummaryCached({
-      startMs,
-      endMs,
-      dayBucket: resolveDayBucket(dateInterpretation),
-      config,
-      agentId: effectiveAgentId,
-      agentScope,
-    });
-    respond(true, summary, undefined);
-  },
+  "usage.cost": usageCostHandler,
   "sessions.usage": withUsageRequestBudget(async ({ respond, params, context, client }, budget) => {
     if (!assertValidParams(params, validateSessionsUsageParams, "sessions.usage", respond)) {
       return;
@@ -284,7 +226,6 @@ export const usageHandlers: GatewayRequestHandlers = {
                 startMs,
                 endMs,
                 visibilityFilter,
-                ...(p.projection === "overview" ? { statistics: false as const } : {}),
               }),
             () => [],
           );
@@ -370,6 +311,19 @@ export const usageHandlers: GatewayRequestHandlers = {
               hasContextWeight: Boolean(merged.contextWeight),
               contextWeight: includeContextWeight ? (merged.contextWeight ?? null) : undefined,
             });
+          }
+
+          // Prepare reusable cohorts only once the overview is fully summarized.
+          if (overviewSummaries && !summarizing) {
+            await budget.read(
+              () =>
+                prepareUsageOverviewUsage({
+                  usage: overviewSummaries.usage,
+                  rows: sessions.filter((row) => !creatorKey || row.creatorKey === creatorKey),
+                  dayBucket: resolveUsageCostWorkerDayBucket(dayBucket),
+                }),
+              () => undefined,
+            );
           }
 
           return {
@@ -620,10 +574,15 @@ export const usageHandlers: GatewayRequestHandlers = {
               aggregates: accumulator.finish(),
             };
       }
-      const creatorOptions = new Map<string, SessionUsageCreator>();
+      const creatorOptions = new Map<string, SessionUsageCreator & { sessionCount: number }>();
       for (const row of visible) {
         if (row.creatorKey) {
-          creatorOptions.set(row.creatorKey, { key: row.creatorKey, actor: row.createdActor });
+          const option = creatorOptions.get(row.creatorKey);
+          creatorOptions.set(row.creatorKey, {
+            key: row.creatorKey,
+            actor: row.createdActor,
+            sessionCount: (option?.sessionCount ?? 0) + 1,
+          });
         }
       }
       const partial = budget.exhausted()

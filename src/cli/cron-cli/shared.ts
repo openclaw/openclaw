@@ -6,7 +6,10 @@ import {
   timestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalString,
+  readNonBlankString,
+} from "@openclaw/normalization-core/string-coerce";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
 import { readCronJobNotFoundError } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
 import { truncateToVisibleWidth, visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
@@ -14,6 +17,7 @@ import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-t
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import { normalizeThinkLevel, THINKING_LEVELS_HELP } from "../../auto-reply/thinking.shared.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
+import { buildCronCommandShellArgv } from "../../cron/command-shell.js";
 import { parseAbsoluteTimeMs } from "../../cron/parse.js";
 import type { assertSupportedJobSpec } from "../../cron/service/jobs-validation.js";
 import { resolveCronStaggerMs } from "../../cron/stagger.js";
@@ -30,11 +34,8 @@ import { defaultRuntime, ExitError, type RuntimeEnv } from "../../runtime.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { isOffsetlessIsoDateTime } from "../../shared/iso-time.js";
 import { formatCliCommand } from "../command-format.js";
-import {
-  ExpectedCliError,
-  formatCliOperatorError,
-  rethrowExpectedCliError,
-} from "../failure-output.js";
+import { ExpectedCliError } from "../expected-cli-error.js";
+import { formatCliOperatorError, rethrowExpectedCliError } from "../failure-output.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { callGatewayFromCli } from "../gateway-rpc.js";
 import { isJsonOutputModeActive } from "../json-output-mode.js";
@@ -384,6 +385,14 @@ export function requireCronJobId(id: unknown, accepted = "Pass it positionally."
   return jobId;
 }
 
+/** Ctrl-C cancels a pending read; mutations keep waiting for their receipt. */
+export async function callCronReadFromCli(method: string, opts: GatewayRpcOpts, params: unknown) {
+  const signal = getAsyncWorkSignal();
+  return signal
+    ? await callGatewayFromCli(method, opts, params, { signal })
+    : await callGatewayFromCli(method, opts, params);
+}
+
 export async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
   // Old/offline gateways should not make successful cron mutations fail after the fact.
   try {
@@ -414,6 +423,29 @@ export async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
   } catch {
     // Ignore status failures (older gateway, offline, etc.)
   }
+}
+
+/** Build `--command` argv for the shell of the Gateway host that will run the job. */
+export async function buildCronCommandShellArgvForGateway(
+  command: string,
+  opts: GatewayRpcOpts,
+): Promise<string[]> {
+  const unknownPlatform =
+    "The Gateway did not report its platform, so --command cannot pick its shell. Pass the exact argv with --command-argv instead.";
+  let info: Record<string, unknown>;
+  try {
+    info = await callGatewayFromCli("system.info", opts, {});
+  } catch (err) {
+    if (err instanceof GatewayClientRequestError && err.message === "unknown method: system.info") {
+      throw new CronCliError(unknownPlatform, { cause: err });
+    }
+    throw err;
+  }
+  const platform = readNonBlankString(info.platform);
+  if (!platform) {
+    throw new CronCliError(unknownPlatform);
+  }
+  return buildCronCommandShellArgv(command, platform);
 }
 
 export function parsePositiveCronDurationMs(input: string): number | null {
@@ -535,12 +567,6 @@ const formatCell = (value: unknown, width: number) => {
   return remaining > 0 ? `${truncated}${" ".repeat(remaining)}` : truncated;
 };
 
-const formatIsoMinute = (iso: string) => {
-  const isoStr = timestampMsToIsoString(parseAbsoluteTimeMs(iso));
-  // Date.toISOString() has a fixed :ss.sssZ suffix but variable-width years.
-  return isoStr ? `${isoStr.slice(0, -8).replace("T", " ")}Z` : "-";
-};
-
 const formatSpan = (ms: number) => (ms < 60_000 ? "<1m" : formatDurationHuman(ms));
 
 const formatRelative = (ms: number | null | undefined, nowMs: number) => {
@@ -552,10 +578,17 @@ const formatRelative = (ms: number | null | undefined, nowMs: number) => {
   return delta >= 0 ? `in ${label}` : `${label} ago`;
 };
 
-const formatSchedule = (schedule: CronSchedule | undefined, hasTrigger = false) => {
+const formatSchedule = (
+  schedule: CronSchedule | undefined,
+  hasTrigger = false,
+  mode: "summary" | "detail" = "summary",
+) => {
   const suffix = hasTrigger ? "+trigger" : "";
   if (schedule?.kind === "at") {
-    return `at ${formatIsoMinute(schedule.at)}${suffix}`;
+    const iso = timestampMsToIsoString(parseAbsoluteTimeMs(schedule.at));
+    // Date.toISOString() has a fixed :ss.sssZ suffix but variable-width years.
+    const timestamp = iso && mode === "summary" ? `${iso.slice(0, -8)}Z` : iso;
+    return `at ${timestamp?.replace("T", " ") ?? "-"}${suffix}`;
   }
   if (schedule?.kind === "every") {
     return `every ${formatExactDuration(schedule.everyMs)}${suffix}`;
@@ -697,7 +730,8 @@ export function printCronShow(
   runtime.log(`owner agent: ${showValue(job.owner?.agentId)}`);
   runtime.log(`owner session: ${showValue(job.owner?.sessionKey)}`);
   runtime.log(`enabled: ${job.enabled ? "yes" : "no"}`);
-  runtime.log(`schedule: ${showValue(formatSchedule(job.schedule, job.trigger !== undefined))}`);
+  const schedule = formatSchedule(job.schedule, job.trigger !== undefined, "detail");
+  runtime.log(`schedule: ${showValue(schedule)}`);
   runtime.log(`policies: ${formatCronPolicies(job) || "-"}`);
   if (job.schedule?.kind === "stream") {
     runtime.log(`stream status: ${showValue(state.streamStatus)}`);

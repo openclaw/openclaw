@@ -90,13 +90,21 @@ export async function readConfiguredLogTail(
   params?: { cursor?: number; limit?: number; maxBytes?: number },
   filter?: (line: string) => boolean,
 ): Promise<LogTailPayload> {
-  const target = getResolvedLoggerFileTarget();
+  const target = await getResolvedLoggerFileTarget();
+  return readLogTail(target, params, resolveLogTailRedactOptions(), filter);
+}
+
+export async function readLogTail(
+  target: { file: string; rolling: boolean },
+  params: { cursor?: number; limit?: number; maxBytes?: number } | undefined,
+  redaction: ReturnType<typeof resolveLogTailRedactOptions>,
+  filter?: (line: string) => boolean,
+): Promise<LogTailPayload> {
   const { file, stat } = await resolveLogFile(target.file, target.rolling);
   invalidateRedactionAnchor(file, stat);
   const requestedCursor = params?.cursor;
   const requestedLimit = params?.limit ?? DEFAULT_LIMIT;
   const requestedMaxBytes = params?.maxBytes ?? DEFAULT_MAX_BYTES;
-  const redaction = resolveLogTailRedactOptions();
   if (stat && !stat.isFile()) {
     throw new Error(`Log path is not a regular file: ${file}`);
   }

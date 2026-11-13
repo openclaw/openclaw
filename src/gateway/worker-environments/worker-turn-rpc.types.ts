@@ -27,6 +27,7 @@ export type WorkerPendingTerminalTurnFence = WorkerProcessTurnBinding & {
 
 export type WorkerTurnRequest =
   | { kind: "inference" }
+  | { kind: "inference-cancel" }
   | { kind: "heartbeat" }
   | { kind: "live"; seq: number }
   | { kind: "transcript"; seq: number }

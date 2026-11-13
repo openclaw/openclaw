@@ -233,7 +233,7 @@ suite.define(() => {
     expect((await gateway.getRequests("sessions.search"))[1]?.params).toMatchObject({
       scope: { agentId: "main", archived: true },
     });
-    await waitText(page, "No transcript messages match that search.");
+    await waitText(page, "No messages match your search.");
     expect(await page.locator(".sessions-transcript-search__result").count()).toBe(0);
   });
 
@@ -298,8 +298,8 @@ suite.define(() => {
 
     const { search, input } = await openSearch(page);
     const submit = search.getByRole("button", { name: "Search transcripts" });
-    const empty = page.getByText("No transcript messages match that search.", { exact: true });
-    const indexing = page.getByText("Results may be incomplete — search again shortly.");
+    const empty = page.getByText("No messages match your search.", { exact: true });
+    const indexing = page.getByText("Results may be incomplete. Search again shortly.");
     const retry = page.getByRole("button", { name: "Retry" });
     await input.waitFor({ state: "visible", timeout: 10_000 });
     await input.fill("   ");
@@ -321,7 +321,7 @@ suite.define(() => {
     await indexing.waitFor({ state: "visible", timeout: 10_000 });
     await captureUiProof("04-search-completeness-unconfirmed.png");
     await expect.poll(async () => gateway.getRequests("sessions.search")).toHaveLength(2);
-    expect(await page.getByText("No transcript messages match that search.").count()).toBe(0);
+    expect(await page.getByText("No messages match your search.").count()).toBe(0);
 
     await gateway.setMethodResponse("sessions.search", { results: [] });
     await retry.click();
@@ -338,12 +338,12 @@ suite.define(() => {
       retryable: true,
     });
     await page
-      .getByText(/Transcript search failed:.*Search service unavailable/)
+      .getByText(/Couldn’t search messages. Try again.:.*Search service unavailable/)
       .waitFor({ state: "visible", timeout: 10_000 });
     await captureUiProof("05-search-request-error.png");
     await retry.click();
     await expect.poll(async () => gateway.getRequests("sessions.search")).toHaveLength(5);
     await empty.waitFor({ state: "visible" });
-    expect(await page.getByText(/Transcript search failed:/).count()).toBe(0);
+    expect(await page.getByText(/Couldn’t search messages. Try again.:/).count()).toBe(0);
   });
 });

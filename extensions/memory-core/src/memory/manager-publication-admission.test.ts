@@ -263,9 +263,9 @@ it("preserves memory schema admission when a fresh handle reuses repair then rep
   });
 });
 
-it.each(["clean", "unclean"])(
-  "retains reindexed memory admission across a %s restart without skipping required integrity",
-  async (shutdown) => {
+it.each(["valid", "invalid"])(
+  "retains bounded reindexed memory admission with a %s seal",
+  async (seal) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (fixture) => {
       const target = openOpenClawAgentDatabase({
         agentId: "main",
@@ -337,21 +337,30 @@ it.each(["clean", "unclean"])(
         backend.close();
       }
       await closeOpenClawAgentDatabasesAsync();
-      expect(fs.existsSync(`${target.path}.seal`)).toBe(true);
-      if (shutdown === "unclean") {
-        fs.unlinkSync(`${target.path}.seal`);
+      const { payload } = JSON.parse(fs.readFileSync(`${target.path}.seal`, "utf8"));
+      const { verifiedAt } = JSON.parse(payload);
+      if (seal === "invalid") {
+        fs.writeFileSync(`${target.path}.seal`, "interrupted seal write");
       }
       // Same-process reopen deliberately retains physical proof; only a new process tests the seal.
-      const { stdout } = await promisify(execFile)(process.execPath, [
-        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(memoryAdmissionRestartEntrypoint)),
-        target.path,
-      ]);
-      expect(JSON.parse(stdout)).toEqual({
-        integrityChecked: shutdown === "unclean",
-        // A missing seal requires integrity verification, but the published schema is still valid.
-        schemaRebuilt: false,
-        ftsAvailable: true,
-      });
+      const restart = async (mode: "runtime" | "full", verification: unknown) => {
+        const { stdout } = await promisify(execFile)(process.execPath, [
+          ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(memoryAdmissionRestartEntrypoint)),
+          target.path,
+          mode,
+        ]);
+        const result = JSON.parse(stdout);
+        expect(result).toEqual({
+          verification,
+          schemaRebuilt: false,
+          ftsAvailable: true,
+        });
+        return result.verification;
+      };
+      await restart("runtime", seal === "valid" ? verifiedAt : null);
+      if (seal === "invalid") {
+        expect(await restart("full", expect.any(Number))).not.toBe(verifiedAt);
+      }
     });
   },
 );

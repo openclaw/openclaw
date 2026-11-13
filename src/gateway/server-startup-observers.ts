@@ -38,6 +38,7 @@ export async function runGatewayStartupObservers(params: {
     ...args: Parameters<typeof createHookRunner>
   ) => ReturnType<typeof createHookRunner> | Promise<ReturnType<typeof createHookRunner>>;
   refreshLatestUpdateRestartSentinel: () => Promise<unknown>;
+  startDurableProcesses?: () => Promise<void>;
 }): Promise<void> {
   if (params.signal.aborted || params.isClosing?.()) {
     return;
@@ -52,6 +53,7 @@ export async function runGatewayStartupObservers(params: {
       if (!context || params.signal.aborted || params.isClosing?.()) {
         return;
       }
+      await params.startDurableProcesses?.();
       const { resumeAgentDeletions } = await import("./server-agent-deletion-recovery.js");
       await resumeAgentDeletions(context, params.signal);
       const activateSubagentRegistry = await params.loadSubagentRegistryActivation();
@@ -63,15 +65,22 @@ export async function runGatewayStartupObservers(params: {
         return;
       }
       const { resumeMarkedSessions } = await import("./session-restart-resume.js");
+      const unlock = () => {
+        if (!params.signal.aborted && !params.isClosing?.()) {
+          params.unlockStartupMethods?.();
+        }
+      };
       try {
-        await resumeMarkedSessions({ context, signal: params.signal, log: params.log });
+        await resumeMarkedSessions({
+          context,
+          signal: params.signal,
+          log: params.log,
+          onPrepared: unlock,
+        });
       } catch (error) {
         params.signal.throwIfAborted();
         params.log.warn(`Restart resume discovery failed: ${String(error)}`);
-      }
-      if (!params.signal.aborted && !params.isClosing?.()) {
-        // Retained FIFO inputs must own their ordinary queue slots before reconnecting sends.
-        params.unlockStartupMethods?.();
+        unlock();
       }
     },
     "startup:session-resume",

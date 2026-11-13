@@ -155,6 +155,22 @@ it("keeps generated split-turn context when a terminal audit trims the suffix", 
   );
 });
 
+it("keeps required file operations when a large split-turn summary meets a large body", async () => {
+  const files = Array.from({ length: 40 }, (_, index) => `/srv/app/module-${index}.ts`);
+  summarize.mockImplementation(async ({ summaryPrompt }) =>
+    summaryPrompt?.kind === "custom"
+      ? structuredSummary({ decisions: `Keep the rollout plan. ${"d".repeat(9_000)}` })
+      : `Active turn ${"z".repeat(MAX_COMPACTION_SUMMARY_CHARS)}`,
+  );
+  const prefix = { turnPrefixMessages: [userMessage("confirm health", 2)], isSplitTurn: true };
+  const event = compactionEvent({ messageText: "roll back the api", preparation: prefix });
+  Object.assign(event.preparation.fileOps, { read: files, edited: files.map((f) => `${f}.bak`) });
+  const { result } = await runCompaction(qualitySession({ qualityGuardMaxRetries: 0 }), event);
+  // The split-turn summary yields from its head; required tail sections stay.
+  const { summary } = expectCompactionResult(result);
+  expectSummaryContains(summary, "Keep the rollout plan.", "<read-files>", "<modified-files>");
+});
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 function workspace(content: string) {
   const root = tempDirs.make("openclaw-compaction-summary-");

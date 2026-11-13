@@ -88,6 +88,7 @@
               "cacheWrite": 3
             },
             "compat": {
+              "requiresReasoningContentOnAssistantMessages": true,
               "supportsReasoningEffort": true,
               "supportedReasoningEfforts": [
                 "max"
@@ -118,6 +119,7 @@
             "contextWindow": 1048576,
             "maxTokens": 1048576,
             "compat": {
+              "requiresReasoningContentOnAssistantMessages": true,
               "supportsReasoningEffort": true,
               "supportedReasoningEfforts": [
                 "max"
@@ -147,6 +149,7 @@
             "contextWindow": 1048576,
             "maxTokens": 1048576,
             "compat": {
+              "requiresReasoningContentOnAssistantMessages": true,
               "supportsReasoningEffort": true,
               "supportedReasoningEfforts": [
                 "max"
@@ -166,6 +169,7 @@
               "high": null
             },
             "compat": {
+              "requiresReasoningContentOnAssistantMessages": true,
               "defaultThinkingLevel": "low",
               "thinkingRequired": true,
               "thinkingLevelLabels": {
@@ -196,6 +200,7 @@
               "high": null
             },
             "compat": {
+              "requiresReasoningContentOnAssistantMessages": true,
               "defaultThinkingLevel": "low",
               "thinkingRequired": true,
               "thinkingLevelLabels": {

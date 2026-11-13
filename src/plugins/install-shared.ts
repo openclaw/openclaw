@@ -187,7 +187,7 @@ export function emitSuccessfulPluginInstallSecurityEvent(
     trustedSourceLinkedOfficialInstall?: boolean;
   },
 ) {
-  if (params.dryRun || !result.ok) {
+  if (params.dryRun || !result.ok || result.outcome === "prepared") {
     return;
   }
   emitPluginInstallSecurityEvent({
@@ -200,9 +200,23 @@ export function emitSuccessfulPluginInstallSecurityEvent(
   });
 }
 
-function buildBlockedInstallResult(params: {
+export function reportBlockedPluginInstall(params: {
   blocked: NonNullable<NonNullable<InstallSecurityScanResult>["blocked"]>;
+  pluginId?: string;
+  mode?: "install" | "update";
+  sourceFamily?: PluginSecuritySourceFamily;
 }): Extract<InstallPluginResult, { ok: false }> {
+  const reason =
+    params.blocked.code === "security_scan_failed"
+      ? "security_scan_failed"
+      : "security_scan_blocked";
+  emitPluginAuditSecurityEvent({
+    outcome: pluginAuditOutcomeForReason(reason),
+    reason,
+    pluginId: params.pluginId,
+    mode: params.mode,
+    sourceFamily: params.sourceFamily,
+  });
   return {
     ok: false,
     error: params.blocked.reason,
@@ -306,18 +320,12 @@ export async function runInstallSourceScan(params: {
   try {
     const scanResult = await params.scan();
     if (scanResult?.blocked) {
-      const reason =
-        scanResult.blocked.code === "security_scan_failed"
-          ? "security_scan_failed"
-          : "security_scan_blocked";
-      emitPluginAuditSecurityEvent({
-        outcome: pluginAuditOutcomeForReason(reason),
-        reason,
+      return reportBlockedPluginInstall({
+        blocked: scanResult.blocked,
         pluginId: params.pluginId,
         mode: params.mode,
         sourceFamily: params.sourceFamily,
       });
-      return buildBlockedInstallResult({ blocked: scanResult.blocked });
     }
     return null;
   } catch (err) {
@@ -350,6 +358,7 @@ export async function installPluginDirectoryIntoExtensions(params: {
   workTimeoutMs?: number | null;
   mode: "install" | "update";
   dryRun: boolean;
+  prepareOnly?: boolean;
   copyErrorPrefix: string;
   hasDeps: boolean;
   sourceHardlinks?: "package-manager" | "reject";
@@ -413,6 +422,7 @@ export async function installPluginDirectoryIntoExtensions(params: {
     logger: params.logger,
     copyErrorPrefix: params.copyErrorPrefix,
     hasDeps: params.hasDeps,
+    prepareOnly: params.prepareOnly,
     omitOpenClawHostDependency: true,
     sourceHardlinks: params.sourceHardlinks ?? "reject",
     depsLogMessage: params.depsLogMessage,
@@ -425,7 +435,10 @@ export async function installPluginDirectoryIntoExtensions(params: {
       }
       try {
         // Consent must bind to the final staged bytes, never their mutable source tree.
-        await params.onBeforePluginArtifactCommit?.({
+        const inspect = params.prepareOnly
+          ? params.onPluginArtifactInspect
+          : params.onBeforePluginArtifactCommit;
+        await inspect?.({
           pluginId: params.pluginId,
           ...(params.mode === "update" ? { currentArtifactDir: targetDir } : {}),
           stagedArtifactDir: installedDir,
@@ -456,14 +469,17 @@ export async function installPluginDirectoryIntoExtensions(params: {
     return installRes;
   }
 
-  const result = buildDirectoryInstallResult({
-    pluginId: params.pluginId,
-    targetDir,
-    manifestName: params.manifestName,
-    version: params.version,
-    extensions: params.extensions,
-    setup: params.setup,
-  });
+  const result: InstallPluginResult = {
+    ...buildDirectoryInstallResult({
+      pluginId: params.pluginId,
+      targetDir,
+      manifestName: params.manifestName,
+      version: params.version,
+      extensions: params.extensions,
+      setup: params.setup,
+    }),
+    ...(params.prepareOnly ? { outcome: "prepared" } : {}),
+  };
   const transaction = resolvePackageDirInstallTransaction(installRes);
   return transaction ? attachPluginInstallTransaction(result, transaction) : result;
 }

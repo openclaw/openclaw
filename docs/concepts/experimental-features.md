@@ -1,6 +1,7 @@
 ---
 summary: "What experimental flags mean in OpenClaw and which ones are currently documented"
 title: "Experimental features"
+doc-schema-version: 1
 read_when:
   - You see an `.experimental` config key and want to know whether it is stable
   - You want to try preview runtime features without confusing them with normal defaults
@@ -22,16 +23,17 @@ available for user-installed browser code.
 
 ## Currently documented flags
 
-| Surface        | Key                                                                     | Use it when                                                                                                                       | More                                                                                   |
-| -------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| Codex harness  | `plugins.entries.codex.config.appServer.experimental.sandboxExecServer` | You want native Codex app-server 0.143.0 or newer to target an OpenClaw sandbox-backed exec-server instead of disabling Code Mode | [Codex harness reference](/plugins/codex-harness-reference#sandboxed-native-execution) |
-| Code Mode      | `tools.codeMode.enabled`                                                | You want compact code-orchestrated access to a hidden OpenClaw tool catalog                                                       | [Code Mode](/tools/code-mode)                                                          |
-| Cloud workers  | `cloudWorkers.desktop`                                                  | You want to watch or control desktop-capable cloud worker environments from the Control UI                                        | [Cloud Worker Desktop](/gateway/cloud-workers#desktop-interactive)                     |
-| Templates      | `gateway.controlUi.experimental.templates`                              | You want to explore and add official ClawHub agents from the Control UI                                                           | [Templates](/cli/templates)                                                            |
-| Host Desktop   | `desktop.host.enabled`                                                  | You want to watch or control the Gateway host through its VNC or Screen Sharing server                                            | [Desktop](/gateway/configuration-reference#desktop)                                    |
-| Advisor        | `plugins.entries.advisor.enabled`                                       | You want an advisor model to periodically check a conversation's agent work and give the agent one short correction               | [Advisor](#advisor)                                                                    |
-| Speech bubbles | `gateway.controlUi.experimental.chatBubbles`                            | You want to try conversation bubbles and compact activity; Home defaults on while the lab is enabled                              | [Chat](/web/control-ui/chat)                                                           |
-| Tool Search    | `tools.toolSearch.enabled`                                              | You want to control the global Tool Search default, which is enabled                                                              | [Tool Search](/tools/tool-search)                                                      |
+| Surface                 | Key                                                                     | Use it when                                                                                                                       | More                                                                                   |
+| ----------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| Codex harness           | `plugins.entries.codex.config.appServer.experimental.sandboxExecServer` | You want native Codex app-server 0.143.0 or newer to target an OpenClaw sandbox-backed exec-server instead of disabling Code Mode | [Codex harness reference](/plugins/codex-harness-reference#sandboxed-native-execution) |
+| Code Mode               | `tools.codeMode.enabled`                                                | You want compact code-orchestrated access to a hidden OpenClaw tool catalog                                                       | [Code Mode](/tools/code-mode)                                                          |
+| Cloud workers           | `cloudWorkers.desktop`                                                  | You want to watch or control desktop-capable cloud worker environments from the Control UI                                        | [Cloud device desktop](/gateway/cloud-workers#desktop-interactive)                     |
+| Templates               | `gateway.controlUi.experimental.templates`                              | You want to explore and add official ClawHub agents from the Control UI                                                           | [Templates](/cli/templates)                                                            |
+| This computer’s desktop | `desktop.host.enabled`                                                  | You want to watch or control the Gateway host through its VNC or Screen Sharing server                                            | [Desktop](/gateway/configuration-reference#desktop)                                    |
+| OpenClaw ID             | `gateway.openclawId.enabled`                                            | You want to open this claw from your other devices through OpenClaw ID, without opening a port                                    | [OpenClaw ID remote access](#openclaw-id-remote-access)                                |
+| Speech bubbles          | `gateway.controlUi.experimental.chatBubbles`                            | You want to try conversation bubbles and compact activity; Home defaults on while the lab is enabled                              | [Chat](/web/control-ui/chat)                                                           |
+| Tool Search             | `tools.toolSearch.enabled`                                              | You want to control the global Tool Search default, which is enabled                                                              | [Tool Search](/tools/tool-search)                                                      |
+| Usage-ranked tool index | `agents.defaults.experimental.usageRankedToolIndex`                     | You want frequently and recently used tools to take priority in bounded prompt indexes                                            | [Usage-ranked tool index](#usage-ranked-tool-index)                                    |
 
 ## Control UI Labs
 
@@ -39,12 +41,17 @@ Open **Settings → Labs** to manage experiments that have a
 Control UI switch. Enabling or disabling a lab patches the saved Gateway
 config immediately without restarting the Gateway.
 
-Labs includes Speech bubbles, Decision assistance, Advisor, Code Mode, Tool Search for all models,
-Templates, Host Desktop, and Cloud Worker Desktop. Under the default reload mode,
+Labs includes Speech bubbles, Decision assistance, Code Mode, Tool Search for all models,
+Usage-ranked tool index,
+Templates, This computer’s desktop, OpenClaw ID remote access, and Cloud device desktop. Under the default reload mode,
 desktop availability updates in connected Control UI pages. Code Mode and Tool
-Search changes take effect for future agent runs. The Cloud Worker Desktop lab
+Search changes take effect for future agent runs. The Cloud device desktop lab
 controls access to existing desktop-capable workers; changing a profile’s
 `settings.desktop` affects only newly provisioned workers.
+
+<a id="advisor" />Advisor has graduated from Labs. It stays off by default;
+turn it on in **Settings → Plugins → Advisor**. See
+[Advisor](/plugins/reference/advisor).
 
 Custom plugin UI has graduated from Labs. Enabled plugins can load native UI
 by default, while an existing explicit
@@ -59,14 +66,119 @@ agent. Turning the switch off blocks new Add operations, but existing agents
 continue running. Local project authoring and inspection do not require the
 switch. An Add already admitted before the switch changes can finish safely.
 
-Code Mode remains disabled until you turn on its Labs switch or explicitly set
-`tools.codeMode` to `true` or `"auto"`. The Labs switch writes `"auto"`, so it
-engages only for models marked as preferred Code Mode performers; it does not
-force Code Mode on for every model.
+When `tools.codeMode` is absent, Code Mode uses `"auto"`: it engages only for
+models marked as preferred Code Mode performers. The Labs switch writes `"auto"`
+when on and `false` when off; it does not force Code Mode on for every model.
+An explicitly authored object without `enabled` stays off. Agent and model
+overrides take precedence.
 
 Tool Search is enabled by default when `tools.toolSearch` is unset.
 Turning its Labs switch off disables the global default; turning it on restores
 that default.
+
+## Usage-ranked tool index
+
+This opt-in prefers frequently and recently used tools when a bounded prompt
+index cannot show every tool. Enable **Settings → Labs → Usage-ranked tool
+index**, or set the Boolean in config:
+
+```json5
+{
+  agents: {
+    defaults: {
+      experimental: { usageRankedToolIndex: true },
+    },
+  },
+}
+```
+
+The default is **off**; only explicit `true` enables it. The embedded OpenClaw
+runtime ranks the [Code Mode index](/tools/code-mode) and the
+[Tool Search deferred-schema directory](/tools/tool-search), not MCP directories
+or Codex-native surfaces. It does not enable Code Mode or Tool Search, authorize
+any tool, or change search results. Core coding tools retain their pinned places.
+Each surface reserves part of its existing budget for new tools, and selected
+entries render in canonical order.
+
+Successful calls contribute to a score with a 14-day half-life. Failed,
+cancelled, pending, client-delegated, and incognito calls do not count. Nested
+calls count the target tool rather than the Tool Search or Code Mode wrapper.
+Subagents inherit the parent's frozen preference, filtered to their own
+available catalog; calls contribute to the agent that executes them.
+
+Rankings stay frozen during a prompt series. Calls update stored scores without
+rewriting the prompt prefix. A new session or reset, committed compaction, model
+or route change, or harness/surface switch can refresh the snapshot. Config and
+catalog refreshes still enforce current tool policy without re-ranking surviving
+tools. Toggling the lab affects ranking at the next such boundary. Turning it
+off does not erase saved scores; use reset below to clear them.
+
+### Inspect, import, or reset
+
+These commands require a running Gateway and `operator.admin` access. The agent
+defaults to `main`; use `--agent <id>` for another configured agent. Import and
+inspection are available even while the lab is off, so you can preview past
+usage before opting in.
+
+```bash
+openclaw tools usage status --agent main
+openclaw tools usage import --agent main --since 90 --dry-run --json
+openclaw tools usage import --agent main --since 90
+openclaw tools usage status --agent main --session agent:main:example --limit 20 --json
+openclaw tools usage reset --agent main
+```
+
+- `status` reports the row count, current decayed top scores, retention, and last
+  import time. `--limit` accepts 1–100 (default 20). `--session` additionally
+  reports that session's frozen snapshot, which can differ from current scores.
+- `import` scans retained transcripts from the last `--since` days (1–90,
+  default 90), resolves names against the current authorized agent catalog, and
+  imports only history not already covered by live recording or an earlier
+  import. Repeating the same import does not count the same history twice.
+  The report includes scanned and counted calls, exclusions, errors,
+  cancellations, pending calls, wrappers, and top scores. Missing or archived
+  history that cannot be scanned is reported rather than inferred. Nested results
+  omitted by transcript size limits are reported as unknown outcomes, not guessed
+  to be successful. `--dry-run` previews the import without writing scores or import metadata.
+- `reset` clears learned scores and invalidates pending counts. It does not
+  rewrite active frozen prompts, delete transcripts, or turn off the lab. New
+  successful calls can start learning again while the lab remains enabled.
+- `--json` returns the complete report. Standard Gateway connection flags such
+  as `--url`, `--token`, and `--timeout` are available on every subcommand.
+
+The corresponding admin-only Gateway methods are `toolUsage.status`
+(`agentId?`, `limit?`, `sessionKey?`), `toolUsage.import` (`agentId?`,
+`sinceDays?`, `dryRun?`), and `toolUsage.reset` (`agentId?`). There is no
+model-facing management tool.
+
+### Storage and privacy
+
+Usage rows contain only tool IDs, decayed scores, and timestamps. They contain
+no arguments, results, session IDs, or per-call history. Import bookkeeping
+stores import coverage boundaries and a 90-day participation receipt for each
+live-recorded run, using the run ID already stamped on transcript messages.
+Receipts contain no calls or payloads. Imports fill gaps while recording was disabled
+without adding live-recorded runs again. Unstamped results after live recording began
+are reported as unknown provenance rather than guessed.
+Rows expire 90 days after their last counted successful call, and agent removal
+removes that agent's usage. Expired rows never affect ranking or status; physical
+pruning happens on usage writes and the Gateway’s hourly maintenance sweep, even
+while the lab is disabled. Calls accumulate in a run-local map; existing transcript
+commits persist batches without a separate writer request. A custom/shared
+transcript store cannot write another database's counters, so those runs and late
+completions use the existing run-settlement writer. Orderly shutdown waits for it.
+Selecting a new ranking snapshot still reads stored scores at the prompt-series
+boundary. A crash or failed commit may lose unflushed counts. Imports exclude
+active runs and committed live-run receipts; a foreign-store run that crashes
+before its receipt commits can remain eligible for historical import.
+Import reads existing transcripts from the configured session store, including
+custom/shared stores, while counting only the selected agent’s sessions. It does
+not retain another copy of their content.
+
+This is **operator-owned storage**, not a promise of device-local storage: the
+agent database may use operator-managed PostgreSQL. No usage data is sent to
+Foundation telemetry or added to OpenTelemetry attributes. Selected tool names
+still reach the model provider as part of the prompt.
 
 ## Decision assistance
 
@@ -236,61 +348,171 @@ remain unknown, not zero. DEBUG-off avoids the extra definition serialization.
 No conversation, tool payloads, full schemas, or credentials are logged by this
 record; existing logging and trace-correlation controls apply.
 
-## Advisor
+## OpenClaw ID remote access
 
-Advisor is an experimental bundled plugin that is off by default. It watches
-user-directed work and steps in while the agent goes off course: repeating
-failing steps, waiting on finished work, working around a blocker it could fix,
-drifting beyond what you asked, or claiming results the tools do not show.
-
-A review forks the conversation on the session's own model and asks whether the
-agent is on track. When it is not, Advisor steers the active run with one short
-correction, which the agent sees before its next step under the run's own
-permissions. If the run already ended, the correction is dropped. When the agent
-is on track, nothing happens.
-
-Turn it on in **Settings → Agents & Tools → Labs → Advisor**. Its **Configure**
-button opens the plugin's settings page (**Settings → Plugins → Advisor**), where
-you set the options below. Or use config:
+OpenClaw ID remote access is off by default (`gateway.openclawId.enabled`).
+While it is off the Gateway starts no tunnel child, opens no tunnel sockets and
+makes no calls to OpenClaw ID, Discovery or relays, and the `openclawId.*`
+methods refuse every request. Turning it off also stops any Discovery request
+that was still being prepared. Turn it on in **Settings → Labs → OpenClaw ID
+remote access**, or in config:
 
 ```json5
 {
-  plugins: {
-    entries: {
-      advisor: {
-        enabled: true,
-        config: { everyToolCalls: 10, everyMinutes: 20 },
-      },
+  gateway: {
+    openclawId: {
+      enabled: true,
+      relayUrl: "https://relay.example.com/",
+      // Needed to turn on remote access for a claw from the account menu
+      // (you sign in with OpenClaw ID first, which needs clientId):
+      issuerUrl: "https://id.example.com/api/auth",
+      clientId: "<public PKCE client id>",
+      discoveryUrl: "https://discovery.example.com",
+      loaderDomain: "claws.example.com",
     },
   },
 }
 ```
 
-- `everyToolCalls` (default `10`, range `0`–`1000`): review after this many tool
-  calls in a conversation.
-- `everyMinutes` (default `20`, range `0`–`1440`): review after this many minutes
-  of work in a run, checked when a tool starts.
-- `reviewInstructions` (optional, up to 4,000 characters): replaces the built-in
-  definition of "off course". Changes apply to the next review.
+No service URL has a production default yet; the Gateway reports
+`unconfigured` until `relayUrl` is set. Changes apply without a restart. See the
+[`openclawId` configuration keys](/gateway/config-gateway) for the full list.
 
-Set both triggers to `0` to turn reviews off.
+Labs only switches the feature on or off. Everything else lives outside Labs:
 
-Behavior and limits:
+- **Account menu** (your avatar, bottom left of the sidebar): **Sign in with
+  OpenClaw ID**, **Turn on remote access**, **Your devices**, **Copy claw link**
+  and **Sign out of OpenClaw ID**, depending on your connection and setup state.
+- **Access**, under **Pages**: the **Remote access** page from the bundled
+  `openclaw-id-access` plugin (enabled by default). It shows who may reach this
+  claw through OpenClaw ID; its **People** section lets you invite someone,
+  approve or deny their request, and remove members. Use an approved owner
+  browser to change access. Devices paired with this Gateway are in
+  **Settings → Devices**.
+- **Your devices**, in the account menu: view approved owner browsers and choose
+  **Remove access** for a browser. The confirmation lists any other devices that
+  will also lose access. They disconnect immediately; use another approved owner
+  browser or your recovery kit to restore access.
+- **Sign out of OpenClaw ID** on a remote browser ends its account session and
+  revokes the Gateway tokens issued to it, but the browser stays approved.
+  Signing back in on the same browser reconnects with the access it was
+  approved for, without a new device approval. Asking for more access than
+  that still needs approval.
+- **Settings → Devices** and `openclaw devices list` mark browsers that connect
+  through OpenClaw ID and link to **Access**. They can't be removed or have
+  their tokens revoked as devices. To end someone's access, remove them on
+  **Access**; to remove one of your own owner browsers, use **Your devices** in
+  the account menu. Nodes and other devices are managed as before.
+- There is no owner reset in this version: a claw keeps the recovery kit it was
+  linked with, so store the kit safely.
+- To move a claw to new connection keys (a lost or leaked key file, a new computer
+  without the key files, or routine rotation), run `openclaw id rebind` on the
+  computer that runs it, with its recovery kit. Devices, people, nodes and invites
+  stay ([CLI](/cli/id)).
 
-- Only user-triggered runs are reviewed. Heartbeat, cron and other automatic
-  runs are not.
-- A due review waits until every running tool call has its result, so the fork
-  never sees a missing or synthetic tool outcome. A stalled call delays the
-  review rather than forcing it.
-- Each conversation has at most one review in flight. The run ending, a new user
-  message, session reset, plugin disable, or service stop cancels it.
-- Reviews use the session's model, context and credentials. The fork cannot run
-  tools or send replies. Corrections are labeled as advice the agent must check
-  before acting.
-- Advisor needs conversation access and prompt injection permission through
-  `plugins.entries.advisor.hooks`, which trusted plugins have by default.
-- Gateway info logs record review token usage and whether a correction steered
-  the run.
+### Sign in with OpenClaw ID
+
+Sign-in uses the public client `clientId`. Where it works depends on how the
+Control UI reaches the Gateway:
+
+- **On the Gateway machine (direct loopback):** an OpenID Connect authorization
+  code flow with PKCE, in a popup. The Gateway builds the authorization URL and
+  redeems the code, because the issuer does not serve CORS; it keeps nothing but
+  the short-lived pending sign-in. The popup returns to
+  `<Control UI origin>/openclaw-id/callback`, so register that redirect for the
+  client (`http://127.0.0.1/openclaw-id/callback` matches any loopback port).
+- **Through a personal sign-in** (Tailscale Serve, Cloudflare Access or another
+  trusted proxy, an enterprise principal: any connection whose profile comes from
+  a verified identity of its own): the issuer cannot redirect to that origin, so the
+  Gateway runs a device sign-in (RFC 8628). The Control UI shows a code; you open
+  OpenClaw ID, sign in and confirm it, and the Gateway polls until you do. The
+  issuer must offer the device grant to the client.
+- Shared token or password connections, members and owner devices over the
+  OpenClaw ID tunnel, and connections without a personal profile cannot sign in.
+
+The browser keeps the account and its ID token until the token expires or you sign
+out. Signing in only proves which OpenClaw ID account the browser holds; on its own
+it grants nothing.
+
+### Link OpenClaw ID to your profile
+
+Through a personal sign-in, **Settings → Profile → Identity → OpenClaw ID → Link**
+runs the same device sign-in and records the account on your profile. Both sides are
+proven on one connection, so there is no "who are you?" picker. Owner devices of the
+claw's OpenClaw ID owner account then arrive as you (your name, sessions, personal
+instructions and My GitHub) instead of the shared owner. Their owner authority still
+comes from each device's certificate, and linking grants or removes nothing.
+
+- One profile per account: linking an account already linked to another profile, or to
+  a member's profile, is refused. Merging profiles in **Users** carries the link.
+- **Unlink** returns owner devices to the shared owner on their next connection.
+  Sessions they already created are not rewritten. While signed in on the Gateway machine, **Turn on remote access**
+  gets its link code from your account instead of asking you to paste one.
+
+### How the tunnel reaches the Gateway
+
+- The Gateway supervises one **tunnel child** process. The child owns the iroh
+  endpoint key (`<state dir>/openclaw-id/endpoint.key`, mode 0600, created on
+  first start). It runs
+  at a lower CPU priority, restarts with a 1 to 30 second backoff, is restarted
+  gracefully above 512 MB RSS, and stops with SIGTERM then SIGKILL after 2
+  seconds. If the iroh binding cannot load on this platform, the Gateway reports
+  remote access unavailable and keeps running.
+- Once a claw is linked, its server binding names the endpoint key and the
+  Gateway key (`<state dir>/openclaw-id/gateway.key`), and neither is ever
+  created again. If either file is missing or holds another key, for example
+  after a restore that skipped the key files, remote access is off and status
+  reports `keys_missing` or `key_mismatch`. Nothing is published or dialed with
+  another key. The Gateway itself keeps running, so everything on this computer
+  works as before. To bring remote access back, restore the original key files,
+  then restart the Gateway, or move the claw to new keys with its recovery kit
+  on this computer: `openclaw id rebind` ([CLI](/cli/id)).
+- The child admits a device only if the Gateway's membership lists the
+  device's endpoint key, and checks that before accepting any stream. Until a
+  claw is linked, nobody is admitted.
+- The child proxies each stream to a private Gateway ingress: a Unix socket
+  only the Gateway's user can open, plus a per-boot proxy token it receives over
+  the supervisor's IPC channel. It strips client forwarding and identity headers
+  and passes the device key it authenticated in the QUIC handshake.
+- Requests that come through this ingress are always treated as relayed, never
+  as direct loopback, even though they arrive on the local host. Linking a claw
+  and other root ceremonies are allowed only on direct loopback.
+
+<a id="make-a-claw-reachable" />
+
+### Turn on remote access
+
+With the lab on, sign in with OpenClaw ID from the account menu, then choose
+**Turn on remote access**. It works only in OpenClaw on the computer that runs
+this claw (direct loopback). If setup asks for a **Link code**, get one from the
+**Add a claw** page at `https://claws.<loaderDomain>/link` and paste it into setup:
+
+1. The Gateway creates the claw id and its signing key, and reports the tunnel's
+   endpoint key.
+2. The browser creates a recovery kit (`OCK1-…`) and derives the owner root key
+   from it. You must confirm that you saved the kit before you can continue.
+3. The browser creates an owner device key for this origin, and the owner root
+   signs that device's certificate and the server binding (claw id, hostname
+   `<name>-<account tag>.<loaderDomain>` as Discovery assigned it, endpoint key,
+   Gateway key).
+4. The Gateway pins the owner root's fingerprint and admits the owner device.
+   The kit secret and root key never leave the browser and are dropped as soon
+   as the statements are signed.
+5. With a link code, the Gateway registers the claw with
+   Discovery and publishes its descriptor and membership snapshot. Without one,
+   the claw is linked locally and can be published later.
+
+### Membership
+
+The Gateway is the membership authority. It stores the pinned owner root, the allowlist
+of owner devices and members, invites and a sequence number in its state
+database. Owner devices send membership changes directly to the Gateway
+(over the tunnel or loopback); Discovery only mirrors signed snapshots and
+carries invite redemption requests, root-signed statements and revocations.
+When a member or device is removed, the tunnel child closes its connections,
+the Gateway closes its sessions and invalidates device tokens bound to its key,
+cancels its active runs (transcripts are kept up to the cut), and publishes a
+new snapshot.
 
 ## Local model lean mode
 

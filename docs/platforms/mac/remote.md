@@ -122,7 +122,7 @@ the primary connection.
 
 ## Remote transports
 
-- **SSH tunnel**: uses `ssh -N -L ...` to forward the Gateway port to localhost. The Gateway sees the node's IP as `127.0.0.1` because the tunnel is loopback.
+- **SSH tunnel**: uses `ssh -N -L ...` to forward the Gateway port to localhost. The Gateway sees the node's IP as `127.0.0.1` because the tunnel is loopback. The app also forwards the remote widget sandbox port (remote Gateway port plus one) to `127.0.0.1` on the same port on this Mac, in a second SSH connection, so Dashboard widgets and MCP Apps load without a manual forward. That forward never affects the Gateway connection. If the port is in use on this Mac, or belongs to a Gateway this Mac hosts, the app skips the forward and logs why. It checks the port again whenever it looks up or reuses the Gateway connection, and waits at least 30 seconds after a failed forward before trying again. A remote `mcp.apps.sandboxPort` other than the default is not forwarded; set `mcp.apps.sandboxOrigin` on the remote Gateway instead.
 - **Direct (ws/wss)**: connects straight to the Gateway URL. The Gateway sees the real client IP.
 
 The app disables SSH connection multiplexing and post-authentication backgrounding for its own SSH processes so it can monitor and restart the exact process, even if the selected alias enables `ControlMaster` or `ForkAfterAuthentication`.

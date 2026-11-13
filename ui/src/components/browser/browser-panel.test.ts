@@ -16,7 +16,11 @@ import {
   flushBrowserResponses as flush,
   type BrowserRequestEnvelope,
 } from "./browser-panel-controller-test-support.ts";
-import { normalizeBrowserUrlDraft } from "./browser-url.ts";
+import {
+  bareNameAddress,
+  normalizeBrowserUrlDraft,
+  resolveBrowserAddressInput,
+} from "./browser-url.ts";
 import { createBrowserPageClient } from "./test-helpers/browser-page.ts";
 
 type Panel = HTMLElementTagNameMap["openclaw-browser-panel"];
@@ -87,6 +91,43 @@ describe("Browser panel", () => {
     expect(normalizeBrowserUrlDraft("file:///etc/passwd")).toBeNull();
   });
 
+  it("searches address-bar text that is not an address", () => {
+    const search = "https://www.google.com/search?q=";
+    expect(resolveBrowserAddressInput(" openclaw browser panel ")).toBe(
+      `${search}openclaw+browser+panel`,
+    );
+    expect(resolveBrowserAddressInput("openclaw")).toBe(`${search}openclaw`);
+    expect(resolveBrowserAddressInput("note: buy milk")).toBe(`${search}note%3A+buy+milk`);
+    expect(resolveBrowserAddressInput("example.com")).toBe("https://example.com/");
+    expect(resolveBrowserAddressInput("localhost:3000/app")).toBe("https://localhost:3000/app");
+    expect(resolveBrowserAddressInput("localhost")).toBe("https://localhost/");
+    expect(resolveBrowserAddressInput("devbox:8080")).toBe("https://devbox:8080/");
+    expect(resolveBrowserAddressInput("http://127.0.0.1:5173/")).toBe("http://127.0.0.1:5173/");
+    expect(resolveBrowserAddressInput("[::1]:3000")).toBe("https://[::1]:3000/");
+    expect(resolveBrowserAddressInput("javascript:alert(1)")).toBeNull();
+    expect(resolveBrowserAddressInput("   ")).toBeNull();
+  });
+
+  it("offers the old address only for bare names that now search", () => {
+    expect(bareNameAddress("devbox")).toBe("https://devbox/");
+    expect(bareNameAddress("devbox/wiki")).toBe("https://devbox/wiki");
+    expect(bareNameAddress("example.com")).toBeNull();
+    expect(bareNameAddress("devbox:8080")).toBeNull();
+    expect(bareNameAddress("openclaw docs")).toBeNull();
+    expect(bareNameAddress("javascript:alert(1)")).toBeNull();
+  });
+
+  it("keeps opening addresses whose path or query has spaces, or an explicit default port", () => {
+    expect(resolveBrowserAddressInput("https://example.com/a b")).toBe("https://example.com/a%20b");
+    expect(resolveBrowserAddressInput("example.com/a b")).toBe("https://example.com/a%20b");
+    expect(resolveBrowserAddressInput("example.com/find?q=a b")).toBe(
+      "https://example.com/find?q=a%20b",
+    );
+    expect(resolveBrowserAddressInput("localhost:3000/a b")).toBe("https://localhost:3000/a%20b");
+    expect(resolveBrowserAddressInput("devbox:443")).toBe("https://devbox/");
+    expect(resolveBrowserAddressInput("devbox:443/a")).toBe("https://devbox/a");
+  });
+
   it("restores persisted open state when a mounted tag upgrades lazily", async () => {
     persistedDock();
     const tagName = `test-lazy-browser-panel-${crypto.randomUUID()}`;
@@ -106,6 +147,23 @@ describe("Browser panel", () => {
     };
     await panel.updateComplete;
     expect(panel.browserPanelIsOpen()).toBe(true);
+  });
+
+  it("keeps initial browser failure details collapsed beside the recovery action", async () => {
+    const { panel } = mountPanel({
+      client: createBrowserClient(async () => {
+        throw new Error("Synthetic initial browser failure");
+      }).client,
+    });
+    await waitForSolid(() =>
+      expect(panel.querySelector(".empty-state__description")?.textContent).toBe(
+        "Couldn’t complete the browser action. Try again.",
+      ),
+    );
+    const details = panel.querySelector("details");
+    expect(details?.open).toBe(false);
+    expect(details?.textContent).toContain("Synthetic initial browser failure");
+    expect(panel.querySelector(".empty-state button")?.textContent).toContain("Refresh");
   });
 
   it("renders async page loads and retains the page and focus through successful and failed refreshes", async () => {
@@ -170,11 +228,10 @@ describe("Browser panel", () => {
     expect(document.activeElement).toBe(input);
 
     failure.reject(new Error("Refresh connection interrupted"));
-    await waitForSolid(() => expect(reload?.getAttribute("aria-busy")).toBe("false"));
+    await waitForSolid(() => expect(reload?.getAttribute("aria-busy")).not.toBe("true"));
 
     expect(panel.querySelector("openclaw-panel-loading-skeleton")).toBeNull();
     expect(panel.querySelector(".bp-shot")).toBe(preview);
-    expect(reload?.getAttribute("aria-busy")).toBe("false");
     expect(panel.querySelector('[role="alert"]')?.textContent).toContain(
       "Refresh connection interrupted",
     );
@@ -436,7 +493,7 @@ describe("Browser panel", () => {
       });
       if (outcome === "failed") {
         await panel.updateComplete;
-        expect(panel.querySelector('[role="alert"]')?.textContent).toContain("Could not paste");
+        expect(panel.querySelector('[role="alert"]')?.textContent).toContain("Couldn’t paste");
         expect(panel.textContent).not.toContain(text);
       }
     });

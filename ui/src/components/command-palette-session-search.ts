@@ -1,7 +1,9 @@
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsSearchResult } from "../../../packages/gateway-protocol/src/index.js";
 import { indexFirstByKey } from "../../../src/shared/dedupe-by-key.ts";
-import { normalizeSessionSearchText } from "../../../src/shared/session-search-text.ts";
+import {
+  normalizeSessionSearchLiteral,
+  normalizeSessionSearchText,
+} from "../../../src/shared/session-search-text.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { clampText } from "../lib/format.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
@@ -19,7 +21,7 @@ export function buildCommandPaletteSessionItems(params: {
   search: string;
 }): CommandPaletteItem[] {
   const { visibleRows, visibleKeys, transcriptResult } = params;
-  const normalizedSearch = normalizeLowercaseStringOrEmpty(params.search);
+  const normalizedSearch = normalizeSessionSearchLiteral(params.search);
   const titleSearch = normalizeSessionSearchText(params.search);
   const transcriptHitByKey = indexFirstByKey(
     transcriptResult?.results ?? [],
@@ -46,7 +48,7 @@ export function buildCommandPaletteSessionItems(params: {
         row.createdActor?.label,
         row.createdActor?.id,
       ]
-        .map((value) => normalizeLowercaseStringOrEmpty(value))
+        .map(normalizeSessionSearchLiteral)
         .filter(Boolean);
       const titleFields = titleSearch ? titles.map(normalizeSessionSearchText) : [];
       let rawMetadataRank: number;

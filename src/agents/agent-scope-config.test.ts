@@ -54,6 +54,18 @@ const legacy = (list?: LegacyAgentListEntry[]): OpenClawConfigWithLegacyRoster =
 });
 
 describe("agent roster resolution", () => {
+  it("inherits workspace file policy and permits a private per-agent override", () => {
+    const cfg = fleet({
+      defaults: { workspaceFileMode: "0660" },
+      entries: { shared: {}, private: { workspaceFileMode: "0600" } },
+    });
+    expect(agentConfig(cfg, "SHARED")?.workspaceFileMode).toBe("0660");
+    expect(agentConfig(cfg, "private")?.workspaceFileMode).toBe("0600");
+    expect(
+      agentConfig(fleet({ entries: { main: {} } }), "main")?.workspaceFileMode,
+    ).toBeUndefined();
+  });
+
   it.each([undefined, "testprof"])("keeps configured-agent guidance runnable: %s", (profile) => {
     const cfg = twoAgents();
     vi.stubEnv("OPENCLAW_PROFILE", profile);

@@ -20,6 +20,7 @@ import { resolveCacheRetention } from "../providers/cache-retention.js";
 import { buildCopilotDynamicHeaders } from "../providers/github-copilot-headers.js";
 import { finalizeOpenAICompletionsToolCalls } from "../providers/openai-completions-tool-calls.js";
 import { createOpenAIProviderClient } from "../providers/openai-provider-client.js";
+import { mapOpenAIStopReason } from "../providers/openai-stop-reason.js";
 import { toOpenAIResponsesToolChoice } from "../providers/openai-tool-projection.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import {
@@ -72,6 +73,7 @@ import {
 } from "./provider-transport-turn-state.js";
 import { resolveOpencodeSessionHeaders } from "./session-affinity.js";
 import {
+  awaitProviderLifecycleCallback,
   createWritableTransportEventStream,
   failTransportStream,
   finalizeTransportStream,
@@ -413,7 +415,10 @@ export function streamOpenAICompletionsRequest(
       const builtParams = buildOpenAICompletionsRequest(model, requestContext, options, policy);
       let params = builtParams;
       const encodeBody = prepareModelRequestBody(options);
-      const nextParams = await options?.onPayload?.(params, model);
+      const nextParams = await awaitProviderLifecycleCallback(
+        options?.onPayload ? () => options.onPayload?.(params, model) : undefined,
+        options?.signal,
+      );
       if (nextParams !== undefined) {
         params = nextParams as typeof params;
       }
@@ -532,7 +537,7 @@ export function streamOpenAICompletionsRequest(
                   bufferedBytes += chunkBytes;
                   const chunkFinishReason = chunk?.choices?.[0]?.finish_reason;
                   if (chunkFinishReason) {
-                    finishReason = chunkFinishReason;
+                    finishReason = mapOpenAIStopReason(chunkFinishReason).stopReason;
                   }
                   options?.signal?.throwIfAborted();
                 }

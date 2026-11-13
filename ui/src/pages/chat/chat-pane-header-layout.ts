@@ -14,13 +14,18 @@ import {
 import { chatHistoryRequests } from "./chat-history-state.ts";
 import type { ChatMobileHost, MobileDetailsRoute } from "./chat-mobile-host.ts";
 import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
+import { chatDetailsDockingLayout } from "./chat-snapshot-prewarm.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { listSubagents } from "./chat-subagent-wait.ts";
 import type { ChatProps } from "./chat-view.tsx";
 import type { ChatDetailsProps } from "./components/chat-details-types.ts";
 import type { ChatDetailsElements, ChatDetailsViewProps } from "./components/chat-details.tsx";
 import type { ChatPaneHeaderProps } from "./components/chat-pane-header.types.ts";
-import { chatPullRequestId, retainedPublication } from "./components/chat-pull-requests.ts";
+import {
+  chatPullRequestId,
+  publicationPullRequest,
+  retainedPublication,
+} from "./components/chat-pull-requests.ts";
 import {
   getSessionWorkspace,
   isCurrentSessionWorkspace,
@@ -122,9 +127,11 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
         openDetailsPage({ kind: "pull-request", id: chatPullRequestId(request) }, request.title),
       publication: chatProps.githubPublication
         ? {
+            // One PR keeps one pill: once its PR is listed, the PR pill continues the lifecycle.
             eligible: Boolean(
-              (!chatProps.pullRequestsBranchDismissed && chatProps.pullRequestsBranch) ||
-              retainedPublication(chatProps.githubPublication),
+              ((!chatProps.pullRequestsBranchDismissed && chatProps.pullRequestsBranch) ||
+                retainedPublication(chatProps.githubPublication)) &&
+              !publicationPullRequest(chatProps.githubPublication, chatProps.pullRequests ?? []),
             ),
             onOpen: (source) =>
               openDetailsPage(
@@ -295,8 +302,19 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
     const headerDetails: ChatDetailsViewProps | undefined = ownsSubagentsPanel
       ? {
           elements,
+          dockingLayout: chatDetailsDockingLayout([
+            window.innerWidth,
+            this.context.navigation.snapshot.navWidth,
+            this.context.navigation.snapshot.navCollapsed,
+            this.context.theme.settings.chatSplitLayout,
+            this.paneId,
+            sidebarLayout,
+          ]),
           chat: merge(paneChatProps, detailsActions, detailsOutputs, {
             cachedDetails: cached?.details,
+            sessionFactsReady:
+              this.resourceSessionObservation()?.hasObserved === true &&
+              state.sessionWorkspaceReadDisabledReason !== undefined,
             onDetailsSnapshot: cached?.write,
             selectedSession: paneChatProps.transcriptMetadata
               ? {
@@ -344,8 +362,10 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
                 }
               : undefined,
             progressCard:
-              detailsProgress?.card ??
-              (this.detailsProgressCardInitialLoading ? cached?.snapshot.progressCard : null),
+              this.cachedSessionStatePending() && this.cachedSessionState()?.archived
+                ? null
+                : (detailsProgress?.card ??
+                  (this.detailsProgressCardInitialLoading ? cached?.snapshot.progressCard : null)),
             progressCardIdentity: detailsProgress?.identity,
             progressCardLifetime: detailsProgress?.lifetime,
             progressCardInitialLoading: this.detailsProgressCardInitialLoading,

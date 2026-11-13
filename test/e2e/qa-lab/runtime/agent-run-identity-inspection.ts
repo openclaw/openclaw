@@ -38,8 +38,9 @@ import {
   waitForIdentityAuditFence,
 } from "./agent-run-identity-hot-reload.js";
 import { connectHotReloadClient } from "./gateway-config-hot-reload-fixtures.js";
-import { createQaScriptEvidenceWriter, type QaScriptEvidenceStatus } from "./script-evidence.js";
+import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 import { parseQaProducerOptions, type QaProducerOptions } from "./script-options.js";
+import { produceQaScriptProof } from "./script-proof.js";
 
 const SCENARIO_ID = "agent-run-identity-inspection";
 const SNAPSHOT_FILE = `${SCENARIO_ID}-summary.json`;
@@ -64,13 +65,6 @@ const IDENTITY_FIELDS = [
   "Assurance",
 ] as const;
 const FRAME_TIMEOUT_MS = 20_000;
-
-type ProofResult = {
-  artifacts?: Array<{ filePath: string; kind: string }>;
-  details?: string;
-  durationMs: number;
-  status: QaScriptEvidenceStatus;
-};
 
 async function assertUntrustedProxyHeadersRejected(
   url: string,
@@ -745,25 +739,6 @@ async function runProof(options: QaProducerOptions): Promise<string> {
   }
 }
 
-async function produceProof(options: QaProducerOptions): Promise<ProofResult> {
-  const startedAt = Date.now();
-  try {
-    const details = await runProof(options);
-    return {
-      artifacts: [{ filePath: SNAPSHOT_FILE, kind: "summary" }],
-      details,
-      durationMs: Math.max(1, Date.now() - startedAt),
-      status: "pass",
-    };
-  } catch (error) {
-    return {
-      details: formatErrorMessage(error),
-      durationMs: Math.max(1, Date.now() - startedAt),
-      status: "fail",
-    };
-  }
-}
-
 async function runProducer(options: QaProducerOptions): Promise<QaEvidenceSummaryJson> {
   const writer = createQaScriptEvidenceWriter({
     artifactBase: options.artifactBase,
@@ -787,7 +762,7 @@ async function runProducer(options: QaProducerOptions): Promise<QaEvidenceSummar
       ],
     },
   });
-  const result = await produceProof(options);
+  const result = await produceQaScriptProof(options, runProof, SNAPSHOT_FILE);
   writer.appendLog(`${result.status}: ${result.details ?? "no details"}\n`);
   return await writer.write(result);
 }

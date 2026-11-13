@@ -190,6 +190,20 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
             agentID: target.agentID)
     }
 
+    func requestHistory(
+        sessionKey: String,
+        cursor: String) async throws -> OpenClawChatHistoryPayload
+    {
+        guard let route = await self.connection.captureRoute() else { throw CancellationError() }
+        let target = self.sessionTarget(for: sessionKey)
+        return try await self.connection.chatHistory(
+            sessionKey: target.sessionKey,
+            agentID: target.agentID,
+            cursor: cursor,
+            maxBytes: 256 * 1024,
+            ifCurrentRoute: route)
+    }
+
     func gatewayAdvertisesMethod(_ method: String) async -> Bool? {
         guard let lease = await self.connection.captureServerLease() else { return nil }
         return await self.connection.supportsServerMethod(method, ifCurrentServerLease: lease)
@@ -955,6 +969,10 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
     func showCommandPalette() {
         guard self.isKeyChatWindow, self.window?.attachedSheet == nil else { return }
         self.windowCommands.isCommandPalettePresented = true
+    }
+
+    func persistComposerDraft() async {
+        await self.viewModel.persistComposerDraft()
     }
 
     private let conversationController: NativeConversationController?

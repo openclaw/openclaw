@@ -21,9 +21,11 @@ import {
 import type { DatabasePortPluginOwners } from "../infra/database-engine/port-descriptor.js";
 import type { DatabaseEngineSelection } from "../infra/database-engine/types.js";
 import { hasActiveGatewayStateOwner } from "../infra/gateway-state-owner.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import type { SqliteSnapshotValidator } from "../infra/sqlite-snapshot.types.js";
 import type { BackupTask, Capture, Restore } from "./database-backup.operations.js";
 import type { PostgresExportEnvelope } from "./export-envelope.js";
 import type { GitBackupIdentity, GitBackupManifest } from "./git-backup-codec.js";
@@ -48,6 +50,8 @@ export async function runOfflineDatabaseBackup<T>(
         mapIncludePath?: (absolutePath: string) => string;
         env?: NodeJS.ProcessEnv;
       },
+  /** Archive capture reads a running owner's stores through per-store snapshots. */
+  options?: { online?: true },
 ): Promise<T> {
   const existing = offlineBackup.getStore();
   if (existing) {
@@ -62,14 +66,27 @@ export async function runOfflineDatabaseBackup<T>(
     );
   }
   const { createConfigIO } = await import("../config/config.js");
+  const captured = prepared && "config" in prepared ? prepared : undefined;
+  const runScoped = (
+    config: OpenClawConfig,
+    selection: DatabaseEngineSelection,
+    assertCurrent: () => void,
+  ) => {
+    const scope = { config, assertCurrent };
+    return withDatabaseEngineSelection(selection, () => offlineBackup.run(scope, () => run(scope)));
+  };
   return runWithLocalStateOwner({
     method: "backup.create",
     params: {},
     target: sourcePath,
-    onForeignOwner: "refuse",
+    // Captures only read the live stores: each PostgreSQL store exports from one
+    // repeatable-read snapshot, like the live SQLite snapshots of the same archive.
+    onForeignOwner:
+      captured && options?.online
+        ? async ({ assertCurrent }) => runScoped(captured.config, captured.selection, assertCurrent)
+        : "refuse",
     runLocal: async ({ assertCurrent }) => {
       assertCurrent();
-      const captured = prepared && "config" in prepared ? prepared : undefined;
       let config = captured?.config;
       if (!config) {
         const capturedPaths = prepared && "configPath" in prepared ? prepared : undefined;
@@ -96,10 +113,7 @@ export async function runOfflineDatabaseBackup<T>(
       }
       const selection = captured?.selection ?? (await resolveDatabaseEngineSelection(config));
       assertCurrent();
-      const scope = { config, assertCurrent };
-      return withDatabaseEngineSelection(selection, () =>
-        offlineBackup.run(scope, () => run(scope)),
-      );
+      return runScoped(config, selection, assertCurrent);
     },
   });
 }
@@ -143,6 +157,42 @@ export function capturePostgresBackup(
     { operation: "capture", params: input },
     assertCurrent,
   );
+}
+
+/** Preserve the exact store and validate its captured rows before a migration can rewrite them. */
+export async function createVerifiedDatabaseMigrationBackup(params: {
+  sourcePath: string;
+  targetPath: string;
+  config: OpenClawConfig;
+  assertCurrent: () => void;
+  validate: SqliteSnapshotValidator;
+}): Promise<{ path: string }> {
+  params.assertCurrent();
+  if (readBackupEngine(params.sourcePath).engine === "sqlite") {
+    const { createVerifiedSqliteSnapshot } = await import("../infra/sqlite-snapshot.js");
+    return createVerifiedSqliteSnapshot({
+      sourcePath: params.sourcePath,
+      targetPath: params.targetPath,
+      preserveRowIds: true,
+      beforePublish: params.assertCurrent,
+      validate: params.validate,
+    });
+  }
+  await capturePostgresBackup({
+    sourcePath: params.sourcePath,
+    directory: params.targetPath,
+    profile: "exact",
+    config: params.config,
+    assertCurrent: params.assertCurrent,
+  });
+  // The exact export is a verified portable SQLite image, not the local PG anchor.
+  // Validate those captured rows rather than infer their contents from live fingerprints.
+  using database = openNodeSqliteDatabase(path.join(params.targetPath, "database.sqlite"), {
+    readOnly: true,
+  });
+  params.validate(database, params.targetPath);
+  params.assertCurrent();
+  return { path: params.targetPath };
 }
 
 export async function captureGitPostgresBackup(params: {

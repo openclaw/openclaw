@@ -4,6 +4,7 @@ import "openclaw/plugin-sdk/image-generation";
 import "openclaw/plugin-sdk/media-generation-runtime";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { generateImage } from "openclaw/plugin-sdk/image-generation-runtime";
 import type { AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIImageGenerationProvider } from "./image-generation-provider.js";
@@ -471,14 +472,64 @@ describe("openai image generation provider", () => {
     },
   );
 
-  it("normalizes legacy native image dimensions", async () => {
-    const result = await generateOpenAIImage("Wide image", {
-      model: "gpt-image-1",
-      size: "2048x1152",
-    });
-    expect(jsonRequestCall().body).toMatchObject({ model: "gpt-image-1", size: "1536x1024" });
-    expect(result.metadata).toEqual({ requestedSize: "2048x1152", normalizedSize: "1536x1024" });
+  it.each([
+    ["gpt-image-1", "2048x1152", "1536x1024"],
+    ["gpt-image-1-mini", "2048x1152", "1536x1024"],
+    ["gpt-image-1.5", "2048x1152", "1536x1024"],
+    ["dall-e-2", "1536x1024", "1024x1024"],
+    ["dall-e-2", "256x256", "256x256"],
+    ["dall-e-2", "512x512", "512x512"],
+    ["dall-e-2", "auto", "1024x1024"],
+    ["dall-e-3", "1536x1024", "1792x1024"],
+    ["dall-e-3", "1024x1536", "1024x1792"],
+    ["dall-e-3", "1792x1024", "1792x1024"],
+    ["dall-e-3", "auto", "1024x1024"],
+  ])("normalizes native %s size %s to %s", async (model, size, expectedSize) => {
+    const result = await generateOpenAIImage("A lighthouse", { model, size });
+    expect(jsonRequestCall().body).toMatchObject({ model, size: expectedSize });
+    expect(result.metadata).toEqual(
+      size === expectedSize ? undefined : { requestedSize: size, normalizedSize: expectedSize },
+    );
   });
+
+  it.each([
+    ["dall-e-2", { aspectRatio: "16:9" }, "256x256", false],
+    ["dall-e-2", { size: "512x512" }, "512x512", false],
+    ["dall-e-2", { size: "auto" }, "1024x1024", false],
+    ["dall-e-3", { aspectRatio: "16:9" }, "1792x1024", false],
+    ["dall-e-3", { aspectRatio: "9:16" }, "1024x1792", false],
+    ["dall-e-3", { size: "auto" }, "1024x1024", false],
+    ["gpt-image-1", { aspectRatio: "16:9" }, "1536x1024", false],
+    ["gpt-image-1-mini", { aspectRatio: "16:9" }, "1536x1024", false],
+    ["gpt-image-1.5", { aspectRatio: "16:9" }, "1536x1024", false],
+    ["gpt-image-1.5", { aspectRatio: "9:16" }, "1024x1536", true],
+  ] as const)(
+    "normalizes custom-endpoint %s geometry %j to %s (edit=%s)",
+    async (model, geometry, size, edit) => {
+      const result = await generateImage(
+        {
+          cfg: openAIImageConfig({ baseUrl: "https://openai-compatible.example.com/v1" }),
+          modelOverride: `openai/${model}`,
+          prompt: "A lighthouse",
+          ...geometry,
+          ...(edit
+            ? { inputImages: [{ buffer: Buffer.from("reference"), mimeType: "image/png" }] }
+            : {}),
+        },
+        { getProvider: () => provider, listProviders: () => [provider] },
+      );
+      const request = edit ? multipartRequestCall() : jsonRequestCall();
+      expect(request.url).toBe(
+        `https://openai-compatible.example.com/v1/images/${edit ? "edits" : "generations"}`,
+      );
+      if (edit) {
+        expect((request.body as FormData).get("size")).toBe(size);
+      } else {
+        expect(request.body).toMatchObject({ model, size });
+      }
+      expect(result.images[0]?.buffer).toEqual(Buffer.from("png-bytes"));
+    },
+  );
 
   it("preserves custom-endpoint model and geometry choices", async () => {
     const result = await generateOpenAIImage("Transparent custom image", {
@@ -722,11 +773,12 @@ describe("openai image generation provider", () => {
       mockCodexImageStream();
     });
 
-    it("serializes reference-image requests and caps the per-image Responses calls", async () => {
+    it("serializes reference-image requests and keeps returned formats across batches", async () => {
+      const buffer = Buffer.from("89504e470d0a1a0a", "hex");
       mockCodexEvents([
         {
           type: "response.output_item.done",
-          item: { ...imageItem(), revised_prompt: "revised prompt" },
+          item: { ...imageItem(buffer.toString("base64")), revised_prompt: "revised prompt" },
         },
         {
           type: "response.completed",
@@ -785,15 +837,15 @@ describe("openai image generation provider", () => {
       });
       expect(jsonRequestCall().headers?.get("authorization")).toBe("Bearer codex-key");
       expect(result.images.map((image) => image.fileName)).toEqual([
-        "image-1.jpg",
-        "image-2.jpg",
-        "image-3.jpg",
-        "image-4.jpg",
+        "image-1.png",
+        "image-2.png",
+        "image-3.png",
+        "image-4.png",
       ]);
       expect(result.images[0]).toEqual({
-        buffer: Buffer.from("codex-image"),
-        mimeType: "image/jpeg",
-        fileName: "image-1.jpg",
+        buffer,
+        mimeType: "image/png",
+        fileName: "image-1.png",
         revisedPrompt: "revised prompt",
       });
       expect(result.metadata?.responses).toEqual(

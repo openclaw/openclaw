@@ -9,6 +9,7 @@ import type {
 } from "../../config/sessions/types.js";
 import type { AgentRunTerminalReceipt } from "../agent-run-terminal-receipt.js";
 import type { AgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.types.js";
+import type { AgentTerminalSnapshot } from "../agent-terminal-snapshot.js";
 import type { FallbackAttempt } from "../model-fallback.types.js";
 import type { ReplyExpectation } from "../reply-completion.js";
 import type { AgentRuntimeCredentialSource } from "../runtime-plan/credential-source.types.js";
@@ -47,6 +48,8 @@ export type EmbeddedAgentMeta = {
    * usage metadata.
    */
   compactionTokensAfter?: number;
+  /** Context size a native runtime reported before its most recent compaction. */
+  compactionTokensBefore?: number;
   /**
    * Prompt/context snapshot from the latest model request. Prefer this for
    * context-window utilization because provider usage totals can include cached
@@ -136,6 +139,8 @@ export type EmbeddedRunTerminalToolFailure = {
 };
 
 export type EmbeddedAgentRunMeta = {
+  /** Optional content-free facts from the selected failed agent attempt. */
+  agentTerminal?: AgentTerminalSnapshot;
   durationMs: number;
   agentMeta?: EmbeddedAgentMeta;
   aborted?: boolean;

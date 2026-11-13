@@ -8,7 +8,7 @@ import type { ChatItem } from "../../lib/chat/chat-types.ts";
 import { userTurnRunId } from "../../lib/chat/history-message-identity.ts";
 import type { ChatProjection, TurnInsertionBounds } from "./chat-thread-items.ts";
 import { chatItemStartsUserTurn, isInterSessionMessage } from "./chat-turn-boundary.ts";
-import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
+import { knownStreamCausalInterval, persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
 import { readLiveTerminalRunId } from "./terminal-message-identity.ts";
 import { buildToolStreamIdentity, extractToolMessageRefs } from "./tool-stream-identity.ts";
 
@@ -75,6 +75,15 @@ export function createRunTurnLookup(items: ChatItem[]) {
   let bounds: Map<string, TurnInsertionBounds> | undefined;
   const inputs = new Map<string, TurnInsertionBounds>();
   const pagedInputCeilings = new Map<string, TurnInsertionBounds>();
+  const causalBounds = new Map<string, Map<string | undefined, TurnInsertionBounds | null>>();
+  let messages: unknown[] | undefined;
+  const startsExecutionTurn = (item: ChatItem) =>
+    chatItemStartsUserTurn(item) &&
+    !(
+      item.kind === "message" &&
+      asRecord(item.message)?.role === "assistant" &&
+      isInterSessionMessage(item.message)
+    );
   return (runId: string, afterUserSendId?: string): TurnInsertionBounds | null => {
     if (!bounds) {
       bounds = new Map();
@@ -85,12 +94,7 @@ export function createRunTurnLookup(items: ChatItem[]) {
       for (const item of items) {
         // Forwarded activity divides presentation, not the parent execution.
         // Its projected assistant role must not cap that run's live output.
-        if (
-          !chatItemStartsUserTurn(item) ||
-          (item.kind === "message" &&
-            asRecord(item.message)?.role === "assistant" &&
-            isInterSessionMessage(item.message))
-        ) {
+        if (!startsExecutionTurn(item)) {
           continue;
         }
         if (previousInput) {
@@ -122,13 +126,42 @@ export function createRunTurnLookup(items: ChatItem[]) {
         }
       }
     }
-    return (
+    const retainedInputBounds =
       (afterUserSendId
         ? (inputs.get(afterUserSendId) ?? pagedInputCeilings.get(runId))
-        : undefined) ??
-      bounds.get(runId) ??
-      null
-    );
+        : undefined) ?? bounds.get(runId);
+    if (retainedInputBounds) {
+      return retainedInputBounds;
+    }
+    // One lookup owns one fixed transcript. Bursts repeat even missing causal
+    // intervals, but different observed inputs must keep independent bounds.
+    let byInput = causalBounds.get(runId);
+    if (byInput?.has(afterUserSendId)) {
+      return byInput.get(afterUserSendId)!;
+    }
+    messages ??= items.map((item) => (item.kind === "message" ? item.message : null));
+    const interval = knownStreamCausalInterval(messages, { runId }, afterUserSendId);
+    const ceiling = interval
+      ? items.find(
+          (item, index) =>
+            index >= interval.start &&
+            index < interval.end &&
+            startsExecutionTurn(item) &&
+            (item.kind !== "message" || transcriptRunId(item.message) !== runId),
+        )
+      : undefined;
+    const result = interval
+      ? {
+          afterKey: items[interval.start - 1]?.key,
+          beforeKey: ceiling?.key ?? items[interval.end]?.key,
+        }
+      : null;
+    if (!byInput) {
+      byInput = new Map();
+      causalBounds.set(runId, byInput);
+    }
+    byInput.set(afterUserSendId, result);
+    return result;
   };
 }
 

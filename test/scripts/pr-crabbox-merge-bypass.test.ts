@@ -426,8 +426,8 @@ function runProtectedShell(
   writeFileSync(join(root, "input.json"), JSON.stringify(evidence));
   const gh = join(bin, "gh");
   const protectedGh = `#!${process.execPath}
-const fs = require("node:fs");
-const cp = require("node:child_process");
+import fs from "node:fs";
+import cp from "node:child_process";
 const args = process.argv.slice(2);
 fs.appendFileSync("calls.jsonl", JSON.stringify(args) + "\\n");
 const value = JSON.parse(fs.readFileSync("input.json", "utf8"));
@@ -566,7 +566,7 @@ else if (endpoint === "graphql" && args.some(arg => arg.includes("repository(own
         *'${advancedMainSha}'*|*--batch-check*) exec '${process.execPath}' '${selected}' fixture-git "$@";;
         *) exit 0;;
       esac;;
-      merge-base) exit 0;;
+      --version|merge-base) exit 0;;
       config) [ "$*" = 'config --bool remote.origin.promisor' ] && exit 1; exit 19;;
       remote) [ "$2 $3" = 'get-url origin' ] || exit 19; echo 'https://github.com/openclaw/openclaw.git';;
       merge-tree) echo candidate-tree;;

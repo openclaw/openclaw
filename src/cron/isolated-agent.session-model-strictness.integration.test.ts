@@ -18,7 +18,7 @@ import { cronTestJob } from "./service.fixture-builders.test-support.js";
 import { loadCronJobsStore, saveCronJobsStore } from "./store.js";
 import type { CronStoredJob } from "./types.js";
 
-// Loopback stubs named by role: the pinned model always fails with 401 on purpose; the others answer.
+// Loopback stubs named by role: the pinned model fails; the others answer.
 const providerUrls = {
   pinned: "http://127.0.0.1:11434/v1",
   primary: "http://127.0.0.1:11435/v1",
@@ -48,15 +48,23 @@ type ModelCase = [
   SessionEntry["modelOverrideSource"],
   { model?: string; fallbacks?: string[] } | undefined,
   string[],
+  "billing"?,
 ];
 it.each<ModelCase>([
   ["user pin", "user", undefined, []],
   ["legacy pin", undefined, undefined, []],
   ["explicit fallbacks", "user", { fallbacks: ["jobfallback/model-c"] }, ["jobfallback/model-c"]],
   ["its own model", "user", { model: "pinned/model-x" }, ["fallback/model-b"]],
+  [
+    "its own model and fallbacks after billing failure",
+    "user",
+    { model: "pinned/model-x", fallbacks: ["jobfallback/model-c"] },
+    ["jobfallback/model-c"],
+    "billing",
+  ],
 ])(
   "honors stored cron session fallback policy for %s",
-  async (_name, modelOverrideSource, payload, expected) => {
+  async (_name, modelOverrideSource, payload, expected, failure) => {
     await withOpenClawTestState({ label: "cron-session-model" }, async (state) => {
       installPrivateUpdateHandoffStore(state.root);
       const requests: string[] = [];
@@ -74,12 +82,15 @@ it.each<ModelCase>([
           return Response.json(
             {
               error: {
-                message: "Incorrect API key provided.",
+                message:
+                  failure === "billing"
+                    ? "credit balance is too low"
+                    : "Incorrect API key provided.",
                 type: "invalid_request_error",
-                code: "invalid_api_key",
+                code: failure === "billing" ? "insufficient_quota" : "invalid_api_key",
               },
             },
-            { status: 401 },
+            { status: failure === "billing" ? 400 : 401 },
           );
         }
         return providerResponse({

@@ -39,7 +39,7 @@ function extractThinkingFromTaggedStreamOutsideCode(text: string): string {
   let lastIndex = 0;
   let inThinking = false;
   for (const match of text.matchAll(THINKING_TAG_RE)) {
-    const idx = match.index ?? 0;
+    const idx = match.index;
     if (isInsideCode(idx, codeRegions)) {
       continue;
     }

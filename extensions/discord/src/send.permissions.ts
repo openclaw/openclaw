@@ -1,4 +1,12 @@
-import type { APIChannel, APIGuild, APIGuildMember, APIRole } from "discord-api-types/v10";
+import type {
+  APIChannel,
+  APIGuildForumChannel,
+  APIGuild,
+  APIGuildMember,
+  APIRole,
+  APITextChannel,
+  APIThreadChannel,
+} from "discord-api-types/v10";
 import { ChannelType, PermissionFlagsBits } from "discord-api-types/v10";
 import { isDiscordThreadChannelType } from "./channel-type.js";
 import { resolveDiscordRest } from "./client.js";
@@ -189,6 +197,27 @@ async function checkMemberChannelPermissions(
   }
 }
 
+async function canViewChannel(
+  permissions: bigint,
+  channel: APIChannel,
+  rest: RequestClient,
+  userId: string,
+): Promise<boolean> {
+  if (!hasPermissionBit(permissions, PermissionFlagsBits.ViewChannel)) {
+    return false;
+  }
+  if (channel.type === ChannelType.PrivateThread) {
+    if (!hasPermissionBit(permissions, PermissionFlagsBits.ManageThreads)) {
+      try {
+        await getThreadMember(rest, channel.id, userId);
+      } catch {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 export async function canViewDiscordGuildChannel(
   guildId: string,
   channelId: string,
@@ -200,19 +229,56 @@ export async function canViewDiscordGuildChannel(
     channelId,
     userId,
     opts,
-    async (permissions, channel, rest) => {
-      if (!hasPermissionBit(permissions, PermissionFlagsBits.ViewChannel)) {
-        return false;
-      }
-      if ("type" in channel && channel.type === ChannelType.PrivateThread) {
-        if (hasPermissionBit(permissions, PermissionFlagsBits.ManageThreads)) {
-          return true;
-        }
-        await getThreadMember(rest, channel.id, userId);
-      }
-      return true;
-    },
+    (permissions, channel, rest) => canViewChannel(permissions, channel, rest, userId),
   );
+}
+
+/** Fresh facts for one fork qualification; callers must not retain them for creation. */
+export async function fetchThreadForkPermissionsDiscord(
+  guildId: string,
+  source: APIThreadChannel,
+  parent: APITextChannel | APIGuildForumChannel,
+  userId: string,
+  opts: DiscordReactOpts,
+): Promise<{ requesterCanRead: boolean; botPermissions: string[] }> {
+  opts.signal?.throwIfAborted();
+  const rest = resolveDiscordRest(opts);
+  const [guild, requester, botId] = await Promise.all([
+    getGuild(rest, guildId),
+    getGuildMember(rest, guildId, userId),
+    fetchBotUserId(rest),
+  ]);
+  opts.signal?.throwIfAborted();
+  const bot = await getGuildMember(rest, guildId, botId);
+  opts.signal?.throwIfAborted();
+  // Thread visibility and history inherit the same parent overwrites; private
+  // membership remains a separate check, shared with ordinary channel visibility.
+  const requesterPermissions =
+    guild.owner_id === userId
+      ? ALL_PERMISSIONS
+      : resolveMemberChannelPermissionBits({
+          guildId,
+          userId,
+          guild,
+          member: requester,
+          channel: parent,
+        });
+  const requesterCanRead =
+    hasPermissionBit(requesterPermissions, PermissionFlagsBits.ReadMessageHistory) &&
+    (await canViewChannel(requesterPermissions, source, rest, userId));
+  opts.signal?.throwIfAborted();
+  return {
+    requesterCanRead,
+    botPermissions: bitfieldToPermissions(
+      resolveMemberChannelPermissionBits({
+        guildId,
+        userId: botId,
+        guild,
+        member: bot,
+        channel: parent,
+      }),
+    ),
+  };
 }
 
 /**

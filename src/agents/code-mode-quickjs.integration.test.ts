@@ -8,6 +8,64 @@ afterEach(codeMode.resetCodeModeTestState);
 const quickjs = { codeMode: { executor: "quickjs" as const } };
 const textOutput = (...texts: string[]) => texts.map((text) => ({ type: "text", text }));
 
+it("preserves every namespace row under heap pressure without substituting text", async () => {
+  const rows = Array.from({ length: 100_000 }, (_, index) => ({ index, marker: `row:${index}` }));
+  for (const heapMiB of [128, 16]) {
+    const after = codeMode.jsonTool("fixture_after", true);
+    const result = await runCodeModeScriptHeadless({
+      ctx: codeMode.createHeadlessCodeModeHarness([after], {
+        codeMode: {
+          executor: "quickjs",
+          memoryLimitBytes: heapMiB * 1024 * 1024,
+          timeoutMs: 60_000,
+        },
+      }),
+      extraNamespaces: [
+        {
+          id: "fixture-data",
+          globalName: "fixtureData",
+          scope: { kind: "value", value: rows },
+        },
+      ],
+      code: `
+        text("guest entered");
+        let mismatches = 0;
+        for (let i = 0; i < fixtureData.length; i++) {
+          const row = fixtureData[i];
+          if (!row || row.index !== i || row.marker !== "row:" + i || Object.keys(row).length !== 2) mismatches++;
+        }
+        await fixture_after({});
+        return { array: Array.isArray(fixtureData), rows: fixtureData.length, mismatches };
+      `,
+    });
+    if (result.status === "failed") {
+      expect(heapMiB).toBe(16);
+      expect(result).toMatchObject({
+        code: "internal_error",
+        error: expect.stringMatching(/out of memory/i),
+        output: [],
+        toolCallCount: 0,
+      });
+      codeMode.expectToolCalls(0, after);
+    } else {
+      expect(result).toMatchObject({
+        status: "completed",
+        value: { array: true, rows: rows.length, mismatches: 0 },
+        toolCallCount: 1,
+      });
+      expect(result.output).toEqual(textOutput("guest entered"));
+      codeMode.expectToolCalls(1, after);
+    }
+    expect(codeMode.testing.activeRuns.size).toBe(0);
+  }
+  expect(
+    await runCodeModeScriptHeadless({
+      ctx: codeMode.createHeadlessCodeModeHarness([], quickjs),
+      code: "return 42;",
+    }),
+  ).toMatchObject({ status: "completed", value: 42 });
+});
+
 function snapshotFixture() {
   const pendingStarted = createDeferred<AbortSignal>();
   const pending = codeMode.pluginToolWithExecute(

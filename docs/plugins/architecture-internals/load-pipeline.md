@@ -143,9 +143,17 @@ reload listeners and owners started by the reload, reads the published
 generation instead. Account health and authentication state are not part of the
 immutable package inventory.
 
+Plugin auto-enable preparation shares results within an immutable runtime metadata
+generation for the same captured config and environment publication. Model-fallback
+runs reuse that prepared config and its normalized plugin policy. Replacing the
+config, metadata snapshot, or managed environment selects new facts; retained runs
+keep their own generation. Mutable setup inputs retain only same-turn deduplication.
+
 Gateway model admission uses the configured agent's workspace and plugin inventory,
 including its published discovery catalog. A session opened in another folder keeps
-that folder as its execution cwd without losing discovered models. Standalone hosts
+that folder as its execution cwd without losing discovered models. Read-only lookups
+from that session, such as `sessions_spawn` model checks, `/models`, reset-model and
+thinking-level lookups, read the same published catalog. Standalone hosts
 continue to scope plugin discovery to their requested workspace.
 
 Setup provider detection loads providers from the metadata snapshot that

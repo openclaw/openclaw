@@ -1,5 +1,9 @@
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import { sleepWithAbort } from "@openclaw/retry";
+import {
+  monotonicDeadlineAfter,
+  remainingMonotonicMs,
+} from "../../../../src/shared/monotonic-time.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { hasOperatorApprovalsAccess } from "../../app/operator-access.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -26,6 +30,7 @@ import {
   setChatHistoryRetrying,
   type InitialChatHistoryReceipt,
 } from "./chat-history-state.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import { readChatInputRunIds } from "./chat-pending-inputs.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import {
@@ -61,6 +66,7 @@ function isCurrentSelectedSessionMessageSubscriptionSync(
     connectionEpoch: number;
     requestedKey: string;
     requestedAgentId?: string | null;
+    includeLiveToolOutput: boolean;
     openingDispatch?: Promise<boolean>;
   },
 ): boolean {
@@ -71,6 +77,8 @@ function isCurrentSelectedSessionMessageSubscriptionSync(
       ? state.connectionEpoch === params.connectionEpoch && state.connected
       : params.client.connectSent === params.openingDispatch) &&
     state.sessionKey.trim() === params.requestedKey &&
+    (state.settings?.chatInlineCommands === true &&
+      state.inlineCommandPresentation !== undefined) === params.includeLiveToolOutput &&
     resolveSelectedSessionMessageSubscriptionAgentId(state, params.requestedKey) ===
       (params.requestedAgentId ?? null)
   );
@@ -113,18 +121,27 @@ export function syncSelectedSessionMessageSubscription(
   const connectionEpoch = state.connectionEpoch;
   const requestedKey = state.sessionKey.trim();
   const requestedAgentId = resolveSelectedSessionMessageSubscriptionAgentId(state, requestedKey);
+  const includeLiveToolOutput =
+    state.settings?.chatInlineCommands === true && state.inlineCommandPresentation !== undefined;
+  const recoverLiveToolOutput =
+    includeLiveToolOutput &&
+    state.chatSessionMessageSubscription != null &&
+    !state.chatSessionMessageSubscription.includeLiveToolOutput;
   requests.subscriptionRetry?.abort();
   const retry = new AbortController();
   requests.subscriptionRetry = retry;
   const openingDispatch = opts?.beforeHello ? client?.connectSent : undefined;
-  const pending = synchronizeSelectedSessionMessageSubscription(state, retry.signal, opts).finally(
-    () => {
-      if (requests.subscriptionRetry === retry) {
-        delete requests.subscriptionRetry;
-        setChatHistoryRetrying(state, "subscription", false);
-      }
-    },
-  );
+  const pending = synchronizeSelectedSessionMessageSubscription(
+    state,
+    retry.signal,
+    includeLiveToolOutput,
+    opts,
+  ).finally(() => {
+    if (requests.subscriptionRetry === retry) {
+      delete requests.subscriptionRetry;
+      setChatHistoryRetrying(state, "subscription", false);
+    }
+  });
   const generation = requests.subscriptionGeneration;
   const ready = pending.then(
     (admitted) =>
@@ -136,6 +153,7 @@ export function syncSelectedSessionMessageSubscription(
         connectionEpoch,
         requestedKey,
         requestedAgentId,
+        includeLiveToolOutput,
         openingDispatch,
       }) &&
       state.connected &&
@@ -143,12 +161,23 @@ export function syncSelectedSessionMessageSubscription(
       state.chatSessionMessageSubscription != null,
   );
   requests.subscriptionReady = ready;
+  if (recoverLiveToolOutput) {
+    // Admission must resolve first: history hydration itself waits on this
+    // receipt, and a shared lease's initialHistory is consumed only once.
+    void ready.then((admitted) => {
+      if (admitted && requests.subscriptionReady === ready) {
+        return loadChatHistory(state, { deferBranches: true, supersedeInFlight: true });
+      }
+      return undefined;
+    });
+  }
   return ready;
 }
 
 async function synchronizeSelectedSessionMessageSubscription(
   state: ChatSessionMessageSubscriptionState,
   signal: AbortSignal,
+  includeLiveToolOutput: boolean,
   opts?: { force?: boolean; initialHistory?: boolean; beforeHello?: boolean },
 ): Promise<boolean> {
   if (!state.client || (!state.connected && !opts?.beforeHello)) {
@@ -156,7 +185,7 @@ async function synchronizeSelectedSessionMessageSubscription(
   }
   const client = state.client;
   const sessions = state.sessions;
-  const retryDeadline = Date.now() + CHAT_HISTORY_RETRY_WINDOW_MS;
+  const retryDeadline = monotonicDeadlineAfter(CHAT_HISTORY_RETRY_WINDOW_MS);
   const connectionEpoch = state.connectionEpoch;
   // Hello advances the pane epoch; the transport receipt spans that admission only.
   const openingDispatch = opts?.beforeHello ? client.connectSent : undefined;
@@ -171,6 +200,9 @@ async function synchronizeSelectedSessionMessageSubscription(
   const previousCanonicalKey = normalizeNullableString(previousSubscription?.key);
   const previousSelectedKey = previousRequestedKey ?? previousCanonicalKey;
   const nextSubscriptionAgentId = resolveSelectedSessionMessageSubscriptionAgentId(state, nextKey);
+  const outputInterestChanged =
+    previousSubscription !== null &&
+    (previousSubscription.includeLiveToolOutput === true) !== includeLiveToolOutput;
   const selectedAgentChanged =
     nextSubscriptionAgentId !== null &&
     previousSelectedKey === nextKey &&
@@ -183,8 +215,13 @@ async function synchronizeSelectedSessionMessageSubscription(
   const selectedKeyChanged = previousSelectedKey !== null && previousSelectedKey !== nextKey;
   const replaceSubscription = opts?.force === true || selectedKeyChanged || selectedAgentChanged;
   const shouldUnsubscribePrevious = previousSubscription !== null && replaceSubscription;
+  const retainPreviousUntilAdmitted =
+    shouldUnsubscribePrevious && !selectedKeyChanged && !selectedAgentChanged;
   const shouldSubscribe =
-    replaceSubscription || previousCanonicalKey === null || previousRequestedKey === null;
+    replaceSubscription ||
+    outputInterestChanged ||
+    previousCanonicalKey === null ||
+    previousRequestedKey === null;
   const isCurrent = () =>
     !signal.aborted &&
     state.sessions === sessions &&
@@ -194,6 +231,7 @@ async function synchronizeSelectedSessionMessageSubscription(
       connectionEpoch,
       requestedKey: nextKey,
       requestedAgentId: nextSubscriptionAgentId,
+      includeLiveToolOutput,
       openingDispatch,
     });
   const clearRecoveredError = () => {
@@ -274,10 +312,10 @@ async function synchronizeSelectedSessionMessageSubscription(
           nextKey,
           {
             agentId: nextSubscriptionAgentId ?? undefined,
-            ...(state.connected && hasOperatorApprovalsAccess(state.hello?.auth ?? null)
-              ? { includeApprovals: true }
-              : {}),
-            ...(params ? { initialHistory } : {}),
+            includeLiveToolOutput: includeLiveToolOutput || undefined,
+            includeApprovals:
+              state.connected && hasOperatorApprovalsAccess(state.hello?.auth ?? null),
+            initialHistory: params ? initialHistory : undefined,
           },
           opts?.beforeHello ? { beforeHello: true } : undefined,
         );
@@ -297,7 +335,7 @@ async function synchronizeSelectedSessionMessageSubscription(
         if (!isCurrent() || !isRetryableChatReadError(error, "sessions.messages.subscribe")) {
           throw error;
         }
-        const remaining = retryDeadline - Date.now();
+        const remaining = remainingMonotonicMs(retryDeadline);
         if (remaining <= 0) {
           throw error;
         }
@@ -309,7 +347,7 @@ async function synchronizeSelectedSessionMessageSubscription(
         if (!isCurrent()) {
           return null;
         }
-        if (Date.now() >= retryDeadline) {
+        if (remainingMonotonicMs(retryDeadline) <= 0) {
           throw error;
         }
       }
@@ -334,24 +372,28 @@ async function synchronizeSelectedSessionMessageSubscription(
   paneRequests.pendingApprovalReplay = approvalReplayOwner;
   state.chatSessionApprovalQueue = [];
   let upgradingApprovals = false;
-  try {
-    if (shouldUnsubscribePrevious && previousSubscription) {
-      // The capability retains failed releases for cleanup. An old observer
-      // must not delay readiness or fail history for the newly selected session.
+  const releasePrevious = () => {
+    if (previousSubscription) {
       void sessions.unsubscribeMessages(previousSubscription).catch((error: unknown) => {
         console.warn("[chat] Failed to release message subscription:", formatUiError(error));
       });
     }
+  };
+  try {
+    // A same-session refresh must not discard a usable observer when admission fails.
+    if (shouldUnsubscribePrevious && !retainPreviousUntilAdmitted) {
+      releasePrevious();
+    }
     const subscribePromise = shouldSubscribe && isCurrent() ? subscribe() : Promise.resolve(null);
     const subscribed = await subscribePromise.catch((error: unknown) => {
-      if (isCurrent() && shouldUnsubscribePrevious) {
+      if (isCurrent() && shouldUnsubscribePrevious && !retainPreviousUntilAdmitted) {
         state.chatSessionMessageSubscriptionRequestedKey = null;
         state.chatSessionMessageSubscription = null;
       }
       throw error;
     });
     if (!subscribed) {
-      if (isCurrent() && shouldUnsubscribePrevious) {
+      if (isCurrent() && shouldUnsubscribePrevious && !retainPreviousUntilAdmitted) {
         state.chatSessionMessageSubscriptionRequestedKey = null;
         state.chatSessionMessageSubscription = null;
       }
@@ -386,6 +428,10 @@ async function synchronizeSelectedSessionMessageSubscription(
       }
     };
     adoptSubscription(subscribed);
+    if (retainPreviousUntilAdmitted || (outputInterestChanged && !shouldUnsubscribePrevious)) {
+      // Same-session replacement acquires first, including shared live-output demand.
+      releasePrevious();
+    }
     if (initialHistoryReceipt) {
       paneRequests.initialHistory = initialHistoryReceipt;
     }
@@ -400,6 +446,7 @@ async function synchronizeSelectedSessionMessageSubscription(
         .subscribeMessages(nextKey, {
           agentId: nextSubscriptionAgentId ?? undefined,
           includeApprovals: true,
+          includeLiveToolOutput: includeLiveToolOutput || undefined,
         })
         .then(async (approvalSubscription) => {
           if (!isCurrent() || !state.connected) {

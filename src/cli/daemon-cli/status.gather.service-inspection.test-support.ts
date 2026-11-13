@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { expect, it, onTestFinished, vi } from "vitest";
+import { isLaunchAgentLoaded } from "../../daemon/launchd-runtime.js";
 import {
   ServiceInspectionError,
   ServiceOwnershipRefusalError,
@@ -41,7 +42,9 @@ export function registerServiceInspectionStatusTests(params: {
   isGatewayExternallySupervised: { mockReturnValue(value: boolean): unknown };
   findSystemdGatewayInstallation: RejectOnce;
   loadInstalledPluginIndexInstallRecords: () => unknown;
-  serviceIsLoaded: RejectOnce;
+  serviceIsLoaded: RejectOnce & {
+    mockImplementationOnce(implementation: () => Promise<boolean>): unknown;
+  };
   serviceReadCommand: { mockResolvedValueOnce(command: null): unknown };
   serviceReadRuntime: RejectOnce;
   inspectGatewayRestart: () => unknown;
@@ -110,6 +113,35 @@ export function registerServiceInspectionStatusTests(params: {
       expect(exit).toHaveBeenCalledWith(1);
       expect(writeJson).toHaveBeenCalled();
       expectNoCalls(callGatewayStatusProbe, params.loadInstalledPluginIndexInstallRecords);
+    },
+  );
+
+  it.each([
+    [125, "Could not print domain: 125: Domain does not support specified action"],
+    [13, "Permission denied"],
+  ] as const)(
+    "reports GUI-session guidance when launchd inspection exits %i",
+    async (code, stderr) => {
+      await withMockedPlatform("darwin", async () => {
+        const native = vi.spyOn(await import("../../daemon/exec-file.js"), "execFileUtf8");
+        onTestFinished(() => native.mockRestore());
+        native.mockResolvedValue({ code, termination: "exit", stdout: "", stderr });
+        params.serviceIsLoaded.mockImplementationOnce(() => isLaunchAgentLoaded({ env: {} }));
+
+        const status = await params.gatherStatus({ probe: false });
+        expect(status.service).toMatchObject({
+          inspectionReason: "launchd-gui-domain-unavailable",
+          loaded: null,
+        });
+        const printed = capturePrintedDaemonStatus(status, { json: false });
+        const output = `${printed.logs}\n${printed.errors}`;
+        expect(output).toContain("may be missing or inaccessible");
+        expect(output).toContain("launchctl print gui/$(id -u)");
+        expect(output).toContain("If the domain is missing, log in to the macOS desktop");
+        expect(output).toContain("SSH");
+        expect(output).toContain("OPENCLAW_SERVICE_REPAIR_POLICY=external");
+        expect(output).not.toContain("Manage its LaunchAgent from");
+      });
     },
   );
 

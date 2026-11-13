@@ -1,4 +1,8 @@
-import { withSqliteReaderOwner } from "../../infra/sqlite-reader-lifecycle.js";
+import {
+  withSqliteReaderOwner,
+  type SqliteOperationHoldContext,
+} from "../../infra/sqlite-reader-lifecycle.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { OpenClawAgentDatabaseReadValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import { sessionHistoryCleanupError } from "./session-history-worker-errors.js";
 import type {
@@ -8,6 +12,7 @@ import type {
 
 // Keep target switching within the existing serialized worker; no read snapshot survives a task.
 const MAX_RETAINED_HISTORY_DATABASES = 64;
+const log = createSubsystemLogger("sqlite/transaction");
 const historyDatabaseScopes = new Map<
   string,
   {
@@ -21,6 +26,7 @@ export async function withHistoryDatabase<T>(
   operationLabel: string,
   operation: () => T | Promise<T>,
   validation?: OpenClawAgentDatabaseReadValidation,
+  holdContext?: SqliteOperationHoldContext,
 ): Promise<SessionTranscriptWorkerSuccess<T>> {
   const key = JSON.stringify(database);
   let retained = historyDatabaseScopes.get(key);
@@ -34,6 +40,8 @@ export async function withHistoryDatabase<T>(
     const value = await withSqliteReaderOwner(
       { operation: `sessions.${operationLabel}`, ownerKind: "worker" },
       () => scope.run({ ...database, validation }, operation),
+      { agentId: database.agentId, ...holdContext },
+      log,
     );
     historyDatabaseScopes.delete(key);
     // Tasks without retained connections must not evict useful connections or retain empty scopes.

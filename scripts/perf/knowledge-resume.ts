@@ -2,11 +2,14 @@
  * Knowledge resume owner benchmark: real SQLite, publication files and fsyncs.
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/knowledge-resume.ts
  *   [--source /absolute/path/to/storage-journal.ts] [--iterations 5]
- *   [--history 10000] [--records 100] [--replays 0] [--sample]
+ *   [--publication-files /absolute/path/to/publication-files.ts]
+ *   [--storage-base /absolute/path/to/storage-base.ts]
+ *   [--history 10000] [--records 100] [--replays 0] [--sample] [--fsync-delay-ms 500]
  *
  * Alternate base/candidate timing runs, then repeat with --sample for allocation.
  * --source can be a baseline copy under .local: its sibling imports resolve to
- * the current Knowledge owner directory. Only storage-journal.ts is substituted.
+ * the current Knowledge owner directory. Companion overrides preserve baseline
+ * storage-base and publication-files behavior when those owners also changed.
  * --replays 2000 adds a separate already-published replay pass; use --records 1
  * for a small replay workload or retain 100 to exercise a multi-MiB journal plan.
  *
@@ -26,7 +29,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
-import { registerHooks } from "node:module";
+import { registerHooks, syncBuiltinESMExports } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { PerformanceObserver, type PerformanceEntry } from "node:perf_hooks";
@@ -43,11 +46,14 @@ import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 const { values } = parseArgs({
   options: {
     source: { type: "string" },
+    "publication-files": { type: "string" },
+    "storage-base": { type: "string" },
     iterations: { type: "string", default: "5" },
     history: { type: "string", default: "10000" },
     records: { type: "string", default: "100" },
     replays: { type: "string", default: "0" },
     sample: { type: "boolean", default: false },
+    "fsync-delay-ms": { type: "string", default: "0" },
   },
 });
 const integer = (name: "iterations" | "history" | "records" | "replays", min = 1) =>
@@ -56,11 +62,23 @@ const iterations = integer("iterations"),
   history = integer("history", 0),
   recordCount = integer("records"),
   replays = integer("replays", 0);
+const fsyncDelayMs = parseStrictIntegerOption({
+  raw: values["fsync-delay-ms"],
+  label: "--fsync-delay-ms",
+  min: 0,
+  fallback: 0,
+});
 const repo = fileURLToPath(new URL("../../", import.meta.url));
 const owner = new URL("../../extensions/knowledge/src/", import.meta.url);
 const source = values.source
   ? pathToFileURL(path.resolve(values.source))
   : new URL("storage-journal.ts", owner);
+const publicationFilesSource = values["publication-files"]
+  ? pathToFileURL(path.resolve(values["publication-files"]))
+  : undefined;
+const storageBaseSource = values["storage-base"]
+  ? pathToFileURL(path.resolve(values["storage-base"]))
+  : undefined;
 registerHooks({
   resolve(specifier, context, nextResolve) {
     const prefix = "openclaw/plugin-sdk/";
@@ -71,7 +89,18 @@ registerHooks({
         context,
       );
     }
-    if (context.parentURL === source.href && specifier.startsWith("./")) {
+    if (storageBaseSource && specifier.endsWith("/storage-base.js")) {
+      return nextResolve(storageBaseSource.href, context);
+    }
+    if (publicationFilesSource && specifier.endsWith("/publication-files.js")) {
+      return nextResolve(publicationFilesSource.href, context);
+    }
+    if (
+      [source.href, publicationFilesSource?.href, storageBaseSource?.href].includes(
+        context.parentURL,
+      ) &&
+      specifier.startsWith("./")
+    ) {
       return nextResolve(new URL(specifier.replace(/\.js$/, ".ts"), owner).href, context);
     }
     return nextResolve(specifier, context);
@@ -90,8 +119,28 @@ const counters = () => ({
   sqlMs: 0,
   sqlCalls: 0,
   authorityCalls: 0,
+  fsyncCalls: 0,
+  fsyncMs: 0,
 });
 let measured: ReturnType<typeof counters> | undefined;
+// Delay one real fsync per measured operation: a single stalled flush must
+// lengthen publication, never the SQLite write-lock hold.
+const nativeFsync = fs.fsyncSync;
+const delaySignal = new Int32Array(new SharedArrayBuffer(4));
+fs.fsyncSync = (fd) => {
+  const start = performance.now();
+  if (measured && measured.fsyncCalls++ === 0 && fsyncDelayMs) {
+    Atomics.wait(delaySignal, 0, 0, fsyncDelayMs);
+  }
+  try {
+    return nativeFsync(fd);
+  } finally {
+    if (measured) {
+      measured.fsyncMs += performance.now() - start;
+    }
+  }
+};
+syncBuiltinESMExports();
 class MeasuredStore extends SqliteIdentityStore {
   override withDatabase<T>(run: (db: DatabaseSync) => T): T {
     return super.withDatabase((db) => {
@@ -211,6 +260,9 @@ async function measure(name: string, operations: number, run: () => void) {
     sqlMs: stats.sqlMs,
     sqlCalls: stats.sqlCalls,
     authorityCalls: stats.authorityCalls,
+    fsyncDelayMs,
+    fsyncCalls: stats.fsyncCalls,
+    fsyncMs: stats.fsyncMs,
     transactions: stats.holds.length,
     transactionTotalMs: sum(stats.holds),
     transactionMaxMs: maximum(stats.holds),

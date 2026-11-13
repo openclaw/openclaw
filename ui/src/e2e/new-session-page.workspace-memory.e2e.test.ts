@@ -203,9 +203,7 @@ suite.define(() => {
       .poll(() => draft.evaluate((element) => getComputedStyle(element).opacity))
       .toBe("1");
     expect(
-      await incognito.evaluate(
-        (element) => element.closest(".new-session-page__incognito-rail") != null,
-      ),
+      await incognito.evaluate((element) => element.closest(".mobile-header__capsule") != null),
     ).toBe(true);
     const [footerBox, attachBox, modelBox] = await Promise.all([
       bounds(footer),
@@ -350,7 +348,7 @@ suite.define(() => {
     await expectLabel(projectTrigger, "packages");
     await pollLocatorText(
       page.locator("#new-session-where-trigger .new-session-page__trigger-label"),
-    ).toBe("Local");
+    ).toBe("This computer");
     await expectAttribute(placeTrigger, "data-worktree", "true");
     await placeTrigger.click();
     await expectValue(checkoutBaseRefInput(page), "release/next");
@@ -436,18 +434,7 @@ suite.define(() => {
         "agents.list": mainAgentList(),
         "fs.listDir": FOLDER_LISTINGS,
         "projects.list": { projects: [], recents: [] },
-        "users.prefs.get": {
-          sequence: [
-            { status: "ok", entries: {} },
-            {
-              status: "ok",
-              entries: {
-                "new-session.migration.v1": true,
-                "new-session.v1:main": REMEMBERED_PROJECT,
-              },
-            },
-          ],
-        },
+        "users.prefs.get": { status: "ok", entries: {} },
         "users.prefs.set": { status: "ok" },
         "worktrees.branches": GIT_BRANCHES,
       },
@@ -457,13 +444,20 @@ suite.define(() => {
     expect(migrated.params).toMatchObject({
       entries: { "new-session.v1:main": REMEMBERED_PROJECT },
     });
+    await gateway.setMethodResponse("users.prefs.get", {
+      status: "ok",
+      entries: {
+        "new-session.migration.v1": true,
+        "new-session.v1:main": REMEMBERED_PROJECT,
+      },
+    });
     const trigger = page.locator("#new-session-project-trigger");
     const checkoutTrigger = page.locator("#new-session-checkout-trigger");
     await expectLabel(trigger, "packages");
     await expectAttribute(checkoutTrigger, "data-worktree", "true");
     await captureProjectUiProof(suite, page, "identity-preferences-migrated.png");
     await returnToDraft(page);
-    await waitForRequestCount(gateway, 2, "users.prefs.get");
+    await waitForRequestCount(gateway, 2, "users.prefs.get", {}, { exactParams: true });
     await waitForRequestCount(gateway, 1, "users.prefs.set");
     await gateway.deferNext("users.prefs.set");
     const newSession = page.locator("openclaw-new-session-page");

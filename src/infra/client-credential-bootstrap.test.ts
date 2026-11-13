@@ -4,6 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { bindFreshClientCredentialStore } from "./client-credential-migration.js";
+import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
 import {
   readClientCredentialReceipt,
   writeClientCredentialReceipt,
@@ -11,6 +12,7 @@ import {
 import { readClientCredentialFileIdentity } from "./client-credential-receipt.js";
 import {
   openClientCredentialCustody,
+  openClientCredentialCustodyAsync,
   runClientCredentialOperation,
 } from "./client-credential-store.js";
 import { generateStoredDeviceIdentity } from "./device-identity-material.js";
@@ -72,6 +74,35 @@ function bind(source: DatabaseSync, f: ReturnType<typeof fixture>) {
     bindFreshClientCredentialStore(source, { path: f.sourcePath, env: f.env }),
   );
 }
+
+it("preserves prepared credential absence during fresh bootstrap", async () => {
+  const f = fixture(false);
+  const prepared = await openClientCredentialCustodyAsync(f.env, { migration: true });
+  expect(prepared).toBeUndefined();
+  using source = openNodeSqliteDatabase(f.sourcePath);
+  expect(() =>
+    runSqliteImmediateTransactionSync(source, () => {
+      createAnchor(source);
+      bindFreshClientCredentialStore(source, {
+        path: f.sourcePath,
+        env: f.env,
+        custody: prepared ?? null,
+      });
+    }),
+  ).toThrow("Cannot acquire local credentials during shared bootstrap.");
+  expect(fs.existsSync(resolveClientCredentialStorePath(f.env))).toBe(false);
+  expect(
+    source.prepare("SELECT name FROM sqlite_schema WHERE name = 'openclaw_engine_anchor'").get(),
+  ).toBeUndefined();
+  runSqliteImmediateTransactionSync(source, () => {
+    createAnchor(source);
+    bindFreshClientCredentialStore(source, { path: f.sourcePath, env: f.env });
+  });
+  expect(localSnapshot(f.env).receipt).toMatchObject({
+    phase: "complete",
+    receipt: { source: { engine: "postgres", identity: storeId } },
+  });
+});
 
 function localSnapshot(env: NodeJS.ProcessEnv) {
   using owner = openClientCredentialCustody(env, { migration: true })!;

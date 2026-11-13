@@ -1,32 +1,32 @@
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { chromium, type Browser, type Page } from "playwright";
-import { expect, it } from "vitest";
+import { expect, inject, it } from "vitest";
 import type { OpenClawTestInstance } from "../../../../test/helpers/openclaw-test-instance.ts";
-import { runQaGatewayFixture } from "../../../../test/helpers/qa-gateway-cleanup.ts";
-import { startScrollInferenceFixture } from "../../e2e/chat-collaborator-scroll.real-gateway.test-support.ts";
-import { assertServedUi, pairFixture } from "../../e2e/chat-lifecycle.test-support.ts";
-import {
-  connectChatGateway,
-  createChatGatewayInstance,
-} from "../../e2e/chat-real-gateway.test-support.ts";
 import { createDarkDesktopControlUiContextOptions } from "../../e2e/control-ui-browser-options.test-support.ts";
 import { seedSidebarSettings } from "../../e2e/sidebar-contract.test-support.ts";
-import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
 import { getControlUiContextHandle } from "../../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../../test-helpers/control-ui-e2e-readiness.ts";
-import { takeControlUiScreenshotFrame } from "../../test-helpers/control-ui-e2e-screenshot.ts";
 import {
-  canRunPlaywrightChromium,
+  controlUiSessionUrl,
   installMockGateway,
   reconnectMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
   waitForControlUiRoute,
 } from "../../test-helpers/control-ui-e2e.ts";
 
-const executablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
+const {
+  executablePath,
+  available: chromiumAvailable,
+  wsEndpoint: chromiumWsEndpoint,
+} = inject("controlUiE2eChromium");
+
+function connectCreatorBrowser() {
+  return chromiumWsEndpoint
+    ? chromium.connect(chromiumWsEndpoint, { timeout: 30_000 })
+    : chromium.launch({ executablePath });
+}
 async function withHeldCreator(
   run: (fixture: {
     page: Page;
@@ -40,7 +40,7 @@ async function withHeldCreator(
   const release = Promise.withResolvers<void>();
   let browser: Browser | undefined;
   try {
-    browser = await chromium.launch({ executablePath });
+    browser = await connectCreatorBrowser();
     const page = await browser.newPage(createDarkDesktopControlUiContextOptions());
     await seedSidebarSettings(page, server.baseUrl, { sidebarAgentsMode: "roster" });
     const config = { gateway: { controlUi: { experimental: { templates: true } } } };
@@ -101,7 +101,7 @@ async function withHeldCreator(
     const openAction = async () => {
       await row.hover();
       await menu.click();
-      await page.getByRole("menuitem", { name: "Create Template", exact: true }).click();
+      await page.getByRole("menuitem", { name: "Create template", exact: true }).click();
     };
     await openAction();
     await expect.poll(() => held).toBe(1);
@@ -130,7 +130,7 @@ async function withHeldCreator(
   }
 }
 
-it.skipIf(!canRunPlaywrightChromium(executablePath))(
+it.skipIf(!chromiumAvailable)(
   "loads the creator on the first sidebar action and keeps duplicate clicks behind one admission",
   async () => {
     await withHeldCreator(async ({ page, gateway, imports, openAction, releaseAndSettle }) => {
@@ -143,11 +143,21 @@ it.skipIf(!canRunPlaywrightChromium(executablePath))(
       expect(creates).toHaveLength(1);
       expect(creates[0]?.params).toEqual({ agentId: "main" });
       expect(imports).toHaveLength(1);
-      const dialog = page.getByRole("dialog", { name: "Review your Template" });
-      expect(await dialog.count()).toBe(0);
+      const card = page.getByRole("region", { name: "Review your Template" });
+      expect(await card.count()).toBe(0);
+      // Duplicate admission must also stay closed after create has completed
+      // while the original chat write is still awaiting its acknowledgement.
+      await openAction();
+      expect(await gateway.getRequests("templates.drafts.create")).toHaveLength(1);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
       await gateway.resolveDeferred("chat.send", { status: "started" });
-      await dialog.waitFor({ state: "visible" });
-      expect(await dialog.getByLabel("Name").inputValue()).toBe("First use");
+      await card
+        .getByRole("heading", { name: "First use", exact: true })
+        .waitFor({ state: "attached" });
+      await card.scrollIntoViewIfNeeded();
+      await card.getByRole("heading", { name: "First use", exact: true }).waitFor();
+      expect(await card.locator("input, textarea").count()).toBe(0);
+      expect(await page.getByRole("dialog", { name: "Review your Template" }).count()).toBe(0);
       expect(await gateway.getRequests("templates.drafts.create")).toHaveLength(1);
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
       console.log(
@@ -168,7 +178,7 @@ it.skipIf(!canRunPlaywrightChromium(executablePath))(
   },
 );
 
-it.skipIf(!canRunPlaywrightChromium(executablePath)).each(["replacement", "read-only"] as const)(
+it.skipIf(!chromiumAvailable).each(["replacement", "read-only"] as const)(
   "rejects deferred creator writes after %s authority retirement",
   async (mode) => {
     await withHeldCreator(async ({ page, gateway, releaseAndSettle }) => {
@@ -238,15 +248,24 @@ it.skipIf(!canRunPlaywrightChromium(executablePath)).each(["replacement", "read-
   },
 );
 
-it.skipIf(!canRunPlaywrightChromium(executablePath))(
-  "publishes the reviewed selection after closing a pending publish and retrying its failure",
-  async () => {
+it.skipIf(!chromiumAvailable).each([
+  { width: 390, colorScheme: "dark" as const },
+  { width: 390, colorScheme: "light" as const },
+  { width: 1440, colorScheme: "dark" as const },
+])(
+  "keeps file previews readable and retains publication across navigation at $width/$colorScheme",
+  async ({ width, colorScheme }) => {
     const server = await startControlUiE2eServer();
     let browser: Browser | undefined;
     try {
-      browser = await chromium.launch({ executablePath });
-      const page = await browser.newPage(createDarkDesktopControlUiContextOptions());
+      browser = await connectCreatorBrowser();
+      const page = await browser.newPage({
+        ...createDarkDesktopControlUiContextOptions(),
+        viewport: { width, height: 844 },
+        colorScheme,
+      });
       const draftId = "ec8f46b0-4ca3-4991-8a73-dfdcc8764087";
+      const sessionKey = "agent:main:dashboard:release-brief";
       const optionalFile = "workspace/checklist.md";
       const scope = { input: "Repository", job: "Summarize", output: "Brief", authority: "Read" };
       const reviewed = {
@@ -268,15 +287,52 @@ it.skipIf(!canRunPlaywrightChromium(executablePath))(
         ],
         files: [
           { path: "CLAW.md", content: "Portable release instructions" },
-          { path: optionalFile, content: "Check each date and citation." },
+          { path: optionalFile, content: "Check each date and citation.\n\n".repeat(50) },
         ],
         scope,
       };
       const config = { gateway: { controlUi: { experimental: { templates: true } } } };
       const gateway = await installMockGateway(page, {
-        featureMethods: ["create", "read", "review", "publish"].map(
-          (op) => `templates.drafts.${op}`,
-        ),
+        sessionKey,
+        // Synthetic persisted tool result: this exercises the real browser
+        // review owner, not model execution or real registry publication.
+        historyMessages: [
+          {
+            role: "user",
+            content: [{ type: "text", text: "Create a reusable release brief." }],
+            timestamp: 1_790_000_000_000,
+          },
+          {
+            role: "assistant",
+            content: [
+              { type: "text", text: "The private proposal is ready. Nothing has been published." },
+            ],
+            timestamp: 1_790_000_001_000,
+          },
+          {
+            role: "toolResult",
+            toolName: "screen",
+            toolCallId: "release-review",
+            content: [{ type: "text", text: "Template ready for review" }],
+            timestamp: 1_790_000_002_000,
+            details: {
+              pluginView: {
+                type: "plugin_view",
+                pluginId: "openclaw",
+                viewId: "template-review",
+                version: 1,
+                toolName: "screen",
+                toolCallId: "release-review",
+                summary: "Template ready for review",
+                payload: { agentId: "main", draftId, sessionKey },
+              },
+            },
+          },
+        ],
+        featureMethods: [
+          "chat.send",
+          ...["create", "read", "review", "publish"].map((op) => `templates.drafts.${op}`),
+        ],
         methodResponses: {
           "config.get": {
             config,
@@ -298,66 +354,102 @@ it.skipIf(!canRunPlaywrightChromium(executablePath))(
           },
         },
       });
-      const setReview = (token: string) =>
-        gateway.setMethodResponse("templates.drafts.review", {
-          ...reviewed,
-          reviewToken: token.repeat(64),
-          items: reviewed.items.map((item) => ({ ...item, included: false })),
-          files: reviewed.files.filter((file) => file.path !== optionalFile),
-        });
       const waitForRequests = (method: string, count: number) =>
         expect.poll(async () => (await gateway.getRequests(method)).length).toBe(count);
-      await page.goto(`${server.baseUrl}templates?draft=${draftId}&agent=main`);
-      const dialog = page.getByRole("dialog", { name: "Review your Template" });
-      await dialog.waitFor();
-      const proofDir = createControlUiE2eArtifactDir("templates-rename-creator-after");
-      const frame = await takeControlUiScreenshotFrame(
-        page,
-        dialog,
-        [dialog.getByRole("button", { name: "Publish to ClawHub" })],
-        { animations: "disabled" },
+      await page.goto(controlUiSessionUrl(server.baseUrl, sessionKey));
+      await waitForControlUiRoute(page, { routeId: "chat" });
+      await waitForControlUiGatewayReady(page);
+      const inline = page.locator('[data-plugin-inline-view="release-review"]');
+      await inline.scrollIntoViewIfNeeded();
+      const card = inline.getByRole("region", { name: "Review your Template" });
+      await card.getByRole("heading", { name: "Release Brief", exact: true }).waitFor();
+      expect(await card.getByText("Summarizes releases", { exact: true }).count()).toBe(1);
+      expect(await card.locator("input, textarea").count()).toBe(0);
+      expect(await card.getByRole("checkbox").count()).toBe(0);
+      await card.getByRole("button", { name: /Workspace files/ }).click();
+      await card.getByRole("button", { name: "View all", exact: true }).click();
+      await card.getByRole("button", { name: optionalFile, exact: true }).click();
+      const document = card.locator(".template-creator__detail-panel article");
+      await document.getByText("Check each date and citation.", { exact: true }).first().waitFor();
+      expect(await document.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+        true,
       );
-      await writeFile(`${proofDir}/after-creator.png`, frame.png);
-      expect(await dialog.getByText("View", { exact: true }).count()).toBe(1);
-      expect(await dialog.getByLabel("Description").inputValue()).toBe("Summarizes releases");
-      await setReview("d");
-      await dialog.getByRole("checkbox", { name: optionalFile }).uncheck();
-      await waitForRequests("templates.drafts.review", 2);
+      const body = card.locator(".template-creator__body");
+      await body.evaluate((element) => {
+        element.scrollTop = element.scrollHeight;
+      });
+      expect(
+        await body.evaluate(
+          (element) => element.scrollTop + element.clientHeight >= element.scrollHeight - 1,
+        ),
+      ).toBe(true);
+      await card.getByRole("button", { name: "Back to contents", exact: true }).click();
+      await card.getByRole("button", { name: "Back to contents", exact: true }).click();
+      await card.getByRole("button", { name: "Back to Template", exact: true }).click();
+      expect(await gateway.getRequests("templates.drafts.review")).toHaveLength(1);
+      expect(await gateway.getRequests("templates.drafts.publish")).toHaveLength(0);
       await gateway.deferNext("templates.drafts.publish");
-      await dialog.getByRole("button", { name: "Publish to ClawHub" }).click();
+      await card.getByRole("button", { name: "Publish", exact: true }).click();
       await gateway.waitForRequest("templates.drafts.publish");
-      await expect
-        .poll(() => dialog.locator("button.btn.primary").getAttribute("aria-busy"))
-        .toBe("true");
-      await dialog.locator(".btn__spinner").waitFor({ state: "visible" });
-      await dialog.getByRole("button", { name: "Ask for changes" }).click();
-      await dialog.waitFor({ state: "detached" });
-      await gateway.rejectDeferred("templates.drafts.publish", {
-        code: "UNAVAILABLE",
-        message: "The package upload was interrupted.",
-      });
-      const publicationError = page.getByRole("alert");
-      await publicationError.waitFor();
-      expect(await publicationError.textContent()).toContain("The package upload was interrupted.");
-      expect(await page.getByRole("button", { name: "Review Template package" }).count()).toBe(0);
-      await setReview("e");
-      await publicationError.getByRole("button", { name: "Retry review" }).click();
-      await waitForRequests("templates.drafts.review", 3);
-      await dialog.getByRole("button", { name: "Publish to ClawHub" }).click();
-      await waitForRequests("templates.drafts.publish", 2);
-      const published = await gateway.getRequests("templates.drafts.publish");
-      expect(published[1]?.params).toMatchObject({
-        reviewToken: "e".repeat(64),
-        choices: {
-          excluded: [`file:${optionalFile}`],
-        },
-      });
-      await page
-        .getByText("Submitted to ClawHub. Publication pending security review.")
-        .waitFor({ state: "visible" });
-      await page.getByRole("button", { name: "View on ClawHub" }).waitFor({ state: "visible" });
-      expect(await page.locator(".template-creator__notice").count()).toBe(0);
-      expect(await dialog.count()).toBe(0);
+      await card.getByRole("button", { name: "Publishing…", exact: true }).waitFor();
+      expect(
+        await card.getByRole("button", { name: "Publishing…", exact: true }).isDisabled(),
+      ).toBe(true);
+      await card.locator(".btn__spinner").waitFor({ state: "visible" });
+      const application = await getControlUiContextHandle(page);
+      try {
+        await application.evaluate((context) => context.navigate("connection"));
+        await waitForControlUiRoute(page, { routeId: "connection" });
+        await card.waitFor({ state: "detached" });
+        await application.evaluate(
+          (context, pathname) => context.navigate("chat", { pathname }),
+          new URL(controlUiSessionUrl(server.baseUrl, sessionKey)).pathname,
+        );
+        await waitForControlUiRoute(page, { routeId: "chat" });
+        await card.getByRole("button", { name: "Publishing…", exact: true }).waitFor();
+        expect(
+          await card.getByRole("button", { name: "Publishing…", exact: true }).isDisabled(),
+        ).toBe(true);
+        expect(await gateway.getRequests("templates.drafts.publish")).toHaveLength(1);
+        await gateway.rejectDeferred("templates.drafts.publish", {
+          code: "UNAVAILABLE",
+          message: "The package upload was interrupted.",
+          details: { templatePublication: { effect: "none" } },
+        });
+        const publicationError = card.getByRole("alert");
+        await publicationError.waitFor();
+        expect(await publicationError.textContent()).toContain(
+          "The package upload was interrupted.",
+        );
+        await card.getByText("Not published", { exact: true }).waitFor();
+        expect(await gateway.getRequests("templates.drafts.publish")).toHaveLength(1);
+        await gateway.setMethodResponse("templates.drafts.review", {
+          ...reviewed,
+          reviewToken: "e".repeat(64),
+        });
+        await card.getByRole("button", { name: "Retry", exact: true }).click();
+        await card.getByRole("button", { name: "Publish", exact: true }).waitFor();
+        await card.getByRole("button", { name: "Publish", exact: true }).click();
+        await waitForRequests("templates.drafts.publish", 2);
+        const published = await gateway.getRequests("templates.drafts.publish");
+        expect(published[1]?.params).toMatchObject({
+          agentId: "main",
+          draftId,
+          reviewToken: "e".repeat(64),
+          choices: {
+            name: "release-brief",
+            displayName: "Release Brief",
+            description: "Summarizes releases",
+            excluded: [],
+          },
+        });
+        await card.getByText("Pending", { exact: true }).waitFor();
+        await card.getByRole("link", { name: "View submission", exact: true }).waitFor();
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+        expect(await page.getByRole("dialog", { name: "Review your Template" }).count()).toBe(0);
+      } finally {
+        await application.dispose();
+      }
     } finally {
       await browser?.close();
       await server.close();
@@ -370,6 +462,17 @@ it.skipIf(!canRunPlaywrightChromium(executablePath))(
 it.skipIf(!process.env.OPENCLAW_TEMPLATE_CREATOR_AUTHORITY_PROOF)(
   "dispatches an allowed creator once and rejects replaced or revoked authority through real Gateways",
   async () => {
+    const [
+      { runQaGatewayFixture },
+      { startScrollInferenceFixture },
+      { assertServedUi, pairFixture },
+      { connectChatGateway, createChatGatewayInstance },
+    ] = await Promise.all([
+      import("../../../../test/helpers/qa-gateway-cleanup.ts"),
+      import("../../e2e/chat-collaborator-scroll.real-gateway.test-support.ts"),
+      import("../../e2e/chat-lifecycle.test-support.ts"),
+      import("../../e2e/chat-real-gateway.test-support.ts"),
+    ]);
     const provider = await startScrollInferenceFixture();
     const instances: OpenClawTestInstance[] = [];
     let browser: Browser | undefined;
@@ -477,7 +580,7 @@ it.skipIf(!process.env.OPENCLAW_TEMPLATE_CREATOR_AUTHORITY_PROOF)(
           const row = page.locator('.sidebar-agent-roster__row[data-agent-id="main"]');
           await row.hover();
           await page.getByRole("button", { name: "Options for Creator proof" }).click();
-          await page.getByRole("menuitem", { name: "Create Template", exact: true }).click();
+          await page.getByRole("menuitem", { name: "Create template", exact: true }).click();
           await expect.poll(() => runtimeUrl).toBeTruthy();
           expect(writes).toEqual([]);
           const application = await getControlUiContextHandle(page);

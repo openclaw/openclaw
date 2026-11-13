@@ -7,9 +7,10 @@ import path from "node:path";
 import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { registerProcessExitCleanup } from "../infra/process-exit-cleanup.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { attachModelProviderRuntimePluginHandle } from "../plugins/provider-hook-runtime.js";
 import type { ProviderPlugin } from "../plugins/provider-plugin.types.js";
@@ -201,6 +202,8 @@ describe("provider local service", () => {
 
   it("starts an on-demand local service and stops it after idle", async () => {
     const port = await fixture.claimPort();
+    onTestFinished(registerProcessExitCleanup(() => {}));
+    const exitListeners = process.listenerCount("exit");
     const healthUrl = `http://127.0.0.1:${port}/v1/models`;
     const reconcile = vi.fn<NonNullable<ProviderPlugin["reconcileLocalService"]>>(async () => {
       expect((await fetch(healthUrl)).ok).toBe(true);
@@ -215,7 +218,19 @@ describe("provider local service", () => {
       await withSpawnReadyHealthProbe(acquire),
       "Expected first lease",
     );
+    expect(process.listenerCount("exit")).toBe(exitListeners);
     const secondLease = expectDefined(await acquire(), "Expected second lease");
+    for (let index = 0; index < 8; index++) {
+      const lease = expectDefined(
+        await ensureProviderLocalService(
+          serviceTarget(port, `local-alias-${index}`, localService(port)),
+        ),
+        "Expected alias lease",
+      );
+      expect(process.listenerCount("exit")).toBe(exitListeners);
+      lease.release();
+      expect(process.listenerCount("exit")).toBe(exitListeners);
+    }
     reconcile.mockImplementationOnce(() => {
       throw new Error("reconcile failed");
     });
@@ -251,6 +266,7 @@ describe("provider local service", () => {
     await waitForProbeFailure(healthUrl);
     await stopManagedProviderLocalServices();
     expect(hasManagedProviderLocalServices()).toBe(false);
+    expect(process.listenerCount("exit")).toBe(exitListeners);
   });
 
   it("resolves process configuration for root and exact legacy baseURL endpoints", async () => {

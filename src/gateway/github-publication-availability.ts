@@ -3,6 +3,7 @@ import type {
   GitHubPublicationPublisher,
   SessionGitHubReadinessResult,
 } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
+import { resolveGitHubHost } from "../agents/github-host-runtime.js";
 import {
   matchesPreparedGitHubPublicationIdentity,
   prepareGitHubPublicationIdentity,
@@ -200,7 +201,9 @@ export async function prepareGitHubPublicationSession(
     }
     const { path: sourcePath, agentId: sourceAgentId } = source;
     const databaseIdentity = `file:${source.databaseIdentity}`;
-    if (isArtifactPreservingStateRead("agent", sourcePath)) {
+    // Observational reads retain the source until response publication: a closed or
+    // replaced database must not keep serving facts read from the retired source.
+    if (isArtifactPreservingStateRead()) {
       // Registry publications carry physical facts; unrelated registrations are not revocation.
       assertSourcePublication = prepareOpenClawAgentDatabaseRegistrySnapshotRead({}, (mutation) =>
         mutation.sources.every(
@@ -214,8 +217,8 @@ export async function prepareGitHubPublicationSession(
               registered.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION),
         ),
       ).assertCurrent;
-      // Copied readers close before receipt observation; retain the original source's
-      // native retirement signal independently of the entry's writer postimages.
+      // Retain the original source's native retirement signal independently of the
+      // entry's writer postimages.
       releaseSource = registerOpenClawAgentDatabaseReadCandidateResource({
         path: sourcePath,
         revoke: retire,
@@ -566,8 +569,8 @@ export async function prepareGitHubPublicationRepositoryIdentity(params: {
   return repositoryIdentity;
 }
 
-function isSupportedGitHubOrigin(originUrl: string): boolean {
-  const remote = parseGitHubRemoteUrl(originUrl);
+function isSupportedGitHubOrigin(originUrl: string, host: string): boolean {
+  const remote = parseGitHubRemoteUrl(originUrl, host);
   return Boolean(
     remote && /^[A-Za-z0-9_.-]+$/u.test(remote.owner) && /^[A-Za-z0-9_.-]+$/u.test(remote.repo),
   );
@@ -589,6 +592,7 @@ export async function qualifyGitHubPublicationSource(
   readSession: () => PublicationSessionRead,
   options: { readMode?: "existing-only" } = {},
 ): Promise<PublicationSourceQualification> {
+  const githubHost = resolveGitHubHost();
   const checkSession = () => {
     assertCurrent();
     return requirePublicationSessionOwner(session, readSession(), true);
@@ -624,7 +628,7 @@ export async function qualifyGitHubPublicationSource(
       return {
         ok: true,
         custody: { kind: "qualified", source: "repository" },
-        target: isSupportedGitHubOrigin(owner.workspace.url)
+        target: isSupportedGitHubOrigin(owner.workspace.url, githubHost)
           ? { kind: "supported", basis: "repository-url", freshness: "observed" }
           : { kind: "unsupported" },
         assertCurrent: () => {
@@ -678,7 +682,12 @@ export async function qualifyGitHubPublicationSource(
       };
     }
     const { repoRoot, repoFingerprint } = owner.worktree;
-    const key = JSON.stringify([context.admission.identity.key, repoRoot, repoFingerprint]);
+    const key = JSON.stringify([
+      context.admission.identity.key,
+      githubHost,
+      repoRoot,
+      repoFingerprint,
+    ]);
     let observed = false;
     const target = await repositoryTargets.read(
       key,
@@ -688,7 +697,7 @@ export async function qualifyGitHubPublicationSource(
           assertCurrent: () => context.admission.assertCurrent(),
         });
         observed = true;
-        return isSupportedGitHubOrigin(repository.originUrl);
+        return isSupportedGitHubOrigin(repository.originUrl, githubHost);
       },
       { allowStale: false },
     );

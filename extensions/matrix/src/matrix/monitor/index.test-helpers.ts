@@ -40,7 +40,6 @@ const hoisted = await vi.hoisted(async () => {
   const client = Object.assign(new EventEmitter(), {
     id: "matrix-client",
     bindSyncIngress: vi.fn(async () => () => {}),
-    drainPendingDecryptions: vi.fn(async () => undefined),
   });
   const createMatrixRoomMessageHandler = vi.fn(() => vi.fn());
   const createDirectRoomTracker = vi.fn(

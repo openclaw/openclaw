@@ -15,6 +15,7 @@ import type {
   ControlUiView,
   ControlUiViewContext,
 } from "../../../src/plugin-sdk/control-ui.js";
+import { formatUiError } from "../lib/format-error.ts";
 import { useOptionalApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
@@ -189,7 +190,7 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
   const fail = (failure: unknown) => {
     const pluginId = registration?.pluginId ?? "host";
     unmount();
-    setError(failure instanceof Error ? failure.message : String(failure));
+    setError(formatUiError(failure));
     context?.plugins.reportError(pluginId, failure);
   };
   const update = () => {

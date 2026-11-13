@@ -23,6 +23,7 @@ import { withTranscriptWriteSequence } from "./session-accessor.sqlite-transcrip
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import * as storeTargetRuntime from "./session-store-target-runtime.js";
 import { messageEvent as createMessageEvent } from "./transcript-message.test-support.js";
+import { SESSION_TOTAL_TOKENS_VERSION } from "./types.js";
 
 const forkableClaudeCliBackend = {
   id: "claude-cli",
@@ -345,7 +346,7 @@ it("branches the current parent CLI session and preserves writes made during pre
     updatedAt: 1,
     totalTokens: 88_876,
     totalTokensFresh: true,
-    totalTokensVersion: 1,
+    totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
   });
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteStoreScope(storePath)));
   let preparedWrite = false;

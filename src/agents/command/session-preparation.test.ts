@@ -13,7 +13,9 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import { resolveVisibleActiveSessionRunState } from "../../gateway/server-methods/session-active-runs.js";
 import { registerAgentRunCapacityWait } from "../../infra/agent-run-capacity-wait.js";
 import {
+  claimAgentRunContext,
   clearAgentRunContext,
+  getAgentRunContext,
   getAgentRunLifecycleGeneration,
 } from "../../infra/agent-run-registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -179,12 +181,13 @@ it.each([
 );
 
 it.each([
-  { internal: false, coordination: false },
-  { internal: true, coordination: false },
-  { internal: false, coordination: true },
-])(
-  "projects command startup and capacity waits (internal=$internal, coordination=$coordination)",
-  async ({ internal, coordination }) => {
+  { internal: false, intake: "public" },
+  { internal: true, intake: "public" },
+  { internal: false, intake: "coordination" },
+  { internal: false, intake: "private" },
+] as const)(
+  "projects command startup and capacity waits (internal=$internal, intake=$intake)",
+  async ({ internal, intake }) => {
     const sessionKey = "agent:main:command-activity";
     const sessionId = "command-activity-session";
     const lifecycleGeneration = getAgentRunLifecycleGeneration();
@@ -199,15 +202,37 @@ it.each([
 
     let releaseWait: (() => void) | undefined;
     try {
+      if (intake === "private") {
+        // Gateway admission registers private completion intake hidden before the command runs.
+        claimAgentRunContext(preparedRunId, {
+          sessionKey,
+          agentId: "main",
+          isControlUiVisible: false,
+          sessionEventDelivery: false,
+          projectSessionMessages: false,
+          projectSessionActive: false,
+          lifecycleGeneration,
+        });
+      }
       await prepare({
         opts: {
           message: "hello",
-          ...(coordination
+          ...(intake === "coordination"
             ? {
                 inputProvenance: {
                   kind: "inter_session" as const,
                   sourceTool: "sessions_send",
                   sourceRole: "subagent" as const,
+                },
+              }
+            : {}),
+          ...(intake === "private"
+            ? {
+                privateCompletion: true as const,
+                inputProvenance: {
+                  kind: "inter_session" as const,
+                  sourceTool: "subagent_announce",
+                  sourceSessionKey: "agent:main:subagent:child",
                 },
               }
             : {}),
@@ -218,8 +243,9 @@ it.each([
         suppressVisibleSessionEffects: internal,
         sessionStateActor: { actorType: "human" },
       });
-      const hidden = internal || coordination;
+      const hidden = internal || intake !== "public";
       const active = hidden ? { active: false, runIds: [] } : { active: true };
+      expect(getAgentRunContext(preparedRunId)?.isControlUiVisible).toBe(!hidden);
       expect(state()).toEqual(active);
       releaseWait = registerAgentRunCapacityWait(preparedRunId, lifecycleGeneration);
       expect(state()).toEqual(hidden ? active : { active: true, status: "queued" });

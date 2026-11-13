@@ -1,0 +1,91 @@
+name: Boat release runner
+description: Provision or remove one workflow-owned Boat runner.
+
+inputs:
+  operation:
+    description: provision or cleanup
+    required: true
+  role:
+    description: decision, drain, or nightly
+    required: true
+  api-key:
+    description: Foundation Boat API key
+    required: true
+  boat-org:
+    description: Boat billing organization
+    required: true
+  runner-group:
+    description: GitHub organization runner group
+    required: false
+  app-id:
+    description: Dedicated Boat runner GitHub App ID
+    required: true
+  app-private-key:
+    description: Dedicated Boat runner GitHub App private key
+    required: true
+  vm:
+    description: VM receipt from this workflow's provisioning job
+    required: false
+  runner:
+    description: Actions receipt from this workflow's provisioning job
+    required: false
+
+outputs:
+  vm:
+    description: Public VM identity for cleanup
+    value: ${{ steps.provision.outputs.vm }}
+  runner:
+    description: Public Actions registration identity for cleanup
+    value: ${{ steps.register.outputs.runner }}
+  label:
+    description: Unique runner label for this workflow attempt and role
+    value: ${{ steps.register.outputs.label }}
+
+runs:
+  using: composite
+  steps:
+    - name: Create organization runner token
+      id: token
+      continue-on-error: ${{ inputs.operation == 'cleanup' }}
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+      with:
+        app-id: ${{ inputs.app-id }}
+        private-key: ${{ inputs.app-private-key }}
+        owner: ${{ github.repository_owner }}
+        permission-organization-self-hosted-runners: write
+
+    - name: Provision Boat VM
+      id: provision
+      if: inputs.operation == 'provision'
+      shell: bash
+      env:
+        BOAT_API_KEY: ${{ inputs.api-key }}
+        BOAT_ORG: ${{ inputs.boat-org }}
+        BOAT_RUNNER_GROUP: ${{ inputs.runner-group }}
+        BOAT_RUNNER_ROLE: ${{ inputs.role }}
+      run: node scripts/boat-release-runner.mjs provision "$BOAT_RUNNER_ROLE"
+
+    - name: Register ephemeral runner
+      id: register
+      if: inputs.operation == 'provision'
+      shell: bash
+      env:
+        BOAT_API_KEY: ${{ inputs.api-key }}
+        BOAT_ORG: ${{ inputs.boat-org }}
+        BOAT_RUNNER_ROLE: ${{ inputs.role }}
+        BOAT_RUNNER_GROUP: ${{ inputs.runner-group }}
+        BOAT_VM_RECEIPT: ${{ steps.provision.outputs.vm }}
+        GH_TOKEN: ${{ steps.token.outputs.token }}
+      run: node scripts/boat-release-runner.mjs register "$BOAT_RUNNER_ROLE"
+
+    - name: Remove runner and Boat VM
+      if: always() && inputs.operation == 'cleanup'
+      shell: bash
+      env:
+        BOAT_API_KEY: ${{ inputs.api-key }}
+        BOAT_ORG: ${{ inputs.boat-org }}
+        BOAT_RUNNER_ROLE: ${{ inputs.role }}
+        BOAT_VM_RECEIPT: ${{ inputs.vm }}
+        BOAT_RUNNER_RECEIPT: ${{ inputs.runner }}
+        GH_TOKEN: ${{ steps.token.outputs.token }}
+      run: node scripts/boat-release-runner.mjs cleanup "$BOAT_RUNNER_ROLE"

@@ -22,14 +22,14 @@ type WorkerLifecycleLease = support.WorkerLifecycleLease;
 describe("worker environment service", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
-  it("cancels an in-flight inspection on suspend and reconciles again after resume", async () => {
+  it("cancels inspections on suspend, resumes, then settles them on shutdown", async () => {
     const environment = await support.seedReady("suspend-in-flight");
     const entered = createDeferred<AbortSignal | undefined>();
     const release = createDeferred();
     const inspect = vi.fn(async ({ signal }: WorkerLifecycleLease) => {
       entered.resolve(signal);
-      await racePromiseWithAbortSignal(release.promise, signal);
-      return { status: "active" as const };
+      await release.promise;
+      return { status: "unknown" as const };
     });
     const workerService = support.createService(support.createProvider({ inspect }));
     const reconciliation = workerService.reconcileOnce();
@@ -39,11 +39,13 @@ describe("worker environment service", () => {
       expect(suspension).not.toBeNull();
       expect(signal?.aborted).toBe(true);
       await reconciliation;
-      expect(support.testState.store.get(environment.environmentId)).toEqual(environment);
       suspension?.rollback();
-      release.resolve();
-      await workerService.reconcileOnce();
-      expect(inspect).toHaveBeenCalledTimes(2);
+      const resumed = workerService.reconcileOnce();
+      await support.waitForFast(() => expect(inspect).toHaveBeenCalledTimes(2));
+      await workerService.stop();
+      await resumed;
+      expect(inspect.mock.calls[1]![0].signal?.aborted).toBe(true);
+      expect(support.testState.store.get(environment.environmentId)).toEqual(environment);
     } finally {
       resetGatewayWorkAdmission();
       release.resolve();

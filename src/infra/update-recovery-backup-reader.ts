@@ -26,7 +26,6 @@ import { lstatIfExists } from "./path-existence.js";
 import { SQLITE_SIDECAR_SUFFIXES } from "./sqlite-files.js";
 import { resolveLegacyStateDirMigrationCandidates } from "./state-migrations.state-dir.js";
 import { resolveUpdateCaptureRoot } from "./update-capture-paths.js";
-import { UPDATE_CAPTURE_PRIVACY_MARKER } from "./update-capture-privacy-marker.js";
 import {
   assertUpdateRecoverySealComplete,
   hasPendingUpdateRecoverySeal,
@@ -154,7 +153,9 @@ function assertManifestSelectedScope(
   manifest: UpdateRecoveryBackupManifest,
   scopes: Map<string, Set<string>>,
 ) {
-  if (!scopes.get(manifest.stateDir)?.has(manifest.configPath)) {
+  const stateDir = canonicalEntryPath(manifest.stateDir);
+  const configPath = canonicalEntryPath(manifest.configPath);
+  if (!scopes.get(stateDir)?.has(configPath)) {
     throw new Error("Update recovery backup belongs to another selected state or configuration.");
   }
 }
@@ -317,9 +318,8 @@ async function fingerprintIncompleteRecoveryGeneration(directory: string): Promi
   return sha256Hex(JSON.stringify(inventory));
 }
 /** This records repair of current state, never reverse publication or permission to delete B/C/T. */
-async function readBinding(ref: UpdateRecoveryBackupRef) {
+async function readBinding(ref: UpdateRecoveryBackupRef, run: UpdateRunRecord | undefined) {
   return withRecoveryMetadata(ref, async ({ manifest, outcome, pin }) => {
-    const run = await getUpdateRunAsync(manifest.runId);
     const capture = run?.origin.updateRecoveryCapture;
     if (
       outcome ||
@@ -400,14 +400,14 @@ async function readBinding(ref: UpdateRecoveryBackupRef) {
 /** Missing receipt keeps admission closed. Malformed or contradictory receipts fail closed. */
 export async function hasUpdateRecoveryForwardResolution(
   ref: UpdateRecoveryBackupRef,
+  run: UpdateRunRecord | undefined,
 ): Promise<boolean> {
-  return withRecoveryMetadata(ref, async ({ manifest, outcome }) => {
-    const run = await getUpdateRunAsync(manifest.runId);
+  return withRecoveryMetadata(ref, async ({ outcome }) => {
     const receipt = run?.origin.updateRecoveryCapture?.forwardResolution;
     if (!receipt) {
       return false;
     }
-    if (outcome || !isDeepStrictEqual(receipt.binding, await readBinding(ref))) {
+    if (outcome || !isDeepStrictEqual(receipt.binding, await readBinding(ref, run))) {
       throw new Error("Forward recovery receipt is stale or contradicts its failed capture.");
     }
     return true;
@@ -456,6 +456,16 @@ export async function readUpdateRecoveryBaselineIdentity(params: {
   }
   if (present.length !== 1) {
     throw new Error("Multiple original update captures belong to this run; preserve all evidence.");
+  }
+  if (
+    !expectedRef &&
+    !(await lstatIfExists(path.join(directory, "manifest.json"), "ENOENT")) &&
+    !(await hasPendingUpdateRecoverySeal(directory))
+  ) {
+    // Failed best-effort capture keeps unsealed evidence without a manifest.
+    // The updater already reported it; there is no baseline to reuse.
+    params.assertCurrent();
+    return undefined;
   }
   let identity:
     | { ref: UpdateRecoveryBackupRef; manifest: UpdateRecoveryBackupManifest }
@@ -534,80 +544,69 @@ type UpdateRecoveryBackupRead =
       ref: UpdateRecoveryBackupRef;
       manifest: UpdateRecoveryBackupManifest;
       outcome: Outcome;
+      run: UpdateRunRecord | undefined;
     }
   | { kind: "incomplete"; directory: string }
   | { kind: "unreadable"; directory: string; error: string };
 
-export async function readUpdateRecoveryBackups(): Promise<UpdateRecoveryBackupRead[]> {
+export async function readUpdateRecoveryBackups(
+  readRun: typeof getUpdateRunAsync,
+  directories: readonly string[],
+): Promise<UpdateRecoveryBackupRead[]> {
   const result: UpdateRecoveryBackupRead[] = [];
   const scopes = captureScopes(process.env);
-  for (const stateDir of scopes.keys()) {
-    const store = resolveUpdateCaptureRoot(stateDir);
-    if (!(await lstatIfExists(store, "ENOENT"))) {
-      continue;
-    }
-    for (const captureId of await fs.readdir(store)) {
-      const directory = path.join(store, captureId);
-      const entry = await lstatIfExists(directory, "ENOENT");
-      // Producers mark capture directories before staging payloads. Other entries
-      // (including OS metadata, schema archives, and rehearsal scratch) are unrelated.
+  for (const directory of directories) {
+    const captureId = path.basename(directory);
+    try {
+      const manifestPath = path.join(directory, "manifest.json");
+      const manifestEntry = await lstatIfExists(manifestPath, "ENOENT");
       if (
-        !entry?.isDirectory() ||
-        !(
-          await lstatIfExists(path.join(directory, UPDATE_CAPTURE_PRIVACY_MARKER), "ENOENT")
-        )?.isFile()
+        /^[a-zA-Z0-9_-]{1,128}$/u.test(captureId) &&
+        (!manifestEntry || (await hasPendingUpdateRecoverySeal(directory)))
       ) {
+        result.push({ kind: "incomplete", directory });
         continue;
       }
-      try {
-        const manifestPath = path.join(directory, "manifest.json");
-        const manifestEntry = await lstatIfExists(manifestPath, "ENOENT");
-        if (
-          /^[a-zA-Z0-9_-]{1,128}$/u.test(captureId) &&
-          (!manifestEntry || (await hasPendingUpdateRecoverySeal(directory)))
-        ) {
-          result.push({ kind: "incomplete", directory });
-          continue;
-        }
-        if (!manifestEntry?.isFile()) {
-          throw new Error(
-            `Unresolved update capture ${directory} has incomplete publication. Inspection only: openclaw update status --json; npx openclaw@latest doctor --fix. Earlier captures are retained.`,
-          );
-        }
-        const source = await safeRoot(directory, { symlinks: "reject", hardlinks: "reject" });
-        const raw = await source.readText("manifest.json", {
-          maxBytes: MAX_MANIFEST_BYTES,
-        });
-        const manifest = parseUpdateRecoveryBackupManifest(raw);
-        const ref = { directory, manifestPath, manifestSha256: sha256Hex(raw) };
-        assertManifestLocation(ref, manifest);
-        assertManifestSelectedScope(manifest, scopes);
-        const capture = (await getUpdateRunAsync(manifest.runId))?.origin.updateRecoveryCapture;
-        if (capture && capture.manifestSha256 !== ref.manifestSha256) {
-          throw new Error(
-            `Update capture identity changed: ${manifestPath}. Inspect with openclaw update status --json; npx openclaw@latest doctor --fix.`,
-          );
-        }
-        const terminalPath = path.join(directory, "outcome.json");
-        let outcome: Outcome;
-        if (await lstatIfExists(terminalPath, "ENOENT")) {
-          const terminal = recordedOutcomeSchema.parse(
-            await source.readJson("outcome.json", {
-              maxBytes: MAX_UPDATE_RECOVERY_OUTCOME_BYTES,
-            }),
-          );
-          if (terminal.manifestSha256 !== ref.manifestSha256) {
-            throw new Error(`Update recovery outcome refers to another manifest: ${manifestPath}`);
-          }
-          outcome = terminal;
-        } else {
-          outcome = { status: capture?.status ?? "pending", error: capture?.error };
-        }
-        result.push({ kind: "sealed", ref, manifest, outcome });
-      } catch (error) {
-        // A damaged marked capture remains evidence; it cannot hide verified neighbors.
-        result.push({ kind: "unreadable", directory, error: formatErrorMessage(error) });
+      if (!manifestEntry?.isFile()) {
+        throw new Error(
+          `Unresolved update capture ${directory} has incomplete publication. Inspection only: openclaw update status --json; npx openclaw@latest doctor --fix. Earlier captures are retained.`,
+        );
       }
+      const source = await safeRoot(directory, { symlinks: "reject", hardlinks: "reject" });
+      const raw = await source.readText("manifest.json", {
+        maxBytes: MAX_MANIFEST_BYTES,
+      });
+      const manifest = parseUpdateRecoveryBackupManifest(raw);
+      const ref = { directory, manifestPath, manifestSha256: sha256Hex(raw) };
+      assertManifestLocation(ref, manifest);
+      assertManifestSelectedScope(manifest, scopes);
+      const run = await readRun(manifest.runId);
+      const capture = run?.origin.updateRecoveryCapture;
+      if (capture && capture.manifestSha256 !== ref.manifestSha256) {
+        throw new Error(
+          `Update capture identity changed: ${manifestPath}. Inspect with openclaw update status --json; npx openclaw@latest doctor --fix.`,
+        );
+      }
+      const terminalPath = path.join(directory, "outcome.json");
+      let outcome: Outcome;
+      if (await lstatIfExists(terminalPath, "ENOENT")) {
+        const terminal = recordedOutcomeSchema.parse(
+          await source.readJson("outcome.json", {
+            maxBytes: MAX_UPDATE_RECOVERY_OUTCOME_BYTES,
+          }),
+        );
+        if (terminal.manifestSha256 !== ref.manifestSha256) {
+          throw new Error(`Update recovery outcome refers to another manifest: ${manifestPath}`);
+        }
+        outcome = terminal;
+      } else {
+        outcome = { status: capture?.status ?? "pending", error: capture?.error };
+      }
+      // One ledger observation owns this projection; known absence is not a reason to reread.
+      result.push({ kind: "sealed", ref, manifest, outcome, run });
+    } catch (error) {
+      // A damaged marked capture remains evidence; it cannot hide verified neighbors.
+      result.push({ kind: "unreadable", directory, error: formatErrorMessage(error) });
     }
   }
   return result.toSorted((a, b) => {

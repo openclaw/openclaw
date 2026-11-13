@@ -158,9 +158,9 @@ export function filterCommandPaletteItems(params: {
   if (!params.query) {
     return baseItems;
   }
-  const query = normalizeLowercaseStringOrEmpty(params.query);
+  const query = normalizeLowercaseStringOrEmpty(params.query).normalize("NFC");
   const matchRank = (item: CommandPaletteItem) => {
-    const label = normalizeLowercaseStringOrEmpty(item.label);
+    const label = normalizeLowercaseStringOrEmpty(item.label).normalize("NFC");
     if (label === query) {
       return 3;
     }
@@ -168,10 +168,10 @@ export function filterCommandPaletteItems(params: {
       return 2;
     }
     return label.includes(query) ||
-      normalizeLowercaseStringOrEmpty(item.description).includes(query) ||
-      normalizeLowercaseStringOrEmpty(item.searchText).includes(query) ||
+      normalizeLowercaseStringOrEmpty(item.description).normalize("NFC").includes(query) ||
+      normalizeLowercaseStringOrEmpty(item.searchText).normalize("NFC").includes(query) ||
       (params.primaryModelSearch &&
-        normalizeLowercaseStringOrEmpty(item.primaryModel).includes(query))
+        normalizeLowercaseStringOrEmpty(item.primaryModel).normalize("NFC").includes(query))
       ? 1
       : 0;
   };

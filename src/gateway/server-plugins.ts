@@ -4,6 +4,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import { allowsProcessHomeSessionScan } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveBundledCodeReloadPluginIds } from "../plugins/bundled-plugin-dev-reload.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../plugins/installed-plugin-index-install-records.js";
 import type {
@@ -37,6 +38,7 @@ import type {
   RuntimeGatewayRequestOptions,
 } from "../plugins/runtime/types.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { captureEnvironmentKey } from "../shared/environment-key.js";
 import { bindInProcessSessionDeliveryGeneration } from "./in-process-session-delivery.js";
 import { authorizeOperatorScopesForRequiredScope } from "./method-scopes.js";
 import { APPROVALS_SCOPE, normalizeOperatorScopeList } from "./operator-scopes.js";
@@ -392,7 +394,12 @@ export async function loadGatewayPlugins(params: {
   loadIntent: "startup" | "replacement";
   previousRegistry?: import("../plugins/registry-types.js").PluginRegistry;
   replacePluginIds?: ReadonlySet<string>;
-  expectedSourceDigests?: Readonly<Record<string, string>>;
+  /** Explicit lifecycle request: source-digest checks and opted-in bundled recapture. */
+  pluginLifecycle?: {
+    reason: string;
+    pluginIds: readonly string[];
+    expectedSourceDigests?: Readonly<Record<string, string>>;
+  };
   /** Metadata-only replacement preflight; never executes plugin registration. */
   loadModules?: boolean;
   moduleRecoveries?: ReadonlyMap<string, PluginRuntimeRecovery>;
@@ -433,9 +440,10 @@ export async function loadGatewayPlugins(params: {
     autoEnabledReasons: params.autoEnabledReasons,
     workspaceDir: params.workspaceDir,
     env: params.env ?? process.env,
+    environmentKey: captureEnvironmentKey(params.env),
     logger,
     preferBuiltPluginArtifacts: true,
-    expectedSourceDigests: params.expectedSourceDigests,
+    expectedSourceDigests: params.pluginLifecycle?.expectedSourceDigests,
     metadataSnapshot,
     ...(loaderMetadata
       ? {
@@ -463,6 +471,7 @@ export async function loadGatewayPlugins(params: {
           throwOnLoadError: params.loadIntent === "replacement",
           previousRegistry: params.previousRegistry,
           replacePluginIds: params.replacePluginIds ? [...params.replacePluginIds] : undefined,
+          bundledCodeReloadPluginIds: resolveBundledCodeReloadPluginIds(params.pluginLifecycle),
           loadModules: params.loadModules,
           moduleRecoveries: params.moduleRecoveries,
           prepareRegistrationFailureCleanup: params.prepareRegistrationFailureCleanup,

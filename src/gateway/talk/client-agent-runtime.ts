@@ -4,7 +4,12 @@ import { drainAgentRunTerminalWrites } from "../../infra/agent-run-terminal-writ
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-context-binding.js";
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
-import { getRpcSourceForGateway } from "../../sessions/session-controller.rpc-sources.js";
+import {
+  getRpcSourceForGateway,
+  getRpcSourceIdentity,
+  getRpcSourceLifecycleGeneration,
+  type RpcSourceRef,
+} from "../../sessions/session-controller.rpc-sources.js";
 import {
   buildRunUserTurnIdempotencyKey,
   createUserTurnTranscriptRecorder,
@@ -12,6 +17,7 @@ import {
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import type { GatewayContextResolver } from "../server-methods/types.js";
 import type { TalkClientRunAuthority } from "./client-run-authority.js";
+import { isTalkConsultSourceCurrent } from "./run-ownership.js";
 
 const loadTalkAgentExecution = createLazyRuntimeModule(async () => {
   const [embeddedAgent, admission] = await Promise.all([
@@ -29,6 +35,8 @@ export function createTalkClientAgentRuntime(params: {
   config: OpenClawConfig;
   resolveGatewayContext?: GatewayContextResolver;
   rawSourceRef?: string;
+  /** Present only when this consultation registers an exact source before execution. */
+  getRegisteredSource?: () => RpcSourceRef | undefined;
   runAuthority?: TalkClientRunAuthority;
   assertCurrent?: () => void;
   bindOperationalRunInstance?: (instance: OperationalRunInstanceRef) => void;
@@ -56,13 +64,49 @@ export function createTalkClientAgentRuntime(params: {
       });
     };
   }
+  let sourceAcquired = false;
   const runEmbeddedAgent: typeof agentRuntime.runEmbeddedAgent = async (requestedParams) => {
     const { agentId, sessionId, sessionKey, storePath } = requestedParams.sessionTarget ?? {};
     if (!agentId || !sessionId || !sessionKey || !storePath) {
       throw new Error("Talk consult requires its prepared transcript target");
     }
-    const source = getRpcSourceForGateway(requestedParams.runId, params.resolveGatewayContext);
+    if (params.getRegisteredSource && sourceAcquired) {
+      throw new Error("Talk consultation source has already been acquired");
+    }
+    const source = params.getRegisteredSource?.();
+    if ((params.getRegisteredSource || params.rawSourceRef) && !source) {
+      throw new Error("Talk consultation source registration is unavailable");
+    }
+    const lifecycleGeneration = source && getRpcSourceLifecycleGeneration(source);
+    const assertSourceCurrent = () => {
+      if (!source) {
+        return;
+      }
+      const identity = getRpcSourceIdentity(source);
+      if (
+        params.getRegisteredSource?.() !== source ||
+        source.input.protocolRunId !== requestedParams.runId ||
+        getRpcSourceForGateway(requestedParams.runId, params.resolveGatewayContext) !== source ||
+        source.input.target?.storeScope !== storePath ||
+        identity.agentId !== agentId ||
+        !params.rawSourceRef ||
+        !isTalkConsultSourceCurrent({
+          entry: source,
+          connectionId: params.rawSourceRef,
+          sessionId,
+          sessionKey,
+          lifecycleGeneration,
+          phase: "active",
+        })
+      ) {
+        throw new Error("Talk consultation source registration is no longer current");
+      }
+      source.adapter.authority?.assertCurrent();
+    };
     params.assertCurrent?.();
+    assertSourceCurrent();
+    // One execution consumes this consultation's registration, never a later retry.
+    sourceAcquired = params.getRegisteredSource !== undefined;
     return await withSessionTurn(
       {
         sessionKey,
@@ -77,21 +121,14 @@ export function createTalkClientAgentRuntime(params: {
         runParams.abortSignal?.throwIfAborted();
         const config = runParams.config ?? params.config;
         params.assertCurrent?.();
-        const retained = await params.runAuthority?.retainRun(
-          runParams.runId,
-          runParams.spawnedBy ?? undefined,
-        );
+        assertSourceCurrent();
+        const retained = await params.runAuthority?.retainRun(runParams.runId);
         try {
           runParams.abortSignal?.throwIfAborted();
           const execution = await loadTalkAgentExecution();
           runParams.abortSignal?.throwIfAborted();
           // Accepted work outlives audio transport; the source and retained run authority govern it.
-          if (
-            source &&
-            getRpcSourceForGateway(runParams.runId, params.resolveGatewayContext) !== source
-          ) {
-            throw new Error("Talk source changed during runtime preparation");
-          }
+          assertSourceCurrent();
           const operationalRunInstance = execution.createOperationalRunInstanceRef(runParams.runId);
           retained?.assertSourceCurrent();
           params.bindOperationalRunInstance?.(operationalRunInstance);

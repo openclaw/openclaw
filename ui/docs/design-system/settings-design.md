@@ -1,6 +1,6 @@
 # Settings Design Language
 
-Every settings surface (the `/settings` takeover pages plus the Plugins/Skills hubs) uses one structural pattern. Workspace styles live in `ui/src/styles/settings.css`, while controls shared with startup surfaces live in `ui/src/styles/settings-controls.css` and `settings-native-controls.css`. Shared layout and control components live in `ui/src/components/solid/settings-ui.tsx`.
+Every settings surface (the `/settings` takeover pages plus the Plugins/Skills hubs) uses one structural pattern. Workspace styles live in `ui/src/styles/settings.css`, while shared rows, disclosures, and controls live in `ui/src/styles/settings-controls.css` and `settings-native-controls.css` so they also work before visiting Settings. Shared layout and control components live in `ui/src/components/solid/settings-ui.tsx`.
 
 ## Anatomy
 
@@ -10,7 +10,7 @@ Every settings surface (the `/settings` takeover pages plus the Plugins/Skills h
     .settings-section__heading     ← plain uppercase text label, outside any surface
     .settings-group                ← the ONLY surface (card bg, border, radius-lg)
       .settings-row                ← title/description left, one control right
-      .settings-row                ← hairline divider between rows
+      .settings-row                ← shared row rhythm, no row dividers
 ```
 
 - **Sections are typography, not chrome.** Grouping comes from whitespace + a small uppercase heading — never a card header.
@@ -24,7 +24,7 @@ Every settings surface (the `/settings` takeover pages plus the Plugins/Skills h
 
 - **Do not narrate unchanged defaults.** Controls and placeholders show the effective value. Omit repetitive “Using default” descriptions; keep useful help, scope, reset controls, and default references for customized values.
 - **No status pills.** Status is `SettingsStatus` from `components/solid/settings-ui.tsx` — a dot + plain text (`● Connected`) by default. Permissions use neutral text without dots, with a small checkmark for granted access and aligned action buttons; an ungranted permission is a choice, not an error. Badges (`.settings-count`) exist only for genuine counts.
-- **Spacing uses `--space-*` tokens** (`base.css`); no hardcoded paddings/gaps.
+- **Rows share list tokens** from `base.css`: `--list-row-min-height`, `--list-row-padding`, `--list-row-title-weight`, and `--list-row-icon-size`. Use `--space-*` for gaps and other spacing; do not add per-page row dividers or duplicate padding values.
 - **Motion budget:** color/background transitions only. No enter animations, staggered reveals, or hover glows.
 - **Buttons:** default `.btn` (quiet). `--accent` primary at most once per view. Danger actions live in a `danger: true` section at the page bottom.
 - **One control set.** Use `SettingsToggleRow` (preferred: whole row clickable, accessible name from its title) or `SettingsToggle` with a required `ariaLabel`, `SettingsSegmented`, `.settings-select`, `.settings-input`. Do not add another toggle or badge variant.

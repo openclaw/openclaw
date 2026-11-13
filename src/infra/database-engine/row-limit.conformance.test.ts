@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { acpReplayOperations } from "../../acp/event-ledger.worker.js";
-import { pruneChannelIngressInDatabase } from "../../channels/message/ingress-queue.kernel.js";
+import { pruneChannelIngressInDatabase } from "../../channels/message/ingress-queue-prune.kernel.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { addSessionSuggestionInDatabase } from "../../config/sessions/session-suggestion-store.kernel.js";
 import { DebugProxyCaptureStore } from "../../proxy-capture/store.sqlite.js";

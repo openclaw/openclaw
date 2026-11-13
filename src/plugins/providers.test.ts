@@ -1,7 +1,11 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { PluginAutoEnableResult } from "../config/plugin-auto-enable.types.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
-import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
+import {
+  createPluginManifestRecordFixture,
+  createPluginMetadataSnapshotFixture,
+} from "./plugin-metadata.test-support.js";
 import type { PluginRegistrySnapshot } from "./plugin-registry.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { createIndexFixture } from "./test-helpers/installed-plugin-index-fixture.js";
@@ -22,6 +26,7 @@ type SetActivePluginRegistry = typeof import("./runtime.js").setActivePluginRegi
 
 const runtimeLoader = vi.fn<ResolveRuntimePluginRegistry>();
 const setupLoader = vi.fn<LoadOpenClawPlugins>();
+const setupInspection = vi.fn<typeof import("./loader.js").acquirePluginRegistryForInspection>();
 const isPluginRegistryLoadInFlightMock = vi.fn<IsPluginRegistryLoadInFlight>((_options) => false);
 const manifestLoader = vi.fn<LoadPluginManifestRegistry>();
 const metadataLoader = vi.fn<LoadPluginMetadataSnapshot>();
@@ -29,9 +34,12 @@ const indexLoader = vi.fn<LoadPluginRegistrySnapshot>();
 const indexWithMetadataLoader = vi.fn<LoadPluginRegistrySnapshotWithMetadata>();
 const currentMetadata = vi.fn();
 const autoEnable = vi.fn<ApplyPluginAutoEnable>();
+const prepareAutoEnable =
+  vi.fn<typeof import("../config/plugin-auto-enable.shared.js").preparePluginAutoEnableSetup>();
 
 let owners: typeof import("./providers.js");
 let resolvePluginProviders: typeof import("./providers.runtime.js").resolvePluginProvidersCore;
+let withPluginProviders: typeof import("./providers.runtime.js").withPluginProviders;
 let setActivePluginRegistry: SetActivePluginRegistry;
 
 function manifest(id: string, overrides: Partial<PluginManifestRecord> = {}): PluginManifestRecord {
@@ -128,8 +136,10 @@ describe("resolvePluginProviders", () => {
   beforeAll(async () => {
     vi.resetModules();
     setManifestPlugins([]);
+    // mock-isolation: Provider selection uses fixture registries without acquiring live plugin generations.
     vi.doMock("./loader.js", () => ({
       loadOpenClawPlugins: setupLoader,
+      acquirePluginRegistryForInspection: setupInspection,
       isPluginRegistryLoadInFlight: isPluginRegistryLoadInFlightMock,
       resolveRuntimePluginRegistry: runtimeLoader,
     }));
@@ -140,6 +150,10 @@ describe("resolvePluginProviders", () => {
     });
     vi.doMock("../config/plugin-auto-enable.js", () => ({
       applyPluginAutoEnable: autoEnable,
+    }));
+    vi.doMock("../config/plugin-auto-enable.shared.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../config/plugin-auto-enable.shared.js")>()),
+      preparePluginAutoEnableSetup: prepareAutoEnable,
     }));
     vi.doMock("./manifest-registry.js", () => ({
       loadPluginManifestRegistryCore: manifestLoader,
@@ -177,7 +191,7 @@ describe("resolvePluginProviders", () => {
       };
     });
     owners = await import("./providers.js");
-    ({ resolvePluginProvidersCore: resolvePluginProviders } =
+    ({ resolvePluginProvidersCore: resolvePluginProviders, withPluginProviders } =
       await import("./providers.runtime.js"));
     ({ setActivePluginRegistry } = await import("./runtime.js"));
   });
@@ -288,6 +302,8 @@ describe("resolvePluginProviders", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
     runtimeLoader.mockReset();
     setupLoader.mockReset();
+    setupInspection.mockReset();
+    prepareAutoEnable.mockReset().mockResolvedValue(undefined);
     isPluginRegistryLoadInFlightMock.mockReset();
     isPluginRegistryLoadInFlightMock.mockReturnValue(false);
     metadataLoader.mockReset();
@@ -311,6 +327,7 @@ describe("resolvePluginProviders", () => {
     );
     runtimeLoader.mockReturnValue(registry);
     setupLoader.mockReturnValue(registry);
+    setupInspection.mockResolvedValue({ registry, release: async () => {} });
     manifestLoader.mockReset();
     autoEnable.mockReset();
     autoEnable.mockImplementation((params): PluginAutoEnableResult => ({
@@ -527,6 +544,180 @@ describe("resolvePluginProviders", () => {
       { id: "lmstudio", label: "LM Studio", auth: [], pluginId: "lmstudio" },
     ]);
     expectActivatedOwner("lmstudio");
+  });
+
+  it("prepares activated auto-enable owners before acquiring the runtime inspection", async () => {
+    const prepared = createDeferred();
+    prepareAutoEnable.mockReturnValue(prepared.promise);
+    const consume = vi.fn(async () => {});
+    const operation = withPluginProviders(
+      { config: {}, mode: "runtime", providerRefs: ["google"] },
+      consume,
+    );
+    expect(prepareAutoEnable).toHaveBeenCalledOnce();
+    expect(prepareAutoEnable.mock.calls[0]?.[0].config.plugins?.entries?.google?.enabled).toBe(
+      true,
+    );
+    expect(setupInspection).not.toHaveBeenCalled();
+    prepared.resolve();
+    await operation;
+    expect(setupInspection).toHaveBeenCalledOnce();
+    expect(consume).toHaveBeenCalledOnce();
+  });
+
+  it("keeps provider hints on their retained generation without acquiring a new inspection", async () => {
+    const { createProviderHookRuntime } = await import("./provider-hook-runtime-core.js");
+    const { createProviderRegistryResolver } = await import("./providers.runtime-core.js");
+    const { withPluginRuntimeGenerationRegistryScope } =
+      await import("./runtime/generation-state.js");
+    const registry = providerRegistry({ id: "google", label: "Retained Google", auth: [] });
+    currentMetadata.mockReturnValue(
+      createPluginMetadataSnapshotFixture({ plugins: manifestLoader().plugins }),
+    );
+    const hooks = createProviderHookRuntime(
+      createProviderRegistryResolver({
+        loadOpenClawPlugins: setupLoader,
+        acquirePluginRegistryForInspection: setupInspection,
+        resolveRuntimePluginRegistry: runtimeLoader,
+        isPluginRegistryLoadInFlight: isPluginRegistryLoadInFlightMock,
+      }),
+    );
+    const label = await withPluginRuntimeGenerationRegistryScope(registry, () =>
+      hooks.withProviderRuntimePlugin(
+        { provider: "google", config: {} },
+        async (plugin) => plugin?.label,
+      ),
+    );
+    expect(label).toBe("Retained Google");
+    expect(setupInspection).not.toHaveBeenCalled();
+    expect(prepareAutoEnable).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { mode: "runtime", empty: false, expected: ["Retained Google"], acquired: 0 },
+    { mode: "runtime", empty: true, expected: [], acquired: 0 },
+    { mode: "setup", empty: false, expected: ["Setup Google"], acquired: 1 },
+  ] as const)(
+    "preserves $mode provider ownership for a retained generation (empty=$empty)",
+    async ({ mode, empty, expected, acquired }) => {
+      const { withPluginRuntimeGenerationRegistryScope } =
+        await import("./runtime/generation-state.js");
+      const registry = empty
+        ? createEmptyPluginRegistry()
+        : providerRegistry({ id: "google", label: "Retained Google", auth: [] });
+      currentMetadata.mockReturnValue(
+        createPluginMetadataSnapshotFixture({ plugins: manifestLoader().plugins }),
+      );
+      setupInspection.mockResolvedValue({
+        registry: providerRegistry({ id: "google", label: "Setup Google", auth: [] }),
+        release: async () => {},
+      });
+      const labels = await withPluginRuntimeGenerationRegistryScope(registry, () =>
+        withPluginProviders({ config: {}, mode, providerRefs: ["google"] }, async (providers) =>
+          providers.map((provider) => provider.label),
+        ),
+      );
+      expect(labels).toEqual(expected);
+      expect(setupInspection).toHaveBeenCalledTimes(acquired);
+      expect(prepareAutoEnable).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps selected providers alive until asynchronous repair failure settles", async () => {
+    const admitted = createDeferred();
+    const entered = createDeferred();
+    const finished = createDeferred();
+    const events: string[] = [];
+    const failure = new Error("repair failed");
+    const registry = providerRegistry({ id: "google", label: "Google", auth: [] });
+    registry.providers.push({
+      pluginId: "kilocode",
+      provider: { id: "kilocode", label: "Kilo", auth: [] },
+      source: "bundled",
+    });
+    setupInspection.mockImplementation(async () => {
+      await admitted.promise;
+      return {
+        registry,
+        release: async () => {
+          events.push("released");
+        },
+      };
+    });
+    const operation = withPluginProviders(
+      { config: {}, mode: "runtime", providerRefs: ["google"] },
+      async (providers) => {
+        expect(providers.map((provider) => provider.id)).toEqual(["google"]);
+        events.push("consuming");
+        entered.resolve();
+        await finished.promise;
+        throw failure;
+      },
+    );
+    expect(events).toEqual([]);
+    admitted.resolve();
+    await entered.promise;
+    expect(events).toEqual(["consuming"]);
+    finished.resolve();
+    await expect(operation).rejects.toBe(failure);
+    expect(events).toEqual(["consuming", "released"]);
+  });
+
+  it.each(["cancellation", "retirement", "metadata invalidation"])(
+    "releases a prepared inspection after %s",
+    async (cause) => {
+      const { AsyncWorkScope } = await import("../shared/async-work-scope.js");
+      const {
+        createPluginCache,
+        invalidatePluginCacheMetadata,
+        retirePluginCache,
+        withPluginCache,
+      } = await import("./plugin-cache.js");
+      const cache = createPluginCache();
+      const work = new AsyncWorkScope();
+      const acquired = createDeferred<Awaited<ReturnType<typeof setupInspection>>>();
+      const released = vi.fn(async () => {});
+      const consume = vi.fn(async () => {});
+      setupInspection.mockReturnValue(acquired.promise);
+      const operation = withPluginCache(cache, () =>
+        work.track(() => withPluginProviders({ config: {}, mode: "setup" }, consume)),
+      );
+      const rejected = expect(operation).rejects.toThrow();
+      if (cause === "cancellation") {
+        work.beginClose();
+      } else if (cause === "retirement") {
+        void retirePluginCache(cache);
+      } else {
+        invalidatePluginCacheMetadata(cache);
+      }
+      acquired.resolve({ registry: createEmptyPluginRegistry(), release: released });
+      await rejected;
+      expect(consume).not.toHaveBeenCalled();
+      expect(released).toHaveBeenCalledOnce();
+      await work.drain();
+      await retirePluginCache(cache);
+    },
+  );
+
+  it("rejects a completed provider inspection after metadata invalidation", async () => {
+    const { createPluginCache, invalidatePluginCacheMetadata, retirePluginCache, withPluginCache } =
+      await import("./plugin-cache.js");
+    const cache = createPluginCache();
+    const released = vi.fn(async () => {});
+    setupInspection.mockResolvedValue({ registry: createEmptyPluginRegistry(), release: released });
+    try {
+      await expect(
+        withPluginCache(cache, () =>
+          withPluginProviders({ config: {}, mode: "setup" }, async () => {
+            invalidatePluginCacheMetadata(cache);
+            return "stale";
+          }),
+        ),
+      ).rejects.toThrow("retired");
+      expect(released).toHaveBeenCalledOnce();
+    } finally {
+      await retirePluginCache(cache);
+    }
   });
 
   it("auto-loads a same-id prefix record after ambiguous pattern matches", () => {
