@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { createServer, request as httpRequest, type ServerResponse } from "node:http";
 import path from "node:path";
-import { expect, test } from "vitest";
+import { assert, expect, test } from "vitest";
 import {
   extractCurrentRuntimeContextTexts,
   isInternalRuntimeContextCarrierText,
@@ -292,6 +292,7 @@ async function runAccountHistoryProof(compactionMode: "client" | "server-endpoin
     if (compactionMode === "server-endpoint") {
       expect(compacted.result?.kind).toBe("server-endpoint");
       expect(compactRequests).toHaveLength(1);
+      assert.isDefined(compactRequests[0]);
       expectHistory(historyWindow(compactRequests[0]), [5, 6], [1, 2]);
       for (let generation = 1; generation <= 2; generation++) {
         const firstTurn = generation * 6 + 1;
@@ -314,6 +315,7 @@ async function runAccountHistoryProof(compactionMode: "client" | "server-endpoin
           );
           expect(next.result?.kind).toBe("server-endpoint");
           expect(compactRequests).toHaveLength(2);
+          assert.isDefined(compactRequests[1]);
           expect(compactRequests[1]).toContain(checkpoint(1).encrypted_content);
           expectHistory(historyWindow(compactRequests[1]), [], [5, 6], ".");
         }
