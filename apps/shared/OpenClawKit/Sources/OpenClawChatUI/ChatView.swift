@@ -61,6 +61,7 @@ public struct OpenClawChatView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     #endif
+    @State private var transcriptPreparation = ChatTranscriptPresentation()
     @State private var contentWidth: CGFloat = 0
     @State private var scrollerBottomID = UUID()
     @State private var scrollCommand = ChatScrollCommand()
@@ -406,7 +407,7 @@ extension OpenClawChatView {
         #endif
     }
 
-    private func messageList(transcript: TranscriptPresentation) -> some View {
+    private func messageList(transcript: ChatTranscriptPresentation.Prepared) -> some View {
         let hasVisibleContent = !transcript.rows.isEmpty || self.hasVisibleTransientContent
         return ZStack {
             Group {
@@ -515,9 +516,9 @@ extension OpenClawChatView {
             })
         .onChange(of: self.viewModel.isLoading) { _, isLoading in
             guard !isLoading, !self.hasPerformedInitialScroll else { return }
-            self.restoreInitialScrollPosition()
+            self.restoreInitialScrollPosition(transcript: transcript)
             self.hasPerformedInitialScroll = true
-            self.lastTurnStartID = self.latestVisibleTurnStartID
+            self.lastTurnStartID = transcript.visibleTurnStartIDs.last
         }
         #if os(iOS)
         .onChange(of: self.scroll.followTarget) { _, target in
@@ -550,7 +551,7 @@ extension OpenClawChatView {
         }
         #endif
         .onChange(of: self.viewModel.timelineRevision) { _, _ in
-            self.handleTimelineChange()
+            self.handleTimelineChange(transcript: transcript)
         }
         #if canImport(UIKit) && !os(macOS)
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { _ in
@@ -613,28 +614,9 @@ extension OpenClawChatView {
         }
     }
 
-    /// Keep one grouping owner per platform so new turns do not recreate disclosure state.
-    private func transcriptGroups(transcript: TranscriptPresentation, hasVisibleContent: Bool) -> some View {
-        self.messageListRows(
-            transcript: transcript,
-            groups: self.runGroups(transcript)[...],
-            hasVisibleContent: hasVisibleContent)
-    }
-
-    private func runGroups(_ transcript: TranscriptPresentation) -> [ChatAssistantRunGroup] {
-        let liveRunIDs = Set(self.viewModel.liveAdvertisedRunIDs).union(self.viewModel.liveLocalRunIDs)
-        return ChatAssistantRunGroup.build(
-            transcript.rows,
-            tools: self.displayOptions.contains(.toolActivity) ? self.viewModel.toolActivities : [],
-            liveRunID: liveRunIDs.count == 1 ? liveRunIDs.first : nil,
-            hasLiveContent: self.showsWorkingIndicator || self.hasVisibleStreamingAssistantText,
-            searchActive: self.isSearchPresented)
-    }
-
     @ViewBuilder
-    private func messageListRows(
-        transcript: TranscriptPresentation,
-        groups shownGroups: ArraySlice<ChatAssistantRunGroup>,
+    private func transcriptGroups(
+        transcript: ChatTranscriptPresentation.Prepared,
         hasVisibleContent: Bool) -> some View
     {
         let contextWindowTokens = self.viewModel.contextUsage?.contextWindowTokens
@@ -660,7 +642,7 @@ extension OpenClawChatView {
         }
 
         #if os(iOS)
-        ForEach(ChatAssistantListCell.cells(shownGroups)) { cell in
+        ForEach(transcript.cells) { cell in
             Group {
                 if cell.group.runID != nil {
                     ChatAssistantRunFrame(
@@ -682,11 +664,11 @@ extension OpenClawChatView {
             .padding(.bottom, cell.joinsBelow ? 0 : Layout.messageSpacing / 2)
         }
         #else
-        ForEach(shownGroups) { group in
+        ForEach(transcript.groups) { group in
             let parts = ForEach(group.parts) { part in
                 self.runPart(
                     part,
-                    metadata: transcript.metadata,
+                    transcript: transcript,
                     contextWindowTokens: contextWindowTokens,
                     isGrouped: group.runID != nil,
                     answerID: group.runID == nil ? nil : group.answerID)
@@ -715,13 +697,13 @@ extension OpenClawChatView {
     @ViewBuilder
     private func listCellContent(
         _ cell: ChatAssistantListCell,
-        transcript: TranscriptPresentation,
+        transcript: ChatTranscriptPresentation.Prepared,
         contextWindowTokens: Int?) -> some View
     {
         if let part = cell.part {
             self.runPart(
                 part,
-                metadata: transcript.metadata,
+                transcript: transcript,
                 contextWindowTokens: contextWindowTokens,
                 isGrouped: cell.group.runID != nil,
                 answerID: cell.group.answerID)
@@ -734,7 +716,7 @@ extension OpenClawChatView {
     @ViewBuilder
     private func runPart(
         _ part: ChatAssistantRunGroup.Part,
-        metadata: [UUID: ChatMessageMetadata],
+        transcript: ChatTranscriptPresentation.Prepared,
         contextWindowTokens: Int?,
         isGrouped: Bool,
         answerID: UUID?) -> some View
@@ -743,7 +725,7 @@ extension OpenClawChatView {
         case let .row(row):
             self.transcriptRow(
                 row,
-                metadata: metadata,
+                transcript: transcript,
                 contextWindowTokens: contextWindowTokens,
                 isGrouped: isGrouped,
                 answerID: answerID)
@@ -757,7 +739,7 @@ extension OpenClawChatView {
     @ViewBuilder
     private func transcriptRow(
         _ row: ChatTranscriptRow,
-        metadata: [UUID: ChatMessageMetadata],
+        transcript: ChatTranscriptPresentation.Prepared,
         contextWindowTokens: Int?,
         isGrouped: Bool,
         answerID: UUID?) -> some View
@@ -766,7 +748,8 @@ extension OpenClawChatView {
         case let .message(message):
             self.messageRow(
                 for: message,
-                metadata: message.presentationOwnsFooter ? metadata[message.id] : nil,
+                actionMessage: transcript.actionMessage(for: message),
+                metadata: message.presentationOwnsFooter ? transcript.metadata[message.id] : nil,
                 contextWindowTokens: contextWindowTokens,
                 showsActions: !isGrouped || message.presentationID == answerID)
                 #if os(iOS)
@@ -790,7 +773,8 @@ extension OpenClawChatView {
             ChatCompletedWorkDisclosure(work: work) { message in
                 self.messageRow(
                     for: message,
-                    metadata: message.presentationOwnsFooter ? metadata[message.id] : nil,
+                    actionMessage: transcript.actionMessage(for: message),
+                    metadata: message.presentationOwnsFooter ? transcript.metadata[message.id] : nil,
                     contextWindowTokens: contextWindowTokens,
                     showsActions: !isGrouped)
             }
@@ -859,12 +843,11 @@ extension OpenClawChatView {
     @ViewBuilder
     private func messageRow(
         for msg: OpenClawChatMessage,
+        actionMessage: OpenClawChatMessage,
         metadata: ChatMessageMetadata?,
         contextWindowTokens: Int?,
         showsActions: Bool = true) -> some View
     {
-        let actionMessage = msg.presentationBlockIndex == nil ? msg :
-            self.viewModel.transcriptMessages.first(where: { $0.id == msg.id }) ?? msg
         let isUser = msg.role.lowercased() == "user"
         let bubble = ChatMessageBubble(
             message: msg,
@@ -1050,64 +1033,19 @@ extension OpenClawChatView {
         }
     }
 
-    private struct TranscriptPresentation {
-        let rows: [ChatTranscriptRow]
-        let metadata: [UUID: ChatMessageMetadata]
-    }
-
-    private var readerPresentationMessages: [OpenClawChatMessage] {
-        let current = self.viewModel.transcriptMessages
+    private var transcriptPresentation: ChatTranscriptPresentation.Prepared {
         #if os(iOS)
-        if let snapshot = self.readerHistorySnapshot {
-            return snapshot.presentation(
-                current: current, deletionRevision: self.viewModel.readerHistoryDeletionRevision)
-        }
+        let readerHistory = self.readerHistorySnapshot
+        #else
+        let readerHistory: ChatReaderHistorySnapshot? = nil
         #endif
-        return current
-    }
-
-    private var transcriptPresentation: TranscriptPresentation {
-        let messages = self.readerPresentationMessages
-        let base: [OpenClawChatMessage]
-        if self.style == .onboarding {
-            guard let first = messages.first else { return TranscriptPresentation(rows: [], metadata: [:]) }
-            base = first.role.lowercased() == "user" ? Array(messages.dropFirst()) : messages
-        } else {
-            base = messages
-        }
-        var rows = ChatTranscriptRow.build(from: ChatTranscriptRow.mergeToolResults(in: base))
-        let runWorking = self.viewModel.hasBlockingRunActivity || self.viewModel.hasStreamingAssistantText
-        let activeRunIDs = Set(self.viewModel.liveAdvertisedRunIDs).union(self.viewModel.liveLocalRunIDs)
-        // Footers and visible rows share the merged, onboarding-trimmed input, before work moves into disclosures.
-        let metadata = ChatTranscriptRow.footerMetadata(
-            in: rows,
-            activeRunIDs: activeRunIDs,
-            runWorking: runWorking,
-            isMessageVisible: self.shouldDisplayMessage)
-        if self.collapsesCompletedWork {
-            rows = ChatTranscriptRow.collapseCompletedWork(
-                rows,
-                runWorking: runWorking,
-                activeRunIDs: activeRunIDs,
-                searchActive: self.isSearchPresented)
-        }
-        rows = rows.compactMap { row in
-            switch row {
-            case let .message(message):
-                return self.shouldDisplayMessage(message) ? row : nil
-            case let .completedWork(work):
-                let visible = work.messages.filter(self.shouldDisplayMessage)
-                return visible.isEmpty ? nil : .completedWork(.init(
-                    anchorID: work.anchorID, messages: visible, durationMilliseconds: work.durationMilliseconds))
-            default:
-                return row
-            }
-        }
-        return TranscriptPresentation(rows: rows, metadata: metadata)
-    }
-
-    private var latestVisibleTurnStartID: UUID? {
-        self.transcriptPresentation.rows.last(where: \.startsTurn)?.id
+        return self.transcriptPreparation.resolve(
+            viewModel: self.viewModel,
+            onboarding: self.style == .onboarding,
+            displayOptions: self.displayOptions,
+            collapsesCompletedWork: self.collapsesCompletedWork,
+            searchActive: self.isSearchPresented,
+            readerHistory: readerHistory)
     }
 
     private var isFollowingTurn: Bool {
@@ -1303,19 +1241,19 @@ extension OpenClawChatView {
         return ("Something went wrong", error, "exclamationmark.triangle.fill", .orange)
     }
 
-    private func restoreInitialScrollPosition() {
+    private func restoreInitialScrollPosition(transcript: ChatTranscriptPresentation.Prepared) {
         #if os(iOS)
         self.scroll.followTarget = .latest
         self.scroll.hasNewerContentBelow = false
         self.moveScrollPosition(to: self.scrollerBottomID)
         #else
         if chatReaderInitialRestorePolicy() == .latestTurn,
-           let latestTurnStartID = self.latestVisibleTurnStartID
+           let latestTurnStartID = transcript.visibleTurnStartIDs.last
         {
             self.scroll.followTarget = nil
             self.scroll.hasNewerContentBelow = chatReaderHasNewerContent(
                 after: latestTurnStartID,
-                visibleIDs: self.transcriptPresentation.rows.map(\.id),
+                visibleIDs: transcript.rows.map(\.id),
                 hasTransientContent: self.hasVisibleTransientContent)
             self.moveScrollPosition(to: latestTurnStartID, anchor: Layout.newTurnAnchor)
         } else {
@@ -1326,7 +1264,7 @@ extension OpenClawChatView {
         #endif
     }
 
-    private func handleTimelineChange() {
+    private func handleTimelineChange(transcript: ChatTranscriptPresentation.Prepared) {
         #if os(iOS)
         guard self.hasPerformedInitialScroll else { return }
         // A search result is an explicit reading position. Incoming replies
@@ -1344,7 +1282,7 @@ extension OpenClawChatView {
         }
         // Pinned, the synchronous UIKit follow owner keeps the newest content in view in the same layout
         // pass as the change; nothing is scrolled here. Away, nothing moves at all.
-        let visibleTurnStartIDs = self.transcriptPresentation.rows.compactMap { $0.startsTurn ? $0.id : nil }
+        let visibleTurnStartIDs = transcript.visibleTurnStartIDs
         switch chatReaderUserTransition(previousID: self.lastTurnStartID, visibleIDs: visibleTurnStartIDs) {
         case let .removed(latestRemainingID):
             self.lastTurnStartID = latestRemainingID
@@ -1363,7 +1301,7 @@ extension OpenClawChatView {
             // A chat's cached or live rows paint while the rest of its load (sessions, models,
             // health) is still running. Hold them at the initial position instead of the top;
             // the load's completion still settles it.
-            if !self.viewModel.messages.isEmpty { self.restoreInitialScrollPosition() }
+            if !self.viewModel.messages.isEmpty { self.restoreInitialScrollPosition(transcript: transcript) }
             return
         }
         // A search result is an explicit reading position. Incoming replies
@@ -1380,8 +1318,8 @@ extension OpenClawChatView {
             self.moveScrollPosition(to: self.scrollerBottomID)
             return
         }
-        let transcriptRows = self.transcriptPresentation.rows
-        let visibleTurnStartIDs = transcriptRows.compactMap { $0.startsTurn ? $0.id : nil }
+        let transcriptRows = transcript.rows
+        let visibleTurnStartIDs = transcript.visibleTurnStartIDs
         switch chatReaderUserTransition(
             previousID: self.lastTurnStartID,
             visibleIDs: visibleTurnStartIDs)
@@ -1461,34 +1399,6 @@ extension OpenClawChatView {
             from: nil,
             for: nil)
         #endif
-    }
-
-    private func shouldDisplayMessage(_ message: OpenClawChatMessage) -> Bool {
-        let primaryText = ChatMessageVisibleText.displayText(
-            in: message,
-            includeThinking: self.displayOptions.contains(.reasoning))
-        if message.content.contains(where: \.isInlineAttachment) {
-            return true
-        }
-
-        if message.isToolResult {
-            return self.displayOptions.contains(.toolActivity)
-        }
-
-        if !primaryText.isEmpty {
-            if message.role.lowercased() == "user" {
-                return true
-            }
-            if AssistantTextParser.hasVisibleContent(
-                in: primaryText,
-                includeThinking: self.displayOptions.contains(.reasoning))
-            {
-                return true
-            }
-        }
-
-        return self.displayOptions.contains(.toolActivity) &&
-            message.content.contains { $0.isToolCall || $0.isToolResult }
     }
 
     @ViewBuilder

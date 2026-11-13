@@ -2,8 +2,8 @@ import Foundation
 
 /// Live commentary is a display projection, never a second durable transcript.
 /// Canonical history takes over each exact run/item without losing its row identity.
-struct ChatNarration {
-    private struct Segment {
+struct ChatNarration: Equatable {
+    private struct Segment: Equatable {
         let runID: String
         let itemID: String?
         let eventID: String

@@ -1,7 +1,7 @@
 import Foundation
 
 /// Keeps trimmed history while reading, but never across an authoritative deletion.
-struct ChatReaderHistorySnapshot {
+struct ChatReaderHistorySnapshot: Equatable {
     let messages: [OpenClawChatMessage]
     let deletionRevision: UInt64
 
