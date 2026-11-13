@@ -159,7 +159,9 @@ function scanAssertionNodes(
   sourceFile: ts.SourceFile,
   observe?: (node: AssertionNode, exemption: AssertionExemption) => void,
 ) {
-  const safetyCommentLines = collectSafetyCommentLines(sourceFile, source);
+  const safetyCommentLines = source.includes("SAFETY:")
+    ? collectSafetyCommentLines(sourceFile, source)
+    : undefined;
   let count = 0;
   const visit = (node: ts.Node): void => {
     if (ts.isAsExpression(node) || ts.isTypeAssertion(node)) {
@@ -172,7 +174,7 @@ function scanAssertionNodes(
       // Casting exactly to unknown strengthens evidence; oxlint rejects chained assertions.
       if (!isConstAssertion && node.type.kind === ts.SyntaxKind.UnknownKeyword) {
         exemption = "unknown";
-      } else if (!isConstAssertion) {
+      } else if (!isConstAssertion && safetyCommentLines) {
         const operatorLine = sourceFile.getLineAndCharacterOfPosition(
           assertionOperatorPosition(sourceFile, node),
         ).line;
