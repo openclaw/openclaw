@@ -21,7 +21,7 @@ type ProxyCreditParams = {
 };
 
 /** Undefined means this sign-in has no import owner; null clears that owner's default. */
-export function resolveTrustedProxyGitCoauthor(
+function resolveTrustedProxyGitCoauthor(
   params: ProxyCreditParams,
 ): GitCoauthorOrganizationIdentity | null | undefined {
   const mapping = params.authConfig?.trustedProxy?.gitCoauthor;
