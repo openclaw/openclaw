@@ -59,6 +59,41 @@ afterEach(() => {
 });
 
 describe("release evidence API reads", () => {
+  it("waits for freshly uploaded artifact metadata without retrying ordinary missing artifacts", () => {
+    const wait = vi.spyOn(Atomics, "wait").mockReturnValue("timed-out");
+    const missing = Object.assign(new Error("gh failed"), { stderr: "gh: Not Found (HTTP 404)" });
+    transport.read.mockImplementationOnce(() => {
+      throw missing;
+    });
+    transport.read.mockReturnValue(JSON.stringify({ id: 7 }));
+    const client = createReleaseEvidenceClient("openclaw/openclaw");
+    expect(client.getArtifact("7", { freshlyUploaded: true })).toEqual({ id: 7 });
+    expect(transport.read).toHaveBeenCalledTimes(2);
+    expect(wait.mock.calls.map((call) => call[3])).toEqual([2000]);
+    transport.read.mockReset().mockImplementation(() => {
+      throw missing;
+    });
+    wait.mockClear();
+    expect(() => client.getArtifact("7")).toThrow(missing);
+    expect(transport.read).toHaveBeenCalledOnce();
+    expect(wait).not.toHaveBeenCalled();
+  });
+  it.each([
+    [404, 4],
+    [403, 1],
+    [401, 1],
+  ])("bounds fresh artifact HTTP %i reads to %i attempts", (status, attempts) => {
+    vi.spyOn(Atomics, "wait").mockReturnValue("timed-out");
+    const failure = Object.assign(new Error("gh failed"), { stderr: `HTTP ${status}` });
+    transport.read.mockImplementation(() => {
+      throw failure;
+    });
+    expect(() =>
+      createReleaseEvidenceClient("openclaw/openclaw").getArtifact("7", { freshlyUploaded: true }),
+    ).toThrow(failure);
+    expect(transport.read).toHaveBeenCalledTimes(attempts);
+  });
+
   it("reads only the named plugin artifact after a transient metadata failure", () => {
     vi.spyOn(Atomics, "wait").mockReturnValue("timed-out");
     transport.read.mockImplementationOnce(() => {

@@ -1049,7 +1049,9 @@ async function publicationMode(mode) {
       throw new Error("invalid publication upload action digest");
     }
     uploaded.digest = `sha256:${uploaded.digest}`;
-    const metadata = createReleaseEvidenceClient(source.repository).getArtifact(uploaded.id);
+    const metadata = createReleaseEvidenceClient(source.repository).getArtifact(uploaded.id, {
+      freshlyUploaded: true,
+    });
     const descriptor = validatePublicationObservationArtifactIdentity(metadata, source, uploaded);
     admission = createPublicationAdmission(
       source,

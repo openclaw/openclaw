@@ -2124,11 +2124,23 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO) {
     revalidateQualificationAdmissionAuthority(options) {
       return revalidateQualificationAdmissionAuthority(options);
     },
-    getArtifact(artifactId) {
+    getArtifact(artifactId, { freshlyUploaded = false } = {}) {
       if (!/^[1-9][0-9]{0,19}$/u.test(String(artifactId))) {
         throw new Error("invalid publication artifact ID");
       }
-      return githubRestJson(`actions/artifacts/${artifactId}`, normalizedRepository);
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          return githubRestJson(`actions/artifacts/${artifactId}`, normalizedRepository);
+        } catch (error) {
+          // Upload finalization can precede REST visibility. Only the uploader
+          // opts into this bounded wait; ordinary missing evidence fails closed.
+          const diagnostic = `${error?.message ?? ""}\n${error?.stderr ?? ""}`;
+          if (!freshlyUploaded || attempt >= 3 || !/HTTP 404\b/u.test(diagnostic)) {
+            throw error;
+          }
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2_000 * 2 ** attempt);
+        }
+      }
     },
     getRef(fullRef) {
       const refPath = String(fullRef)
