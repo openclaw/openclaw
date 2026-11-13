@@ -6,6 +6,7 @@ import {
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import type { SessionStoreTarget } from "../../config/sessions/targets.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   listAgentDatabaseAdmissionRefusals,
@@ -33,7 +34,8 @@ export async function assertAcpSessionKeysMigratedForStartup(
   env: NodeJS.ProcessEnv,
   admittedAgentIds: readonly string[],
   admittedDatabase: OpenClawAgentDatabaseOptions | undefined,
-  assertCurrent?: () => void,
+  assertCurrent: (() => void) | undefined,
+  excludeTarget: (target: SessionStoreTarget) => boolean,
 ): Promise<void> {
   assertCurrent?.();
   const result = await executeExistingOpenClawStateRead({ env }, { type: "acpSessions.list" });
@@ -74,6 +76,18 @@ export async function assertAcpSessionKeysMigratedForStartup(
       local: boolean;
     }> = [];
     for (const identity of identities) {
+      // Historical explicit ACP owners can outlive their roster entry and schema.
+      if (
+        excludeTarget({
+          agentId: identity.agentId,
+          storePath: resolveSessionStorePathCore(cfg.session?.store, {
+            agentId: identity.agentId,
+            env,
+          }),
+        })
+      ) {
+        continue;
+      }
       let owner: ReturnType<typeof resolveSessionStorePathForAcp>;
       try {
         owner = resolveSessionStorePathForAcp({

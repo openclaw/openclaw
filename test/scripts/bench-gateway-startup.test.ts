@@ -169,6 +169,33 @@ async function listenOnLoopback(handler: RequestListener) {
 }
 
 describe("gateway startup benchmark script", () => {
+  it("captures startup allocations and CPU when the Gateway exits before readiness", async ({
+    signal,
+  }) => {
+    const root = tempDirs.make("openclaw-startup-fatal-heap-");
+    const outputPath = path.join(root, "fatal.heapprofile");
+    const exitCode = await runManagedCommand({
+      bin: resolveTestNodeExecPath(),
+      args: [
+        "--import",
+        path.resolve("scripts/lib/gateway-startup-heap-profile.mjs"),
+        "--eval",
+        "globalThis.fixture = Array.from({ length: 4096 }, (_, index) => new Array(128).fill(index)); process.exit(78);",
+      ],
+      env: { ...process.env, OPENCLAW_BENCH_HEAP_EXIT_PATH: outputPath },
+      signal,
+      stdio: ["ignore", "ignore", "inherit", "ipc"],
+    });
+    expect(exitCode).toBe(78);
+    const profile = JSON.parse(
+      fs.readFileSync(outputPath, "utf8"),
+    ) as HeapProfiler.SamplingHeapProfile & { cpuUsage: NodeJS.CpuUsage };
+    const sampledAllocationBytes = (node: HeapProfiler.SamplingHeapProfileNode): number =>
+      node.selfSize + node.children.reduce((sum, child) => sum + sampledAllocationBytes(child), 0);
+    expect(sampledAllocationBytes(profile.head)).toBeGreaterThan(0);
+    expect(profile.cpuUsage.user + profile.cpuUsage.system).toBeGreaterThan(0);
+  });
+
   it("samples collected startup allocations and stops before post-ready work", async ({
     signal,
   }) => {
@@ -582,6 +609,7 @@ server.listen(port, "127.0.0.1", () => {
     for (const flag of [
       "--cpu-prof-dir",
       "--heap-prof-dir",
+      "--log-file",
       "--gateway-runtime",
       "--gateway-cpus",
     ]) {
@@ -598,6 +626,12 @@ server.listen(port, "127.0.0.1", () => {
       output: "startup.json",
       runs: 2,
     });
+    const defaultLogging = resolveBenchCase("default").config.logging;
+    const logCase = parseOptions("--case default --log-file logs/isolated.log").cases[0]!;
+    expect(readConfig(tempDirs.make("openclaw-bench-logfile-"), logCase).logging?.file).toBe(
+      path.resolve("logs/isolated.log"),
+    );
+    expect(resolveBenchCase("default").config.logging).toEqual(defaultLogging);
     if (process.platform === "win32") {
       expect(() => parseOptions("--case teamBoot --publication-api-delay-ms 500")).toThrow("POSIX");
       return;

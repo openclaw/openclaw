@@ -28,6 +28,7 @@ import type {
   AgentDeletionJournalDisposition,
   AgentDeletionJournalPurpose,
   AgentDeletionJournalStatus,
+  HeldAgentDatabase,
   RetainedAgentDeletion,
 } from "./agent-deletion-journal.types.js";
 import {
@@ -212,10 +213,17 @@ export function readRetainedAgentDeletionsFromDatabase(
     }
     unreadableReason = formatErrorMessage(error);
   }
-  const held =
-    purpose === "maintenance" && tableExists(database, "migration_sources")
-      ? readAgentDeletionRecoveryHolds({ db: database, path: statePath })
-      : [];
+  let held: HeldAgentDatabase[] = [];
+  try {
+    if (tableExists(database, "migration_sources")) {
+      held = readAgentDeletionRecoveryHolds({ db: database, path: statePath });
+    }
+  } catch (error) {
+    if (purpose === "maintenance" || isSqliteCorruptionError(error)) {
+      throw error;
+    }
+    // Unknown recovery history cannot turn otherwise live agents into held stores.
+  }
   if (missing && held.length === 0 && hasPreJournalStateSchema(database)) {
     return { status: "empty" };
   }

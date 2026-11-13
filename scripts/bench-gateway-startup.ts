@@ -107,6 +107,7 @@ type GatewayBenchCase = {
   publicationGitDelayMs?: number;
   publicationApiDelayMs?: number;
   restartSessions?: number;
+  heldAgentSchema?: boolean;
   teamScale?: boolean;
   runByDefault?: boolean;
 };
@@ -144,6 +145,7 @@ type GatewaySample = {
   cpuMs: number | null;
   exitedBeforeTeardown?: boolean;
   exitCode: number | null;
+  exitMs?: number;
   firstOutputMs: number | null;
   firstSessionRpc: {
     ms: number | null;
@@ -219,6 +221,7 @@ const BOOLEAN_FLAGS = new Set([
   "--installed-cpu-diagnostic",
   "--seed-only",
   "--team-scale",
+  "--held-agent-schema",
   "--snapshot-counts",
   "--module-counts",
   "--exit-listeners",
@@ -231,6 +234,7 @@ const VALUE_FLAGS = new Set([
   "--gateway-runtime",
   "--gateway-cpus",
   "--heap-prof-dir",
+  "--log-file",
   "--installed-cohort",
   "--output",
   "--runs",
@@ -497,6 +501,7 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
       "--warmup",
       "--cpu-prof-dir",
       "--heap-prof-dir",
+      "--log-file",
       "--timeout-ms",
       "--exit-listeners",
       "--assert-exit-listeners",
@@ -510,6 +515,16 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
     }
   }
   let cases = installedCohort ? [] : resolveCases(flags.get("--case") ?? []);
+  const logFile = resolveOutputPath(flags.get("--log-file")?.[0]);
+  if (logFile) {
+    cases = cases.map((benchCase) => ({
+      ...benchCase,
+      config: {
+        ...benchCase.config,
+        logging: { file: path.resolve(logFile) },
+      },
+    }));
+  }
   if (cases.length === 1 && cases[0]?.id === "teamBoot" && flags.has("--agent-database-mib")) {
     cases = [
       {
@@ -527,6 +542,12 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
       throw new CliArgumentError("--team-scale requires --case teamBoot");
     }
     cases = [{ ...cases[0], teamScale: true, pluginCount: 46 }];
+  }
+  if (flags.has("--held-agent-schema")) {
+    if (cases.length !== 1 || cases[0]?.id !== "teamBoot") {
+      throw new CliArgumentError("--held-agent-schema requires --case teamBoot");
+    }
+    cases = [{ ...cases[0], heldAgentSchema: true }];
   }
   if (flags.has("--restart-sessions")) {
     if (cases.length !== 1 || cases[0]?.id !== "teamBoot") {
@@ -700,10 +721,12 @@ Options:
   --fixture-root <path> Prepared teamBoot or slowAgentDatabase fixture (requires --runs 1 --warmup 0)
   --snapshot-counts   Count private SQLite staging directories/bytes and retain full Gateway output
   --module-counts     Count loaded module files at listener log and completion (diagnostic pass)
+  --log-file <path>   Use an explicit isolated logfile when fixture ancestors cannot host default logs
   --seed-only         Create a new --fixture-root without launching a Gateway
   --bundled-plugin-fixture <path> Synthetic plugins/models/tools/channels/secrets config for teamBoot
   --plugin-migration-fixture <status> Seed a pending or deferred config-only teamBoot obligation
   --team-scale                   Seed 46 plugins, 12 GiB shared/35 GiB agent data and 62k workspace files
+  --held-agent-schema            Add a retained schema-41 agent, historical ACP binding and empty agent directories
   --restart-sessions <n> Resume n interrupted sessions plus 155 stale runs; probe startup reads
   --publication-git-delay-ms <n> Seed one pending teamBoot publication with a slow local Git read (1–30000)
   --publication-api-delay-ms <n> Recover four historical publications through delayed mock GitHub reads (200–800)
@@ -1565,6 +1588,7 @@ async function seedTeamBootFixture(root: string, benchCase: GatewayBenchCase): P
     const cipher = createCipheriv("aes-256-ctr", Buffer.alloc(32), Buffer.alloc(16));
     const databasePaths: string[] = [];
     let statePath = "";
+    let heldAgentPath: string | undefined;
     try {
       for (const { id: agentId, workspace } of agents) {
         mkdirSync(workspace, { recursive: true });
@@ -1723,9 +1747,64 @@ async function seedTeamBootFixture(root: string, benchCase: GatewayBenchCase): P
           writeFileSync(path.join(directory, `${index}.bin`), cipher.update(Buffer.alloc(19_050)));
         }
       }
+      if (benchCase.heldAgentSchema) {
+        const agentId = "retained-benchmark";
+        heldAgentPath = agentDb.openOpenClawAgentDatabase({ agentId, env }).path;
+        const { writeAcpSessionMetaForMigration } =
+          await import("../src/acp/runtime/session-meta.js");
+        writeAcpSessionMetaForMigration({
+          env,
+          sessionKey: `agent:${agentId}:acp:historical`,
+          lifecycleRevision: "retained-benchmark-revision",
+          meta: {
+            backend: "fixture",
+            agent: agentId,
+            runtimeSessionName: "retained",
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: now,
+          },
+          now: () => now,
+        });
+        const { beginAgentDeletionJournalInDatabase, completeAgentDeletionJournalInDatabase } =
+          await import("../src/state/agent-deletion-journal.js");
+        stateDb.runOpenClawStateWriteTransaction(
+          (database) => {
+            beginAgentDeletionJournalInDatabase(database, {
+              agentId,
+              operationId: "synthetic-retained-deletion",
+              agentDir: path.dirname(heldAgentPath!),
+              workspaceDir: path.join(root, "workspace-retained"),
+              sessionsDir: path.join(root, "state", "agents", agentId, "sessions"),
+              deleteFiles: false,
+            });
+            completeAgentDeletionJournalInDatabase(
+              database,
+              agentId,
+              "synthetic-retained-deletion",
+            );
+          },
+          { env },
+        );
+      }
     } finally {
       await agentDb.closeOpenClawAgentDatabasesAsync();
       await stateDb.closeOpenClawStateDatabaseAsync();
+    }
+    if (heldAgentPath) {
+      // Exclusive offline fixture custody reproduces the schema-41 -> 42 update boundary.
+      const { DatabaseSync } = await import("node:sqlite");
+      const held = new DatabaseSync(heldAgentPath);
+      try {
+        held.exec(
+          "DROP TABLE agent_tool_usage; PRAGMA user_version=41; UPDATE schema_meta SET schema_version=41",
+        );
+      } finally {
+        held.close();
+      }
+      for (const agentId of ["claude", "codex", "visitors"]) {
+        mkdirSync(path.join(root, "state", "agents", agentId, "agent"), { recursive: true });
+      }
     }
     writeBenchmarkJson(
       {
@@ -1733,6 +1812,7 @@ async function seedTeamBootFixture(root: string, benchCase: GatewayBenchCase): P
         agentDatabaseMib: benchCase.agentDatabaseMib,
         pluginMigrationFixture: benchCase.pluginMigrationFixture,
         teamScale: benchCase.teamScale ?? false,
+        heldAgentSchema: benchCase.heldAgentSchema ?? false,
         workspaceFileCount: benchCase.teamScale ? 62_000 : 0,
         workspaceBytes: benchCase.teamScale ? 62_000 * 19_050 : 0,
         bundledPluginFixture: benchCase.bundledPluginFixture ?? {},
@@ -2102,6 +2182,15 @@ async function runGatewaySample(
       copyFileSync(configPath, `${configPath}.bak`);
     }
     const env = createGatewayBenchEnv(root, configPath, { caseEnv: options.benchCase.env });
+    const heapExitPath = options.heapProfDir
+      ? path.resolve(
+          options.heapProfDir,
+          `gateway-startup-fatal-${path.basename(root)}.heapprofile`,
+        )
+      : undefined;
+    if (heapExitPath) {
+      env.OPENCLAW_BENCH_HEAP_EXIT_PATH = heapExitPath;
+    }
     const publicationMarker =
       options.benchCase.publicationGitDelayMs !== undefined
         ? path.join(root, "publication-git-released.json")
@@ -2176,6 +2265,7 @@ async function runGatewaySample(
     let httpListenLogMs: number | null = null;
     let moduleCountsAtHttpListen: ReturnType<typeof summarizeGatewayModuleLoads> | undefined;
     let childExited = false;
+    let exitMs: number | undefined;
     let heapProfilePath: string | undefined;
     let startupReads: StartupReadProbe | undefined;
     const restartRecovery = options.benchCase.restartSessions
@@ -2244,6 +2334,7 @@ async function runGatewaySample(
       rssSampler = startGatewayRssSampling(startedChild);
       startedChild.once("exit", () => {
         childExited = true;
+        exitMs = performance.now() - startAt;
       });
 
       const onLine = (line: string, nowMs: number) => {
@@ -2467,6 +2558,9 @@ async function runGatewaySample(
         completionMs = performance.now() - startAt;
       }
       const completedAt = performance.now();
+      if (!heapProfilePath && heapExitPath && existsSync(heapExitPath)) {
+        heapProfilePath = heapExitPath;
+      }
       const cpuEndMs = readProcessTreeCpuMs(startedChild.pid);
       const cpuMs =
         cpuStartMs == null || cpuEndMs == null ? null : Math.max(0, cpuEndMs - cpuStartMs);
@@ -2564,6 +2658,7 @@ async function runGatewaySample(
         cpuMs,
         exitedBeforeTeardown: exit.exitedBeforeTeardown,
         exitCode: exit.exitCode,
+        exitMs,
         firstOutputMs,
         firstSessionRpc,
         gatewayReadyLogLine,
@@ -2725,6 +2820,7 @@ async function main() {
         publicationGitDelayMs?: number;
         publicationApiDelayMs?: number;
         teamScale?: boolean;
+        heldAgentSchema?: boolean;
         pluginMigrationFixture?: GatewayBenchCase["pluginMigrationFixture"];
         restartSessions?: number;
       };
@@ -2739,6 +2835,9 @@ async function main() {
       }
       if (Boolean(fixture.teamScale) !== Boolean(options.cases[0]?.teamScale)) {
         throw new CliArgumentError("--team-scale must match the prepared fixture");
+      }
+      if (Boolean(fixture.heldAgentSchema) !== Boolean(options.cases[0]?.heldAgentSchema)) {
+        throw new CliArgumentError("--held-agent-schema must match the prepared fixture");
       }
       if (
         JSON.stringify(fixture.bundledPluginFixture ?? {}) !==

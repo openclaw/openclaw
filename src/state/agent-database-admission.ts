@@ -25,7 +25,9 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
+import { resolveAgentCreationClaimAgentId } from "./agent-creation-claim.js";
 import { AgentDatabaseStartupPublicationError } from "./agent-database-admission-error.js";
+import { isSameOpenClawAgentDatabasePath } from "./openclaw-agent-db.paths.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
@@ -40,6 +42,7 @@ export type AgentDatabaseAdmissionRefusal = {
       code:
         | "agent-database-inspection-pending"
         | "agent-database-inspection-failed"
+        | "agent-database-held"
         | "agent-deletion";
       embeddedOwnerId?: undefined;
     }
@@ -71,7 +74,7 @@ const refusalsByState = new Map<
   string,
   {
     source: "startup" | "diagnostic";
-    refusals: ReadonlyMap<string, AgentDatabaseAdmissionRefusal>;
+    refusals: Map<string, AgentDatabaseAdmissionRefusal>;
   }
 >();
 
@@ -212,6 +215,58 @@ export function createAgentDatabaseDeletionRefusal(
   };
 }
 
+export function createAgentDatabaseHeldRefusal(
+  agentId: string,
+  paths: string[],
+): AgentDatabaseAdmissionRefusal {
+  return {
+    agentId,
+    paths,
+    code: "agent-database-held",
+    reason: `Agent ${agentId} database is held for explicit restoration.`,
+    repairHint:
+      "Run openclaw doctor --fix for restoration guidance, then restore the preserved store with agents add. Held databases are not live agents.",
+  };
+}
+
+/** Explicit restoration releases only the physical paths its hold writer committed. */
+export function releaseAgentDatabaseHeldAdmission(
+  paths: readonly string[],
+  options: AdmissionOptions = {},
+): void {
+  const owner = refusalsByState.get(stateKey(options));
+  if (!owner) {
+    return;
+  }
+  for (const [id, refusal] of owner.refusals) {
+    let changed = false;
+    const remaining = admissionRefusalParts(refusal).flatMap((part) => {
+      if (part.code !== "agent-database-held") {
+        return [part];
+      }
+      const kept = part.paths.filter(
+        (pathname) =>
+          !paths.some((released) => isSameOpenClawAgentDatabasePath(pathname, released)),
+      );
+      if (kept.length === part.paths.length) {
+        return [part];
+      }
+      changed = true;
+      return kept.length ? [{ ...part, paths: kept }] : [];
+    });
+    if (!changed) {
+      continue;
+    }
+    const merged = mergeAdmissionRefusals(remaining);
+    if (merged) {
+      owner.refusals.set(id, merged);
+    } else {
+      owner.refusals.delete(id);
+    }
+    sessionChanges.emit({ all: true, scope: { agentId: id, topology: true } });
+  }
+}
+
 /** Capture existing pending decisions; a later commit must never revoke their successors. */
 export function captureAgentDatabasePreparationDeletionForIdentity(
   agentId: string,
@@ -306,7 +361,50 @@ export function canIsolateAgentDatabase(config: OpenClawConfig, agentId: string)
   );
 }
 
-/** Only a new admission pass replaces this boot's decisions; file edits never clear a live refusal. */
+function admissionRefusalParts(
+  refusal: AgentDatabaseAdmissionRefusal,
+): AgentDatabaseAdmissionRefusal[] {
+  const cause = refusalCauses.get(refusal);
+  return cause instanceof AggregateError &&
+    cause.errors.length > 0 &&
+    cause.errors.every(
+      (error) =>
+        error instanceof AgentDatabaseAdmissionError && error.refusal.agentId === refusal.agentId,
+    )
+    ? cause.errors.flatMap((error: AgentDatabaseAdmissionError) =>
+        admissionRefusalParts(error.refusal),
+      )
+    : [refusal];
+}
+
+function mergeAdmissionRefusals(
+  parts: readonly AgentDatabaseAdmissionRefusal[],
+): AgentDatabaseAdmissionRefusal | undefined {
+  if (parts.length < 2) {
+    return parts[0];
+  }
+  const primary =
+    parts.find((part) => part.code === "agent-database-ownership-mismatch") ??
+    parts.find(
+      (part) =>
+        part.code !== "agent-database-held" && part.code !== "agent-database-inspection-pending",
+    ) ??
+    parts.find((part) => part.code === "agent-database-held") ??
+    parts[0]!;
+  const merged = {
+    ...primary,
+    paths: [...new Set(parts.flatMap((part) => part.paths))],
+    reason: parts.map((part) => part.reason).join("\n"),
+    repairHint: parts.map((part) => part.repairHint).join("\n"),
+  };
+  refusalCauses.set(
+    merged,
+    new AggregateError(parts.map((part) => new AgentDatabaseAdmissionError(part))),
+  );
+  return merged;
+}
+
+/** Admission and explicit restoration own these decisions; file edits never clear a live refusal. */
 export function recordAgentDatabaseAdmissions(
   refusals: readonly AgentDatabaseAdmissionRefusal[],
   options: AdmissionOptions & { source?: "startup" | "diagnostic" } = {},
@@ -323,22 +421,11 @@ export function recordAgentDatabaseAdmissions(
       continue;
     }
     const merged = previous
-      ? {
-          ...previous,
-          paths: [...new Set([...previous.paths, ...refusal.paths])],
-          reason: `${previous.reason}\n${refusal.reason}`,
-          repairHint: `${previous.repairHint}\n${refusal.repairHint}`,
-        }
+      ? mergeAdmissionRefusals([
+          ...admissionRefusalParts(previous),
+          ...admissionRefusalParts(refusal),
+        ])!
       : refusal;
-    if (previous) {
-      refusalCauses.set(
-        merged,
-        new AggregateError([
-          new AgentDatabaseAdmissionError(previous),
-          new AgentDatabaseAdmissionError(refusal),
-        ]),
-      );
-    }
     byAgent.set(refusal.agentId, merged);
   }
   refusalsByState.set(key, { source, refusals: byAgent });
@@ -484,6 +571,13 @@ function readSelectedAgentDatabaseAdmissionRefusal(
   access: "read" | "write" = "write",
 ): AgentDatabaseAdmissionRefusal | undefined {
   const refusal = refusalsByState.get(key)?.refusals.get(agentId);
+  if (
+    refusal?.code === "agent-database-held" &&
+    admissionRefusalParts(refusal).every((part) => part.code === "agent-database-held") &&
+    resolveAgentCreationClaimAgentId(agentId, key) === agentId
+  ) {
+    return undefined;
+  }
   const scope = preparation.getStore();
   if (scope && scope.key === key && scope.refusal.agentId === agentId) {
     // Publication listeners inherit this scope; none may borrow writable admission.
