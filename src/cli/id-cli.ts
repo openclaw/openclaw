@@ -217,7 +217,13 @@ function writeCommittedWarning(
   error: unknown,
   stage: "follow-up" | "publication",
 ) {
-  const reason = sanitizeTerminalText(error instanceof Error ? error.message : String(error));
+  // Transport errors are built as several text lines (message, remedy, connection
+  // details). Sanitize each line so untrusted segments cannot inject controls while the
+  // message keeps its intended layout.
+  const reason = (error instanceof Error ? error.message : String(error))
+    .split("\n")
+    .map((line) => sanitizeTerminalText(line))
+    .join("\n");
   write(
     opts,
     {
