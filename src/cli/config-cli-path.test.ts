@@ -61,6 +61,45 @@ describe("parseConfigSetValue", () => {
   });
 });
 
+describe("setAtPath array bounds", () => {
+  it("rejects a leaf write past the end of an array instead of creating null holes", () => {
+    const root = { tags: ["a", "b"] } as Record<string, unknown>;
+    expect(() => setAtPath(root, ["tags", "5"], "z")).toThrow(
+      'Cannot set index 5 of array "tags": index out of range (length 2). Use index 2 to append a new entry, or index 0-1 to update an existing entry.',
+    );
+    expect(root.tags).toEqual(["a", "b"]);
+  });
+
+  it("rejects a traversal through an out-of-range index instead of creating null holes", () => {
+    const root = { models: [{ id: "x" }] } as Record<string, unknown>;
+    expect(() => setAtPath(root, ["models", "3", "name"], "y")).toThrow(
+      'Cannot set index 3 of array "models": index out of range (length 1). Use index 1 to append a new entry, or index 0 to update the existing entry.',
+    );
+    expect(root.models).toEqual([{ id: "x" }]);
+  });
+
+  it("explains appending when the array is empty", () => {
+    const root = { tags: [] } as Record<string, unknown>;
+    expect(() => setAtPath(root, ["tags", "1"], "z")).toThrow(
+      'Cannot set index 1 of array "tags": index out of range (length 0). Use index 0 to append a new entry.',
+    );
+    expect(root.tags).toEqual([]);
+  });
+
+  it("still appends at the next index (index === length)", () => {
+    const root = { tags: ["a", "b"] } as Record<string, unknown>;
+    setAtPath(root, ["tags", "2"], "c");
+    expect(root.tags).toEqual(["a", "b", "c"]);
+  });
+
+  it("still fills a new empty container at index 0", () => {
+    const root = { agents: { list: [] } } as Record<string, unknown>;
+    setAtPath(root, ["agents", "list", "0", "id"], "tech");
+    const agents = root.agents as { list: unknown[] };
+    expect(agents.list).toEqual([{ id: "tech" }]);
+  });
+});
+
 // Each subcommand may only be pointed at the flags it registers; `config patch` has no
 // --merge/--replace, so advice naming them strands the user.
 describe("replacement guard advice", () => {
