@@ -584,7 +584,9 @@ private struct NodeTestConnection: OpenClawIDNodeConnection {
 /// A cancellable suspension without real timers, used for the losing deadline/close waits.
 private final class NodeTestCounter: Sendable {
     private let value = Mutex(0)
-    var count: Int { self.value.withLock { $0 } }
+    var count: Int {
+        self.value.withLock { $0 }
+    }
 
     func next() -> Int {
         self.value.withLock { value in
