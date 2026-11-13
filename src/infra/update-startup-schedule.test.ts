@@ -174,13 +174,14 @@ it("uses sub-hourly windows, skips clock jumps, and rearms hot schedule changes"
   expect(getUpdateSchedule()?.campaign?.state).toBe("countdown");
 });
 
-it("defers automatic catalog refresh until constrained memory recovers", async () => {
+it("defers automatic update and catalog checks until constrained memory recovers", async () => {
+  vi.mocked(checkUpdateStatus).mockClear();
   vi.spyOn(process, "constrainedMemory").mockReturnValue(1024 * 1024 * 1024);
   const available = vi.spyOn(process, "availableMemory").mockReturnValue(128 * 1024 * 1024);
   const applyRemoteCatalogUpdate = vi.fn(async () => "unchanged" as const);
   check = createGatewayUpdateCheck({
     lifecycle,
-    getConfig: () => ({ update: { channel: "extended-stable", checkOnStart: false } }),
+    getConfig: () => ({}),
     log: { info: vi.fn() },
     isNixMode: false,
     applyRemoteCatalogUpdate,
@@ -188,13 +189,14 @@ it("defers automatic catalog refresh until constrained memory recovers", async (
   check.start();
 
   await clock.advanceBy(0);
-  expectNoCalls(refreshRemoteModelCatalogMock, applyRemoteCatalogUpdate);
+  expectNoCalls(checkUpdateStatus, refreshRemoteModelCatalogMock, applyRemoteCatalogUpdate);
   await clock.advanceBy(60_000);
-  expectNoCalls(refreshRemoteModelCatalogMock, applyRemoteCatalogUpdate);
+  expectNoCalls(checkUpdateStatus, refreshRemoteModelCatalogMock, applyRemoteCatalogUpdate);
   available.mockReturnValue(1024 * 1024 * 1024);
   await clock.advanceBy(59_999);
-  expectNoCalls(refreshRemoteModelCatalogMock, applyRemoteCatalogUpdate);
+  expectNoCalls(checkUpdateStatus, refreshRemoteModelCatalogMock, applyRemoteCatalogUpdate);
   await clock.advanceBy(1);
+  expect(checkUpdateStatus).toHaveBeenCalledOnce();
   expect(refreshRemoteModelCatalogMock).toHaveBeenCalledOnce();
   expect(applyRemoteCatalogUpdate).toHaveBeenCalledOnce();
 });

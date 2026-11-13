@@ -16,7 +16,6 @@ import { isGatewayExternallySupervised } from "./gateway-supervision.js";
 import { isConstrainedProcessLowOnMemory } from "./host-memory.js";
 import type { UpdateCheckLifecycle } from "./update-check-lifecycle.js";
 import type { resolveStartupInstallStatus } from "./update-install-status.js";
-import { runGatewayUpdateCheck, resolveCheckIntervalMs } from "./update-startup.js";
 import { getUpdateSchedule } from "./update-status-state.js";
 
 export function createGatewayUpdateCheck(params: {
@@ -40,8 +39,13 @@ export function createGatewayUpdateCheck(params: {
   const updatePolicy = () => JSON.stringify(params.getConfig().update ?? {});
   let policy = updatePolicy();
   const check = async () => {
+    if (isConstrainedProcessLowOnMemory()) {
+      return 60_000;
+    }
+    let updateRuntime: typeof import("./update-startup.js") | undefined;
     try {
-      await runGatewayUpdateCheck(params, lifecycle);
+      updateRuntime = await import("./update-startup.js");
+      await updateRuntime.runGatewayUpdateCheck(params, lifecycle);
     } catch (error) {
       // Discovery failures must not crash or retire the Gateway update loop.
       if (!lifecycle.signal.aborted) {
@@ -50,8 +54,11 @@ export function createGatewayUpdateCheck(params: {
         });
       }
     }
+    if (!updateRuntime) {
+      return 60_000;
+    }
     const cfg = params.getConfig();
-    const interval = resolveCheckIntervalMs(cfg, getUpdateSchedule()?.install?.kind);
+    const interval = updateRuntime.resolveCheckIntervalMs(cfg, getUpdateSchedule()?.install?.kind);
     const expr =
       cfg.update?.auto?.enabled &&
       cfg.update?.checkOnStart !== false &&
