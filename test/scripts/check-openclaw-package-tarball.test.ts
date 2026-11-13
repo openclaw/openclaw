@@ -1129,7 +1129,16 @@ syncBuiltinESMExports();
       ],
     },
     {
-      name: "rejects the patched Bonjour runtime when it is not bundled",
+      name: "accepts registry Ciao when Bonjour imports its package root",
+      files: { "dist/index.js": 'export const load = () => import("@homebridge/ciao");\n' },
+      options: { packageJson: { dependencies: { "@homebridge/ciao": "1.3.12" } } },
+      status: 0,
+    },
+    {
+      name: "rejects registry Ciao when Bonjour imports its patched native entry",
+      files: {
+        "dist/index.js": 'export const load = () => import("@homebridge/ciao/native.js");\n',
+      },
       options: { packageJson: { dependencies: { "@homebridge/ciao": "1.3.12" } } },
       status: "nonzero",
       stderr: [
