@@ -12,6 +12,7 @@ const suite = createControlUiE2eSuite({
 
 function peopleGatewayOptions(): NonNullable<Parameters<typeof installMockGateway>[1]> {
   return {
+    hasMultipleSessionSharingIdentities: true,
     operatorScopes: ["operator.read", "operator.write"],
     presenceUsers: ["Ada Chen", "Bob Rivera", "Jacqueline Henriksen"].map((name, index) => ({
       id: ["ada", "bob", "jacqueline"][index]!,
@@ -218,6 +219,7 @@ suite.define(() => {
       { colorScheme: "dark", locale: "en-US", serviceWorkers: "block" },
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
+          hasMultipleSessionSharingIdentities: true,
           featureMethods: ["users.list"],
           operatorScopes: ["operator.read", "operator.write"],
           presenceUsers: ["Ada Chen", "Bob Rivera"].map((name, index) => ({

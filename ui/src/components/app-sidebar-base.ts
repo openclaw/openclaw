@@ -231,9 +231,19 @@ export abstract class AppSidebarBase {
   get updateComplete(): Promise<boolean> {
     return this.complete;
   }
+  get usersNavigationVisible(): boolean {
+    return (
+      this.context.gateway.snapshot.hello?.policy?.hasMultipleSessionSharingIdentities !== false
+    );
+  }
+
   prepareRender(): void {
     if (!this.isConnected) {
       return;
+    }
+    // A restored Users view cannot strand a solo gateway on a hidden destination.
+    if (!this.usersNavigationVisible && this.navigationView === "online") {
+      this.navigationView = "sessions";
     }
     this.willUpdate();
   }

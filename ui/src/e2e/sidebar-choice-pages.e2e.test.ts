@@ -32,7 +32,10 @@ suite.define(() => {
       await suite.withPage(
         { viewport: { width, height }, colorScheme, reducedMotion: "reduce" },
         async ({ page }) => {
-          await installMockGateway(page, { presenceUsers: people });
+          await installMockGateway(page, {
+            hasMultipleSessionSharingIdentities: true,
+            presenceUsers: people,
+          });
           await page.goto(suite.server.baseUrl + "new");
           if (width < 1000) {
             await navigationDrawerToggle(page).click();

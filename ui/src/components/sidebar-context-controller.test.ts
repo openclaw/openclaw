@@ -4,11 +4,52 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { createSidebarTestRouter } from "../test-helpers/app-sidebar-router.ts";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
-import { createGateway, createSessions, mountSidebar } from "../test-helpers/app-sidebar.ts";
+import {
+  createGateway,
+  createGatewayHarness,
+  createSessions,
+  mountSidebar,
+  TWO_AGENTS,
+} from "../test-helpers/app-sidebar.ts";
+import { sidebarBootSnapshot } from "../test-helpers/sidebar-boot-snapshot.test-support.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { getAppSidebarOwner } from "./app-sidebar.tsx";
 
 setupSidebarTest();
+
+it("retires a restored Users view when the gateway identifies itself as single-user", async () => {
+  const gateway = createGatewayHarness({} as GatewayBrowserClient);
+  const { sidebar } = await mountSidebar(
+    gateway.gateway,
+    createSessions("main", []),
+    "panel",
+    TWO_AGENTS,
+  );
+  sidebar.connected = true;
+  sidebar.restoreSidebarSnapshot({ ...sidebarBootSnapshot(null), navigationView: "online" });
+  gateway.publish({
+    hello: {
+      ...gateway.gateway.snapshot.hello!,
+      policy: { hasMultipleSessionSharingIdentities: false },
+    },
+  });
+  await sidebar.updateComplete;
+  expect(sidebar.querySelector('[data-navigation-view="online"]')).toBeNull();
+  expect(sidebar.navigationView).toBe("sessions");
+  expect(
+    sidebar.querySelector('[data-navigation-view="sessions"]')?.getAttribute("aria-pressed"),
+  ).toBe("true");
+
+  gateway.publish({
+    hello: {
+      ...gateway.gateway.snapshot.hello!,
+      policy: { hasMultipleSessionSharingIdentities: true },
+    },
+  });
+  await sidebar.updateComplete;
+  expect(sidebar.querySelector('[data-navigation-view="online"]')).not.toBeNull();
+  expect(sidebar.navigationView).toBe("sessions");
+});
 
 const mountEmptySidebar = () =>
   mountSidebar(createGateway({} as GatewayBrowserClient), createSessions("main", []));

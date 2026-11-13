@@ -82,7 +82,7 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
         />
       </div>
       <div class="sidebar-rail__views">
-        <For each={views}>
+        <For each={views.filter((view) => view !== "online" || host.usersNavigationVisible)}>
           {(view) => {
             return (
               <openclaw-tooltip prop:content={viewLabel(view)}>
