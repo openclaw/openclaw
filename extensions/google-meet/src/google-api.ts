@@ -54,8 +54,11 @@ export async function requestGoogleApi<T>(
   try {
     if (!response.ok) {
       const detail = await readGoogleApiErrorDetail(response);
+      // Only auth failures point at the grant; a missing meeting or bad request is not fixed by re-auth.
       const scopeHint =
-        params.scopes && params.scopes.length > 0
+        (response.status === 401 || response.status === 403) &&
+        params.scopes &&
+        params.scopes.length > 0
           ? ` Required OAuth scope: ${params.scopes.map((scope) => `\`${scope}\``).join(", ")}. ${REAUTH_HINT}`
           : "";
       throw new Error(`${params.prefix} failed (${response.status}): ${detail}${scopeHint}`);
