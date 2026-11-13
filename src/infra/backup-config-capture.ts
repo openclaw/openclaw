@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { readFileHandleBounded } from "@openclaw/fs-safe/advanced";
 import { hashConfigIncludeRaw } from "../config/includes.js";
 import { createConfigIO } from "../config/io.factory.js";
 import { containsConfigIncludeDirective } from "../config/io.read-helpers.js";
@@ -10,6 +11,7 @@ import type {
   ReadConfigFileSnapshotForWriteResult,
 } from "../config/io.types.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
+import { selectDatabaseEngine } from "./database-engine/registry.js";
 import { openLocalFileSafely } from "./fs-safe.js";
 
 type CapturedConfigFile = {
@@ -120,30 +122,25 @@ export async function resolveBackupConfigCapture(
       throw captureError(sourcePath, "file identity could not be pinned", error);
     }
   }
-  // Watch paths include both lexical and canonical names. Every one must belong
-  // to a successfully resolved, hash-pinned file, not a partially visited graph.
-  for (const includePath of snapshot.includedPaths ?? []) {
-    if (
-      !capture.some((file) => file.sourcePath === includePath || file.canonicalPath === includePath)
-    ) {
-      throw captureError(includePath, "include inventory is incomplete");
-    }
-  }
   return {
     files: capture,
     assertRootAlias,
     revalidate: async () => {
       await assertRootAlias?.();
-      const current = await withOpenClawStateDatabaseReadSnapshot(
-        () =>
-          createConfigIO({
-            configPath: snapshot.path,
-            env: options.env,
-            pluginValidation: options.pluginValidation,
-            observe: false,
-          }).readConfigFileSnapshotForWrite(),
-        { env: options.env },
-      );
+      const read = () =>
+        createConfigIO({
+          configPath: snapshot.path,
+          env: options.env,
+          pluginValidation: options.pluginValidation,
+          observe: false,
+        }).readConfigFileSnapshotForWrite();
+      // Core-only revalidation pins config files without reading database state.
+      const current = await (selectDatabaseEngine(
+        { id: "state", postgres: true },
+        snapshot.sourceConfig,
+      ) === "postgres" && options.pluginValidation === "core-only"
+        ? read()
+        : withOpenClawStateDatabaseReadSnapshot(read, { env: options.env }));
       // A file can be reached repeatedly during discovery. Comparing the resolved
       // source as well as the last hashes prevents accepting mixed observations.
       if (
@@ -177,7 +174,7 @@ export async function readBackupConfigCaptureFile(file: CapturedConfigFile): Pro
       ) {
         throw new Error("file identity changed");
       }
-      const bytes = await handle.readFile();
+      const bytes = await readFileHandleBounded(handle, Infinity);
       const raw = bytes.toString("utf8");
       if (!bytes.equals(Buffer.from(raw)) || hashConfigIncludeRaw(raw) !== file.hash) {
         throw new Error("file contents changed");
@@ -211,11 +208,6 @@ export async function stageBackupConfigCapture(
     await fs.writeFile(stagedPath, bytes, { flag: "wx", mode: 0o600 });
     remaps.set(stagedPath, file.canonicalPath);
   }
-  await capture?.revalidate();
-  // Seal only after every dependency has been copied. Matching all authored
-  // bytes also pins the include edges; no second resolver or mixed retry.
-  for (const file of capture?.files ?? []) {
-    await readBackupConfigCaptureFile(file);
-  }
+  await capture?.assertRootAlias?.();
   return remaps;
 }

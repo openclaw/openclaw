@@ -52,7 +52,7 @@ export function validateOnboardingChoiceOptions(
     return reject('Invalid --flow. Use "quickstart", "advanced", "manual", or "import".');
   }
   if (opts.daemonRuntime !== undefined && !isGatewayDaemonRuntime(opts.daemonRuntime)) {
-    return reject('Invalid --daemon-runtime. Use "node" or "bun".');
+    return reject('Invalid --daemon-runtime. Use "node", "bun", or "standalone".');
   }
   if (opts.nodeManager !== undefined && !isNodeManagerChoice(opts.nodeManager)) {
     return reject('Invalid --node-manager. Use "npm", "pnpm", or "bun".');

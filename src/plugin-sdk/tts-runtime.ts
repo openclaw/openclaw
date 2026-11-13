@@ -1,6 +1,7 @@
 // TTS runtime exports expose host-owned text-to-speech helpers through the plugin SDK.
 export { maybeApplyTtsToPayload, textToSpeech } from "../tts/tts.js";
 export type { TtsResult } from "../tts/tts-runtime-types.js";
+export { prepareTtsPreferences, type PreparedTtsPreferences } from "../tts/tts-preferences.js";
 
 export {
   TtsAutoSchema,
@@ -14,6 +15,7 @@ export function prewarmTtsRuntimeFacade(): void {}
 
 export {
   buildTtsSystemPromptHint,
+  buildTtsSystemPromptHintAsync,
   getLastTtsAttempt,
   getResolvedSpeechProviderConfig,
   getTtsMaxLength,

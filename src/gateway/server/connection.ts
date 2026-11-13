@@ -1,6 +1,7 @@
 // Shared Gateway connection owner: admission, registration, dispatch, and tracked cleanup.
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolvePreauthHandshakeTimeoutMs } from "../../../packages/gateway-client/src/timeouts.js";
 import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/server-capabilities.js";
@@ -20,12 +21,13 @@ import {
 } from "../ingress-attribution.js";
 import { isLoopbackAddress } from "../net.js";
 import { clearNodeWakeState } from "../node-wake-state.js";
+import { recordOpenClawIdTunnelConnection } from "../openclaw-id/tunnel-connections.js";
 import {
   indexPluginNodeCapabilitySurfaces,
   reconcileClientPluginNodeCapabilities,
   type PluginNodeCapabilitySurface,
 } from "../plugin-node-capability.js";
-import { serializeGatewayFrame } from "../serialized-json.js";
+import { serializeGatewayFrame, type SerializedGatewayFrame } from "../serialized-json.js";
 import { MAX_BUFFERED_BYTES, WEBSOCKET_OPEN_READY_STATE } from "../server-constants.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
 import { cleanupTalkConnection } from "../talk/session-registry.js";
@@ -51,7 +53,7 @@ import {
 import { resolveSharedGatewaySessionGeneration } from "./ws-shared-generation.js";
 import { WS_HANDSHAKE_PHASES, type GatewayWsClient, type WsHandshakePhase } from "./ws-types.js";
 
-const unauthorizedCloseBeforeConnectLogLimiter = new HandshakeAuthLogLimiter();
+const preconnectAuthLogLimiter = new HandshakeAuthLogLimiter();
 export type GatewayConnectionOptions = Pick<
   GatewayWsMessageHandlerParams,
   | "bootId"
@@ -59,10 +61,13 @@ export type GatewayConnectionOptions = Pick<
   | "connectionWork"
   // Read per connection so reloads cannot leave a stale auth snapshot.
   | "getResolvedAuth"
+  | "gatewayExposure"
   | "getRequiredSharedGatewaySessionGeneration"
   | "rateLimiter"
   | "browserRateLimiter"
   | "nodeReapprovalCoordinator"
+  | "isConnectPending"
+  | "startupMethodsReady"
   | "isStartupPending"
   | "isPendingWorkerNodeSetup"
   | "admitsNodeSetupCompletion"
@@ -295,22 +300,21 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
       closeWithGrace(1008, connectionKind === "worker" ? "slow-consumer" : "slow consumer");
       return { kind: "unavailable" } as const;
     }
-    let encoded: string | Buffer;
+    let encoded: Buffer | SerializedGatewayFrame;
     try {
-      encoded = serializeGatewayFrame(obj);
+      const serialized = serializeGatewayFrame(obj);
+      encoded = typeof serialized === "string" ? Buffer.from(serialized) : serialized;
     } catch (error) {
       return { kind: "serialization", error } as const;
     }
     try {
-      if (typeof encoded === "string") {
-        socket.send(encoded);
-      } else {
-        socket.send(encoded, { binary: false });
+      const wireBytes = socket.send(encoded, { binary: false });
+      const bytes = encoded.byteLength;
+      const frame = asOptionalRecord(obj);
+      if (frame?.type === "event" && typeof frame.event === "string") {
+        socket.recordEventSent?.(frame.event, encoded, undefined, undefined, wireBytes);
       }
-      return {
-        kind: "sent",
-        bytes: typeof encoded === "string" ? Buffer.byteLength(encoded) : encoded.byteLength,
-      } as const;
+      return { kind: "sent", bytes } as const;
     } catch {
       socket.terminate();
       retireConnection();
@@ -353,7 +357,8 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
     const logOrigin = sanitizeWsLogValue(requestOrigin);
     const logHost = sanitizeWsLogValue(requestHost);
     const logUserAgent = sanitizeWsLogValue(requestUserAgent);
-    const logReason = sanitizeWsLogValue(reason?.toString());
+    const rawReason = reason?.toString() ?? "";
+    const logReason = sanitizeWsLogValue(rawReason);
     const handshakeIncomplete = lastHandshakePhase !== "ready";
     const closeContext = {
       ...disconnectContext,
@@ -382,7 +387,7 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
           : logWsControl.warn;
       const suppressedText =
         closeCause === "unauthorized"
-          ? unauthorizedCloseBeforeConnectLogLimiter.missingCredentialLogSuffix({
+          ? preconnectAuthLogLimiter.missingCredentialLogSuffix({
               reason: stringMetaValue(closeMeta, "authReason"),
               remoteAddr,
               client:
@@ -391,7 +396,16 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
               mode: stringMetaValue(closeMeta, "mode"),
               authProvided: "none",
             })
-          : "";
+          : preconnectAuthLogLimiter.nativeAuthUnavailableLogSuffix({
+              code,
+              reason: rawReason,
+              remoteAddr:
+                ingressAttribution && ingressAttribution.kind !== "unattributable-proxy"
+                  ? ingressAttribution.clientIp
+                  : remoteAddr,
+              origin: requestOrigin,
+              userAgent: requestUserAgent,
+            });
       if (suppressedText !== undefined) {
         logFn(
           `closed before connect conn=${connId} peer=${endpoint ?? "n/a"} remote=${remoteAddr ?? "?"} fwd=${logForwardedFor || "n/a"} origin=${logOrigin || "n/a"} host=${logHost || "n/a"} ua=${logUserAgent || "n/a"} code=${code ?? "n/a"} reason=${logReason || "n/a"} phase=${lastHandshakePhase}${suppressedText}`,
@@ -421,18 +435,6 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
       let disconnectedNodeHistory: Parameters<typeof recordPairedNodeDisconnection>[0] | undefined;
       if (client?.connect?.role === "node") {
         const nodeId = client.connect.device?.id ?? client.connect.client.id;
-        const nodeSession = context.nodeRegistry.get(nodeId);
-        if (nodeSession?.connId === connId && nodeSession.pairingGeneration) {
-          disconnectedNodeHistory = {
-            nodeId: nodeSession.nodeId,
-            connectedAtMs: nodeSession.connectedAtMs,
-            disconnectedAtMs: Date.now(),
-            expectedPairingGeneration: {
-              nodeId: nodeSession.nodeId,
-              key: nodeSession.pairingGeneration,
-            },
-          };
-        }
         // Retire I/O now, but retain revocation until admitted lifecycle work drains.
         retainClientUntilNodeDrain = true;
         retireTransport();
@@ -444,6 +446,19 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
                 `node lifecycle dispatch drain timed out after ${NODE_LIFECYCLE_DISPATCH_DRAIN_TIMEOUT_MS}ms conn=${connId}`,
               );
             }
+          }
+          const nodeSession = context.nodeRegistry.get(nodeId);
+          if (nodeSession?.connId === connId && nodeSession.pairingGeneration) {
+            disconnectedNodeHistory = {
+              nodeId: nodeSession.nodeId,
+              connectedAtMs: nodeSession.connectedAtMs,
+              disconnectedAtMs: Date.now(),
+              ...(nodeSession.hostStats ? { hostStats: nodeSession.hostStats } : {}),
+              expectedPairingGeneration: {
+                nodeId: nodeSession.nodeId,
+                key: nodeSession.pairingGeneration,
+              },
+            };
           }
           currentDisconnectedNodeId = context.nodeRegistry.unregister(connId);
         } finally {
@@ -538,6 +553,14 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
     next.connectionSignal = connectionController.signal;
     client = next;
     clients.add(next);
+    if (next.internal?.openclawIdPeerKey) {
+      // Run custody outlives the socket: a removed member's runs are found by this record.
+      recordOpenClawIdTunnelConnection(
+        next.connId,
+        next.internal.openclawIdPeerKey,
+        connectionController.signal,
+      );
+    }
     if (
       next.presenceKey &&
       (next.authenticatedUserId || next.authenticatedUserProfile) &&

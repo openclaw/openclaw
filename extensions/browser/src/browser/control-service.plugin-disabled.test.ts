@@ -2,7 +2,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  ensureBrowserControlAuth: vi.fn(async () => ({ generatedToken: false })),
   createBrowserRuntimeState: vi.fn(async () => ({ ok: true })),
   loadConfig: vi.fn(() => ({
     browser: {
@@ -38,10 +37,6 @@ vi.mock("./config.js", () => ({
   })),
 }));
 
-vi.mock("./control-auth.js", () => ({
-  ensureBrowserControlAuth: mocks.ensureBrowserControlAuth,
-}));
-
 vi.mock("./runtime-lifecycle.js", () => ({
   createBrowserRuntimeState: mocks.createBrowserRuntimeState,
   stopBrowserRuntime: vi.fn(async () => {}),
@@ -56,7 +51,6 @@ vi.doUnmock("./server-context.js");
 
 describe("startBrowserControlServiceFromConfig", () => {
   beforeEach(() => {
-    mocks.ensureBrowserControlAuth.mockClear();
     mocks.createBrowserRuntimeState.mockClear();
     mocks.loadConfig.mockClear();
   });
@@ -65,7 +59,6 @@ describe("startBrowserControlServiceFromConfig", () => {
     const started = await startBrowserControlServiceFromConfig();
 
     expect(started).toBeNull();
-    expect(mocks.ensureBrowserControlAuth).not.toHaveBeenCalled();
     expect(mocks.createBrowserRuntimeState).not.toHaveBeenCalled();
   });
 });

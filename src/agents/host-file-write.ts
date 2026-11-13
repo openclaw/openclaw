@@ -1,11 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { hasErrnoCode } from "../infra/errors.js";
-import { overwriteFileHandle } from "../infra/file-descriptor.js";
-import {
-  captureAgentToolSourceExecutionGuard,
-  runWithAgentToolSourceExecutionScope,
-} from "./agent-tool-source-execution-guard.js";
+import { overwriteFileHandleWithAuthority } from "@openclaw/fs-safe/advanced";
+import { prepareSessionSourceEffect } from "../config/sessions/session-source-authority.js";
+import { ignoreMissingPath } from "../infra/errno.js";
+import { captureAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
 import { expandOsHomePrefix } from "./sessions/tools/path-utils.js";
 
 async function openHostFileForUpdate(resolved: string) {
@@ -14,10 +12,7 @@ async function openHostFileForUpdate(resolved: string) {
     // Rollback requires the original bytes; unreadable files must fail before mutation.
     return existing.isFile() ? await fs.open(resolved, "r+") : undefined;
   } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
+    return ignoreMissingPath(error);
   }
 }
 
@@ -27,25 +22,23 @@ export async function writeHostFile(
   abortSignal?: AbortSignal,
 ) {
   const assertCurrent = captureAgentToolSourceExecutionGuard(abortSignal);
+  await using effects = new AsyncDisposableStack();
+  const prepareAuthority = async () => {
+    const prepared = await prepareSessionSourceEffect(assertCurrent);
+    effects.defer(() => prepared.release?.());
+    return prepared.assertCurrent;
+  };
   const resolved = path.resolve(expandOsHomePrefix(absolutePath));
-  await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-    assertCurrent();
-    await fs.mkdir(path.dirname(resolved), { recursive: true });
-  });
+  (await prepareAuthority())();
+  await fs.mkdir(path.dirname(resolved), { recursive: true });
   const handle = await openHostFileForUpdate(resolved);
   if (!handle) {
-    await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-      assertCurrent();
-      await fs.writeFile(resolved, content, "utf-8");
-    });
+    (await prepareAuthority())();
+    await fs.writeFile(resolved, content, "utf-8");
     return;
   }
   try {
-    await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-      await overwriteFileHandle(handle, Buffer.from(content, "utf-8"), {
-        beforeWrite: assertCurrent,
-      });
-    });
+    await overwriteFileHandleWithAuthority(handle, Buffer.from(content, "utf-8"), prepareAuthority);
   } finally {
     await handle.close().catch(() => undefined);
   }

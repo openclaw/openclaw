@@ -1,4 +1,4 @@
-import { WorkerTaskPoolCore } from "@openclaw/worker-runtime";
+import { WorkerTaskPoolCore, type WorkerRetirementReason } from "@openclaw/worker-runtime";
 import { createWorkerTaskHost } from "./worker-task-host.js";
 import type {
   WorkerTaskInput,
@@ -46,8 +46,8 @@ export class WorkerTaskPool<Input, Output> {
     return this.core.rotate();
   }
 
-  close(error?: Error): Promise<void> {
-    return this.core.close(error);
+  close(error?: Error, reason?: WorkerRetirementReason): Promise<void> {
+    return this.core.close(error, reason);
   }
 }
 
@@ -63,8 +63,11 @@ export function createOwnedWorkerTaskPool<Input, Output>(
     ownerOptions,
   );
   return {
-    run: (input: WorkerTaskInput<Input>, taskOptions: WorkerTaskOptions<Input>) =>
-      core.run(input, taskOptions),
+    run: (
+      input: WorkerTaskInput<Input>,
+      taskOptions: WorkerTaskOptions<Input> &
+        Pick<OwnedWorkerTaskOptions<Input>, "diagnosticOperation">,
+    ) => core.run(input, taskOptions),
     rotate: () => core.rotate(),
     runTask: (input: WorkerTaskInput<Input>, taskOptions: OwnedWorkerTaskOptions<Input>) =>
       core.runTask(input, taskOptions),

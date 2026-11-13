@@ -96,6 +96,10 @@ If `message.taskId` is supplied, unknown, expired, or other peers' task IDs retu
 
 To return immediately while the agent continues working, add `"configuration": { "returnImmediately": true }` alongside `"message"` in `params`. The task initially reports `TASK_STATE_WORKING`. Requests that exceed `replyTimeoutMs` also return the current working task instead of canceling it.
 
+When another turn is active in the same context, the new task queues behind it. Its reply
+and terminal state remain attached to the original task ID, so the peer can keep polling
+`GetTask`. Queued replies do not require an outbound peer URL or start a reverse-direction message.
+
 Older clients can use `message/send` as an alias for `SendMessage`.
 
 ## Poll a task
@@ -140,6 +144,13 @@ Add a peer URL when OpenClaw should send messages to another A2A agent. Set `out
 ```
 
 Address outbound messages to `a2a:hermes`. The plugin sends `SendMessage` directly to the configured URL without performing Agent Card discovery. Outbound messages reuse a stable conversation context per peer. A peer without a configured `url` cannot receive outbound messages.
+
+Agent replies, including queued followups, deliver only terminal reply content to A2A peers.
+Host status notices, including metadata-only diagnostics, and run-failure messages are not
+forwarded as new peer messages or task artifacts. A failed agent run instead marks its
+originating task `TASK_STATE_FAILED` with the reason `Agent run failed`, including when the
+run was queued. If collect mode combines requests, a failed run marks every originating
+task failed. This does not change error reporting on human-facing channels.
 
 ## Configuration reference
 
@@ -195,7 +206,9 @@ state while that task is retained. It does not start another agent turn, even if
 the turn, including when messages in one context finish out of order. A finished turn with no
 reply text completes without an artifact; stopping the channel fails unfinished tasks.
 
-Tasks remain in memory only. Completed and other terminal tasks are retained for up to 24 hours, with a maximum of 500 retained entries. Restarting the gateway discards all tasks and task history.
+Completed and other terminal tasks are persisted per account before they are returned to peers. They survive Gateway restarts for up to 24 hours from their original completion time, with a maximum of 500 retained entries in finish order. Peer ownership and message deduplication survive with each retained task. Active inference is not resumed after a restart; stopping the channel records unfinished tasks as failed.
+
+A definite storage validation refusal (for example, a result exceeding the plugin-state size limit) becomes a visible failed task whose status explains that it will not survive a restart; any completed artifact remains available until the process stops or retention expires. An uncertain write acknowledgement is not replaced with a synthetic failure, because the original result may already have committed.
 
 ## Related
 

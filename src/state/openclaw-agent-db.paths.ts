@@ -2,10 +2,10 @@ import { realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { probePathSuffixAliasesSync, resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
+import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { resolveStateDir } from "../config/paths.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { isPathInside } from "../infra/path-guards.js";
-import { normalizeAgentId } from "../routing/session-key.js";
 
 type OpenClawAgentSqlitePathOptions = {
   agentId: string;
@@ -20,11 +20,11 @@ const agentSqlitePaths = new Map<string, string>();
 const agentSqlitePathKeys = agentSqlitePaths.keys();
 
 export function resolveOpenClawAgentSqlitePath(options: OpenClawAgentSqlitePathOptions): string {
-  const agentId = normalizeAgentId(options.agentId);
   if (options.path != null) {
     return path.resolve(options.path);
   }
-  // The state-dir owner still observes env, cwd, and legacy-directory changes.
+  const agentId = normalizeAgentId(options.agentId);
+  // The state-dir owner still observes env and cwd changes.
   // Only its resolved output is memoized; a changed root selects a new entry.
   const stateDir = resolveStateDir(options.env ?? process.env);
   const cacheKey = `${agentId}:${stateDir}`;
@@ -339,6 +339,21 @@ export function isSameOpenClawAgentDatabasePath(left: string, right: string): bo
     resolveAgentDatabasePathIdentity(left),
     resolveAgentDatabasePathIdentity(right),
   );
+}
+
+export function includesOpenClawAgentDatabasePath(
+  paths: readonly string[],
+  target: string,
+  samePath = isSameOpenClawAgentDatabasePath,
+): boolean {
+  return paths.some((pathname) => {
+    try {
+      return samePath(pathname, target);
+    } catch {
+      // An uncertain sibling cannot classify this target; its own inspection reports the failure.
+      return false;
+    }
+  });
 }
 
 function canonicalPathForRegistryBoundary(pathname: string): string {

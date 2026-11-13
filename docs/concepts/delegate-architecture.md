@@ -211,7 +211,6 @@ Route inbound messages to the delegate agent using [Multi-Agent Routing](/concep
   agents: {
     ownership: "explicit",
     defaults: {
-      heartbeat: { agentId: "main" },
       systemAgent: { agentId: "main" },
     },
     entries: {
@@ -264,7 +263,6 @@ A complete delegate configuration handling email, calendar, and social media:
   agents: {
     ownership: "explicit",
     defaults: {
-      heartbeat: { agentId: "main" },
       systemAgent: { agentId: "main" },
     },
     entries: {

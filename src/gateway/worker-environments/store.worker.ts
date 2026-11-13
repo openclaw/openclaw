@@ -22,7 +22,7 @@ import type {
   WorkerEnvironmentMutationInput,
   WorkerEnvironmentMutationMethods,
 } from "./store.types.js";
-import { pruneObservedTerminalWorkerEnvironments } from "./terminal-environment-retention.js";
+import { pruneTerminalWorkerEnvironments } from "./terminal-environment-retention.js";
 
 type Method = keyof WorkerEnvironmentMutationMethods | "initialize";
 type Input<Name extends Method> = {
@@ -114,6 +114,22 @@ export const workerEnvironmentOperations = {
   "workerEnvironments.createIntent": environmentMutation("createIntent", (input, store) =>
     store.createIntent(input),
   ),
+  "workerEnvironments.recordResourceReceipt": environmentMutation(
+    "recordResourceReceipt",
+    (input, store) => store.recordResourceReceipt(input),
+  ),
+  "workerEnvironments.beginRetentionOperation": environmentMutation(
+    "beginRetentionOperation",
+    (input, store) => store.beginRetentionOperation(input),
+  ),
+  "workerEnvironments.recordRetentionObservation": environmentMutation(
+    "recordRetentionObservation",
+    (input, store) => store.recordRetentionObservation(input),
+  ),
+  "workerEnvironments.setRetentionRuntimeAdmission": environmentMutation(
+    "setRetentionRuntimeAdmission",
+    (input, store) => store.setRetentionRuntimeAdmission(input),
+  ),
   "workerEnvironments.ensureNodeEnrollment": mutation(
     "ensureNodeEnrollment",
     ({ input }, { store, touch }) => {
@@ -168,6 +184,10 @@ export const workerEnvironmentOperations = {
     "requestPreparedDestroy",
     (input, store) => store.requestPreparedDestroy(input),
   ),
+  "workerEnvironments.refreshPreparedProject": environmentMutation(
+    "refreshPreparedProject",
+    (input, store) => store.refreshPreparedProject(input),
+  ),
   "workerEnvironments.createSessionAttachmentIntent": mutation(
     "createSessionAttachmentIntent",
     ({ input }, { store, touch }) => {
@@ -199,11 +219,10 @@ export const workerEnvironmentOperations = {
   ),
   "workerEnvironments.pruneTerminalEnvironments": mutation(
     "pruneTerminalEnvironments",
-    ({ input: { approved } }, { db, touch }) => {
-      for (const row of approved) {
-        touch(row.environment_id);
-      }
-      return pruneObservedTerminalWorkerEnvironments(db, approved);
+    ({ input }, { db, touch }) => {
+      const deleted = pruneTerminalWorkerEnvironments(db, input);
+      deleted.forEach(touch);
+      return deleted.length;
     },
   ),
 } satisfies WorkerOperationHandlers;

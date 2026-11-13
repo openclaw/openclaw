@@ -73,6 +73,18 @@ const XAccountSchema = z.object({
     .strict()
     .optional(),
   replySignature: z.string().max(140).optional(),
+  failureRoute: z
+    .object({
+      // Failures must never be routed back to X.
+      channel: z
+        .string()
+        .min(1)
+        .refine((channel) => channel.trim().toLowerCase() !== "x"),
+      to: z.string().min(1),
+      accountId: z.string().min(1).optional(),
+    })
+    .strict()
+    .optional(),
 });
 
 export const XConfigSchema = buildMultiAccountChannelSchema(XAccountSchema, {

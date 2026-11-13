@@ -1,10 +1,47 @@
 import { vi, type Mock } from "vitest";
+import type { ConfigMutationIO, TransformConfigFileWithRetryParams } from "../config/mutate.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { getMockCallOutput } from "./test-runtime-capture.js";
 
+/** Model the parent phase that precedes an otherwise standalone post-core child. */
+export async function withPostCoreUpdateFixtureRun<T>(operation: () => Promise<T>): Promise<T> {
+  if (process.env.OPENCLAW_UPDATE_RUN_ID?.trim()) {
+    return await operation();
+  }
+  const [{ createUpdateRun, recordUpdateRunStep }, { withEnvAsync }, { VERSION }] =
+    await Promise.all([
+      import("../infra/update-run-ledger.js"),
+      import("../test-utils/env.js"),
+      import("../version.js"),
+    ]);
+  const { runId } = createUpdateRun({ trigger: "cli", before: { version: VERSION } });
+  recordUpdateRunStep(runId, { step: "openclaw doctor", status: "completed" });
+  recordUpdateRunStep(runId, { step: "post-update verification", status: "in_progress" });
+  return await withEnvAsync({ OPENCLAW_UPDATE_RUN_ID: runId }, operation);
+}
+
 export function createUpdateConfigMock() {
   const readConfigFileSnapshot = vi.fn();
+  // Keep orchestration I/O synthetic while using the config owner's transform
+  // and publication receipts, including custom plugin-index commits.
+  const io: ConfigMutationIO = {
+    readConfigFileSnapshotForWrite: async (options) => ({
+      snapshot: await readConfigFileSnapshot(options),
+      writeOptions: {},
+    }),
+    writeConfigFile: async () => {},
+  };
+  const replaceConfigFile = vi.fn<typeof import("../config/mutate.js").replaceConfigFile>(
+    async (params) => {
+      const actual = await import("../config/mutate.js");
+      return await actual.replaceConfigFile({ ...params, io });
+    },
+  );
   return {
+    // Source-only recovery cleanup may import the runtime loader, but must not use it.
+    loadConfig: vi.fn((): OpenClawConfig => {
+      throw new Error("Unexpected runtime config load in update fixture");
+    }),
     createConfigIO: (
       options: {
         pluginValidation?: string;
@@ -51,7 +88,11 @@ export function createUpdateConfigMock() {
     readConfigFileSnapshot,
     readSourceConfigBestEffort: vi.fn(),
     mutateConfigFileWithRetry: vi.fn(),
-    replaceConfigFile: vi.fn(),
+    transformConfigFileWithRetry: async <T>(params: TransformConfigFileWithRetryParams<T>) => {
+      const actual = await import("../config/mutate.js");
+      return await actual.transformConfigFileWithRetry({ ...params, io });
+    },
+    replaceConfigFile,
     resolveGatewayPort: vi.fn(() => 18789),
   };
 }

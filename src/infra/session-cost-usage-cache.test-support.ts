@@ -6,6 +6,7 @@ import {
   readSessionCostUsageRollupRowsInDatabase,
   readSessionCostUsageRollupBodyInDatabase,
   type SessionCostUsageRollupRow,
+  type SessionCostUsageRollupSnapshot,
 } from "./session-cost-usage-cache.kernel.js";
 import { prepareSessionCostUsageRefreshLock } from "./session-cost-usage-cache.sqlite.js";
 import {
@@ -13,6 +14,21 @@ import {
   decodeUsageCostRollupEnvelope,
   encodeUsageCostRollup,
 } from "./session-cost-usage-rollup-codec.js";
+
+export async function pruneUsageCostRollupsForTest(params: {
+  agentId: string;
+  databasePath?: string;
+  liveKeys: ReadonlySet<string>;
+  rows: readonly SessionCostUsageRollupSnapshot[];
+}): Promise<void> {
+  const owner = prepareSessionCostUsageRefreshLock(params.agentId, params.databasePath);
+  try {
+    expect(await owner.acquire()).toBe(true);
+    await owner.pruneRows(params.rows.filter((row) => !params.liveKeys.has(row.key)));
+  } finally {
+    await owner.release();
+  }
+}
 
 export function readSessionCostUsageRollupRows(
   agentId?: string,
@@ -49,35 +65,33 @@ export async function writeLegacyUsageCostRollupForTest(sessionFile: string): Pr
   try {
     expect(await lock.acquire()).toBe(true);
     expect(
-      await lock.writeRollup({
-        rollupId: sessionFile,
-        valueJson: Buffer.from(encoded.valueJson),
-        blob: encoded.blob,
-        updatedAt: currentRow.updatedAt + 1,
-      }),
+      await lock.writeRollup([
+        {
+          rollupId: sessionFile,
+          valueJson: Buffer.from(encoded.valueJson),
+          blob: encoded.blob,
+          updatedAt: currentRow.updatedAt + 1,
+        },
+      ]),
     ).toBe(true);
   } finally {
     await lock.release();
   }
 }
 
-export function readSessionCostUsageRollupEntry(
-  row: SessionCostUsageRollupRow,
-  agentId?: string,
-  databasePath?: string,
-) {
+export function readSessionCostUsageRollupEntry(row: SessionCostUsageRollupRow, agentId?: string) {
   const envelope = decodeUsageCostRollupEnvelope(row.valueJson);
   if (!envelope) {
     return undefined;
   }
   const result = withOpenClawAgentDatabaseReadOnly(
     ({ db }) => {
-      const body = readSessionCostUsageRollupBodyInDatabase(db, row);
+      const body = readSessionCostUsageRollupBodyInDatabase(db, row.key);
       return body
         ? decodeUsageCostRollup(row.valueJson, envelope.pricingFingerprint, body.blob)
         : undefined;
     },
-    { agentId: normalizeAgentId(agentId), ...(databasePath ? { path: databasePath } : {}) },
+    { agentId: normalizeAgentId(agentId) },
   );
   return result.found ? result.value : undefined;
 }

@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { normalizeUniqueStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
+import type { CodexPluginConfig } from "./app-server/config-contracts.js";
 import type { JsonValue } from "./app-server/protocol.js";
 import { formatRelativeDuration } from "./app-server/rate-limit-time.js";
 import {
@@ -20,10 +21,7 @@ import {
   type CodexAccountUsageSummary,
 } from "./app-server/rate-limits.js";
 import { isLikelyEmailAddress } from "./command-account-email.js";
-import type {
-  SafeCodexControlRequestFn as SafeCodexControlRequest,
-  SafeValue,
-} from "./command-rpc.js";
+import { safeCodexControlRequest, type SafeValue } from "./command-rpc.js";
 
 const OPENAI_PROVIDER_ID = "openai";
 
@@ -42,7 +40,6 @@ export type CodexAccountAuthOverview = {
   currentLine?: string;
   subscriptionLabel?: string;
   subscriptionUsage?: string;
-  orderTitle: string;
   rows: CodexAccountAuthRow[];
 };
 
@@ -50,8 +47,7 @@ export async function readCodexAccountAuthOverview(params: {
   ctx: PluginCommandContext;
   agentDir: string;
   authProfileId: string | null | undefined;
-  pluginConfig: unknown;
-  safeCodexControlRequest: SafeCodexControlRequest;
+  pluginConfig: CodexPluginConfig | undefined;
   account: SafeValue<JsonValue | undefined>;
   limits: SafeValue<JsonValue | undefined>;
 }): Promise<CodexAccountAuthOverview | undefined> {
@@ -86,7 +82,7 @@ export async function readCodexAccountAuthOverview(params: {
       ? summarizeCodexAccountUsage(params.limits.value, now)
       : undefined;
   if (subscriptionProfileId && !activeIsSubscription) {
-    const limits = await params.safeCodexControlRequest(
+    const limits = await safeCodexControlRequest(
       params.pluginConfig,
       CODEX_CONTROL_METHODS.rateLimits,
       undefined,
@@ -120,7 +116,6 @@ export async function readCodexAccountAuthOverview(params: {
   const activeRow = rows.find((row) => row.active);
   if (!activeRow) {
     return {
-      orderTitle: "Auth order",
       rows,
     };
   }
@@ -134,7 +129,6 @@ export async function readCodexAccountAuthOverview(params: {
     ...(activeIsApiKey ? { currentLine: buildApiKeyActiveLine(activeRow, subscriptionUsage) } : {}),
     ...(subscriptionLabel ? { subscriptionLabel } : {}),
     ...(subscriptionUsageLine ? { subscriptionUsage: subscriptionUsageLine } : {}),
-    orderTitle: "Auth order",
     rows,
   };
 }
@@ -169,7 +163,7 @@ function describeInactiveProfileStatus(params: {
     return `rate-limited - resets in ${formatRelativeDuration(Math.max(60_000, blockedUntil - params.now))}`;
   }
   const unusableUntil = resolveProfileUnusableUntilForDisplay(params.store, params.profileId);
-  if (isActiveUntil(unusableUntil ?? undefined, params.now)) {
+  if (isActiveUntil(unusableUntil, params.now)) {
     return describeFailureStatus(stats?.disabledReason ?? stats?.cooldownReason, params.credential);
   }
   const eligibility = resolveAuthProfileEligibility({
@@ -314,6 +308,6 @@ function describeEligibilityStatus(
   return ELIGIBILITY_STATUS.get(reason) ?? "unavailable";
 }
 
-function isActiveUntil(value: number | undefined, now: number): value is number {
-  return typeof value === "number" && Number.isFinite(value) && value > now;
+function isActiveUntil(value: number | null | undefined, now: number): value is number {
+  return value != null && value > now;
 }

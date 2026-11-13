@@ -13,14 +13,34 @@ import {
   sameBootRecordOwner,
   type BootRecordOwner,
 } from "./boot-record.ts";
-import { clearWarmBootState } from "./bootstrap-warm-boot.ts";
 import type { ApplicationGatewayConnection } from "./gateway.ts";
+import { retirePluginRecoveryStorage } from "./plugin-recovery-storage.ts";
 import { isRemoteControlUiIngress } from "./remote-ingress.ts";
+import { clearWarmBootState } from "./warm-boot-retirement.ts";
 
 type GatewayCredentials = Pick<
   GatewayBrowserClientOptions,
   "offlineRecoveryScope" | "url" | "token" | "bootstrapToken" | "bootstrapProfile" | "password"
 >;
+
+export function readCredentialBootRecord(
+  connection: Pick<
+    ApplicationGatewayConnection,
+    "gatewayUrl" | "token" | "bootstrapToken" | "password"
+  >,
+) {
+  return !connection.bootstrapToken && !connection.password
+    ? readBootRecord(gatewayCredentialScope(connection.gatewayUrl), (method) =>
+        method === "token"
+          ? connection.token
+          : connection.token.trim()
+            ? null
+            : method === "device-token"
+              ? loadCurrentDeviceAuthToken(connection.gatewayUrl)
+              : "",
+      )
+    : null;
+}
 
 /** Credential admission owns both the read boot record and its successor hello. */
 export function createGatewayCredentials(ownsWarmBoot: boolean) {
@@ -29,6 +49,9 @@ export function createGatewayCredentials(ownsWarmBoot: boolean) {
   let capturedOwner: BootRecordOwner | undefined;
   let liveOwner: BootRecordOwner | undefined;
   return {
+    get hasWarmBoot() {
+      return capturedOwner !== undefined;
+    },
     prepare(
       connection: ApplicationGatewayConnection,
       credentialsChanged: boolean,
@@ -36,17 +59,7 @@ export function createGatewayCredentials(ownsWarmBoot: boolean) {
     ): GatewayCredentials {
       scope = gatewayCredentialScope(connection.gatewayUrl);
       const boot =
-        canOwnWarmBoot && !credentialsChanged && !connection.bootstrapToken && !connection.password
-          ? readBootRecord(scope, (method) =>
-              method === "token"
-                ? connection.token
-                : connection.token.trim()
-                  ? null
-                  : method === "device-token"
-                    ? loadCurrentDeviceAuthToken(connection.gatewayUrl)
-                    : "",
-            )
-          : null;
+        canOwnWarmBoot && !credentialsChanged ? readCredentialBootRecord(connection) : null;
       if (boot) {
         capturedOwner = bootRecordOwner(boot);
       }
@@ -76,6 +89,9 @@ export function createGatewayCredentials(ownsWarmBoot: boolean) {
           ? bootRecordOwner(credentials)
           : undefined;
     },
+    acceptRecoveryScope(gatewayUrl: string, recoveryScope?: string): void {
+      retirePluginRecoveryStorage(gatewayUrl, recoveryScope);
+    },
     retire(clearCaches: boolean): void {
       const gatewayScope = scope;
       const owners = capturedOwner ? [capturedOwner] : [];
@@ -88,6 +104,7 @@ export function createGatewayCredentials(ownsWarmBoot: boolean) {
       if (!gatewayScope) {
         return;
       }
+      retirePluginRecoveryStorage(gatewayScope);
       const clear = clearCaches ? clearWarmBootState : clearBootRecords;
       for (const owner of owners) {
         void clear(gatewayScope, owner);

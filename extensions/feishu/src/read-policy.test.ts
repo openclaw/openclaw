@@ -1,6 +1,6 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { describe, expect, it } from "vitest";
 import { resolveFeishuAccount } from "./accounts.js";
+import { createFeishuTestConfig } from "./bot.test-support.js";
 import { resolveFeishuChatType } from "./chat-type.js";
 import {
   assertFeishuChatReadAllowed,
@@ -10,20 +10,34 @@ import {
 } from "./read-policy.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
-const cfg = { channels: { feishu: {} } } as OpenClawConfig;
+const cfg = createFeishuTestConfig({});
 
-function createAccount(): ResolvedFeishuAccount {
+type AccountConfig = Partial<ResolvedFeishuAccount["config"]>;
+function createAccount(config: AccountConfig = {}): ResolvedFeishuAccount {
   return {
     accountId: "default",
-    selectionSource: "fallback",
     enabled: true,
     configured: true,
     domain: "feishu",
     config: {
       groupPolicy: "allowlist",
       dmPolicy: "pairing",
+      ...config,
     } as ResolvedFeishuAccount["config"],
   };
+}
+
+type ReadParams = Parameters<typeof assertFeishuChatReadAllowed>[0];
+const currentContext = {
+  accountId: "default",
+  requesterAccountId: "default",
+  toolContext: { currentChannelProvider: "feishu", currentChannelId: "oc_current" },
+};
+function read(params: Pick<ReadParams, "account" | "chatId"> & Partial<ReadParams>) {
+  return assertFeishuChatReadAllowed({ cfg, ...params, ctx: params.ctx ?? {} });
+}
+function expectDenied(params: Parameters<typeof read>[0]) {
+  expect(() => read(params)).toThrow("Feishu read target is not allowed.");
 }
 
 describe("Feishu read policy", () => {
@@ -38,202 +52,77 @@ describe("Feishu read policy", () => {
 
   it("allows only the trusted current chat when the target type is unknown", () => {
     const account = createAccount();
-    const ctx = {
-      accountId: "default",
-      requesterAccountId: "default",
-      toolContext: {
-        currentChannelProvider: "feishu",
-        currentChannelId: "oc_current",
+    expect(read({ account, chatId: "oc_current", ctx: currentContext })).toBe("oc_current");
+    expectDenied({ account, chatId: "oc_other", ctx: currentContext });
+  });
+
+  it.each([
+    [
+      "untrusted delivery routing",
+      {},
+      "oc_unconfigured",
+      "group",
+      {
+        agentAccountId: "default",
+        messageChannel: "feishu",
+        deliveryContext: { channel: "feishu", to: "oc_unconfigured", accountId: "default" },
       },
-    };
-
-    expect(
-      assertFeishuChatReadAllowed({
-        cfg,
-        account,
-        chatId: "oc_current",
-        ctx,
-      }),
-    ).toBe("oc_current");
-    expect(() =>
-      assertFeishuChatReadAllowed({
-        cfg,
-        account,
-        chatId: "oc_other",
-        ctx,
-      }),
-    ).toThrow("Feishu read target is not allowed.");
-  });
-
-  it("does not treat public delivery routing as trusted current-chat identity", () => {
-    const account = createAccount();
-
-    expect(() =>
-      assertFeishuChatReadAllowed({
-        cfg,
-        account,
-        chatId: "oc_unconfigured",
-        chatType: "group",
-        ctx: {
-          agentAccountId: "default",
-          messageChannel: "feishu",
-          deliveryContext: {
-            channel: "feishu",
-            to: "oc_unconfigured",
-            accountId: "default",
-          },
-        },
-      }),
-    ).toThrow("Feishu read target is not allowed.");
-  });
-
-  it("does not treat wildcard group defaults as admission", () => {
-    const account = createAccount();
-    account.config = {
-      ...account.config,
-      dmPolicy: "open",
-      groups: { "*": { requireMention: false } },
-    };
-
-    expect(() =>
-      assertFeishuChatReadAllowed({
-        cfg,
-        account,
-        chatId: "oc_unconfigured",
-        ctx: {},
-      }),
-    ).toThrow("Feishu read target is not allowed.");
-  });
+    ],
+    [
+      "wildcard defaults",
+      { dmPolicy: "open", groups: { "*": { requireMention: false } } },
+      "oc_unconfigured",
+      undefined,
+      undefined,
+    ],
+    ["disabled policy", { groupPolicy: "disabled" }, "oc_current", undefined, currentContext],
+    [
+      "disabled group",
+      { groups: { oc_blocked: { enabled: false } } },
+      "oc_blocked",
+      "group",
+      { conversationReadOrigin: "direct-operator" },
+    ],
+  ] satisfies Array<[string, AccountConfig, string, ReadParams["chatType"]?, ReadParams["ctx"]?]>)(
+    "denies %s",
+    (_name, config, chatId, chatType, ctx) =>
+      expectDenied({ account: createAccount(config), chatId, chatType, ctx }),
+  );
 
   it("requires an effective wildcard before open policy allows non-current DMs", () => {
-    const mergedCfg = {
-      channels: {
-        feishu: {
-          appId: "cli_test",
-          appSecret: "secret_test",
-          dmPolicy: "allowlist",
-          allowFrom: ["ou_admin"],
-          accounts: {
-            sales: {
-              dmPolicy: "open",
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
+    const mergedCfg = createFeishuTestConfig({
+      appId: "cli_test",
+      appSecret: "secret_test",
+      dmPolicy: "allowlist",
+      allowFrom: ["ou_admin"],
+      accounts: { sales: { dmPolicy: "open" } },
+    });
     const account = resolveFeishuAccount({ cfg: mergedCfg, accountId: "sales" });
 
-    expect(() =>
-      assertFeishuChatReadAllowed({
-        cfg: mergedCfg,
-        account,
-        chatId: "oc_other",
-        chatType: "p2p",
-        ctx: {},
-      }),
-    ).toThrow("Feishu read target is not allowed.");
+    const target = { cfg: mergedCfg, account, chatId: "oc_other", chatType: "p2p" } as const;
+    expectDenied(target);
     expect(canEnumerateAllFeishuPeers(account)).toBe(false);
 
-    account.config = {
-      ...account.config,
-      allowFrom: ["ou_admin", "feishu:*"],
-    };
-    expect(
-      assertFeishuChatReadAllowed({
-        cfg: mergedCfg,
-        account,
-        chatId: "oc_other",
-        chatType: "p2p",
-        ctx: {},
-      }),
-    ).toBe("oc_other");
+    account.config = { ...account.config, allowFrom: ["ou_admin", "feishu:*"] };
+    expect(read(target)).toBe("oc_other");
     expect(canEnumerateAllFeishuPeers(account)).toBe(true);
   });
 
   it("honors wildcard group admission entries", () => {
-    const account = createAccount();
-    account.config = {
-      ...account.config,
-      groupAllowFrom: ["*"],
-    };
-
-    expect(
-      assertFeishuChatReadAllowed({
-        cfg,
-        account,
-        chatId: "oc_any",
-        chatType: "group",
-        ctx: {},
-      }),
-    ).toBe("oc_any");
+    const account = createAccount({ groupAllowFrom: ["*"] });
+    expect(read({ account, chatId: "oc_any", chatType: "group" })).toBe("oc_any");
     expect(canEnumerateAllFeishuGroups(cfg, account)).toBe(true);
   });
 
-  it("rejects an unclassified current target when group reads are disabled", () => {
-    const account = createAccount();
-    account.config = {
-      ...account.config,
-      groupPolicy: "disabled",
-      dmPolicy: "pairing",
-    };
-
-    expect(() =>
-      assertFeishuChatReadAllowed({
-        cfg,
-        account,
-        chatId: "oc_current",
-        ctx: {
-          accountId: "default",
-          requesterAccountId: "default",
-          toolContext: {
-            currentChannelProvider: "feishu",
-            currentChannelId: "oc_current",
-          },
-        },
-      }),
-    ).toThrow("Feishu read target is not allowed.");
-  });
-
-  it("keeps disabled group targets blocked for direct operators", () => {
-    const account = createAccount();
-    account.config = {
-      ...account.config,
-      groups: { oc_blocked: { enabled: false } },
-    };
-
-    expect(() =>
-      assertFeishuChatReadAllowed({
-        cfg,
-        account,
-        chatId: "oc_blocked",
-        chatType: "group",
-        ctx: { conversationReadOrigin: "direct-operator" },
-      }),
-    ).toThrow("Feishu read target is not allowed.");
-  });
-
   it("requires metadata only when an unknown target has mixed scope policy", () => {
-    const account = createAccount();
-    account.config = {
-      ...account.config,
-      allowFrom: ["*"],
-    };
-
-    expect(
-      resolveFeishuChatReadPreliminaryAuthorization({
-        cfg,
-        account,
-        chatId: "oc_unknown",
-        ctx: {},
-      }),
-    ).toEqual({ chatId: "oc_unknown", decision: "needs-metadata" });
-    expect(
-      resolveFeishuChatReadPreliminaryAuthorization({
-        cfg,
-        account,
-        chatId: "oc_unknown",
-        ctx: { conversationReadOrigin: "direct-operator" },
-      }),
-    ).toEqual({ chatId: "oc_unknown", decision: "allow" });
+    const account = createAccount({ allowFrom: ["*"] });
+    const target = { cfg, account, chatId: "oc_unknown" };
+    const authorization = (ctx: ReadParams["ctx"]) =>
+      resolveFeishuChatReadPreliminaryAuthorization({ ...target, ctx });
+    expect(authorization({})).toEqual({ chatId: "oc_unknown", decision: "needs-metadata" });
+    expect(authorization({ conversationReadOrigin: "direct-operator" })).toEqual({
+      chatId: "oc_unknown",
+      decision: "allow",
+    });
   });
 });

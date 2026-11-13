@@ -19,11 +19,6 @@ type FlexSpan = messagingApi.FlexSpan;
 
 type LineMessageSegment = { type: "text"; text: string } | { type: "flex"; message: FlexMessage };
 
-interface CodeBlock {
-  language?: string;
-  code: string;
-}
-
 const LINE_MARKDOWN_OPTIONS = {
   assistantTranscriptRoleHeaders: true,
   autolink: false,
@@ -43,13 +38,6 @@ function parseLineMarkdown(text: string, tableMode: "block" | "bullets" = "block
   return markdownToIRWithMeta(text, { ...LINE_MARKDOWN_OPTIONS, tableMode });
 }
 
-function toCodeBlock(ir: MarkdownIR, span: MarkdownStyleSpan): CodeBlock {
-  return {
-    ...(span.language ? { language: span.language } : {}),
-    code: ir.text.slice(span.start, span.end).trimEnd(),
-  };
-}
-
 type PlainTextInsertion =
   | { position: number; text: string }
   | { position: number; message: FlexMessage };
@@ -59,6 +47,12 @@ function rangesOverlap(
   right: { start: number; end: number },
 ): boolean {
   return left.start < right.end && right.start < left.end;
+}
+
+/** A link shows its href after the label unless the label already is that address. */
+function linkAddsHref(rawLabel: string, href: string): boolean {
+  const label = rawLabel.trim();
+  return Boolean(href && label && label !== href && `mailto:${label}` !== href);
 }
 
 function projectPlainText(
@@ -73,9 +67,7 @@ function projectPlainText(
       continue;
     }
     const href = link.href.trim();
-    const label = ir.text.slice(link.start, link.end).trim();
-    const comparableHref = href.startsWith("mailto:") ? href.slice("mailto:".length) : href;
-    if (href && label && label !== href && label !== comparableHref) {
+    if (linkAddsHref(ir.text.slice(link.start, link.end), href)) {
       insertions.push({ position: link.end, text: ` (${href})` });
     }
   }
@@ -166,34 +158,11 @@ function projectPlainText(
   return output.trim();
 }
 
-function formatOversizedTableAsBullets(table: MarkdownTableMeta): string {
-  const markdownCell = (cell: MarkdownTableCell) =>
-    projectPlainText(cell)
-      .replace(/[\\|`*_[\]~<>&]/gu, "\\$&")
-      .replace(/\r?\n/gu, " ");
-  const markdownRow = (cells: MarkdownTableCell[]) => `| ${cells.map(markdownCell).join(" | ")} |`;
-  const markdown = [
-    markdownRow(table.headerCells),
-    `| ${table.headerCells.map(() => "---").join(" | ")} |`,
-    ...table.rowCells.map(markdownRow),
-  ].join("\n");
-
-  return projectPlainText(parseLineMarkdown(markdown, "bullets").ir);
-}
-
 type RenderedCell = {
   text: string;
   contents?: FlexSpan[];
   hasMarkup: boolean;
 };
-
-function sameSpanStyle(left: FlexSpan, right: FlexSpan): boolean {
-  return (
-    left.weight === right.weight &&
-    left.style === right.style &&
-    left.decoration === right.decoration
-  );
-}
 
 function renderTableCell(cell: MarkdownTableCell): RenderedCell {
   if (!cell.text.trim()) {
@@ -227,7 +196,12 @@ function renderTableCell(cell: MarkdownTableCell): RenderedCell {
 
   const appendSpan = (span: FlexSpan) => {
     const previous = spans.at(-1);
-    if (previous && sameSpanStyle(previous, span)) {
+    if (
+      previous &&
+      previous.weight === span.weight &&
+      previous.style === span.style &&
+      previous.decoration === span.decoration
+    ) {
       previous.text = `${previous.text ?? ""}${span.text ?? ""}`;
     } else {
       spans.push(span);
@@ -265,8 +239,7 @@ function renderTableCell(cell: MarkdownTableCell): RenderedCell {
     }
     for (const link of cell.links.filter((candidate) => candidate.end === end)) {
       const href = link.href.trim();
-      const label = cell.text.slice(link.start, link.end).trim();
-      if (href && label && label !== href) {
+      if (linkAddsHref(cell.text.slice(link.start, link.end), href)) {
         appendSpan({ type: "span", text: ` (${href})` });
         hasMarkup = true;
       }
@@ -366,27 +339,6 @@ function convertTableToFlexBubble(table: MarkdownTableMeta): FlexBubble | undefi
   };
 }
 
-function convertCodeBlockToFlexBubble(block: CodeBlock): FlexBubble {
-  const titleText = block.language ? `Code (${block.language})` : "Code";
-
-  return {
-    type: "bubble",
-    body: cardBox(
-      "vertical",
-      [
-        cardText(titleText, { weight: "bold", size: "sm", color: "#666666" }),
-        cardBox("vertical", [cardText(block.code, { size: "xs", color: "#333333", wrap: true })], {
-          backgroundColor: "#F5F5F5",
-          paddingAll: "md",
-          cornerRadius: "md",
-          margin: "sm",
-        }),
-      ],
-      { paddingAll: "lg" },
-    ),
-  };
-}
-
 /** Parse once, route existing block surfaces to Flex, and project the remainder as plain text. */
 export function processLineMessage(text: string): LineMessageSegment[] {
   const { ir, tables } = parseLineMarkdown(text);
@@ -396,9 +348,21 @@ export function processLineMessage(text: string): LineMessageSegment[] {
   for (const table of tables) {
     const bubble = convertTableToFlexBubble(table);
     if (!bubble || !fitsLineFlexBubble(bubble)) {
+      const markdownCell = (cell: MarkdownTableCell) =>
+        projectPlainText(cell)
+          .replace(/[\\|`*_[\]~<>&]/gu, "\\$&")
+          .replace(/\r?\n/gu, " ");
+      const markdownRow = (cells: MarkdownTableCell[]) =>
+        `| ${cells.map(markdownCell).join(" | ")} |`;
+      const markdown = [
+        markdownRow(table.headerCells),
+        `| ${table.headerCells.map(() => "---").join(" | ")} |`,
+        ...table.rowCells.map(markdownRow),
+      ].join("\n");
+
       plainTextInsertions.push({
         position: table.placeholderOffset,
-        text: `\n\n${formatOversizedTableAsBullets(table)}\n\n`,
+        text: `\n\n${projectPlainText(parseLineMarkdown(markdown, "bullets").ir)}\n\n`,
       });
       continue;
     }
@@ -407,7 +371,10 @@ export function processLineMessage(text: string): LineMessageSegment[] {
   }
 
   for (const span of codeSpans) {
-    const block = toCodeBlock(ir, span);
+    const block = {
+      ...(span.language ? { language: span.language } : {}),
+      code: ir.text.slice(span.start, span.end).trimEnd(),
+    };
     // An empty fence has no code to show, and LINE rejects the whole push when a
     // Flex text is blank, so it drops out instead of costing the reply.
     if (!block.code.trim()) {
@@ -420,9 +387,29 @@ export function processLineMessage(text: string): LineMessageSegment[] {
       plainTextInsertions.push({ position: span.start, text: `\n\n${block.code}\n\n` });
       continue;
     }
+    const titleText = block.language ? `Code (${block.language})` : "Code";
     plainTextInsertions.push({
       position: span.start,
-      message: toFlexMessage("Code", convertCodeBlockToFlexBubble(block)),
+      message: toFlexMessage("Code", {
+        type: "bubble",
+        body: cardBox(
+          "vertical",
+          [
+            cardText(titleText, { weight: "bold", size: "sm", color: "#666666" }),
+            cardBox(
+              "vertical",
+              [cardText(block.code, { size: "xs", color: "#333333", wrap: true })],
+              {
+                backgroundColor: "#F5F5F5",
+                paddingAll: "md",
+                cornerRadius: "md",
+                margin: "sm",
+              },
+            ),
+          ],
+          { paddingAll: "lg" },
+        ),
+      }),
     });
   }
 

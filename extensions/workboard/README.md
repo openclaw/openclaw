@@ -21,6 +21,29 @@ tool policy and workspace permissions.
 Workboard tracks work on one Gateway. See the [Workboard guide](https://docs.openclaw.ai/plugins/workboard)
 for card workflows, worker dispatch, and sharing boundaries.
 
+Sessions board placement repair runs in the service background. Sessions board
+operations wait for repair; unrelated Gateway connections can proceed. Repair
+failures appear in plugin service health, and shutdown joins outstanding repair.
+
+## Large boards
+
+The Control UI loads cards and sessions in pages of 100. **Load more cards** and
+**Load more sessions** extend the current view. Card search and filters, and the
+Sessions board's agent filter, apply to loaded rows; the page displays this scope
+while more rows are available. Dashboard widgets also disclose incomplete counts
+and offer **Load more cards**, including cards not loaded yet. Load all cards
+before reordering them. Session
+people filters continue to apply to the complete authorized session population.
+
+Gateway clients continue `workboard.cards.list` with the returned `nextCursor` as
+`after` (the `{ position, createdAt, id }` object), and
+`workboard.sessionsBoard.read` with its string `nextCursor` as `after`. Both omit
+`nextCursor` on the final page. Sessions responses also include the total matching
+session count. `sinceRevision` applies only to a first-page refresh. CLI card lists
+follow all pages automatically. Pages reflect current owner state, so a refresh
+reconciles cards or sessions reordered between requests; a missing session cursor
+returns an explicit refresh error.
+
 ## Browser development
 
 The browser UI uses Solid 2 and bundles its own renderer through the plugin

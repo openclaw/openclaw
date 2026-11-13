@@ -15,7 +15,29 @@ import type {
   CatalogSessionKey,
 } from "../lib/sessions/catalog-key.ts";
 import { buildCatalogSessionKey, parseCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
-import type { SidebarSessionHovercardRow } from "./app-sidebar-session-types.ts";
+import type {
+  SidebarRecentSession,
+  SidebarSessionHovercardRow,
+} from "./app-sidebar-session-types.ts";
+
+export function catalogSessionActivity(
+  sessions: readonly SessionCatalogSession[],
+  liveRowsByKey: ReadonlyMap<
+    string,
+    Pick<SidebarRecentSession, "unread" | "backgroundProcessCount" | "isRunVisuallyActive">
+  >,
+) {
+  let running = false;
+  let unread = false;
+  for (const session of sessions) {
+    const row = session.sessionKey ? liveRowsByKey.get(session.sessionKey) : undefined;
+    running ||= row
+      ? row.isRunVisuallyActive === true || (row.backgroundProcessCount ?? 0) > 0
+      : session.status === "active" || session.status === "running";
+    unread ||= row?.unread === true;
+  }
+  return { running, unread };
+}
 
 export function formatSidebarTimestamp(timestampMs: number | null | undefined): string {
   const now = Date.now();
@@ -130,7 +152,7 @@ export type SidebarSessionCatalog = SessionCatalog & { visibleHosts: SessionCata
 
 type SessionVisibilityRow = Pick<GatewaySessionRow, "key" | "archived" | "snoozedUntil">;
 
-/** Section peers and rendering share the same nonempty, owner-filtered catalogs. */
+/** Section peers and rendering share the same owner-filtered catalogs and discovery failures. */
 export function projectSidebarSessionCatalogs(
   catalogs: readonly SessionCatalog[],
   ownerId: string | null,
@@ -168,14 +190,26 @@ export function projectSidebarSessionCatalogs(
         visibleHosts.push(sessions.length === host.sessions.length ? host : { ...host, sessions });
       }
     }
-    return visibleHosts.length > 0 ? [{ ...catalog, visibleHosts }] : [];
+    // Discovery failures may expose an empty catalog, not sessions excluded by the user's filter.
+    return visibleHosts.length > 0 ||
+      (catalog.hosts.every((host) => host.sessions.length === 0) &&
+        catalogErrorMessages(catalog).length > 0)
+      ? [{ ...catalog, visibleHosts }]
+      : [];
   });
 }
 
+export type CatalogRowControls = Partial<
+  Record<"link" | "children" | "pin" | "archive" | "menu" | "catalogMenu", HTMLElement>
+>;
+
 export type CatalogBackingSessionDisplay = {
   catalogIdentityKey: string;
-  catalogMenu: CatalogSessionMenuRequest;
-  rowRef?: (element: Element | undefined) => void;
+  rowRef?: (
+    element: HTMLElement,
+    controls: CatalogRowControls,
+    previousFocus: Element | null,
+  ) => () => void;
   pullRequest?: SessionCatalogSession["pullRequest"];
 };
 

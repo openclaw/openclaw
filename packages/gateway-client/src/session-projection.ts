@@ -89,6 +89,7 @@ export type SessionProjectionRun = {
   stopReason?: string;
   errorKind?: string;
   errorMessage?: string;
+  suppressErrorNotice?: boolean;
 };
 
 export type SessionProjectionState = {
@@ -487,7 +488,9 @@ function updateRun(
   state: SessionProjectionState,
   incoming: SessionProjectionRun,
 ): SessionProjectionState {
-  const incomingErrorMessage = readNonemptyString(incoming.errorMessage);
+  const incomingErrorMessage = incoming.suppressErrorNotice
+    ? null
+    : readNonemptyString(incoming.errorMessage);
   const incomingSeq =
     typeof incoming.seq === "number" && Number.isSafeInteger(incoming.seq) && incoming.seq >= 0
       ? incoming.seq
@@ -495,6 +498,8 @@ function updateRun(
   const normalizedIncoming = { ...incoming, seq: incomingSeq };
   if (incomingErrorMessage) {
     normalizedIncoming.errorMessage = incomingErrorMessage;
+  } else if (incoming.suppressErrorNotice) {
+    normalizedIncoming.errorMessage = undefined;
   } else {
     delete normalizedIncoming.errorMessage;
   }
@@ -523,13 +528,16 @@ function updateRun(
     // Distinct valid finals are remembered; the first delivered reply remains immutable.
     const recoverMessage = acceptFinal && !currentHasDisplayableMessage;
     const recoverError =
-      readNonemptyString(current.errorMessage) === null && incomingErrorMessage !== null;
+      !current.suppressErrorNotice &&
+      readNonemptyString(current.errorMessage) === null &&
+      incomingErrorMessage !== null;
     const updateTerminalSequence =
       incoming.status !== "streaming" &&
       (incomingSeq === undefined
         ? current.seq !== undefined
         : current.seq === undefined || incomingSeq > current.seq);
-    if (!acceptFinal && !recoverError && !updateTerminalSequence) {
+    const suppressError = incoming.suppressErrorNotice === true && !current.suppressErrorNotice;
+    if (!acceptFinal && !recoverError && !updateTerminalSequence && !suppressError) {
       return state;
     }
     const firstFinalIdentity = readSessionProjectionFinalMessageIdentity(current.message);
@@ -541,6 +549,7 @@ function updateRun(
         ...state.runs,
         [incoming.runId]: {
           ...current,
+          ...(suppressError ? { suppressErrorNotice: true, errorMessage: undefined } : {}),
           ...(updateTerminalSequence ? { seq: incomingSeq } : {}),
           ...(recoverMessage ? { message: incoming.message } : {}),
           ...(acceptFinal && incomingFinalIdentity
@@ -584,23 +593,23 @@ function updateRun(
     incoming.status === "completed" || incoming.status === "yielded"
       ? readSessionProjectionFinalMessageIdentity(incoming.message)
       : null;
+  const runs = {
+    ...previousRuns,
+    [incoming.runId]: {
+      ...(resumesErrorProjection ? {} : current),
+      ...normalizedIncoming,
+      ...(acceptedFinalIdentity ? { acceptedFinalMessageIdentities: [acceptedFinalIdentity] } : {}),
+      ...(!resumesErrorProjection &&
+      incoming.message === undefined &&
+      current?.message !== undefined
+        ? { message: current.message }
+        : {}),
+    },
+  };
   return {
     ...resumedState,
-    runs: retainSessionProjectionRuns({
-      ...previousRuns,
-      [incoming.runId]: {
-        ...(resumesErrorProjection ? {} : current),
-        ...normalizedIncoming,
-        ...(acceptedFinalIdentity
-          ? { acceptedFinalMessageIdentities: [acceptedFinalIdentity] }
-          : {}),
-        ...(!resumesErrorProjection &&
-        incoming.message === undefined &&
-        current?.message !== undefined
-          ? { message: current.message }
-          : {}),
-      },
-    }),
+    // Continuing a run changes neither membership nor the retention partition.
+    runs: current?.status === incoming.status ? runs : retainSessionProjectionRuns(runs),
   };
 }
 
@@ -699,6 +708,9 @@ export function reduceSessionProjection(
         ...(event.message === undefined ? {} : { message: event.message }),
         ...(event.stopReason === undefined ? {} : { stopReason: event.stopReason }),
         ...(event.errorKind === undefined ? {} : { errorKind: event.errorKind }),
+        ...(event.suppressErrorNotice === undefined
+          ? {}
+          : { suppressErrorNotice: event.suppressErrorNotice }),
         ...(event.errorMessage === undefined ? {} : { errorMessage: event.errorMessage }),
       });
     case "transportGap":

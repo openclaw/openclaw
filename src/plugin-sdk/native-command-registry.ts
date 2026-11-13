@@ -1,6 +1,3 @@
-/**
- * Public SDK subpath for chat/native command definitions and argument helpers.
- */
 export {
   buildCommandTextFromArgs,
   findCommandByNativeName,

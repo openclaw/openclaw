@@ -4,7 +4,7 @@ import { For, Show, createMemo } from "solid-js";
 import { icons } from "../../components/icons.tsx";
 import { t } from "../../i18n/index.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
-import type { WorkboardCard, WorkboardDependencyState } from "../../lib/workboard/index.ts";
+import type { WorkboardCard, WorkboardDependencyState } from "../../lib/workboard/types.ts";
 import { formatStatusLabel, formatUpdatedTime } from "./view-helpers.tsx";
 
 export function DependencyDetailList(props: { dependencies: WorkboardDependencyState }) {
@@ -15,8 +15,14 @@ export function DependencyDetailList(props: { dependencies: WorkboardDependencyS
         <ul class="workboard-detail__list workboard-detail__dependencies">
           <For each={props.dependencies.parents} keyed={(parent) => parent.id}>
             {(parent) => (
-              <li class={parent().done ? "is-done" : "is-blocked"}>
-                {parent().done ? (
+              <li
+                class={{
+                  "is-done": parent().done,
+                  "is-blocked":
+                    !parent().done && (parent().missing || parent().status !== undefined),
+                }}
+              >
+                {parent().done || (!parent().missing && parent().status === undefined) ? (
                   <span class="workboard-detail__dependency-spacer" />
                 ) : (
                   icons.alertTriangle
@@ -27,7 +33,7 @@ export function DependencyDetailList(props: { dependencies: WorkboardDependencyS
                     ? t("workboard.dependencyStatusMissing")
                     : parent().status
                       ? formatStatusLabel(parent().status!)
-                      : t("workboard.unknownStatus")}
+                      : t("workboard.dependencyStatusNotLoaded")}
                 </span>
               </li>
             )}

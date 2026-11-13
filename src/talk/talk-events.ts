@@ -1,43 +1,12 @@
 import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
 import type { TalkEvent as ProtocolTalkEvent } from "../../packages/gateway-protocol/src/schema/channels.js";
+import {
+  TALK_CAPTURE_SCOPED_EVENT_TYPES,
+  TALK_EVENT_TYPES,
+  TALK_TURN_SCOPED_EVENT_TYPES,
+} from "../../packages/gateway-protocol/src/talk-event-vocabulary.js";
 
-const TURN_LIFECYCLE_EVENT_TYPES = ["turn.started", "turn.ended", "turn.cancelled"] as const;
-const CAPTURE_EVENT_TYPES = [
-  "capture.started",
-  "capture.stopped",
-  "capture.cancelled",
-  "capture.once",
-] as const;
-const TURN_STREAM_EVENT_TYPES = [
-  "input.audio.delta",
-  "input.audio.committed",
-  "transcript.delta",
-  "transcript.done",
-  "output.text.delta",
-  "output.text.done",
-  "output.audio.started",
-  "output.audio.delta",
-  "output.audio.done",
-  "tool.call",
-  "tool.progress",
-  "tool.result",
-  "tool.error",
-] as const;
-
-/** Canonical event names emitted by Talk sessions across realtime and STT/TTS flows. */
-export const TALK_EVENT_TYPES = [
-  "session.started",
-  "session.ready",
-  "session.closed",
-  "session.error",
-  "session.replaced",
-  ...TURN_LIFECYCLE_EVENT_TYPES,
-  ...CAPTURE_EVENT_TYPES,
-  ...TURN_STREAM_EVENT_TYPES,
-  "usage.metrics",
-  "latency.metrics",
-  "health.changed",
-] as const;
+export { TALK_EVENT_TYPES };
 
 export type TalkEventType = (typeof TALK_EVENT_TYPES)[number];
 
@@ -69,13 +38,10 @@ export type TalkEventSequencer = {
 
 // Turn-scoped event names must carry turnId so mixed audio/text/tool streams can be
 // reconstructed without guessing from sequence order alone.
-const TURN_SCOPED_TALK_EVENT_TYPES = new Set<TalkEventType>([
-  ...TURN_LIFECYCLE_EVENT_TYPES,
-  ...TURN_STREAM_EVENT_TYPES,
-]);
+const TURN_SCOPED_TALK_EVENT_TYPES = new Set<TalkEventType>(TALK_TURN_SCOPED_EVENT_TYPES);
 
 // Capture-scoped events describe microphone capture lifecycle, which can overlap turns.
-const CAPTURE_SCOPED_TALK_EVENT_TYPES = new Set<TalkEventType>(CAPTURE_EVENT_TYPES);
+const CAPTURE_SCOPED_TALK_EVENT_TYPES = new Set<TalkEventType>(TALK_CAPTURE_SCOPED_EVENT_TYPES);
 
 function assertTalkEventCorrelation(input: TalkEventInput): void {
   if (TURN_SCOPED_TALK_EVENT_TYPES.has(input.type) && !input.turnId?.trim()) {

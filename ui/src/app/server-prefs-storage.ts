@@ -1,4 +1,4 @@
-import { safeParseJson } from "@openclaw/normalization-core";
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   SYNCED_PREFS,
@@ -36,9 +36,6 @@ export function serializeStoredPrefs(prefs: ServerUiPrefs): string {
     if (Object.hasOwn(prefs, key)) {
       stored[storageKey] = prefs[key];
     }
-  }
-  if (prefs.navigationConfirmation) {
-    stored.navigationConfirmation = { railShortcuts: prefs.navigationConfirmation.sidebarEntries };
   }
   return JSON.stringify(stored);
 }
@@ -89,14 +86,6 @@ export function parseStoredPrefs(raw: string | null): ServerUiPrefs | null {
       if (Object.hasOwn(prefs, storageKey)) {
         prefs[key] = prefs[storageKey];
         delete prefs[storageKey];
-      }
-    }
-    const confirmation = asRecord(prefs.navigationConfirmation);
-    if (confirmation) {
-      if (Object.hasOwn(confirmation, "railShortcuts")) {
-        prefs.navigationConfirmation = { sidebarEntries: confirmation.railShortcuts };
-      } else {
-        delete prefs.navigationConfirmation;
       }
     }
   }

@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isMainThread } from "node:worker_threads";
 import {
   acquireStateDatabaseSchemaLease,
@@ -6,6 +5,7 @@ import {
   getStateDatabaseSchemaLease,
   type StateDatabaseSchemaLease,
 } from "../../infra/gateway-state-owner.js";
+import { sqlPublicationAnchor, type EngineConnection } from "../../infra/sql-connection.js";
 import { getSqliteDatabaseAdmissionIdentityForPath } from "../../infra/sqlite-database-admission.js";
 import { runWithSqliteCleanup } from "../../infra/sqlite-lifecycle-errors.js";
 import {
@@ -23,16 +23,16 @@ import { getWorkerAuthProfileWrites } from "./runtime-scope.js";
 
 const retainedTransactions = resolveGlobalSingleton(
   Symbol.for("openclaw.authProfileCredentialWriteCustody"),
-  () => new WeakMap<DatabaseSync, { lease: StateDatabaseSchemaLease; unknown: boolean }>(),
+  () => new WeakMap<EngineConnection, { lease: StateDatabaseSchemaLease; unknown: boolean }>(),
 );
 
 /** Reuse native custody; standalone SDK callers take the existing exclusive offline lease. */
 export function withAuthProfileCredentialOwner<T>(
   databasePath: string,
-  operation: (retainTransaction?: (database: DatabaseSync) => void) => T,
-  database?: DatabaseSync,
+  operation: (retainTransaction?: (database: EngineConnection) => void) => T,
+  database?: EngineConnection,
 ): T {
-  const retained = database && retainedTransactions.get(database);
+  const retained = database && retainedTransactions.get(sqlPublicationAnchor(database));
   if (retained) {
     if (retained.unknown) {
       throw new Error("Auth profile credential write outcome is unknown; restart its owner");
@@ -73,18 +73,18 @@ export function withAuthProfileCredentialOwner<T>(
   }
   const lease = acquireStateDatabaseSchemaLease(databasePath);
   let transactionOwnsLease = false;
-  const retainTransaction = (db: DatabaseSync) => {
-    if (!hasSqlitePostCommitScope(db)) {
+  const retainTransaction = (db: EngineConnection) => {
+    if (!hasSqlitePostCommitScope(sqlPublicationAnchor(db))) {
       return;
     }
     const owner = { lease, unknown: false };
     const release = () => {
-      retainedTransactions.delete(db);
+      retainedTransactions.delete(sqlPublicationAnchor(db));
       lease.release();
     };
     // Stage first so rollback releases after credential facts; commit release is an observer.
-    transactionOwnsLease = stageSqliteTransactionState(db, {
-      stage: () => retainedTransactions.set(db, owner),
+    transactionOwnsLease = stageSqliteTransactionState(sqlPublicationAnchor(db), {
+      stage: () => retainedTransactions.set(sqlPublicationAnchor(db), owner),
       commit() {},
       rollback: release,
       invalidate: () => {
@@ -92,7 +92,7 @@ export function withAuthProfileCredentialOwner<T>(
         owner.unknown = true;
       },
     });
-    deferSqlitePostCommitPublication(db, release);
+    deferSqlitePostCommitPublication(sqlPublicationAnchor(db), release);
   };
   return runWithSqliteCleanup(
     {
@@ -109,15 +109,16 @@ export function withAuthProfileCredentialOwner<T>(
 
 /** The native opener captures the shared root, including agents outside the state directory. */
 export function withAuthProfileCredentialWriteCustody<T>(
-  database: DatabaseSync,
+  database: EngineConnection,
   operation: () => T,
 ): T {
-  if (database.isTransaction && !hasSqlitePostCommitScope(database)) {
+  if (database.isTransaction && !hasSqlitePostCommitScope(sqlPublicationAnchor(database))) {
     throw new Error("Credential writes require their owning transaction publication scope");
   }
-  const agent = findOpenClawAgentDatabaseIdentity({ db: database });
+  const agent = findOpenClawAgentDatabaseIdentity({ db: sqlPublicationAnchor(database) });
   const databasePath =
-    agent?.ownerDatabasePath ?? readTrackedStateDatabaseIdentity(database)?.canonicalPath;
+    agent?.ownerDatabasePath ??
+    readTrackedStateDatabaseIdentity(sqlPublicationAnchor(database))?.canonicalPath;
   if (!databasePath) {
     throw new Error("Auth profile credential database has no captured state owner");
   }

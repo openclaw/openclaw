@@ -4,29 +4,35 @@ import type {
   RealtimeVoiceToolResultOptions,
 } from "openclaw/plugin-sdk/realtime-voice";
 import {
+  canonicalizeBase64,
+  normalizeRealtimeVoiceResponseOutcome,
   RealtimeVoiceSessionLifecycle,
   RealtimeVoiceWebSocketTransport,
 } from "openclaw/plugin-sdk/realtime-voice-provider";
-import WebSocket from "ws";
+import {
+  asOptionalObjectRecord,
+  isRecord,
+  readStringField,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
 import {
   readRealtimeErrorDetail,
   resolveOpenAIRealtimeRequestHeaders,
 } from "./realtime-provider-shared.js";
 import { buildOpenAIRealtimeSidebandUrl } from "./realtime-quicksilver-wire.js";
+import { OpenAIRealtimeProtocol } from "./realtime-voice-protocol.js";
 import {
-  OpenAIRealtimeEvents,
-  OpenAIRealtimeMalformedAudioError,
-} from "./realtime-voice-events.js";
-import {
+  OPENAI_REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX,
+  OPENAI_REALTIME_NO_ACTIVE_RESPONSE_CANCEL_ERROR,
   OPENAI_REALTIME_DEFAULT_MODEL,
-  OPENAI_REALTIME_API_KEY_REQUIRED,
   OPENAI_REALTIME_CONFIGURED_API_KEY_REJECTED,
   OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED,
   OPENAI_REALTIME_SIDEBAND_STARTUP_MAX_BYTES,
   OPENAI_VOICE_WS_MAX_PAYLOAD_BYTES,
   hasOpenAIRealtimeConfiguredApiKeyInput,
   isDirectOpenAIRealtimeWebSocketUrl,
+  isOpenAIRealtimeMaxSessionDurationError,
   isOpenAIRealtimeStartupAuthFailure,
   requireOpenAIRealtimeApiKey,
   requireOpenAIRealtimePlatformAuth,
@@ -39,7 +45,9 @@ import {
 const OPENAI_REALTIME_MAX_BUFFERED_AUDIO_BYTES = 1024 * 1024;
 const OPENAI_REALTIME_AUDIO_DROP_WARN_INTERVAL_MS = 5_000;
 
-export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements RealtimeVoiceBridge {
+class OpenAIRealtimeMalformedAudioError extends Error {}
+
+export class OpenAIRealtimeBridge extends OpenAIRealtimeProtocol implements RealtimeVoiceBridge {
   private readonly transport: RealtimeVoiceWebSocketTransport<RealtimeEvent>;
   private sessionReadyFired = false;
   private activeConnectionReason: string | undefined;
@@ -211,15 +219,17 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
     | Promise<{ url: string; headers: Record<string, string> }> {
     const cfg = this.config;
     const model = cfg.model ?? OPENAI_REALTIME_DEFAULT_MODEL;
-    if (cfg.azureEndpoint && cfg.azureDeployment) {
+    if (cfg.azureEndpoint) {
       const apiKey = requireOpenAIRealtimeApiKey(cfg.apiKey);
+      this.azureRealtimeApi = cfg.azureApiVersion ? "preview" : "ga";
       const base = cfg.azureEndpoint
         .replace(/\/$/, "")
         .replace(/^http(s?):/, (_, secure: string) => `ws${secure}:`);
-      const apiVersion = cfg.azureApiVersion ?? "2024-10-01-preview";
-      const url = `${base}/openai/realtime?api-version=${apiVersion}&deployment=${encodeURIComponent(
-        cfg.azureDeployment,
-      )}`;
+      // Explicit preview configurations retain their original URL and wire contract.
+      const url =
+        this.azureRealtimeApi === "preview"
+          ? `${base}/openai/realtime?api-version=${cfg.azureApiVersion}&deployment=${encodeURIComponent(cfg.azureDeployment ?? model)}`
+          : `${base.replace(/\/openai(?:\/v1)?$/i, "")}/openai/v1/realtime?model=${encodeURIComponent(cfg.azureDeployment ?? model)}`;
       return {
         url,
         headers: resolveOpenAIRealtimeRequestHeaders(
@@ -235,14 +245,6 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
       const directApiKey = resolveOpenAIRealtimeSecretInput(cfg.apiKey);
       if (!directApiKey) {
         throw new Error(OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED);
-      }
-      return this.resolveApiKeyConnectionParams(directApiKey, model);
-    }
-
-    if (cfg.azureEndpoint) {
-      const directApiKey = resolveOpenAIRealtimeSecretInput(process.env.OPENAI_API_KEY);
-      if (!directApiKey) {
-        throw new Error(OPENAI_REALTIME_API_KEY_REQUIRED);
       }
       return this.resolveApiKeyConnectionParams(directApiKey, model);
     }
@@ -282,11 +284,6 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
         : [];
       endpoint.search = [...query, `model=${encodeURIComponent(model)}`].join("&");
       url = endpoint.toString();
-    } else if (cfg.azureEndpoint) {
-      const base = cfg.azureEndpoint
-        .replace(/\/$/, "")
-        .replace(/^http(s?):/, (_, secure: string) => `ws${secure}:`);
-      url = `${base}/v1/realtime?model=${encodeURIComponent(model)}`;
     } else {
       url = cfg.callId
         ? buildOpenAIRealtimeSidebandUrl(cfg.callId)
@@ -365,5 +362,369 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
         reason: "Tool-call session limit exceeded",
       });
     }
+  }
+
+  protected handleEvent(event: RealtimeEvent, connection: RealtimeVoiceSessionConnection): void {
+    const emitServerEvent = () =>
+      this.config.onEvent?.({
+        direction: "server",
+        type: event.type,
+        detail: this.describeServerEvent(event),
+        ...(event.item_id ? { itemId: event.item_id } : {}),
+        ...((event.response_id ?? event.response?.id)
+          ? { responseId: event.response_id ?? event.response?.id }
+          : {}),
+      });
+    if (
+      event.type === "error" &&
+      isOpenAIRealtimeMaxSessionDurationError(readRealtimeErrorDetail(event.error))
+    ) {
+      this.rotateExpiredSession();
+      return;
+    }
+    if (event.type === "response.done") {
+      this.handleResponseDone(event, connection, emitServerEvent);
+      return;
+    }
+    if (event.type === "response.cancelled") {
+      try {
+        emitServerEvent();
+      } finally {
+        this.releaseResponseState();
+      }
+      return;
+    }
+    if (event.type === "response.created") {
+      // Publish the response owner before observers can interrupt its first PCM.
+      this.outputAudioGeneration += 1;
+      this.responseActive = true;
+      this.responseCreateState = "idle";
+    }
+    const audioGeneration = this.outputAudioGeneration;
+    emitServerEvent();
+    if (!this.acceptsEvent(connection)) {
+      return;
+    }
+    switch (event.type) {
+      case "session.created":
+        return;
+
+      case "session.updated": {
+        this.onSessionUpdated(connection);
+        return;
+      }
+
+      case "conversation.output_audio.delta":
+      case "response.audio.delta":
+      case "response.output_audio.delta": {
+        const audioDelta = event.delta ?? event.data;
+        if (
+          !audioDelta ||
+          this.responseCancelInFlight ||
+          audioGeneration !== this.outputAudioGeneration
+        ) {
+          return;
+        }
+        const canonicalAudio = canonicalizeBase64(audioDelta);
+        if (!canonicalAudio) {
+          throw new OpenAIRealtimeMalformedAudioError(
+            "OpenAI realtime stream returned malformed base64 audio data",
+          );
+        }
+        const audio = Buffer.from(canonicalAudio, "base64");
+        if (event.item_id && event.item_id !== this.assistantAudioItem?.itemId) {
+          this.assistantAudioItem = {
+            itemId: event.item_id,
+            bytes: audio.byteLength,
+            startTimestamp: this.latestMediaTimestamp,
+          };
+        } else if (this.assistantAudioItem) {
+          // Playback clocks can lead provider output, but truncate cannot exceed item audio.
+          this.assistantAudioItem.bytes += audio.byteLength;
+        }
+        this.responseActive = true;
+        const generation = this.outputAudioGeneration;
+        const markName = this.createPlaybackMark();
+        this.config.onAudio(audio, event.item_id ? { itemId: event.item_id } : undefined);
+        if (generation === this.outputAudioGeneration && this.acceptsEvent(connection)) {
+          this.config.onMark?.(markName, () => {
+            if (this.acceptsEvent(connection)) {
+              this.acknowledgeMark(markName);
+            }
+          });
+        }
+        return;
+      }
+
+      case "input_audio_buffer.speech_started":
+        if (this.config.interruptResponseOnInputAudio ?? this.config.autoRespondToAudio ?? true) {
+          this.handleBargeIn();
+        }
+        return;
+
+      case "conversation.output_transcript.delta":
+      case "response.text.delta":
+      case "response.output_text.delta":
+      case "response.audio_transcript.delta":
+      case "response.output_audio_transcript.delta":
+        if (event.delta) {
+          this.config.onTranscript?.("assistant", event.delta, false);
+        }
+        return;
+
+      case "response.text.done":
+      case "response.output_text.done":
+      case "response.audio_transcript.done":
+      case "response.output_audio_transcript.done":
+        {
+          const transcript = event.transcript ?? event.text;
+          if (transcript) {
+            this.config.onTranscript?.("assistant", transcript, true);
+          }
+        }
+        return;
+
+      case "conversation.input_transcript.delta":
+      case "conversation.item.input_audio_transcription.delta":
+        if (event.delta) {
+          this.config.onTranscript?.("user", event.delta, false);
+        }
+        return;
+
+      case "conversation.item.input_audio_transcription.completed":
+        if (event.transcript) {
+          this.config.onTranscript?.("user", event.transcript, true);
+        }
+        return;
+
+      case "conversation.item.input_audio_transcription.failed":
+        this.config.onError?.(new Error(readRealtimeErrorDetail(event.error)));
+        break;
+
+      case "conversation.item.added":
+        break;
+
+      case "response.function_call_arguments.delta":
+      case "response.function_call_arguments.done":
+      case "conversation.item.done":
+        // These events are provisional and can also arrive for interrupted,
+        // incomplete, or cancelled responses. Successful response.done output
+        // is the sole execution boundary.
+        return;
+
+      case "error": {
+        const detail = readRealtimeErrorDetail(event.error);
+        const error = isRecord(event.error) ? event.error : undefined;
+        // Validation errors can omit event_id. The response parameter still belongs
+        // to our single pending create; an explicit id always overrides that evidence.
+        const rejectedEventId =
+          readStringField(asOptionalObjectRecord(event.error), "event_id") ??
+          (this.responseCreateState === "in-flight" &&
+          error?.type === "invalid_request_error" &&
+          typeof error.param === "string" &&
+          (error.param === "response" || error.param.startsWith("response."))
+            ? (this.manualResponseCreateEventId ?? this.standaloneSpeechEventId)
+            : undefined);
+        const rejectsStandaloneSpeech =
+          this.standaloneSpeechEventId !== null && rejectedEventId === this.standaloneSpeechEventId;
+        const rejectsManualResponseCreate =
+          this.manualResponseCreateEventId !== null &&
+          rejectedEventId === this.manualResponseCreateEventId;
+        if (
+          rejectsManualResponseCreate &&
+          detail.startsWith(OPENAI_REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX)
+        ) {
+          this.responseActive = true;
+          this.responseCreateState = "idle";
+          this.manualResponseCreateEventId = null;
+          this.responseCreatePending = true;
+          return;
+        }
+        const rejectsManualResponseCancel =
+          this.manualResponseCancelEventId !== null &&
+          readStringField(asOptionalObjectRecord(event.error), "event_id") ===
+            this.manualResponseCancelEventId;
+        if (detail === OPENAI_REALTIME_NO_ACTIVE_RESPONSE_CANCEL_ERROR) {
+          if (!rejectsManualResponseCancel) {
+            return;
+          }
+          this.responseActive = false;
+          this.responseCancelInFlight = false;
+          this.manualResponseCancelEventId = null;
+          if (this.responseCreatePending) {
+            this.flushPendingResponseCreate();
+          } else {
+            this.restoreAutoRespondAfterManualResponse();
+          }
+          return;
+        }
+        if (rejectsManualResponseCreate || rejectsStandaloneSpeech) {
+          // Rejected creates never emit response.done. Retire the same response owner
+          // so transports release speech and reentrant callbacks drain only afterward.
+          this.handleResponseDone(
+            {
+              type: "response.done",
+              response: { status: "failed", status_details: { error: event.error } },
+            },
+            connection,
+            () => this.config.onError?.(new Error(detail)),
+          );
+          return;
+        }
+        this.config.onError?.(new Error(detail));
+      }
+
+      default:
+    }
+  }
+
+  private handleCompletedResponse(
+    event: RealtimeEvent,
+    connection: RealtimeVoiceSessionConnection,
+  ): boolean {
+    if (
+      event.response?.status !== "completed" ||
+      !Array.isArray(event.response.output) ||
+      !this.config.onToolCall
+    ) {
+      return false;
+    }
+    for (const output of event.response.output) {
+      if (!this.acceptsEvent(connection) || !this.isTransportOpen()) {
+        return true;
+      }
+      if (
+        !isRecord(output) ||
+        output.type !== "function_call" ||
+        (output.status !== undefined && output.status !== "completed")
+      ) {
+        continue;
+      }
+      const itemId = typeof output.id === "string" ? output.id.trim() || undefined : undefined;
+      const callId = typeof output.call_id === "string" ? output.call_id.trim() : "";
+      const name = typeof output.name === "string" ? output.name.trim() : "";
+      if (!callId || !name || this.completedToolCallIds.has(callId)) {
+        continue;
+      }
+      if (this.completedToolCallIds.size >= OpenAIRealtimeProtocol.MAX_COMPLETED_TOOL_CALL_IDS) {
+        this.failToolCallSessionLimit(
+          new Error(
+            `OpenAI realtime tool-call session limit exceeded (${OpenAIRealtimeProtocol.MAX_COMPLETED_TOOL_CALL_IDS})`,
+          ),
+          connection,
+        );
+        return true;
+      }
+      this.completedToolCallIds.add(callId);
+      this.pendingToolCallIds.add(callId);
+      const rejectArguments = (
+        reason: string,
+        message = "Invalid tool arguments: expected a JSON object.",
+      ) => {
+        this.config.onEvent?.({
+          direction: "server",
+          type: "tool_call.arguments.rejected",
+          detail: `reason=${reason}`,
+          itemId,
+        });
+        this.submitToolResult(callId, { error: message });
+      };
+      if (typeof output.arguments !== "string") {
+        rejectArguments("invalid-json-type");
+        continue;
+      }
+      const rawArgs = output.arguments;
+      if (Buffer.byteLength(rawArgs, "utf8") > OpenAIRealtimeProtocol.MAX_TOOL_ARGUMENT_BYTES) {
+        rejectArguments(
+          "too-large",
+          `Realtime tool arguments exceed the ${OpenAIRealtimeProtocol.MAX_TOOL_ARGUMENT_BYTES}-byte UTF-8 limit`,
+        );
+        continue;
+      }
+      let args: unknown;
+      try {
+        args = JSON.parse(rawArgs || "{}");
+      } catch {
+        rejectArguments("malformed-json");
+        continue;
+      }
+      if (!isRecord(args)) {
+        rejectArguments("non-object-json");
+        continue;
+      }
+      this.config.onToolCall({ itemId: itemId ?? callId, callId, name, args });
+    }
+    return false;
+  }
+
+  private handleResponseDone(
+    event: RealtimeEvent,
+    connection: RealtimeVoiceSessionConnection,
+    emitServerEvent: () => void,
+  ): void {
+    const outcome = normalizeRealtimeVoiceResponseOutcome({
+      providerLabel: "OpenAI realtime voice",
+      response: event.response,
+      responseId: event.response_id,
+    });
+    let providerTerminated = false;
+    try {
+      // Terminal output still belongs to this response until observers retire its owner.
+      providerTerminated = this.handleCompletedResponse(event, connection);
+      this.config.onResponseDone?.(outcome);
+      emitServerEvent();
+    } finally {
+      // response.done owns response state regardless of observer success. A fatal tool
+      // boundary still clears state, but must not start queued work on a closing socket.
+      const canDrain =
+        !providerTerminated && this.acceptsEvent(connection) && this.isTransportOpen();
+      this.releaseResponseState({ drain: canDrain });
+    }
+  }
+
+  private describeServerEvent(event: RealtimeEvent): string | undefined {
+    if (
+      event.type === "error" ||
+      event.type === "conversation.item.input_audio_transcription.failed"
+    ) {
+      return readRealtimeErrorDetail(event.error);
+    }
+    if (event.type === "session.created" || event.type === "session.updated") {
+      const session = isRecord(event.session) ? event.session : undefined;
+      const tools = Array.isArray(session?.tools) ? session.tools.length : 0;
+      const rawToolChoice = session?.tool_choice;
+      const toolChoice =
+        typeof rawToolChoice === "string"
+          ? rawToolChoice
+          : isRecord(rawToolChoice) && typeof rawToolChoice.type === "string"
+            ? rawToolChoice.type
+            : "unset";
+      return `tools=${tools} toolChoice=${toolChoice}`;
+    }
+    if (
+      (event.type === "conversation.item.added" || event.type === "conversation.item.done") &&
+      event.item?.type
+    ) {
+      return [
+        `itemType=${event.item.type}`,
+        event.item.name ? `name=${event.item.name}` : undefined,
+      ]
+        .filter(Boolean)
+        .join(" ");
+    }
+    if (event.type === "response.done") {
+      const status = event.response?.status;
+      const details =
+        event.response?.status_details === undefined
+          ? undefined
+          : JSON.stringify(event.response.status_details);
+      return (
+        [status ? `status=${status}` : undefined, details].filter(Boolean).join(" ") || undefined
+      );
+    }
+    if (event.type === "response.cancelled") {
+      return "cancelled";
+    }
+    return undefined;
   }
 }

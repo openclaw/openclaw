@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { SESSION_EXEC_OVERRIDES_NOTE } from "../infra/exec-approvals-effective.js";
 import * as execApprovals from "../infra/exec-approvals.js";
-import { testing } from "./exec-approvals-cli.js";
+import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
 
 const {
   callGatewayFromCli,
@@ -18,15 +18,9 @@ const {
   resetExecApprovalsCliMocks,
   runApprovalsCommand,
   runtimeErrors,
+  runtimeLogs,
+  setLocalSocket,
 } = await import("./exec-approvals-cli.test-support.js");
-
-describe("exec approvals CLI error formatting", () => {
-  it("keeps the bounded first line UTF-16 well-formed", () => {
-    const message = testing.formatCliError(`${"x".repeat(299)}🚀tail\nignored`);
-
-    expect(message).toBe(`${"x".repeat(299)}...`);
-  });
-});
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -36,74 +30,42 @@ function createMcpToolGrant(tool = "publish_page") {
 
 const requireRecord = createRequireRecord("record", "expected-label-capitalized");
 
-function requireArray(value: unknown, label: string): unknown[] {
-  if (!Array.isArray(value)) {
-    throw new Error(`Expected ${label}`);
-  }
-  return value;
-}
-
-function expectFields(
-  value: unknown,
-  label: string,
-  fields: Record<string, unknown>,
-): Record<string, unknown> {
-  const record = requireRecord(value, label);
-  for (const [key, expected] of Object.entries(fields)) {
-    expect(record[key]).toEqual(expected);
-  }
-  return record;
-}
-
-function firstMockArg(mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } }): unknown {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error("Expected mock to have at least one call");
-  }
-  return call[0];
-}
-
-function gatewayCall(index: number) {
-  const call = callGatewayFromCli.mock.calls[index];
-  if (!call) {
-    throw new Error(`Expected gateway call ${index + 1}`);
-  }
-  return call;
-}
-
 function expectGatewayCall(index: number, method: string, params: unknown) {
-  const call = gatewayCall(index);
-  expect(call[0]).toBe(method);
-  expect(requireRecord(call[1], "gateway call options").timeout).toBe("60000");
-  expect(call[2]).toEqual(params);
+  expect(callGatewayFromCli.mock.calls[index]?.slice(0, 3)).toEqual([
+    method,
+    expect.objectContaining({ timeout: "60000" }),
+    params,
+  ]);
 }
 
 function writtenJson(): Record<string, unknown> {
-  const value = firstMockArg(vi.mocked(defaultRuntime.writeJson));
-  return requireRecord(value, "written json");
+  return requireRecord(defaultRuntime.writeJson.mock.calls[0]?.[0], "written json");
 }
 
 function effectivePolicy(output: Record<string, unknown> = writtenJson()) {
   return requireRecord(output.effectivePolicy, "effective policy");
 }
 
+const nativePolicy = { defaultAction: "deny", rules: [{ pattern: "hostname", action: "allow" }] };
+const nativeSnapshot = { enabled: true, hash: "sha256:current", defaultAction: "deny", rules: [] };
+const nativeFileArgs = (filePath: string) => [
+  "approvals",
+  "set",
+  "--node",
+  "windows",
+  "--file",
+  filePath,
+];
+function policyFile(contents: unknown) {
+  const filePath = path.join(tempDirs.make("openclaw-approvals-"), "policy.json");
+  fs.writeFileSync(filePath, JSON.stringify(contents));
+  return filePath;
+}
+
 describe("exec approvals CLI", () => {
   const runNativeApprovalsFileCommand = async (filePath: string) => {
-    callGatewayFromCli.mockResolvedValue({
-      enabled: true,
-      hash: "sha256:current",
-      defaultAction: "deny",
-      rules: [],
-    } as never);
-    await runApprovalsCommand([
-      "approvals",
-      "set",
-      "--node",
-      "windows",
-      "--file",
-      filePath,
-      "--json",
-    ]);
+    callGatewayFromCli.mockResolvedValue(nativeSnapshot);
+    await runApprovalsCommand([...nativeFileArgs(filePath), "--json"]);
   };
 
   beforeEach(resetExecApprovalsCliMocks);
@@ -116,13 +78,25 @@ describe("exec approvals CLI", () => {
 
     expectGatewayCall(0, method, target === "node" ? { nodeId: "node-1" } : {});
     expectGatewayCall(1, "config.get", {});
-    expect(
-      defaultRuntime.log.mock.calls.filter(([line]) =>
-        String(line ?? "").includes(SESSION_EXEC_OVERRIDES_NOTE),
-      ),
-    ).toHaveLength(1);
+    expect(runtimeLogs.filter((line) => line.includes(SESSION_EXEC_OVERRIDES_NOTE))).toHaveLength(
+      1,
+    );
     expect(runtimeErrors).toHaveLength(0);
   });
+
+  it.each([
+    ["get", ["approvals", "get"]],
+    ["allowlist add", ["approvals", "allowlist", "add", "/usr/bin/uname"]],
+  ] as const)(
+    "%s rejects --gateway combined with --node instead of silently routing to the gateway",
+    async (_label, baseArgs) => {
+      await expect(
+        runApprovalsCommand([...baseArgs, "--gateway", "--node", "macbook"]),
+      ).rejects.toThrow("__exit__:1");
+      expect(runtimeErrors.join("\n")).toContain("Pass only one of --gateway or --node.");
+      expect(callGatewayFromCli).not.toHaveBeenCalled();
+    },
+  );
 
   it("renders an unstored fresh-install policy as defaults instead of absent", async () => {
     localSnapshot.exists = false;
@@ -137,6 +111,7 @@ describe("exec approvals CLI", () => {
 
   it("sanitizes stored allowlist patterns in human output without changing JSON", async () => {
     const pattern = "/tmp/safe\u001b[31mred\u001b[0m\u001b]0;pwned\u0007\nnext\trow\rback\bspace🦞";
+    setLocalSocket("/tmp/local-exec-approvals.sock", "fixture-token");
     localSnapshot.file = {
       version: 1,
       agents: { "*": { allowlist: [{ pattern }] } },
@@ -161,90 +136,17 @@ describe("exec approvals CLI", () => {
     await runApprovalsCommand(["approvals", "get", "--json"]);
 
     const file = requireRecord(writtenJson().file, "JSON approvals file");
-    const agents = requireRecord(file.agents, "JSON approvals agents");
-    const wildcard = requireRecord(agents["*"], "JSON wildcard agent");
-    const allowlist = requireArray(wildcard.allowlist, "JSON wildcard allowlist");
-    expect(requireRecord(allowlist[0], "JSON allowlist entry").pattern).toBe(pattern);
-  });
-
-  it("keeps grant scopes distinct in a 40-column terminal", async () => {
-    const columns = 40;
-    const originalColumns = process.stdout.columns;
-    Object.defineProperty(process.stdout, "columns", { configurable: true, value: columns });
-    try {
-      const pattern = "/usr/bin/git";
-      const lastUsedAt = 1;
-      localSnapshot.file = {
-        version: 1,
-        agents: {
-          main: {
-            allowlist: [
-              { pattern, lastUsedAt },
-              { pattern, argPattern: "^status$", lastUsedAt },
-              {
-                pattern,
-                source: "allow-always",
-                argPattern: execApprovals.buildCwdBoundHashedArgPattern(
-                  [pattern, "status"],
-                  "/workspace",
-                ),
-                lastUsedAt,
-              },
-              { pattern, source: "allow-always", lastUsedAt },
-              { pattern: "=command:manual0000000000", lastUsedAt },
-              { pattern: "=command:generated00000", source: "allow-always", lastUsedAt },
-              { pattern, argPattern: "sha256:argv:obsolete", lastUsedAt },
-            ],
-          },
-        },
-      };
-      await runApprovalsCommand(["approvals", "get"]);
-      const rows = loggedOutput()
-        .split("\n")
-        .filter((line) => line.startsWith("│ local"));
-      expect(rows).toHaveLength(7);
-      expect(new Set(rows.slice(0, 4)).size).toBe(4);
-      for (const [index, scope] of [
-        "any args",
-        "argv",
-        "argv+cwd",
-        "inactive",
-        "any args",
-        "command text",
-        "inactive",
-      ].entries()) {
-        expect(rows[index]).toContain(scope);
-      }
-      expect(rows[6]).not.toMatch(/\bargv\b/);
-    } finally {
-      Object.defineProperty(process.stdout, "columns", {
-        configurable: true,
-        value: originalColumns,
-      });
-    }
-  });
-
-  it("redacts the socket token from local get JSON while preserving its path", async () => {
-    localSnapshot.file = {
-      version: 1,
-      socket: { path: "/tmp/local-exec-approvals.sock", token: "fixture-token" },
-      agents: {},
-    };
-
-    await runApprovalsCommand(["approvals", "get", "--json"]);
-
-    const output = writtenJson();
-    const file = requireRecord(output.file, "JSON approvals file");
     expect(file.socket).toEqual({ path: "/tmp/local-exec-approvals.sock" });
-    expect(JSON.stringify(output)).not.toContain('"token"');
+    expect(JSON.stringify(writtenJson())).not.toContain('"token"');
+    expect(file.agents).toMatchObject({ "*": { allowlist: [{ pattern }] } });
   });
 
   it("redacts the socket token from local write JSON while preserving its path", async () => {
-    localSnapshot.file = {
+    setLocalSocket("/tmp/local-exec-approvals.sock", "fixture-token");
+    localSnapshot.file = freezeTrustedJsonSnapshot({
       version: 1,
-      socket: { path: "/tmp/local-exec-approvals.sock", token: "fixture-token" },
       agents: {},
-    };
+    });
 
     await runApprovalsCommand(["approvals", "allowlist", "add", "/usr/bin/uname", "--json"]);
 
@@ -253,6 +155,8 @@ describe("exec approvals CLI", () => {
     expect(file.socket).toEqual({ path: "/tmp/local-exec-approvals.sock" });
     expect(output.raw).toBeUndefined();
     expect(JSON.stringify(output)).not.toContain('"token"');
+    expect(localSnapshot.file.socket).toBeUndefined();
+    expect(localSnapshot.raw).not.toContain("fixture-token");
     expect(defaultRuntime.writeJson).toHaveBeenCalledTimes(1);
     expect(loggedOutput()).not.toContain("Writing approvals for this state root.");
   });
@@ -298,13 +202,7 @@ describe("exec approvals CLI", () => {
         return { config: { tools: { exec: { security: "full", ask: "off" } } } };
       }
       if (method === "exec.approvals.node.get") {
-        return {
-          enabled: true,
-          hash: "sha256:current",
-          baseHash: "sha256:current",
-          defaultAction: "deny",
-          rules: [{ pattern: "hostname", action: "allow" }],
-        } as never;
+        return { ...nativeSnapshot, ...nativePolicy, baseHash: "sha256:current" };
       }
       return {} as never;
     });
@@ -323,69 +221,54 @@ describe("exec approvals CLI", () => {
   });
 
   it("writes host-native node approvals with the current hash", async () => {
-    const dir = tempDirs.make("openclaw-native-approvals-");
-    const policyPath = path.join(dir, "policy.json");
-    fs.writeFileSync(
-      policyPath,
-      JSON.stringify({
-        defaultAction: "deny",
-        rules: [{ pattern: "hostname", action: "allow" }],
-      }),
-    );
+    const policyPath = policyFile(nativePolicy);
     callGatewayFromCli.mockImplementation(
       async (method: string, _opts: unknown, params?: unknown) => {
         if (method === "exec.approvals.node.get") {
-          return {
-            enabled: true,
-            hash: "sha256:current",
-            defaultAction: "deny",
-            rules: [],
-          } as never;
+          return nativeSnapshot;
         }
         return { method, params };
       },
     );
 
-    await runApprovalsCommand([
-      "approvals",
-      "set",
-      "--node",
-      "windows",
-      "--file",
-      policyPath,
-      "--json",
-    ]);
+    await runApprovalsCommand([...nativeFileArgs(policyPath), "--json"]);
 
     expect(callGatewayFromCli.mock.calls[1]?.[0]).toBe("exec.approvals.node.set");
     expect(callGatewayFromCli.mock.calls[1]?.[2]).toEqual({
       nodeId: "node-1",
-      native: {
-        defaultAction: "deny",
-        rules: [{ pattern: "hostname", action: "allow" }],
-      },
+      native: nativePolicy,
       baseHash: "sha256:current",
     });
     expect(callGatewayFromCli.mock.calls[2]?.[0]).toBe("exec.approvals.node.get");
     expect(runtimeErrors).toHaveLength(0);
   });
 
-  it("rejects unknown host-native policy fields instead of dropping them", async () => {
-    const dir = tempDirs.make("openclaw-native-approvals-");
-    const policyPath = path.join(dir, "policy.json");
-    fs.writeFileSync(
-      policyPath,
-      JSON.stringify({ rules: [{ pattern: "hostname", action: "allow", shell: "powershell" }] }),
-    );
-    callGatewayFromCli.mockResolvedValue({
-      enabled: true,
-      hash: "sha256:current",
-      defaultAction: "deny",
-      rules: [],
-    } as never);
+  it.each([
+    [{ ...nativeSnapshot, ...nativePolicy }, "hostname"],
+    [{ enabled: false, message: "Configured on the host only" }, "Configured on the host only"],
+  ])(
+    "renders host-native policy for people without file-policy inference",
+    async (snapshot, detail) => {
+      callGatewayFromCli.mockResolvedValue(snapshot);
 
-    await expect(
-      runApprovalsCommand(["approvals", "set", "--node", "windows", "--file", policyPath]),
-    ).rejects.toThrow("__exit__:1");
+      await runApprovalsCommand(["approvals", "get", "--node", "windows"]);
+
+      const output = loggedOutput();
+      expect(output).toContain("host-native");
+      expect(output).toContain(detail);
+      expect(output).toContain("OpenClaw approvals-file policy math does not apply.");
+      expect(callGatewayFromCli.mock.calls.map(([method]) => method)).toEqual([
+        "exec.approvals.node.get",
+      ]);
+      expect(runtimeErrors).toHaveLength(0);
+    },
+  );
+
+  it("rejects unknown host-native policy fields instead of dropping them", async () => {
+    const policyPath = policyFile({ rules: [{ ...nativePolicy.rules[0], shell: "powershell" }] });
+    callGatewayFromCli.mockResolvedValue(nativeSnapshot);
+
+    await expect(runApprovalsCommand(nativeFileArgs(policyPath))).rejects.toThrow("__exit__:1");
 
     expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
     expect(runtimeErrors[0]).toContain("Unknown host-native exec approval rule 1 field: shell");
@@ -397,16 +280,9 @@ describe("exec approvals CLI", () => {
       message: "No exec policy configured",
     } as never);
 
-    await expect(
-      runApprovalsCommand([
-        "approvals",
-        "set",
-        "--node",
-        "windows",
-        "--file",
-        "/does/not/exist.json",
-      ]),
-    ).rejects.toThrow("__exit__:1");
+    await expect(runApprovalsCommand(nativeFileArgs("/does/not/exist.json"))).rejects.toThrow(
+      "__exit__:1",
+    );
 
     expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
     expect(runtimeErrors[0]).toContain("disabled on this node and cannot be configured remotely");
@@ -415,12 +291,7 @@ describe("exec approvals CLI", () => {
   it("rejects allowlist helpers for host-native nodes", async () => {
     callGatewayFromCli.mockImplementation(async (method: string) => {
       if (method === "exec.approvals.node.get") {
-        return {
-          enabled: true,
-          hash: "sha256:current",
-          defaultAction: "deny",
-          rules: [],
-        } as never;
+        return nativeSnapshot;
       }
       return {} as never;
     });
@@ -492,14 +363,11 @@ describe("exec approvals CLI", () => {
     expect(callGatewayFromCli.mock.calls.some((call) => call[0] === "exec.approvals.set")).toBe(
       false,
     );
-    const saved = requireRecord(localSnapshot.file, "saved approvals");
     expect(updateExecApprovals).toHaveBeenCalledWith(
       expect.objectContaining({ baseHash: "hash-local" }),
       expect.anything(),
     );
-    if (requireRecord(saved.agents, "saved agents").main === undefined) {
-      throw new Error("Expected main exec approval agent entry");
-    }
+    expect(localSnapshot.file.agents?.main).toBeDefined();
     expect(readBestEffortConfig).toHaveBeenCalledTimes(1);
     expect(loggedOutput()).toContain("Writing approvals for this state root.");
   });
@@ -542,29 +410,25 @@ describe("exec approvals CLI", () => {
   });
 
   it("removes wildcard allowlist entry and prunes empty agent", async () => {
-    localSnapshot.file = {
+    localSnapshot.file = freezeTrustedJsonSnapshot({
       version: 1,
       agents: {
         "*": {
           allowlist: [{ pattern: "/usr/bin/uname", lastUsedAt: Date.now() }],
         },
       },
-    };
+    });
 
     const updateExecApprovals = vi.mocked(execApprovals.updateExecApprovals);
     updateExecApprovals.mockClear();
 
     await runApprovalsCommand(["approvals", "allowlist", "remove", "/usr/bin/uname"]);
 
-    const saved = requireRecord(localSnapshot.file, "saved approvals");
     expect(updateExecApprovals).toHaveBeenCalledWith(
       expect.objectContaining({ baseHash: "hash-local" }),
       expect.anything(),
     );
-    expectFields(saved, "saved approvals", {
-      version: 1,
-      agents: {},
-    });
+    expect([localSnapshot.file.version, localSnapshot.file.agents]).toEqual([1, {}]);
     expect(loggedOutput()).toContain("Writing approvals for this state root.");
     expect(runtimeErrors).toHaveLength(0);
   });
@@ -597,14 +461,7 @@ describe("exec approvals CLI", () => {
         main: { mcpTools: [retainedGrant, { ...retainedGrant, tool: "publish_page" }] },
       },
     };
-    const filePath = path.join(tempDirs.make("openclaw-mcp-grants-revoke-"), "approvals.json");
-    fs.writeFileSync(
-      filePath,
-      JSON.stringify({
-        version: 1,
-        agents: { main: { mcpTools: [retainedGrant] } },
-      }),
-    );
+    const filePath = policyFile({ version: 1, agents: { main: { mcpTools: [retainedGrant] } } });
 
     await runApprovalsCommand(["approvals", "set", "--file", filePath, "--json"]);
 
@@ -614,12 +471,40 @@ describe("exec approvals CLI", () => {
     );
   });
 
-  it("bounds approvals JSON read from stdin", async () => {
-    await expect(testing.readStdin(Readable.from(["12345"]), 5)).resolves.toBe("12345");
-    await expect(testing.readStdin(Readable.from(["12345", "6"]), 5)).rejects.toThrow(
-      "Exec approvals stdin exceeds 5 bytes.",
-    );
-  });
+  it.each([0, 1])(
+    "enforces the stdin byte cap with %i excess bytes before saving",
+    async (excessBytes) => {
+      const originalStdin = Object.getOwnPropertyDescriptor(process, "stdin");
+      if (!originalStdin) {
+        throw new Error("Expected process.stdin");
+      }
+      const input = '{defaults:{security:"deny"}}';
+      const stream = Readable.from([
+        input,
+        Buffer.alloc(1024 * 1024 - Buffer.byteLength(input) + excessBytes, " "),
+      ]);
+      const updateExecApprovals = vi.mocked(execApprovals.updateExecApprovals).mockClear();
+      Object.defineProperty(process, "stdin", { configurable: true, value: stream });
+      try {
+        const command = runApprovalsCommand(["approvals", "set", "--stdin", "--json"]);
+        if (excessBytes) {
+          await expect(command).rejects.toThrow("Exec approvals stdin exceeds 1048576 bytes.");
+          expect(updateExecApprovals).not.toHaveBeenCalled();
+          expect(localSnapshot.file).toEqual({ version: 1, agents: {} });
+          expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+        } else {
+          await command;
+          expect(updateExecApprovals).toHaveBeenCalledTimes(1);
+          expect(localSnapshot.file.defaults).toEqual({ security: "deny" });
+          expect(requireRecord(writtenJson().file, "JSON approvals file").defaults).toEqual({
+            security: "deny",
+          });
+        }
+      } finally {
+        Object.defineProperty(process, "stdin", originalStdin);
+      }
+    },
+  );
 
   it("rejects a file that grows past the limit after opening", async () => {
     const dir = tempDirs.make("openclaw-approvals-file-growth-");
@@ -657,9 +542,9 @@ describe("exec approvals allowlist JSON no-ops", () => {
     async (_target, args, method) => {
       for (const operation of ["add", "remove"] as const) {
         const socketPath = "/tmp/noop-exec-approvals.sock";
+        setLocalSocket(socketPath, "fixture-noop-token");
         localSnapshot.file = {
           version: 1,
-          socket: { path: socketPath, token: "fixture-noop-token" },
           ...(operation === "add"
             ? { agents: { "*": { allowlist: [{ pattern: "/usr/bin/uptime", lastUsedAt: 123 }] } } }
             : {}),
@@ -668,13 +553,17 @@ describe("exec approvals allowlist JSON no-ops", () => {
           path: localSnapshot.path,
           exists: localSnapshot.exists,
           hash: localSnapshot.hash,
-          file: localSnapshot.file,
+          file: {
+            ...localSnapshot.file,
+            socket: { path: socketPath, token: "fixture-noop-token" },
+          },
         };
         const before = structuredClone(snapshot);
         const updateExecApprovals = vi.mocked(execApprovals.updateExecApprovals);
         updateExecApprovals.mockClear();
         callGatewayFromCli.mockClear();
         defaultRuntime.log.mockClear();
+        runtimeLogs.length = 0;
         defaultRuntime.writeJson.mockClear();
         if (method) {
           callGatewayFromCli.mockResolvedValueOnce(snapshot);

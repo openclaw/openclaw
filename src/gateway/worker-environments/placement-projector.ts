@@ -195,7 +195,17 @@ export function projectWorkerPlacementMove(
   return {
     target: intent.target,
     updatedAtMs: intent.updatedAtMs,
-    ...(intent.lastError ? { error: intent.lastError } : {}),
+    ...(intent.lastError
+      ? {
+          error: intent.lastError,
+          // Draining advances placement generation; retries retain the original source CAS.
+          retry: {
+            expected: { ...intent.source },
+            target: { ...intent.target },
+            ...(intent.abandonSource ? { abandonSource: true as const } : {}),
+          },
+        }
+      : {}),
   };
 }
 

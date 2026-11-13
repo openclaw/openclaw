@@ -52,11 +52,14 @@ Clearing the override does not remove sandbox containers or change other chats.
 Older versions that do not support this preference follow their configured
 sandbox policy instead.
 
-Native runtime selection and sending can offer **Continue for this chat** when an
+Native runtime selection and sending can offer **Continue for this session** when an
 administrator explicitly chooses the native agent's own permissions. This
 combines the optional sandbox opt-out with Full access and consent bound to that
 chat and runtime. Optional native tool and workspace restrictions are then
 delegated to the native agent; OpenClaw-hosted tools keep their existing policy.
+If setup already remembered consent for that runtime on the chat's owning agent,
+the administrator can recover without another prompt. Otherwise, both ordinary
+agent chats and global chats require explicit confirmation.
 After a refused send, confirmation saves the permissions and retries that message
 once. Selection-only confirmation does not send the draft. Neither changes global
 settings. Native consent is cleared on reset or runtime change and is never
@@ -71,6 +74,14 @@ execution placement remain independently enforced. See
 - `agent`: one container per agent.
 - `session`: one container per session.
 - `shared`: one container shared by all sandboxed sessions (per-agent `docker`/`ssh`/`browser` overrides are ignored under this scope).
+
+For ordinary `session` scope, `/new` and `/reset` reset conversation context
+under the same session key; they do not remove the existing container or its
+sandbox workspace. The next turn can reuse both. To replace the container, use
+`openclaw sandbox recreate --session "<scope key>"` with the key from
+`openclaw sandbox list`; host-backed workspace files remain. Managed project
+sessions instead retire their runtimes on reset (see
+[Workspace access](/gateway/sandboxing/workspace-access#managed-project-workspaces)).
 
 Required sandboxes with proven Gateway-profile creators use that profile as
 their isolation boundary. Different guests on the same agent receive separate

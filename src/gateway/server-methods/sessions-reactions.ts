@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   ErrorCodes,
-  errorShape,
   isReactionEmoji,
   validateSessionReactionsListParams,
   validateSessionReactionsSetParams,
@@ -35,8 +34,9 @@ import {
   readSessionConversationBindingAsync,
 } from "../session-transcript-readers.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
+import { respondError } from "./response.js";
 import { withSessionReactionAccess } from "./sessions-reactions-access.js";
-import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
 function reactionScope(target: SessionSharingTarget) {
@@ -87,155 +87,6 @@ function resolveMirrorTransport(
   };
 }
 
-async function mirrorReaction(params: {
-  context: GatewayRequestContext;
-  target: SessionSharingTarget;
-  transport: MirrorTransport;
-  newestRemainingEmoji: string | undefined;
-  emoji: string;
-  remove: boolean;
-  assertCurrent: () => void;
-}): Promise<SessionReactionMirror> {
-  try {
-    const { transport } = params;
-    const plugin = getRuntimeVisibleChannelPlugin(transport.channel);
-    const singleSlot = plugin?.capabilities.reactionSlots === "single";
-    const replacement = singleSlot && params.remove ? params.newestRemainingEmoji : undefined;
-    const scope = { ...reactionScope(params.target), sessionId: params.target.entry.sessionId };
-    const cfg = params.context.getRuntimeConfig();
-    // Start capture now and reserve commit order before yielding to another mutation.
-    const captured = readSessionConversationBindingAsync(scope, transport.conversationRef).then(
-      (conversation) => ({ ok: true as const, conversation }),
-      (error: unknown) => ({ ok: false as const, error }),
-    );
-    return await enqueueKeyedTask({
-      tails: mirrorQueues,
-      key: [
-        params.target.agentId,
-        params.target.storeKey,
-        params.target.entry.sessionId,
-        transport.conversationRef,
-        transport.messageId,
-        singleSlot ? "" : params.emoji,
-      ].join("\0"),
-      task: async () => {
-        const resolved = await captured;
-        if (!resolved.ok) {
-          throw resolved.error;
-        }
-        params.assertCurrent();
-        const conversation = resolved.conversation;
-        if (!conversation || conversation.channel !== transport.channel) {
-          return { status: "skipped", reason: "source conversation is unavailable" };
-        }
-        const channel = conversation.channel;
-        if (!isConfiguredChannel(cfg, channel)) {
-          return { status: "skipped", reason: "source channel is not configured or enabled" };
-        }
-        // The mirror reacts inside the message's own conversation, so it uses the
-        // current-channel discovery; the cross-channel schema-safe list excludes
-        // every channel whose react params are current-channel-only.
-        const discovery = resolveCurrentChannelMessageToolDiscoveryAdapter(channel);
-        if (
-          !discovery ||
-          !(
-            await resolveMessageActionDiscoveryForPluginAsync({
-              pluginId: discovery.pluginId,
-              actions: discovery.actions,
-              context: createMessageActionDiscoveryContext({
-                cfg,
-                channel,
-                accountId: conversation.accountId,
-                agentId: params.target.agentId,
-                sessionKey: params.target.canonicalKey,
-                sessionId: params.target.entry.sessionId,
-                currentChannelId: conversation.nativeChannelId,
-                currentMessageId: transport.messageId,
-                currentThreadTs: conversation.threadId,
-              }),
-              includeActions: true,
-            })
-          ).actions.includes("react")
-        ) {
-          return { status: "skipped", reason: "source channel does not support reactions" };
-        }
-        params.assertCurrent();
-        if (!plugin) {
-          return { status: "skipped", reason: "source channel is unavailable" };
-        }
-        const account = await resolveChannelAccount({
-          plugin,
-          cfg,
-          accountId: conversation.accountId,
-        });
-        if (
-          !(plugin.config.isEnabled?.(account, cfg) ?? isAccountEnabled(account)) ||
-          !((await plugin.config.isConfigured?.(account, cfg)) ?? true)
-        ) {
-          return {
-            status: "skipped",
-            reason: "source channel account is not configured or enabled",
-          };
-        }
-        const { runMessageAction } = await import("../../infra/outbound/message-action-runner.js");
-        const assertCurrent = () => {
-          params.assertCurrent();
-          if (params.context.getRuntimeConfig() !== cfg) {
-            throw new Error("channel configuration changed before reaction delivery");
-          }
-        };
-        assertCurrent();
-        const outcome = resolveMessageActionOutcome(
-          await runMessageAction({
-            cfg,
-            action: "react",
-            agentId: params.target.agentId,
-            sessionKey: params.target.canonicalKey,
-            sessionId: params.target.entry.sessionId,
-            // A person asked for this reaction from the Control UI; like the CLI it
-            // is an operator action, not a model-delegated conversation read.
-            conversationReadOrigin: "direct-operator",
-            onPlatformSendDispatch: async () => {
-              const current = await readSessionConversationBindingAsync(
-                scope,
-                transport.conversationRef,
-              );
-              if (
-                !current ||
-                current.channel !== conversation.channel ||
-                current.accountId !== conversation.accountId ||
-                current.target !== conversation.target ||
-                current.threadId !== conversation.threadId ||
-                current.nativeChannelId !== conversation.nativeChannelId
-              ) {
-                throw new Error("source conversation changed before delivery");
-              }
-            },
-            assertDirectAdapterHandoff: assertCurrent,
-            params: {
-              channel,
-              to: conversation.target,
-              accountId: conversation.accountId,
-              ...(conversation.threadId ? { threadId: conversation.threadId } : {}),
-              messageId: transport.messageId,
-              emoji: replacement ?? params.emoji,
-              remove: params.remove && !replacement,
-            },
-          }),
-        );
-        if (!outcome.ok) {
-          throw new Error(outcome.error);
-        }
-        return { status: "delivered" };
-      },
-    });
-  } catch (error) {
-    const reason = formatErrorMessage(error);
-    params.context.logGateway.warn(`Control UI reaction mirror failed: ${reason}`);
-    return { status: "failed", reason };
-  }
-}
-
 export const sessionReactionHandlers: GatewayRequestHandlers = {
   "session.reactions.list": defineValidatedGatewayHandler(
     "session.reactions.list",
@@ -263,19 +114,15 @@ export const sessionReactionHandlers: GatewayRequestHandlers = {
         async ({ target, assertCurrent }) => {
           const actor = gatewayClientSessionCreator(client);
           if (!actor) {
-            respond(
-              false,
-              undefined,
-              errorShape(ErrorCodes.INVALID_REQUEST, "identified reaction author required"),
+            respondError(
+              respond,
+              ErrorCodes.INVALID_REQUEST,
+              "identified reaction author required",
             );
             return;
           }
           if (!isReactionEmoji(params.emoji)) {
-            respond(
-              false,
-              undefined,
-              errorShape(ErrorCodes.INVALID_REQUEST, "one emoji grapheme is required"),
-            );
+            respondError(respond, ErrorCodes.INVALID_REQUEST, "one emoji grapheme is required");
             return;
           }
           const scope = reactionScope(target);
@@ -297,7 +144,7 @@ export const sessionReactionHandlers: GatewayRequestHandlers = {
           );
           assertCurrent();
           if (!message || (message.role !== "user" && message.role !== "assistant")) {
-            respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown message"));
+            respondError(respond, ErrorCodes.INVALID_REQUEST, "unknown message");
             return;
           }
           let write: SessionReactionWrite;
@@ -318,17 +165,14 @@ export const sessionReactionHandlers: GatewayRequestHandlers = {
             });
             assertCurrent();
           } catch (error) {
-            respond(
-              false,
-              undefined,
-              errorShape(
-                ErrorCodes.INVALID_REQUEST,
-                error instanceof SessionReactionLimitError
-                  ? "reaction limit reached"
-                  : error instanceof SessionReactionMessageMissingError
-                    ? "unknown message"
-                    : formatErrorMessage(error),
-              ),
+            respondError(
+              respond,
+              ErrorCodes.INVALID_REQUEST,
+              error instanceof SessionReactionLimitError
+                ? "reaction limit reached"
+                : error instanceof SessionReactionMessageMissingError
+                  ? "unknown message"
+                  : formatErrorMessage(error),
             );
             return;
           }
@@ -369,18 +213,162 @@ export const sessionReactionHandlers: GatewayRequestHandlers = {
             reactions.find((reaction) => reaction.emoji === params.emoji)?.count ?? 0,
           );
           // Enqueue before any await so queue order is commit order.
-          const mirror =
-            "skipped" in decision
-              ? decision.skipped
-              : await mirrorReaction({
-                  context,
-                  target,
-                  transport: decision.transport,
-                  newestRemainingEmoji: write.newestRemainingEmoji,
-                  emoji: params.emoji,
-                  remove: params.remove === true,
-                  assertCurrent,
-                });
+          let mirror: SessionReactionMirror;
+          if ("skipped" in decision) {
+            mirror = decision.skipped;
+          } else {
+            const transport = decision.transport;
+            const newestRemainingEmoji = write.newestRemainingEmoji;
+            const emoji = params.emoji;
+            const remove = params.remove === true;
+            try {
+              const plugin = getRuntimeVisibleChannelPlugin(transport.channel);
+              const singleSlot = plugin?.capabilities.reactionSlots === "single";
+              const replacement = singleSlot && remove ? newestRemainingEmoji : undefined;
+              const mirrorScope = { ...reactionScope(target), sessionId: target.entry.sessionId };
+              const cfg = context.getRuntimeConfig();
+              // Start capture now and reserve commit order before yielding to another mutation.
+              const captured = readSessionConversationBindingAsync(
+                mirrorScope,
+                transport.conversationRef,
+              ).then(
+                (conversation) => ({ ok: true as const, conversation }),
+                (error: unknown) => ({ ok: false as const, error }),
+              );
+              mirror = await enqueueKeyedTask({
+                tails: mirrorQueues,
+                key: [
+                  target.agentId,
+                  target.storeKey,
+                  target.entry.sessionId,
+                  transport.conversationRef,
+                  transport.messageId,
+                  singleSlot ? "" : emoji,
+                ].join("\0"),
+                task: async () => {
+                  const resolved = await captured;
+                  if (!resolved.ok) {
+                    throw resolved.error;
+                  }
+                  assertCurrent();
+                  const conversation = resolved.conversation;
+                  if (!conversation || conversation.channel !== transport.channel) {
+                    return { status: "skipped", reason: "source conversation is unavailable" };
+                  }
+                  const channel = conversation.channel;
+                  if (!isConfiguredChannel(cfg, channel)) {
+                    return {
+                      status: "skipped",
+                      reason: "source channel is not configured or enabled",
+                    };
+                  }
+                  // The mirror reacts inside the message's own conversation, so it uses the
+                  // current-channel discovery; the cross-channel schema-safe list excludes
+                  // every channel whose react params are current-channel-only.
+                  const discovery = resolveCurrentChannelMessageToolDiscoveryAdapter(channel);
+                  if (
+                    !discovery ||
+                    !(
+                      await resolveMessageActionDiscoveryForPluginAsync({
+                        pluginId: discovery.pluginId,
+                        actions: discovery.actions,
+                        context: createMessageActionDiscoveryContext({
+                          cfg,
+                          channel,
+                          accountId: conversation.accountId,
+                          agentId: target.agentId,
+                          sessionKey: target.canonicalKey,
+                          sessionId: target.entry.sessionId,
+                          currentChannelId: conversation.nativeChannelId,
+                          currentMessageId: transport.messageId,
+                          currentThreadTs: conversation.threadId,
+                        }),
+                        includeActions: true,
+                      })
+                    ).actions.includes("react")
+                  ) {
+                    return {
+                      status: "skipped",
+                      reason: "source channel does not support reactions",
+                    };
+                  }
+                  assertCurrent();
+                  if (!plugin) {
+                    return { status: "skipped", reason: "source channel is unavailable" };
+                  }
+                  const account = await resolveChannelAccount({
+                    plugin,
+                    cfg,
+                    accountId: conversation.accountId,
+                  });
+                  if (
+                    !(plugin.config.isEnabled?.(account, cfg) ?? isAccountEnabled(account)) ||
+                    !((await plugin.config.isConfigured?.(account, cfg)) ?? true)
+                  ) {
+                    return {
+                      status: "skipped",
+                      reason: "source channel account is not configured or enabled",
+                    };
+                  }
+                  const { runMessageAction } =
+                    await import("../../infra/outbound/message-action-runner.js");
+                  const assertDeliveryCurrent = () => {
+                    assertCurrent();
+                    if (context.getRuntimeConfig() !== cfg) {
+                      throw new Error("channel configuration changed before reaction delivery");
+                    }
+                  };
+                  assertDeliveryCurrent();
+                  const outcome = resolveMessageActionOutcome(
+                    await runMessageAction({
+                      cfg,
+                      action: "react",
+                      agentId: target.agentId,
+                      sessionKey: target.canonicalKey,
+                      sessionId: target.entry.sessionId,
+                      // A person asked for this reaction from the Control UI; like the CLI it
+                      // is an operator action, not a model-delegated conversation read.
+                      conversationReadOrigin: "direct-operator",
+                      onPlatformSendDispatch: async () => {
+                        const current = await readSessionConversationBindingAsync(
+                          mirrorScope,
+                          transport.conversationRef,
+                        );
+                        if (
+                          !current ||
+                          current.channel !== conversation.channel ||
+                          current.accountId !== conversation.accountId ||
+                          current.target !== conversation.target ||
+                          current.threadId !== conversation.threadId ||
+                          current.nativeChannelId !== conversation.nativeChannelId
+                        ) {
+                          throw new Error("source conversation changed before delivery");
+                        }
+                      },
+                      assertDirectAdapterHandoff: assertDeliveryCurrent,
+                      params: {
+                        channel,
+                        to: conversation.target,
+                        accountId: conversation.accountId,
+                        ...(conversation.threadId ? { threadId: conversation.threadId } : {}),
+                        messageId: transport.messageId,
+                        emoji: replacement ?? emoji,
+                        remove: remove && !replacement,
+                      },
+                    }),
+                  );
+                  if (!outcome.ok) {
+                    throw new Error(outcome.error);
+                  }
+                  return { status: "delivered" };
+                },
+              });
+            } catch (error) {
+              const reason = formatErrorMessage(error);
+              context.logGateway.warn(`Control UI reaction mirror failed: ${reason}`);
+              mirror = { status: "failed", reason };
+            }
+          }
           respond(true, { messageId: params.messageId, reactions, mirror });
         },
       );

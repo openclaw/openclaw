@@ -11,18 +11,18 @@ it.each([
   const agentTools = en.agentTools;
   expect(agentTools.disableAll).toBeUndefined();
 
-  const { registerGitHubEnglish } = await import("./locales/en-github.ts");
-  registerGitHubEnglish();
+  const { registerGitHubConnectionsEnglish } = await import("./locales/en-github-connections.ts");
+  registerGitHubConnectionsEnglish();
   await manager.setLocale("de");
   await load();
 
   expect(en.agentTools).toBe(agentTools);
   expect(manager.t("agentTools.title")).toBe("Werkzeugzugriff");
-  expect(manager.t("agentTools.disableAll")).toBe("Disable All");
+  expect(manager.t("agentTools.disableAll")).toBe("Disable all");
   expect(manager.t("agentTools.previewTitle")).toBe("Tool preview");
   expect(manager.t("agentTools.githubVerify")).toBe("Verify");
 
-  registerGitHubEnglish();
+  registerGitHubConnectionsEnglish();
   expect(en.agentTools).toBe(agentTools);
-  expect(manager.t("agentTools.disableAll")).toBe("Disable All");
+  expect(manager.t("agentTools.disableAll")).toBe("Disable all");
 });

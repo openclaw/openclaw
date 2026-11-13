@@ -56,7 +56,7 @@ suite.define(() => {
           await page.goto(`${suite.server.baseUrl}new`);
           await gateway.waitForRequest("environments.list");
           await openEnvironmentPicker(page);
-          const picker = page.locator("wa-popover.new-session-page__where-popover");
+          const picker = page.locator(".oc-popover.new-session-page__where-popover");
           await picker.getByRole("button", { name: "aws", exact: true }).click();
           const machineClass = choice === "smaller" ? "small" : "standard";
           if (choice === "explicit") {

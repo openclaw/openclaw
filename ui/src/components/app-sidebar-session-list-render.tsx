@@ -1,229 +1,84 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Show, untrack } from "solid-js";
-import type { GatewaySessionRow } from "../api/types.ts";
-import type { CatalogOpenTarget } from "../app/settings.ts";
+import { createMemo, createSignal, For, Show } from "solid-js";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
-import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import {
   presenceViewerActivity,
   type PresenceActivity,
   projectPresenceViewers,
 } from "../lib/presence-users.ts";
-import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
-import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
-import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.ts";
+import { t } from "../lib/reactive/i18n.ts";
+import { createIntersectionObserver } from "../lib/reactive/observers.ts";
+import { readVisibleTime } from "../lib/reactive/visible-clock.ts";
+import { nextSessionSnoozeWakeAt } from "../lib/sessions/session-snooze.ts";
+import { sidebarPinnedSessionRows } from "./app-sidebar-personal-navigation.ts";
 import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.tsx";
-import type { SidebarSessionCatalog } from "./app-sidebar-session-catalogs.ts";
 import {
   renderPersonalSessionEmpty,
-  renderSessionMutationError,
+  renderSessionListError,
 } from "./app-sidebar-session-filter-summary.tsx";
 import type {
-  SessionListHost,
   RenderableSessionSection,
   SidebarSessionListHost,
   PersonHeaders,
+  SessionCatalogRenderSnapshot,
 } from "./app-sidebar-session-render-types.ts";
-import {
-  renderChildSessionLoadError,
-  renderRecentSession,
-} from "./app-sidebar-session-row-render.tsx";
-import { renderSessionSection } from "./app-sidebar-session-section-render.tsx";
-import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
-import { SIDEBAR_SESSION_PAGE_SIZE } from "./app-sidebar-session-types.ts";
-import { areSessionCatalogsSettled } from "./session-data-controller-catalog.ts";
+import { renderChildSessionLoadError } from "./app-sidebar-session-row-render.tsx";
+import { renderSessionSection as SessionSection } from "./app-sidebar-session-section-render.tsx";
+import { PersonalSessionGroups } from "./personal-session-groups.tsx";
+import { areSessionCatalogsSettled } from "./session-data-catalog.ts";
 
-registerEnglishCatalog(registerSessionOrganizationEnglish);
-type SessionCatalogRenderSnapshot = {
-  catalogs: readonly SidebarSessionCatalog[];
-  basePath: string;
-  routeSessionKey: string;
-  newSessionAgentId: string;
-  mainKey: string;
-  loadingMoreCatalogIds: ReadonlySet<string>;
-  projectGrouping: CatalogProjectGrouping;
-  liveRows: readonly GatewaySessionRow[];
-  toSidebarSession: (row: GatewaySessionRow) => SidebarRecentSession;
-  catalogOpenTarget: CatalogOpenTarget;
-  terminalAvailable: boolean;
-};
-/** Fetching a page is useless if the new rows land behind a section's local cap,
- *  so an explicit roster load reveals a page in every section too -- otherwise
- *  the click can look like undefined happened. */
-function renderRosterLoadMore(
-  host: SidebarSessionListHost,
-  sections: RenderableSessionSection[],
-  hasMore: boolean | undefined,
-  loading: boolean,
-) {
-  if (!hasMore) {
-    return undefined;
-  }
-  return (
-    <div class="sidebar-session-pagination sidebar-session-pagination--roster">
-      <button
-        type="button"
-        class="sidebar-session-pagination__button"
-        aria-label={loading ? t("common.loading") : t("chat.selectors.loadMoreRosterSessions")}
-        disabled={loading}
-        aria-busy={loading ? "true" : "false"}
-        onClick={() => {
-          // The request owner changes before the DOM commits the disabled attribute.
-          // A repeated activation must not reveal local rows during that read.
-          if (host.sessionData.sessionsLoading) {
-            return;
-          }
-          void host.sessionData.loadMoreSidebarSessions().then(() => {
-            for (const section of sections) {
-              host.setVisibleSessionLimit(
-                section.id,
-                section.visibleLimit + SIDEBAR_SESSION_PAGE_SIZE,
-              );
-            }
-          });
-        }}
-      >
-        {loading ? <span class="session-run-spinner" aria-hidden="true" /> : undefined}
-        {loading ? t("common.loading") : t("chat.selectors.loadMoreRosterSessions")}
-      </button>
-    </div>
-  );
-}
-
-/** Section paging only reveals rows the roster already holds. Fetching the next
- *  roster page is a list-level action because it feeds every section at once --
- *  bolting it to one section left the others unable to recover missing rows. */
-
-function renderSessionCatalog(params: {
-  host: SessionListHost;
-  snapshot: SessionCatalogRenderSnapshot;
-  catalog: SidebarSessionCatalog;
-  renderer: SessionCatalogGroupsRenderer;
-}) {
-  const host = createMemo(() => params.host),
-    snapshot = createMemo(() => params.snapshot),
-    catalog = createMemo(() => params.catalog),
-    renderer = createMemo(() => params.renderer);
-  const newSessionAccess = createMemo(() => host().readNewSessionAccess());
-  const groupWriteAccess = createMemo(() =>
-    host().readSessionMutationAccess({
-      method: "sessions.groups.put",
-      requiredScope: "operator.write",
-    }),
-  );
-  // One lazy module owns this catalog renderer for the mounted section's lifetime.
-  const render = untrack(renderer);
-  return render({
-    get catalogs() {
-      return [catalog()];
-    },
-    get basePath() {
-      return snapshot().basePath;
-    },
-    get routeSessionKey() {
-      return snapshot().routeSessionKey;
-    },
-    get newSessionAgentId() {
-      return snapshot().newSessionAgentId;
-    },
-    get mainKey() {
-      return snapshot().mainKey;
-    },
-    get collapsedSections() {
-      return host().collapsedSessionSections;
-    },
-    get loadingMoreCatalogIds() {
-      return snapshot().loadingMoreCatalogIds;
-    },
-    get visibleSessionLimits() {
-      return host().sessionData.visibleSessionLimits;
-    },
-    get projectGrouping() {
-      return snapshot().projectGrouping;
-    },
-    get liveRows() {
-      return snapshot().liveRows;
-    },
-    renderLiveRow: (row, display) =>
-      renderRecentSession({
-        get host() {
-          return host();
-        },
-        get session() {
-          return snapshot().toSidebarSession(row());
-        },
-        get display() {
-          return display;
-        },
-      }),
-    onToggleSection: (sectionId) => host().toggleSection(sectionId),
-    get draggingSectionId() {
-      return host().sessionOrganizer.draggingSidebarSection;
-    },
-    get sectionDropTarget() {
-      return host().sessionOrganizer.sidebarSectionDropTarget;
-    },
-    onSectionDragOver: (event, sectionId) =>
-      host().sessionOrganizer.sectionDragOver(event, sectionId),
-    onSectionDragLeave: (event, sectionId) =>
-      host().sessionOrganizer.sectionDragLeave(event, sectionId),
-    onSectionDrop: (event, sectionId) => host().sessionOrganizer.sectionDrop(event, sectionId),
-    onStartSectionDrag: (sectionId) => host().sessionOrganizer.startSidebarSectionDrag(sectionId),
-    onFinishSectionDrag: () => host().sessionOrganizer.finishSidebarSectionDrag(),
-    onReorderSection: (source, target, position) =>
-      host().sessionOrganizer.reorderSidebarSection(source, target, position),
-    get viewMenuOpenCatalogId() {
-      return host().sidebarMenus.catalogViewMenuPosition?.catalogId ?? null;
-    },
-    get ownerFilterActive() {
-      return host().sessionOwnerFilterActive;
-    },
-    onOpenViewMenu: (catalogId, trigger, position) => {
-      if (position) {
-        host().sidebarMenus.openCatalogViewMenu(catalogId, position.x, position.y, trigger);
-        return;
-      }
-      host().sidebarMenus.toggleCatalogViewMenu(catalogId, trigger);
-    },
-    onLoadMore: (catalogId) => void host().sessionData.loadMoreSessionCatalog(catalogId),
-    onSetVisibleSessionLimit: (sectionId, limit) => host().setVisibleSessionLimit(sectionId, limit),
-    onOpenNewSession: (agentId, target) => host().requestOpenNewSession(agentId, target),
-    get newSessionDisabledReason() {
-      return (() => {
-        const access = newSessionAccess();
-        return access.allowed ? undefined : access.reason;
-      })();
-    },
-    get sectionDragDisabledReason() {
-      return (() => {
-        const access = groupWriteAccess();
-        return access.allowed ? undefined : access.reason;
-      })();
-    },
-    get onNavigate() {
-      return host().onNavigate;
-    },
-    get catalogOpenTarget() {
-      return snapshot().catalogOpenTarget;
-    },
-    get terminalAvailable() {
-      return snapshot().terminalAvailable;
-    },
-    onOpenTerminal: (key, agentId) => openCatalogSessionInTerminal(host(), key, agentId),
-    onOpenMenu: (request, x, y, trigger) =>
-      host().sidebarMenus.catalogMenu.open(request, x, y, trigger),
-    onCatalogMenuTriggerRendered: (key, element) =>
-      host().sidebarMenus.catalogMenu.retargetTrigger(key, element),
-    isMenuOpen: (key) => host().sidebarMenus.catalogMenu.isOpenFor(key),
-  });
-}
-function renderSessionListBody(params: {
+function RosterLoadMore(props: {
   host: SidebarSessionListHost;
-  sections: RenderableSessionSection[];
-  nativeSessionsHaveMore: boolean;
-  catalogs: SessionCatalogRenderSnapshot;
-  catalogRenderer: SessionCatalogGroupsRenderer | null;
+  hasMore: boolean;
+  loading: boolean;
 }) {
+  const [button, setButton] = createSignal<HTMLButtonElement>();
+  // One page per entry into view: the button has to leave and come back before
+  // the next load, so a page whose rows land off-screen or a failed load never
+  // turns into a request loop. The button stays as the manual fallback.
+  // Grouped and people-sorted views place older rows inside earlier sections,
+  // so they keep the explicit button. The flat list mostly appends; when
+  // Created order or catalog sections put a page above the fold, this still
+  // loads at most one page per entry into view.
+  createIntersectionObserver(
+    () => {
+      const target = button();
+      return target ? [target] : [];
+    },
+    (entries) => {
+      const host = props.host;
+      if (
+        host.effectiveSessionsGrouping() === "none" &&
+        host.effectiveSessionSortMode() !== "people" &&
+        entries.some((entry) => entry.isIntersecting)
+      ) {
+        void host.loadMoreSidebarSessions();
+      }
+    },
+  );
+  return (
+    <Show when={props.hasMore}>
+      <div class="sidebar-session-pagination sidebar-session-pagination--roster">
+        <button
+          ref={setButton}
+          type="button"
+          class="sidebar-session-pagination__button"
+          aria-label={
+            props.loading ? t("common.loading") : t("chat.selectors.loadMoreRosterSessions")
+          }
+          disabled={props.loading}
+          aria-busy={props.loading ? "true" : "false"}
+          onClick={() => void props.host.loadMoreSidebarSessions()}
+        >
+          {props.loading ? <span class="session-run-spinner" aria-hidden="true" /> : undefined}
+          {props.loading ? t("common.loading") : t("chat.selectors.loadMoreRosterSessions")}
+        </button>
+      </div>
+    </Show>
+  );
+}
+
+function renderSessionListBody(params: Parameters<typeof renderSessionList>[0]) {
   const host = createMemo(() => params.host);
   const personHeaders = createMemo<PersonHeaders | undefined>(() => {
     if (host().sessionsGrouping !== "person") {
@@ -254,59 +109,39 @@ function renderSessionListBody(params: {
   );
   return (
     <For each={params.sections} keyed={(section) => section.id}>
-      {(section) => {
-        // The key fixes the section kind; its row facts remain reactive below.
-        if (untrack(section).id.startsWith("catalog:")) {
-          return (
-            <Show when={params.catalogRenderer && catalogsBySectionId().get(section().id)}>
-              {(catalog) =>
-                renderSessionCatalog({
-                  get host() {
-                    return host();
-                  },
-                  get snapshot() {
-                    return params.catalogs;
-                  },
-                  get catalog() {
-                    return catalog();
-                  },
-                  get renderer() {
-                    return params.catalogRenderer!;
-                  },
-                })
+      {(section) => (
+        <Show
+          when={section().id.startsWith("catalog:")}
+          fallback={
+            // Empty personal sections are omitted by the projection. Other empty sections retain their drag destinations.
+            <Show
+              when={
+                !(section().id === "work" && section().totalRowCount === 0) &&
+                !(
+                  section().id === "ungrouped" &&
+                  section().totalRowCount === 0 &&
+                  !params.nativeSessionsHaveMore &&
+                  !host().sessionOwnershipVisibility.filters &&
+                  host().sessionsStatusFilter === "active" &&
+                  host().sessionOrganizer.draggingSessionKey === null
+                )
               }
+            >
+              <SessionSection host={host()} section={section()} personHeaders={personHeaders()} />
             </Show>
-          );
-        }
-        // Empty personal sections are omitted by the projection. Other empty sections retain their drag destinations.
-        return (
-          <Show
-            when={
-              !(section().id === "work" && section().totalRowCount === 0) &&
-              !(
-                section().id === "ungrouped" &&
-                section().totalRowCount === 0 &&
-                !params.nativeSessionsHaveMore &&
-                !host().sessionOwnershipVisibility.filters &&
-                host().sessionsStatusFilter === "active" &&
-                host().sessionOrganizer.draggingSessionKey === null
-              )
-            }
-          >
-            {renderSessionSection({
-              get host() {
-                return host();
-              },
-              get section() {
-                return section();
-              },
-              get personHeaders() {
-                return personHeaders();
-              },
-            })}
+          }
+        >
+          <Show when={catalogsBySectionId().get(section().id)}>
+            {(catalog) => (
+              <params.catalogRenderer
+                host={host()}
+                snapshot={params.catalogs}
+                catalog={catalog()}
+              />
+            )}
           </Show>
-        );
-      }}
+        </Show>
+      )}
     </For>
   );
 }
@@ -317,26 +152,25 @@ export function renderSessionList(params: {
   nativeSessionsHaveMore: boolean;
   nativeSessionsLoading: boolean;
   catalogs: SessionCatalogRenderSnapshot;
-  catalogRenderer: SessionCatalogGroupsRenderer | null;
+  catalogRenderer: SessionCatalogGroupsRenderer;
 }) {
   const host = createMemo(() => params.host);
   return renderSessionListFrame(
-    untrack(host),
+    host,
     <div class="sidebar-recent-sessions">
       {renderSessionListBody(params)}
-      {renderRosterLoadMore(
-        host(),
-        params.sections,
-        params.nativeSessionsHaveMore,
-        params.nativeSessionsLoading,
-      )}
+      <RosterLoadMore
+        host={host()}
+        hasMore={params.nativeSessionsHaveMore}
+        loading={params.nativeSessionsLoading}
+      />
       {renderPersonalSessionEmpty(
         host(),
         params.empty && params.sections.every((section) => section.totalRowCount === 0),
         host().connected &&
           host().sessionData.sessionsResult !== null &&
           !host().sessionData.sessionsLoading &&
-          !host().sessionData.sessionMutationError &&
+          !host().sessionData.sessionListError &&
           !params.nativeSessionsHaveMore &&
           params.catalogs.catalogs.length === 0 &&
           areSessionCatalogsSettled(host().sessionData),
@@ -347,14 +181,58 @@ export function renderSessionList(params: {
     </div>,
   );
 }
-export function renderSessionListFrame(host: SidebarSessionListHost, body: JSX.Element) {
+/** Personal pins keep their saved order in one section above every list section. */
+function PinnedSessionSection(params: { host: SidebarSessionListHost }) {
+  const section = createMemo((): RenderableSessionSection | undefined => {
+    const host = params.host;
+    const zone = host.reconciledSidebarZone();
+    const sessions = host.sessionDataContext?.sessions;
+    const now = Date.now();
+    const hasSnoozedPins = nextSessionSnoozeWakeAt(zone.sessionRows.values(), now) !== null;
+    const rows = sidebarPinnedSessionRows(
+      zone,
+      (key) => sessions?.archiveVisibility(key),
+      hasSnoozedPins ? readVisibleTime(1_000) : now,
+    );
+    if (rows.length === 0) {
+      return undefined;
+    }
+    const collapsed = host.collapsedSessionSections.has("pinned");
+    return {
+      id: "pinned",
+      rows,
+      totalRowCount: rows.length,
+      visibleRowCount: collapsed ? 0 : rows.length,
+      visibleLimit: rows.length,
+      collapsedVisibleRowCount: rows.length,
+      renderHeader: true,
+    };
+  });
+  return (
+    <Show when={section()}>
+      {(pinned) => (
+        // The list container owns row insets; chip and roster bodies share this section.
+        <div class="sidebar-recent-sessions sidebar-recent-sessions--pinned">
+          <SessionSection host={params.host} section={pinned()} personHeaders={undefined} />
+        </div>
+      )}
+    </Show>
+  );
+}
+
+/** The roster leads with its agents; the session list keeps its own sections first. */
+export function renderSessionListFrame(
+  host: () => SidebarSessionListHost,
+  body: JSX.Element,
+  bodyFirst = false,
+) {
   const home = createMemo(() =>
-    host.sidebarAgentsMode === "roster" ? null : host.mainSessionRow(),
+    host().sidebarAgentsMode === "roster" ? null : host().mainSessionRow(),
   );
   const loadKeys = createMemo(() => {
     const homeValue = home();
     return homeValue
-      ? host.projectHomeSession(homeValue, host.expandedAgentId()).childLoadParentKeys
+      ? host().projectHomeSession(homeValue, host().expandedAgentId()).childLoadParentKeys
       : [];
   });
   const homeLoadKeys = createMemo(() => {
@@ -364,12 +242,15 @@ export function renderSessionListFrame(host: SidebarSessionListHost, body: JSX.E
   });
   return (
     <section
-      class={`sidebar-sessions ${host.sessionOrganizer.sessionListRemovalDrop ? "sidebar-sessions--removal-drop" : ""}`}
-      onDragOver={(event: DragEvent) => host.sessionOrganizer.handleSessionListDragOver(event)}
-      onDragLeave={(event: DragEvent) => host.sessionOrganizer.handleSessionListDragLeave(event)}
-      onDrop={(event: DragEvent) => host.sessionOrganizer.handleSessionListDrop(event)}
+      class={[
+        "sidebar-sessions",
+        host().sessionOrganizer.sessionListRemovalDrop && "sidebar-sessions--removal-drop",
+      ]}
+      onDragOver={(event: DragEvent) => host().sessionOrganizer.handleSessionListDragOver(event)}
+      onDragLeave={(event: DragEvent) => host().sessionOrganizer.handleSessionListDragLeave(event)}
+      onDrop={(event: DragEvent) => host().sessionOrganizer.handleSessionListDrop(event)}
     >
-      {host.sessionData.sessionsStartingUp && !host.sidebarSnapshot ? (
+      {host().sessionData.sessionsStartingUp && !host().sidebarSnapshot ? (
         <div
           class="sidebar-session-empty-hint sidebar-session-empty-hint--startup"
           role="status"
@@ -379,13 +260,16 @@ export function renderSessionListFrame(host: SidebarSessionListHost, body: JSX.E
         </div>
       ) : undefined}
       <For each={homeLoadKeys()}>{(key) => renderChildSessionLoadError(host, key)}</For>
-      {host.sessionOrganizer.isDraggingChildSession ? (
+      {host().sessionOrganizer.isDraggingChildSession ? (
         <div class="sidebar-session-root-drop" data-session-root-drop="" role="status">
           {t("sessionsView.moveToTopLevel")}
         </div>
       ) : undefined}
-      {renderSessionMutationError(host)} {body}
+      {renderSessionListError(host())}
+      {bodyFirst ? body : undefined}
+      <PinnedSessionSection host={host()} />
+      <PersonalSessionGroups host={host()} />
+      {bodyFirst ? undefined : body}
     </section>
   );
 }
-export { renderSessionSection };

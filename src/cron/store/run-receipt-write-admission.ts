@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 
 /** Optional tables supplied by the shared physical database schema owner. */
@@ -8,7 +8,7 @@ export type CronRunReceiptWriteSchema = Readonly<{
 }>;
 
 /** Reuse admitted schema facts for the owning write transaction. */
-export function prepareCronRunReceiptWriteSchema(db: DatabaseSync): CronRunReceiptWriteSchema {
+export function prepareCronRunReceiptWriteSchema(db: EngineConnection): CronRunReceiptWriteSchema {
   if (!db.isTransaction) {
     throw new Error("Cron receipt schema admission requires the owning write transaction");
   }

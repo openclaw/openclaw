@@ -25,33 +25,22 @@ const [root, scenario] = process.argv.slice(2);
 assert.ok(root, "SQLite lifecycle retention requires its temporary directory");
 const callerContext = new AsyncLocalStorage<object>();
 
-class SqliteStagingCaller {
-  prompt = Buffer.alloc(1024 * 1024, 1);
+class RetainedCaller {
+  prompt = Buffer.alloc(1024 * 1024);
 }
-class SqliteStateOpeningCaller {
-  prompt = Buffer.alloc(1024 * 1024, 2);
-}
-class SqliteStateOpeningAuthority {
-  prompt = Buffer.alloc(1024 * 1024, 3);
-}
-class SqliteAgentOpeningCaller {
-  prompt = Buffer.alloc(1024 * 1024, 4);
-}
+
+const referencesTo = (...objects: object[]) => objects.map((object) => new WeakRef(object));
 
 async function assertCollected(references: WeakRef<object>[]) {
   await collectForRetentionCheck(`sqlite-${scenario}`);
-  assert.equal(
-    references.filter((reference) => reference.deref()).length,
-    0,
-    `${scenario} retained completed caller state`,
-  );
+  assert.equal(references.filter((reference) => reference.deref()).length, 0);
 }
 
 function captureStagingCaller() {
-  const caller = new SqliteStagingCaller();
+  const caller = new RetainedCaller();
   return {
     owner: callerContext.run(caller, captureSqliteSnapshotStagingOwner),
-    references: [new WeakRef(caller), new WeakRef(caller.prompt)],
+    references: referencesTo(caller, caller.prompt),
   };
 }
 
@@ -60,10 +49,7 @@ async function checkStaging() {
   // Per-request custody has its own lifetime; this caller only creates the reusable owner.
   const directory = await allocateWorkerOwnedSqliteSnapshotDirectory(root!, false);
   try {
-    assert.ok(
-      existsSync(directory.directory),
-      "The real native resource must allocate a directory",
-    );
+    assert.ok(existsSync(directory.directory));
     await assertCollected(references);
     assert.equal(captureSqliteSnapshotStagingOwner(), owner);
     const second = await allocateWorkerOwnedSqliteSnapshotDirectory(root!, false);
@@ -75,32 +61,27 @@ async function checkStaging() {
 }
 
 const readCommand = {
-  type: "deviceIdentity.read",
-  input: { identityKey: "lifecycle-retention" },
+  type: "nativeHookRelay.listRecords",
+  input: undefined,
 } as const;
 
 async function completeStateOpening() {
-  const caller = new SqliteStateOpeningCaller();
-  const authority = new SqliteStateOpeningAuthority();
+  const caller = new RetainedCaller();
+  const authority = new RetainedCaller();
   const context = captureOpenClawStateWorkerContext();
-  const references = [
-    new WeakRef(caller),
-    new WeakRef(caller.prompt),
-    new WeakRef(authority),
-    new WeakRef(authority.prompt),
-  ];
+  const references = referencesTo(caller, caller.prompt, authority, authority.prompt);
   await callerContext.run(caller, async () => {
     const result = await runOpenClawStateWorkerOperation(
       context,
       (scope) => scope.execute(readCommand),
       {
         assertCurrent() {
-          assert.equal(callerContext.getStore(), caller, "Admission must retain current authority");
+          assert.equal(callerContext.getStore(), caller);
           assert.equal(authority.prompt.byteLength, 1024 * 1024);
         },
       },
     );
-    assert.equal(result, null);
+    assert.deepEqual(result, []);
   });
   return { references, context };
 }
@@ -116,9 +97,9 @@ async function checkStateOpening() {
     assert.equal(isSqliteWorkerStoreAvailable(store), true);
     assert.equal(await owner.open(context), store);
     assert.equal(getSqliteWorkerActorIdentity(store), actor);
-    assert.equal(
+    assert.deepEqual(
       await runOpenClawStateWorkerOperation(context, (scope) => scope.execute(readCommand)),
-      null,
+      [],
     );
   } finally {
     await closeOpenClawStateDatabaseAsync();
@@ -130,7 +111,7 @@ async function completeAgentCaller(
   context: ReturnType<typeof captureOpenClawStateWorkerContext>,
   prepare = false,
 ) {
-  const caller = new SqliteAgentOpeningCaller();
+  const caller = new RetainedCaller();
   // Keep this lexical: an opening Promise's async context is a separate contract.
   const source: Parameters<OpenClawAgentDatabaseExecution["prepare"]>[0] = {
     assertCurrent() {
@@ -149,7 +130,7 @@ async function completeAgentCaller(
       });
     },
   };
-  const references = [new WeakRef(caller), new WeakRef(caller.prompt), new WeakRef(source)];
+  const references = referencesTo(caller, caller.prompt, source);
   if (prepare) {
     await execution.prepare(source);
   } else {
@@ -194,13 +175,65 @@ async function checkAgentOpening() {
   }
 }
 
-if (scenario === "snapshot-staging") {
-  await checkStaging();
-} else if (scenario === "state-opening") {
-  await checkStateOpening();
-} else if (scenario === "agent-opening") {
-  await checkAgentOpening();
-} else {
+async function checkHistoryClose() {
+  const sessions = await import("../config/sessions/session-accessor.js");
+  const history = await import("../config/sessions/session-accessor.sqlite-history-events.js");
+  const { openOpenClawAgentDatabase } = await import("../state/openclaw-agent-db.js");
+  const { OpenClawAgentDatabaseReadOnlyScope } =
+    await import("../state/openclaw-agent-db-readonly-scope.js");
+  const { withOpenClawAgentDatabaseReadOnly } =
+    await import("../state/openclaw-agent-db-readonly.js");
+  const scope = {
+    agentId: "main",
+    sessionId: "history-retention",
+    sessionKey: "agent:main:history-retention",
+    env: process.env,
+  };
+  const reader = new OpenClawAgentDatabaseReadOnlyScope();
+  try {
+    sessions.replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    await sessions.persistSessionTranscriptTurn(scope, {
+      messages: [
+        { eventId: "message", parentId: null, message: { role: "user", content: "hello" } },
+      ],
+      touchSessionEntry: false,
+    });
+    const target = { agentId: scope.agentId, path: openOpenClawAgentDatabase(scope).path };
+    await closeOpenClawAgentDatabasesAsync(root);
+    const reference = reader.run(target, () => {
+      const result = withOpenClawAgentDatabaseReadOnly(({ db }) => {
+        const page = history.readSessionTranscriptHistoryEventPage(scope, {
+          offset: 0,
+          maxMessages: 1,
+          readOnly: true,
+        });
+        assert.equal(page.events.length, 1);
+        return new WeakRef(db);
+      }, scope);
+      assert.ok(result.found);
+      return result.value;
+    });
+    assert.equal(reader.hasRetainedConnection, true);
+    reader.close();
+    await collectForRetentionCheck("sqlite-history-close");
+    assert.equal(reference.deref(), undefined, "Closed history database must collect");
+    assert.equal(reader.hasRetainedConnection, false);
+  } finally {
+    reader.close();
+    await closeOpenClawAgentDatabasesAsync(root);
+    await closeOpenClawStateDatabaseAsync();
+  }
+}
+
+const scenarios = new Map<string, () => Promise<void>>([
+  ["snapshot-staging", checkStaging],
+  ["state-opening", checkStateOpening],
+  ["agent-opening", checkAgentOpening],
+  ["history-close", checkHistoryClose],
+]);
+const run = scenarios.get(scenario ?? "");
+if (!run) {
   throw new Error(`Unknown SQLite lifecycle retention scenario: ${scenario}`);
 }
+await run();
 process.stdout.write(JSON.stringify({ scenario, collected: true, reused: true }));

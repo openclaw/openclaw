@@ -24,8 +24,7 @@ function parseCredentialEntry(
     return { ok: false, reason: "invalid_type" };
   }
   const provider =
-    typed.provider ||
-    (typeof fallbackProvider === "string" ? normalizeProviderId(fallbackProvider) : "");
+    typed.provider || (fallbackProvider ? normalizeProviderId(fallbackProvider) : "");
   if (!provider) {
     return { ok: false, reason: "missing_provider" };
   }

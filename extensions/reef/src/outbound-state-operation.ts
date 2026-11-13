@@ -21,8 +21,11 @@ import {
   requestReefReview,
   ReefReviewCapacityError,
 } from "./state-operation.js";
-import { recordReefOutboundDelivery } from "./trust-state-operation.js";
-import { ReefPeerStateSchema, type ReefPeerStateSnapshot } from "./trust-store-format.js";
+import {
+  ReefOutboundDeliverySchema,
+  ReefPeerStateSchema,
+  type ReefPeerStateSnapshot,
+} from "./trust-store-format.js";
 
 export type ReefOutboundFailure =
   | { kind: "unapproved" | "peer-changed" | "duplicate" }
@@ -254,23 +257,16 @@ export function runReefOutboundOperation(
   if (delivery !== undefined) {
     return finish({ kind: "duplicate" as const });
   }
-  recordReefOutboundDelivery(
-    tx,
-    {
-      peers: 0,
-      deliveries: 1,
-      peerKey: scope.peerKey,
-      deliveryKey: scope.deliveryKey,
-      peer: scope.peer,
-      delivery: {
-        bodyHash: binding.bodyHash,
-        textHash: command.input.textHash,
-        recipient,
-        sentAt: now,
-        ...(command.input.resendDisabled ? { resendDisabled: true } : {}),
-      },
-    },
-    { peerState, delivery },
+  tx.set(
+    1,
+    scope.deliveryKey,
+    ReefOutboundDeliverySchema.parse({
+      bodyHash: binding.bodyHash,
+      textHash: command.input.textHash,
+      recipient,
+      sentAt: now,
+      ...(command.input.resendDisabled ? { resendDisabled: true } : {}),
+    }),
   );
   return finish({ kind: "recorded" as const });
 }

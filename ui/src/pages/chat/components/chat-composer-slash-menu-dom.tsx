@@ -1,24 +1,34 @@
 import type { JSX } from "@solidjs/web";
-import { getSlashCommandDescription, type SlashCommandDef } from "../../../lib/chat/commands.ts";
-import { paneDomId } from "./chat-composer-dom.ts";
+import { createMemo, Show } from "solid-js";
+import { sessionIconMask } from "../../../components/solid/icon.tsx";
+import type { SlashCommandDef } from "../../../lib/chat/commands.ts";
+import type { SlashMenuHost } from "./chat-composer-slash-menu-state.ts";
 
-function slashOptionIdSegment(value: string): string {
-  return (
-    value
-      .toLowerCase()
-      .replace(/[^a-z0-9_-]+/gu, "-")
-      .replace(/^-+|-+$/gu, "") || "item"
+export function SlashCommandTrail(props: {
+  command: SlashCommandDef;
+  host: SlashMenuHost;
+  current?: { value: string; label: string };
+}) {
+  const hasChoices = createMemo(
+    () =>
+      (props.command.key !== "goal" || !props.host.activateComposerMode) &&
+      props.host.resolveArgOptions(props.command).length > 0,
   );
-}
-
-export function getSlashCommandOptionId(paneId: string, cmd: SlashCommandDef): string {
-  return paneDomId(paneId, `slash-option-command-${slashOptionIdSegment(cmd.name)}`);
-}
-
-export function getSlashArgOptionId(paneId: string, commandName: string, arg: string): string {
-  return paneDomId(
-    paneId,
-    `slash-option-arg-${slashOptionIdSegment(commandName)}-${slashOptionIdSegment(arg)}`,
+  return (
+    <Show when={props.current || hasChoices()}>
+      <span class="slash-menu-trail">
+        <Show when={props.current}>
+          <span class="slash-menu-value">{props.current?.label}</span>
+        </Show>
+        <Show when={hasChoices()}>
+          <i
+            class="session-css-icon slash-menu-chevron"
+            aria-hidden="true"
+            style={{ "mask-image": sessionIconMask("chevronRight", 1.75) }}
+          />
+        </Show>
+      </span>
+    </Show>
   );
 }
 
@@ -32,12 +42,4 @@ export function renderSlashMatchedName(name: string, query: string): JSX.Element
       {name.slice(matchLength)}
     </>
   );
-}
-
-export function getSlashCommandOptionLabel(cmd: SlashCommandDef | undefined): string {
-  if (!cmd) {
-    return "";
-  }
-  const command = `/${cmd.name}${cmd.args ? ` ${cmd.args}` : ""}`;
-  return `${command} ${getSlashCommandDescription(cmd)}`;
 }

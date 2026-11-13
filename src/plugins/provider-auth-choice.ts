@@ -19,24 +19,20 @@ import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capabili
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { enablePluginWithCapabilityConsent } from "./enable.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
-import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
+import { withPluginLifecycleLeaseAsync } from "./plugin-lifecycle-lease.js";
 import {
-  applyProviderAuthConfigPatch,
+  applyProviderAuthConfigPatchWithNormalization,
   restoreAgentsDefaultsModel,
 } from "./provider-auth-choice-helpers.js";
 import { resolveManifestProviderAuthChoice } from "./provider-auth-choices.js";
 import { applyAuthProfileConfig } from "./provider-auth-helpers.js";
 import { runProviderPluginAuthMethodUnpersisted } from "./provider-auth-method.js";
 import { persistProviderAuthProfileBatch } from "./provider-auth-persistence.js";
+import type { ProviderAuthOptionBag } from "./provider-auth-types.js";
 import { resolveProviderInstallCatalogEntry } from "./provider-install-catalog.js";
 import { applyPrimaryModel } from "./provider-model-primary.js";
 import { buildProviderPluginMethodChoice } from "./provider-plugin-choice.js";
-import type {
-  ProviderAuthMethod,
-  ProviderAuthOptionBag,
-  ProviderAuthResult,
-  ProviderPlugin,
-} from "./types.js";
+import type { ProviderAuthMethod, ProviderAuthResult, ProviderPlugin } from "./types.js";
 
 type ApplyProviderAuthChoiceParams = {
   authChoice: string;
@@ -50,6 +46,7 @@ type ApplyProviderAuthChoiceParams = {
   agentId?: string;
   workspaceDir?: string;
   signal?: AbortSignal;
+  assertCurrent?: () => void;
   isRemote?: boolean;
   beforePersistentEffect?: () => void | Promise<void>;
   opts?: Partial<ProviderAuthOptionBag>;
@@ -126,7 +123,7 @@ export function applyProviderPluginAuthMethodResultConfig(params: {
   let nextConfig = params.config;
 
   if (result.configPatch) {
-    nextConfig = applyProviderAuthConfigPatch(nextConfig, result.configPatch, {
+    nextConfig = applyProviderAuthConfigPatchWithNormalization(nextConfig, result.configPatch, {
       replaceDefaultModels: result.replaceDefaultModels,
     });
   }
@@ -158,6 +155,7 @@ export async function runProviderPluginAuthMethod(params: {
   agentId?: string;
   workspaceDir?: string;
   signal?: AbortSignal;
+  assertCurrent?: () => void;
   isRemote?: boolean;
   beforePersistentEffect?: () => void | Promise<void>;
   secretInputMode?: ProviderAuthOptionBag["secretInputMode"];
@@ -198,6 +196,7 @@ async function prepareProviderPluginAuthMethod(
     agentDir,
     workspaceDir,
     ...(params.signal ? { signal: params.signal } : {}),
+    assertCurrent: params.assertCurrent,
     ...(params.isRemote !== undefined ? { isRemote: params.isRemote } : {}),
     secretInputMode: params.secretInputMode,
     allowSecretRefPrompt: params.allowSecretRefPrompt,
@@ -261,7 +260,12 @@ export async function prepareAuthChoiceLoadedPluginProvider<T>(
     runProviderModelSelectedHook,
   } = await import("./provider-auth-choice.runtime.js");
   // Import the reviewed generation while locked; authentication may outlive the lease.
-  const prepared = await withPluginLifecycleLease({ env: params.env }, async () =>
+  const leaseOptions = {
+    env: params.env,
+    signal: params.signal,
+    assertCurrent: params.assertCurrent,
+  };
+  const prepared = await withPluginLifecycleLeaseAsync(leaseOptions, async () =>
     withPluginCache(initialCache, async () => {
       let nextConfig = params.config;
       let pendingPluginInstalls: Record<string, PluginInstallRecord> | undefined;
@@ -317,6 +321,7 @@ export async function prepareAuthChoiceLoadedPluginProvider<T>(
               params.prompter,
               params.beforePersistentEffect,
             ),
+            beforePersistentApply: params.assertCurrent,
           },
         );
         if (!enableResult.enabled) {
@@ -383,6 +388,7 @@ export async function prepareAuthChoiceLoadedPluginProvider<T>(
           runtime: params.runtime,
           workspaceDir,
           beforePersistentEffect: params.beforePersistentEffect,
+          beforePersistentApply: params.assertCurrent,
         });
         if (!installResult.installed) {
           return preparedWithoutAuthProfiles({
@@ -432,6 +438,7 @@ export async function prepareAuthChoiceLoadedPluginProvider<T>(
       agentId: params.agentId,
       workspaceDir,
       ...(params.signal ? { signal: params.signal } : {}),
+      assertCurrent: params.assertCurrent,
       ...(params.isRemote !== undefined ? { isRemote: params.isRemote } : {}),
       beforePersistentEffect: async () => {
         assertUtilityModelSeparation(params.config, resolved.wizard?.modelTarget);
@@ -492,6 +499,7 @@ export async function prepareAuthChoiceLoadedPluginProvider<T>(
             prompter: params.prompter,
             runtime: params.runtime,
             beforePersistentEffect: params.beforePersistentEffect,
+            beforePersistentApply: params.assertCurrent,
             ...(workspaceDir !== undefined ? { workspaceDir } : {}),
           });
           if (!installed.ok) {

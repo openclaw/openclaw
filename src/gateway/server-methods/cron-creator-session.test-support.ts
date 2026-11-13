@@ -1,5 +1,4 @@
 import { expect, it, type Mock } from "vitest";
-import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { CronDeliveryPreview } from "../../cron/types.js";
 import {
@@ -11,18 +10,13 @@ import {
   requireCronAddPayload,
   requireRecord,
 } from "./cron.validation.test-support.js";
+import { createSessionMutationTestClient } from "./sessions-mutations.owner.test-support.js";
 import type { GatewayClient } from "./types.js";
 
 export type CronCreatorSessionLookup = {
   canonicalKey: string;
-  entry?: {
-    agentHarnessId?: unknown;
-    createdActor?: SessionCreatedActor;
-    modelSelectionLocked?: unknown;
-    sessionId?: unknown;
-    lifecycleRevision?: string;
-    skillLibrarySelections?: SessionEntry["skillLibrarySelections"];
-  };
+  entry?: Partial<Record<"agentHarnessId" | "modelSelectionLocked" | "sessionId", unknown>> &
+    Pick<SessionEntry, "createdActor" | "lifecycleRevision" | "skillLibrarySelections">;
 };
 
 export function registerCronCreatorSessionTests(fixture: {
@@ -31,133 +25,106 @@ export function registerCronCreatorSessionTests(fixture: {
   resolveCronDeliveryPreview: Mock<() => Promise<CronDeliveryPreview>>;
 }) {
   const { invokeCron, loadGatewaySessionEntry, resolveCronDeliveryPreview } = fixture;
-  it("stamps the authenticated profile as private cron creator provenance", async () => {
-    const client: GatewayClient = {
-      connect: {} as GatewayClient["connect"],
-      authenticatedUserProfile: {
-        profileId: "profile-ada",
-        displayName: "Ada",
-        hasAvatar: false,
-        updatedAt: 1,
-      },
-    };
-
-    const { context, respond } = await invokeCron("cron.add", agentTurnCronParams(), { client });
-
-    const options = requireRecord(context.cron.add.mock.calls[0]?.[1], "cron.add options");
-    expect(options.createdActor).toEqual({ type: "human", source: "profile", id: "profile-ada" });
-    expect(requireCronAddPayload(context)).not.toHaveProperty("createdActor");
+  const creator = { type: "human", source: "profile", id: "profile-ada" } as const;
+  const sourceConversation = {
+    sessionKey: "agent:ops:conversation",
+    sessionId: "creating-session",
+    lifecycleRevision: "generation-1",
+  };
+  const create = async (
+    params: Parameters<typeof invokeCron>[1],
+    options?: Parameters<typeof invokeCron>[2],
+  ) => {
+    const { context, respond } = await invokeCron("cron.add", params, options);
     expectCronSuccess(respond);
+    return {
+      options: requireRecord(context.cron.add.mock.calls[0]?.[1], "cron.add options"),
+      payload: requireCronAddPayload(context),
+    };
+  };
+  it("stamps the authenticated profile as private cron creator provenance", async () => {
+    const { authenticatedUserProfile } = createSessionMutationTestClient("profile-ada");
+    const client = { connect: {} as GatewayClient["connect"], authenticatedUserProfile };
+
+    const { options, payload } = await create(agentTurnCronParams(), { client });
+    expect(options.createdActor).toEqual(creator);
+    expect(payload).not.toHaveProperty("createdActor");
   });
 
   it.each([
-    {
-      caller: "agent-runtime",
-      payload: { kind: "agentTurn", message: "report", toolsAllow: ["*"] },
-    },
-    { caller: "operator", payload: { kind: "agentTurn", message: "report", toolsAllow: ["*"] } },
-    {
-      caller: "agent-runtime",
-      payload: { kind: "script", script: "return { notify: 'report' };", toolsAllow: [] },
-    },
-    {
-      caller: "operator",
-      payload: { kind: "script", script: "return { notify: 'report' };", toolsAllow: [] },
-    },
-    { caller: "operator", payload: { kind: "command", argv: ["echo", "report"] } },
-  ])(
-    "captures the fallback conversation for isolated $caller $payload.kind jobs",
-    async ({ caller, payload }) => {
-      const sourceConversation = {
-        sessionKey: "agent:ops:conversation",
-        sessionId: "creating-session",
-        lifecycleRevision: "generation-1",
-      };
-      loadGatewaySessionEntry.mockReturnValue({
-        canonicalKey: sourceConversation.sessionKey,
-        entry: {
-          ...sourceConversation,
-          createdActor: { type: "human", source: "profile", id: "profile-ada" },
-          skillLibrarySelections: [],
-        },
-      });
-      const { context, respond } = await invokeCron(
-        "cron.add",
-        agentTurnCronParams({ agentId: "ops", sessionKey: "conversation", payload }),
-        caller === "agent-runtime"
-          ? { client: callerClient("ops", undefined, sourceConversation.sessionKey) }
-          : undefined,
-      );
+    ["agent-runtime", { kind: "agentTurn", message: "report", toolsAllow: ["*"] }],
+    ["operator", { kind: "agentTurn", message: "report", toolsAllow: ["*"] }],
+    ["operator", { kind: "script", script: "return { notify: 'report' };", toolsAllow: [] }],
+    ["operator", { kind: "command", argv: ["echo", "report"] }],
+  ])("retains %s creator context for %j", async (caller, jobPayload) => {
+    loadGatewaySessionEntry.mockReturnValue({
+      canonicalKey: sourceConversation.sessionKey,
+      entry: {
+        ...sourceConversation,
+        createdActor: { ...creator },
+        skillLibrarySelections: [],
+      },
+    });
+    const { options, payload } = await create(
+      agentTurnCronParams({ agentId: "ops", sessionKey: "conversation", payload: jobPayload }),
+      caller === "agent-runtime"
+        ? { client: callerClient("ops", undefined, sourceConversation.sessionKey) }
+        : undefined,
+    );
 
-      const options = requireRecord(context.cron.add.mock.calls[0]?.[1], "cron.add options");
-      expect(options.sourceConversation).toEqual(sourceConversation);
-      if (caller === "operator") {
-        expect(options).not.toHaveProperty("skillLibrarySelections");
-        expect(options).not.toHaveProperty("createdActor");
-      } else {
-        expect(options.skillLibrarySelections).toEqual([]);
-        expect(options.createdActor).toEqual({
-          type: "human",
-          source: "profile",
-          id: "profile-ada",
-        });
-      }
-      expect(requireCronAddPayload(context)).not.toHaveProperty("sourceConversation");
-      expect(resolveCronDeliveryPreview).toHaveBeenCalledWith(
-        expect.objectContaining({ job: expect.objectContaining({ sourceConversation }) }),
-      );
-      expectCronSuccess(respond);
-    },
-  );
+    expect(options.sourceConversation).toEqual(sourceConversation);
+    if (caller === "operator") {
+      expect(options).not.toHaveProperty("skillLibrarySelections");
+      expect(options).not.toHaveProperty("createdActor");
+    } else {
+      expect(options.skillLibrarySelections).toEqual([]);
+      // Historical isolation identity is retained, but no human initiated this runtime call.
+      expect(options.createdActor).toEqual({
+        ...creator,
+        delegatedBy: { type: "agent", id: "ops" },
+      });
+    }
+    expect(payload).not.toHaveProperty("sourceConversation");
+    expect(resolveCronDeliveryPreview).toHaveBeenCalledWith(
+      expect.objectContaining({ job: expect.objectContaining({ sourceConversation }) }),
+    );
+  });
 
   it.each([undefined, "missing-conversation"])(
     "leaves isolated jobs unbound without an existing creating session: %s",
     async (sessionKey) => {
-      const { context, respond } = await invokeCron(
-        "cron.add",
-        agentTurnCronParams({ sessionKey }),
-      );
-      const options = requireRecord(context.cron.add.mock.calls[0]?.[1], "cron.add options");
+      const { options } = await create(agentTurnCronParams({ sessionKey }));
       expect(options).not.toHaveProperty("sourceConversation");
-      expectCronSuccess(respond);
     },
   );
 
-  it.each(["unknown"] as const)(
-    "retains %s creator provenance through agent-created cron jobs",
-    async (source) => {
-      loadGatewaySessionEntry.mockReturnValue({
-        canonicalKey: "agent:ops:main",
-        entry: {
-          sessionId: "session-ops-main",
-          createdActor: { type: "human", source, id: "profile-ada", label: "Ada" },
-        },
-      });
-      const client = callerClient("ops");
-      client.internal!.agentRuntimeIdentity!.sessionSpawnContext = {
-        inheritedToolPolicy: { version: 1, allow: ["*"], deny: [] },
-      };
+  it("retains unknown isolation provenance without attributing agent-created cron jobs to a human", async () => {
+    const legacyCreator = { ...creator, source: "unknown", label: "Ada" } as const;
+    loadGatewaySessionEntry.mockReturnValue({
+      canonicalKey: "agent:ops:main",
+      entry: {
+        sessionId: "session-ops-main",
+        createdActor: { ...legacyCreator },
+      },
+    });
+    const client = callerClient("ops");
+    client.internal!.agentRuntimeIdentity!.sessionSpawnContext = {
+      inheritedToolPolicy: { version: 1, allow: ["*"], deny: [] },
+    };
 
-      const { context, respond } = await invokeCron("cron.add", agentTurnCronParams(), {
-        client,
-      });
-
-      const options = requireRecord(context.cron.add.mock.calls[0]?.[1], "cron.add options");
-      expect(options.createdActor).toEqual({
-        type: "human",
-        source,
-        id: "profile-ada",
-        label: "Ada",
-      });
-      expect(loadGatewaySessionEntry).toHaveBeenCalledWith("agent:ops:main", { agentId: "ops" });
-      expect(requireCronAddPayload(context)).not.toHaveProperty("createdActor");
-      expectCronSuccess(respond);
-    },
-  );
+    const { options, payload } = await create(agentTurnCronParams(), { client });
+    expect(options.createdActor).toEqual({
+      ...legacyCreator,
+      delegatedBy: { type: "agent", id: "ops" },
+    });
+    expect(loadGatewaySessionEntry).toHaveBeenCalledWith("agent:ops:main", { agentId: "ops" });
+    expect(payload).not.toHaveProperty("createdActor");
+  });
 
   it.each([
     { createdActor: { type: "human", source: "profile", id: "spoofed-profile" } },
     { sourceConversation: { sessionKey: "agent:main:other", sessionId: "spoofed-session" } },
+    { operatorSource: { source: { profileId: "spoofed-profile" } } },
   ])("rejects caller-supplied private cron creator facts: %j", async (privateFields) => {
     const { context, respond } = await invokeCron("cron.add", agentTurnCronParams(privateFields));
 

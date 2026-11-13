@@ -1,69 +1,71 @@
-import { createSignal } from "solid-js";
-import type { ComponentProps } from "solid-js";
+import { createSignal, type ComponentProps } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { nextFrame } from "../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import "../styles.css";
 import { CommandPaletteInput } from "./command-palette-input.tsx";
 
 const hasBrowserLayout = !navigator.userAgent.toLowerCase().includes("jsdom");
-const onInputRef = () => undefined;
-const nextFrame = () =>
-  new Promise<void>((resolve) => {
-    requestAnimationFrame(() => resolve());
-  });
 
 describe.skipIf(!hasBrowserLayout)("command palette input layout", () => {
-  let host: HTMLDivElement | undefined;
-  let unmount: (() => void) | undefined;
-  let update: ((next: ComponentProps<typeof CommandPaletteInput>) => void) | undefined;
-  const renderInput = (props: ComponentProps<typeof CommandPaletteInput>) => {
-    if (update) {
-      update(props);
-    } else {
-      const [current, setCurrent] = createSignal(props);
-      update = (next) => setCurrent(() => next);
-      unmount = mountSolid(() => <CommandPaletteInput {...current()} />, {
-        container: host!,
-      }).unmount;
-    }
-    flush();
+  type InputProps = ComponentProps<typeof CommandPaletteInput>;
+  const edit = (input: HTMLTextAreaElement, value: string) => {
+    input.value = value;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
   };
-
-  afterEach(() => {
-    if (host) {
-      unmount?.();
-      unmount = undefined;
-      update = undefined;
-      host.remove();
-      host = undefined;
+  const expectFades = (entry: Element, top: boolean, bottom: boolean) =>
+    expect(["top", "bottom"].map((edge) => entry.hasAttribute("data-scroll-fade-" + edge))).toEqual(
+      [top, bottom],
+    );
+  const threeFrames = async () => {
+    for (let frame = 0; frame < 3; frame++) {
+      await nextFrame();
     }
-    vi.restoreAllMocks();
-  });
+  };
+  function mountInput(
+    value: string,
+    extra: Partial<InputProps> = {},
+    css = "width: 740px; max-width: 100%;",
+  ) {
+    const props: InputProps = {
+      value,
+      placeholder: "Search or start a task…",
+      onInputRef: () => undefined,
+      onValueChange: (next) => {
+        props.value = next;
+      },
+      ...extra,
+    };
+    const [current, setCurrent] = createSignal(props);
+    const { container: host } = mountSolid(() => <CommandPaletteInput {...current()} />);
+    host.style.cssText = css;
+    flush();
+    return {
+      host,
+      props,
+      input: host.querySelector("textarea")!,
+      entry: host.querySelector<HTMLElement>(".cmd-palette__entry")!,
+      renderInput: (next: InputProps) => {
+        setCurrent(() => next);
+        flush();
+      },
+    };
+  }
+  afterEach(() => vi.restoreAllMocks());
 
   it("preserves the prompt without remeasuring result navigation and measures again on reconnect", async () => {
-    host = document.body.appendChild(document.createElement("div"));
-    // Reconnection must cross a wrapping boundary independently of the
-    // runner's viewport and platform font metrics.
-    host.style.cssText = "width: 740px; font-family: monospace;";
-    const props = {
-      value: "Keep this prompt and its caret while changing preferences.",
-      placeholder: "Search or start a task…",
-      onInputRef,
-      onValueChange: () => undefined,
-      actions: <button type="button">Settings</button>,
-    };
-    renderInput(props);
+    // A fixed width/font makes reconnection cross a wrapping boundary.
+    const { host, input, props, renderInput } = mountInput(
+      "Keep this prompt and its caret while changing preferences.",
+      { actions: <button type="button">Settings</button> },
+      "width: 740px; font-family: monospace;",
+    );
     await document.fonts.ready;
-    // Initial layout installs ResizeObserver; its first delivery schedules
-    // the next frame. Observe result navigation after that commit completes.
-    await nextFrame();
-    await nextFrame();
-    await nextFrame();
-    const input = host.querySelector("textarea")!;
+    // ResizeObserver's initial delivery schedules another layout frame.
+    await threeFrames();
     const originalHeight = input.clientHeight;
-    expect(host.clientWidth).toBe(740);
-    expect(originalHeight).toBe(24);
+    expect([host.clientWidth, originalHeight]).toEqual([740, 24]);
     const measureContent = vi.spyOn(input, "scrollHeight", "get");
     const settings = host.querySelector("button")!;
     input.focus();
@@ -72,12 +74,12 @@ describe.skipIf(!hasBrowserLayout)("command palette input layout", () => {
     renderInput({ ...props, activeDescendant: "next-result" });
     await nextFrame();
     expect(document.activeElement).toBe(settings);
-    expect(input.value).toBe(props.value);
-    expect([input.selectionStart, input.selectionEnd, input.selectionDirection]).toEqual([
-      5,
-      11,
-      "backward",
-    ]);
+    expect(input).toMatchObject({
+      value: props.value,
+      selectionStart: 5,
+      selectionEnd: 11,
+      selectionDirection: "backward",
+    });
     expect(measureContent).not.toHaveBeenCalled();
     expect(input.clientHeight).toBe(originalHeight);
 
@@ -90,19 +92,9 @@ describe.skipIf(!hasBrowserLayout)("command palette input layout", () => {
   });
 
   it("keeps a scrolled prompt in place through rerenders and resizing until the user edits", async () => {
-    host = document.body.appendChild(document.createElement("div"));
-    host.style.cssText = "width: 740px; max-width: 100%;";
-    const props = {
-      value: Array.from({ length: 12 }, (_, index) => "Prompt line " + (index + 1)).join("\n"),
-      placeholder: "Search or start a task…",
-      onInputRef,
-      onValueChange: (value: string) => {
-        props.value = value;
-      },
-    };
-    renderInput(props);
-    const input = host.querySelector("textarea")!;
-    const entry = host.querySelector(".cmd-palette__entry")!;
+    const { host, input, entry, props, renderInput } = mountInput(
+      Array.from({ length: 12 }, (_, index) => "Prompt line " + (index + 1)).join("\n"),
+    );
     await vi.waitFor(() => expect(input.style.overflowY).toBe("auto"));
     input.focus();
     input.setSelectionRange(input.value.length, input.value.length);
@@ -111,12 +103,9 @@ describe.skipIf(!hasBrowserLayout)("command palette input layout", () => {
     const previousScroll = input.scrollTop;
 
     renderInput({ ...props, activeDescendant: "next-result" });
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => resolve());
-    });
+    await nextFrame();
     expect(input.scrollTop).toBe(previousScroll);
-    expect(entry.hasAttribute("data-scroll-fade-top")).toBe(true);
-    expect(entry.hasAttribute("data-scroll-fade-bottom")).toBe(true);
+    expectFades(entry, true, true);
 
     host.style.width = "500px";
     await new Promise<void>((resolve) => {
@@ -126,15 +115,11 @@ describe.skipIf(!hasBrowserLayout)("command palette input layout", () => {
       });
       observer.observe(entry);
     });
-    expect(input.scrollTop).toBe(previousScroll);
-    expect(input.selectionEnd).toBe(props.value.length);
+    expect(input).toMatchObject({ scrollTop: previousScroll, selectionEnd: props.value.length });
 
-    input.value += "\nContinue writing";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
+    edit(input, input.value + "\nContinue writing");
     renderInput(props);
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => resolve());
-    });
+    await nextFrame();
     expect(input.scrollTop).toBe(input.scrollHeight - input.clientHeight);
     expect(entry.hasAttribute("data-scroll-fade-bottom")).toBe(false);
 
@@ -143,87 +128,62 @@ describe.skipIf(!hasBrowserLayout)("command palette input layout", () => {
     input.setRangeText("Edit the beginning: ", 0, 0, "end");
     input.dispatchEvent(new Event("input", { bubbles: true }));
     renderInput(props);
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => resolve());
-    });
+    await nextFrame();
     expect(input.scrollTop).toBe(0);
   });
 
   it("grows down through three lines, keeps actions fixed and fades clear of the far-right scrollbar", async () => {
-    host = document.body.appendChild(document.createElement("div"));
-    host.style.cssText = "width: 740px; max-width: 100%;";
-    renderInput({
-      value: "One line",
-      placeholder: "Search or start a task…",
-      onInputRef,
-      onValueChange: () => undefined,
+    const { host, input, entry } = mountInput("One line", {
       actions: (
         <button type="button" class="cmd-palette__create">
           New session<kbd>Ctrl+Enter</kbd>
         </button>
       ),
     });
-    const input = host.querySelector("textarea")!;
-    const entry = host.querySelector<HTMLElement>(".cmd-palette__entry")!;
     const actions = host.querySelector<HTMLElement>(".cmd-palette__input-actions")!;
     const textScroll = host.querySelector<HTMLElement>(".cmd-palette__input-scroll")!;
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => resolve());
-    });
-    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await nextFrame();
+    edit(input, input.value);
     const top = input.getBoundingClientRect().top;
     const actionTop = actions.getBoundingClientRect().top;
     const lineHeight = Number.parseFloat(getComputedStyle(input).lineHeight);
     expect(input.clientHeight).toBe(24);
 
-    input.value = "One line\nTwo lines";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(input.clientHeight).toBe(lineHeight * 2);
-    expect(input.getBoundingClientRect().top).toBe(top);
-    expect(actions.getBoundingClientRect().top).toBe(actionTop);
-
-    input.value = "One line\nTwo lines\nThree lines\nFour lines\nFive lines";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(input.clientHeight).toBe(lineHeight * 3);
+    for (const lines of [2, 5]) {
+      edit(input, Array(lines).fill("Prompt line").join("\n"));
+      expect([
+        input.clientHeight,
+        input.getBoundingClientRect().top,
+        actions.getBoundingClientRect().top,
+      ]).toEqual([lineHeight * Math.min(lines, 3), top, actionTop]);
+    }
+    const inputRect = input.getBoundingClientRect();
+    const actionsRect = actions.getBoundingClientRect();
+    const inputStyle = getComputedStyle(input);
     expect(input.scrollHeight).toBeGreaterThan(input.clientHeight);
-    expect(getComputedStyle(input).overflowY).toBe("auto");
-    expect(getComputedStyle(input).scrollbarWidth).not.toBe("none");
-    expect(input.getBoundingClientRect().top).toBe(top);
-    expect(actions.getBoundingClientRect().top).toBe(actionTop);
-    expect(input.getBoundingClientRect().right).toBeGreaterThan(
-      actions.getBoundingClientRect().right + 8,
+    expect(inputStyle.overflowY).toBe("auto");
+    expect(inputStyle.scrollbarWidth).not.toBe("none");
+    expect(inputRect.right).toBeGreaterThan(actionsRect.right + 8);
+    expect(inputRect.right - Number.parseFloat(inputStyle.paddingRight)).toBeLessThan(
+      actionsRect.left,
     );
-    const textRight =
-      input.getBoundingClientRect().right - Number.parseFloat(getComputedStyle(input).paddingRight);
-    expect(textRight).toBeLessThan(actions.getBoundingClientRect().left);
     const fadeRight =
       textScroll.getBoundingClientRect().right -
       Number.parseFloat(getComputedStyle(textScroll, "::after").right);
-    expect(fadeRight).toBeLessThan(actions.getBoundingClientRect().left);
+    expect(fadeRight).toBeLessThan(actionsRect.left);
     // Autofocus keeps an edited caret visible; explicitly inspect the top edge.
-    input.scrollTop = 0;
-    input.dispatchEvent(new Event("scroll"));
-    expect(entry.hasAttribute("data-scroll-fade-bottom")).toBe(true);
-    expect(entry.hasAttribute("data-scroll-fade-top")).toBe(false);
+    for (const scrollTop of [0, input.scrollHeight, 0]) {
+      input.scrollTop = scrollTop;
+      input.dispatchEvent(new Event("scroll"));
+      expectFades(entry, scrollTop > 0, scrollTop === 0);
+    }
 
-    input.scrollTop = input.scrollHeight;
-    input.dispatchEvent(new Event("scroll"));
-    expect(entry.hasAttribute("data-scroll-fade-top")).toBe(true);
-    expect(entry.hasAttribute("data-scroll-fade-bottom")).toBe(false);
-    input.scrollTop = 0;
-    input.dispatchEvent(new Event("scroll"));
-    expect(entry.hasAttribute("data-scroll-fade-top")).toBe(false);
-    expect(entry.hasAttribute("data-scroll-fade-bottom")).toBe(true);
-
-    input.value = "A short task";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
+    edit(input, "A short task");
     expect(input.clientHeight).toBe(24);
-    expect(entry.hasAttribute("data-scroll-fade-top")).toBe(false);
-    expect(entry.hasAttribute("data-scroll-fade-bottom")).toBe(false);
+    expectFades(entry, false, false);
     expect(input.getBoundingClientRect().top).toBe(top);
 
-    input.value = "A wrapping task with enough text to grow after the available width changes.";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
+    edit(input, "A wrapping task with enough text to grow after the available width changes.");
     host.style.width = "320px";
     await vi.waitFor(() => expect(input.clientHeight).toBe(lineHeight * 3));
     expect(actions.getBoundingClientRect().top).toBe(actionTop);
@@ -233,16 +193,19 @@ describe.skipIf(!hasBrowserLayout)("command palette input layout", () => {
     const observer = new MutationObserver((records) => styleChanges.push(...records));
     observer.observe(input, { attributes: true, attributeFilter: ["style"] });
     try {
-      // Frame callbacks run before ResizeObserver delivery; a fixed pair of
-      // frames can still leave the final resize queued on a busy browser.
-      // Require a quiet three-frame window after those finite updates settle.
-      await vi.waitFor(async () => {
-        styleChanges.length = 0;
-        await nextFrame();
-        await nextFrame();
-        await nextFrame();
-        expect(styleChanges).toEqual([]);
-      });
+      // ResizeObserver can enqueue more frames; require a quiet three-frame window.
+      await vi.waitFor(
+        async () => {
+          styleChanges.length = 0;
+          await threeFrames();
+          expect(styleChanges).toEqual([]);
+        },
+        { timeout: 5_000 },
+      );
+      edit(input, "One line");
+      observer.takeRecords();
+      await threeFrames();
+      expect(styleChanges).toEqual([]);
     } finally {
       observer.disconnect();
     }

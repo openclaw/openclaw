@@ -1,6 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import type { Mock } from "vitest";
 import { ensureCodexAppServerClientRuntime } from "./app-server/client-runtime.js";
@@ -8,6 +11,7 @@ import type { CodexAppServerClient } from "./app-server/client.js";
 import {
   registerCodexTestSessionIdentity,
   resetCodexTestBindingStore,
+  writeCodexAppServerBinding,
 } from "./app-server/session-binding.test-helpers.js";
 import { createClientHarness } from "./app-server/test-support.js";
 import type { codexControlRequest } from "./command-rpc.js";
@@ -64,7 +68,13 @@ export async function withCodexNativeThreadToolFixture(
       await run({ root, sessionFile, client });
     } finally {
       client.close();
-      await closeOpenClawAgentDatabasesAsync();
+      await closeOpenClawAgentDatabasesAsync(root);
+      // Runtime close retains validation; deleted fixtures must also retire its watchers.
+      closeOpenClawAgentDatabasesForTest(root);
     }
   });
+}
+
+export function writeNativeThreadToolBinding(threadId: string, sessionId = "session-id") {
+  return writeCodexAppServerBinding(sessionId, { threadId, cwd: "/tmp/project" });
 }

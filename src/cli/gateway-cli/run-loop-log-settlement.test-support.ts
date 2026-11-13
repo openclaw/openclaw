@@ -27,15 +27,19 @@ export function registerGatewayLogSettlementTests({
   it("persists an issued close-error log append before forced exit", async () => {
     const logger =
       await vi.importActual<typeof import("../../logging/logger.js")>("../../logging/logger.js");
-    const { fileLogTransport } = await import("../../logging/logger-file-transport.js");
-    const { appendRegularFile } = await import("@openclaw/fs-safe/advanced");
+    const { default: fsPromises } = await vi.importActual<{
+      default: typeof import("node:fs/promises");
+    }>("node:fs/promises");
     const logFile = join(closeLogTempDirs.make("openclaw-close-log-"), "gateway.jsonl");
     const appendAllowed = createDeferredCore();
     logger.setLoggerOverride({ level: "info", file: logFile });
     const fileLogger = logger.getChildLogger({ subsystem: "gateway" });
-    fileLogTransport.setAppenderForTests(async (options) => {
-      await appendAllowed.promise;
-      return appendRegularFile(options);
+    const openFile = fsPromises.open.bind(fsPromises);
+    const open = vi.spyOn(fsPromises, "open").mockImplementation(async (...args) => {
+      if (args[0] === logFile) {
+        await appendAllowed.promise;
+      }
+      return openFile(...args);
     });
     gatewayLog.error.mockImplementation((message: string) => {
       fileLogger.error(message);
@@ -71,8 +75,8 @@ export function registerGatewayLogSettlementTests({
     } finally {
       appendAllowed.resolve();
       await logger.flushLogger();
+      open.mockRestore();
       logger.resetLogger();
-      fileLogTransport.resetForTests();
       gatewayLog.error.mockReset();
       flushLogger.mockReset().mockResolvedValue(undefined);
     }

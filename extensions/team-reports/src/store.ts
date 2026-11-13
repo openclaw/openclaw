@@ -2,6 +2,7 @@ import path from "node:path";
 import type { SqliteWorkerStore } from "openclaw/plugin-sdk/sqlite-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import type { TeamReportsOperations } from "./store-contract.js";
+import { TEAM_REPORTS_WRITES } from "./store-contract.js";
 import type { Period } from "./types.js";
 
 export type { PeriodListEntry, PersonDay } from "./store-contract.js";
@@ -62,10 +63,6 @@ export class TeamReportsStore {
     return this.execute("latestPeople", undefined);
   }
 
-  getDayReports(sinceMs: number, untilMs: number) {
-    return this.execute("getDayReports", { sinceMs, untilMs });
-  }
-
   listPersonDays(
     login: string,
     options: TeamReportsOperations["listPersonDays"]["input"]["options"] = {},
@@ -112,14 +109,27 @@ export async function createTeamReportsStore(options: {
       "team-reports",
       "team-reports.sqlite",
     );
-  const { openEngineWorkerStore } = await import("openclaw/plugin-sdk/database-engine-runtime");
+  const { openEngineWorkerStore, getDatabaseEngineInput, runEngineStoreOperation } =
+    await import("openclaw/plugin-sdk/database-engine-runtime");
+  const input = getDatabaseEngineInput("team-reports");
   const worker = await openEngineWorkerStore<TeamReportsOperations>(
     {
       moduleUrl: options.workerModuleUrl,
       databasePath,
-      input: undefined,
+      input,
     },
-    undefined,
+    input,
   );
-  return new TeamReportsStore(worker);
+  return new TeamReportsStore({
+    execute: (command, operationOptions) =>
+      runEngineStoreOperation(
+        worker,
+        input,
+        TEAM_REPORTS_WRITES.has(command.type),
+        (scope) => scope.execute(command, operationOptions),
+        undefined,
+        databasePath,
+      ),
+    close: () => worker.close(),
+  });
 }

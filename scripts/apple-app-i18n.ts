@@ -178,10 +178,6 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
     'localized: "about ^[\\(minutes) minute](inflect: true)"',
     'localized: "about ^[\\(hours) hour](inflect: true)"',
   ],
-  "apps/ios/Sources/Voice/TalkGatewayPermissionState.swift": [
-    'String(format: String(localized: "Missing %@"), scope)',
-    'String(localized: "Requesting approval")',
-  ],
   "apps/ios/Sources/Voice/TalkModeManager.swift": [
     'format: String(localized: "Speech error: %@")',
     'format: String(localized: "Speak failed: %@")',
@@ -210,10 +206,7 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
     "message: .verbatim(self.problem.localizedMessage)",
     "Text(verbatim: primaryActionTitle)",
   ],
-  "apps/ios/Sources/LiveActivity/LiveActivityManager.swift": [
-    'String(localized: "Connecting...")',
-    "status: .disconnected",
-  ],
+  "apps/ios/Sources/LiveActivity/LiveActivityManager.swift": ["status: .disconnected"],
   "apps/ios/WatchApp/Sources/WatchInboxView.swift": [
     "enum WatchTextValue {\n    case localized(LocalizedStringResource)",
     "private struct WatchFaceHeader: View {\n    let section: WatchTextValue\n    let title: WatchTextValue\n    let subtitle: WatchTextValue",

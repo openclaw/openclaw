@@ -24,11 +24,9 @@ export function rememberWhatsAppBaileysCacheEntry<T>(
   if (!cache) {
     return;
   }
-  if (cache.has(key)) {
-    cache.delete(key);
-  }
+  cache.delete(key);
   cache.set(key, {
-    expiresAt: Date.now() + ttlMs,
+    expiresAt: performance.now() + ttlMs,
     value,
   });
   pruneMapToMaxSize(cache, WHATSAPP_BAILEYS_CACHE_MAX_ENTRIES);
@@ -42,7 +40,7 @@ export function readWhatsAppBaileysCacheEntry<T>(
   if (!entry) {
     return undefined;
   }
-  if (entry.expiresAt <= Date.now()) {
+  if (entry.expiresAt <= performance.now()) {
     cache.delete(key);
     return undefined;
   }

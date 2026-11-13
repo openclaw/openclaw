@@ -16,7 +16,11 @@ export type AgentDatabaseRequestExecutionSource = {
   assertCurrent(): void;
   onRegistryChange?: (change: AgentDatabaseRegistryChange) => void;
   createAdmission(params: {
-    attachment: { kind: "agent-execution"; startupJournal: boolean };
+    attachment: {
+      kind: "agent-execution";
+      startupJournal: boolean;
+      startupIntegrityRequired: boolean;
+    };
     nativeLocations: readonly string[];
     authorize(request: SqliteWorkerAdmissionRequest): void;
     assertCurrent(): void;
@@ -28,10 +32,6 @@ export type OpenClawAgentDatabaseAdmissionExecution = {
   readonly path: string;
   assertCurrent(): void;
   captureGenerationClaim(): AgentDatabaseGenerationClaim;
-  /** Reuse native preparation; host handle admission explicitly requests current schema proof. */
-  prepare(
-    source: AgentDatabaseRequestExecutionSource,
-    signal?: AbortSignal,
-    options?: { readmitSchema: true },
-  ): Promise<void>;
+  /** Reuse the native owner's published preparation and schema proof. */
+  prepare(source: AgentDatabaseRequestExecutionSource, signal?: AbortSignal): Promise<void>;
 };

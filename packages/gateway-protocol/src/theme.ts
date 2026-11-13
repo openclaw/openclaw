@@ -1,3 +1,6 @@
+import type { Static } from "typebox";
+import type { SchemaContract } from "./schema-contract.js";
+import type { ThemeDefinitionSchema } from "./schema/themes.js";
 import type { ThemeId } from "./theme-ids.ts";
 export {
   BUILTIN_THEME_IDS,
@@ -62,25 +65,13 @@ export const THEME_TOKEN_MAX_LENGTH = 120;
 
 export type ThemePalette = Record<(typeof THEME_COLOR_KEYS)[number], string> &
   Partial<Record<(typeof THEME_FONT_KEYS)[number], string>>;
-export type ThemeDefinition = {
-  name: string;
-  description: string;
-  mascot?: ThemeMascot;
-  brandName?: string;
-  brandIcon?: string;
-  workingIndicator?: ThemeWorkingIndicator;
-  lobsterdex?: boolean;
-  communityLinks?: boolean;
-  workingPhrases?: string[];
-  critters?: string[];
-  avatarHat?: string;
-  light?: ThemePalette;
-  dark?: ThemePalette;
-};
+export type ThemeDefinition = SchemaContract<Static<typeof ThemeDefinitionSchema>>;
 export type ThemeArtwork = {
   icons?: Record<string, { url: string }>;
   hats?: Record<string, { url: string }>;
   critters?: Record<string, { url: string; title?: string; crossMs?: number }>;
+  /** Plugin-only canvas artwork per color mode; a missing mode keeps neutral artwork. */
+  backgrounds?: Partial<Record<ThemeColorMode, { url: string }>>;
 };
 export type ThemeDescriptor = {
   id: ThemeId;
@@ -270,21 +261,24 @@ function requireChoice<T extends string>(value: unknown, allowed: readonly T[], 
 const NUMBER = "[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:e[+-]?\\d+)?";
 const COMPONENT = `${NUMBER}%?`;
 const HUE = `${NUMBER}(?:deg|grad|rad|turn)?`;
-const LEGACY_COLOR_FUNCTION = new RegExp(
+const LEGACY_COLOR_FUNCTION = /* @__PURE__ */ new RegExp(
   `^(?:(?:rgb|rgba)\\( *(?:${NUMBER} *, *${NUMBER} *, *${NUMBER}|${NUMBER}% *, *${NUMBER}% *, *${NUMBER}%)|(?:hsl|hsla)\\( *${HUE} *, *${NUMBER}% *, *${NUMBER}%)(?: *, *${COMPONENT})? *\\)$`,
   "i",
 );
-const COLOR_FUNCTION = new RegExp(
+const COLOR_FUNCTION = /* @__PURE__ */ new RegExp(
   `^(?:(?:rgb|rgba|oklab|lab)\\( *${COMPONENT} +${COMPONENT} +${COMPONENT}|(?:hsl|hsla)\\( *${HUE} +${COMPONENT} +${COMPONENT}|(?:oklch|lch)\\( *${COMPONENT} +${COMPONENT} +${HUE})(?: */ *${COMPONENT})? *\\)$`,
   "i",
 );
-const COLOR_SPACE_FUNCTION = new RegExp(
+const COLOR_SPACE_FUNCTION = /* @__PURE__ */ new RegExp(
   `^color\\( *(?:srgb|srgb-linear|display-p3|a98-rgb|prophoto-rgb|rec2020|xyz|xyz-d50|xyz-d65) +${COMPONENT} +${COMPONENT} +${COMPONENT}(?: */ *${COMPONENT})? *\\)$`,
   "i",
 );
 const FONT_IDENTIFIER = "(?:--[a-z0-9_-]*|-?[a-z_][a-z0-9_-]*)";
 const FONT_FAMILY = `(?:"[a-z0-9 ,'._-]*"|'[a-z0-9 ,"._-]*'|${FONT_IDENTIFIER}(?: +${FONT_IDENTIFIER})*)`;
-const FONT_FAMILY_LIST = new RegExp(`^${FONT_FAMILY}(?: *, *${FONT_FAMILY})*$`, "i");
+const FONT_FAMILY_LIST = /* @__PURE__ */ new RegExp(
+  `^${FONT_FAMILY}(?: *, *${FONT_FAMILY})*$`,
+  "i",
+);
 const CSS_WIDE_KEYWORDS = new Set(["inherit", "initial", "unset", "revert", "revert-layer"]);
 const GENERIC_FONT_FAMILIES = new Set([
   "serif",
@@ -345,8 +339,7 @@ function normalizePalette(value: unknown, mode: ThemeColorMode): ThemePalette {
     requireColor(palette[key], `theme.${mode}.${key}`),
   ]);
   // SAFETY: every required color key is emitted exactly once, after validating its value.
-  const colors = Object.fromEntries(entries) as Record<(typeof THEME_COLOR_KEYS)[number], string>;
-  const result: ThemePalette = { ...colors };
+  const result = Object.fromEntries(entries) as ThemePalette;
   for (const key of THEME_FONT_KEYS) {
     if (palette[key] === undefined) {
       continue;

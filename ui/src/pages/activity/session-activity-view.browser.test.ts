@@ -1,18 +1,25 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { page } from "vitest/browser";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ApplicationContext } from "../../app/context.ts";
-import { SessionActivityController } from "./session-activity-controller.ts";
+import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
+import { createSessionActivity } from "./session-activity-owner.ts";
 import "../../styles/base.css";
 import "../../styles/components.css";
 import "../../styles/settings.css";
 import "../../styles/settings-controls.css";
 import "../../styles/activity.css";
-import { mountSolid } from "./session-activity-view.test-harness.ts";
+import {
+  mountSolid,
+  props as createActivityProps,
+  type SessionActivityTestProps,
+} from "./session-activity-view.test-harness.ts";
 import { renderSessionActivityView } from "./session-activity-view.tsx";
 
-const renderSessionActivityViewSolid = mountSolid(renderSessionActivityView);
+const renderSessionActivityViewSolid = mountSolid<SessionActivityTestProps>(
+  renderSessionActivityView,
+  (input) => createSolidApplicationContextProvider(input.context).wrapper,
+);
 
 let container: HTMLDivElement;
 
@@ -26,6 +33,22 @@ afterEach(() => {
   container.remove();
 });
 
+function activityProps(personId: string | null): SessionActivityTestProps {
+  const fixture = createActivityProps({ filters: { personId, query: "", time: "7d" } });
+  fixture.result!.people = [
+    { identity: { type: "profile", id: "person" }, label: "Person", sessionCount: 0 },
+  ];
+  fixture.result!.activityPulse = {
+    since: new Date(2026, 8, 20).getTime(),
+    until: new Date(2026, 8, 28).getTime(),
+    buckets: Array.from({ length: 8 }, () => 0),
+    sessions: 0,
+    started: 0,
+    running: 0,
+  };
+  return fixture;
+}
+
 it.each([
   { personId: null, width: 900 },
   { personId: "person", width: 900 },
@@ -35,51 +58,14 @@ it.each([
   "keeps content stable through passive refresh and explicit Retry ($personId, $width px)",
   async ({ personId, width }) => {
     await page.viewport(width, 700);
-    const props: Parameters<typeof renderSessionActivityView>[0] = {
-      context: {
-        basePath: "",
-        navigate: vi.fn(),
-        gateway: {
-          snapshot: { hello: null, client: null, phase: "stopped" },
-          subscribe: () => () => {},
-          subscribeEvents: () => () => {},
-        },
-        agents: { state: { agentsList: { defaultId: "main", mainKey: "main" } } },
-        agentSelection: { state: { selectedId: "main" } },
-        sessions: { state: { result: { sessions: [] } } },
-      } as unknown as ApplicationContext,
-      filters: { personId, query: "", time: "7d" },
-      presenceViewers: [],
-      loading: false,
-      retrying: false,
-      result: {
-        ts: 1,
-        path: "",
-        count: 0,
-        sessions: [],
-        defaults: { model: null, modelProvider: null, contextTokens: null },
-        people: [{ identity: { type: "profile", id: "person" }, label: "Person", sessionCount: 0 }],
-        activityPulse: {
-          since: new Date(2026, 8, 20).getTime(),
-          until: new Date(2026, 8, 28).getTime(),
-          buckets: Array.from({ length: 8 }, () => 0),
-          sessions: 0,
-          started: 0,
-          running: 0,
-        },
-      },
-      expandedAutomationDays: new Set(),
-      onRetry: vi.fn(),
-      onAutomationDayToggle: vi.fn(),
-      onFiltersChange: vi.fn(),
-    };
+    const props = activityProps(personId);
     renderSessionActivityViewSolid(props, container);
     const main = container.querySelector<HTMLElement>(".activity-feed__main")!;
     const content = main.querySelector<HTMLElement>(
       personId ? "[data-activity-identity]" : ".activity-pulse",
     )!;
     expect(getComputedStyle(container.querySelector(".activity-feed__feedback")!).minHeight).toBe(
-      "32px",
+      width <= 640 ? "38px" : "32px",
     );
     const top = content.getBoundingClientRect().top;
     expect(content.getBoundingClientRect().height).toBeGreaterThan(0);
@@ -93,7 +79,7 @@ it.each([
     const request = vi.fn().mockResolvedValue(props.result);
     const client = { request } as unknown as GatewayBrowserClient;
     let retryCompletion = Promise.resolve();
-    const controller = new SessionActivityController(() =>
+    const controller = createSessionActivity(() =>
       renderSessionActivityViewSolid(
         {
           ...props,
@@ -130,11 +116,13 @@ it.each([
       expect(container.querySelector('[role="status"]')?.textContent).toContain("Refreshing");
       expect(retryButton()?.disabled).toBe(true);
       expect(Math.abs(retained.getBoundingClientRect().top - retainedTop)).toBeLessThan(1);
-      pending.reject(new Error("Retry failed"));
+      const report = vi.spyOn(console, "error").mockImplementation(() => {});
+      onTestFinished(() => report.mockRestore());
+      pending.reject(new TypeError("Cannot read properties of undefined (reading 'map')"));
       await retryCompletion;
-      expect(controller.error).toBe("Retry failed");
+      expect(controller.error).toBe("Request failed");
       expect(retryButton()?.disabled).toBe(false);
-      expect(container.querySelector('[role="alert"]')?.textContent).toContain("Retry failed");
+      expect(container.querySelector('[role="alert"]')?.textContent).toContain("Request failed");
       expect(Math.abs(retained.getBoundingClientRect().top - retainedTop)).toBeLessThan(1);
       const recovered = createDeferred<NonNullable<typeof props.result>>();
       request.mockReturnValueOnce(recovered.promise);
@@ -159,3 +147,21 @@ it.each([
     ).toContain("Loading");
   },
 );
+
+it("returns focus to the People trigger once a person is chosen", async () => {
+  await page.viewport(900, 700);
+  const props = activityProps(null);
+  renderSessionActivityViewSolid(props, container);
+  const trigger = container.querySelector<HTMLButtonElement>(".activity-feed__people-trigger")!;
+  trigger.click();
+  await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
+  await expect
+    .poll(() => document.activeElement?.className)
+    .toContain("activity-feed__people-popover");
+  container.querySelector<HTMLButtonElement>('[data-activity-person="person"]')?.click();
+  await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
+  expect(props.onFiltersChange).toHaveBeenCalledWith(
+    expect.objectContaining({ personId: "person" }),
+  );
+  await expect.poll(() => document.activeElement, { timeout: 1500 }).toBe(trigger);
+});

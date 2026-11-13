@@ -1,9 +1,10 @@
-// Memory Wiki tests cover markdown plugin behavior.
-
-import path from "node:path";
+import assert from "node:assert/strict";
+import { fromMarkdown } from "mdast-util-from-markdown";
 import { describe, expect, it } from "vitest";
+import { extractWikiLinks } from "./markdown-links.js";
 import {
   extractHumanNotesBlock,
+  formatWikiLink,
   parseWikiMarkdown,
   preserveHumanNotesBlock,
   renderWikiMarkdown,
@@ -12,213 +13,149 @@ import {
   toWikiPageSummary,
 } from "./markdown.js";
 
-function scanWikiLinkTargets(markdown: string, relativePath: string): string[] {
+function scanWikiSummary(raw: string) {
   const result = scanWikiPageSummary({
-    absolutePath: path.join("/tmp/wiki", relativePath),
-    relativePath,
-    raw: markdown,
+    absolutePath: "/tmp/wiki/entities/test.md",
+    relativePath: "entities/test.md",
+    raw,
   });
   if (result.status !== "valid") {
     throw new Error(`Expected valid wiki page scan, got ${result.status}`);
   }
-  return result.page.linkTargets;
+  return result.page;
 }
 
-describe("slugifyWikiSegment", () => {
-  it("keeps ASCII behavior unchanged", () => {
-    expect(slugifyWikiSegment("hello world")).toBe("hello-world");
-    expect(slugifyWikiSegment("")).toBe("page");
-  });
-
-  it("retains combining marks so distinct titles do not collapse", () => {
-    expect(slugifyWikiSegment("किताब")).toBe("किताब");
-    expect(slugifyWikiSegment("कुतुब")).toBe("कुतुब");
-    expect(slugifyWikiSegment("कीताब")).toBe("कीताब");
-  });
+it.each([
+  ["hello world", "hello-world"],
+  ["", "page"],
+  ["किताब", "किताब"],
+  ["कुतुब", "कुतुब"],
+  ["कीताब", "कीताब"],
+  [" _Alpha--\u00a0\t!_Beta-- ", "alpha-beta"],
+  [" --\u2028__ ", "page"],
+])("slugifies %j without collapsing distinct combining marks", (input, expected) => {
+  expect(slugifyWikiSegment(input)).toBe(expected);
 });
 
 describe("human Notes blocks", () => {
-  const startMarker = "<!-- openclaw:human:start -->";
-  const endMarker = "<!-- openclaw:human:end -->";
-  const rendered = ["# Source", "", "## Notes", startMarker, endMarker, ""].join("\n");
-
-  it.each([endMarker])("ignores a standalone marker inside fenced source content", (marker) => {
-    const existing = ["# Source", "", "## Content", "```text", marker, "```", ""].join("\n");
-
-    expect(extractHumanNotesBlock(existing)).toBeNull();
-    expect(preserveHumanNotesBlock(rendered, existing)).toBe(rendered);
-  });
-
-  it("preserves marker comments embedded in complete human Notes", () => {
-    const notes = [
-      "Before copied markers",
-      startMarker,
-      "Between copied markers",
-      endMarker,
-      "After copied markers",
-    ].join("\n");
-    const existing = rendered.replace(
-      `${startMarker}\n${endMarker}`,
-      `${startMarker}\n${notes}\n${endMarker}`,
+  const start = "<!-- openclaw:human:start -->";
+  const end = "<!-- openclaw:human:end -->";
+  const empty = `${start}\n${end}`;
+  const rendered = `# Source\n\n## Notes\n${empty}\n`;
+  const notes = `Before copied markers\n${start}\nBetween copied markers\n${end}\nAfter copied markers`;
+  const block = `${start}\n${notes}\n${end}`;
+  it.each([
+    [`# Source\n\n## Content\n\`\`\`text\n${end}\n\`\`\`\n`, null, false],
+    [rendered.replace(empty, () => block), block, false],
+    [`~~~markdown\n## Notes\n${start}\nProducer example.\n${end}\n~~~`, null, true],
+    ...["\n", "\r\n"].map((newline) => {
+      const human = [start, "Keep café and trailing spaces.  ", end].join(newline);
+      return [
+        `~~~sql${newline}SELECT 1${newline}## Notes${newline}${human}${newline}`,
+        human,
+        true,
+      ] as const;
+    }),
+  ] as const)("preserves only actual complete Notes in %j", (existing, kept, producerMarkdown) => {
+    expect(extractHumanNotesBlock(existing, { producerMarkdown })).toBe(kept);
+    expect(preserveHumanNotesBlock(rendered, existing, { producerMarkdown })).toBe(
+      kept === null ? rendered : rendered.replace(empty, () => kept),
     );
+  });
+  it.each([start, end])("rejects an unpaired producer marker %s", (marker) => {
+    const existing = `# Concept\n\n## Notes\n${marker}\nHandwritten note.\n`;
+    const preserve = () => preserveHumanNotesBlock(rendered, existing, { producerMarkdown: true });
+    expect(preserve).toThrow("human Notes are missing");
+  });
+});
 
-    expect(extractHumanNotesBlock(existing)).toBe(`${startMarker}\n${notes}\n${endMarker}`);
-    expect(preserveHumanNotesBlock(rendered, existing)).toBe(existing);
+describe("renderWikiMarkdown", () => {
+  const body = "# Alpha\n";
+  const frontmatter = {
+    build: 7,
+    status: "review",
+    customStatus: "active",
+    mirror: "status",
+    questions: ["x"],
+    updatedAt: "2026-11-04T05:00:00.000Z",
+  };
+  const canonical = renderWikiMarkdown({ frontmatter, body });
+  it.each([
+    "1: alpha\ntitle: T",
+    "? { a: b }\n: value\nstatus: active",
+    "build: 007\nstatus: &s active\ncustomStatus: *s",
+    "build: 007\n? &k status\n: active\n? *k\n: draft\nmirror: *k",
+    "build: 007\nquestions: &q\n  - *q\nmirror: *q\ntitle: Alpha",
+    "build: 007\nstatus: !!bool true",
+    "updatedAt: !!timestamp 2026-01-01\nbuild: 007",
+  ])("retains published value rendering for unsupported source %j", (source) => {
+    const original = `---\n${source}\n---\n\n${body}`;
+    const page = renderWikiMarkdown({ frontmatter, body, original });
+    expect(page).toBe(canonical);
+    expect(parseWikiMarkdown(page).frontmatter).toEqual(frontmatter);
+  });
+  it("keeps block-scalar newlines when deleting a sibling", () => {
+    const original = "---\nnotes: |+\n  body\n\n\nextra: drop me\n---\n\n# Alpha\n";
+    const { extra: _extra, ...kept } = parseWikiMarkdown(original).frontmatter;
+    const page = renderWikiMarkdown({ frontmatter: kept, body, original });
+    expect(page).toContain("notes: |+\n  body\n");
+    expect(page).not.toContain("extra");
+    expect(parseWikiMarkdown(page).frontmatter).toEqual(kept);
   });
 });
 
 describe("toWikiPageSummary", () => {
-  it("normalizes agent-facing people wiki metadata", () => {
-    const raw = renderWikiMarkdown({
-      frontmatter: {
-        pageType: "entity",
-        entityType: "person",
-        id: "entity.brad",
-        title: "Brad Groux",
-        canonicalId: "maintainer.brad-groux",
-        aliases: ["brad", "bgroux"],
-        privacyTier: "local-private",
-        bestUsedFor: ["Microsoft ecosystem routing"],
-        notEnoughFor: ["legal approval"],
-        lastRefreshedAt: "2026-04-29T00:00:00.000Z",
-        personCard: {
-          handles: ["@bgroux"],
-          socials: ["https://x.example/bgroux"],
-          email: "brad@example.com",
-          timezone: "America/Chicago",
-          lane: "Microsoft Teams",
-          askFor: ["Teams and Azure questions"],
-          avoidAskingFor: ["unrelated billing"],
-          confidence: 0.8,
-          privacyTier: "confirm-before-use",
-          lastRefreshedAt: "2026-04-28T00:00:00.000Z",
-        },
-        relationships: [
-          {
-            targetId: "entity.alice",
-            targetTitle: "Alice",
-            kind: "collaborates-with",
-            weight: 0.7,
-            confidence: 0.6,
-            evidenceKind: "discrawl-stat",
-            privacyTier: "local-private",
-          },
-        ],
-        claims: [
-          {
-            id: "claim.brad.teams",
-            text: "Brad is useful for Microsoft Teams routing.",
-            confidence: 0.9,
-            evidence: [
-              {
-                kind: "maintainer-whois",
-                sourceId: "source.maintainers",
-                confidence: 0.8,
-                privacyTier: "local-private",
-              },
-            ],
-          },
-        ],
-      },
-      body: "# Brad Groux\n",
-    });
+  it("reports and excludes sequence frontmatter roots from page scans", () => {
+    const raw = "---\n- pageType: synthesis\n---\n\n# Invalid Root";
+    const relativePath = "syntheses/invalid-root.md";
+    const params = { absolutePath: `/tmp/wiki/${relativePath}`, relativePath, raw };
+    const result = scanWikiPageSummary(params);
+    assert(result.status === "invalid-frontmatter", "expected invalid frontmatter result");
 
-    const summary = toWikiPageSummary({
-      absolutePath: "/tmp/wiki/entities/brad.md",
-      relativePath: "entities/brad.md",
-      raw,
-    });
-    if (!summary) {
-      throw new Error("expected wiki summary");
-    }
-
-    expect(summary.entityType).toBe("person");
-    expect(summary.canonicalId).toBe("maintainer.brad-groux");
-    expect(summary.aliases).toEqual(["brad", "bgroux"]);
-    expect(summary.privacyTier).toBe("local-private");
-    expect(summary.bestUsedFor).toEqual(["Microsoft ecosystem routing"]);
-    expect(summary.notEnoughFor).toEqual(["legal approval"]);
-    expect(summary.lastRefreshedAt).toBe("2026-04-29T00:00:00.000Z");
-    expect(summary.personCard?.handles).toEqual(["@bgroux"]);
-    expect(summary.personCard?.emails).toEqual(["brad@example.com"]);
-    expect(summary.personCard?.lane).toBe("Microsoft Teams");
-    expect(summary.personCard?.privacyTier).toBe("confirm-before-use");
-    expect(summary.relationships).toEqual([
-      {
-        targetId: "entity.alice",
-        targetTitle: "Alice",
-        kind: "collaborates-with",
-        weight: 0.7,
-        confidence: 0.6,
-        evidenceKind: "discrawl-stat",
-        privacyTier: "local-private",
-      },
-    ]);
-    expect(summary.claims[0]?.id).toBe("claim.brad.teams");
-    expect(summary.claims[0]?.evidence).toEqual([
-      {
-        kind: "maintainer-whois",
-        sourceId: "source.maintainers",
-        confidence: 0.8,
-        privacyTier: "local-private",
-      },
-    ]);
+    expect(result.error.message).toBe("Wiki frontmatter must be a YAML mapping");
+    expect(toWikiPageSummary(params)).toBeNull();
+    expect(() => parseWikiMarkdown(raw)).toThrow("Wiki frontmatter must be a YAML mapping");
   });
-
-  it.each([{ name: "sequence", frontmatter: "- pageType: synthesis" }])(
-    "reports and excludes $name frontmatter roots from page scans",
-    ({ frontmatter }) => {
-      const raw = ["---", frontmatter, "---", "", "# Invalid Root"].join("\n");
-      const params = {
-        absolutePath: "/tmp/wiki/syntheses/invalid-root.md",
-        relativePath: "syntheses/invalid-root.md",
-        raw,
-      };
-      const result = scanWikiPageSummary(params);
-      if (result.status !== "invalid-frontmatter") {
-        throw new Error("expected invalid frontmatter result");
-      }
-
-      expect(result.error.message).toBe("Wiki frontmatter must be a YAML mapping");
-      expect(toWikiPageSummary(params)).toBeNull();
-      expect(() => parseWikiMarkdown(raw)).toThrow("Wiki frontmatter must be a YAML mapping");
-    },
-  );
 });
 
-describe("scanWikiPageSummary linkTargets", () => {
-  it("accepts a closing fence longer than the opening fence (#97945)", () => {
-    // CommonMark allows the closing fence to be the same or longer than the
-    // opening fence.  A `` ``` `` opener with a `` ```` `` closer must still
-    // strip the block so the Scala generic inside is not extracted.
-    const markdown = [
-      "# Longer Close",
-      "",
-      "```scala",
-      "def handle(req: Request[A]): Future[Option[User]] = ???",
-      "````",
-      "",
-      "Prose: [[RealTarget]]",
-    ].join("\n");
-    const links = scanWikiLinkTargets(markdown, "entities/test.md");
-    expect(links).toEqual(["RealTarget"]);
-  });
+it.each([
+  [
+    "longer closing fence",
+    "```scala\n# install first\ndef handle(req: Request[A]): Future[Option[User]] = ???\n````\n\n# Longer Close\n\nProse: [[RealTarget]]",
+    { title: "Longer Close", linkTargets: ["RealTarget"] },
+  ],
+  [
+    "shorter inner fence",
+    "# Long `Fence` With Shorter Inner Line\n\n``````bash\nsome code\n```\n[[not-a-link]]\n``````\n\nAfter fence: [[RealPage]]",
+    { title: "Long `Fence` With Shorter Inner Line", linkTargets: ["RealPage"] },
+  ],
+])("ignores fenced links and title comments (%s, #97945)", (_name, markdown, expected) => {
+  expect(scanWikiSummary(markdown)).toMatchObject(expected);
+});
 
-  it("does not leak [[…]] when a shorter fence-like line appears inside a longer fenced block (#97945)", () => {
-    // A 6-backtick block containing a shorter 3-backtick line before the real
-    // 6-backtick close must not cause the scanner to exit early.
-    const markdown = [
-      "# Long Fence With Shorter Inner Line",
-      "",
-      "``````bash",
-      "some code",
-      "```",
-      "[[not-a-link]]",
-      "``````",
-      "",
-      "After fence: [[RealPage]]",
-    ].join("\n");
-    const links = scanWikiLinkTargets(markdown, "entities/test.md");
-    expect(links).toEqual(["RealPage"]);
-  });
+it.each(["Plain", "[x]", "[x", "]", "a\\", "`C:\\x[y]`", "*raw* _text_ &amp; <tag>"])(
+  "renders native link titles literally: %s",
+  (title) => {
+    const relativePath = "sources/meeting notes.md";
+    for (const sourceRelativeTo of ["index.md", "entities/plan.md"]) {
+      const link = formatWikiLink({ renderMode: "native", relativePath, sourceRelativeTo, title });
+      expect(extractWikiLinks(link, sourceRelativeTo)).toEqual([relativePath]);
+      expect(JSON.stringify(fromMarkdown(link))).toContain(`"value":${JSON.stringify(title)}`);
+    }
+  },
+);
+
+it("filters literal links while parsing CommonMark destinations", () => {
+  const markdown = [
+    '\\\\[[Wiki target|Alias]]\n\n[Plan](../syntheses/plan(v2).md?view=full#details "Project plan")\n\n[Escaped](../syntheses/plan\\(v3\\).md)\n\n![Image](../assets/diagram.png)',
+    "[External](https://example.com/page.md)\n\n[Anchor](#details)\n\n`[Inline code](inline.md)`\n\n```markdown\n[Fenced code](fenced.md)\n```\n\n<!-- [[missing-comment]] [[Literal]] -->\n<!--\n[[missing-multiline]]\n-->\n\\[[missing-escape]] and \\[[Literal]]\n\\\\\\[[missing-odd-run]]",
+    "<!-- openclaw:wiki:related:start -->\n\n[Generated](generated.md)\n\n<!-- openclaw:wiki:related:end -->",
+    "[Reference][ref]\n\n[ref]: reference.md\n\n[Notes](../syntheses/plan%20notes.md)\n\n[Cafe](../syntheses/caf%C3%A9.md#menu)\n\n[Malformed](../syntheses/100%.md)",
+  ].join("\n\n");
+
+  expect(scanWikiSummary(markdown).linkTargets).toEqual(
+    "Wiki target\nsyntheses/plan(v2).md\nsyntheses/plan(v3).md\nassets/diagram.png\nsyntheses/plan notes.md\nsyntheses/café.md\nsyntheses/100%.md".split(
+      "\n",
+    ),
+  );
 });

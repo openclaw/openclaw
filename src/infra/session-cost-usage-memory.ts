@@ -9,14 +9,19 @@ import type {
 } from "../config/sessions/session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "../config/sessions/session-actor-storage-result.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
-import { buildUsageOverview } from "../shared/usage-overview.js";
-import type { SessionCostUsageRollupRow } from "./session-cost-usage-cache.kernel.js";
+import { createDeferredCore, type Deferred } from "../shared/deferred.js";
+import { racePromiseWithAbortSignal } from "./abort-signal.js";
+import type {
+  SessionCostUsageDeferredMetadata,
+  SessionCostUsageRollupRow,
+} from "./session-cost-usage-cache.kernel.js";
 import type { UsageCostResolver } from "./session-cost-usage-pricing.js";
 import {
   projectCostUsageSummary,
   projectSessionCostSummaries,
 } from "./session-cost-usage-projection.js";
 import {
+  decodeUsageCostRollup,
   decodeUsageCostRollupEnvelope,
   encodeUsageCostRollup,
   isUsageCostRollupFresh,
@@ -28,8 +33,8 @@ import type {
 } from "./session-cost-usage-worker.types.js";
 import type { UsageCostTranscriptFile } from "./session-cost-usage.types.js";
 
-// Computation holds no actor FIFO turn. Overlapping refreshes simply reuse the next refresh request.
-const refreshes = new Set<string>();
+// Computation holds no actor FIFO turn. Direct detail waits; background overlaps return busy.
+const refreshes = new Map<string, Deferred>();
 type UsageCostOwnerLocation = Pick<SessionActorStorageBinding, "agentId" | "path">;
 type CapturedUsageCostOwner = NonNullable<ReturnType<typeof captureSessionActorStorageOwner>>;
 type UsageCostMemorySource = Omit<SessionActorStorageBinding, "actor"> & {
@@ -68,10 +73,11 @@ function transcriptFile(
 export async function runSessionActorUsage(
   binding: SessionActorStorageBinding | CapturedUsageCostOwner,
   operation: UsageCostWorkerOperation,
-  resolveCost: UsageCostResolver,
+  prepareCost: () => Promise<UsageCostResolver>,
+  waitForRefresh = false,
 ): Promise<UsageCostWorkerResult | { kind: "busy" }> {
   if ("actor" in binding) {
-    return runCapturedSessionActorUsage(binding, operation, resolveCost);
+    return runCapturedSessionActorUsage(binding, operation, prepareCost, waitForRefresh);
   }
   const selected =
     binding.binding?.agentId === binding.agentId && binding.binding.path === binding.path
@@ -90,7 +96,12 @@ export async function runSessionActorUsage(
       : await selected?.actor.storage!.acquire(sessionKey, lifetime)
     : undefined;
   try {
-    return await runCapturedSessionActorUsage({ ...binding, actor }, operation, resolveCost);
+    return await runCapturedSessionActorUsage(
+      { ...binding, actor },
+      operation,
+      prepareCost,
+      waitForRefresh,
+    );
   } finally {
     await actor?.release();
   }
@@ -99,23 +110,38 @@ export async function runSessionActorUsage(
 async function runCapturedSessionActorUsage(
   binding: UsageCostMemorySource,
   operation: UsageCostWorkerOperation,
-  resolveCost: UsageCostResolver,
+  prepareCost: () => Promise<UsageCostResolver>,
+  waitForRefresh: boolean,
 ): Promise<UsageCostWorkerResult | { kind: "busy" }> {
+  if (operation.kind === "overview") {
+    // The overview loader reads private sessions through their whole in-memory rollups.
+    throw new Error("Private session usage has no overview quarter rows");
+  }
   const refresh = operation.kind === "refresh";
   const key = refreshKey(binding);
-  if (refresh && refreshes.has(key)) {
-    return { kind: "busy" };
-  }
   if (refresh) {
-    refreshes.add(key);
+    for (let current = refreshes.get(key); current; current = refreshes.get(key)) {
+      if (!waitForRefresh) {
+        return { kind: "busy" };
+      }
+      await racePromiseWithAbortSignal(
+        current.promise,
+        getAsyncWorkSignal(),
+        (aborted) => aborted.reason,
+      );
+    }
+  }
+  const completion = refresh ? createDeferredCore() : undefined;
+  if (completion) {
+    refreshes.set(key, completion);
   }
   try {
     const requested =
       operation.kind === "sessions"
         ? operation.sessions.map((entry) => entry.sessionFile)
-        : operation.kind === "summary"
-          ? undefined
-          : operation.sessionFiles;
+        : operation.kind === "refresh"
+          ? operation.sessionFiles
+          : undefined;
     const requestedSessionId = (file: string) => {
       const marker = parseSqliteSessionFileMarker(file);
       if (!marker || marker.agentId !== binding.agentId || marker.storePath !== binding.path) {
@@ -124,6 +150,19 @@ async function runCapturedSessionActorUsage(
       return marker.sessionId;
     };
     const ids = requested?.map(requestedSessionId);
+    const metadataLimit = Math.min(ids ? new Set(ids).size : 20_000, 20_000);
+    const reportBudget =
+      operation.kind === "summary" || operation.kind === "sessions"
+        ? {
+            remainingBytes:
+              (operation.kind === "sessions"
+                ? (operation.reportBudgetBytes ?? 32 * 1024 * 1024)
+                : 32 * 1024 * 1024) -
+              metadataLimit * 256,
+            metadataLimit,
+            pricingFingerprint: operation.pricingFingerprint,
+          }
+        : undefined;
     if (operation.kind === "refresh") {
       operation.rebuildRows?.forEach((row) => requestedSessionId(row.key));
     }
@@ -134,6 +173,7 @@ async function runCapturedSessionActorUsage(
             input: {
               includeEvents: refresh,
               includeRollupBodies: operation.kind === "summary" || operation.kind === "sessions",
+              ...(reportBudget ? { reportBudget } : {}),
               ...(ids ? { sessionIds: ids } : {}),
             },
           },
@@ -150,11 +190,10 @@ async function runCapturedSessionActorUsage(
     if (operation.kind === "inventory") {
       return {
         kind: "inventory",
-        files: (selectedFiles ?? [...files.values()].map(({ file }) => file))
+        files: [...files.values()]
+          .map(({ file }) => file)
           .filter(
-            (file): file is UsageCostTranscriptFile =>
-              file !== undefined &&
-              (operation.minMtimeMs === undefined || file.mtimeMs >= operation.minMtimeMs),
+            (file) => operation.minMtimeMs === undefined || file.mtimeMs >= operation.minMtimeMs,
           )
           .map(({ kind, sourcePath, sessionId, mtimeMs }) => ({
             kind,
@@ -165,25 +204,52 @@ async function runCapturedSessionActorUsage(
       };
     }
     const rows = new Map<string, SessionCostUsageRollupRow>();
+    const deferredPaths = new Set<string>();
+    const deferredMetadata = new Map<string, SessionCostUsageDeferredMetadata>();
     for (const [filePath, { instance }] of files) {
       if (instance.rollup) {
         rows.set(filePath, {
           key: filePath,
           valueJson: instance.rollup.valueJson,
           updatedAt: instance.rollup.updatedAt,
+          ...(instance.rollup.bodyBytes === undefined
+            ? {}
+            : { bodyBytes: instance.rollup.bodyBytes }),
         });
+        if (reportBudget) {
+          reportBudget.remainingBytes -=
+            2 * instance.rollup.valueJson.length + (instance.rollup.blob?.byteLength ?? 0);
+        }
+      }
+      if (instance.rollupDeferred) {
+        deferredPaths.add(filePath);
+      }
+      if (instance.deferredRollupMetadata) {
+        deferredMetadata.set(filePath, instance.deferredRollupMetadata);
       }
     }
     if (operation.kind === "summary" || operation.kind === "sessions") {
+      const decodeBudget = { remainingBytes: reportBudget?.remainingBytes ?? 0 };
       const consumed = new Set<string>();
       const invalidRows = new Map<string, SessionCostUsageRollupRow>();
       const source = {
+        deferredPaths,
+        deferredMetadata,
         readRow(filePath: string) {
           consumed.add(filePath);
           return rows.get(filePath);
         },
         readBody(row: SessionCostUsageRollupRow) {
           return files.get(row.key)?.instance.rollup?.blob ?? null;
+        },
+        async readEntry(row: SessionCostUsageRollupRow) {
+          getAsyncWorkSignal()?.throwIfAborted();
+          return decodeUsageCostRollup(
+            row.valueJson,
+            operation.pricingFingerprint,
+            files.get(row.key)?.instance.rollup?.blob ?? null,
+            decodeBudget,
+          );
         },
         onInvalidBody(filePath: string) {
           const row = rows.get(filePath);
@@ -208,6 +274,7 @@ async function runCapturedSessionActorUsage(
                 ...operation,
                 files: [...files.values()].map(({ file }) => file),
               }),
+              staleSessionFiles: [],
             }
           : {
               kind: "sessions" as const,
@@ -216,22 +283,10 @@ async function runCapturedSessionActorUsage(
                 ...operation,
                 files: selectedFiles ?? [],
               })),
+              remainingReportBytes: Math.max(0, decodeBudget.remainingBytes),
             };
       // This is the disclosure boundary; ordinary bookkeeping uses the captured immutable snapshot.
       binding.actor?.snapshot(binding.authority);
-      if (result.kind === "sessions" && operation.kind === "sessions" && operation.overview) {
-        return {
-          kind: "overview",
-          result: buildUsageOverview({
-            ...operation.overview,
-            summaries: result.summaries,
-            dayBucket: operation.dayBucket,
-          }),
-          cacheStatus: result.cacheStatus,
-          staleSessionFiles: result.staleSessionFiles,
-          invalidRows: [...invalidRows.values()],
-        };
-      }
       return { ...result, invalidRows: [...invalidRows.values()] };
     }
     if (!binding.actor) {
@@ -252,10 +307,14 @@ async function runCapturedSessionActorUsage(
           return false;
         }
         const row = rows.get(file.filePath);
+        if (row && Buffer.byteLength(row.valueJson) > 64 * 1024) {
+          return true;
+        }
         const envelope =
           row && decodeUsageCostRollupEnvelope(row.valueJson, operation.pricingFingerprint);
         return (
           rebuild.has(file.filePath) ||
+          (row?.bodyBytes !== undefined && envelope?.body.storedBytes !== row.bodyBytes) ||
           !isUsageCostRollupFresh({ file, checkpoint: envelope?.checkpoint })
         );
       })
@@ -273,7 +332,7 @@ async function runCapturedSessionActorUsage(
         file,
         events: instance.events ?? [],
         pricingFingerprint: operation.pricingFingerprint,
-        resolveCosts: async (pairs) => pairs.map(resolveCost),
+        resolveCosts: async (pairs) => pairs.map(await prepareCost()),
       });
       const encoded = encodeUsageCostRollup(entry);
       const outcome = await binding.actor.storage!.mutate(
@@ -301,8 +360,9 @@ async function runCapturedSessionActorUsage(
       })),
     };
   } finally {
-    if (refresh) {
+    if (completion) {
       refreshes.delete(key);
+      completion.resolve();
     }
   }
 }

@@ -1,10 +1,9 @@
 import fs from "node:fs";
 import readline from "node:readline";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
-import type { Worker } from "node:worker_threads";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CliSessionReseedReceipt } from "../config/sessions.js";
 import { normalizeCliSessionReseedReceipt } from "../config/sessions/cli-session-binding.js";
-import { createCpuTrackedWorker } from "../infra/worker-cpu.js";
 import {
   appendCoalescedClaudeCliToolMessage,
   createClaudeReseedImportState,
@@ -16,61 +15,9 @@ import {
 } from "./cli-session-history.claude.js";
 
 const YIELD_BYTES = 256 * 1024;
-const OFFTHREAD_JSONL_LINE_CHARS = 1024 * 1024;
+const OVERSIZED_JSONL_LINE_CHARS = 1024 * 1024;
 const OVERSIZED_HISTORY_PLACEHOLDER =
   "[Claude CLI history record omitted from context because it exceeded 1 MiB.]";
-const OVERSIZED_ENTRY_WORKER_SOURCE = `
-  const { parentPort } = require("node:worker_threads");
-  const boundedString = (value, max) =>
-    typeof value === "string" && value.length <= max ? value : undefined;
-  parentPort.on("message", (line) => {
-    try {
-      const entry = JSON.parse(line);
-      const type = entry?.type;
-      const message = entry?.message;
-      if ((type !== "user" && type !== "assistant") || !message || message.role !== type) {
-        parentPort.postMessage(null);
-      } else {
-        // An oversized tool result stays a tool result; as plain text it would render as a user turn.
-        const blocks = Array.isArray(message.content) ? message.content : [];
-        const toolResultsOnly = type === "user" && blocks.length > 0 &&
-          blocks.every((block) => block?.type === "tool_result" && boundedString(block.tool_use_id, 1_024));
-        const rawUsage = message.usage;
-        const usage = rawUsage && typeof rawUsage === "object"
-          ? Object.fromEntries(
-              ["input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"]
-                .flatMap((key) => Number.isFinite(rawUsage[key]) ? [[key, rawUsage[key]]] : []),
-            )
-          : undefined;
-        parentPort.postMessage({
-          type,
-          timestamp: boundedString(entry.timestamp, 128),
-          uuid: boundedString(entry.uuid, 1_024),
-          isSidechain: entry.isSidechain === true,
-          isMeta: entry.isMeta === true,
-          isCompactSummary: entry.isCompactSummary === true,
-          isVisibleInTranscriptOnly: entry.isVisibleInTranscriptOnly === true,
-          message: {
-            role: type,
-            content: toolResultsOnly
-              ? blocks.slice(0, 64).map((block) => ({
-                  type: "tool_result",
-                  tool_use_id: block.tool_use_id,
-                  ...(block.is_error === true ? { is_error: true } : {}),
-                  content: ${JSON.stringify(OVERSIZED_HISTORY_PLACEHOLDER)},
-                }))
-              : ${JSON.stringify(OVERSIZED_HISTORY_PLACEHOLDER)},
-            model: boundedString(message.model, 256),
-            stop_reason: boundedString(message.stop_reason, 128),
-            usage,
-          },
-        });
-      }
-    } catch {
-      parentPort.postMessage(null);
-    }
-  });
-`;
 type Message = Record<string, unknown>;
 export type ClaudeCliHistoryParams = {
   cliSessionId: string;
@@ -78,32 +25,66 @@ export type ClaudeCliHistoryParams = {
   localSessionId?: string;
   reseedReceipt?: CliSessionReseedReceipt;
 };
-async function decodeOversizedClaudeEntry(
-  worker: Worker,
-  line: string,
-): Promise<ClaudeCliProjectEntry | null> {
-  return await new Promise((resolve) => {
-    let settled = false;
-    const finish = (value: ClaudeCliProjectEntry | null) => {
-      if (settled) {
-        return;
+
+function projectOversizedClaudeEntry(entry: ClaudeCliProjectEntry): ClaudeCliProjectEntry | null {
+  const type = entry.type;
+  const message = asOptionalRecord(entry.message);
+  if ((type !== "user" && type !== "assistant") || !message || message.role !== type) {
+    return null;
+  }
+  const boundedString = (value: unknown, max: number) =>
+    typeof value === "string" && value.length <= max ? value : undefined;
+  let content: string | Message[] = OVERSIZED_HISTORY_PLACEHOLDER;
+  if (type === "user" && Array.isArray(message.content) && message.content.length) {
+    const toolResults: Message[] = [];
+    for (const value of message.content) {
+      const block = asOptionalRecord(value);
+      const toolUseId = boundedString(block?.tool_use_id, 1_024);
+      if (block?.type !== "tool_result" || !toolUseId) {
+        toolResults.length = 0;
+        break;
       }
-      settled = true;
-      worker.off("message", finish);
-      worker.off("error", fail);
-      worker.off("exit", fail);
-      resolve(value);
-    };
-    const fail = () => finish(null);
-    worker.once("message", finish);
-    worker.once("error", fail);
-    worker.once("exit", fail);
-    try {
-      worker.postMessage(line, []);
-    } catch {
-      fail();
+      if (toolResults.length < 64) {
+        toolResults.push({
+          type: "tool_result",
+          tool_use_id: toolUseId,
+          ...(block.is_error === true ? { is_error: true } : {}),
+          content: OVERSIZED_HISTORY_PLACEHOLDER,
+        });
+      }
     }
-  });
+    // An oversized tool result stays a tool result, never a synthetic user turn.
+    if (toolResults.length) {
+      content = toolResults;
+    }
+  }
+  const rawUsage = asOptionalRecord(message.usage);
+  const usage = rawUsage
+    ? Object.fromEntries(
+        [
+          "input_tokens",
+          "output_tokens",
+          "cache_read_input_tokens",
+          "cache_creation_input_tokens",
+        ].flatMap((key) => (Number.isFinite(rawUsage[key]) ? [[key, rawUsage[key]]] : [])),
+      )
+    : undefined;
+  return {
+    type,
+    timestamp: boundedString(entry.timestamp, 128),
+    uuid: boundedString(entry.uuid, 1_024),
+    isSidechain: entry.isSidechain === true,
+    isMeta: entry.isMeta === true,
+    isCompactSummary: entry.isCompactSummary === true,
+    isVisibleInTranscriptOnly: entry.isVisibleInTranscriptOnly === true,
+    message: {
+      role: type,
+      content,
+      model: boundedString(message.model, 256),
+      stop_reason: boundedString(message.stop_reason, 128),
+      usage,
+    },
+  };
 }
 
 export async function resolveClaudeCliHistorySource(
@@ -153,60 +134,47 @@ export async function visitClaudeCliSessionMessages(
   const reseedState = createClaudeReseedImportState(params);
   let bytesSinceYield = 0;
   let lineNumber = 0;
-  let worker: Worker | undefined;
-  try {
-    for await (const line of lines) {
-      lineNumber += 1;
-      const oversized = line.length > OFFTHREAD_JSONL_LINE_CHARS;
-      if (oversized) {
+  // Production imports already run in the history worker. A pathological decode can
+  // fail that read under its heap limit; the external transcript is never changed.
+  for await (const line of lines) {
+    lineNumber += 1;
+    const oversized = line.length > OVERSIZED_JSONL_LINE_CHARS;
+    if (oversized) {
+      bytesSinceYield = 0;
+      await yieldToEventLoop();
+    } else {
+      bytesSinceYield += Buffer.byteLength(line, "utf8") + 1;
+      if (bytesSinceYield >= YIELD_BYTES) {
         bytesSinceYield = 0;
-      } else {
-        bytesSinceYield += Buffer.byteLength(line, "utf8") + 1;
-        if (bytesSinceYield >= YIELD_BYTES) {
-          bytesSinceYield = 0;
-          await yieldToEventLoop();
-        }
-        if (!line.trim()) {
-          continue;
-        }
+        await yieldToEventLoop();
       }
-      let parsedMessage: Message | null = null;
-      try {
-        // Keep large valid user/assistant records visible through a bounded projection;
-        // unsupported external records are still ignored, but JSON.parse runs off-loop.
-        let entry: ClaudeCliProjectEntry | null;
-        if (oversized) {
-          if (!worker || worker.threadId === -1) {
-            worker = createCpuTrackedWorker(OVERSIZED_ENTRY_WORKER_SOURCE, { eval: true });
-            // Isolate failures between records remain local to this history import.
-            worker.on("error", () => {});
-          }
-          entry = await decodeOversizedClaudeEntry(worker, line);
-        } else {
-          entry = decodeClaudeCliProjectEntry(line);
-        }
-        if (!entry) {
-          continue;
-        }
-        parsedMessage = parseClaudeCliHistoryEntry(
-          entry,
-          params.cliSessionId,
-          lineNumber,
-          toolNames,
-          { reseedMode: "recover", reseedState },
-        );
-      } catch {
-        // Ignore malformed external history entries.
-      }
-      if (parsedMessage) {
-        appendCoalescedClaudeCliToolMessage(messages, parsedMessage);
-        if (messages.length > 1) {
-          visit(redactClaudeCliHistoryMessage(messages.shift()!));
-        }
+      if (!line.trim()) {
+        continue;
       }
     }
-  } finally {
-    await worker?.terminate();
+    let parsedMessage: Message | null = null;
+    try {
+      const decoded = decodeClaudeCliProjectEntry(line);
+      const entry = oversized ? projectOversizedClaudeEntry(decoded) : decoded;
+      if (!entry) {
+        continue;
+      }
+      parsedMessage = parseClaudeCliHistoryEntry(
+        entry,
+        params.cliSessionId,
+        lineNumber,
+        toolNames,
+        { reseedMode: "recover", reseedState },
+      );
+    } catch {
+      // Ignore malformed external history entries.
+    }
+    if (parsedMessage) {
+      appendCoalescedClaudeCliToolMessage(messages, parsedMessage);
+      if (messages.length > 1) {
+        visit(redactClaudeCliHistoryMessage(messages.shift()!));
+      }
+    }
   }
   for (const message of messages) {
     visit(redactClaudeCliHistoryMessage(message));

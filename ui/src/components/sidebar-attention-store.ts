@@ -1,18 +1,25 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CronCompactJob, ModelAuthStatusResult } from "../api/types.ts";
+import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { createMentionsCapability, type MentionsCapability } from "../app/mentions.ts";
-import { hasOperatorReadAccess } from "../app/operator-access.ts";
+import { hasOperatorReadAccess, isRestrictedSessionGuest } from "../app/operator-access.ts";
 import type {
-  SidebarAttentionStoreController as StoreController,
+  SidebarAttentionStoreOwner as StoreOwner,
   SidebarAttentionStoreSources,
 } from "../app/sidebar-attention-store.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
 import { subscribeChatOutboxAttentionChanges } from "../lib/chat/outbox-owner-registry.ts";
 import { subscribeStoredChatOutboxChanges } from "../lib/chat/outbox-store.ts";
-import { createInitialCronState, loadCronStatus } from "../lib/cron/index.ts";
+import {
+  hasCronInventoryEvents,
+  isCronInventoryInvalidation,
+} from "../lib/cron/inventory-connection.ts";
 import { loadCompactCronJobsPage } from "../lib/cron/jobs.ts";
+import { createInitialCronState, loadCronStatus } from "../lib/cron/state.ts";
 import { isGatewayAvailable } from "../lib/gateway-availability.ts";
 import { modelAuthEventInvalidates } from "../lib/model-auth-request-state.ts";
 import { loadModelAuthStatus, nextModelAuthStatusRefreshAt } from "../lib/model-auth.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import {
   dismissSidebarAttention,
@@ -27,6 +34,7 @@ import {
   buildScopeUpgradeInboxEntry,
   buildSidebarInboxEntries,
   type SidebarInboxEntry,
+  type SidebarAttentionItem,
 } from "./sidebar-attention-entries.ts";
 import {
   type CronAttentionJob,
@@ -40,7 +48,42 @@ type SidebarAttentionOwner = {
   dismissalKey: string | null;
 };
 
-export class SidebarAttentionStoreController implements StoreController {
+function isCronAttentionJob(job: unknown): job is CronAttentionJob {
+  if (
+    !isRecord(job) ||
+    typeof job.id !== "string" ||
+    !job.id ||
+    typeof job.name !== "string" ||
+    typeof job.enabled !== "boolean" ||
+    typeof job.updatedAtMs !== "number" ||
+    (job.agentId !== undefined && typeof job.agentId !== "string") ||
+    !isRecord(job.state)
+  ) {
+    return false;
+  }
+  const state = job.state;
+  const disabled = state.autoDisabled;
+  return (
+    [job.updatedAtMs, state.nextRunAtMs, state.lastRunAtMs, state.runningAtMs].every(
+      (value) =>
+        value === undefined || (typeof value === "number" && Number.isFinite(value) && value >= 0),
+    ) &&
+    [state.lastRunStatus, state.lastStatus].every(
+      (value) => value === undefined || value === "ok" || value === "error" || value === "skipped",
+    ) &&
+    (disabled === undefined ||
+      (isRecord(disabled) &&
+        (disabled.reason === "consecutive-failures" || disabled.reason === "schedule-errors") &&
+        typeof disabled.atMs === "number" &&
+        Number.isFinite(disabled.atMs) &&
+        disabled.atMs >= 0 &&
+        typeof disabled.consecutiveErrors === "number" &&
+        Number.isSafeInteger(disabled.consecutiveErrors) &&
+        disabled.consecutiveErrors > 0))
+  );
+}
+
+export class SidebarAttentionStoreOwner implements StoreOwner {
   readonly mentions: MentionsCapability;
   private cronJobs: CronAttentionJob[] = [];
   private cronSchedulerEnabled: boolean | null = null;
@@ -50,6 +93,8 @@ export class SidebarAttentionStoreController implements StoreController {
   private healthRefreshTimer?: ReturnType<typeof globalThis.setTimeout>;
   private loadedOwner: SidebarAttentionOwner | null = null;
   private loadedClient = this.sources.gateway.snapshot.client;
+  private presentationClient = this.sources.gateway.snapshot.client;
+  private presentationScope = gatewayPresentationScope(this.sources.gateway);
   private loadedAgentScope = { ...this.sources.agentSelection.state };
   private dismissalKey: string | null = null;
   private dismissed: SidebarAttentionDismissals = {};
@@ -61,8 +106,10 @@ export class SidebarAttentionStoreController implements StoreController {
   private modelAuthRefresh: { generation: number; agentId: string; requested: boolean } | null =
     null;
   private readonly stopSubscriptions: Array<() => void>;
-  private outboxRuntime: typeof import("../pages/chat/chat-outbox-owner.ts") | null = null;
+  private outboxRuntime: typeof import("../lib/chat/outbox-attention.ts") | null = null;
   private disposed = false;
+  private keyAttention: SidebarAttentionItem | null = null;
+  private keyReadGeneration = 0;
 
   constructor(
     private readonly sources: SidebarAttentionStoreSources,
@@ -73,14 +120,28 @@ export class SidebarAttentionStoreController implements StoreController {
       connectionBootstrap: sources.connectionBootstrap,
     });
     this.loadedClient = null;
+    // Reconcile owner scope and publish aggregate attention synchronously for downstream consumers.
     this.stopSubscriptions = [
       sources.gateway.subscribe(() => this.synchronizeGateway()),
+      sources.config.subscribe(() => this.refreshOpenClawId()),
       sources.gateway.subscribeEvents((event) => {
-        if (event.event === "cron") {
+        if (event.event === "openclawId.people.changed") {
+          this.refreshOpenClawId();
+        } else if (event.event === "cron") {
+          if (
+            !this.applyCronEvent(event.payload) &&
+            !hasCronInventoryEvents(sources.gateway.snapshot)
+          ) {
+            this.load(false);
+          }
+          if (document.visibilityState === "hidden") {
+            this.cronRefreshNeeded = true;
+          }
+        } else if (isCronInventoryInvalidation(event, sources.gateway.snapshot)) {
           this.load(false);
-        } else if (event.event === "config.changed") {
-          this.load();
-        } else if (modelAuthEventInvalidates(event)) {
+        } else if (
+          modelAuthEventInvalidates(event, sources.agentSelection.state.selectedId ?? undefined)
+        ) {
           this.load(true, false);
         }
       }),
@@ -90,9 +151,11 @@ export class SidebarAttentionStoreController implements StoreController {
       this.mentions.subscribe(onChange),
       subscribeStoredChatOutboxChanges(onChange),
       subscribeChatOutboxAttentionChanges(onChange),
+      listen(document, "visibilitychange", this.refreshDeferred),
+      listen(globalThis, "storage", this.syncDismissalsFromStorage),
     ];
     // Share the chat owner’s live overlays without putting its send graph in shell startup.
-    void import("../pages/chat/chat-outbox-owner.ts")
+    void import("../lib/chat/outbox-attention.ts")
       .then((runtime) => {
         if (!this.disposed) {
           this.outboxRuntime = runtime;
@@ -104,8 +167,6 @@ export class SidebarAttentionStoreController implements StoreController {
       .catch(() => {
         // Chat retains its existing recovery controls if its lazy runtime cannot load.
       });
-    document.addEventListener("visibilitychange", this.refreshDeferred);
-    globalThis.addEventListener("storage", this.syncDismissalsFromStorage);
     this.synchronizeGateway();
   }
 
@@ -135,6 +196,8 @@ export class SidebarAttentionStoreController implements StoreController {
   }
 
   private clearHealth(): void {
+    this.keyReadGeneration += 1;
+    this.keyAttention = null;
     this.cronJobs = [];
     this.cronSchedulerEnabled = null;
     this.cronRetryAt = undefined;
@@ -150,6 +213,7 @@ export class SidebarAttentionStoreController implements StoreController {
     if (
       this.disposed ||
       !isGatewayAvailable(this.sources.gateway.snapshot) ||
+      (this.sources.gateway.snapshot.selfUser === undefined && this.dismissalKey !== null) ||
       document.visibilityState === "hidden"
     ) {
       return;
@@ -222,23 +286,23 @@ export class SidebarAttentionStoreController implements StoreController {
                 item.agentId,
                 item.sessionKey,
                 item.id,
-                item.unconfirmed,
+                item.held,
                 item.command,
               ]),
             },
             requiresAction: true,
-            severity: item.unconfirmed ? ("warning" as const) : ("error" as const),
+            severity: item.held ? ("warning" as const) : ("error" as const),
           }),
         ) ?? [];
-    if (gateway.phase !== "connected") {
-      return outbox;
-    }
     const overlay = this.sources.overlays.snapshot;
     const update = resolveSidebarUpdateAttention(this.sources);
-    const scopeUpgrade = buildScopeUpgradeInboxEntry({
-      scopes: gateway.hello?.auth?.scopes,
-      state: this.sources.scopeUpgrade.state,
-    });
+    // Expected guest permissions are not a browser-repair incident. Profile keeps the explicit request.
+    const scopeUpgrade = isRestrictedSessionGuest(gateway.hello?.auth ?? null)
+      ? null
+      : buildScopeUpgradeInboxEntry({
+          scopes: gateway.hello?.auth?.scopes,
+          state: this.sources.scopeUpgrade.state,
+        });
     const attention = buildSidebarAttentionEntries({
       cronJobs: this.cronJobs,
       cronSchedulerEnabled: this.cronSchedulerEnabled,
@@ -249,7 +313,7 @@ export class SidebarAttentionStoreController implements StoreController {
     });
     return buildSidebarInboxEntries({
       approvals: overlay.approvalQueue,
-      attention,
+      attention: this.keyAttention ? [...attention, this.keyAttention] : attention,
       outbox,
       mentions: this.mentions.snapshot.items,
       scopeUpgrade,
@@ -271,12 +335,61 @@ export class SidebarAttentionStoreController implements StoreController {
     });
   }
 
+  private applyCronEvent(payload: unknown): boolean {
+    // A pending/partial inventory still needs its trailing read. Applying an event
+    // there would let an older page overwrite it or certify missing rows.
+    if (
+      this.cronRefresh ||
+      this.cronRefreshNeeded ||
+      this.cronSchedulerEnabled === null ||
+      !isGatewayAvailable(this.sources.gateway.snapshot) ||
+      document.visibilityState === "hidden" ||
+      !isRecord(payload) ||
+      typeof payload.action !== "string" ||
+      !["removed", "started", "finished", "scheduled"].includes(payload.action) ||
+      !isCronAttentionJob(payload.job) ||
+      payload.jobId !== payload.job.id
+    ) {
+      return false;
+    }
+    const job = payload.job;
+    const scopeId = this.sources.agentSelection.state.scopeId;
+    const index = this.cronJobs.findIndex((entry) => entry.id === job.id);
+    // Events do not establish list membership: even All agents can be access-
+    // filtered, and completion can carry a removed job's historical snapshot.
+    if (index < 0) {
+      return false;
+    }
+    if (payload.action === "removed") {
+      this.cronJobs.splice(index, 1);
+    } else {
+      const { id, name, agentId, enabled, updatedAtMs } = job;
+      const { nextRunAtMs, lastRunAtMs, lastRunStatus, lastStatus, runningAtMs, autoDisabled } =
+        job.state;
+      // Retain attention facts only; event jobs also contain full task payloads.
+      const attention = {
+        id,
+        name,
+        agentId,
+        enabled,
+        updatedAtMs,
+        state: { nextRunAtMs, lastRunAtMs, lastRunStatus, lastStatus, runningAtMs, autoDisabled },
+      };
+      this.cronJobs[index] = attention;
+    }
+    this.reconcileDismissals({ cronInventoryComplete: scopeId === null, modelAuthAgentId: null });
+    this.scheduleHealthRefresh();
+    this.onChange();
+    return true;
+  }
+
   private load(refreshModelAuth = true, refreshCron = true): void {
     const gateway = this.sources.gateway.snapshot;
     const client = gateway.client;
     if (
       !isGatewayAvailable(gateway) ||
       !client ||
+      (gateway.selfUser === undefined && this.dismissalKey !== null) ||
       !hasOperatorReadAccess(gateway.hello?.auth ?? null)
     ) {
       return;
@@ -330,6 +443,8 @@ export class SidebarAttentionStoreController implements StoreController {
             const cron = createInitialCronState<CronCompactJob>({ client, connected: true });
             cron.canRefresh = canRefreshCron;
             cron.cronAgentId = agentScope.scopeId;
+            // The Inbox consumes the whole inventory, rather than one table page.
+            cron.cronJobsLimit = 200;
             await Promise.all([loadCompactCronJobsPage(cron), loadCronStatus(cron)]);
             while (
               canRefreshCron() &&
@@ -411,10 +526,10 @@ export class SidebarAttentionStoreController implements StoreController {
             while (refresh.requested && currentAuth()) {
               refresh.requested = false;
               const status = await loadModelAuthStatus(client, { agentId }).catch(() => null);
-              if (currentAuth()) {
+              if (currentAuth() && status) {
                 this.modelAuthStatus = status;
                 this.modelAuthAgentId = agentId;
-                this.modelAuthRefreshAt = status ? nextModelAuthStatusRefreshAt(status) : undefined;
+                this.modelAuthRefreshAt = nextModelAuthStatusRefreshAt(status);
                 publishSource({ cronInventoryComplete: false, modelAuthAgentId: agentId });
               }
             }
@@ -432,12 +547,74 @@ export class SidebarAttentionStoreController implements StoreController {
     this.scheduleHealthRefresh();
   }
 
+  refreshOpenClawId(): void {
+    const generation = ++this.keyReadGeneration;
+    const snapshot = this.sources.gateway.snapshot;
+    const client = snapshot.client;
+    const revision = this.sources.gateway.connectionRevision;
+    const scope = gatewayPresentationScope(this.sources.gateway);
+    const current = () =>
+      !this.disposed &&
+      generation === this.keyReadGeneration &&
+      this.sources.config.current.openclawIdEnabled === true &&
+      this.sources.gateway.snapshot.phase === "connected" &&
+      this.sources.gateway.snapshot.client === client &&
+      this.sources.gateway.connectionRevision === revision &&
+      gatewayPresentationScope(this.sources.gateway) === scope;
+    if (!client || !current() || !hasOperatorReadAccess(snapshot.hello?.auth ?? null)) {
+      if (this.keyAttention !== null) {
+        this.keyAttention = null;
+        this.onChange();
+      }
+      return;
+    }
+    void (async () => {
+      const { readOpenClawIdKeyAttention } = await import("./sidebar-attention-openclaw-id.ts");
+      if (!current()) {
+        return;
+      }
+      const attention = await readOpenClawIdKeyAttention(client, current);
+      if (current()) {
+        this.keyAttention = attention;
+        this.onChange();
+      }
+    })().catch(() => {
+      // A failed read is not evidence that a known key problem was repaired.
+    });
+  }
+
   private synchronizeGateway(): void {
     const snapshot = this.sources.gateway.snapshot;
-    const key = resolveSidebarAttentionKey(this.sources.gateway);
+    const scope = gatewayPresentationScope(this.sources.gateway);
+    const identityChanged =
+      this.presentationClient !== snapshot.client || this.presentationScope !== scope;
+    this.presentationClient = snapshot.client;
+    this.presentationScope = scope;
+    const identityPending =
+      snapshot.phase === "connected" &&
+      snapshot.selfUser === undefined &&
+      this.dismissalKey !== null &&
+      hasOperatorReadAccess(snapshot.hello?.auth ?? null);
+    const key =
+      (snapshot.phase !== "connected" || identityPending) && !identityChanged
+        ? this.dismissalKey
+        : resolveSidebarAttentionKey(this.sources.gateway);
     if (key !== this.dismissalKey) {
       this.dismissalKey = key;
       this.dismissed = loadDismissals(key);
+    }
+    if (
+      (snapshot.phase !== "connected" || identityPending) &&
+      snapshot.client &&
+      !identityChanged
+    ) {
+      this.loadGeneration += 1;
+      this.loadedClient = null;
+      this.keyReadGeneration += 1;
+      this.keyAttention = null;
+      this.scheduleHealthRefresh();
+      this.onChange();
+      return;
     }
     if (
       snapshot.phase !== "connected" ||
@@ -459,7 +636,8 @@ export class SidebarAttentionStoreController implements StoreController {
     }
     const owner = this.owner();
     const agentScope = this.sources.agentSelection.state;
-    const ownerChanged = this.loadedOwner !== null && !this.ownerEquals(owner, this.loadedOwner);
+    const ownerChanged =
+      identityChanged || (this.loadedOwner !== null && !this.ownerEquals(owner, this.loadedOwner));
     if (ownerChanged) {
       this.clearHealth();
       this.onChange();
@@ -502,11 +680,13 @@ export class SidebarAttentionStoreController implements StoreController {
     this.cronRetryAt = undefined;
     this.scheduleHealthRefresh();
     this.load();
+    this.refreshOpenClawId();
   }
 
   private readonly refreshDeferred = () => {
     this.scheduleHealthRefresh();
     if (document.visibilityState === "visible") {
+      this.refreshOpenClawId();
       this.onChange();
       if (this.cronRefreshNeeded) {
         // Catch up hidden changes or failed reads without reloading unchanged inventory.
@@ -560,7 +740,5 @@ export class SidebarAttentionStoreController implements StoreController {
       stop();
     }
     this.mentions.dispose();
-    document.removeEventListener("visibilitychange", this.refreshDeferred);
-    globalThis.removeEventListener("storage", this.syncDismissalsFromStorage);
   }
 }

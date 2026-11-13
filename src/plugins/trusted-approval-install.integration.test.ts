@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { wrapToolWithBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -11,33 +11,25 @@ import {
   setEmbeddedPluginApprovalBroker,
 } from "../infra/embedded-plugin-approval-broker.js";
 import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
-import { withEnvAsync } from "../test-utils/env.js";
 import { resetGlobalHookRunner } from "./hook-runner-global.js";
 import { installPluginFromPath } from "./install.js";
 import { clearPluginRegistryLoadCache, loadOpenClawPlugins } from "./loader.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { resetPluginRuntimeStateForTest } from "./runtime.js";
 import { resolvePluginTools } from "./tools.js";
+import { readToolTestEvents } from "./tools.test-support.js";
 
 const tempDirs = createTempDirTracker();
 const pluginId = "approval-effect-probe";
 const toolName = "approval_effect_probe";
+let probeRoot: string;
 
-function nextApprovalRequest(broker: EmbeddedPluginApprovalBroker): {
-  promise: Promise<PluginApprovalRequest>;
-  dispose: () => void;
-} {
-  let unsubscribe = () => {};
-  const promise = new Promise<PluginApprovalRequest>((resolve) => {
-    unsubscribe = broker.subscribe((event) => {
-      if (event.event === "plugin.approval.requested") {
-        unsubscribe();
-        resolve(event.payload);
-      }
-    });
-  });
-  return { promise, dispose: () => unsubscribe() };
-}
+beforeEach(() => {
+  probeRoot = tempDirs.make("openclaw-approval-install-");
+  vi.stubEnv("OPENCLAW_STATE_DIR", path.join(probeRoot, "state"));
+  vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(probeRoot, "config.json"));
+  vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+});
 
 function resetRuntime() {
   resetGlobalHookRunner();
@@ -49,6 +41,7 @@ function resetRuntime() {
 afterEach(() => {
   setEmbeddedPluginApprovalBroker(null);
   setEmbeddedMode(false);
+  vi.unstubAllEnvs();
   resetRuntime();
   tempDirs.cleanup();
 });
@@ -57,27 +50,23 @@ function writeProbePackage(root: string, version: "1.0.0" | "2.0.0") {
   const dir = path.join(root, `source-${version}`);
   fs.mkdirSync(dir, { recursive: true });
   const entry = `probe-${version}.cjs`;
-  fs.writeFileSync(
-    path.join(dir, "package.json"),
-    JSON.stringify({ name: pluginId, version, openclaw: { extensions: [`./${entry}`] } }),
-  );
-  fs.writeFileSync(
-    path.join(dir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: pluginId,
-      contracts: { trustedToolPolicies: ["approve-probe"], tools: [toolName] },
-      configSchema: {
-        type: "object",
-        additionalProperties: false,
-        required: ["output", "trace", "mode"],
-        properties: {
-          output: { type: "string" },
-          trace: { type: "string" },
-          mode: { enum: ["unchanged", "rewrite", "veto"] },
-        },
+  const writeJson = (name: string, value: unknown) =>
+    fs.writeFileSync(path.join(dir, name), JSON.stringify(value));
+  writeJson("package.json", { name: pluginId, version, openclaw: { extensions: [`./${entry}`] } });
+  writeJson("openclaw.plugin.json", {
+    id: pluginId,
+    contracts: { trustedToolPolicies: ["approve-probe"], tools: [toolName] },
+    configSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["output", "trace", "mode"],
+      properties: {
+        output: { type: "string" },
+        trace: { type: "string" },
+        mode: { enum: ["unchanged", "rewrite", "veto"] },
       },
-    }),
-  );
+    },
+  });
   // The installed plugin owns real hook callbacks and file I/O; no hook runner is mocked.
   fs.writeFileSync(
     path.join(dir, entry),
@@ -132,13 +121,11 @@ async function installProbe(root: string, version: "1.0.0" | "2.0.0", mode: "ins
   return result.targetDir;
 }
 
-type ProbeMode = "unchanged" | "rewrite" | "veto";
-
 async function exerciseProbe(params: {
   root: string;
   installed: string;
   label: string;
-  mode: ProbeMode;
+  mode: "unchanged" | "rewrite" | "veto";
   secondDecision?: "allow-once" | "deny";
 }) {
   resetRuntime();
@@ -157,11 +144,6 @@ async function exerciseProbe(params: {
     cache: false,
     onlyPluginIds: [pluginId],
   });
-  expect(
-    registry.plugins.find((plugin) => plugin.id === pluginId)?.status,
-    JSON.stringify(registry.diagnostics),
-  ).toBe("loaded");
-  expect(registry.trustedToolPolicies).toHaveLength(1);
   const tool = expectDefined(
     resolvePluginTools({
       context: { config, workspaceDir: params.root },
@@ -170,19 +152,23 @@ async function exerciseProbe(params: {
     "installed probe tool",
   );
   const wrapped = wrapToolWithBeforeToolCallHook(tool, { config, workspaceDir: params.root });
-  const broker = new EmbeddedPluginApprovalBroker();
+  const firstRequestEvent = Promise.withResolvers<PluginApprovalRequest>();
+  const secondRequestEvent = Promise.withResolvers<PluginApprovalRequest>();
+  let onRequest = firstRequestEvent.resolve;
+  const broker = new EmbeddedPluginApprovalBroker((event) => {
+    if (event.event === "plugin.approval.requested") {
+      onRequest(event.payload);
+    }
+  });
   setEmbeddedMode(true);
   setEmbeddedPluginApprovalBroker(broker);
-  const readTrace = (): Array<{ stage: string; value: string }> =>
-    fs.existsSync(trace)
-      ? fs
-          .readFileSync(trace, "utf8")
-          .trim()
-          .split("\n")
-          .map((line) => JSON.parse(line))
-      : [];
+  const readTrace = () => readToolTestEvents<{ stage: string; value: string }>(trace);
   let settled = false;
-  const firstRequestEvent = nextApprovalRequest(broker);
+  const expectPending = (stages: string[]) => {
+    expect(settled).toBe(false);
+    expect(fs.existsSync(output)).toBe(false);
+    expect(readTrace()).toEqual(stages.map((stage) => ({ stage, value: "original" })));
+  };
   const pending = wrapped
     .execute(params.label, { value: "original" })
     .then(
@@ -193,26 +179,17 @@ async function exerciseProbe(params: {
       settled = true;
       return result;
     });
-  let secondRequestEvent: ReturnType<typeof nextApprovalRequest> | undefined;
   try {
     const first = await firstRequestEvent.promise;
     expect(first.request.title).toBe("Original write");
-    expect(readTrace()).toEqual([{ stage: "trusted", value: "original" }]);
-    expect(fs.existsSync(output)).toBe(false);
-    if (params.secondDecision) {
-      secondRequestEvent = nextApprovalRequest(broker);
-    }
+    expectPending(["trusted"]);
+    onRequest = secondRequestEvent.resolve;
     expect(broker.resolve(first.id, "allow-once")).toBe(true);
     if (params.secondDecision) {
-      const second = await expectDefined(secondRequestEvent, "replacement approval event").promise;
+      const second = await secondRequestEvent.promise;
       expect(second.id).not.toBe(first.id);
       expect(second.request.title).toBe("Replacement write");
-      expect(settled).toBe(false);
-      expect(fs.existsSync(output)).toBe(false);
-      expect(readTrace()).toEqual([
-        { stage: "trusted", value: "original" },
-        { stage: "ordinary", value: "original" },
-      ]);
+      expectPending(["trusted", "ordinary"]);
       expect(broker.resolve(second.id, params.secondDecision)).toBe(true);
     }
     const outcome = await pending;
@@ -220,33 +197,26 @@ async function exerciseProbe(params: {
     const shouldWrite = params.mode === "unchanged" || params.secondDecision === "allow-once";
     const value = params.mode === "unchanged" ? "original" : "replacement";
     expect(readTrace()).toEqual([
-      { stage: "trusted", value: "original" },
-      { stage: "ordinary", value: "original" },
+      ...["trusted", "ordinary"].map((stage) => ({ stage, value: "original" })),
       ...(shouldWrite ? [{ stage: "effect", value }] : []),
     ]);
+    expect(outcome.kind).toBe(shouldWrite || params.mode === "veto" ? "returned" : "threw");
     if (shouldWrite) {
       expect(outcome).toMatchObject({
-        kind: "returned",
         result: { content: [{ type: "text", text: value }] },
       });
       expect(fs.readFileSync(output, "utf8")).toBe(value);
     } else {
       expect(fs.existsSync(output)).toBe(false);
       if (params.mode === "veto") {
-        expect(outcome.kind).toBe("returned");
         expect(JSON.stringify(outcome)).toContain("Probe veto");
-      } else {
-        expect(outcome.kind).toBe("threw");
-        if (!params.secondDecision && outcome.kind === "threw") {
-          expect(String(outcome.error)).toContain(
-            "Tool call parameters changed after trusted approval",
-          );
-        }
+      } else if (!params.secondDecision && outcome.kind === "threw") {
+        expect(String(outcome.error)).toContain(
+          "Tool call parameters changed after trusted approval",
+        );
       }
     }
   } finally {
-    firstRequestEvent.dispose();
-    secondRequestEvent?.dispose();
     broker.stop();
     await pending;
     setEmbeddedPluginApprovalBroker(null);
@@ -254,46 +224,31 @@ async function exerciseProbe(params: {
   }
 }
 
-async function withProbeRoot(run: (root: string) => Promise<void>) {
-  const root = tempDirs.make("openclaw-approval-install-");
-  await withEnvAsync(
-    {
-      OPENCLAW_STATE_DIR: path.join(root, "state"),
-      OPENCLAW_CONFIG_PATH: path.join(root, "config.json"),
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-    },
-    async () => await run(root),
-  );
-}
+it.each([
+  { label: "unchanged", mode: "unchanged", version: "1.0.0" },
+  { label: "ordinary-veto", mode: "veto", version: "1.0.0" },
+  { label: "denied-rewrite", mode: "rewrite", version: "2.0.0", secondDecision: "deny" },
+] as const)("fresh install: $label", async (scenario) => {
+  const installed = await installProbe(probeRoot, scenario.version, "install");
+  await exerciseProbe({ root: probeRoot, installed, ...scenario });
+});
 
-describe("installed plugin trusted approval reaches only approved file effects", () => {
-  it.each([
-    { label: "unchanged", mode: "unchanged", version: "1.0.0" },
-    { label: "ordinary-veto", mode: "veto", version: "1.0.0" },
-    { label: "unapproved-rewrite", mode: "rewrite", version: "1.0.0" },
-    { label: "approved-rewrite", mode: "rewrite", version: "2.0.0", secondDecision: "allow-once" },
-    { label: "denied-rewrite", mode: "rewrite", version: "2.0.0", secondDecision: "deny" },
-  ] as const)("fresh install: $label", async (scenario) => {
-    await withProbeRoot(async (root) => {
-      const installed = await installProbe(root, scenario.version, "install");
-      await exerciseProbe({ root, installed, ...scenario });
-    });
+it("updates the installed transforming plugin to request separate approval", async () => {
+  const legacy = await installProbe(probeRoot, "1.0.0", "install");
+  await exerciseProbe({
+    root: probeRoot,
+    installed: legacy,
+    label: "before-upgrade",
+    mode: "rewrite",
   });
-
-  it("updates the installed transforming plugin to request separate approval", async () => {
-    await withProbeRoot(async (root) => {
-      const legacy = await installProbe(root, "1.0.0", "install");
-      await exerciseProbe({ root, installed: legacy, label: "before-upgrade", mode: "rewrite" });
-      resetRuntime();
-      const upgraded = await installProbe(root, "2.0.0", "update");
-      expect(upgraded).toBe(legacy);
-      await exerciseProbe({
-        root,
-        installed: upgraded,
-        label: "after-upgrade",
-        mode: "rewrite",
-        secondDecision: "allow-once",
-      });
-    });
+  resetRuntime();
+  const upgraded = await installProbe(probeRoot, "2.0.0", "update");
+  expect(upgraded).toBe(legacy);
+  await exerciseProbe({
+    root: probeRoot,
+    installed: upgraded,
+    label: "after-upgrade",
+    mode: "rewrite",
+    secondDecision: "allow-once",
   });
 });

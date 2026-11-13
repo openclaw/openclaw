@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readProviderRefusalReview } from "./provider-refusal.js";
+import { readProviderRefusalReview } from "./diagnostics.js";
 
 describe("provider refusal review", () => {
   it("preserves the exact maximum UTF-8 explanation and continuation", () => {

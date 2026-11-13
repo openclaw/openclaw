@@ -12,14 +12,15 @@ import type {
   SessionEntryCreateWithTranscriptPrepareResult,
   SessionEntryCreateWithTranscriptResult,
 } from "./session-accessor.types.js";
+import { acquireSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import {
-  acquireSessionActorStorage,
   captureSessionActorStorageOwner,
   getSessionActorStorageBinding,
   type SessionActorStorageBinding,
   type SessionActorStorageScope,
 } from "./session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
+import { SessionEntryCreationNotCommittedError } from "./session-creation-operation.js";
 import { mergeSessionEntryPatch } from "./session-entry-patch-operation.js";
 import type { SqliteSessionEntrySnapshotPatchParams } from "./session-entry-patch-source.js";
 import {
@@ -162,6 +163,7 @@ async function patchSessionActorEntry(
         assertCurrent() {
           authority.assertCurrent();
           source.assertCurrent();
+          maintenancePreservation?.capture();
           options.workerGuard?.assertCurrent?.();
           options.workerGuard?.assertMutationAllowed?.();
           options.assertCommitAllowed?.();
@@ -170,16 +172,23 @@ async function patchSessionActorEntry(
       {
         committed(outcome) {
           const change = outcome.changes.find((value) => value.sessionKey === sessionKey);
-          if (!outcome.value || isDeepStrictEqual(change?.before?.entry, change?.after?.entry)) {
+          if (
+            !outcome.value ||
+            (!outcome.entryPatchEffects &&
+              isDeepStrictEqual(change?.before?.entry, change?.after?.entry))
+          ) {
             return;
           }
           const predicate = options.workerGuard?.shouldCommitIf;
-          options.onCommitted?.(
-            outcome.value,
+          const transcriptPredicate =
             predicate && change?.before?.entry?.sessionId === outcome.value.sessionId
               ? { sessionId: predicate.sessionId, watermark: change.before.transcript.watermark }
-              : undefined,
-          );
+              : undefined;
+          if (outcome.entryPatchEffects) {
+            options.onCommitted?.(outcome.value, transcriptPredicate, outcome.entryPatchEffects);
+          } else {
+            options.onCommitted?.(outcome.value, transcriptPredicate);
+          }
           const database = actor.target.database;
           if (database.kind !== "memory") {
             throw new Error("Memory patch lost its owner");
@@ -276,30 +285,37 @@ async function createSessionActorEntryWithTranscript<TError>(
       }
       const commit = async (assertSourceCurrent?: () => void) => {
         options.onPhase?.("commit");
-        const entry = readSessionActorStorageResult(
-          await actor.storage!.mutate(
-            {
-              type: "session.entry.create",
-              input: {
-                entry: created.entry,
-                expected: prepared.targetEntry,
-                label: options.label,
-                cwd: options.cwd,
-                transcriptEvents: created.transcriptEvents,
-                owner: options.resolveOwnerAssignment?.(),
-              },
+        const outcome = await actor.storage!.mutate(
+          {
+            type: "session.entry.create",
+            input: {
+              entry: created.entry,
+              expected: prepared.targetEntry,
+              label: options.label,
+              cwd: options.cwd,
+              transcriptEvents: created.transcriptEvents,
+              owner: options.resolveOwnerAssignment?.(),
             },
-            {
-              ...authority,
-              assertCurrent() {
-                authority.assertCurrent();
-                options.commitGuard?.();
-                assertSourceCurrent?.();
-              },
+          },
+          {
+            ...authority,
+            assertCurrent() {
+              authority.assertCurrent();
+              options.commitGuard?.();
+              assertSourceCurrent?.();
             },
-            { committed: ({ value }) => options.onLifecycleCommitted?.(value) },
-          ),
+          },
+          { committed: ({ value }) => options.onLifecycleCommitted?.(value) },
         );
+        let entry: SessionEntry;
+        try {
+          entry = readSessionActorStorageResult(outcome);
+        } catch (error) {
+          if (options.certifyNotCommitted && outcome.kind === "rolled-back") {
+            throw new SessionEntryCreationNotCommittedError(error);
+          }
+          throw error;
+        }
         if (options.afterCommitted) {
           const handle = await actor.storage!.acquire(actor.target.sessionKey);
           try {

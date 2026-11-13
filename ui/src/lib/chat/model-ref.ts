@@ -40,7 +40,9 @@ function hasCatalogQualifiedValue(catalog: ModelCatalogEntry[], value: string): 
   if (!normalized) {
     return false;
   }
-  return catalog.some((entry) => createQualifiedCatalogKey(entry) === normalized);
+  return catalog.some(
+    (entry) => buildQualifiedChatModelValue(entry.id, entry.provider).toLowerCase() === normalized,
+  );
 }
 
 function resolveUniqueCatalogValueById(model: string, catalog: ModelCatalogEntry[]): string {
@@ -134,25 +136,31 @@ function formatRawCatalogLabel(entry: ModelCatalogEntry): string {
 }
 
 function resolveCatalogDisplayName(entry: ModelCatalogEntry): string {
-  const name = entry.name.trim();
-  const alias = entry.alias?.trim();
+  let name = entry.name.trim();
+  let alias = entry.alias?.trim();
+  if (normalizeChatModelProviderId(entry.provider) === "clawrouter") {
+    // The provider group already identifies the route; keep model labels model-only.
+    name = name.replace(/\s+via\s+clawrouter$/iu, "");
+    alias = alias?.replace(/\s+via\s+clawrouter$/iu, "");
+  }
   if (!name || !alias) {
     return name || alias || "";
   }
-  if (alias.toLowerCase() === name.toLowerCase()) {
+  const normalizedName = name.toLowerCase();
+  const normalizedAlias = alias.toLowerCase();
+  // Only omit a whole family name immediately before a trailing numeric version.
+  // Substrings and custom route/configuration labels still add information.
+  const family = normalizedName.replace(/[\s-]+\d+(?:\.\d+)*$/u, "");
+  if (
+    normalizedAlias === normalizedName ||
+    (family !== normalizedName &&
+      (family === normalizedAlias || family.endsWith(` ${normalizedAlias}`)))
+  ) {
     return name;
   }
   // Aliases are selectable metadata, not a replacement for model identity.
   // Preserve richer custom labels only when they already contain the full name.
-  return alias.toLowerCase().includes(name.toLowerCase()) ? alias : `${name} · ${alias}`;
-}
-
-function createQualifiedCatalogKey(entry: ModelCatalogEntry): string {
-  return buildQualifiedChatModelValue(entry.id, entry.provider).toLowerCase();
-}
-
-function createNameProviderKey(name: string, provider?: string | null): string {
-  return `${name.toLowerCase()}\u0000${provider?.trim().toLowerCase() ?? ""}`;
+  return normalizedAlias.includes(normalizedName) ? alias : `${name} · ${alias}`;
 }
 
 type ChatModelDisplayLookup = ReadonlyMap<string, string>;
@@ -169,7 +177,7 @@ export function buildCatalogDisplayLookup(catalog: ModelCatalogEntry[]): Map<str
         buildQualifiedChatModelValue(entry.id, entry.provider),
       ),
       nameKey: name.toLowerCase(),
-      providerKey: createNameProviderKey(name, entry.provider),
+      providerKey: `${name.toLowerCase()}\u0000${entry.provider?.trim().toLowerCase() ?? ""}`,
     };
   });
 

@@ -10,7 +10,9 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { LockedTranscriptMessageAppendOptions } from "../config/sessions/session-accessor.types.js";
 import { assertLegacyTranscriptPreparation } from "../config/sessions/session-transcript-preparation.js";
+import { warnSessionTranscriptPreparationDeprecation } from "../plugins/compat/session-transcript-preparation-deprecation.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { projectSessionTranscriptAppendOptions } from "./session-transcript-append-options.js";
 import {
   formatSessionTranscriptMemoryHitKey,
   type SessionTranscriptMemoryHitKey,
@@ -51,9 +53,18 @@ export async function withProjectedSessionTranscriptWriteLock<
     locked: SessionTranscriptWriteLockAccessorContext,
   ) => TContext,
   mode: "lock" | "sequence" = "lock",
+  legacyMethod:
+    | "withSessionTranscriptWriteLock"
+    | "withCodexSessionTranscriptMirrorWriteLock" = "withSessionTranscriptWriteLock",
 ): Promise<T> {
   if (mode === "lock") {
     assertLegacyTranscriptPreparation(params);
+    warnSessionTranscriptPreparationDeprecation(
+      legacyMethod,
+      legacyMethod === "withCodexSessionTranscriptMirrorWriteLock"
+        ? "withCodexSessionTranscriptMirrorWrite"
+        : "withSessionTranscriptWrite",
+    );
   }
   const storageTarget = await resolveSessionTranscriptRuntimeTarget(params, params.config);
   const agentId = normalizeAgentId(storageTarget.agentId);
@@ -88,9 +99,12 @@ export async function withProjectedSessionTranscriptWriteLock<
     readEvents: () => whileOpen(locked.readEvents),
     readMessageFacts: (query) => whileOpen(() => locked.readMessageFacts(query)),
     replaceEvents: (events) => whileOpen(() => locked.replaceEvents(events)),
-    appendMessage: (options) => whileOpen(() => locked.appendMessage(options)),
+    appendMessage: (options) =>
+      whileOpen(() => locked.appendMessage(projectSessionTranscriptAppendOptions(options))),
     appendMessageWithMessageSequence: (options) =>
-      whileOpen(() => locked.appendMessageWithMessageSequence(options)),
+      whileOpen(() =>
+        locked.appendMessageWithMessageSequence(projectSessionTranscriptAppendOptions(options)),
+      ),
   });
   const runOpen = async (context: TContext) => {
     try {
@@ -114,7 +128,7 @@ export async function withProjectedSessionTranscriptWriteLock<
           appendMessage: (options) =>
             whileOpen(() =>
               locked.appendMessage({
-                ...options,
+                ...projectSessionTranscriptAppendOptions(options),
                 ...(params.config !== undefined ? { config: params.config } : {}),
               }),
             ),

@@ -2,7 +2,11 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
-import { setUserProfileRole, syncGitHubIdentity } from "../state/user-profile-writes.worker.js";
+import {
+  linkEmail,
+  setUserProfileRole,
+  syncGitHubIdentity,
+} from "../state/user-profile-writes.worker.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { authorizeWsControlUiGatewayConnect, resolveGatewayAuth } from "./auth.js";
 import { createAuthenticatedGitHubIdentitySync } from "./github-user-identity.js";
@@ -23,19 +27,31 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it("keeps public sign-in, durable roles and privileged dispatch independent of colliding Enterprise IDs", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+it.each(["tailscale", "onetimepin"])("gates %s privileged dispatch", async (provider) => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const owner = syncGitHubIdentity({
       identity: { accountId: 9001, login: "bob" },
       authenticationAlias: { kind: "github-login", login: "bob" },
     });
+    linkEmail("bob@example.test", owner.id);
     setUserProfileRole(owner.id, "maintainer");
     using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
     const cfg: OpenClawConfig = {
       gateway: {
         github: { host: "ghe.example.test", apiBaseUrl: "https://ghe.example.test/api/v3" },
         controlUi: { github: { host: "ghe.example.test", token: "synthetic-enterprise-token" } },
-        auth: { mode: "token", token: "synthetic-gateway-token", allowTailscale: true },
+        auth:
+          provider === "onetimepin"
+            ? {
+                mode: "trusted-proxy",
+                trustedProxy: {
+                  allowLoopback: true,
+                  userHeader: "cf-access-authenticated-user-email",
+                  requiredHeaders: ["cf-access-jwt-assertion"],
+                },
+              }
+            : { mode: "token", token: "synthetic-gateway-token", allowTailscale: true },
+        trustedProxies: ["127.0.0.1"],
         roles: {
           default: "guest",
           definitions: {
@@ -48,11 +64,20 @@ it("keeps public sign-in, durable roles and privileged dispatch independent of c
     vi.stubEnv("GH_TOKEN", "synthetic-public-token");
     vi.stubEnv("GITHUB_TOKEN", undefined);
     const lookups: string[] = [];
+    const accessOrigin = "https://team.cloudflareaccess.com";
+    let accessLookups = 0;
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = new URL(
         typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
       );
       lookups.push(url.href);
+      if (url.origin === accessOrigin) {
+        return Response.json({
+          id: 9001,
+          email: `${accessLookups++ === 0 ? "bob" : "ada"}@example.test`,
+          idp: { type: "onetimepin" },
+        });
+      }
       const login = url.pathname.split("/").at(-1);
       return new Response(
         JSON.stringify({
@@ -94,16 +119,24 @@ it("keeps public sign-in, durable roles and privileged dispatch independent of c
                 "x-forwarded-host": "gateway.example.ts.net",
                 "tailscale-user-login": `${login}@github`,
                 "tailscale-user-name": login,
+                "cf-access-authenticated-user-email": `${login}@example.test`,
+                "cf-access-jwt-assertion": `header.${Buffer.from(JSON.stringify({ iss: accessOrigin, exp: Math.floor(Date.now() / 1_000) + 600, email: `${login}@example.test` })).toString("base64url")}.signature`,
               },
             });
-            markGatewayIngressTransport(req, { kind: "managed-tailscale", mode: "serve" });
+            if (provider === "tailscale") {
+              markGatewayIngressTransport(req, { kind: "managed-tailscale", mode: "serve" });
+            }
             const authResult = await authorizeWsControlUiGatewayConnect({
               auth: resolveGatewayAuth({ authConfig: cfg.gateway?.auth }),
+              trustedProxies: cfg.gateway?.trustedProxies,
               connectAuth: null,
               req,
               tailscaleWhois: async () => ({ login: `${login}@github`, name: login }),
             });
-            expect(authResult).toMatchObject({ ok: true, method: "tailscale" });
+            expect(authResult).toMatchObject({
+              ok: true,
+              method: provider === "tailscale" ? "tailscale" : "trusted-proxy",
+            });
             const logWsControl = createSubsystemLogger("test/issuer");
             const warnings = vi.spyOn(logWsControl, "warn");
             const admission = await resolveGatewayConnectProfileAdmission({
@@ -123,6 +156,8 @@ it("keeps public sign-in, durable roles and privileged dispatch independent of c
               authenticatedUserId: authResult.user,
               resolveAuthenticatedGitHubIdentity: createAuthenticatedGitHubIdentitySync({
                 authResult,
+                authConfig: cfg.gateway?.auth,
+                requestHeaders: req.headers,
               }),
             });
             expect(admission.ok, warnings.mock.calls.map(([message]) => message).join("\n")).toBe(
@@ -142,6 +177,18 @@ it("keeps public sign-in, durable roles and privileged dispatch independent of c
             expect(effects).toBe(1);
             if (allowed) {
               expect(client.authenticatedUserProfile.profileId).toBe(owner.id);
+              setUserProfileRole(owner.id, null);
+              invalidateOperatorRolePolicy(owner.id);
+              const revoked = await dispatchGatewayRequestInProcessRaw(
+                "test.issuer-effect",
+                {},
+                { context, client, methodRegistry },
+              );
+              expect(revoked.ok).toBe(false);
+              expect(effects).toBe(1);
+              // Keep the owner's authority active when testing the other email.
+              setUserProfileRole(owner.id, "maintainer");
+              invalidateOperatorRolePolicy(owner.id);
             } else {
               expect(client.authenticatedUserProfile.profileId).not.toBe(owner.id);
             }
@@ -149,10 +196,14 @@ it("keeps public sign-in, durable roles and privileged dispatch independent of c
           }
         },
       });
-      expect(lookups).toEqual([
-        "https://api.github.com/users/bob",
-        "https://api.github.com/users/ada",
-      ]);
+      expect(lookups).toEqual(
+        provider === "tailscale"
+          ? ["https://api.github.com/users/bob", "https://api.github.com/users/ada"]
+          : [
+              `${accessOrigin}/cdn-cgi/access/get-identity`,
+              `${accessOrigin}/cdn-cgi/access/get-identity`,
+            ],
+      );
     } finally {
       invalidateOperatorRolePolicy(owner.id);
     }

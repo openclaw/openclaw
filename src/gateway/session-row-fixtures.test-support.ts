@@ -6,6 +6,8 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { projectSessionEntryUsageUpdate } from "../config/sessions/session-entry-usage.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { estimateAggregateUsageCostAsync, resolveModelCostConfig } from "../utils/usage-format.js";
+import { clearStoredSessionRowTranscriptForTest } from "./session-row-backfill.test-support.js";
 import { writeSessionStore } from "./test-helpers.server.js";
 
 type CompletedReply = Record<string, unknown> & {
@@ -41,6 +43,14 @@ export async function seedCompletedSessionTranscript<T extends CompletedReply>(p
   });
   const usage = normalizeUsage(params.message.usage);
   const prepared = prepareSessionUsageUpdate({
+    estimatedCostUsd: await estimateAggregateUsageCostAsync({
+      usage,
+      prepareCost: () =>
+        resolveModelCostConfig({
+          provider: params.message.provider,
+          model: params.message.model,
+        }),
+    }),
     usage,
     lastCallUsage: usage,
     providerUsed: params.message.provider,
@@ -48,18 +58,20 @@ export async function seedCompletedSessionTranscript<T extends CompletedReply>(p
     preserveRuntimeModel: true,
   });
   if (prepared) {
-    await patchSessionEntryCore(scope, (entry) =>
-      projectSessionEntryUsageUpdate(entry, {
-        ...prepared.update,
-        estimatedCostUsd: prepared.estimateCost(entry),
-      }),
-    );
+    await patchSessionEntryCore(scope, (entry) => projectSessionEntryUsageUpdate(entry, prepared));
   }
   return params.message;
 }
 
-/** Legacy rows retain missing titles until Doctor repairs them; previews remain transient. */
-export async function seedSessionListBackfillFixture(storePath: string, count: number) {
+/**
+ * Legacy rows retain missing titles and need their first durable preview backfill. The last
+ * `durable` rows keep their facts, as when another Gateway projection already backfilled them.
+ */
+export async function seedSessionListBackfillFixture(
+  storePath: string,
+  count: number,
+  durable: number,
+) {
   const now = Date.now();
   const rows = Array.from({ length: count }, (_, index) => ({
     sessionId: `sess-list-yield-${index}`,
@@ -81,6 +93,9 @@ export async function seedSessionListBackfillFixture(storePath: string, count: n
         updateMode: "none",
       },
     );
+    if (index < count - durable) {
+      clearStoredSessionRowTranscriptForTest({ ...row, agentId: "main", storePath });
+    }
   }
   return rows.map((row) => row.sessionKey);
 }

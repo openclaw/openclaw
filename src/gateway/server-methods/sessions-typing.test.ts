@@ -5,6 +5,8 @@ import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.j
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { dispatchAuthorizationRequest } from "../server-methods.authorization.test-support.js";
+import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { clearSessionTypingState } from "./session-typing-state.js";
 import {
   identifiedClient,
@@ -15,10 +17,6 @@ import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js
 
 const mocks = vi.hoisted(() => ({
   presence: [] as Array<Pick<PresenceEntry, "user" | "watchedSessions">>,
-}));
-
-vi.mock("../../infra/system-presence.js", () => ({
-  listSystemPresence: () => mocks.presence,
 }));
 
 function profileUser(id: string): NonNullable<PresenceEntry["user"]> {
@@ -36,9 +34,9 @@ function client(profileId: string, connId: string): GatewayClient {
 function context(broadcast = vi.fn(), cfg: OpenClawConfig = {}): GatewayRequestContext {
   return {
     getRuntimeConfig: () => cfg,
+    getPresenceSnapshot: () => mocks.presence,
     broadcast,
     broadcastToConnIds: vi.fn(),
-    chatAbortControllers: new Map(),
     logGateway: { warn: vi.fn() },
   } as unknown as GatewayRequestContext;
 }
@@ -89,6 +87,106 @@ afterEach(() => {
 });
 
 describe("session typing handler", () => {
+  it("admits session-only typing for its creator without granting foreign-session writes", async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      const cfg = rolePolicyConfig();
+      setRuntimeConfigSnapshot(cfg);
+      const owner = roleClient("view", "typing-scoped-owner");
+      const other = roleClient("write", "typing-scoped-other");
+      owner.connect.scopes = ["operator.sessions.write"];
+      other.connect.scopes = ["operator.sessions.write"];
+      const sessionKey = "agent:main:typing-scoped";
+      const sessionId = "typing-scoped";
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey },
+        {
+          sessionId,
+          updatedAt: 1,
+          createdActor: {
+            type: "human",
+            source: "profile",
+            id: owner.authenticatedUserProfile!.profileId,
+          },
+          visibility: "shared",
+        },
+      );
+      mocks.presence = [owner, other].map((requestClient) => ({
+        user: profileUser(requestClient.authenticatedUserProfile!.profileId),
+        watchedSessions: [sessionKey],
+      }));
+      const broadcast = vi.fn();
+      const requestContext = context(broadcast, cfg);
+      await initializeSessionReadContext(requestContext);
+      const request = (requestClient: GatewayClient, overrides: Record<string, unknown> = {}) =>
+        dispatchAuthorizationRequest(
+          "session.typing",
+          {
+            sessionKey,
+            sessionId,
+            typing: true,
+            preview: "Owned guest draft",
+            ...overrides,
+          },
+          {
+            client: requestClient,
+            context: requestContext,
+            extraHandlers: sessionSuggestionHandlers,
+          },
+        );
+      expect((await request(owner)).mock.calls[0]).toMatchObject([
+        true,
+        { ok: true, broadcast: true },
+      ]);
+      expect(broadcast.mock.lastCall?.[1]).toMatchObject({
+        sessionKey,
+        sessionId,
+        preview: "Owned guest draft",
+      });
+      broadcast.mockClear();
+      expect((await request(other)).mock.calls[0]).toMatchObject([
+        true,
+        { ok: true, broadcast: false },
+      ]);
+      owner.connect.scopes = ["operator.sessions.read"];
+      expect((await request(owner)).mock.calls[0]).toMatchObject([
+        false,
+        undefined,
+        { code: "FORBIDDEN" },
+      ]);
+      owner.connect.scopes = ["operator.sessions.write"];
+      expect((await request(owner, { sessionId: "stale-session" })).mock.calls[0]).toMatchObject([
+        true,
+        { broadcast: false },
+      ]);
+      expect(broadcast).not.toHaveBeenCalled();
+      const hidden = roleClient("none", "typing-scoped-hidden");
+      hidden.connect.scopes = ["operator.sessions.write"];
+      expect((await request(hidden)).mock.calls[0]).toMatchObject([
+        false,
+        undefined,
+        { code: "INVALID_REQUEST", message: `Session "${sessionKey}" was not found.` },
+      ]);
+      expect(
+        (await request(owner, { sessionKey: "agent:main:dashboard:incognito-typing" })).mock
+          .calls[0],
+      ).toMatchObject([
+        false,
+        undefined,
+        {
+          code: "INVALID_REQUEST",
+          message: 'Incognito session "agent:main:dashboard:incognito-typing" was not found.',
+        },
+      ]);
+      clearSessionTypingState();
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      vi.setSystemTime(30_000);
+      await request(owner);
+      await request(owner, { preview: "Pending draft must not escape revocation" });
+      owner.connect.scopes = ["operator.sessions.read"];
+      await vi.advanceTimersByTimeAsync(250);
+      expect(broadcast).toHaveBeenCalledTimes(1);
+    });
+  });
   it.each([
     {
       name: "counts a same-id raw viewer separately from the profile actor",

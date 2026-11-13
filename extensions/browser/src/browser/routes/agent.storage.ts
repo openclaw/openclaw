@@ -1,5 +1,6 @@
 import {
   asNullableRecord,
+  filterStringRecord,
   readNonBlankString,
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -20,6 +21,14 @@ function parseStorageKind(raw: string): StorageKind {
     return raw;
   }
   throw new Error("kind must be local|session");
+}
+
+function readRequiredStateString(raw: unknown, field: string): string {
+  const value = toStringOrEmpty(raw);
+  if (!value) {
+    throw new Error(`${field} is required`);
+  }
+  return value;
 }
 
 function assertRange(
@@ -57,8 +66,8 @@ function parseCookieSetOptions(cookie: Record<string, unknown>): CookieSetOption
     domain: toStringOrEmpty(cookie.domain) || undefined,
     path: toStringOrEmpty(cookie.path) || undefined,
     expires: readOptionalRouteFiniteNumber(cookie.expires, "cookie.expires"),
-    httpOnly: toBoolean(cookie.httpOnly) ?? undefined,
-    secure: toBoolean(cookie.secure) ?? undefined,
+    httpOnly: toBoolean(cookie.httpOnly),
+    secure: toBoolean(cookie.secure),
     sameSite:
       cookie.sameSite === "Lax" || cookie.sameSite === "None" || cookie.sameSite === "Strict"
         ? cookie.sameSite
@@ -100,14 +109,13 @@ export function registerBrowserAgentStorageRoutes(
 ) {
   const register = createPlaywrightRouteRegistrar(app, ctx, "state");
 
-  register(
-    "get",
-    "/cookies",
-    "cookies",
-    () =>
-      (pw, { cdpUrl, targetId }) =>
-        pw.cookiesGetViaPlaywright({ cdpUrl, targetId }),
-  );
+  register("get", "/cookies", "cookies", (input) => {
+    if (input.partition !== undefined && input.partition !== "unpartitioned") {
+      throw new Error("partition must be unpartitioned when specified");
+    }
+    const partition = input.partition;
+    return (pw, target, signal) => pw.cookiesGetViaPlaywright({ ...target, partition, signal });
+  });
 
   register("post", "/cookies/set", "cookies set", (body) => {
     const cookie = asNullableRecord(body.cookie);
@@ -180,12 +188,8 @@ export function registerBrowserAgentStorageRoutes(
     if (!headers) {
       throw new Error("headers is required");
     }
-    const parsed: Record<string, string> = {};
-    for (const [k, v] of Object.entries(headers)) {
-      if (typeof v === "string") {
-        parsed[k] = v;
-      }
-    }
+    const parsed = filterStringRecord(headers) ?? {};
+    Reflect.deleteProperty(parsed, "__proto__");
     return (pw, target) => pw.setExtraHTTPHeadersViaPlaywright({ ...target, headers: parsed });
   });
 
@@ -227,10 +231,7 @@ export function registerBrowserAgentStorageRoutes(
     "/set/timezone",
     "timezone",
     (body) => {
-      const timezoneId = toStringOrEmpty(body.timezoneId);
-      if (!timezoneId) {
-        throw new Error("timezoneId is required");
-      }
+      const timezoneId = readRequiredStateString(body.timezoneId, "timezoneId");
       return (pw, target) => pw.setTimezoneViaPlaywright({ ...target, timezoneId });
     },
     EXISTING_SESSION_LIMITS.emulation,
@@ -241,10 +242,7 @@ export function registerBrowserAgentStorageRoutes(
     "/set/locale",
     "locale",
     (body) => {
-      const locale = toStringOrEmpty(body.locale);
-      if (!locale) {
-        throw new Error("locale is required");
-      }
+      const locale = readRequiredStateString(body.locale, "locale");
       return (pw, target) => pw.setLocaleViaPlaywright({ ...target, locale });
     },
     EXISTING_SESSION_LIMITS.emulation,
@@ -255,10 +253,7 @@ export function registerBrowserAgentStorageRoutes(
     "/set/device",
     "device emulation",
     (body) => {
-      const name = toStringOrEmpty(body.name);
-      if (!name) {
-        throw new Error("name is required");
-      }
+      const name = readRequiredStateString(body.name, "name");
       return (pw, target, signal) => pw.setDeviceViaPlaywright({ ...target, name, signal });
     },
     EXISTING_SESSION_LIMITS.emulation,

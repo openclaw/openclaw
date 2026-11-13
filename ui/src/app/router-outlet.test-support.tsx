@@ -7,6 +7,9 @@ type Inputs = {
   router: unknown;
   retryContext?: unknown;
   retentionScope?: object;
+  onNotFound?: RouterOutletProps["onNotFound"];
+  notFoundRecoveryReady?: boolean;
+  retryEnabled?: boolean;
 };
 
 export type MountedRouterOutlet = ControlUiReadinessOutlet & {

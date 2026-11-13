@@ -1,11 +1,11 @@
-import { createHash } from "node:crypto";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { AccountScopedConversationBindingRecord } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 
 export const TELEGRAM_THREAD_BINDINGS_NAMESPACE = "telegram.thread-bindings";
 export const TELEGRAM_THREAD_BINDINGS_MAX_ENTRIES = 5_000;
 
-type TelegramBindingTargetKind = "subagent" | "acp";
+type TelegramBindingTargetKind = "subagent" | "acp" | "session";
 
 export type TelegramThreadBindingRecord =
   AccountScopedConversationBindingRecord<TelegramBindingTargetKind> & {
@@ -42,7 +42,7 @@ export type TelegramThreadBindingManager = {
     targetSessionKey: string,
     update: (entry: TelegramThreadBindingRecord, now: number) => TelegramThreadBindingRecord,
   ) => Promise<TelegramThreadBindingRecord[]>;
-  /** @deprecated Use touchConversation or updateBySessionKey; removed in the next Plugin SDK major. */
+  /** @deprecated Use touchConversation or updateBySessionKey; compatible through 2026-12-31, removed in the first January 2027 stable. */
   updateConversationSync: (
     conversationId: string,
     update: (entry: TelegramThreadBindingRecord) => TelegramThreadBindingRecord | undefined,
@@ -54,10 +54,7 @@ export function resolveStoredBindingKey(params: {
   accountId: string;
   conversationId: string;
 }): string {
-  return createHash("sha256")
-    .update(`${params.accountId}\0${params.conversationId}`, "utf8")
-    .digest("hex")
-    .slice(0, 32);
+  return sha256Hex(`${params.accountId}\0${params.conversationId}`).slice(0, 32);
 }
 
 export function normalizeMetadataForStore(
@@ -80,7 +77,8 @@ export function sanitizeStoredBinding(
 ): TelegramThreadBindingRecord | null {
   const conversationId = normalizeOptionalString(entry?.conversationId);
   const targetSessionKey = normalizeOptionalString(entry?.targetSessionKey) ?? "";
-  const targetKind = entry?.targetKind === "subagent" ? "subagent" : "acp";
+  const targetKind =
+    entry?.targetKind === "subagent" || entry?.targetKind === "session" ? entry.targetKind : "acp";
   if (!conversationId || !targetSessionKey) {
     return null;
   }

@@ -1,4 +1,3 @@
-/** Parses direct Python and Node script targets from shell command text. */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,

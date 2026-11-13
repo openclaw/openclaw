@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { prepareConfigWriteValues } from "./io.write-prepare.js";
-import type { ConfigFileSnapshot } from "./types.js";
+import { createSnapshot } from "./mutate.test-support.js";
 
 describe("config write input environment basis", () => {
   it.each([
@@ -9,20 +9,14 @@ describe("config write input environment basis", () => {
   ])("preserves $name across a later snapshot", ({ input, authored }) => {
     const original = { messages: { responsePrefix: "${FIXTURE_TOKEN}" } };
     const current = { messages: { responsePrefix: "new-value" } };
-    const snapshot: ConfigFileSnapshot = {
-      path: "/fixture/config.json",
-      exists: true,
-      raw: JSON.stringify(original),
-      parsed: original,
+    const snapshot = {
+      ...createSnapshot({
+        path: "/fixture/config.json",
+        sourceConfig: current,
+        raw: JSON.stringify(original),
+        parsed: original,
+      }),
       authoredConfig: original,
-      sourceConfig: current,
-      resolved: current,
-      runtimeConfig: current,
-      config: current,
-      valid: true,
-      issues: [],
-      warnings: [],
-      legacyIssues: [],
     };
     const nextConfig = { messages: { responsePrefix: input } };
     const values = prepareConfigWriteValues({

@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 import {
   MspError,
   Session,
@@ -6,6 +8,7 @@ import {
   spawnMspConnection,
   type SpawnedMspConnection,
 } from "@muse-code/sdk";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import musePackage from "../package.json" with { type: "json" };
 
@@ -25,7 +28,10 @@ const RESUME_RETRY_KINDS: Record<string, true> = {
 };
 export type MuseRuntime = {
   host: SpawnedMspConnection;
+  credentialIdentity: string;
   sessions: Map<string, Session>;
+  /** MSP usage notices are consumer-folded, not routed to turn handles. */
+  usageObservers: Map<string, (params: unknown) => void>;
   dead: boolean;
   closing: boolean;
   users: number;
@@ -34,17 +40,7 @@ export type MuseRuntime = {
 };
 type MuseLease = { runtime: MuseRuntime; release: () => void };
 
-function museEnvironment(apiKey?: string): NodeJS.ProcessEnv {
-  // Without an OpenClaw-selected key, Muse applies its own documented order:
-  // META_API_KEY, then a stored key, then a browser sign-in.
-  return {
-    ...process.env,
-    MUSE_NO_AUTO_UPDATE: "1",
-    ...(apiKey ? { META_API_KEY: apiKey } : {}),
-  };
-}
-
-export function credentialFingerprint(apiKey?: string): string {
+function credentialFingerprint(apiKey?: string): string {
   return apiKey ? createHash("sha256").update(apiKey).digest("hex") : "cli-login";
 }
 
@@ -101,37 +97,107 @@ export async function openMuseSession(runtime: MuseRuntime, options: MuseOpenSes
 }
 
 export class MusePool {
-  private readonly entries = new Map<string, Promise<MuseRuntime>>();
+  private readonly entries = new Map<
+    string,
+    { credentialIdentity: string; pending: Promise<MuseRuntime>; startup: AbortController }
+  >();
   private disposed = false;
-  constructor(private readonly binaryPath = "muse") {}
+  constructor(
+    private readonly binaryPath = "muse",
+    private readonly noSessionLog = false,
+  ) {}
 
   async acquire(
-    workspace: string,
+    workspace: string | undefined,
     apiKey: string | undefined,
     readOnly: boolean,
+    signal?: AbortSignal,
   ): Promise<MuseLease> {
+    signal?.throwIfAborted();
     if (this.disposed) {
       throw new Error("Muse runtime has been disposed");
     }
-    const key = JSON.stringify([workspace, credentialFingerprint(apiKey), readOnly]);
-    let pending = this.entries.get(key);
-    if (!pending) {
-      pending = this.spawn(workspace, apiKey, readOnly);
-      this.entries.set(key, pending);
+    const inherited = { ...process.env };
+    const managedHome = path.join(resolveStateDir(inherited), "muse");
+    const authPath = path.join(managedHome, "muse", "auth.json");
+    let credentialSource: string;
+    try {
+      const stat = await fs.stat(authPath);
+      credentialSource = JSON.stringify([
+        "managed",
+        authPath,
+        stat.dev,
+        stat.ino,
+        stat.size,
+        stat.mtimeMs,
+        stat.ctimeMs,
+      ]);
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+        credentialSource = "native";
+      } else {
+        throw error;
+      }
+    }
+    // An existing managed store remains authoritative even if its contents are unusable.
+    const env: NodeJS.ProcessEnv = {
+      ...inherited,
+      MUSE_NO_AUTO_UPDATE: "1",
+      ...(credentialSource !== "native"
+        ? { TBH_CREDENTIAL_BACKEND: "file", XDG_CONFIG_HOME: managedHome }
+        : {}),
+      ...(apiKey ? { META_API_KEY: apiKey } : {}),
+    };
+    if (this.disposed) {
+      throw new Error("Muse runtime was disposed during environment preparation");
+    }
+    signal?.throwIfAborted();
+    const apiKeyIdentity = credentialFingerprint(apiKey);
+    const key = JSON.stringify([workspace, apiKeyIdentity, readOnly]);
+    const credentialIdentity = JSON.stringify([
+      apiKey ? apiKeyIdentity : credentialFingerprint(env.META_API_KEY),
+      credentialSource,
+    ]);
+    let entry = this.entries.get(key);
+    if (!entry || entry.credentialIdentity !== credentialIdentity) {
+      const previous = entry;
+      const startup = new AbortController();
+      const pending = (async () => {
+        if (previous) {
+          const runtime = await previous.pending.catch(() => undefined);
+          await runtime?.close();
+        }
+        return this.spawn(workspace, env, readOnly, credentialIdentity, startup.signal);
+      })();
+      entry = { credentialIdentity, pending, startup };
+      this.entries.set(key, entry);
       void pending.catch(() => {
-        if (this.entries.get(key) === pending) {
+        if (this.entries.get(key) === entry) {
           this.entries.delete(key);
         }
       });
     }
-    const runtime = await pending;
+    const abort = () => entry.startup.abort(signal?.reason);
+    signal?.addEventListener("abort", abort, { once: true });
+    let runtime: MuseRuntime;
+    try {
+      runtime = await entry.pending;
+    } finally {
+      signal?.removeEventListener("abort", abort);
+    }
+    if (signal?.aborted) {
+      await runtime.close();
+      signal.throwIfAborted();
+    }
     if (this.disposed) {
       await runtime.close();
       throw new Error("Muse runtime was disposed during startup");
     }
-    if (runtime.dead) {
-      this.entries.delete(key);
-      return this.acquire(workspace, apiKey, readOnly);
+    if (this.entries.get(key) !== entry || runtime.dead || runtime.closing) {
+      if (this.entries.get(key) === entry) {
+        this.entries.delete(key);
+      }
+      return this.acquire(workspace, apiKey, readOnly, signal);
     }
     clearTimeout(runtime.timer);
     runtime.users++;
@@ -139,9 +205,9 @@ export class MusePool {
       runtime,
       release: () => {
         runtime.users--;
-        if (runtime.users === 0) {
+        if (runtime.users === 0 && !runtime.closing) {
           runtime.timer = setTimeout(() => {
-            if (this.entries.get(key) === pending) {
+            if (this.entries.get(key) === entry) {
               this.entries.delete(key);
             }
             void runtime.close();
@@ -153,39 +219,63 @@ export class MusePool {
   }
 
   private async spawn(
-    workspace: string,
-    apiKey: string | undefined,
+    workspace: string | undefined,
+    env: NodeJS.ProcessEnv,
     readOnly: boolean,
+    credentialIdentity: string,
+    signal: AbortSignal,
   ): Promise<MuseRuntime> {
+    if (this.disposed) {
+      throw new Error("Muse runtime was disposed during environment preparation");
+    }
+    signal.throwIfAborted();
     const handshake = spawnMspConnection({
       command: this.binaryPath,
-      args: ["serve", ...(readOnly ? ["--disable-shell", "--disable-write"] : [])],
+      args: [
+        "serve",
+        ...(this.noSessionLog ? ["--no-session-log"] : []),
+        ...(readOnly ? ["--disable-shell", "--disable-write"] : []),
+      ],
       cwd: workspace,
-      env: museEnvironment(apiKey),
+      env,
       shutdownTimeoutMs: 1000,
     });
     const startup = setTimeout(() => {
       void handshake.close();
     }, 30_000);
     startup.unref();
+    const abort = () => {
+      void handshake.close();
+    };
+    signal.addEventListener("abort", abort, { once: true });
     try {
       const host = await handshake.initialize({
         clientInfo: { name: "openclaw", version: musePackage.version },
+        // OpenClaw never presents or answers userInput/request, and MSP treats an
+        // absent flag as capable, so a Muse question would block the turn until timeout.
+        capabilities: { userInputDialogs: false },
       });
+      signal.throwIfAborted();
       const runtime: MuseRuntime = {
         host,
+        credentialIdentity,
         sessions: new Map(),
+        usageObservers: new Map(),
         users: 0,
         dead: false,
         closing: false,
         close: async () => {
           runtime.closing = true;
+          clearTimeout(runtime.timer);
           await host.close();
         },
       };
       host.connection.onNotification((event) => {
         const sessionId = event.params?.sessionId;
         if (typeof sessionId === "string") {
+          if (event.method === "session/tokenUsage") {
+            runtime.usageObservers.get(sessionId)?.(event.params);
+          }
           runtime.sessions.get(sessionId)?.apply(event);
         }
       });
@@ -213,6 +303,7 @@ export class MusePool {
       );
     } finally {
       clearTimeout(startup);
+      signal.removeEventListener("abort", abort);
     }
   }
 
@@ -222,9 +313,8 @@ export class MusePool {
     this.entries.clear();
     await Promise.all(
       entries.map(async (entry) => {
-        const runtime = await entry.catch(() => undefined);
+        const runtime = await entry.pending.catch(() => undefined);
         if (runtime) {
-          clearTimeout(runtime.timer);
           await runtime.close();
         }
       }),

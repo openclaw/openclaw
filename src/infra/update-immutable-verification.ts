@@ -5,11 +5,11 @@ import {
   createGatewayRestartDeadline,
   GatewayRestartDeadlineError,
 } from "../cli/daemon-cli/restart-health-deadline.js";
+import { getGatewayChannelWarnings } from "../cli/daemon-cli/restart-health-diagnostics.js";
 import {
   resolveGatewayRestartProbeContext,
   waitForGatewayHttpReadiness,
 } from "../cli/daemon-cli/restart-health-probe.js";
-import { INTERRUPTED_UPDATE_SETTLE_PROBES } from "../cli/daemon-cli/restart-health.constants.js";
 import {
   inspectGatewayRestart,
   isSameGatewayRestartGeneration,
@@ -161,19 +161,20 @@ export async function waitForImmutableGateway(params: {
         expectedVersion: version,
         expectedBuildId: buildId,
         requirePluginHealth: true,
+        requireChannelHealth: false,
       };
       waited = await waitForGatewayHealthyRestart({
         ...probe,
         phase: "readiness:health",
         deadlineOutcome: "snapshot",
         requireRunningService: true,
-        settle: { probes: INTERRUPTED_UPDATE_SETTLE_PROBES },
       });
       if (!waited.healthy) {
         return inconclusive();
       }
       const http = await deadline.read("readiness:http", () =>
         waitForGatewayHttpReadiness({
+          requireChannelHealth: false,
           config: context.config,
           port,
           attempts: 1,
@@ -250,14 +251,16 @@ export async function waitForImmutableGateway(params: {
         !isSameGatewayRestartGeneration(waited, after) ||
         after.gatewayVersion !== version ||
         after.gatewayBuildId !== buildId ||
-        http.healthz !== 200 ||
-        http.readyz !== 200
+        !(http.coreReady ?? (http.healthz === 200 && http.readyz === 200))
       ) {
         return result("unverified");
       }
       assertImmutableServiceProcessCurrent(current);
       assertCurrent();
       observed = current;
+      for (const { id } of getGatewayChannelWarnings(after, http)) {
+        params.onReceipt?.(`Channel health warning (${id}); run openclaw channels status --probe.`);
+      }
       return {
         ...result("verified"),
         verification: {

@@ -1,22 +1,28 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
-import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
+import { getAdmittedSqlSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
+import { isStateSchemaVersionAtLeast } from "./openclaw-state-db-admission.js";
 import type { OpenClawStateDatabaseReadAdmission } from "./openclaw-state-db-async-lifecycle.js";
 import {
   captureOpenClawStateDatabaseReadAdmission,
   registerOpenClawStateDatabaseLifecycleListener,
   registerOpenClawStateDatabaseAsyncResource,
 } from "./openclaw-state-db-cache.js";
-import { readProfileAuthority, type ProfileAuthorityDescriptor } from "./user-profile-authority.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
+import {
+  prepareProfileAuthorityRead,
+  readProfileAuthority,
+  type ProfileAuthorityDescriptor,
+} from "./user-profile-authority.js";
 import type { UserProfileMutationChanges } from "./user-profile-mutation.js";
 import type { UserProfileEmailBinding, UserProfilesDatabase } from "./user-profiles.types.js";
 
 type EmailBindingChange = {
-  db: DatabaseSync;
+  db: EngineConnection;
   email: string;
   binding: UserProfileEmailBinding | null;
 };
@@ -44,7 +50,7 @@ type ProfileAuthorityBinding = (() => boolean) & {
 type ProfileAuthorityStore = {
   admission: OpenClawStateDatabaseReadAdmission;
   identityKey: string;
-  lifetime: ProfileAuthorityDescriptor["lifetime"];
+  lifetime: { revision: BigInt64Array<SharedArrayBuffer>; epoch: bigint };
   generation: Int32Array<SharedArrayBuffer>;
   revision: number;
   identityRevision: number;
@@ -63,7 +69,7 @@ const changes = {
   bindingListeners: new Set<(change: EmailBindingChange) => void>(),
   listeners: new Set<() => void>(),
   authorityStores: new Map<string, ProfileAuthorityStore>(),
-  authorityHandles: new WeakMap<DatabaseSync, ProfileAuthorityStore>(),
+  authorityHandles: new WeakMap<EngineConnection, ProfileAuthorityStore>(),
   authorityLifecycleRegistered: false,
 };
 
@@ -71,7 +77,8 @@ const changes = {
 function isAuthorityStoreCurrent(store: ProfileAuthorityStore): boolean {
   if (
     store.admission.identity.key !== store.identityKey ||
-    Atomics.load(new BigInt64Array(store.lifetime.revision), 0) !== store.lifetime.epoch
+    Atomics.load(store.lifetime.revision, 0) !== store.lifetime.epoch ||
+    Atomics.load(store.generation, 0) !== 1
   ) {
     Atomics.store(store.generation, 0, 0);
     return false;
@@ -94,7 +101,7 @@ function authorityStore(admission: OpenClawStateDatabaseReadAdmission): ProfileA
     store = {
       admission,
       identityKey: admission.identity.key,
-      lifetime: { revision: lifetime.revision, epoch: lifetime.epoch },
+      lifetime: { revision: new BigInt64Array(lifetime.revision), epoch: lifetime.epoch },
       generation,
       revision: 0,
       identityRevision: 0,
@@ -179,7 +186,7 @@ function authorityDescriptor(
 ): ProfileAuthorityDescriptor {
   return {
     generation: store.generation.buffer,
-    lifetime: store.lifetime,
+    lifetime: { revision: store.lifetime.revision.buffer, epoch: store.lifetime.epoch },
     entries: cells.map((cell) => ({
       state: cell.buffer,
       ...(bound ? { revision: Atomics.load(cell, 0) } : {}),
@@ -192,11 +199,12 @@ function authorityBinding(
   store: ProfileAuthorityStore,
   descriptor: ProfileAuthorityDescriptor,
 ): ProfileAuthorityBinding {
+  const readCurrent = prepareProfileAuthorityRead(descriptor);
   return Object.assign(
     () => {
       try {
         admission.assertCurrent();
-        return isAuthorityStoreCurrent(store) && readProfileAuthority(descriptor) === "current";
+        return isAuthorityStoreCurrent(store) && readCurrent() === "current";
       } catch {
         return false;
       }
@@ -206,13 +214,16 @@ function authorityBinding(
 }
 
 /** Authority revisions belong to the profile writer, independently of display notifications. */
-export function publishUserProfileAuthorityChange(db: DatabaseSync, ...profileIds: string[]): void {
+export function publishUserProfileAuthorityChange(
+  db: EngineConnection,
+  ...profileIds: string[]
+): void {
   // Native and worker mutations retire recovery custody in their original transaction.
-  const schema = profileIds.length ? getAdmittedSqliteSchemaFacts(db) : undefined;
+  const schema = profileIds.length ? getAdmittedSqlSchemaFacts(db) : undefined;
   if (profileIds.length && !schema) {
     throw new Error("Profile authority mutation requires admitted schema facts");
   }
-  if (schema && schema.userVersion >= 19 && schema.tables.has("user_profile_identities")) {
+  if (schema && isStateSchemaVersionAtLeast(db, 19) && tableExists(db, "user_profile_identities")) {
     executeSqliteQuerySync(
       db,
       getNodeSqliteKysely<UserProfilesDatabase>(db)
@@ -225,13 +236,16 @@ export function publishUserProfileAuthorityChange(db: DatabaseSync, ...profileId
 }
 
 /** Only changed merge pointers invalidate account selection; roles and login grants do not. */
-export function publishUserProfileIdentityChange(db: DatabaseSync, ...profileIds: string[]): void {
+export function publishUserProfileIdentityChange(
+  db: EngineConnection,
+  ...profileIds: string[]
+): void {
   publishAuthorityStoreChange(db, "profileIdentities", profileIds);
 }
 
 /** Default-link changes do not revoke explicit selections or saved session account pins. */
 export function publishUserProfileModelAccountLinksChange(
-  db: DatabaseSync,
+  db: EngineConnection,
   ...profileIds: string[]
 ): void {
   publishAuthorityStoreChange(db, "modelAccountLinks", profileIds);
@@ -253,6 +267,8 @@ export function captureUserProfileModelAccountLinksAuthority(
       [
         authorityCell(store, "modelAccountLinks", profileId),
         authorityCell(store, "profileIdentities", profileId),
+        // A merge may add default links without changing the target's identity.
+        authorityCell(store, "profiles", profileId),
       ],
       true,
     ),
@@ -337,12 +353,15 @@ export function fenceUserProfileModelAccountLinks(
   };
 }
 
-export function publishUserChannelIdentityAuthorityChange(db: DatabaseSync, subject: string): void {
+export function publishUserChannelIdentityAuthorityChange(
+  db: EngineConnection,
+  subject: string,
+): void {
   publishAuthorityStoreChange(db, "channelIdentities", [subject]);
 }
 
 function publishAuthorityStoreChange(
-  db: DatabaseSync,
+  db: EngineConnection,
   kind: ProfileAuthorityKind,
   ids: string[],
 ): void {
@@ -377,7 +396,6 @@ function publishAuthorityStoreChange(
   };
   if (
     !stageSqliteTransactionState(db, {
-      stage: () => {},
       // Native callbacks keep their committed facts until the physical COMMIT attempt.
       prepareCommit: () => {
         fence ??= fenceAuthorityEntries(store, entries, false);
@@ -446,9 +464,13 @@ export async function captureUserProfileAuthorityRead(
   admission.assertCurrent();
   const subjectCell = (value: string | undefined) =>
     value === undefined ? [] : [authorityCell(store, "channelIdentities", value)];
+  const settlementState = (kind: ProfileAuthorityKind, id: string) => {
+    const cell = store[kind].get(id);
+    return cell ? Atomics.load(cell, 1) : 0;
+  };
   const subjectIsSettled = (value = subject) =>
-    readProfileAuthority(authorityDescriptor(store, subjectCell(value))) === "current";
-  if (!subjectIsSettled()) {
+    value === undefined || settlementState("channelIdentities", value) === 0;
+  if (!isAuthorityStoreCurrent(store) || !subjectIsSettled()) {
     throw new UserProfileMutationUnsettledError("pending");
   }
   const currentRevision = () =>
@@ -476,12 +498,20 @@ export async function captureUserProfileAuthorityRead(
     /** Current-fact readers tolerate settled changes, but never borrow an unknown mutation. */
     assertSettled(this: void, profileIds: string | readonly string[]): void {
       admission.assertCurrent();
-      const status = readProfileAuthority(authorityDescriptor(store, profileCells(profileIds)));
-      if (!isAuthorityStoreCurrent(store) || status === "revoked") {
+      // This module owns every cell write. Local synchronous checks need no transfer descriptor.
+      let state = 0;
+      if (typeof profileIds === "string") {
+        state = settlementState(profileRevisions, profileIds);
+      } else {
+        for (const id of profileIds) {
+          state = Math.max(state, settlementState(profileRevisions, id));
+        }
+      }
+      if (!isAuthorityStoreCurrent(store)) {
         throw new Error("Profile authority store changed");
       }
-      if (status !== "current") {
-        throw new UserProfileMutationUnsettledError(status);
+      if (state !== 0) {
+        throw new UserProfileMutationUnsettledError(state === 1 ? "pending" : "uncertain");
       }
       if (!subjectIsSettled()) {
         throw new UserProfileMutationUnsettledError("pending");
@@ -524,13 +554,11 @@ export function onUserProfileEmailBindingChanged(
 
 /** Native writer facts become visible with the commit, before profile observers. */
 export function stageUserProfileEmailBindingChange(
-  db: DatabaseSync,
+  db: EngineConnection,
   email: string,
   binding: UserProfileEmailBinding | null,
 ): void {
   stageSqliteTransactionState(db, {
-    stage: () => {},
-    rollback: () => {},
     commit: () => {
       changes.bindingRevision += 1;
       for (const listener of changes.bindingListeners) {

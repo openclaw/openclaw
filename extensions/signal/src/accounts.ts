@@ -106,7 +106,6 @@ function resolveSignalManagedNativePort(params: {
   transport: SignalTransportConfig | undefined;
 }): number {
   if (params.transport?.kind === "managed-native" && params.transport.socketPath !== undefined) {
-    assertSignalSocketTransport(params.transport);
     if (isSignalAccountEnabled(params.cfg, params.accountConfig)) {
       for (const accountId of listSignalAccountIds(params.cfg)) {
         if (normalizeAccountId(accountId) === params.accountId) {
@@ -236,7 +235,7 @@ export function resolveSignalTransport(
     httpPort,
     startupTimeoutMs: managedTransport?.startupTimeoutMs ?? 30_000,
     ...(managedTransport?.receiveMode ? { receiveMode: managedTransport.receiveMode } : {}),
-    ...(typeof managedTransport?.ignoreStories === "boolean"
+    ...(managedTransport?.ignoreStories !== undefined
       ? { ignoreStories: managedTransport.ignoreStories }
       : {}),
   };
@@ -276,12 +275,6 @@ export function listEnabledSignalAccounts(cfg: OpenClawConfig): ResolvedSignalAc
     .filter((account) => account.enabled);
 }
 
-function normalizeSignalReplyToMode(value: unknown): ReplyToMode | undefined {
-  return value === "off" || value === "first" || value === "all" || value === "batched"
-    ? value
-    : undefined;
-}
-
 export function resolveSignalReplyToMode(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -298,10 +291,10 @@ export function resolveSignalReplyToMode(params: {
   const chatType =
     params.chatType === "direct" || params.chatType === "group" ? params.chatType : undefined;
   return (
-    normalizeSignalReplyToMode(chatType && accountConfig?.replyToModeByChatType?.[chatType]) ??
-    normalizeSignalReplyToMode(accountConfig?.replyToMode) ??
-    normalizeSignalReplyToMode(chatType && signalConfig?.replyToModeByChatType?.[chatType]) ??
-    normalizeSignalReplyToMode(signalConfig?.replyToMode) ??
+    (chatType && accountConfig?.replyToModeByChatType?.[chatType]) ??
+    accountConfig?.replyToMode ??
+    (chatType && signalConfig?.replyToModeByChatType?.[chatType]) ??
+    signalConfig?.replyToMode ??
     "all"
   );
 }

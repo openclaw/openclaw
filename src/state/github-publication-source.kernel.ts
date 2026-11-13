@@ -10,6 +10,8 @@ import { validateCanonicalSessionRowEntry } from "../config/sessions/session-can
 import { listSessionMembersInDatabase } from "../config/sessions/session-sharing-store.kernel.js";
 import type { PersonalGitHubPublicationRow } from "../gateway/github-personal-publication-store.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { projectGitHubPublicationSessionFacts } from "./github-publication-session-facts.js";
 import type { GitHubPublicationSourcePredicate } from "./github-publication-source-contract.js";
 import type {
   GitHubPublicationSourceFacts,
@@ -83,26 +85,13 @@ function readSessionFacts(
     ? validateCanonicalSessionRowEntry(row, parseSessionEntryJson(row, "list"), "read")
     : undefined;
   const members = listSessionMembersInDatabase({ db: sourceDb }, selector.sessionKey);
-  return {
-    entry: entry && {
-      sessionId: entry.sessionId,
-      lifecycleRevision: entry.lifecycleRevision,
-      archivedAt: entry.archivedAt,
-      visibility: entry.visibility,
-      incognito: entry.incognito,
-      createdActor: entry.createdActor,
-      owner: entry.owner,
-      worktree: entry.worktree,
-      repositoryWorkspaceId: entry.repositoryWorkspaceId,
-    },
-    members,
-  };
+  return projectGitHubPublicationSessionFacts(entry, members);
 }
 
 /** Shared-state facts remain transaction-held for both durable and memory session sources. */
 export function readGitHubPublicationSourceFacts(
   source: DatabaseSync | GitHubPublicationSessionFacts,
-  stateDb: DatabaseSync,
+  stateDb: EngineConnection,
   selector: GitHubPublicationSourceSelector,
 ): GitHubPublicationSourceFacts {
   const facts: GitHubPublicationSourceFacts =
@@ -180,7 +169,7 @@ export function readGitHubPublicationSourceFacts(
 /** Equality is a source predicate, never a replacement for the requester's live capability. */
 export function assertGitHubPublicationSourceFacts(
   sourceDb: DatabaseSync | GitHubPublicationSessionFacts,
-  stateDb: DatabaseSync,
+  stateDb: EngineConnection,
   selector: GitHubPublicationSourceSelector,
   expected: GitHubPublicationSourceFacts,
 ): void {
@@ -192,8 +181,20 @@ export function assertGitHubPublicationSourceFacts(
 export function assertGitHubPublicationWorktreeSource(
   source: GitHubPublicationSourcePredicate,
   worktree: { id: string; repoFingerprint: string; branch: string },
+  allowExistingPullRequest = false,
 ): void {
   const { entry, worktree: current, ownerWorktree } = source.expected;
+  const pullRequest = entry?.worktree?.githubPullRequest;
+  if (
+    pullRequest &&
+    (!allowExistingPullRequest ||
+      !pullRequest.preparedHeadCommit ||
+      pullRequest.preparedHeadCommit !== pullRequest.head.commit)
+  ) {
+    throw new Error(
+      "This workspace continues an existing PR; its original publication target must be handled explicitly.",
+    );
+  }
   if (
     source.selector.worktreeId !== worktree.id ||
     current?.id !== worktree.id ||
@@ -202,7 +203,7 @@ export function assertGitHubPublicationWorktreeSource(
     current.ownerKind !== "session" ||
     current.ownerId !== source.selector.sessionKey ||
     current.repoFingerprint !== worktree.repoFingerprint ||
-    current.branch !== worktree.branch ||
+    (pullRequest?.head.branch ?? current.branch) !== worktree.branch ||
     entry?.worktree?.id !== worktree.id ||
     entry.worktree.branch !== current.branch ||
     entry.worktree.repoRoot !== current.repoRoot

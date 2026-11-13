@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
+  normalizeOptionalStringifiedId,
+  normalizeOptionalThreadValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { classifyOAuthRefreshFailure } from "../../agents/auth-profiles/oauth-refresh-failure.js";
@@ -14,6 +16,10 @@ import { normalizeAnyChannelId } from "../../channels/registry-normalize.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { resolveTargetPrefixedChannel } from "../../infra/outbound/channel-target-prefix.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
+import {
+  resolveCronDeliveryDefaultsScope,
+  resolveCronFailureAlertDefaults,
+} from "../delivery-defaults.js";
 import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
 import { cronFailureDetailLines } from "../failure-notification-text.js";
 import { hasCanonicalCronDeliveryMode } from "../store/delivery-codec.js";
@@ -24,7 +30,9 @@ import type {
   CronJob,
   CronMessageChannel,
   CronRunErrorClassification,
+  CronStoredJob,
 } from "../types.js";
+import { buildCronAutoDisableNotice } from "./auto-disable.js";
 import { buildCronFailureRepairBrief } from "./failure-repair-brief.js";
 import { isJobEnabled } from "./jobs-scheduling.js";
 import {
@@ -101,11 +109,20 @@ function hasFailureRepairOwner(
 /** Resolves effective failure-alert policy from job config, delivery defaults, and global cron config. */
 export function resolveFailureAlert(
   state: {
-    deps: Pick<CronJobPolicyContext["deps"], "cronConfig">;
+    deps: Pick<
+      CronJobPolicyContext["deps"],
+      "cronConfig" | "defaultAgentId" | "resolveDefaultAgentId"
+    >;
     preparedFailureAlert?: CronJobPolicyContext["preparedFailureAlert"];
   },
   job: Pick<CronJob, "delivery" | "failureAlert"> &
-    Partial<Pick<CronJob, "id" | "owner" | "payload" | "schedule">>,
+    Partial<
+      Pick<
+        CronJob,
+        "id" | "owner" | "payload" | "schedule" | "agentId" | "sessionKey" | "sessionTarget"
+      >
+    > &
+    Partial<Pick<CronStoredJob, "createdActor">>,
 ): ResolvedFailureAlert | null {
   const prepared = state.preparedFailureAlert;
   if (prepared) {
@@ -114,7 +131,13 @@ export function resolveFailureAlert(
     }
     return prepared.value;
   }
-  const globalConfig = state.deps.cronConfig?.failureAlert;
+  const defaults = resolveCronDeliveryDefaultsScope(
+    state.deps.cronConfig,
+    job,
+    state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
+  );
+  // The owner's agent route replaces the global route fields; tuning stays global.
+  const globalConfig = resolveCronFailureAlertDefaults(defaults);
   const jobConfig = job.failureAlert === false ? undefined : job.failureAlert;
 
   if (job.failureAlert === false) {
@@ -128,6 +151,7 @@ export function resolveFailureAlert(
     (jobConfig.channel !== undefined ||
       jobConfig.to !== undefined ||
       jobConfig.accountId !== undefined ||
+      jobConfig.threadId !== undefined ||
       jobConfig.mode !== undefined),
   );
   const alternateRoute = resolveFailureDestination(
@@ -136,7 +160,7 @@ export function resolveFailureAlert(
     hasJobRoute ? jobConfig : undefined,
   );
   const primaryRoute = hasCanonicalCronDeliveryMode(job.delivery)
-    ? resolveCronDeliveryPlan(job)
+    ? resolveCronDeliveryPlan(job, defaults)
     : undefined;
   const primaryAnnounceRoute =
     primaryRoute?.mode === "announce" && primaryRoute.requested ? primaryRoute : undefined;
@@ -189,15 +213,24 @@ export function resolveFailureAlert(
   const accountId =
     normalizeOptionalString(route?.accountId) ??
     (primaryRecipientMatches ? primaryAnnounceRoute?.accountId : undefined);
-  // A configured failure destination has no thread and stays distinct from a
-  // threaded primary peer unless a job alert names its own recipient.
-  const primaryRouteMatches =
+  // Preserve legacy thread inheritance when no explicit failure thread is set.
+  const primaryThreadFallbackMatches =
     primaryRecipientMatches &&
     accountId === primaryAnnounceRoute?.accountId &&
     (alternateRoute === null ||
       !job.delivery?.failureDestination ||
       primaryAnnounceRoute?.threadId == null ||
       jobConfig?.to !== undefined);
+  const threadId =
+    mode === "announce"
+      ? (normalizeOptionalThreadValue(route?.threadId) ??
+        (primaryThreadFallbackMatches ? primaryAnnounceRoute?.threadId : undefined))
+      : undefined;
+  const primaryRouteMatches =
+    primaryRecipientMatches &&
+    accountId === primaryAnnounceRoute?.accountId &&
+    normalizeOptionalStringifiedId(threadId) ===
+      normalizeOptionalStringifiedId(primaryAnnounceRoute?.threadId);
 
   return {
     after: clampPositiveInt(jobConfig?.after ?? globalConfig?.after, DEFAULT_FAILURE_ALERT_AFTER),
@@ -209,7 +242,7 @@ export function resolveFailureAlert(
     to,
     mode,
     accountId,
-    threadId: primaryRouteMatches ? primaryAnnounceRoute.threadId : undefined,
+    threadId,
     includeSkipped: jobConfig?.includeSkipped ?? globalConfig?.includeSkipped ?? false,
     alternateRoute: alternateRoute !== null && !primaryRouteMatches,
   };
@@ -229,9 +262,24 @@ function buildFailureAlertPayload(params: {
   status: "error" | "skipped";
   repairRequested?: boolean;
   localProviderUnavailable?: boolean;
+  /** The failure auto-disabled the recurring job: lead with the safety notice and recovery command. */
+  autoDisabled?: boolean;
 }) {
   const safeJobName = params.job.name || params.job.id;
   const errorReason = params.status === "error" ? params.errorReason : undefined;
+  if (params.autoDisabled) {
+    const notice = buildCronAutoDisableNotice({
+      job: params.job,
+      reason: "consecutive-failures",
+      consecutiveErrors: params.consecutiveErrors,
+    });
+    return {
+      text:
+        params.route.mode === "webhook"
+          ? `${notice}\nLast error: ${truncateUtf16Safe(params.error?.trim() || "unknown reason", 200)}`
+          : notice,
+    } satisfies ReplyPayload;
+  }
   // Keep alert bodies compact because they may route through chat channels
   // with notification previews and provider-specific message limits.
   const statusVerb = params.status === "skipped" ? "skipped" : "failed";
@@ -360,7 +408,7 @@ function failureIncident(params: {
 
 /**
  * Emits one alert per incident when threshold, best-effort, and cooldown policy allow it.
- * An owned job's first chat alert, or terminal one-shot failure, becomes a repair request.
+ * An owned job's first inherited chat alert, or terminal one-shot failure, requests repair.
  * A later failure alerts, naming the request, and the streak is never repaired twice.
  */
 function maybeEmitFailureAlert(
@@ -375,6 +423,7 @@ function maybeEmitFailureAlert(
     runAtMs: number;
     consecutiveCount: number;
     terminalOneShot?: boolean;
+    terminalRecurring?: boolean;
     deferredNotifications: DeferredCronNotifications;
   },
 ): "unavailable" | "suppressed" | "queued" {
@@ -390,11 +439,14 @@ function maybeEmitFailureAlert(
   }
   recordUnresolvedFailure(params.job, params.failureNotificationDetail);
   const terminalOneShot = params.terminalOneShot === true;
+  const terminalRecurring = params.terminalRecurring === true;
+  // A terminal failure disabled the job: its notice ignores the threshold and cooldown.
+  const terminal = terminalOneShot || terminalRecurring;
   const alertConfig = params.alertConfig;
   if (!alertConfig) {
     return "unavailable";
   }
-  if (!terminalOneShot && params.consecutiveCount < alertConfig.after) {
+  if (!terminal && params.consecutiveCount < alertConfig.after) {
     return "suppressed";
   }
   // Best-effort delivery suppresses inherited alert noise, not an independently
@@ -407,7 +459,9 @@ function maybeEmitFailureAlert(
   const repair = params.job.state.failureAlertIncident?.repair;
   // Older stored incidents have no deadline and retain request-based escalation.
   // A run admitted before settlement cannot verify the repair, even if it fails later.
+  // A recurring job disabled by this failure is reported now, even while a repair is pending.
   if (
+    !terminalRecurring &&
     repair?.deadlineAtMs !== undefined &&
     (repair.settledAtMs !== undefined && repair.settledAtMs < repair.deadlineAtMs
       ? params.runAtMs <= repair.settledAtMs
@@ -415,7 +469,8 @@ function maybeEmitFailureAlert(
   ) {
     return "suppressed";
   }
-  if (repair && !repair.alerted) {
+  if (terminalRecurring || (repair && !repair.alerted)) {
+    // The streak's earlier alert shares this incident signature; the disable is still news.
     startFailureAlertCycle(params.job, incident, now);
   } else if (!requestFailureNotification(state, params.job, alertConfig, incident)) {
     return "suppressed";
@@ -434,12 +489,30 @@ function maybeEmitFailureAlert(
       status: params.status,
       repairRequested: repair !== undefined,
       localProviderUnavailable,
+      autoDisabled: terminalRecurring,
     }),
     runAtMs: params.runAtMs,
     route: alertConfig,
   };
+  // Destination selectors express alert-only intent; policy or mode-only overrides
+  // still inherit repair-first behavior. Do not infer intent from resolved routes.
+  const hasJobFailureDestination = [
+    params.job.failureAlert,
+    params.job.delivery?.failureDestination,
+  ].some(
+    (route) =>
+      route &&
+      (route.channel !== undefined ||
+        route.to !== undefined ||
+        route.threadId !== undefined ||
+        route.accountId !== undefined),
+  );
+  // A recurring job's auto-disable notice goes straight to the route: a repair turn can
+  // fail the same way the job did and leave the route silent.
   if (
     !repair &&
+    !hasJobFailureDestination &&
+    !terminalRecurring &&
     (terminalOneShot || alertConfig.mode === "announce") &&
     params.status === "error" &&
     // Command jobs and on-exit or stream schedules are operator-only, so they alert as before.
@@ -504,7 +577,8 @@ export function finalizeCronFailureNotifications(
       startedAt: number;
     };
     completionStatus: CronCompletionStatus;
-    autoDisableNotificationOwnsFailure: boolean;
+    /** The recurring job was auto-disabled by this failure; the route carries its safety notice. */
+    terminalRecurring?: boolean;
     terminalOneShot?: boolean;
     /** A quick re-run for a provider outage is scheduled; alert/repair wait for its outcome. */
     pendingTransientRetry?: boolean;
@@ -516,10 +590,7 @@ export function finalizeCronFailureNotifications(
     resolveFailureIncident(params.job);
     return undefined;
   }
-  if (
-    params.result.errorClassification?.kind === "aborted" &&
-    (params.job.schedule.kind === "at" || params.job.schedule.kind === "on-exit")
-  ) {
+  if (params.result.errorClassification?.kind === "aborted") {
     return undefined;
   }
   recordUnresolvedFailure(params.job, params.result.failureNotificationDetail);
@@ -529,7 +600,6 @@ export function finalizeCronFailureNotifications(
   }
   if (
     (params.result.status === "error" || params.result.status === "skipped") &&
-    !params.autoDisableNotificationOwnsFailure &&
     !params.pendingTransientRetry
   ) {
     return maybeEmitFailureAlert(state, {
@@ -545,6 +615,7 @@ export function finalizeCronFailureNotifications(
           ? params.job.state.consecutiveSkipped
           : params.job.state.consecutiveErrors) ?? 0,
       terminalOneShot: params.terminalOneShot,
+      terminalRecurring: params.terminalRecurring,
       deferredNotifications: params.deferredNotifications,
     });
   } else if (

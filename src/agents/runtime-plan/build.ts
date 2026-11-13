@@ -1,8 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TSchema } from "typebox";
-import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import {
   resolveProviderRuntimePluginHandle,
@@ -21,6 +19,7 @@ import {
   logProviderToolSchemaDiagnostics,
   normalizeProviderToolSchemas,
 } from "../embedded-agent-runner/tool-schema-runtime.js";
+import { resolveModelCyberAccessProgramDefault } from "../model-catalog-access-programs.js";
 import type { AgentTool } from "../runtime/index.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { buildAgentRuntimeAuthPlan } from "./auth.js";
@@ -87,12 +86,6 @@ export function buildAgentRuntimeDeliveryPlan(
   const config = asOpenClawConfig(params.config);
   const providerRuntimeHandle = resolvePreparedProviderRuntimeHandle(params);
   return {
-    isSilentPayload(payload): boolean {
-      return (
-        isSilentReplyPayloadText(payload.text, SILENT_REPLY_TOKEN) &&
-        !hasReplyPayloadContent({ ...payload, text: undefined }, { trimText: true })
-      );
-    },
     resolveFollowupRoute(routeParams) {
       return resolveProviderFollowupFallbackRoute({
         provider: params.provider,
@@ -183,9 +176,10 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
     });
   const resolveTransportExtraParams = (
     overrides: Parameters<AgentRuntimePlan["transport"]["resolveExtraParams"]>[0] = {},
-  ) =>
-    resolvePreparedExtraParams({
+  ) => {
+    const extraParams = resolvePreparedExtraParams({
       cfg: config,
+      transportConfig: asOpenClawConfig(params.transportConfig),
       provider: params.provider,
       modelId: params.modelId,
       agentDir: params.agentDir,
@@ -200,6 +194,19 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
         ? { mode: auth.selectedAuthMode, authFlow: auth.selectedAuthFlow }
         : undefined,
     });
+    if (Object.hasOwn(extraParams, "accessPrograms")) {
+      return extraParams;
+    }
+    const cyber = resolveModelCyberAccessProgramDefault({
+      config,
+      agentId: overrides.agentId ?? params.agentId,
+      provider: params.provider,
+      modelId: params.modelId,
+      runtimeId: params.harnessRuntime ?? params.harnessId ?? "openclaw",
+      route: auth.modelRoute,
+    });
+    return cyber === undefined ? extraParams : { ...extraParams, accessPrograms: { cyber } };
+  };
   let memoizedTranscriptPolicy: ReturnType<typeof resolveTranscriptRuntimePolicy> | undefined;
   let memoizedTransportExtraParams: ReturnType<typeof resolveTransportExtraParams> | undefined;
   const providerTextTransforms = resolveProviderTextTransforms({

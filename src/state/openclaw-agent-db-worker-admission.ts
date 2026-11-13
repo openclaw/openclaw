@@ -123,9 +123,7 @@ export async function withWorkerAdmission<T>(
         }, binding.attachment),
       }),
     };
-    await runOpenClawAgentWorkerWrite(options, () =>
-      execution.prepare(source, signal, { readmitSchema: true }),
-    );
+    await runOpenClawAgentWorkerWrite(options, () => execution.prepare(source, signal));
     assertAdmission();
     publishAlias?.(
       execution.captureGenerationClaim().identity,

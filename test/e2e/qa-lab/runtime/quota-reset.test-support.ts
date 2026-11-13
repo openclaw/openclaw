@@ -39,6 +39,7 @@ export const BACKUP_RESPONSES_PATH = "/quota-backup/responses";
 
 const MODEL = "openai/gpt-5.5";
 export const UTILITY_MODEL_ID = "quota-test-utility";
+export const ORDINARY_RATE_LIMIT_RETRY_AFTER_MS = 30_000;
 const PROFILE_ID = "openai:quota";
 export const ACCOUNT_ID = "quota-test-account";
 export const MARKER = "QUOTA_TURN_OK";
@@ -210,8 +211,14 @@ export async function startQuotaProvider(
     };
   };
   const failure = () => {
-    const headers: Record<string, string> =
-      primaryExhausted() && source === "codex_rate_limits"
+    const ordinaryRateLimit =
+      phase === "ordinary-rate-limit" ||
+      phase === "ordinary-rate-limit-with-capacity" ||
+      phase === "ordinary-rate-limit-with-exhausted-usage";
+    // Ordinary throttles carry the provider's retry timing; it alone sets the cooldown.
+    const headers: Record<string, string> = ordinaryRateLimit
+      ? { "retry-after": String(ORDINARY_RATE_LIMIT_RETRY_AFTER_MS / 1000) }
+      : primaryExhausted() && source === "codex_rate_limits"
         ? {
             "x-codex-primary-used-percent": "100",
             "x-codex-primary-window-minutes": "300",
@@ -231,9 +238,7 @@ export async function startQuotaProvider(
               code: "invalid_api_key",
               message: "Invalid authentication token",
             }
-          : phase === "ordinary-rate-limit" ||
-              phase === "ordinary-rate-limit-with-capacity" ||
-              phase === "ordinary-rate-limit-with-exhausted-usage"
+          : ordinaryRateLimit
             ? {
                 type: "rate_limit_error",
                 code: "rate_limit_exceeded",
@@ -685,6 +690,11 @@ export async function createQuotaResetFixture(
     startTimeoutMs: 120_000,
     env: {
       ...(tls ? { NODE_EXTRA_CA_CERTS: caPath, CODEX_CA_CERTIFICATE: caPath } : {}),
+      // Dashboard bootstrap codes and auth readbacks must use the Gateway's
+      // advanced clock. NODE_OPTIONS also carries it through CLI respawns.
+      NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import=${preload.href}`]
+        .filter(Boolean)
+        .join(" "),
       OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
       OPENCLAW_SKIP_PROVIDERS: undefined,
       OPENCLAW_AGENT_HARNESS_FALLBACK: "none",
@@ -802,7 +812,10 @@ export async function createQuotaResetFixture(
   const alternateProfileId = "openai:quota-alternate";
   const alternateAccess = syntheticAccessToken(expires, "quota-alternate-account");
   const { saveAuthProfileStoreWithPreparedOwner } = createAuthProfileStoreRuntime(
-    createExternalAuthRuntime(() => []),
+    createExternalAuthRuntime(
+      () => [],
+      async (_params, run) => run(),
+    ),
   );
   // Quota recovery uses shared auth, including the external saved-block writer.
   // Bind the fresh fixture's owner explicitly; an agent-local seed is not equivalent.

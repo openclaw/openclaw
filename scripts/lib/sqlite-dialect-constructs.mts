@@ -5,6 +5,25 @@ export const SQLITE_PRIMITIVE_OWNERS: readonly string[] = [
   "src/infra/sqlite-strict.ts",
   // Canonical owner of SQLite user_version read/write.
   "src/infra/sqlite-user-version.ts",
+  // SQLite archive-format owner: catalog capture and offline restoration of migration table scopes.
+  "src/infra/sqlite-migration-scoped-snapshot.ts",
+  // SQLite artifact owner: native admission, journal normalization, and verified publication.
+  "src/infra/sqlite-snapshot.ts",
+  // SQLite admission catalogs own native schema/PRAGMA facts; PostgreSQL has its own catalog owner.
+  "src/infra/sqlite-schema-catalog.ts",
+  // SQLite planner-statistics owner: bounded optimization under existing writer admission.
+  "src/infra/sqlite-planner-statistics.ts",
+  // SQLite-only daemon store owner: empty-store admission and durable schema creation on every engine.
+  "src/daemon/runtime-pin-store.ts",
+  // SQLite-only local client owner; it never opens the selected Gateway engine.
+  "src/infra/client-credential-store.ts",
+];
+// SQLite physical-layout DDL; PostgreSQL generation/migrations retain ordinary tables.
+export const SQLITE_PHYSICAL_LAYOUT_OWNERS: readonly string[] = [
+  "src/state/openclaw-agent-schema.sql",
+  "src/state/openclaw-state-schema.sql",
+  "packages/memory-host-sdk/src/memory-entry-origins.ts",
+  "src/state/sqlite-table-layout-migration.ts",
 ];
 export type DialectMatch = {
   construct: string;
@@ -72,7 +91,12 @@ const constructs: readonly Construct[] = [
 
 export const CONFLICT_METHOD = /^(?:orReplace|orIgnore|orAbort|orFail|orRollback)$/iu;
 
-export function matchDialect(text: string, owner = false, sqlFile = false): DialectMatch[] {
+export function matchDialect(
+  text: string,
+  owner = false,
+  sqlFile = false,
+  physicalLayoutOwner = false,
+): DialectMatch[] {
   // Preserve offsets; single-quoted text remains eligible, including prose.
   const masked = text.replace(
     /"(?:""|[^"])*(?:"|$)|'(?:''|[^'])*(?:'|$)|--[^\r\n]*|\/\*[\s\S]*?(?:\*\/|$)/gu,
@@ -89,12 +113,20 @@ export function matchDialect(text: string, owner = false, sqlFile = false): Dial
             construct !== "custom-function" ||
             !/\b(?:table|exists|into|references|on)\s+$/iu.test(masked.slice(0, match.index)),
         )
-        .map((match) => ({
-          construct,
-          group,
-          index: match.index,
-          owner: owner && construct === "json-string-set",
-        })),
+        .map((match) => {
+          const prefix = masked.slice(0, match.index);
+          const physicalLayout =
+            physicalLayoutOwner &&
+            /(?:^|;)\s*CREATE\s+TABLE\b[^;]*$/iu.test(prefix) &&
+            (construct === "without-rowid" ||
+              (construct === "rowid" && /\bwithout\s+$/iu.test(prefix)));
+          return {
+            construct,
+            group: physicalLayout ? "engine-maintenance" : group,
+            index: match.index,
+            owner: physicalLayout || (owner && construct === "json-string-set"),
+          } satisfies DialectMatch;
+        }),
     )
     .toSorted(
       (left, right) =>

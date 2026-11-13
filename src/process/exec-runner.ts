@@ -14,6 +14,7 @@ import {
   resolveWindowsConsoleEncoding,
 } from "../infra/windows-encoding.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { copyOwnedBuffer } from "../shared/owned-buffer.js";
 import {
   EXIT_STDIO_GRACE_MS,
   hasChildProcessExited,
@@ -54,12 +55,15 @@ import {
   waitForCommandSpawn,
 } from "./exec-spawn.js";
 import { createCommandTerminationController } from "./exec-termination.js";
+import type { ProcessExecutionIntent } from "./linux-exec-cgroup.js";
 import { setProcessTimeout } from "./process-deadline.js";
 import { BrokerChild } from "./spawn-broker/child.js";
 
 type CommandTerminationReason = SpawnResult["termination"] | "output-limit";
 
 export type CommandOptions = {
+  executionIntent?: ProcessExecutionIntent;
+  executionScopeKey?: string;
   timeoutMs?: number;
   cwd?: string;
   input?: string | Uint8Array;
@@ -120,6 +124,14 @@ export async function runCommandBuffersWithTimeout(
   optionsOrTimeout: number | CommandOptions,
 ): Promise<BufferSpawnResult> {
   return await runCommandWithOutputEncoding(argv, optionsOrTimeout, false, true);
+}
+
+/** Retain raw bytes with UTF-8 capture boundaries, independent of the Windows console page. */
+export async function runUtf8CommandBuffersWithTimeout(
+  argv: string[],
+  optionsOrTimeout: number | CommandOptions,
+): Promise<BufferSpawnResult> {
+  return await runCommandWithOutputEncoding(argv, optionsOrTimeout, true, true);
 }
 
 async function runCommandWithOutputEncoding(
@@ -230,6 +242,8 @@ async function runCommandWithOutputEncoding(
   let terminatingOutputError: Error | undefined;
 
   const { child, invocation } = spawnCommandWithInvocation(argv, {
+    executionIntent: options.executionIntent,
+    executionScopeKey: options.executionScopeKey,
     buffer: false,
     cancelSignal: cancelController.signal,
     inheritScopeCancellation: false,
@@ -462,7 +476,7 @@ async function runCommandWithOutputEncoding(
         if (removedBytes === entry.buffer.byteLength) {
           combinedTailChunks.splice(index, 1);
         } else {
-          entry.buffer = Buffer.from(entry.buffer.subarray(removedBytes));
+          entry.buffer = copyOwnedBuffer(entry.buffer.subarray(removedBytes));
         }
         combinedCapturedBytes -= removedBytes;
         combinedCapturedBytesByStream[entry.stream] -= removedBytes;
@@ -593,7 +607,12 @@ async function runCommandWithOutputEncoding(
     throw failedProcess(error);
   });
   const resolvedSignal = result.signal ?? childExitState?.signal ?? nodeChild.signalCode ?? null;
-  if (cleanup === "normal" && resolvedSignal) {
+  // An explicit POSIX tree join already confirmed extinction in the exit handler.
+  if (
+    cleanup === "normal" &&
+    resolvedSignal &&
+    !(ownsExitedProcessTree && options.requireProcessTreeExtinction)
+  ) {
     cleanup = "uncertain";
   }
   if (inputAdmissionError) {

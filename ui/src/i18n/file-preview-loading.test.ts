@@ -4,7 +4,7 @@ import { useLazyEnglishTest } from "./lazy-english.test-support.ts";
 const loadI18n = useLazyEnglishTest();
 
 it.each([
-  { surface: "bundle preview", load: () => import("../components/file-preview-modal.ts") },
+  { surface: "bundle preview", load: () => import("../components/file-preview-modal.tsx") },
   { surface: "file draft", load: () => import("../pages/chat/components/chat-file-drafts.ts") },
   { surface: "embedded panel", load: () => import("../pages/chat/chat-pane-embedded-panels.ts") },
 ])("loads file preview fallback copy with the $surface instead of startup", async ({ load }) => {
@@ -36,7 +36,7 @@ it.each([
   expect(manager.t("filePreview.listLabel")).toBe("Files");
   expect(manager.t("filePreview.fileCount", { count: "2" })).toBe("2 files");
   expect(manager.t("filePreview.bundle.binary")).toBe(
-    "This binary file is included in the bundle but cannot be displayed as text.",
+    "This binary file is included in the bundle but can’t be displayed as text.",
   );
   expect(manager.t("filePreview.bundle.incomplete")).toBe(
     "Some bundle content is unavailable. Select a file to see its status.",

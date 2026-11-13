@@ -139,6 +139,9 @@ extension RealtimeTalkRelayTransport {
                 guard await gateway.currentRoute() == route else { throw CancellationError() }
                 return response
             },
-            isCurrent: { await gateway.currentRoute() == route })
+            isCurrent: { await gateway.currentRoute() == route },
+            supportsCloseDisposition: {
+                await gateway.supportsServerCapability(.talkSessionCloseDisposition, ifCurrentRoute: route) == true
+            })
     }
 }

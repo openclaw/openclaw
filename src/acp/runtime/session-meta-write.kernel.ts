@@ -1,6 +1,6 @@
-import type { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { SessionRowFacts } from "../../sessions/session-row-changes.js";
 import {
   buildAcpDatabaseSessionKey,
@@ -52,7 +52,7 @@ export function bindAcpSessionMeta(params: {
 
 /** Shared SQL policy for worker writes and the retained native owner. */
 export function applyAcpSessionMutation(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: Omit<AcpSessionMutationCommit, "agentId" | "source" | "updatedAt"> & { agentId?: string },
 ): Extract<SessionRowFacts, { kind: "acp" }> {
   const initialKey = buildAcpDatabaseSessionKey(input.storageSessionKey, input.agentId);

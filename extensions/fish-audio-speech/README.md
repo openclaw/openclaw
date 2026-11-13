@@ -13,10 +13,10 @@ remain `fish-audio`. Configure `tts.provider: "fish-audio"` and set
 `FISH_API_KEY`. The provider supports buffered audio, HTTP-streamed playback,
 native Opus voice notes, 8 kHz PCM telephony, and Fish Audio voice discovery.
 
-Set `tts.providers.fish-audio.model: "drama-3-preview"` to opt in to Drama 3
-voice direction. The default remains `s2.1-pro`. Natural-language directions
-such as `[calm, reassuring]` and paired tags such as `<whisper>...</whisper>`
-are passed through in the spoken text.
+Set `tts.providers.fish-audio.model: "drama-3"` to opt in to Drama 3 voice
+direction (`"drama-3-preview"` is still accepted). The default remains
+`s2.1-pro`. Natural-language directions such as `[calm, reassuring]` and paired
+tags such as `<whisper>...</whisper>` are passed through in the spoken text.
 
 See [Fish Audio](https://docs.openclaw.ai/providers/fish-audio) for setup,
 models, voice selection, expressive tags, and local macOS MLX usage.

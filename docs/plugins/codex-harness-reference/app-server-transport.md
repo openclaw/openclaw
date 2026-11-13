@@ -14,7 +14,7 @@ How OpenClaw starts and reaches the Codex app-server, and every `appServer` fiel
 
 For ordinary harness turns, OpenClaw starts a managed Codex binary: a newer
 Codex you installed yourself, or the one shipped with the official plugin
-(currently `@openai/codex` `0.160.0`):
+(currently `@openai/codex` `0.162.1`):
 
 ```bash
 codex app-server --listen stdio://
@@ -60,8 +60,8 @@ on `PATH` and uses it only when all of these hold:
 
 Otherwise OpenClaw uses the shipped binary. The Gateway logs one line with the
 chosen binary, its version, and the reason, for example
-`Codex app-server: using installed /usr/local/bin/codex 0.162.1 (newer than bundled 0.160.0)`
-or `Codex app-server: using bundled 0.160.0 (installed /usr/local/bin/codex 0.159.0 is not newer)`.
+`Codex app-server: using installed /usr/local/bin/codex 0.163.0 (newer than bundled 0.162.1)`
+or `Codex app-server: using bundled 0.162.1 (installed /usr/local/bin/codex 0.159.0 is not newer)`.
 
 If the selected Codex later fails to start, fails `initialize`, or reports
 another version (for example after an in-place upgrade), OpenClaw starts the
@@ -130,6 +130,16 @@ explicitly when the ordinary harness should share `$CODEX_HOME` (or `~/.codex`)
 with native clients. A private supervised binding uses the supervision
 connection regardless of the ordinary harness default. Independent App Server
 processes retain separate live status and approval state.
+
+For managed local app-servers with an agent home, OpenClaw sets
+`thread_unload_delay_secs=0`, overriding native post-unsubscribe retention.
+OpenClaw keeps warm subscriptions and protects active child work itself. When a
+conversation needs new configuration, it waits up to two seconds for that
+thread's unload notification before resuming its history, so a failed thread can
+recover while a sibling continues. If unloading is not confirmed, the binding is
+preserved; failed-thread recovery can replace the client only when no sibling
+work would be interrupted. User homes, stdio proxies, and external socket
+connections keep their native retention settings.
 
 For non-production testing against an already-running app-server, WebSocket
 transport is available:
@@ -279,7 +289,7 @@ If the normal app-server runtime would be `danger-full-access`, enabling
 permission profile instead. Codex-managed network enforcement is sandboxed
 networking, so a full-access profile would not protect outbound traffic.
 
-The plugin ships stable Codex app-server `0.160.0` and prefers a newer
+The plugin ships stable Codex app-server `0.162.1` and prefers a newer
 installed Codex only under the rules in
 [Newer installed Codex](#newer-installed-codex). Explicit custom
 executables, remote app-servers, and macOS desktop binaries must report a

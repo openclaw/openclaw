@@ -2,7 +2,7 @@ import {
   readProviderJsonResponse,
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
-import type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { UrbitHttpError } from "./errors.js";
 import { urbitFetch } from "./fetch.js";
 
@@ -12,8 +12,6 @@ type UrbitChannelDeps = {
   ship: string;
   channelId: string;
   ssrfPolicy?: SsrFPolicy;
-  lookupFn?: LookupFn;
-  fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 };
 
 export async function putUrbitChannel(
@@ -37,8 +35,6 @@ export async function putUrbitChannel(
       body: JSON.stringify(params.body),
     },
     ssrfPolicy: deps.ssrfPolicy,
-    lookupFn: deps.lookupFn,
-    fetchImpl: deps.fetchImpl,
     timeoutMs: params.timeoutMs,
     auditContext: params.auditContext,
     beforeRequest: params.beforeRequest,
@@ -49,7 +45,14 @@ const TLON_ERROR_BODY_LIMIT_BYTES = 16 * 1024;
 
 export async function pokeUrbitChannel(
   deps: UrbitChannelDeps,
-  params: { app: string; mark: string; json: unknown; auditContext: string },
+  params: {
+    app: string;
+    mark: string;
+    json: unknown;
+    auditContext: string;
+    beforeRequest?: () => void;
+    timeoutMs?: number;
+  },
 ): Promise<number> {
   const pokeId = Date.now();
   const pokeData = {
@@ -64,7 +67,8 @@ export async function pokeUrbitChannel(
   const { response, release } = await putUrbitChannel(deps, {
     body: [pokeData],
     auditContext: params.auditContext,
-    timeoutMs: 30_000,
+    timeoutMs: params.timeoutMs,
+    beforeRequest: params.beforeRequest,
   });
 
   try {
@@ -85,7 +89,7 @@ export async function pokeUrbitChannel(
 }
 
 export async function scryUrbitPath(
-  deps: Pick<UrbitChannelDeps, "baseUrl" | "cookie" | "ssrfPolicy" | "lookupFn" | "fetchImpl"> & {
+  deps: Pick<UrbitChannelDeps, "baseUrl" | "cookie" | "ssrfPolicy"> & {
     beforeRequest?: () => void;
   },
   params: { path: string; auditContext: string },
@@ -99,8 +103,6 @@ export async function scryUrbitPath(
       headers: { Cookie: deps.cookie },
     },
     ssrfPolicy: deps.ssrfPolicy,
-    lookupFn: deps.lookupFn,
-    fetchImpl: deps.fetchImpl,
     beforeRequest: deps.beforeRequest,
     timeoutMs: 30_000,
     auditContext: params.auditContext,

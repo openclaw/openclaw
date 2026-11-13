@@ -18,7 +18,7 @@ openclaw-modal-dialog {
   overflow: visible;
   border: 0;
   border-radius: var(--overlay-modal-radius);
-  background: transparent;
+  background: var(--overlay-modal-surface);
   color: var(--text);
   font: inherit;
   box-shadow: var(--overlay-modal-shadow);
@@ -31,10 +31,19 @@ openclaw-modal-dialog {
     overlay var(--openclaw-modal-hide-duration) allow-discrete;
 }
 
+.oc-modal-dialog:has(
+  > .oc-modal-dialog__body > .exec-approval-modal-stack:not(.exec-approval-card)
+) {
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
 .oc-modal-dialog[open] {
   display: flex;
   opacity: 1;
-  scale: 1;
+  /* Identity scale still contains fixed-position transient anchors. */
+  scale: none;
   transition-duration: var(--openclaw-modal-show-duration);
 }
 
@@ -70,15 +79,157 @@ openclaw-modal-dialog {
   }
 }
 
+.oc-modal-dialog__focus-guard {
+  position: fixed;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
 .oc-modal-dialog__body {
   flex: 1 1 auto;
   min-height: 0;
   padding: 0;
   overflow: auto;
+  border-radius: inherit;
 }
 
 .oc-modal-dialog__overlay-content {
   display: contents;
+}
+
+/* Static light DOM keeps submit buttons in their native form in both renderers. */
+.oc-modal-dialog openclaw-modal-actions {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  align-self: stretch;
+  justify-content: flex-end;
+  gap: 8px;
+  grid-column: 1 / -1;
+  min-width: 0;
+  flex-shrink: 0;
+  overflow-wrap: anywhere;
+}
+
+.oc-modal-dialog openclaw-modal-actions > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.oc-modal-dialog openclaw-modal-actions :is(button, .btn, a) {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* Opted-in choice dialogs keep DOM, reading, and tab order aligned with the layout. */
+.oc-modal-dialog openclaw-modal-actions.confirm-dialog-actions--stacked {
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.oc-modal-dialog .confirm-dialog-choice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: inherit;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* One layout for task dialogs: title and close stay, the body scrolls, the footer stays. */
+.oc-dialog {
+  display: grid;
+  max-height: var(--openclaw-modal-height-limit);
+  min-width: 0;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.oc-dialog__header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: var(--space-2);
+  padding: 12px 12px 0 var(--overlay-modal-padding);
+}
+
+.oc-dialog__title {
+  display: flex;
+  min-width: 0;
+  min-height: var(--overlay-modal-close-size);
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--overlay-modal-title-size);
+  font-weight: 600;
+}
+
+.oc-dialog__description {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: var(--space-1);
+  padding-inline-end: calc(var(--overlay-modal-padding) - 12px);
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+}
+
+.oc-dialog__description p {
+  margin: 0;
+}
+
+/* Icon actions such as help sit before close, in the same box. */
+.oc-dialog__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* Close and header icon actions are IconButtons sized by the dialog's close box,
+   which grows with the menu row height on touch layouts. */
+.oc-dialog__close,
+.oc-dialog__icon-button {
+  --oc-icon-button-size: var(--overlay-modal-close-size);
+}
+
+.oc-dialog__body {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--overlay-modal-padding) var(--space-2);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.oc-dialog__body:last-child {
+  padding-block-end: var(--overlay-modal-padding);
+}
+
+/* Scrolling rows stop short of the buttons instead of running into them. */
+.oc-modal-dialog openclaw-modal-actions.oc-dialog__footer {
+  padding: var(--space-3) var(--overlay-modal-padding) var(--overlay-modal-padding);
+}
+
+/* Step actions rendered inside the body stay reachable while a long step scrolls. */
+.oc-dialog__body:last-child:has(openclaw-modal-actions) {
+  padding-block-end: 0;
+}
+
+.oc-dialog__body openclaw-modal-actions {
+  position: sticky;
+  z-index: 1;
+  inset-block-end: 0;
+  padding-block: var(--space-3) var(--overlay-modal-padding);
+  background: var(--overlay-modal-surface);
 }
 
 openclaw-modal-dialog.fullscreen {
@@ -97,6 +248,8 @@ openclaw-modal-dialog.viewport-edge-to-edge > .oc-modal-dialog {
   max-height: none;
   margin: 0;
   border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 openclaw-modal-dialog.viewport-edge-to-edge > .oc-modal-dialog > .oc-modal-dialog__body,
@@ -129,7 +282,7 @@ openclaw-modal-dialog.drawer > .oc-modal-dialog {
   max-height: 100dvh;
   margin: 0 0 0 auto;
   border-radius: 0;
-  scale: 1;
+  scale: none;
 }
 
 openclaw-modal-dialog.drawer > .oc-modal-dialog[open] {
@@ -147,7 +300,6 @@ openclaw-modal-dialog.drawer--floating > .oc-modal-dialog {
   max-width: calc(100vw - var(--openclaw-drawer-inset) * 2);
   max-height: calc(100dvh - var(--openclaw-drawer-inset) * 2);
   margin: var(--openclaw-drawer-inset) var(--openclaw-drawer-inset) auto auto;
-  border-radius: var(--radius-xl);
 }
 
 @keyframes openclaw-drawer-in {
@@ -168,6 +320,13 @@ openclaw-modal-dialog.drawer--floating > .oc-modal-dialog {
 
   openclaw-modal-dialog.drawer > .oc-modal-dialog[open] {
     animation: none;
+  }
+}
+
+@supports (corner-shape: superellipse(1.5)) {
+  .oc-modal-dialog,
+  .oc-modal-dialog__body {
+    corner-shape: superellipse(1.5);
   }
 }
 
@@ -205,4 +364,38 @@ openclaw-modal-dialog.drawer--floating > .oc-modal-dialog {
   openclaw-modal-dialog.mobile-edge-to-edge > .oc-modal-dialog > .oc-modal-dialog__body {
     height: 100%;
   }
+}
+
+/* Facts inside a dialog: a label and its value, with no tiles or rules between them. */
+.oc-dialog__rows {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.oc-dialog__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-width: 0;
+  min-height: var(--menu-item-height);
+  font-size: var(--control-ui-text-sm);
+}
+
+.oc-dialog__row > :last-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: end;
+}
+
+.oc-dialog__row-label {
+  flex: none;
+  color: var(--muted);
+}
+
+.oc-dialog__row-note {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  overflow-wrap: anywhere;
 }

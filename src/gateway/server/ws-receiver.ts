@@ -15,7 +15,7 @@ function hasWritablePayloadLimit(target: PayloadLimited | undefined): target is 
   );
 }
 
-function gatewayReceiver(socket: WebSocket): GatewayReceiver | null {
+export function gatewayReceiver(socket: WebSocket): GatewayReceiver | null {
   // SAFETY: ws owns these private per-frame fields; validate each before the handoff.
   const receiver = (socket as WebSocket & { _receiver?: GatewayReceiver })["_receiver"];
   return hasWritablePayloadLimit(receiver) ? receiver : null;

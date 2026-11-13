@@ -1,7 +1,9 @@
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
+import { finishBootFrame } from "../../app/boot-composer.ts";
 import { readOfflineStorageScope, type BootRecord } from "../../app/boot-record.ts";
 import {
   sidebarSnapshotInvalidationMatches,
+  sidebarSnapshotDeletedSessionKey,
   subscribeSnapshotInvalidation,
 } from "../../pages/chat/session-snapshot-invalidation-events.ts";
 import {
@@ -10,7 +12,8 @@ import {
   sidebarSnapshotScopeKey,
   subscribeSidebarBootRetirement,
 } from "../../pages/chat/session-snapshot-prewarm.ts";
-import type { SessionGateway, SessionState } from "./session-capability.ts";
+import { listen } from "../reactive/listener.ts";
+import type { SessionGateway, SessionState } from "./session-types.ts";
 
 export function createSessionBootSnapshot(
   gateway: SessionGateway,
@@ -60,9 +63,26 @@ export function createSessionBootSnapshot(
   };
   const stopRetirement = subscribeSidebarBootRetirement(() => scope, retire);
   const stopInvalidation = subscribeSnapshotInvalidation((event) => {
-    if (scope && sidebarSnapshotInvalidationMatches(sidebarSnapshotScopeKey(scope), event)) {
+    if (!scope) {
+      return undefined;
+    }
+    if (sidebarSnapshotDeletedSessionKey(sidebarSnapshotScopeKey(scope), event)) {
+      return readSidebarBootSnapshot(gateway).then((snapshot) => {
+        const state = host.readState();
+        if (
+          current() &&
+          state.resultCached &&
+          snapshot?.roster &&
+          state.result !== snapshot.roster.result
+        ) {
+          host.publish({ ...state, ...snapshot.roster });
+        }
+      });
+    }
+    if (sidebarSnapshotInvalidationMatches(sidebarSnapshotScopeKey(scope), event)) {
       retire();
     }
+    return undefined;
   });
   let routingDefaults = bootRecord
     ? { mainKey: bootRecord.agents.mainKey, scope: bootRecord.agents.scope }
@@ -73,11 +93,11 @@ export function createSessionBootSnapshot(
       resolve();
       return;
     }
-    retirement.signal.addEventListener("abort", () => resolve(), { once: true });
+    listen(retirement.signal, "abort", () => resolve(), { once: true });
     void readSidebarBootSnapshot(gateway)
-      .then((snapshot) => {
+      .then(async (snapshot) => {
         if (!snapshot || retirement.signal.aborted || !current()) {
-          return;
+          return snapshot ? undefined : finishBootFrame();
         }
         routingDefaults = snapshot.routingDefaults;
         const roster = snapshot.roster;
@@ -89,6 +109,20 @@ export function createSessionBootSnapshot(
           host.readState().result === null
         ) {
           host.publish({ ...host.readState(), ...roster, resultCached: true });
+          // A new task alone can precede paint. Cross a frame before mounting the pane;
+          // the timeout releases routing in background tabs where rAF is suspended.
+          await new Promise<void>((release) => {
+            const timeout = setTimeout(() => {
+              if (frame !== undefined) {
+                cancelAnimationFrame(frame);
+              }
+              release();
+            }, 100);
+            const frame = globalThis.requestAnimationFrame?.(() => {
+              clearTimeout(timeout);
+              setTimeout(release, 0);
+            });
+          });
         }
       })
       .then(resolve, resolve);

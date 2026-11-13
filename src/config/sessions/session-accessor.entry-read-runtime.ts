@@ -66,7 +66,7 @@ export async function readResolvedSessionStoreTargetsInWorker(
   const prepared = [...new Set(scope.sessionKeys)].map((requestedKey) => {
     const { agentId, canonicalKey } = resolveSessionStoreIdentity({
       ...scope,
-      sessionKey: requestedKey.trim(),
+      sessionKey: requestedKey,
     });
     return {
       agentId,

@@ -9,8 +9,59 @@ import { isRecord as isPlainObject } from "@openclaw/normalization-core/record-c
 import { createDedupeCache } from "../../infra/dedupe.js";
 import { expandHomePrefix } from "../../infra/home-dir.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { DEFAULT_USAGE_BAR_TEMPLATE } from "./default-template.js";
 import type { UsageBarTemplate } from "./translator.js";
+
+function usageSegments() {
+  return [
+    { map: "model.is_fallback", cases: { true: "🔄" } },
+    { map: "model.is_override", cases: { true: "📌" } },
+    { when: "model.reasoning", text: "{model.reasoning|alias:reasoning}" },
+    { map: "state.fast_mode", cases: { true: "⚡️", false: "🐌" } },
+    {
+      when: "context.max_tokens",
+      text: "\u00A0| 📚[{context.pct_used|meter:5:braille}]{context.max_tokens|num}",
+    },
+    { when: "cost.turn_usd", text: "\u00A0💰{cost.turn_usd|fixed:4}" },
+  ];
+}
+
+const DEFAULT_USAGE_BAR_TEMPLATE: UsageBarTemplate = {
+  schema: "openclaw.usageBar.v1",
+  scales: {
+    braille: "⠐⡀⡄⡆⡇⣇⣧⣷⣿",
+    block: "░▏▎▍▌▋▊▉█",
+    shade: "░▒▓█",
+    moon: "🌑🌘🌗🌖🌕",
+    level: "▁▂▃▄▅▆▇█",
+    weather: ["🥶", "☁️", "🌥", "⛅️", "🌤", "☀️"],
+    plants: ["🪾", "🍂", "🌱", "☘️", "🍀", "🌿"],
+    moons6: ["🌑", "🌚", "🌘", "🌗", "🌖", "🌝"],
+  },
+  aliases: {
+    models: {
+      "claude-opus-4-6": "opus46",
+      "claude-opus-4-8": "opus48",
+      "claude-sonnet-4-6": "sonnet46",
+      "claude-haiku-4-5": "haiku45",
+      "gpt-5.5": "gpt5.5",
+    },
+    reasoning: { off: "🌑", minimal: "🌚", low: "🌘", medium: "🌗", high: "🌕", xhigh: "🌝" },
+  },
+  output: {
+    sep: "",
+    default: [
+      { text: "{model.provider}{identity.emoji|🤖}{model.display_name|alias:models}" },
+      ...usageSegments(),
+    ],
+    surfaces: {
+      discord: [
+        { text: "-# -\n" },
+        { text: "-# {model.provider}{identity.emoji|🤖}{model.display_name|alias:models}" },
+        ...usageSegments(),
+      ],
+    },
+  },
+};
 
 type UsageTemplateConfig = string | Record<string, unknown> | undefined;
 
@@ -29,13 +80,6 @@ const warnedTemplateOverrides = createDedupeCache({
   ttlMs: 0,
 });
 const usageTemplateLog = createSubsystemLogger("usage-template");
-
-function expandPath(p: string): string {
-  if (!p.startsWith("~")) {
-    return resolve(p);
-  }
-  return resolve(expandHomePrefix(p, { home: homedir() }));
-}
 
 function hasPieces(value: unknown): boolean {
   return Array.isArray(value) && value.some(isPlainObject);
@@ -173,7 +217,9 @@ export function loadUsageBarTemplate(configured: UsageTemplateConfig): UsageBarT
   if (typeof configured === "object") {
     return resolveTemplateOrWarn(parseTemplate(configured), "inline") ?? DEFAULT_USAGE_BAR_TEMPLATE;
   }
-  const path = expandPath(configured);
+  const path = configured.startsWith("~")
+    ? resolve(expandHomePrefix(configured, { home: homedir() }))
+    : resolve(configured);
   const cached = fileCache.get(path);
   return (
     cached?.template ??

@@ -15,6 +15,23 @@ import {
   resolveUiSessionNavigationParentKey,
 } from "../lib/sessions/session-key.ts";
 
+/**
+ * Operator roots carry an implicit Home link for notices. Explicit creation
+ * records the parent's generation; delegation and forks have their own markers.
+ * Older rows without creation provenance keep their existing placement.
+ */
+export function isImplicitHomeLinkedRoot(row: GatewaySessionRow): boolean {
+  return (
+    row.createdVia === "operator" &&
+    row.spawnDepth === 0 &&
+    !row.parentSessionId &&
+    !row.spawnedBy &&
+    !row.forkSource &&
+    row.forkedFromParent !== true &&
+    !isSubagentSessionKey(row.key)
+  );
+}
+
 /** Resolve visual placement without changing persisted routing or transcript ancestry. */
 export function resolveSidebarSessionParentKey(
   row: GatewaySessionRow | undefined,
@@ -25,18 +42,10 @@ export function resolveSidebarSessionParentKey(
     return undefined;
   }
   const parentKey = resolveUiSessionNavigationParentKey(row) ?? listedParentKey;
-  // Operator roots carry an implicit Home link for notices. Explicit creation
-  // records the parent's generation; delegation and forks have their own markers.
-  // Older rows without creation provenance keep their existing placement.
   if (
     parentKey &&
-    row?.createdVia === "operator" &&
-    row.spawnDepth === 0 &&
-    !row.parentSessionId &&
-    !row.spawnedBy &&
-    !row.forkSource &&
-    row.forkedFromParent !== true &&
-    !isSubagentSessionKey(row.key) &&
+    row &&
+    isImplicitHomeLinkedRoot(row) &&
     [...mainSessionKeys].some((key) => areUiSessionKeysEquivalent(key, parentKey))
   ) {
     return undefined;
@@ -94,7 +103,7 @@ export function isAcknowledgeableHiddenRun(
 }
 
 /** Walk the same ancestry used by sidebar folding, preserving each source row. */
-export function collectSessionDescendantRows(
+function collectSessionDescendantRows(
   rows: readonly GatewaySessionRow[],
   parentKey: string,
   subagentsOnly = false,

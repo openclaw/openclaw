@@ -5,7 +5,6 @@ import { readSqliteInspectionBudget } from "../infra/sqlite-readonly-worker.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
-import { captureCanonicalSessionValidationSchema } from "../state/openclaw-agent-canonical-validation-schema.js";
 import type { OpenClawAgentDatabaseOptions } from "../state/openclaw-agent-db-contract.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../state/openclaw-agent-db-resources.js";
 import type {
@@ -25,6 +24,7 @@ import {
   trajectoryRuntimeRetentionDue,
   trajectoryRuntimeRetentionState,
 } from "./runtime-retention.sqlite.js";
+import { invalidateTrajectoryRuntimeWindowFacts } from "./runtime-window-facts.js";
 
 const log = createSubsystemLogger("trajectory");
 
@@ -93,11 +93,8 @@ export function scheduleSqliteTrajectoryRuntimeRetention(params: {
     });
     const root = captureOpenClawStateReadContext(resolveOpenClawStateSqlitePath(options.env));
     unregisterRoot = registerOpenClawStateDatabaseAsyncResource({
-      close: async (closed) => {
-        if (!closed || closed.key === root.admission.identity.key) {
-          await close();
-        }
-      },
+      admission: root.admission,
+      close,
     });
     reader = retainSessionHistoryWorkerDatabase(options, maintenanceLane);
   } catch (error) {
@@ -156,7 +153,6 @@ export function scheduleSqliteTrajectoryRuntimeRetention(params: {
           {
             input,
             now,
-            schemaContract: captureCanonicalSessionValidationSchema(),
             expectedIdentity: { key: `file:${physicalIdentity}`, birthtime: identity.birthtime },
             env: options.env ?? process.env,
           },
@@ -167,12 +163,13 @@ export function scheduleSqliteTrajectoryRuntimeRetention(params: {
         );
       for (;;) {
         assertCurrent();
-        const result = await execute((worker) =>
-          worker.execute({
+        const result = await execute((worker) => {
+          invalidateTrajectoryRuntimeWindowFacts(identity);
+          return worker.execute({
             type: "trajectory.retention.delete",
             input: { sweepId, snapshot },
-          }),
-        );
+          });
+        });
         snapshot = undefined;
         if (result.complete || result.refresh) {
           break;

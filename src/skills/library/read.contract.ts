@@ -13,6 +13,7 @@ export type SkillLibraryWorkerAuthority = {
   profileId?: string;
   namespace?: "personal";
   scopes: readonly string[];
+  ownerDevice?: boolean;
   config: OpenClawConfig;
 };
 export type SkillLibraryReadQueries = {
@@ -53,7 +54,14 @@ export type SkillLibraryReadInput = {
     kind: K;
     params: SkillLibraryReadQueries[K]["input"];
     authority: SkillLibraryWorkerAuthority;
-  };
+  } & (K extends "session"
+    ? {
+        sessionFacts: {
+          profile?: { id: string; role: string | null; githubLogin: string | null };
+          multipleProfiles: boolean;
+        };
+      }
+    : unknown);
 }[keyof SkillLibraryReadQueries];
 export type SkillLibraryReadOutput = {
   [K in keyof SkillLibraryReadQueries]: {

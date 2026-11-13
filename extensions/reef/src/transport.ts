@@ -1,6 +1,6 @@
 import { toStringifiedError as asError } from "openclaw/plugin-sdk/error-runtime";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
-import * as fetchRuntime from "openclaw/plugin-sdk/fetch-runtime";
+import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -188,29 +188,23 @@ export class ReefTransportClient {
     try {
       result = await this.signed("POST", "/v1/friends/respond", request, signal);
     } catch (error) {
-      if (
-        error instanceof ReefRelayError &&
-        error.status === 400 &&
-        error.code === "invalid_request"
-      ) {
-        throw new ReefProtocolCompatibilityError(
-          400,
-          error.code,
-          "reef-relay",
-          "The Reef relay is likely incompatible or outdated. Update OpenClaw and the Reef relay together, then approve the fresh pairing challenge again.",
-        );
-      }
-      if (
-        error instanceof ReefRelayError &&
-        error.status === 409 &&
-        error.code === "client_upgrade_required"
-      ) {
-        throw new ReefProtocolCompatibilityError(
-          409,
-          error.code,
-          "openclaw-client",
-          "OpenClaw is outdated for this Reef relay. Update OpenClaw, then approve the fresh pairing challenge again.",
-        );
+      if (error instanceof ReefRelayError) {
+        if (error.status === 400 && error.code === "invalid_request") {
+          throw new ReefProtocolCompatibilityError(
+            400,
+            error.code,
+            "reef-relay",
+            "The Reef relay is likely incompatible or outdated. Update OpenClaw and the Reef relay together, then approve the fresh pairing challenge again.",
+          );
+        }
+        if (error.status === 409 && error.code === "client_upgrade_required") {
+          throw new ReefProtocolCompatibilityError(
+            409,
+            error.code,
+            "openclaw-client",
+            "OpenClaw is outdated for this Reef relay. Update OpenClaw, then approve the fresh pairing challenge again.",
+          );
+        }
       }
       throw error;
     }
@@ -319,9 +313,7 @@ export class ReefTransportClient {
     secrets: readonly string[] = [],
     assertCurrent?: () => void,
   ): Promise<T> {
-    // Preserve the namespace in bundled output: supported older hosts omit this export.
-    const { captureEffectAuthority } = { ...fetchRuntime };
-    const effect = captureEffectAuthority === undefined ? null : captureEffectAuthority();
+    const effect = captureEffectAuthority();
     const url = new URL(path, this.relayUrl).toString();
     const timeout = buildTimeoutAbortSignal({
       timeoutMs: this.requestTimeoutMs,
@@ -348,7 +340,7 @@ export class ReefTransportClient {
             signal: timeout.signal,
           });
         };
-        response = await (effect === null ? initiate() : effect.initiate(initiate));
+        response = await effect.initiate(initiate);
       } catch (error) {
         if (!initiated) {
           throw error;
@@ -403,6 +395,7 @@ export interface WebSocketLike {
   ): void;
   send(data: string): void;
   close(): void;
+  terminate(): void;
 }
 
 /**
@@ -618,6 +611,9 @@ export class ReefInboxConnection {
       const url = this.client.websocketUrl();
       const signature = new URL(url).searchParams.get("sig") ?? "";
       const socket = this.webSocketFactory(url);
+      const closed = new Promise<void>((done) => {
+        socket.addEventListener("close", () => done());
+      });
       const workAbort = new AbortController();
       // Emit each state transition at most once per socket and never after this
       // invocation settles, so late events from an abandoned socket cannot
@@ -637,7 +633,7 @@ export class ReefInboxConnection {
         }
         aborting = true;
         markDisconnected();
-        socket.close();
+        socket.terminate();
         // Older socket work can still own the shared serial tail. Waiting here
         // prevents a replacement channel from dispatching the same cursor range.
         void this.processing.then(
@@ -654,11 +650,8 @@ export class ReefInboxConnection {
           clearInterval(keepalive);
         }
         signal?.removeEventListener("abort", abortListener);
-        if (error) {
-          reject(error);
-        } else {
-          resolve();
-        }
+        // A close handshake can retain TLS and its timeout after the account settles.
+        void closed.then(() => (error ? reject(error) : resolve()));
       };
       const markDisconnected = () => {
         if (disconnected) {
@@ -674,14 +667,13 @@ export class ReefInboxConnection {
           return;
         }
         markDisconnected();
-        // An abort waits for the class-wide serial tail. A close event emitted
-        // synchronously by socket.close() must not finish this invocation early.
+        // A synchronous close on terminate must still wait for the class-wide serial tail.
         if (aborting) {
           return;
         }
         finish(error);
         if (error) {
-          socket.close();
+          socket.terminate();
         }
       };
       const pump = () => {

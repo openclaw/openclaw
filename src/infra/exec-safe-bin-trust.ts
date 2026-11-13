@@ -1,5 +1,6 @@
 // Resolves trusted directories for safe-bin allowlist policy.
-import fs from "node:fs";
+import type { Stats } from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 import {
   sortUniqueStrings,
@@ -18,19 +19,18 @@ type TrustedSafeBinPathParams = {
 
 export type WritableTrustedSafeBinDir = {
   dir: string;
-  groupWritable: boolean;
   worldWritable: boolean;
 };
 
-function pathCaseInsensitive(value: string): boolean {
+async function pathCaseInsensitive(value: string): Promise<boolean> {
   let candidate = value;
   for (;;) {
     const swapped = swapAsciiCase(candidate);
     if (swapped !== candidate) {
       try {
-        const original = fs.statSync(candidate);
+        const original = await fs.stat(candidate);
         try {
-          const alternate = fs.statSync(swapped);
+          const alternate = await fs.stat(swapped);
           return sameFsObject(original, alternate);
         } catch {
           return false;
@@ -48,17 +48,9 @@ function pathCaseInsensitive(value: string): boolean {
   }
 }
 
-function normalizeTrustComparisonPath(value: string): string {
+async function normalizeTrustComparisonPath(value: string): Promise<string> {
   const resolved = path.resolve(value);
-  return pathCaseInsensitive(resolved) ? resolved.toLowerCase() : resolved;
-}
-
-function normalizeTrustedDir(value: string, forComparison = true): string | null {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
-  return forComparison ? normalizeTrustComparisonPath(trimmed) : path.resolve(trimmed);
+  return (await pathCaseInsensitive(resolved)) ? resolved.toLowerCase() : resolved;
 }
 
 export function normalizeTrustedSafeBinDirs(entries?: readonly string[] | null): string[] {
@@ -69,38 +61,34 @@ export function normalizeTrustedSafeBinDirs(entries?: readonly string[] | null):
   return uniqueStrings(normalized);
 }
 
-function resolveTrustedSafeBinDirs(entries: readonly string[], forComparison = true): string[] {
-  const resolved = entries
-    .map((entry) => normalizeTrustedDir(entry, forComparison))
-    .filter((entry): entry is string => Boolean(entry));
-  return sortUniqueStrings(resolved);
+async function resolveTrustedSafeBinDirs(entries: readonly string[]): Promise<string[]> {
+  return sortUniqueStrings(await Promise.all(entries.map(normalizeTrustComparisonPath)));
 }
 
 function hasPathSelector(value: string): boolean {
   return value.includes("/") || value.includes("\\");
 }
 
-function isExecutableSafeBinFile(value: string): boolean {
+async function isExecutableSafeBinFile(value: string): Promise<boolean> {
   try {
-    const stats = fs.statSync(value);
+    const stats = await fs.stat(value);
     if (!stats.isFile()) {
       return false;
     }
     if (process.platform === "win32") {
       return true;
     }
-    fs.accessSync(value, fs.constants.X_OK);
+    await fs.access(value, fs.constants.X_OK);
     return true;
   } catch {
     return false;
   }
 }
 
-function resolveTrustedSafeBinTargetDirs(
+async function resolveTrustedSafeBinTargetDirs(
   entries: readonly string[],
   safeBins: readonly string[],
-  forComparison = true,
-): string[] {
+): Promise<string[]> {
   const dirs: string[] = [];
   const bins = Array.from(
     new Set(
@@ -110,19 +98,15 @@ function resolveTrustedSafeBinTargetDirs(
   if (bins.length === 0) {
     return dirs;
   }
-  for (const entry of normalizeTrustedSafeBinDirs(entries)) {
+  for (const entry of entries) {
     const dir = path.resolve(entry);
     for (const bin of bins) {
       const candidate = path.join(dir, bin);
-      if (!isExecutableSafeBinFile(candidate)) {
+      if (!(await isExecutableSafeBinFile(candidate))) {
         continue;
       }
       try {
-        const targetDir = path.dirname(fs.realpathSync(candidate));
-        const normalized = normalizeTrustedDir(targetDir, forComparison);
-        if (normalized) {
-          dirs.push(normalized);
-        }
+        dirs.push(path.dirname(await fs.realpath(candidate)));
       } catch {
         // Missing binaries are resolved normally at command time.
       }
@@ -131,42 +115,41 @@ function resolveTrustedSafeBinTargetDirs(
   return sortUniqueStrings(dirs);
 }
 
-export function getTrustedSafeBinDirs(
+export async function getTrustedSafeBinDirs(
   params: {
-    baseDirs?: readonly string[];
     extraDirs?: readonly string[];
     safeBins?: readonly string[];
   } = {},
-): Set<string> {
-  const baseDirs = params.baseDirs ?? DEFAULT_SAFE_BIN_TRUSTED_DIRS;
+): Promise<Set<string>> {
   const extraDirs = params.extraDirs ?? [];
   const safeBins = params.safeBins ?? [];
-  const entries = [
-    ...normalizeTrustedSafeBinDirs(baseDirs),
-    ...normalizeTrustedSafeBinDirs(extraDirs),
-  ];
-  const targetDirs = resolveTrustedSafeBinTargetDirs(entries, safeBins);
-  return new Set([...resolveTrustedSafeBinDirs(entries), ...targetDirs]);
+  const entries = normalizeTrustedSafeBinDirs([...DEFAULT_SAFE_BIN_TRUSTED_DIRS, ...extraDirs]);
+  const targetDirs = await resolveTrustedSafeBinTargetDirs(entries, safeBins);
+  return new Set(await resolveTrustedSafeBinDirs(sortUniqueStrings([...entries, ...targetDirs])));
 }
 
-export function isTrustedSafeBinPath(params: TrustedSafeBinPathParams): boolean {
-  const trustedDirs = params.trustedDirs ?? getTrustedSafeBinDirs();
-  const resolvedDir = normalizeTrustComparisonPath(path.dirname(path.resolve(params.resolvedPath)));
+export async function isTrustedSafeBinPath(params: TrustedSafeBinPathParams): Promise<boolean> {
+  const trustedDirs = params.trustedDirs ?? (await getTrustedSafeBinDirs());
+  const resolvedDir = await normalizeTrustComparisonPath(
+    path.dirname(path.resolve(params.resolvedPath)),
+  );
   return trustedDirs.has(resolvedDir);
 }
 
-export function listWritableExplicitTrustedSafeBinDirs(
+export async function listWritableExplicitTrustedSafeBinDirs(
   entries?: readonly string[] | null,
-): WritableTrustedSafeBinDir[] {
+): Promise<WritableTrustedSafeBinDir[]> {
   if (process.platform === "win32") {
     return [];
   }
-  const resolved = resolveTrustedSafeBinDirs(normalizeTrustedSafeBinDirs(entries), false);
+  const resolved = sortUniqueStrings(
+    normalizeTrustedSafeBinDirs(entries).map((dir) => path.resolve(dir)),
+  );
   const hits: WritableTrustedSafeBinDir[] = [];
   for (const dir of resolved) {
-    let stat: fs.Stats;
+    let stat: Stats;
     try {
-      stat = fs.statSync(dir);
+      stat = await fs.stat(dir);
     } catch {
       continue;
     }
@@ -179,7 +162,7 @@ export function listWritableExplicitTrustedSafeBinDirs(
     if (!groupWritable && !worldWritable) {
       continue;
     }
-    hits.push({ dir, groupWritable, worldWritable });
+    hits.push({ dir, worldWritable });
   }
   return hits;
 }

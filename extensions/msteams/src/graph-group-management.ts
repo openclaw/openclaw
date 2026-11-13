@@ -1,22 +1,13 @@
 import type { OpenClawConfig } from "../runtime-api.js";
-import { findMSTeamsConversationMember } from "./graph-conversation-members.js";
-import { resolveConversationPath, resolveGraphMessageContext } from "./graph-messages.js";
-import { deleteGraphRequest, escapeOData, mutateGraphJson, resolveGraphToken } from "./graph.js";
+import { resolveGraphMessageContext } from "./graph-messages.js";
+import { deleteGraphRequest, escapeOData, fetchAllGraphPages, mutateGraphJson } from "./graph.js";
 
-type AddParticipantMSTeamsParams = {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  to: string;
-  userId: string;
-  role?: string;
-};
-
-type ConversationMemberRole = "member" | "owner";
+const MAX_CONVERSATION_MEMBER_PAGES = 100;
 
 function resolveConversationMemberRoles(
   role: string | undefined,
   kind: "chat" | "channel",
-): ConversationMemberRole[] {
+): ("member" | "owner")[] {
   const normalized = role?.trim().toLowerCase() || "member";
   if (normalized !== "member" && normalized !== "owner") {
     throw new Error('MS Teams participant role must be "member" or "owner".');
@@ -29,7 +20,13 @@ function resolveConversationMemberRoles(
   return normalized === "owner" ? ["owner"] : [];
 }
 
-export async function addParticipantMSTeams(params: AddParticipantMSTeamsParams) {
+export async function addParticipantMSTeams(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  to: string;
+  userId: string;
+  role?: string;
+}) {
   const { token, conversationId, kind, basePath } = await resolveGraphMessageContext(params);
 
   const body = {
@@ -48,47 +45,52 @@ export async function addParticipantMSTeams(params: AddParticipantMSTeamsParams)
   return { added: { userId: params.userId, chatId: conversationId } };
 }
 
-type RemoveParticipantMSTeamsParams = {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  to: string;
-  userId: string;
-};
-
 /**
  * Remove a user from a chat or channel via Graph API.
  * Lists members first to resolve the membership ID, then deletes.
  */
-export async function removeParticipantMSTeams(params: RemoveParticipantMSTeamsParams) {
-  const token = await resolveGraphToken(params.cfg, { accountId: params.accountId });
-  const { conversationId, member } = await findMSTeamsConversationMember({
+export async function removeParticipantMSTeams(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  to: string;
+  userId: string;
+}) {
+  const { token, conversationId, basePath } = await resolveGraphMessageContext(params);
+  const userId = params.userId.trim().toLowerCase();
+  const result = await fetchAllGraphPages<{
+    id?: string;
+    userId?: string;
+    email?: string;
+  }>({
     token,
-    to: params.to,
-    cfg: params.cfg,
-    accountId: params.accountId,
-    userId: params.userId,
+    path: `${basePath}/members`,
+    maxPages: MAX_CONVERSATION_MEMBER_PAGES,
+    collectItems: false,
+    findOne: (candidate) =>
+      candidate.userId?.trim().toLowerCase() === userId ||
+      candidate.email?.trim().toLowerCase() === userId,
   });
+  if (result.truncated) {
+    throw new Error("MS Teams conversation member pagination limit exceeded");
+  }
+  const member = result.found;
   if (!member?.id) {
     throw new Error(`User ${params.userId} is not a member of this conversation`);
   }
-  const conv = resolveConversationPath(conversationId);
-
   await deleteGraphRequest({
     token,
-    path: `${conv.basePath}/members/${encodeURIComponent(member.id)}`,
+    path: `${basePath}/members/${encodeURIComponent(member.id)}`,
   });
 
   return { removed: { userId: params.userId, chatId: conversationId } };
 }
 
-type RenameGroupMSTeamsParams = {
+export async function renameGroupMSTeams(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   to: string;
   name: string;
-};
-
-export async function renameGroupMSTeams(params: RenameGroupMSTeamsParams) {
+}) {
   const { token, conversationId, kind, basePath } = await resolveGraphMessageContext(params);
 
   const body = kind === "chat" ? { topic: params.name } : { displayName: params.name };

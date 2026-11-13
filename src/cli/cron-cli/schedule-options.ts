@@ -4,7 +4,7 @@ import {
   normalizeOptionalString,
   readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
-import { isValidCronExpression } from "../../cron/schedule.js";
+import { isValidCronExpression } from "../../cron/expression.js";
 import type { CronSchedule } from "../../cron/types.js";
 import { CronCliError } from "./cron-cli-error.js";
 import {
@@ -218,9 +218,9 @@ function normalizeScheduleOptions(options: ScheduleOptionInput) {
     every: normalizeOptionalString(options.every) ?? "",
     cronExpr: normalizeOptionalString(options.cron) ?? "",
     onExitCommand: readNonBlankString(options.onExit) ?? "",
-    onExitCwd: normalizeOptionalString(options.onExitCwd),
+    onExitCwd: readNonBlankString(options.onExitCwd),
     streamCommand: parseCronStreamCommandArgv(options.streamCommand),
-    streamCwd: normalizeOptionalString(options.streamCwd),
+    streamCwd: readNonBlankString(options.streamCwd),
     streamCwdSupplied: options.streamCwd !== undefined,
     streamMode,
     streamModeSupplied,

@@ -1,15 +1,67 @@
+import { projectProviderError } from "@openclaw/ai/internal/shared";
 import { Value } from "typebox/value";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { ChatEventSchema } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { buildEmbeddedRunPayloads } from "../agents/embedded-agent-runner/run/payloads.js";
 import { handleAgentEnd } from "../agents/embedded-agent-subscribe.handlers.lifecycle.js";
 import { createContext } from "../agents/embedded-agent-subscribe.handlers.lifecycle.test-helpers.js";
-import { createAgentHarnessAttemptLifecycle } from "../agents/harness/attempt-events.js";
+import { AgentHarnessModelRequestPolicyError } from "../agents/harness/errors.js";
 import { makeAssistantMessageFixture } from "../agents/test-helpers/assistant-message-fixtures.js";
+import { createAgentLifecycleTerminalBackstop } from "../auto-reply/reply/agent-lifecycle-terminal.js";
+import {
+  createAgentHarnessAttemptLifecycle,
+  createAgentHarnessAssistantMessage,
+} from "../plugin-sdk/agent-harness-attempt-runtime.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.js";
 import { createAgentEventTestHarness } from "./server-chat.agent-events.test-harness.js";
 
 afterEach(() => vi.useRealTimers());
+
+it("preserves opaque provider codes through deferred terminal chat publication", async () => {
+  const code = "subscription_sharing_workplace_individual_usage_limit_exceeded";
+  vi.useFakeTimers();
+  const assistant = makeAssistantMessageFixture({
+    ...projectProviderError({ status: 429, code, message: "Usage limit reached" }),
+    content: [],
+  });
+  const ctx = createContext(assistant);
+  ctx.params.terminalLifecyclePhase = "finishing";
+  const runId = ctx.params.runId;
+  const sessionKey = "agent:main:main";
+  const h = createAgentEventTestHarness({ lifecycleErrorRetryGraceMs: 0 });
+  onTestFinished(() => h.handler.dispose());
+  h.register(runId, sessionKey, runId);
+  const deliveries: Promise<void>[] = [];
+  const terminal = createAgentLifecycleTerminalBackstop({
+    runId,
+    sessionKey,
+    getLifecycleGeneration: () => "test-generation",
+    resolveTerminationFields: () => ({}),
+    onTerminalEvent: (event) => {
+      deliveries.push(Promise.resolve(h.emit(runId, event.stream, event.data)));
+    },
+  });
+  ctx.params.onAgentEvent = (event) => terminal.note(event);
+  await handleAgentEnd(ctx);
+  expect(h.chat()).toHaveLength(0);
+  terminal.emit("error", terminal.getDeferredError());
+  await Promise.all(deliveries);
+
+  const terminals = h.chat().filter(([, event]) => event.state !== "delta");
+  expect(terminals).toHaveLength(1);
+  const payload = terminals[0]?.[1];
+  expect(Value.Check(ChatEventSchema, payload)).toBe(true);
+  expect(payload).toMatchObject({
+    state: "error",
+    errorDetail: {
+      provider: "openai",
+      providerErrorCode: code,
+      httpStatus: 429,
+      failoverReason: "rate_limit",
+    },
+  });
+  expect(payload?.errorMessage).not.toContain(code);
+});
 
 it("preserves exhausted context-budget guidance in live chat, Details, history, and channel replies", async () => {
   vi.useFakeTimers();
@@ -107,5 +159,83 @@ it.each([false, true])(
       stream: "lifecycle",
       data: { phase: "error", aborted, replayInvalid: true },
     });
+  },
+);
+
+it.each(["pre-start", "immediate", "deferred"] as const)(
+  "preserves a deployment denial through %s terminal publication",
+  async (mode) => {
+    vi.useFakeTimers();
+    const expected =
+      "The deployment rejected this model request. Ask the administrator to check the model access policy and request settings.";
+    const error = new AgentHarnessModelRequestPolicyError();
+    const h = createAgentEventTestHarness({ lifecycleErrorRetryGraceMs: 0 });
+    onTestFinished(() => h.handler.dispose());
+    const runId = "run-model-policy-denial";
+    h.register(runId, "session-model-policy-denial", runId);
+    const deliveries: Promise<void>[] = [];
+    let seq = 0;
+    const terminal = createAgentLifecycleTerminalBackstop({
+      runId,
+      getLifecycleGeneration: () => "test-generation",
+      resolveTerminationFields: () => ({}),
+      onTerminalEvent: (event) => {
+        deliveries.push(Promise.resolve(h.emit(runId, event.stream, event.data, { seq: ++seq })));
+      },
+    });
+    const lifecycle = createAgentHarnessAttemptLifecycle({
+      attempt: {
+        provider: "openai",
+        modelId: "fixture-model",
+        deferTerminalLifecycle: mode === "deferred",
+      },
+      backend: "codex-app-server",
+      startedAtMs: Date.now(),
+      state: { lifecycleStarted: false, lifecycleTerminalEmitted: false },
+      emitEvent: (event) => {
+        terminal.note(event);
+        const delivery = Promise.resolve(h.emit(runId, event.stream, event.data, { seq: ++seq }));
+        deliveries.push(delivery);
+        return delivery;
+      },
+    });
+    if (mode !== "pre-start") {
+      lifecycle.emitLifecycleStart({ provider: "openai", model: "fixture-model" });
+      lifecycle.emitLifecycleTerminal({ phase: "error", error });
+    }
+    if (mode !== "immediate") {
+      terminal.capture("error", error);
+      terminal.emit("error", error);
+      terminal.emit("error", error);
+    }
+    await Promise.all(deliveries);
+    const errors = h.chat().filter(([, event]) => event.state === "error");
+    expect(errors).toHaveLength(1);
+    const payload = errors[0]?.[1];
+    expect(Value.Check(ChatEventSchema, payload)).toBe(true);
+    expect(payload).toMatchObject({
+      errorMessage: expected,
+      errorDetail: { providerErrorCode: "model_request_policy_denied", httpStatus: 403 },
+    });
+    expect(payload?.errorDetail?.failoverReason).toBeUndefined();
+    if (mode !== "pre-start") {
+      expect(payload?.errorDetail).toMatchObject({ provider: "openai", model: "fixture-model" });
+    }
+    // Only an accepted turn can have the partial assistant output projected below.
+    if (mode !== "immediate") {
+      return;
+    }
+    const assistant = createAgentHarnessAssistantMessage(
+      { api: "openai-responses", provider: "openai", modelId: "fixture-model" },
+      "Partial reply",
+      { aborted: false, promptError: error },
+    );
+    expect(assistant).toMatchObject({
+      errorCode: "model_request_policy_denied",
+      errorMessage: expected,
+    });
+    const history = projectChatDisplayMessages([assistant]);
+    expect(JSON.stringify(history)).toContain(expected);
+    expect(JSON.stringify(history)).not.toContain("sign in");
   },
 );

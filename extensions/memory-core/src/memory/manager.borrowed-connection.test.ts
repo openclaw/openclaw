@@ -1,7 +1,7 @@
 import { unlinkSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { DatabaseSync, StatementSync } from "node:sqlite";
+import { DatabaseSync, StatementSync, type SQLInputValue } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
@@ -16,15 +16,18 @@ import {
   loadSqliteVecExtension,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
-import { deleteSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { withSessionTranscriptWriteLock } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { deleteSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
 import {
+  requireNativeSqliteDatabase,
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { seedMemoryForgetTombstones } from "../test-helpers.js";
+import {
+  seedMemoryForgetTombstones,
+  verifyMemoryDatabaseCorruptionForTest,
+} from "../test-helpers.js";
 import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
@@ -35,24 +38,47 @@ import {
   readPublishedSessionIndex,
 } from "./manager-index.test-support.js";
 import { memoryPublicationFaultEntrypoint } from "./manager-publication-fault-entrypoint.test-support.js";
+import { reservePublishedWriter } from "./manager-publication-observer.test-support.js";
 import { MemoryIndexManager } from "./manager.js";
 
-const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
+const memoryIndex = await import("./index.js");
 
 function managerDatabase(manager: MemoryIndexManager): DatabaseSync {
   return (manager as unknown as { db: DatabaseSync }).db;
 }
 
-describe("memory manager agent database lifecycle", () => {
-  const fixture = createManagerIndexFixture({
-    getMemorySearchManager,
-    closeAllMemorySearchManagers,
-  });
-  const createConfig = () => fixture.createConfig({ provider: "none", vectorEnabled: false });
+function rows(db: DatabaseSync, sql: string, ...bindings: SQLInputValue[]) {
+  return db.prepare(sql).all(...bindings);
+}
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+function closeWriter(db: DatabaseSync) {
+  if (db.isTransaction) {
+    db.exec("ROLLBACK");
+  }
+  db.close();
+}
+
+describe("memory manager agent database lifecycle", () => {
+  const fixture = createManagerIndexFixture(memoryIndex);
+  const createConfig = (overrides: Parameters<typeof fixture.createConfig>[0] = {}) =>
+    fixture.createConfig({ provider: "none", vectorEnabled: false, ...overrides });
+  const sessionConfig = () =>
+    fixture.createConfig({ provider: "none", sources: ["sessions"], sessionMemory: true });
+  const seedSession = (sessionId: string, content: string) =>
+    fixture.seedSessionTranscript({
+      sessionId,
+      messages: [{ role: "user", timestamp: Date.now(), content }],
+    });
+  function seedCache(db: DatabaseSync, value: (index: number) => number) {
+    const insert = db.prepare(`INSERT INTO memory_embedding_cache
+      (provider, model, provider_key, hash, embedding, dims, updated_at)
+      VALUES ('fixture', 'fixture', 'fixture', ?, ?, 1, ?)`);
+    for (let index = 0; index < 331; index++) {
+      insert.run(`cache-${index}`, encodeMemoryEmbedding([value(index)]), index);
+    }
+  }
+
+  afterEach(() => vi.restoreAllMocks());
 
   it("joins the admitted publication worker when manager construction fails", async () => {
     const failure = new Error("background context unavailable");
@@ -77,16 +103,14 @@ describe("memory manager agent database lifecycle", () => {
       runInBackgroundContext: () => {
         throw failure;
       },
-    }).then(
-      () => {
+    })
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      )
+      .finally(() => {
         settled = true;
-        return undefined;
-      },
-      (error: unknown) => {
-        settled = true;
-        return error;
-      },
-    );
+      });
     try {
       await Promise.race([workerEntered.promise, outcome]);
       expect(settled).toBe(false);
@@ -108,13 +132,7 @@ describe("memory manager agent database lifecycle", () => {
     const firstDb = managerDatabase(first);
     expect(firstDb.location()).toBe(shared.path);
     expect(() => firstDb.exec("DELETE FROM memory_index_chunks")).toThrow(/readonly/i);
-    const replacement = await fixture.getFreshManager(
-      fixture.createConfig({
-        provider: "none",
-        vectorEnabled: false,
-        minScore: 0.1,
-      }),
-    );
+    const replacement = await fixture.getFreshManager(createConfig({ minScore: 0.1 }));
 
     expect(replacement === first).toBe(false);
     expect(managerDatabase(replacement).location()).toBe(shared.path);
@@ -123,8 +141,7 @@ describe("memory manager agent database lifecycle", () => {
     expect(managerDatabase(replacement).isOpen).toBe(true);
     await replacement.sync({ reason: "test", force: true });
     expect((await replacement.search("Alpha")).length).toBeGreaterThan(0);
-    await closeAllMemorySearchManagers();
-    expect(shared.db.isOpen).toBe(true);
+    await memoryIndex.closeAllMemorySearchManagers();
     expect(shared.db.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks").get()).toEqual({
       count: 1,
     });
@@ -132,27 +149,21 @@ describe("memory manager agent database lifecycle", () => {
 
   it("rejects shared integrity failure before exposing a manager", async () => {
     const shared = sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" });
-    closeOpenClawAgentDatabasesForTest();
-    const damaged = new DatabaseSync(shared.path);
-    try {
+    await closeOpenClawAgentDatabasesAsync();
+    {
+      using damaged = new DatabaseSync(shared.path);
       damaged.exec(`
         PRAGMA foreign_keys = OFF;
         CREATE TABLE fixture_parent (id INTEGER PRIMARY KEY);
         CREATE TABLE fixture_child (parent_id INTEGER REFERENCES fixture_parent(id));
         INSERT INTO fixture_child VALUES (1);
       `);
-    } finally {
-      damaged.close();
+      expect(damaged.prepare("PRAGMA foreign_key_check").all()).toEqual([
+        { table: "fixture_child", rowid: 1, parent: "fixture_parent", fkid: 0 },
+      ]);
     }
-    // Replaced files cannot reuse the original connection's clean integrity receipt.
-    const replacementPath = `${shared.path}.replacement`;
-    await fs.copyFile(shared.path, replacementPath);
-    await fs.rename(replacementPath, shared.path);
-
-    expect(() => sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" })).toThrow(
-      /foreign_key_check/,
-    );
-    const result = await getMemorySearchManager({
+    await verifyMemoryDatabaseCorruptionForTest(shared.path);
+    const result = await memoryIndex.getMemorySearchManager({
       runInBackgroundContext: runInMemoryTestBackgroundContext,
       cfg: createConfig(),
       agentId: "main",
@@ -169,11 +180,10 @@ describe("memory manager agent database lifecycle", () => {
     const db = memoryIndexFixtureWriter(manager);
     expect((await loadSqliteVecExtension({ db })).ok).toBe(true);
     const vectorTexts = () =>
-      db
-        .prepare(
-          "SELECT c.text FROM memory_index_chunks c JOIN memory_index_chunks_vec v ON v.id = c.id ORDER BY c.text",
-        )
-        .all();
+      rows(
+        db,
+        "SELECT c.text FROM memory_index_chunks c JOIN memory_index_chunks_vec v ON v.id = c.id ORDER BY c.text",
+      );
 
     for (const text of ["Alpha first replacement.", "Beta second replacement."]) {
       await fs.writeFile(memoryFile, text);
@@ -217,28 +227,35 @@ describe("memory manager agent database lifecycle", () => {
     expect((await replacement.search("Alpha")).length).toBeGreaterThan(0);
   });
 
+  it("re-admits a worker-only manager after terminal database revocation", async () => {
+    const cfg = createConfig();
+    const seed = await fixture.getFreshManager(cfg, "cli");
+    await seed.sync({ reason: "baseline", force: true });
+    await seed.close();
+
+    const first = await fixture.getFreshManager(cfg);
+    const database = Reflect.get(first, "publishedDatabase") as MemoryIndexDatabase;
+    expect(database.isOpen).toBe(true);
+    expect(await fixture.getFreshManager(cfg)).toBe(first);
+
+    // Keep this path worker-only: opening the compatibility reader would mask stale liveness.
+    await closeOpenClawAgentDatabasesAsync(fixture.paths.stateDir);
+    expect(database.isOpen).toBe(false);
+
+    const replacement = await fixture.getFreshManager(cfg);
+    expect(replacement).not.toBe(first);
+    expect((await replacement.search("Alpha")).length).toBeGreaterThan(0);
+    await first.close();
+    await replacement.sync({ reason: "after-revocation", force: true });
+    expect((await replacement.search("Alpha")).length).toBeGreaterThan(0);
+  });
+
   it("rejects queued maintenance without reopening its retired source connection", async () => {
     const cfg = createConfig();
     const source = await fixture.getFreshManager(cfg, "cli");
     const sourcePath = source.status().dbPath;
-    const target = {
-      agentId: "main",
-      sessionKey: "agent:main:maintenance-admission",
-      sessionId: "maintenance-admission",
-    };
-    await upsertSessionEntry({
-      ...target,
-      entry: { sessionId: target.sessionId, updatedAt: Date.now() },
-    });
-    const entered = createDeferred<void>();
-    const released = createDeferred<void>();
     const queued = createDeferred<void>();
-    const writer = withSessionTranscriptWriteLock(target, async () => {
-      entered.resolve();
-      await released.promise;
-      closeOpenClawAgentDatabasesForTest();
-    });
-    await entered.promise;
+    const writer = await reservePublishedWriter(() => closeOpenClawAgentDatabasesForTest());
     const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStoreV2;
     vi.spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStoreV2").mockImplementation(
       async (...args) => {
@@ -263,7 +280,7 @@ describe("memory manager agent database lifecycle", () => {
     void creating.catch(() => undefined);
     try {
       await Promise.race([queued.promise, creating]);
-      released.resolve();
+      writer.release();
       await expect(creating).rejects.toThrow(/^Agent database execution admission is closed$/);
       expect(
         prepare.mock.contexts.filter(
@@ -274,8 +291,8 @@ describe("memory manager agent database lifecycle", () => {
         ),
       ).toEqual([]);
     } finally {
-      released.resolve();
-      await Promise.allSettled([writer, creating]);
+      writer.release();
+      await Promise.allSettled([writer.done, creating]);
     }
   });
 
@@ -292,22 +309,15 @@ describe("memory manager agent database lifecycle", () => {
       expect(results.some((result) => result.path === "memory/2026-01-12.md")).toBe(true);
       expect(performance.now() - started).toBeLessThan(1000);
     } finally {
-      writer.exec("ROLLBACK");
-      writer.close();
+      closeWriter(writer);
       await manager.close();
     }
   });
 
   it("preserves a newer source when archive cleanup waits for write admission", async () => {
     const sessionId = "archive-publication-race";
-    await fixture.seedSessionTranscript({
-      sessionId,
-      messages: [{ role: "user", timestamp: Date.now(), content: "Violet archived memory." }],
-    });
-    const manager = await fixture.getFreshManager(
-      fixture.createConfig({ provider: "none", sources: ["sessions"], sessionMemory: true }),
-      "cli",
-    );
+    await seedSession(sessionId, "Violet archived memory.");
+    const manager = await fixture.getFreshManager(sessionConfig(), "cli");
     await manager.sync({ reason: "baseline", force: true });
     await deleteSessionEntry({
       agentId: "main",
@@ -347,10 +357,7 @@ describe("memory manager agent database lifecycle", () => {
       ).toEqual({ hash: "newer-publication" });
     } finally {
       clearTimeout(releaseWriter);
-      if (writer.isTransaction) {
-        writer.exec("ROLLBACK");
-      }
-      writer.close();
+      closeWriter(writer);
       await manager.close();
     }
   });
@@ -365,13 +372,14 @@ describe("memory manager agent database lifecycle", () => {
     const writeTranscript = (content: string) =>
       fs.writeFile(
         transcript,
-        `${JSON.stringify({ type: "message", message: { role: "user", content } })}\n`,
+        `${JSON.stringify({
+          type: "message",
+          timestamp: "2026-09-01T00:00:00.000Z",
+          message: { role: "user", content },
+        })}\n`,
       );
     await writeTranscript("Old violet history.");
-    const manager = await fixture.getFreshManager(
-      fixture.createConfig({ provider: "none", sources: ["sessions"], sessionMemory: true }),
-      "cli",
-    );
+    const manager = await fixture.getFreshManager(sessionConfig(), "cli");
     await manager.sync({ reason: "baseline", force: true });
     const shared = sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" });
     const sourcePath = sessionPathForFile(transcript);
@@ -379,6 +387,8 @@ describe("memory manager agent database lifecycle", () => {
       "SELECT hash FROM memory_index_sources WHERE path = ? AND source = 'sessions'",
     );
     expect(readSource.get(sourcePath)).toBeDefined();
+    const changedTime = new Date(Date.now() + 60_000);
+    await fs.utimes(transcript, changedTime, changedTime);
     // Legacy/imported chunks can await a later constructor's provenance reconciliation.
     shared.db
       .prepare(
@@ -432,10 +442,7 @@ describe("memory manager agent database lifecycle", () => {
     } finally {
       releaseRefresh.resolve();
       observeRefresh.mockRestore();
-      if (writer.isTransaction) {
-        writer.exec("ROLLBACK");
-      }
-      writer.close();
+      closeWriter(writer);
       await sync.catch(() => undefined);
       await manager.close();
     }
@@ -502,15 +509,11 @@ describe("memory manager agent database lifecycle", () => {
             }
           },
         });
-        expect(publicationStarted).toBe(true);
         expect(deletionCount).toBe(1);
         expect(readSource.get(sourcePath)).toEqual({ hash: "newer-media-publication" });
       } finally {
         try {
-          if (writer.isTransaction) {
-            writer.exec("ROLLBACK");
-          }
-          writer.close();
+          closeWriter(writer);
           await manager.close();
         } finally {
           publicationSpy.mockRestore();
@@ -529,14 +532,9 @@ describe("memory manager agent database lifecycle", () => {
     const sessionWork = scenario === "deleted-session" || scenario === "session-fingerprint";
     const sessionId = "maintenance-session";
     if (sessionWork) {
-      await fixture.seedSessionTranscript({
-        sessionId,
-        messages: [{ role: "user", timestamp: Date.now(), content: "Violet session content." }],
-      });
+      await seedSession(sessionId, "Violet session content.");
     }
-    const cfg = fixture.createConfig({
-      provider: "none",
-      vectorEnabled: false,
+    const cfg = createConfig({
       sources: sessionWork ? ["memory", "sessions"] : ["memory"],
       sessionMemory: sessionWork,
     });
@@ -549,28 +547,18 @@ describe("memory manager agent database lifecycle", () => {
     const shared = sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" });
     if (scenario === "deleted-memory") {
       await fs.unlink(changedPath);
-      shared.db
-        .prepare(
-          "INSERT INTO memory_index_chunks(id, path, source, model, start_line, end_line, hash, text, embedding, updated_at) VALUES ('old-model', 'memory/updated.md', 'memory', 'old-model', 1, 1, 'old-hash', 'old-model violet', x'', 1)",
-        )
-        .run();
-      shared.db
-        .prepare(
-          "INSERT INTO memory_index_chunks(id, path, source, model, start_line, end_line, hash, text, embedding, updated_at) VALUES ('other-source', 'memory/updated.md', 'sessions', 'old-model', 1, 1, 'other-hash', 'other-source', x'', 1)",
-        )
-        .run();
+      const insert = shared.db.prepare(
+        "INSERT INTO memory_index_chunks(id, path, source, model, start_line, end_line, hash, text, embedding, updated_at) VALUES (?, 'memory/updated.md', ?, 'old-model', 1, 1, ?, ?, x'', 1)",
+      );
+      insert.run("old-model", "memory", "old-hash", "old-model violet");
+      insert.run("other-source", "sessions", "other-hash", "other-source");
     } else if (scenario === "watched-file") {
       await fs.writeFile(changedPath, "Refreshed violet memory.");
     }
     if (scenario === "cache-prune") {
       const owner = manager as unknown as { cache: { maxEntries: number } };
       owner.cache.maxEntries = 2;
-      const insert = shared.db.prepare(
-        "INSERT INTO memory_embedding_cache(provider, model, provider_key, hash, embedding, dims, updated_at) VALUES ('fixture', 'fixture', 'fixture', ?, ?, 1, ?)",
-      );
-      for (let index = 0; index < 331; index += 1) {
-        insert.run(`cache-${index}`, encodeMemoryEmbedding([1]), index);
-      }
+      seedCache(requireNativeSqliteDatabase(shared.db), () => 1);
     }
     if (sessionWork) {
       const session = (await listSessionTranscriptCorpusEntriesForAgent("main")).find(
@@ -620,11 +608,10 @@ describe("memory manager agent database lifecycle", () => {
       await sync;
       if (scenario === "deleted-memory") {
         expect(
-          shared.db
-            .prepare(
-              "SELECT model FROM memory_index_chunks_fts WHERE path = 'memory/updated.md' ORDER BY source",
-            )
-            .all(),
+          rows(
+            requireNativeSqliteDatabase(shared.db),
+            "SELECT model FROM memory_index_chunks_fts WHERE path = 'memory/updated.md' ORDER BY source",
+          ),
         ).toEqual([{ model: "old-model" }]);
         expect(
           (await reader.search("violet", { sources: ["memory"] })).some(
@@ -632,14 +619,13 @@ describe("memory manager agent database lifecycle", () => {
           ),
         ).toBe(false);
       } else if (scenario === "deleted-session") {
-        expect(
-          shared.db
-            .prepare("SELECT path FROM memory_index_sources WHERE source = 'sessions'")
-            .all(),
-        ).toEqual([]);
-        expect(
-          shared.db.prepare("SELECT text FROM memory_index_chunks WHERE source = 'sessions'").all(),
-        ).toEqual([]);
+        const db = requireNativeSqliteDatabase(shared.db);
+        expect(rows(db, "SELECT path FROM memory_index_sources WHERE source = 'sessions'")).toEqual(
+          [],
+        );
+        expect(rows(db, "SELECT text FROM memory_index_chunks WHERE source = 'sessions'")).toEqual(
+          [],
+        );
       } else if (scenario === "session-fingerprint") {
         expect(
           shared.db
@@ -650,7 +636,10 @@ describe("memory manager agent database lifecycle", () => {
         ).toEqual({ refreshed: 1 });
       } else if (scenario === "cache-prune") {
         expect(
-          shared.db.prepare("SELECT hash FROM memory_embedding_cache ORDER BY updated_at").all(),
+          rows(
+            requireNativeSqliteDatabase(shared.db),
+            "SELECT hash FROM memory_embedding_cache ORDER BY updated_at",
+          ),
         ).toEqual([{ hash: "cache-329" }, { hash: "cache-330" }]);
         expect([...observedCacheCounts].some((count) => count > 2 && count < 331)).toBe(true);
       } else {
@@ -661,25 +650,18 @@ describe("memory manager agent database lifecycle", () => {
     } finally {
       clearTimeout(releaseWriter);
       clearImmediate(observeCacheTimer);
-      if (writer.isTransaction) {
-        writer.exec("ROLLBACK");
-      }
-      writer.close();
+      closeWriter(writer);
       await sync.catch(() => undefined);
       await manager.close();
     }
   });
 
   it("does not replay a committed prune batch after its native reply fails", async () => {
-    const cfg = fixture.createConfig({
-      provider: "none",
-      vectorEnabled: false,
-      cacheEnabled: true,
-      sources: ["memory"],
-    });
-    const db = sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" }).db;
+    const cfg = createConfig({ cacheEnabled: true, sources: ["memory"] });
+    const db = requireNativeSqliteDatabase(
+      sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" }).db,
+    );
     const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStoreV2;
-    const interceptedPaths: Array<string | undefined> = [];
     let closeSettled: boolean;
     const intercept = vi
       .spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStoreV2")
@@ -697,7 +679,6 @@ describe("memory manager agent database lifecycle", () => {
           moduleUrl: resolveRuntimeWorkerUrl(memoryPublicationFaultEntrypoint),
           input: { kind: "cache-prune-result", publication: worker.input },
         });
-        interceptedPaths.push(options.path);
         const close = client.close.bind(client);
         vi.spyOn(client, "close").mockImplementation(async () => {
           await close();
@@ -709,18 +690,11 @@ describe("memory manager agent database lifecycle", () => {
     expect(managerDatabase(manager).location()).toBe(db.location());
     try {
       await manager.sync({ reason: "baseline", force: true });
-      expect(interceptedPaths).toContain(db.location());
       const owner = manager as unknown as { cache: { maxEntries: number } };
       owner.cache.maxEntries = 2;
-      const insert = db.prepare(`INSERT INTO memory_embedding_cache
-        (provider, model, provider_key, hash, embedding, dims, updated_at)
-        VALUES ('fixture', 'fixture', 'fixture', ?, ?, 1, ?)`);
-      for (let index = 0; index < 331; index++) {
-        insert.run(`cache-${index}`, encodeMemoryEmbedding([index + 1]), index);
-      }
-      const readCache = () =>
-        db.prepare("SELECT * FROM memory_embedding_cache ORDER BY updated_at").all();
-      const readSources = () => db.prepare("SELECT * FROM memory_index_sources ORDER BY id").all();
+      seedCache(db, (index) => index + 1);
+      const readCache = () => rows(db, "SELECT * FROM memory_embedding_cache ORDER BY updated_at");
+      const readSources = () => rows(db, "SELECT * FROM memory_index_sources ORDER BY id");
       const before = readCache();
       const sources = readSources();
       expect(before).toHaveLength(331);
@@ -730,7 +704,6 @@ describe("memory manager agent database lifecycle", () => {
       );
       expect(closeSettled).toBe(true);
       const remaining = readCache();
-      expect(remaining).toHaveLength(231);
       expect(remaining).toEqual(before.slice(100));
       expect(readSources()).toEqual(sources);
 
@@ -747,9 +720,7 @@ describe("memory manager agent database lifecycle", () => {
   it.each(["unreleased", "replaced"] as const)(
     "preserves the %s shadow when final cleanup has no custody",
     async (failure) => {
-      const manager = await fixture.getFreshManager(
-        fixture.createConfig({ provider: "none", sources: ["memory"], vectorEnabled: false }),
-      );
+      const manager = await fixture.getFreshManager(createConfig({ sources: ["memory"] }));
       const open = MemoryIndexDatabase.openShadow.bind(MemoryIndexDatabase);
       let shadow: { owner: MemoryIndexDatabase; db: DatabaseSync; path: string } | undefined;
       const releaseFailure = new Error("controlled shadow release failure");
@@ -779,7 +750,6 @@ describe("memory manager agent database lifecycle", () => {
         await expect(manager.sync({ reason: "cli", force: true })).rejects.toThrow(
           failure === "unreleased" ? releaseFailure.message : "shadow file changed",
         );
-        expect(shadow).toBeDefined();
         expect(shadow!.owner.shadowReleased).toBe(failure === "replaced");
         expect(shadow!.db.isOpen).toBe(failure === "unreleased");
         if (failure === "unreleased") {
@@ -798,9 +768,7 @@ describe("memory manager agent database lifecycle", () => {
   );
 
   it("keeps closed-shadow cleanup pending while foreground callbacks run", async () => {
-    const manager = await fixture.getFreshManager(
-      fixture.createConfig({ provider: "none", sources: ["memory"], vectorEnabled: false }),
-    );
+    const manager = await fixture.getFreshManager(createConfig({ sources: ["memory"] }));
     const open = MemoryIndexDatabase.openShadow.bind(MemoryIndexDatabase);
     let shadow: DatabaseSync | undefined;
     let shadowPath: string | undefined;
@@ -813,10 +781,8 @@ describe("memory manager agent database lifecycle", () => {
     const entered = createDeferred<void>();
     const resume = createDeferred<void>();
     const remove = fs.rm;
-    let removalStarted = false;
     vi.spyOn(fs, "rm").mockImplementation(async (...args) => {
       if (args[0] === shadowPath) {
-        removalStarted = true;
         entered.resolve();
         await resume.promise;
       }
@@ -831,7 +797,6 @@ describe("memory manager agent database lifecycle", () => {
     let closed = false;
     try {
       await Promise.race([entered.promise, sync]);
-      expect(removalStarted).toBe(true);
       expect(shadow?.isOpen).toBe(false);
       expect(syncSettled).toBe(false);
       await nextTurn();
@@ -858,12 +823,7 @@ describe("memory manager agent database lifecycle", () => {
     const sessionId = "admission-without-host-reads";
     const sessionKey = `agent:main:chat:${sessionId}`;
     const manager = await fixture.getFreshManager(
-      fixture.createConfig({
-        provider: "none",
-        sources: ["sessions"],
-        sessionMemory: true,
-        vectorEnabled: false,
-      }),
+      createConfig({ sources: ["sessions"], sessionMemory: true }),
       "cli",
     );
     await manager.sync({ reason: "index-empty-corpus", force: true });

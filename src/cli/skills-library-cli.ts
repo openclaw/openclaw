@@ -1,11 +1,22 @@
+import { createHash } from "node:crypto";
+import * as fs from "node:fs/promises";
+import path from "node:path";
+import { readRegularFile } from "@openclaw/fs-safe/advanced";
 import { Option, type Command } from "commander";
-import type {
-  SkillsLibraryActivateResult,
-  SkillsLibraryListResult,
-  SkillsLibraryReadResult,
-  SkillsLibraryReceipt,
+import {
+  SKILL_LIBRARY_MAX_BUNDLE_BYTES,
+  SKILL_LIBRARY_MAX_FILE_BYTES,
+  SKILL_LIBRARY_MAX_FILES,
+  type SkillLibraryFile,
+  type SkillsLibraryActivateResult,
+  type SkillsLibraryListResult,
+  type SkillsLibraryReadResult,
+  type SkillsLibraryReceipt,
+  type SkillsLibraryUploadResult,
 } from "../../packages/gateway-protocol/src/index.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { defaultRuntime } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 import { inheritOptionFromParent } from "./command-options.js";
 import {
@@ -15,7 +26,6 @@ import {
 } from "./gateway-rpc.js";
 import { collectOption } from "./program/helpers.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
-import { readLibraryInput, uploadLibraryZip } from "./skills-library-input.js";
 
 type LibraryOptions = GatewayRpcOpts & {
   slug?: string;
@@ -28,23 +38,8 @@ type LibraryOptions = GatewayRpcOpts & {
   session?: string;
 };
 
-function rpcOptions(command: Command): GatewayRpcOpts {
-  const opts = command.opts<GatewayRpcOpts>();
-  const value = <K extends keyof GatewayRpcOpts>(name: K): GatewayRpcOpts[K] =>
-    inheritOptionFromParent<GatewayRpcOpts[K]>(command, name) ?? opts[name];
-  return {
-    url: value("url"),
-    port: value("port"),
-    token: value("token"),
-    password: value("password"),
-    timeout: value("timeout"),
-    expectFinal: value("expectFinal"),
-    json: value("json"),
-  };
-}
-
 function receiptText(receipt: SkillsLibraryReceipt): string {
-  return `${receipt.state}: ${receipt.entry.slug} (${receipt.target}, owner ${receipt.entry.ownerLabel})\nSkill ID: ${receipt.entry.skillId}\nRevision: ${receipt.entry.revision}\n${receipt.nextAction}\n`;
+  return `${receipt.state}: ${sanitizeTerminalText(receipt.entry.slug)} (${receipt.target}, owner ${sanitizeTerminalText(receipt.entry.ownerLabel)})\nSkill ID: ${sanitizeTerminalText(receipt.entry.skillId)}\nRevision: ${sanitizeTerminalText(receipt.entry.revision)}\n${receipt.nextAction}\n`;
 }
 
 async function saveLocalLibrarySkill(input: string, slug: string, rpc: GatewayRpcOpts) {
@@ -72,12 +67,37 @@ export function registerSkillsLibraryCli(skills: Command): void {
     );
   const execute = <T>(
     command: Command,
-    action: (opts: GatewayRpcOpts) => Promise<T>,
+    action: (opts: GatewayRpcOpts, signal?: AbortSignal) => Promise<T>,
     format: (result: T) => string,
+    readOnly = false,
   ) =>
     runCommandWithRuntime(defaultRuntime, async () => {
-      const opts = rpcOptions(command);
-      const result = await action(opts);
+      const commandOptions = command.opts<GatewayRpcOpts>();
+      const value = <K extends keyof GatewayRpcOpts>(name: K): GatewayRpcOpts[K] =>
+        inheritOptionFromParent<GatewayRpcOpts[K]>(command, name) ?? commandOptions[name];
+      const opts: GatewayRpcOpts = {
+        url: value("url"),
+        port: value("port"),
+        token: value("token"),
+        password: value("password"),
+        timeout: value("timeout"),
+        expectFinal: value("expectFinal"),
+        json: value("json"),
+      };
+      // Reads stop with the command; nothing they settle to is printed after Ctrl+C.
+      const signal = readOnly ? getAsyncWorkSignal() : undefined;
+      let result: T;
+      try {
+        result = await action(opts, signal);
+      } catch (error) {
+        if (signal?.aborted) {
+          return;
+        }
+        throw error;
+      }
+      if (signal?.aborted) {
+        return;
+      }
       if (opts.json) {
         defaultRuntime.writeJson(result);
       } else {
@@ -94,11 +114,16 @@ export function registerSkillsLibraryCli(skills: Command): void {
     .action((opts: LibraryOptions, command: Command) =>
       execute(
         command,
-        (rpc) =>
-          callGatewayFromCliWithTransport<SkillsLibraryListResult>("skills.library.list", rpc, {
-            scope: opts.scope,
-            ...(opts.session ? { sessionKey: opts.session } : {}),
-          }),
+        (rpc, signal) =>
+          callGatewayFromCliWithTransport<SkillsLibraryListResult>(
+            "skills.library.list",
+            rpc,
+            {
+              scope: opts.scope,
+              ...(opts.session ? { sessionKey: opts.session } : {}),
+            },
+            { signal },
+          ),
         (result) =>
           [
             `Default target: ${result.defaultTarget}`,
@@ -127,7 +152,10 @@ export function registerSkillsLibraryCli(skills: Command): void {
                 ]
               : []),
             "",
-          ].join("\n"),
+          ]
+            .map(sanitizeTerminalText)
+            .join("\n"),
+        true,
       ),
     );
 
@@ -138,7 +166,7 @@ export function registerSkillsLibraryCli(skills: Command): void {
     .action((skillId: string, opts: LibraryOptions, command: Command) =>
       execute(
         command,
-        (rpc) => {
+        (rpc, signal) => {
           if (opts.session && !opts.revision) {
             throw new Error("--session requires --revision to read an exact selected pin.");
           }
@@ -150,18 +178,19 @@ export function registerSkillsLibraryCli(skills: Command): void {
               ...(opts.revision ? { revision: opts.revision } : {}),
               ...(opts.session ? { sessionKey: opts.session } : {}),
             },
+            { signal },
           );
         },
         (result) =>
           [
-            `${result.entry.slug} (${result.entry.ownerLabel})`,
-            `Skill ID: ${result.entry.skillId}`,
-            `Revision: ${result.entry.revision}`,
-            `Command: ${result.entry.name}`,
+            `${sanitizeTerminalText(result.entry.slug)} (${sanitizeTerminalText(result.entry.ownerLabel)})`,
+            `Skill ID: ${sanitizeTerminalText(result.entry.skillId)}`,
+            `Revision: ${sanitizeTerminalText(result.entry.revision)}`,
+            `Command: ${sanitizeTerminalText(result.entry.name)}`,
             "--- SKILL.md ---",
             result.content,
             ...result.files.flatMap((file) => [
-              `--- ${file.path} (${file.encoding ?? "utf8"}${file.executable ? ", executable" : ""}) ---`,
+              `--- ${sanitizeTerminalText(file.path)} (${file.encoding ?? "utf8"}${file.executable ? ", executable" : ""}) ---`,
               file.content,
             ]),
             "Retained revisions:",
@@ -170,6 +199,7 @@ export function registerSkillsLibraryCli(skills: Command): void {
             ),
             "",
           ].join("\n"),
+        true,
       ),
     );
 
@@ -250,8 +280,52 @@ export function registerSkillsLibraryCli(skills: Command): void {
               },
             );
           }
-          if (source.toLowerCase().endsWith(".zip")) {
-            return uploadLibraryZip(source, opts.slug, rpc);
+          if (source.toLowerCase().endsWith(".zip") && !(await fs.lstat(source)).isDirectory()) {
+            const { buffer: bytes } = await readRegularFile({
+              filePath: source,
+              maxBytes: SKILL_LIBRARY_MAX_BUNDLE_BYTES,
+            });
+            if (bytes.length === 0) {
+              throw new Error("ZIP import requires a regular file between 1 byte and 8 MiB.");
+            }
+            const call = (params: unknown) =>
+              callGatewayFromCliWithTransport<SkillsLibraryUploadResult>(
+                "skills.library.upload",
+                rpc,
+                params,
+              );
+            const begin = await call({
+              action: "begin",
+              slug: opts.slug,
+              sizeBytes: bytes.length,
+              sha256: createHash("sha256").update(bytes).digest("hex"),
+            });
+            if (!("uploadId" in begin)) {
+              throw new Error("Gateway did not open the upload. Retry the import.");
+            }
+            let offset = begin.offset;
+            while (offset < bytes.length) {
+              const end = Math.min(offset + begin.maxChunkBytes, bytes.length);
+              const chunk = await call({
+                action: "chunk",
+                uploadId: begin.uploadId,
+                offset,
+                data: bytes.subarray(offset, end).toString("base64"),
+              });
+              if (!("offset" in chunk) || chunk.offset !== end) {
+                throw new Error(
+                  "Upload acknowledgement did not match the chunk. Retry the import.",
+                );
+              }
+              offset = chunk.offset;
+            }
+            const result = await call({ action: "commit", uploadId: begin.uploadId });
+            if (!("state" in result)) {
+              throw new Error(
+                "Gateway did not confirm publication. List your library before retrying.",
+              );
+            }
+            return result;
           }
           return saveLocalLibrarySkill(source, opts.slug, rpc);
         },
@@ -322,9 +396,64 @@ export function registerSkillsLibraryCli(skills: Command): void {
             },
           ),
         (result) =>
-          `Queued for next turn: ${result.sessionKey}\n${result.selections.map((selection) => `${selection.skillId}  ${selection.name}  ${selection.revision}`).join("\n")}\n`,
+          `Queued for next turn: ${sanitizeTerminalText(result.sessionKey)}\n${result.selections.map((selection) => `${sanitizeTerminalText(selection.skillId)}  ${sanitizeTerminalText(selection.name)}  ${sanitizeTerminalText(selection.revision)}`).join("\n")}\n`,
       ),
     );
   }
   applyParentDefaultHelpAction(library);
+}
+
+async function readLibraryInput(input: string): Promise<{
+  content: string;
+  files?: SkillLibraryFile[];
+}> {
+  const root = path.resolve(input);
+  const info = await fs.lstat(root);
+  let total = 0;
+  let count = 0;
+  const files: SkillLibraryFile[] = [];
+  let content: string | undefined;
+  const read = async (file: string, relative: string) => {
+    count += 1;
+    if (count > SKILL_LIBRARY_MAX_FILES) {
+      throw new Error("Skill bundle exceeds the 1 MiB/file, 8 MiB/bundle, or 256-file limit.");
+    }
+    const { buffer: bytes, stat } = await readRegularFile({
+      filePath: file,
+      maxBytes: Math.min(SKILL_LIBRARY_MAX_FILE_BYTES, SKILL_LIBRARY_MAX_BUNDLE_BYTES - total),
+    });
+    total += bytes.length;
+    if (relative === "SKILL.md") {
+      content = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+      return;
+    }
+    // Base64 round-trips every supporting file, including binary assets and CRLF text.
+    files.push({
+      path: relative,
+      content: bytes.toString("base64"),
+      encoding: "base64",
+      executable: (stat.mode & 0o111) !== 0,
+    });
+  };
+  const walk = async (directory: string, prefix = "") => {
+    for (const entry of (await fs.readdir(directory, { withFileTypes: true })).toSorted((a, b) =>
+      a.name.localeCompare(b.name),
+    )) {
+      const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        await walk(path.join(directory, entry.name), relative);
+      } else {
+        await read(path.join(directory, entry.name), relative);
+      }
+    }
+  };
+  if (info.isDirectory()) {
+    await walk(root);
+  } else {
+    await read(root, "SKILL.md");
+  }
+  if (content === undefined) {
+    throw new Error("The bundle must contain SKILL.md at its root.");
+  }
+  return { content, ...(info.isDirectory() ? { files } : {}) };
 }

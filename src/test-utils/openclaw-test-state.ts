@@ -34,6 +34,7 @@ type OpenClawTestStateOptions = {
   scenario?: OpenClawTestStateScenario;
   agentEnv?: "clear" | "main";
   applyEnv?: boolean;
+  prepareProfileCatalog?: boolean;
   env?: Record<string, string | undefined>;
   verifyCleanup?: (cleanup: () => Promise<void>) => Promise<void>;
   gateway?: {
@@ -75,6 +76,8 @@ const ENV_KEYS = [
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_AGENT_DIR",
   "OPENCLAW_SERVICE_REPAIR_POLICY",
+  "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
+  "OPENCLAW_BUNDLED_PLUGINS_DIR",
 ] as const;
 
 function resetConfigRuntimeStateForTest(): void {
@@ -310,6 +313,7 @@ export async function createOpenClawTestState(
     let envApplied = false;
     let releasePromise: Promise<void> | undefined;
     let cleanupPromise: Promise<void> | undefined;
+    let releaseProfileCatalog: (() => void) | undefined;
     const restoreAppliedEnv = () => {
       if (envApplied) {
         for (const snapshot of snapshots) {
@@ -351,7 +355,10 @@ export async function createOpenClawTestState(
             import("../agents/auth-profiles/external-auth.js"),
           ]);
         const { saveAuthProfileStore } = createAuthProfileStoreRuntime(
-          createExternalAuthRuntime(() => []),
+          createExternalAuthRuntime(
+            () => [],
+            async (_params, run) => run(),
+          ),
         );
         withEnv(env, () => {
           const lease = acquireStateDatabaseSchemaLease(resolveOpenClawStateSqlitePath(env));
@@ -396,6 +403,7 @@ export async function createOpenClawTestState(
       // including failure, so no concurrent caller can restore selectors early.
       restoreEnv: () =>
         (releasePromise ??= Promise.resolve().then(async () => {
+          releaseProfileCatalog?.();
           await cleanupSessionStateForTest({ stateDir: paths.stateDir, rootPath: root });
           restoreAppliedEnv();
         })),
@@ -421,6 +429,17 @@ export async function createOpenClawTestState(
 
     if (options.applyEnv !== false) {
       state.applyEnv();
+    }
+
+    if (options.prepareProfileCatalog) {
+      try {
+        const { prepareUserProfileCatalogForTest } = await import("./user-profile-catalog.js");
+        const catalog = await prepareUserProfileCatalogForTest({ env });
+        releaseProfileCatalog = catalog.release;
+      } catch (error) {
+        await state.cleanup();
+        throw error;
+      }
     }
 
     return state;

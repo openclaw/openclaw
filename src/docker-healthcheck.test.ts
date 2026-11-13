@@ -52,10 +52,29 @@ describe("Docker healthcheck", () => {
 
     await expect(probeDockerGatewayHealth()).resolves.toBe(true);
     expect(fetch).toHaveBeenCalledWith(`http://127.0.0.1:${expected}/healthz`);
-    expect(createConfigIO).toHaveBeenCalledWith({
-      pluginValidation: "skip",
-      shellEnvFallback: "defer",
-    });
+    if (port === undefined) {
+      expect(createConfigIO).toHaveBeenCalledWith({
+        pluginValidation: "skip",
+        shellEnvFallback: "defer",
+      });
+    }
+  });
+
+  it("still probes the env port when config resolution throws", async () => {
+    vi.stubEnv("OPENCLAW_GATEWAY_PORT", "19001");
+    const defaultImpl = vi.mocked(createConfigIO).getMockImplementation()!;
+    await vi.mocked(createConfigIO).withImplementation(
+      (...args) => ({
+        ...defaultImpl(...args),
+        loadConfigAsync: async () => {
+          throw new Error("invalid config");
+        },
+      }),
+      async () => {
+        await expect(probeDockerGatewayHealth()).resolves.toBe(true);
+        expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:19001/healthz");
+      },
+    );
   });
 
   it("probes the configured port when the active lock cannot be read", async () => {

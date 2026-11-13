@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -11,10 +10,12 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { buildGatewayConnectionDetailsWithResolvers } from "../../gateway/connection-details.js";
 import { isLoopbackHost } from "../../gateway/net.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { resolveModelRefOverride } from "../../shared/model-ref-override.js";
 import { canonicalizeSpeechProviderId, listSpeechProviders } from "../../tts/provider-registry.js";
 import type { TtsResult } from "../../tts/tts-runtime-types.js";
-import { isTtsConfigReservedKey, resolveTtsPersonaList } from "../../tts/tts-settings.js";
+import { updateTtsPrefsAsync } from "../../tts/tts-settings-write-worker.js";
+import { resolveTtsPersonaList } from "../../tts/tts-settings.js";
 import {
   getTtsProviderAsync,
   listTtsPersonas,
@@ -22,13 +23,10 @@ import {
   resolveExplicitTtsOverridesAsync,
   resolveTtsConfig,
   resolveTtsPrefsPathAsync,
-  setTtsEnabled,
-  setTtsPersona,
-  setTtsProvider,
   textToSpeech,
 } from "../../tts/tts.js";
 import { getTtsCommandSecretTargetIds } from "../command-secret-targets.js";
-import { publishOutputFileAtomically } from "../media-output.js";
+import { writeOutputAsset } from "../media-output.js";
 import type { CapabilityEnvelope, CapabilityTransport } from "./metadata.js";
 import {
   pinRuntimeConfigSnapshot,
@@ -46,6 +44,7 @@ export async function runTtsConvert(params: {
   output?: string;
   transport: CapabilityTransport;
 }) {
+  const signal = getAsyncWorkSignal();
   let result: Pick<TtsResult, "audioPath" | "provider" | "outputFormat" | "voiceCompatible">;
   let attempts: NonNullable<TtsResult["attempts"]> = [];
   if (params.transport === "gateway") {
@@ -67,6 +66,7 @@ export async function runTtsConvert(params: {
         voiceId: params.voiceId,
       },
       timeoutMs: 120_000,
+      signal,
     });
   } else {
     const cfg = await resolveLocalCapabilityRuntimeConfig({
@@ -77,7 +77,7 @@ export async function runTtsConvert(params: {
     const prefsPath = await resolveTtsPrefsPathAsync(ttsConfig);
     const ttsProvider =
       params.provider ??
-      resolveModelRefOverride(normalizeOptionalString(params.modelId)).provider ??
+      resolveModelRefOverride(params.modelId).provider ??
       (await getTtsProviderAsync(ttsConfig, prefsPath));
     const effectiveCfg = await injectTtsAuthProfileApiKey({
       cfg,
@@ -95,18 +95,13 @@ export async function runTtsConvert(params: {
       voiceId: params.voiceId,
       channelId: params.channel,
     });
-    const hasExplicitSelection = Boolean(
-      overrides.provider ||
-      normalizeOptionalString(params.modelId) ||
-      normalizeOptionalString(params.voiceId),
-    );
     const localResult = await textToSpeech({
       text: params.text,
       cfg: effectiveCfg,
       prefsPath,
       channel: params.channel,
       overrides,
-      disableFallback: hasExplicitSelection,
+      disableFallback: Boolean(overrides.provider),
     });
     if (!localResult.success || !localResult.audioPath) {
       throw new Error(localResult.error ?? "TTS conversion failed");
@@ -116,12 +111,17 @@ export async function runTtsConvert(params: {
   }
   let outputPath = result.audioPath;
   if (params.output && result.audioPath) {
-    const sourcePath = result.audioPath;
-    outputPath = path.resolve(params.output);
-    await publishOutputFileAtomically({
-      filePath: outputPath,
-      writeTemp: (tempPath) => fs.copyFile(sourcePath, tempPath),
+    const buffer = await fs.readFile(result.audioPath);
+    signal?.throwIfAborted();
+    // Match image/video outputs: the extension follows the audio actually returned.
+    const written = await writeOutputAsset({
+      buffer,
+      outputPath: params.output,
+      outputIndex: 0,
+      outputCount: 1,
+      subdir: "tts",
     });
+    outputPath = written.path;
   }
   return {
     ok: true,
@@ -198,14 +198,10 @@ async function injectTtsAuthProfileApiKey(params: {
     ...(isObjectRecord(existing?.value) ? existing.value : {}),
     apiKey: auth.apiKey,
   };
-  if (existing?.container === "direct") {
-    tts[key] = providerConfig;
-  } else {
-    tts.providers = {
-      ...(isObjectRecord(tts.providers) ? tts.providers : {}),
-      [key]: providerConfig,
-    };
-  }
+  tts.providers = {
+    ...(isObjectRecord(tts.providers) ? tts.providers : {}),
+    [key]: providerConfig,
+  };
   return channelProvider && channelKey && isObjectRecord(channel)
     ? { ...cfg, channels: { ...cfg.channels, [channelKey]: { ...channel, tts } } }
     : { ...cfg, tts };
@@ -215,29 +211,20 @@ function findTtsProviderConfig(
   tts: unknown,
   providerId: string,
   cfg: OpenClawConfig,
-): { container: "providers" | "direct"; key: string; value: unknown } | undefined {
+): { key: string; value: unknown } | undefined {
   if (!isObjectRecord(tts)) {
     return undefined;
   }
   const providers = isObjectRecord(tts.providers) ? tts.providers : undefined;
   const exact = providers?.[providerId];
   if (exact !== undefined) {
-    return { container: "providers", key: providerId, value: exact };
+    return { key: providerId, value: exact };
   }
-  for (const [container, entries] of [
-    ["providers", providers],
-    ["direct", tts],
-  ] as const) {
-    for (const [key, value] of Object.entries(entries ?? {})) {
-      if (container === "direct" && isTtsConfigReservedKey(key)) {
-        continue;
-      }
-      if (
-        normalizeLowercaseStringOrEmpty(canonicalizeSpeechProviderId(key, cfg) ?? key) ===
-        providerId
-      ) {
-        return { container, key, value };
-      }
+  for (const [key, value] of Object.entries(providers ?? {})) {
+    if (
+      normalizeLowercaseStringOrEmpty(canonicalizeSpeechProviderId(key, cfg) ?? key) === providerId
+    ) {
+      return { key, value };
     }
   }
   return undefined;
@@ -259,6 +246,7 @@ export async function runTtsProviders(transport: CapabilityTransport, rawAgentId
     } = await callGateway({
       method: "tts.providers",
       timeoutMs: 30_000,
+      signal: getAsyncWorkSignal(),
     });
     return {
       ...payload,
@@ -303,6 +291,7 @@ export async function runTtsPersonas(transport: CapabilityTransport) {
     return await callGateway({
       method: "tts.personas",
       timeoutMs: 30_000,
+      signal: getAsyncWorkSignal(),
     });
   }
   const cfg = await captureRuntimeConfigAsyncReader()();
@@ -349,6 +338,7 @@ export async function runTtsStateMutation(params: {
             ? { persona: params.persona ?? "off" }
             : undefined,
       timeoutMs: 30_000,
+      signal: getAsyncWorkSignal(),
     });
   }
 
@@ -357,12 +347,12 @@ export async function runTtsStateMutation(params: {
   const prefsPath = await resolveTtsPrefsPathAsync(config);
   if (params.capability === "tts.enable" || params.capability === "tts.disable") {
     const enabled = params.capability === "tts.enable";
-    setTtsEnabled(prefsPath, enabled);
+    await updateTtsPrefsAsync(prefsPath, { auto: enabled ? "always" : "off" });
     return { enabled };
   }
   if (params.capability === "tts.set-persona") {
     if (!params.persona) {
-      setTtsPersona(prefsPath, null);
+      await updateTtsPrefsAsync(prefsPath, { persona: null });
       return { persona: null };
     }
     const persona = listTtsPersonas(config).find(
@@ -371,7 +361,7 @@ export async function runTtsStateMutation(params: {
     if (!persona) {
       throw new Error(`Unknown TTS persona: ${params.persona}`);
     }
-    setTtsPersona(prefsPath, persona.id);
+    await updateTtsPrefsAsync(prefsPath, { persona: persona.id });
     return { persona: persona.id };
   }
   if (!params.provider) {
@@ -381,6 +371,6 @@ export async function runTtsStateMutation(params: {
   if (!provider) {
     throw new Error(`Unknown speech provider: ${params.provider}`);
   }
-  setTtsProvider(prefsPath, provider);
+  await updateTtsPrefsAsync(prefsPath, { provider });
   return { provider };
 }

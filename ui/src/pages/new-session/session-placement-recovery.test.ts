@@ -132,51 +132,43 @@ describe("session placement recovery", () => {
     expect(sessionStorage.length).toBe(0);
   });
 
-  it.each([true])(
-    "keeps input in memory on a failed pause write (already paused=%s)",
-    (alreadyPaused) => {
-      const retained = alreadyPaused
-        ? {
-            ...recovery,
-            phase: "paused" as const,
-            reason: "not-sent" as const,
-            error: "first failure",
-          }
-        : recovery;
-      expect(writeSessionPlacementRecovery(retained)).toBe(true);
-      const storage = sessionStorage;
-      vi.stubGlobal("sessionStorage", {
-        getItem: storage.getItem.bind(storage),
-        removeItem: storage.removeItem.bind(storage),
-        setItem: () => {
-          throw new DOMException("quota exceeded", "QuotaExceededError");
-        },
-      });
-      expect(pauseSessionPlacementRecovery(retained, "later failure", true)).toMatchObject({
-        persisted: false,
-        recovery: {
-          message: retained.message,
-          messageId: retained.messageId,
-          phase: "paused",
-          reason: "not-sent",
-          error: expect.stringContaining("Keep this page open"),
-        },
-      });
-      expect(readRecovery()).toEqual(alreadyPaused ? retained : null);
-    },
-  );
+  it("keeps input in memory on a failed pause write (already paused=true)", () => {
+    const retained = {
+      ...recovery,
+      phase: "paused" as const,
+      reason: "not-sent" as const,
+      error: "first failure",
+    };
+    expect(writeSessionPlacementRecovery(retained)).toBe(true);
+    const storage = sessionStorage;
+    vi.stubGlobal("sessionStorage", {
+      getItem: storage.getItem.bind(storage),
+      removeItem: storage.removeItem.bind(storage),
+      setItem: () => {
+        throw new DOMException("quota exceeded", "QuotaExceededError");
+      },
+    });
+    expect(pauseSessionPlacementRecovery(retained, "later failure", true)).toMatchObject({
+      persisted: false,
+      recovery: {
+        message: retained.message,
+        messageId: retained.messageId,
+        phase: "paused",
+        reason: "not-sent",
+        error: expect.stringContaining("Keep this page open"),
+      },
+    });
+    expect(readRecovery()).toEqual(retained);
+  });
 
-  it.each([false])(
-    "keeps bounded pause errors on UTF-16 boundaries (persistent=%s)",
-    (persistent) => {
-      const error = `${"x".repeat(4095)}🤖`;
-      const paused = pauseSessionPlacementRecovery(recovery, error, persistent);
+  it("keeps bounded pause errors on UTF-16 boundaries (persistent=false)", () => {
+    const error = `${"x".repeat(4095)}🤖`;
+    const paused = pauseSessionPlacementRecovery(recovery, error, false);
 
-      expect(paused.recovery.error).toBe("x".repeat(4095));
-      expect(paused.persisted).toBe(persistent);
-      expect(readRecovery()).toEqual(persistent ? paused.recovery : null);
-    },
-  );
+    expect(paused.recovery.error).toBe("x".repeat(4095));
+    expect(paused.persisted).toBe(false);
+    expect(readRecovery()).toEqual(null);
+  });
 
   it("keeps storage-failure guidance on UTF-16 boundaries", () => {
     const prefix = "Recovery could not be saved in this tab. Keep this page open.\n";
@@ -279,9 +271,10 @@ describe("session placement recovery", () => {
       getItem: storage.getItem.bind(storage),
       key: storage.key.bind(storage),
       removeItem: vi.fn((key: string) => {
-        if (key !== sourceKey) {
-          storage.removeItem(key);
+        if (key === sourceKey) {
+          throw new DOMException("storage disabled", "SecurityError");
         }
+        storage.removeItem(key);
       }),
       setItem: storage.setItem.bind(storage),
     });
@@ -329,6 +322,46 @@ describe("session placement recovery", () => {
     expect(sessionStorage.getItem(exactKey("agent:cloud:wrong-key"))).toBeNull();
     expect(sessionStorage.getItem(exactKey(invalidPayload.sessionKey))).toBeNull();
     expect(sessionStorage.getItem(malformedKey)).toBeNull();
+  });
+
+  it("round-trips a device folder only with its exact dispatch target", () => {
+    const creating = {
+      ...recovery,
+      phase: "creating" as const,
+      target: { kind: "device" as const, deviceId: "runner" },
+      createParams: {
+        key: recovery.sessionKey,
+        agentId: "cloud",
+        message: "" as const,
+        deviceFolder: { deviceId: "runner", path: "/srv/project" },
+      },
+    };
+    expect(writeSessionPlacementRecovery(creating)).toBe(true);
+    expect(readRecovery()).toEqual(creating);
+    expect(writeSessionPlacementRecovery({ ...creating, target: { kind: "auto-device" } })).toBe(
+      false,
+    );
+    expect(
+      writeSessionPlacementRecovery({ ...creating, target: { kind: "device", deviceId: "other" } }),
+    ).toBe(false);
+  });
+
+  it("rejects a malformed persisted device-folder binding", () => {
+    sessionStorage.setItem(
+      exactKey(recovery.sessionKey),
+      JSON.stringify({
+        ...recovery,
+        phase: "creating",
+        target: { kind: "device", deviceId: "runner" },
+        createParams: {
+          key: recovery.sessionKey,
+          agentId: "cloud",
+          message: "",
+          deviceFolder: null,
+        },
+      }),
+    );
+    expect(readRecovery()).toBeNull();
   });
 
   it("round-trips an attachment-only first turn", () => {

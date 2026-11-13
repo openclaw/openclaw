@@ -7,17 +7,21 @@ import { isPassThroughRemoteMediaSource } from "@openclaw/media-core/media-sourc
 import { hasNonEmptyString as isNonEmptyMediaSource } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveDeliveryQueueMediaDir } from "../../config/paths.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   buildOutboundMediaLoadOptions,
   type OutboundMediaAccess,
 } from "../../media/load-options.js";
 import { loadWebMedia } from "../../media/web-media.js";
+import { oldestDeliveryQueueMediaStageAdmission } from "../delivery-queue-cache.js";
 import {
   captureDeliveryQueueStateContext,
   type DeliveryQueueStateContext,
 } from "../delivery-queue-sqlite.js";
-import { hasErrnoCode } from "../errno.js";
+import { ignoreMissingPath } from "../errno.js";
+import { FsSafeError } from "../fs-safe.js";
 import { generateSecureUuid } from "../secure-random.js";
+import { getOrLoadSqliteDatabaseAdmissionForPath } from "../sqlite-database-admission.js";
 import {
   ARTIFACT_NAME_RE,
   collectEntrySpoolPaths,
@@ -33,13 +37,7 @@ import {
 const ARTIFACT_EXT_RE = /^\.[A-Za-z0-9]{1,10}$/;
 const PART_SUFFIX = ".part";
 const ORPHAN_GRACE_MS = 24 * 60 * 60_000;
-
-function ignoreMissingArtifact(error: unknown): null {
-  if (hasErrnoCode(error, "ENOENT")) {
-    return null;
-  }
-  throw error;
-}
+const log = createSubsystemLogger("outbound/deliver");
 
 function openSpoolStore(stateDir: string | undefined, maxBytes?: number) {
   return fileStore({
@@ -208,7 +206,11 @@ export async function releaseSpoolArtifacts(
     if (relative) {
       try {
         await openSpoolStore(stateDir).remove(relative);
-      } catch {}
+      } catch (err) {
+        if (!(err instanceof FsSafeError && err.code === "not-found")) {
+          log.warn(`failed to remove delivery queue media artifact ${relative}: ${String(err)}`);
+        }
+      }
     }
   }
 }
@@ -225,35 +227,49 @@ export async function pruneOrphanedDeliveryQueueMedia(
   const captured = context ?? captureDeliveryQueueStateContext(params?.stateDir);
   const stateDir = captured.stateDir;
   const cutoffMs = (params?.nowMs ?? Date.now()) - ORPHAN_GRACE_MS;
-  const snapshot = await loadDeliveryQueueMediaRetentionSnapshot(
-    { expireBeforeMs: cutoffMs },
-    captured,
-  );
   const spoolRoot = path.resolve(resolveDeliveryQueueMediaDir(stateDir));
-  const retainPaths = new Set(
-    snapshot.stagedArtifacts
-      .concat(snapshot.payloads.flatMap((payloads) => collectEntrySpoolPaths(payloads, stateDir)))
-      .map((entry) => path.resolve(entry)),
-  );
-  const entries = await fs.readdir(spoolRoot, { withFileTypes: true }).catch(ignoreMissingArtifact);
-  if (!entries) {
-    return;
-  }
-
-  for (const entry of entries) {
+  let retainPaths: Set<string> | undefined;
+  const loadRetainedPaths = async () => {
+    const snapshot = await loadDeliveryQueueMediaRetentionSnapshot(
+      { expireBeforeMs: cutoffMs },
+      captured,
+    );
+    retainPaths = new Set(
+      snapshot.stagedArtifacts
+        .concat(snapshot.payloads.flatMap((payloads) => collectEntrySpoolPaths(payloads, stateDir)))
+        .map((entry) => path.resolve(entry)),
+    );
+    return retainPaths;
+  };
+  const entries = await fs.readdir(spoolRoot, { withFileTypes: true }).catch(ignoreMissingPath);
+  for (const entry of entries ?? []) {
     // Unknown files and symlinks are not spool artifacts; never follow them.
     if (!entry.isFile() || !ARTIFACT_NAME_RE.test(entry.name)) {
       continue;
     }
     const artifactPath = path.join(spoolRoot, entry.name);
-    if (retainPaths.has(artifactPath)) {
+    if (retainPaths?.has(artifactPath)) {
       continue;
     }
-    const stats = await fs.stat(artifactPath).catch(ignoreMissingArtifact);
+    const stats = await fs.stat(artifactPath).catch(ignoreMissingPath);
     if (!stats || stats.mtimeMs > cutoffMs) {
       continue;
     }
+    if ((retainPaths ?? (await loadRetainedPaths())).has(artifactPath)) {
+      continue;
+    }
     await releaseSpoolArtifacts([artifactPath], stateDir);
+  }
+  if (!retainPaths) {
+    const oldest = getOrLoadSqliteDatabaseAdmissionForPath(
+      captured.workerContext.admission.databasePath,
+      oldestDeliveryQueueMediaStageAdmission,
+      () => undefined,
+    );
+    // A crashed producer can leave an expiring stage without ever creating a file.
+    if (oldest === undefined || (oldest !== null && oldest <= cutoffMs)) {
+      await loadRetainedPaths();
+    }
   }
 }
 

@@ -40,6 +40,7 @@ import type {
 import {
   buildSenderName,
   getTelegramTextParts,
+  joinTelegramTextParts,
   resolveTelegramNonTextBody,
   hasLeadingBotCommandAddressedToOtherBot,
   hasBotMentionInText,
@@ -56,7 +57,10 @@ import {
 import { renderTelegramTextEntities } from "./bot/inbound-text-entities.js";
 import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramDirectPeerId } from "./dm-session-key.js";
-import { isTelegramForumServiceMessage } from "./forum-service-message.js";
+import {
+  isTelegramForumServiceMessage,
+  isTelegramForumTopicTitleUpdate,
+} from "./forum-service-message.js";
 import { resolveTelegramGroupIngestEnabled } from "./group-config-helpers.js";
 import {
   resolveTelegramCommandIngressAuthorization,
@@ -206,7 +210,11 @@ export async function resolveTelegramInboundBody(params: {
   if (!rawBody && msg.sticker && !stickerHasMedia && !formattedStickerDescription) {
     rawBody = msg.sticker.emoji?.trim() || formatMediaPlaceholderText(nativeMediaFacts);
   }
-  if (!rawBody && nativeMediaFacts.length === 0) {
+  const privateTopicTitleUpdate =
+    msg.chat.type === "private" &&
+    msg.message_thread_id != null &&
+    isTelegramForumTopicTitleUpdate(msg);
+  if (!rawBody && nativeMediaFacts.length === 0 && !privateTopicTitleUpdate) {
     return null;
   }
 
@@ -243,6 +251,8 @@ export async function resolveTelegramInboundBody(params: {
         OriginatingChannel: "telegram",
         OriginatingTo: originatingTo,
         AccountId: accountId,
+        MessageSid: String(msg.message_id),
+        ChatType: isGroup ? "group" : "direct",
         MessageThreadId: replyThreadId,
         media: materializedMedia,
       };
@@ -264,23 +274,35 @@ export async function resolveTelegramInboundBody(params: {
   const historyBody =
     rawBody || formattedStickerDescription || formatMediaPlaceholderText(nativeMediaFacts);
 
-  const hasAnyMention = messageTextParts.entities.some((ent) => ent.type === "mention");
+  const mentionMessages = options?.bufferedMessages?.some((message) => message.contact)
+    ? options.bufferedMessages
+    : undefined;
+  const mentionTextParts = mentionMessages
+    ? joinTelegramTextParts(
+        mentionMessages.filter((message) => !message.contact),
+        "\n",
+      )
+    : messageTextParts;
+  const hasAnyMention = mentionTextParts.entities.some((ent) => ent.type === "mention");
   const explicitlyMentioned = botUsername
-    ? hasBotMention(msg, botUsername, primaryCtx.me?.id) ||
+    ? (mentionMessages
+        ? mentionMessages.some((message) => hasBotMention(message, botUsername, primaryCtx.me?.id))
+        : hasBotMention(msg, botUsername, primaryCtx.me?.id)) ||
       (richText ? hasBotMentionInText(richText, botUsername) : false)
     : false;
+  const mentionText = mentionMessages || !msg.contact ? mentionTextParts.text : "";
   const groupThread = resolveGroupThreadMentionFacts({
     cfg,
     channel: "telegram",
     peerId: isGroup ? String(chatId) : resolveTelegramDirectPeerId({ chatId, senderId }),
-    text: [messageTextParts.text, richText, preflightTranscript].filter(Boolean).join("\n"),
+    text: [mentionText, richText, preflightTranscript].filter(Boolean).join("\n"),
     sessionKey: params.sessionKey,
     acpBinding: params.acpBinding,
   });
   const computedWasMentioned =
     Boolean(groupThread?.mentionedAgentIds.length) ||
     matchesMentionWithExplicit({
-      text: messageTextParts.text || richText || "",
+      text: mentionText || richText || "",
       mentionRegexes,
       explicit: {
         hasAnyMention,
@@ -398,7 +420,7 @@ export async function resolveTelegramInboundBody(params: {
     historyKey,
     commandAuthorized,
     effectiveWasMentioned,
-    inboundEventKind,
+    inboundEventKind: privateTopicTitleUpdate ? "room_event" : inboundEventKind,
     groupThread,
     mentionFacts: {
       canDetectMention,

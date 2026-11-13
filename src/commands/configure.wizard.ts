@@ -1,7 +1,7 @@
-import fsPromises from "node:fs/promises";
 import nodePath from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   listAgentIds,
   tryResolveAmbientOwnerAgentId,
@@ -15,11 +15,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createChannelSetupHooks, setupChannels } from "../flows/channel-setup.js";
 import { validateGatewayPortInput } from "../gateway/gateway-config-prompts.shared.js";
 import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../gateway/probe-auth.js";
+import { canAccess } from "../infra/path-existence.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
 import { formatWindowsGatewayFirewallGuidance } from "../infra/windows-gateway-firewall-diagnostics.js";
 import { resolvePluginContributionOwners } from "../plugins/plugin-registry.js";
-import type { RuntimeEnv } from "../runtime.js";
-import { defaultRuntime } from "../runtime.js";
+import { defaultRuntime as runtime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
@@ -32,7 +32,7 @@ import {
   type GatewayHealthCheckOutcome,
 } from "./configure.gateway-health.js";
 import { promptGatewayConfig } from "./configure.gateway.js";
-import { createConfigurePrompts } from "./configure.prompts.js";
+import { configurePrompts as prompts } from "./configure.prompts.js";
 import type { WizardSection } from "./configure.shared.js";
 import { CONFIGURE_SECTION_OPTIONS, intro, outro } from "./configure.shared.js";
 import { resolveGatewayStartupTiming } from "./gateway-startup-timing.js";
@@ -60,10 +60,8 @@ const GATEWAY_HINT_PROBE_TIMEOUT_MS = 300;
 
 async function promptWebToolsConfig(
   nextConfig: OpenClawConfig,
-  runtime: RuntimeEnv,
   prompter: ReturnType<typeof createClackPrompter>,
 ): Promise<OpenClawConfig> {
-  const prompts = createConfigurePrompts(runtime);
   type WebSearchConfig = NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"];
   const existingSearch = nextConfig.tools?.web?.search;
   const existingFetch = nextConfig.tools?.web?.fetch;
@@ -147,7 +145,7 @@ async function promptWebToolsConfig(
       if (enableCodexNative) {
         configureManagedProvider = await prompts.confirm({
           message: existingSearch?.provider
-            ? `Change the separate web search provider (currently ${existingSearch.provider})?`
+            ? terminalText`Change the separate web search provider (currently ${existingSearch.provider})?`
             : "Also configure a separate web search provider for other models?",
           initialValue: Boolean(existingSearch?.provider),
         });
@@ -224,11 +222,7 @@ async function promptWebToolsConfig(
 }
 
 /** Run the configure wizard, optionally limited to selected sections. */
-export async function runConfigureWizard(
-  opts: { sections?: WizardSection[] },
-  runtime: RuntimeEnv = defaultRuntime,
-) {
-  const prompts = createConfigurePrompts(runtime);
+export async function runConfigureWizard(opts: { sections?: WizardSection[] }) {
   try {
     intro("OpenClaw configure");
     const prompter = createClackPrompter();
@@ -255,7 +249,7 @@ export async function runConfigureWizard(
       if (!snapshot.valid && snapshot.issues.length > 0) {
         note(
           [
-            ...snapshot.issues.map((iss) => `- ${iss.path}: ${iss.message}`),
+            ...snapshot.issues.map((iss) => terminalText`- ${iss.path}: ${iss.message}`),
             "",
             "Docs: https://docs.openclaw.ai/gateway/configuration",
           ].join("\n"),
@@ -334,8 +328,8 @@ export async function runConfigureWizard(
             hint: !remoteUrl
               ? "No remote URL configured yet"
               : remoteProbe?.ok
-                ? `Gateway reachable (${remoteUrl})`
-                : `Configured but unreachable (${remoteUrl})`,
+                ? terminalText`Gateway reachable (${remoteUrl})`
+                : terminalText`Configured but unreachable (${remoteUrl})`,
           },
         ],
       });
@@ -447,21 +441,12 @@ export async function runConfigureWizard(
           nodePath.join(workspaceDir, name),
         );
         const hasExistingContent = (
-          await Promise.all(
-            indicators.map(async (candidate) => {
-              try {
-                await fsPromises.access(candidate);
-                return true;
-              } catch {
-                return false;
-              }
-            }),
-          )
+          await Promise.all(indicators.map((candidate) => canAccess(candidate)))
         ).some(Boolean);
         if (hasExistingContent) {
           note(
             [
-              `Existing workspace detected at ${workspaceDir}`,
+              terminalText`Existing workspace detected at ${workspaceDir}`,
               "Existing files are preserved. Missing templates may be created, never overwritten.",
             ].join("\n"),
             "Existing workspace",
@@ -505,7 +490,7 @@ export async function runConfigureWizard(
           onPostWriteHook: channelSetup.onPostWriteHook,
         });
       } else {
-        nextConfig = await removeChannelConfigWizard(nextConfig, runtime);
+        nextConfig = await removeChannelConfigWizard(nextConfig);
       }
     };
 
@@ -521,7 +506,7 @@ export async function runConfigureWizard(
         );
       },
       web: async () => {
-        nextConfig = await promptWebToolsConfig(nextConfig, runtime, prompter);
+        nextConfig = await promptWebToolsConfig(nextConfig, prompter);
       },
       memory: async () => {
         const { runMemorySetupFlow } = await import("../flows/memory-setup.js");
@@ -530,7 +515,7 @@ export async function runConfigureWizard(
         });
       },
       gateway: async () => {
-        const gateway = await promptGatewayConfig(nextConfig, runtime);
+        const gateway = await promptGatewayConfig(nextConfig);
         nextConfig = gateway.config;
         gatewayPort = gateway.port;
         didConfigureGateway = true;
@@ -561,7 +546,7 @@ export async function runConfigureWizard(
           });
           gatewayPort = parseTcpPort(portInput) ?? gatewayPort;
         }
-        daemonSetupOutcome = await maybeInstallDaemon({ runtime, port: gatewayPort });
+        daemonSetupOutcome = await maybeInstallDaemon({ port: gatewayPort });
       },
       health: async () => {
         healthCheckOutcome = await runGatewayHealthCheck({
@@ -719,13 +704,13 @@ export async function runConfigureWizard(
       ? "Gateway: auth unavailable (check skipped)"
       : gatewayProbe.ok
         ? "Gateway: reachable"
-        : `Gateway: not detected${gatewayProbe.detail ? ` (${gatewayProbe.detail})` : ""}`;
+        : terminalText`Gateway: not detected${gatewayProbe.detail ? ` (${gatewayProbe.detail})` : ""}`;
     const windowsFirewallLines = formatWindowsGatewayFirewallGuidance({ bind });
 
     note(
       [
-        `Web UI: ${displayLinks.httpUrl}`,
-        `Gateway WS: ${displayLinks.wsUrl}`,
+        terminalText`Web UI: ${displayLinks.httpUrl}`,
+        terminalText`Gateway WS: ${displayLinks.wsUrl}`,
         gatewayStatusLine,
         ...windowsFirewallLines,
         "Docs: https://docs.openclaw.ai/web/control-ui",

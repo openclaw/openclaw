@@ -1,6 +1,4 @@
-import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 
 const injectionQueues = resolveGlobalSingleton(
@@ -58,14 +56,7 @@ export async function withMessageInjectionAdmission<T>(
 ): Promise<T> {
   let consumed = false;
   const consumeSync = () => {
-    if (consumed) {
-      throw new Error("Message injection admission already consumed its input");
-    }
     const result = consume();
-    if (isPromiseLike(result)) {
-      void Promise.resolve(result).catch(() => {});
-      throw new Error("Message injection admission consumers must remain synchronous");
-    }
     consumed = true;
     return result;
   };
@@ -77,11 +68,7 @@ export async function withMessageInjectionAdmission<T>(
     return consumeSync();
   }
   try {
-    const result = await admission(consumeSync);
-    if (!consumed) {
-      throw new Error("Message injection admission did not consume its input");
-    }
-    return result;
+    return await admission(consumeSync);
   } catch (cause) {
     if (consumed) {
       throw new MessageInjectionAcceptedUnconfirmedError({ cause });
@@ -90,27 +77,14 @@ export async function withMessageInjectionAdmission<T>(
   }
 }
 
-/** Order preparation on the captured backend; release before awaiting delivery. */
-export function enqueueMessageInjection<T>(
-  backend: object,
-  run: (release: () => void) => Promise<T>,
-): Promise<T> {
+/** Order preparation on the captured backend. */
+export function enqueueMessageInjection<T>(backend: object, run: () => Promise<T>): Promise<T> {
   let queue = injectionQueues.get(backend);
   if (!queue) {
     queue = new KeyedAsyncQueue();
     injectionQueues.set(backend, queue);
   }
-  const result = createDeferredCore<T>();
-  void queue
-    .enqueue(
-      "input",
-      () =>
-        new Promise<void>((release) => {
-          void run(release).then(result.resolve, result.reject).finally(release);
-        }),
-    )
-    .catch(result.reject);
-  return result.promise;
+  return queue.enqueue("input", run);
 }
 
 /** A refused owner assertion is terminal for this input, not permission to redispatch it. */
@@ -121,18 +95,97 @@ export class MessageInjectionAuthorityError extends Error {
   }
 }
 
+/** The input belongs to another requester and may be admitted as a separate turn. */
+export class MessageInjectionRequesterMismatchError extends Error {
+  override name = "MessageInjectionRequesterMismatchError";
+
+  constructor() {
+    super("Steering requires the active turn's authenticated requester");
+  }
+}
+
+/** A live caller needs a separate execution; this is not a failed or revoked publisher. */
+export class MessageInjectionPolicyMismatchError extends Error {
+  override name = "MessageInjectionPolicyMismatchError";
+
+  constructor(
+    readonly reason:
+      | "execution-settings-changed"
+      | "tool_authority_mismatch"
+      | "model-fallback-changed",
+    message = "Current caller policy does not match the active execution",
+  ) {
+    super(message);
+  }
+}
+
+export type ReplyMessageInjectionOutcome =
+  | { status: "indeterminate"; errorMessage: string }
+  | { status: "accepted" }
+  /** Terminal authority failure; the separately recorded acceptance stays unchanged. */
+  | { status: "failed"; error: Error }
+  | {
+      status: "rejected";
+      reason: ReplyMessageInjectionRejectionReason;
+      runtimeReason?: MessageInjectionRuntimeReason;
+      errorMessage?: string;
+    };
+
+export type ReplyMessageInjectionRejectionReason =
+  | "no_active_run"
+  | "not_running"
+  | "stale_run"
+  | "injection_unavailable"
+  | "guarded_injection_unsupported"
+  | "requester_origin_mismatch"
+  | "audio_input_unsupported"
+  | "collaborative_steering_disabled"
+  | ReplyBackendQueueMessageMismatch
+  | "runtime_rejected";
+
+export type ReplyBackendQueueMessageMismatch =
+  | "transcript_commit_wait_unsupported"
+  | "input_visibility_mismatch"
+  | "tool_authority_mismatch"
+  | "image_input_unsupported"
+  | "source_reply_delivery_mode_mismatch"
+  | "reply_expectation_mismatch"
+  | "task_suggestion_delivery_mode_mismatch";
+
+export type MessageInjectionRuntimeReason =
+  | "transcript_commit_timeout"
+  | "tool_boundary_timeout"
+  | "session_ended"
+  | "session_handoff"
+  | "steering_closed"
+  | "source_cancelled"
+  | "compaction_in_progress"
+  | "compaction_state_unavailable"
+  | "availability_check_failed"
+  | "turn_not_steerable"
+  | "injection_unsupported";
+
 /** The caller remains valid, but this target can no longer receive its input. */
 export class MessageInjectionTargetUnavailableError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    readonly runtimeReason?: MessageInjectionRuntimeReason,
+  ) {
     super(message);
     this.name = "MessageInjectionTargetUnavailableError";
   }
 }
 
+export class MessageInjectionClosedError extends MessageInjectionTargetUnavailableError {
+  constructor() {
+    super("active session is finalizing", "steering_closed");
+  }
+}
+
 /** The delivery owner removed the exact queued input before provider submission. */
 export class MessageInjectionWithdrawnError extends MessageInjectionTargetUnavailableError {
-  constructor(message: string) {
-    super(message);
+  constructor(message: string, runtimeReason?: MessageInjectionRuntimeReason) {
+    super(message, runtimeReason);
     this.name = "MessageInjectionWithdrawnError";
   }
 }

@@ -1,7 +1,8 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import { INGRESS_CLAIM_LEASE_MS } from "./ingress-claim-owner.js";
+import { INGRESS_QUEUE_CAP_DROP_REASONS } from "./ingress-queue-cap-drop.js";
 import type {
   ChannelIngressFailedHealth,
   ChannelIngressPressureSnapshot,
@@ -10,7 +11,7 @@ import { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } from "./ingress-retry-policy.js";
 
 /** Count failed channel ingress events per channel account for operator health surfaces. */
 export function countFailedChannelIngressQueueEntriesInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
 ): ChannelIngressFailedHealth[] {
   const queueDb =
     getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "channel_ingress_events">>(db);
@@ -25,6 +26,12 @@ export function countFailedChannelIngressQueueEntriesInDatabase(
         eb.fn.min<number>("failed_at").as("oldestFailedAt"),
       ])
       .where("status", "=", "failed")
+      .where((eb) =>
+        eb.or([
+          eb("failed_reason", "is", null),
+          eb("failed_reason", "not in", INGRESS_QUEUE_CAP_DROP_REASONS),
+        ]),
+      )
       .groupBy(["channel_id", "account_id"])
       .orderBy("channel_id", "asc")
       .orderBy("account_id", "asc"),
@@ -36,7 +43,7 @@ export function countFailedChannelIngressQueueEntriesInDatabase(
 
 /** Aggregate active lanes whose retry or claim state can block later ingress. */
 export function countChannelIngressQueuePressureInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   now: number,
 ): ChannelIngressPressureSnapshot {
   const queueDb =

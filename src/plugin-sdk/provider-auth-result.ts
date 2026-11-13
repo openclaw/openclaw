@@ -8,14 +8,15 @@ import {
   normalizeAgentModelRefForConfig,
   normalizeAgentModelSelectionForConfig,
 } from "../config/model-input.js";
-import type { ModelProviderConfig } from "../config/types.models.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
+
+type AuthConfigPatch = NonNullable<ProviderAuthResult["configPatch"]>;
+type AuthProviderConfig = NonNullable<NonNullable<AuthConfigPatch["models"]>["providers"]>[string];
 
 function normalizeProviderConfigModelIdsForAuthResult(
   provider: string,
-  providerConfig: ModelProviderConfig,
-): ModelProviderConfig {
+  providerConfig: AuthProviderConfig,
+): AuthProviderConfig {
   const models = providerConfig.models;
   if (!Array.isArray(models) || models.length === 0) {
     return providerConfig;
@@ -33,9 +34,7 @@ function normalizeProviderConfigModelIdsForAuthResult(
   return mutated ? { ...providerConfig, models: nextModels } : providerConfig;
 }
 
-function normalizeProviderAuthConfigPatchModelRefs(
-  patch: Partial<OpenClawConfig>,
-): Partial<OpenClawConfig> {
+function normalizeProviderAuthConfigPatchModelRefs(patch: AuthConfigPatch): AuthConfigPatch {
   let next = patch;
   const defaults = patch.agents?.defaults;
   if (defaults) {
@@ -122,7 +121,7 @@ export function buildOauthProviderAuthResult(params: {
   /** Provider-specific credential fields merged into the OAuth credential. */
   credentialExtra?: Record<string, unknown>;
   /** Explicit config patch to emit after model-ref normalization. */
-  configPatch?: Partial<OpenClawConfig>;
+  configPatch?: AuthConfigPatch;
   /** Optional setup notes forwarded to provider login callers. */
   notes?: string[];
 }): ProviderAuthResult {
@@ -150,16 +149,15 @@ export function buildOauthProviderAuthResult(params: {
   return {
     profiles: [{ profileId, credential }],
     configPatch: normalizeProviderAuthConfigPatchModelRefs(
-      params.configPatch ??
-        ({
-          agents: {
-            defaults: {
-              models: {
-                [defaultModel]: {},
-              },
+      params.configPatch ?? {
+        agents: {
+          defaults: {
+            models: {
+              [defaultModel]: {},
             },
           },
-        } as Partial<OpenClawConfig>),
+        },
+      },
     ),
     defaultModel,
     notes: params.notes,

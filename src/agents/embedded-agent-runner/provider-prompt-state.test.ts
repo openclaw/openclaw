@@ -6,13 +6,20 @@ import {
   type Context,
   type Model,
 } from "openclaw/plugin-sdk/llm";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareModelRequestBody } from "../../../packages/ai/src/transports/model-request-body.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import type { WorkerTaskPool } from "../../infra/worker-task-pool.js";
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
+import { prepareProviderPrompt } from "./provider-prompt-serialization.js";
 import {
   clearProviderPromptState,
   getProviderPromptState,
   markLastProviderPromptContextRejected,
+  type PromptPreparationResult,
+  type PromptPreparationTask,
+  type ProviderPromptState,
   wrapStreamFnWithProviderPromptState,
 } from "./provider-prompt-state.js";
 
@@ -22,6 +29,25 @@ const model = {
   provider: "openai",
   baseUrl: "https://api.openai.com/v1",
 } as Model;
+const context: Context = { systemPrompt: "system", messages: [], tools: [] };
+let state: ProviderPromptState;
+beforeEach(() => {
+  state = {};
+});
+
+function observe(
+  promptState: ProviderPromptState,
+  streamFn: StreamFn,
+  recordEvent?: Parameters<typeof wrapStreamFnWithProviderPromptState>[0]["recordEvent"],
+  effectiveContextTokenBudget = 128_000,
+) {
+  return wrapStreamFnWithProviderPromptState({
+    state: promptState,
+    streamFn,
+    recordEvent,
+    effectiveContextTokenBudget,
+  });
+}
 
 function endResultStream(
   stream: ReturnType<typeof createAssistantMessageEventStream>,
@@ -48,33 +74,19 @@ function createResultStream(stopReason: "error" | "stop", errorMessage?: string)
 }
 
 describe("provider prompt state", () => {
-  it("keeps state within one run id and drops it at the run boundary", () => {
-    const first = getProviderPromptState("run-1");
-    expect(getProviderPromptState("run-1")).toBe(first);
-
-    clearProviderPromptState("run-1");
-    expect(getProviderPromptState("run-1")).not.toBe(first);
-    clearProviderPromptState("run-1");
-  });
-
   it("retains active run state until its owned cleanup", () => {
-    const firstRunId = "active-run-0";
-    const otherRunIds = Array.from({ length: 79 }, (_, index) => `active-run-${index + 1}`);
-    const first = getProviderPromptState(firstRunId);
-    for (const runId of otherRunIds) {
-      getProviderPromptState(runId);
-    }
-
-    expect(getProviderPromptState(firstRunId)).toBe(first);
-    for (const runId of [firstRunId, ...otherRunIds]) {
-      clearProviderPromptState(runId);
+    const runIds = Array.from({ length: 80 }, (_, index) => `active-run-${index}`);
+    const first = getProviderPromptState(runIds[0]!);
+    try {
+      runIds.forEach((runId) => getProviderPromptState(runId));
+      expect(getProviderPromptState(runIds[0]!)).toBe(first);
+    } finally {
+      runIds.forEach((runId) => clearProviderPromptState(runId));
     }
   });
 
   it("records only bounded private observer evidence", async () => {
-    const runId = "provider-evidence";
     const marker = "PRIVATE-PROVIDER-PROMPT-MARKER";
-    const state = getProviderPromptState(runId);
     const recordEvent = vi.fn();
     const observation = {
       egress: "responses-sdk",
@@ -84,8 +96,9 @@ describe("provider prompt state", () => {
       observedChars: marker.length,
       matchesAssembledPrompt: true,
     } as const;
-    const wrapped = wrapStreamFnWithProviderPromptState({
-      streamFn: async (_model, _context, options) => {
+    const wrapped = observe(
+      state,
+      async (_model, _context, options) => {
         if (!options) {
           throw new Error("missing stream options");
         }
@@ -93,51 +106,42 @@ describe("provider prompt state", () => {
         responsesPromptObserver.get(options)?.(observation);
         return createResultStream("stop");
       },
-      state,
-      effectiveContextTokenBudget: 128_000,
       recordEvent,
-    });
+    );
 
-    const result = await wrapped(model, { systemPrompt: marker, messages: [], tools: [] });
-    await result.result();
+    await (await wrapped(model, { ...context, systemPrompt: marker })).result();
 
     expect(recordEvent).toHaveBeenCalledWith("provider.prompt.observed", observation);
     expect(JSON.stringify({ calls: recordEvent.mock.calls, state })).not.toContain(marker);
     expect(state.lastAttempt?.cachePrefix).toBeUndefined();
-    clearProviderPromptState(runId);
   });
 
   it("records recovery attempts and final response metadata without leaking them to the next call", async () => {
-    const state = getProviderPromptState("wire-recovery");
     const onResponse = vi.fn();
     let recover = true;
-    const wrapped = wrapStreamFnWithProviderPromptState({
-      state,
-      effectiveContextTokenBudget: 128_000,
-      streamFn: async (_model, _context, options) => {
-        const encode = prepareModelRequestBody(options);
-        for (const attempt of recover
-          ? (["initial", "continuation-rejected"] as const)
-          : (["initial"] as const)) {
-          responsesPromptObserver.get(options!)?.({
-            egress: "responses-sdk",
-            payloadVariant: attempt,
-            promptSource: "missing",
-            expectedChars: 0,
-            observedChars: 0,
-            matchesAssembledPrompt: false,
-          });
-          await encode({ input: [], stream: true });
-          await options?.onResponse?.(
-            {
-              status: attempt === "initial" ? 400 : 200,
-              headers: { "x-request-id": attempt, "openai-processing-ms": "private-value" },
-            },
-            model,
-          );
-        }
-        return createResultStream("stop");
-      },
+    const wrapped = observe(state, async (_model, _context, options) => {
+      const encode = prepareModelRequestBody(options);
+      for (const attempt of recover
+        ? (["initial", "continuation-rejected"] as const)
+        : (["initial"] as const)) {
+        responsesPromptObserver.get(options!)?.({
+          egress: "responses-sdk",
+          payloadVariant: attempt,
+          promptSource: "missing",
+          expectedChars: 0,
+          observedChars: 0,
+          matchesAssembledPrompt: false,
+        });
+        await encode({ input: [], stream: true });
+        await options?.onResponse?.(
+          {
+            status: attempt === "initial" ? 400 : 200,
+            headers: { "x-request-id": attempt, "openai-processing-ms": "private-value" },
+          },
+          model,
+        );
+      }
+      return createResultStream("stop");
     });
     await wrapped(model, { messages: [] }, { onResponse });
     expect(state.lastAttempt?.wire).toMatchObject({
@@ -161,17 +165,13 @@ describe("provider prompt state", () => {
       retried: false,
       payloadVariant: "initial",
     });
-    clearProviderPromptState("wire-recovery");
   });
 
   it("observes the final replacement body and blocks its rejected replay before network send", async () => {
-    const runId = "replacement-body";
-    const state = getProviderPromptState(runId);
-    const context = {
-      systemPrompt: "system",
+    const userContext: Context = {
+      ...context,
       messages: [{ role: "user", content: "hello", timestamp: 1 }],
-      tools: [],
-    } as Context;
+    };
     const sentPayloads: unknown[] = [];
     const transport = vi.fn<StreamFn>(async (_model, _context, options) => {
       const rawPayload = { input: "raw", model: model.id };
@@ -180,33 +180,22 @@ describe("provider prompt state", () => {
       return createResultStream("error");
     });
     const finalPayload = { input: "final 🦞 日本語".repeat(3_000), model: model.id };
-    const wrapped = wrapStreamFnWithProviderPromptState({
-      streamFn: transport,
-      state,
-      effectiveContextTokenBudget: 128_000,
-    });
+    const wrapped = observe(state, transport);
 
-    const first = await wrapped(model, context, {
-      onPayload: () => finalPayload,
-    });
-    await first.result();
+    await (await wrapped(model, userContext, { onPayload: () => finalPayload })).result();
     markLastProviderPromptContextRejected(state);
 
     const changedPayload = { input: "changed", model: model.id };
-    const changed = await wrapped(model, context, {
-      onPayload: () => changedPayload,
-    });
-    await changed.result();
+    await (await wrapped(model, userContext, { onPayload: () => changedPayload })).result();
 
     await expect(
-      wrapped(model, context, {
+      wrapped(model, userContext, {
         onPayload: () => ({ ...finalPayload }),
       }),
     ).rejects.toThrow("byte-identical provider payload");
     expect(transport).toHaveBeenCalledTimes(3);
     expect(sentPayloads).toEqual([finalPayload, changedPayload]);
     expect(JSON.stringify(state)).not.toContain("final");
-    clearProviderPromptState(runId);
   });
 
   it.each([
@@ -223,6 +212,40 @@ describe("provider prompt state", () => {
       canonical: '["earlier"]',
     },
     {
+      name: "array with a trailing hole",
+      payload: Object.assign(["earlier"], { length: 2 }),
+      canonical: '["earlier",undefined]',
+    },
+    {
+      name: "sparse array rejected before inspecting a custom child",
+      payload: Object.assign(
+        [
+          Object.create(
+            new Proxy(
+              {},
+              {
+                has() {
+                  throw new Error("custom prototype must not be inspected");
+                },
+              },
+            ),
+          ),
+        ],
+        { length: 2 },
+      ),
+      canonical: "[{},undefined]",
+    },
+    {
+      name: "accessor after ordinary prompt data",
+      payload: {
+        input: "earlier".repeat(1_000),
+        get tail() {
+          return "getter value";
+        },
+      },
+      canonical: `{"input":"${"earlier".repeat(1_000)}","tail":"getter value"}`,
+    },
+    {
       name: "custom hook callback",
       payload: { input: "hello", callback: () => undefined },
       canonical: '{"callback":null,"input":"hello"}',
@@ -236,14 +259,9 @@ describe("provider prompt state", () => {
       canonical: '{"message":"fixture","name":"FixtureError","stack":"fixture-stack"}',
     },
   ])("preserves canonical identity for $name", async ({ payload, canonical }) => {
-    const state = {};
-    const wrapped = wrapStreamFnWithProviderPromptState({
-      streamFn: async (_model, _context, options) => {
-        await options?.onPayload?.(payload, model);
-        return createResultStream("error");
-      },
-      state,
-      effectiveContextTokenBudget: 128_000,
+    const wrapped = observe(state, async (_model, _context, options) => {
+      await options?.onPayload?.(payload, model);
+      return createResultStream("error");
     });
     await wrapped(model, { messages: [] });
     expect(markLastProviderPromptContextRejected(state)).toMatchObject({
@@ -255,40 +273,56 @@ describe("provider prompt state", () => {
     );
   });
 
+  it("admits a large prompt without allocating key-entry iterators", async () => {
+    const payload = {
+      messages: Array.from({ length: 512 }, () => ({ text: "x".repeat(2048) })),
+    };
+    const prepared = prepareProviderPrompt({ payload, encode: false });
+    const entries = vi.spyOn(Array.prototype, "entries");
+    // A prior file can own the pool through an earlier module evaluation;
+    // replace only its transport so admission and payload observation stay real.
+    const pool = resolveGlobalSingleton<
+      WorkerTaskPool<PromptPreparationTask, PromptPreparationResult>
+    >(Symbol.for("openclaw.providerPromptHashPool"), () => {
+      throw new Error("Expected provider prompt state to initialize its worker pool");
+    });
+    const worker = vi.spyOn(pool, "run").mockResolvedValueOnce({
+      kind: "provider",
+      prompt: prepared,
+    });
+    const wrapped = observe(state, async (_model, _context, options) => {
+      await options?.onPayload?.(payload, model);
+      return createResultStream("stop");
+    });
+    try {
+      await wrapped(model, context);
+      expect(worker).toHaveBeenCalledExactlyOnceWith(expect.any(Function), {
+        inputBytes: 2_153_412,
+        signal: undefined,
+      });
+      expect(state.lastAttempt?.digest).toBe(prepared.digest);
+      expect(entries).not.toHaveBeenCalled();
+    } finally {
+      worker.mockRestore();
+      entries.mockRestore();
+    }
+  });
+
   it("does not compare rejected payloads across effective context scopes", async () => {
-    const runId = "changed-context-scope";
-    const state = getProviderPromptState(runId);
-    const context = { systemPrompt: "system", messages: [], tools: [] } as Context;
     const payload = { input: "same", model: model.id };
     const transport = vi.fn<StreamFn>(async (_model, _context, options) => {
       await options?.onPayload?.(payload, model);
       return createResultStream("error");
     });
-    const firstWrapped = wrapStreamFnWithProviderPromptState({
-      streamFn: transport,
-      state,
-      effectiveContextTokenBudget: 64_000,
-    });
-    const first = await firstWrapped(model, context);
-    await first.result();
+    await (await observe(state, transport, undefined, 64_000)(model, context)).result();
     markLastProviderPromptContextRejected(state);
 
-    const secondWrapped = wrapStreamFnWithProviderPromptState({
-      streamFn: transport,
-      state,
-      effectiveContextTokenBudget: 128_000,
-    });
-    const second = await secondWrapped(model, context);
-    await second.result();
+    await (await observe(state, transport)(model, context)).result();
 
     expect(transport).toHaveBeenCalledTimes(2);
-    clearProviderPromptState(runId);
   });
 
   it("keeps a rejected primary identity across successful auxiliary attempts", async () => {
-    const runId = "success-preserves-rejection";
-    const state = getProviderPromptState(runId);
-    const context = { systemPrompt: "system", messages: [], tools: [] } as Context;
     const rejectedPayload = { input: "rejected", model: model.id };
     const successfulPayload = { input: "successful", model: model.id };
     const payloads = [rejectedPayload, successfulPayload, { ...rejectedPayload }];
@@ -298,90 +332,49 @@ describe("provider prompt state", () => {
       await options?.onPayload?.(payload, model);
       return createResultStream(stopReasons.shift() ?? "error");
     });
-    const wrapped = wrapStreamFnWithProviderPromptState({
-      streamFn: transport,
-      state,
-      effectiveContextTokenBudget: 128_000,
-    });
+    const wrapped = observe(state, transport);
 
-    const rejected = await wrapped(model, context);
-    await rejected.result();
+    await (await wrapped(model, context)).result();
     markLastProviderPromptContextRejected(state);
-    const successful = await wrapped(model, context);
-    await successful.result();
+    await (await wrapped(model, context)).result();
 
     await expect(wrapped(model, context)).rejects.toThrow("byte-identical provider payload");
     expect(transport).toHaveBeenCalledTimes(3);
-    clearProviderPromptState(runId);
   });
 
   it("does not invent an identity for a custom transport without onPayload", async () => {
-    const runId = "custom-transport";
-    const state = getProviderPromptState(runId);
-    const observed = wrapStreamFnWithProviderPromptState({
-      streamFn: async (_model, _context, options) => {
-        await options?.onPayload?.({ input: "observed" }, model);
-        return createResultStream("error");
-      },
-      state,
-      effectiveContextTokenBudget: 128_000,
+    const observed = observe(state, async (_model, _context, options) => {
+      await options?.onPayload?.({ input: "observed" }, model);
+      return createResultStream("error");
     });
-    const observedResult = await observed(model, {
-      systemPrompt: "system",
-      messages: [],
-      tools: [],
-    });
-    await observedResult.result();
+    await (await observed(model, context)).result();
     expect(state.lastAttempt).toBeDefined();
 
     const stream = createResultStream("error", "connection dropped after dispatch");
-    const wrapped = wrapStreamFnWithProviderPromptState({
-      streamFn: () => stream,
-      state,
-      effectiveContextTokenBudget: 128_000,
-    });
+    const wrapped = observe(state, () => stream);
 
-    const result = await wrapped(model, {
-      systemPrompt: "system",
-      messages: [],
-      tools: [],
-    });
-    await result.result();
+    await (await wrapped(model, context)).result();
 
     expect(state.lastAttempt).toBeUndefined();
     expect(markLastProviderPromptContextRejected(state)).toBeUndefined();
-    clearProviderPromptState(runId);
   });
 
   it("records identity after an asynchronous payload hook finishes", async () => {
-    const runId = "async-payload-hook";
-    const state = getProviderPromptState(runId);
     const stream = createAssistantMessageEventStream();
-    let releasePayloadHook: (() => void) | undefined;
-    const payloadHookGate = new Promise<void>((resolve) => {
-      releasePayloadHook = resolve;
-    });
+    const { promise: payloadHookGate, resolve: releasePayloadHook } = createDeferred();
     let observedPayloadHook: Promise<unknown> | undefined;
     const transport = vi.fn<StreamFn>((_model, _context, options) => {
       observedPayloadHook = options?.onPayload?.({ input: "hello" }, model) as Promise<unknown>;
       return stream;
     });
-    const wrapped = wrapStreamFnWithProviderPromptState({
-      streamFn: transport,
-      state,
-      effectiveContextTokenBudget: 128_000,
-    });
+    const wrapped = observe(state, transport);
 
-    const result = await wrapped(
-      model,
-      { systemPrompt: "system", messages: [], tools: [] },
-      {
-        onPayload: async (payload) => {
-          await payloadHookGate;
-          return payload;
-        },
+    const result = await wrapped(model, context, {
+      onPayload: async (payload) => {
+        await payloadHookGate;
+        return payload;
       },
-    );
+    });
     expect(state.lastAttempt).toBeUndefined();
 
     releasePayloadHook?.();
@@ -390,6 +383,5 @@ describe("provider prompt state", () => {
 
     endResultStream(stream, "stop");
     await result.result();
-    clearProviderPromptState(runId);
   });
 });

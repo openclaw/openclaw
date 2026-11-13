@@ -9,16 +9,15 @@ import type {
   ChatHistoryMessageParams,
 } from "../../config/sessions/session-history-types.js";
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
-import {
-  prepareForwardedMessageCronJobNameResolver,
-  projectForwardedMessages,
-} from "../chat-display-projection.history.js";
+import { prepareForwardedMessageCronJobNameResolver } from "../chat-display-projection.cron.js";
+import { projectForwardedMessages } from "../chat-display-projection.history.js";
+import { sanitizeChatHistoryMessages } from "../chat-display-projection.sanitize.js";
+import { readChatHistoryPageKernel } from "../chat-history-page-kernel.js";
+import { projectChatHistoryWithReplies } from "../chat-history-reply-messages.js";
+import { encodeChatHistoryResponsePage } from "../chat-history-response-page.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import { createSessionActorTranscriptReader } from "../session-transcript-memory-reader.js";
 import * as sessionTranscriptReaders from "../session-transcript-readers.js";
-import { readChatHistoryPageKernel } from "./chat-history-page-kernel.js";
-import { projectChatHistoryWithReplies } from "./chat-history-reply-messages.js";
-import { encodeChatHistoryResponsePage } from "./chat-history-response-page.js";
 
 function prepareChatHistoryParams<Params extends ChatHistoryPageParams>(input: Params): Params {
   return getCliSessionBinding(input.entry, "claude-cli")?.sessionId
@@ -42,41 +41,32 @@ function chatHistoryScope(params: ChatHistoryPageParams) {
 export async function readChatHistoryMessageById(input: ChatHistoryMessageParams) {
   const scope = chatHistoryScope(input);
   const memory = captureSessionActorTranscriptRead(scope);
-  if (memory) {
-    const captured = structuredClone(input);
-    let result;
-    if (getCliSessionBinding(captured.entry, "claude-cli")?.sessionId) {
-      const { readProcessHeldCliHistoryMessage } =
-        await import("../cli-session-history.process-held.js");
-      result = await readProcessHeldCliHistoryMessage(prepareChatHistoryParams(captured), memory);
-    } else {
-      result = await createSessionActorTranscriptReader(memory).readSessionMessageByIdAsync(
-        scope,
-        captured.messageId,
-        {
-          allowResetArchiveFallback: true,
-          historyVisibility: { sessionStartedAt: captured.entry?.sessionStartedAt },
-        },
-      );
-    }
+  const captured = memory ? structuredClone(input) : input;
+  const binding = getCliSessionBinding(captured.entry, "claude-cli");
+  if (memory && binding?.sessionId) {
+    const { readProcessHeldCliHistoryMessage } =
+      await import("../cli-session-history.process-held.js");
+    const result = await readProcessHeldCliHistoryMessage(
+      prepareChatHistoryParams(captured),
+      memory,
+    );
     memory.assertCurrent();
     return result;
   }
-  const binding = getCliSessionBinding(input.entry, "claude-cli");
   if (
+    memory ||
     !binding?.sessionId ||
     !input.storePath ||
     input.entry?.incognito ||
     isIncognitoSessionKey(input.canonicalKey)
   ) {
-    return sessionTranscriptReaders.readSessionMessageByIdAsync(
-      chatHistoryScope(input),
-      input.messageId,
-      {
-        allowResetArchiveFallback: true,
-        historyVisibility: { sessionStartedAt: input.entry?.sessionStartedAt },
-      },
-    );
+    const readers = memory ? createSessionActorTranscriptReader(memory) : sessionTranscriptReaders;
+    const result = await readers.readSessionMessageByIdAsync(scope, captured.messageId, {
+      allowResetArchiveFallback: true,
+      historyVisibility: { sessionStartedAt: captured.entry?.sessionStartedAt },
+    });
+    memory?.assertCurrent();
+    return result;
   }
   const params = prepareChatHistoryParams(input);
   const { readSessionHistoryPageInWorker } =
@@ -87,7 +77,7 @@ export async function readChatHistoryMessageById(input: ChatHistoryMessageParams
   });
 }
 
-export async function readChatHistoryPage(
+async function readChatHistoryPageUnprojected(
   input: ChatHistoryPageParams,
   signal?: AbortSignal,
 ): Promise<ChatHistoryPage> {
@@ -155,4 +145,30 @@ async function refreshForwardedLabels(messages: unknown[]): Promise<unknown[]> {
         await prepareForwardedMessageCronJobNameResolver(displayMessages),
       ),
   );
+}
+
+export type ChatHistoryMessageProjector = {
+  project: (messages: unknown[]) => Promise<unknown[]>;
+};
+
+/** Enrich only the admitted display copy, then budget the bytes actually sent. */
+export async function readChatHistoryPage(
+  input: ChatHistoryPageParams,
+  signal?: AbortSignal,
+  displayProjector?: ChatHistoryMessageProjector,
+) {
+  const page = await readChatHistoryPageUnprojected(
+    displayProjector ? { ...input, deferChannelUserDisplay: true } : input,
+    signal,
+  );
+  if (!displayProjector || page.encodedResponse) {
+    return page;
+  }
+  const messages = sanitizeChatHistoryMessages(
+    await displayProjector.project(page.messages),
+    input.effectiveMaxChars,
+    { toolResultMaxChars: input.toolResultMaxChars },
+  );
+  signal?.throwIfAborted();
+  return encodeChatHistoryResponsePage({ ...page, messages }, prepareChatHistoryParams(input));
 }

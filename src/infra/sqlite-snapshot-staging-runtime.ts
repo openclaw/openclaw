@@ -1,54 +1,59 @@
-import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
+import { createAsyncLock } from "@openclaw/fs-safe/advanced";
+import {
+  createSqliteLifecycleAggregateError,
+  throwSqliteLifecycleErrors,
+} from "./sqlite-lifecycle-errors.js";
 import type {
   SqliteNativeSessionLaunch,
   SqliteNativeStagingSession,
 } from "./sqlite-readonly-native-resource.types.js";
 import type { SqliteSnapshotStagingLaunch } from "./sqlite-snapshot-staging.types.js";
 
-/** Private token connections share one process, never a copy/read worker permit. */
+type StagingSession = { worker: SqliteNativeStagingSession; directories: number };
+
+/** Private token connections share a process per launch context, never a copy/read permit. */
 export function createSqliteSnapshotStagingRuntime(
   createSession: (launch: SqliteNativeSessionLaunch) => SqliteNativeStagingSession,
 ) {
-  let worker: SqliteNativeStagingSession | undefined;
-  let directories = 0;
-  let pending = Promise.resolve();
-  function run<T>(operation: () => Promise<T>): Promise<T> {
-    const result = pending.then(operation);
-    pending = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    return result;
+  const sessions = new Set<StagingSession>();
+  const run = createAsyncLock();
+  async function closeSession(current: StagingSession) {
+    await current.worker.close();
+    sessions.delete(current);
   }
-  async function closeSession(current: SqliteNativeStagingSession) {
-    await current.close();
-    worker = undefined;
-  }
-  async function session(launch: SqliteSnapshotStagingLaunch) {
-    if (worker?.isRetired()) {
-      await closeSession(worker);
+  function session(launch: SqliteSnapshotStagingLaunch): StagingSession {
+    for (const current of sessions) {
+      if (current.worker.compatible(launch)) {
+        return current;
+      }
     }
-    worker ??= createSession({
-      ...launch,
-      retainLifetime: false,
-      retainOnOperationError: true,
-    });
-    if (!worker.compatible(launch)) {
-      throw new Error(
-        "SQLite snapshot staging owner launch context changed; retire its snapshots before retrying",
-      );
-    }
-    return worker;
+    // Doctor can retain its report image while inspecting a second private state root.
+    const current = {
+      worker: createSession({
+        ...launch,
+        retainLifetime: false,
+        retainOnOperationError: true,
+      }),
+      directories: 0,
+    };
+    sessions.add(current);
+    return current;
   }
   return {
     close() {
       return run(async () => {
-        if (directories !== 0) {
+        if ([...sessions].some((current) => current.directories !== 0)) {
           throw new Error("SQLite snapshot staging owner still has retained directories");
         }
-        if (worker) {
-          await closeSession(worker);
+        const errors: unknown[] = [];
+        for (const current of sessions) {
+          try {
+            await closeSession(current);
+          } catch (error) {
+            errors.push(error);
+          }
         }
+        throwSqliteLifecycleErrors(errors, "SQLite snapshot staging owners failed to close");
       });
     },
     async allocate(
@@ -58,17 +63,17 @@ export function createSqliteSnapshotStagingRuntime(
       preparationId: number,
     ) {
       return run(async () => {
-        const current = await session(launch);
+        const current = session(launch);
         let directory: string;
         try {
           // Once dispatched, join the shared child without aborting sibling tokens.
-          directory = await current.run(root, {
+          directory = await current.worker.run(root, {
             mode: allowLegacyWorker ? "staging-create-legacy" : "staging-create",
             preparationId,
           });
-          directories++;
+          current.directories++;
         } catch (error) {
-          if (directories === 0) {
+          if (current.directories === 0) {
             try {
               await closeSession(current);
             } catch (cleanupError) {
@@ -86,12 +91,12 @@ export function createSqliteSnapshotStagingRuntime(
           directory,
           retire: () =>
             run(async () => {
-              if (retired) {
-                return;
+              if (!retired) {
+                await current.worker.run(directory, { mode: "staging-retire" });
+                retired = true;
+                current.directories--;
               }
-              await current.run(directory, { mode: "staging-retire" });
-              retired = true;
-              if (--directories === 0) {
+              if (current.directories === 0 && sessions.has(current)) {
                 await closeSession(current);
               }
             }),

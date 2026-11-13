@@ -25,6 +25,7 @@ function createTimeoutHarness(options?: {
   timeoutMs?: number;
   runAbortController?: AbortController;
   onDeadline?: DeadlineChanged;
+  abortRun?: ReturnType<typeof createEmbeddedAttemptRunAbort>;
 }) {
   const state = {
     pendingCompaction: options?.pendingCompaction ?? false,
@@ -32,7 +33,7 @@ function createTimeoutHarness(options?: {
     streaming: false,
   };
   const runAbortController = options?.runAbortController ?? new AbortController();
-  const abortRun = vi.fn();
+  const abortRun = vi.fn(options?.abortRun);
   const markTimedOutDuringCompaction = vi.fn();
   const markTimedOutByRunBudget = vi.fn();
   const onAttemptTimeoutArmed = vi.fn();
@@ -77,6 +78,23 @@ function createTimeoutHarness(options?: {
   };
 }
 
+function expectDeadlines(
+  harness: ReturnType<typeof createTimeoutHarness>,
+  ...deadlines: (number | null)[]
+) {
+  expect(harness.onAttemptDeadlineChanged.mock.calls).toEqual(
+    deadlines.map((deadline) => [
+      deadline === null ? { kind: "unlimited" } : { kind: "bounded", deadlineAtMs: deadline },
+    ]),
+  );
+}
+
+function expectReleased(harness: ReturnType<typeof createTimeoutHarness>) {
+  expect(harness.abortRun).not.toHaveBeenCalled();
+  expect(vi.getTimerCount()).toBe(0);
+  expect(getEventListeners(harness.runAbortController.signal, "abort")).toHaveLength(0);
+}
+
 describe("prepareEmbeddedAttemptTimeout", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -94,9 +112,7 @@ describe("prepareEmbeddedAttemptTimeout", () => {
     const harness = createTimeoutHarness();
 
     expect(harness.onAttemptTimeoutArmed).toHaveBeenCalledOnce();
-    expect(harness.onAttemptDeadlineChanged.mock.calls).toEqual([
-      [{ kind: "bounded", deadlineAtMs: 100 }],
-    ]);
+    expectDeadlines(harness, 100);
     expect(harness.timeout.getRunAbortDeadlineAtMs()).toBe(100);
     await vi.advanceTimersByTimeAsync(100);
 
@@ -105,12 +121,9 @@ describe("prepareEmbeddedAttemptTimeout", () => {
     // The run-budget marker must be recorded before the abort so settlement
     // can re-confirm terminal ownership before committing partial output; the
     // timeout callback itself never commits buffered text.
-    const markOrder = harness.markTimedOutByRunBudget.mock.invocationCallOrder[0];
-    const abortOrder = harness.abortRun.mock.invocationCallOrder[0];
-    expect(markOrder).toBeDefined();
-    expect(abortOrder).toBeDefined();
-    expect(markOrder ?? -1).toBeLessThan(abortOrder ?? -1);
-    harness.timeout.clearTimers();
+    expect(harness.markTimedOutByRunBudget.mock.invocationCallOrder[0]).toBeLessThan(
+      harness.abortRun.mock.invocationCallOrder[0] ?? -1,
+    );
   });
 
   it("propagates the built-in deadline reason", async () => {
@@ -130,45 +143,30 @@ describe("prepareEmbeddedAttemptTimeout", () => {
       runAbortController,
       state: { terminal: { kind: "ok" } },
     });
-    const input = {
-      attempt: {
-        runId: "run-deadline",
-        sessionId: "session-deadline",
-        timeoutMs: 100,
-      },
-      runAbortSignal: runAbortController.signal,
-      activeSession: { isCompacting: false, isStreaming: false },
-      compactionState: { isCompacting: () => false },
-      compactionTimeoutMs: 50,
-      isProbeSession: true,
-      abortRun,
-      markTimedOutDuringCompaction: vi.fn(),
-      markTimedOutByRunBudget: vi.fn(),
-    };
-    const timeout = prepareEmbeddedAttemptTimeout(input);
-    timeoutCleanups.push(timeout.clearTimers);
+    createTimeoutHarness({ runAbortController, abortRun });
 
     await vi.advanceTimersByTimeAsync(100);
 
     expect(runAbortController.signal.reason).toEqual(
       expect.objectContaining({ name: "TimeoutError", message: "request timed out" }),
     );
-    timeout.clearTimers();
   });
 
-  it("pauses exactly the original run budget until all scoped approvals resolve", async () => {
+  it.each([0, 10_000_000])("pauses approvals across %i ms clock step", async (clockStep) => {
     const harness = createTimeoutHarness();
+    const observed: Array<number | undefined> = [];
+    const unsubscribe = harness.timeout.onRunAbortDeadlineChanged(() => {
+      observed.push(harness.timeout.getRunAbortDeadlineAtMs());
+    });
 
     await vi.advanceTimersByTimeAsync(30);
+    vi.setSystemTime(Date.now() + clockStep);
     emitApproval("waiting-approval", "first");
     emitApproval("waiting-approval", "second");
     await vi.advanceTimersByTimeAsync(500);
     expect(harness.abortRun).not.toHaveBeenCalled();
     expect(harness.timeout.getRunAbortDeadlineAtMs()).toBeUndefined();
-    expect(harness.onAttemptDeadlineChanged.mock.calls).toEqual([
-      [{ kind: "bounded", deadlineAtMs: 100 }],
-      [{ kind: "unlimited" }],
-    ]);
+    expectDeadlines(harness, 100, null);
 
     emitApproval("approval-resolved", "first", "another-run");
     emitApproval("approval-resolved", "first", "run-1", "another-session");
@@ -178,19 +176,17 @@ describe("prepareEmbeddedAttemptTimeout", () => {
     expect(harness.onAttemptDeadlineChanged).toHaveBeenCalledTimes(2);
 
     emitApproval("approval-resolved", "second");
-    expect(harness.timeout.getRunAbortDeadlineAtMs()).toBe(700);
-    expect(harness.onAttemptDeadlineChanged.mock.calls).toEqual([
-      [{ kind: "bounded", deadlineAtMs: 100 }],
-      [{ kind: "unlimited" }],
-      [{ kind: "bounded", deadlineAtMs: 700 }],
-    ]);
+    expect(harness.timeout.getRunAbortDeadlineAtMs()).toBe(700 + clockStep);
+    expectDeadlines(harness, 100, null, 700 + clockStep);
+    expect(observed).toEqual([undefined, 700 + clockStep]);
+    unsubscribe();
     await vi.advanceTimersByTimeAsync(69);
     expect(harness.abortRun).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
 
     expect(harness.markTimedOutByRunBudget).toHaveBeenCalledOnce();
     expect(harness.abortRun).toHaveBeenCalledWith(true);
-    harness.timeout.clearTimers();
+    expect(observed).toEqual([undefined, 700 + clockStep]);
   });
 
   it("pauses only the unused compaction grace budget during inline approval", async () => {
@@ -203,45 +199,31 @@ describe("prepareEmbeddedAttemptTimeout", () => {
 
     harness.state.pendingCompaction = false;
     emitApproval("approval-resolved", "grace");
-    expect(harness.onAttemptDeadlineChanged.mock.calls).toEqual([
-      [{ kind: "bounded", deadlineAtMs: 100 }],
-      [{ kind: "bounded", deadlineAtMs: 150 }],
-      [{ kind: "unlimited" }],
-      [{ kind: "bounded", deadlineAtMs: 650 }],
-    ]);
+    expectDeadlines(harness, 100, 150, null, 650);
     expect(harness.timeout.getRunAbortDeadlineAtMs()).toBe(650);
     await vi.advanceTimersByTimeAsync(29);
     expect(harness.abortRun).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
 
     expect(harness.abortRun).toHaveBeenCalledWith(true);
-    harness.timeout.clearTimers();
   });
 
-  it.each([{ name: "in-flight", compactionInFlight: true }])(
-    "publishes only one grace deadline for $name compaction",
-    async (options) => {
-      const harness = createTimeoutHarness(options);
-
-      await vi.advanceTimersByTimeAsync(100);
-      expect(harness.abortRun).not.toHaveBeenCalled();
-      expect(harness.timeout.getRunAbortDeadlineAtMs()).toBe(150);
-      expect(harness.onAttemptDeadlineChanged.mock.calls).toEqual([
-        [{ kind: "bounded", deadlineAtMs: 100 }],
-        [{ kind: "bounded", deadlineAtMs: 150 }],
-      ]);
-
-      await vi.advanceTimersByTimeAsync(50);
-      expect(harness.markTimedOutDuringCompaction).toHaveBeenCalledOnce();
-      expect(harness.abortRun).toHaveBeenCalledWith(true);
-      expect(harness.onAttemptDeadlineChanged).toHaveBeenCalledTimes(2);
-    },
-  );
+  it("publishes only one grace deadline for in-flight compaction", async () => {
+    const harness = createTimeoutHarness({ compactionInFlight: true });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(harness.abortRun).not.toHaveBeenCalled();
+    expect(harness.timeout.getRunAbortDeadlineAtMs()).toBe(150);
+    expectDeadlines(harness, 100, 150);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(harness.markTimedOutDuringCompaction).toHaveBeenCalledOnce();
+    expect(harness.abortRun).toHaveBeenCalledWith(true);
+    expect(harness.onAttemptDeadlineChanged).toHaveBeenCalledTimes(2);
+  });
 
   it("publishes an unlimited run without arming a timer or inventing a finite deadline", async () => {
     const harness = createTimeoutHarness({ timeoutMs: MAX_TIMER_TIMEOUT_MS });
 
-    expect(harness.onAttemptDeadlineChanged.mock.calls).toEqual([[{ kind: "unlimited" }]]);
+    expectDeadlines(harness, null);
     expect(harness.onAttemptTimeoutArmed).toHaveBeenCalledOnce();
     expect(harness.timeout.getRunAbortDeadlineAtMs()).toBeUndefined();
     expect(vi.getTimerCount()).toBe(0);
@@ -251,28 +233,21 @@ describe("prepareEmbeddedAttemptTimeout", () => {
 
     expect(harness.abortRun).not.toHaveBeenCalled();
     expect(harness.markTimedOutByRunBudget).not.toHaveBeenCalled();
-    expect(harness.onAttemptDeadlineChanged.mock.calls).toEqual([[{ kind: "unlimited" }]]);
+    expectDeadlines(harness, null);
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it.each([MAX_TIMER_TIMEOUT_MS])(
-    "does not publish or arm a pre-aborted run with budget %i",
-    async (timeoutMs) => {
-      const runAbortController = new AbortController();
-      runAbortController.abort(new Error("cancelled before timer preparation"));
-      const harness = createTimeoutHarness({ timeoutMs, runAbortController });
-
-      emitApproval("waiting-approval", "late");
-      emitApproval("approval-resolved", "late");
-      await vi.advanceTimersByTimeAsync(200);
-
-      expect(harness.onAttemptDeadlineChanged).not.toHaveBeenCalled();
-      expect(harness.onAttemptTimeoutArmed).not.toHaveBeenCalled();
-      expect(harness.abortRun).not.toHaveBeenCalled();
-      expect(vi.getTimerCount()).toBe(0);
-      expect(getEventListeners(runAbortController.signal, "abort")).toHaveLength(0);
-    },
-  );
+  it("does not publish or arm a pre-aborted unlimited run", async () => {
+    const runAbortController = new AbortController();
+    runAbortController.abort(new Error("cancelled before timer preparation"));
+    const harness = createTimeoutHarness({ timeoutMs: MAX_TIMER_TIMEOUT_MS, runAbortController });
+    emitApproval("waiting-approval", "late");
+    emitApproval("approval-resolved", "late");
+    await vi.advanceTimersByTimeAsync(200);
+    expect(harness.onAttemptDeadlineChanged).not.toHaveBeenCalled();
+    expect(harness.onAttemptTimeoutArmed).not.toHaveBeenCalled();
+    expectReleased(harness);
+  });
 
   it.each(["running", "approval-paused", "compaction-grace"] as const)(
     "closes a %s deadline on local run abort without late approval resurrection",
@@ -292,9 +267,7 @@ describe("prepareEmbeddedAttemptTimeout", () => {
 
       expect(harness.onAttemptDeadlineChanged.mock.calls).toEqual(published);
       expect(harness.markTimedOutByRunBudget).not.toHaveBeenCalled();
-      expect(harness.abortRun).not.toHaveBeenCalled();
-      expect(vi.getTimerCount()).toBe(0);
-      expect(getEventListeners(harness.runAbortController.signal, "abort")).toHaveLength(0);
+      expectReleased(harness);
     },
   );
 
@@ -307,13 +280,9 @@ describe("prepareEmbeddedAttemptTimeout", () => {
 
     await vi.advanceTimersByTimeAsync(200);
 
-    expect(harness.onAttemptDeadlineChanged.mock.calls).toEqual([
-      [{ kind: "bounded", deadlineAtMs: 100 }],
-    ]);
+    expectDeadlines(harness, 100);
     expect(harness.onAttemptTimeoutArmed).not.toHaveBeenCalled();
-    expect(harness.abortRun).not.toHaveBeenCalled();
-    expect(vi.getTimerCount()).toBe(0);
-    expect(getEventListeners(runAbortController.signal, "abort")).toHaveLength(0);
+    expectReleased(harness);
   });
 
   it("does not resurrect timers or deadline publications during synchronous timeout cleanup", async () => {
@@ -328,9 +297,7 @@ describe("prepareEmbeddedAttemptTimeout", () => {
 
     expect(harness.abortRun).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
-    expect(harness.onAttemptDeadlineChanged.mock.calls).toEqual([
-      [{ kind: "bounded", deadlineAtMs: 100 }],
-    ]);
+    expectDeadlines(harness, 100);
     await vi.advanceTimersByTimeAsync(20_000);
     expect(harness.abortRun).toHaveBeenCalledOnce();
   });

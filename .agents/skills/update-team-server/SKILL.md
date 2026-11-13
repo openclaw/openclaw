@@ -59,6 +59,17 @@ This skill does not install a migration phase. Missing access or a safe capabili
 
 ## Retain ownership through acceptance
 
+Successful retained fix-forward activation leaves `REPAIR_COMPLETED` in the
+canonical slot. Finish that flow with
+`openclaw-release-deploy --retire-retained-repair OPERATION COMPLETED_JOURNAL_SHA256`
+using the same operation and reviewed completed journal digest. Follow the
+[completed-repair retirement contract](controller/RETAINED-REPAIR.md#retire-a-completed-repair)
+for acceptance, live-generation and pointer bindings, durable archival, and
+same-command interrupted replay. Require its retirement receipt before handing
+back ordinary deploy admission. Never substitute ordinary `--recover` or manual
+journal removal; `REPAIR_FAILED` has no retirement through this action. Retirement
+does not authorize a new deployment or enable unattended scheduling.
+
 Treat every authorized update request, including a brief ping to update, as an execution obligation until the requested release passes full native acceptance. An acknowledgment, status reply, successful build, restored incumbent, blocker report, or landed repair PR does not complete that obligation. Follow-up pings and clarifications retain the same request and approval; they do not reset ownership or require the requester to ask again. Respect an explicit pause or cancellation.
 
 When the update fails or defers, repeat this loop until it succeeds:
@@ -89,6 +100,14 @@ installed database can migrate. The controller must not enumerate schema edges,
 rehearse each crossing, implement migrations, or copy database SQL into its
 admission rules. Older databases use OpenClaw's supported forward migrations;
 unknown future schemas and downgrades are refused by that owner.
+
+Same-schema activation still requires the candidate's native database admission.
+Same-version additive session columns must be checked against its saved catalog
+facts before admission reuses a seal. Every affected agent stays unavailable until writable
+admission installs missing columns under the existing maintenance authority,
+before session preparation or readers run. An unchanged schema version does not
+prove reader readiness. The controller delegates this ordering to OpenClaw;
+never add controller SQL or manual ALTER statements as an activation path.
 
 Keep the incumbent serving during the off-path build. Under the existing
 maintenance authority, drain and stop it, then invoke the candidate's internal
@@ -133,7 +152,7 @@ marker receipts, and deadline expiry remain failures with evidence retained.
 
 Use the exact invocation's native terminal acceptance receipt as the authoritative outcome. The native owner performs the serving/build SHA, process generation, RPC, health/startup/readiness, configured-channel, protected-policy/identity, original session-witness, and journal-resolution checks recorded there. Reuse its validation and real model-marker receipt; do not repeat health probes, channel/session/policy audits, migration checks, or marker turns as agent-side acceptance. Preserve the intended state of the configured sole cadence without adding another validation loop. Read the native result, not just the observer process status: observer exit `0` can wrap native exit `75`/deferred and is not accepted deployment. Supervisor success, a skip, healthy old code, rollback, or same-release recovery is not a new deployment.
 
-Missing or ambiguous native acceptance, concrete native failure, contradictory current evidence, or an actual ownership conflict calls for targeted diagnosis through the same owner, not a second validation suite. When that diagnosis needs live checks, respect generation and owner-phase boundaries; never run ordinary RPCs across an active fence or pause the configured cadence for a quiet proof window. Preserve failed outcomes and unresolved journals; do not delete evidence or retry blindly. Use only the owner's compatibility-checked recovery and cleanup, preserving referenced releases, backups, ordinary sessions, unrelated state, and dirty workspaces.
+Missing or ambiguous native acceptance, concrete native failure, contradictory current evidence, or an actual ownership conflict calls for targeted diagnosis through the same owner, not a second validation suite. For fix-driven incidents, distinguish [code inclusion](../release-openclaw-maintainer/references/fix-inclusion.md) from recovery of the failing path; readiness alone does not prove the incident is resolved. When that diagnosis needs live checks, respect generation and owner-phase boundaries; never run ordinary RPCs across an active fence or pause the configured cadence for a quiet proof window. Preserve failed outcomes and unresolved journals; do not delete evidence or retry blindly. Use only the owner's compatibility-checked recovery and cleanup, preserving referenced releases, backups, ordinary sessions, unrelated state, and dirty workspaces.
 
 Let [Gateway restart recovery](https://docs.openclaw.ai/gateway/restart-recovery) resume eligible work; do not duplicate it manually. PTYs end, unsaved work may be lost, and recovery budgets/quarantine remain: neither universal recovery nor exactly-once execution is promised.
 

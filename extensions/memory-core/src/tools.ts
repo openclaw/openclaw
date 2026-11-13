@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { resolveMemoryDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import {
   attemptMemoryCorpus,
   composeMemoryCorpusMetadata,
@@ -35,7 +36,6 @@ import {
 import {
   DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
   resolveMemorySearchAbortError,
-  runMemorySearchWithDeadline,
 } from "./memory/search-deadline.js";
 import {
   buildMemorySearchPresentation,
@@ -97,21 +97,18 @@ function readMemorySearchToolCooldown(key: string): MemoryCorpusFailure | undefi
   if (!entry) {
     return undefined;
   }
+  const { until, ...failure } = entry;
   // A configuration change may retain the previous failure for this one-minute pause.
-  if (entry.until <= Date.now()) {
+  if (until <= performance.now()) {
     memorySearchToolCooldowns.delete(key);
     return undefined;
   }
-  return {
-    error: entry.error,
-    deadline: entry.deadline,
-    ...(entry.code ? { code: entry.code } : {}),
-  };
+  return failure;
 }
 
 function recordMemorySearchToolCooldown(key: string, failure: MemoryCorpusFailure): void {
   memorySearchToolCooldowns.set(key, {
-    until: Date.now() + MEMORY_SEARCH_TOOL_COOLDOWN_MS,
+    until: performance.now() + MEMORY_SEARCH_TOOL_COOLDOWN_MS,
     ...failure,
   });
 }
@@ -130,19 +127,24 @@ async function closeMemoryManagers(
   if (pending.length === 0) {
     return;
   }
-  try {
-    await runMemorySearchWithDeadline({
-      timeoutMs: DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
-      parentSignal,
-      run: async () => {
-        await Promise.allSettled(pending);
+  if (parentSignal?.aborted) {
+    throw resolveMemorySearchAbortError(parentSignal);
+  }
+  // Manager close owns settlement; its best-effort wait must not hide search results.
+  await raceWithTimeout(
+    Promise.allSettled(pending),
+    DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
+    () => undefined,
+    {
+      ref: false,
+      signal: parentSignal,
+      onAbort: (signal) => {
+        throw resolveMemorySearchAbortError(signal);
       },
-    });
-  } catch (error) {
-    if (parentSignal?.aborted) {
-      throw error;
-    }
-    // Search results should not be hidden by best-effort transient cleanup.
+    },
+  );
+  if (parentSignal?.aborted) {
+    throw resolveMemorySearchAbortError(parentSignal);
   }
 }
 
@@ -290,7 +292,9 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
             run: async () => {
               const memory = await acquireMemoryManager();
               if ("error" in memory) {
-                throw new Error(memory.error ?? "memory search unavailable");
+                throw Object.assign(new Error(memory.error ?? "memory search unavailable"), {
+                  code: memory.code,
+                });
               }
               signal.throwIfAborted();
               const explicitSources: MemorySource[] | undefined =
@@ -339,7 +343,9 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
                     ...(attempted.code ? { code: attempted.code } : {}),
                   }
                 : { error: "memory search unavailable", deadline: false };
-            recordMemorySearchToolCooldown(agentId, failure);
+            if (!failure.deadline) {
+              recordMemorySearchToolCooldown(agentId, failure);
+            }
             return {
               corpus: "memory",
               outcome: "unavailable",
@@ -519,7 +525,7 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
             throw resolveMemorySearchAbortError(callerSignal);
           }
           const failed = unavailableMemoryCorpus("memory", null, error);
-          if (requestedCorpus !== "wiki") {
+          if (requestedCorpus !== "wiki" && !failed.deadline) {
             recordMemorySearchToolCooldown(agentId, failed);
           }
           return jsonResult(

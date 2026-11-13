@@ -9,6 +9,7 @@ import {
 import {
   generateOAuthState,
   startProviderOAuthLoopbackCallbackServer,
+  type OAuthCallbackResult as OpenRouterOAuthCallbackResult,
 } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   readProviderJsonResponse,
@@ -33,11 +34,6 @@ const OPENROUTER_OAUTH_TIMEOUT_MS = 5 * 60 * 1000;
 const OPENROUTER_OAUTH_FETCH_TIMEOUT_MS = 30 * 1000;
 const OPENROUTER_OAUTH_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 const OPENROUTER_OAUTH_PROFILE_ID = "openrouter:default";
-
-type OpenRouterOAuthCallbackResult = {
-  code: string;
-  state: string;
-};
 
 type OpenRouterOAuthCallbackServer = Awaited<
   ReturnType<typeof startProviderOAuthLoopbackCallbackServer>
@@ -106,20 +102,6 @@ function parseOpenRouterKeyResponse(value: unknown): OpenRouterOAuthKeyResult {
   };
 }
 
-function buildOpenRouterOAuthAuthorizeUrl(params: {
-  codeChallenge: string;
-  redirectUrl: string;
-  state: string;
-}): string {
-  const callbackUrl = new URL(params.redirectUrl);
-  callbackUrl.searchParams.set("state", params.state);
-  const url = new URL(OPENROUTER_OAUTH_AUTHORIZE_URL);
-  url.searchParams.set("callback_url", callbackUrl.toString());
-  url.searchParams.set("code_challenge", params.codeChallenge);
-  url.searchParams.set("code_challenge_method", OPENROUTER_OAUTH_CODE_CHALLENGE_METHOD);
-  return url.toString();
-}
-
 function requireOpenRouterOAuthState(state: string | undefined, expectedState: string): string {
   if (!state) {
     throw new Error("Missing OpenRouter OAuth state. Paste the full redirect URL.");
@@ -174,48 +156,6 @@ function parseOpenRouterOAuthCallbackInput(
   }
 }
 
-async function exchangeOpenRouterOAuthCode(params: {
-  code: string;
-  codeVerifier: string;
-  signal?: AbortSignal;
-  assertCurrent?: () => void;
-}): Promise<OpenRouterOAuthKeyResult> {
-  const { response, release } = await fetchWithSsrFGuard({
-    url: OPENROUTER_OAUTH_TOKEN_URL,
-    init: {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify({
-        code: params.code,
-        code_verifier: params.codeVerifier,
-        code_challenge_method: OPENROUTER_OAUTH_CODE_CHALLENGE_METHOD,
-      }),
-      signal: params.signal
-        ? AbortSignal.any([params.signal, AbortSignal.timeout(OPENROUTER_OAUTH_FETCH_TIMEOUT_MS)])
-        : AbortSignal.timeout(OPENROUTER_OAUTH_FETCH_TIMEOUT_MS),
-    },
-    beforeRequest: params.assertCurrent,
-    // The endpoint is fixed; preserve operator-configured proxy routing.
-    mode: "trusted_env_proxy",
-    auditContext: "openrouter.oauth",
-  });
-  try {
-    const body = await readResponseBody(response);
-    if (!response.ok) {
-      const message = extractOpenRouterError(body);
-      throw new Error(
-        `OpenRouter OAuth key exchange failed (${response.status})${message ? `: ${message}` : ""}`,
-      );
-    }
-    return parseOpenRouterKeyResponse(body);
-  } finally {
-    await release();
-  }
-}
-
 async function promptForOpenRouterRedirect(
   ctx: ProviderAuthContext,
   expectedState: string,
@@ -235,130 +175,155 @@ async function promptForOpenRouterRedirect(
   return parseOpenRouterOAuthCallbackInput(input, expectedState).code;
 }
 
-async function resolveOpenRouterOAuthCode(
-  ctx: ProviderAuthContext,
-  params: {
-    buildAuthorizationUrl: (redirectUrl: string) => string;
-    state: string;
-    onProgress: (message: string) => void;
-  },
-): Promise<string> {
-  if (ctx.oauth.authorize) {
-    const result = await ctx.oauth.authorize({
-      state: params.state,
-      timeoutMs: OPENROUTER_OAUTH_TIMEOUT_MS,
-      buildAuthorizationUrl: params.buildAuthorizationUrl,
-    });
-    return result.code;
-  }
-
-  const authorizeUrl = params.buildAuthorizationUrl(OPENROUTER_OAUTH_REDIRECT_URI);
-  await ctx.prompter.note(
-    ctx.isRemote
-      ? [
-          "Open this URL in your LOCAL browser.",
-          "After signing in, paste the redirect URL back here.",
-          "",
-          `Redirect URI: ${OPENROUTER_OAUTH_REDIRECT_URI}`,
-        ].join("\n")
-      : [
-          "Browser will open for OpenRouter authentication.",
-          "If the callback does not auto-complete, paste the redirect URL.",
-          "",
-          `Redirect URI: ${OPENROUTER_OAUTH_REDIRECT_URI}`,
-        ].join("\n"),
-    "OpenRouter OAuth",
-  );
-
-  if (ctx.isRemote) {
-    ctx.runtime.log(`\nOpen this URL in your LOCAL browser:\n\n${authorizeUrl}\n`);
-    await ctx.openUrl(authorizeUrl);
-    await ctx.prompter.note(
-      `Open this URL in your LOCAL browser:\n\n${authorizeUrl}`,
-      "OpenRouter OAuth",
-    );
-    return await promptForOpenRouterRedirect(ctx, params.state);
-  }
-
-  let callback: OpenRouterOAuthCallbackServer | undefined;
-  let result: OpenRouterOAuthLoopbackResult;
-  try {
-    try {
-      callback = await startProviderOAuthLoopbackCallbackServer({
-        redirectUrl: OPENROUTER_OAUTH_REDIRECT_URI,
-        expectedState: params.state,
-        timeoutMs: OPENROUTER_OAUTH_TIMEOUT_MS,
-        ...(ctx.signal ? { signal: ctx.signal } : {}),
-      });
-      params.onProgress(
-        `Waiting for OpenRouter OAuth callback on ${OPENROUTER_OAUTH_REDIRECT_URI}...`,
-      );
-    } catch (error) {
-      if (ctx.signal?.aborted) {
-        throw error;
-      }
-      params.onProgress("OAuth callback not detected; waiting for redirect URL...");
-    }
-
-    try {
-      await ctx.openUrl(authorizeUrl);
-      ctx.runtime.log(`Open: ${authorizeUrl}`);
-    } catch {
-      ctx.runtime.log(`Open manually: ${authorizeUrl}`);
-    }
-
-    if (!callback) {
-      return await promptForOpenRouterRedirect(ctx, params.state);
-    }
-
-    try {
-      try {
-        result = await callback.waitForCallback();
-      } finally {
-        const completedCallback = callback;
-        callback = undefined;
-        await completedCallback.close();
-      }
-    } catch (error) {
-      if (ctx.signal?.aborted) {
-        throw error;
-      }
-      params.onProgress("OAuth callback not detected; waiting for redirect URL...");
-      return await promptForOpenRouterRedirect(ctx, params.state);
-    }
-  } finally {
-    await callback?.close();
-  }
-
-  if (result.type === "oauth_error") {
-    const detail = result.errorDescription
-      ? `${result.error}: ${result.errorDescription}`
-      : result.error;
-    throw new Error(`OpenRouter OAuth error: ${detail}`);
-  }
-  return result.code;
-}
-
 async function loginOpenRouterOAuth(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {
   const progress = ctx.prompter.progress("Starting OpenRouter OAuth...");
   try {
     const pkce = generatePkceVerifierChallenge();
     const state = generateOAuthState();
-    const code = await resolveOpenRouterOAuthCode(ctx, {
-      buildAuthorizationUrl: (redirectUrl) =>
-        buildOpenRouterOAuthAuthorizeUrl({ codeChallenge: pkce.challenge, redirectUrl, state }),
-      state,
-      onProgress: (message) => progress.update(message),
-    });
+    const buildAuthorizationUrl = (redirectUrl: string) => {
+      const callbackUrl = new URL(redirectUrl);
+      callbackUrl.searchParams.set("state", state);
+      const url = new URL(OPENROUTER_OAUTH_AUTHORIZE_URL);
+      url.searchParams.set("callback_url", callbackUrl.toString());
+      url.searchParams.set("code_challenge", pkce.challenge);
+      url.searchParams.set("code_challenge_method", OPENROUTER_OAUTH_CODE_CHALLENGE_METHOD);
+      return url.toString();
+    };
+    const code = await (async () => {
+      if (ctx.oauth.authorize) {
+        const result = await ctx.oauth.authorize({
+          state,
+          timeoutMs: OPENROUTER_OAUTH_TIMEOUT_MS,
+          buildAuthorizationUrl,
+        });
+        return result.code;
+      }
+
+      const authorizeUrl = buildAuthorizationUrl(OPENROUTER_OAUTH_REDIRECT_URI);
+      await ctx.prompter.note(
+        ctx.isRemote
+          ? [
+              "Open this URL in your LOCAL browser.",
+              "After signing in, paste the redirect URL back here.",
+              "",
+              `Redirect URI: ${OPENROUTER_OAUTH_REDIRECT_URI}`,
+            ].join("\n")
+          : [
+              "Browser will open for OpenRouter authentication.",
+              "If the callback does not auto-complete, paste the redirect URL.",
+              "",
+              `Redirect URI: ${OPENROUTER_OAUTH_REDIRECT_URI}`,
+            ].join("\n"),
+        "OpenRouter OAuth",
+      );
+
+      if (ctx.isRemote) {
+        ctx.runtime.log(`\nOpen this URL in your LOCAL browser:\n\n${authorizeUrl}\n`);
+        await ctx.openUrl(authorizeUrl);
+        await ctx.prompter.note(
+          `Open this URL in your LOCAL browser:\n\n${authorizeUrl}`,
+          "OpenRouter OAuth",
+        );
+        return await promptForOpenRouterRedirect(ctx, state);
+      }
+
+      let callback: OpenRouterOAuthCallbackServer | undefined;
+      let result: OpenRouterOAuthLoopbackResult;
+      try {
+        try {
+          callback = await startProviderOAuthLoopbackCallbackServer({
+            redirectUrl: OPENROUTER_OAUTH_REDIRECT_URI,
+            expectedState: state,
+            timeoutMs: OPENROUTER_OAUTH_TIMEOUT_MS,
+            ...(ctx.signal ? { signal: ctx.signal } : {}),
+          });
+          progress.update(
+            `Waiting for OpenRouter OAuth callback on ${OPENROUTER_OAUTH_REDIRECT_URI}...`,
+          );
+        } catch (error) {
+          if (ctx.signal?.aborted) {
+            throw error;
+          }
+          progress.update("OAuth callback not detected; waiting for redirect URL...");
+        }
+
+        try {
+          await ctx.openUrl(authorizeUrl);
+          ctx.runtime.log(`Open: ${authorizeUrl}`);
+        } catch {
+          ctx.runtime.log(`Open manually: ${authorizeUrl}`);
+        }
+
+        if (!callback) {
+          return await promptForOpenRouterRedirect(ctx, state);
+        }
+
+        try {
+          try {
+            result = await callback.waitForCallback();
+          } finally {
+            const completedCallback = callback;
+            callback = undefined;
+            await completedCallback.close();
+          }
+        } catch (error) {
+          if (ctx.signal?.aborted) {
+            throw error;
+          }
+          progress.update("OAuth callback not detected; waiting for redirect URL...");
+          return await promptForOpenRouterRedirect(ctx, state);
+        }
+      } finally {
+        await callback?.close();
+      }
+
+      if (result.type === "oauth_error") {
+        const detail = result.errorDescription
+          ? `${result.error}: ${result.errorDescription}`
+          : result.error;
+        throw new Error(`OpenRouter OAuth error: ${detail}`);
+      }
+      return result.code;
+    })();
     progress.update("Exchanging OpenRouter OAuth code...");
     ctx.signal?.throwIfAborted();
     ctx.assertCurrent?.();
-    const token = await exchangeOpenRouterOAuthCode({
-      code,
-      codeVerifier: pkce.verifier,
-      ...(ctx.signal ? { signal: ctx.signal } : {}),
-      assertCurrent: () => ctx.assertCurrent?.(),
+    const signal = ctx.signal;
+    const { response, release } = await fetchWithSsrFGuard({
+      url: OPENROUTER_OAUTH_TOKEN_URL,
+      init: {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({
+          code,
+          code_verifier: pkce.verifier,
+          code_challenge_method: OPENROUTER_OAUTH_CODE_CHALLENGE_METHOD,
+        }),
+        signal: signal
+          ? AbortSignal.any([signal, AbortSignal.timeout(OPENROUTER_OAUTH_FETCH_TIMEOUT_MS)])
+          : AbortSignal.timeout(OPENROUTER_OAUTH_FETCH_TIMEOUT_MS),
+      },
+      beforeRequest: () => ctx.assertCurrent?.(),
+      // The endpoint is fixed; preserve operator-configured proxy routing.
+      mode: "trusted_env_proxy",
+      auditContext: "openrouter.oauth",
     });
+    let token: OpenRouterOAuthKeyResult;
+    try {
+      const body = await readResponseBody(response);
+      if (!response.ok) {
+        const message = extractOpenRouterError(body);
+        throw new Error(
+          `OpenRouter OAuth key exchange failed (${response.status})${message ? `: ${message}` : ""}`,
+        );
+      }
+      token = parseOpenRouterKeyResponse(body);
+    } finally {
+      await release();
+    }
     progress.stop("OpenRouter credential received");
 
     const metadata = {

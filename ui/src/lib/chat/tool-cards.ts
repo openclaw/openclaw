@@ -25,12 +25,54 @@ import {
 } from "../../../../src/chat/tool-content.js";
 import { readBrowserTabTarget } from "../../components/browser/browser-target.ts";
 import type { ToolCard, ToolCardOutcome, ToolOutputMetadata } from "./chat-types.ts";
+import { getMessageDerivations } from "./message-derivations.ts";
 import { isToolResultMessage } from "./message-normalizer.ts";
 import { readLiveDiffStat } from "./tool-call-diff.ts";
 import { readPreparedActivity } from "./tool-call-grouping.ts";
+import { readLiveToolOutput } from "./tool-live-output.ts";
 
 export type ToolPreview = NonNullable<ToolCard["preview"]>;
 export type CanvasToolPreview = Extract<ToolPreview, { kind: "canvas" }>;
+export type ToolCardOutput = Pick<ToolCard, "outputText" | "liveOutput">;
+
+function readToolStreamResult(message: Record<string, unknown>) {
+  return readRecord(
+    Array.isArray(message.content)
+      ? message.content.find((item) => isToolResultContentType(readRecord(item)?.type))
+      : undefined,
+  );
+}
+
+/** Only running invocations replace output; reconciliation owns terminal results. */
+export function readLiveToolStreamOutput(
+  message: Record<string, unknown>,
+): ToolCardOutput | undefined {
+  if (
+    message["__openclawToolStreamLive"] !== true ||
+    message["__openclawToolStreamResultReceived"] === true ||
+    message["__openclawToolStreamItemEnded"] === true
+  ) {
+    return undefined;
+  }
+  const result = readToolStreamResult(message);
+  return {
+    outputText: result ? extractToolText(result) : undefined,
+    liveOutput: readLiveToolOutput(message["__openclawToolStreamLiveOutput"]),
+  };
+}
+
+/** Canonical stream messages have one invocation and at most one captured result. */
+export function readToolStreamCanvasPreview(
+  message: Record<string, unknown> | undefined,
+): CanvasToolPreview | undefined {
+  if (!message) {
+    return undefined;
+  }
+  const result = readToolStreamResult(message);
+  return result
+    ? extractToolCanvasPreview(result.details ?? message.details, extractToolText(result))
+    : undefined;
+}
 
 function resolveTranscriptMessageId(message: Record<string, unknown>): string | undefined {
   return (
@@ -136,6 +178,11 @@ export function resolveToolCardOutcome(
   if (card.toolOutput?.outcome === "unknown") {
     return isToolCardError(card) ? "failed" : "unknown";
   }
+  if (card.activity?.unpairedCall) {
+    return runActive === true && card.live === true && card.completed !== true
+      ? "running"
+      : "unrecorded";
+  }
   if (card.activity) {
     const { status, phase } = card.activity;
     if (status === "failed" || status === "blocked") {
@@ -159,7 +206,18 @@ export function resolveToolCardOutcome(
   if (card.completed === true || (card.live !== true && card.outputText !== undefined)) {
     return "succeeded";
   }
-  return "unknown";
+  return "unrecorded";
+}
+
+/** Preserve view incompleteness when adapting card outcomes to shared activity. */
+export function projectToolCardActivityOutcome(
+  outcome: ToolCardOutcome,
+): Pick<NonNullable<ToolCard["activity"]>, "status" | "unpairedCall"> {
+  return outcome === "unrecorded"
+    ? { unpairedCall: true }
+    : {
+        status: outcome === "succeeded" ? "completed" : outcome === "unknown" ? undefined : outcome,
+      };
 }
 
 export function extractToolPreview(outputText: string | undefined): CanvasToolPreview | undefined {
@@ -169,18 +227,24 @@ export function extractToolPreview(outputText: string | undefined): CanvasToolPr
     : undefined;
 }
 
+function extractToolCanvasPreview(
+  details: unknown,
+  text: string | undefined,
+): CanvasToolPreview | undefined {
+  const preview = extractCanvasFromDetails(details);
+  return preview?.surface === "assistant_message"
+    ? { ...preview, surface: "assistant_message" }
+    : extractToolPreview(text);
+}
+
 function extractToolPresentation(
   details: unknown,
   text: string | undefined,
   browserToolName: string,
 ): Pick<ToolCard, "preview" | "browserTab"> {
-  const preview = extractCanvasFromDetails(details);
-  const canvas =
-    preview?.surface === "assistant_message"
-      ? { ...preview, surface: "assistant_message" }
-      : extractToolPreview(text);
+  const canvas = extractToolCanvasPreview(details, text);
   if (canvas) {
-    return { preview: { ...canvas, surface: "assistant_message" } };
+    return { preview: canvas };
   }
   const tab = asNullableRecord(asNullableRecord(details)?.browserTab);
   const target = readBrowserTabTarget(tab);
@@ -231,11 +295,7 @@ function serializeToolInput(args: unknown): string | undefined {
   if (typeof args === "string") {
     return args;
   }
-  try {
-    return JSON.stringify(args, null, 2);
-  } catch {
-    return typeof args === "bigint" ? String(args) : Object.prototype.toString.call(args);
-  }
+  return JSON.stringify(args, null, 2);
 }
 
 /** Rendering only: extraction and result retrieval retain the original card. */
@@ -299,16 +359,7 @@ export function resolveCollapsedToolArgumentPreview(args: unknown): string | und
     if (typeof value !== "string") {
       continue;
     }
-    const firstContent = value.search(/\S/);
-    let firstLine: string | undefined;
-    if (firstContent >= 0) {
-      const start =
-        Math.max(value.lastIndexOf("\r", firstContent), value.lastIndexOf("\n", firstContent)) + 1;
-      const lineEnd = /[\r\n]/g;
-      lineEnd.lastIndex = firstContent;
-      firstLine = value.slice(start, lineEnd.exec(value)?.index ?? value.length);
-    }
-    const preview = formatCollapsedToolPreviewText(firstLine);
+    const preview = formatCollapsedToolPreviewText(value.trimStart().split(/[\r\n]/, 1)[0]);
     if (preview) {
       return preview;
     }
@@ -334,6 +385,8 @@ export function isToolCallContentBlock(item: {
 
 function extractToolCards(message: unknown): ToolCard[] {
   const m = message as Record<string, unknown>;
+  const catalogMetadata = asNullableRecord(m["__openclaw"]);
+  const catalogSource = catalogMetadata?.catalogSource === true;
   const role = typeof m.role === "string" ? m.role.toLowerCase() : "";
   const isStandaloneToolMessage =
     isToolResultMessage(message) ||
@@ -344,6 +397,9 @@ function extractToolCards(message: unknown): ToolCard[] {
   const content = normalizeContent(m.content);
   const messageIsError = readToolErrorFlag(m);
   const isLiveToolStream = m["__openclawToolStreamLive"] === true;
+  const liveOutput = isLiveToolStream
+    ? readLiveToolOutput(m["__openclawToolStreamLiveOutput"])
+    : undefined;
   const liveDiffStat = readLiveDiffStat(m["__openclawToolStreamDiffStat"]);
   const cards: ToolCard[] = [];
   const fallbackMatchedCards = new WeakSet<ToolCard>();
@@ -357,17 +413,21 @@ function extractToolCards(message: unknown): ToolCard[] {
     const text = extractToolText(item);
     const details = item.details ?? m.details;
     const metadata = asNullableRecord(item["__openclaw"]);
-    const isError = readToolErrorFlag(item) ?? messageIsError;
+    // Recorded catalog prose cannot establish an execution outcome.
+    const isError =
+      readToolErrorFlag(item) ?? messageIsError ?? (catalogSource ? false : undefined);
     const exitCode = readToolExitCode(
       item,
       details,
-      text ? safeParseJsonRecord(text.trim()) : undefined,
+      !catalogSource && text ? safeParseJsonRecord(text.trim()) : undefined,
       standalone ? undefined : m,
     );
     return {
       outputText: text,
-      resultMessageId:
-        !standalone && metadata && Object.hasOwn(metadata, "id")
+      ...(catalogSource && metadata?.catalogTruncated === true ? { catalogTruncated: true } : {}),
+      resultMessageId: catalogSource
+        ? undefined
+        : !standalone && metadata && Object.hasOwn(metadata, "id")
           ? readNonBlankString(metadata.id)
           : transcriptMessageId,
       outputTruncated:
@@ -379,7 +439,7 @@ function extractToolCards(message: unknown): ToolCard[] {
       ...(details !== undefined ? { details } : {}),
       ...(isError !== undefined ? { isError } : {}),
       ...(exitCode !== undefined ? { exitCode } : {}),
-      ...extractToolPresentation(details, text, browserToolName),
+      ...(catalogSource ? {} : extractToolPresentation(details, text, browserToolName)),
     };
   };
 
@@ -418,6 +478,7 @@ function extractToolCards(message: unknown): ToolCard[] {
             }
           : {}),
         ...(liveDiffStat ? { liveDiffStat } : {}),
+        ...(liveOutput ? { liveOutput } : {}),
       });
       continue;
     }
@@ -489,6 +550,9 @@ function extractToolCards(message: unknown): ToolCard[] {
   );
   let revision: number | undefined;
   for (const [index, card] of cards.entries()) {
+    if (catalogSource && catalogMetadata?.catalogTruncated === true) {
+      card.catalogTruncated = true;
+    }
     const activity = card.callId ? activityByCall.get(card.callId) : undefined;
     if (activity) {
       card.activity = activity;
@@ -502,18 +566,17 @@ function extractToolCards(message: unknown): ToolCard[] {
   return cards;
 }
 
-const toolCardsByMessage = new WeakMap<object, ToolCard[]>();
-
 export function extractToolCardsCached(message: unknown): ToolCard[] {
   if (!message || typeof message !== "object") {
     return extractToolCards(message);
   }
-  const cached = toolCardsByMessage.get(message);
+  const facts = getMessageDerivations(message);
+  const cached = facts.toolCards;
   if (cached) {
     return cached;
   }
   const cards = extractToolCards(message);
-  toolCardsByMessage.set(message, cards);
+  facts.toolCards = cards;
   return cards;
 }
 

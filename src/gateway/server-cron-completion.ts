@@ -2,13 +2,15 @@ import type { NormalizeReplySkipReason } from "../auto-reply/reply/normalize-rep
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveControlUiAutomationRunUrl } from "../config/control-ui-link-base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { CronResultConversation } from "../cron/conversation-result.js";
-import {
-  bindCronResultConversation,
-  commitCronConversationResult,
-  resolveCronResultConversation,
-} from "../cron/conversation-result.js";
+import { tryResolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
+import { commitCronConversationResult } from "../cron/conversation-result.js";
 import type { CronCompletionDeliveryFence } from "../cron/delivery-attempt-fence.js";
+import {
+  cronDeliveryUsesDefaultDestination,
+  resolveCronDeliveryDefaultsScope,
+  resolveCronDeliveryMode,
+} from "../cron/delivery-defaults.js";
+import { hasExplicitCronDeliveryTarget } from "../cron/delivery-target-validation.js";
 import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
 import { normalizeDirectCronDeliveryPayloads } from "../cron/isolated-agent/delivery-payload-normalization.js";
 import {
@@ -29,6 +31,7 @@ import type {
 } from "../cron/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { getChildLogger } from "../logging.js";
+import { toAgentStoreSessionKey } from "../routing/session-key.js";
 
 export function pickDefined<T extends Record<string, unknown>>(
   obj: T,
@@ -57,7 +60,18 @@ export async function finalizeCronCompletionAnnouncement(params: {
   label: string;
   traceResolvedFailure?: boolean;
 }) {
-  const plan = resolveCronDeliveryPlan(params.job);
+  let agent: { agentId: string; cfg: OpenClawConfig } | undefined;
+  const resolveAgent = () =>
+    (agent ??= params.resolveCronAgent(tryResolveCronJobEffectiveAgentId(params.job)));
+  // Only a route-less announce job needs the owner before planning; others keep
+  // resolving their agent at send time.
+  const owner = cronDeliveryUsesDefaultDestination(params.job, resolveCronDeliveryMode(params.job))
+    ? resolveAgent()
+    : undefined;
+  const plan = resolveCronDeliveryPlan(
+    params.job,
+    owner && resolveCronDeliveryDefaultsScope(owner.cfg.cron, params.job, owner.agentId),
+  );
   const delivery: CronDeliveryTrace = {
     intended: pickDefined(
       {
@@ -96,7 +110,7 @@ export async function finalizeCronCompletionAnnouncement(params: {
     return finish(false);
   }
 
-  const { agentId, cfg } = params.resolveCronAgent(params.job.agentId);
+  const { agentId, cfg } = resolveAgent();
   const inspectUrl = resolveControlUiAutomationRunUrl(cfg, {
     jobId: params.job.id,
     runId:
@@ -116,27 +130,7 @@ export async function finalizeCronCompletionAnnouncement(params: {
     if (!resolved.ok && requiresExternalCronDelivery(plan, resolved)) {
       throw resolved.error;
     }
-    let conversationResult: CronResultConversation = {};
-    let conversationError: string | undefined;
-    const conversationParams = {
-      config: cfg,
-      agentId,
-      delivery: resolved,
-      source: params.job.sourceConversation,
-      sourceSessionKey: resolveCronDeliverySessionKey(params.job),
-      deliveryAttemptFence: params.deliveryAttemptFence,
-    };
-    try {
-      conversationResult = await resolveCronResultConversation(conversationParams);
-    } catch (error) {
-      if (!resolved.ok) {
-        throw error;
-      }
-      conversationError = formatErrorMessage(error);
-    }
-    let { conversation } = conversationResult;
-    let effectivePayloads = normalized.payload;
-    diagnostics = mergeCronRunDiagnostics(diagnostics, conversationResult.diagnostics);
+    const conversation = resolved.ok ? undefined : params.job.sourceConversation;
     if ((conversation || resolved.ok) && params.runStartedAtMs === undefined) {
       throw new Error("cron result is missing its occurrence start time");
     }
@@ -149,7 +143,25 @@ export async function finalizeCronCompletionAnnouncement(params: {
         cfg,
         agentId,
         jobId: params.job.id,
-        target: { ...resolved, sessionKey: resolved.sessionRoute?.sessionKey },
+        target: resolved,
+        transcriptRoute: resolved.sessionRoute,
+        transcriptExpectedGeneration:
+          params.job.sourceConversation &&
+          !hasExplicitCronDeliveryTarget(plan) &&
+          resolved.sessionRoute?.sessionKey ===
+            toAgentStoreSessionKey({
+              agentId,
+              requestKey: params.job.sourceConversation.sessionKey,
+              mainKey: cfg.session?.mainKey,
+            })
+            ? params.job.sourceConversation
+            : undefined,
+        onTranscriptDiagnostic: (message) => {
+          diagnostics = mergeCronRunDiagnostics(
+            diagnostics,
+            createCronRunDiagnosticsFromError("delivery", message, { severity: "warn" }),
+          );
+        },
         payload: normalized.payload,
         inspectionUrl: inspectUrl,
         abortSignal,
@@ -162,6 +174,7 @@ export async function finalizeCronCompletionAnnouncement(params: {
                 deliveryAttemptFence: params.deliveryAttemptFence,
               },
             }),
+        onDeliveryReceipt: (receipt) => (delivery.receipts ??= []).push(receipt),
         onDeliveryAttempt: (reachedRecipient) => {
           mayHaveReachedRecipient ||= reachedRecipient;
         },
@@ -189,26 +202,16 @@ export async function finalizeCronCompletionAnnouncement(params: {
       }
       deliveryState.status = "delivered";
       deliveryState.delivered = true;
-      effectivePayloads = result.payloads;
-      try {
-        const bound = await bindCronResultConversation(conversationParams);
-        conversation = bound.conversation;
-        conversationError = undefined;
-      } catch (error) {
-        conversationError = formatErrorMessage(error);
-      }
+      return finish(true);
     }
-    if (conversationError) {
-      throw new Error(conversationError);
-    }
-    if (conversation && params.runStartedAtMs !== undefined && effectivePayloads.length > 0) {
+    if (conversation && params.runStartedAtMs !== undefined && normalized.payload.length > 0) {
       const committed = await commitCronConversationResult({
         config: cfg,
         agentId,
         jobId: params.job.id,
         runStartedAt: params.runStartedAtMs,
         conversation,
-        payloads: effectivePayloads,
+        payloads: normalized.payload,
         signal: abortSignal,
         deliveryAttemptFence: params.deliveryAttemptFence,
       });
@@ -222,17 +225,6 @@ export async function finalizeCronCompletionAnnouncement(params: {
     return finish(true);
   } catch (err) {
     const deliveryError = formatErrorMessage(err);
-    if (deliveryState.delivered) {
-      diagnostics = mergeCronRunDiagnostics(
-        diagnostics,
-        createCronRunDiagnosticsFromError(
-          "delivery",
-          `result was delivered but was not added to the conversation: ${deliveryError}`,
-          { severity: "warn" },
-        ),
-      );
-      return finish(true);
-    }
     if (mayHaveReachedRecipient) {
       deliveryState.status = "unknown";
       deliveryState.delivered = undefined;

@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import {
   addSession,
+  appendOutput,
   deleteSession,
   markExited,
   recordNotifyOnExitRemoval,
@@ -23,11 +24,13 @@ import {
   createDispatcher,
   hookMocks,
   mocks,
+  mockSessionStorePath,
   resetPluginTtsAndThreadMocks,
   sessionStoreMocks,
   setDiscordTestRegistry,
 } from "./dispatch-from-config.shared.test-harness.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
+import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
@@ -45,7 +48,7 @@ beforeEach(() => {
   mocks.routeReply.mockReset().mockResolvedValue({ ok: true, delivered: true });
   sessionStoreMocks.currentEntry = undefined;
   sessionStoreMocks.loadSessionStoreEntry.mockImplementation(() => undefined);
-  sessionStoreMocks.resolveSessionStorePathCore.mockReturnValue("/tmp/mock-sessions.json");
+  sessionStoreMocks.resolveSessionStorePathCore.mockReturnValue(mockSessionStorePath);
 });
 
 afterEach(() => {
@@ -62,20 +65,15 @@ function fixture(alias = "!poll") {
   const process = createProcessSessionFixture({ id, backgrounded: true });
   process.scopeKey = "chat:bash";
   process.sessionKey = sessionKey;
-  process.aggregated = "Completed synthetic work";
+  appendOutput(process, "stdout", "Completed synthetic work");
   addSession(process);
   markExited(process, 0, null, "completed");
   const eventOptions = { sessionKey, contextKey: `exec:${id}` };
   const unrelated = enqueueSystemEventEntry("Unrelated pending event", eventOptions);
-  recordNotifyOnExitRemoval(
-    process,
-    expectDefined(
-      enqueueSystemEventWithReceipt("Completed synthetic work", eventOptions, {
-        allowDuplicate: true,
-      }),
-      "completion receipt",
-    ),
-  );
+  const receipt = enqueueSystemEventWithReceipt("Completed synthetic work", eventOptions, {
+    allowDuplicate: true,
+  });
+  recordNotifyOnExitRemoval(process, expectDefined(receipt, "completion receipt"));
   const cfg: OpenClawConfig = {
     agents: { entries: { main: {} } },
     commands: { bash: true, text: true },
@@ -83,12 +81,9 @@ function fixture(alias = "!poll") {
   const command = `${alias} ${id}`;
   const ctx = buildTestCtx({
     Body: command,
-    BodyForAgent: command,
-    BodyForCommands: command,
     RawBody: command,
     CommandBody: command,
     CommandAuthorized: true,
-    CommandSource: "text",
     SenderId: "owner",
     From: "user:owner",
     To: "channel:poll",
@@ -96,7 +91,6 @@ function fixture(alias = "!poll") {
     MessageSid: id,
     Provider: "discord",
     Surface: "discord",
-    ChatType: "direct",
   });
   const commandParams = buildCommandTestParams(command, cfg, ctx);
   commandParams.ctx = ctx;
@@ -114,6 +108,13 @@ function fixture(alias = "!poll") {
     return markCommandReplyForDelivery(result.reply);
   });
   return { cfg, ctx, sessionKey, unrelated, replyResolver };
+}
+
+function dispatch(f: ReturnType<typeof fixture>, dispatcher: ReplyDispatcher) {
+  return withReplyDispatcher({
+    dispatcher,
+    run: () => dispatchReplyFromConfig({ ...f, dispatcher }),
+  });
 }
 
 it.each(["cancelled", "pre-send", "transport", "delivered"])(
@@ -135,10 +136,7 @@ it.each(["cancelled", "pre-send", "transport", "delivered"])(
       }
     });
     const dispatcher = createReplyDispatcher({ beforeDeliver, deliver });
-    await withReplyDispatcher({
-      dispatcher,
-      run: () => dispatchReplyFromConfig({ ...f, dispatcher }),
-    });
+    await dispatch(f, dispatcher);
     expect(f.replyResolver).toHaveBeenCalledOnce();
     expect(beforeDeliver).toHaveBeenCalledWith(
       expect.objectContaining({ text: expect.stringContaining("Completed synthetic work") }),
@@ -148,11 +146,7 @@ it.each(["cancelled", "pre-send", "transport", "delivered"])(
     expect(peekSystemEventEntries(f.sessionKey)).toContainEqual(f.unrelated);
     for (const attempt of ["retry", "repeat"]) {
       f.ctx.MessageSid = `${f.ctx.MessageSid}-${attempt}`;
-      const retryDispatcher = createReplyDispatcher({ deliver: async () => undefined });
-      await withReplyDispatcher({
-        dispatcher: retryDispatcher,
-        run: () => dispatchReplyFromConfig({ ...f, dispatcher: retryDispatcher }),
-      });
+      await dispatch(f, createReplyDispatcher({ deliver: async () => undefined }));
       expect(peekSystemEventEntries(f.sessionKey)).toEqual([f.unrelated]);
     }
   },
@@ -170,10 +164,7 @@ it.each([true, false])(
         return { finalization: finalized.promise };
       },
     });
-    const dispatched = withReplyDispatcher({
-      dispatcher,
-      run: () => dispatchReplyFromConfig({ ...f, dispatcher }),
-    });
+    const dispatched = dispatch(f, dispatcher);
     await started.promise;
     expect(peekSystemEventEntries(f.sessionKey)).toHaveLength(2);
     if (delivered) {
@@ -195,10 +186,7 @@ it.each([true, undefined] as const)(
     // A custom adapter can report aggregate delivery without tracking the caller's exact payload.
     dispatcher.sendFinalReply = vi.fn((payload) => sendFinalReply({ ...payload }));
     dispatcher.supportsSettledReceipt = supportsSettledReceipt;
-    await withReplyDispatcher({
-      dispatcher,
-      run: () => dispatchReplyFromConfig({ ...f, dispatcher }),
-    });
+    await dispatch(f, dispatcher);
     expect(await dispatcher.waitForIdle()).toMatchObject({ anyVisibleDelivered: true });
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
       expect.objectContaining({ text: expect.stringContaining("Completed synthetic work") }),
@@ -219,11 +207,7 @@ it.each([true, false])(
     });
     mocks.routeReply.mockResolvedValue({ ok: true, delivered, messageId: "poll-reply" });
     const deliver = vi.fn();
-    const dispatcher = createReplyDispatcher({ deliver });
-    await withReplyDispatcher({
-      dispatcher,
-      run: () => dispatchReplyFromConfig({ ...f, dispatcher }),
-    });
+    await dispatch(f, createReplyDispatcher({ deliver }));
     expect(f.replyResolver).toHaveBeenCalledOnce();
     expect(mocks.routeReply).toHaveBeenCalled();
     expect(deliver).not.toHaveBeenCalled();

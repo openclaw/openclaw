@@ -75,7 +75,7 @@ function terminateRetainedBrokerChildGroup(identity: BrokerChildGroupIdentity) {
     signal("SIGKILL");
   };
   const settled = (async () => {
-    const graceEndsAt = Date.now() + GRACEFUL_CANCEL_TIMEOUT_MS;
+    const graceEndsAt = performance.now() + GRACEFUL_CANCEL_TIMEOUT_MS;
     const deadline = graceEndsAt + 2000;
     try {
       signal("SIGTERM");
@@ -83,10 +83,10 @@ function terminateRetainedBrokerChildGroup(identity: BrokerChildGroupIdentity) {
         if (retired || !isBrokerChildGroupAlive(identity)) {
           break;
         }
-        if (Date.now() >= graceEndsAt) {
+        if (performance.now() >= graceEndsAt) {
           force();
         }
-        if (Date.now() >= deadline) {
+        if (performance.now() >= deadline) {
           throw new SpawnBrokerError(
             `Spawn broker child cleanup could not be confirmed for pid=${identity.pid}`,
           );
@@ -105,7 +105,6 @@ function terminateRetainedBrokerChildGroup(identity: BrokerChildGroupIdentity) {
 export function terminateLostBrokerChild(
   pid: number,
   detached: boolean,
-  ownerExited?: Promise<void>,
   groupIdentity?: BrokerChildGroupIdentity,
 ) {
   if (detached && groupIdentity) {
@@ -115,24 +114,19 @@ export function terminateLostBrokerChild(
     return terminateRetainedBrokerChildGroup(groupIdentity);
   }
   const termination = killProcessTree(pid, { detached, graceMs: GRACEFUL_CANCEL_TIMEOUT_MS });
-  const graceEndsAt = Date.now() + GRACEFUL_CANCEL_TIMEOUT_MS;
+  const deadline = performance.now() + GRACEFUL_CANCEL_TIMEOUT_MS + 2000;
   const settled = (async () => {
-    let deadline = graceEndsAt + 2000;
-    if (ownerExited) {
-      // A stopped broker retains killed children as zombies until its own exit.
-      // Keep signaling on schedule, but budget observation after reaping can proceed.
-      await ownerExited;
-      deadline = Math.max(deadline, Date.now() + 2000);
-    }
-    // The attached-tree owner's captured descendants retain their entire TERM/KILL grace.
-    if (!detached && Date.now() < graceEndsAt) {
-      await delay(graceEndsAt - Date.now());
-    }
+    // An attached root can exit before its descendants; the tree owner's exited()
+    // keeps settlement joined to their TERM/KILL escalation.
     for (;;) {
-      if (isPidDefinitelyDead(pid) && (!detached || groupGone(pid))) {
+      if (
+        isPidDefinitelyDead(pid) &&
+        (!detached || groupGone(pid)) &&
+        (termination?.exited() ?? true)
+      ) {
         break;
       }
-      if (Date.now() >= deadline) {
+      if (performance.now() >= deadline) {
         throw new SpawnBrokerError(
           `Spawn broker child cleanup could not be confirmed for pid=${pid}`,
         );
@@ -148,7 +142,7 @@ export async function drainCurrentBrokerProcessGroup(): Promise<void> {
   if (process.platform === "win32") {
     return;
   }
-  const deadline = Date.now() + GRACEFUL_CANCEL_TIMEOUT_MS;
+  const deadline = performance.now() + GRACEFUL_CANCEL_TIMEOUT_MS;
   const signaled = new Map<string, NodeJS.Signals>();
   for (;;) {
     const members = [...readProcessGroupMembers(1000)];
@@ -164,7 +158,7 @@ export async function drainCurrentBrokerProcessGroup(): Promise<void> {
     if (!pending.length) {
       return;
     }
-    const signal = Date.now() < deadline ? "SIGTERM" : "SIGKILL";
+    const signal = performance.now() < deadline ? "SIGTERM" : "SIGKILL";
     const identities = new Map(
       pending.map((member) => [member.pid, getProcessInstanceStartTime(member.pid)]),
     );
@@ -242,10 +236,10 @@ export function terminateBrokerProcessGroup(pgid: number) {
     }
     signal("SIGTERM");
     forceTimer = setTimeout(force, GRACEFUL_CANCEL_TIMEOUT_MS);
-    const deadline = Date.now() + GRACEFUL_CANCEL_TIMEOUT_MS + 2000;
+    const deadline = performance.now() + GRACEFUL_CANCEL_TIMEOUT_MS + 2000;
     try {
       while (!groupGone(pgid)) {
-        if (Date.now() >= deadline) {
+        if (performance.now() >= deadline) {
           throw new SpawnBrokerError(
             `Spawn broker group cleanup could not be confirmed for pgid=${pgid}`,
             { cause: signalError },

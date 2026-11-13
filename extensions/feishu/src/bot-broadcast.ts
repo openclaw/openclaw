@@ -1,7 +1,10 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import type { ClawdbotConfig } from "../runtime-api.js";
+import { claimUnprocessedFeishuMessage } from "./dedup.js";
 import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
+
+type QueueDropReason = Parameters<NonNullable<FeishuIngressLifecycle["onDropped"]>>[0];
 
 export function createFeishuBroadcastIngressSettlement(params: {
   lifecycle?: FeishuIngressLifecycle;
@@ -22,14 +25,15 @@ export function createFeishuBroadcastIngressSettlement(params: {
   type LaneState = {
     replayClaim?: ChannelReplayClaimHandle;
     adopting?: boolean;
-    status: "pending" | "deferred" | "completed" | "failed";
+    status: "pending" | "deferred" | "completed" | "dropped" | "failed";
   };
 
   const lanes = new Set<LaneState>();
   const failures: unknown[] = [];
   const fallbackAbort = new AbortController();
   let fanoutSettled = false;
-  let terminal: "adopted" | "abandoned" | undefined;
+  let terminal: { kind: "adopted" | "dropped" } | { kind: "abandoned"; error: unknown } | undefined;
+  let dropReason: QueueDropReason | undefined;
   let terminalSettled = false;
   let finalizing = false;
   let deferred = false;
@@ -62,16 +66,75 @@ export function createFeishuBroadcastIngressSettlement(params: {
       // Reporting cannot undo an already adopted durable turn.
     }
   };
+  const notifyAdopted = () => {
+    try {
+      params.onAdopted?.();
+    } catch {
+      // Local cleanup cannot reopen an already adopted durable turn.
+    }
+  };
   const abandon = async (error: unknown) => {
     if (terminal) {
       return;
     }
-    terminal = "abandoned";
+    terminal = { kind: "abandoned", error };
     params.replayClaim?.release({ error });
+    for (const lane of lanes) {
+      if (lane.status === "dropped") {
+        lane.replayClaim?.release({ error });
+      }
+    }
     try {
       await params.lifecycle?.onAbandoned();
     } finally {
       fallbackAbort.abort(error);
+      terminalSettled = true;
+      finishSettlement();
+    }
+  };
+  const drop = async (reason: QueueDropReason) => {
+    if (terminal) {
+      return;
+    }
+    terminal = { kind: "dropped" };
+    try {
+      beginFinalizing();
+      if (params.lifecycle?.onDropped) {
+        await params.lifecycle.onDropped(reason);
+        for (const lane of lanes) {
+          if (lane.status !== "dropped") {
+            continue;
+          }
+          try {
+            await lane.replayClaim?.commit();
+          } catch (error) {
+            reportReplayCommitError(error);
+          }
+        }
+        try {
+          await params.replayClaim?.commit();
+        } catch (error) {
+          reportReplayCommitError(error);
+        }
+      } else {
+        const error = new Error(`feishu-broadcast-${reason}`);
+        params.replayClaim?.release({ error });
+        for (const lane of lanes) {
+          if (lane.status === "dropped") {
+            lane.replayClaim?.release({ error });
+          }
+        }
+        await params.lifecycle?.onAbandoned();
+      }
+      if ([...lanes].some((lane) => lane.status === "completed")) {
+        notifyAdopted();
+      }
+    } catch (error) {
+      terminal = undefined;
+      await abandon(error).catch(() => undefined);
+      throw error;
+    } finally {
+      fallbackAbort.abort(reason);
       terminalSettled = true;
       finishSettlement();
     }
@@ -82,15 +145,11 @@ export function createFeishuBroadcastIngressSettlement(params: {
     }
     // Choose one terminal action. Re-entrant terminal callbacks are best effort;
     // accepted lane commits remain tracked through their own completion.
-    terminal = "adopted";
+    terminal = { kind: "adopted" };
     try {
       beginFinalizing();
       await params.lifecycle?.onAdopted();
-      try {
-        params.onAdopted?.();
-      } catch {
-        // Local cleanup cannot reopen an already adopted durable turn.
-      }
+      notifyAdopted();
       try {
         await params.replayClaim?.commit();
       } catch (error) {
@@ -117,7 +176,11 @@ export function createFeishuBroadcastIngressSettlement(params: {
       );
       return;
     }
-    if ([...lanes].some((lane) => lane.status !== "completed")) {
+    if ([...lanes].some((lane) => lane.status !== "completed" && lane.status !== "dropped")) {
+      return;
+    }
+    if (dropReason !== undefined) {
+      await drop(dropReason);
       return;
     }
     await adopt();
@@ -135,6 +198,7 @@ export function createFeishuBroadcastIngressSettlement(params: {
               terminal ||
               lane.adopting ||
               lane.status === "completed" ||
+              lane.status === "dropped" ||
               lane.status === "failed"
             ) {
               return;
@@ -167,13 +231,39 @@ export function createFeishuBroadcastIngressSettlement(params: {
           deferredHeartbeatIntervalMs: params.lifecycle?.deferredHeartbeatIntervalMs,
           onAdoptionFinalizing: beginFinalizing,
           onAbandoned: async () => {
-            if (lane.adopting || lane.status === "completed" || lane.status === "failed") {
+            if (
+              lane.adopting ||
+              lane.status === "completed" ||
+              lane.status === "dropped" ||
+              lane.status === "failed"
+            ) {
               return;
             }
             lane.status = "failed";
             lane.replayClaim?.release({ error: new Error("feishu-broadcast-turn-abandoned") });
             await maybeSettle();
           },
+          onDropped: params.lifecycle?.onDropped
+            ? async (reason: QueueDropReason) => {
+                if (
+                  lane.adopting ||
+                  lane.status === "completed" ||
+                  lane.status === "dropped" ||
+                  lane.status === "failed"
+                ) {
+                  return;
+                }
+                lane.status = "dropped";
+                dropReason ??= reason;
+                // The tracked aggregate retains transport custody. Holding this
+                // session's dropped head until a peer adopts can deadlock fan-out.
+                await maybeSettle();
+                if (terminal?.kind === "abandoned") {
+                  lane.replayClaim?.release({ error: terminal.error });
+                  throw terminal.error;
+                }
+              }
+            : undefined,
         },
         onDispatchComplete: async (dispatched) => {
           if (lane.adopting || lane.status !== "pending") {
@@ -190,7 +280,7 @@ export function createFeishuBroadcastIngressSettlement(params: {
         },
         onDispatchFailed: async (error) => {
           failures.push(error);
-          if (!lane.adopting && lane.status !== "completed") {
+          if (!lane.adopting && lane.status !== "completed" && lane.status !== "dropped") {
             lane.status = "failed";
             lane.replayClaim?.release({ error });
           }
@@ -211,13 +301,40 @@ export function createFeishuBroadcastIngressSettlement(params: {
   };
 }
 
-export function resolveBroadcastAgents(cfg: ClawdbotConfig, peerId: string): string[] | null {
-  const broadcast = (cfg as Record<string, unknown>).broadcast;
-  if (!broadcast || typeof broadcast !== "object") {
-    return null;
+export async function claimFeishuBroadcastAgentMessage(params: {
+  messageId: string;
+  agentId: string;
+  log: (...args: unknown[]) => void;
+  onPending: () => void;
+}) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const claim = await claimUnprocessedFeishuMessage({
+      messageId: params.messageId,
+      namespace: `broadcast:${params.agentId}`,
+      log: params.log,
+    });
+    if (claim.kind === "duplicate") {
+      return undefined;
+    }
+    if (claim.kind !== "inflight") {
+      return claim;
+    }
+    params.onPending();
+    try {
+      await claim.pending;
+      return undefined;
+    } catch (err) {
+      if (attempt === 1) {
+        throw err;
+      }
+    }
   }
-  const agents = (broadcast as Record<string, unknown>)[peerId];
-  return Array.isArray(agents) && agents.length > 0 ? (agents as string[]) : null;
+  return undefined;
+}
+
+export function resolveBroadcastAgents(cfg: ClawdbotConfig, peerId: string): string[] | null {
+  const agents = cfg.broadcast?.[peerId];
+  return Array.isArray(agents) && agents.length > 0 ? agents : null;
 }
 
 export function buildBroadcastSessionKey(

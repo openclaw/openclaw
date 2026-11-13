@@ -91,7 +91,6 @@ export function createTelegramDraftStream(params: {
   validateProviderMessage?: (message: Message) => Promise<void> | void;
   /** Called with Telegram's response after a new preview message becomes durable. */
   onProviderMessage?: (message: Message) => Promise<void> | void;
-  log?: (message: string) => void;
   warn?: (message: string) => void;
 }) {
   const richMessages = params.richMessages === true;
@@ -149,6 +148,7 @@ export function createTelegramDraftStream(params: {
   let lastSentPreviewKey = "";
   let lastDeliveredText = "";
   let lastRequestedText = "";
+  let attemptedText = "";
   let lastRequestedPreview: TelegramDraftPreview | undefined;
   let pendingPlatformSendDispatch: (() => Promise<void>) | undefined;
   let pendingPlatformSendAuthorization: (() => void) | undefined;
@@ -426,6 +426,7 @@ export function createTelegramDraftStream(params: {
     if (!trimmed) {
       return false;
     }
+    attemptedText = trimmed;
     const fullPreview =
       lastRequestedPreview?.text === trimmed
         ? lastRequestedPreview
@@ -642,7 +643,6 @@ export function createTelegramDraftStream(params: {
         if (replyTargetState.kind === "retained" && replyTargetState.messageId === messageId) {
           replyTargetState = { kind: "available" };
         }
-        params.log?.(`telegram stream preview deleted (chat=${chatId}, message=${messageId})`);
       } catch (err) {
         params.warn?.(`telegram stream preview cleanup failed: ${formatErrorMessage(err)}`);
       }
@@ -706,8 +706,6 @@ export function createTelegramDraftStream(params: {
     }
   };
 
-  params.log?.(`telegram stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs})`);
-
   return {
     update: (
       text: string,
@@ -760,7 +758,10 @@ export function createTelegramDraftStream(params: {
     /** Reset internal state so the next update creates a new message instead of editing. */
     forceNewMessage: () => resetStreamToNewMessage("retain"),
     rotateToNewMessageDeferringDelete,
-    /** True when a preview sendMessage was attempted but the response was lost. */
-    sendMayHaveLanded: () => messageSendAttempted && typeof streamMessageId !== "number",
+    /** True when a lost sendMessage response may have delivered exactly this text. */
+    sendMayHaveLanded: (text: string) =>
+      messageSendAttempted &&
+      typeof streamMessageId !== "number" &&
+      attemptedText === text.trimEnd(),
   };
 }

@@ -15,12 +15,9 @@ import {
   createModelPickerRecommendationRank,
   orderModelCatalogForPicker,
 } from "./model-catalog-order.js";
-import type {
-  ModelCatalogRoutePolicy,
-  ModelCatalogRouteProjection,
-} from "./model-catalog-route.js";
+import type { ModelCatalogRouteProjection } from "./model-catalog-route.js";
 import { createModelCatalogView } from "./model-catalog-view.js";
-import type { ModelCatalogEntry } from "./model-catalog.js";
+import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import type { ModelRef } from "./model-ref-shared.js";
 import { dedupeModelCatalogEntries } from "./model-selection-shared.js";
 import {
@@ -30,6 +27,7 @@ import {
 } from "./model-visibility-policy.js";
 import {
   createModelCatalogIdentityKeyResolver,
+  openAIModelCatalogRoutePolicy,
   resolveModelCatalogIdentityKey,
 } from "./openai-model-routes.js";
 
@@ -45,15 +43,14 @@ type LogicalModelCatalogEntryState = ReturnType<typeof resolveLogicalModelCatalo
 export function resolveLogicalModelCatalogEntryState(params: {
   evaluation: ModelAuthAvailabilityEvaluation;
   authBacked?: boolean;
-  routePolicy: ModelCatalogRoutePolicy;
 }) {
   const routeManaged = params.evaluation.routeResolution !== null;
   const selectedRoute = params.evaluation.selectedRoute;
   const routeProjection: ModelCatalogRouteProjection = !routeManaged
     ? { kind: "unmanaged" }
     : selectedRoute
-      ? { kind: "selected", route: selectedRoute, policy: params.routePolicy }
-      : { kind: "unresolved", policy: params.routePolicy };
+      ? { kind: "selected", route: selectedRoute }
+      : { kind: "unresolved" };
   return {
     authBacked: params.authBacked ?? params.evaluation.availability === true,
     compatible: params.evaluation.routeResolution?.kind !== "incompatible",
@@ -61,10 +58,6 @@ export function resolveLogicalModelCatalogEntryState(params: {
     routeProjection,
     ...(params.evaluation.runtimeAuth ? { nativeRuntime: params.evaluation.runtimeAuth.id } : {}),
   };
-}
-
-function sortModelCatalogEntries(entries: ModelCatalogEntry[]): ModelCatalogEntry[] {
-  return entries.toSorted(compareModelCatalogEntries);
 }
 
 type LogicalModelCatalogParams = {
@@ -76,7 +69,6 @@ type LogicalModelCatalogParams = {
   workspaceDir?: string;
   view?: ModelCatalogVisibilityView;
   policy?: ModelVisibilityPolicy;
-  routePolicy: ModelCatalogRoutePolicy;
   routeVariants?: readonly ModelCatalogEntry[];
   retainedModel?: ModelRef;
   selectedModel?: ModelRef;
@@ -123,28 +115,32 @@ export async function prepareLogicalVisibleModelCatalog(
       agentId: params.agentId,
       ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
     });
+  // Typed-only rows (chat:false, such as Decision models) are never chat choices; the policy
+  // above still sees them so authored refs to them do not become placeholder chat rows.
+  const chatCatalog = params.catalog.filter((entry) => entry.inference?.chat !== false);
   const keyOf = createModelCatalogIdentityKeyResolver();
   const catalogView = createModelCatalogView({
     cfg: params.cfg,
-    catalog: params.catalog,
-    routeVariants: params.routeVariants?.length ? params.routeVariants : params.catalog,
-    routePolicy: params.routePolicy,
+    catalog: chatCatalog,
+    routeVariants: params.routeVariants?.length ? params.routeVariants : chatCatalog,
     keyOf,
   });
   const { configuredKeys, retainedKeys } = policy;
   const retainedKey = params.retainedModel
     ? keyOf({ provider: params.retainedModel.provider, id: params.retainedModel.model })
     : undefined;
-  const retained = params.catalog.filter(
+  const retained = chatCatalog.filter(
     (entry) => retainedKeys.has(keyOf(entry)) || keyOf(entry) === retainedKey,
   );
   const wildcard = policy.allowAny || policy.hasProviderWildcards;
-  const configuredCatalog = wildcard ? sortModelCatalogEntries([...policy.configuredCatalog]) : [];
+  const configuredCatalog = wildcard
+    ? policy.configuredCatalog.toSorted(compareModelCatalogEntries)
+    : [];
   const candidates =
     params.view === "all"
-      ? params.catalog
+      ? chatCatalog
       : [
-          ...(wildcard ? params.catalog : []),
+          ...(wildcard ? chatCatalog : []),
           ...configuredCatalog,
           ...policy.allowedCatalog,
           ...retained,
@@ -167,7 +163,7 @@ export async function prepareLogicalVisibleModelCatalog(
     workspaceDir: params.workspaceDir,
     metadataSnapshot: params.metadataSnapshot,
   });
-  const catalogKeys = new Set(params.catalog.map(createModelCatalogIdentityKeyResolver()));
+  const catalogKeys = new Set(chatCatalog.map(createModelCatalogIdentityKeyResolver()));
   let previousStates: Map<string, LogicalModelCatalogEntryState> | undefined;
   let previousCatalog: ModelCatalogEntry[] | undefined;
   return () => {
@@ -189,8 +185,6 @@ export async function prepareLogicalVisibleModelCatalog(
           previous.routeManaged === state.routeManaged &&
           previous.nativeRuntime === state.nativeRuntime &&
           previousRoute?.kind === route.kind &&
-          (route.kind === "unmanaged" ||
-            (previousRoute.kind !== "unmanaged" && previousRoute.policy === route.policy)) &&
           (route.kind !== "selected" ||
             (previousRoute.kind === "selected" && previousRoute.route === route.route))
         );
@@ -204,12 +198,7 @@ export async function prepareLogicalVisibleModelCatalog(
         previousCatalog = undefined;
         return catalog;
       }
-      previousStates = new Map(
-        [...states].map(([key, state]) => [
-          key,
-          { ...state, routeProjection: { ...state.routeProjection } },
-        ]),
-      );
+      previousStates = states;
       previousCatalog = [...catalog];
       return catalog;
     };
@@ -246,36 +235,34 @@ export async function prepareLogicalVisibleModelCatalog(
       );
     };
     if (params.view === "all") {
-      return publish(projectEntries(params.catalog));
+      return publish(projectEntries(chatCatalog));
     }
     // Authored refs stay listed, unavailable, until their login or key returns.
     const defaultVisibleCatalog = wildcard
-      ? sortModelCatalogEntries(
-          dedupeModelCatalogEntries([
-            ...configuredCatalog,
-            ...params.catalog.filter(
-              (entry) =>
-                configuredKeys.has(publicationKeyOf(entry)) || getEntryState(entry).authBacked,
-            ),
-          ]),
-        )
+      ? dedupeModelCatalogEntries([
+          ...configuredCatalog,
+          ...chatCatalog.filter(
+            (entry) =>
+              configuredKeys.has(publicationKeyOf(entry)) || getEntryState(entry).authBacked,
+          ),
+        ]).toSorted(compareModelCatalogEntries)
       : [];
-    const visible = sortModelCatalogEntries(
-      dedupeModelCatalogEntries(
-        policy.visibleCatalog({
-          catalog: params.catalog,
-          defaultVisibleCatalog,
-          view: params.view,
-        }),
-      ),
-    ).filter(
-      (entry) =>
-        catalogKeys.has(publicationKeyOf(entry)) || configuredKeys.has(publicationKeyOf(entry)),
-    );
+    const visible = dedupeModelCatalogEntries(
+      policy.visibleCatalog({
+        catalog: chatCatalog,
+        defaultVisibleCatalog,
+        view: params.view,
+      }),
+    )
+      .toSorted(compareModelCatalogEntries)
+      .filter(
+        (entry) =>
+          catalogKeys.has(publicationKeyOf(entry)) || configuredKeys.has(publicationKeyOf(entry)),
+      );
     const preferredKeys = new Set([...visible, ...retained].map(publicationKeyOf));
     const preferred: ModelCatalogEntry[] = [];
     const routeBacked = new Set<ModelCatalogEntry>();
-    for (const entry of params.catalog) {
+    for (const entry of chatCatalog) {
       const key = publicationKeyOf(entry);
       const preferredKey = preferredKeys.has(key);
       const wildcardRoute =
@@ -292,7 +279,7 @@ export async function prepareLogicalVisibleModelCatalog(
       if (
         preferredKey &&
         state.routeProjection.kind === "selected" &&
-        params.routePolicy.matchesRoute(entry, state.routeProjection.route)
+        openAIModelCatalogRoutePolicy.matchesRoute(entry, state.routeProjection.route)
       ) {
         preferred.push(entry);
       }

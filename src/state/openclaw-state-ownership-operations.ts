@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
 import {
   acquireStateDatabaseSchemaLease,
   assertStateDatabaseAccessAllowed,
@@ -10,6 +10,8 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import {
   OpenClawStateOwnershipMetadataError,
@@ -50,7 +52,7 @@ function requireOwnershipCheckpoint(
 }
 
 function claimOwnershipRow(
-  database: DatabaseSync,
+  database: EngineConnection,
   databasePath: string,
   managerId: string,
   repairMalformed: boolean,
@@ -107,6 +109,9 @@ function repairMalformedOwnershipClaim(
   assertStateDatabaseAccessAllowed(databasePath);
   const existing = openClawStateDatabaseCache.getOpenClawStateDatabaseIfOpenAtPath(databasePath);
   const database = existing?.db ?? openNodeSqliteDatabase(databasePath);
+  if (isPostgresSqlConnection(database)) {
+    requireNativeDatabaseFile("postgres", "repair");
+  }
   let walMaintenance: SqliteWalMaintenance | undefined;
   try {
     database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);

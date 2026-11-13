@@ -6,6 +6,7 @@ import { createGatewayEventLog } from "../../app/gateway-observers.ts";
 import { i18n } from "../../i18n/index.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { DebugPage } from "./debug-page.tsx";
 
 afterEach(() => {
@@ -51,12 +52,15 @@ describe.runIf("__vitest_browser__" in globalThis)("Debug event log", () => {
     const view = mountSolid(() => createComponent(DebugPage, {}), { wrapper: provider.wrapper });
     const page = view.container;
     flush();
+    await vi.dynamicImportSettled();
+    flush();
 
     const eventSection = page.querySelector(".settings-section:last-child");
     assert(eventSection);
     const payloads = Array.from(eventSection.querySelectorAll("pre"));
     expect(payloads).toHaveLength(250);
     assert(payloads[100]);
+    await waitForSolid(() => assert(payloads[100]?.querySelector(".hljs-string")));
     const selected = payloads[100].querySelector(".hljs-string");
     assert(selected);
     const range = document.createRange();

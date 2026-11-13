@@ -50,7 +50,7 @@ export function registerCliWatchdogNoticeTests(fixture: {
       });
       context.params = {
         ...context.params,
-        sourceReplyDeliveryMode: policy === "message_tool_only" ? "message_tool_only" : undefined,
+        sourceReplyDeliveryMode: policy === "private-run" ? "automatic" : policy,
         onBeforeFreshCliSessionRetry: clearBeforeRetry,
       };
       await expect(fixture.run(context)).rejects.toThrow("produced no output");

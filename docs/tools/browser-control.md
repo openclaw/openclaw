@@ -33,6 +33,37 @@ agent tools, but nothing listens on the loopback control port.
 - State: `GET /cookies`, `POST /cookies/set`, `POST /cookies/clear`, `GET /storage/:kind`, `POST /storage/:kind/set`, `POST /storage/:kind/clear`
 - Settings: `POST /set/offline`, `POST /set/headers`, `POST /set/credentials`, `POST /set/geolocation`, `POST /set/media`, `POST /set/timezone`, `POST /set/locale`, `POST /set/device`
 
+Cookie acquisition clients that cannot represent browser partition namespaces can
+request `GET /cookies?partition=unpartitioned` with their existing `profile` and
+`targetId`. The same query is available through `browser.request`, including the
+public `openclaw/plugin-sdk/gateway-runtime` client:
+
+```json
+{
+  "method": "GET",
+  "path": "/cookies",
+  "query": {
+    "profile": "openclaw",
+    "targetId": "<selected-target-id>",
+    "partition": "unpartitioned"
+  }
+}
+```
+
+Require `cookiePartition: "unpartitioned"` in the successful response before using
+the rows. Older hosts may ignore the query, so a successful response alone is not
+proof of this contract. The browser filters whole partitioned rows before
+Playwright's cookie normalization, including opaque and nonserializable partitions
+whose opaque marker is present with `false`. Any presence of partition metadata,
+including null or malformed values, excludes the row. Selected ordinary rows retain
+their protocol attributes, including the actual name, value, domain, path, expiry,
+and flags; omitted optional attributes are not synthesized. This opt-in uses a
+page-scoped Chromium protocol read in the selected context, keeps existing profile,
+target, permission, and cancellation checks, and fails rather than falling back to
+lossy acquisition if that read is unsupported. It never changes browser cookies.
+Omitting `partition` preserves the existing Playwright response. Other selector
+values are rejected.
+
 `POST /tabs/action` is the batched form the CLI uses internally for
 `browser tab` subcommands (`{"action":"new"|"label"|"select"|"close"|"list", ...}`).
 Prefer the single-purpose tab routes above when scripting directly.
@@ -78,6 +109,12 @@ An empty URL alone does not indicate a policy denial. Navigation-policy errors
 also carry `reason: "navigation_blocked"`. Raw blocked URLs and DNS details are
 not included in that metadata. Tab listings are observations, not authorization:
 every subsequent content read or action still enforces its own checks.
+
+Closing is the exception. `DELETE /tabs/:targetId` (including
+`targetIdMode=raw`) and `POST /tabs/action` with `action: "close"` do not
+check the tab's URL, because closing never contacts that address. Agents and
+session cleanup can therefore always end a tab, including one whose URL is
+blocked or could not be validated.
 
 If shared-secret gateway auth is configured, browser HTTP routes require auth too:
 
@@ -461,7 +498,7 @@ not supported on `profile="user"` and other existing-session (chrome-mcp)
 profiles. Send actions individually there.
 
 - CLI: `openclaw browser batch --actions '<json>'`, `openclaw browser batch
---actions-file plan.json`, or `openclaw browser batch --actions-file -` to
+  --actions-file plan.json`, or `openclaw browser batch --actions-file -` to
   read the JSON array from stdin. `--continue` sets `stopOnError=false`. The
   default is to stop on first error. `--target-id` scopes the whole batch to
   one tab. `--actions-file` and stdin input are capped at 1,000,000 bytes.
@@ -478,7 +515,7 @@ profiles. Send actions individually there.
   different tab is rejected with `ACT_TARGET_ID_MISMATCH` before any action
   runs. Batched actions share the request's tab by design.
 - Error summary: the response is `{ "results": [{ "ok": true }, { "ok": false,
-"error": "<message>" }, ...] }`, one entry per action in order. When
+  "error": "<message>" }, ...] }`, one entry per action in order. When
   `stopOnError` is the default, the array ends at the first failure. With
   `--continue` it covers every action. Any failed entry makes the CLI exit
   nonzero. Pass `--json` to preserve the full ordered response for scripts.
@@ -566,7 +603,8 @@ These are useful for "make the site behave like X" workflows:
 - `openclaw browser evaluate --fn` accepts a function source, an expression, or
   a statement body. Statement bodies are wrapped as async functions, so use
   `return` for the value you want back. Use `--timeout-ms <ms>` when the
-  page-side function may need longer than the default evaluate timeout.
+  page-side function may need longer than the default evaluate timeout. The Gateway
+  parses this input for routing; supplied JavaScript runs only inside the page.
 - For logins and anti-bot notes (X/Twitter, etc.), see [Browser login + X/Twitter posting](/tools/browser-login).
 - Keep the Gateway/node host private (loopback or tailnet-only).
 - Remote CDP endpoints are powerful. Tunnel and protect them.

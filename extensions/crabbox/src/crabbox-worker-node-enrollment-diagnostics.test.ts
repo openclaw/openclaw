@@ -3,11 +3,14 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { runInNewContext } from "node:vm";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import * as processRunner from "./crabbox-process.js";
 import { collectCrabboxNodeEnrollmentEvidence } from "./crabbox-worker-node-enrollment-diagnostics.js";
 
 const require = createRequire(import.meta.url);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+afterEach(() => vi.restoreAllMocks());
 
 it.each(["utf8", "utf16le"] as const)(
   "keeps the newest %s log line within the redacted evidence budget",
@@ -24,36 +27,36 @@ it.each(["utf8", "utf16le"] as const)(
       path.join(state, "node.log"),
       encoding === "utf16le" ? Buffer.concat([Buffer.from([0xff, 0xfe]), log]) : log,
     );
+    vi.spyOn(processRunner, "runCrabboxProcess").mockImplementation(async (_argv, options) => {
+      let stdout = "";
+      const script = String(options.input)
+        .split("CRABBOX_NODE_SCRIPT'\n")[1]!
+        .split("\nCRABBOX_NODE_SCRIPT")[0]!;
+      runInNewContext(script, {
+        Buffer,
+        require: (name: string) =>
+          name === "node:os"
+            ? { homedir: () => home }
+            : name === "node:fs"
+              ? {
+                  ...fs,
+                  readlinkSync: () => `/runtime/${"long-directory/".repeat(80)}`,
+                }
+              : require(name),
+        process: {
+          stdout: {
+            write: (text: string) => {
+              stdout += text;
+            },
+          },
+        },
+      });
+      return { stdout, stderr: "", code: 0, signal: null, killed: false, termination: "exit" };
+    });
     const evidence = await collectCrabboxNodeEnrollmentEvidence({
       binary: "crabbox",
       provider: "aws",
       id: "cbx_evidence",
-      runCommand: async (_argv, options) => {
-        let stdout = "";
-        const script = String(options.input)
-          .split("CRABBOX_NODE_SCRIPT'\n")[1]!
-          .split("\nCRABBOX_NODE_SCRIPT")[0]!;
-        runInNewContext(script, {
-          Buffer,
-          require: (name: string) =>
-            name === "node:os"
-              ? { homedir: () => home }
-              : name === "node:fs"
-                ? {
-                    ...fs,
-                    readlinkSync: () => `/runtime/${"long-directory/".repeat(80)}`,
-                  }
-                : require(name),
-          process: {
-            stdout: {
-              write: (text: string) => {
-                stdout += text;
-              },
-            },
-          },
-        });
-        return { stdout, stderr: "", code: 0, signal: null, killed: false, termination: "exit" };
-      },
     });
     expect(evidence).toContain("node-runtime=");
     expect(evidence).toContain("node-pid=dead-or-absent");

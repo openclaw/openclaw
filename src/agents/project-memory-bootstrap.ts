@@ -1,3 +1,4 @@
+import { raceWithTimeout } from "@openclaw/retry";
 import {
   extractProjectKeysFromCuratedEntry,
   normalizeProjectAnnotationKey,
@@ -5,6 +6,7 @@ import {
   stripMemoryAnnotationCarriers,
 } from "../../packages/memory-host-sdk/src/engine-storage.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { observeDiagnosticsTimelinePhases } from "../infra/diagnostics-timeline.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   isAutomaticMemoryEntryEligible,
@@ -12,10 +14,10 @@ import {
 } from "../memory-host-sdk/host/types.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import type {
-  MemoryCallerContext,
   MemorySearchHit,
   MemoryProviderHandle,
-} from "../plugins/memory-provider-types.js";
+} from "../plugins/memory-provider-runtime-types.js";
+import type { MemoryCallerContext } from "../plugins/memory-provider-types.js";
 import { getMemoryRuntime, resolveLoadedMemoryProviderKind } from "../plugins/memory-state.js";
 import type { MemoryPluginRuntime } from "../plugins/registry-contribution-types.js";
 import type { EmbeddedContextFile } from "./embedded-agent-helpers/context-file.js";
@@ -157,6 +159,7 @@ async function prepareLegacyProjectMemoryBootstrap(
   params: { cfg: OpenClawConfig; agentId: string; activeProjectKeys: readonly string[] },
   runtime: MemoryPluginRuntime,
 ): Promise<string[]> {
+  using phases = observeDiagnosticsTimelinePhases("project-memory.legacy.manager");
   try {
     const lookup = await runtime.getMemorySearchManager({
       cfg: params.cfg,
@@ -166,10 +169,12 @@ async function prepareLegacyProjectMemoryBootstrap(
     if (!lookup.manager?.listCuratedProjectCandidates) {
       return [];
     }
+    phases.mark("project-memory.legacy.candidates");
     const results = await lookup.manager.listCuratedProjectCandidates({
       activeProjectKeys: [...params.activeProjectKeys],
       limit: 48,
     });
+    phases.mark("project-memory.legacy.render");
     const providerId = normalizePluginsConfig(params.cfg.plugins).slots.memory ?? "memory";
     return buildProjectMemoryBootstrap({
       entries: results.map((entry) => toLegacyProjectMemoryHit(entry, providerId)),
@@ -180,18 +185,39 @@ async function prepareLegacyProjectMemoryBootstrap(
   }
 }
 
-export async function prepareProjectMemoryBootstrap(params: {
+type ProjectMemoryBootstrapParams = {
   cfg: OpenClawConfig;
   agentId: string;
   activeProjectKeys: readonly string[];
   context?: MemoryCallerContext;
-}): Promise<string[]> {
+};
+
+export async function prepareProjectMemoryBootstrap(
+  params: ProjectMemoryBootstrapParams,
+): Promise<string[]> {
   if (params.activeProjectKeys.length === 0) {
     return [];
   }
+  // Bound prompt waiting; the read keeps the turn's authority and owns its late cleanup.
+  return await raceWithTimeout(
+    () => loadProjectMemoryBootstrap(params),
+    1_000,
+    () => {
+      log.warn(
+        "project memory recall skipped: 1000ms budget exceeded; continuing without project candidates",
+      );
+      return [];
+    },
+    { signal: params.context?.signal, onAbort: () => [] },
+  );
+}
+
+async function loadProjectMemoryBootstrap(params: ProjectMemoryBootstrapParams): Promise<string[]> {
+  using phases = observeDiagnosticsTimelinePhases("project-memory.select");
   // Only a native slot owner serves recall under caller authority. Classification reads
   // owners this process already loaded; legacy owners keep the loaded-runtime path.
   if (resolveLoadedMemoryProviderKind(params.cfg) !== "native") {
+    phases.mark("project-memory.legacy");
     const runtime = getMemoryRuntime();
     return runtime ? await prepareLegacyProjectMemoryBootstrap(params, runtime) : [];
   }
@@ -218,11 +244,13 @@ export async function prepareProjectMemoryBootstrap(params: {
   let lines: string[] = [];
   const selectedPluginId = normalizePluginsConfig(params.cfg.plugins).slots.memory;
   try {
+    phases.mark("project-memory.imports");
     const [{ getActiveMemoryProviderCore }, { assertMemoryCallerCurrent }] = await Promise.all([
       import("../plugins/memory-runtime.js"),
       import("../plugins/memory-audience.js"),
     ]);
     assertCallerCurrent = () => assertMemoryCallerCurrent(caller);
+    phases.mark("project-memory.provider");
     const lookup = await getActiveMemoryProviderCore({
       cfg: params.cfg,
       agentId: params.agentId,
@@ -237,6 +265,7 @@ export async function prepareProjectMemoryBootstrap(params: {
       lookup.provider.candidates &&
       lookup.provider.capabilities.candidates.includes("project")
     ) {
+      phases.mark("project-memory.candidates");
       const results = await lookup.provider.candidates({
         kind: "project",
         // buildProjectMemoryBootstrap applies the all-of key check when the provider cannot filter.
@@ -245,7 +274,9 @@ export async function prepareProjectMemoryBootstrap(params: {
           : {}),
         limit: 48,
       });
+      phases.mark("project-memory.authority");
       context.assertCurrent();
+      phases.mark("project-memory.render");
       lines = buildProjectMemoryBootstrap({
         entries: results.hits,
         activeProjectKeys: params.activeProjectKeys,
@@ -261,6 +292,7 @@ export async function prepareProjectMemoryBootstrap(params: {
     );
     lines = [];
   } finally {
+    phases.mark("project-memory.close");
     active = false;
     try {
       await provider?.close();
@@ -272,6 +304,7 @@ export async function prepareProjectMemoryBootstrap(params: {
       lines = [];
     }
   }
+  phases.mark("project-memory.publish");
   try {
     // Cleanup may yield after selection; the owning run and its audience still control release.
     assertCallerCurrent();
@@ -282,10 +315,4 @@ export async function prepareProjectMemoryBootstrap(params: {
     );
     return [];
   }
-}
-
-export function buildProjectMemoryWriteInstruction(projectKey: string | null | undefined): string {
-  return projectKey && !/[\r\n<>]/u.test(projectKey)
-    ? `For every repository-specific memory entry you write, add <!-- project: ${projectKey} --> on the same line. Do not project-scope user-level preferences, standing intents, or facts that are not specific to this repository.`
-    : "";
 }

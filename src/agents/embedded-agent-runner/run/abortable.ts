@@ -1,3 +1,4 @@
+import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
 import { toErrorObject } from "../../../infra/errors.js";
 
 /** Marks AbortErrors produced by abortable() so provider aborts stay retryable. */
@@ -64,7 +65,7 @@ export function joinWithRunLivenessDeadline(input: {
       () => finish("timeout"),
       input.timeoutMs ?? RUN_LIVENESS_JOIN_TIMEOUT_MS,
     );
-    timer.unref?.();
+    timer.unref();
     if (input.runAbortSignal?.aborted) {
       finish("abort");
       return;
@@ -87,25 +88,12 @@ export function abortable<T>(signal: AbortSignal, promise: Promise<T>): Promise<
     void promise.catch(() => {});
     return Promise.reject(createAbortableError(signal));
   }
-  return withAbortListener(signal, () => promise, createAbortableError);
-}
-
-/** Start work under an already-checked signal, preserving the caller's abort error contract. */
-export function withAbortListener<T>(
-  signal: AbortSignal,
-  start: () => Promise<T>,
-  createError: (signal: AbortSignal) => Error,
-): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const settle = (complete: () => void) => {
-      signal.removeEventListener("abort", onAbort);
-      complete();
-    };
-    const onAbort = () => settle(() => reject(createError(signal)));
-    signal.addEventListener("abort", onAbort, { once: true });
-    start().then(
-      (value) => settle(() => resolve(value)),
-      (err: unknown) => settle(() => reject(toErrorObject(err, "Non-Error rejection"))),
-    );
-  });
+  return racePromiseWithAbortSignal(
+    () =>
+      promise.catch((err: unknown) => {
+        throw toErrorObject(err, "Non-Error rejection");
+      }),
+    signal,
+    createAbortableError,
+  );
 }

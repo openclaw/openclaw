@@ -1,5 +1,5 @@
 /**
- * Claude CLI provider discovery descriptor. It exposes subscription-backed
+ * Claude CLI provider discovery descriptor. It exposes native-login
  * synthetic auth for catalog/runtime discovery without full Anthropic registration.
  */
 import type {
@@ -16,7 +16,10 @@ const modelCaptures = new WeakMap<
   WeakMap<object, WeakMap<object, Promise<ModelDefinitionConfig[]>>>
 >();
 
-type NativeAvailability = ReturnType<typeof probeClaudeCliAuthStatus>;
+type NativeAvailability = {
+  expiresAt: number;
+  pending: ReturnType<typeof probeClaudeCliAuthStatus>;
+};
 const availability = new WeakMap<object, WeakMap<object, WeakMap<object, NativeAvailability>>>();
 
 async function prepareClaudeCliAuth({
@@ -36,15 +39,38 @@ async function prepareClaudeCliAuth({
   environments.set(env, captures);
   // Native login is independent of workspace; fresh captures and cancellation own their probes.
   const owner = signal ?? config;
-  const pending = captures.get(owner) ?? probeClaudeCliAuthStatus({ env, signal });
-  captures.set(owner, pending);
-  const result = await pending;
+  const now = Date.now();
+  let capture = captures.get(owner);
+  if (!capture || capture.expiresAt <= now) {
+    capture = {
+      expiresAt: now + 60_000,
+      pending: probeClaudeCliAuthStatus({ env, signal }),
+    };
+    captures.set(owner, capture);
+  }
+  const result = await capture.pending;
   signal?.throwIfAborted();
-  return result.status === "available"
+  const kind =
+    result.status === "available" && result.authMethod === "claude.ai"
+      ? ("subscription" as const)
+      : result.status === "available" &&
+          ["api_key", "api_key_helper", "third_party"].includes(result.authMethod ?? "")
+        ? ("api" as const)
+        : ("native" as const);
+  const plan = result.status === "available" ? result.subscriptionType : undefined;
+  return result.status !== "missing" && result.status !== "not-installed"
     ? {
         apiKey: CLAUDE_CLI_NATIVE_AUTH_MARKER,
         source: "Claude CLI native auth",
         mode: "oauth" as const,
+        nativeAuth: {
+          runtime: CLAUDE_CLI_BACKEND_ID,
+          mode: "oauth" as const,
+          display: {
+            kind,
+            ...(plan ? { plan: plan[0]!.toUpperCase() + plan.slice(1) } : {}),
+          },
+        },
       }
     : undefined;
 }
@@ -80,38 +106,26 @@ const anthropicProviderDiscovery: ProviderPlugin = {
       const owner = ctx.signal ?? ctx.config;
       const pending = captures.get(owner) ?? discoverClaudeCliModels(ctx);
       captures.set(owner, pending);
-      try {
-        const models = await pending;
-        ctx.signal?.throwIfAborted();
-        return {
-          providers: {
-            [CLAUDE_CLI_BACKEND_ID]: {
-              baseUrl: "https://api.anthropic.com",
-              api: "anthropic-messages",
-              models,
-            },
+      const models = await pending.catch(() => undefined);
+      ctx.signal?.throwIfAborted();
+      return {
+        providers: {
+          [CLAUDE_CLI_BACKEND_ID]: {
+            baseUrl: "https://api.anthropic.com",
+            api: "anthropic-messages",
+            models: models ?? [],
           },
-          outcomes: [
-            {
-              provider: CLAUDE_CLI_BACKEND_ID,
-              status: "ready",
-              listedModelIds: models.map((model) => model.id),
-            },
-          ],
-        };
-      } catch {
-        ctx.signal?.throwIfAborted();
-        return {
-          providers: {
-            [CLAUDE_CLI_BACKEND_ID]: {
-              baseUrl: "https://api.anthropic.com",
-              api: "anthropic-messages",
-              models: [],
-            },
-          },
-          outcomes: [{ provider: CLAUDE_CLI_BACKEND_ID, status: "unavailable" }],
-        };
-      }
+        },
+        outcomes: [
+          models
+            ? {
+                provider: CLAUDE_CLI_BACKEND_ID,
+                status: "ready",
+                listedModelIds: models.map((model) => model.id),
+              }
+            : { provider: CLAUDE_CLI_BACKEND_ID, status: "unavailable" },
+        ],
+      };
     },
   },
   prepareSyntheticAuth: prepareClaudeCliAuth,

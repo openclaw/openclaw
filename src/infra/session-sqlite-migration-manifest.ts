@@ -88,7 +88,16 @@ const MigrationGithubIssueSchema = z.object({
 const MigrationTargetSchema = z
   .object({
     agentId: z.string().min(1),
-    databaseIdentity: z.object({ dev: z.string(), ino: z.string() }).optional(),
+    databaseIdentity: z
+      .object({
+        dev: z.string(),
+        ino: z.string(),
+        sha256: z
+          .string()
+          .regex(/^[a-f0-9]{64}$/u)
+          .optional(),
+      })
+      .optional(),
     completedMoves: z.array(MigrationMoveSchema),
     issues: z.array(MigrationIssueSchema),
     plannedMoves: z.array(MigrationMoveSchema),
@@ -484,7 +493,9 @@ function isRestoreMoveWithinTarget(
     return (
       sourcePath === storePath &&
       archivePath.startsWith(`${sourcePath}.pre-startup-migration-`) &&
-      /^[a-f0-9-]{36}\.bak$/.test(archivePath.slice(`${sourcePath}.pre-startup-migration-`.length))
+      /^[a-f0-9-]{36}(?:\.scoped)?\.bak$/.test(
+        archivePath.slice(`${sourcePath}.pre-startup-migration-`.length),
+      )
     );
   }
   const sessionsDir = path.dirname(storePath);

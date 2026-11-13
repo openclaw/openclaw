@@ -1,5 +1,12 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { resolveAgentAssistantTurnId } from "../../../../packages/agent-core/src/tool-execution-context.js";
+import {
+  getInternalToolTurnCompletion,
+  setInternalToolTurnCompletion,
+} from "../../../../packages/agent-core/src/internal-hooks.js";
+import {
+  getAgentToolInputScope,
+  resolveAgentAssistantTurnId,
+} from "../../../../packages/agent-core/src/tool-execution-context.js";
 import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
 import {
   isDeliveredMessageToolOnlySourceReplyResult,
@@ -13,18 +20,16 @@ import {
 import type { MessagingToolSourceReplyPayload } from "../../embedded-agent-messaging.types.js";
 import { captureToolAuthoredSourceReply } from "../../embedded-agent-tool-authored-source-reply.js";
 import type { AfterToolCallContext, AfterToolCallResult, Agent } from "../../runtime/index.js";
-import {
-  getInternalToolTurnCompletion,
-  setInternalToolTurnCompletion,
-} from "../../runtime/internal-hooks.js";
 import { normalizeToolPolicyName } from "../../tool-policy-shared.js";
 import { isToolResultError, readToolResultDetails } from "../../tool-result-error.js";
+import { createSourceReplyBatchCompletion } from "../../tool-source-reply-completion.js";
 
 type MessageToolTerminalRoute = Omit<
   Parameters<typeof isDeliveredMessagingToolSendToCurrentSource>[0],
   "send" | "deliveredPayload"
 > & {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  messageToolFinalByDefault?: boolean;
   currentMessageId?: string | number;
   replyToMode?: "off" | "first" | "all" | "batched";
   hasRepliedRef?: { value: boolean };
@@ -101,19 +106,27 @@ export function installMessageToolTerminalHook(
     onDeliveredSourceReply?: () => void;
   },
 ): void {
-  let finalSourceReplyDelivered = false;
+  const finalReplyInputs = new Set<object>();
+  const nestedCompletion = createSourceReplyBatchCompletion();
   const previousCompletion = getInternalToolTurnCompletion(params.agent);
   // Let sibling tools settle, then finish without another model request.
   setInternalToolTurnCompletion(params.agent, (context) => {
-    const completed = finalSourceReplyDelivered;
-    finalSourceReplyDelivered = false;
+    const completed = nestedCompletion.complete(
+      context.toolResults,
+      finalReplyInputs.has(context.inputScope),
+      context.inputScope,
+    );
+    finalReplyInputs.clear();
     return previousCompletion?.(context) === true || completed;
   });
   const previousAfterToolCall = params.agent.afterToolCall?.bind(params.agent);
   params.agent.afterToolCall = async (context, signal) => {
+    const inputScope = getAgentToolInputScope(context);
+    // Capture private cell identity before presentation can replace or reject its result.
+    nestedCompletion.observe(context.result);
     const toolName = context.toolCall.name;
     const toolArgs = argsRecordForToolCall(context);
-    const final = resolveMessageToolSourceReplyFinal(toolArgs);
+    const final = resolveMessageToolSourceReplyFinal(toolArgs, params.messageToolFinalByDefault);
     const extractionArgs =
       toolName === "message" &&
       params.currentProvider &&
@@ -147,7 +160,9 @@ export function installMessageToolTerminalHook(
     } finally {
       delivered ||= isDelivered(hookResult);
       if (delivered) {
-        finalSourceReplyDelivered ||= final;
+        if (final && inputScope) {
+          finalReplyInputs.add(inputScope);
+        }
         params.onDeliveredSourceReply?.();
       }
     }

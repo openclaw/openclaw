@@ -18,6 +18,7 @@ export async function runMemorySearchWithOwner(
       ...(opts.minScore !== undefined ? { minScore: opts.minScore } : {}),
     },
     target: "memory search",
+    databaseEngine: "configured",
     runLocal: async () => {
       const { runMemorySearch } = await import("./cli.runtime.js");
       await runMemorySearch(query, opts, hostOptions);

@@ -1,3 +1,4 @@
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -5,7 +6,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { SqliteWorkerError } from "openclaw/plugin-sdk/sqlite-runtime";
 import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { seedMemoryForgetTombstones } from "../test-helpers.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import {
@@ -13,6 +14,9 @@ import {
   memoryIndexFixtureWriter,
 } from "./manager-index.test-support.js";
 import { MemorySourceIndexKernel } from "./manager-source-index-kernel.js";
+
+const snapshot = (db: DatabaseSync) =>
+  db.prepare("SELECT path, text FROM memory_index_chunks ORDER BY path").all();
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 
@@ -26,14 +30,7 @@ describe("private session source staging", () => {
   async function setup() {
     await fixture.seedSessionTranscript({
       sessionId: "shadow-session",
-      messages: [
-        {
-          role: "user",
-          timestamp: 1,
-          content: "Violet session preference.",
-          senderIsOwner: true,
-        },
-      ],
+      messages: [{ role: "user", timestamp: 1, content: "Violet", senderIsOwner: true }],
     });
     const manager = await fixture.getFreshManager(
       fixture.createConfig({
@@ -51,25 +48,22 @@ describe("private session source staging", () => {
   it("rejects a tombstone recorded after native staging before publishing the shadow", async () => {
     const { manager, db } = await setup();
     await manager.sync({ reason: "baseline", force: true });
-    const before = db.prepare("SELECT path, text FROM memory_index_chunks ORDER BY path").all();
+    const before = snapshot(db);
     // oxlint-disable-next-line typescript/unbound-method -- Invoked with the intercepted database owner.
     const publish = MemoryIndexDatabase.prototype.publishShadow;
     vi.spyOn(MemoryIndexDatabase.prototype, "publishShadow").mockImplementation(function (
       this: MemoryIndexDatabase,
-      input,
-      assertCurrent,
+      ...args
     ) {
       // The shadow is complete; simulate forget advancing the published revision
       // before the final publication obtains transaction admission.
       seedMemoryForgetTombstones({ agentId: "main", sessionIds: ["shadow-session"] });
-      return publish.call(this, input, assertCurrent);
+      return publish.apply(this, args);
     });
     await expect(manager.sync({ reason: "cli", force: true })).rejects.toThrow(
       "retry the full reindex",
     );
-    expect(db.prepare("SELECT path, text FROM memory_index_chunks ORDER BY path").all()).toEqual(
-      before,
-    );
+    expect(snapshot(db)).toEqual(before);
   });
 
   it("releases publication capacity and retries cleanup after a close failure", async () => {
@@ -102,7 +96,6 @@ describe("private session source staging", () => {
       } else {
         await sync;
       }
-      expect(probeReleased).toHaveLength(index + 1);
       await expect(probeReleased[index]!()).rejects.toThrow("owner is closed");
       expect((await manager.search("Violet")).length).toBeGreaterThan(0);
     }
@@ -111,11 +104,9 @@ describe("private session source staging", () => {
   it("preserves publication and generation cleanup failures through sync", async () => {
     const { manager, db } = await setup();
     await manager.sync({ reason: "baseline", force: true });
-    const before = db.prepare("SELECT path, text FROM memory_index_chunks ORDER BY path").all();
+    const before = snapshot(db);
     const database: unknown = Reflect.get(manager, "publishedDatabase");
-    if (!(database instanceof MemoryIndexDatabase)) {
-      throw new Error("Expected the manager's published database owner");
-    }
+    assert.instanceOf(database, MemoryIndexDatabase);
     const original = new SqliteWorkerError(
       "controlled publication result failure",
       "outcome-unknown",
@@ -128,23 +119,12 @@ describe("private session source staging", () => {
     const failure: unknown = await manager
       .sync({ reason: "failure", force: true })
       .catch((error: unknown) => error);
-    expect(failure).toBeInstanceOf(AggregateError);
-    if (!(failure instanceof AggregateError)) {
-      throw new Error("Expected sync and cleanup failures");
-    }
+    assert.instanceOf(failure, AggregateError);
     expect(failure.cause).toBe(original);
-    expect(failure.errors).toHaveLength(2);
-    expect(failure.errors[0]).toBe(original);
-    expect(failure.errors[1]).toBe(cleanup);
-    expect(String(failure)).toContain(original.message);
-    expect(String(failure)).toContain(cleanup.message);
-    expect(db.prepare("SELECT path, text FROM memory_index_chunks ORDER BY path").all()).toEqual(
-      before,
-    );
+    expect(failure.errors).toEqual([original, cleanup]);
+    expect(snapshot(db)).toEqual(before);
     await manager.sync({ reason: "retry", force: true });
-    expect(db.prepare("SELECT path, text FROM memory_index_chunks ORDER BY path").all()).toEqual(
-      before,
-    );
+    expect(snapshot(db)).toEqual(before);
   });
 
   it("drains accepted staging before manager close releases its database", async () => {
@@ -160,11 +140,10 @@ describe("private session source staging", () => {
     const replace = MemoryIndexDatabase.prototype.replaceSource;
     vi.spyOn(MemoryIndexDatabase.prototype, "replaceSource").mockImplementation(async function (
       this: MemoryIndexDatabase,
-      input,
-      assertCurrent,
-      prepare,
+      ...args
     ) {
-      const result = await replace.call(this, input, assertCurrent, prepare);
+      const result = await replace.apply(this, args);
+      const [input] = args;
       const replacements = Array.isArray(input) ? input : [input];
       if (this.isShadow && replacements.some(({ source }) => source === "sessions")) {
         entered.resolve();
@@ -259,14 +238,9 @@ describe("private session source staging", () => {
     const replace = MemoryIndexDatabase.prototype.replaceSource;
     const run = vi
       .spyOn(MemoryIndexDatabase.prototype, "replaceSource")
-      .mockImplementation(async function (
-        this: MemoryIndexDatabase,
-        input,
-        assertCurrent,
-        prepare,
-      ) {
+      .mockImplementation(async function (this: MemoryIndexDatabase, ...args) {
         try {
-          return await replace.call(this, input, assertCurrent, prepare);
+          return await replace.apply(this, args);
         } finally {
           replacementSettled = true;
         }
@@ -278,14 +252,10 @@ describe("private session source staging", () => {
     try {
       await Promise.race([Promise.all([entered.promise, timedOut.promise]), sync]);
       await nextTurn();
-      expect(shadowPath).toBeDefined();
       const shadow = shadowDatabase;
-      if (!shadow) {
-        throw new Error("Expected the retained shadow database");
-      }
+      assert.isDefined(shadow, "Expected the retained shadow database");
       const expectPendingSetup = () => {
-        expect(shadow.isOpen).toBe(true);
-        expect(replacementSettled).toBe(false);
+        expect([shadow.isOpen, replacementSettled]).toEqual([true, false]);
         expect(
           shadow
             .prepare(
@@ -312,14 +282,16 @@ describe("private session source staging", () => {
     }
   });
 
-  it("preserves the published index when an accepted transfer fails without replaying inline", async () => {
+  it("releases each rebuild's shadow descriptor and keeps the published index after a failed transfer", async () => {
     const { manager, db } = await setup();
     await fs.writeFile(
       path.join(fixture.paths.memory, "transfer.md"),
       "Violet transfer source.\n".repeat(30_000),
     );
+    const opened = vi.spyOn(syncFs, "openSync");
+    const closed = vi.spyOn(syncFs, "closeSync");
     await manager.sync({ reason: "baseline", force: true });
-    const before = db.prepare("SELECT path, text FROM memory_index_chunks ORDER BY path").all();
+    const before = snapshot(db);
     const transfer = await import("./manager-publication-transfer.js");
     const batches = transfer.memoryPublicationBatches;
     const rejectedTransfer = vi
@@ -339,17 +311,15 @@ describe("private session source staging", () => {
       code: "overloaded",
       message: "controlled accepted transfer failure",
     });
-    expect(db.prepare("SELECT path, text FROM memory_index_chunks ORDER BY path").all()).toEqual(
-      before,
-    );
+    expect(snapshot(db)).toEqual(before);
     rejectedTransfer.mockRestore();
     await manager.sync({ reason: "retry", force: true });
-    expect(db.prepare("SELECT path, text FROM memory_index_chunks ORDER BY path").all()).toEqual(
-      before,
+    expect(snapshot(db)).toEqual(before);
+    // Completed and failed rebuilds both delete their shadow; neither may keep it open.
+    const shadows = opened.mock.results.filter((_, call) =>
+      String(opened.mock.calls[call]![0]).includes(".memory-reindex-"),
     );
-    const databasePath = db.location()!;
-    await manager.close();
-    const entries = await fs.readdir(path.dirname(databasePath));
-    expect(entries.filter((name) => name.includes(".memory-reindex-"))).toEqual([]);
+    expect(shadows).not.toHaveLength(0);
+    expect(closed.mock.calls.flat()).toEqual(expect.arrayContaining(shadows.map((r) => r.value)));
   });
 });

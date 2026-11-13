@@ -5,7 +5,7 @@ import {
   type ImageContent,
   type Message,
   type TextContent,
-} from "@openclaw/llm-core";
+} from "@openclaw/llm-core/types";
 import { parseDateStringTimestampMs as parseSessionTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { getOpenClawSystemUpdateKind } from "../operator-messages.js";

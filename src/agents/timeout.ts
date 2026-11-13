@@ -22,11 +22,9 @@ export function resolveAgentTimeoutMs(opts: {
 }): number {
   const minMs = Math.max(resolveOptionalIntegerOption(opts.minMs) ?? 1, 1);
   const clampTimeoutMs = (valueMs: number) => clampTimerTimeoutMs(valueMs, minMs) ?? minMs;
-  const seconds =
-    resolveOptionalIntegerOption(opts.cfg?.agents?.defaults?.timeoutSeconds) ??
-    DEFAULT_AGENT_TIMEOUT_SECONDS;
+  const seconds = opts.cfg?.agents?.defaults?.timeoutSeconds ?? DEFAULT_AGENT_TIMEOUT_SECONDS;
   // Config and per-run zero share the exact timer-safe unlimited sentinel.
-  const defaultMs = seconds === 0 ? NO_TIMEOUT_MS : clampTimeoutMs(Math.max(seconds, 1) * 1000);
+  const defaultMs = seconds === 0 ? NO_TIMEOUT_MS : clampTimeoutMs(seconds * 1000);
   const overrideMs = resolveOptionalIntegerOption(opts.overrideMs);
   const override = overrideMs ?? resolveOptionalIntegerOption(opts.overrideSeconds);
   if (override === undefined || override < 0) {

@@ -267,6 +267,7 @@ export async function resolveDevGitCommits(params: {
     ],
     {
       timeoutMs: 2500,
+      operation: "update.inspect",
       signal: params.signal,
       killProcessTree: true,
       maxOutputBytes: { stdout: DEV_COMMIT_LOG_MAX_OUTPUT_BYTES, stderr: 1024 },

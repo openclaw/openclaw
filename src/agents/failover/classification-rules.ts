@@ -13,6 +13,8 @@ import {
 import type { FailoverClassification, FailoverReason, FailoverSignal } from "./signal.js";
 const NO_BODY_HTTP_WRAPPER_RE =
   /^(?:no body(?: response)?|no response body|status code \(no body\))$/i;
+const REDACTION_DESTROYED_BODY_RE =
+  /^\[(?:(?:Malformed|Oversized) diagnostic JSON redacted|Unserializable)\]$/;
 const PRESERVED_NOT_FOUND_OR_GONE_REASONS = new Set<FailoverReason | null>([
   "session_expired",
   "billing",
@@ -23,26 +25,23 @@ function stripErrorPrefix(raw: string): string {
   return raw.replace(/^error:\s*/i, "").trim();
 }
 export function inferSignalStatus(signal: FailoverSignal): number | undefined {
-  if (typeof signal.status === "number" && Number.isFinite(signal.status)) {
+  if (Number.isFinite(signal.status)) {
     return signal.status;
   }
   const message = stripErrorPrefix(signal.message?.trim() ?? "");
   return extractLeadingHttpStatus(message)?.code ?? extractProviderWrappedHttpStatus(message)?.code;
 }
-function isExplicitNoBodyHttpMessage(raw: string | undefined, status?: number): boolean {
+function isExplicitNoBodyHttpMessage(raw: string | undefined, status: number): boolean {
   const trimmed = raw?.trim();
   if (!trimmed) {
     return false;
   }
-  const candidate = extractLeadingHttpStatus(trimmed) ? trimmed : stripErrorPrefix(trimmed);
+  const candidate = stripErrorPrefix(trimmed);
   const leadingStatus = extractLeadingHttpStatus(candidate);
-  if (leadingStatus) {
-    if (typeof status === "number" && leadingStatus.code !== status) {
-      return false;
-    }
-    return NO_BODY_HTTP_WRAPPER_RE.test(leadingStatus.rest);
-  }
-  return NO_BODY_HTTP_WRAPPER_RE.test(candidate);
+  return (
+    (!leadingStatus || leadingStatus.code === status) &&
+    NO_BODY_HTTP_WRAPPER_RE.test(leadingStatus?.rest ?? candidate)
+  );
 }
 export function isUnclassifiedNoBodyHttpSignal(signal: FailoverSignal): boolean {
   const status = inferSignalStatus(signal);
@@ -190,7 +189,7 @@ export function classifyFailoverClassificationFromHttpStatus(
   opts?: { preserveProviderSignalClassification?: boolean },
 ): FailoverClassification | null {
   const messageReason = failoverReasonFromClassification(messageClassification);
-  if (typeof status !== "number" || !Number.isFinite(status)) {
+  if (status === undefined || !Number.isFinite(status)) {
     return null;
   }
   if (status === 402) {
@@ -271,6 +270,7 @@ export function classifyFailoverClassificationFromHttpStatus(
     if (
       messageReason === "overloaded" ||
       messageReason === "server_error" ||
+      messageReason === "route_unavailable" ||
       (status >= 500 && messageReason === "format")
     ) {
       return messageClassification;
@@ -285,18 +285,22 @@ export function classifyFailoverClassificationFromHttpStatus(
     // 400/422 are ambiguous: inspect the payload first so provider-specific
     // rate limits, auth failures, model-not-found errors, and billing signals
     // are not collapsed into generic "format" failures.
-    if (messageClassification && messageReason !== "server_error") {
+    if (
+      messageClassification &&
+      (messageReason !== "server_error" || opts?.preserveProviderSignalClassification)
+    ) {
       return messageClassification;
     }
-    // When the response has no body at all, or only surfaces as an HTTP wrapper
-    // like "400 status code (no body)", return null instead of defaulting to
-    // "format". These shapes are likely transient proxy issues — classifying
-    // them as "format" triggers a compaction loop that cannot recover.
-    if (isUnclassifiedNoBodyHttpSignal({ status, message })) {
+    // An empty or fully redacted body cannot establish request-format semantics.
+    const diagnostic = stripErrorPrefix(message?.trim() ?? "");
+    const body = extractLeadingHttpStatus(diagnostic)?.rest ?? diagnostic;
+    if (
+      isUnclassifiedNoBodyHttpSignal({ status, message }) ||
+      REDACTION_DESTROYED_BODY_RE.test(body.trim())
+    ) {
       return null;
     }
-    // Body exists but couldn't be classified — still treat as format error
-    // since the provider rejected the request schema.
+    // Other unclassified bodies retain the provider's request-format rejection.
     return toReasonClassification("format");
   }
   return null;
@@ -304,6 +308,7 @@ export function classifyFailoverClassificationFromHttpStatus(
 // Only cross-provider structured codes classify in core; provider-native
 // mappings belong to provider hooks.
 const FAILOVER_CODE_REASONS = new Map<string, FailoverReason>([
+  ["DEGENERATE_OUTPUT", "server_error"],
   ["UNKNOWN_PARAMETER", "format"],
   ["RESOURCE_EXHAUSTED", "rate_limit"],
   ["RATE_LIMIT", "rate_limit"],

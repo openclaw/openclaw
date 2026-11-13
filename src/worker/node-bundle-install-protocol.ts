@@ -21,6 +21,7 @@ const WorkerBuildSchema = z.custom<WorkerAdmissionHandshake>(
 
 const BundleInstallInputSchema = z.strictObject({
   gatewayNamespace: z.string().regex(GATEWAY_NAMESPACE_PATTERN),
+  prefetch: z.literal(1).optional(),
   bundlePrewarm: z.literal(WORKER_BUNDLE_PREWARM_VERSION).optional(),
   build: WorkerBuildSchema,
   archive: z.strictObject({
@@ -61,7 +62,7 @@ export function parseNodeWorkerBundleInstallInput(
 export function parseNodeWorkerBundleInstallResult(
   value: unknown,
 ): NodeWorkerBundleInstallResult | null {
-  return validateWorkerAdmissionHandshake(value) ? structuredClone(value) : null;
+  return validateWorkerAdmissionHandshake(value) ? value : null;
 }
 
 export function nodeWorkerBundleTransferPath(bundleHash: string): string {

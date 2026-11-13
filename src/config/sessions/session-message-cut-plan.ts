@@ -6,6 +6,7 @@ import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import type { SessionMessageCutMutationResult } from "./session-accessor.types.js";
 import { findSessionTranscriptHeader } from "./session-entry-codec.js";
+import { preserveSqliteSameKeySessionRolloverLineage } from "./session-entry-lineage.js";
 import { buildSessionCreationStamp } from "./session-entry-provenance.js";
 import { inheritSessionSelection } from "./session-entry-selection.js";
 import { extractEditorText } from "./session-message-cut-content.js";
@@ -13,7 +14,7 @@ import type {
   SessionMessageCutIntent,
   SessionMessageCutResult,
 } from "./session-message-cut.types.js";
-import { createSessionTranscriptHeader } from "./transcript-header.js";
+import { createSessionTranscriptHeader, readInheritedThrough } from "./transcript-header.js";
 import {
   isSessionTranscriptLeafControl,
   scanSessionTranscriptTree,
@@ -25,9 +26,7 @@ import { MIN_READABLE_SESSION_VERSION } from "./version.js";
 
 type MessageCut = {
   status: "cut";
-  editorText?: string;
-  editorAttachments?: Array<{ mimeType: string; data: string }>;
-  editorMediaRefs?: Array<{ path: string; contentType: string }>;
+  message: Record<string, unknown>;
   parentId: string | null;
   prefix: TranscriptEvent[];
 };
@@ -41,13 +40,19 @@ export type SessionMessageCutPlan =
       result: Extract<SessionMessageCutResult, { status: "created" }>;
     };
 
-/** Shared history selection and identity policy; the backend owns the atomic install. */
-export function planSessionMessageCut(
+/** Semantic preflight before workspace retirement; the committing planner checks it again. */
+export function selectSessionMessageCut(
   currentEntry: SessionEntry | undefined,
   events: readonly TranscriptEvent[],
   params: SessionMessageCutIntent,
   sourceRepositoryWorkspaceId?: string,
-): SessionMessageCutPlan {
+):
+  | Exclude<SessionMessageCutResult, { status: "created" }>
+  | {
+      status: "selected";
+      entry: SessionEntry;
+      cut?: MessageCut;
+    } {
   if (!currentEntry?.sessionId) {
     return { status: "missing-session" };
   }
@@ -70,7 +75,10 @@ export function planSessionMessageCut(
     currentEntry,
     "Session history changes are unavailable while model selection is locked.",
   );
-  const cut = params.mode === "switch" ? undefined : resolveMessageCut(events, params.entryId);
+  const cut =
+    params.mode === "switch"
+      ? undefined
+      : resolveMessageCut(events, params.entryId, params.mode === "fork");
   if (cut && cut.status !== "cut") {
     return cut;
   }
@@ -88,12 +96,49 @@ export function planSessionMessageCut(
   ) {
     throw new Error("Repository session fork requires its own prepared workspace");
   }
+  return { status: "selected", entry: currentEntry, cut };
+}
 
+/** Shared history selection and identity policy; the backend owns the atomic install. */
+export function planSessionMessageCut(
+  entry: SessionEntry | undefined,
+  events: readonly TranscriptEvent[],
+  params: SessionMessageCutIntent,
+  sourceRepositoryWorkspaceId?: string,
+): SessionMessageCutPlan {
+  const selected = selectSessionMessageCut(entry, events, params, sourceRepositoryWorkspaceId);
+  if (selected.status !== "selected") {
+    return selected;
+  }
+  const { entry: currentEntry, cut } = selected;
+  const workspace = params.settledLocalWorkspace;
+  if (
+    workspace &&
+    (params.mode === "fork" ||
+      currentEntry.worktree?.id !== workspace.worktreeId ||
+      currentEntry.sessionId !== workspace.sessionId ||
+      (currentEntry.lifecycleRevision ?? null) !== workspace.lifecycleRevision)
+  ) {
+    return { status: "conflict" };
+  }
   const nextSessionId = randomUUID();
   const header = createSessionTranscriptHeader({
     cwd: readTranscriptHeaderCwd(events),
     sessionId: nextSessionId,
     version: findSessionTranscriptHeader(events)?.version ?? MIN_READABLE_SESSION_VERSION,
+    // A fork copies a prefix of the counted active path. Rewind and switch copy the whole
+    // tree: the source counts its active path, and its own inherited paths stay inherited.
+    inheritedThrough:
+      params.mode === "fork" && cut
+        ? [readLastEventId(cut.prefix)].filter((id): id is string => id !== null)
+        : [
+            ...new Set(
+              [
+                ...readInheritedThrough(findSessionTranscriptHeader(events)),
+                scanSessionTranscriptTree(events).leafId,
+              ].filter((id): id is string => typeof id === "string"),
+            ),
+          ],
   });
   const nextEvents =
     params.mode === "fork" && cut
@@ -112,11 +157,20 @@ export function planSessionMessageCut(
   // Rotating transcript identity fences stale live managers: later snapshot-replace writes
   // target the old session and cannot erase this leaf repoint from the active session.
   const forked = params.mode === "fork";
-  const nextEntry: SessionEntry = {
+  const cutEntry: SessionEntry = {
     // Rewind keeps retired history references so cleanup cannot orphan old transcripts.
     ...(forked ? inheritSessionSelection(currentEntry) : currentEntry),
     sessionId: nextSessionId,
     lifecycleRevision: forked ? randomUUID() : currentEntry.lifecycleRevision,
+    localWorkspaceHandoff: workspace
+      ? {
+          worktreeId: workspace.worktreeId,
+          fromSessionId: workspace.sessionId,
+          toSessionId: nextSessionId,
+          lifecycleRevision: workspace.lifecycleRevision,
+          projectionRevision: workspace.projectionRevision,
+        }
+      : undefined,
     updatedAt: Date.now(),
     systemSent: false,
     abortedLastRun: false,
@@ -149,13 +203,9 @@ export function planSessionMessageCut(
     modelSelectionLocked: undefined,
     skillsSnapshot: undefined,
     systemPromptReport: undefined,
-    restartRecoveryRuns: undefined,
-    restartRecoveryForceSafeTools: undefined,
+    resumeAfterRestart: undefined,
     abortCutoffMessageSid: undefined,
     abortCutoffTimestamp: undefined,
-    usageFamilyKey: forked ? undefined : currentEntry.usageFamilyKey,
-    usageFamilySessionIds: forked ? undefined : currentEntry.usageFamilySessionIds,
-    previousSessionId: forked ? undefined : currentEntry.sessionId,
     ...(forked
       ? {
           forkSource: {
@@ -164,6 +214,7 @@ export function planSessionMessageCut(
             entryId: params.entryId,
           },
           parentSessionKey: params.canonicalSourceKey,
+          ...(currentEntry.visibility === "draft" ? { visibility: "draft" as const } : {}),
         }
       : {}),
     ...(params.mode === "fork" ? params.forkWorkspace : {}),
@@ -177,6 +228,18 @@ export function planSessionMessageCut(
       ? { incognito: true as const }
       : {}),
   };
+  // Rewind and branch switch keep the session key, so Usage keeps the retired window in its family.
+  const nextEntry = forked
+    ? cutEntry
+    : preserveSqliteSameKeySessionRolloverLineage({
+        next: cutEntry,
+        previous: currentEntry,
+        sessionKey: params.targetKey,
+      });
+  const editorText =
+    cut && (readMessageWorkContext(cut.message)?.text ?? extractEditorText(cut.message.content));
+  const editorAttachments = cut && extractEditorAttachments(cut.message.content);
+  const editorMediaRefs = cut && extractEditorMediaRefs(cut.message);
   return {
     status: "prepared",
     header,
@@ -185,9 +248,9 @@ export function planSessionMessageCut(
       status: "created",
       key: params.targetKey,
       entry: nextEntry,
-      ...(cut?.editorText ? { editorText: cut.editorText } : {}),
-      ...(cut?.editorAttachments ? { editorAttachments: cut.editorAttachments } : {}),
-      ...(cut?.editorMediaRefs ? { editorMediaRefs: cut.editorMediaRefs } : {}),
+      ...(editorText ? { editorText } : {}),
+      ...(editorAttachments ? { editorAttachments } : {}),
+      ...(editorMediaRefs ? { editorMediaRefs } : {}),
     },
   };
 }
@@ -213,6 +276,7 @@ function validateBranchTip(
 function resolveMessageCut(
   events: readonly TranscriptEvent[],
   entryId: string,
+  copyPrefix: boolean,
 ): MessageCut | Exclude<SessionMessageCutMutationResult, { status: "created" }> {
   const tree = scanSessionTranscriptTree(events);
   const target = tree.byId.get(entryId);
@@ -230,7 +294,7 @@ function resolveMessageCut(
     return { status: "off-active-path" };
   }
   const prefix: TranscriptEvent[] = [];
-  for (const node of activePath.slice(0, targetIndex)) {
+  for (const node of copyPrefix ? activePath.slice(0, targetIndex) : []) {
     const entry = asRecord(node.entry);
     // Spread (not Object.assign) so a parsed own `__proto__` key stays an inert
     // data property instead of rebinding the copy's prototype.
@@ -240,13 +304,9 @@ function resolveMessageCut(
         : node.entry,
     );
   }
-  const editorAttachments = extractEditorAttachments(message.content);
-  const editorMediaRefs = extractEditorMediaRefs(message);
   return {
     status: "cut",
-    editorText: readMessageWorkContext(message)?.text ?? extractEditorText(message.content),
-    ...(editorAttachments ? { editorAttachments } : {}),
-    ...(editorMediaRefs ? { editorMediaRefs } : {}),
+    message,
     parentId: target.parentId,
     prefix,
   };

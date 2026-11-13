@@ -1,7 +1,8 @@
-// Voice Call plugin module implements websocket test support behavior.
 import { once } from "node:events";
 import http from "node:http";
 import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
+// Voice Call plugin module implements websocket test support behavior.
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 
 export const withTimeout = async <T>(promise: Promise<T>, timeoutMs = 2000): Promise<T> => {
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -34,17 +35,10 @@ export const startUpgradeWsServer = async (params: {
     params.onUpgrade(request, socket, head);
   });
 
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Failed to resolve test server address");
-  }
+  const port = await listenOnLoopback(server);
 
   return {
-    url: `ws://127.0.0.1:${address.port}${params.urlPath}`,
+    url: `ws://127.0.0.1:${port}${params.urlPath}`,
     close: async () => {
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));

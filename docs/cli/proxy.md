@@ -62,6 +62,9 @@ See [Network Proxy](/security/network-proxy) for deployment guidance and denial 
 
 `run` starts a local debug proxy, then runs `<cmd...>` (after `--`) with the proxy env applied, under its own capture session. An OpenClaw child forwards instrumented HTTPS and WebSocket payloads to the parent through an ephemeral, session-bound capture token in its debug endpoint URL. Normal HTTP proxy variables and stored capture URLs remain credential-free. The parent remains the only persistence client; the child does not open a capture database. The private capture endpoint cannot read or purge captures and closes with the proxy. For child commands that mutate other OpenClaw state, run the Gateway first so those commands can route their writes. Offline capture retains exclusive parent ownership until the child exits.
 
+If `run` has no command after `--`, or `blob` cannot find the requested id,
+the CLI prints the specific reason on stderr and exits with status `1`.
+
 Capture persistence uses asynchronous worker operations. When a local Gateway owns the state directory, the CLI keeps the proxy listener and child command local and routes capture reads and writes through that Gateway. With the Gateway stopped, the CLI holds exclusive offline ownership through capture cleanup. A failed or uncertain Gateway request is never replayed locally. Older Gateways without capture routing require an update or an orderly stop before offline capture. On orderly shutdown,
 `start` and `run` wait for admitted capture writes and session cleanup. Capture
 failures remain reportable during cleanup even when the original HTTP response
@@ -78,7 +81,7 @@ The debug proxy's direct upstream forwarding opens upstream sockets for diagnost
 
 `sessions` lists recent capture sessions (`--limit`, default 20).
 
-`query --preset <name>` runs a built-in query against captured traffic, optionally scoped to `--session <id>`. Presets:
+`query --preset <name>` runs a built-in query against captured traffic, optionally scoped to `--session <id>`. Unknown or empty preset names exit with code 1 and list the accepted choices, including with `--json`. Presets:
 
 - `double-sends`
 - `retry-storms`

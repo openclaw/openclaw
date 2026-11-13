@@ -5,7 +5,6 @@ const events: string[] = [];
 const transcribeFirstAudioMock = vi.fn();
 const maybeSendAckReactionMock = vi.fn();
 const processMessageMock = vi.fn();
-const maybeBroadcastMessageMock = vi.fn();
 const createStatusReactionControllerMock = vi.fn();
 const updateLastRouteInBackgroundMock = vi.fn();
 const statusReactionController = {
@@ -26,7 +25,7 @@ const ackReactionHandle = {
   ackReactionValue: "👀",
   remove: vi.fn(async () => undefined),
 };
-const applyGroupGatingMock = vi.fn();
+const resolveGroupActivationForMock = vi.fn();
 
 vi.mock("./audio-preflight.runtime.js", () => ({
   transcribeFirstAudio: (...args: unknown[]) => transcribeFirstAudioMock(...args),
@@ -40,26 +39,18 @@ vi.mock("./process-message.js", () => ({
   processMessage: (...args: unknown[]) => processMessageMock(...args),
 }));
 
-vi.mock("./broadcast.js", () => ({
-  maybeBroadcastMessage: (...args: unknown[]) => maybeBroadcastMessageMock(...args),
-}));
-
 vi.mock("./status-reaction.js", () => ({
   createWhatsAppStatusReactionController: (...args: unknown[]) =>
     createStatusReactionControllerMock(...args),
 }));
 
-vi.mock("./group-gating.js", () => ({
-  applyGroupGating: (...args: unknown[]) => applyGroupGatingMock(...args),
+vi.mock("./group-activation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./group-activation.js")>()),
+  resolveGroupActivationFor: (...args: unknown[]) => resolveGroupActivationForMock(...args),
 }));
 
 vi.mock("./last-route.js", () => ({
   updateLastRouteInBackground: (...args: unknown[]) => updateLastRouteInBackgroundMock(...args),
-}));
-
-vi.mock("./peer.js", () => ({
-  resolvePeerId: (msg: { admission: { conversation: { id: string } } }) =>
-    msg.admission.conversation.id,
 }));
 
 vi.mock("../config.runtime.js", () => ({
@@ -76,12 +67,14 @@ vi.mock("../../group-session-key.js", () => ({
   resolveWhatsAppGroupSessionRoute: (route: unknown) => route,
 }));
 
-vi.mock("../../identity.js", () => ({
+vi.mock("../../identity.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../identity.js")>()),
   getPrimaryIdentityId: () => undefined,
   getSenderIdentity: () => ({ e164: "+15550000002", name: "Alice" }),
 }));
 
-vi.mock("openclaw/plugin-sdk/routing", () => ({
+vi.mock("openclaw/plugin-sdk/routing", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/routing")>()),
   buildGroupHistoryKey: () => "group-key",
   resolveAgentRoute: () => ({
     agentId: "main",
@@ -179,8 +172,6 @@ function makeHandler(overrides: Partial<Parameters<typeof createWebOnMessageHand
 describe("createWebOnMessageHandler audio preflight", () => {
   beforeEach(() => {
     events.length = 0;
-    maybeBroadcastMessageMock.mockReset();
-    maybeBroadcastMessageMock.mockImplementation(async () => false);
     maybeSendAckReactionMock.mockReset();
     maybeSendAckReactionMock.mockImplementation(async () => {
       events.push("ack");
@@ -198,8 +189,8 @@ describe("createWebOnMessageHandler audio preflight", () => {
     Object.values(statusReactionController).forEach((mock) => mock.mockClear());
     ackReactionHandle.remove.mockClear();
     updateLastRouteInBackgroundMock.mockReset();
-    applyGroupGatingMock.mockReset();
-    applyGroupGatingMock.mockResolvedValue({ shouldProcess: true });
+    resolveGroupActivationForMock.mockReset();
+    resolveGroupActivationForMock.mockResolvedValue("always");
   });
 
   it("sends ack reaction before audio preflight for voice notes", async () => {
@@ -252,20 +243,13 @@ describe("createWebOnMessageHandler audio preflight", () => {
   });
 
   it("clears preflight status reaction before group broadcast voice fan-out", async () => {
-    maybeBroadcastMessageMock.mockImplementation(
-      async (params: { preflightAudioTranscript?: string | null }) => {
-        expect(params.preflightAudioTranscript).toBe("transcribed voice note");
-        expect(statusReactionController.cancelPending).toHaveBeenCalledTimes(1);
-        expect(statusReactionController.clear).toHaveBeenCalledTimes(1);
-        return true;
-      },
-    );
     const handler = makeHandler({
       cfg: {
         messages: { statusReactions: { enabled: true } },
         broadcast: {
           "1203630@g.us": ["main", "backup"],
         },
+        agents: { entries: { main: {}, backup: {} } },
         channels: {
           whatsapp: {
             ackReaction: { enabled: true },
@@ -282,22 +266,24 @@ describe("createWebOnMessageHandler audio preflight", () => {
     expect(statusReactionController.cancelPending).toHaveBeenCalledTimes(1);
     expect(statusReactionController.clear).toHaveBeenCalledTimes(1);
     expect(statusReactionController.restoreInitial).not.toHaveBeenCalled();
-    expect(processMessageMock).not.toHaveBeenCalled();
+    expect(processMessageMock).toHaveBeenCalledTimes(2);
+    for (const [params] of processMessageMock.mock.calls) {
+      expect(params.preflightAudioTranscript).toBe("transcribed voice note");
+      expect(statusReactionController.clear.mock.invocationCallOrder[0]).toBeLessThan(
+        processMessageMock.mock.invocationCallOrder[0] ?? 0,
+      );
+    }
   });
 
   it("removes preflight ack when group voice transcript still misses mention gating", async () => {
-    applyGroupGatingMock
-      .mockResolvedValueOnce({ shouldProcess: false, needsMentionText: true })
-      .mockResolvedValueOnce({ shouldProcess: false });
+    resolveGroupActivationForMock.mockResolvedValue("mention");
     const handler = makeHandler();
 
     await handler(makeGroupAudioMsg());
 
-    expect(applyGroupGatingMock).toHaveBeenCalledTimes(2);
     expect(events).toEqual(["ack", "stt"]);
     expect(ackReactionHandle.remove).toHaveBeenCalledTimes(1);
     expect(updateLastRouteInBackgroundMock).not.toHaveBeenCalled();
-    expect(maybeBroadcastMessageMock).not.toHaveBeenCalled();
     expect(processMessageMock).not.toHaveBeenCalled();
   });
 

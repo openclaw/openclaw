@@ -55,6 +55,8 @@ export type OpenClawStateIntegrityAdmission = {
   readonly proof: SharedArrayBuffer;
 };
 export type OpenClawStateDatabaseAsyncResource = {
+  /** Retain the admission getter so first creation can publish its physical identity. */
+  admission?: Pick<OpenClawStateDatabaseReadAdmission, "identity">;
   /** Shared execution resources close only after accepted owners settle their remaining work. */
   phase?: "after-resources";
   close: (identity?: DatabasePathIdentity) => Promise<void>;
@@ -69,7 +71,10 @@ type IdentityRecord = {
 };
 type ReadSeal = { record?: IdentityRecord };
 type CloseAttempt = {
-  seal: ReadSeal;
+  /** Absent after failed drainage released reads; the next attempt seals again. */
+  seal?: ReadSeal;
+  /** A published replacement keeps reads sealed until this record's native handle retires. */
+  superseded?: true;
   retained: Set<OpenClawStateDatabaseAsyncResource>;
   pending?: Promise<boolean>;
   queue?: Set<OpenClawStateDatabaseAsyncResource>;
@@ -80,11 +85,13 @@ export function createOpenClawDatabaseMaintenanceScope(
   options?:
     | {
         schemaMaintenance?: false;
+        sqliteIntegrityCheck?: "quick" | "full";
         assertOwnerCurrent?: (access?: "read") => void;
         assertDatabaseAccess?: (databasePath: string) => void;
       }
     | {
         schemaMaintenance: true;
+        sqliteIntegrityCheck?: "quick" | "full";
         assertOwnerCurrent: (access?: "read") => void;
         assertDatabaseAccess?: (databasePath: string) => void;
       },
@@ -113,6 +120,7 @@ export function createOpenClawDatabaseMaintenanceScope(
   const scope: OpenClawDatabaseMaintenanceScope = {
     ownsSchemaMaintenance:
       options?.schemaMaintenance === true || parent?.ownsSchemaMaintenance === true,
+    sqliteIntegrityCheck: options?.sqliteIntegrityCheck ?? parent?.sqliteIntegrityCheck,
     assertOwnerCurrent(access) {
       assertOpen();
       if (checkingOwner) {
@@ -156,6 +164,17 @@ export function createOpenClawDatabaseMaintenanceScope(
         assertDatabaseAccess(databasePath);
       } else if (parent) {
         parent.assertDatabaseAccess(databasePath);
+      } else {
+        throw new Error("Database maintenance scope does not own this database");
+      }
+    },
+    assertCleanupDatabaseAccess(databasePath) {
+      assertOpen();
+      // Revoked operation authority cannot strand resources under the same physical owner.
+      if (assertDatabaseAccess) {
+        assertDatabaseAccess(databasePath);
+      } else if (parent) {
+        parent.assertCleanupDatabaseAccess(databasePath);
       } else {
         throw new Error("Database maintenance scope does not own this database");
       }
@@ -333,6 +352,9 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
     }
     return false;
   };
+  // A failed path close keeps custody after releasing reads, so its retry still
+  // targets the identity whose native handle and resources it failed to retire.
+  const hasCloseCustody = (record: IdentityRecord) => isSealed(record) || attempts.has(record);
   const assertOpen = (record: IdentityRecord) => {
     if (isSealed(record)) {
       throw new StateDatabaseReadAdmissionInvalidatedError(
@@ -342,7 +364,7 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
   };
   const findPhysicalRecord = (identity: DatabasePathIdentity): IdentityRecord | undefined => {
     const record = records.get(identity.key);
-    if (!record || !identity.key.startsWith("file:") || isSealed(record)) {
+    if (!record || !identity.key.startsWith("file:") || hasCloseCustody(record)) {
       return record;
     }
     // Cold binding retires vanished paths even when another hardlink keeps the file alive.
@@ -436,8 +458,14 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
     seals.add(held);
     return held;
   };
+  const release = (attempt: CloseAttempt) => {
+    if (attempt.seal) {
+      seals.delete(attempt.seal);
+      attempt.seal = undefined;
+    }
+  };
   const forget = (record: IdentityRecord) => {
-    if (!isSealed(record) && records.get(record.identity.key) === record) {
+    if (!hasCloseCustody(record) && records.get(record.identity.key) === record) {
       records.delete(record.identity.key);
       for (const pathname of record.paths) {
         if (recordsByPath.get(pathname) === record) {
@@ -516,21 +544,36 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
         ? captureRecord(record, resolveDatabasePath({ path: pathname })).captureIntegrity?.()
         : undefined;
     },
-    publish(pathname: string): {
+    publish(
+      pathname: string,
+      preparedIdentity?: DatabasePathIdentity,
+    ): {
       identity: DatabasePathIdentity;
       admission: OpenClawStateDatabaseReadAdmission;
     } {
       const resolvedPath = resolveDatabasePath({ path: pathname });
-      const identity = readDatabasePathIdentitySync(resolvedPath);
+      const identity = preparedIdentity ?? readDatabasePathIdentitySync(resolvedPath);
       const previous = recordsByPath.get(resolvedPath);
-      let record = findPhysicalRecord(identity);
+      // Warm worker publication keeps captured facts; cold binding still retires vanished aliases.
+      let record =
+        preparedIdentity && previous?.identity.key === identity.key
+          ? records.get(identity.key)
+          : findPhysicalRecord(identity);
       if (previous && previous.identity.key !== identity.key) {
         if (previous.identity.key.startsWith("path:") && !record) {
           // First canonical creation binds the same captured admission to its file.
           publishCreatedIdentity(previous, identity);
           record = previous;
         } else {
-          invalidate(previous);
+          const failed = attempts.get(previous);
+          if (failed) {
+            // The replaced file still has unretired native custody. Its path stays
+            // bound to that record, so reads there wait for the close retry.
+            failed.superseded = true;
+            failed.seal ??= seal(previous);
+          } else {
+            invalidate(previous);
+          }
           forget(previous);
         }
       }
@@ -538,7 +581,9 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
         record = resolve(resolvedPath, identity);
       }
       bindPath(record, resolvedPath);
-      bindPath(record, identity.canonicalPath);
+      // A retained actor's opening path cannot restore an alias retired by relocation.
+      // Native publication has just observed its own canonical alias.
+      bindPath(record, preparedIdentity ? record.identity.canonicalPath : identity.canonicalPath);
       // Private native binding may publish while reads are sealed. Retain its
       // generation now; every later worker use still checks the seal and lifetime.
       return { identity, admission: captureRecord(record, resolvedPath) };
@@ -602,9 +647,13 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
         return attempt.pending;
       }
       if (!attempt) {
-        attempt = { seal: seal(record), retained: new Set() };
+        attempt = { retained: new Set() };
         attempts.set(record, attempt);
       }
+      // A retry after failed drainage seals again before draining: invalidation
+      // retires admissions captured while reads were open, and the drain below
+      // settles resources those readers entered.
+      attempt.seal ??= seal(record);
       const current = attempt;
       const pending = tail
         .then(async () => {
@@ -634,7 +683,14 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
             await Promise.all(
               batch.map(async (resource) => {
                 try {
-                  await resource.close(record?.identity);
+                  const identity = record?.identity;
+                  if (
+                    !identity ||
+                    !resource.admission ||
+                    identity.key === resource.admission.identity.key
+                  ) {
+                    await resource.close(identity);
+                  }
                   current.retained.delete(resource);
                 } catch (error) {
                   // Unregistration cannot abandon a resource whose close failed.
@@ -644,16 +700,21 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
               }),
             );
           }
+          if (errors.length && !current.superseded) {
+            // Native handles were not retired, so the database stays live and
+            // reads can resume. Failed resources stay retained for the retry.
+            release(current);
+          }
           throwSqliteLifecycleErrors(errors, "OpenClaw state resource drainage failed");
           const retired = await retireNative(record?.identity);
           attempts.delete(record);
-          seals.delete(current.seal);
+          release(current);
           if (record === undefined) {
             // A successful whole-cache retry also discharges prior failed path closes.
             for (const [key, entry] of attempts) {
               if (!entry.pending) {
                 attempts.delete(key);
-                seals.delete(entry.seal);
+                release(entry);
               }
             }
             for (const entry of records.values()) {
@@ -673,7 +734,8 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
         () => undefined,
       );
       void pending.catch(() => {
-        // Keep the seal and failed resource custody, while allowing an explicit retry.
+        // Failed native retirement keeps its seal; failed drainage released it above.
+        // Both keep failed resource custody for an explicit retry.
         current.pending = undefined;
       });
       return pending;

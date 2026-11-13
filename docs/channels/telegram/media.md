@@ -33,7 +33,7 @@ What OpenClaw can send to Telegram beyond text, and how inbound media reaches th
 
     The caption goes on the first photo. Text that exceeds the caption limit follows the album as a separate message. Photos sent as documents, other media types, and messages with inline buttons keep separate sends so their existing controls and delivery behavior are preserved.
 
-    Media captions use Telegram HTML rather than rich message blocks. Rich lists become separate marker lines (including nested lists and checkboxes), and asides become blockquotes. Code examples keep their literal tags.
+    Media captions use Telegram HTML rather than rich message blocks. Rich lists become separate marker lines (including nested lists and checkboxes), and asides become blockquotes. HTML checkbox input types are case-insensitive. Caption edits use the same rendering; a plain-text retry keeps the visible text without counting formatting markers against the caption limit. Code examples keep their literal tags.
 
     ### Audio messages
 

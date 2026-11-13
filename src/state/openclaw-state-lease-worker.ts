@@ -1,7 +1,8 @@
 import { hostname } from "node:os";
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
@@ -30,6 +31,7 @@ import {
   reclaimDeadOpenClawStateLeaseInTransaction,
   releaseOpenClawStateLeaseInTransaction,
   renewOpenClawStateLeaseInTransaction,
+  readOpenClawStateLeaseLoss,
 } from "./openclaw-state-lease-store.js";
 import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease.types.js";
 
@@ -41,7 +43,7 @@ function takeLeaseExpiryObservation(identity: OpenClawStateLeaseIdentity): BigIn
     !isDeepStrictEqual(attachment.identity, identity) ||
     !(attachment.observation instanceof SharedArrayBuffer) ||
     attachment.observation.byteLength !==
-      (leaseHeartbeatState.startupPhase + 1) * BigInt64Array.BYTES_PER_ELEMENT
+      (leaseHeartbeatState.ownerFence + 1) * BigInt64Array.BYTES_PER_ELEMENT
   ) {
     throw new Error("State lease worker requires its original expiry observation attachment");
   }
@@ -56,15 +58,13 @@ function publishLeaseExpiryObservation(shared: BigInt64Array, expiresAt: bigint)
 }
 
 function stageLeaseExpiryObservation(
-  db: DatabaseSync,
+  db: EngineConnection,
   shared: BigInt64Array,
   expiresAt: number | undefined,
 ): void {
   const value = BigInt(expiresAt ?? 0);
   if (
     !stageSqliteTransactionState(db, {
-      stage() {},
-      rollback() {},
       commit() {
         publishLeaseExpiryObservation(shared, value);
       },
@@ -75,7 +75,7 @@ function stageLeaseExpiryObservation(
 }
 
 function readOwnedLeaseExpiry(
-  database: DatabaseSync,
+  database: EngineConnection,
   identity: OpenClawStateLeaseIdentity,
 ): number {
   return verifyOpenClawStateLeaseOwnership({
@@ -86,7 +86,7 @@ function readOwnedLeaseExpiry(
 }
 
 function assertOpenClawStateLeaseWorkerOwned(
-  database: DatabaseSync,
+  database: EngineConnection,
   identity: OpenClawStateLeaseIdentity,
   purpose: "write" | "verify" | "renew" = "write",
   stage: "transaction" | "commit" = "transaction",
@@ -108,7 +108,7 @@ function assertOpenClawStateLeaseWorkerOwned(
 
 /** The live owner grants this exact transaction; the receipt alone grants nothing. */
 export function assertOpenClawStateLeaseWorkerOwnedInTransaction(
-  database: DatabaseSync,
+  database: EngineConnection,
   identity: OpenClawStateLeaseIdentity,
   purpose: "write" | "verify" | "renew" = "write",
   stage: "transaction" | "commit" = "transaction",
@@ -122,7 +122,7 @@ export function assertOpenClawStateLeaseWorkerOwnedInTransaction(
 
 /** One grant covers the complete lease set held by this transaction. */
 export function assertOpenClawStateLeasesWorkerOwnedInTransaction(
-  database: DatabaseSync,
+  database: EngineConnection,
   identities: readonly OpenClawStateLeaseIdentity[],
   stage: "transaction" | "commit" = "transaction",
 ): void {
@@ -160,6 +160,7 @@ export function acquireOpenClawStateLeaseInWorker(
             process.pid,
             getSqliteWorkerStateContext().environment,
           ),
+          processNamespace: readGatewayLockProcessNamespace(),
         },
       })
     : null;
@@ -211,6 +212,8 @@ export function executeOpenClawStateLeaseCommand(
     publishLeaseExpiryObservation(shared, BigInt(expiresAt));
     return expiresAt;
   }
+  const singleStatement =
+    command.type === "stateLease.release" && !isPostgresSqlConnection(database.db);
   const shared =
     command.type === "stateLease.renew"
       ? takeLeaseExpiryObservation(command.input.identity)
@@ -234,7 +237,11 @@ export function executeOpenClawStateLeaseCommand(
           command.input.leaseMs,
         );
         if (expiresAt === undefined) {
-          throw createOpenClawStateLeaseLostError(command.input.identity);
+          throw createOpenClawStateLeaseLostError(
+            command.input.identity,
+            undefined,
+            readOpenClawStateLeaseLoss(db, command.input.identity),
+          );
         }
         assertOpenClawStateLeaseWorkerOwnedInTransaction(
           db,
@@ -248,12 +255,19 @@ export function executeOpenClawStateLeaseCommand(
         return expiresAt;
       }
       const facts = { kind: "state-lease-release", identity: command.input.identity };
-      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts });
+      requestSqliteWorkerOperationAdmission({
+        stage: singleStatement ? "commit" : "transaction",
+        facts,
+      });
       assertExistingDatabaseIdentity(database.path, command.input.databaseIdentity);
       releaseOpenClawStateLeaseInTransaction(db, command.input.identity);
-      requestSqliteWorkerOperationAdmission({ stage: "commit", facts });
-      assertExistingDatabaseIdentity(database.path, command.input.databaseIdentity);
+      if (!singleStatement) {
+        requestSqliteWorkerOperationAdmission({ stage: "commit", facts });
+        assertExistingDatabaseIdentity(database.path, command.input.databaseIdentity);
+      }
       return undefined;
     },
+    0,
+    singleStatement ? true : undefined,
   );
 }

@@ -1,5 +1,4 @@
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
 import { registerSessionStateWatch } from "../../sessions/session-state-events.js";
 import {
@@ -8,20 +7,24 @@ import {
 } from "../accepted-session-spawn.js";
 import { withFollowupRequest } from "../subagents/completion/session-followup-completion.js";
 import type { FollowupRequest } from "../subagents/completion/session-followup-completion.types.js";
+import { subagentRuns } from "../subagents/registry/subagent-registry-memory.js";
 import { getLatestLiveSubagentRunByChildSessionKey } from "../subagents/registry/subagent-registry-read.js";
-import type { AgentStepSession } from "./agent-step.js";
 import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
   prepareGatewayToolCallerAssertion,
 } from "./gateway-caller-context.js";
-import { runWithGatewayToolCleanupContext } from "./in-process-gateway.js";
+import {
+  getInProcessGatewayToolContext,
+  runWithGatewayToolCleanupContext,
+} from "./in-process-gateway.js";
 import { prepareSessionsSendFollowup } from "./sessions-send-followup-custody.js";
 import { startSessionsSendReplyFlow } from "./sessions-send-reply-flow.js";
 import {
   startSessionsSendAgentRun,
   trySessionsSendActiveRunDelivery,
 } from "./sessions-send-tool.delivery.js";
+import type { AgentStepSession } from "./sessions-send-tool.types.js";
 import { jsonResult } from "./tool-results.js";
 
 /** Reconcile only the original admission; an uncertain ACK never starts a replacement. */
@@ -49,14 +52,15 @@ export async function startSessionsSendFollowup(
         targetAgentId: request.targetAgentId,
         requesterAgentId: request.requesterAgentId,
         requesterSessionKey: request.requesterSessionKey,
-        replyMode: "one-way",
+        replyMode: replyContext.replyMode === "peer" ? "peer" : "one-way",
         notifyRequesterOnWaitFailure: true,
       });
       return {
         start: {
           ...start,
+          selfHeld: undefined,
           result: jsonResult({
-            ...(isRecord(start.result.details) ? start.result.details : {}),
+            ...start.result.details,
             sentBeforeError: true,
           }),
         },
@@ -74,13 +78,14 @@ export async function startSessionsSendFollowup(
   return { start, completion };
 }
 
-/** Accepted child followups belong to the same completion owner as spawned work. */
+/** Eligible followups retain their accepted result through the existing completion owner. */
 export async function dispatchSessionsSendFollowup(
   params: Parameters<typeof startSessionsSendAgentRun>[0],
   replyContext: Parameters<typeof startSessionsSendFollowup>[2],
   options: {
     message: string;
     ownChild: boolean;
+    persistentChildAccess?: boolean;
     nativeChild: boolean;
     watch: boolean;
     requesterSessionKey: string;
@@ -100,11 +105,10 @@ export async function dispatchSessionsSendFollowup(
       )
     : undefined;
   const sameRequester = replyContext.requesterSessionKey === options.requesterSessionKey;
+  const isCronRequester = isCronRunSessionKey(options.requesterSessionKey);
   const requesterTurn =
-    params.allowActiveRunQueueDelivery &&
-    !params.expectedSessionId &&
+    (!params.expectedSessionId || options.persistentChildAccess) &&
     options.nativeChild &&
-    !isCronRunSessionKey(options.requesterSessionKey) &&
     sameRequester &&
     (options.ownChild ||
       (completionChild?.requesterSessionKey === options.requesterSessionKey &&
@@ -116,11 +120,23 @@ export async function dispatchSessionsSendFollowup(
     throw new Error("Child followup completion requires its original requester session.");
   }
   const active = await trySessionsSendActiveRunDelivery(params, options.ownChild);
-  const completionTurn =
-    options.watch || (options.ownChild && !("ok" in active)) ? requesterTurn : undefined;
+  const registryTurn =
+    (!isCronRequester && options.watch) || (options.ownChild && !("ok" in active))
+      ? requesterTurn
+      : undefined;
+  const completionTurn = isCronRequester ? undefined : registryTurn;
+  // A queued self-send has no separate recipient to observe it with operator.write.
+  // Keep the original run's result, without registering the session as its own child.
+  const ownSessionCompletion =
+    replyContext.replyMode === "peer" &&
+    options.requesterSessionKey === params.sessionStoreTarget.canonicalKey &&
+    options.requesterAgentId === params.sendParams.agentId &&
+    getInProcessGatewayToolContext()?.lifecycleRuntime !== undefined;
   const request =
     !("ok" in active) &&
-    (completionTurn || (replyContext.replyMode === "one-way" && options.ownChild)) &&
+    (registryTurn ||
+      ownSessionCompletion ||
+      (replyContext.replyMode === "one-way" && options.ownChild)) &&
     sameRequester
       ? await prepareSessionsSendFollowup({
           runId: params.runId,
@@ -141,11 +157,11 @@ export async function dispatchSessionsSendFollowup(
     "ok" in active
       ? { start: active, completion: undefined }
       : await startSessionsSendFollowup(
-          completionTurn ? undefined : request,
+          registryTurn ? undefined : request,
           {
             ...params,
             ...active,
-            ...(completionTurn
+            ...(registryTurn
               ? {
                   retainAcceptance: true,
                   assertDispatchCurrent: () => {
@@ -161,7 +177,7 @@ export async function dispatchSessionsSendFollowup(
           replyContext,
         );
   try {
-    if (start.ok && completionTurn) {
+    if (start.ok && registryTurn) {
       const { registerSubagentRun, adoptSubagentRunForRequesterTurn } =
         await import("../subagents/registry/subagent-registry.js");
       // Acceptance already owns the input; retained custody owns recording its result obligation.
@@ -184,7 +200,8 @@ export async function dispatchSessionsSendFollowup(
               expected,
               requesterSessionKey: options.requesterSessionKey,
               requesterAgentId: options.requesterAgentId,
-              requesterTurnRunId: completionTurn,
+              requesterTurnRunId: registryTurn,
+              requesterRunInstance: instance,
               assertCurrent: assertCompletionCurrent,
             });
           }
@@ -203,13 +220,13 @@ export async function dispatchSessionsSendFollowup(
               requesterSessionKey: options.requesterSessionKey,
               requesterDisplayKey: options.requesterSessionKey,
               requesterAgentId: options.requesterAgentId,
-              requesterTurnRunId: completionTurn,
+              requesterTurnRunId: registryTurn,
               requesterOrigin: replyContext.requesterOrigin,
               task: options.message,
               cleanup: "keep",
               spawnMode: "session",
-              expectsCompletionMessage: true,
-              completionTarget: "parent",
+              expectsCompletionMessage: Boolean(completionTurn),
+              completionTarget: completionTurn ? "parent" : undefined,
               completionRequesterSessionId: replyContext.requesterSession?.sessionId,
               completionRequesterLifecycleRevision:
                 replyContext.requesterSession?.lifecycleRevision,
@@ -218,9 +235,22 @@ export async function dispatchSessionsSendFollowup(
               assertCurrent: assertCompletionCurrent,
               assertPublicationCurrent: () => request?.custody.assertCurrent(),
               acceptedRunReplay: true,
+              requesterRunInstance: instance,
             },
           );
-          accepted = { runId: start.runId, childSessionKey, expectsCompletionMessage: true };
+          accepted = {
+            runId: start.runId,
+            childSessionKey,
+            expectsCompletionMessage: Boolean(completionTurn),
+          };
+        }
+        if (completionTurn && request?.requesterAuthority) {
+          const runId = start.targetDisposition === "steered" ? start.steeredRunId : start.runId;
+          const entry = runId ? subagentRuns.get(runId) : undefined;
+          if (!entry) {
+            throw new Error("Accepted child followup has no registry owner.");
+          }
+          request.requesterAuthority.bind({ entry, runs: subagentRuns });
         }
         return accepted;
       };
@@ -257,6 +287,8 @@ export async function dispatchSessionsSendFollowup(
     return {
       start: {
         ok: false as const,
+        // Only an accepted start reaches this catch, so it is never a retainable refusal.
+        selfHeld: undefined,
         result: jsonResult({
           runId: start.ok ? start.runId : params.runId,
           status: "error",
@@ -271,7 +303,7 @@ export async function dispatchSessionsSendFollowup(
     };
   } finally {
     admissionOpen = false;
-    if (completionTurn) {
+    if (registryTurn) {
       request?.custody.release();
     }
   }
@@ -282,7 +314,7 @@ export async function dispatchSessionsSendFollowup(
   if (
     start.ok &&
     options.watch &&
-    !params.expectedSessionId &&
+    (!params.expectedSessionId || options.persistentChildAccess) &&
     replyContext.requesterSessionKey &&
     targetSessionKey &&
     replyContext.requesterSessionKey !== targetSessionKey

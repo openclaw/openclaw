@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { periodSchema } from "./periods.js";
 
+export const TEAM_REPORTS_SCHEMA_VERSION = 2;
+
 export const TEAM_REPORTS_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS team_reports_schema_migrations (
   id TEXT PRIMARY KEY,

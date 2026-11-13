@@ -1,5 +1,8 @@
 import { performance } from "node:perf_hooks";
 import { createQueuedDiagnosticPhaseEmitter } from "../../infra/diagnostic-events.js";
+import type { AdmissionDiagnostics } from "../../infra/diagnostics-timeline.js";
+import { formatAdmissionDiagnostics } from "../../process/command-lane-diagnostics.js";
+import { createPhaseTimings } from "./phase-timings.js";
 
 const PHASES = [
   "authority",
@@ -18,12 +21,9 @@ const PHASES = [
   "dispatch",
 ] as const;
 type ChatSendPhase = (typeof PHASES)[number] | `detail.${string}`;
-type PhaseScope = {
-  mark: (phase?: ChatSendPhase) => void;
-  finish: () => void;
-  [Symbol.dispose]: () => void;
-};
 type PostAckStage = "startup" | "steer" | "queued";
+const DEPENDENCY_RETIRE_VERIFY =
+  "attempt.setup.sandbox.workspace_selection.prepare.reconcile.dependency.retire.verify";
 
 export type ChatSendDiagnostics = ReturnType<typeof startChatSendDiagnostics>;
 
@@ -46,23 +46,39 @@ export function readChatSendDiagnostics(request: object): ChatSendDiagnostics | 
 /** Request-owned totals; nested and parallel phases can overlap. */
 export function startChatSendDiagnostics(log: { info(message: string): void }) {
   const emit = createQueuedDiagnosticPhaseEmitter();
-  const totals = new Map<ChatSendPhase, number>();
-  const active = new Set<(now: number) => void>();
+  const timing = createPhaseTimings<ChatSendPhase>();
+  const { totals } = timing;
   let stage: "request" | PostAckStage = "request";
   let startedAt = performance.now();
   let acknowledgedMs: number | undefined;
+  let dependencyRetireVerifyAttempts = 0;
+  let admissionState: AdmissionDiagnostics | undefined;
+  let laneMs = 0,
+    writerMs = 0,
+    placementMs = 0;
   let finished = false;
+  let identity: { sessionId: string; runId: string } | undefined;
 
   const report = () => {
     const now = performance.now();
-    for (const flush of active) {
-      flush(now);
-    }
+    timing.flush(now);
     const elapsedMs = now - startedAt;
-    const endedAt = Date.now();
+    const slow = elapsedMs >= 1_000;
+    if (!slow && !emit) {
+      totals.clear();
+      dependencyRetireVerifyAttempts = 0;
+      admissionState = undefined;
+      laneMs = writerMs = placementMs = 0;
+      startedAt = now;
+      return elapsedMs;
+    }
+    const endedAt = emit ? Date.now() : 0;
     try {
-      let message = `slow chat send ${Math.round(elapsedMs)}ms stage=${stage}`;
-      if (acknowledgedMs !== undefined) {
+      let message = slow ? `slow chat send ${Math.round(elapsedMs)}ms stage=${stage}` : "";
+      if (slow && identity) {
+        message += ` sessionId=${identity.sessionId} runId=${identity.runId}`;
+      }
+      if (slow && acknowledgedMs !== undefined) {
         message += ` ack=${Math.round(acknowledgedMs)}ms`;
       }
       for (const phase of [
@@ -78,17 +94,28 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
           startedAt: endedAt - elapsedMs,
           endedAt,
           durationMs,
-          details: { stage },
+          details: { stage, ...identity },
         });
-        message += ` ${phase}=${Math.round(durationMs)}ms`;
+        if (slow) {
+          message += ` ${phase}=${Math.round(durationMs)}ms`;
+        }
       }
-      if (elapsedMs >= 1_000) {
+      if (slow) {
+        if (dependencyRetireVerifyAttempts) {
+          message += ` detail.${DEPENDENCY_RETIRE_VERIFY}.attempts=${dependencyRetireVerifyAttempts}`;
+        }
+        if (admissionState) {
+          message += ` ${formatAdmissionDiagnostics({ ...admissionState, laneMs, writerMs, placementMs })}`;
+        }
         log.info(message);
       }
     } catch {
       // Diagnostic failures must not change acknowledgement or dispatch outcomes.
     }
     totals.clear();
+    dependencyRetireVerifyAttempts = 0;
+    admissionState = undefined;
+    laneMs = writerMs = placementMs = 0;
     startedAt = now;
     return elapsedMs;
   };
@@ -106,44 +133,57 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
       }
       report();
       finished = true;
-      active.clear();
+      timing.close();
     }
   };
-  const scope = (initialPhase: ChatSendPhase): PhaseScope | undefined => {
-    if (finished) {
-      return undefined;
-    }
-    let phase: ChatSendPhase | undefined = initialPhase;
-    let phaseStartedAt = performance.now();
-    const flush = (now: number) => {
-      if (phase) {
-        totals.set(phase, (totals.get(phase) ?? 0) + now - phaseStartedAt);
-      }
-      phaseStartedAt = now;
-    };
-    active.add(flush);
-    const phaseScope: PhaseScope = {
-      mark(nextPhase) {
-        if (active.has(flush)) {
-          flush(performance.now());
-          phase = nextPhase;
-        }
-      },
-      finish() {
-        phaseScope.mark();
-        active.delete(flush);
-      },
-      [Symbol.dispose]() {
-        phaseScope.finish();
-      },
-    };
-    return phaseScope;
-  };
+  const scope = (phase: ChatSendPhase) => (finished ? undefined : timing.scope(phase));
   return {
+    setRunIdentity(sessionId: string, runId: string) {
+      identity = { sessionId, runId };
+    },
     scope,
-    observeSpan: (name: string, attributes: Record<string, unknown> | undefined) => {
+    observeSpan: (
+      name: string,
+      attributes: Record<string, unknown> | undefined,
+      durationMs?: number,
+      admission?: AdmissionDiagnostics,
+    ) => {
+      if (finished) {
+        return undefined;
+      }
+      if (admission) {
+        if (name === "laneMs") {
+          laneMs += durationMs!;
+        }
+        if (name === "writerMs") {
+          writerMs += durationMs!;
+        }
+        if (name === "placementMs") {
+          placementMs += durationMs!;
+        }
+        admissionState = admission;
+        return undefined;
+      }
       const spanName = name === "agent.prepare" ? attributes?.stage : name;
-      return typeof spanName === "string" ? scope(`detail.${spanName}`)?.finish : undefined;
+      if (typeof spanName !== "string") {
+        return undefined;
+      }
+      if (
+        stage === "startup" &&
+        spanName.startsWith("reply.admission.") &&
+        spanName.endsWith("_wait")
+      ) {
+        stage = "queued";
+      }
+      const phase = `detail.${spanName}` as const;
+      if (durationMs !== undefined) {
+        totals.set(phase, (totals.get(phase) ?? 0) + durationMs);
+        return undefined;
+      }
+      if (spanName === DEPENDENCY_RETIRE_VERIFY) {
+        dependencyRetireVerifyAttempts++;
+      }
+      return scope(phase)?.finish;
     },
     acknowledge(disposition: PostAckStage = "startup") {
       if (!finished && stage === "request") {

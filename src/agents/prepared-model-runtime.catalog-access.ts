@@ -1,6 +1,5 @@
 import pLimit from "p-limit";
 import { withRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
-import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import { createPreparedRuntimeAuthProfileUsageReader } from "./auth-profiles/runtime-snapshots.js";
 import {
   augmentPreparedModelCatalogWithAgentHarness,
@@ -10,6 +9,7 @@ import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-pr
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { createPreparedModelCatalogWorker } from "./prepared-model-catalog-worker.js";
 import {
+  createPreparedModelCatalogUsageReader,
   getPreparedModelFullCatalogAuth,
   setPreparedModelFullCatalogAuth,
   type PreparedModelCatalogAuth,
@@ -37,19 +37,19 @@ import {
   retainPreparedModelCatalogPublication,
 } from "./prepared-model-runtime.catalog-publication.js";
 import {
+  listChangedPreparedCatalogProviders,
   preparedProviderCatalogCredentials,
+  preparedProviderCatalogSource,
   prepareRetainedProviderCatalog,
 } from "./prepared-model-runtime.catalog-source.js";
 import * as retry from "./prepared-model-runtime.discovery-retry.js";
 import { assertPreparedModelRuntimeInputCurrent } from "./prepared-model-runtime.errors.js";
-import { preparedModelInventoryKey } from "./prepared-model-runtime.facts.js";
-import { fingerprintPreparedRuntimeFacts } from "./prepared-model-runtime.fingerprint.js";
 import {
   isPreparedModelCatalogFull,
   markPreparedModelCatalogFull,
 } from "./prepared-model-runtime.full-catalog.js";
 import { capturePreparedModelRuntimeLifetime } from "./prepared-model-runtime.lifecycle.js";
-import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
+import { runWithPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
 import {
   createCatalogAttemptReporter,
   notifyPreparedModelCatalogPublication,
@@ -93,7 +93,7 @@ export async function createFullModelCatalogAccess(
     params.retirementSignal,
     params.agentFacts.input.config,
     () => {
-      if (params.catalogOwner && params.isPublished?.() !== false) {
+      if (params.catalogOwner) {
         notifyPreparedModelRuntimePublication({
           phase: "catalog-observation",
           modelFactsChanged: false,
@@ -106,22 +106,20 @@ export async function createFullModelCatalogAccess(
     params.agentFacts.input.agentDir,
     params.agentFacts.input.inheritedAuthDir,
   );
+  const readCurrentUsage = createPreparedModelCatalogUsageReader(params.isCurrent, readUsage);
   const setCatalogAuth = (catalog: ModelCatalogSnapshot, auth: PreparedModelCatalogAuth) =>
-    setPreparedModelFullCatalogAuth(catalog, auth, (store) =>
-      params.isCurrent() ? readUsage(store) : store,
-    );
+    setPreparedModelFullCatalogAuth(catalog, auth, readCurrentUsage);
   const projectInventory = createPreparedModelCatalogProjection({ ...params, normalizeProvider });
   const project = (...args: Parameters<typeof projectInventory>) =>
     attempt.withRefreshStatus(projectInventory(...args));
-  const inventoryKey = preparedModelInventoryKey(params.agentFacts.input);
-  const nativeSource = fingerprintPreparedRuntimeFacts({
-    runtimePluginSelections: params.agentFacts.input.runtimePluginSelections,
-    config: params.nativeConfigFingerprint,
-    configuredModelRefs: params.agentFacts.configuredModelRefs,
-  });
-  const pluginFingerprint = resolveInstalledManifestRegistryIndexFingerprint(
-    params.pluginGeneration.pluginMetadataSnapshot.index,
-  );
+  const {
+    retainedInventory,
+    providerSources,
+    unretainedProviders,
+    inventoryKey,
+    nativeSource,
+    pluginFingerprint,
+  } = prepareRetainedProviderCatalog(params, normalizeProvider, eligibleProviders);
   const attempt = createCatalogAttemptReporter(
     params.inventoryOwner,
     { key: inventoryKey, pluginFingerprint, credentials: params.agentFacts.credentials },
@@ -135,16 +133,7 @@ export async function createFullModelCatalogAccess(
         params.inventoryOwner.catalogInventory = published.inventory;
       }
     },
-    params.isPublished,
   );
-  const { providerSource, retainedInventory, listChangedProviders } =
-    prepareRetainedProviderCatalog(
-      params,
-      normalizeProvider,
-      eligibleProviders,
-      pluginFingerprint,
-      nativeSource,
-    );
   if (retainedInventory) {
     setCatalogAuth(retainedInventory.catalog, currentAuth);
   }
@@ -172,7 +161,10 @@ export async function createFullModelCatalogAccess(
   const worker = withRemoteModelCatalogSnapshot(params.pluginGeneration.remoteCatalog, () =>
     createPreparedModelCatalogWorker({
       pluginRegistry: params.pluginGeneration.pluginRegistry,
-      agentFacts: params.agentFacts,
+      agentFacts: {
+        ...params.agentFacts,
+        configuredRuntimeModels: params.catalogFacts.configuredRuntimeModels,
+      },
       pluginMetadataSnapshot: params.pluginGeneration.pluginMetadataSnapshot,
       preferBuiltPluginArtifacts: params.pluginGeneration.preferBuiltPluginArtifacts,
       isCurrent: params.isCurrent,
@@ -276,7 +268,6 @@ export async function createFullModelCatalogAccess(
         configuredRuntimeModels,
         runtimeModels,
         providerExpiries,
-        hookRows,
       } = await worker.loadCatalog(
         providerIds,
         (error) => attempt.failed(error, providers, "provider"),
@@ -304,7 +295,7 @@ export async function createFullModelCatalogAccess(
             scope.has(normalizeProvider(provider)),
           )
         : discoveredAuth;
-      const { legacyRows, ...publication } = prepareModelCatalogPublication(
+      const { legacyProviders, ...publication } = prepareModelCatalogPublication(
         providerIds
           ? filterPreparedProviderCatalog(workerCatalog, (provider) =>
               scope.has(normalizeProvider(provider)),
@@ -314,10 +305,18 @@ export async function createFullModelCatalogAccess(
         retained,
         auth,
         normalizeProvider,
-        hookRows,
       );
       const completedProviders = new Map(
         [...scope].map((provider) => {
+          const source =
+            providerSources.get(provider) ??
+            preparedProviderCatalogSource(
+              params.agentFacts,
+              params.pluginGeneration,
+              provider,
+              normalizeProvider,
+            );
+          providerSources.set(provider, source);
           const expiresAt = providerExpiries.get(provider);
           const failed = workerCatalog.providerOutcomes?.some(
             (outcome) =>
@@ -326,16 +325,17 @@ export async function createFullModelCatalogAccess(
           return [
             provider,
             {
-              source: providerSource(provider),
+              source,
               credentials: preparedProviderCatalogCredentials(auth, provider, normalizeProvider),
               ...retry.discoveryDeadline(failed, expiresAt, retained?.providers.get(provider)),
-              ...(legacyRows.get(provider)?.size ? { legacyRows: legacyRows.get(provider) } : {}),
+              ...(legacyProviders.has(provider) ? { legacyAcquired: true } : {}),
             },
           ] as const;
         }),
       );
       const acquired = {
         ...publication,
+        ...(!providerIds ? { fullProviderDiscovery: true as const } : {}),
         key: inventoryKey,
         pluginFingerprint,
         nativeSource,
@@ -405,18 +405,13 @@ export async function createFullModelCatalogAccess(
     }
     const previousNative = nativePending;
     let failedProviders: readonly string[] | undefined;
-    const promise = (async () => {
+    const promise = runWithPreparedPluginGeneration(params.pluginGeneration, async () => {
       await previousNative?.catch(() => undefined);
       const settledCatalog = readReadyCatalog();
       if (settledCatalog) {
         return settledCatalog;
       }
-      await using _ = {
-        [Symbol.asyncDispose]: retainPreparedPluginGeneration(params.pluginGeneration),
-      };
-      if (params.isCurrent()) {
-        attempt.setPending([], "native");
-      }
+      attempt.setPending([], "native");
       let discoveredProviders: string[] = [];
       let completed = false;
       const failures: Array<{ error: unknown; providers?: readonly string[] }> = [];
@@ -434,9 +429,7 @@ export async function createFullModelCatalogAccess(
           ? (provider) => providerIds.includes(normalizeProvider(provider))
           : undefined,
         onDiscoveryStarted: (provider) => {
-          if (params.isCurrent()) {
-            attempt.setPending([normalizeProvider(provider)], "native");
-          }
+          attempt.setPending([normalizeProvider(provider)], "native");
         },
         onError: (error, failedProviderIds) => {
           failures.push({ error, providers: failedProviderIds?.map(normalizeProvider) });
@@ -505,6 +498,9 @@ export async function createFullModelCatalogAccess(
               nativeSource,
               providers: latestInventory?.providers ?? new Map(),
               discoveryOrigins: latestInventory?.discoveryOrigins ?? [],
+              ...(latestInventory?.fullProviderDiscovery
+                ? { fullProviderDiscovery: true as const }
+                : {}),
             }
           : latestInventory;
       if (nextInventory) {
@@ -527,18 +523,16 @@ export async function createFullModelCatalogAccess(
         { ...latest, inventory: nextInventory, nativeCatalogAcquired: acquiredNative },
         "native",
       );
-      if (params.isPublished?.() !== false) {
-        notifyPreparedModelCatalogPublication(change);
-      }
+      notifyPreparedModelCatalogPublication(change);
       if (!completed && failures.length && (selection || refresh)) {
         failedProviders = failures.flatMap((failure) => failure.providers ?? []);
         throw failures[0]!.error;
       }
       return published.catalog ?? staticCatalog;
-    })()
+    })
       .catch((error: unknown) => {
         attempt.failed(error, failedProviders ?? providerIds, "native");
-        if (params.isCurrent() && published.catalog) {
+        if (published.catalog) {
           attempt.withRefreshStatus(published.catalog);
         }
         throw error;
@@ -578,12 +572,12 @@ export async function createFullModelCatalogAccess(
       };
       setCatalogAuth(inventory.catalog, auth);
       const change = publishCatalog({ ...published, inventory }, "native");
-      notifyPreparedModelCatalogPublication(params.isPublished?.() === false ? undefined : change);
+      notifyPreparedModelCatalogPublication(change);
     },
   );
   const refreshExpiredModelCatalog = () => {
     assertCurrent();
-    recheckNativeLogin();
+    void recheckNativeLogin();
     if (pending || !published.inventory) {
       return;
     }
@@ -608,6 +602,7 @@ export async function createFullModelCatalogAccess(
       !options.refresh &&
       !options.changedOnly &&
       published.catalog &&
+      (options.providerIds || published.inventory?.fullProviderDiscovery) &&
       eligibleProviders.every((provider) => published.inventory?.providers.has(provider))
     ) {
       refreshExpiredModelCatalog();
@@ -617,12 +612,19 @@ export async function createFullModelCatalogAccess(
       ...new Set((options.providerIds ?? eligibleProviders).map(normalizeProvider)),
     ];
     const providers = options.changedOnly
-      ? listChangedProviders(published.inventory, options.providerIds)
+      ? listChangedPreparedCatalogProviders(
+          params.agentFacts,
+          normalizeProvider,
+          providerSources,
+          unretainedProviders,
+          published.inventory,
+          options.providerIds,
+        )
       : requestedProviders;
-    // A changed-only pass without provider inventory is a cold start: acquire what a refresh
-    // would, including hosted rows for providers without credentials.
+    // Native and scoped acquisitions do not cover hosted rows for uncredentialed providers.
+    // The first unscoped demand must still acquire complete provider inventory.
     const fullRefresh =
-      !options.providerIds && (!options.changedOnly || !published.inventory?.providers.size);
+      !options.providerIds && (!options.changedOnly || !published.inventory?.fullProviderDiscovery);
     const includeNative = trigger === "request" && hasNativeCatalog && !options.changedOnly;
     const nativeScope = options.providerIds ? requestedProviders : undefined;
     const nativeProviders = includeNative ? nativeScope : [];
@@ -648,10 +650,7 @@ export async function createFullModelCatalogAccess(
     }
     attempt.setPending(fullRefresh || providers.length ? providers : undefined);
     const providerIds = fullRefresh ? undefined : providers;
-    const promise = (async () => {
-      await using _ = {
-        [Symbol.asyncDispose]: retainPreparedPluginGeneration(params.pluginGeneration),
-      };
+    const promise = runWithPreparedPluginGeneration(params.pluginGeneration, async () => {
       if (fullRefresh || providers.length) {
         const candidate = await acquireProviderCatalog(providerIds, refreshResponses).catch(
           (error: unknown) => {
@@ -667,7 +666,7 @@ export async function createFullModelCatalogAccess(
         return await acquireNativeCatalog(nativeScope, undefined, options.refresh);
       }
       return published.catalog ?? staticCatalog;
-    })().finally(() => {
+    }).finally(() => {
       pending = undefined;
       retryFailedDiscovery();
     });
@@ -691,6 +690,7 @@ export async function createFullModelCatalogAccess(
   return {
     accountCatalog,
     initialAuth: currentAuth,
+    readUsage: readCurrentUsage,
     isCurrent: params.isCurrent,
     withRefreshStatus: attempt.withRefreshStatus,
     loadAuth: (scope) => loadScopedModelCatalogAuth(authOwner, scope),

@@ -1,6 +1,7 @@
 // HTTP request authority retains admitted policy and response lifetime through awaited work.
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { isDeepStrictEqual } from "node:util";
 import { ToolAuthorizationError } from "../agents/tool-input-error.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -28,6 +29,7 @@ import {
   hasCurrentGatewayOperatorAccess,
 } from "./operator-access-policy.js";
 import { readOperatorRolePolicyRevision } from "./operator-role-policy.js";
+import { sourceRolePolicies } from "./operator-role-source-policy.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
@@ -43,60 +45,69 @@ export function runGatewayHttpRequest(
   context: GatewayHttpRequestLifetime | undefined,
   handle: () => Promise<"failed" | undefined>,
 ): Promise<void> {
+  if (context?.requestEntryLifetime?.signal.aborted) {
+    if (!res.writableFinished && !res.destroyed) {
+      res.destroy();
+    }
+    return Promise.resolve();
+  }
   const run = async () => {
     const ingress = getRemoteControlUiIngressContext(req);
     assertRemoteControlUiIngressCurrent(ingress);
     const work = new AsyncWorkScope();
-    const requestContext = work.run(() => AsyncLocalStorage.snapshot());
-    const client = createHttpRequestAbortSignal(req, res);
-    const shutdown = context?.requestEntryLifetime?.signal;
-    const signal = AbortSignal.any([
-      client.signal,
-      ...(shutdown ? [shutdown] : []),
-      ...(ingress ? [ingress.signal] : []),
-    ]);
-    let cancelledBy: "client" | "shutdown" | undefined;
-    const cancel = () =>
-      requestContext(() => {
-        cancelledBy = client.signal.aborted ? "client" : "shutdown";
-        work.beginClose(signal.reason);
-        // A streaming handler can return before its response finishes; wake the transport join too.
-        if (cancelledBy === "shutdown" && !res.writableFinished && !res.destroyed) {
-          res.destroy();
-        }
-      });
-    signal.addEventListener("abort", cancel, { once: true });
-    if (signal.aborted) {
-      cancel();
-    }
-    let failed = false;
-    try {
-      await work.track(() =>
-        runHttpConnectionRequest(
-          req,
-          async () => {
-            failed = (await handle()) === "failed";
-          },
-          res,
-        ),
-      );
-    } catch (error) {
-      failed = true;
-      throw error;
-    } finally {
-      signal.removeEventListener("abort", cancel);
-      client.cleanup();
-      // Rejections can finish their framed body by half-closing without res.end().
-      if (
-        cancelledBy &&
-        !failed &&
-        res.statusCode < 500 &&
-        !(cancelledBy === "client" && waitForHttpRequestRejection(req))
-      ) {
-        emitInternalDiagnosticEvent({ type: "gateway.http.cancelled", source: cancelledBy });
+    // Setup and dispatch share one entry; cancellation retains this exact request frame.
+    return work.run(async () => {
+      const requestContext = AsyncLocalStorage.snapshot();
+      const client = createHttpRequestAbortSignal(req, res);
+      const shutdown = context?.requestEntryLifetime?.signal;
+      const signal = AbortSignal.any([
+        client.signal,
+        ...(shutdown ? [shutdown] : []),
+        ...(ingress ? [ingress.signal] : []),
+      ]);
+      let cancelledBy: "client" | "shutdown" | undefined;
+      const cancel = () =>
+        requestContext(() => {
+          cancelledBy = client.signal.aborted ? "client" : "shutdown";
+          work.beginClose(signal.reason);
+          // A streaming handler can return before its response finishes; wake the transport join too.
+          if (cancelledBy === "shutdown" && !res.writableFinished && !res.destroyed) {
+            res.destroy();
+          }
+        });
+      signal.addEventListener("abort", cancel, { once: true });
+      if (signal.aborted) {
+        cancel();
       }
-      await requestContext(() => work.drain());
-    }
+      let failed = false;
+      try {
+        await work.track(() =>
+          runHttpConnectionRequest(
+            req,
+            async () => {
+              failed = (await handle()) === "failed";
+            },
+            res,
+          ),
+        );
+      } catch (error) {
+        failed = true;
+        throw error;
+      } finally {
+        signal.removeEventListener("abort", cancel);
+        client.cleanup();
+        // Rejections can finish their framed body by half-closing without res.end().
+        if (
+          cancelledBy &&
+          !failed &&
+          res.statusCode < 500 &&
+          !(cancelledBy === "client" && waitForHttpRequestRejection(req))
+        ) {
+          emitInternalDiagnosticEvent({ type: "gateway.http.cancelled", source: cancelledBy });
+        }
+        await requestContext(() => work.drain());
+      }
+    });
   };
   return context ? context.trackExecution(run) : run();
 }
@@ -158,7 +169,9 @@ export function captureHttpRequestAuthority(
     params.auth,
     params.trustedProxies ?? cfg.gateway?.trustedProxies,
   );
-  const roleRevision = cfg.gateway?.roles ? readOperatorRolePolicyRevision() : undefined;
+  const roles = cfg.gateway?.roles;
+  const rolePolicy = sourceRolePolicies(roles);
+  const roleRevision = roles ? readOperatorRolePolicyRevision() : undefined;
   const aliasRevision = readUserProfileAliasRevision();
   const ingress = getRemoteControlUiIngressContext(params.req);
   return () => {
@@ -173,6 +186,9 @@ export function captureHttpRequestAuthority(
     return (
       !params.req.socket?.destroyed &&
       isGatewayAuthPolicyCurrent(policy, current) &&
+      // HTTP preparation retains its role-policy fence independently of WS transport policy.
+      (roles === current.gateway?.roles ||
+        isDeepStrictEqual(rolePolicy, sourceRolePolicies(current.gateway?.roles))) &&
       (roleRevision === undefined || roleRevision === readOperatorRolePolicyRevision()) &&
       aliasRevision === readUserProfileAliasRevision() &&
       authGeneration ===
@@ -185,7 +201,10 @@ export function captureHttpRequestAuthority(
 }
 
 export function bindHttpResponseAuthority<T>(
-  auth: T & { operatorAccessAuthority?: PluginGatewayAccessAuthority | null },
+  auth: T & {
+    operatorAccessAuthority?: PluginGatewayAccessAuthority | null;
+    hasCurrentProfileAuthority?: () => boolean;
+  },
   res: ServerResponse,
   hasCurrentClientAuthority: () => boolean,
 ): T & GatewayHttpResponseAuthority {
@@ -196,7 +215,7 @@ export function bindHttpResponseAuthority<T>(
     if (!hasCurrentGatewayOperatorAccess(auth.operatorAccessAuthority)) {
       throw new GatewayOperatorAccessDeniedError();
     }
-    if (!hasCurrentClientAuthority()) {
+    if (!hasCurrentClientAuthority() || auth.hasCurrentProfileAuthority?.() === false) {
       sendUnauthorized(res);
       throw new GatewayHttpRequestAuthorityError("Unauthorized");
     }
@@ -207,6 +226,7 @@ export function bindHttpResponseAuthority<T>(
       !res.writableEnded &&
       !res.destroyed &&
       hasCurrentClientAuthority() &&
+      auth.hasCurrentProfileAuthority?.() !== false &&
       hasCurrentGatewayOperatorAccess(auth.operatorAccessAuthority),
     assertCurrent,
     revalidate: async () => assertCurrent(),

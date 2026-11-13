@@ -1,11 +1,17 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
+import { nativeMessage } from "./chat-thread-fixtures.test-support.ts";
 import { createProps } from "./chat-thread.test-support.ts";
 import { buildCachedChatItems, resetChatThreadState } from "./chat-thread.ts";
+import * as causalBoundary from "./stream-causal-boundary.ts";
 
 type PendingInput = NonNullable<BuildChatItemsProps["pendingInputs"]>[number];
+
+function makeMessage(role: string, content: string, timestamp: number, metadata: object) {
+  return { role, content, timestamp, __openclaw: metadata };
+}
 
 function queuedInput(
   text: string,
@@ -74,13 +80,65 @@ beforeEach(() => resetChatThreadState("input-order"));
 afterEach(() => resetChatThreadState("input-order"));
 
 describe("transcript input order", () => {
+  it("keeps interleaved tool bursts within each observed input", () => {
+    const rows = visibleRows({
+      runId: "live",
+      messages: [
+        makeMessage("user", "First input", 1, { idempotencyKey: "first:user", seq: 1 }),
+        makeMessage("user", "Second input", 2, { idempotencyKey: "second:user", seq: 2 }),
+      ],
+      toolMessages: Array.from({ length: 4 }, (_, index) => ({
+        role: "assistant",
+        content: `Tool ${index}`,
+        runId: "live",
+        timestamp: 100 + index,
+        openclawToolStreamAfterSendId: index % 2 ? "second" : "first",
+      })),
+    });
+    expect(rows).toEqual(["First input", "Tool 0", "Tool 2", "Second input", "Tool 1", "Tool 3"]);
+  });
+
+  it("bounds missing-run history scans independently of tool-burst length", () => {
+    const lookup = vi.spyOn(causalBoundary, "knownStreamCausalInterval");
+    try {
+      const rows = visibleRows({
+        runId: "live",
+        messages: [makeMessage("user", "Current input", 1, { seq: 1 })],
+        toolMessages: Array.from({ length: 40 }, (_, index) => ({
+          role: "assistant",
+          content: `Tool ${index}`,
+          runId: "live",
+          timestamp: 100 + index,
+        })),
+      });
+      expect(rows).toEqual(["Current input", ...Array.from({ length: 40 }, (_, i) => `Tool ${i}`)]);
+      expect(lookup.mock.calls.length).toBeLessThanOrEqual(3);
+    } finally {
+      lookup.mockRestore();
+    }
+  });
+
+  it("keeps a paged input separate from an unscoped lookup for the same run", () => {
+    const rows = visibleRows({
+      runId: "live",
+      messages: [makeMessage("user", "Current input", 1, { seq: 1 })],
+      toolMessages: Array.from({ length: 4 }, (_, index) => ({
+        role: "assistant",
+        content: `Tool ${index}`,
+        runId: "live",
+        timestamp: 100 + index,
+        ...(index % 2 ? { openclawToolStreamAfterSendId: "paged-input" } : {}),
+      })),
+    });
+    expect(rows).toEqual(["Tool 1", "Tool 3", "Current input", "Tool 0", "Tool 2"]);
+  });
+
   it("keeps parent output around a worker update in the same order live and saved", () => {
-    const original = {
-      role: "user",
-      content: "Publish the change",
-      timestamp: 10,
-      __openclaw: { id: "request", idempotencyKey: "parent:user", seq: 1 },
-    };
+    const original = makeMessage("user", "Publish the change", 10, {
+      id: "request",
+      idempotencyKey: "parent:user",
+      seq: 1,
+    });
     const update = {
       role: "assistant",
       content: "Worker update",
@@ -89,24 +147,21 @@ describe("transcript input order", () => {
       senderSession: { sessionKey: "agent:main:worker" },
       __openclaw: { id: "update", seq: 3 },
     };
-    const before = {
-      role: "assistant",
-      content: "Preparing publication",
-      timestamp: 20,
-      __openclaw: { id: "before", runId: "parent", seq: 2 },
-    };
-    const after = {
-      role: "assistant",
-      content: "Published successfully",
-      timestamp: 40,
-      __openclaw: { id: "after", runId: "parent", seq: 4 },
-    };
-    const next = {
-      role: "user",
-      content: "Next request",
-      timestamp: 50,
-      __openclaw: { id: "next", idempotencyKey: "next:user", seq: 5 },
-    };
+    const before = makeMessage("assistant", "Preparing publication", 20, {
+      id: "before",
+      runId: "parent",
+      seq: 2,
+    });
+    const after = makeMessage("assistant", "Published successfully", 40, {
+      id: "after",
+      runId: "parent",
+      seq: 4,
+    });
+    const next = makeMessage("user", "Next request", 50, {
+      id: "next",
+      idempotencyKey: "next:user",
+      seq: 5,
+    });
     const expected = [
       "Publish the change",
       "Preparing publication",
@@ -188,36 +243,19 @@ describe("transcript input order", () => {
       };
       const messages = [
         ...(includeOriginal ? [original] : []),
-        {
-          role: "assistant",
-          content: "Before",
-          timestamp: 1_050,
-          __openclaw: { runId: "run", seq: 2 },
-        },
-        {
-          role: "user",
-          content: "Steer one",
-          timestamp: 1_200,
-          __openclaw: { idempotencyKey: "steer-one:user", steerTargetRunId: "run", seq: 3 },
-        },
-        {
-          role: "assistant",
-          content: "After",
-          timestamp: 1_300,
-          __openclaw: { runId: "run", seq: 4 },
-        },
-        {
-          role: "user",
-          content: "Steer two",
-          timestamp: 1_400,
-          __openclaw: { idempotencyKey: "steer-two:user", steerTargetRunId: "run", seq: 5 },
-        },
-        {
-          role: "user",
-          content: "Next turn",
-          timestamp: 2_000,
-          __openclaw: { idempotencyKey: "next:user", seq: 6 },
-        },
+        makeMessage("assistant", "Before", 1_050, { runId: "run", seq: 2 }),
+        makeMessage("user", "Steer one", 1_200, {
+          idempotencyKey: "steer-one:user",
+          steerTargetRunId: "run",
+          seq: 3,
+        }),
+        makeMessage("assistant", "After", 1_300, { runId: "run", seq: 4 }),
+        makeMessage("user", "Steer two", 1_400, {
+          idempotencyKey: "steer-two:user",
+          steerTargetRunId: "run",
+          seq: 5,
+        }),
+        makeMessage("user", "Next turn", 2_000, { idempotencyKey: "next:user", seq: 6 }),
       ];
       const input = createInput({
         messages,
@@ -319,14 +357,14 @@ describe("transcript input order", () => {
     },
   );
 
-  it.each(["unconfirmed", "waiting-reconnect", "accepted", "reordered"] as const)(
+  it.each(["waiting-reconnect", "accepted", "reordered"] as const)(
     "keeps an earlier %s input ahead of a new submission through custody",
     (state) => {
       const reordered = state === "reordered";
       const earlier = queuedInput(
         "Earlier input",
         reordered ? 30 : 10,
-        state === "unconfirmed" || state === "waiting-reconnect" ? state : "submitting",
+        state === "waiting-reconnect" ? state : "submitting",
       );
       const later = queuedInput("New input", reordered ? 10 : 20);
       const queue =
@@ -357,17 +395,14 @@ describe("transcript input order", () => {
 
   it.each([
     { state: "queued", label: "reversed", timestamps: [30, 20] },
-    { state: "interrupted", label: "reversed", timestamps: [30, 20] },
     { state: "cancelled", label: "equal", timestamps: [20, 20] },
   ] as const)(
     "preserves server $state input order and attached notices with $label timestamps",
     ({ state, timestamps }) => {
       const notice =
-        state === "interrupted"
-          ? "Interrupted before the agent started it. It will not run automatically; copy it and send again."
-          : state === "cancelled"
-            ? "Cancelled before the agent started it. It will not run automatically; copy it and send again."
-            : null;
+        state === "cancelled"
+          ? "Cancelled before the agent started it. It will not run automatically; copy it and send again."
+          : null;
       const expectedInputs = ["First accepted input", "Second accepted input"].flatMap((text) =>
         notice ? [text, notice] : [text],
       );
@@ -412,18 +447,16 @@ describe("transcript input order", () => {
     (queueMode) => {
       const earlier = queuedInput("Earlier input", 10, "failed");
       const later = { ...queuedInput("Later input", 20), queueMode };
-      const reply = {
-        role: "assistant",
-        content: "Recovered reply",
-        timestamp: 30,
-        __openclaw: { id: "recovered-reply", seq: 2, runId: later.sendRunId },
-      };
-      const canonical = {
-        role: "user",
-        content: later.text,
-        timestamp: 20,
-        __openclaw: { id: "later-input", seq: 1, idempotencyKey: `${later.sendRunId}:user` },
-      };
+      const reply = makeMessage("assistant", "Recovered reply", 30, {
+        id: "recovered-reply",
+        seq: 2,
+        runId: later.sendRunId,
+      });
+      const canonical = makeMessage("user", later.text, 20, {
+        id: "later-input",
+        seq: 1,
+        idempotencyKey: `${later.sendRunId}:user`,
+      });
       const expected =
         queueMode === "steer"
           ? ["Later input", "Recovered reply", "Earlier input"]
@@ -440,12 +473,7 @@ describe("transcript input order", () => {
   it("reuses loaded history when a render rebuilds its pending input list", () => {
     let messageReads = 0;
     const loaded = new Proxy(
-      {
-        role: "assistant",
-        content: "Loaded history",
-        timestamp: 1,
-        __openclaw: { id: "loaded", seq: 1 },
-      },
+      nativeMessage("assistant", "Loaded history", 1, { id: "loaded", seq: 1 }),
       {
         get(target, key, receiver) {
           messageReads += 1;

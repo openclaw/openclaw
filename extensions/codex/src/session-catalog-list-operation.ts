@@ -1,6 +1,7 @@
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type {
   SessionCatalogEntrySnapshot,
@@ -9,12 +10,14 @@ import type {
 import { publishSessionCatalogHost } from "openclaw/plugin-sdk/session-catalog-paging";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import type { CodexAppServerBindingStore } from "./app-server/session-binding.js";
+import { withTimeout } from "./app-server/timeout.js";
 import { CodexCatalogLoadingError } from "./session-catalog-availability.js";
 import {
   currentCodexCatalogListDiagnostics,
   startCodexCatalogListTiming,
 } from "./session-catalog-diagnostics.js";
 import type { CodexCatalogHome } from "./session-catalog-homes.js";
+import { CODEX_CATALOG_HOST_RESPONSE_TIMEOUT_MS } from "./session-catalog-limits.js";
 import type { CatalogNode } from "./session-catalog-node-continue.js";
 import {
   CodexCatalogNodeSnapshots,
@@ -35,6 +38,18 @@ import type {
   CodexSessionCatalogParams,
 } from "./session-catalog-types.js";
 import { CodexCatalogVisiblePage } from "./session-catalog-visible-page.js";
+
+const loadCatalogAdoption = createLazyRuntimeModule(() => import("./session-catalog-adoption.js"));
+const loadSessionCatalog = createLazyRuntimeModule(async () => {
+  const { sessionCatalogAdoptedSourceKey } = await import("openclaw/plugin-sdk/session-catalog");
+  return { sessionCatalogAdoptedSourceKey };
+});
+const loadNodeAdoption = createLazyRuntimeModule(
+  () => import("./session-catalog-node-adoption.js"),
+);
+const loadNodeContinue = createLazyRuntimeModule(
+  () => import("./session-catalog-node-continue.js"),
+);
 
 type ListParams = {
   agentId?: string;
@@ -65,6 +80,7 @@ type LocalHost = {
   value?: CodexSessionCatalogHost;
   active?: Promise<void>;
   background?: boolean;
+  deadlineAt?: number;
 };
 
 type PreparedList = {
@@ -120,8 +136,8 @@ async function projectLocalHost(
   page: CodexSessionCatalogPage,
 ): Promise<CodexSessionCatalogHost> {
   params.signal?.throwIfAborted();
-  const { listAdoptedSessionEntries } = await import("./session-catalog-adoption.js");
-  const { sessionCatalogAdoptedSourceKey } = await import("openclaw/plugin-sdk/session-catalog");
+  const { listAdoptedSessionEntries } = await loadCatalogAdoption();
+  const { sessionCatalogAdoptedSourceKey } = await loadSessionCatalog();
   params.signal?.throwIfAborted();
   const finishTiming = startCodexCatalogListTiming("adoptionSumMs", "adoptionCalls");
   let adopted: Awaited<ReturnType<typeof listAdoptedSessionEntries>>;
@@ -176,6 +192,27 @@ function managedMarker(
   };
 }
 
+async function readLocalHostPage(
+  params: ListParams,
+  agentId: string,
+  host: LocalHost,
+): Promise<CodexSessionCatalogHost | undefined> {
+  const remaining =
+    (host.deadlineAt ??= performance.now() + CODEX_CATALOG_HOST_RESPONSE_TIMEOUT_MS) -
+    performance.now();
+  if (remaining <= 0) {
+    throw new CodexCatalogLoadingError();
+  }
+  return await withTimeout(
+    host.page.next().then((step) => {
+      params.signal?.throwIfAborted();
+      return step.done ? projectLocalHost(params, agentId, host.source, step.page) : undefined;
+    }),
+    remaining,
+    "Codex session catalog host timed out. Retry shortly.",
+  );
+}
+
 async function finishLocalHost(
   params: ListParams,
   agentId: string,
@@ -183,10 +220,9 @@ async function finishLocalHost(
 ): Promise<CodexSessionCatalogHost> {
   try {
     for (;;) {
-      const step = await host.page.next();
-      params.signal?.throwIfAborted();
-      if (step.done) {
-        return await projectLocalHost(params, agentId, host.source, step.page);
+      const value = await readLocalHostPage(params, agentId, host);
+      if (value) {
+        return value;
       }
     }
   } catch (error) {
@@ -335,18 +371,10 @@ class CodexCatalogListDriver {
       return;
     }
     try {
-      const page = await host.page.next();
-      params.signal?.throwIfAborted();
-      if (page.done) {
-        host.value = await projectLocalHost(
-          params,
-          this.selection().agentId,
-          host.source,
-          page.page,
-        );
-      }
+      host.value = await readLocalHostPage(params, this.selection().agentId, host);
     } catch (error) {
       this.localFailed = true;
+      host.page.close();
       host.value = hostFailure(host.source, error);
     }
     if (host.value) {
@@ -421,10 +449,8 @@ class CodexCatalogListDriver {
     }
     params.signal?.throwIfAborted();
     this.nodeSnapshots.observe(inventory);
-    const { listNodeAdoptedSessionEntries, nodeAdoptedSourceKey } =
-      await import("./session-catalog-node-adoption.js");
-    const { compareNodeLabels, listPairedNode, nodeLabel } =
-      await import("./session-catalog-node-continue.js");
+    const { listNodeAdoptedSessionEntries, nodeAdoptedSourceKey } = await loadNodeAdoption();
+    const { compareNodeLabels, listPairedNode, nodeLabel } = await loadNodeContinue();
     params.signal?.throwIfAborted();
     const adopted = listNodeAdoptedSessionEntries({
       agentId,

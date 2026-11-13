@@ -1,29 +1,27 @@
 import type { callGateway } from "../../../gateway/call.js";
-import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
+import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
 } from "../../../infra/agent-events.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
+import { assertionSucceeds } from "../../../shared/assertion.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import {
   resolveSubagentChildAgentId,
   resolveSubagentChildAuthority,
 } from "./subagent-child-owner-match.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   assertSubagentRegistryWriteSourceCurrent,
   mutateSubagentRuns,
 } from "./subagent-registry-persistence.js";
-import { isRestoredQueuedFailureSettlementClaimed } from "./subagent-registry-restore.js";
 import { isSuspendedPendingFinalDelivery } from "./subagent-registry-suspended-delivery.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 
-export function createSubagentSweepReadScope(
-  runs: Map<string, SubagentRunRecord>,
-  getGatewayRuntime: () => GatewayRecoveryRuntime | undefined,
-) {
+export function createSubagentSweepReadScope(runs: Map<string, SubagentRunRecord>) {
   let source:
     | { context: ReturnType<typeof captureOpenClawStateWorkerContext> }
     | { error: unknown };
@@ -33,7 +31,7 @@ export function createSubagentSweepReadScope(
     source = { error };
   }
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
-  const gatewayRuntime = getGatewayRuntime();
+  const gatewayResolver = getGatewayContextResolver(runs);
   const retiredRead = new Error("Subagent sweep read lost its selected run");
   let readsStarted = false;
   const assertCurrent = () => {
@@ -46,20 +44,14 @@ export function createSubagentSweepReadScope(
     }
     if (
       !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) ||
-      getGatewayRuntime() !== gatewayRuntime
+      getGatewayContextResolver(runs) !== gatewayResolver
     ) {
       throw new Error("Subagent sweep read lost its Gateway owner");
     }
   };
-  const isHostCurrent = () => {
-    try {
-      assertCurrent();
-      return true;
-    } catch {
-      return false;
-    }
-  };
+  const isHostCurrent = () => assertionSucceeds(assertCurrent);
   return {
+    gatewayResolver,
     assertCurrent,
     retiredRead,
     completionCurrent: { isHostCurrent, prepare: async () => isHostCurrent() },
@@ -89,12 +81,13 @@ export const sweptContext = (entry: SubagentRunRecord) => ({
 });
 
 export const isSessionCleanupDeferred = (entry: SubagentRunRecord) =>
-  entry.pauseReason === "sessions_yield" ||
-  entry.delivery?.status === "in_progress" ||
-  (entry.delivery?.status === "pending" &&
-    (entry.expectsCompletionMessage === true ||
-      entry.delivery.payload !== undefined ||
-      entry.delivery.disposition === "session_queued"));
+  ((entry.delivery?.status === "pending" || entry.delivery?.status === "in_progress") &&
+    entry.delivery.disposition === "session_queued") ||
+  (!subagentRuns.isCompletionAuthorityRetired(entry) &&
+    (entry.pauseReason === "sessions_yield" ||
+      entry.delivery?.status === "in_progress" ||
+      (entry.delivery?.status === "pending" &&
+        (entry.expectsCompletionMessage === true || entry.delivery.payload !== undefined))));
 
 export const isCollectorArchiveReady = (entry: SubagentRunRecord, now: number): boolean =>
   entry.collectorCompletion !== undefined &&
@@ -113,10 +106,8 @@ export function isCleanupCurrent(
     current.execution.status === expected.execution.status &&
     current.execution.endedAt === expected.execution.endedAt &&
     typeof current.execution.endedAt === "number" &&
-    !current.killIntent &&
-    !current.killReconciliation &&
-    !current.requesterSettleWake &&
-    !isRestoredQueuedFailureSettlementClaimed(current) &&
+    (subagentRuns.isCompletionAuthorityRetired(current) ||
+      (!current.killIntent && !current.killReconciliation && !current.requesterSettleWake)) &&
     !isSuspendedPendingFinalDelivery(current) &&
     !isSessionCleanupDeferred(current)
   );
@@ -128,11 +119,15 @@ export async function deleteSweptSession(
   runs: Map<string, SubagentRunRecord>,
   call: typeof callGateway,
   assertCurrent: () => void,
+  gatewayResolver: GatewayContextResolver | undefined,
 ): Promise<"deleted" | "changed"> {
   let failure: unknown;
   const outcome = await deleteSubagentSessionForCleanup({
     callGateway: call,
-    gatewayBinding: { resolveGatewayContext: getGatewayContextResolver(entry) },
+    // Settled history has no per-run binding; retain this sweep's Gateway for deletion.
+    gatewayBinding: {
+      resolveGatewayContext: getGatewayContextResolver(entry) ?? gatewayResolver,
+    },
     isCurrent: () => {
       assertCurrent();
       return isCleanupCurrent(runs.get(entry.runId), entry);
@@ -164,7 +159,8 @@ export function mutateCleanup(
       if (!isCleanupCurrent(current, entry) || !ready(current)) {
         return { value: undefined };
       }
-      const draft = structuredClone(current);
+      // Cleanup changes only top-level bookkeeping and the frozen execution record.
+      const draft = { ...current, execution: { ...current.execution } };
       const next = update(draft) === null ? null : draft;
       return { value: next, postimages: new Map([[entry.runId, next]]) };
     },

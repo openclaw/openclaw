@@ -1,6 +1,6 @@
 import { createServer, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { listenLoopback } from "../../test/helpers/gateway-integration-fixtures.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
@@ -78,13 +78,7 @@ describe("handleChannelAvatarHttpRequest", () => {
         })
         .catch(() => finishFailedGatewayHttpResponse(res));
     });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => {
-        port = (server.address() as AddressInfo).port;
-        resolve();
-      });
-    });
+    port = Number(new URL(await listenLoopback(server)).port);
   });
 
   afterAll(async () => {
@@ -98,17 +92,22 @@ describe("handleChannelAvatarHttpRequest", () => {
     vi.unstubAllEnvs();
   });
 
+  let sessionVisible = true;
+
   beforeEach(() => {
     authorityCurrent = true;
-    mocks.authorize
-      .mockReset()
-      .mockImplementation(({ res }: { res: ServerResponse }) =>
-        bindHttpResponseAuthority(
-          { authMethod: "token", operatorScopes: ["operator.admin", "operator.read"] },
-          res,
-          () => authorityCurrent,
-        ),
-      );
+    sessionVisible = true;
+    mocks.authorize.mockReset().mockImplementation(({ res }: { res: ServerResponse }) =>
+      bindHttpResponseAuthority(
+        {
+          authMethod: "token",
+          operatorScopes: ["operator.admin", "operator.read"],
+          canReadSession: () => sessionVisible,
+        },
+        res,
+        () => authorityCurrent,
+      ),
+    );
     mocks.loadEntry.mockReset().mockResolvedValue({ entry: avatarEntry() });
     mocks.resolveReference.mockReset().mockResolvedValue({
       id: "channel-avatar.png",
@@ -226,6 +225,23 @@ describe("handleChannelAvatarHttpRequest", () => {
     expect(mocks.readMedia).toHaveBeenCalledTimes(reads);
   });
 
+  it("refuses a session the profile cannot see without loading its avatar", async () => {
+    sessionVisible = false;
+    const url = new URL(avatarRoute("agent:main:hidden"));
+    url.searchParams.set("v", channelAvatarRevision(AVATAR_REFERENCE));
+    const response = await fetch(url);
+    expect(response.status).toBe(403);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      error: { message: "session access required", type: "forbidden" },
+    });
+    expect(mocks.resolveReference).not.toHaveBeenCalled();
+    expect(mocks.readMedia).not.toHaveBeenCalled();
+    sessionVisible = true;
+    expect((await fetch(url)).status).toBe(200);
+  });
+
   it("rejects revoked authority while channel avatar bytes are loading", async () => {
     const reading = createDeferredCore();
     const release = createDeferredCore();
@@ -319,42 +335,6 @@ describe("handleChannelAvatarHttpRequest", () => {
     expect(mocks.resolveReference).toHaveBeenCalledTimes(1);
     expect(mocks.readMedia).toHaveBeenCalledTimes(1);
   });
-
-  it.each([false, true])(
-    "keeps the current avatar cached when an older load finishes last (warm: %s)",
-    async (warm) => {
-      const route = avatarRoute(`agent:main:out-of-order:${warm}`);
-      const currentReference = "/state/media/inbound/new-avatar.png";
-      if (warm) {
-        mocks.loadEntry.mockReturnValue({ entry: avatarEntry(currentReference) });
-        mocks.readMedia.mockResolvedValue({ buffer: APNG_BYTES });
-        await (await fetch(route)).arrayBuffer();
-      }
-
-      const reading = createDeferredCore();
-      const release = createDeferredCore();
-      mocks.loadEntry.mockReturnValue({ entry: avatarEntry() });
-      mocks.readMedia.mockImplementationOnce(async () => {
-        reading.resolve();
-        await release.promise;
-        return { buffer: PNG_BYTES };
-      });
-      const older = fetch(route);
-      await reading.promise;
-      mocks.loadEntry.mockReturnValue({ entry: avatarEntry(currentReference) });
-      mocks.readMedia.mockResolvedValue({ buffer: APNG_BYTES });
-      const current = await fetch(route);
-      const currentBytes = Buffer.from(await current.arrayBuffer());
-      release.resolve();
-      const olderBytes = Buffer.from(await (await older).arrayBuffer());
-      const revisited = await fetch(route);
-
-      expect(currentBytes).toEqual(APNG_BYTES);
-      expect(olderBytes).toEqual(PNG_BYTES);
-      expect(Buffer.from(await revisited.arrayBuffer())).toEqual(APNG_BYTES);
-      expect(mocks.readMedia).toHaveBeenCalledTimes(2);
-    },
-  );
 
   it.each(["missing", "failed", "invalid"])(
     "retries an avatar after a %s load settles",

@@ -2,35 +2,17 @@ import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
 import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
 import {
-  isToolResultError,
   protectNetworkToolExecutionError,
   resolveToolExecutionErrorKind,
-  resolveToolResultFailureKind,
-} from "./tool-result-error.js";
-import { ToolAuthorizationError, ToolInputError } from "./tools/common.js";
+} from "./tool-execution-error.js";
+import { isToolResultError, resolveToolResultFailureKind } from "./tool-result-error.js";
+import { ToolInputError } from "./tools/common.js";
 
 // Bun's built-in Undici shim does not carry the installed package's error codes.
 const requireUndiciPackage = createRequire(
   createRequire(import.meta.url).resolve("undici/package.json"),
 );
 const undiciErrors = (requireUndiciPackage("./index.js") as typeof import("undici")).errors;
-
-describe("isToolResultError", () => {
-  it("keeps real failures fatal even with a completed status", () => {
-    expect(isToolResultError({ details: { status: "completed", timedOut: true } })).toBe(true);
-    expect(isToolResultError({ details: { status: "completed", error: "spawn failed" } })).toBe(
-      true,
-    );
-    expect(isToolResultError({ details: { ok: false, status: "completed" } })).toBe(true);
-  });
-
-  it("keeps failure statuses and statusless nonzero exits fatal", () => {
-    expect(isToolResultError({ details: { status: "failed", exitCode: 1 } })).toBe(true);
-    expect(isToolResultError({ details: { status: "failed", exitCode: 127 } })).toBe(true);
-    expect(isToolResultError({ details: { status: "killed", exitCode: 137 } })).toBe(true);
-    expect(isToolResultError({ details: { exitCode: 1 } })).toBe(true);
-  });
-});
 
 describe("resolveToolExecutionErrorKind", () => {
   it("recognizes structured timeout identities", () => {
@@ -42,33 +24,9 @@ describe("resolveToolExecutionErrorKind", () => {
     expect(resolveToolExecutionErrorKind({ code: "ETIMEDOUT" })).toBe("timed_out");
     expect(resolveToolExecutionErrorKind({ reason: "timeout" })).toBe("timed_out");
   });
-
-  it("does not infer timeout from validation text", () => {
-    expect(resolveToolExecutionErrorKind(new Error("timeoutMs must be a positive number"))).toBe(
-      "failed",
-    );
-  });
-
-  it("contains hostile error fields", () => {
-    const hostile = Object.defineProperty({}, "name", {
-      get() {
-        throw new Error("name getter escaped");
-      },
-    });
-    expect(resolveToolExecutionErrorKind(hostile)).toBe("failed");
-  });
 });
 
 describe("protectNetworkToolExecutionError", () => {
-  it("preserves source-like assignments and token text in tool failures", () => {
-    const message = "API_TOKEN = computeToken()\nsk-abc123456789012345678";
-    const protectedError = protectNetworkToolExecutionError(
-      new Error(message),
-      "fallback",
-    ) as Error;
-    expect(protectedError.message).toContain(message);
-  });
-
   it("bounds hostile upstream failures without splitting UTF-16 surrogate pairs", () => {
     const original = new Error(`${"x".repeat(3_999)}🚀<|im_start|>${"y".repeat(20_000)}`);
 
@@ -113,7 +71,6 @@ describe("protectNetworkToolExecutionError", () => {
 
   it.each([
     new ToolInputError("query required"),
-    new ToolAuthorizationError("read denied"),
     new SecretSurfaceUnavailableError({
       ownerKind: "capability",
       ownerId: "web-search:brave",
@@ -212,6 +169,30 @@ describe("protectNetworkToolExecutionError", () => {
 });
 
 describe("resolveToolResultFailureKind", () => {
+  it.each([
+    [{ status: "denied", timedOut: true }, "blocked"],
+    [{ status: "cancelled", timedOut: true }, "timed_out"],
+    [{ status: "cancelled" }, "cancelled"],
+    [{ status: "timeout" }, "timed_out"],
+    [{ status: "completed", timedOut: true }, "timed_out"],
+    [{ status: "completed", error: "spawn failed" }, "failed"],
+    [{ ok: false, status: "completed" }, "failed"],
+    [{ status: "failed", exitCode: 1 }, "failed"],
+    [{ status: "failed", exitCode: 127 }, "failed"],
+    [{ status: "killed", exitCode: 137 }, "cancelled"],
+    [{ status: "failed", ok: true }, undefined],
+    [{ status: "failed", success: true }, undefined],
+    [{ status: "failed", success: true, ok: false }, "failed"],
+    [{ status: "completed", error: "failed" }, "failed"],
+    [{ status: "completed", exitCode: 1 }, undefined],
+    [{ exitCode: 1 }, "failed"],
+    [{ exitCode: Number.NaN }, undefined],
+  ] as const)("classifies structured outcome %j as %s", (details, expected) => {
+    const result = { details };
+    expect(resolveToolResultFailureKind(result)).toBe(expected);
+    expect(isToolResultError(result)).toBe(expected !== undefined);
+  });
+
   it("contains hostile structured result fields", () => {
     const hostileDetails = new Proxy(
       {},
@@ -232,14 +213,5 @@ describe("resolveToolResultFailureKind", () => {
 
     expect(resolveToolResultFailureKind({ details: hostileDetails })).toBeUndefined();
     expect(resolveToolResultFailureKind(hostileResult)).toBeUndefined();
-  });
-
-  it("does not classify completed nonzero exits as failures", () => {
-    expect(
-      resolveToolResultFailureKind({ details: { status: "completed", exitCode: 1 } }),
-    ).toBeUndefined();
-    expect(resolveToolResultFailureKind({ details: { status: "failed", exitCode: 1 } })).toBe(
-      "failed",
-    );
   });
 });

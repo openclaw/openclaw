@@ -1,6 +1,6 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getRemoteModelCatalogProviderOverlay } from "../model-catalog/remote-overlay.js";
+import { getRemoteModelCatalogProviderRecommendations } from "../model-catalog/remote-overlay.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 
@@ -73,7 +73,7 @@ export function createModelPickerRecommendationRank(
     let ranks = ranksByProvider.get(provider);
     if (!ranks) {
       ranks = new Map();
-      const recommended = getRemoteModelCatalogProviderOverlay(config, provider)?.recommendedModels;
+      const recommended = getRemoteModelCatalogProviderRecommendations(config, provider);
       for (const [rank, id] of (recommended ?? []).entries()) {
         const key = keyOf({ provider, id });
         if (!ranks.has(key)) {

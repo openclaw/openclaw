@@ -1,14 +1,12 @@
 import fs from "node:fs";
-import {
-  readMigrationArtifactIdentity,
-  type MigrationArtifact,
-} from "../infra/session-sqlite-migration-artifact.js";
+import { rebindRewrittenClientCredentials } from "../infra/client-credential-restore.js";
 import {
   canonicalMigrationFilePath,
   listSessionSqliteMigrationManifestPaths,
   readSessionSqliteMigrationManifest,
   writeSessionSqliteMigrationManifest,
 } from "../infra/session-sqlite-migration-manifest.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 
 /** Transfer existing recovery evidence only across Doctor's verified offline rewrite. */
 export function reconcileNoCowRecoveryIdentities(params: {
@@ -23,13 +21,26 @@ export function reconcileNoCowRecoveryIdentities(params: {
     ]),
   );
   const warnings: string[] = [];
-  const refresh = (
-    pathname: string,
-    identity: { dev: string; ino: string },
-    artifact?: MigrationArtifact,
-  ): boolean => {
+  const sharedPath = canonicalMigrationFilePath(resolveOpenClawStateSqlitePath(params.env));
+  const sharedBefore = previous.get(sharedPath);
+  if (sharedBefore) {
+    try {
+      rebindRewrittenClientCredentials({
+        env: params.env,
+        previousSharedFile: {
+          path: sharedPath,
+          dev: String(sharedBefore.dev),
+          ino: String(sharedBefore.ino),
+        },
+        assertCurrent: params.assertCurrent,
+      });
+    } catch (error) {
+      warnings.push(`NOCOW credential identity left unchanged for ${sharedPath}: ${String(error)}`);
+    }
+  }
+  const refresh = (pathname: string, identity: { dev: string; ino: string }): boolean => {
     const before = previous.get(canonicalMigrationFilePath(pathname));
-    if (!before || (artifact && artifact.disposal.state !== "retained")) {
+    if (!before) {
       return false;
     }
     try {
@@ -41,22 +52,9 @@ export function reconcileNoCowRecoveryIdentities(params: {
       if (!next.isFile() || next.nlink !== 1n) {
         throw new Error("rewritten file is not an unaliased regular file");
       }
-      if (artifact) {
-        const copied = readMigrationArtifactIdentity(pathname);
-        if (
-          String(before.mtimeNs) !== artifact.identity.mtimeNs ||
-          Number(before.size) !== artifact.identity.size ||
-          copied.size !== artifact.identity.size ||
-          copied.sha256 !== artifact.identity.sha256
-        ) {
-          throw new Error("rewritten copy does not match the recorded original");
-        }
-        artifact.identity = copied;
-      } else {
-        // The destination may have migrated in place; bind its generation, not its old bytes.
-        identity.dev = String(next.dev);
-        identity.ino = String(next.ino);
-      }
+      // The destination may have migrated in place; bind its generation, not its old bytes.
+      identity.dev = String(next.dev);
+      identity.ino = String(next.ino);
       return true;
     } catch (error) {
       warnings.push(`NOCOW recovery identity left unchanged for ${pathname}: ${String(error)}`);
@@ -70,11 +68,6 @@ export function reconcileNoCowRecoveryIdentities(params: {
     }
     let changed = false;
     for (const target of manifest.targets) {
-      for (const move of [...target.completedMoves, ...target.plannedMoves]) {
-        if (move.artifact) {
-          changed = refresh(move.archivePath, move.artifact.identity, move.artifact) || changed;
-        }
-      }
       if (target.databaseIdentity) {
         changed = refresh(target.sqlitePath, target.databaseIdentity) || changed;
       }

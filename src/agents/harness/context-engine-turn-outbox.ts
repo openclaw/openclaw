@@ -4,9 +4,11 @@ import type {
   TranscriptTurnAdmission,
   TranscriptTurnBoundary,
 } from "../../config/sessions/transcript-entry-anchor.js";
-import type { ContextEngine } from "../../context-engine/types.js";
+import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
+import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
+import type { ContextEngine, ContextEnginePromptCacheInfo } from "../../context-engine/types.js";
 
-export type PendingContextEngineTurn = Readonly<{
+type PendingContextEngineTurn = Readonly<{
   advancement_key: string;
   payload_json: string;
   session_id: string;
@@ -18,24 +20,23 @@ export type ContextEngineTurnRuntimeContext = Readonly<{
   modelId?: string;
   modelContextWindow?: number;
   tokenBudget?: number;
+  /** The turn's last-call usage and cache observation; plain counters only. */
+  promptCache?: ContextEnginePromptCacheInfo;
 }>;
 
 type AdmittedContextEngineTurnOutboxPayload = Readonly<{
   admission: TranscriptTurnAdmission;
-  isHeartbeat: boolean;
   state: "admitted";
 }>;
 
 export type AcceptedContextEngineTurnOutboxPayload = Readonly<{
   boundary: TranscriptTurnBoundary;
-  isHeartbeat: boolean;
   state: "accepted";
   runtimeContext?: ContextEngineTurnRuntimeContext;
 }>;
 
 export type ReadyContextEngineTurnOutboxPayload = Readonly<{
   boundary: TranscriptTurnBoundary;
-  isHeartbeat: boolean;
   messages: AgentMessage[];
   state: "ready";
   runtimeContext?: ContextEngineTurnRuntimeContext;
@@ -49,7 +50,6 @@ export type ContextEngineTurnReadFailureKind = Exclude<
 export type BlockedContextEngineTurnOutboxPayload = Readonly<{
   boundary: TranscriptTurnBoundary;
   failure: Exclude<ContextEngineTurnReadFailureKind, "projection-unavailable">;
-  isHeartbeat: boolean;
   state: "blocked";
 }>;
 
@@ -184,8 +184,15 @@ async function commitPendingContextEngineTurn(params: {
         sessionKey: payload.boundary.admission.sessionKey,
         storePath: payload.boundary.admission.storePath,
       },
-      isHeartbeat: payload.isHeartbeat,
       ...(payload.runtimeContext ? { runtimeContext: payload.runtimeContext } : {}),
+      runtimeSettings: buildContextEngineRuntimeSettings({
+        contextEngineHost: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+        provider: payload.runtimeContext?.provider,
+        resolvedModel: payload.runtimeContext?.modelId,
+        promptTokenBudget: payload.runtimeContext?.tokenBudget,
+        selectedContextEngineId: params.engine.info.id,
+        contextEngineSelectionSource: params.engine.info.id === "legacy" ? "default" : "configured",
+      }),
     };
     params.store.assertReadable?.();
     const result = await params.engine.commitTurn?.(commonParams);
@@ -220,7 +227,6 @@ export type ContextEngineTurnOutboxWorkerOperations = {
   prepareRun: {
     input: ContextEngineTurnOutboxFilter & {
       admission?: TranscriptTurnAdmission;
-      isHeartbeat: boolean;
       sessionId: string;
     };
     output: { warnings: string[]; pending: boolean; admitted: boolean };
@@ -242,14 +248,12 @@ export type ContextEngineTurnOutboxWorkerOperations = {
   enqueueIntent: {
     input: ContextEngineTurnOutboxFilter & {
       admission: TranscriptTurnAdmission;
-      isHeartbeat: boolean;
     };
     output: undefined;
   };
   acceptIntent: {
     input: ContextEngineTurnOutboxFilter & {
       boundary: TranscriptTurnBoundary;
-      isHeartbeat: boolean;
       runtimeContext?: ContextEngineTurnRuntimeContext;
     };
     output: undefined;
@@ -257,7 +261,6 @@ export type ContextEngineTurnOutboxWorkerOperations = {
   publishClosedTurn: {
     input: ContextEngineTurnOutboxFilter & {
       boundary: TranscriptTurnBoundary;
-      isHeartbeat: boolean;
       maxBytes: number;
       maxEvents: number;
       runtimeContext?: ContextEngineTurnRuntimeContext;

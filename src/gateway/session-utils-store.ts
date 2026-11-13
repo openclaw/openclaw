@@ -7,19 +7,31 @@ import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metada
 import {
   listAgentEntries,
   listAgentIds,
+  resolveAgentConfig,
   resolveAgentModelFallbacksOverride,
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
+import { resolveConversationCapabilityProfile } from "../agents/conversation-capability-profile.js";
+import { isConversationToolAllowed } from "../agents/conversation-tool-policy-pipeline.js";
+import { resolveRunEntryCliRuntime } from "../agents/embedded-agent-runner/run-entry-runtime.js";
 import { resolveExecDefaults } from "../agents/exec-defaults.js";
+import { hasUnrestrictedGatewayExecution } from "../agents/execution-authority.js";
+import { isGatewayToolAllowedWithoutAction } from "../agents/gateway-tool-policy.js";
+import { resolveAgentHarnessSelectionDecision } from "../agents/harness/selection-decision.js";
 import { resolveAgentAvatarUrlFromSource } from "../agents/identity-avatar-file.js";
+import { resolveModelExecCeilings } from "../agents/lazy-exec-tool.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import {
   buildModelAliasIndex,
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "../agents/model-selection.js";
-import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
-import { SESSION_PERMISSION_BY_EXEC_MODE } from "../agents/session-permission-exec-mode.js";
+import { resolveSandboxRuntimeSettings } from "../agents/sandbox/config.js";
+import {
+  projectEffectiveExecPolicy,
+  SESSION_PERMISSION_BY_EXEC_MODE,
+} from "../agents/session-permission-exec-mode.js";
+import { resolveEffectiveToolFsWorkspaceOnly } from "../agents/tool-fs-policy.js";
 import { readUtilityModelSetting } from "../agents/utility-model-setting.js";
 import { resolveConfiguredPrimaryModelForAgent } from "../agents/utility-model.js";
 import { hasWorkspaceGitCheckout } from "../agents/workspace-git.js";
@@ -35,7 +47,11 @@ import type {
   SessionEntryReadScope,
 } from "../config/sessions/session-accessor.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveExecPolicyForMode } from "../infra/exec-approvals-core.js";
+import {
+  resolveExecModeFromPolicy,
+  resolveExecPolicyForMode,
+  type ExecApprovalsFile,
+} from "../infra/exec-approvals-core.js";
 import { loadExecApprovalsReadOnlyAsync } from "../infra/exec-approvals-store.js";
 import {
   isIncognitoSessionKey,
@@ -118,7 +134,7 @@ export function prepareDeletedAgentSessionCheck(params: {
   params.assertCurrent?.();
   return readAcpSessionMetaForEntries({
     cfg: params.cfg,
-    entries: [...keys].map((sessionKey) => ({
+    entries: Array.from(keys, (sessionKey) => ({
       sessionKey,
       agentId:
         parseAgentSessionKey(sessionKey)?.agentId ??
@@ -135,7 +151,6 @@ export function prepareDeletedAgentSessionCheck(params: {
 export function loadIncognitoGatewaySessionEntryReadOnly(
   sessionKey: string,
   opts?: Pick<SessionEntryReadScope, "agentId" | "clone" | "projection" | "env"> & {
-    includeStoreChildEntries?: boolean;
     targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
   },
   cfg: OpenClawConfig = getRuntimeConfig(),
@@ -152,7 +167,6 @@ export function loadIncognitoGatewaySessionEntryReadOnly(
     projection: opts?.projection,
     env: opts?.env,
     targetDiscoveryCache: opts?.targetDiscoveryCache,
-    includeStoreChildEntries: opts?.includeStoreChildEntries,
     ...(opts?.clone === false ? { clone: false } : {}),
     ...(opts?.agentId ? { agentId: opts.agentId } : {}),
   });
@@ -243,7 +257,6 @@ export async function withQualifiedGatewaySessionEntry<T>(params: {
   cfg: OpenClawConfig;
   target: QualifiedSessionEntryAccessTarget;
   logicalStorePath: string;
-  env?: NodeJS.ProcessEnv;
   includeMembership: boolean;
   transcript?: import("../config/sessions/session-entry-read.types.js").SessionExactEntriesWorkerRequest["transcript"];
   includeLifecycle?: boolean;
@@ -366,12 +379,93 @@ function resolvedPermissionLabel(
     : undefined;
 }
 
+function resolveAgentDefaultPermissionLabel(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  model: ReturnType<typeof resolveDefaultModelForAgent>;
+  execApprovals: ExecApprovalsFile;
+}): GatewayAgentRow["defaultPermissionMode"] {
+  const { cfg, agentId, model } = params;
+  const defaults = resolveExecDefaults({ cfg, agentId, execApprovals: params.execApprovals });
+  const projected = projectEffectiveExecPolicy({
+    base: defaults,
+    modelExecCeilings: resolveModelExecCeilings({
+      cfg,
+      agentId,
+      modelProvider: model.provider,
+      modelId: model.model,
+    }),
+  });
+  const effective = {
+    security: projected.security ?? defaults.security,
+    ask: projected.ask ?? defaults.ask,
+  };
+  const policy = {
+    ...defaults,
+    ...effective,
+    mode: projected.mode ?? resolveExecModeFromPolicy(effective),
+  };
+  const label = resolvedPermissionLabel(policy);
+  if (label !== "full") {
+    return label;
+  }
+  try {
+    const primary = resolveConfiguredPrimaryModelForAgent({ cfg, agentId });
+    if (
+      resolveRunEntryCliRuntime({
+        config: cfg,
+        agentId,
+        provider: model.provider,
+        model: model.model,
+        authProfileId: primary ? splitTrailingAuthProfile(primary).profile : undefined,
+      }).useCliExecution
+    ) {
+      return undefined;
+    }
+    const runtime = resolveAgentHarnessSelectionDecision({
+      config: cfg,
+      agentId,
+      provider: model.provider,
+      modelId: model.model,
+    });
+    // Plugin and CLI execution can replace Gateway tools with native behavior.
+    // Selection alone cannot prove their effective unrestricted command policy.
+    if (!runtime.builtIn || runtime.selectedReason === "cli_runtime_passthrough_openclaw") {
+      return undefined;
+    }
+  } catch {
+    // An unavailable or unsupported runtime cannot establish a default grant.
+    return undefined;
+  }
+  // Agent defaults have no session lineage. The runtime separately binds the
+  // actual callable surface and current authority for the requesting turn.
+  const capabilityProfile = resolveConversationCapabilityProfile({
+    config: cfg,
+    agentId,
+    modelProvider: model.provider,
+    modelId: model.model,
+  });
+  return hasUnrestrictedGatewayExecution({
+    execAuthority:
+      isConversationToolAllowed(capabilityProfile, "exec") &&
+      isGatewayToolAllowedWithoutAction("exec", cfg)
+        ? "gateway-host"
+        : undefined,
+    execPolicy: policy,
+    workspaceOnly: resolveEffectiveToolFsWorkspaceOnly({ cfg, agentId }),
+  })
+    ? label
+    : undefined;
+}
+
 export async function listAgentsForGateway(
   cfg: OpenClawConfig,
   options?: {
     modelCatalogByAgentId?: SessionListModelCatalog;
     includeSystem?: boolean;
     httpAvatarBasePath?: string;
+    /** Limit enrichment while retaining the Gateway's canonical routing metadata. */
+    agentIds?: ReadonlySet<string>;
   },
 ): Promise<{
   defaultId: string;
@@ -386,12 +480,21 @@ export async function listAgentsForGateway(
     listAgentProvenance(),
     loadExecApprovalsReadOnlyAsync(),
   ]);
+  const roster = basic.agents.filter(
+    (entry) =>
+      (options?.includeSystem || entry.kind !== "system") &&
+      (!options?.agentIds || options.agentIds.has(entry.id)),
+  );
+  const rosterIds = new Set(roster.map((entry) => entry.id));
   const identityById = new Map<string, GatewayAgentRow["identity"]>();
   for (const entry of listAgentEntries(cfg)) {
     if (!entry?.id) {
       continue;
     }
     const agentId = normalizeAgentId(entry.id);
+    if (!rosterIds.has(agentId)) {
+      continue;
+    }
     const avatar = normalizeOptionalString(entry.identity?.avatar);
     const httpAvatar =
       avatar && options?.httpAvatarBasePath !== undefined
@@ -415,22 +518,26 @@ export async function listAgentsForGateway(
       : undefined;
     identityById.set(agentId, identity);
   }
-  const roster = options?.includeSystem
-    ? basic.agents
-    : basic.agents.filter((entry) => entry.kind !== "system");
   const provenanceById = new Map(
     provenanceRecords.map((record) => [record.agentId, record] as const),
   );
   const agents = roster.map((entry) => {
     const { id } = entry;
-    const execDefaults = resolveExecDefaults({ cfg, agentId: id, execApprovals });
+    const agentConfig = resolveAgentConfig(cfg, id);
+    const newSessionPermissionMode = agentConfig?.newSessionPermissionMode;
+    const resolvedModel = resolveDefaultModelForAgent({ cfg, agentId: id });
     // This label must never overstate permissiveness. When sandbox policy can vary
     // by session, the effective policy is unknowable at agent scope: omit the label.
     const defaultPermissionMode =
-      resolveSandboxConfigForAgent(cfg, id).mode === "off"
-        ? resolvedPermissionLabel(execDefaults)
+      resolveSandboxRuntimeSettings(cfg.agents?.defaults?.sandbox, agentConfig?.sandbox).mode ===
+      "off"
+        ? resolveAgentDefaultPermissionLabel({
+            cfg,
+            agentId: id,
+            model: resolvedModel,
+            execApprovals,
+          })
         : undefined;
-    const resolvedModel = resolveDefaultModelForAgent({ cfg, agentId: id });
     const model = resolveGatewayAgentModel(cfg, id, resolvedModel);
     const utilitySetting = readUtilityModelSetting(cfg, id);
     const selectionParams = { cfg, agentId: id, defaultProvider: resolvedModel.provider };
@@ -492,6 +599,7 @@ export async function listAgentsForGateway(
       { model },
       utility ? { utilityModel: `${utility.provider}/${utility.model}` } : {},
       defaultPermissionMode ? { defaultPermissionMode } : {},
+      newSessionPermissionMode ? { newSessionPermissionMode } : {},
     );
     const provenance = provenanceById.get(id);
     return provenance

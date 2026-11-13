@@ -1,6 +1,6 @@
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { getTelegramRuntime } from "./runtime.js";
+import type { TelegramRuntime } from "./runtime.types.js";
 import {
   resolveStoredBindingKey,
   sanitizeStoredBinding,
@@ -11,21 +11,22 @@ import {
 
 type TelegramThreadBindingStore = PluginStateKeyedStore<TelegramThreadBindingRecord, 2>;
 
-function openThreadBindingStore(): TelegramThreadBindingStore {
-  return getTelegramRuntime().state.openKeyedStoreV2<TelegramThreadBindingRecord>({
+function openThreadBindingStore(runtime: TelegramRuntime): TelegramThreadBindingStore {
+  return runtime.state.openKeyedStoreV2<TelegramThreadBindingRecord>({
     namespace: TELEGRAM_THREAD_BINDINGS_NAMESPACE,
     maxEntries: TELEGRAM_THREAD_BINDINGS_MAX_ENTRIES,
   });
 }
 
 export async function loadBindingsFromStore(
+  runtime: TelegramRuntime,
   accountId: string,
 ): Promise<TelegramThreadBindingRecord[]> {
   let operation = "open";
   let store: TelegramThreadBindingStore;
   let entries: Array<{ key: string; value: TelegramThreadBindingRecord }>;
   try {
-    store = openThreadBindingStore();
+    store = openThreadBindingStore(runtime);
     operation = "read";
     entries = await store.entries();
   } catch (err) {
@@ -54,6 +55,7 @@ export async function loadBindingsFromStore(
 }
 
 export async function persistBindingMutation(params: {
+  runtime: TelegramRuntime;
   accountId: string;
   persist: boolean;
   binding: TelegramThreadBindingRecord;
@@ -66,7 +68,7 @@ export async function persistBindingMutation(params: {
     return false;
   }
   try {
-    const store = openThreadBindingStore();
+    const store = openThreadBindingStore(params.runtime);
     const key = resolveStoredBindingKey(params.binding);
     if (params.remove) {
       await store.delete(key, { assertCurrent: params.assertCurrent });
@@ -91,6 +93,7 @@ export async function persistBindingMutation(params: {
 
 /** Native compatibility for the published synchronous SDK, retained during stable deprecation. */
 export function updateStoredBindingSync(params: {
+  runtime: TelegramRuntime;
   binding: TelegramThreadBindingRecord;
   persist: boolean;
   pendingValueJson?: string | null;
@@ -102,7 +105,7 @@ export function updateStoredBindingSync(params: {
   }
   let observed: TelegramThreadBindingRecord | null | undefined;
   try {
-    const store = getTelegramRuntime().state.openSyncKeyedStore<TelegramThreadBindingRecord>({
+    const store = params.runtime.state.openSyncKeyedStore<TelegramThreadBindingRecord>({
       namespace: TELEGRAM_THREAD_BINDINGS_NAMESPACE,
       maxEntries: TELEGRAM_THREAD_BINDINGS_MAX_ENTRIES,
     });

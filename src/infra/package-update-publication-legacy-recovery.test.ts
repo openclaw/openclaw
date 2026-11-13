@@ -4,12 +4,14 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import {
   openPackageActivationJournal,
   resolvePackageActivationHelper,
   resolvePackageActivationJournalPath,
 } from "./package-update-activation-journal.js";
 import { createPackageActivationLifetimeFixture } from "./package-update-activation-lifetime.test-support.js";
+import { capturePackageActivationRuntime } from "./package-update-activation-paths.js";
 import { prepareRemountedPublication } from "./package-update-activation-remount.test-support.js";
 import {
   assertNoPendingPackageActivation,
@@ -26,6 +28,8 @@ vi.mock("./package-update-activation-paths.js", async (original) => ({
 }));
 
 const fixtures = createPackageActivationLifetimeFixture();
+const detail =
+  "legacy package record settled by identity and version; content could not be re-verified";
 let fixtureRoot: string;
 beforeEach(() => {
   fixtureRoot = fixtures.setup().root;
@@ -43,79 +47,59 @@ it.skipIf(process.platform === "win32").each([
 ] as const)(
   "settles the legacy $phase record through $action after link-count drift",
   async ({ phase, action }) => {
-    const f = await fixtures.prepare();
+    // The frozen legacy helper hash predates Bun's per-install SQLite library header.
+    const runtime = capturePackageActivationRuntime("node", resolveTestNodeExecPath());
+    const f = await fixtures.prepare(undefined, undefined, runtime);
     const journal = openPackageActivationJournal(f.anchor);
     const helper = fs.readFileSync(resolvePackageActivationHelper(f.anchor));
+    const publishing = phase === "publishing";
     await withUpdateCommandExecutor(randomUUID(), async (executor) => {
       const fence = await executor.enter(f.packageRoot);
       const record = journal.read();
-      journal.transition(
-        record,
-        phase,
-        phase === "publishing" ? { kind: "publish" } : null,
-        fence.assertCurrent,
-        [],
-      );
-      const db = new DatabaseSync(resolvePackageActivationJournalPath(f.anchor));
-      try {
+      const intent = publishing ? { kind: "publish" as const } : null;
+      journal.transition(record, phase, intent, fence.assertCurrent, []);
+      const descriptor = {
+        ...record.descriptor,
+        previous: legacyPackageFingerprint(f.packageRoot),
+        candidate: legacyPackageFingerprint(path.join(f.anchor, "candidate")),
+      };
+      {
+        using db = new DatabaseSync(resolvePackageActivationJournalPath(f.anchor));
         db.prepare("UPDATE package_activation SET descriptor_json = ?").run(
-          JSON.stringify({
-            ...record.descriptor,
-            previous: legacyPackageFingerprint(f.packageRoot),
-            candidate: legacyPackageFingerprint(path.join(f.anchor, "candidate")),
-          }),
+          JSON.stringify(descriptor),
         );
-      } finally {
-        db.close();
       }
-      if (phase === "publishing") {
+      if (publishing) {
         fs.renameSync(f.packageRoot, path.join(f.anchor, "previous"));
       }
     });
-    const previous = phase === "publishing" ? path.join(f.anchor, "previous") : f.packageRoot;
+    const previous = publishing ? path.join(f.anchor, "previous") : f.packageRoot;
     const manifest = path.join(previous, "package.json");
     const before = fs.statSync(manifest, { bigint: true });
-    const link = path.join(path.dirname(f.anchor), "retention-link");
-    fs.linkSync(manifest, link);
+    fs.linkSync(manifest, path.join(path.dirname(f.anchor), "retention-link"));
     expect(fs.statSync(manifest, { bigint: true }).nlink).toBe(before.nlink + 1n);
 
     const reported = vi.fn();
+    const result =
+      action === "public repair"
+        ? await settlePendingPackageActivation(f.packageRoot, reported)
+        : await runPackageActivationRecovery(f.anchor, action, f.operationId);
+    expect(result).toMatchObject(action === "public repair" ? { detail } : { phase: "complete" });
     if (action === "public repair") {
-      await expect(settlePendingPackageActivation(f.packageRoot, reported)).resolves.toMatchObject({
-        detail:
-          "legacy package record settled by identity and version; content could not be re-verified",
-      });
-      expect(reported).toHaveBeenCalledWith(
-        expect.objectContaining({
-          detail:
-            "legacy package record settled by identity and version; content could not be re-verified",
-        }),
-      );
-    } else {
-      await expect(
-        runPackageActivationRecovery(f.anchor, action, f.operationId),
-      ).resolves.toMatchObject({ phase: "complete" });
+      expect(reported).toHaveBeenCalledWith(expect.objectContaining({ detail }));
     }
     expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
     expect(
       JSON.parse(fs.readFileSync(path.join(f.packageRoot, "package.json"), "utf8")).version,
-    ).toBe(phase === "publishing" ? "2.0.0" : "1.0.0");
+    ).toBe(publishing ? "2.0.0" : "1.0.0");
     const retained = `${f.anchor}.superseded-${f.operationId}`;
     expect(fs.readFileSync(path.join(retained, "control/recovery.mjs"))).toEqual(helper);
-    const db = new DatabaseSync(path.join(retained, "control/operation.sqlite"), {
+    using db = new DatabaseSync(path.join(retained, "control/operation.sqlite"), {
       readOnly: true,
     });
-    try {
-      const row = db.prepare("SELECT phase, intent_json FROM package_activation").get();
-      expect(row?.phase).toBe("superseded");
-      expect(JSON.parse(String(row?.intent_json))).toMatchObject({
-        settled: true,
-        detail:
-          "legacy package record settled by identity and version; content could not be re-verified",
-      });
-    } finally {
-      db.close();
-    }
+    const row = db.prepare("SELECT phase, intent_json FROM package_activation").get();
+    expect(row?.phase).toBe("superseded");
+    expect(JSON.parse(String(row?.intent_json))).toMatchObject({ settled: true, detail });
   },
 );
 
@@ -123,21 +107,19 @@ it.skipIf(process.platform === "win32").each([false, true])(
   "requires the complete legacy candidate digest after remount (modified=%s)",
   async (modified) => {
     const f = await prepareRemountedPublication(fixtures, fixtureRoot, true);
+    const settle = () =>
+      settlePendingPackageActivation(f.packageRoot, undefined, undefined, {
+        operationId: f.operationId,
+      });
     if (modified) {
       fs.appendFileSync(path.join(f.packageRoot, "openclaw.mjs"), "changed");
       const before = fs.readFileSync(f.journalPath);
-      await expect(
-        settlePendingPackageActivation(f.packageRoot, undefined, undefined, {
-          operationId: f.operationId,
-        }),
-      ).rejects.toThrow("full candidate fingerprint changed");
+      await expect(settle()).rejects.toThrow("full candidate fingerprint changed");
       expect(fs.readFileSync(f.journalPath)).toEqual(before);
     } else {
-      await expect(
-        settlePendingPackageActivation(f.packageRoot, undefined, undefined, {
-          operationId: f.operationId,
-        }),
-      ).resolves.toMatchObject({ reason: "publication-settled-external-change" });
+      await expect(settle()).resolves.toMatchObject({
+        reason: "publication-settled-external-change",
+      });
       expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
     }
   },

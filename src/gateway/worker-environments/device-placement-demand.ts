@@ -1,5 +1,5 @@
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
-import { captureGatewaySessionWorkAdmissions } from "../../sessions/session-lifecycle-admission.js";
+import { captureGatewaySessionControllerWork } from "../../sessions/session-controller.lifecycle.js";
 import type { GatewayContextResolver } from "../server-methods/types.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
@@ -14,7 +14,7 @@ type DevicePlacementDemandSources = {
 
 function captureDemand(sources: DevicePlacementDemandSources) {
   const gatewayContext = sources.resolveGatewayContext();
-  const admissions = captureGatewaySessionWorkAdmissions(sources.resolveGatewayContext);
+  const admissions = captureGatewaySessionControllerWork(sources.resolveGatewayContext);
   const targets = new Set<string>();
   if (gatewayContext) {
     for (const identities of admissions.targets.values()) {
@@ -28,7 +28,7 @@ function captureDemand(sources: DevicePlacementDemandSources) {
 
 function projectDemand(
   sources: DevicePlacementDemandSources,
-  admissions: ReturnType<typeof captureGatewaySessionWorkAdmissions>,
+  admissions: ReturnType<typeof captureGatewaySessionControllerWork>,
   placements: ReadonlyMap<string, WorkerSessionPlacementRecord>,
   excludeSessionId?: string,
 ): ReadonlyMap<string, number> {

@@ -1,6 +1,7 @@
 // Explicit model policy tests keep catalog metadata separate from override restrictions.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
+import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import { resolveDefaultModelForAgent } from "./model-selection-config.js";
 import { getModelRefStatus } from "./model-selection-resolve.js";
 import { createModelVisibilityPolicy } from "./model-visibility-policy.js";
@@ -31,7 +32,7 @@ function createPolicy(cfg: OpenClawConfig, agentId?: string) {
 }
 
 describe("explicit model visibility policy", () => {
-  it("tracks every exact configured picker ref independently of the allow policy", () => {
+  it("tracks every selected model ref, but not metadata-only map keys, as configured", () => {
     const cfg = {
       agents: {
         defaults: {
@@ -65,10 +66,8 @@ describe("explicit model visibility policy", () => {
     });
 
     const configuredRefs = [
-      "demo/default-alias",
       "demo/default-primary",
       "demo/default-fallback",
-      "demo/agent-alias",
       "demo/agent-utility",
       "demo/image",
       "demo/image-fallback",
@@ -79,6 +78,9 @@ describe("explicit model visibility policy", () => {
     ];
     const configuredKeys = configuredRefs.map((ref) => JSON.stringify(["demo", ref.slice(5)]));
     expect(configuredKeys.filter((key) => !policy.configuredKeys.has(key))).toEqual([]);
+    // Aliases and per-model params are metadata; they do not pin a model in the picker.
+    expect(policy.configuredKeys.has(JSON.stringify(["demo", "default-alias"]))).toBe(false);
+    expect(policy.configuredKeys.has(JSON.stringify(["demo", "agent-alias"]))).toBe(false);
   });
 
   it("keeps overrides open when model entries only configure aliases or params", () => {
@@ -125,6 +127,22 @@ describe("explicit model visibility policy", () => {
     expect(policy.retainedKeys).toEqual(
       new Set(['["openai","gpt-5.5"]', '["external","sensitive"]']),
     );
+  });
+
+  it("warns when a wildcard policy substitutes the configured default", async () => {
+    const capture = createWarnLogCapture("model-policy-fallback");
+    try {
+      const policy = createPolicy({
+        agents: { defaults: { model: "external/sensitive", modelPolicy: { allow: ["openai/*"] } } },
+      });
+      const requested = { provider: "external", model: "sensitive" };
+      expect(policy.resolveSelection(requested)).toEqual({ provider: "openai", model: "gpt-5.5" });
+      expect(policy.allows(requested)).toBe(false);
+      expect(await capture.findText("Falling back to")).toContain('"external/sensitive"');
+      expect(await capture.findText("Falling back to")).toContain('"openai/gpt-5.5"');
+    } finally {
+      capture.cleanup();
+    }
   });
 
   it("retains the selected default identity after manifest alias resolution", () => {
@@ -245,6 +263,19 @@ describe("explicit model visibility policy", () => {
     expect(policy.allowedCatalog.map((entry) => `${entry.provider}/${entry.id}`)).toEqual([
       "clawrouter/anthropic/claude-haiku-4-5",
       "openai/gpt-5.5",
+    ]);
+  });
+
+  it("accepts the role model-name prefix grammar in agent policies", () => {
+    const policy = createPolicy({
+      agents: { defaults: { modelPolicy: { allow: ["openai/gpt-5.6-*"] } } },
+    });
+
+    expect(policy.allows({ provider: "openai", model: "gpt-5.6-sol" })).toBe(true);
+    expect(policy.allowsByWildcard({ provider: "openai", model: "gpt-5.6-sol" })).toBe(true);
+    expect(policy.allows({ provider: "openai", model: "gpt-5.5" })).toBe(false);
+    expect(policy.allowedCatalog.map((entry) => `${entry.provider}/${entry.id}`)).toEqual([
+      "openai/gpt-5.6-sol",
     ]);
   });
 

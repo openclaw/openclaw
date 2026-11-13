@@ -1,59 +1,59 @@
 import { Session } from "node:inspector/promises";
 import { isMainThread } from "node:worker_threads";
 
+declare const Bun: { gc(full: boolean): number };
+
 const IDLE_GC_DELAY_MS = 1_000;
 const IDLE_GC_GROWTH_BYTES = 32 * 1024 * 1024;
-let collectedHeap = 0;
-let session: Session | null | undefined;
+const bun = typeof Bun === "object" ? Bun : undefined;
+let collectedMemory = { heapUsed: 0, external: 0 };
+let session: Session | undefined;
 let pending: NodeJS.Timeout | undefined;
 let collecting = false;
-let idle = false;
-let generation = 0;
+
+function hasIdleGarbageGrowth(): boolean {
+  // These isolate-local counters avoid heap walks; external already includes ArrayBuffers.
+  const memory = process.memoryUsage();
+  return (
+    memory.heapUsed > collectedMemory.heapUsed + IDLE_GC_GROWTH_BYTES ||
+    memory.external > collectedMemory.external + IDLE_GC_GROWTH_BYTES
+  );
+}
 
 async function collectWorkerIdleGarbage(): Promise<void> {
   pending = undefined;
-  // Detailed heap statistics can walk live objects; this check only needs the byte counter.
-  if (process.memoryUsage().heapUsed <= collectedHeap + IDLE_GC_GROWTH_BYTES) {
+  if (!hasIdleGarbageGrowth()) {
     return;
   }
-  const collectingGeneration = generation;
   collecting = true;
   try {
-    if (!session) {
-      const connection = new Session();
-      connection.connect();
-      // Keep the local session until worker teardown. Disconnecting during GC
-      // completion deadlocks V8 and tears down other profiler state.
-      session = connection;
-    }
-    await session.post("HeapProfiler.collectGarbage");
-    collecting = false;
-    if (collectingGeneration === generation) {
-      collectedHeap = process.memoryUsage().heapUsed;
-    } else if (idle) {
-      // A successor finished while GC was pending; its released heap needs a new sample.
-      scheduleWorkerIdleGc();
-    }
-  } catch (error) {
-    collecting = false;
-    if (error instanceof Error && error.message.startsWith("Inspector error -32601:")) {
-      session = null;
+    if (bun) {
+      bun.gc(true);
     } else {
-      process.emitWarning(error instanceof Error ? error : String(error));
+      if (!session) {
+        const connection = new Session();
+        connection.connect();
+        // Keep the local session until worker teardown. Disconnecting during GC
+        // completion deadlocks V8 and tears down other profiler state.
+        session = connection;
+      }
+      await session.post("HeapProfiler.collectGarbage");
     }
+    // A task overlapping collection can leave garbage until the next idle growth sample.
+    collectedMemory = process.memoryUsage();
+  } catch (error) {
+    process.emitWarning(error instanceof Error ? error : String(error));
+  } finally {
+    collecting = false;
   }
 }
 
 /** Only native worker owners call this after releasing their operation's payloads. */
 export function scheduleWorkerIdleGc(): void {
-  if (isMainThread || session === null) {
+  if (isMainThread || pending || collecting) {
     return;
   }
-  idle = true;
-  if (pending || collecting) {
-    return;
-  }
-  if (process.memoryUsage().heapUsed <= collectedHeap + IDLE_GC_GROWTH_BYTES) {
+  if (!hasIdleGarbageGrowth()) {
     return;
   }
   // A reply can immediately trigger another task; allow that burst to finish first.
@@ -64,8 +64,6 @@ export function scheduleWorkerIdleGc(): void {
 
 /** A new operation takes precedence over collection of the preceding idle heap. */
 export function cancelWorkerIdleGc(): void {
-  generation++;
-  idle = false;
   clearTimeout(pending);
   pending = undefined;
 }

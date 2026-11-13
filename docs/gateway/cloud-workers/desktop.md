@@ -1,6 +1,6 @@
 ---
 summary: "Watch or control a desktop-capable cloud worker from the Control UI"
-title: "Cloud Worker Desktop"
+title: "Cloud device desktop"
 read_when: "You want to observe or drive a cloud worker's desktop, or you are enabling the desktop lab."
 ---
 
@@ -25,7 +25,7 @@ requesting browser cannot receive the initial presentation, a fresh reservation
 is canceled before provisioning; an existing attachment remains available.
 
 For a native app, use a profile for its operating system with `settings.desktop: true`
-and enable the **Cloud Worker Desktop** lab. The agent launches the application and opens
+and enable the **Cloud device desktop** lab. The agent launches the application and opens
 the Desktop panel. When its model supports vision and tool policy permits
 `computer`, it can observe and control the same desktop using the attachment's
 `environmentId`. Taking manual control pauses agent input; observations remain
@@ -56,13 +56,19 @@ machine is disposable: save required outputs before stopping it. Attaching a
 machine does not automatically synchronize the primary workspace; the agent
 must copy the required files or prepare the project on the machine.
 
+The machine's effective total TTL still bounds desktop use. OpenClaw heartbeats
+the effective idle window while it owns the worker, but desktop input, open
+viewers, and those heartbeats do not extend total lifetime. `keep` does not make
+the desktop persistent. Save required outputs before expiry; see
+[lease lifetime](/gateway/cloud-workers#lease-lifetime).
+
 If stopping a conversation environment fails, cleanup retries with exponential
 backoff from 30 seconds to five minutes, on the next reconciliation sweep.
 After ten attempts or one hour, whichever comes first, cleanup is parked for
 the rest of that Gateway process. Environment status reports an error with the
 lease ID, last failure, and recovery instructions; the lease stays owned and
 blocks replacement until cleanup is confirmed. For Crabbox, inspect it with
-`crabbox leases list` and run `crabbox stop <lease>` as needed, then retry Stop
+`crabbox inspect --id <lease> --json` and run `crabbox stop <lease>` as needed, then retry Stop
 in the conversation. An explicit Stop or Gateway restart starts a fresh retry
 budget. A text-only 404 from Crabbox is an unknown cleanup outcome, not proof
 that the lease was released.
@@ -75,7 +81,7 @@ for the backup, retention, and re-upgrade contract.
 
 ## Desktop (interactive)
 
-Cloud Worker Desktop lets an administrator watch or control a capable worker from the Control UI without exposing its cloud node as an ordinary paired node. Enable the **Cloud Worker Desktop** lab, then set `settings.desktop: true` on a Linux, prepared macOS, or native Windows Crabbox profile. Select `windows/normal` for Windows; WSL2 desktops are unsupported. Desktop capability is fixed at warm time: changing the setting affects newly provisioned workers, while an existing non-desktop lease must be stopped and reprovisioned. Warm-image capture remains Linux only. Native desktops provision cold even when the shared profile enables warm images.
+Cloud device desktop lets an admin watch or control a capable cloud device from the Control UI without exposing its cloud node as an ordinary paired node. Enable the **Cloud device desktop** lab, then set `settings.desktop: true` on a Linux, prepared macOS, or native Windows Crabbox profile. Select `windows/normal` for Windows; WSL2 desktops are unsupported. Desktop capability is fixed at warm time: changing the setting affects newly provisioned workers, while an existing non-desktop lease must be stopped and reprovisioned. Warm-image capture remains Linux only. Native desktops provision cold even when the shared profile enables warm images.
 
 The lab switch applies without restarting the Gateway. Connected Control UI
 pages update desktop availability automatically. Disabling it closes worker

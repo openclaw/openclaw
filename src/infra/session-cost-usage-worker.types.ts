@@ -1,12 +1,8 @@
 import type { ModelCostConfig } from "@openclaw/llm-core";
-import type { SqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import type {
-  UsageOverviewOptions,
-  UsageOverviewSession,
-  UsageOverviewSlice,
-} from "../shared/usage-types.js";
 import type { OpenClawStateWorkerErrorPayload } from "../state/openclaw-state-worker-error.js";
 import type { SessionCostUsageRollupRow } from "./session-cost-usage-cache.kernel.js";
+import type { UsageOverviewBatch } from "./session-cost-usage-overview-batch.js";
+import type { UsageCostQuarterBackfillRow } from "./session-cost-usage-quarters.worker.js";
 import type {
   CostUsageSummary,
   SessionCostSummary,
@@ -46,24 +42,41 @@ type UsageCostWorkerRange = {
   dayBucket: UsageDailyBucket;
 };
 
+export type UsageCostWorkerSession = {
+  sessionId?: string;
+  sessionFile: string;
+};
+
+/** A SQLite transcript as `[stores index, session id]`, so worker inputs name each store once. */
+export type UsageCostOverviewInstance = UsageCostWorkerSession | [store: number, sessionId: string];
+
 export type UsageCostWorkerOperation =
-  | { kind: "inventory"; minMtimeMs?: number; sessionFiles?: string[] }
+  | {
+      kind: "inventory";
+      minMtimeMs?: number;
+    }
   | ({ kind: "summary"; pricingFingerprint: string } & UsageCostWorkerRange)
   | {
       kind: "sessions";
-      projection?: "overview";
-      overview?: {
-        sessions: UsageOverviewSession[];
-        options: UsageOverviewOptions;
-        compact?: boolean;
-      };
       pricingFingerprint: string;
-      sessions: Array<{ sessionId?: string; sessionFile: string }>;
+      sessions: Array<{
+        sessionId?: string;
+        sessionFile: string;
+      }>;
       startMs?: number;
       endMs?: number;
       includeUntimestamped?: boolean;
+      reportBudgetBytes?: number;
       dayBucket: UsageDailyBucket;
     }
+  | ({
+      kind: "overview";
+      pricingFingerprint: string;
+      /** Each family folds its instances into one row, in this order. */
+      families: Array<UsageCostOverviewInstance[]>;
+      stores: Array<{ agentId: string; storePath: string }>;
+      includeUntimestamped?: boolean;
+    } & UsageCostWorkerRange)
   | {
       kind: "refresh";
       pricingFingerprint: string;
@@ -78,6 +91,8 @@ export type UsageCostWorkerInput = {
   kind: "usage-cost";
   location: UsageCostWorkerLocation;
   databases: UsageCostWorkerDatabase[];
+  /** Logical selectors and their physical owners captured before acquiring custody. */
+  stores: Array<{ agentId: string; storePath: string; database: UsageCostWorkerDatabase }>;
   /** Archive metadata discovery shares the roster captured before database custody. */
   archiveStorePaths: string[];
   operation: UsageCostWorkerOperation;
@@ -90,39 +105,45 @@ export type UsageCostWorkerResult =
       kind: "inventory";
       files: Array<Pick<UsageCostTranscriptFile, "kind" | "sourcePath" | "sessionId" | "mtimeMs">>;
     }
-  | { kind: "summary"; summary: CostUsageSummary; invalidRows: SessionCostUsageRollupRow[] }
+  | {
+      kind: "summary";
+      summary: CostUsageSummary;
+      /** Sessions to refresh before the summary is current; private sessions report none. */
+      staleSessionFiles: string[];
+      invalidRows: SessionCostUsageRollupRow[];
+    }
   | {
       kind: "sessions";
       summaries: Array<SessionCostSummary | null>;
       cacheStatus: UsageCacheStatus;
       staleSessionFiles: string[];
       invalidRows: SessionCostUsageRollupRow[];
+      remainingReportBytes?: number;
     }
   | {
       kind: "overview";
-      result: UsageOverviewSlice;
+      /** One packed row per requested family, in order. */
+      batch: UsageOverviewBatch;
+      /** Families with an instance whose usage is not summarized yet. */
+      computing: boolean[];
+      /** Instances whose quarter rows are not written yet (refresh or upgrade backfill). */
+      summarizing: number;
       cacheStatus: UsageCacheStatus;
       staleSessionFiles: string[];
       invalidRows: SessionCostUsageRollupRow[];
     }
-  | { kind: "refresh"; changed: boolean; remainingFiles?: UsageCostPendingFile[] };
+  | {
+      kind: "refresh";
+      changed: boolean;
+      remainingFiles?: UsageCostPendingFile[];
+      /** Archives that cannot be decoded; their last rollup is kept and the batch completes. */
+      unreadableFiles?: Array<{ sessionFile: string; message: string }>;
+    };
 
 export type UsageCostWorkerFailure = {
   message: string;
   error?: OpenClawStateWorkerErrorPayload;
-  hostOrigin?: number;
-  hostFailureOnly?: boolean;
 };
-
-export class UsageCostHostEffectError extends Error {
-  constructor(
-    readonly origin: number,
-    message: string,
-  ) {
-    super(message);
-    this.name = "UsageCostHostEffectError";
-  }
-}
 
 /** Retain the domain failure while the pool proves native retirement. */
 export class UsageCostWorkerReplyError extends Error {
@@ -148,7 +169,7 @@ type UsageCostPreparedRollup = {
 
 type UsageCostPruneRow = {
   key: string;
-  value: Uint8Array;
+  value: Uint8Array<ArrayBuffer>;
   updatedAt: number;
 };
 
@@ -158,10 +179,9 @@ export type UsageCostWorkerHostEffects = {
     input: Array<{ provider?: string; model?: string }>;
     output: Array<ModelCostConfig | undefined>;
   };
-  restore: { input: SqliteSessionFileMarker; output: void };
-  "prune-row": { input: UsageCostPruneRow; output: void };
-  prune: { input: Record<string, never>; output: void };
-  write: { input: UsageCostPreparedRollup; output: boolean };
+  "prune-rows": { input: UsageCostPruneRow[]; output: void };
+  write: { input: UsageCostPreparedRollup[]; output: boolean };
+  "write-quarters": { input: UsageCostQuarterBackfillRow[]; output: boolean };
 };
 
 export type UsageCostWorkerHostRequest = {
@@ -170,7 +190,3 @@ export type UsageCostWorkerHostRequest = {
     input: UsageCostWorkerHostEffects[Kind]["input"];
   };
 }[keyof UsageCostWorkerHostEffects];
-
-export type UsageCostWorkerHostReply =
-  | { ok: true; value: UsageCostWorkerHostEffects[keyof UsageCostWorkerHostEffects]["output"] }
-  | { ok: false; origin: number; message: string };

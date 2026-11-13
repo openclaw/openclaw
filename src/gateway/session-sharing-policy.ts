@@ -6,6 +6,7 @@ import {
   type SessionVisibility,
 } from "../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
+import { assertAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { sessionCreatorProfileId } from "../config/sessions/session-entry-provenance.js";
@@ -281,49 +282,101 @@ export function sharingIdentity(
   return identity?.id === GATEWAY_OWNER_PROFILE_ID ? undefined : identity;
 }
 
+/** Identityless tool callers retain owner sharing only through their live, bounded source. */
+export function isSessionSharingOwnerEquivalent(
+  client: GatewayClient | null,
+  actor: ReturnType<typeof resolveGatewayOperatorRoleActor>,
+): boolean {
+  if (actor?.kind === "system") {
+    return true;
+  }
+  const authority = client?.internal?.operatorRunAuthority;
+  if (actor?.kind !== "operator" || actor.profileId !== GATEWAY_OWNER_PROFILE_ID || !authority) {
+    return false;
+  }
+  assertAdmittedRunOperatorAuthority(authority);
+  authority.assertCurrent();
+  // Attribution alone grants nothing; neither side may widen session-only scopes.
+  return (
+    authority.profileId === actor.profileId &&
+    operatorScopeSatisfied("operator.read", authority.scopes) &&
+    operatorScopeSatisfied("operator.read", client?.connect?.scopes ?? [])
+  );
+}
+
 export function resolveSessionSharingRole(
   params: SessionSharingRoleParams,
   preparedCap?: { value: ReturnType<typeof operatorSessionCap> },
   isCreator?: ReturnType<typeof prepareSessionCreatorProfile>,
 ): SessionSharingRole {
+  return prepareSessionSharingRole(params, preparedCap, isCreator)(params.target, params.isMember);
+}
+
+/** Caller facts belong to one synchronous read; prepare again after yielding. */
+export function prepareSessionSharingRole(
+  params: Pick<SessionSharingRoleParams, "cfg" | "client">,
+  preparedCap?: { value: ReturnType<typeof operatorSessionCap> },
+  isCreator?: ReturnType<typeof prepareSessionCreatorProfile>,
+): (
+  target: Pick<SessionSharingTarget, "canonicalKey" | "entry">,
+  isMember?: boolean,
+) => SessionSharingRole {
   if (isGatewayAdmin(params.client)) {
-    return "admin";
+    return () => "admin";
   }
   const operatorActor = resolveGatewayOperatorRoleActor(params.client);
   const identity = sharingIdentity(params.client, operatorActor);
   // Solo ownership is independent of the shared-secret connection's attribution profile.
   if (!identity) {
-    return params.client?.authenticatedGitHubIdentitySync ||
-      (params.cfg?.gateway?.roles && operatorActor?.kind !== "system")
-      ? "viewer"
-      : "owner";
+    const role =
+      params.client?.authenticatedGitHubIdentitySync ||
+      (params.cfg?.gateway?.roles && !isSessionSharingOwnerEquivalent(params.client, operatorActor))
+        ? "viewer"
+        : "owner";
+    return () => role;
   }
   const creatorMatches = isCreator ?? prepareSessionCreatorProfile(identity.id);
-  if (creatorMatches(params.target.entry.createdActor)) {
-    return "owner";
-  }
   const sessionCap = preparedCap
     ? preparedCap.value
     : params.cfg && operatorSessionCap(params.client, params.cfg);
-  if (
-    sessionCap === "write" &&
-    resolveSessionVisibility(params.target.entry) !== "draft" &&
-    params.target.entry.incognito !== true &&
-    !isIncognitoSessionKey(params.target.canonicalKey)
-  ) {
-    return "member";
-  }
-  if (sessionCap === "none") {
-    return "viewer";
-  }
-  if (params.isMember === undefined) {
-    throw new SessionMutationFactsUnavailableError();
-  }
-  return params.isMember ? "member" : "viewer";
+  return (target, isMember) => {
+    if (creatorMatches(target.entry.createdActor)) {
+      return "owner";
+    }
+    if (
+      sessionCap === "write" &&
+      resolveSessionVisibility(target.entry) !== "draft" &&
+      target.entry.incognito !== true &&
+      !isIncognitoSessionKey(target.canonicalKey)
+    ) {
+      return "member";
+    }
+    if (sessionCap === "none") {
+      return "viewer";
+    }
+    if (isMember === undefined) {
+      throw new SessionMutationFactsUnavailableError();
+    }
+    return isMember ? "member" : "viewer";
+  };
 }
 
 export function canManageSessionSharing(role: SessionSharingRole): boolean {
   return role === "admin" || role === "owner";
+}
+
+/**
+ * Owner-only conversation work: between attributed people only the creator qualifies, even with
+ * admin scope. Unattributed callers and creators keep the owner-equivalent sharing role.
+ */
+export function isSessionOwnRequester(
+  params: Pick<SessionSharingRoleParams, "cfg" | "client">,
+  target: Pick<SessionSharingTarget, "canonicalKey" | "entry">,
+  profileId = sharingIdentity(params.client, resolveGatewayOperatorRoleActor(params.client))?.id,
+): boolean {
+  return profileId && sessionCreatorProfileId(target.entry.createdActor)
+    ? isSessionCreatorProfile(target.entry.createdActor, profileId)
+    : canManageSessionSharing(prepareSessionSharingRole(params, { value: "none" })(target));
 }
 
 export function hiddenSessionNotFound(sessionKey: string, incognito = false): ErrorShape {
@@ -488,6 +541,8 @@ export function authorizeSessionAgentRun(
   params: {
     cfg: OpenClawConfig;
     client: GatewayClient | null;
+    /** File readers reuse the admission policy with read-specific recovery guidance. */
+    sandboxRequiredMessage?: string;
     target: Pick<SessionSharingTarget, "agentId" | "canonicalKey"> & {
       entry?: Pick<SessionEntry, "sandbox">;
     };
@@ -509,7 +564,8 @@ export function authorizeSessionAgentRun(
   ) {
     return errorShape(
       ErrorCodes.FORBIDDEN,
-      `Your operator role requires a sandboxed session; create a new session instead of running in "${params.target.canonicalKey}".`,
+      params.sandboxRequiredMessage ??
+        `Your operator role requires a sandboxed session; create a new session instead of running in "${params.target.canonicalKey}".`,
     );
   }
   return null;
@@ -524,7 +580,10 @@ export function authorizeSessionSharingTarget(
     ? prepared.value
     : params.cfg && operatorSessionCap(params.client, params.cfg);
   const role = prepared?.role ?? resolveSessionSharingRole(params, { value: sessionCap });
-  if (sessionCap === "none" && role !== "owner" && role !== "admin") {
+  if (
+    (sessionCap === "none" && role !== "owner" && role !== "admin") ||
+    (sessionCap === "invited" && role === "viewer")
+  ) {
     return hiddenSessionNotFound(params.target.canonicalKey);
   }
   if (params.requireOwner && !canManageSessionSharing(role)) {
@@ -533,7 +592,7 @@ export function authorizeSessionSharingTarget(
       `Only the session creator or an admin can ${params.ownerAction ?? "archive or restore this session"}.`,
     );
   }
-  const capped = sessionCap === "view" || sessionCap === "suggest";
+  const capped = sessionCap === "invited" || sessionCap === "view" || sessionCap === "suggest";
   // Draft membership is inactive, while an explicit role caps even shared visibility.
   const canMutate =
     visibility === "draft"

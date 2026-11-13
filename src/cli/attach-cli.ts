@@ -2,11 +2,15 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { constants as osConstants, tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import {
+  parseStrictPositiveInteger,
+  timestampMsToIsoString,
+} from "@openclaw/normalization-core/number-coercion";
 import type { Command } from "commander";
 import { captureRuntimeConfigAsyncReader } from "../config/io.js";
 import { defaultRuntime } from "../runtime.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { throwExpectedCliError } from "./expected-cli-error.js";
 import {
   callSessionTargetGateway,
   resolveSessionTarget,
@@ -74,7 +78,9 @@ export async function registerAttachCli(program: Command) {
         const signal = getAsyncWorkSignal();
         signal?.throwIfAborted();
         if (target && opts.session) {
-          throw new Error("pass one session target: use either the positional target or --session");
+          throwExpectedCliError(
+            "pass one session target: use either the positional target or --session",
+          );
         }
         let ttlMs: number | undefined;
         if (opts.ttl !== undefined) {
@@ -101,7 +107,7 @@ export async function registerAttachCli(program: Command) {
           : undefined;
         const gateway = resolved?.gateway ?? requestedGateway;
         signal?.throwIfAborted();
-        const granted = (await callSessionTargetGateway({
+        const grant = (await callSessionTargetGateway({
           gateway,
           method: "attach.grant",
           request: {
@@ -111,32 +117,28 @@ export async function registerAttachCli(program: Command) {
           },
           requiredScope: "operator.admin",
         })) as Partial<AttachGrant> | null;
-        if (
-          !granted ||
-          typeof granted.token !== "string" ||
-          typeof granted.sessionKey !== "string" ||
-          typeof granted.expiresAtMs !== "number" ||
-          !Number.isFinite(granted.expiresAtMs) ||
-          !granted.mcpConfig?.mcpServers ||
-          typeof granted.env !== "object" ||
-          granted.env === null
-        ) {
-          defaultRuntime.error("attach.grant returned an unexpected response from the gateway.");
-          defaultRuntime.exit(1);
-          return;
-        }
-        const grant = granted as AttachGrant;
-
         let keepGrant = false;
         let cleanupConfig: (() => void) | undefined;
         let detachChild: (() => void) | undefined;
-        let expiresAt = String(grant.expiresAtMs);
+        const expiresAt = timestampMsToIsoString(grant?.expiresAtMs);
         let exitCode = 0;
         try {
+          if (
+            !grant ||
+            typeof grant.token !== "string" ||
+            typeof grant.sessionKey !== "string" ||
+            expiresAt === undefined ||
+            !grant.mcpConfig?.mcpServers ||
+            typeof grant.env !== "object" ||
+            grant.env === null
+          ) {
+            defaultRuntime.error("attach.grant returned an unexpected response from the gateway.");
+            defaultRuntime.exit(1);
+            return;
+          }
           // A grant response can arrive after CLI cancellation. Its custody is
           // already ours, so unwind through revocation before creating anything.
           signal?.throwIfAborted();
-          expiresAt = new Date(grant.expiresAtMs).toISOString();
           const config = writeClaudeMcpConfig(grant.mcpConfig);
           cleanupConfig = config.cleanup;
           const claudeArgs = ["--strict-mcp-config", "--mcp-config", config.path];
@@ -210,7 +212,7 @@ export async function registerAttachCli(program: Command) {
           }
         } finally {
           try {
-            if (!keepGrant) {
+            if (!keepGrant && typeof grant?.token === "string") {
               try {
                 await callSessionTargetGateway({
                   gateway,
@@ -220,7 +222,7 @@ export async function registerAttachCli(program: Command) {
                 });
               } catch (error) {
                 defaultRuntime.error(
-                  `Warning: failed to revoke attach grant; it remains live until ${expiresAt}. ${String(error)}`,
+                  `Warning: failed to revoke attach grant; it remains live until ${expiresAt ?? String(grant.expiresAtMs)}. ${String(error)}`,
                 );
               } finally {
                 cleanupConfig?.();

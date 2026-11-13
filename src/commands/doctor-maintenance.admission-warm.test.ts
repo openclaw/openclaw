@@ -7,7 +7,7 @@ import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { readUpdateRunDriver } from "../infra/update-run-driver.js";
 import { createUpdateRun, recordUpdateRunRepairContinuation } from "../infra/update-run-ledger.js";
 import * as ledger from "../infra/update-run-ledger.js";
-import { recordOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.js";
+import { seedOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.test-support.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -21,21 +21,48 @@ import { setupDoctorAdmissionFixture } from "./doctor-maintenance.admission.test
 import { stoppedSystemdBinding } from "./doctor-maintenance.test-support.js";
 
 const fixture = setupDoctorAdmissionFixture();
+const warmSources = ["cached-writer", "admitted-read-only"] as const;
+const runningSql =
+  "UPDATE update_runs SET status = 'running', phase = 'requested', finished_at_ms = NULL";
+async function withMaintenance(
+  source: (typeof warmSources)[number] | "cold-read-only",
+  action: (
+    context: ReturnType<typeof fixture> & {
+      maintenance: ReturnType<typeof maintenanceScope>;
+      openPeer: () => DatabaseSync;
+    },
+  ) => void | Promise<void>,
+) {
+  using context = fixture(source === "cached-writer");
+  const maintenance = maintenanceScope(
+    context.admission,
+    source === "admitted-read-only" ? context.database : undefined,
+  );
+  let peer: DatabaseSync | undefined;
+  const openPeer = () => (peer ??= new DatabaseSync(context.database));
+  try {
+    await maintenance.run(() => action({ ...context, maintenance, openPeer }));
+  } finally {
+    await maintenance.close();
+    peer?.close();
+  }
+}
 
-function maintenanceScope(admission: () => void, database?: string) {
+function maintenanceScope(admission: () => void, database?: string, admit = true) {
   const scope = createOpenClawDatabaseMaintenanceScope({
     schemaMaintenance: true,
     assertOwnerCurrent: admission,
     assertDatabaseAccess: (pathname) => expect(pathname).toBe(database),
   });
-  if (database) {
+  if (database && admit) {
     scope.run(() => admitOpenClawMaintenanceLiveAuthorityReads(database));
   }
   return scope;
 }
 
 it("admits fast systemd inspection after a slow continuation write", async () => {
-  const { env, assertIsolation } = fixture();
+  using context = fixture();
+  const { env } = context;
   const run = createUpdateRun(
     { trigger: "cli", origin: { driver: readUpdateRunDriver() } },
     { env },
@@ -78,99 +105,53 @@ it("admits fast systemd inspection after a slow continuation write", async () =>
     expect(() => admitted.recordContinuation()).toThrow(competing.runId);
   } finally {
     await reader.close();
-    assertIsolation();
   }
 });
 
-it.each(["cached-writer", "admitted-read-only"] as const)(
-  "refuses replacement while the %s maintenance reader is bound",
-  async (source) => {
-    const { database, admission, assertIsolation } = fixture(source === "cached-writer");
-    const maintenance = maintenanceScope(
-      admission,
-      source === "admitted-read-only" ? database : undefined,
-    );
+it.each(warmSources)("refuses replacement while the %s maintenance reader is bound", (source) =>
+  withMaintenance(source, ({ database, maintenance }) => {
     const original = `${database}.original`;
+    maintenance.assertAdmission();
+    fs.renameSync(database, original);
     try {
-      maintenance.run(() => {
-        maintenance.assertAdmission();
-        fs.renameSync(database, original);
-        try {
-          fs.copyFileSync(original, database);
-          expect(() => maintenance.assertAdmission()).toThrow("identity changed");
-        } finally {
-          fs.rmSync(database, { force: true });
-          fs.renameSync(original, database);
-        }
-      });
+      fs.copyFileSync(original, database);
+      expect(() => maintenance.assertAdmission()).toThrow("identity changed");
     } finally {
-      await maintenance.close();
-      assertIsolation();
+      fs.rmSync(database, { force: true });
+      fs.renameSync(original, database);
     }
-  },
+  }),
 );
 
-it.each(["cached-writer", "admitted-read-only"] as const)(
-  "refuses a foreign schema version change through the %s reader",
-  async (source) => {
-    const { database, admission, assertIsolation } = fixture(source === "cached-writer");
-    const maintenance = maintenanceScope(
-      admission,
-      source === "admitted-read-only" ? database : undefined,
-    );
-    const peer = new DatabaseSync(database);
-    try {
-      maintenance.run(() => {
-        maintenance.assertAdmission();
-        peer.exec("PRAGMA user_version = 999999");
-        expect(() => maintenance.assertAdmission()).toThrow(/schema|version/i);
-      });
-    } finally {
-      await maintenance.close();
-      peer.close();
-      assertIsolation();
-    }
-  },
+it.each(warmSources)("refuses a foreign schema version change through the %s reader", (source) =>
+  withMaintenance(source, ({ maintenance, openPeer }) => {
+    const peer = openPeer();
+    maintenance.assertAdmission();
+    peer.exec("PRAGMA user_version = 999999");
+    expect(() => maintenance.assertAdmission()).toThrow(/schema|version/i);
+  }),
 );
 
-it.each(["cached-writer", "admitted-read-only"] as const)(
-  "refuses new quarantine under the %s maintenance reader",
-  async (source) => {
-    const { env, database, admission, assertIsolation } = fixture(source === "cached-writer");
-    const maintenance = maintenanceScope(
-      admission,
-      source === "admitted-read-only" ? database : undefined,
-    );
-    try {
-      maintenance.run(() => {
-        maintenance.assertAdmission();
-        expect(
-          recordOpenClawDatabaseQuarantine({
-            env,
-            kind: "state",
-            path: database,
-            reason: "new maintenance quarantine",
-          }),
-        ).toBe(true);
-        expect(() => maintenance.assertAdmission()).toThrow("new maintenance quarantine");
-        expect(isOpenClawStateDatabaseOpen(database)).toBe(false);
-      });
-    } finally {
-      await maintenance.close();
-      assertIsolation();
-    }
-  },
+it.each(warmSources)("refuses new quarantine under the %s maintenance reader", (source) =>
+  withMaintenance(source, ({ env, database, maintenance }) => {
+    maintenance.assertAdmission();
+    seedOpenClawDatabaseQuarantine({
+      env,
+      kind: "state",
+      path: database,
+      reason: "new maintenance quarantine",
+    });
+    expect(() => maintenance.assertAdmission()).toThrow("new maintenance quarantine");
+    expect(isOpenClawStateDatabaseOpen(database)).toBe(false);
+  }),
 );
 
-it.each(["cached-writer", "admitted-read-only"] as const)(
+it.each(warmSources)(
   "binds the reader to Doctor's %s source and drains before cold restoration",
   async (source) => {
-    const { env, database, admission, assertIsolation } = fixture();
-    const maintenance = createOpenClawDatabaseMaintenanceScope({
-      schemaMaintenance: true,
-      assertOwnerCurrent: admission,
-      assertDatabaseAccess: (pathname) => expect(pathname).toBe(database),
-    });
+    using context = fixture();
+    const { env, database, admission } = context;
+    const maintenance = maintenanceScope(admission, database, false);
     const hashes = vi.spyOn(snapshots, "readSqliteSourceContentVersionSync");
     const copies = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationSync");
     try {
@@ -187,9 +168,7 @@ it.each(["cached-writer", "admitted-read-only"] as const)(
         maintenance.assertAdmission();
         db.exec("BEGIN IMMEDIATE");
         try {
-          db.exec(
-            "UPDATE update_runs SET status = 'running', phase = 'requested', finished_at_ms = NULL",
-          );
+          db.exec(runningSql);
           // Policy sees committed rows through its independent reader even when
           // the original native source is holding the caller's write transaction.
           maintenance.assertAdmission();
@@ -208,36 +187,28 @@ it.each(["cached-writer", "admitted-read-only"] as const)(
       expect(hashes).toHaveBeenCalled();
     } finally {
       await maintenance.close();
-      assertIsolation();
     }
   },
 );
 
 it.each(["cached-writer", "admitted-read-only", "cold-read-only"] as const)(
   "observes %s foreign commits without uncommitted rows or inherited discovery snapshots",
-  async (source) => {
-    const { env, database, admission, assertIsolation } = fixture(source === "cached-writer");
-    const maintenance = maintenanceScope(
-      admission,
-      source === "admitted-read-only" ? database : undefined,
-    );
-    const peer = new DatabaseSync(database);
-    const runId = peer.prepare("SELECT run_id FROM update_runs").get()?.run_id;
-    expect(typeof runId).toBe("string");
-    try {
-      await maintenance.run(async () => {
+  (source) =>
+    withMaintenance(source, async ({ env, database, maintenance, openPeer }) => {
+      const peer = openPeer();
+      const runId = peer.prepare("SELECT run_id FROM update_runs").get()?.run_id;
+      expect(typeof runId).toBe("string");
+      try {
         maintenance.assertAdmission();
         await withOpenClawStateDatabaseReadSnapshot(
           async () => {
             peer.exec("BEGIN IMMEDIATE");
-            peer.exec(
-              "UPDATE update_runs SET status = 'running', phase = 'requested', finished_at_ms = NULL",
-            );
+            peer.exec(runningSql);
             expect(() => maintenance.assertAdmission()).not.toThrow();
             if (source === "cold-read-only") {
               const observe = fs.lstatSync;
               let pendingCommit = true;
-              const stat = vi.spyOn(fs, "lstatSync").mockImplementation((...args) => {
+              using _ = vi.spyOn(fs, "lstatSync").mockImplementation((...args) => {
                 const observed = observe(...args);
                 // Commit after the last file observation used to select a cached revision.
                 if (pendingCommit && args[0] === `${database}-journal`) {
@@ -246,12 +217,9 @@ it.each(["cached-writer", "admitted-read-only", "cold-read-only"] as const)(
                 }
                 return observed;
               });
-              try {
-                expect(() => maintenance.assertAdmission()).toThrow(String(runId));
-                expect(pendingCommit).toBe(false);
-              } finally {
-                stat.mockRestore();
-              }
+
+              expect(() => maintenance.assertAdmission()).toThrow(String(runId));
+              expect(pendingCommit).toBe(false);
             } else {
               peer.exec("COMMIT");
               expect(() => maintenance.assertAdmission()).toThrow(String(runId));
@@ -259,35 +227,29 @@ it.each(["cached-writer", "admitted-read-only", "cold-read-only"] as const)(
           },
           { env },
         );
-      });
-    } finally {
-      if (peer.isTransaction) {
-        peer.exec("ROLLBACK");
+      } finally {
+        if (peer.isTransaction) {
+          peer.exec("ROLLBACK");
+        }
       }
-      await maintenance.close();
-      peer.close();
-      assertIsolation();
-    }
-  },
+    }),
 );
 
 it("refuses committed WAL updates while preserving all live source artifacts", () => {
-  const { env, admission, family, assertIsolation } = fixture(true);
+  using context = fixture(true);
+  const { env, admission, family } = context;
   const before = family();
   admission();
   expect(family()).toEqual(before);
   const competing = createUpdateRun({ trigger: "cli" }, { env });
   const committed = family();
-  try {
-    expect(() => admission()).toThrow(competing.runId);
-    expect(family()).toEqual(committed);
-  } finally {
-    assertIsolation();
-  }
+  expect(() => admission()).toThrow(competing.runId);
+  expect(family()).toEqual(committed);
 });
 
 it("refuses a competing run after replacement of an already admitted source", async () => {
-  const { env, database, admission, createStateDir, assertIsolation } = fixture(true);
+  using context = fixture(true);
+  const { env, database, admission, createStateDir } = context;
   const replacement = createStateDir();
   const competing = createUpdateRun(
     { trigger: "cli" },
@@ -295,43 +257,31 @@ it("refuses a competing run after replacement of an already admitted source", as
   );
   await closeOpenClawStateDatabaseAsync();
   fs.renameSync(path.join(replacement, "state", "openclaw.sqlite"), database);
-  try {
-    expect(() => admission()).toThrow(competing.runId);
-  } finally {
-    assertIsolation();
-  }
+  expect(() => admission()).toThrow(competing.runId);
 });
 
 it("does not borrow a retained discovery snapshot for current admission", async () => {
-  const { env, admission, assertIsolation } = fixture();
-  try {
-    await withOpenClawStateDatabaseReadSnapshot(
-      async () => {
-        const competing = createUpdateRun({ trigger: "cli" }, { env });
-        expect(() => admission()).toThrow(competing.runId);
-      },
-      { env },
-    );
-  } finally {
-    assertIsolation();
-  }
+  using context = fixture();
+  const { env, admission } = context;
+  await withOpenClawStateDatabaseReadSnapshot(
+    async () => {
+      const competing = createUpdateRun({ trigger: "cli" }, { env });
+      expect(() => admission()).toThrow(competing.runId);
+    },
+    { env },
+  );
 });
 
 it("refuses new quarantine with a cold reader and unchanged ledger bytes", () => {
-  const { env, database, admission, family, assertIsolation } = fixture();
+  using context = fixture();
+  const { env, database, admission, family } = context;
   const before = family();
-  expect(
-    recordOpenClawDatabaseQuarantine({
-      env,
-      kind: "state",
-      path: database,
-      reason: "fresh quarantine refusal",
-    }),
-  ).toBe(true);
-  try {
-    expect(() => admission()).toThrow("fresh quarantine refusal");
-    expect(family()).toEqual(before);
-  } finally {
-    assertIsolation();
-  }
+  seedOpenClawDatabaseQuarantine({
+    env,
+    kind: "state",
+    path: database,
+    reason: "fresh quarantine refusal",
+  });
+  expect(() => admission()).toThrow("fresh quarantine refusal");
+  expect(family()).toEqual(before);
 });

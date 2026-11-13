@@ -11,18 +11,37 @@ describe("oc-path-parse-edges", () => {
   it("round-trip canonical forms", () => {
     const cases = [
       "oc://SOUL.md",
+      "oc://.settings.json/key",
+      "oc://notes..json/key",
       "oc://SOUL.md/Boundaries",
       "oc://SOUL.md/Boundaries/deny-rule-1",
       "oc://SOUL.md/Boundaries/deny-rule-1/risk",
-      "oc://SOUL.md?session=daily",
-      "oc://X.md/a/b/c?session=s",
+      "oc://e\u0301.md?session=e\u0301",
+      "oc://é.md/a/b/e\u0301?session=s",
       "oc://skills/email-drafter/[frontmatter]/name",
       "oc://config/plugins.entries.foo.token",
+      "oc://config.jsonc/items/$first",
+      "oc://config.jsonc/items/$last",
+      'oc://config.jsonc/items/"$first"',
+      'oc://config.jsonc/items/"$last"',
+      "oc://config.jsonc/items/*",
+      "oc://config.jsonc/items/**",
+      "oc://config.jsonc/items/+key",
+      "oc://config.jsonc/items/#0",
+      String.raw`oc://config.jsonc/items/"a\"b\\c/d.e?f"`,
+      String.raw`oc://"dir/a\"b\\c.jsonc"/"$first"`,
     ];
     for (const c of cases) {
       expect(formatOcPath(parseOcPath(c)), `round-trip failed for ${c}`).toBe(c);
     }
   });
+
+  it.each([String.raw`"bad\q"`, String.raw`"bad\n"`, '"bad"quote"'])(
+    "rejects invalid quoted escapes: %s",
+    (segment) => {
+      expect(() => parseOcPath(`oc://config.jsonc/${segment}`)).toThrow(OcPathError);
+    },
+  );
 
   it("file slot with `/` round-trips via quoting", () => {
     const constructed = formatOcPath({
@@ -38,13 +57,9 @@ describe("oc-path-parse-edges", () => {
   });
 
   it("formatOcPath rejects field without item or section", () => {
-    expect(() => formatOcPath({ file: "X", field: "name" })).toThrow(OcPathError);
-    try {
-      formatOcPath({ file: "X", field: "name" });
-    } catch (err) {
-      expect(err).toBeInstanceOf(OcPathError);
-      expect((err as OcPathError).code).toBe("OC_PATH_NESTING");
-    }
+    expect(() => formatOcPath({ file: "X", field: "name" })).toThrow(
+      expect.objectContaining({ code: "OC_PATH_NESTING" }),
+    );
   });
 
   it("wildcard detection is quote-aware (literal `*` inside quoted segment)", () => {

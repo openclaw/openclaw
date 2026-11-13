@@ -1,8 +1,9 @@
 import type fs from "node:fs";
-import { hasErrnoCode } from "../infra/errno.js";
+import { hasErrnoCode, ignoreMissingPath } from "../infra/errno.js";
 import type { captureConfigAuditAppender } from "./io.audit.js";
 import type { captureConfigHealthStateStore } from "./io.health-state.js";
 import type { NormalizedConfigIoDeps } from "./io.read.types.js";
+import { ConfigMutationConflictError } from "./mutation-conflict.js";
 
 export type ConfigRecoveryEffect<T> = {
   sync: () => T;
@@ -12,27 +13,43 @@ export type ConfigRecoveryEffect<T> = {
   ) => T | Promise<T>;
 };
 
-export async function commitRecoveryFileIfCurrent(params: {
+export async function commitConfigRecoveryFile(params: {
   health: ReturnType<typeof captureConfigHealthStateStore>;
   beforeCommit?: () => void;
   write: (assertCurrent: () => void) => Promise<unknown>;
-}): Promise<boolean> {
-  let superseded: Error | undefined;
-  try {
-    await params.write(() => {
-      params.beforeCommit?.();
-      if (!params.health.isCurrent()) {
-        superseded = new Error("Config recovery observation was superseded");
-        throw superseded;
+}): Promise<void> {
+  await params.write(() => {
+    params.beforeCommit?.();
+    params.health.assertCurrent();
+  });
+}
+
+/** Recheck original external bytes at mutation, not process-local observation order. */
+export function createConfigRecoverySourceGuard(
+  deps: Pick<NormalizedConfigIoDeps, "fs">,
+  sources: ReadonlyArray<readonly [pathname: string, raw: string, stat: fs.Stats | null]>,
+  requireIdentity = false,
+): () => void {
+  return () => {
+    for (const [pathname, expectedRaw, expectedStat] of sources) {
+      const actualRaw = createConfigBackupReadEffect(deps, pathname).sync();
+      const actualStat = createConfigRecoveryStatEffect(deps, pathname, requireIdentity).sync();
+      if (
+        actualRaw !== expectedRaw ||
+        (requireIdentity && (!actualStat || !expectedStat)) ||
+        (actualStat &&
+          expectedStat &&
+          (actualStat.dev !== expectedStat.dev ||
+            actualStat.ino !== expectedStat.ino ||
+            actualStat.mtimeMs !== expectedStat.mtimeMs ||
+            actualStat.size !== expectedStat.size))
+      ) {
+        throw new ConfigMutationConflictError("config recovery source changed since preparation", {
+          retryable: false,
+        });
       }
-    });
-    return true;
-  } catch (error) {
-    if (superseded && error === superseded) {
-      return false;
     }
-    throw error;
-  }
+  };
 }
 
 export function createConfigRecoveryStatEffect(
@@ -84,9 +101,7 @@ export function createConfigBackupReadEffect(
   backupPath: string,
 ): ConfigRecoveryEffect<string | null> {
   const unavailable = (error: unknown): null => {
-    if (!hasErrnoCode(error, "ENOENT")) {
-      throw error;
-    }
+    ignoreMissingPath(error);
     return null;
   };
   return {

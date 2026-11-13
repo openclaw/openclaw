@@ -1,0 +1,199 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { afterAll, expect, it } from "vitest";
+import { memoryTextSearchSchema } from "../../../packages/memory-host-sdk/src/host/memory-search-schema.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION as currentVersion } from "../../state/openclaw-agent-db-contract.js";
+import { seedOpenClawAgentSchemaV21 } from "../../state/openclaw-agent-schema-v21.test-support.js";
+import { seedAgentV30Schema } from "../../state/schema-migration.test-support.js";
+import { openNodeSqliteDatabase } from "../node-sqlite.js";
+import {
+  LEGACY_USAGE_COST_PARTITION_SCOPE,
+  USAGE_COST_PARTITION_SCOPE,
+  usageCostPartitionKey,
+} from "../session-cost-usage-partitions.js";
+import { loadAgentPortDescriptor } from "./agent-port-descriptor.js";
+import { inspectDatabasePort, migrateDatabasePortSource } from "./port.worker.js";
+import { admitStoreSearch } from "./search-admission.js";
+import { loadSqliteVecExtension } from "./sqlite-vec.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterAll);
+const cacheRow = (scope: string, key: string, value_json: string) => ({ scope, key, value_json });
+
+it("backs up a schema-36 store without requiring the later cold archive chunk table", async () => {
+  const descriptor = await loadAgentPortDescriptor(36);
+  using db = openNodeSqliteDatabase(":memory:");
+  seedAgentV30Schema(db, 36);
+  for (const table of ["sources", "chunks"]) {
+    for (const event of ["insert", "update", "delete"]) {
+      db.exec(`DROP TRIGGER memory_index_${table}_revision_after_${event}`);
+    }
+  }
+  const inspected = await inspectDatabasePort({ engine: "sqlite", db }, descriptor);
+  expect(inspected.tables.session_transcript_cold_archives?.rows).toBe(0);
+  expect(inspected.tables.session_transcript_cold_archive_chunks).toBeUndefined();
+  using restored = openNodeSqliteDatabase(":memory:");
+  restored.exec(descriptor.sqlite);
+  expect(
+    restored
+      .prepare("SELECT name FROM sqlite_schema WHERE name = ?")
+      .get("session_transcript_cold_archive_chunks"),
+  ).toBeUndefined();
+});
+
+it.each([37, 38])(
+  "keeps cold archive chunks and the prior payload CHECK in schema %s backups",
+  async (version) => {
+    const descriptor = await loadAgentPortDescriptor(version);
+    const table = "session_transcript_cold_archive_chunks";
+    expect(descriptor.version).toBe(version);
+    expect(descriptor.tables.map(({ name }) => name)).toContain(table);
+    expect(descriptor.expectedCatalog.some((fact) => fact.table === table)).toBe(true);
+    expect(descriptor.preData).toContain(`CREATE TABLE "${table}"`);
+    expect(descriptor.preData).not.toContain('"event_json" IS NULL AND "event_zstd" IS NULL');
+    expect(descriptor.sqlite).not.toContain("event_json IS NULL AND event_zstd IS NULL");
+  },
+);
+
+it.each([39, 40, 41])(
+  "keeps companion tables and deletion indexes at schema %s",
+  async (version) => {
+    const descriptor = await loadAgentPortDescriptor(version);
+    const receipt = "session_creation_operations";
+    expect(descriptor.tables.some(({ name }) => name === receipt)).toBe(version >= 40);
+    expect(descriptor.expectedCatalog.some((fact) => fact.table === receipt)).toBe(version >= 40);
+    expect(descriptor.preData.includes('CREATE TABLE "session_creation_operations"')).toBe(
+      version >= 40,
+    );
+    expect(descriptor.postData.includes('"idx_agent_session_input_completions_session_key"')).toBe(
+      version >= 40,
+    );
+    const activeFacts = "session_transcript_active_event_facts";
+    expect(descriptor.tables.some(({ name }) => name === activeFacts)).toBe(version >= 41);
+    expect(descriptor.expectedCatalog.some((fact) => fact.table === activeFacts)).toBe(
+      version >= 41,
+    );
+    expect(descriptor.preData.includes(`CREATE TABLE "${activeFacts}"`)).toBe(version >= 41);
+    expect(descriptor.postData.includes(`ALTER TABLE "${activeFacts}"`)).toBe(version >= 41);
+    expect(descriptor.preData).toContain('"event_json" IS NULL AND "event_zstd" IS NULL');
+  },
+);
+
+it.each([21, currentVersion])(
+  "migrates only the private v%s copy, retiring legacy usage partitions",
+  async (version) => {
+    const root = tempDirs.make("agent-port-migration-");
+    const source = path.join(root, "source.sqlite"),
+      copy = path.join(root, "private.sqlite");
+    const descriptor = await loadAgentPortDescriptor();
+    const historical = version === 21;
+    const retained = historical
+      ? [cacheRow("retained", "key", '{"value":1}')]
+      : [
+          cacheRow(
+            USAGE_COST_PARTITION_SCOPE,
+            usageCostPartitionKey('session-"snow:雪', "2026-10-01"),
+            '{"current":true}',
+          ),
+          cacheRow("talk-client-voice-sessions", "voice", '{"status":"closed"}'),
+        ];
+    {
+      using db = openNodeSqliteDatabase(source);
+      if (historical) {
+        seedOpenClawAgentSchemaV21(db);
+      } else {
+        db.exec(`${descriptor.sqlite}
+      PRAGMA user_version = ${currentVersion};
+      INSERT INTO schema_meta VALUES ('primary', 'agent', ${currentVersion}, 'main', NULL, 1, 1);
+    `);
+      }
+      const insert = db.prepare(
+        "INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES (?, ?, ?, 1)",
+      );
+      if (!historical) {
+        for (const key of ["session\0date", "session\\u0000date"]) {
+          insert.run(LEGACY_USAGE_COST_PARTITION_SCOPE, key, '{"retired":true}');
+        }
+      }
+      for (const row of retained) {
+        insert.run(row.scope, row.key, row.value_json);
+      }
+      expect(descriptor.inspectSqliteSource!(db).migrationRequired).toBe(true);
+    }
+    const before = await fs.readFile(source);
+    await fs.copyFile(source, copy);
+    const result = await migrateDatabasePortSource(copy, descriptor, version, () => {});
+    expect(result.tables.cache_entries?.rows).toBe(retained.length);
+    using migrated = openNodeSqliteDatabase(copy);
+    expect(
+      migrated.prepare("SELECT scope, key, value_json FROM cache_entries ORDER BY scope").all(),
+    ).toEqual(retained);
+    if (historical) {
+      expect(migrated.prepare("PRAGMA user_version").get()?.user_version).toBe(currentVersion);
+    } else {
+      expect(descriptor.inspectSqliteSource!(migrated).migrationRequired).toBe(false);
+    }
+    expect(await fs.readFile(source)).toEqual(before);
+  },
+);
+
+it.each(["vector", "text"])("omits rebuildable %s indexes", async (kind) => {
+  const descriptor = await loadAgentPortDescriptor();
+  using db = openNodeSqliteDatabase(":memory:", { allowExtension: kind === "vector" });
+  db.exec(descriptor.sqlite);
+  if (kind === "vector") {
+    expect(await loadSqliteVecExtension({ db })).toMatchObject({ ok: true });
+    db.exec(
+      "CREATE VIRTUAL TABLE memory_index_chunks_vec USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[3])",
+    );
+  } else {
+    admitStoreSearch(db, memoryTextSearchSchema("unicode61"), { extension: "memory.text" });
+  }
+  const inspected = await inspectDatabasePort({ engine: "sqlite", db }, descriptor);
+  const omitted =
+    kind === "vector"
+      ? /^memory_index_chunks_vec/
+      : /^(memory_index_chunks_fts|memory_index_sources)$/;
+  expect(Object.keys(inspected.tables).filter((table) => omitted.test(table))).toEqual([]);
+});
+
+it("preserves raw trajectories and refuses malformed compressed values", async () => {
+  const decode = (await loadAgentPortDescriptor()).decodeSqlite!.trajectory_runtime_events!;
+  const legacy = { session_id: "session", seq: 0, event_json: '{ "type": "legacy" }' };
+  expect(decode(legacy)).toEqual(legacy);
+  expect(() =>
+    decode({ ...legacy, event_codec: "br", event_payload: "not a blob", event_utf8_bytes: 20 }),
+  ).toThrow("Invalid compressed trajectory payload");
+});
+
+it("ports retained cold navigation without decoding absent payloads", async () => {
+  const descriptor = await loadAgentPortDescriptor();
+  const row = {
+    session_id: "cold",
+    seq: 0,
+    event_json: null,
+    event_zstd: null,
+    event_utf8_bytes: 123,
+    navigation_json: '{"version":1}',
+    navigation_type: "message",
+  };
+  expect(descriptor.decodeSqlite!.transcript_events!(row)).toBe(row);
+  const omitted = descriptor.projections!.flatMap(({ tables }) => tables);
+  expect(omitted).toContain("session_transcript_active_event_facts");
+  expect(omitted).not.toContain("session_transcript_active_events");
+  expect(omitted).not.toContain("session_transcript_index_state");
+  using source = openNodeSqliteDatabase(":memory:");
+  source.exec(`${descriptor.sqlite}
+    INSERT INTO session_nodes (session_key,current_session_id,entry_json,updated_at)
+      VALUES ('agent:main:retained','retained','{"sessionId":"retained","updatedAt":1}',1);
+    INSERT INTO session_windows (session_id,session_key,created_at,updated_at)
+      VALUES ('retained','agent:main:retained',1,1);
+    INSERT INTO transcript_events (session_id,seq,event_json,created_at)
+      VALUES ('retained',1,'{"type":"message","message":{"role":"user"}}',1);
+    INSERT INTO session_transcript_active_events (session_id,active_position,event_seq,context_eligible)
+      VALUES ('retained',0,1,1);
+    INSERT INTO session_transcript_active_event_facts VALUES ('retained',1,46,'{}');`);
+  const inspected = await inspectDatabasePort({ engine: "sqlite", db: source }, descriptor);
+  expect(inspected.tables.session_transcript_active_events?.rows).toBe(1);
+  expect(inspected.tables.session_transcript_active_event_facts).toBeUndefined();
+});

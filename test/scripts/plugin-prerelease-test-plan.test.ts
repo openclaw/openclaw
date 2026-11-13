@@ -1,6 +1,6 @@
 // Plugin Prerelease Test Plan tests cover plugin prerelease test plan script behavior.
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, matchesGlob } from "node:path";
 import { runInNewContext } from "node:vm";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -96,6 +96,9 @@ function runPluginPhaseValidation(params: {
 function runPluginManifest(
   phase: "all" | "candidate" | "independent",
   eventName = "workflow_dispatch",
+  runtimePolicy = "",
+  targetRoot?: string,
+  runnerBackend = "",
 ) {
   const workflow = readPluginPrereleaseWorkflow();
   const step = workflow.jobs.preflight.steps.find(
@@ -106,7 +109,12 @@ function runPluginManifest(
   }
   const root = tempDirs.make("openclaw-plugin-prerelease-phase-");
   const outputPath = join(root, "github-output");
-  const result = spawnSync("bash", ["-c", step.run], {
+  const run = step.run.replace(
+    "./.frv-tooling/scripts/lib/ci-blacksmith-capacity.mjs",
+    new URL("../../scripts/lib/ci-blacksmith-capacity.mjs", import.meta.url).href,
+  );
+  const result = spawnSync("bash", ["-c", run], {
+    cwd: targetRoot,
     encoding: "utf8",
     env: {
       FULL_RELEASE_VALIDATION: eventName === "schedule" ? "false" : "true",
@@ -114,6 +122,8 @@ function runPluginManifest(
       GITHUB_OUTPUT: outputPath,
       PATH: process.env.PATH,
       PHASE: phase,
+      OPENCLAW_CI_RUNNER_BACKEND: runnerBackend,
+      OPENCLAW_CI_TEST_RUNTIME_POLICY: runtimePolicy,
     },
   });
   return {
@@ -162,53 +172,41 @@ function runPluginSummary(params: {
 
 describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
   it.each([
+    { fullReleaseValidation: false, expectedPolicy: "bun-all", requiresBun: true },
+    { fullReleaseValidation: true, expectedPolicy: "dual-all", requiresBun: true },
     {
-      name: "ordinary plugin validation",
       fullReleaseValidation: false,
-      memory: true,
-      vitestArgs: [],
+      runtimePolicy: " node ",
+      expectedPolicy: "node",
       requiresBun: false,
     },
     {
-      name: "full release memory and database-worker groups",
       fullReleaseValidation: true,
-      memory: true,
-      vitestArgs: [],
+      runtimePolicy: "node",
+      expectedPolicy: "node",
+      requiresBun: false,
+    },
+    {
+      fullReleaseValidation: false,
+      runtimePolicy: "dual-all",
+      expectedPolicy: "dual-all",
       requiresBun: true,
     },
-
     {
-      name: "full release with an explicit report",
       fullReleaseValidation: true,
-      memory: true,
-      vitestArgs: ["--reporter=json", "--outputFile=report.json"],
-      requiresBun: false,
+      runtimePolicy: "bun-all",
+      expectedPolicy: "bun-all",
+      requiresBun: true,
     },
   ])(
-    "selects runtime setup for $name",
-    async ({ fullReleaseValidation, memory, vitestArgs, requiresBun }) => {
-      const planGroups = [
-        {
-          config: "test/vitest/vitest.extension-database-workers.config.ts",
-          roots: ["extensions/memory-lancedb/index.test.ts"],
-        },
-        ...(memory
-          ? [
-              {
-                config: "test/vitest/vitest.extension-memory.config.ts",
-                roots: ["extensions/memory-lancedb"],
-              },
-            ]
-          : []),
-      ];
-
+    "selects $expectedPolicy for release=$fullReleaseValidation with override=$runtimePolicy",
+    async ({ fullReleaseValidation, runtimePolicy, expectedPolicy, requiresBun }) => {
       expect(
         await resolvePluginPrereleaseExtensionRuntime({
-          planGroups,
           fullReleaseValidation,
-          vitestArgs,
+          env: { OPENCLAW_CI_TEST_RUNTIME_POLICY: runtimePolicy },
         }),
-      ).toEqual({ test_runtime_policy: requiresBun ? "dual" : "node", requires_bun: requiresBun });
+      ).toEqual({ test_runtime_policy: expectedPolicy, requires_bun: requiresBun });
     },
   );
 
@@ -264,9 +262,11 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       stateScenario: "empty",
       weight: 3,
     });
-    expect(script).toContain("npm:@openclaw/kitchen-sink@latest");
-    expect(script).toContain("npm-latest-conformance");
-    expect(script).toContain("npm-latest-adversarial");
+    const recordedVersion = readFileSync(
+      "scripts/e2e/lib/kitchen-sink-plugin/npm-version.txt",
+      "utf8",
+    ).trim();
+    expect(recordedVersion).toMatch(/^\d+\.\d+\.\d+(?:[+-][0-9A-Za-z.-]+)?$/);
     expect(script).toContain("npm:@openclaw/kitchen-sink@beta");
     expect(script).toContain("clawhub:@openclaw/kitchen-sink@latest");
     expect(script).toContain("clawhub:@openclaw/kitchen-sink@beta");
@@ -363,6 +363,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(extensionStep.env.FRV_TEST_EXCLUDE_PATHS_JSON).toBe(
       "${{ needs.preflight.outputs.extension_test_exclude_patterns_json }}",
     );
+    expect(extensionStep.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI).toBe("1");
     expect(extensionStep.run).not.toContain("extensions/codex/src/app-server/run-attempt.test.ts");
   });
 
@@ -374,6 +375,11 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     const dockerSuite = workflow.jobs["plugin-prerelease-docker-suite"];
 
     expect(workflow.on.workflow_dispatch.inputs.full_release_validation.default).toBe(false);
+    expect(workflow.on.workflow_dispatch.inputs.test_runtime_policy).toMatchObject({
+      default: "",
+      type: "string",
+    });
+    expect(manifest.env.OPENCLAW_CI_TEST_RUNTIME_POLICY).toBe("${{ inputs.test_runtime_policy }}");
     expect(manifest.env.FULL_RELEASE_VALIDATION).toBe(
       "${{ inputs.full_release_validation && 'true' || 'false' }}",
     );
@@ -388,6 +394,80 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     );
     expect(dockerSuite.secrets).toBeUndefined();
   });
+
+  it("rejects an invalid extension batch override before planning plugin work", () => {
+    const { result, output } = runPluginManifest("independent", "workflow_dispatch", "bun");
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("test_runtime_policy must be node, bun-all, or dual-all");
+    expect(output).toBe("");
+  });
+
+  it.each(["", "node", "bun-all", "dual-all"])(
+    "keeps the extension deadline proportional to the %s runtime policy",
+    (runtimePolicy) => {
+      const workflow = readPluginPrereleaseWorkflow();
+      expect(
+        evaluateWorkflowExpression(
+          workflow.jobs["plugin-prerelease-extension-shard"]["timeout-minutes"],
+          {
+            eventName: "workflow_dispatch",
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            matrix: { test_runtime_policy: runtimePolicy },
+          },
+        ),
+      ).toBe(runtimePolicy === "dual-all" ? 120 : 60);
+    },
+  );
+
+  it.each([
+    { name: "missing resolver", returnedRuntime: undefined },
+    {
+      name: "legacy Node resolver",
+      returnedRuntime: { test_runtime_policy: "node", requires_bun: false },
+    },
+    {
+      name: "qualified dual resolver",
+      returnedRuntime: { test_runtime_policy: "dual", requires_bun: true },
+    },
+    {
+      name: "missing Bun setup",
+      returnedRuntime: { test_runtime_policy: "dual-all", requires_bun: false },
+    },
+  ])(
+    "rejects an unsupported explicit override with a frozen target's $name",
+    ({ returnedRuntime }) => {
+      const targetRoot = tempDirs.make("openclaw-plugin-runtime-target-");
+      const scriptsRoot = join(targetRoot, "scripts", "lib");
+      mkdirSync(scriptsRoot, { recursive: true });
+      symlinkSync(join(process.cwd(), "node_modules"), join(targetRoot, "node_modules"), "dir");
+      writeFileSync(
+        join(scriptsRoot, "plugin-prerelease-test-plan.mjs"),
+        `export const assertPluginPrereleaseTestPlanComplete = () => ({ staticChecks: [], dockerLanes: [] });
+${returnedRuntime ? `export const resolvePluginPrereleaseExtensionRuntime = () => (${JSON.stringify(returnedRuntime)});` : ""}`,
+      );
+      writeFileSync(
+        join(scriptsRoot, "extension-test-plan.mjs"),
+        `export const DEFAULT_EXTENSION_TEST_SHARD_COUNT = 1;
+export const createExtensionTestShards = () => [{
+  index: 0, checkName: "extensions-fixture", extensionIds: ["fixture"],
+  planGroups: [{ config: "fixture.config.ts", roots: ["extensions/fixture"] }],
+}];`,
+      );
+
+      const { result, output } = runPluginManifest(
+        "independent",
+        "workflow_dispatch",
+        "dual-all",
+        targetRoot,
+      );
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        "Target ref does not support requested test_runtime_policy: dual-all",
+      );
+      expect(output).toBe("");
+    },
+  );
 
   it("requires a complete immutable candidate for the plugin candidate phase", () => {
     const selectedSha = "a".repeat(40);
@@ -463,9 +543,13 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(workflow.jobs["plugin-prerelease-extension-shard"].strategy["max-parallel"]).toBe(12);
 
     const hourly = runPluginManifest("independent", "schedule");
+    const boatHourly = runPluginManifest("independent", "schedule", "", undefined, "boat");
     const release = runPluginManifest("independent");
+    const forcedNode = runPluginManifest("independent", "workflow_dispatch", "node");
     expect(hourly.result.status, hourly.result.stderr).toBe(0);
+    expect(boatHourly.result.status, boatHourly.result.stderr).toBe(0);
     expect(release.result.status, release.result.stderr).toBe(0);
+    expect(forcedNode.result.status, forcedNode.result.stderr).toBe(0);
     const outputs = (output: string) =>
       Object.fromEntries(
         output
@@ -474,6 +558,42 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
           .map((line) => [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)]),
       );
     const selected = outputs(hourly.output);
+    const manifestStep = workflow.jobs.preflight.steps.find(
+      (step: WorkflowStep) => step.id === "manifest",
+    );
+    expect(manifestStep.env.OPENCLAW_CI_RUNNER_BACKEND).toBe(
+      "${{ vars.OPENCLAW_CI_RUNNER_BACKEND }}",
+    );
+    const physicalRows = JSON.parse(
+      expectDefined(selected.plugin_prerelease_extension_matrix, "hourly extension matrix"),
+    ).include;
+    const boatRows = JSON.parse(
+      expectDefined(outputs(boatHourly.output).plugin_prerelease_extension_matrix, "Boat matrix"),
+    ).include;
+    expect(boatRows).toEqual(
+      physicalRows.map((row: Record<string, unknown>) =>
+        Object.assign({}, row, {
+          runner_label: row.runner_label === "blacksmith-4vcpu-ubuntu-2404" ? "boat-large" : "boat",
+        }),
+      ),
+    );
+    const boatLabels = new Set(boatRows.map((row: Record<string, unknown>) => row.runner_label));
+    expect(boatLabels).toEqual(new Set(["boat", "boat-large"]));
+    for (const runner_label of boatLabels) {
+      for (const releaseRunnerGroup of ["", "release-runners"]) {
+        for (const eventName of ["schedule", "workflow_dispatch"] as const) {
+          const labels = eventName === "schedule" ? runner_label : "ubuntu-24.04";
+          expect(
+            evaluateWorkflowRunner(workflow.jobs["plugin-prerelease-extension-shard"]["runs-on"], {
+              ...context,
+              eventName,
+              releaseRunnerGroup,
+              matrix: { runner_label },
+            }),
+          ).toEqual(releaseRunnerGroup ? { group: releaseRunnerGroup, labels } : labels);
+        }
+      }
+    }
     const ownership = (matrix: string | undefined) =>
       JSON.parse(expectDefined(matrix, "extension matrix")).include.map(
         ({ requires_bun: _bun, test_runtime_policy: _runtime, ...row }: Record<string, unknown>) =>
@@ -482,6 +602,25 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(ownership(selected.plugin_prerelease_extension_matrix)).toEqual(
       ownership(outputs(release.output).plugin_prerelease_extension_matrix),
     );
+    for (const [run, policy] of [
+      [release, "dual-all"],
+      [forcedNode, "node"],
+    ] as const) {
+      const matrix = outputs(run.output).plugin_prerelease_extension_matrix;
+      expect(ownership(matrix)).toEqual(ownership(selected.plugin_prerelease_extension_matrix));
+      const rows = JSON.parse(expectDefined(matrix, "extension matrix")).include as {
+        task: string;
+        test_runtime_policy: string;
+        requires_bun: boolean;
+      }[];
+      expect(
+        rows.every((row) =>
+          row.task === "extensions-batch"
+            ? row.test_runtime_policy === policy && row.requires_bun === (policy !== "node")
+            : row.test_runtime_policy === "node" && !row.requires_bun,
+        ),
+      ).toBe(true);
+    }
     const rows: {
       task: string;
       extensions_csv: string;
@@ -493,7 +632,11 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       expectDefined(selected.plugin_prerelease_extension_matrix, "hourly extension matrix"),
     ).include;
     expect(
-      rows.every((row) => !row.requires_bun && (row.test_runtime_policy ?? "node") === "node"),
+      rows.every((row) =>
+        row.task === "extensions-batch"
+          ? row.requires_bun && row.test_runtime_policy === "bun-all"
+          : !row.requires_bun && row.test_runtime_policy === "node",
+      ),
     ).toBe(true);
     const extensionIds = new Set(rows.flatMap((row) => row.extensions_csv.split(",")));
     for (const id of ["device-pair", "active-memory", "talk-voice"]) {

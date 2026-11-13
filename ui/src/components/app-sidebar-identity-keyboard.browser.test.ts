@@ -13,12 +13,12 @@ afterEach(() => {
 });
 
 describe.runIf("__vitest_browser__" in globalThis)("identity menu keyboard navigation", () => {
-  it("traverses the actual item order and both footer controls in each direction", async () => {
+  it("traverses the actual item order and footer controls in each direction", async () => {
     await import("./app-sidebar.tsx");
     const { createGatewayHarness, createSessions, mountSidebar } =
       await import("../test-helpers/app-sidebar.ts");
     const { page, userEvent } = await import("vitest/browser");
-    const { sidebar } = await mountSidebar(
+    const { sidebar, context } = await mountSidebar(
       createGatewayHarness({ instanceId: "self-instance" } as GatewayBrowserClient).gateway,
       createSessions("main", ["agent:main:main"]),
     );
@@ -45,57 +45,58 @@ describe.runIf("__vitest_browser__" in globalThis)("identity menu keyboard navig
     await userEvent.keyboard("{Enter}");
 
     const menu = sidebar.querySelector<HTMLElement>(".sidebar-identity-menu");
-    const items = Array.from(menu?.children ?? []).filter(
-      (item): item is HTMLElement & { active: boolean } =>
-        item instanceof HTMLElement &&
-        item.localName === "wa-dropdown-item" &&
-        !item.hasAttribute("disabled"),
+    const items = [...(menu?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [])].filter(
+      (item) =>
+        item.closest('[role="menu"]') === menu &&
+        !item.hasAttribute("disabled") &&
+        !item.closest(".sidebar-identity-menu__footer"),
     );
     const theme = menu?.querySelector<HTMLButtonElement>(".theme-mode-toggle");
     expect(theme?.getAttribute("role")).toBe("menuitem");
-    const build = document.createElement("a");
-    build.href = "#build";
-    build.textContent = "Build details";
-    menu?.querySelector(".sidebar-mode-switch")?.insertAdjacentElement("beforebegin", build);
+    const footer = [
+      ...(menu?.querySelectorAll<HTMLElement>('.sidebar-identity-menu__footer [role="menuitem"]') ??
+        []),
+    ];
+    expect(footer.map((item) => item.getAttribute("data-value"))).toEqual([
+      ...(menu?.querySelector(".sidebar-footer-build") ? ["command:about"] : []),
+      "command:theme",
+    ]);
     await expect.poll(() => document.activeElement).toBe(items[0]);
+    // Navigation loads on first open; until then keys are queued and replayed later
+    // (menu-navigation cold tests), so wait before asserting each step synchronously.
+    await expect
+      .poll(() => items[0]?.hasAttribute("data-highlighted"), { timeout: 5_000 })
+      .toBe(true);
     expect(tooltip()).toBeNull();
 
     for (const expected of items.slice(1)) {
       await userEvent.keyboard("{ArrowDown}");
       expect(document.activeElement).toBe(expected);
     }
-    expect(items.at(-1)?.active).toBe(true);
+    expect(items.at(-1)?.getAttribute("data-highlighted")).not.toBeNull();
     await userEvent.keyboard("{ArrowRight}");
-    await expect.poll(() => document.activeElement?.getAttribute("slot")).toBe("submenu");
+    await expect.poll(() => document.activeElement?.closest('[role="menu"]')).not.toBe(menu);
     await userEvent.keyboard("{ArrowDown}");
-    expect(document.activeElement?.getAttribute("slot")).toBe("submenu");
+    expect(document.activeElement?.closest('[role="menu"]')).not.toBe(menu);
     await userEvent.keyboard("{ArrowLeft}");
     await expect.poll(() => document.activeElement).toBe(items.at(-1));
-    await userEvent.keyboard("{ArrowDown}");
-    expect(document.activeElement).toBe(build);
-    await userEvent.keyboard("{ArrowDown}");
-    expect(document.activeElement).toBe(theme);
-    await userEvent.keyboard("{ArrowUp}");
-    expect(document.activeElement).toBe(build);
+    for (const expected of footer) {
+      await userEvent.keyboard("{ArrowDown}");
+      expect(document.activeElement).toBe(expected);
+    }
+    for (const expected of footer.slice(0, -1).toReversed()) {
+      await userEvent.keyboard("{ArrowUp}");
+      expect(document.activeElement).toBe(expected);
+    }
     await userEvent.keyboard("{ArrowUp}");
     expect(document.activeElement).toBe(items.at(-1));
-    expect(items.at(-1)?.active).toBe(true);
-
-    build.remove();
-    await userEvent.keyboard("{ArrowDown}");
-    expect(document.activeElement).toBe(theme);
-    const onThemeChange = new Promise<CustomEvent<{ mode: string }>>((resolve) => {
-      menu?.addEventListener(
-        "theme-change",
-        (event) => resolve(event as CustomEvent<{ mode: string }>),
-        {
-          once: true,
-        },
-      );
-    });
+    for (const expected of footer) {
+      await userEvent.keyboard("{ArrowDown}");
+      expect(document.activeElement).toBe(expected);
+    }
     await userEvent.keyboard("{Enter}");
-    expect((await onThemeChange).detail.mode).toBe("light");
+    expect(context.theme.mode).toBe("light");
     await userEvent.keyboard("{Tab}");
-    await expect.poll(() => (menu as HTMLElement & { open: boolean }).open).toBe(false);
+    await expect.poll(() => sidebar.querySelector(".sidebar-identity-menu")).toBeNull();
   });
 });

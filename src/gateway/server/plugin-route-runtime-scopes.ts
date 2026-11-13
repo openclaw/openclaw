@@ -9,9 +9,6 @@ import {
 } from "../http-auth-utils.js";
 import { CLI_DEFAULT_OPERATOR_SCOPES, WRITE_SCOPE } from "../method-scopes.js";
 
-/**
- * Runtime operator-scope resolver for plugin HTTP route requests.
- */
 export type PluginRouteRuntimeScopeSurface = "write-default" | "trusted-operator";
 
 /** Resolves the scopes a plugin route receives after gateway HTTP authentication. */

@@ -21,9 +21,17 @@ export type ControlUiMockPresenceUser = {
   watchedSessions?: string[];
 };
 
+export type ControlUiMockPresenceScenario = {
+  /** Online users included in hello and the full roster stream. The self entry
+   * adopts the connecting client's instanceId so presence surfaces resolve "you". */
+  presenceUsers?: ControlUiMockPresenceUser[];
+  /** Disable to hold the full roster until an explicit presence event. */
+  emitPresenceOnConnect?: boolean;
+};
+
 // Serialized into the browser with explicit runtime dependencies.
 export function createControlUiMockPresence(
-  scenario: { presenceUsers: ControlUiMockPresenceUser[] },
+  scenario: ControlUiMockPresenceScenario & { presenceUsers: ControlUiMockPresenceUser[] },
   isRecord: (value: unknown) => value is Record<string, unknown>,
 ) {
   /** Presence slice of the connect snapshot. The self-flagged entry adopts the
@@ -66,6 +74,43 @@ export function createControlUiMockPresence(
   const self = scenario.presenceUsers.find((user) => user.self);
   return {
     snapshot,
+    afterHello(frame: unknown, publish: (payload: { presence: unknown[] }) => void) {
+      if (
+        scenario.emitPresenceOnConnect !== false &&
+        isRecord(frame) &&
+        frame.type === "res" &&
+        frame.ok &&
+        isRecord(frame.payload) &&
+        frame.payload.type === "hello-ok" &&
+        isRecord(frame.payload.snapshot) &&
+        Array.isArray(frame.payload.snapshot.presence)
+      ) {
+        const roster = frame.payload.snapshot.presence;
+        window.queueMicrotask(() => publish({ presence: roster }));
+      }
+    },
+    eventFrame(
+      client: { hasCapability: (capability: string) => boolean },
+      event: string,
+      payload: unknown,
+      seq: number,
+    ) {
+      // Full-roster fixture inputs still use the negotiated presence wire format.
+      const wirePayload =
+        event === "presence" &&
+        client.hasCapability("presence-deltas") &&
+        isRecord(payload) &&
+        Array.isArray(payload.presence) &&
+        !("version" in payload)
+          ? {
+              reset: true,
+              version: seq,
+              presence: payload.presence,
+              keys: payload.presence.map((_, index) => `mock-presence-${index}`),
+            }
+          : payload;
+      return { event, payload: wirePayload, seq, type: "event" };
+    },
     actor: { type: "human" as const, id: self?.id ?? "profile-1", label: self?.name ?? "You" },
   };
 }

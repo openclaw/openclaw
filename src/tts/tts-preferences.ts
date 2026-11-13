@@ -12,6 +12,12 @@ const pendingPaths = resolveGlobalSingleton(
   () => new Map<string, Promise<PreparedTtsPreferences>>(),
 );
 
+/** Synchronous compatibility reads consume only the path already admitted by its owner. */
+export function getPreparedTtsPreferences(): PreparedTtsPreferences | undefined {
+  const admitted = getTtsMachinePathAdmission(resolveOpenClawStateSqlitePath());
+  return admitted ? preparePath(admitted.row?.value_json) : undefined;
+}
+
 /** Carry the machine-owned path through one turn; preference-file contents stay fresh. */
 export async function prepareTtsPreferences(): Promise<PreparedTtsPreferences> {
   const databasePath = resolveOpenClawStateSqlitePath();
@@ -30,14 +36,12 @@ export async function prepareTtsPreferences(): Promise<PreparedTtsPreferences> {
     const load = loadPath(context);
     pendingPaths.set(key, load);
     const release = () => {
-      if (pendingPaths.get(key) === load) {
-        pendingPaths.delete(key);
-      }
+      pendingPaths.delete(key);
     };
     void load.then(release, release);
     pending = load;
   }
-  return { ...(await pending) };
+  return pending;
 }
 
 async function loadPath(context: OpenClawStateWorkerContext): Promise<PreparedTtsPreferences> {
@@ -49,9 +53,6 @@ async function loadPath(context: OpenClawStateWorkerContext): Promise<PreparedTt
   );
   if (!reply) {
     return {};
-  }
-  if (!reply.ok || reply.type !== "tts.prefsPath") {
-    throw new Error("Unexpected TTS preference-path read result");
   }
   const installed = getTtsMachinePathAdmission(databasePath, () => reply.row);
   return preparePath((installed ? installed.row : reply.row)?.value_json);

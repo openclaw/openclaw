@@ -1,6 +1,5 @@
 import { defineCodexBuildState } from "../build-state.js";
 import type { CodexAppServerClient } from "./client.js";
-import { forgetCodexInferenceThread } from "./inference-routing.js";
 import type {
   CodexThreadForkParams,
   CodexThreadResumeParams,
@@ -44,12 +43,8 @@ export function forgetCodexClientForkSettings(
   threadId?: string,
 ): void {
   if (threadId === undefined) {
-    for (const id of clients.get(client)?.keys() ?? []) {
-      forgetCodexInferenceThread(client, id);
-    }
     clients.delete(client);
   } else {
-    forgetCodexInferenceThread(client, threadId);
     clients.get(client)?.delete(threadId);
   }
 }
@@ -82,11 +77,14 @@ export function recordCodexThreadForkSettings(
     ...(permissions !== undefined ? { permissions } : {}),
     ...(params.serviceTier !== undefined ? { serviceTier: params.serviceTier } : {}),
     ...(params.config !== undefined ? { config: params.config } : {}),
+    // A fork without a base restores the rollout's creation base, which a cold resume with a
+    // changed base does not rewrite (codex-rs/core/src/session/mod.rs, base priority order).
+    ...(params.baseInstructions !== undefined ? { baseInstructions: params.baseInstructions } : {}),
     ...(params.developerInstructions !== undefined
       ? { developerInstructions: params.developerInstructions }
       : {}),
   };
-  // Native history already owns base instructions and immutable dynamic declarations.
+  // Native history already owns immutable dynamic declarations.
   settings.set(threadId, { thread });
 }
 

@@ -8,6 +8,11 @@ read_when:
 
 ## Local equivalents
 
+Changed-file, backport, and Plugin SDK comparisons acquire missing commit objects
+from `origin` with normal history negotiation before reading their trees. They
+retain the clone's blob filter, refs, and `FETCH_HEAD`; unavailable local ref names
+remain errors. Local-availability probes do not fetch implicitly.
+
 Strict managed commands join their process group and captured output before
 releasing temporary resources. A leader can exit before an unreferenced helper
 finishes responding to stdin EOF, so normal POSIX exit reserves half the existing
@@ -19,9 +24,9 @@ Cancellation during natural drainage forwards its signal immediately; its grace
 ends no later than the original halfway point, preserving the recovery allowance
 and total cleanup deadline.
 
-The complete channels test lane prepares its native worker artifacts before
-starting the test process. Cold compilation therefore does not consume the
-test-output watchdog's deadline. Focused channel selections retain lazy
+The complete channels and gateway-methods test projects prepare their native worker
+artifacts before starting the test process. Cold compilation therefore does not
+consume the test-output watchdog's deadline. Focused selections retain lazy
 preparation; the watchdog and compiler cleanup rules remain unchanged.
 
 The lint wrapper owns Go resource limits for current CI. It applies them on
@@ -72,17 +77,14 @@ in incremental project mode: solution-build mode can miss an added root whose
 timestamp predates restored build information. Frozen targets keep their
 original stripe invocations. Per-graph elapsed times appear in the job log.
 
-The test-type jobs restore their own `.artifacts/tsgo-cache` state across runs.
-Exact cache keys separate compiler/dependency/configuration versions and CI rows.
-Rows reuse incremental state across source revisions only when those inputs match.
-Compiler, dependency, or configuration changes start with an empty cache: updating
-older state can cost substantially more than a fresh check. The compiler still
-validates current roots, options, source, and dependency contents after restoration.
-The central changed-graph queue also
-restores the five core stripe caches that full runs publish. Every selected graph
-still runs after a hit. Pull requests only restore state, while the existing trusted cache writer policy controls
-publication after successful checks. Cache-off and frozen-target runs retain
-their original behavior. Lint programs do not share these compiler caches.
+CI type jobs start without restored compiler state. Updating older build information
+can require declaration-signature computation and dependency invalidation that a
+fresh check avoids. A same-checkout six-graph comparison with one-hour-old state
+took 295.27 seconds versus 157.81 seconds cold; both runs checked every graph.
+CI therefore does not publish or restore `.artifacts/tsgo-cache`, including in the
+changed-graph queue. Local commands retain incremental state for repeated checks
+in the same checkout. Compiler selection, graph membership, concurrency, and
+frozen-target commands remain unchanged.
 
 Oxlint keeps `eslint/no-redeclare` enabled for JavaScript. For `.ts`, `.tsx`,
 `.mts`, and `.cts`, `tsgo` owns declaration validity, including intentional
@@ -134,9 +136,9 @@ pnpm perf:kova:summary --report .artifacts/kova/reports/mock-provider/report.jso
 
 Native locale checks remain strict locally. With `CI=true` or `CI=1`, the native
 check warns about obsolete translation IDs, Android generated rows, and Apple catalog
-rows awaiting the serialized locale refresh. Android warnings require canonical, unreferenced,
+rows awaiting the serialized locale refresh. Android warnings require standard, unreferenced,
 noninterpolated obsolete rows whose removal leaves every other byte unchanged.
-Apple warnings require canonical plain generator rows absent from the active
+Apple warnings require standard plain generator rows absent from the active
 inventory; removing those rows must leave the exact generated catalog, including
 metadata. Obsolete rows still need valid dictionary and string-unit structure for
 Xcode, but do not need active locales or translated/nonempty copy. Unsupported
@@ -144,6 +146,22 @@ metadata and variation shapes retain strict parity checks.
 Missing active translations or resources, active placeholder drift, invalid
 artifact syntax, and other generated-output differences remain blocking. Generator sync
 and the standalone Android and Apple checks retain their strict behavior.
+
+### Delegating changed compilers in CI
+
+`check:changed --delegate-compilers` retains the selected formatting, lint, guards,
+owner tests, and graph-boundary check. The changed-check planner exposes the removed
+compiler work as `delegatedTypeGraphs`; it does not infer compiler commands from
+printed output. Narrow core-test checks keep their shared boundary inventory inline.
+The aggregate `tsgo:all` project-reference build also stays inline.
+
+A CI caller must give `ci-check-plan` the same exact changed paths and base commit,
+with `typeGraphBoundaryOwner: "changed-check"`, then execute every returned type row
+through the native compiler runner. Pass those paths explicitly to `check:changed`
+so both planners use the same scope rather than a separate trivia-filtered diff.
+Keep noncompiler checks in the changed-check lane; do not also select a native lint
+lane. Compiler jobs and the changed-check job are all required for success. Omitting
+compiler jobs is not successful changed-file proof. The default CLI is unchanged.
 
 ### Opt-in compiler evidence
 
@@ -211,8 +229,10 @@ caches, or relax resource caps to manufacture a favorable comparison. The recipe
 creates only a new benchmark directory and leaves normal caches untouched.
 
 For CPU/heap investigation, reuse `OPENCLAW_TSGO_PPROF_DIR` with a distinct directory
-per measured invocation, or use `tsgo:profile --deep`. Profiling changes measurement
-overhead: enable it for both comparison sides or keep it outside timing pairs.
+per measured invocation, or use `tsgo:profile --deep`. Go profiling requests select
+tsgo even when tsrs is the default checker. An explicit `OPENCLAW_TYPECHECKER=tsrs`
+combined with `--pprofDir` fails rather than silently omitting profiles. Keep Go-only
+profiling outside tsrs-versus-tsgo timing pairs.
 The evidence records the effective `--pprofDir`; it does not manage or delete those
 profiles. These measurements are developer evidence, not a CI pass/fail threshold.
 
@@ -267,6 +287,9 @@ pre-commit run zizmor --all-files
 
 ## Surface ratchets
 
+Release branches keep line limits non-blocking and skip line-count ratchets, except explicit pruning.
+Oxlint emits line-limit warnings rather than disabling the rules, so existing
+size suppressions remain valid while unused non-size suppressions still fail.
 Size, length, count, and measured performance limits are errors locally and
 warnings in GitHub Actions. `scripts/lib/check-limits.mts` owns this decision
 using GitHub's `GITHUB_ACTIONS=true` signal. `CI=1` alone does not soften checks:
@@ -292,20 +315,62 @@ PR `checks-fast-baseline-ratchets` job reports this growth as warnings. Renames
 compare against the old path; unchanged or shrinking over-cap files pass the
 ratchet. Measurement uses oxlint's actual caps and comment/blank-line exclusions
 and neutralizes suppression directives only in temporary measurement copies.
+Current files are measured first; historical source and rename detection are
+needed only for files that still exceed their cap, avoiding unused blob downloads
+in partial clones.
 Main-push CI does not run the PR growth comparison; ordinary lint still reports
 all unsuppressed over-cap files.
 
-The max-lines suppression inventory and environment-variable count budget use
-the same severity policy. After removing a suppression, remove its stale entry
-from `config/max-lines-baseline.txt`, or run
-`pnpm check:max-lines-ratchet --prune`. Keep the inventory shrinking; warning
-status does not authorize new suppressions or higher caps. The environment
-budget counts distinct `OPENCLAW_*` names in production `src/`, `packages/`, and
-`extensions/` source, excluding tests and QA Lab. Update
-`config/env-var-count-budget.txt` when cleanup reduces that count.
+`pnpm check:baseline-ratchets --base <commit> --no-merge-base` runs the CI
+ratchets in two managed child slots, retaining all results after ordinary
+failures. `RATCHET_PR_HEAD_SHA` adds the existing PR-only line-cap comparison.
+The database-worker inventory starts first and shares the runner with at most
+one smaller check; it never runs two semantic inventories concurrently. When
+the complete current and historical source snapshots have identical paths and
+contents, its fresh current analysis also supplies the comparison counts.
+Changed snapshots retain both full analyses and historical-cache validation.
+Frozen targets without the aggregate command retain their original commands.
+
+<a id="test-line-budget" />
+
+`pnpm check:test-lines-ratchet` measures this change's net test-line delta
+between its comparison base and head. Other changes' growth never counts. A
+change may add up to 400 net test lines without a record. Above that, add a
+`config/test-lines-allocations/<change>.txt` record that covers the excess and
+explain its necessity in the PR. Each record contains one non-negative integer,
+with optional `#` comments. Only records that this change adds or raises give
+credit; merged records have no further effect and can be deleted at any time.
+On failure, the checker prints the net count, the allowance, the credit and the
+lines to remove or allocate.
+
+The checker counts literal newline bytes, like `wc -l`, in
+`*.test.{ts,tsx,mts,mjs,js,cjs}`, `*.test-support.ts`,
+`*test-helpers*`, and `**/test-support/**`. Locally it compares against the
+merge base with `origin/main`; `--staged` compares the index with `HEAD`. Pull
+request CI compares the merge tree with its first parent; a `main` push compares
+with the previous tip, so one push of several squash commits counts their sum.
+Release branches skip the check.
+
+The max-lines suppression inventory and the environment-variable count budget
+must describe the tree, and that check blocks in GitHub Actions as well as
+locally: an unlisted suppression, a stale inventory entry, or an `OPENCLAW_*`
+count that differs from the budget fails everywhere. Warning-only drift on
+`main` would otherwise fail every later local check for unrelated branches.
+Growth of either inventory relative to the merge base follows the severity
+policy above. A renamed suppressed file moves its inventory entry. After removing
+a suppression, remove its stale entry from `config/max-lines-baseline.txt`, or
+run `pnpm check:max-lines-ratchet --prune`. Keep the inventory shrinking;
+warning status does not authorize new suppressions or higher caps. The
+environment budget counts distinct `OPENCLAW_*` names in production `src/`,
+`packages/`, and `extensions/` source, excluding tests and QA Lab. Update
+`config/env-var-count-budget.txt` in the change that adds or removes a name;
+raising it needs owner approval.
 
 The policy also covers numeric bundle, declaration, package, startup memory,
 CPU, timing, and test-root budgets. Measurements and thresholds are unchanged.
+The core test shard root budget is a shared cost signal that no single change
+owns, so it warns locally as well as in CI; rebalance the shard configurations
+in `test/tsconfig/` when it reports.
 When a file or artifact exceeds a cap, extract a coherent module or investigate
 the added cost. Do not trim coverage, disable rules, or raise thresholds just
 to silence a warning.
@@ -329,7 +394,7 @@ expressions, steps, and scripts through YAML anchors and aliases.
 
 ### Assertion inventory reports
 
-`pnpm check:assertion-safety --report <commit-or-ref>` writes a deterministic JSON
+`pnpm check:assertion-safety --report <commit-or-ref>` writes a consistently ordered JSON
 inventory to stdout without changing the assertion baseline. The ref selects the
 committed source and baseline, including files omitted by a sparse checkout.
 Ordinary ratchet checks still inspect worktree or staged content; their `--base`
@@ -393,14 +458,33 @@ Local changed-test routing lives in `scripts/test-projects.test-support.mts` and
 
 Follow the canonical
 [proof policy](https://github.com/openclaw/openclaw/blob/main/.agents/skills/openclaw-testing/SKILL.md#proof-policy).
-For its remote exceptions, `.crabbox.yaml` defaults to `blacksmith-testbox`.
-That workflow hydrates credentials: untrusted contributor/fork code requires
+For its remote exceptions, `.crabbox.yaml` defaults to `boat` and local Actions
+hydration. The OpenClaw wrapper selects `class: fast` (8 vCPU / 16 GB) for new
+Boat leases unless sizing or an alternate `CRABBOX_CONFIG` is explicit. The
+repository keeps `class: standard`: native Crabbox uses 4 vCPU / 8 GB on Boat,
+and other providers retain their existing sizing. Boat account environment secrets
+are disabled with `asciiBox.noEnv`; `asciiBox.noSnapshots` disables snapshots and
+`asciiBox.visibility: private` keeps new VMs private. The configured Crabbox
+environment allowlist still applies. Explicit Blacksmith Testbox workflows
+hydrate credentials: untrusted contributor/fork code requires
 secretless fork CI or sanitized direct AWS, never local execution or Testbox.
 The wrapper uses the bundled Crabbox plugin's binary manager. All providers and
-cloud-worker profiles require Crabbox 0.73.0 or newer. This includes task-owned
+cloud-worker profiles require Crabbox 0.83.0 or newer. This includes task-owned
 Testbox SSH teardown, which prevents persistent SSH masters from keeping idle
-Testboxes alive. Missing or older binaries use a verified managed 0.73.0 release
+Testboxes alive. Missing or older binaries use a verified managed 0.83.0 release
 before provider discovery or lease work. The original binary stays untouched.
+
+For native Linux/WSL command-lifecycle or cancellation proof, verify the selected
+binary's runtime pack before allocating a lease. Use a complete matching Crabbox
+distribution, or set `CRABBOX_RUNTIME_ARTIFACTS` to a verified manifest. The
+companions must come from the same frozen source, and the manifest must bind the
+exact controller binary. Follow Crabbox's
+[runtime artifact instructions](https://github.com/openclaw/crabbox/blob/main/scripts/runtime-artifacts/README.md)
+for preparation and verification. A development CLI without a runtime pack uses
+legacy SSH supervision; its version string alone does not establish native
+supervision. Keep CLI-only results separate from native lifecycle and
+cancellation evidence.
+
 Provider readiness and broker authentication still determine
 which configured backend can run the proof.
 The check workflow hydrates its pinned dispatch commit with a depth-1 checkout;
@@ -421,7 +505,7 @@ The outer GitHub deadline can terminate active SSH commands. Both profiles have
 a separate 15-minute idle limit; active SSH prevents idle expiry, not the outer
 job deadline. Individual test deadlines also remain separate limits. The standard
 workflow accepts an explicit `timeout_minutes` input up to 240 minutes, but
-managed Crabbox 0.73.0 does not forward arbitrary workflow inputs, including
+managed Crabbox 0.82.0 does not forward arbitrary workflow inputs, including
 `timeout_minutes`, and `--ttl` does not extend a Testbox job. Plan routine proof
 within its total-job budget rather than treating TTL or a larger runner as a
 deadline override.
@@ -432,7 +516,7 @@ They use a newly warmed lease dedicated to that untrusted source, never a
 trusted or previously hydrated lease. Launch an installed trusted Crabbox
 binary from a clean trusted `main` checkout and fetch only the remote PR with
 `--fresh-pr`; never execute the untrusted checkout's wrapper or config locally.
-Unset `CRABBOX_AWS_INSTANCE_PROFILE` and fail closed unless resolved
+Unset `CRABBOX_AWS_INSTANCE_PROFILE` and stop unless resolved
 `aws.instanceProfile` is empty. Before any install/test, use trusted
 absolute-path tools to require an IMDSv2 token, prove the IAM credentials
 endpoint returns 404, and compare remote `git rev-parse HEAD` to the full
@@ -458,7 +542,7 @@ without downloading pnpm again. These archives do not replace the frozen-lockfil
 dependency install.
 
 With `install-bun: "true"`, `setup-node-env` can also reuse the original pinned
-Bun 1.4.2 ZIPs from `/opt/crabbox/toolchain-archives` on Linux glibc x64.
+Bun 1.4.4 ZIPs from `/opt/crabbox/toolchain-archives` on Linux glibc x64.
 It authenticates a private copy before extracting a fresh job-private `bun`
 and `bunx`, then publishes their directory after the Node PATH entry.
 The baseline archive is the default; the optimized x64 archive requires AVX
@@ -479,25 +563,25 @@ For an explicitly authorized admin-only PR landing fallback, set
 `OPENCLAW_PR_GATES_REMOTE=crabbox-aws` before `scripts/pr prepare-gates`.
 The mode does not replace the default hosted aggregate gate. After the exact
 prep head is pushed, the wrapper synchronously dispatches the protected-main
-publisher. That trusted workflow checksum-installs Crabbox v0.46, resolves its
+publisher. That trusted workflow checksum-installs Crabbox v0.79.2, resolves its
 service principal through `/v1/whoami`, then runs sanitized brokered AWS with
-`umask 022`, the canonical untrusted bootstrap, `pnpm build`, `pnpm check`, and
-a fail-closed PR-derived test plan. The existing changed-test owner evaluates
+`umask 022`, the standard untrusted bootstrap, `pnpm build`, `pnpm check`, and
+a PR-derived test plan that rejects incomplete selection. The existing changed-test owner evaluates
 every executable changed path independently and must resolve each one to
 concrete matched test files; broad fallback, skipped paths, config targets,
 deleted executable paths, and partial plans are refused. Explicit docs and
 `AGENTS.md`/`CLAUDE.md` instruction surfaces may produce a zero-test plan.
-The exact PR base SHA, head SHA, bootstrap hash, and deterministic plan digest
-are bound into the canonical command. The publisher streams a launcher through
+The exact PR base SHA, head SHA, bootstrap hash, and stable plan digest
+are bound into the prepared command. The publisher streams a launcher through
 Crabbox's `--script-stdin`. Short broker arguments bind the head SHA and the
-bootstrap, canonical command, and launcher hashes. The AWS lease uses a 90-minute idle timeout
+bootstrap, prepared command, and launcher hashes. The AWS lease uses a 90-minute idle timeout
 and 240-minute TTL. The `pr-crabbox-gate-publisher.yml` workflow accepts an open draft
 because proof runs during prepare-push, then rereads the live same-repository
 PR and the exact active organization-admin membership object using the repo-native
 GitHub App token with `Members(read)` (the repository-scoped workflow token is
 not treated as org authority), validates its newly created authenticated broker
 run under the same service token, ordered complete events, independently rebuilt
-canonical command and launcher upload hash, and
+prepared command and launcher upload hash, and
 publishes the distinct `openclaw/crabbox-gate` only for the exact proven
 base/head/plan binding. The publisher also proves that the PR base is the merge
 base of its immutable protected-main workflow SHA and adds that workflow SHA to
@@ -505,10 +589,10 @@ the strict check summary. Before and after the remote run, it proves that a
 candidate live `main` is identical to or descended from that workflow SHA, then
 rereads the ref and requires the candidate to remain unchanged. A descendant
 advance during the long remote run is allowed; movement inside either
-comparison-and-reread window fails closed.
+comparison-and-reread window stops publication.
 Retained broker logs are validated when non-empty but are optional because
-released Crabbox v0.46 can report zero retained log bytes after a successful
-run. Only after the publisher and exact-head check succeed does the local
+Crabbox can report zero retained log bytes after a successful
+run. The publisher accepts `released` or `cleanup` as historical run phases only after validating workload identity, result, and ordered events. It separately runs blocking `crabbox stop --provider aws --id <exact-lease> --wait` from the same temporary Crabbox home and requires confirmed cleanup before publication. Pending cleanup never passes the gate; an uncertain stop retains that recovery home and reports the exact lease and next command. Only after the publisher and exact-head check succeed does the local
 wrapper derive `.local/gates.env` provider/run/lease/URL recovery metadata from
 the trusted summary; those fields are not publication authority.
 
@@ -558,14 +642,15 @@ node scripts/crabbox-wrapper.mjs run --help | sed -n '1,120p'
 The repo wrapper validates the selected Crabbox binary and provider before running. In Codex worktrees or linked/sparse checkouts, avoid the local `pnpm crabbox:run` script because pnpm may reconcile dependencies before Crabbox starts; invoke the node wrapper directly instead:
 
 ```bash
-node scripts/crabbox-wrapper.mjs run --provider blacksmith-testbox --timing-json --shell -- "pnpm test <path-or-filter>"
+node scripts/crabbox-wrapper.mjs run --timing-json --shell -- "pnpm test <path-or-filter>"
 ```
 
 A supported sibling or `PATH` binary can run directly. The wrapper automatically
 replaces an outdated selection with the plugin-managed binary; rebuilding the
 sibling checkout is no longer a prerequisite for proof.
 
-The `blacksmith:` block in `.crabbox.yaml` pins the org, workflow, and job defaults.
+For explicitly selected Testbox proof, the `blacksmith:` block in `.crabbox.yaml`
+pins the org, workflow, and job defaults.
 The wrapper enforces workflow ref `main` while syncing the selected local source,
 so the explicit flags below are optional. Explicit clean-machine changed-gate parity:
 
@@ -681,13 +766,18 @@ For admission/queue handling, follow the canonical proof policy above.
 For explicitly selected AWS capacity, use the
 [direct-provider commands](https://github.com/openclaw/openclaw/blob/main/.agents/skills/crabbox/references/operations.md#direct-aws).
 
-Under AWS pressure, avoid `class=beast` unless the task really needs 48xlarge-class CPU. A `beast` request starts at 192 vCPUs and is the easiest way to trip regional EC2 Spot or On-Demand Standard quota. The repo-owned `.crabbox.yaml` defaults to `class: standard`, on-demand market, and `capacity.hints: true` so brokered AWS leases print selected region/market, quota pressure, Spot fallback, and high-pressure class warnings. Use `fast` for heavier broad checks, `large` only after standard/fast are not enough, and `beast` only for exceptional CPU-bound lanes such as full-suite or all-plugin Docker matrices, explicit release/blocker validation, or high-core performance profiling. Do not use `beast` for `pnpm check:changed`, focused tests, docs-only work, ordinary lint/typecheck, small E2E repros, or Blacksmith outage triage. Use `--market on-demand` for capacity diagnosis so Spot market churn is not mixed into the signal.
+Under AWS pressure, avoid `class=beast` unless the task really needs 48xlarge-class CPU. A `beast` request starts at 192 vCPUs and is the easiest way to trip regional EC2 Spot or On-Demand Standard quota. The repo-owned `.crabbox.yaml` keeps `class: standard` for explicit AWS proof; on-demand market and `capacity.hints: true` retain AWS capacity diagnostics. Use `fast` for heavier broad checks, `large` only after standard/fast are not enough, and `beast` only for exceptional CPU-bound lanes such as full-suite or all-plugin Docker matrices, explicit release/blocker validation, or high-core performance profiling. Do not use `beast` for `pnpm check:changed`, focused tests, docs-only work, ordinary lint/typecheck, small E2E repros, or Blacksmith outage triage. Use `--market on-demand` for capacity diagnosis so Spot market churn is not mixed into the signal.
 
 `.crabbox.yaml` owns provider, sync, and GitHub Actions hydration defaults. Crabbox sync never transfers `.git`, so the hydrated Actions checkout keeps its own remote Git metadata instead of syncing maintainer-local remotes and object stores, and the repo config additionally excludes local runtime/build artifacts (such as `.artifacts` and test reports) that should never be transferred. `.github/workflows/crabbox-hydrate.yml` owns checkout, Node/pnpm setup, `origin/main` fetch, and the non-secret environment handoff for owned-cloud `crabbox run --id <cbx_id>` commands.
 
+Direct leases require Crabbox 0.83.0 or newer. TTL counts from creation, including hydration; idle timeout counts inactivity. The earlier deadline wins. Defaults are 30 minutes each, with a four-hour maximum unless an owner or organization override allows more. Effective policy may clamp requests and live leases; inspect the lease and read policy notices. The Azure `prewarm` and `changed` jobs request four hours total and 90 minutes idle explicitly. The hydration workflow's keepalive holds its Actions job open; it does not renew a Crabbox lease. `keep` and `stop: never` do not prevent expiry.
+
+Plain heartbeats, setup, synchronization, and desktop activity do not extend total lifetime. `run` may extend only while a command executes, subject to provider support, budget, and policy. Creation-fixed providers need sufficient TTL at allocation. `directLeases: deny` requires the configured coordinator route. Do not change providers to avoid that policy. `crabbox list --retained` adds kept terminal resources with unconfirmed cleanup to the default live listing; use exact-ID inspection and a waiting stop to prove cleanup.
+
 Linux hydration keeps physical workspace `node_modules` directories and pnpm's
-default `.pnpm` virtual store. Only the package-content store uses the persistent
-`/var/cache/crabbox/pnpm/store` volume; its fallback lives at
+default `.pnpm` virtual store. Providers with cache-volume support can persist the
+package-content store at `/var/cache/crabbox/pnpm/store`; Boat uses lease-local
+disk, not the optional 80/40-GB volumes. The fallback store lives at
 `.cache/openclaw-pnpm-store` beside the workspace dependencies. Ordinary POSIX
 sync preserves these ignored directories, so frozen reinstalls and later build
 commands use the same owned install. Hydration checks the tooling loader before

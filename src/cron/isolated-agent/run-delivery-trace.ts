@@ -8,6 +8,7 @@ import type {
   SourceDeliveryVisibleDelivery,
 } from "../../infra/outbound/source-delivery-plan.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { resolveCronDeliveryDefaultsScope } from "../delivery-defaults.js";
 import { resolveCronDeliveryPlan, type CronDeliveryPlan } from "../delivery-plan.js";
 import { hasExplicitCronDeliveryTarget } from "../delivery-target-validation.js";
 import {
@@ -143,6 +144,7 @@ export function buildCronDeliveryTrace(params: {
   sourceDeliveryOutcome: SourceDeliveryOutcome;
   fallbackUsed: boolean;
   delivered?: boolean;
+  receipts?: CronDeliveryTrace["receipts"];
 }): CronDeliveryTrace {
   // Trace both intended and resolved targets so run logs can explain fallback
   // delivery without leaking provider-specific raw routing internals.
@@ -166,6 +168,7 @@ export function buildCronDeliveryTrace(params: {
     intended,
     ...(resolved ? { resolved } : {}),
     ...(messageToolSentTo.length > 0 ? { messageToolSentTo } : {}),
+    ...(params.receipts?.length ? { receipts: params.receipts } : {}),
     fallbackUsed: params.fallbackUsed,
     delivered: params.delivered,
   };
@@ -177,6 +180,8 @@ export async function createCronToolsAllowPreflightDiagnostics(params: {
   provider: string;
   model: string;
   modelApi?: string;
+  modelBaseUrl?: string;
+  modelParams?: Record<string, unknown>;
   agentId?: string;
   agentDir?: string;
   sessionKey?: string;
@@ -197,6 +202,8 @@ export async function createCronToolsAllowPreflightDiagnostics(params: {
         config: params.cfg,
         modelProvider: params.provider,
         modelApi: params.modelApi,
+        modelBaseUrl: params.modelBaseUrl,
+        modelParams: params.modelParams,
         modelId: params.model,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
@@ -241,7 +248,10 @@ export async function resolveCronDeliveryContext(params: {
   job: CronStoredJob;
   agentId: string;
 }) {
-  const deliveryPlan = resolveCronDeliveryPlan(params.job);
+  const deliveryPlan = resolveCronDeliveryPlan(
+    params.job,
+    resolveCronDeliveryDefaultsScope(params.cfg.cron, params.job, params.agentId),
+  );
   const {
     buildDeliveryFormatPrompt,
     resolveDeliveryTarget,

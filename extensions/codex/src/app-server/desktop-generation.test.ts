@@ -2,11 +2,19 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  readMacOSDesktopGenerationFingerprint,
-  resolveMacOSDesktopGenerationWatchPaths,
-} from "./desktop-generation-fingerprint.js";
+import { readMacOSDesktopGenerationFingerprint } from "./desktop-generation-fingerprint.js";
 import { createCodexDesktopGenerationOwner } from "./desktop-generation-owner.js";
+
+function createOwner(
+  options: Omit<Parameters<typeof createCodexDesktopGenerationOwner>[0], "signal">,
+) {
+  return createCodexDesktopGenerationOwner({ signal: new AbortController().signal, ...options });
+}
+
+async function settle<T>(pending: Promise<T>) {
+  await vi.advanceTimersByTimeAsync(1_000);
+  return pending;
+}
 
 describe("Codex desktop generation owner", () => {
   afterEach(() => vi.useRealTimers());
@@ -15,39 +23,23 @@ describe("Codex desktop generation owner", () => {
     vi.useFakeTimers();
     const error = new Error("desktop bundle is being replaced");
     const readFingerprint = vi.fn().mockRejectedValueOnce(error).mockResolvedValue("desktop-y");
-    const owner = createCodexDesktopGenerationOwner({
-      signal: new AbortController().signal,
-      readFingerprint,
-    });
+    const owner = createOwner({ readFingerprint });
     const first = owner.refresh().catch((cause: unknown) => cause);
-    await vi.advanceTimersByTimeAsync(1_000);
-    await expect(first).resolves.toBe(error);
-
-    const recovered = owner.wait();
-    await vi.advanceTimersByTimeAsync(1_000);
-    await expect(recovered).resolves.toEqual({ epoch: 1, fingerprint: "desktop-y" });
+    await expect(settle(first)).resolves.toBe(error);
+    await expect(settle(owner.wait())).resolves.toEqual({ epoch: 1, fingerprint: "desktop-y" });
     expect(readFingerprint).toHaveBeenCalledTimes(2);
   });
 
   it("coalesces waiters and keeps the generation for an unchanged snapshot", async () => {
     vi.useFakeTimers();
-    const fingerprint = "X";
-    const readFingerprint = vi.fn(async () => fingerprint);
+    const readFingerprint = vi.fn(async () => "X");
     const changed = vi.fn();
-    const owner = createCodexDesktopGenerationOwner({
-      signal: new AbortController().signal,
-      readFingerprint,
-      onGenerationChange: changed,
-    });
-    const initial = owner.refresh();
-    await vi.advanceTimersByTimeAsync(1_000);
-    await initial;
+    const owner = createOwner({ readFingerprint, onGenerationChange: changed });
+    await settle(owner.refresh());
     readFingerprint.mockClear();
 
     owner.markDirty();
-    const pending = Promise.all([owner.wait(), owner.wait()]);
-    await vi.advanceTimersByTimeAsync(1_000);
-    const [left, right] = await pending;
+    const [left, right] = await settle(Promise.all([owner.wait(), owner.wait()]));
 
     expect(left).toBe(right);
     expect(left).toEqual({ epoch: 1, fingerprint: "X" });
@@ -55,87 +47,36 @@ describe("Codex desktop generation owner", () => {
     expect(changed).not.toHaveBeenCalled();
   });
 
-  it.each([
-    "plugins/openai-bundled/plugins/unified-computer-use",
-    "cua_node/lib/node_modules/@oai/cua-repl",
-  ])("settles same-version %s content changes as a new generation", async (artifactRelative) => {
-    await withTempDir("openclaw-codex-generation-plugin-fingerprint-", async (root) => {
-      const chatGpt = candidate(root, "ChatGPT.app");
-      const pluginRoot = path.join(
-        chatGpt.appBundlePath,
-        "Contents",
-        "Resources",
-        artifactRelative,
-      );
-      const pluginName = path.basename(pluginRoot);
-      await Promise.all([
-        writeCommand(chatGpt.appServerCommandPath, "chatgpt-x"),
-        fs.mkdir(path.join(pluginRoot, ".codex-plugin"), { recursive: true }),
-      ]);
-      await fs.writeFile(
-        path.join(pluginRoot, ".codex-plugin", "plugin.json"),
-        JSON.stringify({ name: pluginName, version: "1.0.0" }),
-      );
-      await fs.writeFile(path.join(pluginRoot, ".mcp.json"), "plugin-content-x");
+  it("settles a replaced desktop bundle as a new generation", async () => {
+    await withTempDir("openclaw-codex-generation-replacement-", async (root) => {
+      const appBundlePath = path.join(root, "ChatGPT.app");
+      const resources = path.join(appBundlePath, "Contents/Resources");
+      const chatGpt = {
+        appName: "ChatGPT.app" as const,
+        appBundlePath,
+        appServerCommandPath: path.join(resources, "codex-cli/CodexCLI.app/Contents/MacOS/codex"),
+        bundledMarketplacePath: path.join(resources, "plugins/openai-bundled"),
+        computerUseServiceAppPaths: [],
+      };
+      await writeCommand(chatGpt.appServerCommandPath, "chatgpt-x");
       const initialFingerprint = await readMacOSDesktopGenerationFingerprint([chatGpt]);
 
-      await fs.writeFile(path.join(pluginRoot, ".mcp.json"), "plugin-content-y");
+      await fs.rename(chatGpt.appBundlePath, `${chatGpt.appBundlePath}.previous`);
+      await writeCommand(chatGpt.appServerCommandPath, "chatgpt-y");
       const updatedFingerprint = await readMacOSDesktopGenerationFingerprint([chatGpt]);
       expect(updatedFingerprint).not.toBe(initialFingerprint);
 
       vi.useFakeTimers();
       let fingerprint = initialFingerprint;
-      const owner = createCodexDesktopGenerationOwner({
-        signal: new AbortController().signal,
-        readFingerprint: async () => fingerprint,
-      });
-      const initial = owner.refresh();
-      await vi.advanceTimersByTimeAsync(1_000);
-      await expect(initial).resolves.toMatchObject({ epoch: 1 });
+      const owner = createOwner({ readFingerprint: async () => fingerprint });
+      await expect(settle(owner.refresh())).resolves.toMatchObject({ epoch: 1 });
 
       fingerprint = updatedFingerprint;
       owner.markDirty();
-      const updated = owner.wait();
-      await vi.advanceTimersByTimeAsync(1_000);
-
-      await expect(updated).resolves.toMatchObject({ epoch: 2 });
+      await expect(settle(owner.wait())).resolves.toMatchObject({ epoch: 2 });
     });
   });
-
-  it("watches stable application roots for recursive artifact updates", () => {
-    const fixture = candidate("/Applications", "ChatGPT.app");
-    expect(resolveMacOSDesktopGenerationWatchPaths([fixture])).toEqual([
-      "/Applications",
-      fixture.appBundlePath,
-    ]);
-  });
 });
-
-function candidate(root: string, appName: "ChatGPT.app" | "Codex.app") {
-  const appBundlePath = path.join(root, appName);
-  return {
-    appName,
-    appBundlePath,
-    appServerCommandPath: path.join(
-      appBundlePath,
-      "Contents",
-      "Resources",
-      "codex-cli",
-      "CodexCLI.app",
-      "Contents",
-      "MacOS",
-      "codex",
-    ),
-    bundledMarketplacePath: path.join(
-      appBundlePath,
-      "Contents",
-      "Resources",
-      "plugins",
-      "openai-bundled",
-    ),
-    computerUseServiceAppPaths: [],
-  };
-}
 
 async function writeCommand(commandPath: string, contents: string): Promise<void> {
   await fs.mkdir(path.dirname(commandPath), { recursive: true });

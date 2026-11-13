@@ -10,6 +10,7 @@ import type {
 } from "./goals-operations.types.js";
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
 import type {
+  ResolvedSessionTranscriptRuntimeTarget,
   SessionTranscriptTurnMessageAppend,
   SessionTranscriptWriteScope,
   SessionTranscriptTurnPersistOptions,
@@ -32,6 +33,7 @@ import type {
 } from "./session-transcript-turn-lifecycle.types.js";
 import type { SessionEntry } from "./types.js";
 export type SqliteExpectedSessionTranscriptTurnResult = {
+  runtimeTarget?: ResolvedSessionTranscriptRuntimeTarget;
   voiceSession?: ClientVoiceSessionRecord;
   transcriptVersion?: SessionTranscriptContextVersion;
   sessionTurnMutationResult?: SessionTranscriptTurnMutationResult;
@@ -43,6 +45,7 @@ export type SqliteExpectedSessionTranscriptTurnResult = {
 };
 
 export type SqliteSessionTurnOptions = {
+  resolveRuntimeTarget?: true;
   /** Same-store voice bookkeeping commits atomically with its reserved transcript event. */
   voiceTranscript?: ClientVoiceRunBinding & { failureKey: string; role: "user" | "assistant" };
   ownerSource?: PreparedSessionSourceAuthority;
@@ -94,6 +97,7 @@ export type SessionTurnPlan = {
         | "shouldAppendInTransaction"
         | "prepareMessageAfterIdempotencyCheck"
         | "beforeFreshMessageCommit"
+        | "prepareMentionInvitation"
         | "workerPreparation"
         | "preparation"
       > & {
@@ -102,7 +106,6 @@ export type SessionTurnPlan = {
         freshGuard?: true;
         preparedMessage?: {
           prepared: boolean;
-          expected: { messageId: string; message: unknown } | undefined;
           message: unknown;
         };
       }

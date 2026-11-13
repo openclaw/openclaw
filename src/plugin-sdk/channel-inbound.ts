@@ -1,5 +1,4 @@
 import type { DispatchFromConfigResult } from "../auto-reply/reply/dispatch-from-config.js";
-// Channel inbound contracts define plugin ingress payloads and reply dispatch metadata.
 import {
   buildChannelInboundEventContext,
   finalizeChannelInboundContext,

@@ -1,5 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
@@ -27,8 +27,8 @@ export type UserProfileMutationPublication = {
   githubConnections?: UserGitHubConnectionCommit;
 };
 export type UserProfileMutationContext = {
-  runTransaction<T>(db: DatabaseSync, operation: () => T): T;
-  before(db: DatabaseSync, ...profileIds: string[]): void;
+  runTransaction<T>(db: EngineConnection, operation: () => T): T;
+  before(db: EngineConnection, ...profileIds: string[]): void;
   authority(...profileIds: string[]): void;
   identity(...profileIds: string[]): void;
   publish(...profileIds: string[]): void;

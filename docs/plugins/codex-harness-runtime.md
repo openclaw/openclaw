@@ -83,14 +83,19 @@ OpenClaw developer instructions cover OpenClaw runtime concerns: source-channel
 delivery, OpenClaw dynamic tools, ACP delegation, adapter context, and the
 active agent workspace profile files. With an OpenClaw-managed direct stdio
 app-server, including a Desktop executable selected for Computer Use, skill
-catalogs, persona files, memory-provider instructions, and tool-routed `MEMORY.md` guidance
+catalogs, persona files, memory-provider instructions, plugin-injected system
+context, and tool-routed `MEMORY.md` guidance
 are appended to the parent model request instructions by a private inference
 relay. Native base and catalog instructions remain unchanged; this new context
 is not written to native conversation history or automatically inherited by
 native subagents. Connections without that relay carry eligible skills, persona, and memory
 in thread developer instructions instead, preserving delivery when the model
 owns collaboration-mode instructions. Native children can inherit that fallback context; selected personal `users/<profile-id>/USER.md` overlays are excluded and require the managed parent-only relay. See [workspace bootstrap files](/plugins/codex-harness-reference/workspace-bootstrap-files)
-for fallback refresh and inheritance semantics. Active `BOOTSTRAP.md` and, when memory tools are unavailable,
+for fallback refresh and inheritance semantics. Plugin `before_prompt_build`
+system context is prepared for each turn; changing recall results does not reload
+the managed thread or block follow-up messages while a background command runs.
+It follows stable parent context and shares the relay's 256 KiB context limit.
+Plugin `systemPrompt` replacements remain thread policy. Active `BOOTSTRAP.md` and, when memory tools are unavailable,
 bounded `MEMORY.md` content travel as plain turn input references. They are
 introduced on a new native thread, after a cold resume or native compaction,
 and when their rendered content changes. Consecutive warm turns omit unchanged
@@ -108,6 +113,16 @@ native accounts, locked upstreams, and native `features.respect_system_proxy` pr
 and TLS configuration instead of changing native networking settings. OpenClaw leaves the native network and account configuration unchanged. Existing history, including any older embedded
 persona or explicitly shared task text, is preserved; this is not a retroactive
 history scrub. See [Workspace bootstrap files](/plugins/codex-harness-reference#workspace-bootstrap-files).
+
+Trajectory `context.compiled`, the system-prompt report (`/context`),
+`llm_input`, and context-engine history budgets count OpenClaw's base instructions and
+thread instructions. Reports use the base the thread lifecycle placed, including the one a supervised thread
+renders for its probed native model; history budgets run
+before startup and use an estimate. After a managed parent turn registers its inference
+context, they also include that exact registered text. Codex's own additions,
+such as an operator `model_instructions_file`, are not counted. This diagnostic
+projection is not the complete native/provider prompt and is never sent back
+into native thread requests. Existing trajectories are not backfilled.
 
 Delivery mode and the current message target requirement arrive as compact
 application context before each user turn. They explicitly supersede earlier
@@ -178,7 +193,7 @@ nine child pages below. The anchors from the single-page version still resolve h
 
 [Codex replies and final answers](/plugins/codex-harness-runtime/replies) — Visible reply delivery, heartbeat turns, and bounded final-answer recovery.
 
-- <a id="visible-replies-and-heartbeats"></a>[Visible replies and heartbeats](/plugins/codex-harness-runtime/replies#visible-replies-and-heartbeats)
+- <a id="visible-replies-and-heartbeats"></a>[Visible replies and scheduled turns](/plugins/codex-harness-runtime/replies#visible-replies-and-heartbeats)
 - <a id="final-answers-after-settled-tool-work"></a>[Final answers after settled tool work](/plugins/codex-harness-runtime/replies#final-answers-after-settled-tool-work)
 
 ### Codex hook boundaries

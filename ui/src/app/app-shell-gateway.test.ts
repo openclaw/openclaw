@@ -1,10 +1,12 @@
 /* @vitest-environment jsdom */
 
-import { GatewayProtocolClient } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UI_APPEARANCE_PREFERENCE_KEYS } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
+import type { UsersPrefsGetResult } from "../../../packages/gateway-protocol/src/schema/users.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { configSnapshot } from "../lib/config/config-snapshot.test-support.ts";
 import {
   CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,
   createConfigCapabilityHarness,
@@ -14,18 +16,17 @@ import {
 } from "../lib/config/config-test-harness.ts";
 import { createRuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
-import { createProfileAppearanceGateway } from "./app-shell-gateway.test-support.ts";
+import {
+  createProfileAppearanceGateway,
+  createShellConfig,
+  holdProfileAppearanceRead,
+  profileAppearanceReply,
+} from "./app-shell-gateway.test-support.ts";
+import { makeBootRoster } from "./bootstrap.test-support.ts";
 import { createGatewayMetadataObserver } from "./gateway-observers.ts";
 import { UI_NAVIGATION_PREFERENCE_KEYS } from "./server-prefs-state.ts";
 import { pushServerUiPrefs, resetServerUiPrefsSync } from "./server-prefs.ts";
 import { loadSettings, patchSettings } from "./settings.ts";
-
-function createShellConfig(request: GatewayBrowserClient["request"]) {
-  const harness = createConfigCapabilityHarness(request);
-  const { context, owner } = createProfileAppearanceGateway(null);
-  Object.assign(context, { runtimeConfig: harness.runtimeConfig });
-  return { ...harness, context, owner };
-}
 
 describe("ShellGatewayOwner profile appearance integration", () => {
   beforeEach(() => {
@@ -35,6 +36,7 @@ describe("ShellGatewayOwner profile appearance integration", () => {
 
   afterEach(() => {
     resetServerUiPrefsSync();
+    vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
@@ -46,7 +48,7 @@ describe("ShellGatewayOwner profile appearance integration", () => {
         config = JSON.parse((params as { raw: string }).raw);
         return { config, hash: "patched" };
       }
-      return { config, raw: JSON.stringify(config), hash: "initial", valid: true, issues: [] };
+      return configSnapshot(config, "initial", JSON.stringify(config));
     });
     const { context, owner, snapshot } = createProfileAppearanceGateway(null);
     const client = { gatewayUrl: "ws://profile.test", request } as unknown as GatewayBrowserClient;
@@ -124,15 +126,7 @@ describe("ShellGatewayOwner profile appearance integration", () => {
     "keeps %s and deduplicated callers pending through actual profile hydration",
     async (entry) => {
       const { context, owner, snapshot, request } = createProfileAppearanceGateway("profile-owner");
-      const readStarted = createDeferred();
-      const reply = createDeferred<{
-        status: string;
-        entries: { "ui.accent": string; "ui.railShortcuts": string[] };
-      }>();
-      request.mockImplementationOnce(() => {
-        readStarted.resolve();
-        return reply.promise;
-      });
+      const { readStarted, reply } = holdProfileAppearanceRead(request);
       if (entry === "invalidation") {
         owner.handleGatewayEvent({
           type: "event",
@@ -154,7 +148,7 @@ describe("ShellGatewayOwner profile appearance integration", () => {
       });
       await readStarted.promise;
       expect(complete).toBe(false);
-      reply.resolve({ status: "ok", entries: { "ui.accent": "#336699", "ui.railShortcuts": [] } });
+      reply.resolve(profileAppearanceReply("#336699"));
       await vi.dynamicImportSettled();
       expect(request).toHaveBeenCalledOnce();
       await ready;
@@ -164,6 +158,32 @@ describe("ShellGatewayOwner profile appearance integration", () => {
       expect(request).toHaveBeenCalledOnce();
     },
   );
+
+  it("restores profile overrides while operator defaults are still loading", async () => {
+    const { context, owner, snapshot, request, refreshTheme } =
+      createProfileAppearanceGateway("profile-owner");
+    const { readStarted, reply } = holdProfileAppearanceRead(request);
+    const config = createDeferred();
+    Object.assign(context.runtimeConfig.state, { configSnapshot: null });
+    vi.spyOn(context.runtimeConfig, "ensureDisplayLoaded").mockImplementation(async () => {
+      await config.promise;
+      Object.assign(context.runtimeConfig.state, {
+        configSnapshot: { config: { ui: { prefs: { theme: "knot" } } } },
+      });
+    });
+    patchSettings({ theme: "claw", accent: "#112233" });
+    const ready = owner.ensureRuntimeConfig(snapshot, context.runtimeConfig);
+    await readStarted.promise;
+    const applied = createDeferred();
+    refreshTheme.mockImplementationOnce(applied.resolve);
+    reply.resolve(profileAppearanceReply("#336699"));
+    await applied.promise;
+    expect(loadSettings()).toMatchObject({ theme: "claw", accent: "#336699", sidebarEntries: [] });
+    config.resolve();
+    await ready;
+    expect(loadSettings()).toMatchObject({ theme: "knot", accent: "#336699", sidebarEntries: [] });
+    expect(request).toHaveBeenCalledOnce();
+  });
 
   it("reconciles a profile read retired by a theme commit without reusing its pending source", async () => {
     const { context, owner, snapshot } = createProfileAppearanceGateway("profile-owner");
@@ -229,10 +249,7 @@ describe("ShellGatewayOwner profile appearance integration", () => {
 
   it("reads fresh profile appearance after reconnecting with the same client", async () => {
     const { context, owner, snapshot, request } = createProfileAppearanceGateway("profile-owner");
-    request.mockResolvedValue({
-      status: "ok",
-      entries: { "ui.accent": "#336699", "ui.railShortcuts": [] },
-    });
+    request.mockResolvedValue(profileAppearanceReply("#336699"));
     owner.synchronizeGateway(snapshot);
     await owner.ensureRuntimeConfig(snapshot, context.runtimeConfig);
     expect(loadSettings().accent).toBe("#336699");
@@ -241,49 +258,127 @@ describe("ShellGatewayOwner profile appearance integration", () => {
     snapshot.phase = "reconnecting";
     createGatewayMetadataObserver(() => true).synchronize(connected, snapshot);
     owner.synchronizeGateway(snapshot);
-    request.mockResolvedValue({
-      status: "ok",
-      entries: { "ui.accent": "#445566", "ui.railShortcuts": [] },
-    });
+    request.mockResolvedValue(profileAppearanceReply("#445566"));
     snapshot.phase = "connected";
     owner.synchronizeGateway(snapshot);
     await owner.ensureRuntimeConfig(snapshot, context.runtimeConfig);
     expect(loadSettings().accent).toBe("#445566");
   });
 
-  it("refuses profile hydration from a superseded config snapshot", async () => {
-    const { context, owner, snapshot, request, refreshTheme, requestUpdate } =
+  it.each(["error", "no_durable_identity"])(
+    "automatically recovers an initial %s profile read on the same connection",
+    async (failure) => {
+      vi.useFakeTimers();
+      vi.spyOn(console, "error").mockImplementation(() => undefined);
+      const { context, owner, snapshot, request } = createProfileAppearanceGateway("profile-owner");
+      patchSettings({ theme: "claw", themeMode: "system" });
+      const saved: UsersPrefsGetResult = {
+        status: "ok",
+        entries: {
+          "ui.theme": "knot",
+          "ui.themeMode": "dark",
+          "ui.fontUi": "jetbrains-mono",
+          "ui.fontChat": "lora",
+          "ui.railShortcuts": [],
+        },
+      };
+      request.mockResolvedValue(saved);
+      if (failure === "error") {
+        request.mockRejectedValueOnce(new Error("temporary preference read failure"));
+      } else {
+        request.mockResolvedValueOnce({ status: "no_durable_identity" });
+      }
+      await owner.ensureRuntimeConfig(snapshot, context.runtimeConfig);
+      expect(loadSettings()).toMatchObject({ theme: "claw", themeMode: "system" });
+      owner.synchronizeGateway(snapshot);
+      await owner.ensureRuntimeConfig(snapshot, context.runtimeConfig);
+      expect(request).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.dynamicImportSettled();
+      expect(loadSettings()).toMatchObject({
+        theme: "knot",
+        themeMode: "dark",
+        fontUi: "jetbrains-mono",
+        fontChat: "lora",
+      });
+      await owner.ensureRuntimeConfig(snapshot, context.runtimeConfig);
+      expect(request).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("bounds automatic failures but allows later synchronization to retry", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { context, owner, snapshot, request } = createProfileAppearanceGateway("profile-owner");
+    request.mockRejectedValue(new Error("preferences offline"));
+    await owner.ensureRuntimeConfig(snapshot, context.runtimeConfig);
+    // Initial config reconciliation and redundant callers must not bypass backoff.
+    await owner.reconcileServerUiPrefs(context.runtimeConfig);
+    await owner.ensureRuntimeConfig(snapshot, context.runtimeConfig);
+    expect(request).toHaveBeenCalledOnce();
+    for (const delay of [1_000, 2_000, 4_000]) {
+      await vi.advanceTimersByTimeAsync(delay);
+      await vi.dynamicImportSettled();
+    }
+    expect(request).toHaveBeenCalledTimes(4);
+    await vi.runAllTimersAsync();
+    expect(request).toHaveBeenCalledTimes(4);
+    request.mockResolvedValue(profileAppearanceReply("#445566"));
+    owner.synchronizeGateway(snapshot);
+    await owner.ensureRuntimeConfig(snapshot, context.runtimeConfig);
+    expect(loadSettings().accent).toBe("#445566");
+    await owner.ensureRuntimeConfig(snapshot, context.runtimeConfig);
+    expect(request).toHaveBeenCalledTimes(5);
+  });
+
+  it.each(["disconnect", "reset", "profile"])(
+    "retires a scheduled profile retry on %s",
+    async (replacement) => {
+      vi.useFakeTimers();
+      vi.spyOn(console, "error").mockImplementation(() => undefined);
+      const { context, owner, snapshot, request } = createProfileAppearanceGateway("profile-owner");
+      request.mockRejectedValue(new Error("preferences offline"));
+      await owner.ensureRuntimeConfig(snapshot, context.runtimeConfig);
+      if (replacement === "disconnect") {
+        snapshot.phase = "reconnecting";
+        owner.synchronizeGateway(snapshot);
+      } else if (replacement === "reset") {
+        owner.reset();
+      } else {
+        snapshot.selfUser = { id: "replacement" };
+      }
+      await vi.runAllTimersAsync();
+      await vi.dynamicImportSettled();
+      expect(request).toHaveBeenCalledOnce();
+      request.mockResolvedValue(profileAppearanceReply("#445566"));
+      snapshot.phase = "connected";
+      await owner.ensureRuntimeConfig(snapshot, context.runtimeConfig);
+      expect(loadSettings().accent).toBe("#445566");
+    },
+  );
+
+  it("applies the current config when an independent profile read finishes", async () => {
+    const { context, owner, snapshot, request, refreshTheme, invalidate } =
       createProfileAppearanceGateway("profile-owner");
-    const readStarted = createDeferred();
-    const reply = createDeferred<{
-      status: string;
-      entries: { "ui.accent": string; "ui.railShortcuts": string[] };
-    }>();
-    request.mockImplementationOnce(() => {
-      readStarted.resolve();
-      return reply.promise;
-    });
+    const { readStarted, reply } = holdProfileAppearanceRead(request);
     const ready = owner.ensureRuntimeConfig(snapshot, context.runtimeConfig);
     await readStarted.promise;
     // Initial identity adoption published its navigation reset before the held profile read.
     expect(refreshTheme).toHaveBeenCalledOnce();
     refreshTheme.mockClear();
-    Object.assign(context.runtimeConfig.state, { configSnapshot: { config: {} } });
-    reply.resolve({ status: "ok", entries: { "ui.accent": "#336699", "ui.railShortcuts": [] } });
+    Object.assign(context.runtimeConfig.state, {
+      configSnapshot: { config: { ui: { prefs: { theme: "knot" } } } },
+    });
+    reply.resolve(profileAppearanceReply("#336699"));
     await ready;
-    expect(loadSettings().accent).not.toBe("#336699");
-    expect(refreshTheme).not.toHaveBeenCalled();
-    expect(requestUpdate).not.toHaveBeenCalled();
+    expect(loadSettings()).toMatchObject({ theme: "knot", accent: "#336699" });
+    expect(refreshTheme).toHaveBeenCalledOnce();
+    expect(invalidate).toHaveBeenCalledOnce();
   });
 
   it("loads current agent discovery when hello lands", async () => {
     const { context, host, owner, snapshot } = createProfileAppearanceGateway(null);
-    const agentsList = {
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender" as const,
-      agents: [{ id: "main" }],
-    };
+    const agentsList = makeBootRoster();
     const ensureList = vi.fn(async () => agentsList);
     Object.assign(context, {
       agents: { state: { agentsList: null }, ensureList },
@@ -307,7 +402,7 @@ describe("ShellGatewayOwner profile appearance integration", () => {
         context,
         owner,
         refreshTheme,
-        requestUpdate,
+        invalidate,
         request,
         snapshot,
       } = createProfileAppearanceGateway(mirrored ? "profile-owner" : null);
@@ -329,7 +424,7 @@ describe("ShellGatewayOwner profile appearance integration", () => {
       await vi.dynamicImportSettled();
       // Adoption publishes navigation, then hydration publishes profile/readiness.
       expect(refreshTheme).toHaveBeenCalledTimes(2);
-      expect(requestUpdate).toHaveBeenCalledOnce();
+      expect(invalidate).toHaveBeenCalledOnce();
       expect(refreshTheme).toHaveBeenCalledWith({ notify: true });
       expect(loadSettings().accent).toBe("#336699");
       expect(request).toHaveBeenCalledExactlyOnceWith("users.prefs.get", {
@@ -393,9 +488,7 @@ describe("ShellGatewayOwner config invalidation", () => {
       }
       return server.request(method, params);
     });
-    const { runtimeConfig } = createConfigCapabilityHarness(
-      request as GatewayBrowserClient["request"],
-    );
+    const { runtimeConfig } = createConfigCapabilityHarness(request);
     try {
       await runtimeConfig.ensureLoaded();
       runtimeConfig.patchForm(["count"], 2);
@@ -449,9 +542,7 @@ describe("ShellGatewayOwner config invalidation", () => {
       }
       return server.request(method, params);
     });
-    const { runtimeConfig, publish } = createConfigCapabilityHarness(
-      request as GatewayBrowserClient["request"],
-    );
+    const { runtimeConfig, publish } = createConfigCapabilityHarness(request);
     try {
       await runtimeConfig.ensureLoaded();
       runtimeConfig.patchForm(["count"], 2);
@@ -492,9 +583,7 @@ describe("ShellGatewayOwner config invalidation", () => {
         }
         return response;
       });
-      const { runtimeConfig } = createConfigCapabilityHarness(
-        request as GatewayBrowserClient["request"],
-      );
+      const { runtimeConfig } = createConfigCapabilityHarness(request);
       try {
         await runtimeConfig.ensureLoaded();
         await expect(runtimeConfig.apply()).resolves.toBe(false);
@@ -535,9 +624,7 @@ describe("ShellGatewayOwner config invalidation", () => {
         }
         return serverRequest(method, params);
       });
-      const { runtimeConfig, publish } = createConfigCapabilityHarness(
-        request as GatewayBrowserClient["request"],
-      );
+      const { runtimeConfig, publish } = createConfigCapabilityHarness(request);
       try {
         await runtimeConfig.ensureLoaded();
         runtimeConfig.patchForm(["count"], 2);
@@ -586,7 +673,7 @@ describe("ShellGatewayOwner config invalidation", () => {
       }
       return method === "config.patch" ? patchRequest() : serverRequest(method, params);
     });
-    const { runtimeConfig, owner } = createShellConfig(request as GatewayBrowserClient["request"]);
+    const { runtimeConfig, owner } = createShellConfig(request);
     try {
       await runtimeConfig.ensureLoaded();
       runtimeConfig.patchForm(["count"], 2);
@@ -638,12 +725,8 @@ describe("ShellGatewayOwner config invalidation", () => {
         }
         return serverRequest(method, params);
       });
-      const { runtimeConfig } = createConfigCapabilityHarness(
-        request as GatewayBrowserClient["request"],
-      );
-      const { context, owner } = createProfileAppearanceGateway(null);
+      const { runtimeConfig, context, owner } = createShellConfig(request);
       Object.assign(context, {
-        runtimeConfig,
         agents: { state: { agentsList: null }, refreshList: vi.fn(async () => null) },
         agentSelection: { state: { selectedId: null } },
       });
@@ -677,126 +760,6 @@ describe("ShellGatewayOwner config invalidation", () => {
     },
   );
 
-  it.each([
-    { revert: false, refresh: "event" },
-    { revert: true, refresh: "event" },
-    { revert: false, refresh: "reconnect" },
-    { revert: true, refresh: "reconnect" },
-  ] as const)(
-    "keeps a correlated apply failure across $refresh (mid-apply revert: $revert)",
-    async ({ revert, refresh }) => {
-      vi.useFakeTimers();
-      let storedRaw = '{\n  "count": 1\n}\n';
-      let revision = 1;
-      let appliedRevision = 1;
-      let rejectApply: () => void = () => {
-        throw new Error("apply request missing");
-      };
-      const protocol = new GatewayProtocolClient<Record<string, never>>({
-        createRequestId: () => "synthetic-request",
-        createSocket: (handlers) => ({
-          isOpen: () => true,
-          close: () => handlers.close(1000, ""),
-          send: (data) => {
-            const frame = JSON.parse(data) as {
-              id: string;
-              method: string;
-              params: { raw?: string };
-            };
-            if (frame.method === "config.apply") {
-              storedRaw = frame.params.raw ?? storedRaw;
-              revision++;
-              rejectApply = () =>
-                handlers.message(
-                  JSON.stringify({
-                    type: "res",
-                    id: frame.id,
-                    ok: false,
-                    error: {
-                      code: "UNAVAILABLE",
-                      message: "config.apply persisted but was not applied to the active Gateway",
-                    },
-                  }),
-                );
-            } else {
-              handlers.message(
-                JSON.stringify({
-                  type: "res",
-                  id: frame.id,
-                  ok: true,
-                  payload: {
-                    config: JSON.parse(storedRaw),
-                    raw: storedRaw,
-                    hash: `hash-${revision}`,
-                    configRevisionHash: `revision-${revision}`,
-                    appliedConfigHash: `revision-${appliedRevision}`,
-                    valid: true,
-                    issues: [],
-                  },
-                }),
-              );
-            }
-          },
-        }),
-        createRequestError: (error) =>
-          new GatewayRequestError({
-            code: error.code ?? "UNAVAILABLE",
-            message: error.message ?? "request failed",
-            details: error.details,
-            retryable: error.retryable,
-            retryAfterMs: error.retryAfterMs,
-          }),
-        buildConnectPlan: () => ({}),
-        buildConnectParams: (plan) => plan,
-        resolveClose: () => ({ retry: false, notify: false }),
-        handshake: { mode: "require-challenge", timeoutMs: 100 },
-        reconnect: { initialMs: 10, multiplier: 2, maxMs: 100 },
-      });
-      protocol.start();
-      const { runtimeConfig, publish, owner } = createShellConfig(protocol.request.bind(protocol));
-      try {
-        await runtimeConfig.ensureLoaded();
-        expect(runtimeConfig.state.configForm).toEqual({ count: 1 });
-        if (revert) {
-          runtimeConfig.patchForm(["count"], 2);
-        }
-        const applied = runtimeConfig.apply();
-        if (revert) {
-          runtimeConfig.patchForm(["count"], 1);
-        }
-        owner.handleGatewayEvent({ type: "event", event: "config.changed", payload: {} });
-        await vi.advanceTimersByTimeAsync(0);
-        rejectApply();
-        await expect(applied).resolves.toBe(false);
-        expect(runtimeConfig.state.configForm).toEqual({ count: 1 });
-        expect(runtimeConfig.state.lastError).toContain("was not applied");
-        expect(runtimeConfig.state.configAutoSaveStatus).toBe("error");
-        if (refresh === "reconnect") {
-          publish(false);
-          publish(true);
-        } else {
-          owner.handleGatewayEvent({ type: "event", event: "config.changed", payload: {} });
-        }
-        await vi.advanceTimersByTimeAsync(0);
-        expect(runtimeConfig.state.configForm).toEqual({ count: 1 });
-        expect(runtimeConfig.state.lastError).toContain("was not applied");
-        expect(runtimeConfig.state.configAutoSaveStatus).toBe("error");
-        expect(runtimeConfig.state.configNeedsApply).toBe(true);
-        if (!revert) {
-          appliedRevision = revision;
-          await runtimeConfig.refresh();
-          expect(runtimeConfig.state.configNeedsApply).toBe(false);
-          expect(runtimeConfig.state.lastError).toBeNull();
-        }
-      } finally {
-        runtimeConfig.setWritesSuspended(true);
-        owner.dispose();
-        runtimeConfig.dispose();
-        protocol.stop();
-      }
-    },
-  );
-
   it.each([false, true])(
     "keeps a timed-out revert when an independent patch follows a refreshed snapshot (foreign: %s)",
     async (foreign) => {
@@ -809,22 +772,16 @@ describe("ShellGatewayOwner config invalidation", () => {
       const request = vi.fn((method: string, params?: unknown) =>
         method === "config.patch" ? patchRequest() : serverRequest(method, params),
       );
-      const { runtimeConfig, owner } = createShellConfig(
-        request as GatewayBrowserClient["request"],
-      );
+      const { runtimeConfig, owner } = createShellConfig(request);
       try {
         await runtimeConfig.ensureLoaded();
         runtimeConfig.patchForm(["count"], 2);
         await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
         runtimeConfig.patchForm(["count"], 1);
         if (foreign) {
-          serverRequest.mockResolvedValueOnce({
-            config: { count: 3 },
-            raw: '{\n  "count": 3\n}\n',
-            hash: "foreign-hash",
-            valid: true,
-            issues: [],
-          });
+          serverRequest.mockResolvedValueOnce(
+            configSnapshot({ count: 3 }, "foreign-hash", '{\n  "count": 3\n}\n'),
+          );
         }
         owner.handleGatewayEvent({ type: "event", event: "config.changed", payload: {} });
         await vi.advanceTimersByTimeAsync(0);
@@ -862,9 +819,7 @@ describe("ShellGatewayOwner config invalidation", () => {
     async ({ mode, refresh, foreign }) => {
       vi.useFakeTimers();
       const { request, submissions, firstSet } = createDeferredSetServerMock();
-      const { runtimeConfig, publish, owner } = createShellConfig(
-        request as GatewayBrowserClient["request"],
-      );
+      const { runtimeConfig, publish, owner } = createShellConfig(request);
       try {
         await runtimeConfig.ensureLoaded();
         const originalRaw = runtimeConfig.state.configRawOriginal;
@@ -880,13 +835,9 @@ describe("ShellGatewayOwner config invalidation", () => {
         }
 
         if (foreign) {
-          request.mockResolvedValueOnce({
-            config: { count: 3 },
-            raw: '{\n  "count": 3\n}\n',
-            hash: "foreign-hash",
-            valid: true,
-            issues: [],
-          });
+          request.mockResolvedValueOnce(
+            configSnapshot({ count: 3 }, "foreign-hash", '{\n  "count": 3\n}\n'),
+          );
         }
         if (refresh === "reconnect") {
           publish(false);
@@ -928,19 +879,15 @@ describe("ShellGatewayOwner config invalidation", () => {
   it("adopts a preserved foreign snapshot after a definitive save rejection", async () => {
     vi.useFakeTimers();
     const { request, firstSet } = createDeferredSetServerMock();
-    const { runtimeConfig, owner } = createShellConfig(request as GatewayBrowserClient["request"]);
+    const { runtimeConfig, owner } = createShellConfig(request);
     try {
       await runtimeConfig.ensureLoaded();
       runtimeConfig.patchForm(["count"], 2);
       await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
       runtimeConfig.patchForm(["count"], 1);
-      request.mockResolvedValueOnce({
-        config: { count: 3 },
-        raw: '{\n  "count": 3\n}\n',
-        hash: "foreign-hash",
-        valid: true,
-        issues: [],
-      });
+      request.mockResolvedValueOnce(
+        configSnapshot({ count: 3 }, "foreign-hash", '{\n  "count": 3\n}\n'),
+      );
       owner.handleGatewayEvent({ type: "event", event: "config.changed", payload: {} });
       await vi.advanceTimersByTimeAsync(0);
       expect(runtimeConfig.state.configForm).toEqual({ count: 1 });
@@ -963,12 +910,8 @@ describe("ShellGatewayOwner config invalidation", () => {
     async (rejected) => {
       vi.useFakeTimers();
       const { request, submissions, firstSet } = createDeferredSetServerMock();
-      const { runtimeConfig } = createConfigCapabilityHarness(
-        request as GatewayBrowserClient["request"],
-      );
-      const { context, owner } = createProfileAppearanceGateway(null);
+      const { runtimeConfig, context, owner } = createShellConfig(request);
       Object.assign(context, {
-        runtimeConfig,
         agents: { state: { agentsList: null }, refreshList: vi.fn(async () => null) },
         agentSelection: { state: { selectedId: null } },
       });
@@ -988,13 +931,9 @@ describe("ShellGatewayOwner config invalidation", () => {
         if (rejected) {
           expect(runtimeConfig.state.configAutoSaveStatus).toBe("idle");
           expect(runtimeConfig.state.lastError).toBeNull();
-          request.mockResolvedValueOnce({
-            config: { count: 1 },
-            raw: '{\n  "count": 1\n}\n',
-            hash: "hash-1",
-            valid: true,
-            issues: [],
-          });
+          request.mockResolvedValueOnce(
+            configSnapshot({ count: 1 }, "hash-1", '{\n  "count": 1\n}\n'),
+          );
         }
 
         owner.handleGatewayEvent({ type: "event", event: "config.changed", payload: {} });
@@ -1024,13 +963,9 @@ describe("ShellGatewayOwner config invalidation", () => {
     let count = 1;
     const request = vi.fn((method: string) => {
       if (method === "config.get") {
-        return Promise.resolve({
-          config: { count },
-          raw: JSON.stringify({ count }),
-          hash: `hash-${count}`,
-          valid: true,
-          issues: [],
-        });
+        return Promise.resolve(
+          configSnapshot({ count }, `hash-${count}`, JSON.stringify({ count })),
+        );
       }
       if (method === "config.patch") {
         count = 2;
@@ -1038,7 +973,7 @@ describe("ShellGatewayOwner config invalidation", () => {
       }
       return Promise.resolve({});
     });
-    const { runtimeConfig, owner } = createShellConfig(request as GatewayBrowserClient["request"]);
+    const { runtimeConfig, owner } = createShellConfig(request);
 
     try {
       await runtimeConfig.ensureLoaded();
@@ -1064,9 +999,7 @@ describe("ShellGatewayOwner config invalidation", () => {
     async (mode) => {
       vi.useFakeTimers();
       const { request, submissions, firstSet } = createDeferredSetServerMock();
-      const { runtimeConfig, owner } = createShellConfig(
-        request as GatewayBrowserClient["request"],
-      );
+      const { runtimeConfig, owner } = createShellConfig(request);
 
       try {
         await runtimeConfig.ensureLoaded();

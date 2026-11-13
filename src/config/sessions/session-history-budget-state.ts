@@ -6,6 +6,7 @@ import {
 } from "../../infra/sqlite-wal-checkpoint.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { SessionDiskBudgetSweepResult } from "./disk-budget.types.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 
 const log = createSubsystemLogger("sessions/history-eviction");
@@ -27,6 +28,7 @@ export function createPhysicalBudgetResult(params: {
   removedFiles?: number;
   maxBytes: number;
   highWaterBytes: number;
+  walBytesAfter?: number;
   deferred?: { checkpoint?: SqliteWalHealth; walBytesBefore: number; walBytesAfter: number };
 }): SessionDiskBudgetSweepResult {
   const totalBytesAfter = params.totalBytesAfter ?? params.totalBytesBefore;
@@ -39,6 +41,7 @@ export function createPhysicalBudgetResult(params: {
     maxBytes: params.maxBytes,
     highWaterBytes: params.highWaterBytes,
     overBudget: params.totalBytesBefore > params.maxBytes,
+    ...(params.walBytesAfter !== undefined ? { walBytesAfter: params.walBytesAfter } : {}),
     ...(params.deferred
       ? {
           deferredReason: "checkpoint-incomplete" as const,
@@ -76,6 +79,7 @@ type BudgetKickState = {
   running: boolean;
   pendingForce?: SessionHistoryBudgetKick;
   blockedUntil?: number;
+  protected?: boolean;
   checkpointGate?: SessionHistoryCheckpointGate;
   checkpointBlocked?: {
     checkpoint?: SqliteWalCheckpointSnapshot;
@@ -83,7 +87,13 @@ type BudgetKickState = {
   };
 };
 
-export const budgetKickStateByStore = new Map<string, BudgetKickState>();
+const budgetKickStateByStore = new Map<string, BudgetKickState>();
+
+/** Per-agent legacy and SQLite locators share one lane; custom stores can aggregate partitions. */
+export function sessionHistoryBudgetStoreKey(storePath: string): string {
+  const target = resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath);
+  return sqliteReaderDatabasePathKey(target.agentId ? target.path : storePath);
+}
 
 onSqliteWalCheckpoint(({ databasePath, health, observedAtNs, lastCompletedAtNs }) => {
   const completedAtNs = health.state === "complete" ? observedAtNs : (lastCompletedAtNs ?? 0n);
@@ -108,6 +118,7 @@ export function deferPhysicalBudgetForCheckpoint(
   checkpoint: SqliteWalCheckpointSnapshot | undefined,
 ): void {
   const state = getBudgetKickState(params.storePath, params.maintenance);
+  state.protected = undefined;
   state.checkpointGate ??= {
     databasePath: sqliteReaderDatabasePathKey(databasePath),
     afterNs: checkpoint?.observedAtNs ?? process.hrtime.bigint(),
@@ -120,10 +131,11 @@ export function getBudgetKickState(
   storePath: string,
   budget: SessionHistoryDiskBudgetParams["maintenance"],
 ): BudgetKickState {
-  let state = budgetKickStateByStore.get(storePath);
+  const key = sessionHistoryBudgetStoreKey(storePath);
+  let state = budgetKickStateByStore.get(key);
   if (!state) {
     state = { budget, lastCheckAt: -Infinity, lastForcedCheckAt: -Infinity, running: false };
-    budgetKickStateByStore.set(storePath, state);
+    budgetKickStateByStore.set(key, state);
   } else if (
     state.budget.maxDiskBytes !== budget.maxDiskBytes ||
     state.budget.highWaterBytes !== budget.highWaterBytes ||
@@ -134,6 +146,7 @@ export function getBudgetKickState(
     state.lastCheckAt = -Infinity;
     state.lastForcedCheckAt = -Infinity;
     state.blockedUntil = undefined;
+    state.protected = undefined;
   }
   return state;
 }
@@ -147,6 +160,7 @@ export function recordPhysicalBudgetOutcome(
   }
   const state = getBudgetKickState(params.storePath, params.maintenance);
   if (result.deferredReason) {
+    state.protected = undefined;
     if (state.checkpointBlocked?.warned) {
       return;
     }
@@ -168,6 +182,7 @@ export function recordPhysicalBudgetOutcome(
   state.checkpointBlocked = undefined;
   if (result.totalBytesAfter <= result.maxBytes) {
     state.blockedUntil = undefined;
+    state.protected = undefined;
     if (result.overBudget) {
       log.info("session history disk budget cleanup completed", {
         storePath: params.storePath,
@@ -182,6 +197,8 @@ export function recordPhysicalBudgetOutcome(
   }
   const alreadyBlocked = state.blockedUntil !== undefined;
   state.blockedUntil = Date.now() + PHYSICAL_BUDGET_CHECK_INTERVAL_MS;
+  state.protected =
+    result.removedEntries === 0 && result.removedFiles === 0 && result.freedBytes === 0;
   if (!alreadyBlocked) {
     log.warn(
       "session history disk budget remains exceeded after cleanup; retained data is protected or could not be reclaimed. Raise session.maintenance.maxDiskBytes or export and delete unneeded sessions; automatic checks resume on activity after 30 minutes",

@@ -38,7 +38,7 @@ suite.define(() => {
         ],
       };
       const gateway = await installMockGateway(page, {
-        featureEvents: ["sessions.catalog.changed", "sessions.catalog.host"],
+        featureEvents: ["sessions.catalog.host"],
         featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
         methodResponses: { "sessions.catalog.list": { catalogs: [catalog] } },
       });
@@ -52,7 +52,15 @@ suite.define(() => {
       };
       await gateway.setMethodResponse("sessions.catalog.list", { catalogs: [pendingCatalog] });
       const beforeRefresh = await gateway.deferNext("sessions.catalog.list");
-      await gateway.emitGatewayEvent("sessions.catalog.changed", { agentId: "main" });
+      await page.evaluate(() => {
+        Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+        document.dispatchEvent(new Event("visibilitychange"));
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          value: "visible",
+        });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
       const request = await gateway.waitForRequest("sessions.catalog.list", {
         after: beforeRefresh,
       });

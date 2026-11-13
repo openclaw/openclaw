@@ -3,7 +3,6 @@ import type {
   PluginsCatalogGetResult,
   PluginsListResult,
   PluginsSetEnabledParams,
-  PluginsUninstallResult,
 } from "../../../../packages/gateway-protocol/src/schema/plugins.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createConfigMutationRunner } from "../config/config-mutation-runner.ts";
@@ -36,16 +35,9 @@ export function loadPluginDiscoveryDetail(
 ): Promise<PluginsCatalogGetResult> {
   return client.request<PluginsCatalogGetResult>(
     "plugins.catalog.get",
-    { id, ...(version ? { version } : {}) },
+    { id, ...(version && !id.startsWith("local_") ? { version } : {}) },
     signal ? { signal } : undefined,
   );
-}
-
-export function uninstallPlugin(
-  client: GatewayBrowserClient,
-  pluginId: string,
-): Promise<PluginsUninstallResult> {
-  return client.request<PluginsUninstallResult>("plugins.uninstall", { pluginId });
 }
 
 export function setPluginEnabled(

@@ -11,69 +11,44 @@ import {
 const fixture = createNativeApprovalTestFixture({
   channel: "signal",
   capability: signalApprovalCapability,
-  buildConfig: ({ channel, approvals } = {}) => ({
-    channels: { signal: { enabled: true, ...channel } },
-    approvals,
-  }),
+  buildConfig: (options = {}) => {
+    const { channel, approvals } = options;
+    return {
+      channels: { signal: { enabled: true, ...channel } },
+      approvals,
+    };
+  },
 });
-const { buildConfig, buildExecRequest, buildTargetModeConfig, checks } = fixture;
+const { buildConfig, buildExecRequest, buildTargetModeConfig, describeDelivery, checks } = fixture;
 const { suppressLocalSessionPrompt } = createLocalApprovalPromptTestFixture({
   channel: "signal",
   buildConfig,
   suppress: shouldSuppressLocalSignalExecApprovalPrompt,
 });
+const approvers = { allowFrom: ["+15551230000"] };
+const targetConfig = () =>
+  buildTargetModeConfig("exec", [{ channel: "signal", to: "+15551230000" }], {
+    channel: approvers,
+  });
 
 describe("signal approval capability", () => {
   it("requires explicit approvers before delivering group-origin approvals", async () => {
     const cfg = buildConfig({ approvals: { exec: { enabled: true } } });
     const request = buildExecRequest("group:g1");
-
-    expect(
-      (
-        await signalApprovalCapability.nativeAsync?.describeDeliveryCapabilities({
-          cfg,
-          accountId: "default",
-          approvalKind: "exec",
-          request,
-        })
-      )?.enabled,
-    ).toBe(false);
-
+    expect((await describeDelivery(cfg, request))?.enabled).toBe(false);
     const withApprover = buildConfig({
-      channel: { allowFrom: ["+15551230000"] },
+      channel: approvers,
       approvals: { exec: { enabled: true } },
     });
-    expect(
-      (
-        await signalApprovalCapability.nativeAsync?.describeDeliveryCapabilities({
-          cfg: withApprover,
-          accountId: "default",
-          approvalKind: "exec",
-          request,
-        })
-      )?.enabled,
-    ).toBe(true);
+    expect((await describeDelivery(withApprover, request))?.enabled).toBe(true);
   });
 
   it("uses target-mode config for requestless availability without native runtime handling", async () => {
-    await checks.targetMode(
-      buildTargetModeConfig("exec", [{ channel: "signal", to: "+15551230000" }], {
-        channel: { allowFrom: ["+15551230000"] },
-      }),
-    );
+    await checks.targetMode(targetConfig());
   });
 
   it("renders target-mode exec prompts without unbound reaction choices", () => {
-    const cfg = buildConfig({
-      channel: { allowFrom: ["+15551230000"] },
-      approvals: {
-        exec: {
-          enabled: true,
-          mode: "targets",
-          targets: [{ channel: "signal", to: "+15551230000" }],
-        },
-      },
-    });
+    const cfg = targetConfig();
     const request = buildExecRequest("+15551230000", {
       ask: "always",
       cwd: "/tmp/work",
@@ -89,13 +64,9 @@ describe("signal approval capability", () => {
     const text = payload?.text ?? "";
 
     expect(text).toContain("/approve exec-1 allow-once");
-    expect(text).not.toContain("React with:");
-    expect(text).not.toContain("👍 Allow Once");
-    expect(text).not.toContain("👎 Deny");
-    expect(text).not.toContain("<id>");
-    expect(text).not.toContain("1️⃣ Allow Once");
-    expect(text).not.toContain("2️⃣ Allow Always");
-    expect(text).not.toContain("3️⃣ Deny");
+    expect(text).not.toMatch(
+      /React with:|👍 Allow Once|👎 Deny|<id>|1️⃣ Allow Once|2️⃣ Allow Always|3️⃣ Deny/,
+    );
   });
 });
 

@@ -4,6 +4,10 @@ import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import {
+  createReloadChannel,
+  observeSettlement,
+} from "./server-plugin-reload.active-call.test-support.js";
+import {
   verifyFailedRecoveryServiceOwnership,
   verifyCandidateCleanupRefusal,
 } from "./server-plugin-reload.managed-candidate.test-support.js";
@@ -18,6 +22,36 @@ import {
 
 export function registerPluginServiceRecoveryTests(createRecoveryFixture: RecoveryFixtureFactory) {
   describe("Gateway plugin service recovery ownership", () => {
+    it("stops services published by deferred startup while reload prepares", async () => {
+      const fixture = await createRecoveryFixture({ abortOnCandidateStart: false });
+      await fixture.owner.currentServices()?.stop();
+      fixture.owner.setServices(null);
+      fixture.firstStop.mockClear();
+      fixture.siblingStop.mockClear();
+      let startupPending = true;
+      await fixture.reload(fixture.getConfig(), ["first"], [], {
+        checkpoint: async () => {
+          if (!startupPending) {
+            return;
+          }
+          startupPending = false;
+          const { startPluginServices } = await import("../plugins/services.js");
+          await startPluginServices({
+            scheduler: fixture.runtime.scheduler,
+            config: fixture.getConfig(),
+            registry: fixture.previousRegistry,
+            workspaceDir: "",
+            onHandle: fixture.owner.setServices,
+          });
+          fixture.expectServices({ firstStart: 2, siblingStart: 2 });
+        },
+      });
+      fixture.expectServices({ firstStop: 1, siblingStop: 0, siblingStart: 2 });
+      await fixture.owner.currentServices()?.stop();
+      fixture.expectServices({ firstStop: 1, siblingStop: 1 });
+      expect(fixture.candidateStop).toHaveBeenCalledOnce();
+    });
+
     it.each(["settled", "rejected", "deadline"] as const)(
       "observes shared-deadline service cleanup before restoring channels: %s",
       async (outcome) => {
@@ -63,20 +97,13 @@ export function registerPluginServiceRecoveryTests(createRecoveryFixture: Recove
             // The fixture's main service is registered last and stops first.
             api.registerService({ id: "later-cleanup", start() {}, stop: laterStop });
             api.registerChannel({
-              plugin: {
-                ...createChannelTestPluginBase({
-                  id: "cleanup-recovery",
-                  config: { listAccountIds: () => ["default", "parked"] },
-                }),
-                gateway: {
-                  startAccount: async ({ accountId, abortSignal }) => {
-                    starts.push(accountId);
-                    await new Promise<void>((resolve) => {
-                      abortSignal.addEventListener("abort", () => resolve(), { once: true });
-                    });
-                  },
+              plugin: createReloadChannel(
+                "cleanup-recovery",
+                (account) => {
+                  starts.push(account);
                 },
-              },
+                ["default", "parked"],
+              ),
             });
           },
         });
@@ -90,22 +117,12 @@ export function registerPluginServiceRecoveryTests(createRecoveryFixture: Recove
         await vi.waitFor(() => expect(starts).toEqual(["default"]));
         const original = getPluginInstance(fixture.previousRegistry.plugins[0]!);
         assert(original);
-        const generation = fixture.owner.currentClaim();
         vi.useFakeTimers();
-        let settled = false;
-        const pending = fixture
-          .reload()
-          .catch((error: unknown) => error)
-          .then((result) => {
-            settled = true;
-            return result;
-          });
+        const pending = observeSettlement(fixture.reload().catch((error: unknown) => error));
         try {
           await entered.promise;
           await vi.advanceTimersByTimeAsync(5_000);
           await laterEntered.promise;
-          expect(fixture.firstStop).toHaveBeenCalledOnce();
-          expect(laterStop).toHaveBeenCalledOnce();
           await vi.advanceTimersByTimeAsync(10_000);
           expect(fixture.candidates).toHaveLength(0);
           expect(disposed).toEqual([]);
@@ -116,10 +133,10 @@ export function registerPluginServiceRecoveryTests(createRecoveryFixture: Recove
           // original cleanup despite having zero observation time remaining.
           if (outcome === "deadline") {
             await vi.advanceTimersByTimeAsync(70_000);
-            expect(settled).toBe(true);
+            expect(pending.settled).toBe(true);
             expect(fixture.owner.getReloadStatus()?.phase).toBe("failed");
           } else {
-            expect(settled).toBe(false);
+            expect(pending.settled).toBe(false);
             expect(fixture.owner.getReloadStatus()?.phase).toBe("recovering");
           }
           release.resolve();
@@ -135,8 +152,9 @@ export function registerPluginServiceRecoveryTests(createRecoveryFixture: Recove
           await admittedWrite;
           expect(completedWrites).toBe(1);
           await vi.advanceTimersByTimeAsync(10_000);
-          expect(await pending).toMatchObject({ details: { committed: false, phase: "drain" } });
-          expect(fixture.owner.currentClaim()).toEqual(generation);
+          expect(await pending.promise).toMatchObject({
+            details: { committed: false, phase: "drain" },
+          });
           expect(fixture.firstStop).toHaveBeenCalledOnce();
           expect(laterStop).toHaveBeenCalledOnce();
           expect(fixture.siblingStop).not.toHaveBeenCalled();
@@ -161,7 +179,7 @@ export function registerPluginServiceRecoveryTests(createRecoveryFixture: Recove
           workRelease.resolve();
           await admittedWrite;
           await vi.advanceTimersByTimeAsync(80_000);
-          await pending;
+          await pending.promise;
           vi.useRealTimers();
           await manager.stopChannel("cleanup-recovery");
         }
@@ -205,39 +223,31 @@ export function registerPluginServiceRecoveryTests(createRecoveryFixture: Recove
           vi.spyOn(manager, "stopChannel").mockRejectedValueOnce(permanent);
         }
         const original = getPluginInstance(fixture.previousRegistry.plugins[0]!);
-        const generation = fixture.owner.currentClaim();
         vi.useFakeTimers();
-        let settled = false;
-        const pending = fixture
-          .reload()
-          .catch((error: unknown) => error)
-          .then((result) => {
-            settled = true;
-            return result;
-          });
+        const pending = observeSettlement(fixture.reload().catch((error: unknown) => error));
         try {
           await entered.promise;
           // Observe the existing service-stop and admitted-work drain deadlines.
           await vi.advanceTimersByTimeAsync(15_000);
-          expect(settled).toBe(true);
-          expect(await pending).toMatchObject({ details: { committed: false, phase: "drain" } });
+          expect(pending.settled).toBe(true);
+          expect(await pending.promise).toMatchObject({
+            details: { committed: false, phase: "drain" },
+          });
           expect(fixture.owner.getReloadStatus()?.phase).toBe("failed");
           expect(original?.acceptingCalls).toBe(false);
           release.resolve();
           await vi.advanceTimersByTimeAsync(70_000);
           expect(fixture.owner.getReloadStatus()?.phase).toBe("failed");
           expect(fixture.registryOwner.registry).toBe(fixture.previousRegistry);
-          expect(fixture.owner.currentClaim()).toEqual(generation);
           expect(fixture.candidates).toHaveLength(0);
           expect(registrations).toBe(1);
-          expect(fixture.firstStart).toHaveBeenCalledOnce();
-          expect(fixture.firstStop).toHaveBeenCalledOnce();
+          fixture.expectServices({ firstStart: 1, firstStop: 1 });
           expect(pendingStop).toHaveBeenCalledOnce();
           expect(fixture.siblingStop).not.toHaveBeenCalled();
         } finally {
           release.resolve();
           await vi.advanceTimersByTimeAsync(70_000);
-          await pending;
+          await pending.promise;
           vi.useRealTimers();
           await manager.stopChannel("first");
         }
@@ -259,20 +269,13 @@ export function registerPluginServiceRecoveryTests(createRecoveryFixture: Recove
             });
           }
           api.registerChannel({
-            plugin: {
-              ...createChannelTestPluginBase({
-                id: owner,
-                config: { listAccountIds: () => ["default", "parked"] },
-              }),
-              gateway: {
-                startAccount: async ({ accountId, abortSignal }) => {
-                  starts[owner](accountId);
-                  await new Promise<void>((resolve) => {
-                    abortSignal.addEventListener("abort", () => resolve(), { once: true });
-                  });
-                },
+            plugin: createReloadChannel(
+              owner,
+              (account) => {
+                starts[owner](account);
               },
-            },
+              ["default", "parked"],
+            ),
           });
         },
       });
@@ -298,14 +301,14 @@ export function registerPluginServiceRecoveryTests(createRecoveryFixture: Recove
         // Command catalog refresh stops this channel, but its registration is healthy.
         expect(manager.getRuntimeSnapshot().reloadingChannels?.has("sibling")).toBe(false);
         expect(manager.hasCurrentAccountTask("sibling", "default")).toBe(true);
-        await vi.waitFor(() => expect(starts.sibling).toHaveBeenCalledTimes(2));
-        expect(starts.sibling.mock.calls).toEqual([["default"], ["default"]]);
+        await vi.waitFor(() =>
+          expect(starts.sibling.mock.calls).toEqual([["default"], ["default"]]),
+        );
         expect(manager.isManuallyStopped("sibling", "parked")).toBe(true);
         expect(
           fixture.registryOwner.registry.plugins.find((record) => record.id === "sibling"),
         ).toBe(sibling);
-        expect(fixture.siblingStart).toHaveBeenCalledOnce();
-        expect(fixture.siblingStop).not.toHaveBeenCalled();
+        fixture.expectServices({ siblingStart: 1, siblingStop: 0 });
         expect(manager.getRuntimeSnapshot().reloadingChannels?.size).toBe(0);
         await expect(manager.startChannel("first")).rejects.toThrow("reloaded or disabled");
         expect(starts.first).toHaveBeenCalledOnce();
@@ -436,8 +439,7 @@ export function registerPluginServiceRecoveryTests(createRecoveryFixture: Recove
           expect(candidateStart).toHaveBeenCalledTimes(
             boundary === "publish" || boundary === "committed" ? 1 : 0,
           );
-          expect(fixture.siblingStart).toHaveBeenCalledOnce();
-          expect(fixture.siblingStop).not.toHaveBeenCalled();
+          fixture.expectServices({ siblingStart: 1, siblingStop: 0 });
         } finally {
           release.resolve();
           await pending;

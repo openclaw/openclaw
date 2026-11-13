@@ -3,11 +3,7 @@ import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coer
 import { isApprovalStaleError } from "../infra/approval-errors.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createTuiRefreshCoalescer } from "./coalesced-refresh.js";
-import {
-  TuiChoicePrompt,
-  createTuiChoiceSelector,
-  type TuiChoiceSelector,
-} from "./components/choice-prompt.js";
+import { TuiChoicePrompt, createTuiChoiceSelector } from "./components/choice-prompt.js";
 import { tuiTheme as theme } from "./theme/theme.js";
 import type { TuiApprovalDecision, TuiBackend, TuiPluginApproval } from "./tui-backend.js";
 import { sanitizeRenderableText } from "./tui-formatters.js";
@@ -21,30 +17,7 @@ function sanitizeApprovalText(text: string): string {
   return sanitizeRenderableText(flattened);
 }
 
-function createApprovalPrompt(approval: TuiPluginApproval, selector: TuiChoiceSelector) {
-  const title = sanitizeApprovalText(approval.request.title);
-  const description = sanitizeApprovalText(approval.request.description ?? "");
-  const severity = approval.request.severity ?? "warning";
-  const metadata = [
-    `Severity: ${severity === "critical" ? "Critical" : severity === "info" ? "Info" : "Warning"}`,
-    ...(approval.request.toolName
-      ? [`Tool: ${sanitizeApprovalText(approval.request.toolName)}`]
-      : []),
-    ...(approval.request.pluginId
-      ? [`Plugin: ${sanitizeApprovalText(approval.request.pluginId)}`]
-      : []),
-  ];
-  return new TuiChoicePrompt(
-    theme.header(`plugin approval: ${title}`),
-    [
-      theme.dim(metadata.join("\n")),
-      { text: theme.system(description ? `Request: ${description}` : ""), optional: true },
-    ],
-    selector,
-  );
-}
-
-type ApprovalTimer = number | NodeJS.Timeout;
+type ApprovalTimer = ReturnType<typeof setTimeout>;
 
 type TuiPluginApprovalControllerDeps = {
   client: Pick<TuiBackend, "listPluginApprovals" | "resolvePluginApproval">;
@@ -56,10 +29,6 @@ type TuiPluginApprovalControllerDeps = {
   openOverlay: (component: Component) => OverlayHandle;
   closeOverlay: (handle: OverlayHandle) => void;
   requestRender: () => void;
-  createSelector?: (items: SelectItem[]) => TuiChoiceSelector;
-  nowMs?: () => number;
-  setTimeoutFn?: (callback: () => void, delayMs: number) => ApprovalTimer;
-  clearTimeoutFn?: (timer: ApprovalTimer) => void;
 };
 
 const DEFAULT_DECISIONS: readonly TuiApprovalDecision[] = ["allow-once", "allow-always", "deny"];
@@ -134,21 +103,7 @@ function parseTuiPluginApproval(payload: unknown): TuiPluginApproval | null {
   };
 }
 
-function decisionLabel(decision: TuiApprovalDecision): string {
-  if (decision === "allow-once") {
-    return "allowed once";
-  }
-  if (decision === "allow-always") {
-    return "always allowed";
-  }
-  return "denied";
-}
-
 export function createTuiPluginApprovalController(deps: TuiPluginApprovalControllerDeps) {
-  const createSelector = deps.createSelector ?? createTuiChoiceSelector;
-  const nowMs = deps.nowMs ?? Date.now;
-  const setTimeoutFn = deps.setTimeoutFn ?? setTimeout;
-  const clearTimeoutFn = deps.clearTimeoutFn ?? clearTimeout;
   let queue = new Map<string, TuiPluginApproval>();
   type Presentation = { id: string; overlay?: OverlayHandle; timer?: ApprovalTimer };
   let active: Presentation | null = null;
@@ -161,7 +116,7 @@ export function createTuiPluginApprovalController(deps: TuiPluginApprovalControl
   const closeActiveOverlay = () => {
     const previous = active;
     if (previous?.timer !== undefined) {
-      clearTimeoutFn(previous.timer);
+      clearTimeout(previous.timer);
     }
     active = null;
     if (previous?.overlay) {
@@ -182,7 +137,7 @@ export function createTuiPluginApprovalController(deps: TuiPluginApprovalControl
     if (disposed || active) {
       return;
     }
-    const now = nowMs();
+    const now = Date.now();
     for (const approval of queue.values()) {
       if (approval.expiresAtMs <= now) {
         remove(approval.id);
@@ -204,9 +159,28 @@ export function createTuiPluginApprovalController(deps: TuiPluginApprovalControl
     const surfaceLabel = "plugin approval";
 
     const decisions = approval.request.allowedDecisions ?? DEFAULT_DECISIONS;
-    const selector = createSelector(decisions.map((decision) => DECISION_ITEMS[decision]));
+    const selector = createTuiChoiceSelector(decisions.map((decision) => DECISION_ITEMS[decision]));
     let allowDecisionArmed = false;
-    const prompt = createApprovalPrompt(approval, selector);
+    const title = sanitizeApprovalText(approval.request.title);
+    const description = sanitizeApprovalText(approval.request.description ?? "");
+    const severity = approval.request.severity ?? "warning";
+    const metadata = [
+      `Severity: ${severity === "critical" ? "Critical" : severity === "info" ? "Info" : "Warning"}`,
+      ...(approval.request.toolName
+        ? [`Tool: ${sanitizeApprovalText(approval.request.toolName)}`]
+        : []),
+      ...(approval.request.pluginId
+        ? [`Plugin: ${sanitizeApprovalText(approval.request.pluginId)}`]
+        : []),
+    ];
+    const prompt = new TuiChoicePrompt(
+      theme.header(`plugin approval: ${title}`),
+      [
+        theme.dim(metadata.join("\n")),
+        { text: theme.system(description ? `Request: ${description}` : ""), optional: true },
+      ],
+      selector,
+    );
     const denyIndex = decisions.indexOf("deny");
     let selectedDecision = denyIndex >= 0 ? decisions[denyIndex] : decisions[0];
     if (denyIndex >= 0) {
@@ -242,7 +216,13 @@ export function createTuiPluginApprovalController(deps: TuiPluginApprovalControl
           stale = true;
         } else {
           remove(approval.id);
-          deps.chatLog.addSystem(`${surfaceLabel}: ${decisionLabel(decision)}`);
+          const label =
+            decision === "allow-once"
+              ? "allowed once"
+              : decision === "allow-always"
+                ? "always allowed"
+                : "denied";
+          deps.chatLog.addSystem(`${surfaceLabel}: ${label}`);
         }
       } catch (error) {
         if (disposed) {
@@ -297,7 +277,7 @@ export function createTuiPluginApprovalController(deps: TuiPluginApprovalControl
       presentNext();
       deps.requestRender();
     };
-    const timer = setTimeoutFn(
+    const timer = setTimeout(
       () => {
         if (active?.id !== approval.id) {
           return;
@@ -309,12 +289,10 @@ export function createTuiPluginApprovalController(deps: TuiPluginApprovalControl
         presentNext();
         deps.requestRender();
       },
-      Math.max(1, approval.expiresAtMs - nowMs()),
+      Math.max(1, approval.expiresAtMs - Date.now()),
     );
     presentation.timer = timer;
-    if (typeof timer !== "number") {
-      timer.unref?.();
-    }
+    timer.unref();
     presentation.overlay = deps.openOverlay(prompt);
     deps.requestRender();
   };

@@ -40,7 +40,7 @@ export function startTrackedBrowserTabCleanupTimer(params: {
   onWarn: (message: string) => void;
 }): () => Promise<void> {
   let stopped = false;
-  let timer: NodeJS.Timeout | null = null;
+  let timer: NodeJS.Timeout | undefined;
   let running: Promise<unknown> | null = null;
 
   const schedule = () => {
@@ -53,8 +53,7 @@ export function startTrackedBrowserTabCleanupTimer(params: {
     } catch (err) {
       params.onWarn(`failed to resolve browser tab cleanup config: ${String(err)}`);
     }
-    timer = setTimeout(run, Math.max(MIN_SWEEP_INTERVAL_MS, minutesToMs(sweepMinutes)));
-    timer.unref?.();
+    timer = setTimeout(run, Math.max(MIN_SWEEP_INTERVAL_MS, minutesToMs(sweepMinutes))).unref();
   };
 
   const run = () => {
@@ -83,10 +82,7 @@ export function startTrackedBrowserTabCleanupTimer(params: {
   schedule();
   return async () => {
     stopped = true;
-    if (timer) {
-      clearTimeout(timer);
-      timer = null;
-    }
+    clearTimeout(timer);
     await running?.catch(() => {});
   };
 }

@@ -1,12 +1,18 @@
-import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
+import path from "node:path";
+import { readTranscriptStatsSync } from "../config/sessions/session-accessor.sqlite-read.js";
+import { readTranscriptStatsBatchReadOnlySync } from "../config/sessions/session-accessor.sqlite-transcript-stats-read.js";
 import {
-  readTranscriptStatsBatchReadOnlySync,
-  readTranscriptStatsSync,
-} from "../config/sessions/session-accessor.sqlite-read.js";
-import { listSessionTranscriptInstances } from "../config/sessions/session-history.js";
-import { listDurableSqliteTargetPathsForSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+  listSessionTranscriptArchivesReadOnly,
+  listSessionTranscriptInstances,
+} from "../config/sessions/session-history-read.js";
 import {
-  listUsageCountedTranscriptStats as collectTranscriptStats,
+  listDurableSqliteTargetPathsForSessionStorePath,
+  resolveSqliteTargetFromSessionStorePath,
+} from "../config/sessions/session-sqlite-target.js";
+import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
+import {
+  listUsageCountedTranscriptSources,
+  readUsageCostTranscriptSourceStats,
   resolveUsageCostTranscriptFiles,
   type UsageCostCollectionAccess,
 } from "./session-cost-usage-collection.js";
@@ -15,9 +21,17 @@ import {
 function createNativeStorageUsageAccess(env?: NodeJS.ProcessEnv): UsageCostCollectionAccess {
   return {
     env,
-    materializeArchive: async (sourcePath) => materializeSessionArchiveForRead(sourcePath),
     listSqliteMetadataStores: listDurableSqliteTargetPathsForSessionStorePath,
-    readSqliteMetadata: async (_storePath, read) => read(),
+    resolveSqliteStorePath: (agentId, storePath) =>
+      resolveSqliteTargetFromSessionStorePath(storePath, { agentId, env }).path,
+    readSqliteArchives: async (agentId, storePath, archiveNames) =>
+      listSessionTranscriptArchivesReadOnly({
+        agentId,
+        storePath,
+        archiveNames,
+        includeAllAgents: true,
+        env,
+      }),
     listSqliteInstances: async (agentId, storePath) =>
       listSessionTranscriptInstances({ agentId, storePath, env, projection: "list" }),
     readSqliteStats: async (markers) => {
@@ -29,17 +43,28 @@ function createNativeStorageUsageAccess(env?: NodeJS.ProcessEnv): UsageCostColle
   };
 }
 
-export function listUsageCountedTranscriptStats(
+export async function listUsageCountedTranscriptStats(
   agentId: string,
-  params: Pick<
-    Parameters<typeof collectTranscriptStats>[1],
-    "minMtimeMs" | "sessionsDir" | "storePath" | "env"
+  params: Partial<
+    Pick<
+      Parameters<typeof listUsageCountedTranscriptSources>[1],
+      "minMtimeMs" | "sessionsDir" | "storePath" | "env"
+    >
   > = {},
 ) {
-  return collectTranscriptStats(agentId, {
-    ...createNativeStorageUsageAccess(params.env),
+  const access = createNativeStorageUsageAccess(params.env);
+  const sources = await listUsageCountedTranscriptSources(agentId, {
+    ...access,
     ...params,
+    storePath: resolveSessionStorePathForScope({
+      agentId,
+      env: params.env,
+      storePath:
+        params.storePath ??
+        (params.sessionsDir ? path.join(params.sessionsDir, "sessions.json") : undefined),
+    }),
   });
+  return readUsageCostTranscriptSourceStats(sources, access);
 }
 
 export async function resolveUsageCostTranscriptFile(sessionFile: string) {

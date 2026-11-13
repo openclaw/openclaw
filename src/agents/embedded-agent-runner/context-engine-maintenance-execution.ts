@@ -5,14 +5,15 @@ import {
   resolveSessionTranscriptRuntimeTarget,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
+import { withSessionTranscriptHydrationCaller } from "../../config/sessions/session-transcript-hydration-caller.js";
 import { resolveContextEngineOwnerPluginId } from "../../context-engine/registry.js";
 import type {
   ContextEngine,
   ContextEngineMaintenanceResult,
   ContextEngineRuntimeContext,
 } from "../../context-engine/types.js";
-import { SessionManager } from "../sessions/index.js";
 import { withSessionManagerWrite } from "../sessions/session-manager-write-admission.js";
+import { SessionManager } from "../sessions/session-manager.js";
 import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
 import type { ContextEngineMaintenanceParams } from "./context-engine-maintenance.types.js";
 import { log } from "./logger.js";
@@ -23,6 +24,7 @@ function buildContextEngineMaintenanceRuntimeContext(
     allowDeferredCompactionExecution?: boolean;
   },
 ): ContextEngineRuntimeContext {
+  const { abortSignal, assertActive } = params;
   return {
     ...params.runtimeContext,
     ...resolveContextEngineCapabilities({
@@ -36,7 +38,7 @@ function buildContextEngineMaintenanceRuntimeContext(
     ...(params.sessionTarget ? { sessionTarget: params.sessionTarget } : {}),
     ...(params.allowDeferredCompactionExecution ? { allowDeferredCompactionExecution: true } : {}),
     rewriteTranscriptEntries: async (request) => {
-      params.assertActive?.();
+      assertActive?.();
       const runtimeAgentId = params.sessionTarget?.agentId ?? params.agentId;
       const runtimeSessionKey = normalizeOptionalString(
         params.sessionTarget?.sessionKey ?? params.sessionKey,
@@ -63,13 +65,22 @@ function buildContextEngineMaintenanceRuntimeContext(
           });
           const { restoreSessionColdTranscript } =
             await import("../../config/sessions/session-cold-storage.js");
-          await restoreSessionColdTranscript({ ...runtimeTarget });
-          sessionManager = await SessionManager.openAsync(runtimeTarget);
+          await restoreSessionColdTranscript(
+            runtimeTarget,
+            assertActive,
+            undefined,
+            undefined,
+            abortSignal,
+          );
+          const target = runtimeTarget;
+          sessionManager = await withSessionTranscriptHydrationCaller("maintenance", () =>
+            SessionManager.openAsync(target, undefined, undefined, abortSignal),
+          );
         }
         const manager = sessionManager;
         return await withSessionManagerWrite(manager, () => {
-          params.abortSignal?.throwIfAborted();
-          params.assertActive?.();
+          abortSignal?.throwIfAborted();
+          assertActive?.();
           return rewriteTranscriptEntriesInSessionManager({
             sessionManager: manager,
             replacements: request.replacements,

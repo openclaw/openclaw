@@ -1,9 +1,8 @@
 # SQLite Release Fixtures
 
 `openclaw-agent-schema-v14.sql` is the exact agent DDL from tag
-`v2026.7.2-beta.4`; `openclaw-agent-schema-v15.sql` is the exact DDL from
-commit `509a5f0373764`. Their media-migration tests retain the original SHA-256
-contracts. `openclaw-agent-schema-v21.sql` freezes commit
+`v2026.7.2-beta.4`. Its media-migration test retains the original SHA-256
+contract. `openclaw-agent-schema-v21.sql` freezes commit
 `f69617aa3818d805889692918ee7f51bef666597` as an independent schema-21 migration input.
 `openclaw-agent-schema-v19.sql` freezes commit
 `fb380bd4879be34aa160675d653560bb79690db9`, the last schema-19 commit before the

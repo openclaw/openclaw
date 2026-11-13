@@ -1,11 +1,15 @@
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, lstatSync, readFileSync } from "node:fs";
 import path, { matchesGlob } from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveTestGitCommits } from "../.github/actions/git-owner/test-prerequisites.mjs";
+import { isTestFileTarget } from "./lib/changed-path-facts.mjs";
+import { blacksmithRunnerLabel } from "./lib/ci-blacksmith-capacity.mjs";
 import {
   formatIosSimulatorSelectionSummary,
   resolveIosSimulatorTestSelection,
 } from "./lib/ci-ios-smoke-plan.mjs";
+import { resolveBoatNodeTestCapacity } from "./lib/ci-node-test-capacity.mts";
+import { resolveSkillsPythonTargets } from "./lib/ci-skills-python-plan.mjs";
 import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 
@@ -19,15 +23,20 @@ const workflowEventName = process.env.OPENCLAW_CI_EVENT_NAME ?? "";
 const ordinaryPullRequest = workflowEventName === "pull_request";
 const ciQualification =
   workflowEventName === "workflow_dispatch" &&
-  process.env.OPENCLAW_CI_RELEASE_GATE === "true" &&
   (process.env.OPENCLAW_CI_QUALIFICATION === "true" ||
-    process.env.OPENCLAW_CI_NODE_RUNNER_BACKEND === "runson");
+    (process.env.OPENCLAW_CI_RELEASE_GATE === "true" &&
+      process.env.OPENCLAW_CI_NODE_RUNNER_BACKEND === "runson"));
 const mainQualification = ciQualification && process.env.OPENCLAW_CI_SHAPE === "main";
-const eventName = ciQualification
-  ? mainQualification
-    ? "push"
-    : "pull_request"
-  : workflowEventName;
+const exactMainQualification =
+  mainQualification && process.env.OPENCLAW_CI_RELEASE_GATE === "false";
+// Admission owns identity. Project only coverage; the raw event still owns trust and provenance.
+const eventName = exactMainQualification
+  ? "schedule"
+  : ciQualification
+    ? mainQualification
+      ? "push"
+      : "pull_request"
+    : workflowEventName;
 const eventRef = mainQualification ? "refs/heads/main" : process.env.GITHUB_REF;
 const checkoutRevision = process.env.OPENCLAW_CI_CHECKOUT_REVISION ?? "";
 const workflowRevision = process.env.OPENCLAW_CI_WORKFLOW_REVISION ?? "";
@@ -141,7 +150,23 @@ const createPluginContractTestShards =
           task: "contracts-plugins",
         },
       ];
-const createMatrix = (include) => ({ include });
+const createMatrix = (include) => ({
+  include: include.map((row) => {
+    // Project before serialization so direct and late-planned matrices agree.
+    const capacity =
+      process.env.OPENCLAW_CI_EFFECTIVE_RUNNER_BACKEND === "boat"
+        ? resolveBoatNodeTestCapacity(row.runner, row.check_name, undefined, [
+            ...(row.includePatterns ?? []),
+            ...(row.groups ?? []).flatMap((group) => group.includePatterns ?? []),
+          ])
+        : undefined;
+    if (capacity) {
+      return { ...row, runner: capacity.runner, runner_label: capacity.runner };
+    }
+    const label = row.runner_label ?? blacksmithRunnerLabel(row.runner);
+    return label ? { ...row, runner_label: label } : row;
+  }),
+});
 // Share setup without combining the target planner's process envelopes.
 const createContractMatrix = (shards, task) =>
   createMatrix(
@@ -157,6 +182,9 @@ const packageScripts = packageJson.scripts ?? {};
 const hasPackageScript = (name) => typeof packageScripts[name] === "string";
 const isCanonicalRepository = process.env.OPENCLAW_CI_REPOSITORY === "openclaw/openclaw";
 const changedPaths = (() => {
+  if (exactMainQualification) {
+    return null;
+  }
   try {
     const manifestPath = process.env.OPENCLAW_CI_CHANGED_PATHS_FILE;
     // Frozen target producers can predate the complete file transport.
@@ -170,8 +198,10 @@ const changedPaths = (() => {
     return null;
   }
 })();
-const docsOnly = parseCiEnvFlag(process.env.OPENCLAW_CI_DOCS_ONLY);
-const docsChanged = parseCiEnvFlag(process.env.OPENCLAW_CI_DOCS_CHANGED);
+const docsOnly = !exactMainQualification && parseCiEnvFlag(process.env.OPENCLAW_CI_DOCS_ONLY);
+const docsChanged = exactMainQualification || parseCiEnvFlag(process.env.OPENCLAW_CI_DOCS_CHANGED);
+const scopeEnabled = (value) => exactMainQualification || parseCiEnvFlag(value);
+const rootProseOnly = parseCiEnvFlag(process.env.OPENCLAW_CI_DOCS_ROOT_PROSE_ONLY);
 const releaseGate = parseCiEnvFlag(process.env.OPENCLAW_CI_RELEASE_GATE) && !ciQualification;
 const compactPullRequest = isCanonicalRepository && eventName === "pull_request";
 const runtimePullRequest = isCanonicalRepository && (compactPullRequest || releaseGate);
@@ -181,6 +211,9 @@ const runProofTier = eventName !== "pull_request" && !releaseGate;
 const releaseScope = process.env.OPENCLAW_CI_RELEASE_SCOPE ?? "full";
 const validationTier = process.env.OPENCLAW_CI_VALIDATION_TIER ?? "full";
 const mainValidation = validationTier === "main";
+if (exactMainQualification && !mainValidation) {
+  throw new Error("Exact main qualification requires validation_tier=main");
+}
 if (validationTier !== "full" && !mainValidation) {
   throw new Error("validation_tier must be full or main");
 }
@@ -190,7 +223,8 @@ if (
     !isCanonicalRepository ||
     frozenTarget ||
     compatibilityTarget ||
-    ciQualification ||
+    (ciQualification && !exactMainQualification) ||
+    (exactMainQualification && checkoutRevision !== workflowRevision) ||
     releaseGate ||
     releaseScope !== "full" ||
     process.env.OPENCLAW_CI_PULL_REQUEST_NUMBER)
@@ -200,6 +234,9 @@ if (
   );
 }
 const npmQualification = releaseScope === "npm-beta" || releaseScope === "npm-stable";
+// Stable tags also ship the macOS app, and its post-tag validation is too late
+// to block the tag, so only beta defers macOS Swift proof.
+const deferMacosSwift = releaseScope === "npm-beta";
 const fullNativeValidation =
   eventName === "workflow_dispatch" && !mainValidation && !releaseGate && releaseScope === "full";
 if (releaseScope !== "full" && !npmQualification) {
@@ -271,13 +308,18 @@ const nativeGeneratedOnly =
 const runNode =
   !nodeDataOnly &&
   !nativeGeneratedOnly &&
-  ((parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_NODE) && !docsOnly) || toolingOwnerChange);
+  ((scopeEnabled(process.env.OPENCLAW_CI_RUN_NODE) && !docsOnly) || toolingOwnerChange);
 const runNodeFastOnly =
   runNode &&
   !runtimePullRequest &&
   !toolingOwnerChange &&
+  !exactMainQualification &&
   parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_NODE_FAST_ONLY);
 const runNodeFull = runNode && !runNodeFastOnly;
+const runBuiltSourceVerifiers =
+  runNodeFull &&
+  !frozenTarget &&
+  changedPaths?.includes("scripts/test-built-source-verifiers.mts") === true;
 // release-fast-lane: label-admitted narrow gate for release tooling PRs.
 // Canonical PR CI only; declined runs keep every ordinary decision.
 const releaseFastLaneLabel = parseCiEnvFlag(process.env.OPENCLAW_CI_RELEASE_FAST_LANE_LABEL);
@@ -335,9 +377,13 @@ if (
 }
 
 const runNodeFastPluginContracts =
-  runNode && parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_NODE_FAST_PLUGIN_CONTRACTS);
+  runNode &&
+  !exactMainQualification &&
+  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_NODE_FAST_PLUGIN_CONTRACTS);
 const runNodeFastCiRouting =
-  runNode && parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_NODE_FAST_CI_ROUTING);
+  runNode &&
+  !exactMainQualification &&
+  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_NODE_FAST_CI_ROUTING);
 const proposedCheckScope =
   runtimePullRequest &&
   (!frozenTarget || releaseGate) &&
@@ -354,10 +400,25 @@ const pluginContractShards =
     : [];
 const channelContractShards =
   !runtimePullRequest && runNodeFull && !releaseFastLane ? createChannelContractTestShards() : [];
+// Reuse releaseGate's existing exact-SHA/PR admission; never acquire a backend
+// or download models for ordinary PR, push, schedule, or unrelated dispatches.
+const mlxNativeProofScope =
+  workflowEventName === "workflow_dispatch" && releaseGate && !frozenTarget && !compatibilityTarget
+    ? await importTargetPlan("./scripts/ci-changed-scope.mjs")
+    : null;
+const runMlxNativeProof =
+  workflowEventName === "workflow_dispatch" &&
+  releaseGate &&
+  isCanonicalRepository &&
+  !frozenTarget &&
+  !compatibilityTarget &&
+  releaseScope === "full" &&
+  typeof mlxNativeProofScope?.hasMlxNativeProofInputs === "function" &&
+  mlxNativeProofScope.hasMlxNativeProofInputs(changedPaths);
 const runMacos =
   !ordinaryPullRequest &&
   !nativeGeneratedOnly &&
-  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_MACOS) &&
+  scopeEnabled(process.env.OPENCLAW_CI_RUN_MACOS) &&
   !docsOnly &&
   isCanonicalRepository &&
   !releaseFastLane;
@@ -366,7 +427,7 @@ const runMacosNode =
   runMacos ||
   (!ordinaryPullRequest &&
     !nativeGeneratedOnly &&
-    parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_MACOS_NODE) &&
+    scopeEnabled(process.env.OPENCLAW_CI_RUN_MACOS_NODE) &&
     !docsOnly &&
     isCanonicalRepository &&
     !releaseFastLane);
@@ -374,11 +435,15 @@ const supportsCurrentMacosSwiftCi =
   existsSync("scripts/install-swift-tools.sh") &&
   existsSync("scripts/lint-swift.sh") &&
   existsSync("scripts/format-swift.sh");
+const runMacosSwift =
+  (runMacos || runMlxNativeProof) &&
+  !deferMacosSwift &&
+  (!frozenTarget || compatibilityTarget || supportsCurrentMacosSwiftCi);
 const supportsIosBuild = hasPackageScript("ios:build");
 const supportsCurrentIosCi = supportsIosBuild && supportsCurrentMacosSwiftCi;
 const iosBuildScope =
   !nativeGeneratedOnly &&
-  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_BUILD) &&
+  scopeEnabled(process.env.OPENCLAW_CI_RUN_IOS_BUILD) &&
   !releaseFastLane &&
   !npmQualification &&
   !docsOnly &&
@@ -387,7 +452,7 @@ const iosBuildScope =
 const runIosBuild = !ordinaryPullRequest && iosBuildScope;
 const runAndroid =
   !nativeGeneratedOnly &&
-  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_ANDROID) &&
+  scopeEnabled(process.env.OPENCLAW_CI_RUN_ANDROID) &&
   !npmQualification &&
   !docsOnly &&
   isCanonicalRepository &&
@@ -403,18 +468,18 @@ const runAndroidAccessNative =
     ));
 let runWindows =
   !ordinaryPullRequest &&
-  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_WINDOWS) &&
+  scopeEnabled(process.env.OPENCLAW_CI_RUN_WINDOWS) &&
   !releaseFastLane &&
   !docsOnly &&
   !runNodeFastOnly &&
   isCanonicalRepository;
 const runSkillsPython =
-  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_SKILLS_PYTHON) && !docsOnly && !releaseFastLane;
+  scopeEnabled(process.env.OPENCLAW_CI_RUN_SKILLS_PYTHON) && !docsOnly && !releaseFastLane;
 const runControlUiI18n =
-  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_CONTROL_UI_I18N) && !docsOnly && !releaseFastLane;
+  scopeEnabled(process.env.OPENCLAW_CI_RUN_CONTROL_UI_I18N) && !docsOnly && !releaseFastLane;
 let runUiTests =
   fullUiPullRequest ||
-  (parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_UI_TESTS) &&
+  (scopeEnabled(process.env.OPENCLAW_CI_RUN_UI_TESTS) &&
     !docsOnly &&
     !nodeDataOnly &&
     !releaseFastLane);
@@ -450,11 +515,11 @@ const includeReleaseOnlyUiTests =
     !isCanonicalRepository ||
     compatibilityTarget ||
     changedPaths === null);
-// Ordinary CI shares eight 16-class browser jobs; full inventories retain
-// twelve. Private source-server projects keep their own one-worker limit.
+// Match four observed CPUs per 16-class job while retaining 24 worker slots.
+// Private source-server projects remain serial.
 const compactUiE2e = supportsUiE2eProjects && !includeReleaseOnlyUiTests;
 let uiE2eJobCount = compactUiE2e
-  ? 9
+  ? 7
   : supportsUiE2eProjects
     ? 13
     : usesHostedRunnerProfile
@@ -473,7 +538,7 @@ const supportsNativeI18n =
   hasPackageScript("android:i18n:check") &&
   hasPackageScript("apple:i18n:check");
 const runNativeI18n =
-  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_NATIVE_I18N) &&
+  scopeEnabled(process.env.OPENCLAW_CI_RUN_NATIVE_I18N) &&
   !releaseFastLane &&
   !npmQualification &&
   !docsOnly &&
@@ -489,6 +554,24 @@ const supportsPublishedDriverUpdate = targetWorkflow.includes(
 );
 const useCompatibleAndroidCi = compatibilityTarget && !supportsCurrentAndroidCi;
 const androidTestTier = !fullNativeValidation && !useCompatibleAndroidCi;
+// Wear production strings feed the phone generator; only its test/debug inputs
+// are independent. Shared modules, build inputs and missing paths keep all rows.
+const narrowAndroidUnitTests =
+  ordinaryPullRequest &&
+  !frozenTarget &&
+  !useCompatibleAndroidCi &&
+  changedPaths !== null &&
+  changedPaths.length > 0 &&
+  changedPaths.every(
+    (file) =>
+      /^(?:apps\/android\/app\/src\/|apps\/android\/wear\/src\/(?:test|androidTest|debug)\/)/u.test(
+        file,
+      ) && lstatSync(file, { throwIfNoEntry: false })?.isFile(),
+  );
+const runAndroidPhoneTests =
+  !narrowAndroidUnitTests || changedPaths?.some((file) => file.startsWith("apps/android/app/"));
+const runAndroidWearTests =
+  !narrowAndroidUnitTests || changedPaths?.some((file) => file.startsWith("apps/android/wear/"));
 // Unit tests do not compile the benchmark. Keep its build when inputs
 // change, or when the existing changed-path manifest cannot narrow scope.
 const androidBenchmarkChanged =
@@ -545,6 +628,33 @@ if (releaseGate) {
 const includeReleaseOnlyRuntimeTests =
   !mainValidation && (!isCanonicalRepository || (!runtimePullRequest && eventName !== "push"));
 const includePrExemptRuntimeTests = !runtimePullRequest;
+const testRuntimePolicyPath = "./scripts/lib/ci-test-runtime.mts";
+const testRuntimePolicy = existsSync(testRuntimePolicyPath)
+  ? await importTargetPlan(testRuntimePolicyPath)
+  : null;
+const dispatchRuntimePolicy =
+  workflowEventName === "workflow_dispatch"
+    ? process.env.OPENCLAW_CI_TEST_RUNTIME_POLICY?.trim()
+    : "";
+if (dispatchRuntimePolicy && !["node", "bun-all", "dual-all"].includes(dispatchRuntimePolicy)) {
+  throw new Error("test_runtime_policy must be empty, node, bun-all, or dual-all");
+}
+if (dispatchRuntimePolicy && !testRuntimePolicy?.resolveCiTestRuntimePolicy) {
+  throw new Error("The selected checkout does not support test_runtime_policy selection");
+}
+if (dispatchRuntimePolicy) {
+  testRuntimePolicy.resolveCiTestRuntimePolicy({
+    OPENCLAW_CI_TEST_RUNTIME_POLICY: dispatchRuntimePolicy,
+  });
+}
+const testRuntimeMode = testRuntimePolicy
+  ? dispatchRuntimePolicy ||
+    (workflowEventName === "workflow_dispatch" && !mainValidation && !ciQualification
+      ? "dual-all"
+      : "bun-all")
+  : "node";
+// Timing readers and the executor must price the same runtime before planning.
+process.env.OPENCLAW_CI_TEST_RUNTIME_POLICY = testRuntimeMode;
 const nodeSelectionMode = process.env.OPENCLAW_CI_NODE_SELECTION === "full" ? "full" : "aggressive";
 const nodeSelectionReasons = [];
 let selectedTestTargets;
@@ -560,6 +670,13 @@ if (runtimePullRequest && runNodeFull) {
     includeReleaseOnlyRuntimeTests,
     includePrExemptRuntimeTests,
     selectionMode: nodeSelectionMode,
+    adaptiveMarkdown:
+      isCanonicalRepository &&
+      compactPullRequest &&
+      !releaseGate &&
+      !frozenTarget &&
+      !compatibilityTarget &&
+      nodeSelectionMode === "aggressive",
     onSelection: (selection) => nodeSelectionReasons.push(selection),
   });
 }
@@ -661,7 +778,12 @@ if (selectedTestTargets) {
     selected.has("extensions/browser/chrome-extension/bootstrap.chromium.test.ts");
   runUiRealGateway = e2eTargets.some((file) => realGatewayTargets.has(file));
   runUiE2e = runControlUiE2e || runBrowserExtensionE2e;
-  uiTestShardCount = Math.min(3, uiTargets.length);
+  // Small PR selections share the existing three-worker row instead of repeating setup.
+  // Full UI owners and manual validation retain their established shard layout.
+  uiTestShardCount = Math.min(
+    3,
+    ordinaryPullRequest && !uiOwnerScope.unit ? Math.ceil(uiTargets.length / 3) : uiTargets.length,
+  );
   // Keep the existing worker/row cap; omit empty file partitions.
   uiE2eJobCount = Math.min(uiE2eJobCount - 1, controlTargets.length) + 1;
 }
@@ -684,13 +806,17 @@ if (uiE2eSelection) {
 // Keep its browser-only contracts scoped to their interaction and style owners.
 const uiWebkitOwners = [
   "ui/vitest.config.ts",
-  "ui/src/components/{web-awesome*,modal-dialog*,tooltip*,menu-*,overlay*,composer-menu*,dropdown-menu*,anchored-overlay*,textarea-token-anchor*,panel-tab-strip*,select-picker*,multi-select*,agent-select*,lobster-pet*,session-group-defaults-dialog*}.{ts,tsx}",
+  "ui/src/components/{control-theme*,modal-dialog*,tooltip*,menu-*,overlay*,composer-menu*,dropdown-menu*,anchored-overlay*,textarea-token-anchor*,panel-tab-strip*,select-picker*,multi-select*,agent-select*,lobster-pet*,session-group-defaults-dialog*}.{ts,tsx}",
+  "ui/src/components/{session-hovercard*,solid/session-hovercard*}.{ts,tsx,css}",
+  "ui/src/components/solid/{menu*.{ts,tsx},overlay.css}",
   "ui/src/app/app-shell-chrome.ts",
   "ui/src/pages/{cron/view-jobs-filter,plugins/settings-editor,plugins/settings-view}.{ts,tsx,css}",
   "ui/src/pages/chat/chat-composer*.{ts,tsx}",
   "ui/src/pages/chat/components/chat-{composer*,picker-overlay*,model-picker*,effort-picker*}.{ts,tsx}",
-  "ui/src/pages/chat/{chat-pane-header,components/chat-pane-header*,components/chat-pane-versions-menu*}.{ts,tsx}",
-  "ui/src/lit/presentation-binding.ts",
+  "ui/src/pages/chat/{chat-pane-header,components/chat-pane-header*}.{ts,tsx}",
+  "ui/src/lib/solid-bridge.ts",
+  "ui/src/lib/solid-bridge-view.tsx",
+  "ui/src/lib/presentation.ts",
   "ui/src/pages/new-session/{composer*,draft-composer*}.{ts,tsx}",
   "ui/src/lib/native-overlay-occlusion.{ts,tsx}",
   "ui/src/styles/{base,layout,components,sidebar-menus,select-picker,multi-select,hub-tabs,*tooltip*,modal*,menu*,session-menu*}.css",
@@ -798,7 +924,7 @@ if (runtimePullRequest && runNodeFull) {
     selectedTestTargets,
     // Changed compiler plans validate every consuming graph, with full fallback on ambiguity.
     dedicatedCoreTypeChecks: runNodeFull,
-    dedicatedBuildArtifacts: false,
+    dedicatedBuildArtifacts: runBuiltSourceVerifiers,
     dedicatedNativeChecks: { macos: runMacos, ios: runIosBuild, android: runAndroid },
     includeReleaseOnlyToolingShards: false,
     includeReleaseOnlyRuntimeTests,
@@ -840,17 +966,49 @@ const extensionLintMode =
       : "affected"
     : undefined;
 const runCheckPlan = Boolean(runCheck && (narrowCheckScope || extensionLintMode));
+let preserveFullChecks = !narrowCheckScope;
 let typeGraphBoundaryOwner = "";
 if (runCheckPlan && proposedCheckScope?.types) {
   const { resolveChangedCiTsgoInputs } = await import(
     fromTarget("./scripts/lib/tsgo-core-test-shards.mts")
   );
   const compilerPaths = resolveChangedCiTsgoInputs(changedPaths, existsSync);
+  if (preserveFullChecks && extensionLintMode && !releaseFastLane && compilerPaths) {
+    const { getChangedPathFacts, isTestLineAllocationPath } = await import(
+      fromTarget("./scripts/lib/changed-path-facts.mjs")
+    );
+    const { resolveCiCheckFamilyScope } = await import(
+      fromTarget("./scripts/lib/ci-check-family-scope.mts")
+    );
+    const budgetCompanions = changedPaths.filter((file) => !isTestLineAllocationPath(file));
+    const budgetOnlyFallback =
+      budgetCompanions.length < changedPaths.length &&
+      resolveCiCheckFamilyScope(budgetCompanions).mode === "scoped";
+    const sourceOnlyFallback = compilerPaths.every((file) => file.startsWith("src/"));
+    // Shared tests and numeric allocations retain every guard family, including
+    // allocation validation. A budget record does not widen otherwise scoped
+    // companions. Ordinary source inputs can also use complete compiler/lint
+    // consumer discovery even when a fixture requires all guard families.
+    preserveFullChecks = !changedPaths.every((file) => {
+      const facts = getChangedPathFacts(file);
+      return (
+        path.posix.normalize(file) === file &&
+        !file.includes("\\") &&
+        (isTestLineAllocationPath(file) ||
+          (budgetOnlyFallback && facts.surface === "rootTest") ||
+          ((budgetOnlyFallback || sourceOnlyFallback) && facts.surface === "docs") ||
+          (["source", "package", "ui", "extension"].includes(facts.surface) &&
+            (budgetOnlyFallback ||
+              sourceOnlyFallback ||
+              (facts.isTestOnly && facts.isChangedLaneTest))))
+      );
+    });
+  }
   typeGraphBoundaryOwner =
     runNodeFull &&
     !releaseFastLane &&
     proposedCheckScope.additionalGroups.includes("boundaries") &&
-    (!narrowCheckScope ||
+    (preserveFullChecks ||
       !compilerPaths ||
       compilerPaths.every((file) => file.startsWith("extensions/")))
       ? "additional-checks"
@@ -858,10 +1016,11 @@ if (runCheckPlan && proposedCheckScope?.types) {
 }
 const fullCoreLintStripes =
   runnerProfile === "hybrid" &&
+  nodeRunnerBackend !== "boat" &&
   !frozenTarget &&
   ((!releaseGate && ["push", "pull_request"].includes(eventName)) ||
     nodeRunnerBackend === "runson" ||
-    ciQualification)
+    (ciQualification && !exactMainQualification))
     ? [1, 2]
     : [1, 2, 3, 4, 5];
 const coreLintRows = fullCoreLintStripes.map((stripe) => ({ stripe }));
@@ -951,10 +1110,50 @@ const runSqliteSessionLifecycle =
   supportsSqliteSessionLifecycleProof &&
   (changedScopeHasSqliteSessionLifecycleImpact ||
     selectedOwnerTest("test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts"));
+const postgresConformancePlan = existsSync("scripts/lib/postgres-conformance-shards.mts")
+  ? await import(fromTarget("./scripts/lib/postgres-conformance-shards.mts"))
+  : {};
+if (
+  "isPostgresConformanceTestTarget" in postgresConformancePlan &&
+  typeof postgresConformancePlan.isPostgresConformanceTestTarget !== "function"
+) {
+  throw new Error("PostgreSQL conformance test ownership must be a function");
+}
+const { isPostgresConformanceTestTarget } = postgresConformancePlan;
 const postgresConformancePaths = [
+  "package.json",
+  "pnpm-lock.yaml",
+  ".github/actions/postgres-conformance/**",
+  "**/*.postgres.test.ts",
+  "src/state/openclaw-agent-*",
+  "src/config/sessions/**",
+  "src/agents/harness/context-engine-turn-outbox*",
+  "src/gateway/server*.ts",
+  "src/gateway/server-methods/cron.ts",
+  "src/gateway/server-methods/cron-add.ts",
+  "src/gateway/server-methods/cron-run.ts",
+  "src/cli/gateway-cli/run.ts",
+  "src/commands/*preflight*.ts",
+  "src/commands/doctor-database-*.ts",
+  "src/commands/doctor-schema-migrations.ts",
+  "src/plugins/doctor-*.ts",
+  "src/plugins/manifest-backup-resources.ts",
+  "src/state/*worker*.ts",
+  "src/state/openclaw-state-ownership.ts",
+  "src/state/openclaw-agent-db-registry-listing.ts",
+  "src/infra/sqlite-worker-*.ts",
+  "src/state/openclaw-state-db*",
+  "src/state/openclaw-state-feature-schema-ensure.ts",
+  "src/state/user-profiles-schema.ts",
   "src/snapshot/**",
   "src/infra/backup-*.ts",
   "src/infra/update-database-*.ts",
+  "src/infra/update-*.ts",
+  "src/infra/state-migrations*.ts",
+  "src/infra/database-port-recovery*.ts",
+  "src/infra/restart-sentinel*.ts",
+  "src/infra/device-identity*.ts",
+  "src/infra/device-auth-store*.ts",
   "src/cli/update-cli/**",
   "src/commands/backup*.ts",
   "src/state/openclaw-state-snapshot-sanitizer.ts",
@@ -968,26 +1167,79 @@ const postgresConformancePaths = [
   "src/state/openclaw-state-db-contract.ts",
   "src/state/postgres-schema.generated/**",
   "src/cron/store/runtime-authority-store.ts",
+  "src/cron/store/row-codec.ts",
+  "src/cron/store/runtime-rows.kernel.ts",
+  "src/cron/store/run-finalization.worker.ts",
+  "src/cron/store/run-queue.worker.ts",
+  "src/cron/service.ts",
+  "src/cron/service/ops-run.ts",
   "src/infra/database-engine/**",
   "src/infra/postgres-sync/**",
   "src/infra/sql-connection.ts",
   "src/infra/sql-query-compiler.ts",
   "src/infra/kysely-sync*.ts",
   "src/infra/sqlite-transaction.ts",
+  "src/plugin-state/**",
+  "src/transcripts/sqlite-schema.ts",
+  "src/transcripts/store-read*.ts",
+  "src/transcripts/store-sqlite-write*.ts",
   "extensions/workboard/**",
+  "extensions/logbook/src/store*.ts",
+  "extensions/logbook/src/postgres-store.test.ts",
+  "extensions/logbook/src/logbook-postgres-schema.ts",
+  "extensions/logbook/src/logbook-schema.postgres.sql",
+  "extensions/team-reports/src/store*.ts",
+  "extensions/team-reports/src/postgres-store.test.ts",
+  "extensions/team-reports/src/team-reports-schema.postgres.sql",
+  "extensions/matrix/doctor-contract-api.ts",
+  "extensions/matrix/src/storage-paths.ts",
+  "extensions/matrix/src/matrix/client/storage.ts",
+  "extensions/matrix/src/matrix/client/storage-metadata.ts",
+  "extensions/matrix/src/matrix/sqlite-state.ts",
+  "extensions/matrix/src/matrix/crypto-state-store.ts",
+  "extensions/matrix/src/matrix/chunked-state.ts",
+  "extensions/matrix/src/matrix/sdk/idb-persistence.ts",
+  "extensions/matrix/src/matrix/monitor/inbound-dedupe-migration.ts",
+  "extensions/codex/doctor-contract-api.ts",
+  "extensions/codex/src/migration/native-task-assignments.ts",
+  "extensions/codex/src/migration/session-binding-orphans.ts",
+  "extensions/memory-core/src/memory/**",
+  "extensions/memory-core/src/memory-session-tombstones.ts",
+  "extensions/memory-core/src/**",
+  "extensions/memory-core/runtime-api.ts",
+  "extensions/memory-core/cli.ts",
+  "packages/memory-host-sdk/src/host/**",
+  "packages/memory-host-sdk/src/engine-storage.ts",
+  "packages/memory-host-sdk/src/memory-entry-origins.ts",
   "src/config/zod-schema.database.ts",
   "scripts/test-database-conformance*.mjs",
+  "scripts/lib/postgres-conformance-shards.mts",
+  "config/postgres-conformance-timings.json",
 ];
 const runPostgresConformance =
   existsSync("scripts/test-database-conformance.mjs") &&
   (eventName === "schedule" ||
+    (eventName === "workflow_dispatch" && !releaseGate) ||
     ((eventName === "pull_request" || releaseGate) &&
+      !docsOnly &&
       (changedPaths === null ||
-        changedPaths.some((file) =>
-          postgresConformancePaths.some((pattern) => matchesGlob(file, pattern)),
+        changedPaths.some(
+          (file) =>
+            !changedNodeTestPlan.isCiDocumentationPath?.(file) &&
+            (isPostgresConformanceTestTarget?.(file) ||
+              postgresConformancePaths.some(
+                (pattern) =>
+                  matchesGlob(file, pattern) &&
+                  // Older targets lack inventory ownership; retain their broad routing.
+                  (!isPostgresConformanceTestTarget ||
+                    !isTestFileTarget(file) ||
+                    isTestFileTarget(pattern)),
+              )),
         ))));
 const runBuildArtifacts =
+  runBuiltSourceVerifiers ||
   publishedDriverUpdate ||
+  (runMacosSwift && existsSync("apps/macos/Sources/OpenClaw/NativeExecPolicyOwner.swift")) ||
   (runNodeFull &&
     (changedScopeHasBuildImpact ||
       runSqliteSessionLifecycle ||
@@ -996,6 +1248,17 @@ const runBuildArtifacts =
       runDiscordComponentProof ||
       runGatewayWatch ||
       selectedTuiPty));
+// Reuse only an already-selected public build; frozen and standalone browser plans
+// keep their local preparation without adding a serial build dependency.
+const reuseBrowserExtensionBuild =
+  runBrowserExtensionE2e && runBuildArtifacts && !frozenTarget && !compatibilityTarget;
+// Keep dispatch/frozen locale jobs separate for release diagnostics and historical tooling.
+const reuseControlUiI18nSetup =
+  runControlUiI18n &&
+  runBuildArtifacts &&
+  ["pull_request", "push", "schedule"].includes(workflowEventName) &&
+  !frozenTarget &&
+  !compatibilityTarget;
 const runControlUiPerformance =
   !releaseFastLane &&
   (runNodeFull || runUiTests) &&
@@ -1007,6 +1270,12 @@ const runQaSmokeCi =
   runNodeFull &&
   changedScopeHasQaImpact &&
   (!frozenTarget || existsSync("extensions/qa-lab/src/ci-smoke-plan.ts"));
+const nodeWorkerE2eShards =
+  runNodeFull &&
+  !runtimePullRequest &&
+  typeof changedNodeTestPlan.createNodeWorkerE2eTestShards === "function"
+    ? changedNodeTestPlan.createNodeWorkerE2eTestShards()
+    : [];
 const rawNodeTestShards = runNodeFull
   ? changedNodeTestShards
     ? changedNodeTestShards
@@ -1023,9 +1292,11 @@ const rawNodeTestShards = runNodeFull
           // the complete compact inventory within its 77-row main-tier cap.
           compact: compactPlanMode !== undefined,
           compactMode: mainValidation ? "pull-request" : compactPlanMode,
-          compactNodeJobCap: nodeMatrixLimit,
+          mainValidation,
+          compactNodeJobCap: nodeMatrixLimit - nodeWorkerE2eShards.length,
           runnerBackend: nodeRunnerBackend,
         }),
+        ...nodeWorkerE2eShards,
       ]
   : [];
 if (
@@ -1128,19 +1399,8 @@ const projectNodeTestGroup = ({
   shard_name,
   timing_key,
 });
-const testRuntimePolicyPath = "./scripts/lib/ci-test-runtime.mts";
-const testRuntimePolicy = existsSync(testRuntimePolicyPath)
-  ? await importTargetPlan(testRuntimePolicyPath)
-  : null;
-const testRuntimeMode = testRuntimePolicy
-  ? eventName === "pull_request" || releaseGate
-    ? "bun-compatible"
-    : eventName === "workflow_dispatch" && !mainValidation
-      ? "dual"
-      : "node"
-  : "node";
 const uiTestRuntimePolicy =
-  !compatibilityTarget &&
+  (!compatibilityTarget || Boolean(dispatchRuntimePolicy)) &&
   testRuntimePolicy?.ciTestShardRequiresBun(
     {
       configs: ["ui/vitest.config.ts"],
@@ -1176,7 +1436,36 @@ const shardRequiresTests = (shard, tests, fallback) =>
       ? patterns.some((pattern) => tests.some((test) => matchesGlob(test, pattern)))
       : fallback(plan);
   });
+const workerPresetOwner =
+  frozenTarget || !existsSync("./scripts/lib/vitest-runtime-selection.mts")
+    ? undefined
+    : await importTargetPlan("./scripts/lib/vitest-runtime-selection.mts");
+const workerCachePreset = (shard) => {
+  if (
+    shard.requiresDist ||
+    shard.pretestBuildMode ||
+    !workerPresetOwner?.resolveCiVitestWorkerPreset
+  ) {
+    return undefined;
+  }
+  const plans = shard.targets?.length
+    ? shard.targets.map((target) => ({ target }))
+    : (shard.groups ?? [shard]).map((group) =>
+        Object.assign({}, group, { env: { ...shard.env, ...group.env } }),
+      );
+  // Unknown flags keep the full archive; the runtime recomputes the decision.
+  const hasExtraArgs = [shard, ...plans].some((plan) => {
+    const args = plan.env?.OPENCLAW_NODE_TEST_VITEST_ARGS_JSON;
+    return (
+      args !== undefined &&
+      (typeof args !== "string" || (args.trim() !== "" && args.trim() !== "[]"))
+    );
+  });
+  const preset = workerPresetOwner.resolveCiVitestWorkerPreset(plans, hasExtraArgs);
+  return preset === "full" ? undefined : preset;
+};
 // The same capped matrix owns compact and plugin work; admit its longest rows first.
+const packedNodeTestRows = [];
 const nodeTestShards = targetNodeTestShards
   .toSorted(
     (a, b) =>
@@ -1184,6 +1473,10 @@ const nodeTestShards = targetNodeTestShards
       (b.predictedSeconds ?? 0) - (a.predictedSeconds ?? 0),
   )
   .map((shard) => {
+    const minTotalMemoryBytes = Math.max(
+      0,
+      ...(shard.groups ?? []).map((group) => group.minTotalMemoryBytes ?? 0),
+    );
     const groups =
       shard.groups?.map(projectNodeTestGroup) ??
       (nodeTestGroupsCodec && shard.configs?.length && !shard.targets?.length
@@ -1199,24 +1492,45 @@ const nodeTestShards = targetNodeTestShards
         : undefined);
     const packedGroups =
       groups?.length && nodeTestGroupsCodec ? encodeNodeTestGroups(groups) : undefined;
+    const capacity =
+      process.env.OPENCLAW_CI_EFFECTIVE_RUNNER_BACKEND === "boat"
+        ? resolveBoatNodeTestCapacity(shard.runner, shard.checkName, minTotalMemoryBytes, [
+            ...(shard.includePatterns ?? []),
+            ...(shard.groups ?? []).flatMap((group) => group.includePatterns ?? []),
+          ])
+        : undefined;
     const row = {
       check_name: shard.checkName,
-      test_runtime_policy: testRuntimeMode,
+      test_runtime_policy: shard.requiresDist ? "node" : testRuntimeMode,
+      adaptive_observations:
+        (shard.groups ?? [shard]).some((group) =>
+          group.configs?.includes("test/vitest/vitest.unit-fast.config.ts"),
+        ) || undefined,
       requires_bun:
         !shard.requiresDist &&
-        Boolean(testRuntimePolicy?.ciTestShardRequiresBun(shard, testRuntimeMode)),
+        (Boolean(testRuntimePolicy?.ciTestShardRequiresBun(shard, testRuntimeMode)) ||
+          // Node-hosted packaging proof also launches a pinned Bun child.
+          shardRequiresTests(shard, ["test/scripts/bun-standalone-codegen.test.ts"], (plan) =>
+            plan.configs?.includes(goToolingConfig),
+          )),
       shard_name: shard.shardName,
       groups_gzip_base64: packedGroups,
       groups: groups && !nodeTestGroupsCodec ? groups : undefined,
       configs: packedGroups ? undefined : shard.configs,
       env: shard.env,
       includePatterns: packedGroups ? undefined : shard.includePatterns,
+      worker_cache_preset: workerCachePreset(shard),
       pretest_build_mode: shard.pretestBuildMode,
       git_commits: resolveTestGitCommits(shard),
       requires_dist: shard.requiresDist,
-      runner: shard.runner,
-      timeout_minutes: shard.timeoutMinutes,
+      runner: capacity?.runner ?? shard.runner,
+      runner_label: capacity?.runner ?? blacksmithRunnerLabel(shard.runner, minTotalMemoryBytes),
+      timeout_minutes:
+        !shard.requiresDist && testRuntimeMode === "dual-all"
+          ? 2 * (shard.timeoutMinutes ?? 60)
+          : shard.timeoutMinutes,
       plan_concurrency: shard.planConcurrency,
+      cpu_budget: capacity?.cpuBudget ?? shard.cpuBudget,
       predicted_seconds: shard.predictedTestSeconds ?? shard.predictedSeconds,
       targets: shard.targets,
       requires_go: shardRequiresTests(shard, ["test/scripts/docs-i18n.test.ts"], (plan) => {
@@ -1238,6 +1552,7 @@ const nodeTestShards = targetNodeTestShards
           "src/agents/sessions/tools/grep.byte-path.test.ts",
           "src/agents/filesystem-tools-output-contract.test.ts",
           "test/scripts/check-database-worker-ratchet.test.ts",
+          "test/scripts/pr-baseline-publication.test.ts",
           "test/scripts/pr-baseline-signing.test.ts",
           "test/scripts/pr-baseline-successor.test.ts",
           "test/scripts/pr-correction-continuation.test.ts",
@@ -1246,6 +1561,11 @@ const nodeTestShards = targetNodeTestShards
           ["agentic-agents-support", "agentic-agents-core-runtime"].includes(
             plan.shard_name ?? plan.shardName,
           ),
+      ),
+      requires_native_secret_service: shardRequiresTests(
+        shard,
+        ["test/e2e/qa-lab/runtime/codex-native-command-auth.e2e.test.ts"],
+        (plan) => plan.configs?.includes("test/vitest/vitest.e2e.config.ts") ?? false,
       ),
       requires_sandbox_image: shardRequiresTests(
         shard,
@@ -1264,6 +1584,7 @@ const nodeTestShards = targetNodeTestShards
         "requires_dist",
         "requires_go",
         "requires_ripgrep",
+        "requires_native_secret_service",
         "requires_sandbox_image",
       ]) {
         if (row[key] === false) {
@@ -1277,8 +1598,51 @@ const nodeTestShards = targetNodeTestShards
         delete row.shard_name;
       }
     }
+    if (packedGroups) {
+      packedNodeTestRows.push({ row, groups });
+    }
     return row;
   });
+const nodeTestGroupPools = {};
+if (
+  typeof nodeTestGroupsCodec?.decodeNodeTestGroups === "function" &&
+  packedNodeTestRows.reduce((size, { row }) => size + row.groups_gzip_base64.length, 0) > 128_000
+) {
+  // Compress repeated paths across rows, without changing the runner's per-row contract.
+  // Each pool stays below Linux's per-environment-string limit, including base64 overhead.
+  let pool = [];
+  let rows = [];
+  const flush = () => {
+    const poolKey = `pool-${Object.keys(nodeTestGroupPools).length + 1}`;
+    nodeTestGroupPools[poolKey] = encodeNodeTestGroups(pool);
+    rows.forEach((row, index) => {
+      row.groups_pool = poolKey;
+      row.groups_index = index;
+      delete row.groups_gzip_base64;
+    });
+    pool = [];
+    rows = [];
+  };
+  for (const { row, groups } of packedNodeTestRows) {
+    // Oversized individual descriptors retain their existing standalone transport.
+    if (row.groups_gzip_base64.length > 60_000) {
+      continue;
+    }
+    if (encodeNodeTestGroups([...pool, groups]).length > 60_000) {
+      if (pool.length) {
+        flush();
+      }
+      if (encodeNodeTestGroups([groups]).length > 60_000) {
+        continue;
+      }
+    }
+    pool.push(groups);
+    rows.push(row);
+  }
+  if (pool.length) {
+    flush();
+  }
+}
 const nodeTestNonDistShards = nodeTestShards.filter((shard) => !shard.requires_dist);
 // Bound the final matrix: precise plans and appended plugin rows can bypass compact caps.
 if (compactPlanMode && nodeTestNonDistShards.length > nodeMatrixLimit) {
@@ -1340,7 +1704,7 @@ const additionalChecks = [
     runner: "blacksmith-4vcpu-ubuntu-2404",
   })),
   // Main-shaped qualifications are still dispatches with an exact comparison range.
-  ...(eventName === "workflow_dispatch" || mainQualification
+  ...(eventName === "workflow_dispatch" || (mainQualification && !exactMainQualification)
     ? [
         // Serial renders exceeded 20m; the measured 32-class clears the 8-CPU/24-GiB parallel floor.
         {
@@ -1370,10 +1734,14 @@ const additionalChecks = [
         : narrowCheckScope.additionalGroups.includes(group))),
 );
 // Move an already-selected boundary row; sharing must never add another CI job.
+// Older target planners cannot mark the combined GitHub lint rows as SDK consumers.
+const supportsCombinedLintSdk =
+  existsSync("scripts/ci-check-plan.mts") &&
+  readFileSync("scripts/ci-check-plan.mts", "utf8").includes("requires_sdk_declarations");
 const sharedSdkDeclarations =
   workflowEventName === "pull_request" &&
   isCanonicalRepository &&
-  runnerProfile === "hybrid" &&
+  (runnerProfile === "hybrid" || (runnerProfile === "github" && supportsCombinedLintSdk)) &&
   runCheckPlan &&
   runNodeFull &&
   !releaseFastLane &&
@@ -1470,6 +1838,7 @@ const manifest = {
   run_skills_python: runSkillsPython,
   run_windows: runWindows,
   run_build_artifacts: runBuildArtifacts,
+  run_built_source_verifiers: runBuiltSourceVerifiers,
   run_proof_tier: runProofTier,
   run_browser_native_host: runBrowserNativeHost,
   run_doctor_plugin_index: runDoctorPluginIndex,
@@ -1506,6 +1875,7 @@ const manifest = {
   source_channel_test_env_json: JSON.stringify(sourceChannelTestEnv),
   run_checks_node_core_nondist: nodeTestNonDistShards.length > 0,
   checks_node_core_nondist_matrix: createMatrix(nodeTestNonDistShards),
+  node_test_group_pools_json: JSON.stringify(nodeTestGroupPools),
   run_checks_node_core_dist: runNodeCoreDist,
   run_check: runCheck,
   // Older scope owners retain these guards rather than silently dropping coverage.
@@ -1519,7 +1889,7 @@ const manifest = {
         ...(extensionLintMode
           ? {
               extensionLintMode,
-              preserveFullChecks: !narrowCheckScope,
+              preserveFullChecks,
               ...(process.env.OPENCLAW_CI_CHANGED_BASE
                 ? { changedBaseRef: process.env.OPENCLAW_CI_CHANGED_BASE }
                 : {}),
@@ -1553,8 +1923,10 @@ const manifest = {
   shared_sdk_declarations: sharedSdkDeclarations,
   check_additional_matrix: createMatrix(runNodeFull && !releaseFastLane ? additionalChecks : []),
   run_check_docs: docsChanged && eventName !== "push",
+  run_docs_content: !(ordinaryPullRequest && docsOnly && rootProseOnly),
   run_format_check: runFormatCheck,
   run_control_ui_i18n: runControlUiI18n,
+  reuse_control_ui_i18n_setup: reuseControlUiI18nSetup,
   run_ui_tests: runUiTests,
   run_ui_webkit: runUiWebkit,
   ui_test_runtime_policy: uiTestRuntimePolicy,
@@ -1577,7 +1949,8 @@ const manifest = {
     ),
   ),
   run_control_ui_performance: runControlUiPerformance,
-  run_ui_e2e: runUiE2e,
+  run_ui_e2e: runControlUiE2e || (runBrowserExtensionE2e && !reuseBrowserExtensionBuild),
+  reuse_browser_extension_build: reuseBrowserExtensionBuild,
   run_ui_real_gateway: runUiRealGateway,
   ui_e2e_matrix: createMatrix(
     Array.from({ length: uiE2eJobCount }, (_, index) => {
@@ -1587,14 +1960,19 @@ const manifest = {
         shard_count: uiE2eJobCount,
         task: shard === uiE2eJobCount ? "browser-extension" : "control-ui",
         vitest_shard_count: uiE2eJobCount - 1,
-        vitest_max_workers: compactUiE2e ? 3 : 2,
+        vitest_max_workers: compactUiE2e ? 4 : 2,
       };
     }).filter((row) =>
-      row.task === "browser-extension" ? runBrowserExtensionE2e : runControlUiE2e,
+      row.task === "browser-extension"
+        ? runBrowserExtensionE2e && !reuseBrowserExtensionBuild
+        : runControlUiE2e,
     ),
   ),
   run_native_i18n: runNativeI18n,
   run_skills_python_job: runSkillsPython,
+  skills_python_targets_json: resolveSkillsPythonTargets(changedPaths, {
+    full: !ordinaryPullRequest || frozenTarget,
+  }),
   run_checks_windows: runWindows,
   // Current targets balance the complete Windows inventory by measured
   // file cost; historical targets retain their original package commands.
@@ -1602,8 +1980,8 @@ const manifest = {
   run_macos_node: runMacosNode,
   macos_node_matrix: createMatrix(
     runMacosNode
-      ? [1, 2, 3].every((part) => hasPackageScript(`test:macos:ci:${part}`))
-        ? [1, 2, 3].map((part) => ({
+      ? [1, 2].every((part) => hasPackageScript(`test:macos:ci:${part}`))
+        ? (hasPackageScript("test:macos:ci:3") ? [1, 2, 3] : [1, 2]).map((part) => ({
             check_name: `macos-node-${part}`,
             runtime: "node",
             task: `test-${part}`,
@@ -1612,11 +1990,9 @@ const manifest = {
           [{ check_name: "macos-node", runtime: "node", task: "test" }]
       : [],
   ),
-  run_macos_swift:
-    runMacos &&
-    !npmQualification &&
-    (!frozenTarget || compatibilityTarget || supportsCurrentMacosSwiftCi),
-  run_openclawkit_tests: runMacos && !npmQualification && supportsOpenClawKitTests,
+  run_macos_swift: runMacosSwift,
+  run_mlx_native_proof: runMlxNativeProof,
+  run_openclawkit_tests: runMacos && !deferMacosSwift && supportsOpenClawKitTests,
   run_ios_build: runIosBuild,
   run_ios_voice_cleanup_tests: iosSimulatorSelection.voice.selected,
   run_ios_lifecycle_tests: iosSimulatorSelection.lifecycle.selected,
@@ -1629,15 +2005,20 @@ const manifest = {
     runAndroid
       ? [
           // android-ci-contract-v3: phone variants, Wear modules, Android lint, benchmark, and ktlint.
-          {
-            check_name: "android-test-play",
-            task: useCompatibleAndroidCi ? "test-play-compat" : "test-play",
-          },
-          {
-            check_name: "android-test-third-party",
-            task: "test-third-party",
-          },
-          ...(!useCompatibleAndroidCi
+          ...(runAndroidPhoneTests
+            ? [
+                {
+                  check_name: "android-test-play",
+                  task: useCompatibleAndroidCi ? "test-play-compat" : "test-play",
+                },
+                {
+                  check_name: "android-test-third-party",
+                  task: "test-third-party",
+                  ...(androidTestTier && !runAndroidWearTests ? { app_lint: "third-party" } : {}),
+                },
+              ]
+            : []),
+          ...(!useCompatibleAndroidCi && runAndroidWearTests
             ? [
                 {
                   check_name: "android-test-wear",
@@ -1696,7 +2077,7 @@ if (hybridHostedEligible) {
         "runtime-topology-architecture",
         "plugin-sdk-api-diff",
         "dependencies",
-      ].includes(row.group) || !row.runner.startsWith("blacksmith-"),
+      ].includes(row.group) || row.runner === "ubuntu-24.04",
   ).length;
   const hostedPlanner =
     process.env.OPENCLAW_CI_RUNNER_BACKEND === "runson" || nodeRunnerBackend === "runson";
@@ -1704,21 +2085,31 @@ if (hybridHostedEligible) {
     hostedPlanner ||
     (workflowEventName === "pull_request" &&
       process.env.OPENCLAW_CI_HEAD_REPOSITORY !== process.env.OPENCLAW_CI_REPOSITORY);
+  const hostedHybridControls =
+    process.env.OPENCLAW_CI_RUNNER_BACKEND === "hybrid" &&
+    workflowEventName !== "workflow_dispatch" &&
+    (workflowEventName !== "pull_request" ||
+      process.env.OPENCLAW_CI_HEAD_REPOSITORY === process.env.OPENCLAW_CI_REPOSITORY);
   // Include control jobs, every emitted matrix row and native hosted jobs.
   // Narrow PRs reserve full lint/type templates; only hybrid moves critical controls.
   // The guard independently expands the workflow to catch inventory drift.
   // Qualification authenticates on hosted preflight before paid admission.
   hybridHostedBaseRows = Object.values({
-    preflight: count(ciQualification),
-    "check-plan": count(hostedPlanner && runCheckPlan),
+    preflight: count(ciQualification || hostedHybridControls),
+    "ci-gate": count(hostedHybridControls),
+    "check-plan": count(
+      (hostedPlanner || (hostedHybridControls && workflowEventName === "pull_request")) &&
+        runCheckPlan,
+    ),
     "pr-failure-report": count(
       workflowEventName === "pull_request" &&
-        process.env.OPENCLAW_CI_HEAD_REPOSITORY !== process.env.OPENCLAW_CI_REPOSITORY,
+        (hostedHybridControls ||
+          process.env.OPENCLAW_CI_HEAD_REPOSITORY !== process.env.OPENCLAW_CI_REPOSITORY),
     ),
     "control-ui-performance": count(manifest.run_control_ui_performance),
     "published-driver-update": count(manifest.run_published_driver_update),
     "native-i18n": count(manifest.run_native_i18n),
-    "control-ui-i18n": count(manifest.run_control_ui_i18n),
+    "control-ui-i18n": count(manifest.run_control_ui_i18n && !manifest.reuse_control_ui_i18n_setup),
     "checks-baseline-ratchets": count(hostedRatchets && manifest.run_baseline_ratchets),
     "checks-fast-core": count(
       manifest.run_checks_fast_core,
@@ -1747,12 +2138,21 @@ if (hybridHostedEligible) {
     ),
     "check-additional-shard": count(manifest.run_check_additional, hostedAdditionalRows),
     "check-docs": count(manifest.run_check_docs),
-    "postgres-conformance": count(manifest.run_postgres_conformance),
+    "postgres-conformance": count(
+      manifest.run_postgres_conformance,
+      workflowEventName === "pull_request" ? 4 : 3,
+    ),
     "skills-python": count(manifest.run_skills_python_job),
+    "checks-windows": count(
+      manifest.run_checks_windows,
+      manifest.checks_windows_matrix.include.length,
+    ),
     "macos-node": count(manifest.run_macos_node, manifest.macos_node_matrix.include.length),
-    "macos-swift": count(manifest.run_macos_swift, 2),
+    // Eligible profiles emit one app test row plus packages and mlx; settings
+    // and release rows require a different dispatch admission.
+    "macos-swift": count(manifest.run_macos_swift, 3),
     "ios-build": count(manifest.run_ios_build),
-    "ios-screenshot-shard": count(parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS), 2),
+    "ios-screenshot-capture": count(parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS), 1),
     "ios-screenshot-evidence": count(parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS)),
     "android-screenshots": count(manifest.run_android_screenshots),
     "android-access-native": count(manifest.run_android_access_native, 2),
@@ -1764,7 +2164,6 @@ if (hybridHostedEligible) {
   }).reduce((total, rows) => total + rows, 0);
   hybridHostedOffloadRows =
     1 +
-    count(manifest.run_ui_tests, 3) +
     count(
       manifest.run_ui_e2e && !compatibilityTarget,
       manifest.ui_e2e_matrix.include.filter((row) => row.task === "browser-extension").length,
@@ -1925,6 +2324,13 @@ if (process.env.GITHUB_STEP_SUMMARY) {
     );
   }
   if (selectedTestTargets) {
+    const adaptiveOmissions = [
+      ...new Set(
+        nodeSelectionReasons
+          .filter(({ rule }) => rule === "adaptive-qualified-unchanged")
+          .flatMap(({ targets }) => targets),
+      ),
+    ];
     /** @type {Map<string, Set<string>>} */
     const reasons = new Map();
     for (const { rule, targets } of nodeSelectionReasons) {
@@ -1940,6 +2346,9 @@ if (process.env.GITHUB_STEP_SUMMARY) {
       `### PR Node test selection (${nodeSelectionMode})\n\n` +
         `Selected ${selectedTestTargets.length} files; ${changedNodeTestShards?.filter((shard) => !shard.requiresDist).length ?? 0} Node rows. ` +
         "Set repository variable `OPENCLAW_CI_NODE_SELECTION=full` to restore the previous selection.\n\n" +
+        (adaptiveOmissions.length
+          ? `Adaptive Markdown pilot omitted ${adaptiveOmissions.length} unchanged qualified tests. Scheduled and release runs retain the full suite.\n\n<details><summary>Omitted Markdown tests</summary>\n<pre>${adaptiveOmissions.map(escapeSummaryHtml).join("\n")}</pre>\n</details>\n\n`
+          : "") +
         "<details><summary>Selected files and selection rules</summary>\n<pre>" +
         selectedTestTargets
           .map((file) =>
@@ -1954,9 +2363,11 @@ if (process.env.GITHUB_STEP_SUMMARY) {
   appendFileSync(
     process.env.GITHUB_STEP_SUMMARY,
     `### CI release qualification\n\n- Scope: \`${releaseScope}\`\n- Target: \`${checkoutRevision}\`\n` +
-      (npmQualification
+      (deferMacosSwift
         ? "- Native app qualification: deferred; Linux, macOS, and Windows Node coverage retained.\n"
-        : ""),
+        : npmQualification
+          ? "- Native app qualification: deferred except macOS Swift; Linux, macOS, and Windows Node coverage retained.\n"
+          : ""),
   );
 }
 

@@ -12,29 +12,10 @@ import {
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
 
-const busy = vi.hoisted(() => ({ roots: new Set<string>(), code: "EBUSY" }));
-
-// Bun without qualified native close keeps the private copy open after logical close.
-vi.mock("node:fs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs")>();
-  const rm: typeof actual.promises.rm = async (target, options) => {
-    const pathname = String(target);
-    if ([...busy.roots].some((root) => pathname.startsWith(root))) {
-      throw Object.assign(new Error(`${busy.code}: resource busy or locked, rm '${pathname}'`), {
-        code: busy.code,
-      });
-    }
-    return await actual.promises.rm(target, options);
-  };
-  return {
-    ...actual,
-    default: { ...actual, promises: { ...actual.promises, rm } },
-  };
-});
-
+const busyRoots = new Set<string>();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
-  busy.roots.clear();
+  busyRoots.clear();
   await cleanupSnapshotOperations();
   vi.restoreAllMocks();
   closeOpenClawStateDatabaseForTest();
@@ -44,13 +25,26 @@ afterEach(async () => {
 it.each([
   { capable: false, code: "EBUSY", read: "success", caller: "signal", settles: "deferred" },
   { capable: false, code: "EBUSY", read: "success", caller: "none", settles: "deferred" },
-  { capable: true, code: "EBUSY", read: "success", caller: "signal", settles: "rejected" },
-  { capable: true, code: "EBUSY", read: "success", caller: "none", settles: "rejected" },
+  { capable: true, code: "EBUSY", read: "success", caller: "signal", settles: "deferred" },
+  { capable: true, code: "EBUSY", read: "success", caller: "none", settles: "deferred" },
+  { capable: true, code: "ENOTEMPTY", read: "success", caller: "signal", settles: "deferred" },
+  { capable: true, code: "ENOTEMPTY", read: "success", caller: "none", settles: "deferred" },
   { capable: false, code: "EPERM", read: "success", caller: "signal", settles: "rejected" },
   { capable: false, code: "EBUSY", read: "failure", caller: "signal", settles: "rejected" },
 ] as const)(
   "settles state preflight with $code cleanup after read $read (native close capable: $capable, caller signal: $caller)",
   async ({ capable, code, read, caller, settles }) => {
+    const remove = fs.promises.rm;
+    // Fail final directory removal, after payload and token retirement have succeeded.
+    vi.spyOn(fs.promises, "rm").mockImplementation(async (target, options) => {
+      if (busyRoots.has(String(target))) {
+        throw Object.assign(new Error(`${code}: resource busy or locked, rm '${String(target)}'`), {
+          code,
+          syscall: "rmdir",
+        });
+      }
+      return remove(target, options);
+    });
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("preflight-snapshot-cleanup-") };
     openOpenClawStateDatabase({ env });
     closeOpenClawStateDatabaseForTest();
@@ -65,14 +59,13 @@ it.each([
         ? ({ warn } as unknown as ReturnType<typeof childLogger>)
         : childLogger(bindings, options),
     );
-    busy.code = code;
     let cleanupRoot = "";
     const prepare = snapshots.prepareSqliteReadOnlyLocation;
     vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation(
       async (pathname, options) => {
         const prepared = await prepare(pathname, options);
         cleanupRoot = prepared.cleanupRoot ?? path.dirname(prepared.location);
-        busy.roots.add(cleanupRoot);
+        busyRoots.add(cleanupRoot);
         if (read === "failure") {
           fs.writeFileSync(prepared.location, "not a database");
         }
@@ -80,29 +73,26 @@ it.each([
       },
     );
 
-    const outcome = await preflightOpenClawDatabaseSchemas({
+    const outcome = preflightOpenClawDatabaseSchemas({
       env,
       scope: "state",
       ...(caller === "signal" ? { signal: new AbortController().signal } : {}),
-    }).then(
-      (value) => ({ value }),
-      (error: unknown) => ({ error }),
-    );
+    });
 
-    expect(cleanupRoot).not.toBe("");
     if (settles === "deferred") {
-      expect(outcome).toEqual({ value: { incompatible: [], indeterminate: [] } });
+      await expect(outcome).resolves.toEqual({ incompatible: [], indeterminate: [] });
       expect(warn).toHaveBeenCalledWith(
-        { path: cleanupRoot, errorCode: "EBUSY" },
-        "SQLite snapshot cleanup deferred until native SQLite resources are released.",
+        { path: cleanupRoot, errorCode: code },
+        "SQLite snapshot cleanup deferred until open files are released.",
       );
     } else {
-      expect(outcome).toEqual({ error: expect.any(Error) });
+      await expect(outcome).rejects.toBeInstanceOf(Error);
       expect(warn).not.toHaveBeenCalled();
     }
+    expect(cleanupRoot).not.toBe("");
     // The registry keeps custody and removes the private copy once native resources release.
     expect(fs.existsSync(cleanupRoot)).toBe(true);
-    busy.roots.clear();
+    busyRoots.clear();
     await cleanupSnapshotOperations();
     expect(fs.existsSync(cleanupRoot)).toBe(false);
   },

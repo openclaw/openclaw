@@ -1,13 +1,12 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionGoalOperation } from "../../config/sessions/goals-operations.js";
 import type { ProviderReviewAcknowledgment } from "../../sessions/provider-review.js";
+import { isHumanAddressedChatMessage } from "./chat-human-mentions.js";
+import { respondChatSendAdmissionError } from "./chat-send-admission-errors.js";
 import { admitChatSend } from "./chat-send-admission.js";
 import type { ChatSendDiagnostics } from "./chat-send-diagnostics.js";
-import {
-  respondChatSendAdmissionError,
-  runChatSendPreAdmission,
-} from "./chat-send-pre-admission.js";
-import { normalizeChatSendRequest } from "./chat-send-request.js";
+import { runChatSendPreAdmission } from "./chat-send-pre-admission.js";
+import { normalizeChatSendRequest, type NormalizedChatSendRequest } from "./chat-send-request.js";
 import {
   prepareChatSendNativeRuntimeRestriction,
   prepareChatSendSession,
@@ -79,7 +78,7 @@ export async function prepareAndAdmitChatSend(
     );
     return undefined;
   }
-  if (normalizedRequest.value.goalOperation) {
+  if (normalization instanceof Promise || normalizedRequest.value.goalOperation) {
     try {
       assertCurrent?.();
     } catch (error) {
@@ -91,7 +90,6 @@ export async function prepareAndAdmitChatSend(
     request: normalizedRequest.value,
     context,
     client,
-    isDirectExternalUser: options?.isDirectExternalUser,
     assertCurrent,
   });
   if (!loadedSession.ok) {
@@ -104,13 +102,14 @@ export async function prepareAndAdmitChatSend(
     );
     return undefined;
   }
-  if (normalizedRequest.value.mentions) {
+  let request: NormalizedChatSendRequest = normalizedRequest.value;
+  if (request.mentions) {
     const mentions = await context.mentionInbox?.validateRecipientsAsync(
       client,
       loadedSession.value.entry
         ? { sessionKey: loadedSession.value.sessionKey, agentId: loadedSession.value.agentId }
         : { agentId: loadedSession.value.agentId },
-      normalizedRequest.value.mentions.map((mention) => mention.profileId),
+      request.mentions.map((mention) => mention.profileId),
     );
     if (!mentions?.ok) {
       respond(
@@ -124,10 +123,20 @@ export async function prepareAndAdmitChatSend(
       );
       return undefined;
     }
+    if (
+      isHumanAddressedChatMessage({
+        cfg: loadedSession.value.cfg,
+        agentId: loadedSession.value.agentId,
+        text: request.workContext?.text ?? request.rawMessage,
+        mentions: request.mentions,
+      })
+    ) {
+      request = { ...request, humanAddressed: true };
+    }
   }
   phase?.mark("authority");
   const preparation = {
-    request: normalizedRequest.value,
+    request,
     session: loadedSession.value,
     respond,
     context,
@@ -161,6 +170,7 @@ export async function prepareAndAdmitChatSend(
     session,
     onAdmissionOwned,
     hasCurrentClientAuthority,
+    sessionMutationAuthorization,
     withPreparedCurrent: sessionMutationAuthorization?.withPreparedCurrent,
     followRegistration: sessionMutationAuthorization?.followRegistration,
     diagnostics,
@@ -170,7 +180,7 @@ export async function prepareAndAdmitChatSend(
   }
   phase?.finish();
   return {
-    request: normalizedRequest.value,
+    request,
     session,
     admission: admitted.value,
   };

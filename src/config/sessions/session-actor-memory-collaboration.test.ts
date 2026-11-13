@@ -1,11 +1,14 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { SessionActorAuthority } from "./session-actor-contract.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
-import { failSessionActorMemoryPublication } from "./session-actor-memory-publication.test-support.js";
-import { acquireSessionActorStorage } from "./session-actor-storage-binding.js";
-import type { SessionActorStorageOutcome } from "./session-actor-storage-contract.js";
+import {
+  commitMemory,
+  readMemory,
+  failSessionActorMemoryPublication,
+} from "./session-actor-memory-publication.test-support.js";
+import { acquireSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import { updateSessionGroupCategoriesInWorker } from "./session-group-categories.js";
 import {
   addSessionSuggestionInWorker,
@@ -42,12 +45,6 @@ const env = { OPENCLAW_STATE_DIR: "/synthetic/memory-collaboration" };
 const agentId = "main";
 const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId, env });
 afterEach(() => memorySessionActorOwners.reset());
-function committed<T>(outcome: SessionActorStorageOutcome<T>): T {
-  if (outcome.kind !== "committed") {
-    throw new Error(outcome.error.message);
-  }
-  return outcome.value;
-}
 async function fixture() {
   const acquire = async (suffix: string) => {
     const sessionKey = `agent:main:dashboard:incognito-${suffix}`;
@@ -59,18 +56,10 @@ async function fixture() {
     }))!;
     const actor = binding.actor;
     const storage = actor.storage;
-    committed(
-      await storage.mutate(
-        {
-          type: "session.entry.create",
-          input: {
-            entry: { sessionId: suffix, updatedAt: 1, category: "Work" },
-            cwd: "/synthetic",
-          },
-        },
-        authority,
-      ),
-    );
+    await commitMemory(storage, "session.entry.create", {
+      entry: { sessionId: suffix, updatedAt: 1, category: "Work" },
+      cwd: "/synthetic",
+    });
     return {
       actor,
       storage,
@@ -109,18 +98,11 @@ describe("memory collaboration through the public adapters", () => {
     });
     const replace = async (patch: Partial<SessionEntry>) => {
       const before = actor.snapshot(authority)?.entry;
-      if (!before) {
-        throw new Error("Expected the current memory entry");
-      }
-      committed(
-        await storage.mutate(
-          {
-            type: "session.entry.replace",
-            input: { expected: before, entry: { ...before, ...patch } },
-          },
-          authority,
-        ),
-      );
+      assert(before, "Expected the current memory entry");
+      await commitMemory(storage, "session.entry.replace", {
+        expected: before,
+        entry: { ...before, ...patch },
+      });
     };
     try {
       await replace({ updatedAt: 2 });
@@ -196,31 +178,21 @@ describe("memory collaboration through the public adapters", () => {
         expectedSessionId: "first",
       }),
     ]);
-    expect(await storage.read({ type: "session.participants.read", input: {} }, authority)).toEqual(
-      [{ identity, contributionCount: 2, firstPromptedAt: 10, lastPromptedAt: 20 }],
-    );
+    expect(await readMemory(storage, "session.participants.read", {})).toEqual([
+      { identity, contributionCount: 2, firstPromptedAt: 10, lastPromptedAt: 20 },
+    ]);
     expect(actor.snapshot(authority)?.entry).toMatchObject({
       updatedAt: 99,
       participantCount: 1,
       owner: { actor: { type: "human", id: "owner" }, assignedAt: 5 },
     });
     for (const id of ["old-profile", "canonical-profile"]) {
-      committed(
-        await storage.mutate(
-          {
-            type: "session.collaboration.participant",
-            input: {
-              params: { identity: { type: "profile", id }, promptedAt: 30 },
-              profileAliases: ["old-profile", "canonical-profile"],
-            },
-          },
-          authority,
-        ),
-      );
+      await commitMemory(storage, "session.collaboration.participant", {
+        params: { identity: { type: "profile", id }, promptedAt: 30 },
+        profileAliases: ["old-profile", "canonical-profile"],
+      });
     }
-    expect(
-      await storage.read({ type: "session.participants.read", input: {} }, authority),
-    ).toContainEqual({
+    expect(await readMemory(storage, "session.participants.read", {})).toContainEqual({
       identity: { type: "profile", id: "old-profile" },
       contributionCount: 2,
       firstPromptedAt: 30,
@@ -250,9 +222,7 @@ describe("memory collaboration through the public adapters", () => {
       now: 10,
     });
     expect(claim?.kind).toBe("claimed");
-    if (claim?.kind !== "claimed") {
-      throw new Error("Missing dispatch claim");
-    }
+    assert(claim?.kind === "claimed", "Missing dispatch claim");
     expect(
       await claimSessionSuggestionDispatchInWorker(scope, {
         id: "suggestion",
@@ -285,9 +255,7 @@ describe("memory collaboration through the public adapters", () => {
       resolution: "edit",
       now: 50_000,
     });
-    if (retry?.kind !== "claimed") {
-      throw new Error("Missing retry claim");
-    }
+    assert(retry?.kind === "claimed", "Missing retry claim");
     await finalizeSessionSuggestionClaimInWorker(scope, {
       id: "suggestion",
       token: retry.token,
@@ -345,55 +313,33 @@ describe("memory collaboration through the public adapters", () => {
       stop();
     }
     expect((await setSessionReactionAsync(scope, reaction)).changed).toBe(false);
-    const history = await storage.read({ type: "session.history.hydrate", input: {} }, authority);
-    if (history.kind !== "full") {
-      throw new Error("Expected full history");
-    }
-    committed(
-      await storage.mutate(
-        {
-          type: "session.transcript.replaceSuffix",
-          input: {
-            scope: { ...scope, sessionId: "first" },
-            args: [
-              history.snapshot.events,
-              history.snapshot.events.slice(0, -1),
-              0,
-              history.snapshot.version.updatedAt,
-              false,
-              [],
-            ],
-          },
-        },
-        authority,
-      ),
-    );
-    expect(
-      await storage.read(
-        { type: "session.reactions.read", input: { sessionId: "first" } },
-        authority,
-      ),
-    ).toEqual({});
+    const history = await readMemory(storage, "session.history.hydrate", {});
+    assert(history.kind === "full", "Expected full history");
+    await commitMemory(storage, "session.transcript.replaceSuffix", {
+      scope: { ...scope, sessionId: "first" },
+      args: [
+        history.snapshot.events,
+        history.snapshot.events.slice(0, -1),
+        0,
+        history.snapshot.version.updatedAt,
+        false,
+        [],
+      ],
+    });
+    expect(await readMemory(storage, "session.reactions.read", { sessionId: "first" })).toEqual({});
     await expect(setSessionReactionAsync(scope, reaction)).rejects.toThrow("unknown message");
     await addSessionSuggestionInWorker(scope, {
       id: "before-reset",
       authorId: "viewer",
       text: "Old window",
     });
-    const expected = await storage.read({ type: "session.entry.read", input: {} }, authority);
-    committed(
-      await storage.mutate(
-        {
-          type: "session.lifecycle.reset",
-          input: { expected, nextEntry: { ...expected!, sessionId: "reset" } },
-        },
-        authority,
-      ),
-    );
+    const expected = await readMemory(storage, "session.entry.read", {});
+    await commitMemory(storage, "session.lifecycle.reset", {
+      expected,
+      nextEntry: { ...expected!, sessionId: "reset" },
+    });
     const reopened = await owner.acquire(actor.target, { assertCurrent() {}, assertReadable() {} });
-    expect(
-      await reopened.storage!.read({ type: "session.suggestions.read", input: {} }, authority),
-    ).toEqual([]);
+    expect(await readMemory(reopened.storage!, "session.suggestions.read", {})).toEqual([]);
   });
 
   it("changes a category cohort atomically and authorizes every affected session", async () => {

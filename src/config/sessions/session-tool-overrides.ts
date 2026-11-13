@@ -1,11 +1,8 @@
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
+import type { SchemaContract } from "../../../packages/gateway-protocol/src/schema-contract.js";
+import type { SessionToolOverrides as ProtocolSessionToolOverrides } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 
-export type SessionToolOverrides = {
-  mcpServers?: Record<string, boolean>;
-  mcpToolsDeny?: Record<string, string[]>;
-  skills?: Record<string, boolean>;
-  webSearch?: boolean;
-};
+export type SessionToolOverrides = SchemaContract<ProtocolSessionToolOverrides>;
 
 export function normalizeMcpToolDenials(
   value?: Record<string, string[]>,
@@ -42,7 +39,7 @@ export function normalizeSessionToolOverrides(
     ...(mcpServers ? { mcpServers } : {}),
     ...(mcpToolsDeny ? { mcpToolsDeny } : {}),
     ...(skills ? { skills } : {}),
-    ...(raw.webSearch === false ? { webSearch: false } : {}),
+    ...(raw.webSearch !== undefined ? { webSearch: raw.webSearch } : {}),
   };
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }

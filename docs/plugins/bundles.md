@@ -85,6 +85,19 @@ detected but not wired.
 | LSP servers              | Claude `.lsp.json` and manifest-declared `lspServers` merged into embedded OpenClaw LSP defaults  | Claude         |
 | Settings                 | Claude `settings.json` imported as embedded OpenClaw defaults                                     | Claude         |
 
+#### Recommended prompts
+
+Codex bundles can advertise starter prompts with `interface.defaultPrompt` in
+`.codex-plugin/plugin.json`. OpenClaw accepts a string or an array of up to three
+non-empty strings. Portable Agent Plugins use the same field under
+`extensions["com.openai"].interface.defaultPrompt` in root `plugin.json`.
+
+These normalize to OpenClaw's [recommended prompt metadata](/plugins/manifest#recommended-prompts).
+Whitespace is trimmed and collapsed to single spaces before enforcing the limit
+of 128 Unicode code points per prompt.
+An invalid declaration is ignored as a whole with a warning, not silently shortened.
+Reading these recommendations never executes bundle content.
+
 #### Skill content
 
 - Bundle skill roots load as normal OpenClaw skill roots.
@@ -127,8 +140,60 @@ them:
   restriction must permit the tool.
 - Only supported stdio-backed LSP servers are runnable; unsupported
   transports still show up in `openclaw plugins inspect <id>`.
+- LSP servers do not inherit the Gateway environment; see
+  [LSP server environment](/plugins/bundles#lsp-server-environment).
 - Canceling a turn or compaction cancels pending LSP startup, stops additional
   servers from starting, and cleans up servers already acquired by that operation.
+
+#### LSP server environment
+
+Bundle LSP servers start from an allowlisted environment, not the full Gateway
+environment:
+
+- The process essentials stdio MCP servers get: `HOME`, `LOGNAME`, `PATH`,
+  `TERM`, `USER` (the standard system variables on Windows).
+- Locale and temp: `LANG`, `LANGUAGE`, `LC_*`, `TZ`, `TMPDIR`, `TMP`, `TEMP`.
+- XDG base directories: `XDG_CACHE_HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`,
+  `XDG_STATE_HOME`, `XDG_RUNTIME_DIR`, `XDG_CONFIG_DIRS`, `XDG_DATA_DIRS`.
+- Toolchain locations: `GOROOT`, `GOMODCACHE`, `GOBIN`, `JAVA_HOME`,
+  `RUSTUP_HOME`, `RUSTUP_TOOLCHAIN`.
+- Then the server's own `env` from its `.lsp.json` entry.
+
+Provider API keys, Gateway and hook tokens, secret-manager credentials, and
+every other Gateway variable are not passed. The host exec env policy applies
+on top: it drops inherited `GOPATH` and `CARGO_HOME`, and it refuses some names
+even in the server's `env`, including proxy variables (`HTTP_PROXY`,
+`HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`), CA bundle variables (`SSL_CERT_FILE`,
+`SSL_CERT_DIR`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`),
+`GRADLE_USER_HOME`, `VIRTUAL_ENV`, `PYTHONPATH`, `NODE_OPTIONS`, `NODE_PATH`,
+and Go settings such as `GOPATH`, `GOFLAGS`, `GOPROXY`, and `GOPRIVATE`.
+
+To pass a variable a language server needs:
+
+- If the policy allows it (for example `CARGO_TARGET_DIR`, `DOTNET_ROOT`, or
+  `ANDROID_HOME`), add it to that server's `env` in the bundle's `.lsp.json`:
+
+  ```json
+  {
+    "lspServers": {
+      "kotlin": {
+        "command": "kotlin-language-server",
+        "env": { "ANDROID_HOME": "/opt/android-sdk" }
+      }
+    }
+  }
+  ```
+
+- If the policy refuses it, the server has to set it itself, for example by
+  pointing its `command` at a wrapper script that exports the variable and then
+  runs the language server.
+
+When a server starts, the Gateway logs one warning per server naming commonly
+needed variables (proxy, CA bundle, Python, Node, Go, Rust, JVM, .NET, and
+Android settings) that are set in the Gateway environment but not passed, and
+whether the server's `env` can supply them. `openclaw doctor` prints the same
+names for configured bundle LSP servers. Both print variable names only, never
+values, and skip names that look like secrets.
 
 ### Detected but not executed
 
@@ -206,6 +271,50 @@ MCP servers can use stdio or HTTP transport.
   can be overridden with `requestTimeoutMs`. Tool listing (`tools/list`) at
   session start uses `requestTimeoutMs` when it is set, and 10 seconds
   otherwise.
+
+### Python stdio servers in Agent Plugins bundles
+
+Supply the Python interpreter and the server's dependencies before enabling the
+bundle. OpenClaw launches the configured executable; it does not install Python
+or run `pip` for you.
+
+For an Agent Plugins bundle with a root `plugin.json`, put this configuration in
+`mcp.json`. This format uses `mcpServers` and `type`, rather than the embedded
+OpenClaw `mcp.servers` shape above:
+
+```json
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "python-tools": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["${PLUGIN_ROOT}/server.py", "--data-dir", "${PLUGIN_DATA}"]
+    }
+  }
+}
+```
+
+This example assumes the bundle ships `server.py` with a `--data-dir` argument;
+replace both with your server's entry point and arguments. OpenClaw expands
+`${PLUGIN_ROOT}` and `${PLUGIN_DATA}` in `args`, `env` values, and `cwd` in one
+pass and supplies both variables to the subprocess. This is bundle placeholder
+expansion, not shell expansion. Keep mutable data under `PLUGIN_DATA`, outside
+the replaceable bundle source in `PLUGIN_ROOT`.
+
+The `command` must be a bare executable name or a `./`-relative path inside the
+plugin; an absolute virtual-environment executable path is invalid in this
+format. For `command: "python"`, put the intended interpreter's directory on the
+Gateway process's `PATH`. If using a virtual environment, that directory is
+`bin` on Unix or `Scripts` on Windows. Activating a venv in an interactive shell
+does not change an already running Gateway service's environment; configure
+the service's `PATH` and restart it. If using the Windows `py` launcher, put
+launcher options such as `-3` in `args`, not in `command`, and verify that the
+selected interpreter has the required dependencies.
+
+`openclaw plugins inspect <id>` confirms detection and configuration support,
+not successful Python startup or tool execution. After enabling the bundle,
+start a new agent session and invoke one of its tools to verify the full path.
 
 ### Tool naming
 

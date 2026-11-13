@@ -1,6 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isShellToolDisplayName, resolveToolDisplay } from "../agents/tool-display.js";
-/** Formats compact tool metadata labels for auto-reply progress/status messages. */
 import { formatInlineCodeSpan } from "../shared/markdown-code.js";
 import { shortenHomeInString } from "../utils.js";
 
@@ -96,6 +95,7 @@ function isPathLike(value: string): boolean {
     !value.includes("·") &&
     !value.includes("&&") &&
     !value.includes("||") &&
-    /^~?(\/[^\s]+)+$/.test(value)
+    // One `\S+` spans every later `/`. Repeating the group only adds exponential backtracking.
+    /^~?\/\S+$/.test(value)
   );
 }

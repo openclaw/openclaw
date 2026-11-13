@@ -1,6 +1,10 @@
-import { createLazyRuntimeSurface } from "openclaw/plugin-sdk/lazy-runtime";
+import {
+  createLazyRuntimeModule,
+  createLazyRuntimeSurface,
+} from "openclaw/plugin-sdk/lazy-runtime";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { buildGoogleGeminiCliBackend } from "./cli-backend.js";
+import { buildGoogleDecisionProvider } from "./decision-provider.js";
 import { buildGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
 import {
   createGoogleImageGenerationProviderMetadata,
@@ -16,7 +20,7 @@ import { createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.
 
 const loadGoogleImageGenerationProvider = createLazyRuntimeSurface(
   () => import("./image-generation-provider.js"),
-  (mod) => mod.buildGoogleImageGenerationProvider(),
+  (mod) => mod.googleImageGenerationProvider,
 );
 
 const loadGoogleMediaUnderstandingProvider = createLazyRuntimeSurface(
@@ -26,22 +30,34 @@ const loadGoogleMediaUnderstandingProvider = createLazyRuntimeSurface(
 
 const loadGoogleMusicGenerationProvider = createLazyRuntimeSurface(
   () => import("./music-generation-provider.js"),
-  (mod) => mod.buildGoogleMusicGenerationProvider(),
+  (mod) => mod.googleMusicGenerationProvider,
 );
 
 const loadGoogleVideoGenerationProvider = createLazyRuntimeSurface(
   () => import("./video-generation-provider.js"),
-  (mod) => mod.buildGoogleVideoGenerationProvider(),
+  (mod) => mod.googleVideoGenerationProvider,
 );
+
+const loadResearch = createLazyRuntimeModule(() => import("./research-gateway.js"));
 
 export default definePluginEntry({
   id: "google",
   name: "Google Plugin",
   description: "Bundled Google plugin",
   register(api) {
+    api.registerGatewayMethod(
+      "google.research.v1",
+      async (options) => (await loadResearch()).handleGoogleResearch(api, options),
+      {
+        scope: "operator.write",
+        profileAccess: "required",
+        sessionAccess: { mode: "write", allowOwnSessionScope: true, requiredTool: "deep_research" },
+      },
+    );
     api.registerCliBackend(buildGoogleGeminiCliBackend());
     api.registerProvider(buildGoogleGeminiCliProvider());
     api.registerProvider(buildGoogleProvider());
+    api.registerDecisionProvider(buildGoogleDecisionProvider());
     api.registerEmbeddingProvider(geminiMemoryEmbeddingProviderAdapter);
     api.registerImageGenerationProvider({
       ...createGoogleImageGenerationProviderMetadata(),

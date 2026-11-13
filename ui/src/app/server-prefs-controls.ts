@@ -1,9 +1,9 @@
 // Appearance-only controls operate on the canonical outbox; startup does not load them.
-import {
-  normalizeBackgroundPreference,
-  type BackgroundPreference,
-} from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
+import type { BackgroundPreference } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { t } from "../i18n/index.ts";
+import { registerPreferencesEnglish } from "../i18n/locales/en-preferences.ts";
+import { registerEnglishCatalog } from "../lib/reactive/i18n.ts";
 import { readConfirmedPrefs, publishConfirmedPrefs } from "./server-prefs-confirmation.ts";
 import { requestServerUiPrefIntent } from "./server-prefs-intent.ts";
 import {
@@ -34,6 +34,8 @@ import type { ThemeName } from "./theme.ts";
 import { invalidateUserPreferences } from "./user-prefs-cache.ts";
 
 /** Transport failures stay attached to the exact pending intent, never a newer edit. */
+registerEnglishCatalog(registerPreferencesEnglish);
+
 export function resolveServerUiPrefWriteStatus(
   key: SyncedPrefKey,
   scope: string,
@@ -57,7 +59,7 @@ export function resolveServerUiPrefWriteStatus(
     return { status: "pending" };
   }
   if (readRetainedLocalKeys(effectiveScope).has(key)) {
-    return { status: "error", error: "This preference is saved only on this device." };
+    return { status: "error", error: t("quickSettings.personal.deviceOnly") };
   }
   return { status: "saved" };
 }
@@ -83,11 +85,7 @@ export function adoptCommittedBackgroundPreference(options: {
   ) {
     return false;
   }
-  const background =
-    options.preference === null ? undefined : normalizeBackgroundPreference(options.preference);
-  if (options.preference !== null && !background) {
-    return false;
-  }
+  const background = options.preference ?? undefined;
   const effectiveScope = resolveProfilePreferenceScope(scope, options.profileId);
   if (effectiveScope === outbox.pendingScope) {
     outbox.reconcilePersistedPendingPrefs();
@@ -114,7 +112,7 @@ export function adoptCommittedBackgroundPreference(options: {
   } else {
     delete lastSeen.background;
   }
-  publishConfirmedPrefs(outbox, effectiveScope, lastSeen, ["background"]);
+  publishConfirmedPrefs(outbox, effectiveScope, lastSeen);
   outbox.preferenceWriteFailures.get(effectiveScope)?.delete("background");
   outbox.updateRetainedLocalKeys(effectiveScope, ["background"], false);
   outbox.lastReconciledConfigObject = null;

@@ -14,6 +14,7 @@ import {
   type NodeHostGatewayConfig,
 } from "./config-shared.js";
 import { NodeWorkerJournalWorker } from "./node-worker-journal-worker.js";
+import type { SavedNodeHostOpenClawIdTarget } from "./openclaw-id-target.js";
 
 export type { NodeHostConfig, NodeHostGatewayConfig } from "./config-shared.js";
 
@@ -62,9 +63,6 @@ export async function loadNodeHostConfig(
   if (!reply) {
     return null;
   }
-  if (!reply.ok || reply.type !== NODE_HOST_CONFIG_KEY) {
-    throw new Error("Unexpected node-host configuration read result");
-  }
   const stored = reply.row;
   if (!stored) {
     return null;
@@ -86,7 +84,6 @@ export async function configureNodeHost(params: {
   fallbackDisplayName: string;
   gateway: NodeHostGatewayConfig;
   env?: NodeJS.ProcessEnv;
-  nowMs?: number;
   candidateNodeId?: string;
   installedAppsSharing?: boolean;
   commands?: string[];
@@ -101,10 +98,6 @@ export async function configureNodeHost(params: {
   const gateway = normalizeGatewayConfig(params.gateway);
   const commands =
     params.commands === undefined ? undefined : normalizeNodeHostCommands(params.commands);
-  const updatedAtMs = params.nowMs ?? Date.now();
-  if (!Number.isSafeInteger(updatedAtMs) || updatedAtMs < 0) {
-    throw new Error("invalid node-host updatedAtMs: expected a non-negative integer");
-  }
 
   const worker = new NodeWorkerJournalWorker({ env });
   const { config, clearedCommands } = await worker.execute({
@@ -119,7 +112,7 @@ export async function configureNodeHost(params: {
         installedAppsSharing: params.installedAppsSharing,
         commands,
         allCommands: params.allCommands,
-        updatedAtMs,
+        updatedAtMs: Date.now(),
       },
     ],
   });
@@ -130,4 +123,31 @@ export async function configureNodeHost(params: {
     );
   }
   return config;
+}
+
+/** Commit verified reconnect facts without replacing unrelated node configuration. */
+export async function refreshNodeHostOpenClawIdTarget(params: {
+  nodeId: string;
+  expected: SavedNodeHostOpenClawIdTarget;
+  target: SavedNodeHostOpenClawIdTarget;
+  env?: NodeJS.ProcessEnv;
+}): Promise<SavedNodeHostOpenClawIdTarget> {
+  const env = params.env ?? process.env;
+  assertNodeHostLegacyStateMigrated(env);
+  const worker = new NodeWorkerJournalWorker({ env });
+  const result = await worker.execute({
+    type: "nodeWorker.refreshOpenClawIdTarget",
+    input: [
+      {
+        nodeId: params.nodeId,
+        expected: params.expected,
+        target: params.target,
+        updatedAtMs: Date.now(),
+      },
+    ],
+  });
+  if (result.superseded) {
+    throw new Error("OpenClaw ID target advanced during refresh; resolve current authority again");
+  }
+  return result.target;
 }

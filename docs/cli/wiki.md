@@ -81,13 +81,13 @@ digests already carry the active runtime agent context.
 
 Show vault mode and scope, resolved agent, health, and Obsidian CLI availability. Use this first to check whether the intended vault is initialized, bridge mode is healthy, or Obsidian integration is available.
 
-When bridge mode is active and configured to read memory artifacts, this command queries the running Gateway so it sees the same active memory plugin context as agent/runtime memory.
+When bridge mode is active and configured to read memory artifacts, this command queries the running Gateway so it sees the same active memory plugin context as agent/runtime memory. Ctrl-C or SIGTERM stops a pending Gateway read without printing a late result; the CLI exits with status 130 or 143.
 
 ### `wiki doctor`
 
 Run wiki health checks and report actionable fixes. Exits non-zero when unhealthy.
 
-When bridge mode is active and configured to read memory artifacts, this command queries the running Gateway before building the report. Disabled bridge imports and bridge configs that do not read memory artifacts stay local/offline.
+When bridge mode is active and configured to read memory artifacts, this command queries the running Gateway before building the report. Disabled bridge imports and bridge configs that do not read memory artifacts stay local/offline. Ctrl-C or SIGTERM stops a pending Gateway read without printing a late result; the CLI exits with status 130 or 143.
 
 Typical issues:
 
@@ -103,7 +103,15 @@ Create the wiki vault layout and starter pages, including top-level indexes and 
 
 Import a local markdown or text file into the wiki `sources/` folder as a source page. `<path>` must be a local file path; there is no URL ingest today. Rejects binary files.
 
+Source files must be valid UTF-8. Malformed input is rejected without replacing an existing source page. Save the source as valid UTF-8 and retry the ingest.
+
+`wiki ingest`, bridge/unsafe-local sync, and ChatGPT imports also reject existing source pages with malformed UTF-8 instead of rewriting their human notes. Save the affected page as valid UTF-8 and retry.
+
 Imported source pages carry provenance frontmatter (`sourceType: local-file`, `sourcePath`, `ingestedAt`). Ingest always recompiles the vault afterward.
+
+Concurrent `wiki ingest` and Gateway bridge imports targeting the same vault wait
+for each other's source writes and compilation to finish. Ingest waits up to five
+minutes for a busy vault before reporting a lock timeout.
 
 Flags: `--title <title>` overrides the source title (default: derived from the filename).
 
@@ -112,6 +120,14 @@ Flags: `--title <title>` overrides the source title (default: derived from the f
 Import an unpacked Open Knowledge Format bundle into wiki concept pages.
 
 The importer reads every non-reserved `.md` concept document in the OKF directory tree, requires a non-empty `type` field, and treats unknown OKF `type` values as generic concepts. Reserved OKF `index.md` and `log.md` files are not imported as concepts.
+
+OKF documents, including the bundle's `index.md`, must contain valid UTF-8.
+Malformed concept documents are skipped with an `unreadable-entry` warning;
+other valid concepts still import. Any import warning also prevents stale-page
+pruning, so a damaged source cannot remove its previously imported concept.
+An unreadable root `index.md` stops the import before concept pages are changed,
+because that file determines the bundle identity. Convert the affected source
+to UTF-8 and retry the import.
 
 Imported pages are flattened under `concepts/` so existing wiki compile, search, get, digest, and dashboard flows see them immediately. The original OKF concept ID, `type`, `resource`, `tags`, timestamp, source path, and full frontmatter are preserved in the page frontmatter. Internal OKF markdown links are rewritten to the generated wiki pages; broken or external links are left unchanged. Import always recompiles the vault afterward.
 
@@ -129,6 +145,10 @@ openclaw wiki get <path-from-json-result>
 Rebuild indexes, related blocks, dashboards, and the compiled query/prompt snapshot. The snapshot is persisted in OpenClaw's shared SQLite plugin state and kept in memory for synchronous prompt projection; it does not create cache files in the vault.
 
 If `render.createDashboards` is enabled, compile also refreshes report pages.
+
+Page names use the frontmatter `title`, then the first level-one heading outside
+code blocks, then the filename. Comments inside fenced code blocks do not become
+page names; inline code in a real heading remains part of its name.
 
 ### `wiki lint`
 
@@ -183,6 +203,10 @@ retain their existing lookup fallbacks and may scan the vault.
 Wiki-page reads support large files and hard links. Reads refuse paths that
 escape the vault or pass through a symbolic link inside it.
 
+Pagination counts real body lines, not the empty split element after a terminal
+newline. A read ending on the last line reports `truncated: false`; intentional
+blank lines are preserved.
+
 ```bash
 openclaw wiki get entity.alpha
 openclaw wiki get syntheses/alpha-summary.md --from 1 --lines 80
@@ -196,6 +220,22 @@ Apply narrow mutations without freeform page surgery:
 - `apply metadata <lookup>`: update metadata on an existing page
 
 Both accept `--source-id`, `--contradiction`, `--question` (each repeatable), `--confidence <n>` (0-1), and `--status <status>`. `apply metadata` also accepts `--clear-confidence` to remove a stored confidence value. This is the supported way to evolve wiki pages so managed generated blocks stay intact.
+
+For `apply metadata`, each supplied `--source-id`, `--contradiction`, or
+`--question` list replaces the entire stored list. Read the page with `wiki get`
+first and repeat each flag for every value you want to retain; omitted lists
+stay unchanged. Successful output reports before/after counts for supplied lists
+(`metadataListChanges` in JSON). To clear a list explicitly, use `wiki_apply`
+with an empty array; the CLI has no list-clear flag.
+
+Metadata updates preserve comments and numeric spellings on untouched keys in ordinary string-keyed YAML mappings. Pages containing anchors, aliases, explicit tags, or non-string keys retain the existing value-rendering behavior instead; their parsed values remain authoritative, but source formatting is not preserved.
+
+Refreshing a synthesis without `--status` preserves its existing status. New synthesis pages default to `active`; an explicit `--status` sets or replaces the value.
+
+For `apply synthesis`, pass the summary with `--body <text>` or `--body-file <path>`.
+Body files must be regular files containing nonempty UTF-8 text. Symlinks to
+regular files are supported. FIFOs and other special files, blank files, and
+invalid UTF-8 are rejected before changing the existing synthesis page.
 
 ### `wiki bridge import`
 
@@ -211,6 +251,13 @@ Import from explicitly configured local paths (`unsafeLocal.paths`) in `unsafe-l
 
 Import a ChatGPT export into draft wiki source pages.
 
+`--export` accepts a JSON file or a directory containing `conversations.json`.
+The path's file type determines which is used, so renamed JSON files and
+directories whose names end in `.json` work the same way.
+
+Imported transcript text preserves line breaks, code indentation, and internal
+spacing, including text parts stored as serialized JSON in the export.
+
 ```bash
 openclaw wiki chatgpt import --export ./chatgpt-export
 openclaw wiki chatgpt import --export ./conversations.json --dry-run
@@ -222,6 +269,16 @@ openclaw wiki chatgpt import --export ./conversations.json --dry-run
 | `--dry-run`       | `false`    | Preview created/updated/skipped counts without writing pages. |
 
 A non-dry-run import that changes any page records an import run id, printed in the summary, needed for rollback.
+
+Malformed UTF-8 exports are rejected before the vault is initialized or imported
+pages are changed. If the error names an invalid export, download a fresh ChatGPT
+export and retry the import.
+
+Export files and existing source pages must resolve to regular files. Named pipes
+and other special files are rejected without waiting for data. Replace the affected
+path with a regular file and retry.
+
+Re-imports preserve handwritten Notes, including literal marker examples inside a complete Notes block. Markers inside transcript code blocks or inline code remain part of the transcript and do not prevent it from refreshing. If a Notes marker is missing, restore it before retrying; the import leaves the affected page unchanged.
 
 ### `wiki chatgpt rollback <run-id>`
 

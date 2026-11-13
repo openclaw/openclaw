@@ -8,9 +8,11 @@ import {
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import type { AgentHarnessSessionRuntimeOwnership } from "../../agents/harness/types.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
+import { createModelCatalogIdentityKeyResolver } from "../../agents/openai-model-routes.js";
 import { getPreparedModelRuntimeAuthMaterializations } from "../../agents/prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
+import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -33,6 +35,7 @@ import type {
   ChatMetadataSessionEntry,
 } from "./chat-metadata-contract.js";
 import type { GatewayModelCatalogContext } from "./models-list-context.js";
+import { hasModelChoiceAccountPin } from "./models-list-public-projection.js";
 
 export type ChatMetadataProjectionFacts = {
   agentId: string;
@@ -45,7 +48,8 @@ export type ChatMetadataProjectionFacts = {
 export type PreparedChatMetadataProjection = Awaited<
   ReturnType<typeof prepareChatMetadataModelProjection>
 > & {
-  agent: ChatMetadataProjectionFacts & Pick<ChatMetadataResult, "commands" | "swarmEnabled">;
+  agent: ChatMetadataProjectionFacts &
+    Pick<ChatMetadataResult, "commands" | "swarmEnabled"> & { revision: string };
 };
 
 export function readPreparedChatMetadata(
@@ -128,8 +132,10 @@ export async function prepareChatMetadataModelProjection(params: {
   // Chat metadata must stay on process-published facts. Live discovery belongs to explicit
   // models.list refresh requests so a slow provider cannot delay chat startup.
   const snapshot = params.facts.modelCatalog;
+  // Capture before creating the shared projector; models.list cannot replace its retained config.
+  const config = captureRuntimeConfig(params.facts.owner.config);
   const projectorParams: Parameters<typeof prepareModelCatalogDecisions>[0] = {
-    cfg: params.facts.owner.config,
+    cfg: config,
     agentId: params.facts.agentId,
     snapshot,
     metadataSnapshot: params.facts.owner.metadataSnapshot,
@@ -158,7 +164,7 @@ export async function prepareChatMetadataModelProjection(params: {
       params: { view: "configured", includeDefaultModels: false },
       preloadedCatalog: {
         agentId: params.facts.agentId,
-        config: params.facts.owner.config,
+        config,
         snapshot,
       },
       preloadedOnly: true,
@@ -188,7 +194,9 @@ export function resolveSessionCatalogProfiles(
   const profileId = sessionEntry?.authProfileOverride?.trim();
   const runtime = sessionEntry?.agentRuntimeOverride?.trim();
   const provider =
-    sessionEntry?.providerOverride ??
+    (sessionEntry?.modelOverrideSource === "default"
+      ? undefined
+      : sessionEntry?.providerOverride) ??
     (runtime
       ? resolveSessionModelRef(config, sessionEntry, agentId, {
           allowPluginNormalization: false,
@@ -233,7 +241,7 @@ export function hasSessionCatalogContext(
   );
 }
 
-function resolveRequiredWorkerInferenceProfileId(
+export function resolveRequiredWorkerInferenceProfileId(
   readParams: ChatMetadataReadParams,
   config: OpenClawConfig,
 ): string | undefined {
@@ -245,9 +253,8 @@ function resolveRequiredWorkerInferenceProfileId(
   // A required worker owns the next session turn even before its placement exists.
   // This is send metadata, not admission or a claim that the node is ready: dispatch
   // still validates the actual placement, runtime, build, workspace and model grant.
-  // Agent-wide/explicit-account picker reads keep their Gateway availability facts.
-  return readParams.sessionKey &&
-    (isDefaultAgentRuntimeId(runtime) || runtime === "openclaw") &&
+  // Draft pickers also describe this required route before a session exists.
+  return (isDefaultAgentRuntimeId(runtime) || runtime === "openclaw") &&
     profile &&
     workerInferenceMetadata({ providerId: profile.provider, profileSnapshot: profile }).inference
     ? required
@@ -260,6 +267,7 @@ export function projectSessionModelCatalog(
   models: ModelChoice[],
   config: OpenClawConfig,
   ownership: AgentHarnessSessionRuntimeOwnership | undefined,
+  availability: "hidden" | "admitted" = "hidden",
 ): ModelChoice[] {
   const requiredWorker = resolveRequiredWorkerInferenceProfileId(readParams, config);
   const nativeAuth = ownership?.auth === "native";
@@ -267,21 +275,44 @@ export function projectSessionModelCatalog(
   const authProfileSource = resolveCollapsedSessionAuthPinSource(entry);
   const workerAuth =
     (readParams.workerInference === "worker" || requiredWorker !== undefined) &&
-    !entry?.modelOverride?.trim() &&
-    !entry?.agentRuntimeOverride?.trim() &&
+    !readParams.draftAccountSelection &&
+    (!entry?.agentRuntimeOverride?.trim() ||
+      normalizeOptionalAgentRuntimeId(entry.agentRuntimeOverride) === "openclaw") &&
     !(entry?.authProfileOverride?.trim() && authProfileSource === "user");
   if (!nativeAuth && !workerAuth) {
     return models;
   }
-  // Pending native branches have no tuple. Worker inference uses the configured ambient model;
-  // explicit model, runtime, and personal-account choices retain Gateway availability checks.
+  // Worker credentials stay node-local. Configured native alternatives defer auth to
+  // worker admission too; unrelated models, harnesses and personal accounts do not.
+  const identityKey = createModelCatalogIdentityKeyResolver();
+  const configuredWorkerModels = new Set(
+    workerAuth && requiredWorker !== undefined
+      ? Object.entries(config.models?.providers ?? {}).flatMap(([provider, definition]) =>
+          definition.models.map((model) => identityKey({ provider, id: model.id })),
+        )
+      : [],
+  );
+  const ambientWorkerModel =
+    workerAuth &&
+    (entry?.modelOverrideSource === "default" || !entry?.modelOverride?.trim()) &&
+    !entry?.agentRuntimeOverride?.trim() &&
+    (readParams.sessionKey !== undefined || readParams.workerInference === "worker");
   const renderedModel =
     ownership?.modelRef ??
     resolveSessionModelRef(config, readParams.sessionEntry, readParams.agentId, {
       allowPluginNormalization: false,
     });
   return models.map((model) => {
-    if (model.provider !== renderedModel.provider || model.id !== renderedModel.model) {
+    if (workerAuth && hasModelChoiceAccountPin(model)) {
+      return model;
+    }
+    const configuredWorkerModel =
+      workerAuth &&
+      (!model.agentRuntime || model.agentRuntime.id === "openclaw") &&
+      configuredWorkerModels.has(identityKey(model));
+    const renderedSelection =
+      model.provider === renderedModel.provider && model.id === renderedModel.model;
+    if (!configuredWorkerModel && ((!nativeAuth && !ambientWorkerModel) || !renderedSelection)) {
       return model;
     }
     if (
@@ -297,6 +328,9 @@ export function projectSessionModelCatalog(
       unavailableUntil: _until,
       ...available
     } = model;
-    return available;
+    // Gateway hides host-auth status; requester catalogs need explicit admission evidence.
+    return availability === "admitted" && renderedSelection
+      ? { ...available, available: true }
+      : available;
   });
 }

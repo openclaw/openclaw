@@ -1,6 +1,6 @@
-import type { DatabaseSync } from "node:sqlite";
 import { jsonObjectTextEntries } from "../infra/database-engine/json-values.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 
 export type PlacementGrantReadInput = {
@@ -12,7 +12,7 @@ export type PlacementGrantReadInput = {
 };
 
 /** One snapshot covers binding selection, attachment, and the durable parent decision. */
-export function readPlacementGrantRows(db: DatabaseSync, input: PlacementGrantReadInput) {
+export function readPlacementGrantRows(db: EngineConnection, input: PlacementGrantReadInput) {
   const stateDb = getNodeSqliteKysely<DB>(db);
   const parents = stateDb
     .selectFrom(

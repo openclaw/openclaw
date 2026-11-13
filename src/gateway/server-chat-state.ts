@@ -88,7 +88,7 @@ type PendingLiveTextFlush = {
 
 type LiveDisplayState = NonNullable<assistantText.ChatRunBufferState["display"]>;
 
-export type ChatRunRecord = assistantText.ChatRunBufferState & {
+type ChatRunRecord = assistantText.ChatRunBufferState & {
   lastActivityAt: number;
   registrations?: ChatRunEntry[];
   buffer?: string;
@@ -249,12 +249,11 @@ export function createChatRunState(isConnectionActive?: (connId: string) => bool
     store.runs.clear();
   };
 
-  const resolveBuffer = (
-    runId: string,
+  const projectBuffer = (
+    record: ChatRunRecord | undefined,
     options?: { final?: boolean },
   ): ReturnType<typeof projectLiveAssistantBufferedText> & { displayText?: string } => {
-    const record = store.runs.get(runId);
-    if (!record || record.bufferIsCurrent?.() === false) {
+    if (!record) {
       return projectLiveAssistantBufferedText("");
     }
     const source = record.rawBuffer;
@@ -274,11 +273,7 @@ export function createChatRunState(isConnectionActive?: (connId: string) => bool
         return full;
       }
       // Missing source context cannot justify suppressing retained output.
-      const suppressed =
-        !contextEvicted &&
-        (options?.final
-          ? projectLiveAssistantBufferedText(full.text, { suppressLeadFragments: false }).suppress
-          : full.suppress);
+      const suppressed = !contextEvicted && full.suppress;
       const text = suppressed
         ? ""
         : contextEvicted
@@ -288,7 +283,6 @@ export function createChatRunState(isConnectionActive?: (connId: string) => bool
         ...full,
         text,
         suppress: suppressed || !text,
-        pendingLeadFragment: suppressed && full.pendingLeadFragment,
       };
     };
     // Delivery remains complete; display finalizes the same occurrence-owned tail.
@@ -347,6 +341,11 @@ export function createChatRunState(isConnectionActive?: (connId: string) => bool
     return display.current;
   };
 
+  const resolveBuffer = (runId: string, options?: { final?: boolean }) => {
+    const record = store.runs.get(runId);
+    return projectBuffer(record?.bufferIsCurrent?.() === false ? undefined : record, options);
+  };
+
   const takeBufferDelta = (runId: string, text: string) => {
     const projected = resolveBuffer(runId);
     const record = store.getOrCreate(runId);
@@ -383,6 +382,12 @@ export function createChatRunState(isConnectionActive?: (connId: string) => bool
     /** Acquire mutable state and record activity; readers use runs.get. */
     getOrCreate: store.getOrCreate,
     resolveBuffer,
+    captureFinalBuffer: (runId: string) => {
+      const record = store.runs.get(runId);
+      // Keep terminal text fixed, but share occurrence publication receipts after cleanup.
+      const snapshot = record?.bufferIsCurrent?.() === false ? undefined : record && { ...record };
+      return () => projectBuffer(snapshot, { final: true });
+    },
     updateBuffer: (
       runId: string,
       input: Parameters<typeof assistantText.updateBuffer>[1],
@@ -431,6 +436,7 @@ export type SessionMessageSubscriberRegistry = {
     sessionKey: string,
     opts?: {
       includeApprovals?: boolean;
+      includeLiveToolOutput?: boolean;
       provisional?: boolean;
       mode?: "narration";
       subscriptionId?: string;
@@ -440,6 +446,7 @@ export type SessionMessageSubscriberRegistry = {
   unsubscribeAll: (connId: string) => void;
   get: (sessionKey: string) => ReadonlySet<string>;
   getApprovals: (sessionKey: string) => ReadonlySet<string>;
+  getLiveToolOutput: (sessionKey: string) => ReadonlySet<string>;
   getNarration: (sessionKey: string) => ReadonlySet<string>;
   onChange: (
     listener: (sessionKey: string, connId: string, baselineOnly?: true) => void,
@@ -450,6 +457,7 @@ type SessionMessageSubscription = (() => void) & { commit: () => void };
 
 type SessionMessageSubscriptionMode = {
   includeApprovals: boolean;
+  includeLiveToolOutput: boolean;
   mode?: "narration";
 };
 
@@ -498,6 +506,7 @@ export function createSessionMessageSubscriberRegistry(
   // Removing a record fences late replay settlements, including connection/session reuse.
   const connections = new Map<string, Map<string, SessionMessageSubscriptionOwners>>();
   const approvalSessionToConnIds = new Map<string, Set<string>>();
+  const liveToolOutputSessionToConnIds = new Map<string, Set<string>>();
   const narrationSessionToConnIds = new Map<string, Set<string>>();
   const changeListeners = new Set<Parameters<SessionMessageSubscriberRegistry["onChange"]>[0]>();
   const empty = new Set<string>();
@@ -533,6 +542,12 @@ export function createSessionMessageSubscriberRegistry(
       (narrationSessionToConnIds.get(sessionKey)?.has(connId) === true) !== narration;
     setMembership(sessionToConnIds, connId, sessionKey, subscribed);
     setMembership(approvalSessionToConnIds, connId, sessionKey, mode?.includeApprovals === true);
+    setMembership(
+      liveToolOutputSessionToConnIds,
+      connId,
+      sessionKey,
+      mode?.includeLiveToolOutput === true,
+    );
     setMembership(narrationSessionToConnIds, connId, sessionKey, narration);
     if (changed) {
       changeListeners.forEach((listener) => listener(sessionKey, connId));
@@ -550,6 +565,7 @@ export function createSessionMessageSubscriberRegistry(
         mode = { ...interest };
       } else {
         mode.includeApprovals ||= interest.includeApprovals;
+        mode.includeLiveToolOutput ||= interest.includeLiveToolOutput;
         if (interest.mode !== "narration") {
           mode.mode = undefined;
         }
@@ -593,6 +609,7 @@ export function createSessionMessageSubscriberRegistry(
       const provisionalRecency = subscriptionSequence;
       const mode: SessionMessageSubscriptionMode = {
         includeApprovals: opts?.includeApprovals === true,
+        includeLiveToolOutput: opts?.includeLiveToolOutput === true,
         mode: opts?.mode,
       };
       state.inflight.set(provisionalRecency, mode);
@@ -672,6 +689,8 @@ export function createSessionMessageSubscriberRegistry(
     },
     get: (sessionKey) => sessionToConnIds.get(sessionKey.trim()) ?? empty,
     getApprovals: (sessionKey) => approvalSessionToConnIds.get(sessionKey.trim()) ?? empty,
+    getLiveToolOutput: (sessionKey) =>
+      liveToolOutputSessionToConnIds.get(sessionKey.trim()) ?? empty,
     getNarration: (sessionKey) => narrationSessionToConnIds.get(sessionKey.trim()) ?? empty,
     onChange: (listener) => {
       changeListeners.add(listener);

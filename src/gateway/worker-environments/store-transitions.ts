@@ -1,15 +1,18 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
+import { assertRepositoryWorkspaceDiskIdentity } from "../../state/session-repository-workspaces.authority.js";
 import { normalizeWorkerDesktopEndpoint } from "./desktop-endpoint.js";
 import type { WorkerEnvironmentRecord } from "./environment-record.js";
+import { workerPlacementMoveFromRow } from "./placement-move-row-codec.js";
 import {
   isCurrentWorkerWorkspacePendingResultOwner,
-  readWorkerWorkspaceReconciliationFacts,
-} from "./placement-workspace-result.js";
+  isRepositoryDiskGatewayMoveResult,
+} from "./placement-workspace-result-owner.js";
+import { readWorkerWorkspaceReconciliationFacts } from "./placement-workspace-result.js";
 import { assertPreparedEnvironmentAttachment } from "./prepared-environment-store.js";
 import { hasWorkerEnvironmentSessionAttachment } from "./session-attachment-store.js";
 import { WorkerSessionAlreadyAttachedError } from "./session-attachment.js";
@@ -47,7 +50,7 @@ function resolveNullablePatch<T>(
   return patch === undefined ? current : patch === null ? null : normalize(patch);
 }
 
-export function createWorkerEnvironmentTransitionOps(db: DatabaseSync, now: () => number) {
+export function createWorkerEnvironmentTransitionOps(db: EngineConnection, now: () => number) {
   return {
     refreshBootstrapReceipt(
       input: WorkerEnvironmentMutationInput<"refreshBootstrapReceipt">,
@@ -92,6 +95,13 @@ export function createWorkerEnvironmentTransitionOps(db: DatabaseSync, now: () =
         ) {
           throw new Error("Worker placement changed during runtime refresh");
         }
+        const moveRow = executeSqliteQueryTakeFirstSync(
+          db,
+          queryWorkerEnvironmentStore(db)
+            .selectFrom("worker_session_placement_moves")
+            .selectAll()
+            .where("session_id", "=", placement.session_id),
+        );
         if (input.expectedReclaimResult) {
           const retained = readWorkerWorkspaceReconciliationFacts(db, [placement.session_id]);
           const pending = retained.pendingResults.get(placement.session_id);
@@ -105,18 +115,21 @@ export function createWorkerEnvironmentTransitionOps(db: DatabaseSync, now: () =
               pending,
             )
           ) {
-            throw new Error("Worker runtime refresh lost its retained Stop result");
+            throw new Error("Worker runtime refresh lost its retained recovery result");
           }
-        }
-        if (
-          executeSqliteQueryTakeFirstSync(
-            db,
-            queryWorkerEnvironmentStore(db)
-              .selectFrom("worker_session_placement_moves")
-              .select("session_id")
-              .where("session_id", "=", placement.session_id),
-          )
-        ) {
+          if (moveRow) {
+            if (
+              !isRepositoryDiskGatewayMoveResult(
+                retained.placements.get(placement.session_id),
+                pending,
+                workerPlacementMoveFromRow(moveRow),
+              )
+            ) {
+              throw new Error("Worker runtime refresh lost its original disk Move result");
+            }
+            assertRepositoryWorkspaceDiskIdentity(pending.repositoryDiskAuthority!, current);
+          }
+        } else if (moveRow) {
           throw new Error("Cannot refresh a worker runtime while its session is moving");
         }
         executeWorkerEnvironmentWrite(
@@ -263,6 +276,7 @@ export function createWorkerEnvironmentTransitionOps(db: DatabaseSync, now: () =
       assertShape({
         state: to,
         leaseId,
+        resourceReceipt: current.resourceReceipt,
         nodeDeviceId,
         sshEndpoint,
         desktop,

@@ -95,14 +95,16 @@ Use `modelCatalog` when OpenClaw should know provider model metadata before load
 
 Top-level fields:
 
-| Field            | Type                                                     | What it means                                                                                               |
-| ---------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `modelsDev`      | `Record<string, string>`                                 | Publication-time opt-in mapping from an owned OpenClaw provider id to a models.dev provider id.             |
-| `providers`      | `Record<string, object>`                                 | Catalog rows for provider ids owned by this plugin. Keys should also appear in top-level `providers`.       |
-| `aliases`        | `Record<string, object>`                                 | Provider aliases that should resolve to an owned provider for catalog or suppression planning.              |
-| `suppressions`   | `object[]`                                               | Model rows from another source that this plugin suppresses for a provider-specific reason.                  |
-| `discovery`      | `Record<string, "static" \| "refreshable" \| "runtime">` | Whether the provider catalog can be read from manifest metadata, refreshed into cache, or requires runtime. |
-| `runtimeAugment` | `boolean`                                                | Set to `true` only when the provider runtime must append catalog rows after manifest/config planning.       |
+| Field            | Type                                                     | What it means                                                                                         |
+| ---------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `modelsDev`      | `Record<string, string>`                                 | Publication-time opt-in mapping from an owned OpenClaw provider id to a models.dev provider id.       |
+| `providers`      | `Record<string, object>`                                 | Catalog rows for provider ids owned by this plugin. Keys should also appear in top-level `providers`. |
+| `aliases`        | `Record<string, object>`                                 | Provider aliases that should resolve to an owned provider for catalog or suppression planning.        |
+| `suppressions`   | `object[]`                                               | Model rows from another source that this plugin suppresses for a provider-specific reason.            |
+| `discovery`      | `Record<string, "static" \| "refreshable" \| "runtime">` | `static`: read from manifest metadata. `runtime` (and the identical `refreshable`): provider runtime. |
+| `runtimeAugment` | `boolean`                                                | Set to `true` only when the provider runtime must append catalog rows after manifest/config planning. |
+
+`configuredEndpointDiscovery: ["provider-id"]` opts an owned `runtime` catalog into discovery from the operator-configured origin. Its hook must return inventory from that origin; without an override, the manifest provider URL supplies the default. Retained inventory from another origin is excluded. Static capability declarations remain scoped to their declared endpoints. Providers without this opt-in retain their existing endpoint policy, including runtime-selected account and regional endpoints.
 
 `modelsDev` opts an owned provider into models.dev metadata hydration when the hosted catalog is published. Declare the upstream provider once per OpenClaw provider, not once per model. Omission means no models.dev hydration; there is no central provider fallback. Keys are normalized as OpenClaw provider ids and source ids are trimmed. Empty or non-string source ids and mappings for unowned providers are ignored; an alias alone does not grant ownership. A mapping does not create catalog provider rows or relax their validation.
 
@@ -116,13 +118,15 @@ This field is publication-time authoring metadata, not a Gateway discovery hook.
 
 Provider fields:
 
-| Field                 | Type                     | What it means                                                                                                                                                                                                     |
-| --------------------- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `baseUrl`             | `string`                 | Optional default base URL for models in this provider catalog.                                                                                                                                                    |
-| `api`                 | `ModelApi`               | Optional default API adapter for models in this provider catalog.                                                                                                                                                 |
-| `headers`             | `Record<string, string>` | Optional static headers that apply to this provider catalog.                                                                                                                                                      |
-| `defaultUtilityModel` | `string`                 | Optional provider-recommended small model id for short internal utility tasks (titles, progress narration). Used when `agents.defaults.utilityModel` is unset and this provider serves the agent's primary model. |
-| `models`              | `object[]`               | Required model rows. Rows without an `id` are ignored.                                                                                                                                                            |
+| Field                  | Type                     | What it means                                                                                                                                                                                                                                                                                                                                                                                  |
+| ---------------------- | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `baseUrl`              | `string`                 | Optional default base URL for models in this provider catalog.                                                                                                                                                                                                                                                                                                                                 |
+| `api`                  | `ModelApi`               | Optional default API adapter for models in this provider catalog.                                                                                                                                                                                                                                                                                                                              |
+| `headers`              | `Record<string, string>` | Optional static headers that apply to this provider catalog.                                                                                                                                                                                                                                                                                                                                   |
+| `defaultUtilityModel`  | `string`                 | Optional provider-recommended small model id for short internal utility tasks (titles, progress narration). Used when `agents.defaults.utilityModel` is unset and this provider serves the agent's primary model.                                                                                                                                                                              |
+| `defaultUtilityModels` | `Record<string, string>` | Optional per-vendor small model ids for a multi-vendor router whose model ids are `<vendor>/<model>`, keyed by vendor (for example `{ "openai": "openai/gpt-6-luna" }`). Used when `agents.defaults.utilityModel` is unset, this provider serves the agent's primary model, the provider declares no `defaultUtilityModel`, and the provider's current model catalog lists the declared model. |
+| `family`               | `string`                 | Optional [model family](#model-family) of every model in this catalog. Declare it only when one developer makes all of them; rows inherit it unless they declare their own.                                                                                                                                                                                                                    |
+| `models`               | `object[]`               | Required model rows. Rows without an `id` are ignored.                                                                                                                                                                                                                                                                                                                                         |
 
 Manifests do not author recommendations. Catalog v2 derives each provider's
 `recommendedModels` from the [curated recommended models list](/concepts/recommended-models).
@@ -137,6 +141,14 @@ symlinks intact. Dangling output symlinks create their targets if the target par
 exist. Missing target parents and symlink cycles fail before either output is replaced.
 The v1-only writer is unchanged.
 
+Optional `--out-v3 <v3-file>` includes canonical model `inference` declarations,
+including native-only Decision rows, in a separate v3 wire. V1/v2 retain their
+released chat-only shape. All selected output paths must be distinct; validation,
+size checks, and recovery preparation cover every output before publication.
+The same separate-file replacement and recovery rules below apply to all selected
+outputs. Keep the set unserved until publication succeeds. This does not change
+the default hosted feed or the plugin execution contract.
+
 Each file is replaced separately: this is **not** a multi-file atomic transaction.
 Use a single publisher and do not serve or deploy the pair until the command succeeds.
 If publication fails or the process stops between replacements, inspect the
@@ -149,6 +161,28 @@ Concurrent publishers and replacement of private recovery files are unsupported;
 this protocol does not promise power-loss durability. After successful publication,
 cleanup failures warn with retained paths without reporting the pair as unpublished.
 
+The generator also refuses catalogs that released clients would misread:
+
+- An unknown key anywhere under a model's `inference` fails publication, as unknown
+  row, provider, and pricing fields already do. Readers would drop it silently.
+- When every auth choice a plugin declares for a provider names only non-chat
+  `onboardingScopes` (such as `image-generation`), each of that provider's rows must
+  set `inference.chat: false`. Every reader treats a row without `inference` as chat.
+- Each output warns above 90% of the 4 MiB client limit and fails above it. With
+  `--skip-oversized-v1`, an oversized v1 is not written (the served v1 stays as it
+  was) and v2/v3 still publish.
+- `--previous <v1-file>`, `--previous-v2 <file>` and `--previous-v3 <file>` name the
+  last published file of each feed. Publication fails when a feed loses more than 5%
+  of its rows or any provider against it, unless `--allow-shrink` is given. A missing
+  previous file is reported and not compared.
+
+Before deploying, `pnpm catalog:compare-released --check --candidate <next> --baseline <published>`
+runs the latest, extended-stable and beta releases that read the candidate's wire
+version against it. It fails when a release rejects the file or keeps fewer rows than
+the publisher wrote, beyond the loss the same release already had on the published
+file. `--allow-row-loss <n>` accepts an intended loss for one publish. Releases
+without a reader for that version are listed as skipped.
+
 Model fields:
 
 | Field                  | Type                                                           | What it means                                                                        |
@@ -158,7 +192,7 @@ Model fields:
 | `api`                  | `ModelApi`                                                     | Optional per-model API override.                                                     |
 | `baseUrl`              | `string`                                                       | Optional per-model base URL override.                                                |
 | `headers`              | `Record<string, string>`                                       | Optional per-model static headers.                                                   |
-| `input`                | `Array<"text" \| "image" \| "document">`                       | Modalities the model accepts. Other values are silently dropped.                     |
+| `input`                | `Array<"text" \| "image" \| "video" \| "document">`            | Modalities the model accepts. Other values are silently dropped.                     |
 | `reasoning`            | `boolean`                                                      | Whether the model exposes reasoning behavior.                                        |
 | `contextWindow`        | `number`                                                       | Native provider context window.                                                      |
 | `contextWindows`       | `Array<{ id: string; label: string; contextWindow: number }>`  | Up to 16 selectable windows, normalized in ascending token-count order.              |
@@ -169,6 +203,7 @@ Model fields:
 | `cost`                 | `object`                                                       | Optional USD per million token pricing, including optional `tieredPricing`.          |
 | `compat`               | `object`                                                       | Optional compatibility flags matching OpenClaw model config compatibility.           |
 | `upstreamModel`        | `string`                                                       | Optional `provider/model` ref of the same upstream model in another bundled catalog. |
+| `family`               | `string`                                                       | Optional [model family](#model-family) of this row; overrides the provider `family`. |
 | `mediaInput`           | `object`                                                       | Optional per-modality input config. `image` is the only modality.                    |
 | `status`               | `"available"` \| `"preview"` \| `"deprecated"` \| `"disabled"` | Listing status. Suppress only when the row must not appear at all.                   |
 | `statusReason`         | `string`                                                       | Optional reason shown with non-available status.                                     |
@@ -192,15 +227,95 @@ Declare retirement only from affirmative provider evidence, never from a failed 
 
 `upstreamModel` marks a row that serves the same upstream model as a row in another bundled catalog under a different name, for example a subscription endpoint next to the vendor's API endpoint. It is authoring metadata: normalization drops it, and a contract test uses it to keep capability flags such as `compat.codeMode` from drifting between catalogs that ship the same model. Most rows need no marker, because matching ignores a leading vendor namespace and casing: `moonshotai/kimi-k3` and `zai-org/GLM-5.2` already match the first-party `kimi-k3` and `glm-5.2` rows. Reach for `upstreamModel` only when the vendor's own names genuinely differ. See [Code mode](/tools/code-mode/configuration#models-shipped-by-more-than-one-provider).
 
-Do not put runtime-only data in `modelCatalog`. Use `static` only when manifest rows are complete enough for provider-filtered list and picker surfaces to skip registry/runtime discovery. Use `refreshable` when manifest rows are useful listable seeds or supplements but a refresh/cache can add more rows later; refreshable rows are not authoritative by themselves. Use `runtime` when OpenClaw must load provider runtime to know the list.
+### Model family
+
+`family` names the developer lineage of a model, using the provider id of that
+developer's own catalog: `anthropic` for Claude, `openai` for GPT, `google` for
+Gemini, and `moonshot` for Kimi. Every route serving the same model reports the
+same family. For example, `anthropic/claude-opus-5-5`, `github-copilot/claude-opus-5.5`
+and ClawRouter's `anthropic/claude-opus-5-5` are all `anthropic`. Values are lowercase,
+hyphen-separated tokens of at most 64 characters; malformed values are dropped.
+
+Declare the provider `family` only when one developer makes every model in the
+catalog. A host serving several developers' models declares `family` per row,
+or leaves it out. Declare only what you know: OpenClaw never infers a family from
+a model id or name, and a row without one reports no family. A hosted catalog
+overlay cannot add or change a family; it keeps the family of the bundled row
+with the same id.
+
+`family` is catalog metadata, not a `models.providers` config field. Onboarding
+writes catalog rows into config without it, and those configured rows take the
+catalog family again while they keep the catalog's route.
+
+Like other catalog facts, the family belongs to the catalog's route. A configured
+model that moves to another API or endpoint loses the catalog family, because that
+endpoint may serve a different model under the same id. Discovered rows keep the
+family only when they match a manifest row exactly. Provider plugins can also set
+`family` on the rows their catalog hooks return from provider metadata, such as
+GitHub Copilot's model `vendor`. The family appears on `models.list` rows and in the
+[requester-admitted model catalog](/plugins/sdk-runtime/models#requester-admitted-model-catalog).
+
+Do not put runtime-only data in `modelCatalog`. Use `static` only when manifest rows are complete enough for provider-filtered list and picker surfaces to skip registry/runtime discovery. Use `runtime` when OpenClaw must load provider runtime to know the list; manifest rows then only seed the picker until the listing publishes. `refreshable` is accepted and behaves exactly like `runtime`.
+
+The Gateway saves each accepted runtime listing in the agent database. After a restart or plugin reload, those rows are available before discovery runs again. A failed listing, including an ended sign-in, keeps them, and the picker marks them unavailable with the reason; a successful listing replaces them.
 
 After a provider gains credentials, list and picker surfaces show its declared manifest rows while account discovery is still pending, in every discovery mode. Once discovery publishes for that provider, its account result replaces them.
+
+Default picker views honor that replacement rather than re-adding static fallback
+rows. Explicitly configured rows and retained current selections remain listed.
 
 Catalog refresh plans keep manual root declarations separate from generated provider inventory. A plugin owning the same provider ID does not turn a manual model into disposable cache data. Merge mode preserves those declarations and auth-only records; explicit replace mode retains its replacement contract. Generated catalogs still follow current ownership, endpoint eligibility, and authoritative replacement rules.
 
 Generated cache reads for plugins with `activation.onStartup: false` require current authentication for at least one currently owned, endpoint-eligible provider in that catalog. Runtime readers use captured auth or a usable key from provider configuration; a retained catalog cannot authenticate itself. Explicitly authored rows remain separate. This membership rule does not delete stored data or grant request authority.
 
 Capabilities belong to the declared API and base URL, not only the provider/model id. When model listing enriches a cached row, it uses manifest capabilities only for a matching route; a custom endpoint must supply its own limits and capabilities.
+
+### Task-specific inference metadata
+
+A model row can declare `inference` facts for its exact served route. Manifest
+normalization and prepared catalog projection retain them. They do not register
+a transport, grant execution permission, or replace existing provider runtime
+contracts. Omitting the field preserves legacy catalog behavior. An explicit
+declaration requires `chat`; text encoding, JSON support and generic tool-choice
+flags do not establish conversational support.
+
+`inference.decision` describes a typed task separately from chat thinking:
+
+- `protocol`: a bounded provider-owned adapter identifier, not a URL or auth identity.
+- `input`: supported text/image modalities for this task.
+- `questions`: optional declared `boolean`, `choice`, `score`, `sort`, or `tags` kinds.
+  Omission means unknown support; an explicit empty declaration is invalid.
+  Each records probability semantics (`boolean`, `categorical`, `independent`,
+  `provider-defined`, or `none`) and whether it can abstain. Optional option bounds
+  include a separate image-input bound. `requiresCriteria` records whether Boolean
+  questions need an explicit rubric. Independent and provider-defined estimates
+  must not be normalized to sum to one; abstention must not become an argmax.
+- `confidence`: optional `provider-specific` or `none`. A provider-specific
+  confidence metric is distinct from a calibrated correctness probability.
+- `reasoning`: supported `auto`/`off`/`on` modes, optional default/applicable
+  question kinds, and whether execution metadata is returned. This does not
+  imply reasoning text or set the primary model effort.
+- `grounding`: web-search support and optional applicable question kinds.
+  Support is not permission for extra network access or billing.
+- `limits`: optional question, request-token, state-plus-question-token, encoded
+  input and image bounds. Unknown values stay absent. Image metadata records
+  decoded-byte limits, MIME types and remote-URL support separately.
+- `billing`: `tokens`, `decision-units`, or `requests`, with source provenance
+  (`provider-docs`, `provider-catalog`, or `configured`). Only token billing
+  accepts `usdPerMillion.input`/`output`. An absent rate is unknown; an explicit
+  zero remains zero. Subscription decision units are not converted into an
+  invented marginal dollar price.
+
+A genuinely dual-capability model may declare both tasks on the same identity.
+Typed-only routes declare `chat: false`; neither capability implies the other.
+Task metadata never supplies fallback models or ambient conversation content.
+
+Malformed explicit declarations exclude the row rather than falling back to
+a legacy chat interpretation. Unknown fields are discarded. A route change
+replaces the entire declaration rather than blending endpoints with different
+reasoning, probabilities, limits or prices. Losing declared route facts retains
+`chat: false` until the new route supplies an explicit declaration. An overlay
+that preserves the original transport also preserves its inference facts.
 
 ## modelIdNormalization reference
 
@@ -237,6 +352,22 @@ Provider fields:
 
 Use `modelPricing` when the hosted catalog publisher needs provider-specific pricing-key behavior. The publisher reads this metadata without importing provider runtime code.
 
+A plugin can declare a policy for each id in its `providers` or `cliBackends`. Policies for other ids are ignored. A CLI backend that sends a vendor's models to that vendor can use `priceAs` to price them with the vendor's catalog rows. Its usage is then estimated at the vendor's API rates, even when the CLI is billed through a subscription plan. No separate prices are published for the CLI backend. For example, the Anthropic plugin prices its `claude-cli` backend as `anthropic`:
+
+```json
+{
+  "providers": ["anthropic"],
+  "cliBackends": ["claude-cli"],
+  "modelPricing": {
+    "providers": {
+      "claude-cli": { "priceAs": "anthropic" }
+    }
+  }
+}
+```
+
+Another example:
+
 ```json
 {
   "providers": ["ollama", "openrouter"],
@@ -265,6 +396,7 @@ Provider fields:
 | `chutes`     | `false \| object` | Explicit mapping to the public Chutes `/v1/models` catalog. Never enabled implicitly.           |
 | `deepinfra`  | `false \| object` | Explicit mapping to the public DeepInfra `/models/list` catalog. Never enabled implicitly.      |
 | `external`   | `boolean`         | Set `false` for local/self-hosted providers that should never use published external pricing.   |
+| `priceAs`    | `string`          | Provider whose catalog rows price this provider's models when it has no price of its own.       |
 | `openCode`   | `false \| object` | Explicit mapping to the public `models.opencode.ai/api.json` catalog. Never enabled implicitly. |
 | `modelsDev`  | `false \| object` | models.dev price list for the provider that bills the request. Enabled by default.              |
 | `openRouter` | `false \| object` | OpenRouter's own prices. They price only `openrouter/*` keys, never a vendor's models.          |

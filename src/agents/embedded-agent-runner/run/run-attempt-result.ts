@@ -31,7 +31,7 @@ export function normalizeEmbeddedRunAttemptResult(
     replayMetadata: runtimeContinuationReplayMetadata ??
       attempt.replayMetadata ?? { hadPotentialSideEffects: true, replaySafe: false },
     currentAttemptReplayMetadata:
-      runtimeContinuationReplayMetadata ?? attempt.currentAttemptReplayMetadata ?? undefined,
+      runtimeContinuationReplayMetadata ?? attempt.currentAttemptReplayMetadata,
   });
 }
 

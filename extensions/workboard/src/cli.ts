@@ -1,4 +1,8 @@
-import { WORKBOARD_STATUSES, type WorkboardCard } from "@openclaw/workboard-contract";
+import {
+  WORKBOARD_STATUSES,
+  type WorkboardCard,
+  type WorkboardCardCursor,
+} from "@openclaw/workboard-contract";
 import type { Command } from "commander";
 import { runWithLocalStateOwner } from "openclaw/plugin-sdk/cli-state-owner";
 import {
@@ -9,8 +13,10 @@ import {
 } from "openclaw/plugin-sdk/gateway-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { terminalText } from "openclaw/plugin-sdk/terminal-safe-text";
 import { resolveWorkboardCardByIdOrPrefix } from "./card-lookup.js";
 import { redactClaimToken, redactDispatchResult } from "./card-redaction.js";
+import { compareCards } from "./store-card-helpers.js";
 import type { WorkboardStore } from "./store.js";
 
 type JsonOptions = {
@@ -54,9 +60,9 @@ function writeLine(value: string): void {
 
 function formatCardLine(card: WorkboardCard): string {
   const boardId = card.metadata?.automation?.boardId ?? "default";
-  const agent = card.agentId ? ` ${card.agentId}` : "";
+  const agent = card.agentId ? terminalText` ${card.agentId}` : "";
   const archived = card.metadata?.archivedAt ? " (archived)" : "";
-  return `${card.id.slice(0, 8)}  ${card.status.padEnd(8)}  ${card.priority.padEnd(6)}  ${boardId}${agent}  ${card.title}${archived}`;
+  return terminalText`${card.id.slice(0, 8)}  ${card.status.padEnd(8)}  ${card.priority.padEnd(6)}  ${boardId}${agent}  ${card.title}${archived}`;
 }
 
 function writeCards(cards: WorkboardCard[], options: JsonOptions): void {
@@ -102,10 +108,22 @@ export function registerWorkboardCli(params: {
           return await action(store, assertCurrent);
         }),
     });
-  const list = (boardId?: string) =>
-    local("workboard.cards.list", { boardId }, async (store) => ({
-      cards: await store.list({ boardId }),
-    }));
+  const list = async (boardId?: string) => {
+    const cards = new Map<string, WorkboardCard>();
+    let after: WorkboardCardCursor | undefined;
+    do {
+      const page = await local<{ cards: WorkboardCard[]; nextCursor?: WorkboardCardCursor }>(
+        "workboard.cards.list",
+        { boardId, ...(after ? { after } : {}) },
+        (store) => store.listCards(boardId, undefined, after),
+      );
+      for (const card of page.cards) {
+        cards.set(card.id, card);
+      }
+      after = page.nextCursor;
+    } while (after);
+    return { cards: [...cards.values()].toSorted(compareCards) };
+  };
   const workboard = params.program
     .command("workboard")
     .description("Manage Workboard cards and worker dispatch");
@@ -202,7 +220,12 @@ export function registerWorkboardCli(params: {
       }
       writeCard(card, options);
       if (!options.json && card.notes) {
-        writeLine(card.notes);
+        writeLine(
+          card.notes
+            .split("\n")
+            .map((line) => terminalText`${line}`)
+            .join("\n"),
+        );
       }
     });
 
@@ -304,7 +327,7 @@ export function registerWorkboardCli(params: {
           typeof failure.cardId === "string" &&
           typeof failure.error === "string"
         ) {
-          writeLine(`${failure.cardId.slice(0, 8)}: ${failure.error}`);
+          writeLine(terminalText`${failure.cardId.slice(0, 8)}: ${failure.error}`);
         }
       }
     }

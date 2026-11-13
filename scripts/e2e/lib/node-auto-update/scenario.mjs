@@ -12,6 +12,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { createBuildSmokeEnv } from "../../../lib/build-smoke-env.mts";
 import { resolveNpmJsonEntries } from "../../../lib/npm-json-output.mts";
 import { stopProcessGroup } from "../stop-process-group.mjs";
 import { packNodeUpdateFixture } from "./package-fixtures.mjs";
@@ -222,13 +223,10 @@ function writeConfig(name, value) {
   fs.mkdirSync(state, { recursive: true });
   const config = path.join(state, "openclaw.json");
   fs.writeFileSync(config, `${JSON.stringify(value, null, 2)}\n`);
-  return {
+  return createBuildSmokeEnv(home, {
     ...cleanEnv,
     OPENCLAW_DEBUG: "1",
-    HOME: home,
-    OPENCLAW_STATE_DIR: state,
-    OPENCLAW_CONFIG_PATH: config,
-  };
+  });
 }
 
 async function startNode(name, registryUrl, options = {}) {

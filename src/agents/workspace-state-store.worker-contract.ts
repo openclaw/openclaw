@@ -1,10 +1,12 @@
 import type { AgentDeletionRecoveryHoldPredicate } from "../state/agent-deletion-journal-recovery.kernel.js";
 import type { AgentDeletionWorkerGuard } from "../state/agent-deletion-worker-contract.js";
 import type { WorkspaceStateIdentity } from "./workspace-state-identity.js";
+import type { WorkspaceAttestationInput } from "./workspace-state-store.kernel.js";
 import type {
+  WorkspaceAttestation,
   WorkspaceSetupState,
   WorkspaceStateSnapshot,
-} from "./workspace-state-store.kernel.js";
+} from "./workspace-state-types.js";
 
 export type WorkspaceStateGuard = {
   /** Host lifecycle and filesystem authority only; never reads SQLite. */
@@ -43,16 +45,17 @@ export type WorkspaceStateWorkerOperations = {
     };
     output: WorkspaceSetupState;
   };
+  "workspace.rollbackBootstrapSeed": {
+    input: WorkspaceStateInput & { bootstrapSeededAt: string };
+    output: void;
+  };
   "workspace.expire": { input: WorkspaceStateInput & { nowMs: number }; output: string | false };
+  "workspace.replaceAttestation": {
+    input: WorkspaceStateInput & WorkspaceAttestationInput;
+    output: WorkspaceAttestation;
+  };
   "workspace.delete": {
     input: { plan: WorkspaceStateDeletionPlan; deletion?: AgentDeletionWorkerGuard };
     output: WorkspaceStateDeletionReceipt;
   };
 };
-
-export type WorkspaceStateWorkerCommand = {
-  [K in keyof WorkspaceStateWorkerOperations]: {
-    type: K;
-    input: WorkspaceStateWorkerOperations[K]["input"];
-  };
-}[keyof WorkspaceStateWorkerOperations];

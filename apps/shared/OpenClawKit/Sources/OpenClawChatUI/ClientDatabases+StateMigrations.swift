@@ -169,4 +169,69 @@ extension OpenClawClientDatabases {
             """)
         }
     }
+
+    static func registerOutboxQueueModeMigration(_ migrator: inout DatabaseMigrator) {
+        // Older apps do not encode queue mode. Park their claims instead of
+        // silently replaying an explicit choice with the session default.
+        migrator.registerMigration("client-state-outbox-queue-mode-v10") { db in
+            try db.execute(sql: """
+            ALTER TABLE outbox_commands ADD COLUMN queue_mode TEXT
+                CHECK(queue_mode IS NULL OR queue_mode IN ('steer', 'followup'));
+            ALTER TABLE outbox_commands ADD COLUMN queue_mode_authorization INTEGER;
+            CREATE TRIGGER outbox_queue_mode_claim_guard
+            BEFORE UPDATE OF status ON outbox_commands
+            WHEN OLD.status = 'queued' AND NEW.status = 'sending' AND OLD.queue_mode IS NOT NULL
+                AND COALESCE(NEW.queue_mode_authorization, 0) = COALESCE(OLD.queue_mode_authorization, 0)
+            BEGIN
+                UPDATE outbox_commands
+                SET status = 'failed', last_error = 'queue_mode_client_upgrade_required'
+                WHERE gateway_id = OLD.gateway_id AND client_uuid = OLD.client_uuid AND status = 'queued';
+                SELECT RAISE(IGNORE);
+            END;
+            CREATE TRIGGER outbox_queue_mode_retry_guard
+            BEFORE UPDATE OF status ON outbox_commands
+            WHEN OLD.status = 'failed' AND NEW.status = 'queued' AND OLD.queue_mode IS NOT NULL
+                AND COALESCE(NEW.queue_mode_authorization, 0) = COALESCE(OLD.queue_mode_authorization, 0)
+            BEGIN
+                SELECT RAISE(ABORT, 'queue-mode outbox retry requires current client');
+            END;
+            """)
+        }
+    }
+
+    static func registerComposerDraftsMigration(_ migrator: inout DatabaseMigrator) {
+        // Older builds ignore these tables. Their Forget marks the irreversible
+        // phase like this build does, so the trigger still erases drafts there.
+        migrator.registerMigration("client-state-composer-drafts-v11") { db in
+            try db.execute(sql: """
+            CREATE TABLE composer_drafts(
+                gateway_id TEXT NOT NULL,
+                draft_key TEXT NOT NULL,
+                text TEXT NOT NULL,
+                revision INTEGER NOT NULL,
+                updated_at REAL NOT NULL,
+                PRIMARY KEY(gateway_id, draft_key)
+            ) STRICT;
+            CREATE TABLE composer_draft_attachments(
+                gateway_id TEXT NOT NULL,
+                draft_key TEXT NOT NULL,
+                position INTEGER NOT NULL,
+                type TEXT NOT NULL,
+                mime_type TEXT NOT NULL,
+                file_name TEXT NOT NULL,
+                payload BLOB NOT NULL,
+                duration_seconds REAL,
+                PRIMARY KEY(gateway_id, draft_key, position),
+                FOREIGN KEY(gateway_id, draft_key)
+                    REFERENCES composer_drafts ON DELETE CASCADE
+            ) STRICT;
+            CREATE TRIGGER composer_drafts_forget
+            AFTER UPDATE OF cleanup_phase ON forgotten_gateways
+            WHEN NEW.cleanup_phase = 2 AND NEW.gateway_id IS NOT NULL
+            BEGIN
+                DELETE FROM composer_drafts WHERE gateway_id = NEW.gateway_id;
+            END;
+            """)
+        }
+    }
 }

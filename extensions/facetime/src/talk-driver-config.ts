@@ -4,7 +4,6 @@ import {
   buildRealtimeVoiceAgentConsultPolicyInstructions,
   getRealtimeVoiceProvider,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-  REALTIME_VOICE_AGENT_CONSULT_SENDER_AUTH_VERSION,
   resolveConfiguredRealtimeVoiceProviderAsync,
   type RealtimeVoiceTool,
 } from "openclaw/plugin-sdk/realtime-voice";
@@ -38,14 +37,6 @@ export const FACETIME_END_CALL_TOOL: RealtimeVoiceTool = {
     properties: {},
   },
 };
-
-export function assertAuthenticatedSenderConsultSupport(): void {
-  if (REALTIME_VOICE_AGENT_CONSULT_SENDER_AUTH_VERSION !== 1) {
-    throw new Error(
-      "OpenClaw host does not support authenticated sender identity for realtime agent consults; update OpenClaw before enabling FaceTime",
-    );
-  }
-}
 
 export function agentIdFromSessionKey(sessionKey: string, config: OpenClawConfig): string {
   if (parseAgentSessionKey(sessionKey)) {

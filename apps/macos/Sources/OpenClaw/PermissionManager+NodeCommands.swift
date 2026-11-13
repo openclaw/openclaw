@@ -79,7 +79,6 @@ extension PermissionManager {
             default: return .denied
             }
         case .location:
-            guard CLLocationManager.locationServicesEnabled() else { return .denied }
             let status = await self.locationAuthorizationStatus()
             let requireAlways = AppDefaults.standard.string(forKey: locationModeKey) ==
                 OpenClawLocationMode.always.rawValue

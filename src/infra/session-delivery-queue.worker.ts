@@ -1,8 +1,5 @@
 import { computeBackoff } from "../../packages/retry/src/index.js";
-import {
-  admitSubagentCompletionInWorker,
-  mutateSubagentCompletionInWorker,
-} from "../agents/subagents/completion/subagent-completion-admission.worker.js";
+import type { subagentCompletionDeliveryOperations } from "../agents/subagents/completion/subagent-completion-admission.worker.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import type {
   WorkerOperationHandlers,
@@ -28,7 +25,6 @@ import {
   SESSION_DELIVERY_QUEUE_NAME,
   type QueuedSessionDelivery,
 } from "./session-delivery-queue.records.js";
-import type { SessionDeliveryAgentRunUpdate } from "./session-delivery-queue.worker-contract.js";
 
 function readSessionDelivery(
   database: OpenClawStateDatabase,
@@ -87,14 +83,6 @@ type PreparedMediaResult =
   | { source: "stored"; blocks: Array<Record<string, unknown>> };
 
 export const sessionDeliveryOperations = {
-  "sessionDelivery.mutateSubagentCompletion": (
-    input: Parameters<typeof mutateSubagentCompletionInWorker>[0],
-    { open },
-  ) => mutateSubagentCompletionInWorker(input, open()),
-  "sessionDelivery.admitSubagentCompletion": (
-    input: Parameters<typeof admitSubagentCompletionInWorker>[0],
-    { open },
-  ) => admitSubagentCompletionInWorker(input, open()),
   "sessionDelivery.enqueue": (input: PreparedEntry, { writeAdmitted }) =>
     writeAdmitted(
       (database) => {
@@ -128,27 +116,6 @@ export const sessionDeliveryOperations = {
       ...entry,
       availableAt: Date.now() + Math.max(0, delayMs),
     }));
-  },
-  "sessionDelivery.advanceAgentRun": (
-    input: { id: string; updates?: SessionDeliveryAgentRunUpdate },
-    { open },
-  ) => {
-    const database = open();
-    const { id, updates } = input;
-    update(database, id, (entry) =>
-      entry.kind !== "agentTurn"
-        ? entry
-        : {
-            ...entry,
-            agentRunAttempt: (entry.agentRunAttempt ?? 0) + 1,
-            deliveryStartedAt: undefined,
-            ...(updates?.message ? { message: updates.message } : {}),
-            ...(updates?.expectedMediaUrls ? { expectedMediaUrls: updates.expectedMediaUrls } : {}),
-            ...(updates?.suppressTextDelivery === true
-              ? { suppressTextDelivery: true as const }
-              : {}),
-          },
-    );
   },
   "sessionDelivery.mergePreparedMedia": (
     input: { id: string; mediaUrl: string; blocksJson: string },
@@ -214,9 +181,6 @@ export const sessionDeliveryOperations = {
       return {
         ...entry,
         retryCount,
-        ...(entry.kind === "agentTurn"
-          ? { lastChargedAgentRunAttempt: entry.agentRunAttempt ?? 0 }
-          : {}),
         ...(releaseAttemptOwnership === true ? { deliveryStartedAt: undefined } : {}),
         lastAttemptAt: now,
         ...(entry.kind === "agentTurn" && entry.owner?.kind === "subagent_completion"
@@ -260,4 +224,5 @@ export const sessionDeliveryOperations = {
   },
 } satisfies WorkerOperationHandlers<WorkerWriteOperationContext>;
 
-export type SessionDeliveryWorkerOperations = WorkerOperations<typeof sessionDeliveryOperations>;
+export type SessionDeliveryWorkerOperations = WorkerOperations<typeof sessionDeliveryOperations> &
+  WorkerOperations<typeof subagentCompletionDeliveryOperations>;

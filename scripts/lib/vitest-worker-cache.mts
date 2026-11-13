@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { parseNodeOptionsEnvVar } from "../../node-runtime-env.mjs";
 import {
   acquireBuildArtifactLockAsync,
   ARTIFACT_CACHE_VERSION,
@@ -16,8 +17,22 @@ import {
   verifyVitestWorkerArtifacts,
   type VitestWorkerManifest,
 } from "./vitest-worker-artifacts.mts";
+import type { VitestWorkerPreset } from "./vitest-worker-descriptor.mts";
 
-const isCacheSlot = (directory: string) => /^run-cache-\d+$/u.test(path.basename(directory));
+const isCacheSlot = (directory: string) =>
+  /^run-cache-(?:(?:runtime|tooling)-)?\d+$/u.test(path.basename(directory));
+
+function compilerNodeOptions(value: string | undefined) {
+  const args = parseNodeOptionsEnvVar(value);
+  if (args === null) {
+    return value;
+  }
+  // Heap ceilings affect compilation resources, not emitted worker bytes.
+  // Preserve every other option, including module-resolution conditions.
+  return JSON.stringify(
+    args.filter((arg) => !/^--max-old-space-size=\d+$/u.test(arg.replaceAll("_", "-"))),
+  );
+}
 
 function cacheLocation(root: string, directory: string) {
   const cacheRoot = path.join(root, ".artifacts/vitest-worker-cache");
@@ -176,7 +191,7 @@ async function transferRoots(source: string, target: string, outputs: Record<str
 export async function createVitestWorkerCache(
   root: string,
   directory: string,
-  compilerInputs: string[],
+  preset: VitestWorkerPreset = "full",
 ) {
   if (!isCacheSlot(directory)) {
     return undefined;
@@ -184,14 +199,15 @@ export async function createVitestWorkerCache(
   const { CompilerInputSnapshot } = await import("./compiler-input-snapshot.mts");
   const snapshot = new CompilerInputSnapshot(root, {
     toolchainFiles: resolveTsdownCompilerFiles(),
-    generatorInputs: ["package.json", "pnpm-lock.yaml", ...compilerInputs],
+    generatorInputs: ["package.json", "pnpm-lock.yaml"],
     isGeneratorInput: (file) => file.endsWith("/package.json"),
   });
   // These absolute external URLs must return to the same exclusively reserved slot.
   const args = [
     `output=${fs.realpathSync(directory)}`,
+    `preset=${preset}`,
     `schtasks=${process.env.CI_WINDOWS_SCHTASKS_INTEGRATION ?? ""}`,
-    `node-options=${process.env.NODE_OPTIONS ?? ""}`,
+    `node-options=${compilerNodeOptions(process.env.NODE_OPTIONS)}`,
     `node-arguments=${JSON.stringify(process.execArgv)}`,
     `umask=${process.umask()}`,
   ];
@@ -199,7 +215,7 @@ export async function createVitestWorkerCache(
   const prepare = () =>
     (metadata ??= (async () => {
       await snapshot.prepare();
-      return snapshot.signature("tsconfig.json", args, []);
+      return snapshot.environmentSignature(args);
     })());
 
   async function restoreGeneration(): Promise<VitestWorkerManifest | undefined> {

@@ -2,21 +2,9 @@ import { bucketRelativeTimeMs, type RelativeTimeUnit } from "@openclaw/normaliza
 import type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { i18n, t } from "../i18n/index.ts";
 import type { SidebarSessionHovercardRow } from "./app-sidebar-session-types.ts";
-import type { SessionCreatedActor } from "./session-owner-chip.ts";
 
 export function participantLabel(participant: SessionParticipant): string {
   return participant.label?.trim() || participant.identity.id;
-}
-
-function excludesParticipant(
-  participant: SessionParticipant,
-  creator: SessionCreatedActor | undefined,
-  selfUserId: string | undefined,
-): boolean {
-  return (
-    (participant.identity.type === "profile" && participant.identity.id === selfUserId) ||
-    JSON.stringify(participant.identity) === JSON.stringify(creator?.identity)
-  );
 }
 
 type SessionAgeUnit = RelativeTimeUnit | "week" | "month" | "year";
@@ -88,7 +76,10 @@ export function sessionAttribution(
         return false;
       }
       participantIds.add(id);
-      if (excludesParticipant(participant, creator, selfUserId)) {
+      if (
+        (participant.identity.type === "profile" && participant.identity.id === selfUserId) ||
+        id === JSON.stringify(creator?.identity)
+      ) {
         excludedProjectedCount += 1;
         return false;
       }

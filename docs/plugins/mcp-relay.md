@@ -11,8 +11,10 @@ title: "MCP Relay"
 
 The bundled `mcp-relay` plugin connects your Gateway to
 `https://mcp.openclaw.ai` over an outbound WebSocket. Remote MCP clients such as
-ChatGPT and Claude connect to `https://mcp.openclaw.ai/mcp`; you do not need to
-expose a Gateway port to the internet.
+ChatGPT, Codex, and Claude connect to `https://mcp.openclaw.ai/mcp`; you do not
+need to expose a Gateway port to the internet. In ChatGPT and Codex, OpenClaw
+appears in the sidebar with your Gateway's full Control UI, and one connection
+can switch between several Gateways.
 
 The plugin is **disabled by default**. Enabling it opts your Gateway into an
 outbound relay connection. Each client also needs a grant you authorize through
@@ -57,13 +59,23 @@ fragment. Local development also accepts `http://localhost:<port>` and
 `http://127.0.0.1:<port>`. `agentId` is optional and selects the default agent for
 new conversations when the client does not choose one.
 
-## Connect ChatGPT or Claude
+<a id="connect-chatgpt-or-claude" />
+
+## Connect ChatGPT, Codex, or Claude
 
 Add `https://mcp.openclaw.ai/mcp` as a plugin in ChatGPT or a custom connector
 in Claude. On the relay's connection page, choose **Sign in with your Gateway**
 and enter your Gateway's Control UI URL. Your browser opens the Gateway's
 **Connected apps** page, using its normal sign-in. The relay does not fetch your
 Gateway URL or receive your Gateway credentials.
+
+Codex shares its MCP servers between the CLI and the desktop app. Add the relay
+once, then sign in; the login opens the same relay connection page:
+
+```bash
+codex mcp add openclaw --url https://mcp.openclaw.ai/mcp
+codex mcp login openclaw
+```
 
 Check the app name and return host, select its access, and choose **Allow** or
 **Deny**. Both choices return you to the relay to finish the request. Requests
@@ -97,6 +109,42 @@ revoke your own grants; administrators can see and revoke all grants. On
 single-user Gateways, operators with administrator access can create owner
 grants. On Gateways with verified profiles, each grant belongs to the person
 who approved it, including grants approved by an administrator.
+
+OpenClaw ID members use their own person grants even when the Gateway uses
+token authentication and has no local roles configured. Their membership role
+limits app operations and the embedded Control UI. Approvals made through a
+connected app also retain that person's original sign-in authority.
+
+## Use several Gateways
+
+One ChatGPT or Codex connection can hold several Gateways, such as a personal
+Gateway and a Team Gateway. Each linked Gateway has its own grant, principal, and
+access limit, and appears in that Gateway's **Connected apps** tab.
+
+In the embedded Control UI, open the identity menu. Its **Gateway** section lists
+the linked Gateways: select one to switch the page, choose **Set as primary**, or
+choose **Gateway settings…** to open **Your Gateways**. Without the embedded UI,
+the **Gateways** button opens the same dialog. There you can:
+
+- Link a Gateway with **Sign in with Gateway** and its Control UI URL, or with a
+  pairing code from that Gateway.
+- **Open** a Gateway in the sidebar.
+- **Set primary** to choose the Gateway that the model's conversation tools use.
+- **Remove** a linked Gateway, which revokes its grant.
+
+The Gateway you connected first cannot be removed from this list. Disconnect the
+connector in ChatGPT or Codex, or revoke its grant in that Gateway's **Connected
+apps** tab.
+
+### Team Gateways
+
+A Team Gateway using [Cloudflare Access](/gateway/cloudflare-access)
+trusted-proxy authentication with configured roles works the same way. **Sign in
+with Gateway** opens the Gateway's Control UI behind its usual sign-in, and you
+approve the request as yourself. The grant is a person grant tied to your
+verified profile, so **Full role access** carries your role into the app,
+including administrator access if your role has it. A later role change also
+limits the grant. See [Multiplayer](/start/multiplayer#production-deployment) for Gateway setup.
 
 ## Show the full Control UI in ChatGPT
 
@@ -185,6 +233,16 @@ is the intersection of the ceiling and the principal's current authority, so a
 role change also limits existing grants. Grants are not restricted to one
 conversation; normal principal and role visibility still applies.
 
+New person grants approved through OpenClaw ID also retain the approving
+membership and device listing. Removing the member or approving key, changing
+that member's role, or disabling OpenClaw ID closes active access. Re-adding a
+removed member or key requires a fresh approval. The same restriction follows
+an approval made through an already-connected app, including after restart.
+Local roles and approvals made through other sign-in paths remain independent.
+Before rollout, revoke and approve again any existing ID-origin grants created
+without this source binding; their original sign-in source cannot be inferred
+from the stored profile.
+
 Person grants approved through Gateway sign-in have an absolute refresh-token
 lifetime of 30 days. After that, sign in and approve again. Owner grants and
 pairing-code grants retain their existing relay token lifetime. Revocation,
@@ -213,8 +271,9 @@ own person grants require write access. Creating owner grants or revoking
 another person's grant requires administrator access. Grant listings include
 the principal and scope ceiling.
 
-Revocation is persisted locally before the Gateway notifies the relay. If the
-relay is offline, the Gateway still refuses further requests using that grant;
+Revocation is persisted locally before the Gateway notifies the relay. It also
+cancels runs under that grant, including work resumed after a Gateway restart. If
+the relay is offline, the Gateway still refuses further requests using that grant;
 the command reports whether the relay was notified. A revoked client must pair
 again to regain access.
 

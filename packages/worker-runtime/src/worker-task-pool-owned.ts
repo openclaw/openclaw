@@ -2,6 +2,7 @@ import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coerc
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createRetainedOperation, type RetainedOperation } from "./retained-operation.js";
+import { WorkerTaskError } from "./worker-task-error.js";
 import type {
   Slot,
   Task,
@@ -33,7 +34,6 @@ export function dispatchOwnedWorkerRequest<Input, Output>(
   owner: {
     accept: (response: WorkerTaskResponse) => void;
     reject: (error: unknown) => void;
-    closedError: () => Error;
   },
 ): void {
   const context = {
@@ -42,7 +42,7 @@ export function dispatchOwnedWorkerRequest<Input, Output>(
   };
   const assertCurrent = () => {
     if (task.done || slot.task !== task) {
-      throw owner.closedError();
+      throw new WorkerTaskError("worker task closed before host dispatch", "unavailable");
     }
   };
   if (task.options.onRequestSync) {
@@ -92,7 +92,7 @@ export function joinOwnedWorkerTask<Input, Output>(
 function startJoinOwnedWorkerTask<Input, Output>(
   task: Task<Input, Output>,
   settlement: OwnedWorkerTaskSettlement<Input, Output>,
-  retire = false,
+  retire: boolean,
 ): RetainedOperation<void> {
   const closing = startCloseOwnedWorkerTask(task, settlement, retire);
   const observe = () => {
@@ -142,7 +142,7 @@ export function closeOwnedWorkerTask<Input, Output>(
 function startCloseOwnedWorkerTask<Input, Output>(
   task: Task<Input, Output>,
   settlement: OwnedWorkerTaskSettlement<Input, Output>,
-  retire = false,
+  retire: boolean,
 ): RetainedOperation<void> {
   const owner = task.owner;
   if (!owner || owner.closed) {
@@ -245,9 +245,9 @@ export function prepareWorkerTaskInput<Input, Output>(
   reject: (error: unknown) => void,
   prepareResources?: () => Promise<unknown>,
 ): void {
-  // Execution owns the input now; retaining it on task duplicates the worker's clone.
+  // Release input custody without rebuilding the task's property dictionary.
   const taskInput = task.input!;
-  delete task.input;
+  task.input = undefined;
   const preparation = Promise.withResolvers<void>();
   task.preparation = preparation;
   const finishPreparation = () => {
@@ -290,18 +290,24 @@ export function prepareWorkerTaskInput<Input, Output>(
 
 export function armWorkerTaskTimeout<Input, Output>(
   task: Task<Input, Output>,
-  timeoutMs: number,
-  onTimeout: () => void,
+  timeoutMs: number | undefined,
+  onTimeout: (task: Task<Input, Output>) => void,
+  from?: "enqueue" | "dispatch",
 ): void {
+  if (timeoutMs === undefined || (from && (task.options.timeoutFrom ?? "enqueue") !== from)) {
+    return;
+  }
   clearTimeout(task.timer);
   const now = performance.now();
   task.deadline = Math.min(
     task.options.hostTimeout !== "owner" && task.options.timeoutMs !== undefined
-      ? (task.deadline ?? task.enqueuedAt + resolveTimerTimeoutMs(task.options.timeoutMs, 60_000))
+      ? (task.deadline ??
+          (task.options.timeoutFrom === "dispatch" ? now : task.enqueuedAt) +
+            resolveTimerTimeoutMs(task.options.timeoutMs, 60_000))
       : Infinity,
     now + resolveTimerTimeoutMs(timeoutMs, 60_000),
   );
-  task.timer = setTimeout(onTimeout, Math.max(0, task.deadline - now));
+  task.timer = setTimeout(onTimeout, Math.max(0, task.deadline - now), task);
 }
 
 export function expireWorkerTasks<Input, Output>(

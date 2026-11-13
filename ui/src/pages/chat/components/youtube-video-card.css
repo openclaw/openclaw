@@ -106,7 +106,7 @@ openclaw-youtube-video {
     cursor: pointer;
   }
   .watch:hover {
-    color: var(--accent);
+    color: var(--text);
   }
   .watch svg,
   .close svg {

@@ -1,6 +1,6 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { existsSync } from "node:fs";
-import { afterEach, beforeEach, expect, expectTypeOf, it } from "vitest";
+import { afterEach, beforeEach, expect, expectTypeOf, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -9,10 +9,8 @@ import {
 } from "../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
-import {
-  acquireSessionActorStorage,
-  runWithSessionActorStorage,
-} from "../config/sessions/session-actor-storage-binding.js";
+import { acquireSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
+import { runWithSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import {
@@ -30,7 +28,11 @@ import {
   listSessionEntriesAsync,
   readAmbientTranscriptWatermarkAsync,
   resolveAmbientTranscriptWatermarkKey,
+  resolveTranscriptSessionKeyBySessionId,
+  resolveTranscriptSessionKeyBySessionIdAsync,
   upsertSessionEntry,
+  withSessionEntriesAsync,
+  resolveStorePath,
 } from "./session-store-runtime.js";
 
 const tempDirs = createTempDirTracker();
@@ -93,6 +95,58 @@ const completeEntry: InternalSessionEntry = {
   },
 };
 
+it("resolves historical transcript keys off the host after the current session changes", async () => {
+  expectTypeOf<typeof resolveTranscriptSessionKeyBySessionIdAsync>().parameters.toEqualTypeOf<
+    Parameters<typeof resolveTranscriptSessionKeyBySessionId>
+  >();
+  const env = { OPENCLAW_STATE_DIR: tempDirs.make("sdk-historical-transcript-key-") };
+  const scope = { agentId: "main", env };
+  const sessionKey = "agent:main:history";
+  const read = async (sessionId: string) => {
+    const sql = observeHostDataSql();
+    try {
+      const resolved = await resolveTranscriptSessionKeyBySessionIdAsync({ ...scope, sessionId });
+      expect(sql.queries).toEqual([]);
+      return resolved;
+    } finally {
+      sql.restore();
+    }
+  };
+  expect(await read("missing")).toBeUndefined();
+  expect(existsSync(resolveOpenClawAgentSqlitePath(scope))).toBe(false);
+  await upsertSessionEntry({
+    ...scope,
+    sessionKey,
+    entry: { sessionId: "historical", updatedAt: 1 },
+  });
+  expect(await read("historical")).toBe(sessionKey);
+  await upsertSessionEntry({
+    ...scope,
+    sessionKey,
+    entry: { sessionId: "current", updatedAt: 2 },
+  });
+  expect(await read("historical")).toBe(sessionKey);
+  expect(await read("current")).toBe(sessionKey);
+  expect(await read("missing")).toBeUndefined();
+  const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+  try {
+    for (let call = 0; call < 2; call++) {
+      expect(resolveTranscriptSessionKeyBySessionId({ ...scope, sessionId: "historical" })).toBe(
+        sessionKey,
+      );
+    }
+    expect(warning).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("resolveTranscriptSessionKeyBySessionIdAsync"),
+      { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
+    );
+  } finally {
+    warning.mockRestore();
+  }
+  await expect(
+    getSessionEntryByIdAsync({ ...scope, sessionId: "historical" }),
+  ).resolves.toBeUndefined();
+});
+
 it("lists current public metadata off the host after an owner write without creating absent stores", async () => {
   expectTypeOf<
     PluginRuntime["agent"]["session"]["listSessionEntriesAsync"]
@@ -146,6 +200,52 @@ it("lists current public metadata off the host after an owner write without crea
     },
   ]);
   expect(before[0]?.entry.sessionId).toBe("selected");
+});
+
+it("retains bounded multi-store metadata only through synchronous SDK consumption", async () => {
+  const env = { OPENCLAW_STATE_DIR: tempDirs.make("sdk-selected-entries-") };
+  const stores = ["main", "second"].map((agentId) => ({
+    agentId,
+    storePath: resolveStorePath(undefined, { agentId, env }),
+    sessionKeys: ["agent:" + agentId + ":selected"],
+  }));
+  for (const store of stores) {
+    for (const suffix of ["selected", "unselected"]) {
+      replaceSessionEntrySync(
+        { ...store, env, sessionKey: "agent:" + store.agentId + ":" + suffix },
+        { ...completeEntry, sessionId: store.agentId + "-" + suffix },
+      );
+    }
+  }
+  const sql = observeHostDataSql();
+  try {
+    const result = await withSessionEntriesAsync({ stores, env }, (entries) => {
+      expect(entries.map(({ agentId, entry }) => [agentId, entry.sessionId])).toEqual([
+        ["main", "main-selected"],
+        ["second", "second-selected"],
+      ]);
+      expect(entries.every(({ entry }) => !("pendingProjectGitUrl" in entry))).toBe(true);
+      return "serialized";
+    });
+    expect(result).toBe("serialized");
+    const detached = await withSessionEntriesAsync({ stores, env }, (entries) => entries);
+    detached[0]!.entry.pluginExtensions!.synthetic = { enabled: false };
+    await withSessionEntriesAsync({ stores, env }, (entries) => {
+      expect(entries[0]!.entry.pluginExtensions).toEqual(completeEntry.pluginExtensions);
+    });
+    await expect(withSessionEntriesAsync({ stores, env }, async () => "late")).rejects.toThrow(
+      "must remain synchronous",
+    );
+    await expect(
+      withSessionEntriesAsync({ stores, env }, () => {
+        throw new Error("consumer failed");
+      }),
+    ).rejects.toThrow("consumer failed");
+    expect(sql.queries.some((query) => query.includes('from "session_nodes"'))).toBe(true);
+    expect(sql.queries.some((query) => query.includes('from "transcript_events"'))).toBe(false);
+  } finally {
+    sql.restore();
+  }
 });
 
 it("reads committed watermark updates off the host and ignores a reset predecessor", async () => {
@@ -255,6 +355,10 @@ it("keeps the complete public projection for durable and memory entry reads", as
   expect(publicEntry).not.toHaveProperty("pendingProjectGitUrl");
   expect(publicEntry).not.toHaveProperty("cliHistoryBoundary");
   expect(publicEntry).not.toBeInstanceOf(Promise);
+  await expect(getSessionEntryAsync(durable)).resolves.toEqual(publicEntry);
+  const detachedEntry = (await getSessionEntryAsync(durable))!;
+  detachedEntry.skillsSnapshot!.prompt = "Plugin-local replacement";
+  detachedEntry.skillsSnapshot!.skills.push({ name: "plugin-local" });
   await expect(getSessionEntryAsync(durable)).resolves.toEqual(publicEntry);
   await expect(getSessionEntryByIdAsync({ ...durable, sessionId: "selected" })).resolves.toEqual({
     sessionKey: durable.sessionKey,

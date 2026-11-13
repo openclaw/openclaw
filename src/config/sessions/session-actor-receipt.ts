@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type {
   SessionActorCommandContext,
   SessionActorHotState,
@@ -7,14 +8,124 @@ import type {
   SessionActorReceipt,
   SessionActorReducerOutcome,
 } from "./session-actor-contract.js";
+import { attachSessionEntrySnapshots } from "./session-entry-snapshot-values.js";
 import type { PendingInputMutationReceipt } from "./session-pending-input-operations.types.js";
+
+export type SessionActorEntryReference = Pick<
+  SessionActorHotState,
+  "target" | "entry" | "writeToken"
+>;
+
+export type SessionActorCommittedWireOutcome<Value> = Extract<
+  SessionActorOutcome<Value>,
+  { kind: "committed" }
+> & {
+  receipt: {
+    entryReference?: string;
+    entryDelta?: { values: [string, unknown][]; removed: string[] };
+    entryMetadataReferences?: number[];
+  };
+};
+
+/** The command retains this exact preimage until native settlement completes. */
+export function projectSessionActorCommittedOutcome<
+  Value extends SessionActorPhaseResults[SessionActorPhase],
+>(
+  outcome: Extract<SessionActorOutcome<Value>, { kind: "committed" }>,
+  reference: SessionActorEntryReference | undefined,
+): SessionActorCommittedWireOutcome<Value> {
+  const { receipt } = outcome;
+  // Initialization retains entry aliases; turn results are detached by the phase owner.
+  if (
+    receipt.transcript.append?.initialEntry ||
+    !reference ||
+    (receipt.postimage.entry !== reference.entry && (!receipt.postimage.entry || !reference.entry))
+  ) {
+    return outcome;
+  }
+  const entry = receipt.postimage.entry;
+  const base = reference.entry;
+  const entryDelta =
+    entry && base && entry !== base
+      ? {
+          values: Object.entries(entry).filter(
+            ([key, field]) =>
+              !Object.hasOwn(base, key) || !isDeepStrictEqual(field, Reflect.get(base, key)),
+          ),
+          removed: Object.keys(base).filter((key) => !Object.hasOwn(entry, key)),
+        }
+      : undefined;
+  // Full and list publications share the canonical entry's immutable fields.
+  let entryMetadataReferences: number[] | undefined;
+  const entryMetadata = receipt.entryMetadata?.map((metadata, index) => {
+    const key = receipt.postimage.target.sessionKey;
+    const fact = metadata.facts.get(key);
+    if (fact?.kind !== "postimage" || !entry || !isDeepStrictEqual(fact.value.fullEntry, entry)) {
+      return metadata;
+    }
+    (entryMetadataReferences ??= []).push(index);
+    return {
+      ...metadata,
+      facts: new Map(metadata.facts).set(key, {
+        ...fact,
+        value: { ...fact.value, fullEntry: undefined },
+      }),
+    };
+  });
+  return {
+    ...outcome,
+    receipt: {
+      ...receipt,
+      entryReference: reference.writeToken,
+      ...(entryDelta ? { entryDelta } : {}),
+      entryMetadata,
+      ...(entryMetadataReferences ? { entryMetadataReferences } : {}),
+      postimage: { ...receipt.postimage, entry: undefined },
+    },
+  };
+}
+
+export function restoreSessionActorCommittedOutcome<Value>(
+  outcome: SessionActorCommittedWireOutcome<Value>,
+  reference: SessionActorEntryReference | undefined,
+): Extract<SessionActorOutcome<Value>, { kind: "committed" }> {
+  const { receipt } = outcome;
+  if (receipt.entryReference !== undefined) {
+    if (!reference || receipt.entryReference !== reference.writeToken) {
+      throw new Error("Session actor receipt entry reference is unavailable");
+    }
+    // The replica owns this deeply frozen entry; settlement and observers only read it.
+    const delta = receipt.entryDelta;
+    const entry = delta
+      ? { ...reference.entry!, ...Object.fromEntries(delta.values) }
+      : reference.entry;
+    if (delta && entry) {
+      for (const key of delta.removed) {
+        Reflect.deleteProperty(entry, key);
+      }
+    }
+    receipt.postimage.entry = entry;
+    for (const index of receipt.entryMetadataReferences ?? []) {
+      const fact = receipt.entryMetadata![index]!.facts.get(receipt.postimage.target.sessionKey);
+      if (fact?.kind === "postimage") {
+        fact.value.fullEntry = entry;
+        fact.value.entry = attachSessionEntrySnapshots({ ...entry! }, {}, "list");
+      }
+    }
+    delete receipt.entryReference;
+    delete receipt.entryDelta;
+    delete receipt.entryMetadataReferences;
+  }
+  return outcome;
+}
 
 function collectAppendedEvents(
   before: SessionActorHotState,
   after: SessionActorHotState,
   payloads: ReadonlyMap<number, { event: unknown; serializedBytes: number }> | undefined,
+  rewrittenGeneration = before.transcript.version.generation,
 ): SessionActorReceipt["transcript"]["appendedEvents"] {
-  if (!payloads || before.transcript.version.generation !== after.transcript.version.generation) {
+  if (!payloads || rewrittenGeneration !== after.transcript.version.generation) {
     return undefined;
   }
   const beforeSeq = before.transcript.version.rawSeq ?? -1;
@@ -37,7 +148,7 @@ function collectAppendedEvents(
   return events;
 }
 
-/** Project the exact phase result and complete postimage into one backend-independent receipt. */
+/** Assemble a receipt; the backend owns capturing its postimage before publication. */
 export function createSessionActorCommittedOutcome<
   Value extends SessionActorPhaseResults[SessionActorPhase],
 >(params: {
@@ -47,6 +158,8 @@ export function createSessionActorCommittedOutcome<
   after: SessionActorHotState;
   payloads?: ReadonlyMap<number, { event: unknown; serializedBytes: number }>;
   transcriptAuthority?: SessionActorReceipt["transcript"]["authorityReceipts"];
+  conversationPublication?: SessionActorReceipt["conversationPublication"];
+  entryMetadata?: SessionActorReceipt["entryMetadata"];
   applied: {
     value: Value;
     pendingInputMutationReceipt?: PendingInputMutationReceipt;
@@ -83,7 +196,12 @@ export function createSessionActorCommittedOutcome<
         after: after.transcript.version,
         appendedMessages:
           turn?.result.appendedMessages ?? (appended && "messageId" in appended ? [appended] : []),
-        appendedEvents: collectAppendedEvents(before, after, params.payloads),
+        appendedEvents: collectAppendedEvents(
+          before,
+          after,
+          params.payloads,
+          append?.modelPromptProjection?.after.generation,
+        ),
         authorityReceipts: params.transcriptAuthority,
         append,
         projectionNeedsReconcile:
@@ -92,11 +210,12 @@ export function createSessionActorCommittedOutcome<
           Boolean(append?.header?.projectionNeedsReconcile) ||
           Boolean(value && "projectionNeedsReconcile" in value && value.projectionNeedsReconcile),
       },
+      conversationPublication: params.conversationPublication,
+      entryMetadata: params.entryMetadata,
       pendingInputReceipt: turn?.custody ?? append?.value.pendingInputReceipt,
       pendingInputMutationReceipt: applied.pendingInputMutationReceipt,
-      pendingFinalDelivery: structuredClone(after.entry?.pendingFinalDelivery),
       reducers: applied.reducers,
-      postimage: structuredClone(after),
+      postimage: after,
     },
   };
 }

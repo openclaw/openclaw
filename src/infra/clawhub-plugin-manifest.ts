@@ -1,11 +1,15 @@
 import { redactSensitiveUrl } from "@openclaw/net-policy/redact-sensitive-url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   validatePluginUiCapabilities,
   type PluginUiCapability,
 } from "../../packages/gateway-protocol/src/plugin-ui-capabilities.js";
 import type { PluginDiscoveryDetail } from "../../packages/gateway-protocol/src/schema/plugins.js";
-import type { ExternalPluginCompatibility } from "../../packages/plugin-package-contract/src/index.js";
+import {
+  validatePluginRecommendedPrompts,
+  type ExternalPluginCompatibility,
+} from "../../packages/plugin-package-contract/src/index.js";
 import {
   readClawHubNonEmptyStringFields,
   readClawHubStringArrayField,
@@ -19,12 +23,17 @@ export type ClawHubPluginCapabilities = {
   providers?: string[];
   channels?: string[];
   uiCapabilities?: PluginUiCapability[];
+  recommendedPrompts?: string[];
 };
 
 export function parseClawHubPluginCapabilities(
   summary: Record<string, unknown>,
 ): ClawHubPluginCapabilities {
   const result: ClawHubPluginCapabilities = {};
+  const prompts = validatePluginRecommendedPrompts(summary.recommendedPrompts);
+  if (prompts.ok && prompts.recommendedPrompts !== undefined) {
+    result.recommendedPrompts = prompts.recommendedPrompts;
+  }
   const ui = validatePluginUiCapabilities(summary.uiCapabilities);
   // Older readers ignored this advisory field; invalid UI metadata must not hide the package.
   if (ui.ok && ui.capabilities !== undefined) {
@@ -82,8 +91,8 @@ export function parseClawHubPluginMcpServer(
   }
   const name = readRequiredClawHubStringField(entry, "name", context);
   const rawUrl = readClawHubStringField(entry, "url", context);
-  const scope = readClawHubStringField(entry, "scope", context)?.slice(0, 1000);
-  const setup = readClawHubStringField(entry, "setup", context)?.slice(0, 2000);
+  const scope = readClawHubStringField(entry, "scope", context);
+  const setup = readClawHubStringField(entry, "setup", context);
   let url: string | undefined;
   let endpointRedacted = entry.endpointRedacted === true;
   if (rawUrl && !endpointRedacted) {
@@ -123,8 +132,8 @@ export function parseClawHubPluginMcpServer(
     ...(entry.auth === "oauth" || entry.auth === "api-key" || entry.auth === "none"
       ? { auth: entry.auth }
       : {}),
-    ...(scope ? { scope } : {}),
-    ...(setup ? { setup } : {}),
+    ...(scope ? { scope: truncateUtf16Safe(scope, 1000) } : {}),
+    ...(setup ? { setup: truncateUtf16Safe(setup, 2000) } : {}),
     ...(endpointRedacted ? { endpointRedacted } : {}),
   };
 }
