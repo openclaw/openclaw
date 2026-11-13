@@ -2858,7 +2858,8 @@ select.data-table-pagination__size {
   max-height: calc(var(--shell-canvas-height, 100dvh) - var(--cmd-palette-top) - 24px);
   overflow: hidden;
   border-radius: calc(20px * var(--openclaw-corner-radius-scale));
-  corner-shape: var(--chat-composer-corner-shape);
+  /* The palette keeps the dialog's superellipse, as on main; engines without it draw round. */
+  corner-shape: superellipse(1.5);
   background:
     linear-gradient(var(--composer-attached-surface), var(--composer-attached-surface)),
     var(--bg-content, var(--bg));
@@ -2870,9 +2871,9 @@ select.data-table-pagination__size {
   align-items: center;
   gap: 16px;
   min-width: 0;
-  /* The selected tab starts where the list's selected row does, which puts its icon under
-     the row icons and the field's text; the keys end on the list's own right margin. */
-  padding-inline: 8px 18px;
+  /* Inset as far from the side as from the top and bottom, so the tab is concentric with
+     the card; the keys end on the list's own right margin. */
+  padding-inline: 10px 18px;
 }
 
 .cmd-palette__mode-tabs {
@@ -2886,10 +2887,12 @@ select.data-table-pagination__size {
   align-items: center;
   justify-content: center;
   gap: 7px;
-  height: 30px;
-  padding: 0 11px 0 10px;
-  border-radius: calc(9px * var(--openclaw-corner-radius-scale));
-  corner-shape: var(--chat-composer-corner-shape);
+  height: 32px;
+  /* The icon lands under the list's row icons and the field's text. */
+  padding: 0 11px 0 8px;
+  /* Concentric with the card: its radius minus the dock's 10px inset. */
+  border-radius: calc(10px * var(--openclaw-corner-radius-scale));
+  corner-shape: superellipse(1.5);
   color: var(--muted);
   font-size: 13px;
   font-weight: var(--control-ui-font-weight-normal);
@@ -2942,9 +2945,10 @@ select.data-table-pagination__size {
   min-width: 20px;
   height: 20px;
   padding: 0 6px;
-  border: 0;
+  /* Outlined keycaps, so a key never reads as the filled, selected tab beside it. */
+  border: 1px solid color-mix(in srgb, var(--text) 16%, transparent);
   border-radius: calc(6px * var(--openclaw-corner-radius-scale));
-  background: color-mix(in srgb, var(--text) 7%, transparent);
+  background: transparent;
   box-shadow: none;
   color: var(--muted);
   font-family: inherit;
@@ -2955,6 +2959,7 @@ select.data-table-pagination__size {
 
 /* A phone has no keys to teach; the switch takes the whole dock. */
 @media (max-width: 560px) {
+  /* 8px on every side of the taller tabs keeps them concentric. */
   .cmd-palette__dock {
     padding-inline: 8px;
   }
@@ -3009,6 +3014,8 @@ select.data-table-pagination__size {
 :root[data-theme-mode] .cmd-palette-overlay .cmd-palette {
   /* The composer never shrinks; this panel must, so a short card keeps its dock. */
   flex-shrink: 1;
+  /* Matches the card it sits in; the chat composer itself stays round. */
+  corner-shape: superellipse(1.5);
   border: 0;
   /* A short, soft lift: the panel rests on the dock rather than floating over it. */
   box-shadow:
