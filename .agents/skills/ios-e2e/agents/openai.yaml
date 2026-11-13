@@ -1,4 +1,0 @@
-interface:
-  display_name: "iOS E2E"
-  short_description: "iOS simulator loop, pairing and end-to-end proof"
-  default_prompt: "Use $ios-e2e to build, run, drive and prove an iOS app change on the simulator against an isolated Gateway."

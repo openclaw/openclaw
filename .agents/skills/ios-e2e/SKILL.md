@@ -5,7 +5,7 @@ description: iOS app on the simulator - build, run, pair with an isolated Gatewa
 
 # iOS E2E
 
-Work from the checkout root. `.mobilebuildmcp/config.yaml` supplies the project, scheme and DerivedData, so `mobilebuildmcp` commands need no project flags. Missing tool: see [Setup](#setup).
+Work from the checkout root. A local `.mobilebuildmcp/config.yaml` ([Setup](#setup)) supplies the project, scheme and DerivedData, so `mobilebuildmcp` commands need no project flags.
 
 Two values recur:
 
@@ -75,6 +75,21 @@ One-time per machine; each step ends on a check.
 
 1. Xcode, simulator runtimes, `xcodegen` and the Watch Rust toolchain: `apps/ios/README.md` prerequisites. Check: `xcrun simctl list devices available` shows `iPhone 17`.
 2. SwiftFormat and SwiftLint at the repo pin: `scripts/install-swift-tools.sh <dir on PATH>`. Check: `scripts/check-swift-tools.sh` exits 0.
-3. MobileBuildMCP, Sentry's XcodeBuildMCP CLI: `brew tap getsentry/xcodebuildmcp && brew install getsentry/xcodebuildmcp/mobilebuildmcp`. These steps were written against 2.7.1. Check: `mobilebuildmcp --version`, and `mobilebuildmcp simulator list-schemes` lists `OpenClaw`.
-4. Checkout: `pnpm install --frozen-lockfile`, then `pnpm ios:gen` (the Xcode project is generated, not committed). Check: `mobilebuildmcp simulator build` succeeds.
+3. MobileBuildMCP, Sentry's XcodeBuildMCP CLI: `brew tap getsentry/xcodebuildmcp && brew install getsentry/xcodebuildmcp/mobilebuildmcp`. These steps were written against 2.7.1. Check: `mobilebuildmcp --version`.
+4. Checkout: `pnpm install --frozen-lockfile`, then `pnpm ios:gen` (the Xcode project is generated, not committed). Then create `.mobilebuildmcp/config.yaml` and add `/.mobilebuildmcp/` to `.git/info/exclude`:
+
+   ```yaml
+   schemaVersion: 1
+   enabledWorkflows: [simulator, simulator-management, ui-automation, debugging]
+   sentryDisabled: true
+   sessionDefaults:
+     projectPath: ./apps/ios/OpenClaw.xcodeproj
+     scheme: OpenClaw
+     configuration: Debug
+     platform: iOS
+     simulatorName: iPhone 17
+     derivedDataPath: ./apps/ios/build/DerivedData # shared with pnpm ios:run
+   ```
+
+   Check: `mobilebuildmcp simulator list-schemes` lists `OpenClaw`, and `mobilebuildmcp simulator build` succeeds.
 5. The `ios-sim` Gateway profile, with the Gateway stopped (`oc` = `node openclaw.mjs --profile ios-sim`): `oc config set gateway.mode local`, `oc config set gateway.port 19031`, `oc config set gateway.auth.mode token`, `oc config set gateway.auth.token "$(openssl rand -hex 24)"`. Chat replies need a model for its `main` agent: `oc models auth login` or `add` with test credentials. Check: the Gateway starts, and `pnpm ios:sim:pair` ends on the chat screen.
