@@ -838,6 +838,37 @@ it("expands one server at a time and keeps switch and bulk tool actions separate
   });
 });
 
+it("shows a selected MCP server as unavailable only for the agent denied its namespace", async () => {
+  const patch = vi.fn();
+  const [blocked, setBlocked] = createSignal(true);
+  const view = mountSolid(() => (
+    <ChatComposerPlusMenu
+      menu={{
+        ...makeMenu({ open: true, view: "connectors" }),
+        capabilityMenu: makeCapabilities({
+          mcpServers: [docsServer(true)],
+          toolsEffectiveResult: {
+            ...docsTools(true),
+            policyBlockedMcpServers: blocked() ? ["docs"] : [],
+          },
+          onPatchToolOverrides: patch,
+        }),
+      }}
+    />
+  ));
+  const serverSwitch = () => view.getByRole("switch", { name: "docs", hidden: true });
+  await waitForSolid(() => expect(serverSwitch().hasAttribute("disabled")).toBe(true));
+  expect(serverSwitch().getAttribute("aria-checked")).toBe("true");
+  expect(view.getByText("docs · Not available for this agent")).not.toBeNull();
+  serverSwitch().click();
+  expect(patch).not.toHaveBeenCalled();
+
+  setBlocked(false);
+  await waitForSolid(() => expect(serverSwitch().hasAttribute("disabled")).toBe(false));
+  serverSwitch().click();
+  expect(patch).toHaveBeenCalledWith({ mcpServers: { docs: false } });
+});
+
 it("keeps colliding tool labels distinct without replacing unique friendly labels", async () => {
   const tools = docsTools(true);
   const [dash, underscore] = tools.groups[0]!.tools;

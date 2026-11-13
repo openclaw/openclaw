@@ -445,6 +445,41 @@ suite.define(() => {
     });
   });
 
+  it("distinguishes a saved MCP selection from a whole-namespace agent policy block", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["chat.metadata", "chat.startup", "sessions.patch", "tools.effective"],
+        methodResponses: {
+          "config.get": configResponse({
+            serverA: { url: "https://a.example.test" },
+            serverB: { url: "https://b.example.test" },
+          }),
+          "sessions.list": sessionsList(),
+          "tools.effective": {
+            agentId: "main",
+            profile: "full",
+            groups: [],
+            policyBlockedMcpServers: ["serverB"],
+          },
+        },
+      });
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const menu = (await openMenu(page)).locator(".agent-chat__capability-menu");
+      await menu.getByRole("menuitem", { name: /^Plugins/ }).click();
+      await gateway.waitForRequest("tools.effective");
+      const allowed = menu.getByRole("switch", { name: "serverA" });
+      const blocked = menu.getByRole("switch", { name: "serverB" });
+      await expect.poll(() => blocked.isVisible()).toBe(true);
+      await expect.poll(() => blocked.isDisabled()).toBe(true);
+      await expect
+        .poll(() => menu.getByText("serverB · Not available for this agent").isVisible())
+        .toBe(true);
+      expect(await allowed.isEnabled()).toBe(true);
+      expect(await blocked.getAttribute("aria-checked")).toBe("true");
+    });
+  });
+
   it('renders tool access for a server named "constructor"', async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       await installMockGateway(page, {

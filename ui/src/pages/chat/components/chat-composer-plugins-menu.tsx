@@ -107,6 +107,8 @@ function ServerRow(props: {
       server()?.enabled ?? false,
       readOwnEntry(props.menu.toolOverrides?.mcpServers, props.name),
     );
+  const policyBlocked = () =>
+    props.menu.toolsEffectiveResult?.policyBlockedMcpServers?.includes(props.name) ?? false;
   return (
     <div
       {...props.attributes}
@@ -116,7 +118,10 @@ function ServerRow(props: {
       <span class="oc-menu-item__icon">
         <Icon name="plug" />
       </span>
-      <span class="oc-menu-item__label">{props.name}</span>
+      <span class="oc-menu-item__label">
+        {props.name}
+        {policyBlocked() ? ` · ${t("chat.composer.menu.skillBlocked")}` : ""}
+      </span>
       <span class="oc-menu-item__details">
         <button
           ref={props.controls.ref()}
@@ -125,8 +130,12 @@ function ServerRow(props: {
           role="switch"
           aria-label={props.name}
           aria-checked={enabled() ? "true" : "false"}
-          disabled={props.menu.mutationBlockedReason !== null}
-          title={props.menu.mutationBlockedReason ?? undefined}
+          disabled={policyBlocked() || props.menu.mutationBlockedReason !== null}
+          title={
+            policyBlocked()
+              ? t("chat.composer.menu.skillBlocked")
+              : (props.menu.mutationBlockedReason ?? undefined)
+          }
           onClick={(event) => {
             event.stopPropagation();
             const entry = server();

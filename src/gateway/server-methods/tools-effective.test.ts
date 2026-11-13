@@ -84,6 +84,7 @@ const runtimeMocks = vi.hoisted(() => ({
   resolveSessionMcpConfigSummary: vi.fn(() => ({
     fingerprint: "mcp:1:test",
     serverNames: [] as string[],
+    policyBlockedServerNames: [] as string[],
   })),
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace-main"),
   resolveEffectiveToolInventory: vi.fn<InventoryModule["resolveEffectiveToolInventory"]>(),
@@ -225,10 +226,17 @@ function payloadOf(respond: ReturnType<typeof vi.fn>) {
 
 const makeMcpCatalog = () => ({ version: 1, generatedAt: 1, servers: {}, tools: [] });
 
-function mockMcpConfigSummary(params: { fingerprint?: string; serverNames?: string[] } = {}): void {
+function mockMcpConfigSummary(
+  params: {
+    fingerprint?: string;
+    serverNames?: string[];
+    policyBlockedServerNames?: string[];
+  } = {},
+): void {
   runtimeMocks.resolveSessionMcpConfigSummary.mockReturnValueOnce({
     fingerprint: params.fingerprint ?? "mcp:1:test",
     serverNames: params.serverNames ?? ["reproProbe"],
+    policyBlockedServerNames: params.policyBlockedServerNames ?? [],
   });
 }
 
@@ -291,6 +299,11 @@ describe("tools.effective handler", () => {
     }
     testing.resetToolsEffectiveCacheForTest();
     runtimeMocks.resolveEffectiveToolInventory.mockResolvedValue(makeCoreInventory());
+    runtimeMocks.resolveSessionMcpConfigSummary.mockImplementation(() => ({
+      fingerprint: "mcp:1:test",
+      serverNames: [],
+      policyBlockedServerNames: [],
+    }));
   });
 
   it("rejects caller-supplied auth context params", async () => {
@@ -620,13 +633,14 @@ describe("tools.effective handler", () => {
   });
 
   it("reports configured MCP servers as not connected without starting them", async () => {
-    mockMcpConfigSummary({ serverNames: ["zeta", "alpha"] });
+    mockMcpConfigSummary({ serverNames: ["zeta", "alpha"], policyBlockedServerNames: ["blocked"] });
     const respond = await invokeTools();
 
     expectPayloadGroupIds(respond, ["core"], "mcp-not-yet-connected");
     const notice = payloadOf(respond).notices?.[0];
     expect(notice?.message).toContain('"alpha", "zeta"');
     expect(notice?.servers).toEqual(["alpha", "zeta"]);
+    expect(payloadOf(respond).policyBlockedMcpServers).toEqual(["blocked"]);
   });
 
   it.each<{
