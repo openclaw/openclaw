@@ -495,4 +495,27 @@ describe("qa-bus state", () => {
     readbackArguments.command = "mutated";
     expect(read(message.id).toolCalls?.[0]?.arguments?.command).toBe("pwd");
   });
+
+  it.each(["text", "fileName", "altText", "transcript"] as const)(
+    "matches canonical Unicode in %s without rewriting messages",
+    (surface) => {
+      for (const [stored, query] of [
+        ["Café", "CAFE\u0301"],
+        ["Cafe\u0301", "CAFÉ"],
+      ]) {
+        state.reset();
+        const input = {
+          text: surface === "text" ? stored : "attachment",
+          attachments:
+            surface === "text"
+              ? []
+              : [{ id: "a", kind: "file" as const, mimeType: "text/plain", [surface]: stored }],
+        };
+        const message = inbound(input);
+        expect(searchIds({ query: ` ${query} ` })).toEqual([message.id]);
+        expect(searchIds({ query: "cafe" })).toEqual([]);
+        expect(read(message.id)).toMatchObject(input);
+      }
+    },
+  );
 });
