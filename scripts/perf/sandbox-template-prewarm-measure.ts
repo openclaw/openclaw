@@ -6,10 +6,12 @@
  * and loop p99. See the PR for the pinned acceptance rule; no Team state is used.
  */
 import assert from "node:assert/strict";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
+import { Session } from "node:inspector/promises";
 import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
@@ -123,31 +125,116 @@ const frozenOwners = new Set([
 ]);
 const instrumentation = Symbol.for("openclaw.perf.sandbox-template-prewarm");
 let installs = 0;
-Object.defineProperty(globalThis, instrumentation, { configurable: true, value: () => installs++ });
+const resources = () => ({
+  process: process.cpuUsage(),
+  thread: process.threadCpuUsage(),
+  allocated: getHeapStatistics().total_allocated_bytes,
+});
+const used = (before: ReturnType<typeof resources>) => ({
+  processCpuMs: Object.values(process.cpuUsage(before.process)).reduce((a, b) => a + b) / 1000,
+  mainThreadCpuMs:
+    Object.values(process.threadCpuUsage(before.thread)).reduce((a, b) => a + b) / 1000,
+  mainThreadAllocatedBytes: getHeapStatistics().total_allocated_bytes - before.allocated,
+});
+type WorkKind = "prewarm" | "template" | "installer" | "clone" | "session" | "other-prewarm";
+type ActiveWork = { kind: WorkKind; commit?: string; root: object };
+const workScope = new AsyncLocalStorage<ActiveWork>();
+const active = new Set<ActiveWork>();
+const work: object[] = [];
+const costs: object[] = [];
+let recording = false;
+let previous = resources();
+let previousAt = performance.now();
+function settleCost() {
+  const usage = used(previous);
+  const now = performance.now();
+  if (recording) {
+    // Interval observations are not causal samples. Concurrent roots remain
+    // ambiguous; the CPU profile supplies execution attribution.
+    const shared = new Set([...active].map((entry) => entry.root)).size > 1;
+    const owner = ["installer", "template", "clone", "prewarm", "session", "other-prewarm"]
+      .map((kind) => [...active].find((entry) => entry.kind === kind))
+      .find((entry) => entry !== undefined);
+    costs.push({
+      kind: shared ? "shared" : (owner?.kind ?? "other"),
+      commit: owner?.commit,
+      activeKinds: [...active].map((entry) => entry.kind),
+      startedAt: previousAt,
+      elapsedMs: now - previousAt,
+      ...usage,
+    });
+  }
+  previous = resources();
+  previousAt = now;
+}
+async function measureWork<T>(kind: WorkKind, commit: string | undefined, run: () => Promise<T>) {
+  const parent = ["prewarm", "session", "other-prewarm"].includes(kind)
+    ? undefined
+    : workScope.getStore();
+  const entry = {
+    kind,
+    commit: commit ?? parent?.commit,
+    root: parent?.root ?? {},
+  };
+  settleCost();
+  active.add(entry);
+  const before = resources();
+  const startedAt = performance.now();
+  if (kind === "installer") {
+    installs++;
+  }
+  try {
+    return await workScope.run(entry, run);
+  } finally {
+    settleCost();
+    active.delete(entry);
+    if (recording) {
+      work.push({
+        kind,
+        commit: entry.commit,
+        startedAt,
+        elapsedMs: performance.now() - startedAt,
+        ...used(before),
+      });
+    }
+  }
+}
+Object.defineProperty(globalThis, instrumentation, { configurable: true, value: measureWork });
 const hooks = registerHooks({
   load(url, context, next) {
-    if (url.endsWith("/src/agents/sandbox/dependency-template.ts")) {
-      const original = readFileSync(new URL(url), "utf8");
-      const source = original.replace(
-        "export async function prepareSandboxDependencyTemplate(",
-        "async function measuredPrepareSandboxDependencyTemplate(",
-      );
-      assert.notEqual(source, original, "Installer instrumentation must bind the real owner");
-      return {
-        format: "module-typescript",
-        shortCircuit: true,
-        source:
-          source +
-          `\nexport async function prepareSandboxDependencyTemplate(...args: Parameters<typeof measuredPrepareSandboxDependencyTemplate>) { globalThis[Symbol.for("openclaw.perf.sandbox-template-prewarm")](); return await measuredPrepareSandboxDependencyTemplate(...args); }\n`,
-      };
-    }
     const name = path.basename(url);
-    if (values["baseline-dir"] && frozenOwners.has(name) && url.includes("/src/gateway/")) {
-      return {
-        format: "module-typescript",
-        shortCircuit: true,
-        source: readFileSync(path.join(values["baseline-dir"], name), "utf8"),
-      };
+    const owners: Record<string, Array<[string, WorkKind]>> = {
+      "dependency-template.ts": [["prepareSandboxDependencyTemplate", "installer"]],
+      "local-workspace-template.ts": [
+        ["prepareLocalWorkspaceTemplate", "template"],
+        ["cloneLocalWorkspaceTemplate", "clone"],
+      ],
+      "local-workspace-prewarm.ts": [["prewarmLocalWorkspaceTemplates", "prewarm"]],
+    };
+    const frozen =
+      values["baseline-dir"] && frozenOwners.has(name) && url.includes("/src/gateway/");
+    const measured = url.includes("/src/") ? owners[name] : undefined;
+    const handlers = url.endsWith("/src/gateway/server-startup-handler-prewarm.ts");
+    if (frozen || measured || handlers) {
+      let source = readFileSync(
+        frozen ? path.join(values["baseline-dir"]!, name) : new URL(url),
+        "utf8",
+      );
+      for (const [fn, kind] of measured ?? []) {
+        const declaration = `export async function ${fn}(`;
+        assert(source.includes(declaration), `Instrumentation must bind ${fn}`);
+        source = source.replace(declaration, `async function measured_${fn}(`);
+        source += `\nexport async function ${fn}(...args: Parameters<typeof measured_${fn}>) { return await globalThis[Symbol.for("openclaw.perf.sandbox-template-prewarm")]("${kind}", args[0].baseCommit, () => measured_${fn}(...args)); }\n`;
+      }
+      if (handlers) {
+        const load = "const load = () => item.load(() => stopped || isBusy());";
+        assert(source.includes(load), "Handler prewarm instrumentation must bind both arms");
+        source = source.replace(
+          load,
+          `const load = () => globalThis[Symbol.for("openclaw.perf.sandbox-template-prewarm")]("other-prewarm", undefined, () => item.load(() => stopped || isBusy()));`,
+        );
+      }
+      return { format: "module-typescript", shortCircuit: true, source };
     }
     return next(url, context);
   },
@@ -237,18 +324,7 @@ const runCampaign = async () => {
     getConfig: () => config,
     log: { warn: (message) => errors.push(message) },
   });
-  const resources = () => ({
-    process: process.cpuUsage(),
-    thread: process.threadCpuUsage(),
-    allocated: getHeapStatistics().total_allocated_bytes,
-  });
   assert(Number.isFinite(resources().allocated), "Node must expose exact V8 allocation counters");
-  const used = (before: ReturnType<typeof resources>) => ({
-    processCpuMs: Object.values(process.cpuUsage(before.process)).reduce((a, b) => a + b) / 1000,
-    mainThreadCpuMs:
-      Object.values(process.threadCpuUsage(before.thread)).reduce((a, b) => a + b) / 1000,
-    mainThreadAllocatedBytes: getHeapStatistics().total_allocated_bytes - before.allocated,
-  });
   const rows: object[] = [];
   const events: object[] = [];
   setDiagnosticsEnabledForProcess(true);
@@ -260,7 +336,9 @@ const runCampaign = async () => {
   const campaignStart = performance.now();
   const worktrees: ManagedWorktreeRecord[] = [];
   const sessions: Array<{ sessionKey: string; sessionId: string }> = [];
-  async function request(label: string, commit: string, guest = true, discover = false) {
+  const request = (label: string, commit: string, guest = true, discover = false) =>
+    measureWork("session", commit, () => performRequest(label, commit, guest, discover));
+  async function performRequest(label: string, commit: string, guest: boolean, discover: boolean) {
     const sessionKey = `agent:fixture:morning-${path.basename(output)}-${label}`;
     const phases: Record<string, number> = {};
     const before = resources();
@@ -359,6 +437,8 @@ const runCampaign = async () => {
   let admittedVerificationAt: number | undefined;
   let templates: Awaited<ReturnType<typeof listTemplatesAsync>> | undefined;
   const loop = monitorEventLoopDelay({ resolution: 10 });
+  const profiler = new Session();
+  profiler.connect();
   try {
     await request("seed", commits[0]!);
     admittedVerificationAt = readSqliteDatabaseIntegrityVerification(
@@ -372,17 +452,23 @@ const runCampaign = async () => {
     await resolveWorktreeBase(repo);
     await delay(0);
     events.length = 0;
+    await profiler.post("Profiler.enable");
+    await profiler.post("Profiler.start");
     replayOrigin = clockNow();
     const before = resources();
     const started = performance.now();
     const beforeInstalls = installs;
     const vmCpuBefore = await vmActiveCpuMs();
+    settleCost();
+    recording = true;
     command(origin, "update-ref", "refs/heads/main", commits[1]!);
     loop.enable();
     await advance(replayOrigin + 120_000);
     rows.push({ label: "arrival", backgroundInstalls: installs - beforeInstalls });
     await request("first-after-lockfile-advance", commits[1]!, true, true);
     loop.disable();
+    settleCost();
+    recording = false;
     rows.push({
       label: "campaign",
       elapsedMs: performance.now() - started,
@@ -394,9 +480,13 @@ const runCampaign = async () => {
       eventLoopP99Ms: loop.percentile(99) / 1e6,
       eventLoopMaxMs: loop.max / 1e6,
     });
+    const { profile } = await profiler.post("Profiler.stop");
+    await fs.writeFile(path.join(output, "campaign.cpuprofile"), JSON.stringify(profile));
     // Inspect retention before stop can cancel pending maintenance.
     templates = await listTemplatesAsync(process.env);
   } finally {
+    recording = false;
+    profiler.disconnect();
     await Promise.all(prewarm.map((handle) => Promise.resolve(handle.stop())));
     await scheduler.stop();
     unsubscribe();
@@ -421,6 +511,8 @@ const runCampaign = async () => {
             sessionMaintenance: morningSessionMaintenance,
             commits,
             rows,
+            work,
+            costs,
             events,
             errors,
             templateSnapshotWhileLive: templates !== undefined,
