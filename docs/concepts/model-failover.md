@@ -253,7 +253,10 @@ with `model: null`, rather than writing the displayed default back as a model.
 
 An agent can override only its fallback chain with `model: { fallbacks: [...] }`
 and keep inheriting the shared primary. Setting `fallbacks: []` explicitly disables
-fallbacks without pinning that primary. In **Settings → Agents → Overview**, editing
+fallbacks without pinning that primary. An empty effective chain also prevents initial
+selection from substituting a catalog model when a wildcard policy excludes the
+primary; the run fails with the model and policy to repair before calling a provider.
+In **Settings → Agents → Overview**, editing
 fallback chips preserves primary inheritance. Removing every chip saves an empty
 chain instead of restoring the shared fallbacks.
 

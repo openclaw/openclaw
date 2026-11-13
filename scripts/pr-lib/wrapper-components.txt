@@ -363,6 +363,7 @@ src/agents/session-slug.ts
 src/agents/core-tool-facts.ts
 src/agents/tool-catalog.ts
 src/agents/tool-description-presets.ts
+src/agents/tool-input-error.ts
 src/agents/tool-policy-match.ts
 src/agents/tool-policy-shared.ts
 src/agents/tool-policy.ts
