@@ -26,6 +26,8 @@ const DEFAULT_TRANSCRIPT_POLICY: TranscriptPolicy = {
   preserveNativeAnthropicToolUseIds: false,
   repairToolUseResultPairing: true,
   preserveSignatures: false,
+  // Earlier runtime-context carriers stay in history on every route, so each request extends
+  // the previous one byte for byte. An owning provider plugin may opt out explicitly.
   appendOnlyRuntimeContext: true,
   inHistorySystemUpdates: false,
   sanitizeThoughtSignatures: undefined,
@@ -167,9 +169,7 @@ export function resolveTranscriptPolicy(params: {
   }
   if (policy.inHistorySystemUpdates) {
     policy.inHistorySystemUpdates = context.inHistorySystemUpdates;
+    policy.appendOnlyRuntimeContext ||= context.inHistorySystemUpdates;
   }
-  // The session prefix never changes mid-session on any route: earlier runtime-context
-  // carriers stay in history, so each request extends the previous one byte for byte.
-  policy.appendOnlyRuntimeContext = true;
   return policy;
 }

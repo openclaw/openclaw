@@ -211,19 +211,29 @@ it.each([
 );
 
 it.each([
-  { name: "generic completions", api: "openai-completions" },
-  { name: "native Ollama", api: "ollama" },
+  { name: "transient override", api: "openai-completions", override: false, retained: false },
+  { name: "retained override", api: "openai-completions", override: true, retained: true },
+  { name: "generic completions", api: "openai-completions", retained: true },
+  { name: "native Ollama", api: "ollama", retained: true },
   {
     name: "suppress-only synthetic input",
     api: "openai-completions",
+    retained: true,
     suppressOnly: true,
   },
 ])(
   "preserves hidden runtime input across provider retry and cold session reopen: $name",
-  async ({ api, suppressOnly = false }) => {
+  async ({ api, override, retained, suppressOnly = false }) => {
     const { appendOnlyRuntimeContext } = resolveTranscriptPolicy({
       modelApi: api,
-      runtimeHandle: { provider: "fixture", plugin: provider },
+      runtimeHandle: {
+        provider: "fixture",
+        plugin: {
+          ...provider,
+          buildReplayPolicy:
+            override === undefined ? undefined : () => ({ appendOnlyRuntimeContext: override }),
+        },
+      },
     });
     await withOpenClawTestState({ label: "runtime-context-persistence" }, async (state) => {
       const target = {
@@ -289,10 +299,12 @@ it.each([
         return { session, sessionManager, submit };
       };
       const first = await createPersistedSession(suppressOnly);
-      await first.session.sendCustomMessage(
-        { customType: "test.extension-context", content: "extension context", display: false },
-        { deliverAs: "nextTurn" },
-      );
+      if (retained) {
+        await first.session.sendCustomMessage(
+          { customType: "test.extension-context", content: "extension context", display: false },
+          { deliverAs: "nextTurn" },
+        );
+      }
       await first.submit(RUNTIME_EVENT_USER_PROMPT, !suppressOnly, suppressOnly);
       expect(requests).toHaveLength(2);
       expect(requests[1]).toEqual(requests[0]);
@@ -307,12 +319,14 @@ it.each([
       const reopened = await createPersistedSession();
       await reopened.submit("second");
       expect(requests).toHaveLength(3);
-      // Boundary timestamp text and content before retained responses must replay byte-for-byte.
-      const providerPrefix = (messages: Context["messages"]) =>
-        JSON.stringify(messages.map(({ role, content }) => ({ role, content })));
-      expect(providerPrefix(requests[2]!.slice(0, requests[0]!.length))).toBe(
-        providerPrefix(requests[0]!),
-      );
+      if (retained) {
+        // Boundary timestamp text and content before retained responses must replay byte-for-byte.
+        const providerPrefix = (messages: Context["messages"]) =>
+          JSON.stringify(messages.map(({ role, content }) => ({ role, content })));
+        expect(providerPrefix(requests[2]!.slice(0, requests[0]!.length))).toBe(
+          providerPrefix(requests[0]!),
+        );
+      }
       const entries = reopened.sessionManager.getEntries();
       const users = entries.flatMap((entry) =>
         entry.type === "message" && entry.message.role === "user" ? [entry.message] : [],
@@ -331,13 +345,19 @@ it.each([
         (entry) =>
           entry.type === "custom_message" && entry.customType === "openclaw.runtime-context",
       );
-      expect(carriers).toHaveLength(2);
-      for (const carrier of carriers) {
-        expect(carrier).toMatchObject({ display: false });
-        const previous = entries[entries.indexOf(carrier) - 1];
-        expect(previous).toMatchObject({ type: "message", message: { role: "user" } });
+      expect(carriers).toHaveLength(retained ? 2 : 0);
+      if (retained) {
+        for (const carrier of carriers) {
+          expect(carrier).toMatchObject({ display: false });
+          const previous = entries[entries.indexOf(carrier) - 1];
+          expect(previous).toMatchObject({ type: "message", message: { role: "user" } });
+        }
+        expect(requests[0]![1]).toMatchObject({ role: "user", runtimeContext: {} });
+      } else {
+        expect(JSON.stringify(requests[2])).not.toContain(
+          `context for ${RUNTIME_EVENT_USER_PROMPT}`,
+        );
       }
-      expect(requests[0]![1]).toMatchObject({ role: "user", runtimeContext: {} });
 
       reopened.sessionManager.appendResetBoundary("new");
       const reset = await createPersistedSession();

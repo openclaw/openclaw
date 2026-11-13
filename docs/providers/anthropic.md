@@ -527,7 +527,9 @@ consecutive user turns on the Messages API; Bedrock Converse still merges
 consecutive user turns. Those carriers contain the delimited context body,
 with interpretation guidance once in the stable system prompt. Every other
 route also retains earlier runtime-context carriers, so each request extends the
-previous one; Messages API routes keep consecutive user turns separate.
+previous one; Messages API routes keep consecutive user turns separate. A
+provider plugin can opt out with `appendOnlyRuntimeContext: false` in its replay
+policy, for a proxy that answers a trailing carrier instead of the user.
 Fallback attempts keep the same route-specific context format without repeating
 the original user message or attachments.
 

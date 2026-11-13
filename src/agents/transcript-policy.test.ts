@@ -269,7 +269,8 @@ describe("resolveTranscriptPolicy", () => {
         runtimeHandle: updatingPlugin("anthropic", false),
       });
       expect(policy.inHistorySystemUpdates).toBe(directApiKey);
-      expect(policy.appendOnlyRuntimeContext).toBe(true);
+      // An explicit provider opt-out holds unless in-history updates need retained carriers.
+      expect(policy.appendOnlyRuntimeContext).toBe(directApiKey);
     },
   );
 

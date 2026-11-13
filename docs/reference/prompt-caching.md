@@ -664,6 +664,11 @@ model see a fully re-rendered prompt.
 Known exceptions:
 
 - Remote worker turns still render the system prompt on each turn.
+- A provider plugin can opt out of retained runtime-context carriers
+  (`appendOnlyRuntimeContext: false` in its replay policy), for example for
+  Gemini's managed explicit caching or a proxy that misreads a trailing
+  carrier. That route then drops the previous turn's carrier, which rewrites
+  that turn's tail once.
 - A tool that the session has not sent before extends the tool pin once.
 - Routes that merge consecutive user turns (strict Chat Completions
   compatibility, Google, Bedrock) can rewrite the last message once. This
