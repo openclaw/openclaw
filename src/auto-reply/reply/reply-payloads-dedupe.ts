@@ -11,6 +11,7 @@ import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { sha256Hex } from "../../infra/crypto-digest.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
 import {
@@ -223,34 +224,59 @@ export function resolveMessagingToolPayloadDedupe(params: MessagingToolDedupeRou
   const routeSentMediaUrls = matchingTargets.flatMap(
     (target) => target.mediaUrls?.filter((url) => url.trim()) ?? [],
   );
+  // A producer that had to drop a sent body to stay inside a retention budget
+  // exports its comparison digest in place of the text, so this route can still
+  // recognize an exact repeat of content it already delivered.
+  const routeSentTextDigests = matchingTargets.flatMap((target) =>
+    target.textComparisonDigest?.trim() ? [target.textComparisonDigest] : [],
+  );
   const allTargetsMatchRoute = matchingRoute && matchingTargets.length === sentTargets.length;
 
   return {
     shouldDedupePayloads: matchingRoute || sentTargets.length === 0,
     matchingRoute,
     routeSentTexts,
+    routeSentTextDigests,
     routeSentMediaUrls,
-    useGlobalSentTextEvidenceFallback: allTargetsMatchRoute && routeSentTexts.length === 0,
+    useGlobalSentTextEvidenceFallback:
+      allTargetsMatchRoute && routeSentTexts.length === 0 && routeSentTextDigests.length === 0,
     useGlobalSentMediaUrlEvidenceFallback: allTargetsMatchRoute && routeSentMediaUrls.length === 0,
   };
+}
+
+/**
+ * Exact-repeat match against the digests a bounded producer exported in place
+ * of texts it dropped. Only exact repeats: the substring rule in
+ * `isMessagingToolDuplicate` cannot be evaluated against a digest.
+ */
+function matchesSentTextDigest(text: string, sentTextDigests: string[]): boolean {
+  if (sentTextDigests.length === 0) {
+    return false;
+  }
+  const normalized = normalizeTextForComparison(text);
+  return normalized.length > 0 && sentTextDigests.includes(sha256Hex(normalized));
 }
 
 function isMessagingToolReplyDuplicate(
   payload: ReplyPayload,
   sentTexts: string[],
   matchingRoute: boolean,
+  sentTextDigests: string[],
 ): boolean {
   if (!payload.btw?.question.trim()) {
     const text = payload.text?.trim();
     return (
       Boolean(matchingRoute && text && sentTexts.some((sentText) => sentText.trim() === text)) ||
+      Boolean(matchingRoute && text && matchesSentTextDigest(text, sentTextDigests)) ||
       isMessagingToolDuplicate(payload.text ?? "", sentTexts)
     );
   }
   // A repeated answer alone cannot prove that a different side question was delivered.
   const rendered = normalizeTextForComparison(formatBtwTextForExternalDelivery(payload) ?? "");
   return (
-    Boolean(rendered) && sentTexts.some((text) => normalizeTextForComparison(text) === rendered)
+    Boolean(rendered) &&
+    (sentTexts.some((text) => normalizeTextForComparison(text) === rendered) ||
+      (matchingRoute && sentTextDigests.includes(sha256Hex(rendered))))
   );
 }
 
@@ -300,17 +326,26 @@ export function filterMessagingToolReplyPayload(
     decision.matchingRoute && !decision.useGlobalSentTextEvidenceFallback
       ? decision.routeSentTexts
       : (params.sentTexts ?? []);
+  const sentTextDigests =
+    decision.matchingRoute && !decision.useGlobalSentTextEvidenceFallback
+      ? decision.routeSentTextDigests
+      : [];
   const filterPayload = (normalizedSentMediaUrls: string[]) => {
     const payloads = filterMessagingToolMediaDuplicates({
       payloads: [params.payload],
       sentMediaUrls: normalizedSentMediaUrls,
     });
     const remaining =
-      sentTexts.length === 0
+      sentTexts.length === 0 && sentTextDigests.length === 0
         ? payloads
         : payloads.filter(
             (payload) =>
-              !isMessagingToolReplyDuplicate(payload, sentTexts, decision.matchingRoute) ||
+              !isMessagingToolReplyDuplicate(
+                payload,
+                sentTexts,
+                decision.matchingRoute,
+                sentTextDigests,
+              ) ||
               hasReplyPayloadContent(
                 { ...payload, text: undefined },
                 { extraContent: hasEnabledDeliveryOperation(payload) || payload.location != null },

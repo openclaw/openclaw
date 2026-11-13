@@ -28,6 +28,7 @@
  * count cap.
  */
 import { sha256Hex } from "../../infra/crypto-digest.js";
+import { normalizeTextForComparison } from "../embedded-agent-helpers/messaging-dedupe.js";
 import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
@@ -42,6 +43,38 @@ import { CLI_MESSAGING_EVIDENCE_MAX_CALLS } from "./execute-messaging.js";
 /** The retained cost of a send or payload object, framing included. */
 function measureSend(send: MessagingToolSend): number {
   return measureToolArgChars(send as unknown as Record<string, unknown>);
+}
+
+/**
+ * Keeps the one thing a dropped body was still doing for the run.
+ *
+ * `reply-payloads-dedupe.ts` is the consumer that decides whether a reply the
+ * host is about to send was already delivered by a `message` tool call, and it
+ * decides that by comparing the *exported* `text` of a settled send with the
+ * payload in hand. So a body dropped for want of retention budget does not
+ * only cost an echo: it costs that route's duplicate suppression, and the turn
+ * can deliver the same answer twice. The digest set this module keeps for its
+ * own de-duplication is private and reaches no consumer.
+ *
+ * A 64-character digest of the comparison form of the dropped text, carried on
+ * the reduced send itself, keeps route-scoped exact-repeat suppression at a
+ * fixed cost. It is deliberately only exact-repeat: the global substring rule
+ * in `isMessagingToolDuplicate` cannot be evaluated against a digest, which is
+ * why this is route-scoped evidence on the target rather than a replacement
+ * for the text in the run's global sent-text set.
+ */
+function withComparisonDigest(
+  reduced: MessagingToolSend,
+  original: MessagingToolSend,
+): MessagingToolSend {
+  if (reduced.text !== undefined || original.text === undefined) {
+    return reduced;
+  }
+  const normalized = normalizeTextForComparison(original.text);
+  if (!normalized) {
+    return reduced;
+  }
+  return { ...reduced, textComparisonDigest: sha256Hex(normalized) };
 }
 
 export function createSettledMessagingEvidence() {
@@ -120,8 +153,11 @@ export function createSettledMessagingEvidence() {
     hasTarget: (evidenceKey: string): boolean => targets.has(evidenceKey),
     /**
      * Admits a confirmed send under its content digest. The key is derived from
-     * the full send, so dropping the content from the stored value costs no
-     * duplicate suppression — only the echoed text and media of that send.
+     * the full send, so a repeat of an already-settled send is recognized here
+     * whether or not its content survived; what a reduced entry must carry for
+     * the *delivery* consumer is `textComparisonDigest` (see
+     * `withComparisonDigest`), because that consumer compares exported text and
+     * never sees these keys.
      */
     admitTarget(evidenceKey: string, target: MessagingToolSend): void {
       if (targets.has(evidenceKey)) {
@@ -140,8 +176,9 @@ export function createSettledMessagingEvidence() {
         return;
       }
       const reduction = reduceMessagingToolArgs(target as unknown as Record<string, unknown>);
-      chargeReduced(reduction.chars);
-      targets.set(evidenceKey, reduction.args as MessagingToolSend);
+      const reduced = withComparisonDigest(reduction.args as MessagingToolSend, target);
+      chargeReduced(measureSend(reduced));
+      targets.set(evidenceKey, reduced);
     },
     /**
      * Admits a source-reply mirror payload. Count-bounded only: see the module
