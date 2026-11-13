@@ -15,7 +15,6 @@ import {
   captureOwnedTranscriptWriteAssertion,
   getOwnedSessionTranscriptReader,
 } from "../../../config/sessions/transcript-write-context.js";
-import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import * as processExec from "../../../process/exec.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
@@ -39,7 +38,7 @@ import {
   sessionManagerReadToolResultProjectionEntries,
   sessionManagerReadTranscriptBranch,
 } from "../../sessions/session-manager-view-types.js";
-import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
+import { createMcpStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { createToolSearchTools, applyToolSearchCatalog } from "../../tool-search.js";
 import { createGitHubPublishTool } from "../../tools/github-publish-tool.js";
@@ -496,53 +495,56 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       const fixture = createFixture();
       const config = { tools: { toolSearch: { mode: "tools" as const } } };
       const catalogRef = {};
-      const mcpTools = Array.from({ length: 400 }, (_, index) => {
-        const tool = Object.assign(createStubTool(`granola__op_${index}`), {
-          description: "Read meeting notes for the caller with a fairly long description.",
-        });
-        setPluginToolMeta(tool, {
-          pluginId: "bundle-mcp",
-          optional: false,
-          mcp: {
-            serverName: "granola",
-            safeServerName: "granola",
-            toolName: `op_${index}`,
-            operation: "tool",
-          },
-        });
-        return tool;
-      });
+      const mcpTools = Array.from({ length: 400 }, (_, index) =>
+        createMcpStubTool("granola", `op_${index}`, "Reads meeting notes for the caller."),
+      );
+      const controls = createToolSearchTools({ config, runtimeConfig: config, catalogRef });
       const { tools } = applyToolSearchCatalog({
-        tools: [
-          ...createToolSearchTools({ config, runtimeConfig: config, catalogRef }),
-          ...mcpTools,
-        ],
+        tools: [...controls, ...mcpTools],
         config,
         catalogRef,
       });
-      const description = tools.find((tool) => tool.name === "tool_search")!.description;
+      const searchDescription = (list: { name: string; description: string }[]) =>
+        list.find((tool) => tool.name === "tool_search")!.description;
+      const description = searchDescription(tools);
       expect(description).toContain("- granola server: 400 tools, names omitted");
-      mocks.readToolUsage.mockResolvedValueOnce([
-        { toolId: "mcp:granola:granola__op_321", score: 4, updatedAt: Date.now() },
-      ]);
+      const usage = (tool: string) => [{ toolId: `mcp:granola:${tool}`, score: 4, updatedAt: 1 }];
+      mocks.readToolUsage.mockReset().mockResolvedValueOnce(usage("granola__op_321"));
       fixture.input.attempt.config = {
         ...config,
         agents: { defaults: { experimental: { usageRankedToolIndex: enabled } } },
       };
       fixture.input.toolBase.toolSearchCatalogRef = catalogRef;
-      await fixture.prepare();
+      const refreshTools = vi.fn();
+      Object.assign(fixture.agentSession, { refreshTools });
+      const runtime = await fixture.prepare();
       const { pinTools } = mocks.prepareAgentSession.mock.calls.at(-1)![0].clientToolPreparation;
-      const sent = pinTools(tools).find(
-        (tool: { name: string }) => tool.name === "tool_search",
-      ).description;
+      const sent = searchDescription(pinTools(tools));
       if (!enabled) {
         expect(mocks.readToolUsage).not.toHaveBeenCalled();
         expect(sent).toBe(description);
         return;
       }
-      expect(sent).not.toBe(description);
       expect(sent).toContain("- mcp:granola:granola__op_321\n");
-      expect(sent).toMatch(/- granola server: \d+ more tools, names omitted/u);
+      Object.assign(fixture.sessionManager, {
+        getSessionTarget: () => undefined,
+        getSessionId: () => "history-session",
+        appendCustomEntryAsync: vi.fn(async () => "checkpoint"),
+      });
+      Object.assign(fixture.activeSession, { agent: { state: { messages: [] } } });
+      await runtime.prepareSystemPromptUpdate!("unchanged");
+      expect(refreshTools).not.toHaveBeenCalled();
+      // Committed compaction refreshes the snapshot; tools re-pin before the next request.
+      Object.assign(fixture.sessionManager, {
+        [sessionManagerReadTranscriptBranch]: () => [{ type: "compaction", id: "compacted" }],
+        getBoundaryCount: () => 1,
+      });
+      mocks.readToolUsage.mockResolvedValueOnce(usage("granola__op_399"));
+      await runtime.prepareSystemPromptUpdate!("unchanged");
+      expect(refreshTools).toHaveBeenCalledOnce();
+      const repinned = searchDescription(pinTools(tools));
+      expect(repinned).toContain("- mcp:granola:granola__op_399\n");
+      expect(repinned).not.toContain("- mcp:granola:granola__op_321\n");
     },
   );
 

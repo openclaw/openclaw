@@ -321,19 +321,18 @@ it("backfills direct, bare-name dispatch, and Code Mode MCP calls from server ev
   append(result("unproven", "granola__get_notes"));
   append(nested("n-bare", "bare", "granola__list_meetings"));
   append(nested("n-code", "code", "granola__list_meetings"));
-  // A name the native catalog owns never falls back to MCP evidence.
+  // MCP evidence for a name a native catalog entry owns stays uncounted, direct or nested.
   append(nested("n-shadow", "code", "granola__shadow"));
+  append({ role: "assistant", content: [call("shadow", "granola__shadow")] }, 100);
+  append(result("shadow", "granola__shadow", mcp));
   // A failed MCP call is excluded even with server evidence.
   append(nested("n-failed", "code", "granola__list_meetings", { ...mcp, status: "error" }));
   append(result("bare", "dispatch_action"), 130);
   append(result("code", "exec"), 130);
   expect(scan.result()).toMatchObject({
-    rows: [
-      { toolId: "mcp:granola:granola__list_meetings", score: 3 },
-      { toolId: "openclaw:notes:granola__shadow", score: 1 },
-    ],
-    successfulCalls: 4,
-    excluded: { unknownTools: 1, errors: 1 },
+    rows: [{ toolId: "mcp:granola:granola__list_meetings", score: 3 }],
+    successfulCalls: 3,
+    excluded: { unknownTools: 3, errors: 1 },
   });
 });
 

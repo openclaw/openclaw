@@ -271,7 +271,8 @@ export function createToolUsageTranscriptAccumulator(input: {
           excluded.unknownTools++;
         }
       } else if (!isToolUsageWrapper(name)) {
-        count(message.toolCallId, call?.target ?? resolve(name, message), at, eventNavigation);
+        // The result's owner evidence decides; a pre-result name binding cannot bypass it.
+        count(message.toolCallId, resolve(name, message), at, eventNavigation);
       } else {
         excluded.wrappers++;
       }

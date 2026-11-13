@@ -106,8 +106,9 @@ function resolveMcpToolUsageId(name: string, result: unknown): string | undefine
 
 /**
  * Names resolve only when unique; exact catalog IDs never depend on catalog order.
- * Exact MCP IDs name their own server, so they resolve without a live MCP catalog,
- * and a bare name the catalog does not know resolves from its MCP result evidence.
+ * Exact MCP IDs name their own server, so they resolve without a live MCP catalog.
+ * A bare name resolves from its MCP result evidence; when that evidence contradicts
+ * a catalog owner of the same name, the call stays uncounted.
  */
 export function createToolUsageCatalogResolver(catalog: readonly ToolUsageCatalogEntry[]) {
   const ids = new Set<string>();
@@ -129,9 +130,11 @@ export function createToolUsageCatalogResolver(catalog: readonly ToolUsageCatalo
     if (ids.has(idOrName) || readMcpToolUsageIdName(idOrName) !== undefined) {
       return idOrName;
     }
-    // A known name never falls back to MCP evidence: an ambiguous name stays uncounted.
-    return names.has(idOrName)
-      ? (names.get(idOrName) ?? undefined)
-      : resolveMcpToolUsageId(idOrName, result);
+    const mcpId = resolveMcpToolUsageId(idOrName, result);
+    if (!names.has(idOrName)) {
+      return mcpId;
+    }
+    const known = names.get(idOrName) ?? undefined;
+    return mcpId && known !== mcpId ? undefined : known;
   };
 }
