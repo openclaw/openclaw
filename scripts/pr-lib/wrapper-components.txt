@@ -1494,6 +1494,7 @@ src/infra/worker-mutation-authority.ts
 src/infra/worker-native-error.ts
 src/infra/worker-native-handle.ts
 src/infra/worker-native-lifecycle.ts
+src/infra/worker-native-lifecycle.types.ts
 src/infra/worker-native-lifecycle.worker.ts
 src/infra/worker-native-port.ts
 src/infra/worker-native-task-port.ts
