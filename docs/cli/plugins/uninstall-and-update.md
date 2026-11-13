@@ -241,6 +241,9 @@ use the `plugins` tool with `action: "reloadAndResume"` and `pluginId` instead.
 This explicit handoff ends the active turn (not the conversation), lets normal
 cleanup release its plugin leases, then runs the ordinary authorized reload and
 wakes the same session with the result, including failures and cleanup warnings.
+The detached reload uses the same cancellable ten-minute drain budget as `--wait`,
+so other admitted turns can finish after the requesting turn releases its leases.
+New agent runs wait behind the replacement gate during that drain.
 It requires a Gateway-hosted conversation with turn-yield support. Stop cancels
 a pending handoff; it never force-releases leases or rolls back a committed reload.
 The handoff is process-local: if the Gateway exits before delivery, inspect the
