@@ -16,6 +16,7 @@ import * as nodeSqlite from "../../infra/node-sqlite.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
+  beginGatewayShutdownCleanup,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
@@ -394,8 +395,9 @@ it.each(["complete", "user-abort", "restart-abort", "frozen-restart"] as const)(
         const sql = observeSql();
         let successor: ReturnType<typeof waitForReplyRunSuccessorAdmission> | undefined;
         try {
-          // Drain forces physical retirement of the active owner and the full idle cache.
+          // Cleanup after restart grace retires the active owner and the full idle cache.
           markGatewayRestartDraining();
+          beginGatewayShutdownCleanup();
           if (ending !== "complete") {
             operation.setPhase("running");
             operation.attachBackend({
