@@ -8,7 +8,10 @@ import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.j
 import { onAgentRuntimeEvent } from "../../infra/agent-events.js";
 import { getAgentRunContext, getAgentRunContextOwnership } from "../../infra/agent-run-registry.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission-state.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import * as trajectoryStore from "../../trajectory/runtime-store.sqlite.js";
@@ -211,7 +214,8 @@ describe("worker live event write settlement", () => {
           SQLITE_SESSION_WRITER_QUEUES,
           "live event test cleanup",
         );
-        closeOpenClawAgentDatabasesForTest();
+        await closeOpenClawAgentDatabasesAsync(support.testState.root);
+        closeOpenClawAgentDatabasesForTest(support.testState.root);
       }
     },
   );
