@@ -6,7 +6,6 @@ import {
   configureProofCollaboration,
   createScenario,
   expectProofIdle,
-  FOLLOWUP_REPLY,
   humanReplies,
   proofDeliveries,
   runHuman,
@@ -179,10 +178,8 @@ export async function verifyCollaborativeCancellation(signal: AbortSignal) {
           } else {
             expect(bobResult.error, id).toBeUndefined();
             expect(bobResult.result?.deferredToActiveRun).toBe("followup");
-            expect(replies).toContainEqual({
-              sender: "bob",
-              text: FOLLOWUP_REPLY,
-            });
+            // Incumbent cancellation queues Bob automatically, without an explicit-command notice.
+            expect(replies.filter((reply) => reply.sender === "bob")).toEqual([]);
             expect(scenario.accepted).toMatchObject({ status: "accepted" });
             expect(scenario.sourceRequests.length).toBeGreaterThan(0);
             expect(scenario.targetRequests.length).toBeGreaterThan(0);

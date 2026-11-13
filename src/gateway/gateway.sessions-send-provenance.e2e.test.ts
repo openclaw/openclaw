@@ -667,12 +667,11 @@ async function verifyCrossHumanAdmission(
   } else {
     expect((await running.bob).deferredToActiveRun).toBe("followup");
   }
-  const expectedReplies = collaborative
-    ? []
-    : (allowCollaborativeSteering !== false
-        ? [FOLLOWUP_REPLY]
-        : [STEERING_REFUSED_REPLY, FOLLOWUP_REPLY]
-      ).map((text) => ({ sender: "bob", text }));
+  // Automatic fallback is quiet; only the explicit /followup path acknowledges queueing.
+  const expectedReplies =
+    allowCollaborativeSteering === false
+      ? [STEERING_REFUSED_REPLY, FOLLOWUP_REPLY].map((text) => ({ sender: "bob", text }))
+      : [];
   expect(humanReplies.slice(firstReply).filter((reply) => reply.sender === "bob")).toEqual(
     expectedReplies,
   );
