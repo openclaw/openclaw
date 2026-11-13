@@ -36,7 +36,7 @@ const QUIET_STARTUP_ENV = {
 export async function checkActivatedGatewayStartup(params: {
   result: UpdateRunResult;
   env: NodeJS.ProcessEnv;
-  /** Remote-only profiles run no local Gateway; the probe speaks plain HTTP only. */
+  /** Profiles without a configured local Gateway are not booted; the probe speaks plain HTTP only. */
   gateway?: { remote: boolean; tls: boolean };
   stateDir: string;
   nodeRunner?: string;
@@ -68,7 +68,9 @@ export async function checkActivatedGatewayStartup(params: {
   const skipped = (message: string) =>
     finish({ exitCode: null, advisory: { kind: "recoverable-maintenance", message } });
   if (params.gateway?.remote) {
-    return skipped("This profile uses a remote Gateway; the activated release was not started.");
+    return skipped(
+      "This profile does not configure a local Gateway; the activated release was not started.",
+    );
   }
   if (params.gateway?.tls) {
     // Accepted: the readiness probe is plain HTTP. TLS Gateways are verified on restart.

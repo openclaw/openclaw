@@ -93,7 +93,7 @@ it("leaves failed or rootless results to their existing owner", async () => {
 });
 
 it.each([
-  [{ remote: true, tls: false }, "remote Gateway"],
+  [{ remote: true, tls: false }, "does not configure a local Gateway"],
   [{ remote: false, tls: true }, "serves TLS"],
 ])("reports a non-check instead of failing %o", async (gateway, message) => {
   const result = await check(activated, gateway);

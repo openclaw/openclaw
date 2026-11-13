@@ -25,7 +25,8 @@ export async function checkActivatedRelease(
     result,
     env,
     gateway: {
-      remote: config?.gateway?.mode === "remote",
+      // Only an explicitly local Gateway can start here; unset and remote modes are refused at boot.
+      remote: config?.gateway?.mode !== "local",
       tls: config?.gateway?.tls?.enabled === true,
     },
     stateDir: resolveStateDir(env),
