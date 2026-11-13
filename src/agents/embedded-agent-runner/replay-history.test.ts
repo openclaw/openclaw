@@ -462,18 +462,48 @@ describe("normalizeAssistantReplayContent", () => {
   });
 
   it.each(["NO_REPLY", "no_reply", "No_Reply"])(
-    "drops standalone %s assistant replay text",
+    "keeps standalone %s replay text before the next user turn",
     (text) => {
-      expectReplayDrop("first", assistant(text), "second");
+      // Dropping it would make two user turns adjacent; role-alternating transports merge
+      // them, which rewrites an already-sent turn and breaks the prompt cache prefix.
+      const messages = [user("first"), assistant([textBlock(text)], "stop"), user("second")];
+      expect(normalize(messages)).toEqual(messages);
     },
   );
 
-  it("drops silent replies with redacted reasoning (#99620)", () => {
-    const kept = user("hi");
-    const reasoning = { type: "redacted_thinking", data: "redacted-yield" };
-    expect(normalize([kept, assistant([reasoning, textBlock("NO_REPLY")], "stop")])).toStrictEqual([
-      kept,
+  it.each(["NO_REPLY", "no_reply", "No_Reply"])(
+    "drops standalone %s replay text before another assistant turn",
+    (text) => {
+      const next = assistant([textBlock("answer")], "stop");
+      expect(normalize([user("first"), assistant([textBlock(text)], "stop"), next])).toEqual([
+        user("first"),
+        next,
+      ]);
+    },
+  );
+
+  it("keeps a newest silent reply so the next request keeps the same prefix", () => {
+    const messages = [user("first"), assistant([textBlock("NO_REPLY")], "stop")];
+    expect(normalize(messages)).toEqual(messages);
+  });
+
+  it("keeps a silent reply stable once its next user turn exists", () => {
+    const silent = assistant([textBlock("NO_REPLY")], "stop");
+    const first = normalize([user("first"), silent, user("second")]);
+    const later = normalize([
+      user("first"),
+      silent,
+      user("second"),
+      assistant([textBlock("ok")], "stop"),
+      user("third"),
     ]);
+    expect(later.slice(0, first.length)).toEqual(first);
+  });
+
+  it("keeps silent replies with redacted reasoning until another assistant turn follows (#99620)", () => {
+    const reasoning = { type: "redacted_thinking", data: "redacted-yield" };
+    const messages = [user("hi"), assistant([reasoning, textBlock("NO_REPLY")], "stop")];
+    expect(normalize(messages)).toEqual(messages);
   });
 
   it("drops silent thinking residue before a follow-up tool turn (#99620)", () => {
