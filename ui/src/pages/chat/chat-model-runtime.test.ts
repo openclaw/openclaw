@@ -236,9 +236,9 @@ describe("chat model runtime choices", () => {
     expect(
       container.querySelector("[data-chat-model-select]")?.getAttribute("data-chat-model-tools"),
     ).toBe("unavailable");
-    expect(
-      container.querySelector(".chat-controls__model-capability-badge")?.textContent,
-    ).toContain("No tools");
+    const trigger = container.querySelector("[data-chat-model-select]");
+    expect(trigger?.getAttribute("aria-label")).toContain("No tools");
+    expect(trigger?.textContent).not.toContain("No tools");
   });
 
   it("labels an observed Codex default with an alternate runtime", async () => {
