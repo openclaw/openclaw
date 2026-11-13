@@ -1,3 +1,4 @@
+import { normalizeAnthropicToolCallId } from "@openclaw/ai/internal/anthropic";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
 import { castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
@@ -27,7 +28,7 @@ describe("tool result id aliases", () => {
   });
 });
 
-type Mode = "strict" | "strict9";
+type Mode = "strict" | "strict9" | "anthropic";
 const call = (id: string) => ({
   type: "toolCall" as const,
   id,
@@ -91,6 +92,18 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
   it("strips non-alphanumeric characters", () => {
     expectRewrite(transcript(["call_|item:123-"]), "callitem123", "strict");
   });
+
+  // A request that reaches the Anthropic transport without host replay (a side-question fork)
+  // is encoded by the transport's own rule, so host replay must produce the same bytes.
+  it.each(["toolu_01AbCdEfGhIjKlMnOpQrStUv", "call_a|fc_b", "functions.read:0", "x".repeat(80)])(
+    "spells %s as the Anthropic transport does in anthropic mode",
+    (id) => {
+      const out = sanitize(transcript([id]), "anthropic");
+      expect(idAt(out)).toBe(normalizeAnthropicToolCallId(id));
+      expect(normalizeAnthropicToolCallId(idAt(out))).toBe(idAt(out));
+      expect(out[1]).toMatchObject({ toolCallId: idAt(out) });
+    },
+  );
 
   it.each([
     ["repeated aliases", ["edit:22", "edit:22"], "strict", true],

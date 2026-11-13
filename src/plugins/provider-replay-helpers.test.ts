@@ -20,7 +20,8 @@ const legacySonnet = "claude-3-7-sonnet-20250219";
 const strictAnthropicPolicy = {
   sanitizeMode: "full",
   sanitizeToolCallIds: true,
-  toolCallIdMode: "strict",
+  // The Anthropic-family transport's own id rule, shared by every request path.
+  toolCallIdMode: "anthropic",
   preserveSignatures: true,
   repairToolUseResultPairing: true,
   validateAnthropicTurns: true,

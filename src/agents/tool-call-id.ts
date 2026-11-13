@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@openclaw/agent-core";
+import { normalizeAnthropicToolCallId } from "@openclaw/ai/internal/anthropic";
 import {
   createToolCallOccurrenceQueue,
   extractToolCallsFromAssistant,
@@ -18,7 +19,9 @@ import {
   normalizeAllowedToolNames,
 } from "./tool-call-shared.js";
 
-export type ToolCallIdMode = "strict" | "strict9";
+// "anthropic" is the Anthropic-family transport's own id rule, so replay and every request path
+// (the session, a side-question fork, compaction) send one spelling of each id.
+export type ToolCallIdMode = "strict" | "strict9" | "anthropic";
 const NATIVE_ANTHROPIC_TOOL_USE_ID_RE = /^toolu_[A-Za-z0-9_]+$/;
 const NATIVE_KIMI_TOOL_CALL_ID_RE = /^functions\.[A-Za-z0-9_-]+:\d+$/;
 const OPENAI_TOOL_CALL_ID_RE = /^call_[A-Za-z0-9_-]+$/;
@@ -39,10 +42,15 @@ type ReplaySafeToolCallBlock = {
  *
  * - "strict" mode: only [a-zA-Z0-9]
  * - "strict9" mode: only [a-zA-Z0-9], length 9 (Mistral tool call requirement)
+ * - "anthropic" mode: the Anthropic-family transport rule, [a-zA-Z0-9_-], at most 64
  */
 function sanitizeToolCallId(id: string, mode: ToolCallIdMode = "strict"): string {
   if (!id) {
     return mode === "strict9" ? "defaultid" : "defaulttoolid";
+  }
+
+  if (mode === "anthropic") {
+    return normalizeAnthropicToolCallId(id);
   }
 
   if (mode === "strict9") {
@@ -162,7 +170,7 @@ function makeUniqueToolId(params: { id: string; used: Set<string>; mode: ToolCal
     return sha256HexPrefixCore(`${params.id}:${Date.now()}`, STRICT9_LEN);
   }
 
-  const MAX_LEN = 40;
+  const MAX_LEN = params.mode === "anthropic" ? 64 : 40;
 
   const base = sanitizeToolCallId(params.id, params.mode).slice(0, MAX_LEN);
   if (!params.used.has(base)) {
@@ -249,7 +257,8 @@ export function rewriteToolResultIds(params: {
  * Sanitize tool call IDs for provider compatibility.
  *
  * @param messages - The messages to sanitize
- * @param mode - "strict" (alphanumeric only) or "strict9" (alphanumeric length 9)
+ * @param mode - "strict" (alphanumeric only), "strict9" (alphanumeric length 9) or
+ *   "anthropic" (the Anthropic-family transport rule)
  * @param options.duplicateToolCallIdStyle - Optional provider-safe style for repeated IDs
  */
 export function sanitizeToolCallIdsForCloudCodeAssist(

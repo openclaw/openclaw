@@ -79,7 +79,9 @@ export function buildStrictAnthropicReplayPolicy(
     ...(sanitizeToolCallIds
       ? {
           sanitizeToolCallIds: true,
-          toolCallIdMode: "strict" as const,
+          // The transport's own id rule: a request that reaches the transport without host
+          // replay (a side-question fork) spells every id the same way.
+          toolCallIdMode: "anthropic" as const,
           ...(options.preserveNativeAnthropicToolUseIds
             ? { preserveNativeAnthropicToolUseIds: true }
             : {}),

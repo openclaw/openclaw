@@ -15,7 +15,7 @@ export type ProviderReasoningOutputMode = "native" | "tagged";
 export type ProviderReplayPolicy = {
   sanitizeMode?: "full" | "images-only";
   sanitizeToolCallIds?: boolean;
-  toolCallIdMode?: "strict" | "strict9";
+  toolCallIdMode?: "strict" | "strict9" | "anthropic";
   duplicateToolCallIdStyle?: "openai";
   preserveNativeAnthropicToolUseIds?: boolean;
   preserveSignatures?: boolean;
