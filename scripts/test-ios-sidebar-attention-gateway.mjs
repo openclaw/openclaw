@@ -380,6 +380,7 @@ wss.on("connection", (ws) => {
               displayName: "Website refresh",
               label: "Website refresh",
               category: "Research",
+              pinned: true,
               kind: "direct",
               childSessions: [reviewKey],
               updatedAt: created - 30000,
@@ -389,11 +390,13 @@ wss.on("connection", (ws) => {
               key: reviewKey,
               displayName: "Pending review",
               label: "Pending review",
-              category: "Research",
+              category: "Other",
+              childSessions: ["agent:main:attention-grandchild"],
               kind: "direct",
               updatedAt: created - 60000,
               totalTokens: 84,
             },
+            { key: "agent:main:attention-grandchild", displayName: "Family grandchild", label: "Family grandchild", category: "Other", kind: "direct", updatedAt: created - 90000 },
           ],
         });
         break;

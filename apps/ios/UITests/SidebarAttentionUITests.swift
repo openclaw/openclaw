@@ -41,6 +41,20 @@ final class SidebarAttentionUITests: XCTestCase {
         XCTAssertTrue(review.waitForExistence(timeout: 15), app.debugDescription)
         let parent = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Website refresh")).firstMatch
         XCTAssertTrue(parent.waitForExistence(timeout: 10))
+        let grandchild = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Family grandchild")).firstMatch
+        XCTAssertTrue(grandchild.waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertEqual(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Pending review")).count, 1)
+        self.capture(app, named: "family-expanded")
+        let collapse = app.buttons["Hide Sub-sessions"].firstMatch
+        XCTAssertTrue(collapse.waitForExistence(timeout: 10))
+        collapse.tap()
+        XCTAssertTrue(review.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(grandchild.waitForNonExistence(timeout: 5))
+        self.capture(app, named: "family-collapsed")
+        app.buttons["Show Sub-sessions"].firstMatch.tap()
+        XCTAssertTrue(review.waitForExistence(timeout: 5))
+        XCTAssertTrue(grandchild.waitForExistence(timeout: 5))
+        XCTAssertEqual(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Pending review")).count, 1)
         self.capture(app, named: "sidebar-pending")
 
         let question = app.buttons.matching(identifier: "sidebar-attention-question").firstMatch
