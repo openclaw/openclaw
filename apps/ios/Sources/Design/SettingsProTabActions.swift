@@ -663,11 +663,17 @@ extension SettingsProTab {
         Binding(
             get: { self.gatewayAuthFields[keyPath: field] },
             set: { value in
-                self.gatewayAuthFields[keyPath: field] = value
-                guard !self.suppressCredentialPersist else { return }
-                self.gatewayAuthFields.persist(
+                guard !self.suppressCredentialPersist else {
+                    self.gatewayAuthFields[keyPath: field] = value
+                    return
+                }
+                self.gatewayAuthFields.edit(
+                    field,
+                    to: value,
                     instanceId: self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines),
-                    targetStableID: self.gatewayCredentialTargetStableID)
+                    defaultTarget: Self.defaultCredentialTargetStableID(
+                        manualStableID: self.currentManualGatewayStableID,
+                        registry: self.gatewayRegistry))
             })
     }
 
