@@ -556,8 +556,8 @@ for (const testCase of cases) {
       expect(current.completionAuthority?.signal.aborted).toBe(false);
       expect(current.deliveries).toBe(0);
       expect(completed.delivery?.status).not.toBe("delivered");
-      // This is a live-authority/scheduler control, not post-release delivery proof.
-      // Let the ordinary producer finish and drain either outcome without changing it.
+      // Preserve the live-authority/scheduler control, then let the ordinary producer
+      // finish and verify the healthy completion reaches its parent exactly once.
       current.producerCanYield.resolve();
       await withinTest(current.producerReleased.promise, signal);
     }
@@ -569,9 +569,6 @@ for (const testCase of cases) {
         pluginId: "person-access",
         grantId: "private-completion-grant",
       });
-    }
-    if (beforeRelease) {
-      return;
     }
     expect(current.deliveries, JSON.stringify(subagentRuns.get(runId)?.delivery)).toBe(1);
     expect(subagentRuns.get(runId)?.delivery?.status).toBe("delivered");
