@@ -1,0 +1,2 @@
+217
+# TTS readiness regressions distinguish selection, credentials, agent scope, SecretRefs, and Gateway facts.

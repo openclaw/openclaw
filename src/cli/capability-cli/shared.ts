@@ -19,6 +19,7 @@ import { getProviderEnvVarsCore } from "../../secrets/provider-env-vars.js";
 import { resolveModelRefOverride } from "../../shared/model-ref-override.js";
 import { resolveCommandConfigWithSecrets } from "../command-config-resolution.js";
 import { inheritOptionFromParent } from "../command-options.js";
+import type { CommandSecretResolutionMode } from "../command-secret-gateway.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 import type { CapabilityTransport } from "./metadata.js";
 
@@ -121,6 +122,7 @@ export function parseOptionalTimeoutMs(raw: string | number | undefined): number
 export async function resolveLocalCapabilityRuntimeConfig(params: {
   commandName: string;
   targetIds: Set<string>;
+  mode?: CommandSecretResolutionMode;
   allowedPaths?: Set<string>;
   forcedActivePaths?: Set<string>;
   optionalActivePaths?: Set<string>;
@@ -131,6 +133,7 @@ export async function resolveLocalCapabilityRuntimeConfig(params: {
     config: cfg,
     commandName: params.commandName,
     targetIds: params.targetIds,
+    ...(params.mode ? { mode: params.mode } : {}),
     ...(params.allowedPaths ? { allowedPaths: params.allowedPaths } : {}),
     ...(params.forcedActivePaths ? { forcedActivePaths: params.forcedActivePaths } : {}),
     ...(params.optionalActivePaths ? { optionalActivePaths: params.optionalActivePaths } : {}),
@@ -144,6 +147,7 @@ export async function resolveLocalCapabilityRuntimeConfig(params: {
 export async function resolveLocalCapabilityAgent(params: {
   commandName: string;
   targetIds: Set<string>;
+  mode?: CommandSecretResolutionMode;
   agent?: string;
   surface?: string;
 }) {
