@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ensureContextEnginesInitialized } from "../context-engine/init.js";
 import { disposeContextEngineSources } from "../context-engine/registry.resources.js";
 import { resetContextEngineRuntimeQuarantineForTests } from "../context-engine/registry.test-support.js";
+import { withActivatedPluginIds } from "./activation-context.js";
 import { writeFixtureJson } from "./loader-fixture-builders.test-support.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import {
@@ -41,6 +42,7 @@ function writeEnginePlugin(params: {
     dir: path.join(params.workspaceDir, params.id),
     filename: "index.cjs",
     body: `const fs = require("node:fs");
+fs.appendFileSync(${JSON.stringify(path.join(params.workspaceDir, "imports"))}, ${JSON.stringify(params.id + "\n")});
 module.exports = { id: ${JSON.stringify(params.id)}, register(api) {
   fs.appendFileSync(${JSON.stringify(path.join(params.workspaceDir, "registrations"))}, ${JSON.stringify(params.id + "\n")});
   api.registerService({ id: ${JSON.stringify(params.id + "-service")}, start() {} });
@@ -66,10 +68,16 @@ module.exports = { id: ${JSON.stringify(params.id)}, register(api) {
   return plugin;
 }
 
-it.each([
-  { engineId: "canonical-engine", allow: ["mixed-demo"] },
-  { engineId: "MiXeD-demo", allow: ["unrelated"] },
-])("loads mixed-case owner of exact engine $engineId", async ({ engineId, allow }) => {
+it.each<[string, NonNullable<OpenClawConfig["plugins"]>, boolean]>([
+  ["canonical-engine", { allow: ["mixed-demo"] }, true],
+  ["MiXeD-demo", { allow: ["unrelated"] }, true],
+  ["MiXeD-demo", { deny: ["mixed-demo"] }, false],
+  [
+    "MiXeD-demo",
+    { entries: { "MIXED-demo": { enabled: true }, "MiXeD-demo": { enabled: false } } },
+    false,
+  ],
+])("admits mixed-case owner of %s under %j: %s", async (engineId, policy, permitted) => {
   useNoBundledPlugins();
   const workspaceDir = makePluginLoaderTempDir();
   vi.stubEnv("OPENCLAW_STATE_DIR", makePluginLoaderTempDir());
@@ -83,12 +91,12 @@ it.each([
   const config: OpenClawConfig = {
     plugins: {
       load: { paths: [plugin.file] },
-      allow,
+      ...policy,
       slots: { memory: "none", contextEngine: engineId },
     },
   };
   const registry = loadOpenClawPlugins({
-    config,
+    config: withActivatedPluginIds({ config, pluginIds: [plugin.id] }),
     workspaceDir,
     cache: false,
     runtimeSideEffects: true,
@@ -96,9 +104,15 @@ it.each([
   try {
     expect(getPluginRuntimeLoadContextState(registry)?.selectedContextEngine).toEqual({
       engineId,
-      owner: "plugin:MiXeD-demo",
+      owner: permitted ? "plugin:MiXeD-demo" : null,
     });
     const record = registry.plugins.find((entry) => entry.id === "MiXeD-demo");
+    expect(fs.existsSync(path.join(workspaceDir, "imports"))).toBe(permitted);
+    if (!permitted) {
+      expect(record?.status).toBe("disabled");
+      expect(registry.contextEngines.has(engineId)).toBe(false);
+      return;
+    }
     expect(record?.error).toBeUndefined();
     expect(record?.status).toBe("loaded");
     expect(registry.contextEngines.get(engineId)?.owner).toBe("plugin:MiXeD-demo");
@@ -113,41 +127,6 @@ it.each([
     } finally {
       await engine.dispose?.();
     }
-  } finally {
-    await disposePluginRegistryInstances(registry);
-  }
-});
-
-it("keeps canonical denial ahead of mixed-case equal-ID selection", async () => {
-  useNoBundledPlugins();
-  const workspaceDir = makePluginLoaderTempDir();
-  vi.stubEnv("OPENCLAW_STATE_DIR", makePluginLoaderTempDir());
-  const plugin = writeEnginePlugin({
-    workspaceDir,
-    id: "MiXeD-demo",
-    engineIds: ["MiXeD-demo"],
-    kind: "context-engine",
-    declaredEngineIds: ["MiXeD-demo"],
-  });
-  const registry = loadOpenClawPlugins({
-    config: {
-      plugins: {
-        load: { paths: [plugin.file] },
-        deny: ["mixed-demo"],
-        slots: { memory: "none", contextEngine: "MiXeD-demo" },
-      },
-    },
-    workspaceDir,
-    cache: false,
-    runtimeSideEffects: true,
-  });
-  try {
-    expect(registry.plugins.find((record) => record.id === "MiXeD-demo")?.status).toBe("disabled");
-    expect(getPluginRuntimeLoadContextState(registry)?.selectedContextEngine).toEqual({
-      engineId: "MiXeD-demo",
-      owner: null,
-    });
-    expect(registry.contextEngines.has("MiXeD-demo")).toBe(false);
   } finally {
     await disposePluginRegistryInstances(registry);
   }
