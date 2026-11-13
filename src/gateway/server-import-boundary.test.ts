@@ -89,6 +89,8 @@ console.log("prewarm-cold-selection-ok");`,
 
   it.each([
     ["src/gateway/call.ts", "src/gateway/method-scopes.ts"],
+    ["src/gateway/call.ts", "src/infra/worker-task-pool.ts"],
+    ["src/gateway/call.ts", "src/infra/client-credential-store.ts"],
     ["src/gateway/config-get-response.ts", "src/config/runtime-schema.ts"],
   ])("loads %s without the demand-only %s", (entry, deferred) => {
     expect(collectStaticValueImports(entry)).not.toContain(path.normalize(deferred));
