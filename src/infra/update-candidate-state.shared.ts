@@ -22,7 +22,6 @@ import {
   type StateDatabaseDiscovery,
 } from "./update-candidate-paths.js";
 import type { UpdateCandidateBundledSource } from "./update-candidate-plugins.js";
-import type { UpdateStateSchemaInspectionPlanSchema } from "./update-candidate-state.js";
 
 const StateSchemaDiscoveryOwnershipSchema = z.record(
   z.string(),
@@ -51,10 +50,9 @@ export async function writeUpdateStateSchemaOwnership(
     .catch(ignoreMissingPath);
 }
 
-export async function rehydrateUpdateStateSchemaOwnership(
-  input: { stateDir: string; stagingRoot?: string },
-  plan: z.infer<typeof UpdateStateSchemaInspectionPlanSchema>,
-) {
+export async function rehydrateUpdateStateSchemaOwnership<
+  T extends { files: ReadonlyArray<readonly [string, StateDatabaseDiscovery]> },
+>(input: { stateDir: string; stagingRoot?: string }, plan: T): Promise<T> {
   const { stagingRoot } = input;
   const record = stagingRoot
     ? await fs
