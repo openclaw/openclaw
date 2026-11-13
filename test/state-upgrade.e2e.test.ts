@@ -81,7 +81,9 @@ const cases = [
   { release: "2026.7.1-blob", failStep: undefined },
   { release: "2026.8.35", failStep: undefined },
   { release: "2026.10.10", failStep: undefined },
-  { release: "2026.7.1", failStep: "injected-step" },
+  // The generic fallback cannot import 7.x session JSON files (a Doctor file import),
+  // so forced-fallback cases use releases whose sessions already live in SQLite.
+  { release: "2026.8.35", failStep: "injected-step" },
   { release: "2026.10.10", failStep: "injected-step" },
 ];
 
@@ -105,13 +107,14 @@ describe("Gateway start upgrades prior-release state by copy and swap", () => {
           .readFileSync(path.join(instance.stateDir, "openclaw.json"), "utf8")
           .replaceAll("/home/fixture/.openclaw", instance.stateDir)
           .replaceAll("/home/fixture", instance.homeDir);
+        const config = JSON.parse(corpus);
+        // The corpus plugin was installed from a path that exists only in the generator
+        // container; with it configured, Doctor (in place or here) defers the 7.x session
+        // import until the plugin converges.
+        delete config.plugins?.entries?.["corpus-plugin"];
         fs.writeFileSync(
           instance.configPath,
-          JSON.stringify({
-            ...JSON.parse(corpus),
-            gateway: generated.gateway,
-            hooks: generated.hooks,
-          }),
+          JSON.stringify({ ...config, gateway: generated.gateway, hooks: generated.hooks }),
         );
         const before = new Map(sqliteFiles(instance.stateDir).map((file) => [file, sha256(file)]));
 
