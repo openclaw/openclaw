@@ -1914,6 +1914,7 @@ jobs:
       published_driver_artifact_id: ${{ steps.published_driver_package_upload.outputs.artifact-id }}
       published_driver_sha256: ${{ steps.published_driver_package.outputs.sha256 }}
       native_runtime_artifact_id: ${{ steps.native_runtime_upload.outputs.artifact-id }}
+      bundled_recovery_runtime: ${{ steps.native_runtime_package.outputs.bundled-recovery }}
     runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON((github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend)) && github.run_attempt > 1) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (needs.preflight.outputs.effective_runner_backend == 'boat' && github.run_attempt == 1 && 'boat-large' || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04')))) || ((github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend)) && github.run_attempt > 1) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (needs.preflight.outputs.effective_runner_backend == 'boat' && github.run_attempt == 1 && 'boat-large' || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04')) }}
     timeout-minutes: ${{ (needs.preflight.outputs.effective_runner_backend == 'boat' || ((github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend) == 'github' || (contains(fromJSON('["hybrid","runson"]'), (github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend)) && github.run_attempt > 1) || (github.event_name == 'workflow_dispatch' && needs.preflight.outputs.ci_shape != 'main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository))) && 35 || 20 }}
     # Keep hosted/Boat budgets and cache ownership distinct.
@@ -2079,7 +2080,16 @@ jobs:
         if: ${{ !cancelled() && (steps.dist_build.outcome == 'success' || steps.dist_build_cache.outputs.cache-hit == 'true') && needs.preflight.outputs.run_macos_swift == 'true' && hashFiles('apps/macos/Sources/OpenClaw/NativeExecPolicyOwner.swift') != '' }}
         env:
           TARGET_SHA: *checkout_sha
-        run: node .ci-harness/scripts/macos-native-runtime-artifact.mjs pack .artifacts/macos-native-runtime "$TARGET_SHA"
+          BUNDLED_RECOVERY: ${{ github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' && hashFiles('scripts/test-macos-app-host.sh') != '' }}
+        run: |
+          set -euo pipefail
+          operation=pack
+          # Older selected sources retain their local build and original artifact contract.
+          if [[ "$BUNDLED_RECOVERY" == "true" ]] && grep -q 'native-runtime-bundled-recovery-v1' scripts/macos-native-runtime-artifact.mjs; then
+            operation=pack-recovery
+          fi
+          node .ci-harness/scripts/macos-native-runtime-artifact.mjs "$operation" .artifacts/macos-native-runtime "$TARGET_SHA"
+          echo "bundled-recovery=$([[ "$operation" == "pack-recovery" ]] && echo true || echo false)" >> "$GITHUB_OUTPUT"
 
       - name: Upload runtime for native policy tests
         id: native_runtime_upload
@@ -3321,11 +3331,10 @@ jobs:
               test "$(git rev-parse refs/remotes/origin/ci-ratchet-base^{commit})" = "$PROTOCOL_SINCE_BASE_SHA"
               run_check protocol pnpm protocol:check
               ;;
-            contracts-plugins-ci-routing)
-              run_check plugin-contracts pnpm test:contracts:plugins
-              pnpm test src/scripts/ci-changed-scope*.test.ts test/scripts/changed-lanes.test.ts test/scripts/changed-path-facts.test.ts test/scripts/ci-changed-node-test-plan.test.ts test/scripts/ci-changed-node-test-plan.config-fallback.test.ts test/scripts/ci-changed-node-test-plan.dependency-inputs.test.ts test/scripts/ci-changed-node-test-plan.dependency-hubs.test.ts test/scripts/ci-changed-node-test-plan.policy.test.ts test/scripts/ci-changed-node-test-plan.process-owners.test.ts test/scripts/ci-changed-node-test-plan.source-owners.test.ts test/scripts/ci-docker-seed-plan.test.ts test/scripts/ci-run-node-test-shard.test.ts test/scripts/ci-hourly.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/ci-workflow-planning.test.ts test/scripts/ci-workflow-evidence.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
-              ;;
-            ci-routing)
+            contracts-plugins-ci-routing|ci-routing)
+              if [[ "$TASK" == "contracts-plugins-ci-routing" ]]; then
+                run_check plugin-contracts pnpm test:contracts:plugins
+              fi
               pnpm test src/scripts/ci-changed-scope*.test.ts test/scripts/changed-lanes.test.ts test/scripts/changed-path-facts.test.ts test/scripts/ci-changed-node-test-plan.test.ts test/scripts/ci-changed-node-test-plan.config-fallback.test.ts test/scripts/ci-changed-node-test-plan.dependency-inputs.test.ts test/scripts/ci-changed-node-test-plan.dependency-hubs.test.ts test/scripts/ci-changed-node-test-plan.policy.test.ts test/scripts/ci-changed-node-test-plan.process-owners.test.ts test/scripts/ci-changed-node-test-plan.source-owners.test.ts test/scripts/ci-docker-seed-plan.test.ts test/scripts/ci-run-node-test-shard.test.ts test/scripts/ci-hourly.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/ci-workflow-planning.test.ts test/scripts/ci-workflow-evidence.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
               ;;
             coercion-helpers)
@@ -5207,9 +5216,10 @@ jobs:
     timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' && matrix.phase == 'tests' && 75 || 30 }}
     env:
       NATIVE_RUNTIME_ARTIFACT_ID: ${{ needs.build-artifacts.outputs.native_runtime_artifact_id }}
+      BUNDLED_RECOVERY_RUNTIME: ${{ needs.build-artifacts.outputs.bundled_recovery_runtime }}
       HISTORICAL_TARGET: *historical_target
-      MACOS_PRIMARY_PHASE: ${{ github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && 'release' || 'tests' }}
-      OPENCLAWKIT_TEST_EXECUTION: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && needs.preflight.outputs.ci_shape != 'main') || github.run_attempt > 1) && 'serial' || 'parallel' }}
+      MACOS_PRIMARY_PHASE: &macos_primary_phase ${{ github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && 'release' || 'tests' }}
+      OPENCLAWKIT_TEST_EXECUTION: &openclawkit_test_execution ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && needs.preflight.outputs.ci_shape != 'main') || github.run_attempt > 1) && 'serial' || 'parallel' }}
     steps: &macos_swift_steps
       - name: Start Swift cache clock
         id: swift-cache-clock
@@ -5665,7 +5675,15 @@ jobs:
         if: ${{ !cancelled() && steps.recovery-runtime-setup.outcome == 'success' }}
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-        run: pnpm build:ci-artifacts
+          NATIVE_RUNTIME_PREPARED: ${{ steps.native-test-cli.outcome }}
+        run: |
+          set -euo pipefail
+          if [[ "$BUNDLED_RECOVERY_RUNTIME" == "true" ]]; then
+            [[ "$NATIVE_RUNTIME_PREPARED" == "success" ]]
+            echo "Reusing the exact-source bundled recovery runtime from build-artifacts."
+          else
+            pnpm build:ci-artifacts
+          fi
 
       - name: Prove bundled app recovery and relaunch
         id: bundled-recovery
@@ -5763,8 +5781,8 @@ jobs:
     timeout-minutes: 30
     env:
       HISTORICAL_TARGET: *historical_target
-      MACOS_PRIMARY_PHASE: ${{ github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && 'release' || 'tests' }}
-      OPENCLAWKIT_TEST_EXECUTION: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && needs.preflight.outputs.ci_shape != 'main') || github.run_attempt > 1) && 'serial' || 'parallel' }}
+      MACOS_PRIMARY_PHASE: *macos_primary_phase
+      OPENCLAWKIT_TEST_EXECUTION: *openclawkit_test_execution
     steps: *macos_swift_steps
 
   ios-build:

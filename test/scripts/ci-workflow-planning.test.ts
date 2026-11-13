@@ -14389,8 +14389,8 @@ describe("ci workflow guards", () => {
     }
     expect(runStep.run).toContain("bundled-protocol)");
     expect(runStep.run).not.toContain("qa-smoke-ci)");
-    expect(runStep.run).toContain("contracts-plugins-ci-routing)");
-    expect(runStep.run).toContain("ci-routing)");
+    expect(runStep.run).toContain("contracts-plugins-ci-routing|ci-routing)");
+    expect(runStep.run).toContain('if [[ "$TASK" == "contracts-plugins-ci-routing" ]]');
     expect(fastCoreJob["runs-on"]).toContain("matrix.runner");
     expect(smokeProfileJob.name).toBe("QA Smoke CI (${{ matrix.name }})");
     // Leak invariant: dist must never be packed after the private overlay
@@ -14580,9 +14580,9 @@ describe("ci workflow guards", () => {
       path: ".artifacts/qa-e2e/smoke-ci-profile-${{ matrix.slug }}/",
       "if-no-files-found": "warn",
     });
-    expect(runStep.run.match(/src\/scripts\/ci-changed-scope\*\.test\.ts/g)).toHaveLength(2);
+    expect(runStep.run.match(/src\/scripts\/ci-changed-scope\*\.test\.ts/g)).toHaveLength(1);
     for (const owner of ["guards", "planning", "evidence"]) {
-      expect(runStep.run.split(`test/scripts/ci-workflow-${owner}.test.ts`)).toHaveLength(3);
+      expect(runStep.run.split(`test/scripts/ci-workflow-${owner}.test.ts`)).toHaveLength(2);
     }
     for (const file of [
       "test/scripts/ci-changed-node-test-plan.test.ts",
@@ -14593,7 +14593,7 @@ describe("ci workflow guards", () => {
       "test/scripts/ci-changed-node-test-plan.process-owners.test.ts",
       "test/scripts/ci-changed-node-test-plan.source-owners.test.ts",
     ]) {
-      expect(runStep.run.split(file)).toHaveLength(3);
+      expect(runStep.run.split(file)).toHaveLength(2);
     }
   });
 });
