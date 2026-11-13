@@ -42,6 +42,26 @@ A key in `models.providers.<provider>.apiKey` also makes the tool available,
 including an env-backed SecretRef. Inline keys in an auth or billing cooldown
 remain unavailable.
 
+## Creative projects
+
+The bundled `creative-project` skill guides branding, posters, illustrations,
+and related visual assets. With bundled skills enabled for the agent, ordinary
+requests such as “redesign these social assets using the posters in this repo”
+can select it through normal [skill discovery](/tools/skills). No special command
+or provider-specific generation script is required.
+
+The workflow inspects existing compositions before choosing a direction, selects
+references by purpose, and preserves the current candidate and revision
+constraints. It uses editable project sources for precise vector or typographic
+work and the available image tool for raster generation or editing. Looking at a
+reference does not automatically pass it to the generator: the generation request
+must include the selected inputs.
+
+The skill does not add providers or bypass file access. It can select a supported
+review-before-delivery mode for the current chat; otherwise background results
+follow the tool’s automatic delivery contract. Inspection after completion does
+not retract an attachment already sent.
+
 ## Quick start
 
 <Steps>
