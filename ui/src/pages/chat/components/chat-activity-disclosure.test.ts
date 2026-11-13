@@ -390,8 +390,8 @@ it.each(["live receipt", "history projection"])(
                 ],
         },
       );
-      activityRoot.render(
-        [createToolGroup("before-narration", [createMessageEntry("live-exec", message)])],
+      messageRoot.render(
+        createToolGroup("before-narration", [createMessageEntry("live-exec", message)]),
         { ...visibleTools, runActive: true, activityRunId: runId },
       );
       await settleToolBridges(summaryContainer);
