@@ -1,6 +1,7 @@
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import type { Frame, Page, Request } from "playwright-core";
+import { assertBrowserNavigationResultAllowed } from "./navigation-guard.js";
 import { getPageForTargetId } from "./pw-session.js";
 import { runActionExecution } from "./pw-tools-core.interactions.execution.js";
 import {
@@ -62,6 +63,7 @@ class OperatorInputSession {
   private accepting = true;
   private navigated = false;
   private navigationRequested = false;
+  private subframeDenied = false;
   private retired = false;
   private readonly controller = new AbortController();
   readonly finished: Promise<void>;
@@ -150,10 +152,18 @@ class OperatorInputSession {
             subframes,
             this.markNavigated,
           );
+          const policy = interactionNavigationPolicy(this.opts);
           const onFrameNavigated = (frame: Frame) => {
+            const checked = subframes.length;
             frameListener(frame);
-            if (subframes.length > 0) {
-              this.markNavigated();
+            // An iframe (ad, embed) reloading does not change where input goes, so
+            // only a policy-denied subframe ends the session. The guard rechecks every
+            // subframe when the session settles and rejects input with the denial.
+            for (const url of subframes.slice(checked)) {
+              assertBrowserNavigationResultAllowed({ url, ...policy }).catch(() => {
+                this.subframeDenied = true;
+                this.wake?.();
+              });
             }
           };
           page.on("framenavigated", onFrameNavigated);
@@ -208,6 +218,7 @@ class OperatorInputSession {
     return (
       this.navigated ||
       this.navigationRequested ||
+      this.subframeDenied ||
       Boolean(signal?.aborted) ||
       this.controller.signal.aborted
     );

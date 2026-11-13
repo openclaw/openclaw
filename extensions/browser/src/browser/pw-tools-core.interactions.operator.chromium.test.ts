@@ -19,6 +19,11 @@ const pages: Record<string, string> = {
     <script>addEventListener("keydown",(e)=>{if(e.key==="n")setTimeout(()=>{location.href=document.getElementById("blocked").href},200)})</script>`,
   "/b": `${recordKeys}<input id="r" autofocus>`,
   "/c": `<p>blocked target</p>`,
+  "/f": `${recordKeys}<input id="q" autofocus><iframe id="embed" src="/frame"></iframe>
+    <script>addEventListener("keydown",(e)=>{const embed=document.getElementById("embed");
+    if(e.key==="r")embed.src="/frame?reload="+Date.now();
+    if(e.key==="d")embed.src="http://localhost:PORT/frame";})</script>`,
+  "/frame": `<p>embedded frame</p>`,
 };
 
 const keys = (text: string): BrowserOperatorInput[] =>
@@ -32,7 +37,7 @@ describe.runIf(runChromiumProof)("operator input sessions in Chromium", () => {
     }
   });
 
-  async function openFormPage() {
+  async function openFormPage(start = "/a") {
     const server: Server = createServer((req, res) => {
       const path = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
       res.writeHead(200, { "content-type": "text/html" });
@@ -52,7 +57,7 @@ describe.runIf(runChromiumProof)("operator input sessions in Chromium", () => {
     cleanup.push(async () => await context.close());
     cleanup.push(async () => await closePlaywrightBrowserConnection({ cdpUrl }));
     const page = context.pages()[0] ?? (await context.newPage());
-    await page.goto(`http://127.0.0.1:${port}/a`);
+    await page.goto(`http://127.0.0.1:${port}${start}`);
     const targetId = await readTargetId(page);
     const send = (inputs: BrowserOperatorInput[]) =>
       sendOperatorInputViaPlaywright({
@@ -89,6 +94,26 @@ describe.runIf(runChromiumProof)("operator input sessions in Chromium", () => {
     });
     await expect(send(keys("z"))).rejects.toThrow(/blocked|private|not allowed/i);
     expect(new URL(page.url()).pathname).toBe("/a");
+  });
+
+  it("keeps typing through an allowed iframe reload", async () => {
+    const { page, send } = await openFormPage("/f");
+    const typed = "abcdefghij".repeat(4);
+    const result = await send(keys(`r${typed}`));
+    expect(result).toEqual({ sent: typed.length + 1 });
+    expect(await page.locator("#q").inputValue()).toBe(`r${typed}`);
+    await expect
+      .poll(() => page.frames().some((frame) => frame.url().includes("reload=")))
+      .toBe(true);
+  });
+
+  it("stops input when an iframe navigates to a blocked address", async () => {
+    const { send } = await openFormPage("/f");
+    await send(keys("d"));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 1_600);
+    });
+    await expect(send(keys("z"))).rejects.toThrow(/blocked|private|not allowed/i);
   });
 
   it("keeps policy denial for navigation started inside a session", async () => {
