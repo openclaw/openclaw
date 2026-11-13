@@ -202,7 +202,7 @@ it
           pids: callerPids,
           complete: true,
         });
-        const cleanup = vi.spyOn(ancestry, "cleanStaleGatewayProcessesSync").mockReturnValue([]);
+        const cleanup = vi.spyOn(ancestry, "cleanStaleGatewayProcesses").mockResolvedValue([]);
         vi.spyOn(launchdRuntime, "resolveLaunchAgentGatewayContext").mockImplementation(
           async () => {
             revokeAt("cleanup");

@@ -2,10 +2,10 @@ import type http from "node:http";
 import { MatrixClient as MatrixJsClient, MatrixEvent } from "matrix-js-sdk/lib/matrix.js";
 import type { ChannelOutboundContext } from "openclaw/plugin-sdk/channel-contract";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createAsyncGate as createPause } from "../../test-support/async-gate.test-support.js";
 import { matrixPlugin } from "./channel.js";
 import { MatrixClient } from "./matrix/sdk.js";
 import { sendMessageMatrix } from "./matrix/send.js";
@@ -43,18 +43,6 @@ function expectAccepted(result: SendOutcome<unknown>, id: string) {
 }
 function expectCanceled(result: SendOutcome<unknown>, reason: Error) {
   expect(result.error).toMatchObject({ message: expect.stringContaining(reason.message) });
-}
-function createPause() {
-  const entered = createDeferred<void>();
-  const resumed = createDeferred<void>();
-  return {
-    entered: entered.promise,
-    open: () => resumed.resolve(),
-    wait: async () => {
-      entered.resolve();
-      await resumed.promise;
-    },
-  };
 }
 afterEach(() => vi.restoreAllMocks());
 
@@ -239,7 +227,7 @@ async function withMatrixFixture(
       expect(requestErrors).toEqual([]);
     } finally {
       for (const blocked of pauses) {
-        blocked.open();
+        blocked.release();
       }
       await Promise.all(sends);
       await resolvedClient.stopWithoutPersist();
@@ -272,7 +260,7 @@ describe("registered Matrix sender currentness", () => {
         );
         await waitForBoundary(media.entered, result, "media preparation");
         caller.abort(cancellation);
-        media.open();
+        media.release();
         expectCanceled(await result, cancellation);
         expect(uploads).toHaveLength(0);
         expect(timeline).toHaveLength(0);
@@ -295,7 +283,7 @@ describe("registered Matrix sender currentness", () => {
       });
       await waitForBoundary(dispatch.entered, result, "dispatch bookkeeping");
       current = false;
-      dispatch.open();
+      dispatch.release();
       expectCanceled(await result, retirement);
       expect(timeline).toEqual([]);
     });
@@ -422,7 +410,7 @@ describe("registered Matrix sender currentness", () => {
         });
         await waitForBoundary(mappingRead.entered, canceled, "the DM mapping reread");
         caller.abort(cancellation);
-        mappingRead.open();
+        mappingRead.release();
         expectCanceled(await canceled, cancellation);
         expect(mappingWrites).toEqual([]);
         expect(directMapping).toEqual(unrelated);
@@ -490,7 +478,7 @@ describe("registered Matrix sender currentness", () => {
       }
       expect(timeline).toHaveLength(1);
       firstCaller.abort(new Error("first Matrix caller retired after request acceptance"));
-      firstResponse.open();
+      firstResponse.release();
       const [firstResult, secondResult] = await Promise.all([first, second]);
       expectAccepted(firstResult, firstId);
       expectAccepted(secondResult, secondId);
@@ -584,7 +572,7 @@ describe("registered Matrix sender currentness", () => {
         if (canceled) {
           firstCaller.abort(cancellation);
         }
-        firstResponse.open();
+        firstResponse.release();
         const firstResult = await first;
         if (canceled) {
           expectCanceled(firstResult, cancellation);
@@ -598,7 +586,7 @@ describe("registered Matrix sender currentness", () => {
           canceled ? [firstRoom, secondRoom] : [firstRoom, firstRoom, secondRoom],
         );
         expect(survivorResults).toEqual([]);
-        secondResponse.open();
+        secondResponse.release();
         const [secondResult, thirdResult] = await Promise.all([second, third]);
         expectAccepted(secondResult, "$second-accepted");
         expectAccepted(thirdResult, "$third-accepted");

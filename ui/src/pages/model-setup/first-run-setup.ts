@@ -7,6 +7,7 @@ import type {
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
+import { registerUpdateActionsEnglish } from "../../i18n/locales/en-update-actions.ts";
 import { formatDateTimeMs } from "../../lib/format.ts";
 import {
   clearFirstRunActivationReceipt,
@@ -25,6 +26,8 @@ import {
   type ModelSetupWizardResult,
   type ModelSetupWizardRecovery,
 } from "./state.ts";
+
+registerUpdateActionsEnglish();
 
 export type ModelSetupConnection = Pick<
   ApplicationContext["gateway"]["snapshot"],
@@ -350,7 +353,7 @@ export class FirstRunSetup {
       this.host.setVerifyState({
         phase: "failed",
         status: "unknown",
-        error: `${t("modelSetup.access.gatewayTooOld")}. ${t("updates.confirm.action")}. ${t("desktop.reconnect")}.`,
+        error: t("modelSetup.access.gatewayTooOld"),
       });
       return;
     }

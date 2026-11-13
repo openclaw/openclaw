@@ -8,11 +8,17 @@ import {
 } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareModelRequestBody } from "../../../packages/ai/src/transports/model-request-body.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import type { WorkerTaskPool } from "../../infra/worker-task-pool.js";
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
+import { prepareProviderPrompt } from "./provider-prompt-serialization.js";
 import {
   clearProviderPromptState,
   getProviderPromptState,
   markLastProviderPromptContextRejected,
+  type PromptPreparationResult,
+  type PromptPreparationTask,
   type ProviderPromptState,
   wrapStreamFnWithProviderPromptState,
 } from "./provider-prompt-state.js";
@@ -33,12 +39,13 @@ function observe(
   promptState: ProviderPromptState,
   streamFn: StreamFn,
   recordEvent?: Parameters<typeof wrapStreamFnWithProviderPromptState>[0]["recordEvent"],
+  effectiveContextTokenBudget = 128_000,
 ) {
   return wrapStreamFnWithProviderPromptState({
     state: promptState,
     streamFn,
     recordEvent,
-    effectiveContextTokenBudget: 128_000,
+    effectiveContextTokenBudget,
   });
 }
 
@@ -67,28 +74,14 @@ function createResultStream(stopReason: "error" | "stop", errorMessage?: string)
 }
 
 describe("provider prompt state", () => {
-  it("keeps state within one run id and drops it at the run boundary", () => {
-    const first = getProviderPromptState("run-1");
-    expect(getProviderPromptState("run-1")).toBe(first);
-
-    clearProviderPromptState("run-1");
-    expect(getProviderPromptState("run-1")).not.toBe(first);
-    clearProviderPromptState("run-1");
-  });
-
   it("retains active run state until its owned cleanup", () => {
-    const firstRunId = "active-run-0";
-    const otherRunIds = Array.from({ length: 79 }, (_, index) => `active-run-${index + 1}`);
-    const first = getProviderPromptState(firstRunId);
+    const runIds = Array.from({ length: 80 }, (_, index) => `active-run-${index}`);
+    const first = getProviderPromptState(runIds[0]!);
     try {
-      for (const runId of otherRunIds) {
-        getProviderPromptState(runId);
-      }
-      expect(getProviderPromptState(firstRunId)).toBe(first);
+      runIds.forEach((runId) => getProviderPromptState(runId));
+      expect(getProviderPromptState(runIds[0]!)).toBe(first);
     } finally {
-      for (const runId of [firstRunId, ...otherRunIds]) {
-        clearProviderPromptState(runId);
-      }
+      runIds.forEach((runId) => clearProviderPromptState(runId));
     }
   });
 
@@ -219,6 +212,40 @@ describe("provider prompt state", () => {
       canonical: '["earlier"]',
     },
     {
+      name: "array with a trailing hole",
+      payload: Object.assign(["earlier"], { length: 2 }),
+      canonical: '["earlier",undefined]',
+    },
+    {
+      name: "sparse array rejected before inspecting a custom child",
+      payload: Object.assign(
+        [
+          Object.create(
+            new Proxy(
+              {},
+              {
+                has() {
+                  throw new Error("custom prototype must not be inspected");
+                },
+              },
+            ),
+          ),
+        ],
+        { length: 2 },
+      ),
+      canonical: "[{},undefined]",
+    },
+    {
+      name: "accessor after ordinary prompt data",
+      payload: {
+        input: "earlier".repeat(1_000),
+        get tail() {
+          return "getter value";
+        },
+      },
+      canonical: `{"input":"${"earlier".repeat(1_000)}","tail":"getter value"}`,
+    },
+    {
       name: "custom hook callback",
       payload: { input: "hello", callback: () => undefined },
       canonical: '{"callback":null,"input":"hello"}',
@@ -246,34 +273,53 @@ describe("provider prompt state", () => {
     );
   });
 
+  it("admits a large prompt without allocating key-entry iterators", async () => {
+    const payload = {
+      messages: Array.from({ length: 512 }, () => ({ text: "x".repeat(2048) })),
+    };
+    const prepared = prepareProviderPrompt({ payload, encode: false });
+    const entries = vi.spyOn(Array.prototype, "entries");
+    // A prior file can own the pool through an earlier module evaluation;
+    // replace only its transport so admission and payload observation stay real.
+    const pool = resolveGlobalSingleton<
+      WorkerTaskPool<PromptPreparationTask, PromptPreparationResult>
+    >(Symbol.for("openclaw.providerPromptHashPool"), () => {
+      throw new Error("Expected provider prompt state to initialize its worker pool");
+    });
+    const worker = vi.spyOn(pool, "run").mockResolvedValueOnce({
+      kind: "provider",
+      prompt: prepared,
+    });
+    const wrapped = observe(state, async (_model, _context, options) => {
+      await options?.onPayload?.(payload, model);
+      return createResultStream("stop");
+    });
+    try {
+      await wrapped(model, context);
+      expect(worker).toHaveBeenCalledExactlyOnceWith(expect.any(Function), {
+        inputBytes: 2_153_412,
+        signal: undefined,
+      });
+      expect(state.lastAttempt?.digest).toBe(prepared.digest);
+      expect(entries).not.toHaveBeenCalled();
+    } finally {
+      worker.mockRestore();
+      entries.mockRestore();
+    }
+  });
+
   it("does not compare rejected payloads across effective context scopes", async () => {
-    const runId = "changed-context-scope";
-    const scopedState = getProviderPromptState(runId);
-    const scopedContext = { systemPrompt: "system", messages: [], tools: [] } as Context;
     const payload = { input: "same", model: model.id };
     const transport = vi.fn<StreamFn>(async (_model, _context, options) => {
       await options?.onPayload?.(payload, model);
       return createResultStream("error");
     });
-    const firstWrapped = wrapStreamFnWithProviderPromptState({
-      streamFn: transport,
-      state: scopedState,
-      effectiveContextTokenBudget: 64_000,
-    });
-    const first = await firstWrapped(model, scopedContext);
-    await first.result();
-    markLastProviderPromptContextRejected(scopedState);
+    await (await observe(state, transport, undefined, 64_000)(model, context)).result();
+    markLastProviderPromptContextRejected(state);
 
-    const secondWrapped = wrapStreamFnWithProviderPromptState({
-      streamFn: transport,
-      state: scopedState,
-      effectiveContextTokenBudget: 128_000,
-    });
-    const second = await secondWrapped(model, scopedContext);
-    await second.result();
+    await (await observe(state, transport)(model, context)).result();
 
     expect(transport).toHaveBeenCalledTimes(2);
-    clearProviderPromptState(runId);
   });
 
   it("keeps a rejected primary identity across successful auxiliary attempts", async () => {
@@ -315,10 +361,7 @@ describe("provider prompt state", () => {
 
   it("records identity after an asynchronous payload hook finishes", async () => {
     const stream = createAssistantMessageEventStream();
-    let releasePayloadHook: (() => void) | undefined;
-    const payloadHookGate = new Promise<void>((resolve) => {
-      releasePayloadHook = resolve;
-    });
+    const { promise: payloadHookGate, resolve: releasePayloadHook } = createDeferred();
     let observedPayloadHook: Promise<unknown> | undefined;
     const transport = vi.fn<StreamFn>((_model, _context, options) => {
       observedPayloadHook = options?.onPayload?.({ input: "hello" }, model) as Promise<unknown>;

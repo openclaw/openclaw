@@ -238,14 +238,6 @@ describe("requester-admitted scheduled commands", () => {
   });
 });
 
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
-
 describe("native scheduled command execution", () => {
   it("runs the final allowed attempt, then retires the schedule instead of rearming it", async () => {
     await withCommandPlugin(async (fixture) => {
@@ -310,8 +302,13 @@ describe("native scheduled command execution", () => {
         storePath: parent.storePath,
       });
       expect(child?.spawnedBy).toBe(parent.sessionKey);
-      // The child inherits the stored ceiling minus scheduling: no recursive schedules.
-      expect(child?.inheritedToolAllow).toEqual(["read", "sessions_spawn", "agents_wait"]);
+      // Retained admin authority keeps automations in the ceiling; child policy still denies it.
+      expect(child?.inheritedToolAllow).toEqual([
+        "read",
+        "automations",
+        "sessions_spawn",
+        "agents_wait",
+      ]);
       expect(subagentRuns.get(expectDefined(childRunId, "accepted child run"))).toMatchObject({
         requesterSessionKey: parent.sessionKey,
         requesterTurnRunId: expectDefined(capacity.occurrenceRunId(), "scheduled occurrence run"),
@@ -544,9 +541,9 @@ describe("native scheduled command execution", () => {
     async (change) => {
       await withCommandPlugin(async (fixture) => {
         const id = await createContinuation(fixture);
-        const entered = deferred();
-        const release = deferred();
-        const settled = deferred();
+        const entered = createDeferredCore();
+        const release = createDeferredCore();
+        const settled = createDeferredCore();
         let retained: PluginCommandContext["runtimeContext"];
         fixture.handler.mockImplementation(async (ctx) => {
           retained = ctx.runtimeContext;

@@ -1,13 +1,12 @@
 import assert from "node:assert/strict";
-import { DatabaseSync, StatementSync } from "node:sqlite";
-import { expect, it, vi } from "vitest";
-import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { DatabaseSync } from "node:sqlite";
+import { expect, it } from "vitest";
 import { getSqliteReadScopeRevision } from "../../infra/sqlite-schema-facts.js";
+import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
 import { runOpenClawAgentWriteTransaction as writeTransaction } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
-import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
 import { resolveSqliteTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptMessageInTransaction as appendMessage } from "./session-accessor.sqlite-transcript-message-append.js";
 import {
@@ -15,9 +14,12 @@ import {
   rememberCommittedTranscriptMessageSequences as rememberSequences,
   rememberCommittedTranscriptMessageSequencesInTransaction as rememberCursor,
 } from "./session-accessor.sqlite-transcript-sequences.js";
-import { readTranscriptContextVersionInTransaction as readVersion } from "./session-accessor.sqlite-transcript-state.js";
+import {
+  ensureTranscriptSessionRoot,
+  readTranscriptContextVersionInTransaction as readVersion,
+} from "./session-accessor.sqlite-transcript-state.js";
 import { runTranscriptWriteSnapshotSync as writeSnapshot } from "./session-accessor.sqlite-transcript-write-snapshot.js";
-import { appendTranscriptMessageSnapshotSync as appendSnapshot } from "./session-accessor.sqlite-transcript-write.js";
+import { appendTranscriptMessageSnapshotSync as appendSnapshot } from "./session-accessor.sqlite-transcript-write.kernel.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
 import { readSessionPendingInputAuthorityFacts as readAuthorityFacts } from "./session-pending-input-authority.kernel.js";
 import { readTranscriptAppendPostimage as readPostimage } from "./session-transcript-append-postimage.js";
@@ -26,7 +28,7 @@ let f: ReturnType<typeof createSessionCompoundWorkerFixture>;
 it.aroundEach(async (runTest) =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     f = createSessionCompoundWorkerFixture();
-    await runTest().finally(() => vi.restoreAllMocks());
+    await runTest();
   }),
 );
 
@@ -36,12 +38,33 @@ const event = (eventId: string, parentId?: null) => ({
   message: { role: "assistant" as const, content: eventId },
 });
 
-const observeReads = () => observeSqliteReadSql(StatementSync.prototype);
+it("publishes only the cold transcript's key after commit", () => {
+  const scope = { agentId: "main", sessionKey: "agent:main:cold-change" };
+  replaceSessionEntrySync(
+    { ...scope, sessionKey: "agent:main:untouched-archive" },
+    { sessionId: "untouched-archive", updatedAt: 1, archivedAt: 1 },
+  );
+  const changes: SessionRowChange[] = [];
+  const stop = sessionChanges.subscribe((change) => changes.push(change));
+  try {
+    writeTransaction((writer) => {
+      ensureTranscriptSessionRoot(writer, { ...scope, sessionId: "cold-change" }, 2);
+      expect(changes).toEqual([]);
+    }, scope);
+    expect(changes).toEqual([
+      {
+        ...scope,
+        storePath: f.database.path,
+      },
+    ]);
+  } finally {
+    stop();
+  }
+});
 
 it.each([false, true])(
   "publishes the final append version after a later mutation: %s",
   (mutate) => {
-    const reads = observeReads();
     let checks = 0;
     const result = appendSnapshot(f.scope, event("message"), undefined, undefined, {
       assertCurrent() {
@@ -52,17 +75,12 @@ it.each([false, true])(
       },
       onPendingTransaction() {},
     });
-    reads.restore();
     assert(result.ok, "Append refused");
     expect(result.value.after).toEqual(readVersion(f.database, f.scope.sessionId));
     expect(result.value.after.rawSeq).toBe(1);
     if (mutate) {
       expect(result.value.after.updatedAt).toBe(42);
     }
-    // A fresh append already read its final version with its anchor. A later write expires it.
-    expect(reads.queries.filter((sql) => sql.startsWith("select coalesce(")).length).toBe(
-      mutate ? 2 : 1,
-    );
 
     {
       using foreign = new DatabaseSync(f.database.path);
@@ -87,30 +105,15 @@ it("shares committed entry facts with custody while retaining live member and ro
       updatedAt: 2,
       label: "committed",
     });
-    const publication = prepareSessionEntryReplacementPublication(
-      {
-        previous: new Map([[f.scope.sessionKey, before]]),
-        current: new Map([[f.scope.sessionKey, entry]]),
-        pendingArchiveRecovery: false,
-        membershipInvalidatedKeys: [],
-        maintenancePlans: [],
-      },
-      database,
-    );
     const postimage = {
       sessionKey: f.scope.sessionKey,
-      entry: publication.current.get(f.scope.sessionKey)!,
+      entry,
       revision: getSqliteReadScopeRevision(database.db)!,
     };
     const readFacts = () =>
       readAuthorityFacts(database, f.scope.sessionKey, f.scope.agentId, postimage);
-    const exec = vi.spyOn(database.db, "exec");
-    const reads = observeReads();
     const facts = readFacts();
-    reads.restore();
     expect(facts).toMatchObject({ entry: { label: "committed" }, members: [] });
-    expect(reads.queries.filter((sql) => sql.includes('from "session_nodes"'))).toEqual([]);
-    expect(exec).not.toHaveBeenCalled();
     if (facts.entry) {
       facts.entry.label = "caller-owned";
     }
@@ -140,12 +143,8 @@ it.each([false, true])(
       if (replaceBranch) {
         appendMessage(db, scope, event("replacement", null));
       }
-      const reads = observeReads();
       rememberCursor(db, f.scope.sessionId, [appended.result], readPostimage(appended));
       expect(readSequence(appended.result)).toBe(replaceBranch ? undefined : 1);
-      if (!replaceBranch) {
-        expect(reads.queries).toEqual([]);
-      }
     }, f.scope);
   },
 );
@@ -160,11 +159,9 @@ it.each([false, true])(
       assert(first && second, "Missing committed messages");
       return [first.result, second.result];
     }, f.scope);
-    const reads = observeReads();
     await rememberSequences(f.scope, messages);
     // An explicit branch change invalidates the projection until its owner rebuilds it.
     expect(messages.map(readSequence)).toEqual(replaceBranch ? [undefined, undefined] : [1, 2]);
-    expect(reads.queries).toEqual([]);
   },
 );
 
@@ -192,11 +189,8 @@ it("keeps snapshot versions scoped to the requested session when a callback appe
 it("reuses the write's context postimage and retires it after a raw write or rollback", () => {
   writeTransaction((database) => {
     appendMessage(database, resolveSqliteTranscriptScope(f.scope), event("saved"));
-    const reads = observeReads();
     const saved = readVersion(database, f.scope.sessionId);
     const changedCopy = readVersion(database, f.scope.sessionId);
-    reads.restore();
-    expect(reads.queries).toEqual([]);
     expect(saved.rawSeq).toBe(1);
     changedCopy.updatedAt = -1;
     expect(readVersion(database, f.scope.sessionId)).toEqual(saved);

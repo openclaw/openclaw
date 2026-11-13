@@ -4,14 +4,17 @@
 
 ## Checkout and source
 
-- `scripts/pr` owns review/prepare worktrees under canonical repo. Outside writable scope → fresh full ordinary checkout inside allowed workspace before init. Preserve full history/blobs. Never clone away active/uncertain operation or retry uncertain merge in new lock namespace.
+- **Reuse the existing base and assigned task worktree; do not clone again for main, review, or landing history.** Before the first `review-init`, run `scripts/pr workspace <pr>`. Check its physical `canonicalRoot`, `worktree`, and `artifactDirectory` against the actual file-tool read/write scope, not just shell permissions or the current task cwd. `review-init` provisions its own PR worktree sharing the base's objects. Linked task worktrees still use the canonical repository’s `.worktrees`; `OPENCLAW_PR_TOOLING_ROOT` selects dependencies only. The preflight reports paths without GitHub calls, PR locks, workflow admission, dependency installation, or checkout creation; it does not grant access.
+- For missing history, deepen the existing clone rather than making a fresh full clone. Keep `blob:none`; use the [history recovery recipe](../../../../docs/reference/scripts/pr-tooling.md#reuse-the-base-and-fetch-only-needed-history). Managed shallow bases use their Doctor/lifecycle owner; task-owned ordinary clones can deepen just the needed refs. Diagnose a failed unshallow in place; do not clone again or remove the filter.
+- If canonical paths are outside scope, use an already operator-provisioned `.worktrees` symlink whose physical target is allowed. If none exists, a separate `--filter=blob:none` checkout with full commit history is the fallback **before init**, as described in [workspace preflight](../../../../docs/reference/scripts/pr-tooling.md#qualify-the-workspace-before-review). Do not replace or relocate shared `.worktrees`. Never clone away an active/uncertain operation or retry an uncertain merge in a new lock namespace.
+- Dependency drift after workflow admission: the current wrapper automatically prepares the retained anchor’s frozen dependencies in its private content-addressed cache. Keep the workflow binding; no manual tooling-root downgrade or rebind is needed. See [dependency materialization](../../../../docs/reference/scripts/pr-tooling.md).
 - Trusted canonical/origin-main wrapper only. Untrusted PR supplies no local wrapper and never runs locally; isolation: `$openclaw-testing` + `$crabbox`. Never weaken guards for missing commands/deps. Requires git, gh, jq, rg, pnpm, node.
 - Unset ambient `GITHUB_TOKEN`, `GH_TOKEN`, `HOMEBREW_GITHUB_API_TOKEN` if wrong writer possible. Verify effective PATH `gh` or `OPENCLAW_GH_BIN`, not cached `ghx` reads. Qualify protected route's exact merge arguments via [GitHub transport](../../../../docs/reference/scripts/github-transport.md#octopool-string-rewrite-protection). Unsupported writer → route-owner blocker; no raw binary, changed semantics, uncertain replay.
 
 ## Open or update the PR
 
 - Current template + real body file; preserve human credit, maintainer-editable branches when safe. Fork edits: heed Actions/secrets warning.
-- Build + focused local tests pass → open ready PR promptly; PR CI runs broad suites. Create draft first, wait for non-null `mergeable`, mark ready, verify CI attached to pushed head. Requested landing of own draft includes marking ready.
+- Follow the [proof policy](../../openclaw-testing/SKILL.md#proof-policy), including its draft/CI route when build capacity is unavailable. Create draft first; after required build and focused proof pass, wait for non-null `mergeable`, mark ready, and verify CI attached to pushed head. Requested landing of own draft includes marking ready once those requirements pass.
 - Merge-ref startup failure cannot rerun; hourly PR CI sweeper re-fires, or authorized close/reopen after verifying missing attachment.
 - No rebase just for advancing main. Refresh for conflict, failing guard, explicit request, material stale-base risk only.
 - Conflict repair: record last passing run/tested head, resolved delta, affected contracts in existing preparation evidence. Reuse unchanged-input proof; run affected checks, not every completed suite. Older run ≠ current-head CI or gate waiver. Admission succeeds → merge before optional polish/cleanup.
@@ -36,6 +39,24 @@
 - PR-caused CI failure → `pnpm test:ci-failed <pr>` → fix new failures/investigate unknown → `pnpm test:ci-failed <pr> --run` until selected affected tests pass locally → push once. This repair loop does not apply to already-attributed unrelated failures. Never `gh run rerun` to chase green; never local full suite for CI repair.
 - The inherited-failure exception never covers PR-caused failures, including tiny lint, type, or stale-expectation failures. Repair them before landing; promising a later main fix does not establish unrelatedness.
 
+### Delegated CodeQL dismissal requests
+
+- A CodeQL failure is a security gate, not an inherited-CI exception. Inspect the exact alert, query, data flow, trusted checkout identity, dependency lock, script policy, cache restore/save behavior, and workflow permissions before classifying it. Prefer a source fix when the flow is not proven safe.
+- When a repository security administrator agrees that the alert is a false positive but the caller lacks direct dismissal authority, request delegated dismissal with GitHub's code-scanning API. `create_request` must be a JSON boolean, so use `-F`; keep the dismissal comment at **280 characters or fewer**:
+
+```bash
+comment='Trusted release tooling is pinned to github.workflow_sha, uses a frozen lockfile with scripts disabled, restores but never saves its dependency cache, and has contents:read only.'
+(( ${#comment} <= 280 )) || { echo 'CodeQL dismissal comment exceeds 280 characters' >&2; exit 1; }
+gh api --method PATCH \
+  repos/openclaw/openclaw/code-scanning/alerts/<alert-number> \
+  -f state=dismissed \
+  -f dismissed_reason='false positive' \
+  -f dismissed_comment="$comment" \
+  -F create_request=true
+```
+
+- HTTP 400 commonly means `create_request=true` was omitted or encoded as a string; HTTP 422 commonly means the comment is too long or a field is invalid. HTTP 409 means GitHub reports that a request already exists: do not submit another. Read the alert again to distinguish open from dismissed; if the pending request is not visible to the caller, record that visibility limit and ask a repository security administrator to inspect it. If an urgent release-tooling repair is otherwise proven and an authorized administrator explicitly lands it while the request is pending, record the exact alert, reviewed head, classification, request state, and reason; never describe the alert as dismissed until GitHub reports it dismissed.
+
 ## Review, prepare, merge
 
 Main-targeted PRs: ordinary native sequence below. For attributed failed CI with land scope, select the [exception route](#authorized-pre-existing-failures) before submission; do not submit an ordinary request just to provoke a rejection.
@@ -56,6 +77,7 @@ scripts/pr merge-run <pr> --auto-merge
 - Unresolved investigated local failure: follow [test-failure investigation](../../openclaw-testing/SKILL.md#test-failure-policy), retain `tests.result: "fail"` + `tests.investigatedLocalFailures`. Exact `head`; nonempty `failures`: original `failure`, actual `reproductionAttempts`, `evidence`, `remainingUncertainty`. Attempts/evidence = nonempty string arrays; failure/uncertainty = nonempty strings. Keep evidence in PR; passing replay ≠ fix. READY allowed; substantive findings, behavior, CI, security, enforced reviews remain required. Failed CI uses separate admin policy.
 - One gate mode per invocation. Old `OPENCLAW_TESTBOX=1` cleared above for this process only. Unsupported/conflicting mode fails before PR reads, locks, evidence replacement; fix env, don't repeat review/discard proof.
 - Unset `OPENCLAW_PR_GATES_REMOTE` = `github` default; explicit selector above optional. Old full local gates: `OPENCLAW_PR_GATES_REMOTE=local`. Unset remote selector + `OPENCLAW_TESTBOX=1` retains hosted mode.
+- Run `scripts/pr` from a task-owned worktree. A canonical checkout parked on a branch predating #167350 runs its own wrapper without the origin/main anchor; pre-#154307 wrappers reject `github` (`supported: testbox`) after taking the PR lock. Clear the orphaned lock with `scripts/pr lock-recover`, then rerun the intended mode from a worktree.
 - Preparation binds pending gates to head, no success stamps/separate scheduled Testbox proof. Merge submits one pinned squash/auto-merge; known failed required checks reject absent admin exception. GitHub waits for `openclaw/ci-gate` (CI + applicable security review) + required reviews. Clean mergeable PR, or UNSTABLE with only superseded same-lane runs non-passing (watcher GREEN), lands immediately.
 - Stay active through publication/review/CI/accepted auto-merge until verified merge + closeout, user pause, or concrete user-input blocker. One watcher/owner; exact PR head/checks/mergeability every two to three minutes, narrow JSON. No tight loops/repeated unchanged updates. Remote change → `merge-run` reconciliation. Watcher timeout ends observation, not task; collect result, investigate, continue/supported successor under same authority. Honor user time limits/pauses/cancellations; no automatic retry instead.
 - Exact failed run: `pnpm test:ci-failed <pr>` fetches failed logs once; repair PR-caused defects/confirmed flakes, rerun only affected failed tests locally. Attributed unrelated failures use the exception, not this repair loop. Infrastructure recovery only after cause identified; never rerun CI for green. Changed head → fresh review/preparation/CI; preserve accepted receipt, recover before head replacement. Never erase outcome or blindly resubmit accepted/uncertain request.

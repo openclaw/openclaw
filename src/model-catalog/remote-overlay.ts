@@ -1,12 +1,11 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { getEnvironmentData, setEnvironmentData } from "node:worker_threads";
 import type { ModelCatalogProvider } from "@openclaw/model-catalog-core/model-catalog-types";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { compareOpenClawVersions } from "../config/version.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { freezeJsonSnapshot } from "../shared/immutable-data.js";
+import { AsyncContext } from "../shared/async-context.js";
+import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { VERSION } from "../version.js";
 import { bundledCatalogGeneratedAt } from "./bundled-catalog-stamp.js";
@@ -39,9 +38,8 @@ export type ActiveRemoteModelCatalog = RemoteModelCatalogMetadata & {
 };
 
 const STARTUP_SNAPSHOT_KEY = "openclaw.remoteModelCatalogStartupSnapshot";
-const remoteCatalogScope = resolveGlobalSingleton(
+const remoteCatalogScope = new AsyncContext<{ catalog: ActiveRemoteModelCatalog | null }>(
   Symbol.for("openclaw.remoteModelCatalogScope"),
-  () => new AsyncLocalStorage<{ catalog: ActiveRemoteModelCatalog | null }>(),
 );
 
 function isCompatible(bundle: RemoteModelCatalogWireBundle): boolean {
@@ -75,7 +73,7 @@ function selectCompatibleRemoteModelCatalog(
     bundle.generatedAt > bundledGeneratedAt
       ? projectRemoteModelCatalog(bundle)
       : { providers: {}, pricing: {}, upstreamPricing: {} };
-  return freezeJsonSnapshot({
+  return freezeTrustedJsonSnapshot({
     sourceUrl: stored.source_url,
     generatedAt: bundle.generatedAt,
     revision: createHash("sha256").update(stored.bundle_json).digest("hex"),

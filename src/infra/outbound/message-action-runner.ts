@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -8,6 +9,7 @@ import type { AgentToolResult } from "../../agents/runtime/index.js";
 import {
   readStringArrayParam,
   readToolStringParam,
+  jsonResult,
   textResult,
 } from "../../agents/tools/common.js";
 import {
@@ -29,6 +31,7 @@ import {
 } from "../../shared/clawhub-recommendations.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
+import { runInAgentRunWriteContext } from "../agent-run-terminal-writes.js";
 import { formatErrorMessage, toErrorObject } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import {
@@ -78,7 +81,16 @@ const loadClawHubRecommendations = createLazyRuntimeModule(
 );
 
 export function getToolResult(result: MessageActionResult): AgentToolResult<unknown> | undefined {
-  return "toolResult" in result ? result.toolResult : undefined;
+  const toolResult = "toolResult" in result ? result.toolResult : undefined;
+  if (result.kind !== "send" || !result.accountId) {
+    return toolResult;
+  }
+  const response = toolResult ?? jsonResult(result.payload);
+  // Successful-send extraction must see the routed account, including bindings.
+  return {
+    ...response,
+    details: { ...asOptionalRecord(response.details), accountId: result.accountId },
+  };
 }
 
 function withMessageTargetPreparation<T>(
@@ -315,7 +327,7 @@ async function handleInternalSourceReplySendAction(
         input.workspaceDir ?? (agentId ? resolveAgentWorkspaceDir(input.cfg, agentId) : undefined),
     });
     throwIfAborted(input.abortSignal);
-    if (!normalizeOptionalString(params.message)) {
+    if (!normalizeOptionalString(params.message) && !normalizeOptionalString(params.caption)) {
       params.message = recommendations.text;
     }
   }
@@ -422,7 +434,10 @@ async function handleInternalSourceReplySendAction(
       throw new Error("Internal source reply requires a session key");
     }
     const { persistInternalSourceReply } = await loadInternalSourceReplyPersistence();
-    const persist = () =>
+    // The run's own reply: its CLI history writer must cover the row, or the gap refuses saved
+    // history to the next fresh CLI session.
+    const persist = () => runInAgentRunWriteContext(input.runId, persistReply);
+    const persistReply = () =>
       persistInternalSourceReply({
         cfg: input.cfg,
         sessionKey,
@@ -618,10 +633,10 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
           const preserveSendBuffer =
             action === "send" &&
             Boolean(gateway) &&
-            (channelPlugin?.actions?.resolveExecutionMode?.({
+            (channelPlugin.actions?.resolveExecutionMode?.({
               action: "send",
             }) === "gateway" ||
-              channelPlugin?.outbound?.deliveryMode === "gateway");
+              channelPlugin.outbound?.deliveryMode === "gateway");
 
           const hydrateActionAttachmentParams = () =>
             hydrateAttachmentParamsForAction({
@@ -636,7 +651,8 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
               extraParamKeys: extraActionMediaSourceParamKeys,
             });
 
-          if (action !== "send") {
+          const stagesBuffer = action === "send" || action === "thread-reply";
+          if (!stagesBuffer) {
             await hydrateActionAttachmentParams();
           }
 
@@ -652,7 +668,7 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
             plugin: channelPlugin,
           });
 
-          if (action === "send") {
+          if (stagesBuffer) {
             // Target validation must finish before buffer staging, which can perform
             // filesystem reads and mutate the outbound action payload.
             await hydrateActionAttachmentParams();

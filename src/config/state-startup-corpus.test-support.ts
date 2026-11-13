@@ -193,7 +193,7 @@ export function createStateStartupCorpusFixture() {
               shouldRepair: true,
               doctorFixCommand: "openclaw doctor --fix",
             });
-            const normalized = normalizeCompatibilityConfigValues(migrated.state.candidate, {
+            const normalized = await normalizeCompatibilityConfigValues(migrated.state.candidate, {
               sourceRaw: snapshot.parsed,
             });
             fs.writeFileSync(configPath, JSON.stringify(normalized.config));

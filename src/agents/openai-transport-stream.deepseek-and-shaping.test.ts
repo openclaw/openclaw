@@ -21,65 +21,55 @@ const cacheOptions = {
   topP: 0.85,
 } as const;
 const metadata = { openclaw_session_id: "session-123", openclaw_turn_id: "turn-123" };
+const unsupportedCodexParams = {
+  metadata,
+  max_output_tokens: 1024,
+  prompt_cache_retention: "24h",
+  prompt_cache_options: { ttl: "30m" },
+  service_tier: "auto",
+  temperature: 0.2,
+  top_p: 0.85,
+};
 type CachedParams = Record<string, unknown> & { input?: Array<{ role?: string }> };
 function expectCodexCache(params: CachedParams, cacheKey: string | undefined) {
   expect(params.prompt_cache_key).toBe(cacheKey);
-  for (const key of [
-    "metadata",
-    "max_output_tokens",
-    "prompt_cache_retention",
-    "prompt_cache_options",
-    "service_tier",
-    "temperature",
-    "top_p",
-  ]) {
+  for (const key of Object.keys(unsupportedCodexParams)) {
     expect(params).not.toHaveProperty(key);
   }
 }
 
+const custom = makeResponsesModel({
+  id: "synthetic-reasoner",
+  provider: "custom-provider",
+  baseUrl: "https://reasoning.example/v1",
+  compat: { supportedReasoningEfforts: ["none", "low", "high"] },
+  thinkingLevelMap: { off: "low" },
+});
+const grok = makeResponsesModel({
+  id: "grok-4.3",
+  provider: "xai",
+  baseUrl: "https://api.x.ai/v1",
+  compat: {
+    supportsReasoningEffort: true,
+    supportedReasoningEfforts: ["none", "low", "medium", "high"],
+  },
+});
+
 describe("openai transport stream", () => {
-  it("preserves xAI Grok 4.3 default reasoning by omitting default none", () => {
-    const params = buildOpenAIResponsesParams(
-      makeResponsesModel({
-        id: "grok-4.3",
-        provider: "xai",
-        baseUrl: "https://api.x.ai/v1",
-        compat: {
-          supportsReasoningEffort: true,
-          supportedReasoningEfforts: ["none", "low", "medium", "high"],
-        },
-      }),
-      { systemPrompt: "system", messages: [], tools: [] } as never,
-      undefined,
-    ) as { reasoning?: unknown; include?: string[] };
-
-    expect(params).not.toHaveProperty("reasoning");
-    expect(params).not.toHaveProperty("include");
-  });
-
   it.each([
-    { intent: "omitted", options: undefined, reasoning: undefined, include: undefined },
-    {
-      intent: "logical off",
-      options: { reasoning: "off" },
-      reasoning: { effort: "low", summary: "auto" },
-      include: ["reasoning.encrypted_content"],
-    },
-    {
-      intent: "native none",
-      options: { reasoningEffort: "none" },
-      reasoning: { effort: "none" },
-      include: undefined,
-    },
-  ] as const)("preserves custom Responses $intent intent", ({ options, reasoning, include }) => {
+    ["Grok default", grok, undefined, undefined, undefined],
+    ["custom omitted", custom, undefined, undefined, undefined],
+    [
+      "custom logical off",
+      custom,
+      { reasoning: "off" },
+      { effort: "low", summary: "auto" },
+      ["reasoning.encrypted_content"],
+    ],
+    ["native none", custom, { reasoningEffort: "none" }, { effort: "none" }, undefined],
+  ] as const)("preserves Responses %s intent", (_intent, model, options, reasoning, include) => {
     const params = buildOpenAIResponsesParams(
-      makeResponsesModel({
-        id: "synthetic-reasoner",
-        provider: "custom-provider",
-        baseUrl: "https://reasoning.example/v1",
-        compat: { supportedReasoningEfforts: ["none", "low", "high"] },
-        thinkingLevelMap: { off: "low" },
-      }),
+      model,
       { systemPrompt: "system", messages: [], tools: [] },
       options,
     );
@@ -138,18 +128,12 @@ describe("openai transport stream", () => {
 
   it("sanitizes Codex responses params after payload hooks mutate them without stripping cache identity", () => {
     const payload = {
+      ...unsupportedCodexParams,
       model: "gpt-5.4",
       input: [],
       stream: true,
-      max_output_tokens: 1024,
-      metadata: { openclaw_session_id: "session-123" },
       prompt_cache_key: "session-123",
-      prompt_cache_retention: "24h",
-      prompt_cache_options: { ttl: "30m" },
-      service_tier: "auto",
-      temperature: 0.2,
       text: { format: { type: "json_object" }, verbosity: "low" },
-      top_p: 0.85,
     };
 
     const sanitized = testing.sanitizeOpenAICodexResponsesParams(

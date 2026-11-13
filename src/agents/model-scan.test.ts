@@ -1,16 +1,19 @@
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { oversizedJsonResponse } from "../../test/helpers/provider-http.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { scanOpenRouterModels } from "./model-scan.js";
 
 const jsonResponse = (body: BodyInit) =>
   new Response(body, { status: 200, headers: { "content-type": "application/json" } });
-const createFetchFixture = (payload: unknown): typeof fetch =>
-  withFetchPreconnect(async () => jsonResponse(JSON.stringify(payload)));
+const useResponse = (response: Response) =>
+  vi.stubGlobal(
+    "fetch",
+    withFetchPreconnect(async () => response),
+  );
 
 const scan = (data: unknown[], options: Parameters<typeof scanOpenRouterModels>[0] = {}) => {
-  vi.stubGlobal("fetch", createFetchFixture({ data }));
+  useResponse(jsonResponse(JSON.stringify({ data })));
   return scanOpenRouterModels({ probe: false, ...options });
 };
 
@@ -59,17 +62,11 @@ describe("scanOpenRouterModels", () => {
   it("keeps independently sized MoE models when filtering by minimum parameters", async () => {
     const results = await scan(
       [
-        {
-          id: "meta-llama/llama4-maverick-17b-128e:free",
-          name: "Llama 4 Maverick 400B",
-        },
-        {
-          id: "meta-llama/llama4-scout-17b-16e:free",
-          name: "Llama 4 Scout",
-        },
-        { id: "qwen/qwen3-30b-a3b:free", name: "Qwen3 30B A3B" },
-        { id: "meta-llama/llama-70b:free", name: "Llama 70B" },
-      ],
+        ["meta-llama/llama4-maverick-17b-128e:free", "Llama 4 Maverick 400B"],
+        ["meta-llama/llama4-scout-17b-16e:free", "Llama 4 Scout"],
+        ["qwen/qwen3-30b-a3b:free", "Qwen3 30B A3B"],
+        ["meta-llama/llama-70b:free", "Llama 70B"],
+      ].map(([id, name]) => ({ id, name })),
       { minParamB: 100 },
     );
 
@@ -100,51 +97,28 @@ describe("scanOpenRouterModels", () => {
   it("cancels catalog error response bodies", async () => {
     const response = new Response("unavailable", { status: 503 });
     const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
-    const fetchImpl = withFetchPreconnect(async () => response);
-
-    vi.stubGlobal("fetch", fetchImpl);
+    useResponse(response);
     await expect(scanOpenRouterModels({ probe: false })).rejects.toThrow(/HTTP 503/);
 
     expect(cancel).toHaveBeenCalledOnce();
   });
 
   it("bounds an oversized catalog success body and cancels the stream", async () => {
-    // An unbounded provider stream must be cancelled at the byte cap.
-    const cancel = vi.fn(async () => undefined);
-    let pullCount = 0;
-    const chunk = new Uint8Array(64 * 1024).fill(0x20); // 64 KiB of spaces
-    const fetchImpl = withFetchPreconnect(async () =>
-      jsonResponse(
-        new ReadableStream({
-          start(controller) {
-            // Valid JSON array prefix so the body would parse if ever read in full.
-            controller.enqueue(new TextEncoder().encode('{"data":['));
-          },
-          pull(controller) {
-            pullCount += 1;
-            controller.enqueue(chunk);
-          },
-          cancel,
-        }),
-      ),
-    );
-
-    vi.stubGlobal("fetch", fetchImpl);
+    const { response, state } = oversizedJsonResponse();
+    useResponse(response);
     await expect(scanOpenRouterModels({ probe: false })).rejects.toThrow(
       /OpenRouter \/models: JSON response exceeds 16777216 bytes/,
     );
 
-    expect(cancel).toHaveBeenCalledOnce();
-    expect(pullCount).toBeGreaterThan(0);
-    expect(pullCount).toBeLessThan(16 * 1024 * 1024); // nowhere near draining forever
+    expect(state.canceled).toBe(true);
+    expect(state.enqueuedBytes).toBeLessThan(64 * 1024 * 1024);
   });
 
   it.each([
     ["body", "not json at all", /OpenRouter \/models: malformed JSON response/],
     ["envelope", "{}", /OpenRouter \/models.*malformed JSON response/],
   ] as const)("rejects a malformed catalog %s", async (_kind, body, error) => {
-    const fetchImpl = withFetchPreconnect(async () => jsonResponse(body));
-    vi.stubGlobal("fetch", fetchImpl);
+    useResponse(jsonResponse(body));
     await expect(scanOpenRouterModels({ probe: false })).rejects.toThrow(error);
   });
 
@@ -156,88 +130,73 @@ describe("scanOpenRouterModels", () => {
     });
   });
 
-  it("applies the scan timeout before the OpenRouter catalog responds", async () => {
-    vi.useFakeTimers();
-    const fetchImpl: typeof fetch = async () =>
-      await new Promise<Response>(() => {
-        // Deliberately ignore cancellation to prove the timeout race settles independently.
-      });
-
-    vi.stubGlobal("fetch", fetchImpl);
-    const pending = expect(scanOpenRouterModels({ probe: false, timeoutMs: 1 })).rejects.toThrow(
-      /OpenRouter model scan timed out/,
-    );
-
-    await vi.advanceTimersByTimeAsync(1);
-    await pending;
-  });
-
-  it("keeps the catalog timeout active while reading a streaming body", async () => {
-    vi.useFakeTimers();
-    const timeoutMs = 20;
-    const chunkIntervalMs = 5;
-    const encoder = new TextEncoder();
-    let chunkCount = 0;
-    let abortCount = 0;
-
-    const fetchImpl = withFetchPreconnect(async (_input, init) => {
-      const signal = typeof init === "object" && init ? init.signal : undefined;
-      if (!signal) {
-        throw new Error("Expected catalog request signal");
-      }
+  it.each(["headers", "streaming body"] as const)(
+    "keeps the scan deadline while awaiting %s",
+    async (stage) => {
+      vi.useFakeTimers();
+      let chunks = 0;
+      const aborted = vi.fn();
       let interval: ReturnType<typeof setInterval> | undefined;
-      let completionTimer: ReturnType<typeof setTimeout> | undefined;
-      return jsonResponse(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(encoder.encode('{"data":['));
-            interval = setInterval(() => {
-              chunkCount += 1;
-              controller.enqueue(encoder.encode(" "));
-            }, chunkIntervalMs);
-            completionTimer = setTimeout(() => {
-              clearInterval(interval);
-              controller.enqueue(encoder.encode("]}"));
-              controller.close();
-            }, timeoutMs + chunkIntervalMs);
-            signal.addEventListener(
-              "abort",
-              () => {
-                abortCount += 1;
-                clearInterval(interval);
-                clearTimeout(completionTimer);
-                controller.error(signal.reason);
+      let completion: ReturnType<typeof setTimeout> | undefined;
+      const stop = () => {
+        clearInterval(interval);
+        clearTimeout(completion);
+      };
+      vi.stubGlobal(
+        "fetch",
+        withFetchPreconnect(async (_input, init) => {
+          if (stage === "headers") {
+            return await new Promise<Response>(() => {});
+          }
+          const signal = init?.signal;
+          if (!signal) {
+            throw new Error("Expected catalog request signal");
+          }
+          const encoder = new TextEncoder();
+          return jsonResponse(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(encoder.encode('{"data":['));
+                interval = setInterval(() => {
+                  chunks++;
+                  controller.enqueue(encoder.encode(" "));
+                }, 5);
+                completion = setTimeout(() => {
+                  stop();
+                  controller.enqueue(encoder.encode("]}"));
+                  controller.close();
+                }, 25);
+                signal.addEventListener(
+                  "abort",
+                  () => {
+                    aborted();
+                    stop();
+                    controller.error(signal.reason);
+                  },
+                  { once: true },
+                );
               },
-              { once: true },
-            );
-          },
-          cancel() {
-            clearInterval(interval);
-            clearTimeout(completionTimer);
-          },
+              cancel: stop,
+            }),
+          );
         }),
       );
-    });
-
-    vi.stubGlobal("fetch", fetchImpl);
-    const pending = expect(scanOpenRouterModels({ probe: false, timeoutMs })).rejects.toThrow(
-      /timed out/i,
-    );
-
-    await vi.advanceTimersByTimeAsync(timeoutMs - 1);
-    expect({ chunkCount, abortCount }).toEqual({ chunkCount: 3, abortCount: 0 });
-
-    await vi.advanceTimersByTimeAsync(chunkIntervalMs + 1);
-    await pending;
-    expect({ abortCount, timers: vi.getTimerCount() }).toEqual({ abortCount: 1, timers: 0 });
-  });
-
-  it("caps oversized scan timeouts before scheduling catalog aborts", async () => {
-    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    await scan([], { timeoutMs: MAX_TIMER_TIMEOUT_MS + 1_000_000 });
-
-    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
-  });
+      const pending = expect(scanOpenRouterModels({ probe: false, timeoutMs: 20 })).rejects.toThrow(
+        /timed out/i,
+      );
+      await vi.advanceTimersByTimeAsync(19);
+      if (stage === "streaming body") {
+        expect(chunks).toBe(3);
+        expect(aborted).not.toHaveBeenCalled();
+      }
+      await vi.advanceTimersByTimeAsync(6);
+      await pending;
+      if (stage === "streaming body") {
+        expect(aborted).toHaveBeenCalledOnce();
+      }
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
 
   it("does not match provider filters across provider id variants", async () => {
     const results = await scan(

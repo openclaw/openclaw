@@ -24,7 +24,6 @@ import type {
 } from "../../../src/gateway/session-utils.types.js";
 import type {
   GatewayContextWindowOption,
-  GatewayThinkingLevelOption,
   SessionsListResultBase,
   SessionsPatchResultBase,
 } from "../../../src/shared/session-types.js";
@@ -106,17 +105,22 @@ export type ConfigSnapshot = {
   runtimeConfig?: Record<string, unknown> | null;
   config?: Record<string, unknown> | null;
   issues?: { path: string; message: string }[] | null;
+  warnings?: { path: string; message: string }[] | null;
+  /** Files reached through $include, when the config uses any. */
+  includedPaths?: string[] | null;
 };
 
 export type { PresenceEntry } from "../../../packages/gateway-protocol/src/schema/snapshot.js";
 export type { GatewayWireSessionsDefaults as GatewaySessionsDefaults };
 export type { GatewayAgentRow } from "../../../src/shared/session-types.js";
-export type { GatewayContextWindowOption, GatewayThinkingLevelOption };
+export type { GatewayContextWindowOption };
 
 // The workspace view joins file results with separately fetched artifacts.
 export type SessionWorkspaceListResult = ProtocolSessionsFilesListResult & {
   artifacts?: ProtocolArtifactSummary[];
 };
+
+export type CyberAccessProgram = NonNullable<GatewayWireSessionRow["cyberAccessProgram"]>;
 
 export type GatewaySessionRow = Omit<GatewayWireSessionRow, "archivedBy" | "updatedAt"> &
   Pick<SessionRow, "archivedBy" | "updatedAt"> & {
@@ -163,13 +167,14 @@ export type SessionsPatchResult = SessionsPatchResultBase<{
   contextWindow?: string;
   thinkingLevel?: string;
   fastMode?: FastMode;
+  cyberAccessProgram?: CyberAccessProgram;
   verboseLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
 }> &
   Pick<GatewayWireSessionsPatchResult, "resolved">;
 
-export type { CostUsageSummary, SessionsUsageResult } from "../pages/usage/data-types.ts";
+export type { SessionsUsageResult } from "../pages/usage/data-types.ts";
 
 export type CronRunStatus = NonNullable<ProtocolCronRunLogEntry["status"]>;
 export type CronDeliveryStatus = NonNullable<ProtocolCronRunLogEntry["deliveryStatus"]>;

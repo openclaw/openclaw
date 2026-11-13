@@ -9,6 +9,7 @@ import {
   bindPluginRuntimeArtifactSelection,
   hasCanonicalPluginDistribution,
 } from "./plugin-runtime-artifact-binding.js";
+import { writeArtifacts } from "./public-surface.test-support.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 
 const owner = vi.hoisted(() => ({ packageRoot: "" }));
@@ -51,20 +52,13 @@ it("requires a completed canonical bundled runtime binding, not matching record 
   expect(hasCanonicalPluginDistribution(record)).toBe(false);
 });
 
-it.each(["workspace", "preferred", "external", "source", "foreign", "unknown", "selected"])(
-  "does not authorize a %s owner even with identical code and package fields",
+it.each(["workspace", "preferred", "external", "source", "unknown", "selected"])(
+  "does not authorize a %s owner even with a canonical runtime entry",
   (kind) => {
     const canonical = artifact();
-    const original =
-      kind === "source"
-        ? artifact("extensions/workboard")
-        : kind === "foreign"
-          ? artifact("foreign/dist/extensions/workboard")
-          : canonical;
+    const original = kind === "source" ? artifact("extensions/workboard") : canonical;
     const record = createPluginRecord({
       id: "workboard",
-      packageName: "@openclaw/workboard",
-      packageVersion: "1.0.0",
       origin: kind === "workspace" ? "workspace" : "bundled",
       ...original,
     });
@@ -86,31 +80,27 @@ it("recognizes staging execution only when it resolves into the same canonical o
   expect(hasCanonicalPluginDistribution(record)).toBe(true);
 });
 
-it.each(["inside", "outside"])(
-  "denies a compiled-tree redirect %s the running package",
-  (where) => {
-    const foreign = artifact(`${where === "inside" ? "owner/" : ""}foreign/extensions/workboard`);
-    owner.packageRoot = path.join(root, "owner");
-    fs.mkdirSync(path.join(owner.packageRoot, "dist"), { recursive: true });
-    fs.symlinkSync(path.dirname(foreign.rootDir), path.join(owner.packageRoot, "dist/extensions"));
-    const record = createPluginRecord({ id: "workboard", origin: "bundled", ...foreign });
-    completeBinding(record, { ...foreign, runtimeEntry: foreign });
-    expect(hasCanonicalPluginDistribution(record)).toBe(false);
-  },
-);
+it("denies a compiled-tree redirect even within the running package", () => {
+  const foreign = artifact("owner/foreign/extensions/workboard");
+  owner.packageRoot = path.join(root, "owner");
+  fs.mkdirSync(path.join(owner.packageRoot, "dist"), { recursive: true });
+  fs.symlinkSync(path.dirname(foreign.rootDir), path.join(owner.packageRoot, "dist/extensions"));
+  const record = createPluginRecord({ id: "workboard", origin: "bundled", ...foreign });
+  completeBinding(record, { ...foreign, runtimeEntry: foreign });
+  expect(hasCanonicalPluginDistribution(record)).toBe(false);
+});
 
 it.each(["file", "directory", "symlink"] as const)(
   "retains the configured %s exclusion after installed-index hydration",
   (kind) => {
     const runtimeEntry = artifact();
-    const writeJson = (name: string, value: unknown) =>
-      fs.writeFileSync(path.join(runtimeEntry.rootDir, name), JSON.stringify(value));
-    writeJson("package.json", {
-      name: "@openclaw/workboard",
-      version: "1.0.0",
-      openclaw: { extensions: ["./index.js"] },
+    writeArtifacts(runtimeEntry.rootDir, {
+      "package.json": {
+        name: "@openclaw/workboard",
+        openclaw: { extensions: ["./index.js"] },
+      },
+      "openclaw.plugin.json": { id: "workboard", configSchema: { type: "object" } },
     });
-    writeJson("openclaw.plugin.json", { id: "workboard", configSchema: { type: "object" } });
     const alias = path.join(root, "linked-workboard");
     if (kind === "symlink") {
       fs.symlinkSync(runtimeEntry.rootDir, alias);

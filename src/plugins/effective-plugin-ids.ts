@@ -5,7 +5,7 @@ import {
   listExplicitlyDisabledChannelIdsForConfig,
   listPotentialConfiguredChannelIds,
 } from "../channels/config-presence.js";
-import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import { applyPluginAutoEnable, applyPluginAutoEnableAsync } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   listExplicitConfiguredChannelIdsForConfig,
@@ -39,7 +39,7 @@ export async function resolveEffectivePluginIdsAsync(
   params: ResolveEffectivePluginIdsParams,
 ): Promise<string[]> {
   const prepared = params.metadataSnapshot?.pluginIds ? undefined : params.metadataSnapshot;
-  const autoEnabled = applyPluginAutoEnable({
+  const autoEnabled = await applyPluginAutoEnableAsync({
     config: params.config,
     env: params.env,
     ...(prepared ? { manifestRegistry: prepared.manifestRegistry } : {}),
@@ -95,6 +95,16 @@ function resolveEffectivePluginIdsWithChannels(
   const contextEnginePluginId = resolveSelectedContextEnginePluginIdFromConfig(
     plugins,
     plugins.slots.contextEngine,
+    plugins.enabled && plugins.slots.contextEngine && plugins.slots.contextEngine !== "legacy"
+      ? (
+          prepared ??
+          loadManifestMetadataSnapshot({
+            config: effectiveConfig,
+            env: params.env,
+            workspaceDir: params.workspaceDir,
+          })
+        ).plugins
+      : [],
   );
   if (contextEnginePluginId) {
     ids.add(contextEnginePluginId);

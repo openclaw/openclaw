@@ -17,6 +17,7 @@
         "baseUrl": "https://tokenhub.tencentmaas.com/v1",
         "api": "openai-completions",
         "defaultModel": "hy4-preview",
+        "family": "tencent",
         "models": [
           {
             "id": "hy3-preview",
@@ -82,6 +83,27 @@
             }
           },
           {
+            "id": "hy4",
+            "name": "Hy4 (TokenHub)",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1024000,
+            "contextTokens": 960000,
+            "maxTokens": 64000,
+            "cost": {
+              "input": 0.834,
+              "output": 2.501,
+              "cacheRead": 0.042,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["none", "high"],
+              "defaultThinkingLevel": "high"
+            }
+          },
+          {
             "id": "hy4-preview",
             "name": "Hy4 preview (TokenHub)",
             "reasoning": true,
@@ -106,6 +128,7 @@
         "baseUrl": "https://api.lkeap.cloud.tencent.com/plan/v3",
         "api": "openai-completions",
         "defaultModel": "hy4-preview",
+        "family": "tencent",
         "models": [
           {
             "id": "hy3",
@@ -118,6 +141,27 @@
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
               "supportedReasoningEfforts": ["none", "high"]
+            }
+          },
+          {
+            "id": "hy4",
+            "name": "Hy4 (TokenPlan)",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1024000,
+            "contextTokens": 960000,
+            "maxTokens": 64000,
+            "cost": {
+              "input": 0.834,
+              "output": 2.501,
+              "cacheRead": 0.042,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["none", "high"],
+              "defaultThinkingLevel": "high"
             }
           },
           {

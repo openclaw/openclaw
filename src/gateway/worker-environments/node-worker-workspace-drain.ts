@@ -19,7 +19,7 @@ import type {
 import { measureGatewayCloseStep } from "../restart-trace.js";
 import { RETRYABLE_NODE_WORKER_TRANSPORT_CODES } from "./node-launch-adapter.js";
 import { raceNodeWorkerOperation } from "./node-worker-abort.js";
-import type { NodeWorkerWorkspaceBinding } from "./node-worker-workspace-actions.js";
+import type { NodeWorkerWorkspaceBinding } from "./node-worker-tunnel.types.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 import {
   joinWorkerTunnelStops,

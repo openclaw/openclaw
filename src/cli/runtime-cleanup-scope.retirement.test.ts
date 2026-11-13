@@ -75,7 +75,8 @@ it.each(["success", "failure"])(
           executableAdmission = true;
           try {
             const command = withCliProcessScope(() => withCliCommandCleanup(false, async cleanup => {
-              assert(skillsResolutions > 0, "watcher callback was not retained before dispatch");
+              assert.equal(skillsResolutions, 0, "unused watcher runtime loaded before dispatch");
+              await import(entries.skills);
               const closeWatchers = cleanup.closeSkillsWatchers;
               const watcherGate = Promise.withResolvers();
               const watcherStarted = Promise.withResolvers();
@@ -127,8 +128,7 @@ it.each(["success", "failure"])(
       },
     });
     const failure = formatCliProcessFailure({ reason: "CLI source retirement failed", ...result });
-    expect(result.signal, failure).toBeNull();
-    expect(result.code, failure).toBe(0);
+    expect(result, failure).toMatchObject({ signal: null, code: 0 });
     expect(result.stdout, failure).toContain("cleanup joined after source retirement");
   },
 );

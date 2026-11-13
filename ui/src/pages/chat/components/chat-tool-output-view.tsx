@@ -4,11 +4,8 @@ import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { registerChatToolContentEnglish } from "../../../i18n/locales/en-chat-tool-content.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
-import {
-  isLegacyToolOutputUnavailable,
-  toolOutputSourceLabel,
-  formatToolOutput,
-} from "../../../lib/chat/tool-output.ts";
+import { isLegacyToolOutputUnavailable } from "../../../lib/chat/tool-output-text.ts";
+import { toolOutputSourceLabel, formatToolOutput } from "../../../lib/chat/tool-output.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { JSX } from "../../../types/solid-elements.d.ts";
 import type {
@@ -69,7 +66,10 @@ export function ChatToolOutput(props: Props) {
   function Output(view: { result: OutputResult }) {
     const card = () => view.result.card ?? props.content?.card;
     const text = () => card()?.outputText ?? "";
-    const displayText = () => (card() ? (formatToolOutput(card()!) ?? "") : "");
+    const displayText = createMemo(() => {
+      const current = card();
+      return current ? (formatToolOutput(current) ?? "") : "";
+    });
     return (
       <Show when={card()}>
         <section
@@ -113,6 +113,9 @@ export function ChatToolOutput(props: Props) {
           <pre class="chat-tool-output__text">
             <code>{displayText()}</code>
           </pre>
+          <Show when={card()!.catalogTruncated}>
+            <p role="status">{t("chat.catalogOutputTruncated")}</p>
+          </Show>
           <Show when={displayText() !== text()}>
             <RawOutputToggle text={text()} />
           </Show>

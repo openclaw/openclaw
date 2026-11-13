@@ -1,4 +1,4 @@
-import { asDateTimestampMs, asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asDateTimestampMs, parseFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -33,7 +33,7 @@ export async function fetchZaiUsage(
     return parsed.snapshot;
   }
   const usage = isRecord(parsed.data) ? parsed.data : undefined;
-  if (usage?.success !== true || asFiniteNumber(usage.code) !== 200) {
+  if (usage?.success !== true || parseFiniteNumber(usage.code) !== 200) {
     return buildUsageErrorSnapshot("zai", normalizeOptionalString(usage?.msg) || "API error");
   }
 
@@ -45,14 +45,14 @@ export async function fetchZaiUsage(
       continue;
     }
     const type = normalizeOptionalString(limit.type);
-    const number = asFiniteNumber(limit.number);
-    const suffix = WINDOW_UNITS[asFiniteNumber(limit.unit) ?? 0];
+    const number = parseFiniteNumber(limit.number);
+    const suffix = WINDOW_UNITS[parseFiniteNumber(limit.unit) ?? 0];
     const windowLabel = suffix && number !== undefined ? `${number}${suffix}` : "Limit";
 
     if (type === "TOKENS_LIMIT" || type === "TIME_LIMIT") {
       windows.push({
         label: type === "TOKENS_LIMIT" ? `Tokens (${windowLabel})` : "Monthly",
-        usedPercent: clampPercent(asFiniteNumber(limit.percentage) ?? 0),
+        usedPercent: clampPercent(parseFiniteNumber(limit.percentage) ?? 0),
         resetAt:
           asDateTimestampMs(limit.nextResetTime) ??
           parseUsageResetAt(normalizeOptionalString(limit.nextResetTime)),

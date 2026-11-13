@@ -89,8 +89,8 @@ suite.define(() => {
           await setting.getByRole("checkbox", { name: settingLabel, exact: true }).isChecked(),
         ).toBe(expected);
       };
-      await readDiscoverySetting("codex", "Discover Codex Sessions", true);
-      await readDiscoverySetting("anthropic", "Discover Claude Code Sessions", false);
+      await readDiscoverySetting("codex", "Discover Codex sessions", true);
+      await readDiscoverySetting("anthropic", "Discover Claude Code sessions", false);
 
       if (captureUiProofEnabled) {
         await page.screenshot({

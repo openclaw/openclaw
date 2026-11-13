@@ -1,24 +1,95 @@
 import { createSignal } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
+import type { ToolCard } from "../../../lib/chat/chat-types.ts";
+import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
+import { ToolCardRow } from "./chat-tool-card-row.solid.tsx";
 import { ChatToolCard } from "./chat-tool-cards.solid.tsx";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 import { ToolPreview } from "./widget-card-view.tsx";
 
-let container: HTMLDivElement | undefined;
-afterEach(() => {
-  cleanupSolid();
-  container?.remove();
-  container = undefined;
-});
+vi.mock("../../../lib/chat/tool-display.ts", { spy: true });
+
+function containerFor(cssText: string) {
+  const container = document.body.appendChild(document.createElement("div"));
+  container.style.cssText = cssText;
+  onTestFinished(() => container.remove());
+  return container;
+}
 
 describe.runIf("__vitest_browser__" in globalThis)("tool activity layout", () => {
+  it("derives details only for a visible generic row while retaining command identity and transitions", () => {
+    const direct: ToolCard = {
+      id: "retained-row",
+      name: "exec",
+      args: { command: "export DEMO=1; cd /tmp; printf first" },
+    };
+    const [card, setCard] = createSignal(direct);
+    const onToggleExpanded = vi.fn();
+    const display = vi.mocked(resolveToolDisplay);
+    display.mockClear();
+    const { container } = mountSolid(() => (
+      <ToolCardRow
+        card={card()}
+        options={{ messageKey: "dedicated-row", expanded: false, onToggleExpanded }}
+      />
+    ));
+    flush();
+    const row = container.querySelector<HTMLButtonElement>(".chat-tool-row")!;
+    const command = () => container.querySelector(".chat-tool-row__cmd")?.textContent;
+    const icon = () => container.querySelector('[role="img"]')?.getAttribute("aria-label");
+    expect(command()).toBe("printf first");
+    expect(icon()).toBe("exec");
+    expect.soft(display.mock.calls.length, "unused command detail derivation").toBe(0);
+    row.focus();
+
+    display.mockClear();
+    setCard({
+      ...direct,
+      name: "dispatch_action",
+      args: { id: "openclaw:core:exec", args: { command: "cd /tmp && printf wrapped" } },
+    });
+    flush();
+    expect(command()).toBe("printf wrapped");
+    expect(icon()).toBe("exec");
+    expect(container.querySelector(".chat-tool-row")).toBe(row);
+    expect(document.activeElement).toBe(row);
+    expect.soft(display.mock.calls.length, "unused wrapped command detail derivation").toBe(0);
+
+    display.mockClear();
+    setCard({ ...direct, args: { command: "printf titled", title: "Inspect the result" } });
+    flush();
+    expect(container.querySelector(".chat-tool-row__title")?.textContent).toBe(
+      "Inspect the result",
+    );
+    expect.soft(display.mock.calls.length, "unused titled command detail derivation").toBe(0);
+
+    for (const message of ["First widget", "Updated widget"]) {
+      display.mockClear();
+      setCard({ ...direct, name: "inspect_widget", args: { message } });
+      flush();
+      expect(container.querySelector(".chat-tool-msg-summary__label")).toBeNull();
+      expect(container.querySelector(".chat-tool-msg-summary__names")?.textContent).toBe(message);
+      expect(display.mock.calls.length).toBeGreaterThan(0);
+      expect(icon()).toBe("inspect_widget");
+      expect(container.querySelector(".chat-tool-row")).toBe(row);
+    }
+
+    display.mockClear();
+    setCard({ ...direct, args: { command: "printf returned" } });
+    flush();
+    expect(command()).toBe("printf returned");
+    expect(container.querySelector(".chat-tool-msg-summary__names")).toBeNull();
+    expect.soft(display.mock.calls.length, "retired generic detail derivation").toBe(0);
+    row.click();
+    expect(onToggleExpanded).toHaveBeenCalledWith("retained-row");
+  });
+
   it("truncates long progress receipts while keeping tool identity visible", async () => {
-    container = document.body.appendChild(document.createElement("div"));
-    container.style.width = "220px";
+    const container = containerFor("width: 220px");
     const step = "Verify the implementation and report the result. ".repeat(12).slice(0, 512);
     const options = { messageKey: "narrow", expanded: false, onToggleExpanded: vi.fn() };
     const cards = [
@@ -48,9 +119,8 @@ describe.runIf("__vitest_browser__" in globalThis)("tool activity layout", () =>
   });
 
   it("mounts and rerenders during resize delivery without observer loop errors", async () => {
-    container = document.body.appendChild(document.createElement("div"));
+    const container = containerFor("width: 420px; height: 300px");
     container.className = "chat-thread";
-    container.style.cssText = "width: 420px; height: 300px";
     const errors: string[] = [];
     const recordError = (event: ErrorEvent) => {
       if (event.message.includes("ResizeObserver loop")) {
@@ -58,65 +128,58 @@ describe.runIf("__vitest_browser__" in globalThis)("tool activity layout", () =>
       }
     };
     window.addEventListener("error", recordError);
-    let redraw!: () => void;
+    onTestFinished(() => window.removeEventListener("error", recordError));
+    const [options, setOptions] = createSignal({ rawText: "Widget details" });
     mountSolid(
-      () => {
-        const [options, setOptions] = createSignal({ rawText: "Widget details" });
-        redraw = () => setOptions({ rawText: "Widget details" });
-        return (
-          <ToolPreview
-            preview={{
-              kind: "canvas",
-              surface: "assistant_message",
-              render: "url",
-              url: "about:blank",
-              sandbox: "strict",
-            }}
-            surface="chat_message"
-            options={options()}
-          />
-        );
-      },
+      () => (
+        <ToolPreview
+          preview={{
+            kind: "canvas",
+            surface: "assistant_message",
+            render: "url",
+            url: "about:blank",
+            sandbox: "strict",
+          }}
+          surface="chat_message"
+          options={options()}
+        />
+      ),
       { container },
     );
     const draw = () => {
-      redraw();
+      setOptions({ rawText: "Widget details" });
       flush();
     };
-    let rerenderObserver: ResizeObserver | undefined;
-    try {
-      draw();
-      const preview = container.querySelector<HTMLElement>(".chat-tool-card__preview")!;
-      preview.style.width = "400px";
-      const actions = preview.querySelector<HTMLElement>("[data-widget-actions]")!;
-      const expectPlacement = async (edge: "top" | "right") => {
-        await vi.waitFor(() => {
-          const actual = actions.getBoundingClientRect()[edge === "top" ? "bottom" : "left"];
-          expect(actual).toBe(preview.getBoundingClientRect()[edge]);
-        });
-        expect(errors).toEqual([]);
-      };
-      await expectPlacement("top");
-
-      let rerendered = false;
-      rerenderObserver = new ResizeObserver(() => {
-        rerenderObserver?.disconnect();
-        draw();
-        rerendered = true;
+    draw();
+    const preview = container.querySelector<HTMLElement>(".chat-tool-card__preview")!;
+    preview.style.width = "400px";
+    const actions = preview.querySelector<HTMLElement>("[data-widget-actions]")!;
+    const expectPlacement = async (edge: "top" | "right") => {
+      await vi.waitFor(() => {
+        const actual = actions.getBoundingClientRect()[edge === "top" ? "bottom" : "left"];
+        expect(actual).toBe(preview.getBoundingClientRect()[edge]);
       });
-      rerenderObserver.observe(preview);
-      await vi.waitFor(() => expect(rerendered).toBe(true));
-      expect(errors).toEqual([]);
+    };
+    await expectPlacement("top");
 
-      // Resize the observed ancestor after delivery; doing it in the callback creates a loop.
-      container.style.width = "480px";
-      await expectPlacement("right");
+    let rerendered = false;
+    const rerenderObserver = new ResizeObserver(() => {
+      rerenderObserver.disconnect();
+      draw();
+      rerendered = true;
+    });
+    onTestFinished(() => rerenderObserver.disconnect());
+    rerenderObserver.observe(preview);
+    await vi.waitFor(() => expect(rerendered).toBe(true));
 
-      container.style.width = "420px";
-      await expectPlacement("top");
-    } finally {
-      rerenderObserver?.disconnect();
-      window.removeEventListener("error", recordError);
+    // Resize the observed ancestor after delivery; doing it in the callback creates a loop.
+    for (const [width, edge] of [
+      [480, "right"],
+      [420, "top"],
+    ] as const) {
+      container.style.width = `${width}px`;
+      await expectPlacement(edge);
     }
+    expect(errors).toEqual([]);
   });
 });

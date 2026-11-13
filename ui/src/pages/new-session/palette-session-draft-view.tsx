@@ -1,6 +1,9 @@
-import { createMemo, Show } from "solid-js";
-import { t } from "../../lib/reactive/i18n.ts";
+import { createMemo, createSignal, Show } from "solid-js";
+import { createChatAttachmentInputHandle } from "../chat/components/chat-attachment-inputs.ts";
+import { ChatAttachmentInputs } from "../chat/components/chat-attachment-inputs.tsx";
 import { AttachmentPreview } from "../chat/components/chat-attachments.tsx";
+import { ChatComposerPlusMenu } from "../chat/components/chat-composer-plus-menu.tsx";
+import type { ChatCommentAction } from "../chat/components/chat-selection-annotations.tsx";
 import { ConnectMachineDialog } from "./connect-machine-dialog-view.tsx";
 import type { PaletteSessionDraft } from "./palette-session-draft.ts";
 import { PaletteSessionSettingsView } from "./palette-session-settings-view.tsx";
@@ -13,6 +16,37 @@ export function PaletteSessionControls(props: DraftProps) {
     return props.draft.settingsView();
   });
   return <Show when={view()}>{(settings) => <PaletteSessionSettingsView {...settings()} />}</Show>;
+}
+
+/** The composer's own add menu, limited to this draft's attachment sources. */
+export function PaletteSessionAddMenu(props: DraftProps) {
+  const inputHandle = createChatAttachmentInputHandle();
+  const [open, setOpen] = createSignal(false);
+  const attachments = createMemo(() => {
+    void props.revision;
+    return props.draft.attachmentProps();
+  });
+  return (
+    <Show when={attachments()}>
+      {(current) => (
+        <>
+          <ChatAttachmentInputs {...current()} inputHandle={inputHandle} />
+          <ChatComposerPlusMenu
+            menu={{
+              attachments: current(),
+              inputHandle,
+              disabled: props.draft.messageLocked,
+              open: open(),
+              view: "root",
+              toolOverrides: undefined,
+              onOpenChange: setOpen,
+              onViewChange: () => {},
+            }}
+          />
+        </>
+      )}
+    </Show>
+  );
 }
 
 export function PaletteSessionAttachments(props: DraftProps) {
@@ -29,7 +63,12 @@ export function PaletteSessionAttachments(props: DraftProps) {
   });
   return (
     <Show when={preview()}>
-      <div class="cmd-palette__attachments">
+      <div
+        class="cmd-palette__attachments"
+        onOpenclaw-comment-action={(event: CustomEvent<ChatCommentAction>) =>
+          props.draft.removeComment(event.detail)
+        }
+      >
         <AttachmentPreview {...preview()!} readRevision={props.revision} />
       </div>
     </Show>
@@ -42,12 +81,4 @@ export function PaletteSessionAuxiliary(props: DraftProps) {
     return props.draft.auxiliaryView();
   });
   return <ConnectMachineDialog {...view()} />;
-}
-
-export function PaletteSessionRecovery(props: { onOpen: () => void }) {
-  return (
-    <button class="btn btn--sm" type="button" onClick={() => props.onOpen()}>
-      {t("sessionsView.openSession")}
-    </button>
-  );
 }

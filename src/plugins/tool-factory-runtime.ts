@@ -1,11 +1,13 @@
 /** Invokes current-context plugin tool factories and reports one assembly's timings. */
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { runWithPluginToolInvocationSource } from "../agents/agent-tool-source-execution-guard.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { isInvalidConfigError } from "../config/io.invalid-config.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runWithTrackedCancellation } from "../shared/async-work-resources.js";
+import { bindPluginInlineViewInvocation } from "./inline-view.js";
 import { prepareMemoryAudienceRead } from "./memory-audience.js";
 import { resolveMemoryCapabilityRegistration } from "./memory-state.js";
 import { capturePluginLifecycleAuthority } from "./registry-lifecycle.js";
@@ -66,30 +68,32 @@ export function bindPluginToolCallbacks(
     return result;
   };
   const prepare = tool.prepareArguments;
+  const executeBound = async (...args: Parameters<AnyAgentTool["execute"]>) => {
+    const [toolCallId, params, signal, onUpdate] = args;
+    const pending =
+      memoryAudience &&
+      resolveMemoryCapabilityRegistration(registry.memoryCapabilities)?.pluginId === entry.pluginId
+        ? prepareMemoryAudienceRead(memoryAudience)
+        : undefined;
+    if (pending) {
+      await racePromiseWithAbortSignal(pending, signal);
+    }
+    // Cancellation retains this context after the instance call has settled.
+    const result = await withPluginRuntimePluginScope(
+      { pluginId: entry.pluginId, pluginSource: entry.source },
+      () =>
+        invoke(() => {
+          const execute = (executionSignal?: AbortSignal) =>
+            tool.execute(toolCallId, params, executionSignal, onUpdate);
+          return signal ? runWithTrackedCancellation(signal, execute) : execute();
+        }),
+      registry,
+    );
+    return bindPluginInlineViewInvocation(result, entry.pluginId, tool.name, toolCallId);
+  };
   const callbacks = {
-    execute: async (...args: Parameters<AnyAgentTool["execute"]>) => {
-      const [toolCallId, params, signal, onUpdate] = args;
-      const pending =
-        memoryAudience &&
-        resolveMemoryCapabilityRegistration(registry.memoryCapabilities)?.pluginId ===
-          entry.pluginId
-          ? prepareMemoryAudienceRead(memoryAudience)
-          : undefined;
-      if (pending) {
-        await racePromiseWithAbortSignal(pending, signal);
-      }
-      // Cancellation retains this context after the instance call has settled.
-      return withPluginRuntimePluginScope(
-        { pluginId: entry.pluginId, pluginSource: entry.source },
-        () =>
-          invoke(() => {
-            const execute = (executionSignal?: AbortSignal) =>
-              tool.execute(toolCallId, params, executionSignal, onUpdate);
-            return signal ? runWithTrackedCancellation(signal, execute) : execute();
-          }),
-        registry,
-      );
-    },
+    execute: (...args: Parameters<AnyAgentTool["execute"]>) =>
+      runWithPluginToolInvocationSource(() => executeBound(...args)),
     ...(prepare
       ? { prepareArguments: (args: unknown) => invoke(() => prepare.call(tool, args)) }
       : {}),

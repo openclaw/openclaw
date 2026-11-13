@@ -122,6 +122,7 @@ function parseArgs(argv) {
     chat: "",
     dm: false,
     createForum: false,
+    createDmTopic: false,
     // Messages posted as the QA user before the driven turn, so history-scoped
     // scenarios (historyLimit, context visibility) have prior turns to scope.
     preSend: [],
@@ -131,52 +132,64 @@ function parseArgs(argv) {
     gatewayReadyTimeoutMs: undefined,
     recorderReadyTimeoutMs: undefined,
   };
-  for (let i = 0; i < argv.length; i += 1) {
+  let i = 0;
+  // An option that appeared must carry a value: a missing, empty or option-shaped
+  // token must not silently fall back to an empty string or a default.
+  const value = (option) => {
+    const next = argv[++i];
+    if (!next || next.startsWith("--")) {
+      throw new Error(`Missing value for ${option}.`);
+    }
+    return next;
+  };
+  for (; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--text") {
-      args.text = argv[++i] || "";
+      args.text = value(arg);
       args.textProvided = true;
-    } else if (arg === "--photo") args.photos.push(argv[++i] || "");
-    else if (arg === "--caption") args.caption = argv[++i] || "";
+    } else if (arg === "--photo") args.photos.push(value(arg));
+    else if (arg === "--caption") args.caption = value(arg);
     else if (arg === "--expect") {
       args.expectPassed = true;
-      args.expect.push(argv[++i] || "");
-    } else if (arg === "--timeout-ms") args.timeoutMs = Number(argv[++i] || args.timeoutMs);
-    else if (arg === "--gateway-port") args.gatewayPort = Number(argv[++i] || args.gatewayPort);
-    else if (arg === "--mock-port") args.mockPort = Number(argv[++i] || args.mockPort);
+      args.expect.push(value(arg));
+    } else if (arg === "--timeout-ms") args.timeoutMs = Number(value(arg));
+    else if (arg === "--gateway-port") args.gatewayPort = Number(value(arg));
+    else if (arg === "--mock-port") args.mockPort = Number(value(arg));
     else if (arg === "--backend") {
-      const value = (argv[++i] || "").trim();
-      if (!["mock", "qa-mock", "claude-cli"].includes(value)) {
-        throw new Error(`--backend takes "mock", "qa-mock", "claude-cli", got "${value}".`);
+      const backend = value(arg).trim();
+      if (!["mock", "qa-mock", "claude-cli"].includes(backend)) {
+        throw new Error(`--backend takes "mock", "qa-mock", "claude-cli", got "${backend}".`);
       }
-      args.backend = value;
+      args.backend = backend;
     } else if (arg === "--any-sut-reply") args.anySutReply = true;
-    else if (arg === "--output") args.output = argv[++i] || "";
+    else if (arg === "--output") args.output = value(arg);
     // Recording mode captures evidence for agent inspection. It does not turn
     // Telegram observations into a test verdict.
-    else if (arg === "--record") args.record = argv[++i] || "";
+    else if (arg === "--record") args.record = value(arg);
     else if (arg === "--expect-edit" || arg === "--expect-delete") {
       throw new Error(
         `${arg} was removed; record the live timeline and inspect the captured event.`,
       );
-    } else if (arg === "--chat") args.chat = argv[++i] || "";
+    } else if (arg === "--chat") args.chat = value(arg);
     else if (arg === "--dm") args.dm = true;
     else if (arg === "--create-forum") args.createForum = true;
-    else if (arg === "--pre-send") args.preSend.push(argv[++i] || "");
-    else if (arg === "--scenario") args.scenarioPath = argv[++i] || "";
+    else if (arg === "--create-dm-topic") {
+      args.createDmTopic = true;
+    } else if (arg === "--pre-send") args.preSend.push(value(arg));
+    else if (arg === "--scenario") args.scenarioPath = value(arg);
     else if (arg === "--source-gateway") args.sourceGateway = true;
     else if (arg === "--gateway-ready-timeout-ms") {
-      const value = Number(argv[++i]);
-      if (!Number.isInteger(value) || value <= 0) {
+      const ms = Number(value(arg));
+      if (!Number.isInteger(ms) || ms <= 0) {
         throw new Error("--gateway-ready-timeout-ms takes a positive integer.");
       }
-      args.gatewayReadyTimeoutMs = value;
+      args.gatewayReadyTimeoutMs = ms;
     } else if (arg === "--recorder-ready-timeout-ms") {
-      const value = Number(argv[++i]);
-      if (!Number.isInteger(value) || value <= 0) {
+      const ms = Number(value(arg));
+      if (!Number.isInteger(ms) || ms <= 0) {
         throw new Error("--recorder-ready-timeout-ms takes a positive integer.");
       }
-      args.recorderReadyTimeoutMs = value;
+      args.recorderReadyTimeoutMs = ms;
     } else if (arg === "--help" || arg === "-h") {
       printHelp();
       process.exit(0);
@@ -220,6 +233,14 @@ function parseArgs(argv) {
       throw new Error("--create-forum sends every scenario message to its created topic.");
     }
   }
+  if (args.createDmTopic) {
+    if (!args.scenario || !args.dm || args.chat || args.createForum) {
+      throw new Error("--create-dm-topic requires --dm and a --scenario.");
+    }
+    if (args.scenario.actions.some((action) => action.forumTopicId !== undefined)) {
+      throw new Error("--create-dm-topic sends every scenario message to its created topic.");
+    }
+  }
   if (!args.expectPassed) args.expect.push("OPENCLAW_E2E_OK");
   return args;
 }
@@ -260,6 +281,8 @@ Chat selection:
   --chat TARGET       TDLib id, username, or supported Telegram link
   --create-forum      create a run-owned forum and topic for a --scenario, send its
                       messages to that topic, and delete the forum during cleanup
+  --create-dm-topic   enable the leased bot's Threaded Mode, create a DM topic for a
+                      --dm --scenario, then delete it and disable Threaded Mode at cleanup
   Scenario send actions accept forumTopicId for a specific forum topic.
   Scenario forwardBurst actions require --dm and forward bot-authored text and photo in one TDLib call.
 
@@ -998,8 +1021,11 @@ async function checkScenarioCredential(credential, { signal, args }) {
     signal,
     dm: args?.dm,
     chat: args?.chat,
-    requireForum: args?.scenario?.actions.some((action) => action.forumTopicId !== undefined),
+    requireForum:
+      !args?.createDmTopic &&
+      args?.scenario?.actions.some((action) => action.forumTopicId !== undefined),
     createForum: args?.createForum,
+    createDmTopic: args?.createDmTopic,
   });
 }
 
@@ -1020,7 +1046,8 @@ export async function runTelegramTestScenario({
         scope.observeLease(credential);
         await checkCredential(credential, { signal: scope.signal, args });
         scope.assertActive();
-        const forumTopicId = credential.testForum?.setup.forumTopicId;
+        const forumTopicId =
+          credential.testForum?.setup.forumTopicId ?? credential.testDmTopic?.setup.forumTopicId;
         if (forumTopicId) {
           for (const action of args.scenario.actions) {
             if (action.type === "send") action.forumTopicId = forumTopicId;
@@ -1046,10 +1073,15 @@ export async function runTelegramTestScenario({
       fs.mkdirSync(evidenceDir, { recursive: true });
       writePrivateJson(path.join(evidenceDir, "test-group.json"), credential.testGroup);
     }
-    if (args?.output && credential?.testForum) {
-      // Release has run: the evidence holds both the created ids and the deletion result.
-      const summaryPath = resolve(args.output);
-      writePrivateJson(summaryPath, { ...readJson(summaryPath), testForum: credential.testForum });
+    for (const fixtureKey of ["testForum", "testDmTopic"]) {
+      if (args?.output && credential?.[fixtureKey]) {
+        // Release has run: preserve both creation and restoration evidence.
+        const summaryPath = resolve(args.output);
+        writePrivateJson(summaryPath, {
+          ...readJson(summaryPath),
+          [fixtureKey]: credential[fixtureKey],
+        });
+      }
     }
   }
 }

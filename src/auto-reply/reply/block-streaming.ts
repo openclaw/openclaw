@@ -64,10 +64,7 @@ export function resolveEffectiveBlockStreamingConfig(params: {
   /** Optional upper bound for chunking/coalescing max chars. */
   maxChunkChars?: number;
   coalesceIdleMs?: number;
-}): {
-  chunking: BlockStreamingChunking;
-  coalescing: BlockStreamingCoalescing;
-} {
+}) {
   const providerContext = resolveProviderChunkContext(
     params.cfg,
     params.provider,

@@ -5,7 +5,10 @@ import type {
 import { LiveModelCatalogHttpError } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { readProviderJsonArrayFieldResponse } from "openclaw/plugin-sdk/provider-http";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  normalizeModelCompat,
+  resolveDefaultModelMaxTokens,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedOrigin,
@@ -25,11 +28,6 @@ import { buildCopilotRuntimeHeaders } from "./runtime-identity.js";
 export const PROVIDER_ID = "github-copilot";
 
 const DEFAULT_CONTEXT_WINDOW = 128_000;
-const DEFAULT_MAX_TOKENS = 8192;
-
-function isCopilotCodexModelId(modelId: string): boolean {
-  return /(?:^|[-_.])codex(?:$|[-_.])/.test(modelId);
-}
 
 export function resolveCopilotForwardCompatModel(
   ctx: ProviderResolveDynamicModelContext,
@@ -49,7 +47,7 @@ export function resolveCopilotForwardCompatModel(
   // Unknown configured IDs remain usable; Copilot enforces account availability.
   const reasoning = staticOverride
     ? (staticOverride.reasoning ?? false)
-    : /^o[13](\b|$)/.test(lowerModelId) || isCopilotCodexModelId(lowerModelId);
+    : /^o[13](\b|$)/.test(lowerModelId) || /(?:^|[-_.])codex(?:$|[-_.])/.test(lowerModelId);
   const compat = staticOverride?.compat ?? resolveCopilotModelCompat(trimmedModelId);
   return normalizeModelCompat({
     id: trimmedModelId,
@@ -61,13 +59,16 @@ export function resolveCopilotForwardCompatModel(
     // image payloads for text-only models rather than failing silently.
     input: staticOverride?.input ?? ["text", "image"],
     cost: staticOverride?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    ...(staticOverride?.family ? { family: staticOverride.family } : {}),
     contextWindow: staticOverride?.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
     // Only the unknown-model estimate is replaceable; curated static sizing stays authoritative.
     ...(staticOverride?.contextWindow === undefined ? { contextWindowSource: "synthetic" } : {}),
     ...(staticOverride?.contextTokens !== undefined
       ? { contextTokens: staticOverride.contextTokens }
       : {}),
-    maxTokens: staticOverride?.maxTokens ?? DEFAULT_MAX_TOKENS,
+    maxTokens:
+      staticOverride?.maxTokens ??
+      resolveDefaultModelMaxTokens(staticOverride?.contextWindow ?? DEFAULT_CONTEXT_WINDOW),
     ...(staticOverride?.thinkingLevelMap
       ? { thinkingLevelMap: staticOverride.thinkingLevelMap }
       : {}),
@@ -217,6 +218,25 @@ function resolveCopilotApi(
   );
 }
 
+// Copilot `/models` vendor labels for the developers OpenClaw catalogs. Azure OpenAI
+// serves OpenAI's models. Other labels leave the family to the manifest row, or unknown.
+const COPILOT_VENDOR_FAMILIES = new Map([
+  ["anthropic", "anthropic"],
+  ["azure openai", "openai"],
+  ["google", "google"],
+  ["moonshot ai", "moonshot"],
+  ["openai", "openai"],
+  ["xai", "xai"],
+]);
+
+function resolveCopilotModelFamily(entry: CopilotApiModelEntry, id: string): string | undefined {
+  const vendor = normalizeOptionalLowercaseString(entry.vendor);
+  return (
+    (vendor ? COPILOT_VENDOR_FAMILIES.get(vendor) : undefined) ??
+    resolveStaticCopilotModelOverride(id)?.family
+  );
+}
+
 function mergeCopilotCompat(
   base: ModelDefinitionConfig["compat"] | undefined,
   reasoningEfforts: string[] | null | undefined,
@@ -265,7 +285,11 @@ function mapCopilotApiModelToDefinition(
   const nativeContextWindow = asPositiveSafeInteger(limits?.max_context_window_tokens);
   // Catalogs retain provider facts; runtime construction supplies an estimate for omissions.
   const contextTokens = asPositiveSafeInteger(limits?.max_prompt_tokens);
-  const maxTokens = asPositiveSafeInteger(limits?.max_output_tokens) ?? DEFAULT_MAX_TOKENS;
+  const maxTokens =
+    asPositiveSafeInteger(limits?.max_output_tokens) ??
+    resolveDefaultModelMaxTokens(
+      asPositiveSafeInteger(limits?.max_context_window_tokens) ?? DEFAULT_CONTEXT_WINDOW,
+    );
   const api = resolveCopilotApi(entry);
   const compat = mergeCopilotCompat(resolveCopilotModelCompat(id, api), supports?.reasoning_effort);
   // Copilot lists effort levels instead of Anthropic's capability tree. Only
@@ -283,10 +307,12 @@ function mapCopilotApiModelToDefinition(
         }
       : undefined;
   const thinkingLevelMap = resolveCopilotThinkingLevelMap(id, compat, api, params);
+  const family = resolveCopilotModelFamily(entry, id);
 
   const definition: CopilotCatalogModel = {
     id,
     name: entry.name?.trim() || id,
+    ...(family ? { family } : {}),
     api,
     reasoning,
     input,
@@ -316,14 +342,6 @@ function asCopilotApiModelEntry(value: unknown): CopilotApiModelEntry {
   return value as CopilotApiModelEntry;
 }
 
-type FetchCopilotModelCatalogParams = {
-  /** GitHub source token accepted by the account's Copilot API endpoint. */
-  copilotApiToken: string;
-  /** Resolved baseUrl from the same token-exchange response. */
-  baseUrl: string;
-  headers?: Record<string, string>;
-};
-
 /**
  * Fetch the live Copilot model catalog from `${baseUrl}/models` and project it
  * into `ModelDefinitionConfig[]`. Used by the plugin's discovery hook so the
@@ -333,9 +351,13 @@ type FetchCopilotModelCatalogParams = {
  * Filters out non-chat objects (embeddings, routers) and internal router ids.
  * Failures propagate so the catalog owner can publish a truthful outcome.
  */
-export async function fetchCopilotModelCatalog(
-  params: FetchCopilotModelCatalogParams,
-): Promise<CopilotCatalogModel[]> {
+export async function fetchCopilotModelCatalog(params: {
+  /** GitHub source token accepted by the account's Copilot API endpoint. */
+  copilotApiToken: string;
+  /** Resolved baseUrl from the same token-exchange response. */
+  baseUrl: string;
+  headers?: Record<string, string>;
+}): Promise<CopilotCatalogModel[]> {
   const trimmedBase = params.baseUrl.replace(/\/+$/, "");
   if (!trimmedBase) {
     throw new Error("fetchCopilotModelCatalog: baseUrl required");

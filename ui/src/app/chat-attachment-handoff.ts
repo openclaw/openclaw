@@ -174,7 +174,7 @@ export function createChatAttachmentHandoff(
       await retryStaleChunkReloadWhenReachable({ timeoutMs: 0, ...reloadOptions });
     } catch {
       if (current()) {
-        showToast({ message: t("chat.privateDraftReload.unavailable") });
+        showToast({ severity: "error", message: t("chat.privateDraftReload.unavailable") });
       }
     } finally {
       if (activeReview?.controller === controller) {
@@ -186,6 +186,8 @@ export function createChatAttachmentHandoff(
     () => !privateEntry(),
     () =>
       showToast({
+        severity: "error",
+        actionPrimary: true,
         message: t("chat.privateDraftReload.blocked"),
         actionLabel: t("chat.privateDraftReload.review"),
         onAction: () => void review(),

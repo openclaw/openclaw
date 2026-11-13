@@ -7,5 +7,9 @@
   "activation": { "onStartup": true },
   "configSchema": { "type": "object", "properties": {}, "additionalProperties": false },
   "contracts": { "tools": ["autoreview"] },
-  "toolMetadata": { "autoreview": { "optional": true } }
+  "toolMetadata": { "autoreview": { "optional": true } },
+  "recommendedPrompts": [
+    "Check whether Auto Review is ready for my repository and sandbox.",
+    "Review my code changes for actionable bugs without editing or publishing."
+  ]
 }

@@ -11,6 +11,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { commandResult } from "../../test-support/command-result.test-support.js";
 import plugin from "../index.js";
 import manifest from "../openclaw.plugin.json" with { type: "json" };
 import { resumeCodexCliSessionOnNode } from "./node-cli-sessions.js";
@@ -39,12 +40,10 @@ const completeResume: RunCommandBuffered = async (argv, options) => {
   }
   await fs.writeFile(outputPath, await fs.realpath(codexHome));
   return {
+    ...commandResult(),
     stdout: Buffer.alloc(0),
     stderr: Buffer.alloc(0),
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
+    termination: "exit" as const,
   };
 };
 
@@ -150,9 +149,13 @@ async function createRegisteredResume() {
     stop: async () => {
       scheduler.beginClose();
       try {
-        await registry.registry.services
-          .find((entry) => entry.service.id === "codex-session-catalog")
-          ?.service.stop?.({ config, stateDir, logger, scheduler });
+        const service = registry.registry.services.find(
+          (entry) => entry.service.id === "codex-session-catalog",
+        )?.service;
+        if (!service || service.apiVersion === 2 || service.apiVersion === 3) {
+          throw new Error("Expected Codex catalog service API version 1");
+        }
+        await service.stop?.({ config, stateDir, logger, scheduler });
       } finally {
         await scheduler.stop();
       }

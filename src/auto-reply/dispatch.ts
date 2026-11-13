@@ -306,7 +306,7 @@ async function dispatchInboundMessageWithBufferedDispatcherCore(
     foregroundReplyLease || configuredBeforeDeliver
       ? markReplyDispatchBeforeDeliverDeadlineOwned(async (payload, info) => {
           const queueAdmissionNotice =
-            getReplyPayloadMetadata(payload)?.queueAdmissionNotice === true;
+            getReplyPayloadMetadata(payload)?.queueAdmissionNotice !== undefined;
           queueAdmissionNoticeDispatched ||= queueAdmissionNotice;
           // Runtime queue acknowledgments and question responses must reach the requester
           // while the preceding turn is still active. Ordinary output retains its fence.

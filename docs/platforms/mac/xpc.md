@@ -41,6 +41,13 @@ Both mean the execution outcome is unknown; the command is never replayed
 locally. `COMPANION_APP_UNAVAILABLE` is reserved for requests that could not be
 submitted to the companion.
 
+The signed exec request envelope is limited to 1 MiB (1,048,576 UTF-8 bytes),
+excluding the trailing newline. The node host rejects larger requests before
+sending with `INVALID_REQUEST` and reason `too-large`; put large scripts or data
+in a file on the execution host and run that instead. Update the macOS app and
+node host together: older apps retain a 256,000-byte limit, so larger requests
+sent to them can still report an unknown execution outcome.
+
 The app obtains shared exec policy through the local CLI's bounded owner
 operations: read a redacted snapshot, replace policy with the expected hash, and
 commit a bound execution decision with any allow-always grant and usage update.

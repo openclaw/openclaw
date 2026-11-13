@@ -1,5 +1,6 @@
 import { Type } from "typebox";
 import { vi } from "vitest";
+import { Agent } from "../../../../packages/agent-core/src/agent.js";
 import { createDiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
 import type { ReplyOperation } from "../../../sessions/session-controller.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
@@ -58,14 +59,15 @@ export function prepareCatalogExecutor(options?: {
   const activeSession =
     options?.activeSession ??
     ({
-      agent: {},
+      agent: new Agent({ streamFn: streamMocks.streamSimple }),
       isStreaming: false,
       sessionManager: options?.sessionManager ?? SessionManager.inMemory(),
       subscribe: () => () => {},
     } as never);
-  const prepared = prepareEmbeddedAttemptStream({
+  const input: StreamInput = {
     attempt: {
       runId: "run-output-schema",
+      toolUsageRecorder: undefined,
       sessionId: "session-output-schema",
       sessionKey: options?.sessionKey ?? "agent:main:main",
       replyOperation: options?.replyOperation,
@@ -85,6 +87,7 @@ export function prepareCatalogExecutor(options?: {
       coreBuiltinToolNames: new Set(),
       replaySafeToolNames: new Set(),
       codeModeExecToolNames: new Set(),
+      toolUsageIdsByName: new Map(),
       sideEffectToolOwners: new Map(),
       trustedLocalMediaToolNames: new Set(options?.trustedLocalMediaToolNames),
     },
@@ -105,9 +108,11 @@ export function prepareCatalogExecutor(options?: {
     getRunState: options?.getRunState ?? (() => ({ ...idleRunState })),
     onBlockReply: options?.streamReplies === false ? undefined : vi.fn(),
     onBlockReplyFlush: options?.streamReplies === false ? undefined : vi.fn(),
-  });
+  };
+  const prepared = prepareEmbeddedAttemptStream(input);
   return {
     ...prepared,
+    input,
     nestedToolActivityState,
     readActivities: () =>
       readAttemptNestedToolActivity(activeSession.sessionManager, nestedToolActivityState),

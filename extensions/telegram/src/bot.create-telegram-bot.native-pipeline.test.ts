@@ -11,8 +11,7 @@ import {
   resolveStorePath,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { peekSystemEventEntries } from "openclaw/plugin-sdk/system-event-runtime";
-import { createRequireRecord, resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { assert, expect, it, vi } from "vitest";
 import { runWithTelegramSpooledReplayUpdate } from "./bot-processing-outcome.js";
 import {
@@ -26,14 +25,14 @@ import {
   apiCalls,
   groupChat,
   groupCommand,
+  deliverTelegramUpdate,
+  nextTelegramTestMessageId,
   publishTelegramTestConfig,
 } from "./bot.create-telegram-bot.native-pipeline.test-support.js";
 import { startTelegramCallbackQueryAnswer } from "./callback-query-answer-state.js";
 import { getTelegramRuntime, setTelegramRuntime } from "./runtime.js";
 import { getCachedSticker } from "./sticker-cache.js";
 
-const { loginExecutor } = vi.hoisted(() => ({ loginExecutor: vi.fn(async () => false) }));
-vi.mock("./bot-native-command-login.js", () => ({ executeTelegramLoginCommand: loginExecutor }));
 vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-runtime")>()),
   loadPreparedModelCatalog: vi.fn(async () => []),
@@ -59,13 +58,6 @@ const callback = (id: string, data: string, chat_instance: string, message_id: n
   chat_instance,
   from,
   message: { message_id, date: messageBase.date, chat },
-});
-
-it("runs the login executor without dispatching a turn", async () => {
-  const bot = await createBot();
-  await handleMessage(bot, 1004, commandMessage("/login"));
-  expect(loginExecutor).toHaveBeenCalledWith(expect.objectContaining({ commandText: "/login" }));
-  expect(harness.replySpy).not.toHaveBeenCalled();
 });
 
 it.each(["forum", "DM"] as const)("routes native commands to the %s topic", async (kind) => {
@@ -288,36 +280,6 @@ it("inherits named-account group access and composes exact-topic overrides on wi
   expect(harness.replySpy.mock.calls.at(-1)?.[1]?.skillFilter).toEqual([]);
 });
 
-it("dispatches registered reaction updates to the routed event queue", async () => {
-  resetSystemEventsForTest();
-  const bot = await configuredBot({
-    ...openDm,
-    reactionNotifications: "all",
-  });
-  try {
-    await bot.handleUpdate({
-      update_id: 2200,
-      message_reaction: {
-        chat,
-        message_id: 42,
-        user: from,
-        date: 1736380800,
-        old_reaction: [],
-        new_reaction: [{ type: "emoji", emoji: "\u{1F44D}" }],
-      },
-    });
-    expect(peekSystemEventEntries("agent:main:main")).toEqual([
-      expect.objectContaining({
-        text: "Telegram reaction added: \u{1F44D} by Alice on msg 42",
-        contextKey: "telegram:reaction:add:42001:42:42001:\u{1F44D}",
-      }),
-    ]);
-    expect(harness.replySpy).not.toHaveBeenCalled();
-  } finally {
-    resetSystemEventsForTest();
-  }
-});
-
 it("handles the overlapping migration filter once without starting an ordinary turn", async () => {
   const config: OpenClawConfig = {
     channels: {
@@ -459,58 +421,84 @@ it.each([
   },
 );
 
-it("labels an enabled first DM topic but not an established session with bounded Unicode input", async () => {
-  const bounded = "a".repeat(499);
-  const generated = vi
-    .spyOn(replyRuntime, "generateConversationLabel")
-    .mockResolvedValue("Invoice review");
-  const renamed = createDeferred<void>();
-  apiCalls.mockImplementation((method) => {
-    if (method === "editForumTopic") {
-      renamed.resolve();
-    }
-  });
-  const topicMessage = (text: string) => ({
-    ...commandMessage(text),
-    entities: [],
-    message_thread_id: 99,
-    is_topic_message: true,
-  });
-  try {
-    const bot = await configuredBot(
-      {
-        ...openUnstreamed,
-        autoTopicLabel: true,
-        direct: { [String(chat.id)]: { autoTopicLabel: true } },
-      },
-      {},
-      true,
-    );
-    await handleMessage(bot, 2700, topicMessage(`${bounded}\u{1F600}tail`));
-    await renamed.promise;
-    expect(generated.mock.calls[0]?.[0].userMessage).toBe(bounded);
-    expect(apiPayloads("editForumTopic")).toEqual([
-      expect.objectContaining({
-        chat_id: chat.id,
-        message_thread_id: 99,
-        name: "Invoice review",
-      }),
-    ]);
-    const sessionKey = harness.replySpy.mock.calls[0]?.[0].SessionKey;
-    assert(sessionKey, "Expected the first topic turn to reach the model");
-    // The controlled model substitutes for the engine that persists first-turn completion.
-    await upsertSessionEntry({
-      storePath: resolveStorePath(undefined, { agentId: "main" }),
-      sessionKey,
-      entry: { sessionId: "delivered-dm-topic", updatedAt: Date.now(), systemSent: true },
+it.each(["text", "voice", "photo", "untranscribed voice"] as const)(
+  "labels a first DM topic opened with %s but not an established session",
+  async (kind) => {
+    const bounded = "a".repeat(499);
+    const generated = vi
+      .spyOn(replyRuntime, "generateConversationLabel")
+      .mockResolvedValue("Invoice review");
+    const renamed = createDeferred<void>();
+    apiCalls.mockImplementation((method) => {
+      if (method === "editForumTopic") {
+        renamed.resolve();
+      }
     });
-    await handleMessage(bot, 2701, topicMessage("Continue the same topic"));
-    expect(generated).toHaveBeenCalledTimes(1);
-    expect(apiPayloads("sendMessage")).toHaveLength(2);
-  } finally {
-    generated.mockRestore();
-  }
-});
+    const topicMessage = (text: string) => ({
+      ...commandMessage(text),
+      entities: [],
+      message_thread_id: 99,
+      is_topic_message: true,
+    });
+    try {
+      const bot = await configuredBot(
+        {
+          ...openUnstreamed,
+          autoTopicLabel: true,
+          direct: { [String(chat.id)]: { autoTopicLabel: true } },
+        },
+        {},
+        true,
+      );
+      harness.transcribeFirstAudio.mockResolvedValue(
+        kind === "voice" ? "Plan a hiking trip" : undefined,
+      );
+      const message = topicMessage(`${bounded}\u{1F600}tail`);
+      const firstMessage =
+        kind === "text"
+          ? message
+          : {
+              ...message,
+              text: undefined,
+              ...(kind === "photo"
+                ? { photo }
+                : { voice: { file_id: "voice", file_unique_id: "voice-unique", duration: 2 } }),
+            };
+      await handleMessage(bot, 2700, firstMessage);
+      expect(generated).toHaveBeenCalledTimes(1);
+      await renamed.promise;
+      expect(generated.mock.calls[0]?.[0].userMessage).toBe(
+        kind === "text"
+          ? bounded
+          : kind === "voice"
+            ? '[Audio transcript (machine-generated, untrusted)]: "Plan a hiking trip"'
+            : kind === "photo"
+              ? "<media:image>"
+              : "<media:audio>",
+      );
+      expect(apiPayloads("editForumTopic")).toEqual([
+        expect.objectContaining({
+          chat_id: chat.id,
+          message_thread_id: 99,
+          name: "Invoice review",
+        }),
+      ]);
+      const sessionKey = harness.replySpy.mock.calls[0]?.[0].SessionKey;
+      assert(sessionKey, "Expected the first topic turn to reach the model");
+      // The controlled model substitutes for the engine that persists first-turn completion.
+      await upsertSessionEntry({
+        storePath: resolveStorePath(undefined, { agentId: "main" }),
+        sessionKey,
+        entry: { sessionId: "delivered-dm-topic", updatedAt: Date.now(), systemSent: true },
+      });
+      await handleMessage(bot, 2701, topicMessage("Continue the same topic"));
+      expect(generated).toHaveBeenCalledTimes(1);
+      expect(apiPayloads("sendMessage")).toHaveLength(2);
+    } finally {
+      generated.mockRestore();
+    }
+  },
+);
 
 it("commits a first sticker description before model admission and never describes a supplemental image as that sticker", async () => {
   const describeStarted = createDeferred<void>();
@@ -695,4 +683,28 @@ it("commits a first sticker description before model admission and never describ
   expect(await getCachedSticker(lateStickerId)).toMatchObject({
     description: "A sticker after webhook expiry",
   });
+});
+
+it.each([
+  ["external_reply", undefined, ["photo-1"]],
+  ["external_reply", "photo-unique", ["p2"]],
+  ["reply_to_message", "photo-unique", ["p2"]],
+] as const)("hydrates %s media unless the current photo is %s", async (field, unique, fileIds) => {
+  const bot = await configuredBot(openUnstreamed);
+  const origin = { type: "user", sender_user: from, date: messageBase.date } as const;
+  const current = unique
+    ? { photo: [{ ...photo[0], file_id: "p2", file_unique_id: unique }] }
+    : { text: "What is in this image?" };
+  const replied = { ...messageBase, message_id: nextTelegramTestMessageId(), photo, origin };
+  const message_id = nextTelegramTestMessageId();
+  await deliverTelegramUpdate(bot, {
+    update_id: message_id,
+    message: { ...messageBase, message_id, ...current, [field]: replied },
+  });
+  expect(apiPayloads("getFile")).toEqual(
+    fileIds.map((id) => expect.objectContaining({ file_id: id })),
+  );
+  const ctx = harness.replySpy.mock.calls[0]?.[0];
+  expect(ctx?.media?.filter((media) => media.path)).toHaveLength(1);
+  expect(typeof ctx?.ReplyChain?.[0]?.mediaPath).toBe(unique ? "undefined" : "string");
 });

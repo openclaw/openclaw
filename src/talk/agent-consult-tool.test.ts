@@ -6,9 +6,7 @@ import {
   parseRealtimeVoiceAgentConsultArgs as parseArgs,
   REALTIME_VOICE_AGENT_CONSULT_TOOL as consultTool,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME as consultName,
-  resolveRealtimeVoiceAgentConsultToolPolicy as resolvePolicy,
   resolveRealtimeVoiceAgentConsultTools as resolveTools,
-  resolveRealtimeVoiceAgentConsultToolsAllow as resolveToolsAllow,
   type RealtimeVoiceAgentConsultToolPolicy as ToolPolicy,
 } from "./agent-consult-tool.js";
 import type { RealtimeVoiceTool } from "./provider-types.js";
@@ -23,13 +21,12 @@ function sessionInstructions(options: Partial<Parameters<typeof buildSessionInst
   });
 }
 
-const customTool: RealtimeVoiceTool = {
-  type: "function",
-  name: "custom_lookup",
-  description: "Custom lookup",
-  parameters: { type: "object", properties: {} },
-};
+const customTool: RealtimeVoiceTool = { ...consultTool, name: "custom_lookup" };
 const duplicateConsultTool = { ...customTool, name: consultName };
+const baseInstructions =
+  "You are OpenClaw's Discord voice interface.\nKeep spoken replies concise, natural, and suitable for a live Discord voice channel.";
+const backchannel =
+  'While waiting for OpenClaw data or tool results, use at most one short natural backchannel such as "yeah", "mm-hmm", "got it", or "one sec"; vary it and do not treat it as the final answer.';
 const unreadableNameTool: RealtimeVoiceTool = {
   ...customTool,
   get name(): string {
@@ -72,13 +69,13 @@ describe("realtime voice agent consult tool", () => {
   it("builds byte-stable agent-proxy session instructions", () => {
     expect(
       sessionInstructions({
-        base: "You are OpenClaw's Discord voice interface.\nKeep spoken replies concise, natural, and suitable for a live Discord voice channel.",
+        base: baseInstructions,
         bootstrapContextInstructions: "  Profile context.  ",
         consultPolicy: "always",
       }),
     ).toBe(
       [
-        "You are OpenClaw's Discord voice interface.\nKeep spoken replies concise, natural, and suitable for a live Discord voice channel.",
+        baseInstructions,
         "Profile context.",
         "Mode: OpenClaw agent proxy.",
         "You are the realtime voice surface for the same OpenClaw agent the user can message directly.",
@@ -86,7 +83,7 @@ describe("realtime voice agent consult tool", () => {
         "Delegate substantive requests, actions, tool work, current facts, memory, workspace context, and user-specific context with openclaw_agent_consult.",
         "Do not block, refuse, or downscope at the voice layer. Delegate to OpenClaw and treat its result as authoritative.",
         "Answer directly only for greetings, acknowledgements, brief latency tests, or filler while waiting.",
-        'While waiting for OpenClaw data or tool results, use at most one short natural backchannel such as "yeah", "mm-hmm", "got it", or "one sec"; vary it and do not treat it as the final answer.',
+        backchannel,
         "When OpenClaw sends an internal exact answer to speak, do not call tools. Say only that answer.",
         [
           "Consult behavior:",
@@ -108,32 +105,14 @@ describe("realtime voice agent consult tool", () => {
         bootstrapContextInstructions: "   ",
         toolPolicy: "safe-read-only",
       }),
-    ).toBe(
-      [
-        "Voice base.",
-        'While waiting for OpenClaw data or tool results, use at most one short natural backchannel such as "yeah", "mm-hmm", "got it", or "one sec"; vary it and do not treat it as the final answer.',
-      ].join("\n\n"),
-    );
-  });
-
-  it("normalizes policy values and resolves shared tool exposure", () => {
-    expect(resolvePolicy(" OWNER ", "safe-read-only")).toBe("owner");
-    expect(resolvePolicy("bad", "safe-read-only")).toBe("safe-read-only");
-    expect(resolveToolsAllow("safe-read-only")).toEqual(
-      "read web_search web_fetch x_search memory_search memory_get".split(" "),
-    );
-    expect(resolveToolsAllow("owner")).toBeUndefined();
-    expect(resolveToolsAllow("none")).toStrictEqual([]);
+    ).toBe(`Voice base.\n\n${backchannel}`);
   });
 
   it.each<[ToolPolicy, RealtimeVoiceTool[] | undefined, RealtimeVoiceTool[]]>([
-    ["safe-read-only", undefined, [consultTool]],
     ["none", undefined, []],
-    ["safe-read-only", [duplicateConsultTool, customTool], [consultTool, customTool]],
-    ["none", [customTool], [customTool]],
     [
       "safe-read-only",
-      [unreadableNameTool, nonStringNameTool, customTool],
+      [duplicateConsultTool, unreadableNameTool, nonStringNameTool, customTool],
       [consultTool, customTool],
     ],
     ["none", [unreadableNameTool, customTool], [customTool]],

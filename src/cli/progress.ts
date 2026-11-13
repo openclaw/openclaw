@@ -11,6 +11,7 @@ import {
   unregisterActiveProgressLine,
 } from "../../packages/terminal-core/src/progress-line.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
+import { startSignalObserver } from "./signal-exit-barrier.js";
 
 /** Keep animated labels inside Clack's captured erase width. */
 export function createProgressSpinner(
@@ -23,6 +24,7 @@ export function createProgressSpinner(
   let columns = readColumns();
   let label = "";
   let finished = false;
+  let releaseSignalObserver: (() => void) | undefined;
   const spin = spinner(options);
   const render = (message: string) => {
     label = message;
@@ -54,7 +56,12 @@ export function createProgressSpinner(
         if (columns !== undefined) {
           output.on("resize", resize);
         }
-        spin.start(render(message));
+        const cookedInput = process.stdin.isTTY && !process.stdin.isRaw;
+        releaseSignalObserver = startSignalObserver(() => spin.start(render(message)));
+        // Clack's spinner puts stdin in raw mode and exits 0 on Ctrl+C; keep the terminal's SIGINT.
+        if (cookedInput && process.stdin.isRaw) {
+          process.stdin.setRawMode(false);
+        }
       }
     },
     message: (message: string) => spin.message(render(message)),
@@ -65,6 +72,7 @@ export function createProgressSpinner(
       finished = true;
       output.off("resize", resize);
       spin.clear();
+      releaseSignalObserver?.();
       if (message !== undefined) {
         log.message([`${symbol("submit")}  ${message}`], { output, spacing: 0, withGuide: false });
       }

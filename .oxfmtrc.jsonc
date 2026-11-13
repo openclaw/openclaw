@@ -27,21 +27,29 @@
   "ignorePatterns": [
     // Preserve the imported controller closure and its exact-source fixtures.
     ".agents/skills/update-team-server/controller/*.mjs",
+    // Preserve official-client fixture bytes and their recorded upstream hashes.
+    "test/fixtures/beam-live-handoff-client/beam.mjs",
+    "test/fixtures/beam-live-handoff-client/beam-handoff.js",
+    "test/fixtures/beam-live-handoff-client/beam-session.js",
     "/apps/",
     "CHANGELOG.md",
     "CHANGELOG/**",
     "CLAUDE.md",
     "docker-compose.yml",
+    // napi-rs generates the iroh binding loader and its type declarations.
+    "crates/openclaw-iroh-node/index.js",
+    "crates/openclaw-iroh-node/index.d.ts",
     "dist/",
     "extensions/diffs/assets/viewer-runtime.js",
     "extensions/browser/chrome-extension/modules/copilot-runtime.js",
+    // Knowledge vault fixtures are byte-exact record data, not authored prose.
+    "extensions/knowledge/fixtures/",
+    "extensions/knowledge/test-fixtures/",
     "**/*.json",
     "node_modules/",
     "patches/",
     "pnpm-lock.yaml/",
     "src/auto-reply/reply/export-html/",
-    "src/canvas-host/a2ui/a2ui.bundle.js",
-    "test/fixtures/agents/prompt-snapshots/codex-model-catalog/*.instructions.md",
     "test/fixtures/agents/prompt-snapshots/happy-path/*.md",
     "vendor/",
   ],

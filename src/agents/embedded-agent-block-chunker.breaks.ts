@@ -25,7 +25,8 @@ export function findSafeSentenceBreakIndex(
   offset = 0,
   openFence?: FenceSpan,
 ): number {
-  const matches = text.matchAll(/[.!?](?=\s|$)/g);
+  // A trailing digit and dot may still become a decimal or version in the next delta.
+  const matches = text.matchAll(/[.!?](?=\s)|(?:[!?]|(?<!\d)\.)$/g);
   let sentenceIdx = -1;
   for (const match of matches) {
     const at = match.index ?? -1;
@@ -54,7 +55,7 @@ export function findSafeParagraphBreakIndex(params: {
   let paragraphIdx = reverse ? text.lastIndexOf("\n\n") : text.indexOf("\n\n");
   while (reverse ? paragraphIdx >= minChars : paragraphIdx !== -1) {
     const candidates = [paragraphIdx, paragraphIdx + 1];
-    for (const candidate of candidates) {
+    for (let candidate of candidates) {
       if (candidate < minChars) {
         continue;
       }
@@ -62,6 +63,14 @@ export function findSafeParagraphBreakIndex(params: {
         continue;
       }
       if (isSafeFenceBreak(unsafeSpans, offset + candidate)) {
+        // Keep the entire empty-line boundary with the following content.
+        while (
+          candidate > minChars &&
+          text[candidate - 1] === "\n" &&
+          isSafeFenceBreak(unsafeSpans, offset + candidate - 1)
+        ) {
+          candidate -= 1;
+        }
         return candidate;
       }
     }
@@ -83,6 +92,13 @@ export function findSafeNewlineBreakIndex(params: {
   let newlineIdx = reverse ? text.lastIndexOf("\n") : text.indexOf("\n");
   while (reverse ? newlineIdx >= minChars : newlineIdx !== -1) {
     if (newlineIdx >= minChars && isSafeFenceBreak(unsafeSpans, offset + newlineIdx)) {
+      while (
+        newlineIdx > minChars &&
+        text[newlineIdx - 1] === "\n" &&
+        isSafeFenceBreak(unsafeSpans, offset + newlineIdx - 1)
+      ) {
+        newlineIdx -= 1;
+      }
       return newlineIdx;
     }
     newlineIdx = reverse

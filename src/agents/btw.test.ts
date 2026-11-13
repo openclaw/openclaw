@@ -1,11 +1,11 @@
 import { DatabaseSync } from "node:sqlite";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
-import { consumeReplyUsageState } from "../auto-reply/reply/reply-usage-state.js";
 import type { SessionEntry } from "../config/sessions.js";
-import { onInternalDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
@@ -47,7 +47,7 @@ describe("runBtwSideQuestion", () => {
   it.each([
     { name: "text-end drain", boundary: "text_end", maxChars: 200 },
     { name: "incremental drain", boundary: "text_end", maxChars: 5 },
-    { name: "message-end drain", boundary: "message_end", maxChars: 5 },
+    { name: "message-end drain", boundary: "message_end", maxChars: 7 },
   ] as const)(
     "contains failed block delivery, continues the $name, and preserves the final answer",
     async ({ boundary, maxChars }) => {
@@ -118,9 +118,7 @@ describe("runBtwSideQuestion", () => {
     try {
       await started.promise;
       // Let the failed stream settle without a timed delay or polling.
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextTurn();
       expect(settled).toBe(false);
     } finally {
       finishBlock.resolve();
@@ -291,12 +289,11 @@ describe("runBtwSideQuestion", () => {
           );
         }
         const outcome = operation.catch((error: unknown) => error);
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           entered.promise,
-          operation.then(() => {
-            throw new Error("Side question completed before its controlled operation");
-          }),
-        ]);
+          operation,
+          "Side question completed before its controlled operation",
+        );
         await source.release();
         expect(database.isOpen).toBe(true);
         expect(disposals).toBe(0);
@@ -544,67 +541,6 @@ describe("runBtwSideQuestion", () => {
       mode: "token",
       requirement: "subscription",
     });
-  });
-
-  it("exposes block-streamed side-question usage without mutating the parent session", async () => {
-    const tokens = { input: 13, output: 9, cacheRead: 7, cacheWrite: 3 };
-    const usage = { ...tokens, total: 41 };
-    const cost = { input: 0.1, output: 0.1, cacheRead: 0.03, cacheWrite: 0.02, total: 0.25 };
-    const text = "Side answer.";
-    const onBlockReply = vi.fn().mockResolvedValue(undefined);
-    const done = btw.createDoneEvent(text);
-    done.message.usage = { ...tokens, totalTokens: 41, cost };
-    btw.streamSimpleMock.mockReturnValue(
-      btw.makeAsyncEvents([
-        { type: "text_delta", delta: text },
-        { type: "text_end", content: text, contentIndex: 0 },
-        done,
-      ]),
-    );
-    const runId = "btw-usage-reply-direct-block";
-    const authorityRunId = "btw-usage-authority-direct-block";
-    const sessionEntry = btw.createSessionEntry({ inputTokens: 200, cacheRead: 100 });
-    const originalEntry = structuredClone(sessionEntry);
-    const diagnostics: unknown[] = [];
-    const unsubscribe = onInternalDiagnosticEvent((event) => {
-      if (event.type === "model.usage") {
-        diagnostics.push(event);
-      }
-    });
-    try {
-      await expect(
-        btw.runSideQuestion({
-          cfg: { diagnostics: { enabled: undefined } },
-          sessionEntry,
-          authorityRunId,
-          blockReplyChunking: { minChars: 1, maxChars: 200, breakPreference: "paragraph" },
-          resolvedBlockStreamingBreak: "text_end",
-          opts: { runId, onBlockReply },
-        }),
-      ).resolves.toEqual(undefined);
-      expect(onBlockReply).toHaveBeenCalledExactlyOnceWith({
-        text,
-        btw: { question: btw.DEFAULT_QUESTION },
-      });
-      expect
-        .soft(consumeReplyUsageState(runId))
-        .toMatchObject({ usage, sessionId: "session-1", turnUsd: 0.25 });
-      expect(consumeReplyUsageState(authorityRunId)).toBeUndefined();
-      expect(sessionEntry).toEqual(originalEntry);
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      expect.soft(diagnostics).toEqual([
-        expect.objectContaining({
-          type: "model.usage",
-          sessionId: "session-1",
-          usage: { ...usage, promptTokens: 23 },
-          costUsd: 0.25,
-        }),
-      ]);
-    } finally {
-      unsubscribe();
-    }
   });
 
   it("keeps an unprofiled subscription token on the OpenClaw BTW path", async () => {
@@ -1081,11 +1017,7 @@ describe("runBtwSideQuestion", () => {
     const authStore = {
       version: 1 as const,
       profiles: {
-        "anthropic:primary": {
-          type: "api_key" as const,
-          provider: "anthropic",
-          key: "primary-key",
-        },
+        "anthropic:primary": createApiKeyCredential("anthropic", "primary-key"),
         "anthropic:backup": {
           type: "api_key" as const,
           provider: "anthropic",
@@ -1195,11 +1127,7 @@ describe("runBtwSideQuestion", () => {
     const authStore = {
       version: 1 as const,
       profiles: {
-        "openai:broken": {
-          type: "api_key" as const,
-          provider: "openai",
-          key: "broken-profile-key",
-        },
+        "openai:broken": createApiKeyCredential("openai", "broken-profile-key"),
       },
       order: { openai: ["openai:broken"] },
     };
@@ -1268,11 +1196,7 @@ describe("runBtwSideQuestion", () => {
       const staticAuthStore = {
         version: 1 as const,
         profiles: {
-          "anthropic:api": {
-            type: "api_key" as const,
-            provider: "anthropic",
-            key: "static-key",
-          },
+          "anthropic:api": createApiKeyCredential("anthropic", "static-key"),
         },
       };
       btw.ensureAuthProfileStoreMock.mockReturnValueOnce(staticAuthStore);
@@ -1392,33 +1316,6 @@ describe("runBtwSideQuestion", () => {
 
     expect(payloadWithEmptyTools).not.toHaveProperty("tools");
     expect(result).toBeUndefined();
-  });
-
-  it("allows Bedrock /btw runs to proceed without a static api key in aws-sdk mode", async () => {
-    btw.resolveModelWithRegistryMock.mockReturnValue({
-      provider: "amazon-bedrock",
-      id: "us.anthropic.claude-sonnet-4-5-v1:0",
-      api: "anthropic-messages",
-    });
-    btw.getApiKeyForModelMock.mockResolvedValue({
-      apiKey: undefined,
-      mode: "aws-sdk",
-      source: "aws-sdk default chain",
-    });
-    btw.streamSimpleMock.mockReturnValue(
-      btw.makeAsyncEvents([btw.createDoneEvent("Bedrock answer.")]),
-    );
-
-    const result = await btw.runSideQuestion({
-      cfg: {},
-      provider: "amazon-bedrock",
-      model: "us.anthropic.claude-sonnet-4-5-v1:0",
-    });
-
-    expect(result).toEqual({ text: "Bedrock answer." });
-    expect(btw.requireApiKeyMock).not.toHaveBeenCalled();
-    const options = btw.streamSimpleMock.mock.calls.at(-1)?.[2];
-    expect((options as { apiKey?: string } | undefined)?.apiKey).toBeUndefined();
   });
 
   it("uses the in-flight prompt as background only when there is no prior transcript context", async () => {

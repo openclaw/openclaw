@@ -31,7 +31,11 @@ import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
 import { formatMissingChildRuntimeWarning } from "../infra/child-runtime-viability.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { formatDurationSeconds } from "../infra/format-time/format-duration.js";
-import { readGatewayLastInstallationReplacementAsync } from "../infra/gateway-boot-lifecycle.js";
+import {
+  readGatewayLastInstallationReplacementAsync,
+  readGatewayRecentCrashesAsync,
+} from "../infra/gateway-boot-lifecycle.js";
+import { formatGatewayCrash, type GatewayCrashRecord } from "../infra/gateway-crash.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   formatSecretDegradationRetryHint,
@@ -114,6 +118,45 @@ function formatGatewayHealthDiagnostic(value: unknown): string {
   return scrubDoctorErrorMessage(sanitizeTerminalText(redactSensitiveUrlLikeString(raw)));
 }
 
+function gatewayCrashFinding(crashes: readonly GatewayCrashRecord[]): HealthFinding[] {
+  const now = Date.now();
+  const recent = crashes.filter((crash) => now - crash.detectedAtMs <= 24 * 60 * 60_000);
+  const repeated = crashes.filter((crash) => now - crash.detectedAtMs <= 7 * 24 * 60 * 60_000);
+  const relevant = recent.length ? recent : repeated.length >= 3 ? repeated : [];
+  return relevant.length
+    ? [
+        {
+          checkId: "core/doctor/gateway-health",
+          severity: "warning",
+          category: "fix-now",
+          message: `Gateway ended unexpectedly ${relevant.length} time(s):\n${relevant.map((crash) => `${new Date(crash.detectedAtMs).toISOString()}: ${formatGatewayHealthDiagnostic(formatGatewayCrash(crash))}`).join("\n")}`,
+          path: "gateway",
+          fixHint:
+            "Inspect `openclaw gateway status` and Gateway or supervisor logs for the recorded exits. A healthy successor does not erase a previous crash.",
+          docsUrl: "https://docs.openclaw.ai/gateway/restart-recovery#unexpected-exits",
+        },
+      ]
+    : [];
+}
+
+async function readLocalGatewayCrashFindings(cfg: OpenClawConfig, env?: NodeJS.ProcessEnv) {
+  if (cfg.gateway?.mode === "remote") {
+    return [];
+  }
+  try {
+    return gatewayCrashFinding(await readGatewayRecentCrashesAsync(env));
+  } catch (error) {
+    return [
+      {
+        checkId: "core/doctor/gateway-health",
+        severity: "warning" as const,
+        message: `Gateway crash history unavailable: ${formatGatewayHealthDiagnostic(error)}`,
+        fixHint: "Inspect `openclaw gateway status --deep` using the same profile and account.",
+      },
+    ];
+  }
+}
+
 async function readLocalInstallationReplacement(
   cfg: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
@@ -156,6 +199,7 @@ export async function collectGatewayHealthFindings(
         },
       ]
     : [];
+  historyFindings.push(...(await readLocalGatewayCrashFindings(ctx.cfg, ctx.env)));
   let probeDetails: Awaited<ReturnType<typeof buildGatewayProbeConnectionDetails>> | undefined;
   const warning = (message: string, fixHint: string): HealthFinding => ({
     checkId: "core/doctor/gateway-health",
@@ -206,6 +250,9 @@ export async function collectGatewayHealthFindings(
         fixHint: `Retry: ${owner.retryHint}`,
       }),
     );
+    if (mode === "remote") {
+      findings.push(...gatewayCrashFinding(status.recentCrashes ?? []));
+    }
     const sqliteWalWarning = formatSqliteWalHealthWarning(status.sqliteWal);
     if (status.modelReasoningWarning) {
       findings.push(
@@ -357,6 +404,9 @@ export async function checkGatewayHealth(params: {
       "No action needed if the current Gateway is healthy. This records a completed installation replacement.",
     );
   }
+  for (const finding of await readLocalGatewayCrashFindings(params.cfg)) {
+    report(finding.message, "Gateway crashes", finding.category, finding.fixHint);
+  }
   const { bindAgentToolGatewayRequest } = await import("../agents/tools/in-process-gateway.js");
   const requestGateway = bindAgentToolGatewayRequest({ hostedOnly: true });
   const timeoutMs = DEFAULT_RESTART_HEALTH_TIMEOUT_MS;
@@ -398,6 +448,11 @@ export async function checkGatewayHealth(params: {
     const slowDiagnosticNote = (diagnostic: string) =>
       `Gateway answered status in ${formatDurationSeconds(statusElapsedMs)}; ${diagnostic} diagnostics did not finish within ${formatDurationSeconds(diagnosticsTimeoutMs)}. The host may be slow; this does not mark the Gateway unhealthy.`;
     healthOk = true;
+    if (params.cfg.gateway?.mode === "remote") {
+      for (const finding of gatewayCrashFinding(status.recentCrashes ?? [])) {
+        report(finding.message, "Gateway crashes", finding.category, finding.fixHint);
+      }
+    }
     const gatewayVersion = status?.runtimeVersion?.trim();
     if (gatewayVersion && gatewayVersion !== VERSION) {
       note(
@@ -419,7 +474,6 @@ export async function checkGatewayHealth(params: {
     if (sqliteWalWarning) {
       report(sqliteWalWarning, "SQLite WAL");
     }
-    noteWarning(status.startupRecoveryWarning, "Startup session recovery");
     noteWarning(status.modelReasoningWarning, "Model reasoning");
     const childRuntimeWarning = status.childRuntime
       ? formatMissingChildRuntimeWarning(status.childRuntime)

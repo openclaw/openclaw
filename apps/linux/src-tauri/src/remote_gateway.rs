@@ -6,7 +6,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::{Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -1036,7 +1036,7 @@ pub(crate) fn start_tunnel(
             "OpenSSH is not installed. Install your system's OpenSSH client.".to_string()
         })?;
 
-    let mut command = Command::new(executable);
+    let mut command = crate::cli::host_command(executable);
     command.args([
         "-N",
         "-L",
@@ -1121,6 +1121,7 @@ pub(crate) fn dashboard_url(gateway_url: &Url) -> Result<Url, String> {
 mod tests {
     use super::*;
     use std::fs;
+    use std::process::Command;
 
     fn request() -> RemoteGatewayRequest {
         RemoteGatewayRequest {

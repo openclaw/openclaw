@@ -13,6 +13,7 @@ import {
   insertStoredDeviceIdentityIfAbsent,
   readStoredDeviceIdentity,
 } from "../infra/device-identity-store.js";
+import { listDirectoryTreeStrictSync } from "../infra/directory-walk.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
@@ -38,13 +39,18 @@ const tempDirs = createFixtureLifetime();
 afterAll(() => tempDirs.cleanup());
 
 function manifest(root: string): Record<string, string> {
-  // Ignore lifecycle scratch and SQLite reader noise; persisted state stays byte-identical.
+  // Refusals may log diagnostics; config and durable state must stay byte-identical.
   return Object.fromEntries(
-    fs
-      .readdirSync(root, { recursive: true, withFileTypes: true })
+    listDirectoryTreeStrictSync(root)
+      .map((walkEntry) => walkEntry.dirent)
       .filter((entry) => entry.isFile())
       .map((entry) => path.relative(root, path.join(entry.parentPath, entry.name)))
       .filter((relative) => relative.split(path.sep)[0] !== "tmp" && !relative.endsWith("-shm"))
+      .filter(
+        (relative) =>
+          path.dirname(relative) !== "logs" ||
+          !/^openclaw-\d{4}-\d{2}-\d{2}\.log$/u.test(path.basename(relative)),
+      )
       .toSorted()
       .map((relative) => [
         relative,
@@ -359,7 +365,13 @@ it.each<[string, AdmissionCase]>([
           }
         }
       } else if (!canonicalIdentity) {
-        expect(manifest(stateDir)).toEqual(before);
+        const after = manifest(stateDir);
+        const wal = path.relative(stateDir, `${databasePath}-wal`);
+        if (!(wal in before) && wal in after) {
+          expect(fs.statSync(`${databasePath}-wal`).size).toBe(0);
+          delete after[wal];
+        }
+        expect(after).toEqual(before);
         expect(schemaMetadata(databasePath)).toEqual(schemaBefore);
       }
     } finally {

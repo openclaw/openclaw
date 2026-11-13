@@ -18,8 +18,6 @@ import {
   type JsdomCustomElementDefinition,
 } from "./jsdom-compat.mts";
 
-export { jsdomCustomElementDefinitions };
-
 export type CustomElementTracking = {
   registry: CustomElementRegistry;
   definitions: JsdomCustomElementDefinition[];

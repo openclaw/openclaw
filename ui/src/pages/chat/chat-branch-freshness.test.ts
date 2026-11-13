@@ -12,7 +12,7 @@ import {
 } from "./chat-history-branches.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
-import { handlePageGatewayEvent } from "./chat-state-events.ts";
+import { handlePageGatewayEvent } from "./chat-state-events.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 
 function branch(leafEntryId = "original-reply", active = false): SessionBranch {
@@ -98,14 +98,13 @@ describe("chat branch freshness", () => {
     });
     vi.spyOn(host.sessions, "refresh").mockResolvedValue(undefined);
     vi.spyOn(host.sessions, "listBranches").mockResolvedValue([]);
-    const state = {
-      ...host,
+    const state = Object.assign(host, {
       chatBranches: branches ?? [],
       chatBranchesSessionKey: branches ? host.sessionKey : null,
       chatBranchesConnectionEpoch: branches ? host.connectionEpoch : null,
       currentSessionId: "selected-session",
       chatMessagesBySession: new Map(),
-    } as unknown as ChatPageHost;
+    }) as unknown as ChatPageHost;
     return { request, state };
   }
 
@@ -127,19 +126,6 @@ describe("chat branch freshness", () => {
     flush();
     return published;
   }
-
-  it("keeps unchanged empty branch reads idle while recording their freshness", async () => {
-    const { state } = createSessionEventState();
-    const published = observeBranchMenu(state);
-    const emptyBranches = state.chatBranches;
-    await loadChatBranches(state);
-    flush();
-    expect(state.chatBranches).toEqual([]);
-    expect(state.chatBranchesSessionKey).toBe(state.sessionKey);
-    expect(state.chatBranchesConnectionEpoch).toBe(state.connectionEpoch);
-    expect(published.at(-1)).toEqual([]);
-    expect(state.chatBranches).toBe(emptyBranches);
-  });
 
   it("keeps unchanged and failed branch reads idle, then publishes recovered branch changes", async () => {
     const original = branch("original-reply", true);

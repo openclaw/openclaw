@@ -13,7 +13,6 @@ const WIDGET_MAX_PER_SCOPE = 32;
 type CanvasDocumentKind = "html_bundle" | "url_embed" | "document" | "image" | "video_asset";
 
 type CanvasDocumentCreateInput = {
-  id?: string;
   html: string;
   title?: string;
   retentionScope?: string;
@@ -177,15 +176,9 @@ export function resolveCanvasHttpPathToLocalPath(requestPath: string): string | 
 
 export async function createCanvasDocument(
   input: CanvasDocumentCreateInput,
-  options?: {
-    stateDir?: string;
-  },
 ): Promise<CanvasDocumentManifest> {
-  const id = input.id?.trim()
-    ? normalizeCanvasDocumentId(input.id)
-    : `cv_${randomUUID().replaceAll("-", "")}`;
-  const rootDir = path.join(resolveCanvasDocumentsDir(options?.stateDir), id);
-  await fs.rm(rootDir, { recursive: true, force: true });
+  const id = `cv_${randomUUID().replaceAll("-", "")}`;
+  const rootDir = path.join(resolveCanvasDocumentsDir(), id);
   await fs.mkdir(rootDir, { recursive: true });
   const root = await fsRoot(rootDir);
   await root.write("index.html", input.html);
@@ -205,7 +198,7 @@ export async function createCanvasDocument(
   if (input.retentionScope) {
     // Bounded transcript widgets cannot grow managed Canvas storage without limit.
     await pruneCanvasDocumentsForScope({
-      documentsDir: resolveCanvasDocumentsDir(options?.stateDir),
+      documentsDir: resolveCanvasDocumentsDir(),
       retentionScope: input.retentionScope,
     });
   }

@@ -23,17 +23,6 @@ const githubAuthSsrfPolicy = (domain: string): SsrFPolicy => ({
   hostnameAllowlist: [domain],
 });
 
-type DeviceCodeResponse = {
-  deviceCode: string;
-  userCode: string;
-  verificationUri: string;
-  expiresInMs: number;
-  // Monotonic performance.now() deadline; wall-clock jumps must not stretch or
-  // shrink the device-code window. Sleeps also consume setTimeout (monotonic).
-  deadlineMs: number;
-  intervalMs: number;
-};
-
 type DeviceTokenResponse =
   | {
       access_token: string;
@@ -54,15 +43,14 @@ function parseJsonResponse(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function parseDeviceCodeResponse(
-  value: Record<string, unknown>,
-  issuedAtMs: number,
-): DeviceCodeResponse {
+function parseDeviceCodeResponse(value: Record<string, unknown>, issuedAtMs: number) {
   const expiresInMs = positiveSecondsToSafeMilliseconds(value.expires_in);
   const intervalMs =
     value.interval === undefined
       ? GITHUB_DEVICE_FLOW_DEFAULT_INTERVAL_MS
       : nonNegativeSecondsToSafeMilliseconds(value.interval);
+  // Monotonic performance.now() deadline; wall-clock jumps must not stretch or
+  // shrink the device-code window. Sleeps also consume setTimeout (monotonic).
   const deadlineMs = expiresInMs === undefined ? undefined : issuedAtMs + expiresInMs;
 
   if (
@@ -191,7 +179,7 @@ export async function runGitHubCopilotDeviceFlow(
     }
   };
   assertCurrent();
-  const requestDeviceCode = async (): Promise<DeviceCodeResponse> => {
+  const requestDeviceCode = async () => {
     const { signal } = io;
     const body = new URLSearchParams({ client_id: CLIENT_ID, scope: "read:user" });
     const json = await postGitHubDeviceFlowForm({

@@ -6,14 +6,6 @@ import {
 export const MATRIX_ANNOTATION_RELATION_TYPE = "m.annotation";
 export const MATRIX_REACTION_EVENT_TYPE = "m.reaction";
 
-type MatrixReactionEventContent = {
-  "m.relates_to": {
-    rel_type: typeof MATRIX_ANNOTATION_RELATION_TYPE;
-    event_id: string;
-    key: string;
-  };
-};
-
 export type MatrixReactionSummary = {
   key: string;
   count: number;
@@ -42,7 +34,13 @@ function normalizeMatrixReactionValue(value: string, field: "messageId" | "emoji
 export function buildMatrixReactionContent(
   messageId: string,
   emoji: string,
-): MatrixReactionEventContent {
+): {
+  "m.relates_to": {
+    rel_type: typeof MATRIX_ANNOTATION_RELATION_TYPE;
+    event_id: string;
+    key: string;
+  };
+} {
   return {
     "m.relates_to": {
       rel_type: MATRIX_ANNOTATION_RELATION_TYPE,

@@ -2,6 +2,8 @@ import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import type { DiffReadTiming } from "./diff-read-timing.js";
 import { serializeGitWorkerFailure, withGitWorkerContext } from "./git-worker-context.js";
 import type { GitWorkerCommand, GitWorkerReply, GitWorkerResult } from "./git-worker-contract.js";
+import { withWorkerFsSafeNativeMode } from "./worker-fs-safe.js";
+import { workerMutationAssertion } from "./worker-mutation-authority.js";
 import { serveWorkerTasks } from "./worker-task-server.js";
 
 serveWorkerTasks<GitWorkerReply<GitWorkerResult>, GitWorkerCommand>(
@@ -19,6 +21,35 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>, GitWorkerCommand>(
         channel,
         () => {
           switch (command.type) {
+            case "github.profile-token":
+              return import("../agents/github-tool-profile-files.js").then(
+                ({ readManagedGitHubProfileToken }) =>
+                  withWorkerFsSafeNativeMode(command.input.nativeMode, () =>
+                    readManagedGitHubProfileToken(command.input.profileDir),
+                  ),
+              );
+            case "github.profile-stage":
+            case "github.profile-refresh":
+              return control.runNativeSection(() =>
+                withWorkerFsSafeNativeMode(command.input.nativeMode, async () => {
+                  const { writeManagedGitHubProfileFiles, refreshManagedGitHubProfileFiles } =
+                    await import("../agents/github-tool-profile-files.js");
+                  const assertCurrent = command.mutationAuthority
+                    ? workerMutationAssertion(
+                        command.mutationAuthority,
+                        () => channel.notify("authority"),
+                        control.throwIfCancelled,
+                      )
+                    : control.throwIfCancelled;
+                  await (
+                    command.type === "github.profile-stage"
+                      ? writeManagedGitHubProfileFiles
+                      : refreshManagedGitHubProfileFiles
+                  )(command.input.profileDir, command.input.identity, {
+                    assertCurrent,
+                  });
+                }),
+              );
             case "workspace.inventory.select":
             case "workspace.inventory.existing":
             case "workspace.inventory.paths":
@@ -27,16 +58,21 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>, GitWorkerCommand>(
                 ({ executeWorkspaceInventoryComputation }) =>
                   executeWorkspaceInventoryComputation(command),
               );
+            case "workspace.manifest.local":
             case "workspace.manifest.capture":
+            case "workspace.manifest.base-refresh":
+            case "workspace.manifest.equal":
             case "workspace.manifest.snapshot":
             case "workspace.manifest.document":
+            case "workspace.manifest.template":
             case "workspace.manifest.reference":
             case "workspace.manifest.parse":
+            case "workspace.manifest.paths":
             case "workspace.manifest.serialize":
             case "workspace.manifest.overlay":
             case "workspace.manifest.pair":
             case "workspace.manifest.staged":
-            case "workspace.manifest.entries":
+            case "workspace.manifest.result":
             case "workspace.manifest.file":
             case "workspace.manifest.nodes":
             case "workspace.reconcile.preflight":
@@ -46,6 +82,8 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>, GitWorkerCommand>(
               );
             case "workspace.manifest.stage-input":
             case "workspace.manifest.tree-input":
+            case "workspace.reconcile.patch":
+            case "workspace.reconcile.diff":
             case "workspace.manifest.remote-capture":
               // Streamed fs-safe creation owns native descriptors until cleanup settles.
               return control.runNativeSection(async () => {
@@ -91,8 +129,8 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>, GitWorkerCommand>(
               );
             case "repository.branches":
               return import("../agents/worktrees/branches.runtime.js").then(
-                ({ readRepositoryBranches }) =>
-                  readRepositoryBranches(command.input.repoRoot, command.input),
+                ({ readRepositoryBranchSnapshot }) =>
+                  readRepositoryBranchSnapshot(command.input.repoRoot, command.input),
               );
             case "checkout.revision":
               return import("../gateway/control-ui-session-prs-git.runtime.js").then(
@@ -128,12 +166,24 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>, GitWorkerCommand>(
       return { ok: true, value, revisionUnavailableReason: diffTiming?.revisionUnavailableReason };
     } catch (error) {
       return { ok: false, error: serializeGitWorkerFailure(error) };
+    } finally {
+      // V8 retains the last successful regex input, including task-owned checkout paths.
+      /(?:)/.test("");
     }
   },
   {
-    transferList: (reply) =>
-      reply.ok && reply.value instanceof Uint8Array && reply.value.buffer instanceof ArrayBuffer
-        ? [reply.value.buffer]
-        : [],
+    transferList: (reply) => {
+      if (!reply.ok) {
+        return [];
+      }
+      const value = reply.value;
+      if (value instanceof Uint8Array && value.buffer instanceof ArrayBuffer) {
+        return [value.buffer];
+      }
+      if (value && typeof value === "object" && "patch" in value) {
+        return [value.patch.buffer, value.basePack.buffer];
+      }
+      return [];
+    },
   },
 );

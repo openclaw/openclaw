@@ -46,6 +46,7 @@ import {
   vi,
   type MockInstance,
 } from "vitest";
+import { makeUserMessage } from "../../test-support/message-fixtures.test-support.js";
 import { buildTelegramApprovalCallbackData } from "./approval-callback-data.js";
 import type { TelegramBotFixtureMocks } from "./bot-module-mocks.test-support.js";
 import {
@@ -481,11 +482,11 @@ async function writeDirectTelegramTranscriptContext(params: {
     isGroup: false,
     senderId: params.senderId,
   };
-  const { route } = await resolveTelegramConversationRoute({
+  const { route, bindingMode } = await resolveTelegramConversationRoute({
     ...conversation,
     threadSpec: { scope: "none" },
   });
-  const sessionKey = resolveTelegramTargetSession({ ...conversation, route });
+  const sessionKey = resolveTelegramTargetSession({ ...conversation, route, bindingMode });
   await upsertSessionEntry({
     storePath: params.storePath,
     sessionKey,
@@ -501,11 +502,7 @@ async function writeDirectTelegramTranscriptContext(params: {
     storePath: params.storePath,
     sessionId: params.sessionId,
     sessionKey,
-    message: {
-      role: "user",
-      content: params.text,
-      timestamp: params.timestamp,
-    },
+    message: makeUserMessage(params.text, params.timestamp),
     eventId: "transcript-user-1",
   });
 }
@@ -2227,49 +2224,6 @@ describe("createTelegramBot", () => {
     expect(payload.Body).toContain(
       "[Forwarded from Bob Smith (@bobsmith) at 1970-01-01T00:08:20.000Z]",
     );
-  });
-
-  it("keeps fetched media for uncached external replies", async () => {
-    const mediaFetch = vi.fn(async () => pngResponse());
-    using _ = pinMediaHostname();
-
-    const handler = await createMessageHandler({
-      telegramTransport: makeTelegramTransport(mediaFetch as typeof fetch),
-    });
-
-    await handler(
-      messageContext({
-        message_id: 9004,
-        chat: { id: 7, type: "private", first_name: "Reader" },
-        from: { id: 7, is_bot: false, first_name: "Reader" },
-        text: "What is in this image?",
-        date: 1736380800,
-        external_reply: {
-          origin: {
-            type: "user",
-            sender_user: { id: 22, is_bot: false, first_name: "Ada" },
-            date: 1736380700,
-          },
-          chat: { id: -10022, type: "supergroup", title: "Source" },
-          message_id: 9003,
-          photo: [
-            {
-              file_id: "external-photo-1",
-              file_unique_id: "external-photo-u1",
-              width: 1,
-              height: 1,
-            },
-          ],
-        },
-      }),
-    );
-
-    expect(replySpy).toHaveBeenCalledTimes(1);
-    const payload = replyContext();
-    expect(payload.ReplyChain?.[0]).toMatchObject({ messageId: "9003" });
-    expect(payload.ReplyChain?.[0]?.mediaPath).toBeTypeOf("string");
-    expect(getFileSpy).toHaveBeenCalledWith("external-photo-1", expect.any(AbortSignal));
-    expect(mediaFetch).toHaveBeenCalledTimes(1);
   });
 
   it.each([

@@ -4,7 +4,7 @@ import {
   normalizeCrabboxWorkload,
 } from "../../scripts/crabbox-routing-policy.mts";
 
-const advertisedProviders = ["aws", "azure", "blacksmith-testbox", "daytona"];
+const advertisedProviders = ["ascii-box", "aws", "azure", "blacksmith-testbox", "daytona"];
 
 describe("Crabbox routing policy", () => {
   it("normalizes supported workload aliases", () => {
@@ -13,16 +13,19 @@ describe("Crabbox routing policy", () => {
     expect(normalizeCrabboxWorkload("unknown")).toBeNull();
   });
 
-  it("routes CI checks through Blacksmith, Daytona, Azure, then AWS", () => {
-    expect(
-      crabboxProviderChain({
-        workload: "ci-fast",
-        configuredProvider: "blacksmith-testbox",
-        target: "linux",
-        advertisedProviders,
-      }),
-    ).toEqual(["blacksmith-testbox", "daytona", "azure", "aws"]);
-  });
+  it.each(["ci-fast", "ci-proof", "release-proof"] as const)(
+    "routes %s through Boat, Daytona, Azure, then AWS",
+    (workload) => {
+      expect(
+        crabboxProviderChain({
+          workload,
+          configuredProvider: "blacksmith-testbox",
+          target: "linux",
+          advertisedProviders,
+        }),
+      ).toEqual(["ascii-box", "daytona", "azure", "aws"]);
+    },
+  );
 
   it("does not let persistent cloud config outrank the CI policy", () => {
     expect(
@@ -32,7 +35,7 @@ describe("Crabbox routing policy", () => {
         target: "linux",
         advertisedProviders,
       }),
-    ).toEqual(["blacksmith-testbox", "daytona", "azure", "aws"]);
+    ).toEqual(["ascii-box", "daytona", "azure", "aws"]);
   });
 
   it("prefers Daytona for interactive Linux work", () => {

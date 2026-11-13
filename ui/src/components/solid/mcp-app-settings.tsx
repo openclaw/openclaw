@@ -2,17 +2,16 @@ import { For, Show, createMemo, createStore } from "solid-js";
 import type { McpAppSettings } from "../../../../src/shared/mcp-app-extensions.js";
 import { registerMcpAppEnglish } from "../../i18n/locales/en-mcp-app.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { Checkbox } from "./checkbox.tsx";
 
 registerMcpAppEnglish();
 
-export type McpAppSettingsView = {
+export function McpAppSettingsForm(props: {
   settings: McpAppSettings;
   busy: boolean;
   onSave: (changes: McpAppSettings["values"]) => void;
   onTool: (name: string) => void;
-};
-
-export function McpAppSettingsForm(props: McpAppSettingsView) {
+}) {
   // Accepted settings replace the local draft; busy/notice updates preserve edits.
   const [values, setValues] = createStore(() => ({ ...props.settings.values }), {});
   const changes = createMemo(() =>
@@ -45,8 +44,7 @@ export function McpAppSettingsForm(props: McpAppSettingsView) {
               <small class="muted">{schema.description}</small>
             </Show>
             {schema.type === "boolean" ? (
-              <input
-                type="checkbox"
+              <Checkbox
                 checked={value() === true}
                 disabled={props.busy}
                 onChange={(event) => change(key, event.currentTarget.checked)}

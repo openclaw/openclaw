@@ -29,6 +29,7 @@ import {
   resetSessionEntryLifecycle,
 } from "./session-accessor.js";
 import { withWorkerSqliteIntegrityCounter } from "./session-accessor.sqlite-integrity-counter.test-support.js";
+import { observeNativeSqliteIntegrityChecks } from "./session-accessor.sqlite-native-integrity.test-support.js";
 import * as sessionWorker from "./session-accessor.sqlite-replacement-worker.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
 
@@ -106,7 +107,6 @@ vi.mock("node:worker_threads", async (importOriginal) => {
 const roots = createTempDirTracker();
 const pending: Promise<unknown>[] = [];
 const releases: Array<() => void> = [];
-const realOpen = sqlite.openNodeSqliteDatabase;
 const realIntegrity = integrity.assertSqliteIntegrityInWorker;
 
 beforeEach(() => {
@@ -164,6 +164,11 @@ function observeColdAdmission(
   databasePath: string,
   mode: "integrity" | "historical-check" = "integrity",
 ) {
+  if (mode === "integrity") {
+    // Revocation is bounded; missing uniqueness still requires physical verification.
+    using database = sqlite.openNodeSqliteDatabase(databasePath);
+    database.exec("DROP INDEX idx_agent_transcript_message_idempotency");
+  }
   const entered = createDeferred();
   const hostRelease = createDeferred();
   const nativeRelease = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
@@ -186,26 +191,8 @@ function observeColdAdmission(
   };
   releases.push(() => release.resolve());
   let parentChecks = 0;
-  vi.spyOn(sqlite, "openNodeSqliteDatabase").mockImplementation((pathname, options) => {
-    const database = realOpen(pathname, options);
-    if (pathname === databasePath && !options?.readOnly) {
-      const prepare = database.prepare.bind(database);
-      database.prepare = (sql) => {
-        const statement = prepare(sql);
-        if (
-          sql === "PRAGMA integrity_check;" ||
-          sql === "PRAGMA integrity_check('sqlite_schema');"
-        ) {
-          const all = statement.all.bind(statement);
-          statement.all = () => {
-            parentChecks += 1;
-            return all();
-          };
-        }
-        return statement;
-      };
-    }
-    return database;
+  observeNativeSqliteIntegrityChecks(databasePath, () => {
+    parentChecks += 1;
   });
   vi.spyOn(integrity, "assertSqliteIntegrityInWorker").mockImplementation((...args) => {
     const work = realIntegrity(...args);
@@ -274,7 +261,7 @@ const cleanupOptions = {
   orphanTranscriptMinAgeMs: 0,
 };
 
-it("keeps cold delete preparation asynchronous inside its writer FIFO", async () => {
+it("keeps delete schema verification asynchronous inside its writer FIFO", async () => {
   const f = fixture();
   const admission = observeColdAdmission(f.databaseOptions.path);
   const work = own(f.deleteEntry());
@@ -362,7 +349,7 @@ it("retains canonical repair refusal during warm cleanup with no matching artifa
   ).toEqual({ entry_json: "{" });
 });
 
-it("rejects retired authority before evaluating a stale deletion target", async () => {
+it("rejects authority retired during schema verification before evaluating a stale deletion target", async () => {
   const f = fixture();
   const admission = observeColdAdmission(f.databaseOptions.path);
   let allowed = true;
@@ -384,7 +371,7 @@ it("rejects retired authority before evaluating a stale deletion target", async 
   expect(loadSessionEntryReadOnly(f.scope)).toMatchObject({ sessionId: "retained" });
 });
 
-it("retains the selected state owner while cold deletion waits in the FIFO", async () => {
+it("retains the selected state owner while deletion schema verification waits in the FIFO", async () => {
   const f = fixture();
   const blockerEntered = createDeferred();
   const releaseBlocker = createDeferred();

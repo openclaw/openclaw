@@ -736,7 +736,6 @@ describe("updateNpmInstalledPlugins", () => {
         pluginIds: [pluginId, "later"],
         onCapabilityConsent,
         beforePersistentEffect,
-        disableOnFailure: true,
         logger: { warn },
       }),
     ).rejects.toMatchObject({
@@ -766,7 +765,6 @@ describe("updateNpmInstalledPlugins", () => {
     ownerEnabled?: boolean;
     childEnabled?: boolean;
     previousPayload?: string;
-    disableOnFailure?: boolean;
     omitStageReview?: boolean;
     reviewRetryStage?: boolean;
   }>([
@@ -815,7 +813,6 @@ describe("updateNpmInstalledPlugins", () => {
       label: "keeps a missing-payload repair pending when no consent handler is available",
       rejected: true,
       previousPayload: "missing",
-      disableOnFailure: true,
     },
     {
       label: "repairs a disabled missing payload without retaining unverifiable acceptance",
@@ -837,7 +834,6 @@ describe("updateNpmInstalledPlugins", () => {
       label: `preserves the original consent callback failure (${review})`,
       nextProviders: ["existing-child-provider", "new-child-provider"],
       review,
-      disableOnFailure: true,
     })),
   ])(
     "$label",
@@ -849,7 +845,6 @@ describe("updateNpmInstalledPlugins", () => {
       ownerEnabled = true,
       childEnabled = false,
       previousPayload,
-      disableOnFailure = false,
       omitStageReview = false,
       reviewRetryStage = false,
     }) => {
@@ -984,7 +979,6 @@ describe("updateNpmInstalledPlugins", () => {
       const pendingUpdate = updatePlugin(config, pluginId, {
         onCapabilityConsent,
         beforePersistentEffect,
-        disableOnFailure,
         packagePluginIds: { [pluginId]: [rootPluginId, `${pluginId}-addon`] },
       });
       if (omitStageReview) {
@@ -1187,6 +1181,106 @@ describe("updateNpmInstalledPlugins", () => {
       nextVersion: "2026.9.2",
     });
   });
+
+  it.each([true, false])(
+    "moves an official ClawHub beta selector to stable (core published=%s)",
+    async (published) => {
+      const packageName = "@openclaw/discord";
+      const installPath = createInstalledPackageDir(packageName, "2026.10.10-beta.5");
+      const config = createClawHubInstallConfig({
+        pluginId: "discord",
+        clawhubPackage: packageName,
+        spec: `clawhub:${packageName}@beta`,
+        installPath,
+      });
+      installPluginFromClawHubMock.mockImplementation(async ({ spec }) =>
+        !published && spec.endsWith("@2026.11.1")
+          ? { ok: false, code: "version_not_found", error: "not published" }
+          : createSuccessfulClawHubUpdateResult({
+              pluginId: "discord",
+              clawhubPackage: packageName,
+              targetDir: installPath,
+              version: "2026.11.1",
+            }),
+      );
+      const warn = vi.fn();
+      const result = await updatePlugin(config, "discord", {
+        updateChannel: "stable",
+        coreVersion: "2026.11.1",
+        logger: { warn },
+      });
+      expect(clawHubInstallCall()?.spec).toBe(`clawhub:${packageName}@2026.11.1`);
+      expect(result.config.plugins?.installs?.discord?.spec).toBe(`clawhub:${packageName}@latest`);
+      expect(result.outcomes[0]?.status).toBe("updated");
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("stable"));
+      if (!published) {
+        expect(clawHubInstallCall(1)?.spec).toBe(`clawhub:${packageName}@latest`);
+        expect(result.outcomes[0]?.message).toContain("stable channel fallback");
+      }
+    },
+  );
+
+  it.each([true, false])(
+    "keeps core alignment and the floor on repeated stable ClawHub updates (core remains available=%s)",
+    async (coreAvailable) => {
+      const packageName = "@openclaw/discord";
+      const coreVersion = "2026.11.1";
+      const installPath = createInstalledPackageDir(packageName, "2026.10.10-beta.5");
+      const config = createClawHubInstallConfig({
+        pluginId: "discord",
+        clawhubPackage: packageName,
+        spec: `clawhub:${packageName}@beta`,
+        installPath,
+      });
+      let repeated = false;
+      installPluginFromClawHubMock.mockImplementation(
+        async (options: Parameters<typeof import("./clawhub.js").installPluginFromClawHub>[0]) => {
+          if (repeated && !coreAvailable && options.spec.endsWith(`@${coreVersion}`)) {
+            return { ok: false, code: "version_not_found", error: "not published" };
+          }
+          const version = options.spec.endsWith("@latest") ? "2026.10.10" : coreVersion;
+          const stagedArtifactDir = createInstalledPackageDir(packageName, version);
+          await options.onBeforePluginArtifactCommit?.({
+            pluginId: "discord",
+            stagedArtifactDir,
+            currentArtifactDir: installPath,
+            mode: "update",
+          });
+          createInstalledPackageDir(packageName, version, { installPath });
+          return createSuccessfulClawHubUpdateResult({
+            pluginId: "discord",
+            clawhubPackage: packageName,
+            targetDir: installPath,
+            version,
+          });
+        },
+      );
+      const warn = vi.fn();
+      const options = { updateChannel: "stable" as const, coreVersion, logger: { warn } };
+      const first = await updatePlugin(config, "discord", options);
+      expect(first.config.plugins?.installs?.discord).toMatchObject({
+        spec: `clawhub:${packageName}@latest`,
+        version: coreVersion,
+      });
+      repeated = true;
+      const second = await updatePlugin(first.config, "discord", options);
+      expect(second.config.plugins?.installs?.discord).toMatchObject({
+        spec: `clawhub:${packageName}@latest`,
+        version: coreVersion,
+      });
+      expect(
+        JSON.parse(fs.readFileSync(path.join(installPath, "package.json"), "utf8")).version,
+      ).toBe(coreVersion);
+      expect(installPluginFromClawHubMock.mock.calls.map(([call]) => call.spec)).toEqual([
+        `clawhub:${packageName}@${coreVersion}`,
+        `clawhub:${packageName}@${coreVersion}`,
+        ...(!coreAvailable ? [`clawhub:${packageName}@latest`] : []),
+      ]);
+      if (!coreAvailable) {
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('Keeping "discord"'));
+      }
+    },
+  );
 
   it.each(["updated", "unchanged", "failed"] as const)(
     "recovers an official npm release pin only after a successful %s replacement",
@@ -1801,11 +1895,15 @@ describe("updateNpmInstalledPlugins", () => {
         config,
         pluginIds: scenario === "unreadable" ? [pluginId, "local"] : [pluginId],
         ...(scenario === "beta" ? { updateChannel: "beta" } : {}),
-        ...(scenario === "healthy" || scenario === "unreadable" ? { disableOnFailure: true } : {}),
+        ...(scenario === "unreadable" ? { retainOnUnavailable: true } : {}),
         logger: { warn, ...(scenario === "fallback" || scenario === "range" ? { info } : {}) },
       });
       if (scenario === "unreadable") {
-        expect(result.config.plugins?.entries?.demo?.enabled).toBe(false);
+        expect(result.config).toBe(config);
+        expect(result.changed).toBe(false);
+        expect(result.config.plugins?.entries?.demo?.enabled).toBe(true);
+        expect(result.outcomes[0]).toMatchObject({ status: "error", code: "npm_metadata_failure" });
+        expect(validatePackageExtensionEntriesForInstallMock).toHaveBeenCalledOnce();
         expect(result.outcomes.map((outcome) => outcome.pluginId)).toEqual(["demo", "local"]);
         return;
       }
@@ -1819,37 +1917,32 @@ describe("updateNpmInstalledPlugins", () => {
       }
       expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
       expect(result.changed).toBe(false);
+      const expectedOutcome = {
+        pluginId,
+        status: "error",
+        code: "npm_metadata_failure",
+        message:
+          scenario === "beta"
+            ? expect.stringContaining("registry timeout")
+            : "Failed to check lossless-claw: npm view failed: registry timeout",
+      };
+      expect(result.outcomes).toEqual([
+        scenario === "beta" ? expect.objectContaining(expectedOutcome) : expectedOutcome,
+      ]);
       if (scenario === "beta") {
         expect(result.config).toBe(config);
-        expect(result.outcomes).toEqual([
-          expect.objectContaining({
-            pluginId,
-            status: "error",
-            code: "npm_metadata_failure",
-            message: expect.stringContaining("registry timeout"),
-          }),
-        ]);
-      } else {
-        expect(result.outcomes).toEqual([
-          {
-            pluginId,
-            status: "error",
-            message: "Failed to check lossless-claw: npm view failed: registry timeout",
-          },
-        ]);
-        if (scenario === "healthy") {
-          expect(result.config.plugins?.entries?.[pluginId]).toEqual({
-            enabled: true,
-            config: { preserved: true },
-          });
-          expect(result.config.plugins?.allow).toEqual([pluginId, "keep"]);
-          expect(result.config.plugins?.deny).toEqual([pluginId, "blocked"]);
-          expect(result.config.plugins?.slots).toEqual({
-            memory: pluginId,
-            contextEngine: pluginId,
-          });
-          expect(validatePackageExtensionEntriesForInstallMock).toHaveBeenCalledTimes(1);
-        }
+      } else if (scenario === "healthy") {
+        expect(result.config.plugins?.entries?.[pluginId]).toEqual({
+          enabled: true,
+          config: { preserved: true },
+        });
+        expect(result.config.plugins?.allow).toEqual([pluginId, "keep"]);
+        expect(result.config.plugins?.deny).toEqual([pluginId, "blocked"]);
+        expect(result.config.plugins?.slots).toEqual({
+          memory: pluginId,
+          contextEngine: pluginId,
+        });
+        expect(validatePackageExtensionEntriesForInstallMock).not.toHaveBeenCalled();
       }
     },
   );
@@ -1924,7 +2017,7 @@ describe("updateNpmInstalledPlugins", () => {
   );
 
   it.each(["damaged", "incompatible"] as const)(
-    "does not override explicit failure disabling for a %s installed plugin",
+    "does not retain a %s installed plugin when its update target is unavailable",
     async (payload) => {
       const installPath = createInstalledPackageDir("@acme/demo", "1.0.0", { runnable: true });
       if (payload === "damaged") {
@@ -1953,13 +2046,14 @@ describe("updateNpmInstalledPlugins", () => {
 
       const result = await updatePlugin(config, "demo", {
         syncOfficialPluginInstalls: true,
-        disableOnFailure: true,
         retainOnUnavailable: true,
         coreVersion: "2026.9.4",
       });
 
-      expect(result.config.plugins?.entries?.demo?.enabled).toBe(false);
-      expect(result.outcomes[0]?.status).toBe("skipped");
+      expect(result.config).toBe(config);
+      expect(result.changed).toBe(false);
+      expect(result.config.plugins?.entries?.demo?.enabled).toBe(true);
+      expect(result.outcomes[0]).toMatchObject({ status: "error", code: "npm_package_not_found" });
     },
   );
 
@@ -2189,7 +2283,7 @@ describe("updateNpmInstalledPlugins", () => {
     },
   );
 
-  it("disables failed plugin activation without revoking explicit policy", async () => {
+  it("preserves activation and explicit policy after a failed plugin update", async () => {
     const warn = vi.fn();
     installPluginFromNpmSpecMock.mockResolvedValue({ ok: false, error: "registry timeout" });
     const config = {
@@ -2207,25 +2301,24 @@ describe("updateNpmInstalledPlugins", () => {
     const result = await updateNpmInstalledPlugins({
       config,
       skipDisabledPlugins: true,
-      disableOnFailure: true,
       logger: { warn },
     });
 
     expect(npmInstallCall()?.spec).toBe("@acme/demo");
     expect(npmInstallCall()?.expectedPluginId).toBe("demo");
-    const message =
-      'Disabled "demo" after plugin update failure; OpenClaw will continue without it. Failed to update demo: registry timeout';
-    expect(warn).toHaveBeenCalledWith(message);
-    expect(result.changed).toBe(true);
+    const message = "Failed to update demo: registry timeout";
+    expect(warn).not.toHaveBeenCalled();
+    expect(result.changed).toBe(false);
+    expect(result.config).toBe(config);
     expect(result.config.plugins?.entries?.demo).toEqual({
-      enabled: false,
+      enabled: true,
       config: { preserved: true },
     });
     expect(result.config.plugins?.allow).toEqual(["demo", "other"]);
     expect(result.config.plugins?.deny).toEqual(["blocked"]);
-    expect(result.config.plugins?.slots).toBeUndefined();
+    expect(result.config.plugins?.slots).toEqual(config.plugins.slots);
     expect(result.config.plugins?.installs?.demo).toEqual(config.plugins.installs.demo);
-    expectOutcome(result, { pluginId: "demo", status: "skipped", message });
+    expectOutcome(result, { pluginId: "demo", status: "error", message });
   });
 
   it.each([
@@ -2283,7 +2376,6 @@ describe("updateNpmInstalledPlugins", () => {
     const warn = vi.fn();
     const result = await updatePlugin(config, pluginId, {
       ...(official ? { updateChannel: "beta" } : {}),
-      ...(scenario !== "custom-unavailable" ? { disableOnFailure: true } : {}),
       ...(scenario === "current-blocked" ? { logger: { warn } } : {}),
     });
     if (official) {
@@ -2292,6 +2384,7 @@ describe("updateNpmInstalledPlugins", () => {
         expectOutcome(result, {
           pluginId,
           status: "error",
+          code: "artifact_unavailable",
           message:
             "Failed to update discord: artifact unavailable (ClawHub clawhub:@openclaw/discord@beta).",
         });
@@ -2304,23 +2397,20 @@ describe("updateNpmInstalledPlugins", () => {
         ]);
       }
     } else {
-      const disabled = scenario === "current-blocked";
-      expect(result.changed).toBe(disabled);
+      expect(result.changed).toBe(false);
       expect(result.config.plugins?.entries?.demo).toEqual({
-        enabled: !disabled,
+        enabled: true,
         config: { preserved: true },
       });
       expect(result.config.plugins?.allow).toEqual(["demo"]);
-      if (disabled) {
-        expect(result.config.plugins?.slots).toBeUndefined();
-        const message =
-          'Disabled "demo" after plugin update failure; OpenClaw will continue without it. Failed to update demo: ClawHub blocked this release; update was not started. (ClawHub clawhub:demo).';
-        expect(warn).toHaveBeenCalledWith(message);
-        expect(result.outcomes).toEqual([{ pluginId, status: "skipped", message }]);
+      expect(result.config).toBe(config);
+      expect(result.config.plugins?.slots?.memory).toBe("demo");
+      if (scenario === "current-blocked") {
+        const message = `Failed to update demo: ${error} (ClawHub clawhub:demo).`;
+        expect(warn).not.toHaveBeenCalled();
+        expectOutcome(result, { pluginId, status: "error", code, message });
       } else {
         expect(clawHubInstallCall()?.spec).toBe("clawhub:demo");
-        expect(result.config).toBe(config);
-        expect(result.config.plugins?.slots?.memory).toBe("demo");
         expectOutcome(result, {
           pluginId,
           status: "skipped",
@@ -2388,54 +2478,6 @@ describe("updateNpmInstalledPlugins", () => {
     expect(installPluginFromClawHubMock).not.toHaveBeenCalled();
   });
 
-  it("falls back to the default ClawHub spec when a beta release is unavailable", async () => {
-    installPluginFromClawHubMock
-      .mockResolvedValueOnce({
-        ok: false,
-        code: "version_not_found",
-        error: "version not found: beta",
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        pluginId: "demo",
-        targetDir: "/tmp/demo",
-        version: "1.2.4",
-        clawhub: {
-          source: "clawhub",
-          clawhubUrl: "https://clawhub.ai",
-          clawhubPackage: "demo",
-          clawhubFamily: "code-plugin",
-          clawhubChannel: "official",
-          integrity: "sha256-clawpack",
-          resolvedAt: "2026-05-01T00:00:00.000Z",
-        },
-      });
-
-    const infoMessages: string[] = [];
-    const warn = vi.fn();
-    const result = await updatePlugin(createClawHubInstallConfig(), "demo", {
-      updateChannel: "beta",
-      logger: { info: (msg) => infoMessages.push(msg), warn },
-    });
-
-    expect(clawHubInstallCall(0)?.spec).toBe("clawhub:demo@beta");
-    expect(clawHubInstallCall(1)?.spec).toBe("clawhub:demo");
-    expect(warn).not.toHaveBeenCalled();
-    expect(infoMessages).toEqual([
-      'Plugin "demo" has no beta ClawHub release for clawhub:demo@beta; using clawhub:demo instead. Core update can still complete.',
-    ]);
-    expectRecordFields(result.config.plugins?.installs?.demo, {
-      source: "clawhub",
-      spec: "clawhub:demo",
-      installPath: "/tmp/demo",
-      version: "1.2.4",
-      clawhubPackage: "demo",
-    });
-    expect(result.outcomes[0]?.message).toBe(
-      "Updated demo: unknown -> 1.2.4. (warning: beta channel fallback used clawhub:demo because clawhub:demo@beta could not be used).",
-    );
-  });
-
   it("skips ClawHub plugin updates when the bundled version is newer", async () => {
     const pluginId = "whatsapp";
     const bundledVersion = "2026.4.20";
@@ -2489,7 +2531,7 @@ describe("updateNpmInstalledPlugins", () => {
           allow: ["fish-audio"],
           deny: ["fish-audio"],
           slots: { memory: "fish-audio" },
-          entries: { "fish-audio": { enabled: false, hooks: { allowPromptInjection: false } } },
+          entries: { "fish-audio": { enabled: false, hooks: { allowPromptModification: false } } },
         },
       ),
       "fish-audio",
@@ -2503,7 +2545,7 @@ describe("updateNpmInstalledPlugins", () => {
     expect(result.config.plugins?.slots?.memory).toBe("fish-audio-speech");
     expect(result.config.plugins?.entries?.["fish-audio-speech"]).toEqual({
       enabled: false,
-      hooks: { allowPromptInjection: false },
+      hooks: { allowPromptModification: false },
     });
     expect(result.config.plugins?.entries?.["fish-audio"]).toBeUndefined();
     expectRecordFields(result.config.plugins?.installs?.["fish-audio-speech"], {
@@ -2676,7 +2718,6 @@ describe("updateNpmInstalledPlugins", () => {
       ...(skipped ? { pluginIds: ["qqbot"], skipIds: new Set(["openclaw-qqbot"]) } : {}),
       ...(outcome === "dry-run" ? { pluginIds: ["qqbot"], dryRun: true } : {}),
       ...(outcome === "conflicting" ? { pluginIds: ["qqbot"] } : {}),
-      ...(outcome === "failed" ? { disableOnFailure: true } : {}),
     });
     if (skipped) {
       const removesAlias = outcome === "runnable";

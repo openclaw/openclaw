@@ -1,7 +1,7 @@
 import { channel } from "node:diagnostics_channel";
 import { describe, expect, it } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import type { DB } from "../../state/openclaw-state-db.generated.js";
+import { sessionSqlFixture } from "../../commands/doctor-session-sqlite.sql.test-support.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -10,13 +10,9 @@ import {
 import {
   persistDevicePairingStoreState,
   readDevicePairingStoreSnapshotFromDatabase,
+  type DevicePairingStoreState,
 } from "../device-pairing-store.js";
 import { removePairedDevice } from "../device-pairing.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "../kysely-sync.js";
 import { clearApnsRegistrationFromDatabase } from "../push-apns-store-transaction.js";
 import {
   clearApnsRegistrationIfCurrent,
@@ -26,6 +22,7 @@ import type { ApnsRegistration } from "../push-apns-store.types.js";
 import { isPostgresSqlConnection } from "../sql-connection.js";
 import { withEngineStoreAdmission as admit } from "./admission-scope.js";
 import { mixedAgentConnection, useMixedAgentPair } from "./mixed-agent.conformance.test-support.js";
+import { createSqlStatementObserver } from "./sql-statement-observer.test-support.js";
 
 function seed(database: OpenClawStateDatabase, nodeId: string, version: number, tombstone: number) {
   const registration: ApnsRegistration = {
@@ -38,25 +35,10 @@ function seed(database: OpenClawStateDatabase, nodeId: string, version: number, 
   };
   runOpenClawStateWriteTransaction(
     ({ db }) => {
-      const query = getNodeSqliteKysely<DB>(db);
-      executeSqliteQuerySync(
-        db,
-        query.insertInto("apns_registrations").values({
-          node_id: nodeId,
-          transport: "direct",
-          token: registration.token,
-          topic: registration.topic,
-          environment: registration.environment,
-          updated_at_ms: version,
-        }),
-      );
-      executeSqliteQuerySync(
-        db,
-        query.insertInto("apns_registration_tombstones").values({
-          node_id: nodeId,
-          deleted_at_ms: tombstone,
-        }),
-      );
+      const sql = sessionSqlFixture(db);
+      sql`INSERT INTO apns_registrations (node_id, transport, token, topic, environment, updated_at_ms)
+        VALUES (${nodeId}, 'direct', ${registration.token}, ${registration.topic}, ${registration.environment}, ${version})`.run();
+      sql`INSERT INTO apns_registration_tombstones (node_id, deleted_at_ms) VALUES (${nodeId}, ${tombstone})`.run();
     },
     { database },
   );
@@ -64,18 +46,26 @@ function seed(database: OpenClawStateDatabase, nodeId: string, version: number, 
 }
 
 function readTombstone(database: OpenClawStateDatabase, nodeId: string) {
-  return executeSqliteQueryTakeFirstSync(
+  return sessionSqlFixture(
     database.db,
-    getNodeSqliteKysely<DB>(database.db)
-      .selectFrom("apns_registration_tombstones")
-      .select("deleted_at_ms")
-      .where("node_id", "=", nodeId),
-  );
+  )`SELECT deleted_at_ms FROM apns_registration_tombstones WHERE node_id = ${nodeId}`.get();
 }
 
 const engines = mixedAgentConnection ? (["sqlite", "postgres"] as const) : (["sqlite"] as const);
 describe.each(engines)("%s APNs deletion transaction", (engine) => {
   const fixture = useMixedAgentPair(engine, engine);
+  const persistPairing = (
+    pairedByDeviceId: DevicePairingStoreState["pairedByDeviceId"],
+    clearApnsNodeIds?: string[],
+  ) =>
+    admit(() =>
+      persistDevicePairingStoreState(
+        { pendingById: {}, pairedByDeviceId },
+        fixture.root,
+        "paired",
+        clearApnsNodeIds ? { clearApnsNodeIds } : undefined,
+      ),
+    );
 
   it("clears in three statements and advances tombstones for present and absent owners", () => {
     admit(() => {
@@ -89,17 +79,9 @@ describe.each(engines)("%s APNs deletion transaction", (engine) => {
       ] as const) {
         let statements = 0;
         const observation = channel("openclaw.database.statement");
-        const observe = (event: unknown) => {
-          if (
-            event &&
-            typeof event === "object" &&
-            "sql" in event &&
-            typeof event.sql === "string" &&
-            isApnsSql(event.sql)
-          ) {
-            statements += 1;
-          }
-        };
+        const observe = createSqlStatementObserver(isApnsSql, () => {
+          statements += 1;
+        });
         const native = isPostgresSqlConnection(database.db)
           ? undefined
           : trackSqliteStatementExecutions(database.db, ["apns"], (sql) =>
@@ -130,25 +112,16 @@ describe.each(engines)("%s APNs deletion transaction", (engine) => {
       const nodeId = `synthetic-overflow-${caller}`;
       const database = admit(() => openOpenClawStateDatabase());
       const registration = admit(() => seed(database, nodeId, Number.MAX_SAFE_INTEGER, 17));
-      admit(() =>
-        persistDevicePairingStoreState(
-          {
-            pendingById: {},
-            pairedByDeviceId: {
-              [nodeId]: {
-                deviceId: nodeId,
-                publicKey: "synthetic-public-key",
-                role: "node",
-                roles: ["node"],
-                createdAtMs: 1,
-                approvedAtMs: 2,
-              },
-            },
-          },
-          fixture.root,
-          "paired",
-        ),
-      );
+      persistPairing({
+        [nodeId]: {
+          deviceId: nodeId,
+          publicKey: "synthetic-public-key",
+          role: "node",
+          roles: ["node"],
+          createdAtMs: 1,
+          approvedAtMs: 2,
+        },
+      });
       const read = () =>
         admit(() => ({
           registration: readApnsRegistrationFromDatabase(database.db, nodeId),
@@ -161,19 +134,7 @@ describe.each(engines)("%s APNs deletion transaction", (engine) => {
           clearApnsRegistrationIfCurrent({ nodeId, registration, baseDir: fixture.root }),
         ).rejects.toThrow("APNs registration version exhausted");
       } else if (caller === "standalone pairing") {
-        expect(() =>
-          admit(() =>
-            persistDevicePairingStoreState(
-              {
-                pendingById: {},
-                pairedByDeviceId: {},
-              },
-              fixture.root,
-              "paired",
-              { clearApnsNodeIds: [nodeId] },
-            ),
-          ),
-        ).toThrow("APNs registration version exhausted");
+        expect(() => persistPairing({}, [nodeId])).toThrow("APNs registration version exhausted");
       } else {
         await expect(removePairedDevice(nodeId, fixture.root)).rejects.toThrow(
           "APNs registration version exhausted",

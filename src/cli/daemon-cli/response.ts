@@ -9,6 +9,7 @@ import { classifySystemdUnavailableDetail } from "../../daemon/systemd-unavailab
 import { isWSL } from "../../infra/wsl.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createNullWriter } from "../../shared/null-writer.js";
+import type { GatewayRestartSnapshot } from "./restart-health.types.js";
 
 type DaemonAction = "install" | "uninstall" | "start" | "stop" | "restart";
 
@@ -22,7 +23,7 @@ type DaemonHintKind =
   | "wsl-systemd"
   | "generic";
 
-type DaemonActionResponse = {
+export type DaemonActionResponse = {
   ok: boolean;
   action: DaemonAction;
   result?: string;
@@ -36,6 +37,7 @@ type DaemonActionResponse = {
   warnings?: string[];
   definitionBackup?: GatewayServiceDefinitionBackupReceipt;
   service?: ReturnType<typeof buildDaemonServiceSnapshot>;
+  readiness?: GatewayRestartSnapshot;
 };
 
 const DAEMON_HINT_PREFIXES: readonly (readonly [string, DaemonHintKind])[] = [

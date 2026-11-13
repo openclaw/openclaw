@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { resolveTelegramAccountOwnerAgentId } from "./account-owner.js";
+import { resolveDefaultTelegramAccountId } from "./accounts.js";
 import { getTelegramRuntime } from "./runtime.js";
 
 const TELEGRAM_TOPIC_NAME_CACHE_MAX_ENTRIES = 2_048;
@@ -32,6 +37,24 @@ type TopicNameCacheState = {
 
 function cacheKey(chatId: number | string, threadId: number | string): string {
   return `${chatId}:${threadId}`;
+}
+
+export function resolveTelegramDirectTopicNameCacheScope(scope: string, accountId: string): string {
+  return scope + "\u0000telegram-account:" + accountId;
+}
+
+export function resolveTelegramTopicNameCacheScope(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  direct: boolean;
+}): string {
+  const accountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultTelegramAccountId(params.cfg),
+  );
+  const scope = resolveStorePath(params.cfg.session?.store, {
+    agentId: resolveTelegramAccountOwnerAgentId({ cfg: params.cfg, accountId }),
+  });
+  return params.direct ? resolveTelegramDirectTopicNameCacheScope(scope, accountId) : scope;
 }
 
 function resolveTopicNameCacheNamespace(scope: string): string {

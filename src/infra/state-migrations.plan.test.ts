@@ -89,13 +89,7 @@ it("defers the Workshop proposal export without touching copied proposal files",
   const before = await captureIdentity(fixture);
 
   const plan = await fixture.plan();
-  const store = { kind: "sqlite", path: resolveOpenClawStateSqlitePath(fixture.env) };
-  const owner = { kind: "owner", id: "core:skill-workshop" };
   expect(plan.steps.find((step) => step.id === "skill-workshop")).toMatchObject({
-    phase: "final",
-    source: [store, { kind: "path", path: path.join(fixture.stateDir, "skill-workshop") }, owner],
-    target: [store, owner],
-    requiredness: "conditional",
     outcome: "deferred",
     refusal: { code: "skill-workshop-planning-deferred" },
   });

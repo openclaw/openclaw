@@ -33,6 +33,11 @@ export function readGlobalSingleton(key: symbol): unknown {
   return Object.hasOwn(globalStore, key) ? globalStore[key] : undefined;
 }
 
+/** Run an existing owner's cleanup without importing or initializing that owner. */
+export async function resetGlobalSingletonLifecycleState(key: symbol): Promise<void> {
+  await resolveGlobalSingletonResetRegistry().get(key)?.reset();
+}
+
 /** Resolves a process-local singleton for caches and registries that tolerate helper lookup. */
 export function resolveGlobalSingleton<T>(
   key: symbol,
@@ -86,10 +91,13 @@ export function resolveGlobalSet<T>(key: symbol, lifecycle: GlobalSingletonLifec
 /** Resets every opt-in singleton while preserving shared object identity for the next lifecycle. */
 export async function drainGlobalSingletonLifecycleState(
   event: "close" | "plugin-registry" | "restart" | "shared-state" = "close",
-  options: { retainSharedState?: boolean } = {},
+  options: {
+    retainSharedState?: boolean;
+    measureReset?: (name: string, reset: () => Promise<void>) => Promise<void>;
+  } = {},
 ): Promise<void> {
-  const resets = [...resolveGlobalSingletonResetRegistry().values()]
-    .filter(({ lifecycle }) => {
+  const resets = [...resolveGlobalSingletonResetRegistry().entries()]
+    .filter(([, { lifecycle }]) => {
       if (event === "shared-state") {
         return lifecycle === "shared-state";
       }
@@ -104,16 +112,21 @@ export async function drainGlobalSingletonLifecycleState(
       }
       return event === "close" || lifecycle === "close-and-restart";
     })
-    .map(({ reset }) => {
-      try {
-        return Promise.resolve(reset());
-      } catch (error) {
-        return Promise.reject(
-          error instanceof Error
-            ? error
-            : new Error("Global singleton reset failed", { cause: error }),
-        );
-      }
+    .map(([key, { reset }]) => {
+      const runReset = () => {
+        try {
+          return Promise.resolve(reset());
+        } catch (error) {
+          return Promise.reject(
+            error instanceof Error
+              ? error
+              : new Error("Global singleton reset failed", { cause: error }),
+          );
+        }
+      };
+      return options.measureReset
+        ? options.measureReset(key.description ?? String(key), runReset)
+        : runReset();
     });
   const settled = await Promise.allSettled(resets);
   const errors = settled.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));

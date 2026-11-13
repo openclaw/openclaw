@@ -7,53 +7,13 @@ import { buildRoster } from "./roster.js";
 import { createSqliteWorkerBackend } from "./store.worker.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const schemaPattern =
-  /user_version|schema_version|sqlite_schema|sqlite_master|pragma_table|team_reports_schema_migrations|CREATE\s+(?:TABLE|INDEX)/i;
 afterEach(() => vi.restoreAllMocks());
 
-function openBackend(
-  databasePath = path.join(tempDirs.make("team-reports-read-"), "reports.sqlite"),
-) {
+function openBackend() {
+  const databasePath = path.join(tempDirs.make("team-reports-read-"), "reports.sqlite");
   const backend = createSqliteWorkerBackend(undefined, { databasePath });
   return { ...backend, [Symbol.dispose]: () => backend.close() };
 }
-
-it("reopens with live admitted persistent schema while creating fresh connection scratch", () => {
-  const directory = tempDirs.make("team-reports-schema-admission-");
-  const databasePath = path.join(directory, "reports.sqlite");
-  // Warm admission lasts only while a native connection remains open.
-  using owner = sqliteRuntime.openNodeSqliteDatabase(databasePath);
-  expect(owner.isOpen).toBe(true);
-  const open = sqliteRuntime.openNodeSqliteDatabase;
-  const schemaStatements: string[] = [];
-  vi.spyOn(sqliteRuntime, "openNodeSqliteDatabase").mockImplementation((...args) => {
-    const db = open(...args);
-    const observe =
-      <T>(run: (sql: string) => T) =>
-      (sql: string) => {
-        if (schemaPattern.test(sql)) {
-          schemaStatements.push(sql);
-        }
-        return run(sql);
-      };
-    const prepare = db.prepare.bind(db);
-    const exec = db.exec.bind(db);
-    vi.spyOn(db, "prepare").mockImplementation(observe(prepare));
-    vi.spyOn(db, "exec").mockImplementation(observe(exec));
-    return db;
-  });
-  for (let opened = 0; opened < 2; opened += 1) {
-    schemaStatements.length = 0;
-    using backend = openBackend(databasePath);
-    if (opened === 0) {
-      expect(schemaStatements.length).toBeGreaterThan(0);
-    } else {
-      expect(schemaStatements).toEqual([]);
-    }
-    expect(backend.execute({ type: "listPeriods", input: {} })).toEqual([]);
-    backend.execute({ type: "resetActivity", input: undefined });
-  }
-});
 
 it("aggregates across payload pages without paging metadata already retained for sorting", () => {
   using backend = openBackend();

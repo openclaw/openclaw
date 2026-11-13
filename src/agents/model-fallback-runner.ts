@@ -31,11 +31,7 @@ import {
   isFallbackCandidateSkipped,
   markFallbackCandidateSkipped,
 } from "./fallback-skip-cache.js";
-import {
-  isAgentHarnessPreflightError,
-  isMissingAgentHarnessError,
-  resolveAgentHarnessPreflightOwner,
-} from "./harness/errors.js";
+import { isAgentHarnessPreflightError, isMissingAgentHarnessError } from "./harness/errors.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import {
   appendFailedCandidateAttempt,
@@ -54,8 +50,8 @@ import {
   recordFailedCandidateAttempt,
   resolveFallbackAuthScope,
   resolveFallbackSoonestCooldownExpiry,
+  resolveHarnessPreflightFallbackIndex,
   resolveLiveSessionModelSwitchRedirectIndex,
-  resolveModelFallbackCandidateAgentRuntime,
   resolveModelFallbackCandidateHarnessAuthPrecheck,
   resolveNextFallbackCandidateIndex,
   runFallbackAttempt,
@@ -73,9 +69,12 @@ import {
 } from "./model-fallback-cooldown.js";
 import {
   isModelFallbackDecisionLogEnabled,
+  logModelFallbackChainStopped,
   logModelFallbackDecision,
   type ModelFallbackDecisionParams,
 } from "./model-fallback-observation.js";
+import { prepareModelFallbackRateLimit } from "./model-fallback-rate-limit.js";
+import { takeStickyRateLimitFallback } from "./model-fallback-sticky.js";
 import {
   MODEL_FALLBACK_SKIPPED_CODE,
   type FallbackAttempt,
@@ -100,6 +99,8 @@ type RunWithModelFallbackParams<T> = ModelFallbackRuntimeContext & {
   model: string;
   runId?: string;
   sessionId?: string;
+  /** Keeps a rate-limit fallback first for this session's next turns so the provider prompt cache stays warm. */
+  stickyRateLimitFallback?: boolean;
   userLockedAuthProfileId?: string;
   prepareCandidateChain?: (candidates: readonly ModelFallbackCandidate[]) => Promise<void> | void;
   lane?: string;
@@ -178,6 +179,8 @@ async function runWithModelFallbackInternal<T>(
   if (operatorModelPolicy && candidates.length === 0) {
     assertOperatorModelAllowed(operatorAuthority, undefined);
   }
+  const stickyFallback = takeStickyRateLimitFallback(params, candidates);
+  candidates = stickyFallback?.candidates ?? candidates;
   await params.prepareCandidateChain?.(candidates);
   const userLockedAuthProfileId = params.userLockedAuthProfileId?.trim() || undefined;
   const authRuntime =
@@ -197,7 +200,9 @@ async function runWithModelFallbackInternal<T>(
         }),
       })
     : null;
-  const attempts: FallbackAttempt[] = [];
+  const rateLimit = prepareModelFallbackRateLimit(candidates, { ...params, authStore });
+  candidates = rateLimit.candidates;
+  const attempts: FallbackAttempt[] = [...(stickyFallback?.attempts ?? []), ...rateLimit.attempts];
   const profileIdsByCandidate = new Map<ModelFallbackCandidate, string[]>();
   let lastError: unknown;
   let selectionChanged = false;
@@ -511,7 +516,7 @@ async function runWithModelFallbackInternal<T>(
       captureHarnessPreflight: true,
       options: {
         ...runOptions,
-        isFinalFallbackAttempt: !hasRemainingCandidate,
+        isFinalFallbackAttempt: rateLimit.isFinalAttempt(candidates, i, tlsFailedProviders),
         modelRoutingProvenance: {
           requestedProvider: params.provider,
           requestedModel: params.model,
@@ -531,6 +536,9 @@ async function runWithModelFallbackInternal<T>(
       abortSignal: params.abortSignal,
     });
     if ("success" in attemptRun) {
+      if (!attemptRun.stopped && !selectionChanged) {
+        stickyFallback?.record(candidate, attempts);
+      }
       if (!attemptRun.stopped && (i > 0 || attempts.length > 0 || attemptedDuringCooldown)) {
         await observeCandidateDecision("candidate_succeeded", {
           previousAttempts: attempts,
@@ -540,34 +548,21 @@ async function runWithModelFallbackInternal<T>(
     }
     const err = attemptRun.error;
     if (isAgentHarnessPreflightError(err)) {
-      const failedHarnessId = resolveAgentHarnessPreflightOwner(err);
-      if (!failedHarnessId) {
-        // Pre-scope callers established that their preflight is global to the
-        // fallback chain. Keep that public contract until they declare an owner.
-        throw err;
-      }
-      let nextEligibleIndex = candidates.length;
-      for (let index = i + 1; index < candidates.length; index += 1) {
-        const next = candidates[index];
-        if (!next || tlsFailedProviders.has(next.provider)) {
-          continue;
-        }
-        const nextRuntime = resolveModelFallbackCandidateAgentRuntime({
+      const nextEligibleIndex = resolveHarnessPreflightFallbackIndex({
+        error: err,
+        candidates,
+        currentIndex: i,
+        excludedProviders: tlsFailedProviders,
+        runtime: {
           cfg: params.cfg,
           agentId: params.agentId,
           sessionKey: params.sessionKey,
           resolveAgentHarnessRuntimeOverride: params.resolveAgentHarnessRuntimeOverride,
-          ...next,
-        }).runtime;
-        // An unresolved runtime remains eligible: only suppress candidates
-        // proven to repeat the exact harness-local failure.
-        if (nextRuntime !== failedHarnessId) {
-          nextEligibleIndex = index;
-          break;
-        }
-      }
-      const nextEligibleCandidate = candidates[nextEligibleIndex];
-      if (!nextEligibleCandidate) {
+        },
+      });
+      const nextEligibleCandidate =
+        nextEligibleIndex === undefined ? undefined : candidates[nextEligibleIndex];
+      if (nextEligibleIndex === undefined || !nextEligibleCandidate) {
         throw err;
       }
       lastError = err;
@@ -597,7 +592,14 @@ async function runWithModelFallbackInternal<T>(
       exhaustionResult = attemptRun.exhaustionResult;
     }
     // Local coordination failures must not consume provider fallbacks (#83510).
-    if (isNonProviderRuntimeCoordinationError(err) || isTranscriptNotContinuableError(err)) {
+    const failoverContext = { ...candidateRef, ...runAttribution };
+    const transcriptStop = isTranscriptNotContinuableError(err);
+    if (isNonProviderRuntimeCoordinationError(err) || transcriptStop) {
+      logModelFallbackChainStopped({
+        reason: transcriptStop ? "transcript_not_continuable" : "local_runtime_coordination",
+        ...failoverContext,
+        error: err,
+      });
       throw err;
     }
     if (transientProbeProviderForAttempt) {
@@ -609,7 +611,6 @@ async function runWithModelFallbackInternal<T>(
     if (isMissingAgentHarnessError(err)) {
       throw err;
     }
-    const failoverContext = { ...candidateRef, ...runAttribution };
     const normalized =
       coerceToFailoverError(err, failoverContext) ??
       (isLikelyContextOverflowError(formatErrorMessage(err))
@@ -645,8 +646,7 @@ async function runWithModelFallbackInternal<T>(
       const switchMsg = err.message;
       const switchNormalized = new FailoverError(switchMsg, {
         reason: "unknown",
-        ...candidateRef,
-        ...runAttribution,
+        ...failoverContext,
       });
       lastError = switchNormalized;
       await observeFailedCandidate({
@@ -728,10 +728,8 @@ async function runWithModelFallbackInternal<T>(
     candidates,
     lastError,
     label: "models",
-    formatAttempt: (attempt) =>
-      `${attempt.provider}/${attempt.model}: ${attempt.error}${
-        attempt.reason ? ` (${attempt.reason})` : ""
-      }`,
+    formatAttempt: ({ provider, model, error, reason }) =>
+      `${provider}/${model}: ${error}${reason ? ` (${reason})` : ""}`,
     soonestCooldownExpiry: await resolveFallbackSoonestCooldownExpiry({
       authRuntime,
       userLockedAuthProfileId,

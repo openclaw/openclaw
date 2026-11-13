@@ -16,7 +16,10 @@ import {
   vi,
 } from "vitest";
 import * as liveGatewayDistFence from "../../scripts/lib/live-gateway-dist-fence.mts";
-import { readProcessMemoryCapacity } from "../../scripts/lib/process-memory.mts";
+import {
+  readProcessCgroupV2Snapshot,
+  readProcessMemoryCapacity,
+} from "../../scripts/lib/process-memory.mts";
 import {
   TSDOWN_PACKAGE_CONFIG_GROUP,
   TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
@@ -46,7 +49,7 @@ import {
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
 } from "../helpers/fixture-receipts.js";
-import { isProcessAlive } from "../helpers/process-wait.js";
+import { isProcessAlive, waitForDead } from "../helpers/process-wait.js";
 import { withinTest } from "../helpers/promise.js";
 import { createSourcePluginDependenciesFixture } from "./source-plugin-dependencies-fixture.js";
 
@@ -104,35 +107,6 @@ async function fixtureEventBeforeSettlement(
     ]),
     signal,
   );
-}
-
-function waitForForeignProcessExit(pid: number, signal: AbortSignal): Promise<void> {
-  // The product owns these child handles, and deliberate parent death or rescue
-  // SIGKILL leaves no test-owned exit event. Only test cancellation bounds reaping.
-  return new Promise((resolve, reject) => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const finish = (error?: Error) => {
-      clearTimeout(timer);
-      signal.removeEventListener("abort", abort);
-      if (error) {
-        reject(error);
-      } else {
-        resolve();
-      }
-    };
-    const abort = () => finish(new Error(`process still alive: ${pid}`, { cause: signal.reason }));
-    const check = () => {
-      if (!isProcessAlive(pid)) {
-        finish();
-      } else if (signal.aborted) {
-        abort();
-      } else {
-        timer = setTimeout(check, 5);
-      }
-    };
-    signal.addEventListener("abort", abort, { once: true });
-    check();
-  });
 }
 
 const MiB = 1024 ** 2;
@@ -307,7 +281,7 @@ describe("resolveTsdownBuildInvocation", () => {
     [
       "config-free positional watch",
       ["--no-config", "packages/normalization-core/src/mountinfo-path.ts", "--watch"],
-      { env: {}, cgroupMemoryLimitBytes: 4 * GiB },
+      { env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" }, cgroupMemoryLimitBytes: 4 * GiB },
     ],
     [
       "custom config",
@@ -315,7 +289,7 @@ describe("resolveTsdownBuildInvocation", () => {
       {
         platform: "linux",
         nodeExecPath: "/usr/bin/node",
-        env: {},
+        env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
         cgroupMemoryLimitBytes: 4 * GiB,
       },
     ],
@@ -324,6 +298,9 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(heapShortfall).toBeNull();
     expect(invocations).toHaveLength(1);
     expect(invocations[0]?.args.slice(-args.length)).toEqual(args);
+    if (params.env?.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD === "1") {
+      expect(invocations[0]?.args).not.toContain("--concurrency");
+    }
     if (args[1] === "tsdown.config.ts") {
       expect(
         invocations[0]?.args.filter((_arg, index, all) => all[index - 1] === "--filter"),
@@ -410,9 +387,8 @@ describe("resolveTsdownBuildInvocation", () => {
       TSDOWN_UNIFIED_CONFIG_GROUP,
       ...TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
     ]);
-    expect(result.invocations[1]?.args).toEqual(expect.arrayContaining(["--concurrency", "1"]));
-    expect(result.invocations[2]?.args).not.toContain("--concurrency");
     for (const invocation of result.invocations) {
+      expect(invocation.args).toEqual(expect.arrayContaining(["--concurrency", "1"]));
       expect(invocation.args.slice(-args.length)).toEqual(args);
       expect(invocation.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
     }
@@ -553,28 +529,29 @@ describe("resolveTsdownBuildInvocation", () => {
   });
 
   it.each([
-    ["Docker default", [], { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" }],
-    ["CLI override", ["--no-dts"], {}],
-  ])("applies the unified-runtime threshold to a %s plan", (_label, args, env) => {
-    const result = resolveTsdownBuildPlan({
-      args,
-      platform: "linux",
-      nodeExecPath: "/usr/bin/node",
-      env,
-      cgroupMemoryLimitBytes: 2 * 1024 * 1024 * 1024,
-    });
-
-    for (const invocation of result.invocations) {
-      expect(invocation.args).not.toContain("--concurrency");
-    }
-    expect(result.maxOldSpaceMb).toBe(1280);
-    expect(result.heapShortfall?.fatal).toBe(true);
-    expect(result.invocations).toHaveLength(2);
-    expect(result.invocations[0]?.args).toEqual(
-      expect.arrayContaining(["--config", "tsdown.ai.config.ts"]),
-    );
-    expect(result.invocations[1]?.args).not.toContain("--filter");
-  });
+    ["Docker default", [], { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" }, 12, 11520, "1"],
+    ["CLI override", ["--no-dts"], {}, 2, 1280, "1"],
+    ["full heap", ["--no-dts"], {}, 16, 12288, "2"],
+    ["explicit heap", ["--no-dts"], { OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB: "8192" }, 16, 8192, "1"],
+  ] as const)(
+    "bounds the %s runtime plan by its heap",
+    (_label, args, env, cgroupGiB, heap, concurrency) => {
+      const result = resolveTsdownBuildPlan({
+        args: [...args],
+        platform: "linux",
+        env,
+        cgroupMemoryLimitBytes: cgroupGiB * GiB,
+      });
+      const [ai, runtime] = result.invocations;
+      expect(result.maxOldSpaceMb).toBe(heap);
+      expect(Boolean(result.heapShortfall?.fatal)).toBe(heap === 1280);
+      expect(result.invocations).toHaveLength(2);
+      expect(ai?.args).toEqual(expect.arrayContaining(["--config", "tsdown.ai.config.ts"]));
+      expect(ai?.args).not.toContain("--concurrency");
+      expect(runtime?.args).toEqual(expect.arrayContaining(["--concurrency", concurrency]));
+      expect(runtime?.args).not.toContain("--filter");
+    },
+  );
 
   it.each([
     { label: "defaults", env: {}, limit: "3GiB" },
@@ -593,38 +570,41 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(result.options.env.GOGC).toBe("30");
   });
 
-  it("keeps the selected Windows runtime and literal compiler arguments", () => {
-    const args = ["--format", "esm", "--concurrency", "2"];
-    const result = resolveTsdownBuildInvocation({
-      args,
-      platform: "win32",
-      nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
-      env: { npm_execpath: "/unrelated/pnpm.cjs" },
-      ...NO_MEMORY_LIMIT,
-    });
-    expect(result.command).toBe("C:\\Program Files\\nodejs\\node.exe");
-    expect(result.args).toEqual([
-      "node_modules/tsdown/dist/run.mjs",
-      "--config-loader",
-      "unrun",
-      "--logLevel",
-      "warn",
-      "--no-clean",
-      ...args,
-    ]);
-    expect(result.options).toEqual({
-      stdio: ["ignore", "pipe", "pipe"],
-      shell: false,
-      windowsVerbatimArguments: undefined,
-      env: {
-        NODE_OPTIONS: "--max-old-space-size=8192",
-        npm_execpath: "/unrelated/pnpm.cjs",
-        GOGC: "30",
-        GOMAXPROCS: "2",
-        GOMEMLIMIT: "3GiB",
-      },
-    });
-  });
+  it.each([["--concurrency", "2"], ["--concurrency=3"]])(
+    "keeps the selected Windows runtime and literal compiler arguments %j",
+    (...concurrency) => {
+      const args = ["--format", "esm", ...concurrency];
+      const result = resolveTsdownBuildInvocation({
+        args,
+        platform: "win32",
+        nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
+        env: { npm_execpath: "/unrelated/pnpm.cjs" },
+        ...NO_MEMORY_LIMIT,
+      });
+      expect(result.command).toBe("C:\\Program Files\\nodejs\\node.exe");
+      expect(result.args).toEqual([
+        "node_modules/tsdown/dist/run.mjs",
+        "--config-loader",
+        "unrun",
+        "--logLevel",
+        "warn",
+        "--no-clean",
+        ...args,
+      ]);
+      expect(result.options).toEqual({
+        stdio: ["ignore", "pipe", "pipe"],
+        shell: false,
+        windowsVerbatimArguments: undefined,
+        env: {
+          NODE_OPTIONS: "--max-old-space-size=8192",
+          npm_execpath: "/unrelated/pnpm.cjs",
+          GOGC: "30",
+          GOMAXPROCS: "2",
+          GOMEMLIMIT: "3GiB",
+        },
+      });
+    },
+  );
 
   it.each([
     [
@@ -810,6 +790,49 @@ describe("resolveTsdownBuildInvocation", () => {
       ),
     };
   }
+
+  it("observes raw counters along the mapped cgroup subtree and ancestors", () => {
+    const mountPoint = "/sys/fs/cgroup dir";
+    const leaf = `${mountPoint}/parent/leaf`;
+    const snapshot = readProcessCgroupV2Snapshot(
+      cgroupMemory(
+        "0::/container/parent/leaf\n",
+        "30 25 0:26 /container /sys/fs/cgroup\\040dir rw - cgroup2 cgroup2 rw\n",
+        [
+          [`${leaf}/cpu.stat`, "usage_usec 1200\n"],
+          [`${leaf}/memory.peak`, "900\n"],
+          [`${leaf}/cpuset.cpus.effective`, "0-3\n"],
+          [`${mountPoint}/parent/cpu.max`, "200000 100000\n"],
+          [`${mountPoint}/cpu.max`, "max 100000\n"],
+        ],
+      ),
+    );
+    expect(snapshot?.map((row) => row.directory)).toEqual([
+      leaf,
+      `${mountPoint}/parent`,
+      mountPoint,
+    ]);
+    expect(snapshot?.map((row) => row.counters)).toMatchObject([
+      {
+        "cpu.stat": "usage_usec 1200\n",
+        "memory.peak": "900\n",
+        "cpuset.cpus.effective": "0-3\n",
+        "memory.current": null,
+      },
+      { "cpu.max": "200000 100000\n" },
+      { "cpu.max": "max 100000\n" },
+    ]);
+  });
+
+  it("does not substitute an unrelated cgroup mount for an unmapped process", () => {
+    expect(
+      readProcessCgroupV2Snapshot(
+        cgroupMemory("0::/\n", `30 25 0:26 /other ${cgroupRoot} rw - cgroup2 cgroup2 rw\n`, [
+          [`${cgroupRoot}/cpu.stat`, "usage_usec 1200\n"],
+        ]),
+      ),
+    ).toBeNull();
+  });
 
   const memoryCases: [
     name: string,
@@ -1612,7 +1635,7 @@ describe("runTsdownBuildInvocation", () => {
               await completion;
               if (pid !== undefined && isProcessAlive(pid)) {
                 process.kill(pid, "SIGKILL");
-                await waitForForeignProcessExit(pid, signal);
+                await waitForDead(pid, signal, "reject");
               }
             } finally {
               signal.removeEventListener("abort", abort);
@@ -1772,7 +1795,7 @@ describe("runTsdownBuildInvocation", () => {
                 : undefined;
               if (childPid !== undefined && isProcessAlive(childPid)) {
                 process.kill(childPid, "SIGKILL");
-                await waitForForeignProcessExit(childPid, signal);
+                await waitForDead(childPid, signal, "reject");
               }
             }
           });
@@ -1892,7 +1915,7 @@ describe("runTsdownBuildInvocation", () => {
           supervisor.advance(250);
           await fixtureEventBeforeSettlement(termPath, "SIGTERM", supervisor.completion, signal);
           const parentPid = Number(fs.readFileSync(parentPidPath, "utf8"));
-          await waitForForeignProcessExit(parentPid, signal);
+          await waitForDead(parentPid, signal, "reject");
           supervisor.advance(249);
           expect(isProcessAlive(childPid)).toBe(true);
           expect(output.chunks.join("")).not.toContain("forcing SIGKILL");
@@ -1961,7 +1984,7 @@ describe("runTsdownBuildInvocation", () => {
           supervisor.advance(250);
           await fixtureEventBeforeSettlement(termPath, "SIGTERM", supervisor.completion, signal);
           const parentPid = Number(fs.readFileSync(parentPidPath, "utf8"));
-          await waitForForeignProcessExit(parentPid, signal);
+          await waitForDead(parentPid, signal, "reject");
           supervisor.advance(249);
           expect(isProcessAlive(childPid)).toBe(true);
           expect(fs.readFileSync(cleanupPath, "utf8")).toBe("");
@@ -2042,7 +2065,7 @@ describe("runTsdownBuildInvocation", () => {
             await runnerClosed;
             if (childPid && isProcessAlive(childPid)) {
               process.kill(childPid, "SIGKILL");
-              await waitForForeignProcessExit(childPid, signal);
+              await waitForDead(childPid, signal, "reject");
             }
           });
         }

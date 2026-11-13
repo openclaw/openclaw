@@ -1,5 +1,4 @@
-import { setTimeout as delay } from "node:timers/promises";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getContextWindowCaches } from "../agents/context-cache.js";
@@ -15,6 +14,7 @@ installGatewayTestHooks();
 const repositories = createTempDirTracker();
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   resetContextWindowCacheForTest();
   await resetPreparedModelRuntimeSnapshotsForTest();
   repositories.cleanup();
@@ -83,15 +83,6 @@ it("keeps unrelated work responsive during the real post-ready warmup", async ()
       defaultWorkspaceDir: workspaceDir,
       allowGatewaySubagentBinding: true,
     });
-    const { getPublishedPreparedModelCatalogOwnerSnapshot } =
-      await import("../agents/prepared-model-catalog.js");
-    const publishedOwner = getPublishedPreparedModelCatalogOwnerSnapshot({
-      config: structuredClone(warmConfig),
-      allowGatewaySubagentBinding: true,
-    });
-    if (!publishedOwner) {
-      throw new Error("synthetic Gateway model catalog owner was not published");
-    }
     await Promise.all([
       client.request("health", { probe: true }),
       client.request("chat.metadata", {}),
@@ -101,83 +92,68 @@ it("keeps unrelated work responsive during the real post-ready warmup", async ()
     const contextModule = await import("../agents/context.js");
     resetContextWindowCacheForTest();
 
-    const heartbeatGaps: number[] = [];
-    let lastHeartbeatAt = performance.now();
-    const heartbeat = setInterval(() => {
-      const now = performance.now();
-      heartbeatGaps.push(now - lastHeartbeatAt);
-      lastHeartbeatAt = now;
-    }, 20);
-    const latencies: Record<string, number[]> = {};
-    const errors: string[] = [];
-    const probe = async (name: string, run: () => Promise<unknown>) => {
-      const startedAt = performance.now();
-      try {
-        await run();
-      } catch (error) {
-        errors.push(`${name}:${String(error)}`);
-      } finally {
-        (latencies[name] ??= []).push(performance.now() - startedAt);
-      }
-    };
-    let probing = true;
-
-    const activeContextPreparation = contextModule.prewarmContextWindowCacheAfterReady({
+    const { getPublishedPreparedModelCatalogOwnerSnapshot } =
+      await import("../agents/prepared-model-catalog.js");
+    const owner = getPublishedPreparedModelCatalogOwnerSnapshot({
       config: warmConfig,
+      allowGatewaySubagentBinding: true,
     });
-    const probeLoop = (async () => {
-      while (true) {
-        await Promise.all([
-          ...(["healthz", "readyz"] as const).map(async (name) => {
-            await probe(name, async () => {
-              const response = await fetch(`http://127.0.0.1:${port}/${name}`);
-              if (response.status !== 200) {
-                errors.push(`${name}:${response.status}`);
-              }
-              await response.arrayBuffer();
-            });
-          }),
-          probe("healthRpc", () => client.request("health", { probe: true })),
-          probe("metadataRpc", () => client.request("chat.metadata", {})),
-          probe("branchesRpc", () =>
-            client.request("worktrees.branches", { repoRoot: workspaceDir }),
-          ),
-        ]);
-        if (!probing) {
-          break;
-        }
-        await delay(40);
-      }
-    })();
-    const contextPreparationOutcome = await activeContextPreparation.then(
-      () => ({ status: "loaded" as const }),
-      (error: unknown) => ({ status: "rejected" as const, error: String(error) }),
-    );
-    await delay(100);
-    probing = false;
-    await probeLoop;
-    await delay(40);
-    clearInterval(heartbeat);
-
-    const resolveTokens = (provider?: string) =>
-      contextModule.resolveContextTokensForModel({
-        cfg: provider ? warmConfig : {},
-        provider,
-        model: "shared-model",
-        allowAsyncLoad: false,
-      });
-    const caches = getContextWindowCaches();
-    expect(errors).toEqual([]);
-    expect(contextPreparationOutcome).toEqual({ status: "loaded" });
-    expect([resolveTokens(), resolveTokens("synthetic-a"), resolveTokens("synthetic-b")]).toEqual([
-      64_000, 128_000, 64_000,
-    ]);
-    expect(caches.discoveredTokenCache.size).toBeGreaterThan(modelCount * 2);
-    expect(caches.contextWindowCache.size).toBeGreaterThan(modelCount * 2);
-    expect(Math.max(...heartbeatGaps)).toBeLessThan(500);
-    for (const samples of Object.values(latencies)) {
-      expect(Math.max(...samples)).toBeLessThan(1_000);
+    if (!owner) {
+      throw new Error("published model catalog is missing");
     }
+    let processedThisTurn = 0;
+    const batches: number[] = [];
+    const inventories: Array<{ id: string }[]> = [
+      ...Object.values(owner.config.models?.providers ?? {}).map((provider) => provider.models),
+      owner.modelCatalog.entries,
+      owner.modelCatalog.staticEntries ?? [],
+    ];
+    // Count real input consumption, so runner scheduling cannot inflate the work budget.
+    for (const rows of new Set(inventories)) {
+      vi.spyOn(rows, Symbol.iterator).mockImplementation(() => {
+        const iterator = rows.values();
+        const next = iterator.next.bind(iterator);
+        iterator.next = () => {
+          const result = next();
+          if (!result.done) {
+            processedThisTurn += 1;
+          }
+          return result;
+        };
+        return iterator;
+      });
+    }
+    const heartbeat = () => {
+      batches.push(processedThisTurn);
+      processedThisTurn = 0;
+      heartbeatHandle = setImmediate(heartbeat);
+    };
+    let heartbeatHandle = setImmediate(heartbeat);
+    try {
+      await Promise.all([
+        contextModule
+          .prewarmContextWindowCacheAfterReady({ config: warmConfig })
+          .finally(() => clearImmediate(heartbeatHandle)),
+        ...(["healthz", "readyz"] as const).map(async (name) => {
+          const response = await fetch(`http://127.0.0.1:${port}/${name}`);
+          expect(response.status).toBe(200);
+          await response.arrayBuffer();
+        }),
+        client.request("health", { probe: true }),
+        client.request("chat.metadata", {}),
+        client.request("worktrees.branches", { repoRoot: workspaceDir }),
+      ]);
+    } finally {
+      clearImmediate(heartbeatHandle);
+      batches.push(processedThisTurn);
+    }
+
+    const caches = getContextWindowCaches();
+    expect(caches.discoveredTokenCache.size).toBeGreaterThan(modelCount * 2);
+    expect(batches.reduce((total, count) => total + count, 0)).toBeGreaterThanOrEqual(
+      modelCount * 4,
+    );
+    expect(Math.max(...batches)).toBeLessThanOrEqual(512);
   };
   await runQaGatewayFixture(
     runProof,

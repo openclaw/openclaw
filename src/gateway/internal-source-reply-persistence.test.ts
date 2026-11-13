@@ -108,43 +108,42 @@ async function createSourceReplyFixture(state: OpenClawTestState) {
     attachments: imagePaths.map((file) => ({ name: path.basename(file) })),
     trustedLocalMedia: true,
   };
+  const owner: Parameters<typeof withOwnedSessionTranscriptWrites>[0] = {
+    sessionKey,
+    sessionTarget: {
+      ...scope,
+      expectedLifecycleRevision: entry.lifecycleRevision,
+      expectedWriterRunId: entry.activeWriterRunId,
+    },
+    withTranscriptWrite: (run) => {
+      onQueued?.();
+      onQueued = undefined;
+      return lifecycle.withTranscriptWrite(async () => {
+        const result = await run();
+        if (failDrain) {
+          failDrain = false;
+          void lifecycle
+            .withTranscriptWrite(() => {
+              throw new Error("nested drain failed");
+            })
+            .catch(() => {});
+        }
+        return result;
+      });
+    },
+  };
   const persist = (options: { sessionKey?: string; runId?: string; textOnly?: boolean } = {}) =>
-    withOwnedSessionTranscriptWrites(
-      {
-        sessionKey,
-        sessionTarget: {
-          ...scope,
-          expectedLifecycleRevision: entry.lifecycleRevision,
-          expectedWriterRunId: entry.activeWriterRunId,
-        },
-        withTranscriptWrite: (run) => {
-          onQueued?.();
-          onQueued = undefined;
-          return lifecycle.withTranscriptWrite(async () => {
-            const result = await run();
-            if (failDrain) {
-              failDrain = false;
-              void lifecycle
-                .withTranscriptWrite(() => {
-                  throw new Error("nested drain failed");
-                })
-                .catch(() => {});
-            }
-            return result;
-          });
-        },
-      },
-      () =>
-        persistInternalSourceReply({
-          cfg: { agents: { entries: { main: { workspace: state.workspaceDir } } } },
-          sessionKey: options.sessionKey ?? sessionKey,
-          expectedSessionId: sessionId,
-          agentId: "main",
-          idempotencyKey: "partial-promotion-reply",
-          sourceReplyFinal: true,
-          runId: options.runId ?? "original-run",
-          payload: options.textOnly ? { text: payload.text } : payload,
-        }),
+    withOwnedSessionTranscriptWrites(owner, () =>
+      persistInternalSourceReply({
+        cfg: { agents: { entries: { main: { workspace: state.workspaceDir } } } },
+        sessionKey: options.sessionKey ?? sessionKey,
+        expectedSessionId: sessionId,
+        agentId: "main",
+        idempotencyKey: "partial-promotion-reply",
+        sourceReplyFinal: true,
+        runId: options.runId ?? "original-run",
+        payload: options.textOnly ? { text: payload.text } : payload,
+      }),
     );
   return {
     scope,
@@ -181,7 +180,7 @@ async function createSourceReplyFixture(state: OpenClawTestState) {
       ]);
       return { replay, done, release: release.resolve };
     },
-    dispose: async () => {
+    [Symbol.asyncDispose]: async () => {
       await finishHeld?.();
       unsubscribe();
       try {
@@ -198,12 +197,8 @@ type Records = Awaited<ReturnType<Fixture["records"]>>;
 
 function withFixture(run: (fixture: Fixture, state: OpenClawTestState) => Promise<void>) {
   return withOpenClawTestState({ layout: "state-only", prefix: "source-reply-" }, async (state) => {
-    const fixture = await createSourceReplyFixture(state);
-    try {
-      await run(fixture, state);
-    } finally {
-      await fixture.dispose();
-    }
+    await using fixture = await createSourceReplyFixture(state);
+    await run(fixture, state);
   });
 }
 

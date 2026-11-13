@@ -4,7 +4,7 @@ import {
   type CronJobScratchWriteResult,
 } from "../../../src/cron/scratch-contract.js";
 import { writeCronJobScratchInDatabase } from "../../../src/cron/scratch-write.kernel.js";
-import { cronStoreKey } from "../../../src/cron/store/key.js";
+import { resolveCronStoreKeyInDatabase } from "../../../src/cron/store/paths.js";
 import { getCronStoreKysely } from "../../../src/cron/store/schema.js";
 import { executeSqliteQuerySync } from "../../../src/infra/kysely-sync.js";
 import { deferSqlitePostCommitPublication } from "../../../src/infra/sqlite-post-commit.js";
@@ -27,7 +27,6 @@ export function writeCronJobScratchForMaintenance(params: {
     assertCronJobScratchContent(params.content);
   }
   const input = {
-    storeKey: cronStoreKey(params.storePath),
     jobId: params.jobId,
     content: params.content,
     expectedRevision: params.expectedRevision,
@@ -37,7 +36,10 @@ export function writeCronJobScratchForMaintenance(params: {
   const markCommitted = captureCronMutationCommit("cron.scratch.set");
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
-      const outcome = writeCronJobScratchInDatabase(db, input);
+      const outcome = writeCronJobScratchInDatabase(db, {
+        ...input,
+        storeKey: resolveCronStoreKeyInDatabase(db, params.storePath, params.options?.env),
+      });
       if (outcome.written && markCommitted) {
         deferSqlitePostCommitPublication(db, markCommitted);
       }
@@ -57,7 +59,7 @@ export function deleteCronJobScratch(
 ): boolean {
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
-      const storeKey = cronStoreKey(storePath);
+      const storeKey = resolveCronStoreKeyInDatabase(db, storePath, options.env);
       const cronDb = getCronStoreKysely(db);
       if (guard) {
         const row = executeSqliteQuerySync(

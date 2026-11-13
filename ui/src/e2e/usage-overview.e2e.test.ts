@@ -1,15 +1,16 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
-import { createEmptyCostUsageTotals } from "../../../src/infra/session-cost-usage-totals.js";
-import { buildAggregatesFromSessions } from "../pages/usage/view.test-support.ts";
 import {
-  takeControlUiScreenshotFrame,
-  takeControlUiViewportScreenshot,
-} from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
+  usageMessages,
+  buildAggregatesFromSessions,
+  usageTotals,
+} from "../pages/usage/view.test-support.ts";
+import { waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { installUsageOverviewGateway } from "./usage-overview-fixture.test-support.ts";
+import {
+  applyUsageQuery,
+  openUsageFilter,
+  installUsageOverviewGateway,
+} from "./usage-overview-fixture.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Usage server overview",
@@ -39,21 +40,13 @@ suite.define(() => {
               modelProvider: index === 1 ? "anthropic" : "openai",
               updatedAt: Date.parse("2026-08-07T12:00:00Z") - index,
               usage: {
-                ...createEmptyCostUsageTotals(),
+                ...usageTotals(tokens, tokens / 100),
                 firstActivity: Date.parse("2026-08-07T12:00:00Z"),
-                input: tokens,
-                totalTokens: tokens,
-                inputCost: tokens / 100,
-                totalCost: tokens / 100,
                 activityDates: ["2026-08-07"],
                 dailyBreakdown: [
                   {
-                    ...createEmptyCostUsageTotals(),
+                    ...usageTotals(tokens, tokens / 100),
                     date: "2026-08-07",
-                    input: tokens,
-                    totalTokens: tokens,
-                    inputCost: tokens / 100,
-                    totalCost: tokens / 100,
                     tokens,
                     cost: tokens / 100,
                   },
@@ -68,13 +61,7 @@ suite.define(() => {
               updatedAt: Date.parse("2026-08-07T12:00:00Z"),
               startDate: "2026-08-07",
               endDate: "2026-08-07",
-              totals: {
-                ...createEmptyCostUsageTotals(),
-                input: 600,
-                totalTokens: 600,
-                inputCost: 6,
-                totalCost: 6,
-              },
+              totals: usageTotals(600, 6),
               sessions,
               aggregates: buildAggregatesFromSessions(sessions),
             },
@@ -86,7 +73,7 @@ suite.define(() => {
         await page.locator(".model-providers__search input").waitFor();
         await page.evaluate(() => window.openclawControlUi!.navigate("usage"));
         await waitForControlUiRoute(page, { routeId: "usage" });
-        const query = page.locator(".usage-query-input");
+        const query = page.locator(".usage-filter-menu__query input");
         const rows = page.locator(".sessions-card .session-bar-title");
         await expect
           .poll(() => rows.allTextContents())
@@ -103,32 +90,15 @@ suite.define(() => {
         await gateway.resolveDeferred("sessions.usage");
         await expect.poll(() => rows.count()).toBe(3);
         expect(pageErrors).toEqual([]);
-        await query.fill('"label:Team Planning"');
-        await query.press("Enter");
+        await applyUsageQuery(page, '"label:Team Planning"');
         await expect.poll(() => rows.allTextContents()).toEqual(["Team Planning"]);
         const previous = (await gateway.getRequests("sessions.usage")).length;
-        const trigger = page.locator('[id="usage-filter-provider:trigger"]');
-        await trigger.click();
-        await page
-          .locator('[id="usage-filter-provider:content"] [data-value="option:openai"]')
-          .click();
-        const request = await gateway.waitForRequest("sessions.usage", { after: previous });
-        // Wait for the returned projection before capturing the base or repaired UI.
-        const submitted = request.params as { query: string };
-        await expect.poll(() => rows.count()).toBe(submitted.query.startsWith('"') ? 1 : 2);
-        await trigger.click();
-        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-          await query.scrollIntoViewIfNeeded();
-          await fs.writeFile(
-            path.join(suite.artifactDir, "quoted-filter.png"),
-            await takeControlUiViewportScreenshot(page, page.locator(".usage-page"), [
-              query,
-              page.locator(".usage-metric-badge").first(),
-            ]),
-          );
-        }
+        await openUsageFilter(page, "Provider");
+        await page.getByRole("menuitemcheckbox", { name: "openai", exact: true }).click();
+        await gateway.waitForRequest("sessions.usage", { after: previous });
+        await expect.poll(() => rows.allTextContents()).toEqual(["Team Planning"]);
+        await page.locator(".usage-filter-menu__trigger").click();
         expect(await query.inputValue()).toBe('"label:Team Planning" provider:openai ');
-        expect(await rows.allTextContents()).toEqual(["Team Planning"]);
         expect(await page.locator(".usage-metric-badge").allTextContents()).toEqual([
           "100 Tokens",
           "$1.00 Cost",
@@ -148,104 +118,31 @@ suite.define(() => {
       },
       async ({ page }) => {
         await page.clock.setFixedTime(new Date("2026-08-07T12:00:00Z"));
-        const artifacts = suite.artifactDir;
-        const capture = async (name: string) => {
-          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-            await fs.writeFile(
-              path.join(artifacts, `${name}.png`),
-              await takeControlUiViewportScreenshot(page, page.locator(".usage-page"), [
-                page.locator(".usage-metric-badge").first(),
-              ]),
-            );
-          }
-        };
-        const totals = {
-          ...createEmptyCostUsageTotals(),
-          input: 125000,
-          totalTokens: 125000,
-          inputCost: 125,
-          totalCost: 125,
-        };
-        const messages = {
-          total: 2500,
-          user: 1250,
-          assistant: 1250,
-          toolCalls: 0,
-          toolResults: 0,
-          errors: 0,
-        };
-        const session = (index: number, label = `Session ${index + 1}`) => ({
+        const session = (
+          index: number,
+          label = index === 1201 ? "Needle outside the first thousand" : `Session ${index + 1}`,
+        ) => ({
           key: `agent:main:overview-${index}`,
           label,
           agentId: "main",
           sessionId: `session-${index}`,
-          updatedAt: 2000 - index,
+          updatedAt: Date.parse("2026-08-07T12:00:00Z") - index,
           usage: {
-            ...createEmptyCostUsageTotals(),
+            ...usageTotals(100, 0.1),
             durationMs: index === 0 ? 60000 : 0,
-            messageCounts: {
-              total: 2,
-              user: 1,
-              assistant: 1,
-              toolCalls: 0,
-              toolResults: 0,
-              errors: 0,
-            },
-            input: 100,
-            totalTokens: 100,
-            totalCost: 0.1,
-            inputCost: 0.1,
+            messageCounts: usageMessages(),
           },
         });
-        const response = (offset = 0, filtered = false) => ({
-          updatedAt: Date.parse("2026-08-07T12:00:00Z"),
-          startDate: "2026-07-09",
-          endDate: "2026-08-07",
-          totals: filtered ? session(1201).usage : totals,
-          sessions: filtered
-            ? [session(1201, "Needle outside the first thousand")]
-            : Array.from({ length: 50 }, (_, index) => session(offset + index)),
-          aggregates: {
-            messages: filtered ? session(1201).usage.messageCounts : messages,
-            tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
-            byModel: [],
-            byProvider: [],
-            byAgent: [{ agentId: "main", totals: filtered ? session(1201).usage : totals }],
-            byChannel: [],
-            daily: [],
-            costDaily: [{ date: "2026-08-07", ...(filtered ? session(1201).usage : totals) }],
-          },
-          overview: {
-            offset,
-            limit: 50,
-            total: filtered ? 1 : 1250,
-            unfilteredSessionCount: 1250,
-            selectedSessionCount: filtered ? 1 : 1250,
-            selectedRowCount: filtered ? 1 : 1250,
-            selectedRows: [],
-            tableSessionCount: filtered ? 1 : 1250,
-            tableTotals: { tokens: filtered ? 100 : 125000, cost: filtered ? 0.1 : 125, errors: 0 },
-            queryWarnings: [],
-            durationMs: filtered ? 0 : 60000,
-            durationCount: filtered ? 0 : 1,
-            hourTokens: Array.from({ length: 24 }, (_, hour) =>
-              hour === 12 ? (filtered ? 100 : 125000) : 0,
-            ),
-            weekdayTokens: [0, 0, 0, 0, 0, filtered ? 100 : 125000, 0],
-            hourlyMessages: Array(24).fill(0),
-            hourlyErrors: Array(24).fill(0),
-            hasTimelineData: true,
-            filterOptions: { agent: ["main"], channel: [], provider: [], model: [], tool: [] },
-          },
-        });
-        const gateway = await installMockGateway(page, {
+        const sessions = Array.from({ length: 1250 }, (_, index) => session(index));
+        const gateway = await installUsageOverviewGateway(page, {
           methodResponses: {
             "sessions.usage": {
-              cases: [
-                { match: { query: "label:Needle" }, response: response(0, true) },
-                { match: { offset: 50 }, response: response(50) },
-                { match: {}, response: response() },
-              ],
+              updatedAt: Date.parse("2026-08-07T12:00:00Z"),
+              startDate: "2026-07-09",
+              endDate: "2026-08-07",
+              totals: usageTotals(125000, 125),
+              sessions,
+              aggregates: buildAggregatesFromSessions(sessions),
             },
             "usage.status": { updatedAt: 1, providers: [] },
           },
@@ -262,22 +159,6 @@ suite.define(() => {
         await expect
           .poll(() => page.locator(".session-bar-meta").first().textContent())
           .toContain("1m");
-        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-          const fullHeight = await page
-            .locator(".usage-page")
-            .evaluate((element) => Math.ceil(element.scrollHeight) + 400);
-          const fullFrame = await takeControlUiScreenshotFrame(
-            page,
-            page.locator(".usage-page"),
-            [page.locator(".usage-header"), rows.first(), page.locator(".data-table-pagination")],
-            {
-              animations: "disabled",
-              viewport: { width: 1440, height: fullHeight },
-            },
-          );
-          await fs.writeFile(path.join(artifacts, "overview-and-sessions.png"), fullFrame.png);
-          await page.setViewportSize({ width: 1440, height: 1100 });
-        }
         await expect
           .poll(() => page.locator(".usage-metric-badge").allTextContents())
           .toEqual(["125.0K Tokens", "$125.00 Cost", "1,250 Sessions"]);
@@ -294,9 +175,7 @@ suite.define(() => {
         await expect
           .poll(() => page.locator(".usage-metric-badge").allTextContents())
           .toEqual(["125.0K Tokens", "$125.00 Cost", "1,250 Sessions"]);
-        await capture("second-page");
-        await page.locator(".usage-query-input").fill("label:Needle");
-        await page.locator(".usage-query-input").press("Enter");
+        await applyUsageQuery(page, "label:Needle");
         await expect
           .poll(() => rows.allTextContents())
           .toEqual(["Needle outside the first thousand"]);
@@ -306,11 +185,91 @@ suite.define(() => {
         await expect
           .poll(() => page.locator(".usage-metric-badge").allTextContents())
           .toEqual(["100 Tokens", "$0.10 Cost", "1 Sessions"]);
-        await capture("filtered-beyond-thousand");
-        await fs.writeFile(
-          path.join(artifacts, "requests.json"),
-          JSON.stringify(await gateway.getRequests("sessions.usage"), null, 2),
-        );
+      },
+    );
+  });
+  it("keeps a multiword model selected and filtered after choosing it from the menu", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        timezoneId: "UTC",
+        viewport: { width: 1440, height: 1100 },
+        serviceWorkers: "block",
+      },
+      async ({ page }) => {
+        await page.clock.setFixedTime(new Date("2026-08-07T12:00:00Z"));
+        const sessions = [
+          ["Synthetic usage example", "Local Model", 100],
+          ["Hosted model session", "gpt-5-mini", 300],
+        ].map(([label, model, tokens], index) => ({
+          key: `agent:main:model-${index}`,
+          label: label as string,
+          agentId: "main",
+          model: model as string,
+          updatedAt: Date.parse("2026-08-07T12:00:00Z") - index,
+          usage: usageTotals(tokens as number, (tokens as number) / 10_000),
+        }));
+        const gateway = await installUsageOverviewGateway(page, {
+          methodResponses: {
+            "sessions.usage": {
+              updatedAt: Date.parse("2026-08-07T12:00:00Z"),
+              startDate: "2026-08-07",
+              endDate: "2026-08-07",
+              totals: usageTotals(400, 0.04),
+              sessions,
+              aggregates: buildAggregatesFromSessions(sessions),
+            },
+            "usage.status": { updatedAt: 1, providers: [] },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}usage`);
+        await waitForControlUiRoute(page, { routeId: "usage" });
+        const rows = page.locator(".sessions-card .session-bar-title");
+        await expect.poll(() => rows.count()).toBe(2);
+
+        await openUsageFilter(page, "Model");
+        const option = page.getByRole("menuitemcheckbox", { name: "Local Model", exact: true });
+        await option.click();
+        await expect.poll(() => option.getAttribute("aria-checked")).toBe("true");
+        await page.locator(".usage-filter-menu__trigger").click();
+        await option.waitFor({ state: "hidden" });
+        const query = page.locator(".usage-filter-menu__query input");
+        await openUsageFilter(page);
+        await page.mouse.move(0, 0);
+        await page.keyboard.press("Tab");
+        await expect
+          .poll(() =>
+            page
+              .getByRole("menuitem", { name: "Started by", exact: true })
+              .evaluate((element) => element === document.activeElement),
+          )
+          .toBe(true);
+        await page.keyboard.press("Shift+Tab");
+        await expect
+          .poll(() => query.evaluate((element) => element === document.activeElement))
+          .toBe(true);
+        // Keyboard focus opens the query hint; Escape dismisses that overlay before the menu.
+        const queryHint = page.getByRole("tooltip").filter({ hasText: "Filter sessions (e.g." });
+        await queryHint.waitFor({ state: "visible" });
+        await page.keyboard.press("Escape");
+        await queryHint.waitFor({ state: "hidden" });
+        expect(
+          await page.locator(".usage-filter-menu__trigger").getAttribute("aria-expanded"),
+        ).toBe("true");
+        expect(await query.inputValue()).toBe('model:"Local Model" ');
+        await page.keyboard.press("Escape");
+        await expect
+          .poll(() => page.locator(".usage-filter-menu__trigger").getAttribute("aria-expanded"))
+          .toBe("false");
+        expect(await query.inputValue()).toBe('model:"Local Model" ');
+
+        const previous = (await gateway.getRequests("sessions.usage")).length;
+        await applyUsageQuery(page, await query.inputValue());
+        await gateway.waitForRequest("sessions.usage", { after: previous });
+        await expect.poll(() => rows.allTextContents()).toEqual(["Synthetic usage example"]);
+        await expect
+          .poll(() => page.locator(".usage-metric-badge").allTextContents())
+          .toEqual(["100 Tokens", "$0.01 Cost", "1 Sessions"]);
       },
     );
   });

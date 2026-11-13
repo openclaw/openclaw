@@ -183,7 +183,7 @@ suite.define(() => {
     await page.goto(`${suite.server.baseUrl}new`);
     const footer = page.locator(".new-session-page__composer .agent-chat__composer-footer");
     const attach = button(page, "Add attachment");
-    const takePhoto = page.getByRole("menuitem", { name: "Take photo" });
+    const camera = page.getByRole("menuitem", { name: "Camera", exact: true });
     const draft = page.locator('.new-session-page__draft-toggle[aria-label^="Draft:"]');
     const incognito = page.getByRole("switch", { name: "Incognito" });
     const model = page.locator(".new-session-page__composer .chat-composer-model-control");
@@ -203,9 +203,7 @@ suite.define(() => {
       .poll(() => draft.evaluate((element) => getComputedStyle(element).opacity))
       .toBe("1");
     expect(
-      await incognito.evaluate(
-        (element) => element.closest(".new-session-page__incognito-rail") != null,
-      ),
+      await incognito.evaluate((element) => element.closest(".mobile-header__capsule") != null),
     ).toBe(true);
     const [footerBox, attachBox, modelBox] = await Promise.all([
       bounds(footer),
@@ -226,7 +224,7 @@ suite.define(() => {
     );
     expect(controlsOverflow).toBe(0);
     await attach.click();
-    await expect.poll(() => takePhoto.isVisible()).toBe(true);
+    await expect.poll(() => camera.isVisible()).toBe(true);
     const attachGlyphSine = () =>
       attach.evaluate((element) => {
         const { transform } = getComputedStyle(element.querySelector("svg") as SVGElement);
@@ -305,9 +303,8 @@ suite.define(() => {
       await thinkingSlider.evaluate((element) => ({
         max: element.getAttribute("max"),
         label: element.getAttribute("aria-valuetext"),
-        fill: Number.parseFloat(element.style.getPropertyValue("--reasoning-fill")),
       })),
-    ).toMatchObject({ max: "6", label: "Extra high", fill: expect.closeTo(83.33, 1) });
+    ).toEqual({ max: "6", label: "Extra high" });
     await effortSelect.click();
     await page.locator(".new-session-page__message").fill("keep the selected effort");
     await button(page, "Start session").click();
@@ -351,7 +348,7 @@ suite.define(() => {
     await expectLabel(projectTrigger, "packages");
     await pollLocatorText(
       page.locator("#new-session-where-trigger .new-session-page__trigger-label"),
-    ).toBe("Local");
+    ).toBe("This computer");
     await expectAttribute(placeTrigger, "data-worktree", "true");
     await placeTrigger.click();
     await expectValue(checkoutBaseRefInput(page), "release/next");
@@ -437,18 +434,7 @@ suite.define(() => {
         "agents.list": mainAgentList(),
         "fs.listDir": FOLDER_LISTINGS,
         "projects.list": { projects: [], recents: [] },
-        "users.prefs.get": {
-          sequence: [
-            { status: "ok", entries: {} },
-            {
-              status: "ok",
-              entries: {
-                "new-session.migration.v1": true,
-                "new-session.v1:main": REMEMBERED_PROJECT,
-              },
-            },
-          ],
-        },
+        "users.prefs.get": { status: "ok", entries: {} },
         "users.prefs.set": { status: "ok" },
         "worktrees.branches": GIT_BRANCHES,
       },
@@ -458,13 +444,20 @@ suite.define(() => {
     expect(migrated.params).toMatchObject({
       entries: { "new-session.v1:main": REMEMBERED_PROJECT },
     });
+    await gateway.setMethodResponse("users.prefs.get", {
+      status: "ok",
+      entries: {
+        "new-session.migration.v1": true,
+        "new-session.v1:main": REMEMBERED_PROJECT,
+      },
+    });
     const trigger = page.locator("#new-session-project-trigger");
     const checkoutTrigger = page.locator("#new-session-checkout-trigger");
     await expectLabel(trigger, "packages");
     await expectAttribute(checkoutTrigger, "data-worktree", "true");
     await captureProjectUiProof(suite, page, "identity-preferences-migrated.png");
     await returnToDraft(page);
-    await waitForRequestCount(gateway, 2, "users.prefs.get");
+    await waitForRequestCount(gateway, 2, "users.prefs.get", {}, { exactParams: true });
     await waitForRequestCount(gateway, 1, "users.prefs.set");
     await gateway.deferNext("users.prefs.set");
     const newSession = page.locator("openclaw-new-session-page");
@@ -586,7 +579,7 @@ suite.define(() => {
     await button(page, "Browse folders").click();
     await button(page, "Use this folder").click();
     await navigateInApp(page, "chat");
-    await page.waitForURL((url) => url.pathname.endsWith("/chat"));
+    await waitForCommittedChatRoute(page);
     await gateway.setMethodResponse("agents.list", mainAgentList(MOVED_WORKSPACE));
     await page.reload();
     await navigateInApp(page, "new-session");

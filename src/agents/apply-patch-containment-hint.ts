@@ -1,14 +1,60 @@
 /**
- * Operator-facing remediation for apply_patch workspace containment.
+ * Remediation for file-tool workspace containment.
  *
  * Which control imposed the boundary decides which remedy is true, so the runtime owner
  * names its own source rather than the tool guessing from configuration it cannot see.
  */
-import { isHostRootEscapeError } from "./sandbox-paths.js";
+import { isHostRootEscapeError, markHostRootEscape } from "./sandbox-paths.js";
 import { withToolOperatorHint } from "./tool-operator-hint.js";
 
-/** Which layer contained apply_patch, and therefore which operator explanation applies. */
+/** The prepared policy transports this source for both patch and other file tools. */
 export type ApplyPatchContainmentSource = "config" | "session" | "required-root";
+
+function workspaceBindingHint(source: ApplyPatchContainmentSource | undefined): string {
+  switch (source) {
+    case "config":
+      return (
+        "Keep file paths within the bound root. For an authorized task in another repository, " +
+        "when session and sender policy permit, use a worker bound to that repository; when " +
+        "starting one with sessions_spawn, set cwd to that repository. Changing exec workdir " +
+        "does not rebind file tools."
+      );
+    case "session":
+      return (
+        "Keep file paths within this session's recorded root. A hidden native sessions_spawn child with only " +
+        "a different cwd inherits this root and will also be blocked. Do not use that as recovery. " +
+        "For an authorized task outside it, the operator must use a " +
+        "session whose recorded root includes the target repository."
+      );
+    case "required-root":
+      return (
+        "Keep file paths within this run's required root. Changing cwd, session permission mode, " +
+        "or workspaceOnly configuration does not lift this boundary."
+      );
+    default:
+      return "Keep file paths within the bound root. Changing exec workdir does not rebind file tools.";
+  }
+}
+
+export function isSandboxRootEscapeError(error: unknown): error is Error {
+  return error instanceof Error && /^Path escapes sandbox root \(/i.test(error.message);
+}
+
+export function withWorkspaceRecoveryHint(
+  error: unknown,
+  hostWorkspace: boolean,
+  source?: ApplyPatchContainmentSource,
+): unknown {
+  if (!isSandboxRootEscapeError(error)) {
+    return error;
+  }
+  const message = error.message.includes(".openclaw/tmp/")
+    ? error.message
+    : `${error.message}. Use a relative path under \`.openclaw/tmp/\` inside the workspace for output files that file tools need to read or write later.`;
+  const bindingHint =
+    hostWorkspace && isHostRootEscapeError(error) ? ` ${workspaceBindingHint(source)}` : "";
+  return new Error(`${message}${bindingHint}`, { cause: error });
+}
 
 const HINTS: Record<ApplyPatchContainmentSource, string> = {
   "required-root":
@@ -17,7 +63,7 @@ const HINTS: Record<ApplyPatchContainmentSource, string> = {
     "within the required root.",
   config:
     "apply_patch is workspace-contained by configuration. Both tools.exec.applyPatch.workspaceOnly " +
-    "(default true) and tools.fs.workspaceOnly impose this independently, so clearing one can leave " +
+    "and tools.fs.workspaceOnly impose this independently, so clearing one can leave " +
     "the other in force. tools.exec.mode does not affect it.",
   session:
     "apply_patch is workspace-contained by this session's permission mode. Only a full permission " +
@@ -25,15 +71,21 @@ const HINTS: Record<ApplyPatchContainmentSource, string> = {
 };
 
 /**
- * Name the control that contained this write, for the operator log only. Applies to host
- * workspace-root rejections; sandbox bridges enforce their own mount boundary, report it in
- * their own message, and are left untouched because host controls cannot lift a mount.
+ * Keep workspace binding guidance model-visible and permission controls operator-only.
+ * Container mounts cannot be rebound by selecting a host cwd.
  */
 export function withApplyPatchContainmentHint(
   error: unknown,
   source: ApplyPatchContainmentSource | undefined,
+  hostWorkspace: boolean,
 ): unknown {
-  return source && isHostRootEscapeError(error)
-    ? withToolOperatorHint(error, HINTS[source])
+  if (!isHostRootEscapeError(error)) {
+    return error;
+  }
+  const failure = hostWorkspace
+    ? markHostRootEscape(
+        new Error(`${error.message}. ${workspaceBindingHint(source)}`, { cause: error }),
+      )
     : error;
+  return source ? withToolOperatorHint(failure, HINTS[source]) : failure;
 }

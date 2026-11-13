@@ -1,8 +1,14 @@
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import {
+  captureAgent,
+  createTurnSequenceStream,
+  makeCall,
+} from "../../../../packages/agent-core/src/agent-loop.test-support.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { isEmbeddedMode, setEmbeddedMode } from "../../../infra/embedded-mode.js";
 import {
   EmbeddedPluginApprovalBroker,
@@ -22,20 +28,31 @@ import {
   testing as safeguardTesting,
 } from "../../agent-hooks/compaction-safeguard.test-support.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
+import { applyCodeModeCatalog } from "../../code-mode.js";
+import {
+  createCodeModeHarness,
+  jsonTool,
+  mcpTool,
+  resetCodeModeTestState,
+} from "../../code-mode.test-support.js";
 import type { AgentTool } from "../../runtime/index.js";
 import {
   agentSessionQueuePromptContext,
   agentSessionSetPromptPreparation,
 } from "../../sessions/agent-session-prompting.js";
 import type { AgentSession } from "../../sessions/index.js";
+import { SettingsManager } from "../../sessions/settings-manager.js";
+import { createWriteTool } from "../../sessions/tools/write.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import * as toolSearch from "../../tool-search.js";
+import { createWorkspaceCompactionConfig } from "../compaction-workspace-config.test-support.js";
 import {
   clearEmbeddedSessionPromptStates,
   retainEmbeddedSessionPromptState,
   prepareSessionSystemPrompt,
 } from "../session-prompt-state.js";
 import { withPromptFixture } from "./attempt-system-prompt.sandbox-info.test-support.js";
+import { isChatGPTV2CompactionEligible } from "./chatgpt-v2-compaction.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -60,12 +77,16 @@ vi.mock("../../../plugins/hook-runner-global.js", () => ({
 vi.mock("../../agent-project-settings.js", () => ({
   createPreparedEmbeddedAgentSettingsManager: hoisted.createPreparedEmbeddedAgentSettingsManager,
 }));
-// mock-isolation: Keep configuration policy outside the session assembly fixture.
-vi.mock("../../agent-settings.js", () => ({
-  applyAgentAutoCompactionGuard: hoisted.applyAgentAutoCompactionGuard,
-  isSilentOverflowProneModel: hoisted.isSilentOverflowProneModel,
-  resolveEffectiveCompactionMode: hoisted.resolveEffectiveCompactionMode,
-}));
+vi.mock("../../agent-settings.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agent-settings.js")>();
+  hoisted.applyAgentAutoCompactionGuard.mockImplementation(actual.applyAgentAutoCompactionGuard);
+  return {
+    ...actual,
+    applyAgentAutoCompactionGuard: hoisted.applyAgentAutoCompactionGuard,
+    isSilentOverflowProneModel: hoisted.isSilentOverflowProneModel,
+    resolveEffectiveCompactionMode: hoisted.resolveEffectiveCompactionMode,
+  };
+});
 vi.mock("../../agent-tool-definition-adapter.js", () => ({
   toToolDefinitions: hoisted.toToolDefinitions,
 }));
@@ -79,7 +100,6 @@ vi.mock("../../sessions/tools/tool-definition-wrapper.js", () => ({
 vi.mock("../extensions.js", () => ({
   buildEmbeddedExtensionFactories: hoisted.buildEmbeddedExtensionFactories,
 }));
-vi.mock("../logger.js", () => ({ log: { info: vi.fn() } }));
 vi.mock("../../sessions/resource-loader.js", () => ({
   DefaultResourceLoader: hoisted.DefaultResourceLoader,
 }));
@@ -94,6 +114,14 @@ vi.mock("./message-tool-terminal.js", async (importOriginal) => ({
 import { prepareEmbeddedAttemptAgentSession } from "./attempt-session-prepare.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionPreparationEvents = [
+  "resource-reload",
+  "stage:session-resource-loader",
+  "create-session",
+  "publish-session",
+  "publish-system-prompt",
+  "install-terminal-hook",
+];
 
 const attempt = {
   authStorage: { id: "auth" },
@@ -111,9 +139,12 @@ const attempt = {
   workspaceDir: "/workspace",
 } as unknown as EmbeddedRunAttemptParams;
 
-function createInput(options?: { terminalHookError?: Error }) {
+function createInput(options?: {
+  terminalHookError?: Error;
+  codeModeCatalogRef?: toolSearch.ToolSearchCatalogRef;
+}) {
   const events: string[] = [];
-  const settingsManager = { id: "settings", getCompactionEnabled: () => true };
+  const settingsManager = SettingsManager.inMemory();
   const resourceLoader = {
     reload: vi.fn(async () => {
       events.push("resource-reload");
@@ -200,6 +231,7 @@ function createInput(options?: { terminalHookError?: Error }) {
       clientToolPreparation: {
         codeModeControlsEnabledForRun: true,
         deferredDirectoryToolsCallable: false,
+        toolSearchCatalogRef: options?.codeModeCatalogRef,
       } as never,
       effectiveCwd: "/workspace",
       effectiveWorkspace: "/workspace",
@@ -232,14 +264,7 @@ function createSystemUpdateInput() {
   fixture.input.initialSystemPrompt = pinnedPrompt;
   fixture.input.onSystemPromptChanged = vi.fn();
   fixture.activeSession.agent.state.messages = [
-    {
-      role: "toolResult",
-      toolCallId: "read-1",
-      toolName: "read",
-      content: [{ type: "text", text: "Read complete." }],
-      isError: false,
-      timestamp: 1,
-    },
+    makeTextToolResult("read-1", "read", "Read complete.", false, 1),
   ];
   const steer = fixture.queuePromptContext;
   const promptStateLease = retainEmbeddedSessionPromptState("permission-system-updates");
@@ -283,6 +308,132 @@ afterEach(() => {
 });
 
 describe("prepareEmbeddedAttemptAgentSession", () => {
+  it("recovers a native hidden write through exec without executing or exposing it directly", async () => {
+    const harness = createCodeModeHarness();
+    const fixture = createInput({ codeModeCatalogRef: harness.catalogRef });
+    const workspace = tempDirs.make("code-mode-hidden-write-");
+    hoisted.getGlobalHookRunner.mockReturnValue(undefined);
+    const { wrapToolDefinition } = await vi.importActual<
+      typeof import("../../sessions/tools/tool-definition-wrapper.js")
+    >("../../sessions/tools/tool-definition-wrapper.js");
+    hoisted.wrapToolDefinition.mockImplementation(wrapToolDefinition);
+    const write = createWriteTool(workspace);
+    const execute = vi.spyOn(write, "execute");
+    const direct = {
+      ...jsonTool("computer", { observed: true }),
+      catalogMode: "direct-only" as const,
+    };
+    onTestFinished(async () => {
+      toolSearch.clearToolSearchCatalog(harness.ctx);
+      await resetCodeModeTestState();
+    });
+    const surface = applyCodeModeCatalog({
+      ...harness.ctx,
+      tools: [...harness.tools, write, direct],
+    });
+    await prepareEmbeddedAttemptAgentSession(fixture.input);
+    const input = { path: "result.txt", content: "written through the bridge\n" };
+    const { agent } = captureAgent(surface.tools, {
+      resolveDeferredTool: hoisted.createAgentSession.mock.calls[0]![0].resolveDeferredTool,
+      streamFn: createTurnSequenceStream(
+        [
+          [{ ...makeCall("write"), arguments: input }, makeCall("computer")],
+          [
+            {
+              ...makeCall("exec"),
+              arguments: {
+                code: "return await write(" + JSON.stringify(input) + ");",
+                awaitResults: true,
+              },
+            },
+          ],
+          [{ type: "text", text: "done" }],
+        ],
+        [],
+        (context, turn) => {
+          expect(context.tools?.map((tool) => tool.name)).toEqual(["exec", "wait", "computer"]);
+          if (turn === 2) {
+            expect(execute).not.toHaveBeenCalled();
+          }
+        },
+      ),
+    });
+    await agent.prompt("write the result");
+    const results = agent.state.messages.filter((message) => message.role === "toolResult");
+    expect(results[0]).toMatchObject({
+      isError: true,
+      content: [{ type: "text", text: expect.stringContaining("Use exec with JavaScript") }],
+    });
+    expect(results[1]).toMatchObject({ toolName: "computer", isError: false });
+    expect(results[2], JSON.stringify(results[2])).toMatchObject({
+      toolName: "exec",
+      isError: false,
+      details: { status: "completed", value: { changed: true, created: true } },
+    });
+    expect(execute).toHaveBeenCalledOnce();
+    expect(await readFile(join(workspace, "result.txt"), "utf8")).toBe(input.content);
+  });
+
+  it("limits Code Mode recovery hints to current catalog names, including collisions and MCP", async () => {
+    const harness = createCodeModeHarness();
+    const fixture = createInput({ codeModeCatalogRef: harness.catalogRef });
+    onTestFinished(() => toolSearch.clearToolSearchCatalog(harness.ctx));
+    const targets = [
+      jsonTool("llm-task", {}),
+      jsonTool("llm_task", {}),
+      mcpTool({ name: "mcp_remote_write", serverName: "remote", toolName: "write" }),
+      jsonTool("denied_write", {}),
+      jsonTool("policy_denied_write", {}),
+    ];
+    const surface = applyCodeModeCatalog({
+      ...harness.ctx,
+      config: {
+        tools: {
+          gatewayPolicy: { allow: ["llm-task", "llm_task", "mcp_remote_write", "denied_write"] },
+        },
+      },
+      tools: [...harness.tools, ...targets],
+    });
+    await prepareEmbeddedAttemptAgentSession(fixture.input);
+    // Permission refresh removes the previously registered tool, not just an invented unknown.
+    toolSearch.restrictToolSearchCatalog({
+      catalogRef: harness.catalogRef,
+      allowedToolNames: new Set(["llm-task", "llm_task", "mcp_remote_write"]),
+    });
+    const { agent } = captureAgent(
+      surface.tools,
+      {
+        resolveDeferredTool: hoisted.createAgentSession.mock.calls[0]![0].resolveDeferredTool,
+      },
+      [
+        [
+          "llm-task",
+          "llm_task",
+          "mcp_remote_write",
+          "denied_write",
+          "policy_denied_write",
+          "unknown_tool",
+        ].map((name) => makeCall(name)),
+        [{ type: "text", text: "done" }],
+      ],
+    );
+    await agent.prompt("inspect the available tools");
+    const results = agent.state.messages.filter((message) => message.role === "toolResult");
+    for (const result of results.slice(0, 3)) {
+      expect(result).toMatchObject({
+        isError: true,
+        content: [{ type: "text", text: expect.stringContaining("catalog.search") }],
+      });
+    }
+    expect(results.slice(3).map((result) => result.content)).toEqual([
+      [{ type: "text", text: "Tool denied_write not found" }],
+      [{ type: "text", text: "Tool policy_denied_write not found" }],
+      [{ type: "text", text: "Tool unknown_tool not found" }],
+    ]);
+    for (const target of targets) {
+      expect(target.execute).not.toHaveBeenCalled();
+    }
+  });
   it("keeps effective workspace rules in automatic compaction when the process and sandbox cwd differ", async () => {
     const fixture = createInput();
     const workspaceDir = tempDirs.make("openclaw-attempt-compaction-workspace-");
@@ -295,18 +446,7 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     fixture.input.attempt = {
       ...fixture.input.attempt,
       model: createAnthropicModelFixture(),
-      config: {
-        agents: {
-          defaults: {
-            compaction: {
-              mode: "safeguard",
-              postCompactionSections: ["Compaction fixture"],
-              recentTurnsPreserve: 0,
-              qualityGuard: { enabled: false },
-            },
-          },
-        },
-      },
+      config: createWorkspaceCompactionConfig(),
     };
     const { buildEmbeddedExtensionFactories } =
       await vi.importActual<typeof import("../extensions.js")>("../extensions.js");
@@ -507,63 +647,52 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     },
   );
 
-  it.each([true])(
-    "refreshes permission guidance with in-history updates %s",
-    async (inHistorySystemUpdates) => {
-      const { fixture, pinnedPrompt, steer, prepareSystemPromptUpdate, prepareNextRequest } =
-        createSystemUpdateInput();
-      const prepared = await prepareEmbeddedAttemptAgentSession({
-        ...fixture.input,
-        prepareSystemPromptUpdate: inHistorySystemUpdates ? prepareSystemPromptUpdate : undefined,
-      });
-      let currentPrompt = pinnedPrompt;
-      prepared.setPermissionPromptPreparation(async () => () => currentPrompt);
-      const signal = new AbortController().signal;
-      await prepareNextRequest(signal);
-      expect(steer).not.toHaveBeenCalled();
-      if (inHistorySystemUpdates) {
-        expect(prepareSystemPromptUpdate).toHaveBeenLastCalledWith(pinnedPrompt, false);
-      }
+  it("refreshes permission guidance with in-history updates", async () => {
+    const { fixture, pinnedPrompt, steer, prepareSystemPromptUpdate, prepareNextRequest } =
+      createSystemUpdateInput();
+    const prepared = await prepareEmbeddedAttemptAgentSession({
+      ...fixture.input,
+      prepareSystemPromptUpdate,
+    });
+    let currentPrompt = pinnedPrompt;
+    prepared.setPermissionPromptPreparation(async () => () => currentPrompt);
+    const signal = new AbortController().signal;
+    await prepareNextRequest(signal);
+    expect(steer).not.toHaveBeenCalled();
+    expect(prepareSystemPromptUpdate).toHaveBeenLastCalledWith(pinnedPrompt, false);
 
-      currentPrompt =
-        "## Tools\nread\n\n<!-- openclaw:attempt:PERMISSION -->\n## Permission change\nThe operator changed workspace permissions to read-only.\n<!-- /openclaw:attempt:PERMISSION -->";
-      prepared.setPermissionPromptPreparation(async () =>
-        Object.assign(() => currentPrompt, { freshlyRendered: true }),
-      );
-      await prepareNextRequest(signal);
-      expect(fixture.activeSession.agent.state.systemPrompt).toBe(
-        inHistorySystemUpdates ? pinnedPrompt : currentPrompt,
-      );
-      if (inHistorySystemUpdates) {
-        expect(prepareSystemPromptUpdate).toHaveBeenLastCalledWith(currentPrompt, true);
-        expect(steer).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({
-            role: "custom",
-            customType: "openclaw.system-update",
-            content: expect.stringContaining("## Tools\nread"),
-            details: { kind: "prompt-update", turnScoped: false },
-          }),
-        );
-        expect(steer.mock.calls[0]?.[0].content).toContain(
-          "## Permission change\nThe operator changed workspace permissions to read-only.",
-        );
-        await prepareNextRequest(signal);
-        expect(steer).toHaveBeenCalledTimes(1);
+    currentPrompt =
+      "## Tools\nread\n\n<!-- openclaw:attempt:PERMISSION -->\n## Permission change\nThe operator changed workspace permissions to read-only.\n<!-- /openclaw:attempt:PERMISSION -->";
+    prepared.setPermissionPromptPreparation(async () =>
+      Object.assign(() => currentPrompt, { freshlyRendered: true }),
+    );
+    await prepareNextRequest(signal);
+    expect(fixture.activeSession.agent.state.systemPrompt).toBe(pinnedPrompt);
+    expect(prepareSystemPromptUpdate).toHaveBeenLastCalledWith(currentPrompt, true);
+    expect(steer).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        role: "custom",
+        customType: "openclaw.system-update",
+        content: expect.stringContaining("## Tools\nread"),
+        details: { kind: "prompt-update", turnScoped: false },
+      }),
+    );
+    expect(steer.mock.calls[0]?.[0].content).toContain(
+      "## Permission change\nThe operator changed workspace permissions to read-only.",
+    );
+    await prepareNextRequest(signal);
+    expect(steer).toHaveBeenCalledTimes(1);
 
-        fixture.activeSession.agent.state.messages.push(
-          makeAgentAssistantMessage({
-            content: [{ type: "text", text: "Done." }],
-          }),
-        );
-        currentPrompt = "## Tools\nnone";
-        await fixture.activeSession.agent.prepareNextTurn?.(signal);
-        expect(fixture.activeSession.agent.state.systemPrompt).toBe(pinnedPrompt);
-        expect(steer).toHaveBeenCalledTimes(1);
-      } else {
-        expect(steer).not.toHaveBeenCalled();
-      }
-    },
-  );
+    fixture.activeSession.agent.state.messages.push(
+      makeAgentAssistantMessage({
+        content: [{ type: "text", text: "Done." }],
+      }),
+    );
+    currentPrompt = "## Tools\nnone";
+    await fixture.activeSession.agent.prepareNextTurn?.(signal);
+    expect(fixture.activeSession.agent.state.systemPrompt).toBe(pinnedPrompt);
+    expect(steer).toHaveBeenCalledTimes(1);
+  });
 
   it("keeps an initial update pending until replay admission succeeds", async () => {
     const { fixture, pinnedPrompt, steer, state, prepareSystemPromptUpdate } =
@@ -684,24 +813,29 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     expect(fixture.activeSession.agent.state.systemPrompt).toBe(snapshot?.context?.systemPrompt);
   });
 
-  it("prepares resources and publishes the activated session runtime", async () => {
+  it.each([false, true])("prepares resources with compaction forbidden=%s", async (forbidden) => {
     const fixture = createInput();
+    fixture.input.attempt = { ...fixture.input.attempt, compactionForbidden: forbidden };
+    hoisted.resolveEffectiveCompactionMode.mockReturnValue("default");
     fixture.input.initialSystemPrompt = "  system prompt\n";
-    fixture.input.onSystemPromptChanged = vi.fn(() => {
-      fixture.events.push("publish-system-prompt");
-    });
+    fixture.input.onSystemPromptChanged = vi.fn(() => fixture.events.push("publish-system-prompt"));
 
     const result = await prepareEmbeddedAttemptAgentSession(fixture.input);
 
-    expect(fixture.events).toEqual([
-      "resource-reload",
-      "stage:session-resource-loader",
-      "create-session",
-      "publish-session",
-      "publish-system-prompt",
-      "install-terminal-hook",
-      "stage:agent-session",
-    ]);
+    expect(fixture.settingsManager.getCompactionEnabled()).toBe(!forbidden);
+    expect(
+      isChatGPTV2CompactionEligible({
+        model: {
+          api: "openai-chatgpt-responses",
+          provider: "openai",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+        },
+        extraParams: {},
+        compactionEnabled: result.compactionEnabled,
+        compactionReplayEnabled: true,
+      }),
+    ).toBe(!forbidden);
+    expect(fixture.events).toEqual([...sessionPreparationEvents, "stage:agent-session"]);
     expect(hoisted.applyAgentAutoCompactionGuard).toHaveBeenCalledOnce();
     const sessionCall = hoisted.createAgentSession.mock.calls[0];
     expect(sessionCall?.[0]).toMatchObject({ resourceLoader: fixture.resourceLoader });
@@ -713,15 +847,13 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     expect(fixture.activeSession.agent.state.systemPrompt).toBe("system prompt");
     expect(fixture.input.onSystemPromptChanged).toHaveBeenCalledWith("  system prompt\n");
     expect(sessionCall?.[0]).toMatchObject({ tools: fixture.sessionToolAllowlist });
-    expect(result).toEqual(
-      expect.objectContaining({
-        activeSession: fixture.activeSession,
-        allCustomTools: fixture.allCustomTools,
-        hookRunner: fixture.hookRunner,
-        settingsManager: fixture.settingsManager,
-        ...fixture.clientToolRuntime,
-      }),
-    );
+    expect(result).toMatchObject({
+      activeSession: fixture.activeSession,
+      allCustomTools: fixture.allCustomTools,
+      hookRunner: fixture.hookRunner,
+      settingsManager: fixture.settingsManager,
+      ...fixture.clientToolRuntime,
+    });
     expect(result.hasDeliveredSourceReply()).toBe(false);
     fixture.onDeliveredSourceReply();
     expect(result.hasDeliveredSourceReply()).toBe(true);
@@ -901,13 +1033,6 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
       "terminal hook failed",
     );
 
-    expect(fixture.events).toEqual([
-      "resource-reload",
-      "stage:session-resource-loader",
-      "create-session",
-      "publish-session",
-      "publish-system-prompt",
-      "install-terminal-hook",
-    ]);
+    expect(fixture.events).toEqual(sessionPreparationEvents);
   });
 });

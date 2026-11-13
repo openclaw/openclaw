@@ -1,13 +1,13 @@
 import fs from "node:fs";
 import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
-import { captureClawInstallSchemaVersionFacts } from "../claws/provenance-runtime-read.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildModelsListResult } from "../gateway/server-methods/models-list-result.js";
 import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { WorkerTaskPool } from "../infra/worker-task-pool.js";
+import { captureTemplateInstallSchemaVersionFacts } from "../templates/provenance-runtime-read.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -17,9 +17,11 @@ import {
   createApiKeyCredential,
   createAuthProfileStoreFixture,
 } from "./auth-profiles/credential-fixtures.test-support.js";
+import { catalogProvider } from "./clawrouter-catalog.test-support.js";
 import { isCodeModeEngagedForModel, resolveCodeModeConfig } from "./code-mode-runtime.js";
 import { resolveBundledStaticCatalogModel } from "./embedded-agent-runner/model.static-catalog.js";
 import { createModelCatalogDecisions } from "./model-catalog-decisions.js";
+import { prepareModelCatalogWorkerContext } from "./prepared-model-catalog-fingerprints.js";
 import { createPreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.js";
 import type {
   PreparedModelCatalogWorkerTask,
@@ -131,37 +133,7 @@ describe("ClawRouter cold prepared catalog", () => {
     const prepared = await prepareWorkspaceBuildGroup([input], "static", {
       preferBuiltPluginArtifacts: true,
     });
-    const metadata = prepared.pluginGeneration.pluginMetadataSnapshot;
-    // The local catalog server stands in for the provider-owned endpoint. Match the
-    // fixture's manifest route to that endpoint without relaxing production policy.
-    const withLocalEndpoint = (plugin: (typeof metadata.plugins)[number]) => {
-      const catalog = plugin.modelCatalog;
-      const provider = catalog?.providers?.clawrouter;
-      if (plugin.id !== "clawrouter" || !catalog || !provider) {
-        return plugin;
-      }
-      return {
-        ...plugin,
-        modelCatalog: {
-          ...catalog,
-          providers: {
-            ...catalog.providers,
-            clawrouter: { ...provider, baseUrl },
-          },
-        },
-      };
-    };
-    const pluginMetadataSnapshot = {
-      ...metadata,
-      plugins: metadata.plugins.map(withLocalEndpoint),
-      manifestRegistry: {
-        ...metadata.manifestRegistry,
-        plugins: metadata.manifestRegistry.plugins.map(withLocalEndpoint),
-      },
-      byPluginId: new Map(
-        [...metadata.byPluginId].map(([id, plugin]) => [id, withLocalEndpoint(plugin)]),
-      ),
-    };
+    const pluginMetadataSnapshot = prepared.pluginGeneration.pluginMetadataSnapshot;
     expect(pluginMetadataSnapshot.byPluginId.get("clawrouter")).toMatchObject({
       modelCatalog: { discovery: { clawrouter: "runtime" }, runtimeAugment: true },
     });
@@ -192,11 +164,14 @@ describe("ClawRouter cold prepared catalog", () => {
     });
     const result = await pool.run(
       {
+        context: prepareModelCatalogWorkerContext(value),
         value,
         request: {
           kind: "catalog",
           syntheticAuth: [],
-          clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env: state.env }),
+          templateInstallSchemaVersions: captureTemplateInstallSchemaVersionFacts({
+            env: state.env,
+          }),
         },
       },
       { timeoutMs: 30_000 },
@@ -257,6 +232,9 @@ describe("ClawRouter cold prepared catalog", () => {
         baseUrl: `${baseUrl}/v1`,
       }),
     );
+    expect(result.runtimeModels.get("clawrouter")?.map((model) => model.id)).toEqual([
+      "codex-latest",
+    ]);
     const projector = createModelCatalogDecisions({
       cfg: config,
       agentId,
@@ -288,23 +266,12 @@ describe("ClawRouter cold prepared catalog", () => {
   });
 
   it("publishes native Code Mode and sampling facts on routed rows without enabling those plugins", async () => {
-    const routedProvider = (id: string, upstreams: string[], capabilities: string[]) => ({
-      id,
-      displayName: id,
-      openaiCompatible: id === "openai",
-      nativeBaseUrl: `/v1/native/${id}`,
-      routes:
-        id === "anthropic"
-          ? [{ path: "/v1/messages", requestFormat: "anthropic.messages", methods: ["POST"] }]
-          : [],
-      models: upstreams.map((upstream) => ({ id: `${id}/${upstream}`, upstream, capabilities })),
-    });
     const { agentId, config, pluginMetadataSnapshot, result } = await publishCatalog({
       sibling: false,
       refreshedAuth: false,
       catalogProviders: [
-        routedProvider("openai", ["gpt-6.1-sol", "gpt-6-unknown"], ["llm.responses"]),
-        routedProvider("anthropic", ["claude-opus-5-5", "claude-haiku-4-5"], ["llm.messages"]),
+        catalogProvider("openai", ["gpt-6.1-sol", "gpt-6-unknown"], ["llm.responses"]),
+        catalogProvider("anthropic", ["claude-opus-5-5", "claude-haiku-4-5"], ["llm.messages"]),
       ],
     });
     // Only ClawRouter is enabled: the native rows are manifest facts, not activated plugins.

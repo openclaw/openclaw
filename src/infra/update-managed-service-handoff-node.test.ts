@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { CLI_PARENT_BOUND_PRELOAD } from "../../cli-parent-lifetime.mjs";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as runtimePaths from "../daemon/runtime-paths.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
@@ -47,23 +48,38 @@ describe("managed handoff Node selection", () => {
     ]);
   });
 
-  it.each(["node", "bun"])(
-    "keeps %s runtime flags outside foreground CLI respawn policy",
-    (runtime) => {
-      const execPath = path.resolve("fixture", runtime);
-      const argv1 = path.resolve("fixture", "openclaw.mjs");
-      const command = resolveManagedServiceCliArgv({ execPath, argv1 }, ["gateway", "run"]);
-      const prepared = prepareManagedHandoffCliRuntime(command, {}, execPath);
-      expect(prepared).toEqual({ nodeExecArgv: [], readyEnv: {} });
-      expect(command).toEqual([
-        execPath,
-        ...(runtime === "bun" ? ["--no-install"] : []),
-        argv1,
-        "gateway",
-        "run",
-      ]);
-    },
-  );
+  it.each([
+    ["node", true],
+    ["bun", true],
+    ["node", false],
+  ] as const)("prepares %s handoffs with foreground=%s", (runtime, foreground) => {
+    const execPath = path.resolve("fixture", runtime);
+    const argv1 = path.resolve("fixture", "openclaw.mjs");
+    const env = { NODE_EXTRA_CA_CERTS: "/fixture/ca.pem" };
+    const expectedCommand = [
+      execPath,
+      ...(runtime === "bun" ? ["--no-install"] : []),
+      argv1,
+      ...(foreground ? ["gateway", "run"] : ["doctor"]),
+    ];
+    const command = [...expectedCommand];
+    expect(prepareManagedHandoffCliRuntime(command, env, execPath)).toEqual({
+      nodeExecArgv: foreground
+        ? []
+        : [
+            "--import",
+            CLI_PARENT_BOUND_PRELOAD,
+            process.platform === "win32"
+              ? "--stack-size=8192"
+              : "--disable-warning=ExperimentalWarning",
+          ],
+      readyEnv: {
+        ...env,
+        ...(foreground || process.platform === "win32" ? {} : { OPENCLAW_NODE_OPTIONS_READY: "1" }),
+      },
+    });
+    expect(command).toEqual(expectedCommand);
+  });
 
   it.runIf(process.platform !== "win32")(
     "skips an unusable PATH Node and launches a compatible replacement",
@@ -79,8 +95,6 @@ describe("managed handoff Node selection", () => {
       const replacement = path.join(goodDir, "node");
       await fs.symlink(nodeExecPath, replacement);
       const removed = path.join(root, "removed-node");
-      await fs.symlink(originalExecPath, removed);
-      await fs.unlink(removed);
       const systemProbe = vi.spyOn(runtimePaths, "resolveSystemNodeInfo").mockResolvedValue(null);
       process.execPath = removed;
       try {

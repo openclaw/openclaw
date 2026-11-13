@@ -58,11 +58,6 @@ type BreakResult = {
   fenceSplit?: FenceSplit;
 };
 
-type ParagraphBreak = {
-  index: number;
-  length: number;
-};
-
 export type BlockChunkMetadata = {
   sourceText: string;
   sourceGeneration: number;
@@ -258,6 +253,16 @@ export class EmbeddedBlockChunker {
       maxChars: chunking?.maxChars ?? Infinity,
       hardMaxChars: chunking?.hardMaxChars,
     });
+    const sourceBoundaryLength = (value: string, start: number) =>
+      value.slice(start).match(/^(?:\n[\t ]*)+/)?.[0].length ?? 0;
+    const nextTextStart = (value: string, start: number) => {
+      const length = sourceBoundaryLength(value, start);
+      // A standalone whitespace message is not deliverable; retain separators
+      // with the next content whenever they fit within the transport cap.
+      return (params.force && start + length === value.length) || length >= maxChars
+        ? start + length
+        : start;
+    };
     this.#tableHeader = resolveTableContinuation(
       this.#tableHeader,
       this.#buffer,
@@ -352,7 +357,14 @@ export class EmbeddedBlockChunker {
       removedFenceInfoLength += removedLength;
     }
     const tables = findTableSpans(source, fenceSpans, maxChars, !force);
-    const unbreakableSpans = scanUnbreakableSpans(source, fenceSpans, hardMaxChars);
+    const unbreakableSpans = scanUnbreakableSpans(source, fenceSpans, hardMaxChars).map((span) => {
+      const boundary = source.slice(0, span.start).match(/(?:\n[\t ]*)+$/)?.[0] ?? "";
+      // Keep a fitting link's paragraph boundary in the delivered text, not just
+      // its source metadata, when link protection moves the preferred cut.
+      return boundary && span.end - span.start + boundary.length <= hardMaxChars
+        ? { ...span, start: span.start - boundary.length }
+        : span;
+    });
     const unsafe =
       tables.length > 0 || unbreakableSpans.length > 0
         ? mergeOverlappingBreakSpans([...fenceSpans, ...tables, ...unbreakableSpans])
@@ -404,12 +416,9 @@ export class EmbeddedBlockChunker {
       if (chunking.flushOnParagraph && !force) {
         const paragraphBreak = findNextParagraphBreak(source, fenceSpans, start, minChars);
         const paragraphLimit = Math.max(1, maxChars - reopenPrefix.length);
-        if (paragraphBreak && paragraphBreak.index - start <= paragraphLimit) {
-          const chunk = `${reopenPrefix}${source.slice(start, paragraphBreak.index)}`;
-          const nextStart = skipLeadingNewlines(
-            source,
-            paragraphBreak.index + paragraphBreak.length,
-          );
+        if (paragraphBreak !== null && paragraphBreak - start <= paragraphLimit) {
+          const chunk = `${reopenPrefix}${source.slice(start, paragraphBreak)}`;
+          const nextStart = nextTextStart(source, paragraphBreak);
           if (chunk.trim().length > 0) {
             emitSourceChunk(chunk, start, nextStart, committedStart);
             committedStart = nextStart;
@@ -427,6 +436,15 @@ export class EmbeddedBlockChunker {
       }
 
       const view = source.slice(start);
+      const boundaryLength = sourceBoundaryLength(source, start);
+      if (boundaryLength === view.length) {
+        break;
+      }
+      if (boundaryLength >= maxChars - reopenPrefix.length) {
+        start += boundaryLength;
+        continue;
+      }
+      const minBreak = Math.max(force ? 1 : minChars, boundaryLength + 1);
       const breakResult =
         force && remainingLength <= maxChars && !openFence
           ? this.#pickPreferredBreakIndex(
@@ -436,7 +454,7 @@ export class EmbeddedBlockChunker {
               chunking,
               true,
               false,
-              1,
+              minBreak,
               start,
               openFence,
             )
@@ -447,7 +465,7 @@ export class EmbeddedBlockChunker {
               unbreakableSpans,
               chunking,
               force,
-              force ? 1 : undefined,
+              minBreak,
               start,
               maxChars - reopenPrefix.length,
               hardMaxChars - reopenPrefix.length,
@@ -493,6 +511,7 @@ export class EmbeddedBlockChunker {
       let nextStart = cut;
       let chunk = `${reopenPrefix}${source.slice(start, nextStart)}`;
       let nextReopenFence: FenceSplit | undefined;
+      let nextTableHeader = "";
       const fenceSplit = breakResult.fenceSplit;
       if (chunk.trim().length === 0) {
         chunk = "";
@@ -509,14 +528,32 @@ export class EmbeddedBlockChunker {
           nextReopenFence = fenceSplit;
         }
       } else {
-        if (nextStart < source.length && /\s/.test(source.charAt(nextStart))) {
+        if (nextStart < source.length && /[^\S\n]/.test(source.charAt(nextStart))) {
           nextStart += 1;
         }
-        nextStart = skipLeadingNewlines(source, nextStart);
+        const rowStart = skipLeadingNewlines(source, nextStart);
+        nextTableHeader = findTableContinuationHeader(source, cut, rowStart, tables, !force);
+        // The repeated table header already supplies the continued row's line break.
+        if (rowStart > cut && tables.some((table) => table.start === rowStart)) {
+          // Keep a table's full row budget by attaching its separator to the
+          // preceding prose, rather than moving the table's first row inward.
+          const separator = source.slice(cut, rowStart);
+          if (chunk.length + separator.length <= maxChars) {
+            chunk += separator;
+          }
+          nextStart = rowStart;
+        } else {
+          nextStart = nextTableHeader ? rowStart : nextTextStart(source, nextStart);
+        }
+        const trailingBoundary = source.slice(cut, nextStart);
+        if (
+          nextStart === source.length &&
+          /^\n[\t \n]*$/.test(trailingBoundary) &&
+          chunk.length + trailingBoundary.length <= maxChars
+        ) {
+          chunk += trailingBoundary;
+        }
       }
-      const nextTableHeader = fenceSplit
-        ? ""
-        : findTableContinuationHeader(source, cut, nextStart, tables, !force);
       if (chunk) {
         emitSourceChunk(chunk, start, nextStart, committedStart);
         committedStart = nextStart;
@@ -540,8 +577,8 @@ export class EmbeddedBlockChunker {
     start = committedStart;
     reopenFence = committedReopenFence;
     tableHeader = committedTableHeader;
-    if (force && !reopenFence) {
-      start = skipLeadingNewlines(source, start);
+    if (params.force && !reopenFence) {
+      start = nextTextStart(source, start);
     }
     if (start === 0) {
       return;
@@ -771,7 +808,7 @@ function findNextParagraphBreak(
   fenceSpans: FenceSpan[],
   startIndex = 0,
   minCharsFromStart = 1,
-): ParagraphBreak | null {
+): number | null {
   const re = /\n[\t ]*\n+/g;
   re.lastIndex = startIndex;
   let match: RegExpExecArray | null;
@@ -785,7 +822,7 @@ function findNextParagraphBreak(
       re.lastIndex = fence.end;
       continue;
     }
-    return { index, length: match[0].length };
+    return index;
   }
   return null;
 }

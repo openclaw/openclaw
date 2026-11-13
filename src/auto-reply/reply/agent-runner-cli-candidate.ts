@@ -9,15 +9,19 @@ import {
   settleCliSessionResult,
 } from "../../agents/cli-session-store.js";
 import { shouldClearFailedCliSessionBinding } from "../../agents/cli-session.js";
-import { resolveDelegationCapability } from "../../agents/delegation-capability.js";
+import {
+  isFallbackAttempt,
+  resolveDelegationCapability,
+} from "../../agents/delegation-capability.js";
 import { withAdmittedCliCandidate } from "../../agents/embedded-agent-runner/run-entry-cli.js";
-import type { CompactionAccountingTarget } from "../../agents/embedded-agent-runner/run/internal-params.js";
+import type { CompactionAccountingFact } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../../agents/media-generation-activity.js";
-import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
-import { recordModelFallbackStop } from "../../agents/model-fallback-stop.js";
+import { resolveCyberAccessProgramForProvider } from "../../agents/model-catalog-access-programs.js";
+import { findModelByNativeAlias, findModelInCatalog } from "../../agents/model-catalog-lookup.js";
+import { createUnrecordedScheduledAccountRefusal } from "../../agents/scheduled-unrecorded-account.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
@@ -39,6 +43,11 @@ import {
 } from "./agent-runner-run-params.js";
 import { buildReplyRouteThreadingToolContext } from "./agent-runner-utils.js";
 import { prepareCliReplyPayload } from "./cli-reply-payload.js";
+import {
+  createCompactionNoticePayload,
+  deliverCompactionNoticePayload,
+  shouldNotifyUserAboutCompaction,
+} from "./compaction-notice.js";
 import { shouldBridgeCliPreambleEvents } from "./get-reply.types.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
@@ -49,9 +58,18 @@ export async function runCliFallbackCandidate(
   params: AgentFallbackCandidateCommonParams & {
     cliExecutionProvider: string;
     lifecycleGeneration: string;
-    onSessionWriter: (writer: CompactionAccountingTarget) => void;
+    onCompactionAccounting: (fact: CompactionAccountingFact) => void;
   },
 ): ReturnType<typeof runCliAgentWithLifecycle> {
+  const accessProgram = resolveCyberAccessProgramForProvider(
+    params.candidateRun.cyberAccessProgram,
+    params.provider,
+  ).program;
+  if (accessProgram !== undefined && accessProgram !== "standard") {
+    throw new Error(
+      "Daybreak access is unsupported by this CLI runtime. Select Standard or use the OpenClaw or native Codex runtime.",
+    );
+  }
   const turn = params.turn;
   params.scheduledInference?.assertCandidate(params.provider, true);
   const onPreparedBlockReply = turn.opts?.onPreparedBlockReply;
@@ -60,12 +78,29 @@ export async function runCliFallbackCandidate(
     (onPreparedBlockReply
       ? (payload, context) => deliverPreparedBlockReply({ onPreparedBlockReply }, payload, context)
       : undefined);
+  const sendCompactionNotice = async (phase: "start" | "end" | "incomplete") => {
+    if (!shouldNotifyUserAboutCompaction(params.runtimeConfig)) {
+      return;
+    }
+    await deliverCompactionNoticePayload(
+      createCompactionNoticePayload({
+        phase,
+        currentMessageId: turn.sessionCtx.MessageSidFull ?? turn.sessionCtx.MessageSid,
+        applyReplyToMode: turn.applyReplyToMode,
+      }),
+      turn.opts?.onBlockReply ?? turn.onCompactionNoticePayload,
+      phase,
+    );
+  };
   const expectedLifecycleRevision = turn.getActiveSessionEntry()?.lifecycleRevision;
-  const selectedModelEntry = findModelInCatalog(
+  const nativeAliasEntry = findModelByNativeAlias(
     params.candidateRun.thinkingCatalog ?? [],
-    params.provider,
+    params.cliExecutionProvider,
     params.model,
   );
+  const selectedModelEntry =
+    findModelInCatalog(params.candidateRun.thinkingCatalog ?? [], params.provider, params.model) ??
+    nativeAliasEntry;
   const modelHasVision = await resolveRunModelHasVision({
     run: params.candidateRun,
     provider: params.provider,
@@ -179,12 +214,14 @@ export async function runCliFallbackCandidate(
         readMode: "read-only",
         getSessionEntry: () => turn.getActiveSessionEntry(),
         classifyResult: params.classifyResult,
+        onCompactionAccounting: params.onCompactionAccounting,
       },
       async ({
         sessionEntry: initialSessionEntry,
         cliSessionBinding,
         assertSettlementCurrent,
         settleResult,
+        persistStoppedFirstSession,
       }) => {
         let sessionEntry = initialSessionEntry;
         const clearCliBinding = () =>
@@ -200,22 +237,8 @@ export async function runCliFallbackCandidate(
             activeSessionEntry: sessionEntry,
           });
         const scheduledInference = params.scheduledInference;
-        // The CLI owner must see explicit pins before provider scoping can discard them.
-        // A recorded account runs only when this backend forwards exactly that account.
-        const authProfileId = scheduledInference
-          ? await scheduledInference.resolveCliAuthProfile(async (selected) =>
-              allowCliAuthProfileForwarding
-                ? await resolveCliExecutionAuthProfileId({
-                    cliExecutionProvider: params.cliExecutionProvider,
-                    authProfileProvider: params.provider,
-                    config: params.runtimeConfig,
-                    agentDir: params.candidateRun.agentDir,
-                    selected,
-                    sessionBinding: cliSessionBinding,
-                  })
-                : undefined,
-            )
-          : allowCliAuthProfileForwarding
+        const resolveLiveProfile = async () =>
+          allowCliAuthProfileForwarding
             ? await resolveCliExecutionAuthProfileId({
                 cliExecutionProvider: params.cliExecutionProvider,
                 authProfileProvider: params.provider,
@@ -227,12 +250,44 @@ export async function runCliFallbackCandidate(
             : resolveRunAuthProfile(params.candidateRun, params.cliExecutionProvider, {
                 config: params.runtimeConfig,
               }).authProfileId;
+        // The CLI owner must see explicit pins before provider scoping can discard them.
+        // The recorded provider runs only when this backend forwards exactly its account;
+        // other providers select their account live.
+        const authProfileId = scheduledInference
+          ? await scheduledInference.resolveCliAuthProfile(
+              params.provider,
+              async (selected) =>
+                allowCliAuthProfileForwarding
+                  ? await resolveCliExecutionAuthProfileId({
+                      cliExecutionProvider: params.cliExecutionProvider,
+                      authProfileProvider: params.provider,
+                      config: params.runtimeConfig,
+                      agentDir: params.candidateRun.agentDir,
+                      selected,
+                      sessionBinding: cliSessionBinding,
+                    })
+                  : undefined,
+              // The run's selected profile is the recorded account on its own provider; another
+              // provider's CLI backend selects its account without it.
+              async () =>
+                allowCliAuthProfileForwarding
+                  ? await resolveCliExecutionAuthProfileId({
+                      cliExecutionProvider: params.cliExecutionProvider,
+                      authProfileProvider: params.provider,
+                      config: params.runtimeConfig,
+                      agentDir: params.candidateRun.agentDir,
+                      selected: undefined,
+                      sessionBinding: cliSessionBinding,
+                    })
+                  : undefined,
+            )
+          : await resolveLiveProfile();
         if (turn.followupRun.run.scheduledAutomation && !scheduledInference && authProfileId) {
-          const refusal = new Error(
-            "Automation has no recorded inference account. Explicitly select its account with a model@profile update before running it.",
-          );
-          recordModelFallbackStop(refusal);
-          throw refusal;
+          throw createUnrecordedScheduledAccountRefusal({
+            runtime: params.cliExecutionProvider,
+            modelRef: `${params.provider}/${params.model}`,
+            profileId: authProfileId,
+          });
         }
         const diagnosticOwner = params.deferredLifecycle.handoffToCli();
         // A forked child carries the parent's binding with a one-shot fork marker;
@@ -303,8 +358,14 @@ export async function runCliFallbackCandidate(
           onReasoningText: createCliReasoningStreamBridge(turn.opts?.onReasoningStream),
           onPlanUpdate: turn.opts?.onPlanUpdate,
           onReasoningProgress: (payload) => turn.opts?.onReasoningProgress?.(payload),
-          onCompactionStart: turn.opts?.onCompactionStart,
-          onCompactionEnd: turn.opts?.onCompactionEnd,
+          onCompactionStart: async () => {
+            await turn.opts?.onCompactionStart?.();
+            await sendCompactionNotice("start");
+          },
+          onCompactionEnd: async (event) => {
+            await turn.opts?.onCompactionEnd?.(event);
+            await sendCompactionNotice(event?.completed === true ? "end" : "incomplete");
+          },
           onToolEvent: async (payload) => {
             const summaryPromise = cliToolSummaryTracker.noteToolEvent(payload);
             if (payload.phase === "result") {
@@ -393,38 +454,7 @@ export async function runCliFallbackCandidate(
             agentId: turn.followupRun.run.agentId,
             jobId: turn.followupRun.run.scheduledAutomation?.job.id,
             onExecutionStarted: turn.followupRun.run.scheduledAutomation
-              ? async () => {
-                  try {
-                    await turn.followupRun.run.internalEventExecution?.beforeScheduledStart?.(
-                      params.runId,
-                    );
-                    params.runAbortSignal?.throwIfAborted();
-                    turn.followupRun.run.internalEventExecution?.assertCurrent?.();
-                    const automation = turn.followupRun.run.scheduledAutomation;
-                    if (automation && sessionKey) {
-                      automation.onExecutionStarted?.({
-                        runId: params.runId,
-                        sessionId: turn.followupRun.run.sessionId,
-                        sessionKey,
-                        provider: params.provider,
-                        model: params.model,
-                        ...(params.isFallbackRetry ? { isFallback: true } : {}),
-                      });
-                    }
-                  } catch (error) {
-                    if (!params.hasAgentRunStarted()) {
-                      lifecycleBackstop.note({
-                        stream: "lifecycle",
-                        data: {
-                          phase: "finishing",
-                          executionStarted: false,
-                          providerStarted: false,
-                        },
-                      });
-                    }
-                    throw error;
-                  }
-                }
+              ? () => params.notifyScheduledExecutionStarted(lifecycleBackstop, () => sessionKey)
               : undefined,
             scheduledToolPolicy: resolveReplyScheduledToolPolicy(turn.followupRun.run),
             config: params.runtimeConfig,
@@ -432,12 +462,11 @@ export async function runCliFallbackCandidate(
               turn.followupRun.currentInboundEventKind !== "room_event" &&
               turn.followupRun.run.suppressTranscriptOnlyAssistantPersistence !== true,
             storePath: turn.storePath,
-            // Candidate zero is the primary attempt; later candidates are
-            // fallbacks. Carry the runner-owned fact instead of inferring from
-            // this shared dispatch path, or primary CLI runs lose delegation.
+            // Carry the runner-owned facts instead of inferring from this shared
+            // dispatch path, or primary CLI runs lose delegation.
             ...buildCliMcpDelegationCapabilityBinding(
               resolveDelegationCapability({
-                fallbackActive: params.isFallbackRetry,
+                fallbackActive: isFallbackAttempt(params),
                 inputProvenance: turn.followupRun.run.inputProvenance,
                 disableTools: turn.opts?.disableTools,
                 toolsAllow: turn.opts?.toolsAllow,
@@ -447,6 +476,7 @@ export async function runCliFallbackCandidate(
             requesterModel: { provider: params.provider, model: params.model },
             modelHasVision,
             modelContextWindow: selectedModelEntry?.contextWindow,
+            ...(nativeAliasEntry ? { nativeModelId: nativeAliasEntry.id } : {}),
             modelContextTokens: selectedModelEntry?.contextTokens,
             contextWindow: sessionEntry?.contextWindow,
             provider: params.cliExecutionProvider,
@@ -465,12 +495,26 @@ export async function runCliFallbackCandidate(
             cliSessionBinding,
             forkCliSessionOnResume,
             ...forkRunParams,
+            // Room events and preserved provenance never publish a new native session.
+            ...(turn.followupRun.currentInboundEventKind === "room_event" ||
+            shouldPreserveUserFacingSessionStateForInputProvenance(
+              turn.followupRun.run.inputProvenance,
+            )
+              ? {}
+              : {
+                  persistStoppedFirstCliSession: (binding) =>
+                    persistStoppedFirstSession({
+                      binding,
+                      expectedSession: sessionEntry,
+                      sessionStore: turn.activeSessionStore,
+                    }),
+                }),
             authProfileId,
             // The CLI owner rechecks this after awaits and before credential/transport effects.
             assertCurrent: scheduledInference
               ? () => {
                   assertSettlementCurrent();
-                  scheduledInference.runParams.authProfileBinding?.assertCurrent();
+                  scheduledInference.assertCurrent(params.provider);
                 }
               : undefined,
             nativeAuthOnly:
@@ -505,14 +549,6 @@ export async function runCliFallbackCandidate(
             onExecutionPhase: params.signalExecutionPhaseForTyping,
           },
         });
-        if (sessionTarget && sessionEntry) {
-          // History preparation publishes its committed writer into this candidate's detached row.
-          params.onSessionWriter({
-            ...sessionTarget,
-            lifecycleRevision: sessionEntry.lifecycleRevision,
-            activeWriterRunId: sessionEntry.activeWriterRunId,
-          });
-        }
         if (droppedCliSessionReplacement) {
           // The room-event transform removed native continuity; only its guarded
           // invalidation remains, and failure must retain the returned turn.

@@ -1,3 +1,4 @@
+import { normalizeModelFamily } from "@openclaw/model-catalog-core/model-catalog-types";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asPositiveSafeInteger as resolvePositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import type {
@@ -12,6 +13,21 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { supportsOpenAIResponsesFastMode } from "../../llm/providers/openai-fast-mode.js";
 import type { ProviderCatalogOutcome } from "../../plugins/provider-catalog.types.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
+
+// Private account provenance follows each projected row, not a shared provider/model key.
+// Weak ownership keeps its catalog lifetime without exposing account selection on the wire.
+const pinnedAccountChoices = new WeakSet<ModelChoice>();
+
+export function retainModelChoiceAccountPin(choice: ModelChoice, pinned: boolean): ModelChoice {
+  if (pinned) {
+    pinnedAccountChoices.add(choice);
+  }
+  return choice;
+}
+
+export function hasModelChoiceAccountPin(choice: ModelChoice): boolean {
+  return pinnedAccountChoices.has(choice);
+}
 
 /** Account observations are never model metadata donors or native-login readiness. */
 function resolveModelCatalogServiceTiers(params: {
@@ -115,14 +131,16 @@ export function buildPublicModelProjection(
 ): ModelChoice {
   const contextWindow = resolvePositiveSafeInteger(entry.contextWindow);
   const contextTokens = resolvePositiveSafeInteger(entry.contextTokens);
+  const family = normalizeModelFamily(entry.family);
   return {
     id: entry.id,
     name: entry.name,
     provider: entry.provider,
     ...(entry.alias ? { alias: entry.alias } : {}),
+    ...(family ? { family } : {}),
     ...(contextWindow ? { contextWindow } : {}),
     ...(contextTokens ? { contextTokens } : {}),
-    ...(options.includeDetails && entry.baseUrl ? { local: isLocalBaseUrl(entry.baseUrl) } : {}),
+    ...(entry.baseUrl ? { local: isLocalBaseUrl(entry.baseUrl) } : {}),
     ...(options.includeDetails && entry.input?.length ? { input: entry.input } : {}),
     ...(entry.contextWindows ? { contextWindows: entry.contextWindows } : {}),
     ...(entry.contextWindowDefault ? { contextWindowDefault: entry.contextWindowDefault } : {}),

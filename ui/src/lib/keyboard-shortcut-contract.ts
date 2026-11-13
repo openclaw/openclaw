@@ -68,7 +68,7 @@ export function formatKeyboardShortcutParts(
 ): string[] {
   const modifiers: Record<KeyboardShortcutModifier, string> = applePlatform
     ? { mod: "⌘", ctrl: "⌃", shift: "⇧", alt: "⌥" }
-    : { mod: "Ctrl", ctrl: "Ctrl", shift: "Shift", alt: "Alt" };
+    : { mod: "Ctrl", ctrl: "Ctrl", shift: "⇧", alt: "Alt" };
   const keys: Partial<Record<KeyboardShortcutKey, string>> = {
     Backquote: "`",
     Comma: ",",

@@ -1,6 +1,23 @@
 import { EventEmitter, once } from "node:events";
 import { vi } from "vitest";
 
+export type MockRoute = {
+  continue: () => Promise<void>;
+  fallback: () => Promise<void>;
+  fulfill: (response: { status: number; body: string }) => Promise<void>;
+  abort: () => Promise<void>;
+};
+
+export function createMockRoute(route?: Partial<MockRoute>): MockRoute {
+  return {
+    continue: vi.fn(async () => {}),
+    fallback: vi.fn(async () => {}),
+    fulfill: vi.fn(async () => {}),
+    abort: vi.fn(async () => {}),
+    ...route,
+  };
+}
+
 export function fileChooserPage() {
   const events = new EventEmitter();
   const fileChooser = {

@@ -17,6 +17,7 @@ import {
   seedTranscriptRows,
 } from "./server.sessions.compaction-fixtures.test-support.js";
 import { embeddedRunMock } from "./test-helpers.js";
+import { createCompactionResult } from "./test-helpers.runtime-state.js";
 import {
   directSessionReq,
   expectNoSessionQueueCleanup,
@@ -35,11 +36,7 @@ vi.mock("../agents/embedded-agent-runner/compact.foreground-work.js", async (imp
 const { createSessionStoreDir } = setupGatewaySessionsTestHarness();
 
 afterEach(() => vi.useRealTimers());
-const compactedResult = {
-  ok: true,
-  compacted: true,
-  result: { summary: "summary", firstKeptEntryId: "entry-1", tokensBefore: 120, tokensAfter: 80 },
-};
+const compactedResult = createCompactionResult();
 
 async function createCompactionSession(sessionId: string) {
   const sessionKey = "agent:main:main";
@@ -168,7 +165,7 @@ test("sessions.compact responds after an idle session compacts under its own con
     return compactedResult;
   });
   // Loaded after the harness installs its runtime mocks, which a static import would precede.
-  const { compactEmbeddedAgentSession } =
+  const { compactQueuedEmbeddedAgentSession: compactEmbeddedAgentSession } =
     await import("../agents/embedded-agent-runner/compact.queued.js");
   embeddedRunMock.compactEmbeddedAgentSession.mockImplementationOnce((...args) =>
     compactEmbeddedAgentSession(...(args as Parameters<typeof compactEmbeddedAgentSession>)),

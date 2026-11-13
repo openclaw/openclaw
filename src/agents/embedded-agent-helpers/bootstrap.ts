@@ -38,7 +38,7 @@ function isBase64Signature(value: string): boolean {
       return false;
     }
     const encoded = buf.toString(isUrl ? "base64url" : "base64");
-    const normalize = (input: string) => input.replace(/=+$/g, "");
+    const normalize = (input: string) => input.replace(/[=]+$/g, "");
     return normalize(encoded) === normalize(compact);
   } catch {
     return false;
@@ -122,11 +122,6 @@ const warnedBootstrapTruncations = new Set<string>();
 
 type PolicyDigestCandidate = { text: string; highPriority: boolean };
 
-type PolicyDigest = {
-  text: string;
-  omittedLines: number;
-};
-
 function resolveBootstrapCharLimit(
   cfg: OpenClawConfig | undefined,
   agentId: string | null | undefined,
@@ -174,10 +169,7 @@ function normalizePolicyDigestLine(line: string): string {
   return `${truncateUtf16Safe(normalized, AGENTS_POLICY_DIGEST_MAX_LINE_CHARS - 1)}…`;
 }
 
-function buildAgentsPolicyDigest(
-  candidates: readonly PolicyDigestCandidate[],
-  budget: number,
-): PolicyDigest {
+function buildAgentsPolicyDigest(candidates: readonly PolicyDigestCandidate[], budget: number) {
   if (budget <= 0) {
     return { text: "", omittedLines: 0 };
   }

@@ -27,6 +27,7 @@ const unavailableMentionsCapability = {
 
 const emptySidebarAttentionStore = {
   entries: [],
+  refreshOpenClawId: () => undefined,
   activate: () => unavailableMentionsCapability,
   dismiss: () => undefined,
   subscribe: () => () => undefined,
@@ -40,8 +41,10 @@ export function normalizeApplicationContext(value: ApplicationContext): Applicat
   return value;
 }
 
-export function createApplicationGateway(
-  initial: ApplicationGatewaySnapshot = {
+export function createApplicationGatewaySnapshot(
+  overrides: Partial<ApplicationGatewaySnapshot> = {},
+): ApplicationGatewaySnapshot {
+  return {
     client: null,
     phase: "stopped",
     offlineStable: false,
@@ -51,7 +54,12 @@ export function createApplicationGateway(
     sessionKey: "",
     lastError: null,
     lastErrorCode: null,
-  },
+    ...overrides,
+  };
+}
+
+export function createApplicationGateway(
+  initial: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot(),
 ) {
   let snapshot = initial;
   const listeners = new Set<(value: ApplicationGatewaySnapshot) => void>();
@@ -70,7 +78,7 @@ export function createApplicationGateway(
   return {
     gateway,
     publishEvent: (event: GatewayEventFrame) =>
-      eventListeners.forEach((listener) => listener(event)),
+      Array.from(eventListeners).forEach((listener) => listener(event)),
     publish(this: void, next: ApplicationGatewaySnapshot) {
       snapshot = next;
       listeners.forEach((listener) => listener(snapshot));

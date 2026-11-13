@@ -166,8 +166,8 @@ export function lightboxImageStyle(image: ImageLightboxItem | undefined) {
     typeof height === "number" &&
     Number.isFinite(height) &&
     height > 0
-    ? `width: min(${width}px, 100cqw, calc(100cqh * ${width / height}))`
-    : undefined;
+    ? { width: `min(${width}px, 100cqw, calc(100cqh * ${width / height}))` }
+    : { width: undefined };
 }
 
 function LightboxImageDownload(props: {
@@ -182,7 +182,7 @@ function LightboxImageDownload(props: {
     } catch {
       // An action can outlive the view, including a reconnect of its host.
       if (button.isConnected) {
-        showToast({ message: t("chat.imageLightbox.downloadFailed") });
+        showToast({ severity: "error", message: t("chat.imageLightbox.downloadFailed") });
       }
     }
   });

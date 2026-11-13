@@ -9,6 +9,7 @@ import {
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { FailoverError } from "../failover-error.js";
 import { resetFallbackSkipCacheForTest } from "../fallback-skip-cache.test-support.js";
 import { createModelFallbackConfig } from "../test-helpers/model-fallback-config-fixture.js";
@@ -24,6 +25,54 @@ afterEach(() => {
   resetGlobalHookRunner();
   resetPluginRuntimeStateForTest();
   resetFallbackSkipCacheForTest();
+});
+
+it("stops a late routing result when the logical run closes before admission", async () => {
+  await withOpenClawTestState({ label: "hook-closed-preparation" }, async (state) => {
+    const cfg = createModelFallbackConfig("fixture/primary", ["fixture/backup"]);
+    setRuntimeConfigSnapshot(cfg);
+    const runId = "hook-closed-preparation";
+    const admission = prepareSystemAgentRunAdmission(cfg, runId, "main", "routing-test");
+    const entered = createDeferred();
+    const release = createDeferred();
+    const registry = createEmptyPluginRegistry();
+    registry.typedHooks.push({
+      pluginId: "local-routing",
+      hookName: "before_model_resolve",
+      source: "test",
+      handler: async () => {
+        entered.resolve();
+        await release.promise;
+        return { modelOverride: "late-model" };
+      },
+    });
+    setActivePluginRegistry(registry);
+    initializeGlobalHookRunner(registry);
+    const attempt = vi.fn(async (provider: string, model: string) =>
+      makeResult({ provider, model }),
+    );
+    const pending = runEmbeddedAgentEntry({
+      preparedRunAdmission: admission,
+      selection: { cfg, provider: "fixture", model: "primary", agentDir: state.agentDir() },
+      modelResolve: { prompt: "Synthetic canceled request" },
+      identity: { runId, agentId: "main", sessionId: runId },
+      harness: createDirectHarness(state.workspaceDir, "openclaw"),
+      behavior: { kind: "maintenance" },
+      sessionOverride: { kind: "preserve" },
+      runCandidate: attempt,
+    });
+    try {
+      await awaitGateBeforeSettlement(entered.promise, pending, "routing did not start");
+      admission.close();
+      release.resolve();
+      await expect(pending).rejects.toMatchObject({ name: "AgentHarnessPreflightError" });
+      expect(attempt).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await Promise.allSettled([pending]);
+      admission.close();
+    }
+  });
 });
 
 it.each<[string, string[] | undefined, string[], boolean, boolean]>([
@@ -117,6 +166,62 @@ it.each<[string, string[] | undefined, string[], boolean, boolean]>([
         })),
       );
       expect(hook).toHaveBeenCalledTimes(locked ? 0 : 1);
+    });
+  },
+);
+
+it.each([undefined, [] as string[]])(
+  "retries the hook-resolved model with Blue Access without changing models (%j)",
+  async (fallbacksOverride) => {
+    await withOpenClawTestState({ label: "hook-cyber-access" }, async (state) => {
+      const cfg = createModelFallbackConfig("openai/primary", []);
+      setRuntimeConfigSnapshot(cfg);
+      const hook = vi.fn(() => ({
+        providerOverride: "openai",
+        modelOverride: "hook-selected",
+        fallbacksOverride,
+      }));
+      const registry = createEmptyPluginRegistry();
+      registry.typedHooks.push({
+        pluginId: "local-routing",
+        hookName: "before_model_resolve",
+        source: "test",
+        handler: hook,
+      });
+      setActivePluginRegistry(registry);
+      initializeGlobalHookRunner(registry);
+      const attempts: Array<{ model: string; access?: string }> = [];
+      const result = await runEmbeddedAgentEntry({
+        selection: { cfg, provider: "openai", model: "primary", agentDir: state.agentDir() },
+        modelResolve: { prompt: "Synthetic cyber request" },
+        identity: { runId: "hook-cyber-access", agentId: "main", sessionId: "hook-cyber" },
+        harness: createDirectHarness(state.workspaceDir, "openclaw"),
+        behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
+        sessionOverride: { kind: "preserve" },
+        runCandidate: async (provider, model, options) => {
+          const selected = options.resolvedModelSelection;
+          const physical = {
+            provider: selected?.provider ?? provider,
+            model: selected?.modelId ?? model,
+          };
+          attempts.push({ model: physical.model, access: options.cyberAccessProgram });
+          const attemptResult = makeResult(physical);
+          if (!options.cyberAccessProgram) {
+            attemptResult.payloads = [{ text: "policy refusal", isError: true }];
+            Object.assign(attemptResult.meta.agentMeta!, {
+              agentHarnessId: "openclaw",
+              providerRefusal: { provider: "openai", category: "cyber" },
+            });
+          }
+          return attemptResult;
+        },
+      });
+      expect(attempts).toEqual([
+        { model: "hook-selected", access: undefined },
+        { model: "hook-selected", access: "daybreak_blue" },
+      ]);
+      expect(result.result.meta.agentMeta?.model).toBe("hook-selected");
+      expect(hook).toHaveBeenCalledOnce();
     });
   },
 );

@@ -11,7 +11,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-export async function closeBoardTestServer(server: Server | undefined) {
+async function closeBoardTestServer(server: Server | undefined) {
   if (server) {
     await new Promise<void>((resolve) => {
       server.close(() => resolve());

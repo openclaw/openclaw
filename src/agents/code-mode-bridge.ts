@@ -5,6 +5,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatErrorMessage } from "../infra/errors.js";
 import { NODE_FS_LIST_DIR_COMMAND } from "../infra/node-commands.js";
 import { logCodeModeFailure } from "../logging/code-mode-diagnostic.js";
+import { redactToolPayloadText } from "../logging/redact.js";
 import { createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
 import { parseNodeList } from "../shared/node-list-parse.js";
 import type { NodeListNode } from "../shared/node-list-types.js";
@@ -29,6 +30,7 @@ import { resolveSwarmConfig } from "./subagents/swarm/swarm-config.js";
 import { getToolContractFailureCode } from "./tool-contract-error.js";
 import { isTrustedToolInputError } from "./tool-input-error.js";
 import { formatToolExecutionGatedMessage, isToolExecutionAllowed } from "./tool-policy-shared.js";
+import { omitDescribedOutputSchema } from "./tool-search-catalog.js";
 import type { ToolSearchRuntime } from "./tool-search-runtime.js";
 import type { ToolSearchCatalogEntry, ToolSearchToolContext } from "./tool-search-types.js";
 import { ToolInputError } from "./tools/common.js";
@@ -262,18 +264,21 @@ export async function runBridgeRequest(params: {
             value = params.results.save(values[0], params.runtime.hasNetworkContent());
           }
         } else if (params.request.method === "resultLoad") {
-          const loaded = sessionStore
-            ? await sessionStore.load(values[0])
-            : params.results.load(values[0]);
+          if (!sessionStore) {
+            const loaded = params.results.load(values[0]);
+            if (loaded.networkContent) {
+              params.runtime.observeNetworkContent(params.parentToolCallId);
+            }
+            // The guest decodes its own copy; keep the stored JSON intact on the host.
+            params.reply.settleJson(true, loaded.json);
+            return;
+          }
+          const loaded = await sessionStore.load(values[0]);
           if (loaded.networkContent) {
             params.runtime.observeNetworkContent(params.parentToolCallId);
           }
           // Session values need an envelope to preserve missing/undefined across the JSON bridge.
-          value = sessionStore
-            ? loaded.value === undefined
-              ? {}
-              : { value: loaded.value }
-            : loaded.value;
+          value = loaded.value === undefined ? {} : { value: loaded.value };
         } else if (sessionStore) {
           await sessionStore.delete(values[0]);
         } else {
@@ -340,10 +345,17 @@ export async function runBridgeRequest(params: {
           parentToolCallId: params.parentToolCallId,
         });
         const { id: _id, sourceName: _sourceName, mcp: _mcp, ...guestDescription } = described;
+        // The declaration renders output types from the schema; describe() returns the raw
+        // output schema only on explicit request because API.read already types the result.
         value =
           values[1] === "declaration"
             ? await createCodeModeToolApiFile(binding.callableName, guestDescription)
-            : { ...guestDescription, callableName: binding.callableName };
+            : {
+                ...(values[1] === "outputSchema"
+                  ? guestDescription
+                  : omitDescribedOutputSchema(guestDescription)),
+                callableName: binding.callableName,
+              };
         break;
       }
       case "callValue": {
@@ -478,25 +490,37 @@ export async function runBridgeRequest(params: {
         const called = await params.runtime.callExactId(
           binding.id,
           params.request.method === "skillsRead"
-            ? { name: values[0] }
+            ? { name: values[0], ...(values[1] === undefined ? {} : { relativePath: values[1] }) }
             : { query: values[0], ...(values[1] === undefined ? {} : { limit: values[1] }) },
           callOptions(),
         );
         const result = called.result;
         if (!isRecord(result) || result.isError || !isRecord(result.details)) {
-          throw new ToolInputError("Installed skill request failed.");
+          const details = isRecord(result) && isRecord(result.details) ? result.details : undefined;
+          const detail = details?.error ?? details?.message;
+          const message =
+            typeof detail === "string"
+              ? detail
+              : result.content.find((part) => part.type === "text")?.text;
+          throw new Error(
+            `Installed skill request failed: ${truncateUtf16Safe(
+              redactToolPayloadText(message || "missing structured result details"),
+              1_024,
+            )}`,
+          );
         }
         if (params.request.method === "skillsRead") {
-          const { name, location, locationNote, content } = result.details;
+          const { name, location, locationNote, relativePath, content } = result.details;
           if (
             typeof name !== "string" ||
             typeof location !== "string" ||
             typeof content !== "string" ||
+            (relativePath !== undefined && typeof relativePath !== "string") ||
             (locationNote !== undefined && typeof locationNote !== "string")
           ) {
             throw new ToolInputError("Installed skill instructions are unavailable.");
           }
-          value = formatSkillInstructions({ name, location, locationNote, content });
+          value = formatSkillInstructions({ name, location, locationNote, relativePath, content });
         } else {
           value = result.details;
         }

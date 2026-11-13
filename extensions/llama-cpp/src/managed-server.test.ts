@@ -2,14 +2,15 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, expect, it, vi } from "vitest";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 
 const installMocks = vi.hoisted(() => ({
   ensureLlamaServerInstalled: vi.fn(),
   resolveManagedLlamaServerPaths: vi.fn(),
 }));
-
 vi.mock("./llama-server-install.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./llama-server-install.js")>()),
   ensureLlamaServerInstalled: installMocks.ensureLlamaServerInstalled,
@@ -21,7 +22,13 @@ vi.mock("./llama-server-assets.js", async (importOriginal) => ({
 }));
 
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import {
+  DEFAULT_LLAMA_CPP_MODEL_CACHE_FILE,
+  DEFAULT_LLAMA_CPP_MODEL_SIZE_BYTES,
+  DEFAULT_LLAMA_CPP_MODEL_URI,
+} from "./defaults.js";
 import { selectLlamaServerAsset } from "./llama-server-assets.js";
+import * as llamaServerInstall from "./llama-server-install.js";
 import { withHuggingFaceMetadataFixture } from "./managed-server-huggingface.test-support.js";
 import { inspectLlamaServerRuntime } from "./managed-server-inspection.js";
 import {
@@ -33,11 +40,8 @@ import {
 
 const servers: http.Server[] = [];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const closeServer = (server: http.Server) =>
-  new Promise<void>((resolve) => {
-    server.close(() => resolve());
-  });
-
+const loadCachedModel = (source: string, cacheDir: string, signal?: AbortSignal) =>
+  ensureLlamaCppModel({ source, cacheDir, download: false, signal });
 async function listen(server: http.Server, port = 0, host = "127.0.0.1"): Promise<number> {
   await new Promise<void>((resolve) => {
     server.listen({ port, host: host === "localhost" ? undefined : host }, resolve);
@@ -49,16 +53,24 @@ async function listen(server: http.Server, port = 0, host = "127.0.0.1"): Promis
   return address.port;
 }
 
-async function createReloadServer(host = "127.0.0.1") {
+async function createReloadServer(
+  host = "127.0.0.1",
+  port = 0,
+  onReload?: (response: http.ServerResponse) => void,
+) {
   const state = { reloads: 0, status: 200 };
   const server = http.createServer((req, res) => {
     state.reloads += Number(req.url === "/models?reload=1");
     res.statusCode = state.status;
+    if (req.url === "/models?reload=1" && onReload) {
+      onReload(res);
+      return;
+    }
     res.end("{}");
   });
   servers.push(server);
-  const port = await listen(server, 0, host);
-  return { state, port, baseUrl: `http://${host}:${port}/v1` };
+  const boundPort = await listen(server, port, host);
+  return { state, port: boundPort, baseUrl: `http://${host}:${boundPort}/v1` };
 }
 
 async function createPresetFixture(label: string) {
@@ -118,12 +130,12 @@ function expectContents(contents: string, fragments: string[]) {
   }
 }
 
-async function serveInspection(routes: Record<string, () => unknown>) {
+async function serveInspection(routes: Record<string, unknown>) {
   const server = http.createServer((req, res) => {
     const endpoint = Object.keys(routes).find((route) =>
       route.endsWith("?") ? req.url?.startsWith(route) : req.url === route,
     );
-    const body = endpoint ? routes[endpoint]?.() : undefined;
+    const body = endpoint ? routes[endpoint] : undefined;
     res.statusCode = body === undefined ? 404 : 200;
     res.setHeader(
       "content-type",
@@ -132,13 +144,19 @@ async function serveInspection(routes: Record<string, () => unknown>) {
     res.end(Buffer.isBuffer(body) || typeof body === "string" ? body : JSON.stringify(body ?? {}));
   });
   servers.push(server);
-  return await listen(server);
+  const port = await listen(server);
+  return (loadError?: string) =>
+    inspectLlamaServerRuntime({
+      baseUrl: `http://127.0.0.1:${port}/v1`,
+      modelId: "embedding-model",
+      loadError,
+    });
 }
 
 afterEach(async () => {
   vi.restoreAllMocks();
   vi.clearAllMocks();
-  await Promise.all(servers.splice(0).map(closeServer));
+  await Promise.all(servers.splice(0).map((server) => server[Symbol.asyncDispose]()));
 });
 
 it("selects the pinned darwin/x64 asset", () => {
@@ -349,24 +367,14 @@ it("retains a failed reload revision for the next reconciliation", async () => {
 
 it("allows reloads to use llama.cpp's pinned model shutdown window", async ({ signal }) => {
   await createPresetFixture("reload-shutdown-window");
-  let reloads = 0;
   const requested = createDeferred<http.ServerResponse>();
-  const server = http.createServer((req, res) => {
-    if (req.url === "/models?reload=1") {
-      reloads += 1;
-      requested.resolve(res);
-      return;
-    }
-    res.end("{}");
-  });
-  servers.push(server);
-  const port = await listen(server);
+  const { state, port, baseUrl } = await createReloadServer("127.0.0.1", 0, requested.resolve);
   await prepareEmbedding(port);
 
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
   const controller = new AbortController();
   const reload = reconcileManagedLlamaServer({
-    baseUrl: `http://127.0.0.1:${port}/v1`,
+    baseUrl,
     signal: AbortSignal.any([signal, controller.signal]),
   });
   try {
@@ -380,7 +388,7 @@ it("allows reloads to use llama.cpp's pinned model shutdown window", async ({ si
     await vi.advanceTimersByTimeAsync(2_600);
     response.end("{}");
     await reload;
-    expect(reloads).toBe(1);
+    expect(state.reloads).toBe(1);
   } finally {
     controller.abort();
     vi.useRealTimers();
@@ -392,7 +400,7 @@ it("reconciles a mutation after the child reads the preset but before it listens
   const { presetPath } = await createPresetFixture("startup-race");
   const probe = http.createServer();
   const port = await listen(probe);
-  await closeServer(probe);
+  await probe[Symbol.asyncDispose]();
   const prepare = async (contextSize: number) =>
     await prepareManagedLlamaServer({
       chatModel: configureChat("chat", "/models/chat.gguf", contextSize, 2048),
@@ -404,34 +412,22 @@ it("reconciles a mutation after the child reads the preset but before it listens
   let loadedPreset = await fs.readFile(presetPath, "utf8");
   await prepare(16_384);
 
-  let reloads = 0;
-  const server = http.createServer((req, res) => {
-    if (req.url === "/models?reload=1") {
-      reloads += 1;
-      void fs.readFile(presetPath, "utf8").then((contents) => {
-        loadedPreset = contents;
-        res.end("{}");
-      });
-      return;
-    }
-    res.end("{}");
+  const { state, baseUrl } = await createReloadServer("127.0.0.1", port, (response) => {
+    void fs.readFile(presetPath, "utf8").then((contents) => {
+      loadedPreset = contents;
+      response.end("{}");
+    });
   });
-  servers.push(server);
-  await listen(server, port);
-  await reconcileManagedLlamaServer({ baseUrl: `http://127.0.0.1:${port}/v1` });
-  await reconcileManagedLlamaServer({ baseUrl: `http://127.0.0.1:${port}/v1` });
+  await reconcileManagedLlamaServer({ baseUrl });
+  await reconcileManagedLlamaServer({ baseUrl });
 
-  expect(reloads).toBe(1);
+  expect(state.reloads).toBe(1);
   expect(loadedPreset).toContain("ctx-size = 16384");
 });
 
 it("reports a missing local GGUF with the setup repair path", async () => {
   await expect(
-    ensureLlamaCppModel({
-      source: path.join(os.tmpdir(), "missing-openclaw-model.gguf"),
-      cacheDir: os.tmpdir(),
-      download: false,
-    }),
+    loadCachedModel(path.join(os.tmpdir(), "missing-openclaw-model.gguf"), os.tmpdir()),
   ).rejects.toThrow("Run interactive llama.cpp setup or correct params.modelPath");
 });
 
@@ -440,8 +436,7 @@ it("bounds Hugging Face manifest metadata while preserving a legitimate response
     { cacheDir: tempDirs.make("llama-cpp-hf-manifest-"), servers },
     "manifest",
     async ({ cacheDir, setPadding }) => {
-      const resolve = (source: string) =>
-        ensureLlamaCppModel({ source, cacheDir, download: false });
+      const resolve = (source: string) => loadCachedModel(source, cacheDir);
       await expect(resolve("hf:owner/repo")).resolves.toBe(
         path.join(cacheDir, "hf_owner_repo_model.gguf"),
       );
@@ -473,45 +468,33 @@ it("keeps a verified custom Hugging Face artifact available while refreshing its
   );
 });
 
-it("reports optional metrics separately from runtime readiness and load errors", async () => {
-  let metricsAvailable = true;
-  const port = await serveInspection({
-    "/health": () => ({ status: "ok" }),
-    "/models": () => ({
-      data: [
-        {
-          id: "embedding-model",
-          path: "/models/from-models.gguf",
-          status: { value: "loaded" },
-        },
-      ],
-    }),
-    "/props?": () => ({
+it("reports readiness, optional metrics and bounded inspection bodies independently", async () => {
+  const model = {
+    id: "embedding-model",
+    path: "/models/from-models.gguf",
+    status: { value: "loaded" },
+  };
+  const routes: Record<string, unknown> = {
+    "/health": { status: "ok" },
+    "/models": { data: [model] },
+    "/props?": {
       build_info: "b10357 (689e227db)",
       model_path: "/models/from-props.gguf",
       modalities: { vision: false },
-    }),
-    "/metrics?": () => (metricsAvailable ? "llamacpp:prompt_tokens_total 1\n" : undefined),
-  });
-  const inspect = (loadError?: string) =>
-    inspectLlamaServerRuntime({
-      baseUrl: `http://127.0.0.1:${port}/v1`,
-      modelId: "embedding-model",
-      backend: "metal",
-      loadError,
-    });
-
+    },
+    "/metrics?": "llamacpp:prompt_tokens_total 1\n",
+  };
+  const inspect = await serveInspection(routes);
   await expect(inspect()).resolves.toEqual({
     engine: "llama.cpp",
     state: "ready",
-    backend: "metal",
+    backend: undefined,
     buildInfo: "b10357 (689e227db)",
     model: { id: "embedding-model", path: "/models/from-props.gguf" },
     capabilities: { vision: false, draft: false },
     endpoints: { health: "ready", models: "ready", props: "ready", metrics: "ready" },
   });
-
-  metricsAvailable = false;
+  routes["/metrics?"] = undefined;
   await expect(inspect()).resolves.toMatchObject({
     state: "ready",
     endpoints: { health: "ready", models: "ready", props: "ready", metrics: "unavailable" },
@@ -521,44 +504,55 @@ it("reports optional metrics separately from runtime readiness and load errors",
     loadError: "Model load failed",
     endpoints: { metrics: "unavailable" },
   });
+  routes["/metrics?"] = "llamacpp:requests_total 1\n";
+  for (const endpoint of ["metrics", "props"]) {
+    const route = `/${endpoint}?`;
+    const original = routes[route];
+    for (const size of [1024 * 1024, 32 * 1024 * 1024]) {
+      // Serialize before inspection so fixture work cannot consume its deadline.
+      const padding = "x".repeat(size);
+      routes[route] = Buffer.from(endpoint === "metrics" ? padding : JSON.stringify({ padding }));
+      const oversized = size > 1024 * 1024;
+      await expect(inspect()).resolves.toMatchObject({
+        state: oversized && endpoint === "props" ? "failed" : "ready",
+        endpoints: {
+          health: "ready",
+          models: "ready",
+          props: oversized && endpoint === "props" ? "unavailable" : "ready",
+          metrics: oversized && endpoint === "metrics" ? "unavailable" : "ready",
+        },
+      });
+    }
+    routes[route] = original;
+  }
 });
 
-it.each(["metrics", "props"] as const)(
-  "bounds %s inspection responses while accepting a legitimate large body",
-  async (endpoint) => {
-    const responseBytes = (size: number) => {
-      const padding = "x".repeat(size);
-      return Buffer.from(endpoint === "metrics" ? padding : JSON.stringify({ padding }));
-    };
-    // Fixture serialization must not consume the concurrent inspection deadlines.
-    let body = responseBytes(1024 * 1024);
-    const port = await serveInspection({
-      "/health": () => ({ status: "ok" }),
-      "/models": () => ({ data: [{ id: "embedding-model" }] }),
-      "/props?": () => ({ modalities: { vision: false } }),
-      "/metrics?": () => "llamacpp:requests_total 1\n",
-      [`/${endpoint}?`]: () => body,
-    });
-    const inspect = () =>
-      inspectLlamaServerRuntime({
-        baseUrl: `http://127.0.0.1:${port}/v1`,
-        modelId: "embedding-model",
-      });
-
-    await expect(inspect()).resolves.toMatchObject({
-      state: "ready",
-      endpoints: { health: "ready", models: "ready", props: "ready", metrics: "ready" },
-    });
-
-    body = responseBytes(32 * 1024 * 1024);
-    await expect(inspect()).resolves.toMatchObject({
-      state: endpoint === "metrics" ? "ready" : "failed",
-      endpoints: {
-        health: "ready",
-        models: "ready",
-        props: endpoint === "props" ? "unavailable" : "ready",
-        metrics: endpoint === "metrics" ? "unavailable" : "ready",
-      },
-    });
-  },
-);
+it("keeps a shared model load alive for the callers that did not abort", async () => {
+  const cacheDir = tempDirs.make("llama-cpp-shared-abort-");
+  const destination = path.join(cacheDir, DEFAULT_LLAMA_CPP_MODEL_CACHE_FILE);
+  await fs.writeFile(destination, "GGUF");
+  await fs.truncate(destination, DEFAULT_LLAMA_CPP_MODEL_SIZE_BYTES);
+  const hash = createDeferred<string>();
+  const reachedHash = createDeferred<void>();
+  onTestFinished(() => hash.resolve("wrong-digest"));
+  const sha256 = vi.spyOn(llamaServerInstall, "sha256File").mockImplementation((_file, signal) => {
+    reachedHash.resolve();
+    return racePromiseWithAbortSignal(hash.promise, signal);
+  });
+  const load = (signal: AbortSignal) =>
+    loadCachedModel(DEFAULT_LLAMA_CPP_MODEL_URI, cacheDir, signal).catch((error: unknown) => error);
+  const [a, b, c] = [new AbortController(), new AbortController(), new AbortController()];
+  const first = load(a.signal);
+  await reachedHash.promise;
+  const joined = load(b.signal);
+  await setImmediate();
+  a.abort(new Error("A stopped"));
+  expect(await first).toMatchObject({ cause: a.signal.reason });
+  const late = load(c.signal);
+  await setImmediate();
+  b.abort(new Error("B stopped"));
+  expect(await joined).toMatchObject({ cause: b.signal.reason });
+  hash.resolve("wrong-digest");
+  expect(await late).toMatchObject({ message: expect.stringContaining("Model is not cached") });
+  expect(sha256).toHaveBeenCalledTimes(1);
+});

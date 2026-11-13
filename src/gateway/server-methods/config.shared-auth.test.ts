@@ -160,6 +160,7 @@ describe("config shared auth disconnects", () => {
   it.each([
     { method: "config.patch", claimed: true },
     { method: "config.apply", claimed: true },
+    { method: "config.set", claimed: true },
     { method: "config.patch", claimed: false },
     { method: "config.apply", claimed: false },
     { method: "config.set", claimed: false },
@@ -177,11 +178,17 @@ describe("config shared auth disconnects", () => {
         { enforceSharedGatewayAuthGenerationForConfigWrite: enforceGeneration },
       );
       expect(respond).toHaveBeenCalledWith(
-        claimed || method === "config.set",
-        claimed || method === "config.set" ? expect.objectContaining({ ok: true }) : undefined,
-        claimed || method === "config.set"
+        claimed,
+        claimed ? expect.objectContaining({ ok: true }) : undefined,
+        claimed
           ? undefined
-          : expect.objectContaining({ message: expect.stringContaining("unclaimed") }),
+          : expect.objectContaining({
+              code: "UNAVAILABLE",
+              message: expect.stringContaining("unclaimed"),
+              details: expect.objectContaining({
+                persistedConfig: expect.objectContaining({ hash: "next-hash" }),
+              }),
+            }),
       );
       expect(enforceGeneration).toHaveBeenCalledTimes(claimed ? 0 : 1);
       expect(disconnectClientsUsingSharedGatewayAuth).toHaveBeenCalledTimes(

@@ -16,7 +16,7 @@ const isBundledSourceOverlayPathMock = vi.hoisted(() =>
   vi.fn((_params: { sourcePath: string }) => false),
 );
 const probeLogWarnMock = vi.hoisted(() => vi.fn());
-const tempDirs: string[] = [];
+let root: string;
 
 vi.mock("../../plugins/channel-catalog-registry.js", () => ({
   listChannelCatalogEntries: listChannelCatalogEntriesMock,
@@ -35,15 +35,9 @@ vi.mock("../../logging/subsystem.js", async (importOriginal) => {
   };
 });
 
-function tempRoot(prefix: string) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  tempDirs.push(root);
-  return root;
-}
-
-function writeProbe(root: string, source: string, filename = "auth-presence.js") {
-  fs.mkdirSync(root, { recursive: true });
-  fs.writeFileSync(path.join(root, filename), source, "utf8");
+function writeProbe(directory: string, source: string, filename = "auth-presence.js") {
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(directory, filename), source, "utf8");
 }
 
 function registerModule(
@@ -52,12 +46,7 @@ function registerModule(
   pluginId = channel.id,
 ) {
   listChannelCatalogEntriesMock.mockReturnValue([
-    {
-      pluginId,
-      origin: "bundled",
-      rootDir,
-      channel,
-    } satisfies PluginChannelCatalogEntry,
+    { pluginId, origin: "bundled", rootDir, channel } satisfies PluginChannelCatalogEntry,
   ]);
 }
 
@@ -80,36 +69,25 @@ function probeState(
   return hasBundledChannelPackageState({ metadataKey, channelId, cfg: {}, env });
 }
 
-function removeTempDirs() {
-  for (const tempDir of tempDirs.splice(0)) {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  }
-}
-
 beforeEach(() => {
-  removeTempDirs();
+  root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-state-"));
   listChannelCatalogEntriesMock.mockReset();
   isBundledSourceOverlayPathMock.mockReset();
   isBundledSourceOverlayPathMock.mockReturnValue(false);
   probeLogWarnMock.mockReset();
 });
 
-afterEach(() => {
-  removeTempDirs();
-});
+afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
 
 describe("channel package-state probes", () => {
   it("awaits the selected async checker and never retries a refusal through the sync checker", async () => {
-    const root = tempRoot("openclaw-package-state-async-");
     writeProbe(
       root,
-      [
-        "module.exports.hasState = () => { throw new Error('sync checker must not run'); };",
-        "module.exports.hasStateAsync = async ({ env }) => {",
-        "  if (env.REFUSE) throw new Error('owner refused');",
-        "  return env.HAS_STATE === 'yes';",
-        "};",
-      ].join("\n"),
+      `module.exports.hasState = () => { throw new Error('sync checker must not run'); };
+module.exports.hasStateAsync = async ({ env }) => {
+  if (env.REFUSE) throw new Error('owner refused');
+  return env.HAS_STATE === 'yes';
+};`,
     );
     registerProbe(root, "fixture", { exportNameAsync: "hasStateAsync" });
     const probe = (env: NodeJS.ProcessEnv) =>
@@ -125,18 +103,15 @@ describe("channel package-state probes", () => {
   });
 
   it("preserves checker loading and newly created plugin state", () => {
-    const root = tempRoot("openclaw-presence-prerequisite-");
     const pluginRoot = path.join(root, "extensions", "fixture");
     const marker = path.join(root, "loaded");
     const env = { OPENCLAW_STATE_DIR: path.join(root, "state") };
     const database = resolveOpenClawStateSqlitePath(env);
     writeProbe(
       pluginRoot,
-      [
-        `const fs = require("node:fs");`,
-        `fs.writeFileSync(${JSON.stringify(marker)}, "loaded");`,
-        `module.exports.hasState = () => fs.existsSync(${JSON.stringify(database)});`,
-      ].join("\n"),
+      `const fs = require("node:fs");
+fs.writeFileSync(${JSON.stringify(marker)}, "loaded");
+module.exports.hasState = () => fs.existsSync(${JSON.stringify(database)});`,
     );
     registerProbe(pluginRoot, "fixture", { backingStore: "plugin-state" });
     const probe = () => probeState("fixture", env);
@@ -177,46 +152,44 @@ describe("channel package-state probes", () => {
     expect(probeState("env-chat", env, "configuredState")).toBe(configured);
   });
 
-  it("falls back to source package-state probes when built artifacts are stale", () => {
-    const root = tempRoot("openclaw-package-state-fallback-");
-    const sourceRoot = path.join(root, "extensions", "whatsapp");
-    const builtRoot = path.join(root, "dist", "extensions", "whatsapp");
-    writeProbe(sourceRoot, "module.exports.hasAnyWhatsAppAuth = () => true;\n");
-    writeProbe(builtRoot, "module.exports.stale = () => false;\n");
-
-    registerProbe(sourceRoot, "whatsapp", { exportName: "hasAnyWhatsAppAuth" });
-    expect(probeState("whatsapp")).toBe(true);
-  });
-
-  it("preserves mtsx source overlay precedence over packaged package-state probes", () => {
-    const root = tempRoot("openclaw-package-state-overlay-");
-    const sourceRoot = path.join(root, "extensions", "matrix");
-    const builtRoot = path.join(root, "dist", "extensions", "matrix");
-    writeProbe(
-      sourceRoot,
-      "export const hasAnyMatrixAuth = (): boolean => true;\n",
-      "auth-presence.mtsx",
-    );
-    writeProbe(builtRoot, "module.exports.hasAnyMatrixAuth = () => false;\n");
-    isBundledSourceOverlayPathMock.mockImplementation(
-      ({ sourcePath }: { sourcePath: string }) => path.resolve(sourcePath) === sourceRoot,
-    );
-
-    const checker = { specifier: "./auth-presence.mtsx", exportName: "hasAnyMatrixAuth" };
-    registerModule(sourceRoot, {
-      id: "matrix",
-      configuredState: checker,
-      persistedAuthState: checker,
-    });
-
-    for (const metadataKey of ["configuredState", "persistedAuthState"] as const) {
-      expect(probeState("matrix", undefined, metadataKey)).toBe(true);
-    }
-  });
+  it.each([false, true])(
+    "uses source probes with overlay=%s or stale built artifacts",
+    (overlay) => {
+      const sourceRoot = path.join(root, "extensions", "fixture");
+      const builtRoot = path.join(root, "dist", "extensions", "fixture");
+      const filename = overlay ? "auth-presence.mtsx" : "auth-presence.js";
+      writeProbe(
+        sourceRoot,
+        overlay
+          ? "export const hasState = (): boolean => true;"
+          : "module.exports.hasState = () => true;",
+        filename,
+      );
+      writeProbe(
+        builtRoot,
+        overlay ? "module.exports.hasState = () => false;" : "module.exports.stale = () => false;",
+      );
+      isBundledSourceOverlayPathMock.mockImplementation(
+        ({ sourcePath }: { sourcePath: string }) =>
+          overlay && path.resolve(sourcePath) === sourceRoot,
+      );
+      const checker = {
+        specifier: overlay ? `./${filename}` : "./auth-presence",
+        exportName: "hasState",
+      };
+      registerModule(sourceRoot, {
+        id: "fixture",
+        configuredState: checker,
+        persistedAuthState: checker,
+      });
+      for (const metadataKey of ["configuredState", "persistedAuthState"] as const) {
+        expect(probeState("fixture", undefined, metadataKey)).toBe(true);
+      }
+    },
+  );
 
   it("reports a missing built package-state artifact as not found, not a boundary escape", () => {
     // The catalog can retain a built root while a rebuild has temporarily removed its artifacts.
-    const root = tempRoot("openclaw-package-state-missing-");
     const builtRoot = path.join(root, "dist", "extensions", "matrix");
     fs.mkdirSync(builtRoot, { recursive: true });
 

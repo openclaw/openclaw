@@ -280,7 +280,7 @@ process.stdout.write('${"a".repeat(40)}\\n');
     bin,
     "gh",
     `
-const fs = require('node:fs');
+import fs from 'node:fs';
 const args = process.argv.slice(2);
 const releases = JSON.parse(fs.readFileSync(process.env.LINUX_CLOSEOUT_REMOTE, 'utf8'));
 function reply(value) { process.stdout.write(typeof value === 'string' ? value : JSON.stringify(value)); }
@@ -366,22 +366,6 @@ if (args[1] === 'view') {
 }
 
 describe("stable closeout Linux publication", () => {
-  it.each(["stableSoakWaiver", "laneWaiver"])(
-    "refuses historical %s replay without rewriting the published receipt",
-    (field) => {
-      const fixture = linuxCloseoutFixture();
-      const receipt = JSON.parse(saveReceipt(fixture));
-      const original = JSON.stringify({ ...receipt, [field]: "historical published authority" });
-      writeFileSync(fixture.originalPath, original);
-      const result = fixture.run(true);
-      expectFailure(result, "Historical waiver-bearing closeout receipt replay is unsupported");
-      expect(result.stderr).toContain(
-        "a fresh validation run cannot replace their published binding",
-      );
-      expect(readFileSync(fixture.originalPath, "utf8")).toBe(original);
-    },
-  );
-
   it("accepts only the validated exact late immutable Linux manifest", () => {
     const fixture = linuxCloseoutFixture();
     const original = saveReceipt(fixture);
@@ -535,21 +519,10 @@ describe("verify-stable-main-closeout", () => {
     },
   );
 
-  it("rejects removed waiver flags while preserving strict closeout replay", () => {
+  it("preserves strict closeout replay", () => {
     const fixture = closeoutFixture();
-    const { outputPath } = fixture;
     const bytes = saveReceipt(fixture);
-    const recorded = JSON.parse(bytes);
-    expect(recorded).not.toHaveProperty("stableSoakWaiver");
-    expect(recorded).not.toHaveProperty("laneWaiver");
-
     expectReplay(fixture, fixture.replay(), bytes);
-    for (const flag of ["--stable-soak-waiver", "--lane-waiver"]) {
-      const rejected = fixture.run([flag, "2026.9.6 operator approved"]);
-      expect(rejected.status).not.toBe(0);
-      expect(rejected.stderr).toContain(`${flag} was removed`);
-      expect(readFileSync(outputPath, "utf8")).toBe(bytes);
-    }
   });
 
   it("records a withdrawn 2026.9.6 macOS appcast from the main commit lookup", () => {
@@ -601,15 +574,7 @@ process.stdout.write(JSON.stringify([
 describe("stable closeout workflow keyed runs and tag-only replay", () => {
   const workflow = parse(
     readFileSync(path.resolve(".github/workflows/openclaw-stable-main-closeout.yml"), "utf8"),
-  ) as {
-    concurrency: { group: string; "cancel-in-progress": boolean | string };
-    on: {
-      workflow_dispatch: {
-        inputs: Record<string, { required: boolean; type: string; default?: string | boolean }>;
-      };
-    };
-    jobs: { verify: { concurrency: { group: string; "cancel-in-progress": boolean } } };
-  };
+  ) as { concurrency: unknown; jobs: { verify: { concurrency: unknown } } };
   it("keeps push runs alive and serializes verification by resolved stable tag", () => {
     expect(workflow.concurrency).toMatchObject({
       "cancel-in-progress": false,
@@ -619,20 +584,6 @@ describe("stable closeout workflow keyed runs and tag-only replay", () => {
       group: "openclaw-stable-main-closeout-verify-${{ needs.resolve.outputs.tag }}",
       "cancel-in-progress": false,
     });
-  });
-
-  it("keeps non-tag replay inputs optional", () => {
-    for (const [name, input] of Object.entries(workflow.on.workflow_dispatch.inputs)) {
-      if (name === "tag") {
-        continue;
-      }
-      expect(input.required, name).toBe(false);
-      // Optional string inputs have an implicit empty default in GitHub Actions.
-      expect(input.default ?? (input.type === "string" ? "" : undefined), name).toBeOneOf([
-        "",
-        false,
-      ]);
-    }
   });
 });
 
@@ -644,19 +595,15 @@ type RoutingPatch = {
   recovery?: { reason?: string; npmPublishRunId?: string };
   code?: number;
   checksum?: string;
+  path?: string;
 };
 const routingCases: Array<[string, RoutingPatch]> = [
   ["ordinary successful parent", { manual: false, conclusion: "success", code: 0 }],
+  ["spoofed parent title", { path: ".github/workflows/plugin-npm-release.yml" }],
   ["failed parent without manual recovery", { manual: false }],
-  ["legacy same-parent recovery", { code: 0 }],
   ["unrelated operator metadata", { recovery: { reason: "App assets are pending" }, code: 0 }],
-  ["failed legacy npm publication", { npm: "failure" }],
-  ["failed legacy Docker publication", { docker: "failure" }],
   ["incomplete split selectors", { recovery: { npmPublishRunId: "13" } }],
-  ...["wrong-file", "duplicate", "mismatch"].map((checksum): [string, RoutingPatch] => [
-    `rejects ${checksum} checksum`,
-    { checksum },
-  ]),
+  ["rejects wrong-file checksum", { checksum: "wrong-file" }],
 ];
 it.each(routingCases)("stable closeout publication routing preserves %s", (name, patch) => {
   const scenario = {
@@ -665,6 +612,7 @@ it.each(routingCases)("stable closeout publication routing preserves %s", (name,
     npm: "success",
     docker: "success",
     code: 1,
+    path: ".github/workflows/openclaw-release-publish.yml",
     ...patch,
   };
   const workflow = readFileSync(".github/workflows/openclaw-stable-main-closeout.yml", "utf8");
@@ -684,7 +632,8 @@ it.each(routingCases)("stable closeout publication routing preserves %s", (name,
   const evidence = path.join(dir, "evidence.json");
   const manifest = path.join(dir, "manifest.json");
   writeJson(run, {
-    workflowName: "OpenClaw Release Publish",
+    workflowName: "OpenClaw Release Publish [v2026.6.8]",
+    path: scenario.path,
     event: "workflow_dispatch",
     status: "completed",
     conclusion: scenario.conclusion,

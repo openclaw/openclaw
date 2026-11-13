@@ -37,6 +37,7 @@ function createChild(withOutput = false) {
   return {
     child,
     kill,
+    close: () => child.emit("close", exitCode, null),
     exit: () => {
       exitCode = 0;
       child.emit("exit", 0, null);
@@ -94,7 +95,10 @@ function runChild(
     // The mocked process owns no filesystem resources.
     env: { TMPDIR: process.cwd() },
     requireProcessTreeExit: true,
-    onReady: fixture.exit,
+    onReady: () => {
+      fixture.exit();
+      fixture.close();
+    },
     ...options,
   }).then(
     (value) => ({ value }),
@@ -144,6 +148,25 @@ describe("managed child natural process-group drainage", () => {
     expect(await command).toEqual({ value: 0 });
     expect(group.signals).toEqual([]);
     fixture.child.stdout?.destroy();
+  });
+
+  it("waits for the actual child close event after the group drains", async () => {
+    const fixture = createChild();
+    const group = observeGroup();
+    let settled = false;
+    const command = runChild(fixture, { onReady: fixture.exit }).then((result) => {
+      settled = true;
+      return result;
+    });
+    setTimeout(() => group.setState("gone"), 100);
+    setTimeout(fixture.close, 150);
+
+    await vi.advanceTimersByTimeAsync(125);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(25);
+
+    expect(await command).toEqual({ value: 0 });
+    expect(group.signals).toEqual([]);
   });
 
   it.each(["live", "indeterminate"] as const)(
@@ -269,6 +292,7 @@ describe("managed child natural process-group drainage", () => {
     setTimeout(() => {
       group.setState("gone");
       fixture.exit();
+      fixture.close();
     }, 50);
 
     await vi.advanceTimersByTimeAsync(50);
@@ -346,6 +370,7 @@ it.each([false, true])(
       group.setState("gone");
       fixture.child.stdout?.emit("data", Buffer.from("after timeout"));
       fixture.child.stdout?.emit("close");
+      fixture.close();
     });
     const command = runChild(fixture, {
       timeoutMs: 100,

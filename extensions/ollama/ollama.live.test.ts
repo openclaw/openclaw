@@ -1,3 +1,4 @@
+/// <reference lib="esnext.array" />
 // Ollama tests cover ollama plugin behavior.
 import { spawnSync } from "node:child_process";
 import * as fsSync from "node:fs";
@@ -83,14 +84,6 @@ function ollamaModelNameMatches(candidate: unknown, expected: string): boolean {
       .toLowerCase()
       .replace(/:latest$/u, "");
   return normalize(candidate) === normalize(expected);
-}
-
-async function collectStreamEvents<T>(stream: AsyncIterable<T>): Promise<T[]> {
-  const events: T[] = [];
-  for await (const event of stream) {
-    events.push(event);
-  }
-  return events;
 }
 
 async function withTempOpenClawState<T>(run: (paths: { root: string }) => Promise<T>): Promise<T> {
@@ -354,7 +347,7 @@ describe.skipIf(!LIVE)("ollama live", () => {
         } as never,
       );
 
-    const events = await collectStreamEvents(await Promise.resolve(runNativeChat()));
+    const events = await Array.fromAsync(await Promise.resolve(runNativeChat()));
     expect(payload?.options).toMatchObject({
       num_ctx: 4096,
       top_p: 1,
@@ -362,7 +355,7 @@ describe.skipIf(!LIVE)("ollama live", () => {
       frequency_penalty: 0,
       presence_penalty: 0,
     });
-    const warmEvents = await collectStreamEvents(await Promise.resolve(runNativeChat(0.8)));
+    const warmEvents = await Array.fromAsync(await Promise.resolve(runNativeChat(0.8)));
     const error = events.find((event) => (event as { type?: string }).type === "error");
     const warmError = warmEvents.find((event) => (event as { type?: string }).type === "error");
     const warmDone = warmEvents.find((event) => event.type === "done");

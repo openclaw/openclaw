@@ -8,10 +8,14 @@ import {
   shouldAutoPromptNotificationsOnSend,
 } from "../../app/notifications-auto-prompt.ts";
 import { t } from "../../i18n/index.ts";
+import { registerCommandPaletteEnglish } from "../../i18n/locales/en-command-palette.ts";
 import { normalizeAgentTargetLabel, resolveAgentTextAvatar } from "../../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
+import { formatUiError } from "../../lib/format-error.ts";
+import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
+import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -21,6 +25,41 @@ import { showToast } from "../../lib/toast.ts";
 import { captureSessionNoticeOwner, openSessionNoticeTarget } from "./session-notice-owner.ts";
 
 const RETRY_DELAY_MS = 1_000;
+
+/** Both launchers use the same accepted-session notice and recovery destination. */
+export function showBackgroundSessionCreated(
+  readContext: () => ApplicationContext | undefined,
+  result: SessionCreateOutcome & { agentId: string },
+  onOpen?: () => void,
+) {
+  const context = readContext();
+  if (!context) {
+    return;
+  }
+  registerCommandPaletteEnglish();
+  const isCurrentOwner = captureSessionNoticeOwner(context);
+  const message =
+    result.initialRun.status === "rejected"
+      ? t("palette.sessionCreatedWithError", { error: formatUiError(result.initialRun.error) })
+      : t(
+          result.initialRun.status === "started"
+            ? "palette.sessionStarted"
+            : "palette.sessionCreated",
+        );
+  showToast({
+    message,
+    dedupeKey: `session-create:${result.agentId}:${result.key}`,
+    severity: result.initialRun.status === "rejected" ? "error" : "success",
+    actionLabel: t("sessionsView.openSession"),
+    onAction: () => {
+      if (readContext() !== context || !isCurrentOwner()) {
+        return;
+      }
+      openSessionNoticeTarget(context, result.key, result.agentId);
+      onOpen?.();
+    },
+  });
+}
 
 export function prepareBackgroundSessionCompletion(params: {
   enabled: boolean;
@@ -60,7 +99,7 @@ export function prepareBackgroundSessionCompletion(params: {
           if (observed.status === "pending" || observed.pendingError === true) {
             await sleepWithAbort(RETRY_DELAY_MS);
           } else if (observationalTimeout) {
-            // Startup display errors can mean unconfirmed delivery, not a failed run.
+            // Pending startup delivery is not a failed run.
             const initialTurn = context.placementStartup.get(key)?.initialTurn;
             if (initialTurn?.sendState === "failed" && initialTurn.sendRunId === normalizedRunId) {
               result = { status: "error", error: initialTurn.sendError };
@@ -94,13 +133,14 @@ export function prepareBackgroundSessionCompletion(params: {
       const row = context.sessions.state.result?.sessions.find((session) =>
         areUiSessionKeysEquivalent(session.key, key),
       );
+      // A finished run needs no label; any other outcome names itself in one muted word.
       const status =
         result.status === "ok"
-          ? t("sessionsView.statusDone")
+          ? undefined
           : result.status === "timeout"
             ? t("sessionsView.statusTimeout")
             : result.stopReason === "rpc"
-              ? t("sessionsView.statusKilled")
+              ? t("chat.handoffSessionStatus.stopped")
               : t("sessionsView.statusFailed");
       const nativeTarget = sessionNavigationTarget({
         face: "chat",
@@ -118,20 +158,37 @@ export function prepareBackgroundSessionCompletion(params: {
       ) ?? { id: agentId };
       const identity = context.agentIdentity.get(agentId);
       showToast({
-        fifo: true,
+        severity:
+          result.status === "ok"
+            ? "success"
+            : result.status === "timeout"
+              ? "error"
+              : result.stopReason === "rpc"
+                ? undefined
+                : "error",
+        placement: "top-right",
         avatar: {
           id: agentId,
           name: normalizeAgentTargetLabel(agent, identity),
           avatar: resolveAgentAvatarUrl(agent, identity),
           textAvatar: resolveAgentTextAvatar(agent, identity),
         },
-        message: `${resolveSessionDisplayName(key, row)}: ${status}`,
+        message: resolveSessionDisplayName(key, row),
+        description: status,
         actionLabel: t("sessionsView.openSession"),
-        onAction: () => {
+        actionHref: sessionNavigationTarget({ context, face: "chat", sessionKey: key, agentId })
+          .href,
+        onAction: (event) => {
           if (!isCurrentOwner()) {
+            event?.preventDefault();
             return;
           }
-          openSessionNoticeTarget(context, key, agentId);
+          const open = () => openSessionNoticeTarget(context, key, agentId);
+          if (!event) {
+            open();
+          } else if (event.type === "click") {
+            handleNavigationClick(event, open);
+          }
         },
       });
     })();

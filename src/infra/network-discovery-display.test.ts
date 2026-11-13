@@ -5,7 +5,6 @@ import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interface
 import {
   pickBestEffortPrimaryLanIPv4,
   pickBestEffortPrimaryTailnetIPv4,
-  resolveBestEffortGatewayBindHostForDisplay,
 } from "./network-discovery-display.js";
 
 const discoveryErrorMessage = "uv_interface_addresses failed";
@@ -31,21 +30,6 @@ describe("network display discovery", () => {
     mockInterfaceDiscoveryFailure();
 
     expect(pickBestEffortPrimaryTailnetIPv4()).toBeUndefined();
-  });
-
-  it("falls back to loopback when bind host resolution throws", async () => {
-    mockInterfaceDiscoveryFailure();
-
-    await expect(
-      resolveBestEffortGatewayBindHostForDisplay({
-        bindMode: "tailnet",
-        warningPrefix:
-          "Status is using fallback network details because interface discovery failed",
-      }),
-    ).resolves.toEqual({
-      bindHost: "127.0.0.1",
-      warning: `Status is using fallback network details because interface discovery failed: ${discoveryErrorMessage}.`,
-    });
   });
 
   it("still returns discovered tailnet values when interfaces are available", () => {

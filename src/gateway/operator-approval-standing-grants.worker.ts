@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type { Selectable } from "kysely";
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
+import { resolveCronOperatorExecutionRevision } from "../cron/service/jobs-tool-policy.js";
 import { resolveCronJobGrantDefinitionRevision } from "../cron/store/job-config-codec.js";
 import {
   loadedCronStoreFromRows,
@@ -108,6 +109,17 @@ export function migrateCronInferenceStandingGrantReferences(
   }
   maintenance.assertAdmission();
   const { inferenceBinding, ...unchanged } = next;
+  const source = previous.operatorSource;
+  if (
+    source?.executionRevision === resolveCronOperatorExecutionRevision(previous) &&
+    isDeepStrictEqual(next.operatorSource, {
+      ...source,
+      executionRevision: resolveCronOperatorExecutionRevision(next),
+    })
+  ) {
+    // Doctor may update only the derivative revision, never the captured authority.
+    unchanged.operatorSource = source;
+  }
   if (
     previous.inferenceBinding !== undefined ||
     !inferenceBinding ||

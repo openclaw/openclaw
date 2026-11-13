@@ -267,7 +267,12 @@ describe("browser control server", () => {
     });
     pw("storageGetViaPlaywright").mockResolvedValueOnce({ values: { token: "value" } });
     for (const [route, mock, result, options] of [
-      ["/cookies", "cookiesGetViaPlaywright", { cookies: [{ name: "session" }] }, {}],
+      [
+        "/cookies",
+        "cookiesGetViaPlaywright",
+        { cookies: [{ name: "session" }] },
+        { partition: undefined, signal: expect.any(AbortSignal) },
+      ],
       [
         "/storage/local?key=token",
         "storageGetViaPlaywright",
@@ -354,6 +359,22 @@ describe("browser control server", () => {
         timeoutMs: 120_000,
       }),
     );
+  });
+
+  it("refuses strict-policy Chrome MCP navigation before dispatching uninspectable redirects", async () => {
+    setBrowserControlServerProfiles({ openclaw: { color: "#FF4500", driver: "existing-session" } });
+    setBrowserControlServerSsrFPolicy({ dangerouslyAllowPrivateNetwork: false });
+    const response = await postResponse(await startServerAndBase(), "/navigate", {
+      url: "http://93.184.216.34/redirect",
+      targetId: "7",
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: expect.stringContaining("requires redirect-hop inspection"),
+    });
+    const chromeMcp = await import("./chrome-mcp.js");
+    expect(chromeMcp.navigateChromeMcpPage).not.toHaveBeenCalled();
   });
 
   it("agent contract: navigation + common act commands", async () => {
@@ -612,6 +633,24 @@ describe("browser control server", () => {
     const result = await post<{ error?: string }>(route, body);
     expect(result.error).toContain("Invalid path");
     expect(pw(mock)).not.toHaveBeenCalled();
+  });
+
+  it.runIf(process.platform !== "win32").each([
+    ["/download", "downloadViaPlaywright", DEFAULT_DOWNLOAD_DIR],
+    ["/wait/download", "waitForDownloadViaPlaywright", DEFAULT_DOWNLOAD_DIR],
+    ["/trace/stop", "traceStopViaPlaywright", DEFAULT_TRACE_DIR],
+  ] as const)("%s preserves a literal path beside a directory", async (route, mock, root) => {
+    await startServerAndBase();
+    await fs.mkdir(root, { recursive: true });
+    const neighbor = path.join(root, "literal-output");
+    await fs.mkdir(neighbor);
+    try {
+      const result = await post<{ ok?: boolean }>(route, { ref: "e12", path: " literal-output " });
+      expect(result.ok).toBe(true);
+      expectBrowserCallFields(pw(mock), { path: path.join(root, " literal-output ") });
+    } finally {
+      await fs.rmdir(neighbor);
+    }
   });
 
   it("agent contract: stop endpoint", async () => {

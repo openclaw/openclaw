@@ -1,28 +1,29 @@
-import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rename, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { collectSourceFileContents } from "../../scripts/lib/source-file-scan-cache.mts";
+import {
+  collectSourceFileContents,
+  mapSourceFileContents,
+} from "../../scripts/lib/source-file-scan-cache.mts";
 import { createDeferred } from "../helpers/promise.js";
 
 const tempDirs: string[] = [];
 let pendingScan: ReturnType<typeof collectSourceFileContents> | undefined;
 
-async function sourceFixture(files: Record<string, string>) {
+async function sourceFixture(files: Record<string, string | Uint8Array>) {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-source-scan-"));
   tempDirs.push(repoRoot);
   await mkdir(path.join(repoRoot, "src"));
   for (const [name, content] of Object.entries(files)) {
     await writeFile(path.join(repoRoot, "src", name), content, "utf8");
   }
-  return (overrides: Partial<Parameters<typeof collectSourceFileContents>[0]>) =>
-    collectSourceFileContents({
-      repoRoot,
-      scanRoots: ["src"],
-      scanExtensions: new Set([".ts"]),
-      ignoredDirNames: new Set(),
-      ...overrides,
-    });
+  return {
+    repoRoot,
+    scanRoots: ["src"],
+    scanExtensions: new Set([".ts"]),
+    ignoredDirNames: new Set<string>(),
+  };
 }
 
 afterEach(async () => {
@@ -32,58 +33,49 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
-it("bounds concurrent source file reads while preserving sorted output", async ({ signal }) => {
-  const names = Array.from({ length: 9 }, (_, index) => `file-${index}.ts`);
+it("bounds reads, refills the pool, and returns sorted content despite a held first read", async ({
+  signal,
+}) => {
+  const names = ["a.ts", "b.ts", "c.ts", "d.ts"];
   const fixture = await sourceFixture(Object.fromEntries(names.map((name) => [name, "source"])));
-
-  let activeFiles = 0;
-  let maxActiveFiles = 0;
-  const reads = names.map((name) => ({
-    name,
-    started: createDeferred(),
-    release: createDeferred(),
-    completed: createDeferred(),
-  }));
-  const releaseReads = () => reads.forEach((read) => read.release.resolve());
-
+  const held = createDeferred();
+  const refilled = createDeferred();
+  let active = 0;
+  let maximum = 0;
+  const release = () => held.resolve();
   signal.throwIfAborted();
-  signal.addEventListener("abort", releaseReads, { once: true });
-  const scan = (pendingScan = fixture({
-    maxConcurrentReads: 3,
-    statFile: (filePath) => {
-      activeFiles += 1;
-      maxActiveFiles = Math.max(maxActiveFiles, activeFiles);
-      return stat(filePath);
+  signal.addEventListener("abort", release, { once: true });
+  const scan = (pendingScan = collectSourceFileContents({
+    ...fixture,
+    maxConcurrentReads: 2,
+    statFile: (file) => {
+      maximum = Math.max(maximum, ++active);
+      return stat(file);
     },
-    readFile: async (filePath) => {
-      const read = reads.find((entry) => entry.name === path.basename(filePath))!;
-      read.started.resolve();
-      await read.release.promise;
-      activeFiles -= 1;
-      read.completed.resolve();
-      return `content:${read.name}`;
+    readFile: async (file) => {
+      const name = path.basename(file);
+      if (name === names[0]) {
+        await held.promise;
+      }
+      active--;
+      if (name === names.at(-1)) {
+        refilled.resolve();
+      }
+      return `content:${name}`;
     },
   }));
-
   try {
-    for (let offset = 0; offset < reads.length; offset += 3) {
-      const batch = reads.slice(offset, offset + 3);
-      await Promise.all(batch.map((read) => read.started.promise));
-      signal.throwIfAborted();
-      expect(activeFiles).toBe(3);
-      // Complete each admitted batch backwards so completion order cannot stand in for file order.
-      for (const read of batch.toReversed()) {
-        read.release.resolve();
-        await read.completed.promise;
-      }
-    }
+    await refilled.promise;
+    signal.throwIfAborted();
+    expect(maximum).toBe(2);
+    expect(active).toBe(1);
+    release();
     const files = await scan;
-    expect(maxActiveFiles).toBe(3);
     expect(files.map((file) => file.relativeFile)).toEqual(names.map((name) => `src/${name}`));
     expect(files.map((file) => file.content)).toEqual(names.map((name) => `content:${name}`));
   } finally {
-    signal.removeEventListener("abort", releaseReads);
-    releaseReads();
+    signal.removeEventListener("abort", release);
+    release();
     await scan;
   }
 });
@@ -95,7 +87,8 @@ it.each<[string, string, number, number]>([
   const scan = await sourceFixture({ "oversized.ts": content });
   let readCalls = 0;
   await expect(
-    scan({
+    collectSourceFileContents({
+      ...scan,
       maxFileBytes: 8,
       readFile: async () => {
         readCalls += 1;
@@ -105,3 +98,88 @@ it.each<[string, string, number, number]>([
   ).rejects.toThrow(`source scan file exceeds 8 byte limit: src/oversized.ts (${bytes} bytes)`);
   expect(readCalls).toBe(calls);
 });
+
+it("maps decoded contents to compact results in source-path order", async () => {
+  const fixture = await sourceFixture({
+    "b.ts": new Uint8Array([0xff]),
+    "a.ts": "\uFEFFhello\r\n猫",
+  });
+  const results = await mapSourceFileContents(fixture, ({ relativeFile, content }) => [
+    relativeFile,
+    Buffer.byteLength(content, "utf8"),
+  ]);
+  expect(results).toEqual([
+    ["src/a.ts", 13],
+    ["src/b.ts", 3],
+  ]);
+});
+
+it("propagates a read failure before mapping its source", async () => {
+  const fixture = await sourceFixture({ "denied.ts": "source" });
+  const error = Object.assign(new Error("read denied"), { code: "EACCES" });
+  let mapped = 0;
+  await expect(
+    mapSourceFileContents(
+      {
+        ...fixture,
+        readFile: async () => {
+          throw error;
+        },
+      },
+      () => ++mapped,
+    ),
+  ).rejects.toBe(error);
+  expect(mapped).toBe(0);
+});
+
+it.each(["delete", "grow", "replace"] as const)(
+  "preserves read semantics when a source changes after stat: %s",
+  async (mutation) => {
+    for (const mode of ["collect", "map"] as const) {
+      const fixture = await sourceFixture({ "mutable.ts": "before" });
+      let mapped = 0;
+      const params = {
+        ...fixture,
+        maxFileBytes: 8,
+        statFile: async (file: string) => {
+          const before = await stat(file);
+          if (mutation === "delete") {
+            await rm(file);
+          } else if (mutation === "grow") {
+            await writeFile(file, "x".repeat(16));
+          } else {
+            const replacement = `${file}.replacement`;
+            await writeFile(replacement, "after");
+            await rename(replacement, file);
+          }
+          return before;
+        },
+      };
+      const scan =
+        mode === "collect"
+          ? collectSourceFileContents(params)
+          : mapSourceFileContents(params, ({ relativeFile, content }) => {
+              mapped += 1;
+              return { relativeFile, content };
+            });
+      if (mutation === "delete") {
+        await expect(scan).rejects.toMatchObject({ code: "ENOENT" });
+      } else if (mutation === "grow") {
+        await expect(scan).rejects.toThrow(
+          "source scan file exceeds 8 byte limit: src/mutable.ts (16 bytes)",
+        );
+      } else {
+        await expect(scan).resolves.toEqual([
+          {
+            ...(mode === "collect"
+              ? { filePath: path.join(fixture.repoRoot, "src/mutable.ts") }
+              : {}),
+            relativeFile: "src/mutable.ts",
+            content: "after",
+          },
+        ]);
+      }
+      expect(mapped).toBe(mode === "map" && mutation === "replace" ? 1 : 0);
+    }
+  },
+);

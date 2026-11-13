@@ -1,7 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/channel-actions";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeOptionalString,
+  readNonBlankString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildGoogleMeetCalendarDayWindow,
   findGoogleMeetCalendarEvent,
@@ -166,7 +169,7 @@ export async function exportGoogleMeetBundleFromParams(
     request: buildGoogleMeetExportRequest(resolved, normalizeOptionalString(raw.calendarId)),
     tokenSource: resolved.token.refreshed ? "refresh-token" : "cached-access-token",
     calendarEvent: resolved.calendarEvent,
-    outputDir: normalizeOptionalString(raw.outputDir) ?? normalizeOptionalString(raw.output),
+    outputDir: readNonBlankString(raw.outputDir) ?? readNonBlankString(raw.output),
     zip: raw.zip === true,
     dryRun: raw.dryRun === true,
   });

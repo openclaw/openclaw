@@ -2,6 +2,44 @@ import { describe, expect, it } from "vitest";
 import { validateSessionsPatchParams, validateSessionsPatchManyParams } from "../index.js";
 
 describe("session patch schema", () => {
+  it("rejects the cron-only scheduled memory parent receipt", () => {
+    const scheduledMemoryParent = {
+      sessionKey: "agent:main:dashboard:parent",
+      sessionId: "2f1d2a4e-5c6b-4d7e-8f90-1a2b3c4d5e6f",
+      senderIsOwner: true,
+    };
+    expect(validateSessionsPatchParams({ key: "agent:main:chat", scheduledMemoryParent })).toBe(
+      false,
+    );
+    expect(
+      validateSessionsPatchManyParams({
+        targets: [{ key: "agent:main:chat" }],
+        patch: { scheduledMemoryParent },
+      }),
+    ).toBe(false);
+  });
+
+  it.each([null, 42])("accepts a per-target unread marker guard (%s)", (expectedMarkedUnreadAt) => {
+    expect(
+      validateSessionsPatchManyParams({
+        targets: [{ key: "agent:main:read", expectedMarkedUnreadAt }],
+        patch: { unread: false },
+      }),
+    ).toBe(true);
+  });
+
+  it.each([-1, "42"])(
+    "rejects an invalid per-target unread marker guard (%s)",
+    (expectedMarkedUnreadAt) => {
+      expect(
+        validateSessionsPatchManyParams({
+          targets: [{ key: "agent:main:read", expectedMarkedUnreadAt }],
+          patch: { unread: false },
+        }),
+      ).toBe(false);
+    },
+  );
+
   it.each([[null, true]] as const)(
     "validates snoozedUntil %j for single and batch patches",
     (snoozedUntil, valid) => {

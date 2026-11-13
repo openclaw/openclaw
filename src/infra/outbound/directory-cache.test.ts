@@ -32,12 +32,10 @@ describe("buildDirectoryCacheKey", () => {
 });
 
 describe("DirectoryCache", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
+  afterEach(() => vi.useRealTimers());
 
-  it("expires entries at ttl and partitions entries by config identity", () => {
-    vi.useFakeTimers();
+  it.each([-60_000, 60_000])("expires by elapsed ttl after a %i ms clock step", (clockStepMs) => {
+    vi.useFakeTimers({ toFake: ["Date", "performance"] });
     const cache = new DirectoryCache<string>(1_000);
     const cfgA = {} as OpenClawConfig;
     const cfgB = {} as OpenClawConfig;
@@ -45,6 +43,8 @@ describe("DirectoryCache", () => {
     cache.set("a", "first", cfgA);
     expect(cache.get("a", cfgA)).toBe("first");
 
+    vi.setSystemTime(Date.now() + clockStepMs);
+    expect(cache.get("a", cfgA)).toBe("first");
     vi.advanceTimersByTime(1_000);
     expect(cache.get("a", cfgA)).toBeUndefined();
 

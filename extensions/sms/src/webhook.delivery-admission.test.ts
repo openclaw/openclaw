@@ -1,10 +1,13 @@
-import { createHmac } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedSmsAccount } from "./types.js";
 import { createSmsWebhookHandler } from "./webhook.js";
-import { createSmsTestAccount, createSmsTestDeliveryRecorder } from "./webhook.test-support.js";
+import {
+  createSmsTestAccount,
+  createSmsTestDeliveryRecorder,
+  signSmsTestForm,
+} from "./webhook.test-support.js";
 
 function createRequest(account: ResolvedSmsAccount, index: number): IncomingMessage {
   const form = {
@@ -14,20 +17,12 @@ function createRequest(account: ResolvedSmsAccount, index: number): IncomingMess
     MessageSid: `SM${index.toString(16).padStart(32, "0")}`,
     MessageStatus: "sent",
   };
-  const body = new URLSearchParams(form).toString();
-  const signatureInput =
-    account.publicWebhookUrl +
-    Object.keys(form)
-      .toSorted()
-      .map((key) => `${key}${form[key as keyof typeof form]}`)
-      .join("");
+  const { body, signature } = signSmsTestForm(form, account);
   const req = Readable.from([body]) as IncomingMessage;
   req.method = "POST";
   req.headers = {
     "content-length": String(Buffer.byteLength(body)),
-    "x-twilio-signature": createHmac("sha1", account.authToken)
-      .update(signatureInput)
-      .digest("base64"),
+    "x-twilio-signature": signature,
   };
   Object.defineProperty(req, "socket", {
     value: { remoteAddress: "203.0.113.50" },

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
+import { hasErrnoCode } from "./errno.js";
 import {
   assertCanonicalPathWithinBase,
   packageNameMatchesId,
@@ -24,24 +25,28 @@ const resolveDir = (id: string) =>
 
 // Vitest evaluates skipIf while declaring tests, so probe before describe().
 const canCreateDirectorySymlinks = (() => {
-  let probeDir: string | undefined;
+  const probeDir = fsSync.mkdtempSync(
+    path.join(os.tmpdir(), "openclaw-install-safe-dir-symlink-probe-"),
+  );
   try {
-    probeDir = fsSync.mkdtempSync(
-      path.join(os.tmpdir(), "openclaw-install-safe-dir-symlink-probe-"),
-    );
     const targetDir = path.join(probeDir, "target");
     const linkDir = path.join(probeDir, "link");
     fsSync.mkdirSync(targetDir);
-    fsSync.symlinkSync(targetDir, linkDir, directorySymlinkType);
-    return true;
-  } catch {
-    return false;
-  } finally {
-    if (probeDir) {
-      try {
-        fsSync.rmSync(probeDir, { recursive: true, force: true });
-      } catch {}
+    try {
+      fsSync.symlinkSync(targetDir, linkDir, directorySymlinkType);
+    } catch (error) {
+      if (
+        ["ENOSYS", "ENOTSUP", "EOPNOTSUPP"].some((code) => hasErrnoCode(error, code)) ||
+        (process.platform === "win32" &&
+          (hasErrnoCode(error, "EPERM") || hasErrnoCode(error, "EACCES")))
+      ) {
+        return false;
+      }
+      throw error;
     }
+    return true;
+  } finally {
+    fsSync.rmSync(probeDir, { recursive: true, force: true });
   }
 })();
 

@@ -224,7 +224,12 @@ export function scanUnbreakableSpans(
   maxChars: number,
 ): UnbreakableSpan[] {
   const spans: UnbreakableSpan[] = findMarkdownLinkSourceSpans(text, { html: false }).map(
-    ([start, end]) => ({ start, end, complete: true }),
+    ({ start, end, definition }) => ({
+      start,
+      end,
+      // Unlike a closed inline link, a definition's trailing URL can still grow.
+      complete: !definition || end < text.length,
+    }),
   );
   const isInsideCode = buildInlineCodeIndex(text, fenceSpans);
   // Complete Markdown grammar belongs to the parser; only unfinished suffixes need buffering.

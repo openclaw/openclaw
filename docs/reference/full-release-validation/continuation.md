@@ -55,6 +55,19 @@ prints the next eligible check and resumes automatically. Permission-denied
 403 responses remain terminal. A local state file under `$TMPDIR/openclaw-frv/`
 retains the retry boundary and reported events across watcher restarts.
 
+`status` lists blockers by owner, job, conclusion, attempt, and URL in text and
+JSON, including parent failures before the immutable plan is sealed. `watch`
+exits with code 1 when it first observes a failed current-attempt parent job, a
+failed current artifact producer, or a policy-blocking failure carried into a
+child's latest attempt. Partial reruns can retain a failed job without executing
+it again. Duplicate or unfinished job identities remain pending.
+
+The watcher records each blocker before it exits. Resume with the same command
+and state path to keep observing diagnostics without reporting that blocker
+again. Inspect `status`, then preview recovery with `continue --failed --dry-run`.
+An undispatched child requires a fresh all-group FRV; watcher exit does not
+authorize recovery or stop Diagnostic Drain.
+
 Once the immutable execution plan is available, `watch` reports its frozen
 candidate SHA and observes the admitted context ref's current tip freshly. If
 that tip advances, the watcher keeps observing the original run and labels the
@@ -73,8 +86,12 @@ state can repeat notifications, but cannot authorize a retry or publication.
 `rerun --child` waits for one failed child, sends exactly one retry request,
 confirms the new attempt has no duplicate jobs, and
 records an audit line. It refuses children past `--max-attempts` (default 2,
-which allows one rerun). When a failed consumer is bound to a green producer's
-run attempt, it reruns that producer and its dependents instead. It returns
+which allows one rerun). The install-smoke update and non-root installer jobs
+verify the candidate payload against the current run attempt. When a failed-jobs
+rerun would re-execute one of them (the job itself failed, or an upstream job
+such as its installer image build failed), it reruns the green producer and its
+dependents instead (`mode: producer`). If a failed job sits outside that dependent set, it reruns the whole
+child (`mode: all-jobs`), because a job rerun cannot also retry it. It returns
 after the new attempt starts; `continue --failed` still owns the final reseal.
 
 When every workload passed and only **Seal child receipt** failed, the preview
@@ -85,10 +102,14 @@ and still requires `continue --failed` plus strict verification before reporting
 qualification accepted. A metadata retry starting is not qualification success.
 
 `continue --failed` reruns each failed child's jobs as soon as that child is
-terminal, while sibling children and the original parent may still run. It
+terminal (choosing the same producer or all-jobs mode for attempt-bound install-smoke
+payload consumers), while sibling children and the original parent may still run. It
 adopts active attempts without duplicating them and leaves green child
-workflows untouched. After the resulting child evidence is green and the
-original parent finishes, it reruns the parent once. The original Decision and
+workflows untouched. Each invocation reruns a child once; if that rerun fails
+again, it exits at once with the failed attempt and remaining rerun budget rather
+than waiting for siblings. A duplicate-job (ghost) attempt is unsealable: start
+a fresh all-group FRV instead of rerunning again. After the resulting child
+evidence is green and the original parent finishes, it reruns the parent once. The original Decision and
 Drain may disagree after an early retry; the final parent attempt restores the
 same immutable execution plan and seals the updated evidence. Existing plan
 and attempt-binding checks remain mandatory.

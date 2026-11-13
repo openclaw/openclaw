@@ -9,7 +9,8 @@ import {
 } from "./doctor-health-contributions.test-support.js";
 import type { HealthFinding } from "./health-checks.js";
 
-vi.mock("../infra/openclaw-root.js", () => ({
+vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/openclaw-root.js")>()),
   resolveOpenClawPackageRoot: vi.fn(),
 }));
 
@@ -33,12 +34,7 @@ function packageRoot(...segments: string[]) {
 }
 
 beforeEach(async () => {
-  globalRoot = path.join(
-    dirs.make("doctor-update-snapshots-"),
-    "operator's prefix",
-    "lib",
-    "node_modules",
-  );
+  globalRoot = path.join(dirs.make("snapshots-"), "operator's prefix", "lib", "node_modules");
   await fs.mkdir(path.join(globalRoot, "openclaw"), { recursive: true });
   packageRoot("openclaw");
 });

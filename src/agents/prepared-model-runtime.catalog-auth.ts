@@ -1,8 +1,12 @@
 import { isDeepStrictEqual } from "node:util";
+import { getRuntimeConfigCapture } from "../config/runtime-config-capture-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog-outcome.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { listManifestSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import {
   resolveAgentCredentialMapFromStore,
@@ -30,10 +34,16 @@ import { preparedSyntheticAuthProviderScope } from "./prepared-model-runtime.syn
 
 // Startup captures each CLI login once; ordinary reads recheck it after this window.
 const NATIVE_LOGIN_RECHECK_MS = 60_000;
+const log = createSubsystemLogger("agents/prepared-model-runtime");
 
-const SERVICE_TIER_OBSERVATION_TTL_MS = 5 * 60_000;
+// A single honored response does not prove capacity recovered; retain the last downgrade for a minute.
+const SERVICE_TIER_OBSERVATION_TTL_MS = 60_000;
 function readDirectBinding(config: OpenClawConfig, provider: string) {
-  const { providerConfig, ref } = resolveProviderConfigSecretInput(config, provider);
+  const { providerConfig, ref } = resolveProviderConfigSecretInput(
+    config,
+    provider,
+    getRuntimeConfigCapture(config)?.source,
+  );
   return { apiKey: ref ?? providerConfig?.apiKey, auth: providerConfig?.auth };
 }
 type AccountCatalogCredential =
@@ -223,6 +233,9 @@ export function createPreparedAccountCatalogAccess(
           ...observation,
           baseUrl: normalizeCatalogRouteBaseUrl(observation.baseUrl) ?? observation.baseUrl,
         };
+        if (observation.requestedTier === observation.responseTier) {
+          return false;
+        }
         const matchesRequest = (candidate: ModelServiceTierObservation) =>
           matchesServiceTierRoute(candidate, route) &&
           candidate.requestedTier === route.requestedTier;
@@ -240,16 +253,11 @@ export function createPreparedAccountCatalogAccess(
             return !matchesRequest(candidate);
           },
         );
-        const matched = observation.requestedTier === observation.responseTier;
-        if (!matched) {
-          captured.serviceTierObservations = [
-            ...captured.serviceTierObservations.slice(-127),
-            { ...route, expiresAt: now + SERVICE_TIER_OBSERVATION_TTL_MS },
-          ];
-        }
-        changed ||= matched
-          ? Boolean(previous)
-          : !previous || previous.responseTier !== observation.responseTier;
+        captured.serviceTierObservations = [
+          ...captured.serviceTierObservations.slice(-127),
+          { ...route, expiresAt: now + SERVICE_TIER_OBSERVATION_TTL_MS },
+        ];
+        changed ||= !previous || previous.responseTier !== observation.responseTier;
         scheduleExpiry();
         if (changed) {
           onChanged?.();
@@ -267,7 +275,11 @@ export function createPreparedAccountCatalogAccess(
       let observation = readAccount(identityKey, params.credential);
       if (!observation) {
         if (!params.allowDiscovery) {
-          return { outcomes: [], isCurrent: () => ownerIsCurrent() && !accounts.has(identityKey) };
+          return {
+            outcomes: [],
+            hasPublishedCatalog: false,
+            isCurrent: () => ownerIsCurrent() && !accounts.has(identityKey),
+          };
         }
         observation = createAccount(identityKey, {
           source: "profile",
@@ -299,9 +311,14 @@ export function createPreparedAccountCatalogAccess(
                 ? createAccount(identityKey, { source: "profile", credential: params.credential })
                 : captured;
               published.outcomes = outcomes;
-              if (pending.refresh && captured.serviceTierObservations?.length) {
+              if (pending.refresh) {
                 scheduleExpiry();
-                onChanged?.();
+                if (
+                  captured.serviceTierObservations?.length ||
+                  !isDeepStrictEqual(captured.outcomes, outcomes)
+                ) {
+                  onChanged?.();
+                }
               }
               return published;
             })
@@ -323,6 +340,7 @@ export function createPreparedAccountCatalogAccess(
       const outcomes = published.outcomes;
       return {
         outcomes: outcomes ?? [],
+        hasPublishedCatalog: outcomes !== undefined,
         isCurrent: () => current(published) && published.outcomes === outcomes,
       };
     },
@@ -557,8 +575,17 @@ export function createNativeLoginRecheck(
       return undefined;
     }
     checkedAt = now;
-    pending = recheck()
-      .catch(() => undefined)
+    // The owner publishes after the triggering read returns; that caller's closed
+    // plugin invocation scope must not own the probe or the publication.
+    pending = runInDetachedAsyncContext(recheck)
+      .catch((error: unknown) => {
+        if (
+          !params.retirementSignal.aborted &&
+          !(error instanceof PreparedModelRuntimePublicationSupersededError)
+        ) {
+          log.warn(`native login recheck failed: ${formatErrorMessage(error)}`);
+        }
+      })
       .finally(() => {
         pending = undefined;
       });

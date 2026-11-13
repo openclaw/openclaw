@@ -49,16 +49,18 @@ export function createResponsesSteering(params: {
     input: ResponseInput;
   }) => void;
   assertActive: () => void;
-  needsContinuation?: () => boolean;
+  needsContinuation?: boolean;
 }) {
+  const needsContinuation = params.needsContinuation;
   let responseId: string | undefined;
-  let sealed = false;
+  let active: typeof params | undefined = params;
   let unsubscribe: (() => void) | void;
   const pending: Submission[] = [];
   const accepted = new Map<string, ResponseInput>();
   const acknowledged = new Set<string>();
   const seal = () => {
-    sealed = true;
+    // Continuations need acknowledgements, not the completed request's callbacks.
+    active = undefined;
     const cleanup = unsubscribe;
     unsubscribe = undefined;
     cleanup?.();
@@ -84,30 +86,31 @@ export function createResponsesSteering(params: {
       if (!isRecord(event)) {
         return false;
       }
-      if (event.type === "response.created" && !responseId && !sealed) {
+      if (event.type === "response.created" && !responseId && active) {
         const response = isRecord(event.response) ? event.response : undefined;
         if (typeof response?.id !== "string" || !response.id.trim()) {
           throw new Error("Responses steering requires a response identity");
         }
         const activeResponseId = response.id;
         responseId = activeResponseId;
-        const cleanup = params.onActiveResponse({
-          needsContinuation: params.needsContinuation,
+        const cleanup = active.onActiveResponse({
+          needsContinuation: needsContinuation === undefined ? undefined : () => needsContinuation,
           steer(messages) {
-            if (sealed || messages.length === 0) {
+            if (!active || messages.length === 0) {
               return Promise.resolve(false);
             }
-            params.assertActive();
-            const converted = params.toInput(messages);
+            active.assertActive();
+            const converted = active.toInput(messages);
             const submit = (input: ResponseInput) => {
-              if (sealed || input.length === 0) {
+              const callbacks = active;
+              if (!callbacks || input.length === 0) {
                 return Promise.resolve(false);
               }
-              params.assertActive();
+              callbacks.assertActive();
               return new Promise<boolean>((resolve, reject) => {
                 pending.push({ input, resolve, reject });
                 // Record before dispatch: a throwing send cannot prove the frame stayed local.
-                params.send({
+                callbacks.send({
                   type: "response.steer",
                   previous_response_id: activeResponseId,
                   input,
@@ -117,7 +120,7 @@ export function createResponsesSteering(params: {
             return Array.isArray(converted) ? submit(converted) : converted.then(submit);
           },
         });
-        if (sealed) {
+        if (!active) {
           cleanup?.();
         } else {
           unsubscribe = cleanup;

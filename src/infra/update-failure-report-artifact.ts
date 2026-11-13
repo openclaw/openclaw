@@ -192,6 +192,7 @@ export async function writeUpdateRunReportArtifact(params: {
     | Pick<UpdateRunReport, "markdown">
     | ((run?: UpdateRunRecord) => Pick<UpdateRunReport, "markdown">);
   readRun?: () => UpdateRunRecord | undefined;
+  record?: UpdateRunRecord;
   env?: NodeJS.ProcessEnv;
   detached?: boolean;
   assertCurrent?: () => void;
@@ -208,7 +209,7 @@ export async function writeUpdateRunReportArtifact(params: {
   const outputPath = path.join(directory, `${id}.md`);
   const write = async () => {
     params.assertCurrent?.();
-    const run = params.readRun?.();
+    const run = params.record ?? params.readRun?.();
     const report = typeof params.report === "function" ? params.report(run) : params.report;
     if (params.readRun && !run) {
       const previous = await readSavedUpdateReport(outputPath);
@@ -222,7 +223,7 @@ export async function writeUpdateRunReportArtifact(params: {
     const failurePath =
       classifyUpdateOutcome(params.result) === "failed"
         ? await writeTriageUpdateFailure(
-            { result: params.result },
+            { result: { ...params.result, target: run?.target } },
             {
               env,
               assertCurrent: params.assertCurrent,

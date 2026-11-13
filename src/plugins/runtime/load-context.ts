@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { createSubsystemLogger } from "../../logging.js";
+import { captureEnvironmentKey } from "../../shared/environment-key.js";
 import { isDeeplyFrozenPlainData } from "../../shared/immutable-data.js";
 import { normalizePluginsConfig } from "../config-state.js";
 import { hashStableJson } from "../installed-plugin-index-hash.js";
@@ -27,12 +28,14 @@ export type PluginRuntimeLoadContext = {
   autoEnabledReasons: Readonly<Record<string, string[]>>;
   workspaceDir: string | undefined;
   env: NodeJS.ProcessEnv;
+  environmentKey: object;
   logger: PluginLogger;
   manifestRegistry?: PluginManifestRegistry;
   metadataSnapshot?: PluginMetadataSnapshot;
   installRecords?: Record<string, PluginInstallRecord>;
   preferBuiltPluginArtifacts?: boolean;
   expectedSourceDigests?: PluginLoadOptions["expectedSourceDigests"];
+  selectedContextEngine?: PluginRuntimeLoadContextState["selectedContextEngine"];
 };
 
 const immutableActivationValueHashes = new WeakMap<object, string>();
@@ -65,7 +68,8 @@ function activationInputFingerprint(config: OpenClawConfig, env: NodeJS.ProcessE
 
 export function setPluginRuntimeLoadContext(
   registry: PluginRegistry,
-  context: PluginRuntimeLoadContext,
+  context: Omit<PluginRuntimeLoadContext, "environmentKey"> &
+    Partial<Pick<PluginRuntimeLoadContext, "environmentKey">>,
   registrationConfigKey?: string,
   loaderCacheIdentity?: PluginRuntimeLoadContextState["loaderCacheIdentity"],
 ): void {
@@ -73,8 +77,13 @@ export function setPluginRuntimeLoadContext(
   const capturedIdentity = previous?.loaderCacheIdentity ?? loaderCacheIdentity;
   const bound = {
     ...context,
+    environmentKey: context.environmentKey ?? captureEnvironmentKey(context.env),
     activationInputFingerprint: activationInputFingerprint(context.rawConfig, context.env),
     ...(capturedIdentity ? { loaderCacheIdentity: capturedIdentity } : {}),
+    // Selection belongs to the generation that registered these closures, not later metadata.
+    selectedContextEngine: previous
+      ? previous.selectedContextEngine
+      : context.selectedContextEngine,
     // Host preparation may rebind metadata, but it cannot change already-registered closures.
     registrationConfigKey:
       previous?.registrationConfigKey ??

@@ -26,7 +26,10 @@ import {
   buildTelegramInboundContextPayload,
   loadTelegramMessageContextSessionRuntime,
 } from "./bot-message-context.session.js";
-import type { BuildTelegramMessageContextParams } from "./bot-message-context.types.js";
+import type {
+  BuildTelegramMessageContextParams,
+  TelegramMessageContextOptions,
+} from "./bot-message-context.types.js";
 import {
   buildTypingThreadParams,
   extractTelegramForumFlag,
@@ -40,6 +43,7 @@ import {
   resolveTelegramConversationRoute,
 } from "./conversation-route.js";
 import { enforceTelegramDmAccess } from "./dm-access.js";
+import { isTelegramForumTopicTitleUpdate } from "./forum-service-message.js";
 import { resolveTelegramForumTopicMetadata } from "./forum-topic-metadata.js";
 import { evaluateTelegramGroupBaseAccess } from "./group-access.js";
 import { resolveTelegramNativeCommandAdmission } from "./ingress.js";
@@ -51,6 +55,7 @@ import {
   resolveTelegramReactionVariant,
   resolveTelegramStatusReactionEmojis,
 } from "./status-reaction-variants.js";
+import { resolveTelegramDirectTopicNameCacheScope } from "./topic-name-cache.js";
 
 export type {
   BuildTelegramMessageContextParams,
@@ -92,6 +97,7 @@ export type TelegramMessageContext = {
   ackReactionPromise: Promise<boolean> | null;
   statusReactionController: TelegramStatusReactionController | null;
   accountId: string;
+  pluginCommandDispatch?: TelegramMessageContextOptions["pluginCommandDispatch"];
 };
 
 export const buildTelegramMessageContext = async ({
@@ -102,6 +108,7 @@ export const buildTelegramMessageContext = async ({
   replyMedia = [],
   replyChain = [],
   promptContext = [],
+  resolveSenderMedia,
   storeAllowFrom,
   options,
   bot,
@@ -145,20 +152,22 @@ export const buildTelegramMessageContext = async ({
       : undefined;
   const replyThreadId = threadSpec.id;
   const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
-  let topicName: string | undefined;
-  let isBotOwnedThread = false;
-  if (isForum && resolvedThreadId != null) {
+  const resolveTopicMetadata = async (threadId: number, direct = false) => {
     const topicRuntime = await loadTelegramMessageContextSessionRuntime(sessionRuntime);
-    const topicNameCacheScope = topicRuntime.resolveStorePath(cfg.session?.store, {
+    let scope = topicRuntime.resolveStorePath(cfg.session?.store, {
       agentId:
         ownerAgentId?.trim() ||
         resolveTelegramAccountOwnerAgentId({ cfg, accountId: account.accountId }),
     });
-    const topic = await resolveTelegramForumTopicMetadata({
-      msg,
-      threadId: resolvedThreadId,
-      scope: topicNameCacheScope,
-    });
+    if (direct) {
+      scope = resolveTelegramDirectTopicNameCacheScope(scope, account.accountId);
+    }
+    return resolveTelegramForumTopicMetadata({ msg, threadId, scope });
+  };
+  let topicName: string | undefined;
+  let isBotOwnedThread = false;
+  if (isForum && resolvedThreadId != null) {
+    const topic = await resolveTopicMetadata(resolvedThreadId);
     topicName = topic.topicName;
     isBotOwnedThread = primaryCtx.me?.id !== undefined && topic.creatorUserId === primaryCtx.me.id;
   }
@@ -296,15 +305,29 @@ export const buildTelegramMessageContext = async ({
     return null;
   }
 
+  // Private bot forums use message_thread_id/is_topic_message. They are direct
+  // conversations, not group forums or channel Direct Messages topics.
+  if (
+    !isGroup &&
+    threadSpec.scope === "dm" &&
+    dmThreadId != null &&
+    (msg.is_topic_message === true || isTelegramForumTopicTitleUpdate(msg))
+  ) {
+    const topic = await resolveTopicMetadata(dmThreadId, true);
+    topicName = topic.topicName;
+  }
+
   route = applyTelegramTargetSession({
     cfg,
     route,
+    bindingMode,
     chatId,
     isGroup,
     senderId,
     dmThreadId,
     botHasTopicsEnabled:
-      (threadSpec.scope === "dm" && msg.is_topic_message === true) ||
+      (threadSpec.scope === "dm" &&
+        (msg.is_topic_message === true || isTelegramForumTopicTitleUpdate(msg))) ||
       resolveTelegramBotHasTopicsEnabled(primaryCtx.me),
   });
   const { sessionKey } = route;
@@ -399,12 +422,17 @@ export const buildTelegramMessageContext = async ({
     }
   }
 
+  const senderMedia =
+    isGroup && requireMention && bodyResult.effectiveWasMentioned && !bodyResult.commandSource
+      ? await resolveSenderMedia?.()
+      : undefined;
   const { ctxPayload, skillFilter, turn } = await buildTelegramInboundContextPayload({
     ...inboundContext,
+    ...(senderMedia ? { allMedia: [...allMedia, ...senderMedia.media] } : {}),
     conversationAvatar: resolveDirectAvatar?.(primaryCtx, cfg),
     replyMedia,
     replyChain,
-    promptContext,
+    promptContext: senderMedia?.promptContext ?? promptContext,
     isForum,
     dmThreadId,
     route,
@@ -544,5 +572,8 @@ export const buildTelegramMessageContext = async ({
     ackReactionPromise,
     statusReactionController,
     accountId: account.accountId,
+    ...(options?.pluginCommandDispatch
+      ? { pluginCommandDispatch: options.pluginCommandDispatch }
+      : {}),
   };
 };

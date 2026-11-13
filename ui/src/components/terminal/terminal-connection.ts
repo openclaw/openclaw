@@ -11,6 +11,10 @@ import type {
 } from "@openclaw/gateway-protocol";
 import { readNonEmptyStringPreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
 import { BoundedBuffer } from "../../../../src/shared/bounded-buffer.ts";
+import { t } from "../../i18n/index.ts";
+import { registerTerminalEnglish } from "../../i18n/locales/en-terminal.ts";
+
+registerTerminalEnglish();
 
 type TerminalRequestOptions = { timeoutMs?: number | null; signal?: AbortSignal };
 
@@ -39,17 +43,15 @@ type TerminalExitInfo = {
   error?: string;
 };
 
-type TerminalReplay = {
-  data: string;
-  newlyObservedFrom: number;
-  mode: "initial" | "recovery" | "resume";
-  signal: AbortSignal;
-};
-
 type SessionSink = {
   onData: (data: string) => void;
   /** Replays a ring snapshot into a fresh sink or replaces a gapped live sink. */
-  onReplay: (replay: TerminalReplay) => void | Promise<void>;
+  onReplay: (replay: {
+    data: string;
+    newlyObservedFrom: number;
+    mode: "initial" | "recovery" | "resume";
+    signal: AbortSignal;
+  }) => void | Promise<void>;
   onExit: (info: TerminalExitInfo) => void;
 };
 
@@ -524,11 +526,11 @@ export class TerminalConnection {
     const stream = this.streams.get(sessionId);
     const signal = stream?.abort.signal;
     if (this.suspended || this.disposed || stream?.recovering) {
-      throw new Error("Terminal is reconnecting. Input was not sent.");
+      throw new Error(t("terminal.inputPaused"));
     }
     const result = await this.client.request<{ ok: boolean }>(method, params);
     if (result == null || signal?.aborted) {
-      throw new Error("Terminal delivery could not be confirmed.");
+      throw new Error(t("terminal.deliveryFailed"));
     }
     if (result.ok || !stream || this.streams.get(sessionId) !== stream) {
       return;

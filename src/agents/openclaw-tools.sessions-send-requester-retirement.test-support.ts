@@ -31,6 +31,7 @@ import { announceTesting } from "./subagents/announce/subagent-announce-override
 import { subscribeSubagentRunChanges } from "./subagents/registry/subagent-registry-publication.js";
 import {
   addSubagentRunForTests,
+  countPendingDescendantRuns,
   getSubagentRunByRunId,
   registerSubagentRun,
   resetSubagentRegistryForTests,
@@ -58,6 +59,43 @@ export function observeSubagentChange(ready: () => boolean) {
     }
   });
   return { ...done, stop };
+}
+
+/** Gateway response for a requester turn that accepted and delivered one reply. */
+export function deliveredRequesterReply(text: string) {
+  return {
+    status: "ok",
+    inputProcessingCompleted: true,
+    result: {
+      payloads: [{ text }],
+      deliveryStatus: { status: "sent", resultCount: 1 },
+    },
+  };
+}
+
+/** Ends a child run through its real lifecycle event and waits for the terminal registry row. */
+export async function endChildRun(
+  runId: string,
+  childSessionKey: string,
+  terminalReply: { disposition: "visible"; text: string },
+) {
+  const ended = observeSubagentChange(
+    () => getSubagentRunByRunId(runId)?.execution.status === "terminal",
+  );
+  emitAgentEvent({
+    runId,
+    sessionKey: childSessionKey,
+    stream: "lifecycle",
+    data: { phase: "end", endedAt: Date.now(), terminalReply },
+  });
+  await ended.promise;
+  ended.stop();
+}
+
+/** Asserts a consumed child result finished cleanup and no longer counts as pending work. */
+export async function expectChildCleanupSettled(runId: string, requesterSessionKey: string) {
+  expect(getSubagentRunByRunId(runId)?.cleanupCompletedAt).toBeTypeOf("number");
+  expect(await countPendingDescendantRuns(requesterSessionKey, () => {})).toBe(0);
 }
 
 export function seedDeliveredChild(

@@ -9,23 +9,25 @@ import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isProvenDeliveryNotSentError } from "../../infra/delivery-recovery.shared.js";
 import { normalizeDeliverableOutboundChannel } from "../../infra/outbound/channel-resolution.js";
+import { isOutboundDeliveryError } from "../../infra/outbound/deliver-types.js";
 import {
   type DurableFinalDeliveryRequirement,
   resolveOutboundDurableFinalDeliverySupport,
 } from "../../infra/outbound/deliver.js";
 import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { deriveDurableFinalDeliveryRequirements } from "../message/capabilities.js";
 import {
   durableMessageBatchMayHaveReachedRecipient,
   sendDurableMessageBatchCore,
   sendStructuredDurableMessageBatchCore,
 } from "../message/send.js";
+import { runAdmittingGatewayDelivery } from "./admitting-gateway-delivery.js";
 import {
   createChannelDeliveryResultFromReceipt,
   createChannelPartialDeliveryError,
 } from "./delivery-result.js";
-import { withDurableDeliveryRuntime } from "./durable-delivery-runtime.js";
 import type {
   ChannelDeliveryInfo,
   ChannelDeliveryResult,
@@ -69,6 +71,11 @@ type DurableInboundReplyDeliveryResult =
       error: unknown;
       /** False requires affirmative no-dispatch proof; omission preserves ambiguity. */
       sentBeforeError?: boolean;
+      /**
+       * The delivery queue still holds this proven-unsent reply, so recovery may replay it.
+       * Custody is not a delivery guarantee: replays are bounded and can still fail.
+       */
+      retainedForRecovery?: true;
     };
 
 function resolveDurableInboundReplyToId(
@@ -146,8 +153,21 @@ async function deliverInboundReplyWithMessageSendContext(
   }
 
   try {
-    return await withDurableDeliveryRuntime(input, (cfg, assertCurrent) =>
-      deliverAdmittedInboundReply({ ...input, cfg }, sendBatch, assertCurrent),
+    // Final delivery is a new operation of the admitting Gateway, not of the completed model turn.
+    const deliver = (cfg: OpenClawConfig, assertCurrent?: () => void) =>
+      deliverAdmittedInboundReply({ ...input, cfg }, sendBatch, assertCurrent);
+    const registry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+    if (!registry) {
+      return await deliver(input.cfg);
+    }
+    return await runAdmittingGatewayDelivery(
+      {
+        registry,
+        cfg: input.cfg,
+        channel: input.channel,
+        prepareRuntimeHandoff: input.prepareRuntimeHandoff,
+      },
+      deliver,
     );
   } catch (error) {
     return { status: "failed", error };
@@ -253,12 +273,14 @@ async function deliverAdmittedInboundReply(
     gatewayClientScopes: params.ctxPayload.GatewayClientScopes ?? [],
   });
   if (send.status === "failed") {
+    const provenNotSent =
+      !durableMessageBatchMayHaveReachedRecipient(send) && isProvenDeliveryNotSentError(send.error);
     return {
       status: "failed" as const,
       error: send.error,
-      ...(!durableMessageBatchMayHaveReachedRecipient(send) &&
-      isProvenDeliveryNotSentError(send.error)
-        ? { sentBeforeError: false }
+      ...(provenNotSent ? { sentBeforeError: false } : {}),
+      ...(provenNotSent && isOutboundDeliveryError(send.error) && send.error.queueCustody === "held"
+        ? { retainedForRecovery: true as const }
         : {}),
     };
   }

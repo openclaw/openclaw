@@ -1,9 +1,14 @@
+import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 import {
   extractErrorHttpStatus,
   formatTransportErrorCopy,
 } from "../../shared/assistant-error-format.js";
 import { describeFailoverError } from "../failover-error.js";
-import { renderFormatErrorCopy } from "./assistant-request-failure-copy.js";
+import { AgentHarnessModelRequestPolicyError } from "../harness/errors.js";
+import {
+  renderAssistantRequestFailureCopy,
+  renderFormatErrorCopy,
+} from "./assistant-request-failure-copy.js";
 import { classifyFailoverReason } from "./classify.js";
 import { classifyProviderRequestFacets } from "./request-error-facets.js";
 import { resolveProviderRequestFailureCopy } from "./user-copy.js";
@@ -19,6 +24,9 @@ export function resolveReplyFailoverFacts(error: unknown, message: string) {
       ? formatTransportErrorCopy([rawError, described.code].filter(Boolean).join(" "))
       : undefined;
   const classification = reason ? ({ kind: "reason", reason } as const) : null;
+  const storageCopy = renderAssistantRequestFailureCopy({
+    storageFailure: classifyGatewayStorageFailure(error),
+  });
   return {
     reason: reason || undefined,
     code: described.code,
@@ -27,11 +35,13 @@ export function resolveReplyFailoverFacts(error: unknown, message: string) {
     status,
     authMode: described.authMode,
     requestFailureText:
-      reason === "format"
+      storageCopy ??
+      (error instanceof AgentHarnessModelRequestPolicyError ? error.message : undefined) ??
+      (reason === "format"
         ? renderFormatErrorCopy(rawError)
         : transportCopy
           ? `⚠️ ${transportCopy} Check the conversation for any completed work before trying again.`
-          : undefined,
+          : undefined),
     providerRequestError: resolveProviderRequestFailureCopy({
       classification,
       facet: classifyProviderRequestFacets({
@@ -39,6 +49,7 @@ export function resolveReplyFailoverFacts(error: unknown, message: string) {
         message: rawError,
       }),
       status,
+      code: described.code,
     }),
   };
 }

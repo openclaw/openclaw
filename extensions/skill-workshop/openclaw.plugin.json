@@ -1,0 +1,63 @@
+{
+  "id": "skill-workshop",
+  "categories": [
+    "agent-orchestration"
+  ],
+  "enabledByDefault": true,
+  "name": "Skill Workshop",
+  "description": "Learned skills each agent saves from its own work.",
+  "agentSkillsDir": "workshop-skills",
+  "activation": {
+    "onStartup": true,
+    "onCommands": [
+      "skills"
+    ]
+  },
+  "contracts": {
+    "tools": [
+      "skill_workshop"
+    ]
+  },
+  "uiHints": {
+    "autonomous.mode": {
+      "label": "Skill Workshop Autonomous Mode",
+      "help": "Controls background learning: \"auto\" lets agents save and update Workshop skills after substantial work, and archives learned skills unused for 30 days. Every change is recorded and undoable. \"propose\" saves what background reviews would change as drafts instead; review them with /learn drafts. \"off\" disables background learning. Default: \"auto\"."
+    },
+    "autonomous.channelNotices": {
+      "label": "Skill Workshop Channel Notices",
+      "help": "Post background review notices to channel conversations, except Slack, with an Undo button (default: false); the Control UI shows that message as plain text. When disabled, notices appear only as the Learned row in the Control UI chat. Saying \"undo\" works either way."
+    },
+    "maxSkillBytes": {
+      "label": "Maximum Workshop Skill Size",
+      "help": "Largest Workshop SKILL.md in bytes, from 1024 to 200000. Default: 40000.",
+      "advanced": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "autonomous": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "off",
+              "propose",
+              "auto"
+            ]
+          },
+          "channelNotices": {
+            "type": "boolean"
+          }
+        }
+      },
+      "maxSkillBytes": {
+        "type": "integer",
+        "minimum": 1
+      }
+    }
+  }
+}

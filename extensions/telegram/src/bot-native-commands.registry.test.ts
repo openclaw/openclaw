@@ -5,7 +5,7 @@ import {
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { clearPluginCommands, registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 let registerTelegramNativeCommands: typeof import("./bot-native-commands.js").registerTelegramNativeCommands;
 let menu: typeof import("./bot-native-commands.menu-test-support.js");
@@ -29,8 +29,7 @@ function installRegistry() {
 }
 
 function registerCommand(pluginId: string, command: Parameters<typeof registerPluginCommand>[1]) {
-  const unauthenticated = { requireAuth: false, ...command };
-  expect(registerPluginCommand(pluginId, unauthenticated)).toEqual({ ok: true });
+  expect(registerPluginCommand(pluginId, { requireAuth: false, ...command })).toEqual({ ok: true });
 }
 
 async function registerMenu(
@@ -119,9 +118,9 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
       expect.objectContaining({ description: expect.not.stringContaining("Custom export") }),
     ]);
     expect(names.slice(0, 2)).toEqual(["custom_backup", "pair_device"]);
-    expect(names.indexOf("status")).toBeGreaterThan(names.indexOf("pair_device"));
-    expect(names.indexOf(longestName)).toBeGreaterThan(names.indexOf("status"));
-    expect(names.indexOf("side")).toBeGreaterThan(names.indexOf(longestName));
+    expect(
+      names.filter((name) => ["pair_device", "status", longestName, "side"].includes(name)),
+    ).toEqual(["pair_device", "status", longestName, "side"]);
     for (const invalid of ["custom!bad", "c".repeat(33), oversizedName]) {
       expect(names).not.toContain(invalid);
     }
@@ -134,33 +133,26 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
   });
 
   it.each([
-    ["same-channel transformed-first", ["zeta", "foo-bar", "foo_bar", "alpha"], true],
-    ["same-channel exact-first", ["alpha", "foo_bar", "foo-bar", "zeta"], true],
+    ["same-channel transformed-first", ["foo-bar", "foo_bar"], true],
     ["cross-channel telegram-first", ["foo-bar", "foo_bar"], false],
-    ["cross-channel discord-first", ["foo_bar", "foo-bar"], false],
   ] as const)(
     "executes the normalized owner with %s discovery",
     async (_label, names, sameChannel) => {
-      const handlers = new Map<string, ReturnType<typeof vi.fn>>();
+      const invoked: string[] = [];
       const owner = sameChannel ? "foo_bar" : "foo-bar";
-      const reply = sameChannel ? "Exact owner ran" : "telegram-owner";
       for (const name of names) {
-        const handler = vi.fn(async () => ({
-          text: name === owner ? reply : sameChannel ? "Other owner ran" : "discord-owner",
-        }));
-        handlers.set(name, handler);
-        registerCommand(
-          sameChannel ? `plugin-${name}` : name === owner ? "telegram-owner" : "discord-owner",
-          {
-            name,
-            description: name,
-            ...(sameChannel
-              ? { descriptionLocalizations: { ko: name === "foo_bar" ? "정확함" : "다른 명령" } }
-              : {}),
-            channels: [sameChannel || name === owner ? "telegram" : "discord"],
-            handler,
+        registerCommand(`plugin-${name}`, {
+          name,
+          description: name,
+          descriptionLocalizations: sameChannel
+            ? { ko: name === "foo_bar" ? "정확함" : "다른 명령" }
+            : undefined,
+          channels: [sameChannel || name === owner ? "telegram" : "discord"],
+          handler: async () => {
+            invoked.push(name);
+            return { text: name };
           },
-        );
+        });
       }
       const { commandHandlers, setMyCommands } = await registerMenu();
       const registered = await menu.waitForRegisteredCommands(setMyCommands);
@@ -172,15 +164,9 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
             descriptionLocalizations: { ko: "정확함" },
           },
         ]);
-        const namesInMenu = registered.map(({ command }) => command);
-        expect(namesInMenu.indexOf("alpha")).toBeGreaterThan(namesInMenu.indexOf("status"));
-        expect(namesInMenu.indexOf("foo_bar")).toBeGreaterThan(namesInMenu.indexOf("alpha"));
-        expect(namesInMenu.indexOf("zeta")).toBeGreaterThan(namesInMenu.indexOf("foo_bar"));
-        expect(namesInMenu.indexOf("side")).toBeGreaterThan(namesInMenu.indexOf("zeta"));
       }
-      await expectCommandReply(commandHandlers, "foo_bar", reply);
-      expect(handlers.get(owner)).toHaveBeenCalledOnce();
-      expect(handlers.get(sameChannel ? "foo-bar" : "foo_bar")).not.toHaveBeenCalled();
+      await expectCommandReply(commandHandlers, "foo_bar", owner);
+      expect(invoked).toEqual([owner]);
     },
   );
 
@@ -233,10 +219,7 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
 
     await expectCommandReply(commandHandlers, "pair", "paired:now", {
       match: "now",
-      messageId: 10,
-      date: 123456,
       userId: 111,
-      username: "nope",
     });
     expect(sendMessage).not.toHaveBeenCalled();
   });

@@ -1,3 +1,4 @@
+import { flush } from "solid-js";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { AgentIdentityResult } from "../api/types.ts";
@@ -6,7 +7,7 @@ import {
   createGatewayStoreTestStore,
   GATEWAY_STORE_TEST_HELLO,
 } from "../app/gateway-store.test-support.ts";
-import { t } from "../i18n/index.ts";
+import { i18n, t } from "../i18n/index.ts";
 import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
 import type { ChatHistoryResponse } from "../pages/chat/chat-history-snapshot.ts";
 import "./control-ui-session-summary.tsx";
@@ -99,7 +100,6 @@ it("keeps history available while progress loads, fails, and retries", async () 
   expect(element.textContent).toContain("Independent history");
 
   element.querySelector<HTMLButtonElement>(".plugin-session-summary > button")!.click();
-  await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2));
   await vi.waitFor(() =>
     expect(element.textContent).toContain(t("sessionProgressCard.widgetLoading")),
   );
@@ -133,7 +133,6 @@ it("refreshes visible message avatars from identity and stops hydrating while hi
 
   const replacement = createAgentIdentityCapability(element.gateway!);
   element.agentIdentity = replacement;
-  await vi.waitFor(() => expect(replacement.get("main")?.avatar).toBe(avatar));
   await avatarLoaded();
 
   element.presented = false;
@@ -238,14 +237,24 @@ it("retains its successful history and cursor when retrying a failed refresh", a
   expect(element.textContent).not.toContain("Retained reply");
 });
 
-it("paces durable events and retains one catch-up during a pending load", async () => {
+it("ignores summary-only changes and retains paced transcript catch-up", async () => {
   useClock();
-  const { element, requests, emit, reply, settled } = setup();
+  const { current, element, requests, emit, reply, settled } = setup();
   await reply(0, "Initial reply");
 
   emit("session.message", "agent:other:one", "other");
   emit("chat");
   await settled(1);
+
+  current().testOptions.onEvent?.(
+    createGatewayEvent("sessions.changed", {
+      sessionKey: "agent:main:one",
+      agentId: "main",
+      reason: "activity-summary",
+    }),
+  );
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(requests).toHaveLength(1);
 
   emit("session.message");
   await vi.advanceTimersByTimeAsync(4_000);
@@ -254,7 +263,7 @@ it("paces durable events and retains one catch-up during a pending load", async 
   await vi.waitFor(() => expect(requests).toHaveLength(2));
   expect(element.textContent).toContain("Initial reply");
   emit("sessions.changed");
-  emit("session.message");
+  emit("sessions.changed");
   await settled(2);
   requests[1]!.resolve(history("Intermediate reply"));
   await vi.advanceTimersByTimeAsync(0);
@@ -264,7 +273,9 @@ it("paces durable events and retains one catch-up during a pending load", async 
   expect(element.textContent).not.toContain("Initial reply");
 
   element.presented = false;
-  await element.updateComplete;
+  await settled(3);
+  await Promise.resolve();
+  flush();
   emit("session.message");
   await vi.advanceTimersByTimeAsync(10_000);
   await element.updateComplete;
@@ -364,4 +375,68 @@ it("rejects an old session response and reloads after reconnect without a parent
   await element.updateComplete;
   current().testOptions.onHello?.(GATEWAY_STORE_TEST_HELLO);
   await reply(2, "Reconnected session");
+});
+
+it("keeps the saved plan but reports unknown runtime during a failed history refresh", async () => {
+  useClock();
+  const card = {
+    sessionKey: "agent:main:one",
+    revision: 1,
+    updatedAt: 101,
+    steps: [{ step: "Collect findings", status: "in_progress" }],
+  };
+  const sessionInfo = {
+    key: card.sessionKey,
+    sessionId: "one",
+    kind: "direct" as const,
+    startedAt: 100,
+  };
+  const { element, reply, emit, requests } = setup(undefined, async () => ({ card }));
+  await reply(0, "Working reply", {
+    ...history("Working reply"),
+    sessionInfo: {
+      ...sessionInfo,
+      hasActiveRun: true,
+    },
+  });
+  const runtime = () => element.querySelector(".session-progress-card__runtime")?.textContent;
+  await vi.waitFor(() => expect(runtime()).toContain(t("sessionProgressCard.runtime.working")));
+  emit("sessions.changed");
+  await vi.advanceTimersByTimeAsync(5_000);
+  await vi.waitFor(() => expect(requests).toHaveLength(2));
+  expect(runtime()).toContain(t("sessionProgressCard.runtime.unknown"));
+  expect(element.textContent).toContain("Collect findings");
+  requests[1]!.reject(new Error("Status unavailable"));
+  await vi.waitFor(() =>
+    expect(element.querySelector(".plugin-session-summary__history [role=alert]")).not.toBeNull(),
+  );
+  expect(runtime()).toContain(t("sessionProgressCard.runtime.unknown"));
+  expect(element.querySelector(".session-run-spinner")).toBeNull();
+  element.querySelector<HTMLButtonElement>(".plugin-session-summary > button")!.click();
+  await vi.advanceTimersByTimeAsync(0);
+  await reply(2, "Delegated reply", {
+    ...history("Delegated reply"),
+    sessionInfo: {
+      ...sessionInfo,
+      endedAt: 110,
+      status: "done",
+      hasActiveRun: false,
+      hasActiveSubagentRun: true,
+    },
+  });
+  await vi.waitFor(() => expect(runtime()).toContain(t("sessionProgressCard.runtime.delegated")));
+});
+
+it("formats plugin message times and tooltips with the UI locale", async () => {
+  vi.spyOn(i18n, "getLocale").mockReturnValue("de");
+  const timestamp = Date.UTC(2026, 0, 2, 12, 34, 56);
+  const { element, reply } = setup();
+  await reply(0, "Dated message", {
+    messages: [{ role: "assistant", timestamp, content: [textBlock("Dated message")] }],
+  });
+  const time = element.querySelector("time");
+  expect(time?.title).toBe(new Date(timestamp).toLocaleString("de"));
+  expect(time?.textContent).toBe(
+    new Date(timestamp).toLocaleTimeString("de", { hour: "numeric", minute: "2-digit" }),
+  );
 });

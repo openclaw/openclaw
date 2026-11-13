@@ -1,0 +1,31 @@
+/* The test state stands where a row title stands, so it reads at title size. */
+.search-test-status > .settings-status {
+  font: inherit;
+  color: inherit;
+  white-space: normal;
+}
+
+/* A long status stays on the chevron's line; the provider name wraps instead. */
+.search-provider > .settings-row__control {
+  flex-wrap: nowrap;
+}
+
+.search-provider > .settings-row__control > .settings-row__chevron {
+  transition: transform var(--duration-fast) var(--ease-out);
+}
+
+.search-provider[aria-expanded="true"] > .settings-row__control > .settings-row__chevron {
+  transform: rotate(90deg);
+}
+
+/* A config control renders its own field row inside this row's control slot. The
+   outer row supplies the chrome and width, so the inner row keeps only its control:
+   the outer row's 60% control cap would otherwise resolve against the inner row. */
+openclaw-search-page .settings-row__control > .settings-row {
+  padding: 0;
+  min-height: 0;
+
+  > .settings-row__control {
+    max-width: none;
+  }
+}

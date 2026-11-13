@@ -1,6 +1,8 @@
 import type { Question } from "@openclaw/gateway-protocol";
 import { createEffect, createMemo, createSignal, createUniqueId, For, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { Kbd } from "../../../components/solid/kbd.tsx";
+import { RadioMark } from "../../../components/solid/radio.tsx";
 import { registerChatQuestionsEnglish } from "../../../i18n/locales/en-chat-questions.ts";
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import {
@@ -13,14 +15,6 @@ import {
 
 registerEnglishCatalog(registerChatQuestionsEnglish);
 
-type QuestionOptionsProps = {
-  question: Question;
-  selected: ReadonlySet<string>;
-  disabled: boolean;
-  onSelect: (label: string) => void;
-  optionRef?: (element: HTMLButtonElement) => () => void;
-};
-
 type QuestionFreeTextProps = {
   getTranscriptElement?: () => HTMLElement | null;
   question: Question;
@@ -31,15 +25,13 @@ type QuestionFreeTextProps = {
   inputRef?: (element: HTMLInputElement | HTMLTextAreaElement) => void;
 };
 
-function Shortcut(props: { value: number }) {
-  return (
-    <kbd class="shortcut-kbd">
-      <span class="kbd__text">{props.value}</span>
-    </kbd>
-  );
-}
-
-export function QuestionOptions(props: QuestionOptionsProps) {
+export function QuestionOptions(props: {
+  question: Question;
+  selected: ReadonlySet<string>;
+  disabled: boolean;
+  onSelect: (label: string) => void;
+  optionRef?: (element: HTMLButtonElement) => () => void;
+}) {
   const implicit = () => props.question.resource?.selection === "implicit";
   const options = createMemo(() =>
     props.question.options.filter(
@@ -91,9 +83,13 @@ export function QuestionOptions(props: QuestionOptionsProps) {
                     disabled={props.disabled}
                     onClick={() => props.onSelect(value())}
                   >
-                    <span class="chat-question-panel__option-marker" aria-hidden="true">
-                      {implicit() ? "−" : selected() ? "✓" : ""}
-                    </span>
+                    {implicit() || props.question.multiSelect ? (
+                      <span class="chat-question-panel__option-marker" aria-hidden="true">
+                        {implicit() ? "−" : selected() ? "✓" : ""}
+                      </span>
+                    ) : (
+                      <RadioMark checked={selected()} />
+                    )}
                     {hasThumbnails() && (
                       <span class="chat-question-panel__thumbnail" aria-hidden="true">
                         {option.thumbnail?.startsWith("data:") ? (
@@ -112,7 +108,7 @@ export function QuestionOptions(props: QuestionOptionsProps) {
                       <strong class="chat-question-panel__option-label">{option.label}</strong>
                       {option.description && <small>{option.description}</small>}
                     </span>
-                    {index() < 9 && <Shortcut value={index() + 1} />}
+                    {index() < 9 && <Kbd keys={index() + 1} />}
                   </button>
                   {option.thumbnail && !option.thumbnail?.startsWith("data:") && (
                     <a
@@ -266,7 +262,12 @@ export function QuestionFreeText(props: QuestionFreeTextProps) {
                     : undefined
                 }
               >
-                <span class="chat-question-panel__option-marker" aria-hidden="true" />
+                {/* Own answer is one more choice beside the options, so it takes their mark. */}
+                {props.question.multiSelect ? (
+                  <span class="chat-question-panel__option-marker" aria-hidden="true" />
+                ) : (
+                  <RadioMark checked={props.selected} />
+                )}
                 <FreeTextControl
                   {...props}
                   class="chat-question-panel__other"
@@ -274,7 +275,7 @@ export function QuestionFreeText(props: QuestionFreeTextProps) {
                   label={t("chat.questions.ownAnswerFor", { header: props.question.header })}
                 />
                 {props.question.options.length < 9 && (
-                  <Shortcut value={props.question.options.length + 1} />
+                  <Kbd keys={props.question.options.length + 1} />
                 )}
               </div>
             )}

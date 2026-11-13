@@ -73,14 +73,17 @@ it.each([false, undefined])("limits assignment for owner=%s", async (senderIsOwn
   });
   expect(denied.some((candidate) => candidate.name === "sessions")).toBe(false);
 });
-it("exposes creation only with admitted session-write authority and preserves explicit denies", async () => {
+it("lists creation without operator authority while preserving explicit denies and management restrictions", async () => {
   const authority = createAdmittedRunOperatorAuthority({
     profileId: "profile-requester",
     scopes: ["operator.sessions.write"],
     signal: new AbortController().signal,
     assertCurrent: () => {},
   });
-  expect(hasCreate()).toBe(false);
+  const gateway = vi.spyOn(inProcessGateway, "callAgentToolGatewayRequest").mockResolvedValue({});
+  expect(assemble().find((tool) => tool.name === "sessions_create")).toBeDefined();
+  expect(gateway).not.toHaveBeenCalled();
+  expect(hasCreate(["sessions_create"])).toBe(false);
   await withCaller(async () => {
     const tools = assemble();
     expect(tools.find((tool) => tool.name === "sessions_create")).toBeDefined();

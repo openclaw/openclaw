@@ -29,6 +29,7 @@ export function createGatewayRunTerminal(params: {
   setTerminalHostedStop: (owner: HostLifecycle | undefined) => void;
   setPendingRestartCompletion: (completion: GatewayBootLifecycleCompletion) => void;
   drainProcessResources: () => Promise<void>;
+  settleResource: (name: string, run: () => void | Promise<void>) => Promise<boolean>;
   finishLoop: (code: number) => void;
   completeBoot: (completion: GatewayBootLifecycleCompletion) => void;
   releaseLockIfHeld: () => Promise<void>;
@@ -52,16 +53,24 @@ export function createGatewayRunTerminal(params: {
     forceExitAfterStabilityBundle,
   } = params;
   const getManagedUpdateOwner = () => params.getRequest()?.restartIntent?.successorOwner;
-  const finishLoopAfterSignals = async (code: number) => {
+  const waitForTerminalSignals = async () => {
     for (;;) {
       if (params.isForcedExitStarted() || !params.getSignals().pending) {
         break;
       }
-      await measureGatewayCloseStep(
-        "restart.close.terminal-signals",
-        () => params.getSignals().pending,
-      );
+      if (
+        !(await params.settleResource(
+          "restart.close.terminal-signals",
+          () => params.getSignals().pending,
+        ))
+      ) {
+        return false;
+      }
     }
+    return true;
+  };
+  const finishLoopAfterSignals = async (code: number) => {
+    await waitForTerminalSignals();
     finishLoop(code);
   };
   const finishLoopAfterCleanup = async (
@@ -74,22 +83,22 @@ export function createGatewayRunTerminal(params: {
       return;
     }
     if (!params.isForcedExitStarted()) {
-      await measureGatewayCloseStep("restart.close.terminal-signals", () =>
-        params.getSignals().drain(),
-      );
+      if (
+        !(await params.settleResource("restart.close.terminal-signals", () =>
+          params.getSignals().drain(),
+        ))
+      ) {
+        finishLoop(code);
+        return;
+      }
     }
     let ownerToCommit = initialOwner;
     let commitOutcome = initialOutcome;
     await params.drainProcessResources();
     for (;;) {
-      for (;;) {
-        if (params.isForcedExitStarted() || !params.getSignals().pending) {
-          break;
-        }
-        await measureGatewayCloseStep(
-          "restart.close.terminal-signals",
-          () => params.getSignals().pending,
-        );
+      if (!(await waitForTerminalSignals())) {
+        finishLoop(code);
+        return;
       }
       if (hostStopOwner && params.getHost() !== hostStopOwner) {
         return;
@@ -113,14 +122,9 @@ export function createGatewayRunTerminal(params: {
         sameManagedUpdateOwner(owner, ownerToCommit) &&
         eagerLifecycleRuntime.claimManagedServiceUpdateHandoff(owner) &&
         (await eagerLifecycleRuntime.commitManagedServiceUpdateHandoff(owner, commitOutcome));
-      for (;;) {
-        if (params.isForcedExitStarted() || !params.getSignals().pending) {
-          break;
-        }
-        await measureGatewayCloseStep(
-          "restart.close.terminal-signals",
-          () => params.getSignals().pending,
-        );
+      if (!(await waitForTerminalSignals())) {
+        finishLoop(code);
+        return;
       }
       if (
         committed &&

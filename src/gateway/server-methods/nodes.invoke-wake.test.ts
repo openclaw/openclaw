@@ -1251,7 +1251,6 @@ describe("node.invoke APNs wake path", () => {
       nodeId: "clock-node",
       context: { nodeRegistry },
       timeoutMs: 300,
-      pollMs: 50,
     }).then((result) => {
       settled = true;
       return result;

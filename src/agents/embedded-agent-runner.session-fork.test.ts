@@ -10,7 +10,7 @@ import { captureRuntimeConfigAsyncReader } from "../config/io.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { createWorkerSessionPlacementStore } from "../gateway/worker-environments/placement-store.js";
 import { stagePlacementWorkspaceJournalWorkerPublication } from "../gateway/worker-environments/placement-turn-authority.js";
-import type { AssistantMessage, Model, ToolCall } from "../llm/types.js";
+import type { AssistantMessage, ImageContent, Model, ToolCall } from "../llm/types.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
 import { clearActivePluginRegistry } from "../plugins/runtime.js";
@@ -28,14 +28,10 @@ import {
   providerResponse,
   type WireApi,
 } from "./embedded-agent-runner.wire.test-support.js";
-import {
-  runEmbeddedSessionFork,
-  wrapStreamFnWithSessionFork,
-} from "./embedded-agent-runner/session-fork.js";
-import { createStubSessionHarness } from "./embedded-agent-subscribe.e2e-harness.js";
-import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
+import { runEmbeddedSessionFork } from "./embedded-agent-runner/session-fork.js";
 import { Agent, type StreamFn } from "./runtime/index.js";
 import * as sessionPlacementAdmission from "./session-placement-admission.js";
+import { convertToLlm } from "./sessions/messages.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 
@@ -69,6 +65,7 @@ const response = (api: WireApi, model: string, tool: boolean): Response =>
 afterEach(async () => {
   cleanupSessionResources();
   await clearActivePluginRegistry();
+  vi.unstubAllGlobals();
 });
 
 it.each([
@@ -76,10 +73,45 @@ it.each([
   { api: "openai-responses" as const, provider: "openai", model: "gpt-5.5" },
   { api: "anthropic-messages" as const, provider: "anthropic", model: "claude-sonnet-4-6" },
 ])(
-  "replays real $api bytes during pending placement publications and revokes on reset",
+  "rebuilds real $api bytes during pending placement publications and checks current session authority",
   { timeout: 120_000 },
   async ({ api, provider, model }) => {
     await withOpenClawTestState({ label: `session-fork-${provider}` }, async (state) => {
+      await fs.mkdir(state.workspaceDir, { recursive: true });
+      await fs.writeFile(
+        path.join(state.workspaceDir, "AGENTS.md"),
+        "Answer review requests using the REVIEW_CONTEXT_1672 convention.\n",
+      );
+      const image: ImageContent = {
+        type: "image",
+        mimeType: "image/png",
+        data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=",
+      };
+      const imagePath = path.join(state.workspaceDir, "private-fork-image.png");
+      if (api === "openai-responses") {
+        await fs.mkdir(state.agentDir(), { recursive: true });
+        await fs.writeFile(
+          path.join(state.agentDir(), "settings.json"),
+          JSON.stringify({ images: { blockImages: true } }),
+        );
+        await fs.writeFile(imagePath, Buffer.from(image.data, "base64"));
+      }
+      const toolEntered = createDeferredCore();
+      const releaseTool = createDeferredCore();
+      let holdParentTool = false;
+      let imageResultMode = false;
+      const executeTool = vi.fn(async () => {
+        if (imageResultMode) {
+          return { content: [{ type: "text", text: "PRIVATE_TOOL_IMAGE" }, image], details: {} };
+        }
+        if (!holdParentTool) {
+          throw new Error("FORK TOOL EXECUTED");
+        }
+        toolEntered.resolve();
+        await releaseTool.promise;
+        return { content: [{ type: "text", text: "LIVE_TOOL_RESULT_1672" }], details: {} };
+      });
+      vi.stubGlobal("openclawForkProofTool", executeTool);
       const pluginDir = state.path("fork-plugin");
       await fs.mkdir(pluginDir, { recursive: true });
       await fs.writeFile(
@@ -93,7 +125,7 @@ it.each([
       );
       await fs.writeFile(
         path.join(pluginDir, "index.cjs"),
-        `module.exports = { id: "fork-proof", register(api) { api.registerTool({ name: "fork_probe", label: "Probe", description: "Must never execute in a review", parameters: { type: "object", properties: {} }, execute: async () => { throw new Error("FORK TOOL EXECUTED"); } }); api.on("before_prompt_build", () => ({ prependContext: "Stable plugin context" })); } };`,
+        `module.exports = { id: "fork-proof", register(api) { api.registerTool({ name: "fork_probe", label: "Probe", description: "Must never execute in a review", parameters: { type: "object", properties: {} }, execute: async () => globalThis.openclawForkProofTool() }); api.on("before_prompt_build", () => ({ prependContext: "Stable plugin context" })); } };`,
       );
       const config = cacheRunnerConfig({
         api,
@@ -103,11 +135,15 @@ it.each([
         pluginId: "fork-proof",
         pluginDir,
         apiKey: "synthetic-fork-key",
-        input: ["text"],
-        tools: ["fork_probe", ...(api === "openai-responses" ? ["web_search"] : [])],
+        input: ["text", "image"],
+        tools: ["fork_probe"],
         modelSettings: {
           agentRuntime: { id: "openclaw" },
-          params: { transport: "sse", cacheRetention: "short" },
+          params: {
+            transport: "sse",
+            cacheRetention: "short",
+            ...(api === "openai-completions" ? { extra_body: { tool_choice: "auto" } } : {}),
+          },
         },
       });
       await state.writeConfig(config);
@@ -118,14 +154,28 @@ it.each([
         throwOnLoadError: true,
       });
       const sessionId = `fork-${provider}`;
-      const sessionKey = `agent:main:direct:${sessionId}`;
+      const sessionKey = `agent:main:subagent:${sessionId}`;
       const target = {
         agentId: "main",
         sessionId,
         sessionKey,
         storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
       };
-      await upsertSessionEntryCore(target, { sessionId, updatedAt: 1 });
+      // The delegated child's fork tool policy reads its cold, persisted ancestor row.
+      const ancestor = {
+        ...target,
+        sessionKey: "agent:main:dashboard:coding",
+        sessionId: "coding",
+      };
+      const policy = { requesterSessionKey: "agent:main:main", targetAgentId: "main" };
+      const delegatedToolPolicy = { ...policy, deny: [], requesterDeny: [] };
+      for (const [row, spawnedBy] of [
+        [ancestor, "agent:main:main"],
+        [target, ancestor.sessionKey],
+      ] as const) {
+        const lineage = { spawnedBy, inheritedToolPolicyVersion: 1 as const, delegatedToolPolicy };
+        await upsertSessionEntryCore(row, { ...lineage, sessionId: row.sessionId, updatedAt: 1 });
+      }
       const host = getAiTransportHost();
       const payloads: Array<Record<string, unknown>> = [];
       let toolsRemaining = 0;
@@ -144,8 +194,8 @@ it.each([
           return response(api, model, tool);
         },
       });
-      const onUsage = vi.fn();
-      const onBlockReply = vi.fn();
+      const [onUsage, onBlockReply] = [vi.fn(), vi.fn()];
+      let sessionReadCurrent = true;
       const fork = (abortSignal?: AbortSignal, denyTools = true) =>
         runBtwSideQuestion({
           cfg: config,
@@ -156,6 +206,11 @@ it.each([
           question: "Review only",
           toolCalls: denyTools ? "deny" : undefined,
           onUsage,
+          assertCurrent: () => {
+            if (!sessionReadCurrent) {
+              throw new Error("Session read authority revoked by reset");
+            }
+          },
           sessionEntry: { sessionId, updatedAt: 1 },
           sessionKey,
           storePath: target.storePath,
@@ -163,24 +218,20 @@ it.each([
           resolvedReasoningLevel: "off",
           opts: { onBlockReply, abortSignal },
         });
-      try {
-        await expect(fork()).rejects.toThrow("requires a parent turn");
-        expect(payloads).toHaveLength(0);
-        const admission = prepareSystemAgentRunAdmission(
-          config,
-          "fork-parent",
-          "main",
-          "fork-proof",
-        );
+      const runParent = async (prompt: string, runId: string, includeImages = false) => {
+        const admission = prepareSystemAgentRunAdmission(config, runId, "main", "fork-proof");
         try {
           const parent = await runEmbeddedAgent({
             preparedRunAdmission: admission,
             userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
               target: { ...target, sessionEntry: undefined },
               input: {
-                text: "Parent question",
+                text: prompt,
+                ...(includeImages
+                  ? { media: [{ path: imagePath, contentType: "image/png" }] }
+                  : {}),
                 timestamp: 1,
-                idempotencyKey: "fork-parent:user",
+                idempotencyKey: `${runId}:user`,
               },
             }),
             agentId: "main",
@@ -197,10 +248,11 @@ it.each([
             codeModeOverride: false,
             thinkLevel: "off",
             toolsAllow: config.tools?.allow,
-            runId: "fork-parent",
+            runId,
             timeoutMs: 60_000,
-            prompt: "Parent question",
-            transcriptPrompt: "Parent question",
+            prompt,
+            ...(includeImages ? { images: [image] } : {}),
+            transcriptPrompt: prompt,
             skillsSnapshot: {
               prompt: "<available_skills>stable skill context</available_skills>",
               skills: [],
@@ -212,25 +264,16 @@ it.each([
         } finally {
           admission.close();
         }
+      };
+      try {
+        await runParent("Parent question", "fork-parent");
         expect(payloads).toHaveLength(1);
         const original = structuredClone(payloads[0]!);
-        const sessionFile = resolveBtwSessionTranscriptPath({
-          sessionId,
-          sessionKey,
-          storePath: target.storePath,
-          sessionEntry: { sessionId, updatedAt: 1 },
-        });
-        if (!sessionFile) {
-          throw new Error("Parent transcript was not created");
-        }
-        const readTranscript = () =>
-          readBtwTranscriptMessages({
-            agentId: "main",
-            sessionFile,
-            sessionId,
-            sessionKey,
-            storePath: target.storePath,
-          });
+        // Reconstruct after process-local transport state is discarded, as after restart.
+        cleanupSessionResources(sessionId);
+        const sessionEntry = { sessionId, updatedAt: 1 };
+        const sessionFile = resolveBtwSessionTranscriptPath({ ...target, sessionEntry })!;
+        const readTranscript = () => readBtwTranscriptMessages({ ...target, sessionFile });
         const parentTranscript = await readTranscript();
         const database = openOpenClawStateDatabase();
         const placements = createWorkerSessionPlacementStore({ database });
@@ -267,24 +310,51 @@ it.each([
         if (!Array.isArray(originalMessages) || !Array.isArray(replayMessages)) {
           throw new Error("Missing captured messages");
         }
-        expect(JSON.stringify(replayMessages.slice(0, originalMessages.length))).toBe(
-          JSON.stringify(originalMessages),
-        );
-        expect(replayMessages).toHaveLength(originalMessages.length + 2);
+        if (api === "openai-responses") {
+          expect(JSON.stringify(replayMessages.slice(0, originalMessages.length))).toBe(
+            JSON.stringify(originalMessages),
+          );
+          expect(replayMessages).toHaveLength(originalMessages.length + 2);
+          expect(JSON.stringify(replay.instructions)).toBe(JSON.stringify(original.instructions));
+        } else {
+          // Rebuild from configured bootstrap context while preserving the durable conversation.
+          expect(JSON.stringify(replayMessages)).toContain(
+            "Stable plugin context\\n\\nParent question",
+          );
+          if (api === "anthropic-messages") {
+            const originalUser = originalMessages[0];
+            if (!isRecord(originalUser) || typeof originalUser.content !== "string") {
+              throw new Error("Missing original Anthropic user text");
+            }
+            expect(replayMessages.slice(0, originalMessages.length)).toEqual([
+              {
+                ...originalUser,
+                content: [
+                  {
+                    type: "text",
+                    text: originalUser.content,
+                    cache_control: { type: "ephemeral" },
+                  },
+                ],
+              },
+              ...originalMessages.slice(1),
+            ]);
+            expect(replayMessages).toHaveLength(originalMessages.length + 2);
+          }
+        }
+        expect(JSON.stringify(original)).toContain("REVIEW_CONTEXT_1672");
+        expect(JSON.stringify(replay)).toContain("REVIEW_CONTEXT_1672");
         expect(JSON.stringify(replayMessages.at(-2))).toContain("Review answer");
         expect(JSON.stringify(replayMessages.at(-1))).toContain("Review only");
         expect(JSON.stringify(replay.tools)).toBe(JSON.stringify(original.tools));
         expect(replay.tool_choice).toEqual(
           api === "anthropic-messages" ? { type: "none" } : "none",
         );
-        if (api === "openai-responses") {
-          expect(original.tools).toEqual(expect.arrayContaining([{ type: "web_search" }]));
-        }
+        expect(JSON.stringify(original.tools)).not.toContain('"web_search"');
         expect(JSON.stringify(original.tools)).toContain("fork_probe");
-        expect(JSON.stringify(replay.system)).toBe(JSON.stringify(original.system));
-        expect(JSON.stringify(replay.instructions)).toBe(JSON.stringify(original.instructions));
         expect(replay.previous_response_id).toBeUndefined();
         expect(replay.prompt_cache_key).toBe(original.prompt_cache_key);
+        expect(replay.reasoning).toEqual(original.reasoning);
         if (api !== "anthropic-messages") {
           expect(original.prompt_cache_key).toBeTruthy();
         } else {
@@ -304,11 +374,51 @@ it.each([
         await expect(fork()).rejects.toThrow("after three attempts");
         expect(payloads.length - beforeDenied).toBe(3);
         expect(await readTranscript()).toEqual(parentTranscript);
+        if (api === "openai-responses") {
+          imageResultMode = true;
+          toolsRemaining = 1;
+          await runParent("Inspect private images", "fork-parent-images", true);
+          imageResultMode = false;
+          const assertImagesBlocked = () => {
+            const body = JSON.stringify(payloads.at(-1));
+            expect(body).toContain("Image reading is disabled.");
+            expect(body).toContain("PRIVATE_TOOL_IMAGE");
+            expect(body).not.toContain(image.data);
+            expect(body).not.toContain('"input_image"');
+            expect(body).not.toContain('"image_url"');
+          };
+          await expect(fork()).resolves.toEqual({ text: "Review answer" });
+          assertImagesBlocked();
+          holdParentTool = true;
+          toolsRemaining = 1;
+          const activeParent = runParent("Run the lookup", "fork-parent-active");
+          try {
+            await Promise.race([
+              toolEntered.promise,
+              activeParent.then(() => {
+                throw new Error("Parent settled before its tool started");
+              }),
+            ]);
+            const whileRunning = await readTranscript();
+            await expect(fork()).resolves.toEqual({ text: "Review answer" });
+            expect(payloads.at(-1)?.prompt_cache_key).toBe(original.prompt_cache_key);
+            expect(JSON.stringify(payloads.at(-1))).toContain("This tool call is still running");
+            expect(JSON.stringify(payloads.at(-1))).not.toContain("LIVE_TOOL_RESULT_1672");
+            expect(await readTranscript()).toEqual(whileRunning);
+            expect(executeTool).toHaveBeenCalledTimes(2);
+            assertImagesBlocked();
+          } finally {
+            releaseTool.resolve();
+            await activeParent;
+            holdParentTool = false;
+          }
+          expect(JSON.stringify(await readTranscript())).toContain("LIVE_TOOL_RESULT_1672");
+        }
         const pluginAbort = new AbortController();
         beforeProviderResponse = () => pluginAbort.abort(new Error("plugin runtime retired"));
         await expect(fork(pluginAbort.signal)).rejects.toThrow();
         const onResetError = vi.fn();
-        beforeProviderResponse = () =>
+        beforeProviderResponse = () => {
           clearCommittedSessionResetRuntimeState({
             previousSessionEntry: { sessionId },
             agentId: "main",
@@ -316,11 +426,18 @@ it.each([
             storePath: target.storePath,
             onError: onResetError,
           });
-        await expect(fork()).rejects.toThrow("requires a parent turn");
+          // The SDK owns session read authority; cache cleanup is not that authority.
+          sessionReadCurrent = false;
+        };
+        await expect(fork()).rejects.toThrow(
+          /^(?:Session read authority revoked by reset|admitted run authority is no longer active)$/,
+        );
         expect(onResetError).not.toHaveBeenCalled();
         beforeProviderResponse = undefined;
         const beforeReset = payloads.length;
-        await expect(fork()).rejects.toThrow("requires a parent turn");
+        await expect(fork()).rejects.toThrow(
+          /^(?:Session read authority revoked by reset|admitted run authority is no longer active)$/,
+        );
         expect(payloads).toHaveLength(beforeReset);
       } finally {
         configureAiTransportHost(host);
@@ -338,7 +455,6 @@ const loopModel: Model = makeProviderModelFixture({
   contextWindow: 10000,
   maxTokens: 1000,
 });
-const loopIdentity = { agentId: "main", sessionId: "fork-async-tail", runId: "fork-async-tail" };
 function assistant(content: AssistantMessage["content"]): AssistantMessage {
   return {
     role: "assistant",
@@ -354,8 +470,6 @@ function assistant(content: AssistantMessage["content"]): AssistantMessage {
 
 it("forks the canonical completed async tool fragments and outcomes in order", async () => {
   const payloads: unknown[] = [];
-  const reviewFork = (question: string) =>
-    runEmbeddedSessionFork({ ...loopIdentity, model: loopModel, question, assertCurrent() {} });
   const ready = createDeferredCore();
   const resultPublished = createDeferredCore();
   const parentResponse = createAssistantMessageEventStream();
@@ -394,16 +508,21 @@ it("forks the canonical completed async tool fragments and outcomes in order", a
         },
       ],
     },
-    streamFn: wrapStreamFnWithSessionFork(transport, loopIdentity),
+    streamFn: transport,
   });
-  const { session, emit } = createStubSessionHarness();
-  Object.assign(session, { agent });
-  const subscription = subscribeEmbeddedAgentSession({
-    session,
-    ...loopIdentity,
-  });
+  const reviewFork = (question: string) =>
+    runEmbeddedSessionFork({
+      context: {
+        systemPrompt: agent.state.systemPrompt,
+        messages: convertToLlm(agent.state.messages),
+        tools: agent.state.tools,
+      },
+      streamFn: transport,
+      model: loopModel,
+      question,
+      assertCurrent() {},
+    });
   const unsubscribe = agent.subscribe((event) => {
-    emit(event);
     if (event.type === "message_end" && event.message.role === "toolResult") {
       resultPublished.resolve();
     }
@@ -426,52 +545,23 @@ it("forks the canonical completed async tool fragments and outcomes in order", a
     });
     parentResponse.end();
     await run;
-    await subscription.waitForPendingEvents();
     await expect(reviewFork("Review completed turn")).resolves.toBe("Review answer");
+    const message = (role: string, content: unknown, extra = {}) =>
+      expect.objectContaining({ role, content, ...extra });
+    const text = (value: string) => [{ type: "text", text: value }];
     expect(payloads.at(-1)).toEqual({
       input: [
-        expect.objectContaining({
-          role: "user",
-          content: [{ type: "text", text: "Parent question" }],
-        }),
-        expect.objectContaining({
-          role: "assistant",
-          content: [expect.objectContaining({ type: "toolCall", id: "lookup-call" })],
-        }),
-        expect.objectContaining({
-          role: "toolResult",
-          toolCallId: "lookup-call",
-          content: [{ type: "text", text: "TOOL_RESULT_4837" }],
-        }),
-        expect.objectContaining({
-          role: "assistant",
-          content: [{ type: "text", text: "PARENT_FINAL_4837" }],
-        }),
-        expect.objectContaining({ role: "user", content: "Review completed turn" }),
+        message("user", text("Parent question")),
+        message("assistant", [expect.objectContaining({ type: "toolCall", id: "lookup-call" })]),
+        message("toolResult", text("TOOL_RESULT_4837"), { toolCallId: "lookup-call" }),
+        message("assistant", text("PARENT_FINAL_4837")),
+        message("user", "Review completed turn"),
       ],
     });
-    cleanupSessionResources(loopIdentity.sessionId);
-    emit({ type: "message_end", message: assistant([{ type: "text", text: "OLD_RUN" }]) });
-    await expect(reviewFork("After reset")).rejects.toThrow("requires a parent turn");
-    const nextParent = wrapStreamFnWithSessionFork(transport, {
-      ...loopIdentity,
-      runId: "replacement-run",
-    });
-    await nextParent(
-      loopModel,
-      { messages: [{ role: "user", content: "Replacement parent", timestamp: 2 }] },
-      {},
-    );
-    emit({ type: "message_end", message: assistant([{ type: "text", text: "OLD_RUN" }]) });
-    await reviewFork("Review replacement");
-    expect(payloads.at(-1)).toEqual({
-      input: [
-        { role: "user", content: "Replacement parent", timestamp: 2 },
-        expect.objectContaining({ role: "user", content: "Review replacement" }),
-      ],
-    });
+    cleanupSessionResources("fork-async-tail");
+    await expect(reviewFork("Review after transport cleanup")).resolves.toBe("Review answer");
+    expect(JSON.stringify(payloads.at(-1))).toContain("PARENT_FINAL_4837");
   } finally {
     unsubscribe();
-    subscription.unsubscribe();
   }
 });

@@ -61,9 +61,7 @@ export function* listChannelSupportedActionsSteps(
   return discovered.actions;
 }
 
-/** List agent tools contributed by registered channel plugins. */
 export function listChannelAgentTools(params: { cfg?: OpenClawConfig }): ChannelAgentTool[] {
-  // Channel docking: aggregate channel-owned tools (login, etc.).
   const tools: ChannelAgentTool[] = [];
   for (const plugin of listChannelPlugins()) {
     const entry = plugin.agentTools;

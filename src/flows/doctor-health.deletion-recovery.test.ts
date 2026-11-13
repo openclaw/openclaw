@@ -1,12 +1,13 @@
 import "./doctor-health.test-support.js";
 import fs from "node:fs";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { prepareDoctorDatabasePreflight } from "../commands/doctor-database-preflight.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { createLegacyDatabaseFixture } from "../infra/state-migrations.media-persistence.test-support.js";
 import { readAgentDeletionRecoveryHolds } from "../state/agent-deletion-journal-recovery.kernel.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -50,22 +51,45 @@ it("refreshes supplied missing-history discovery after maintenance admits a newe
       agents: { ownership: "explicit", entries: { main: {}, late: { agentDir: lateDir } } },
     };
     await state.writeConfig(after);
-    const bytes = [mainPath, latePath].map((file) => fs.readFileSync(file));
     mocks.config.mockReturnValue(after);
-    mocks.packageRoot.mockReturnValue(undefined);
+    fs.writeFileSync(state.path("package.json"), '{"name":"openclaw"}');
+    mocks.packageRoot.mockReturnValue(state.root);
     mocks.runContributions.mockReset();
     mocks.emulateNativeInstall = false;
+    const configFlow = await import("../commands/doctor-config-flow.js");
+    const loadConfig = vi.spyOn(configFlow, "loadAndMaybeMigrateDoctorConfig");
     const runtime = createDoctorRuntime();
     try {
       await runDoctorHealthFlow(runtime, repairOptions, undefined, prepared);
       expect(runtime.exit).not.toHaveBeenCalled();
+      expect(loadConfig).toHaveBeenCalledOnce();
       expect(
-        readAgentDeletionRecoveryHolds(openOpenClawStateDatabase({ env: state.env }))
-          .map((target) => target.path)
-          .toSorted(),
-      ).toEqual([mainPath, latePath].toSorted());
-      expect([mainPath, latePath].map((file) => fs.readFileSync(file))).toEqual(bytes);
+        loadConfig.mock.calls[0]?.[0].agentDatabaseMigrationDiscovery?.discovery.targets
+          .map(({ agentId, path: databasePath, source }) => ({
+            agentId,
+            path: databasePath,
+            source,
+          }))
+          .toSorted((left, right) => left.agentId.localeCompare(right.agentId)),
+      ).toEqual([
+        { agentId: "late", path: latePath, source: "configured" },
+        { agentId: "main", path: mainPath, source: "configured" },
+      ]);
+      for (const [agentId, pathname] of Object.entries({ main: mainPath, late: latePath })) {
+        using database = openNodeSqliteDatabase(pathname, { readOnly: true });
+        expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(
+          OPENCLAW_AGENT_SCHEMA_VERSION,
+        );
+        expect(
+          database.prepare("SELECT * FROM schema_meta WHERE meta_key = 'primary'").get(),
+        ).toMatchObject({
+          role: "agent",
+          agent_id: agentId,
+          schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+        });
+      }
     } finally {
+      loadConfig.mockRestore();
       mocks.emulateNativeInstall = true;
       closeOpenClawStateDatabaseForTest();
     }

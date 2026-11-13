@@ -80,9 +80,12 @@ export function createProgressState(
     reasoningLinePrefix: "🧠 ",
     commentaryLinePrefix: "💬 ",
     toolIcons: true,
+    compactToolRuns: true,
     commentaryItalics: false,
     updateOnLineChange: true,
-    shouldStartNow: (line) => typeof line !== "string" && Boolean(line?.toolName),
+    // Tool-log rows start the card; quiet work status keeps the startup delay.
+    shouldStartNow: (line) =>
+      typeof line === "object" && line.kind !== "operation-status" && Boolean(line.toolName),
     update: async (streamText, options) => {
       if (
         config.streamMode === "progress" &&
@@ -152,7 +155,7 @@ export async function settleFailedFinalDelivery(turn: Turn): Promise<void> {
   if (
     turn.isSuperseded() ||
     turn.previewLifecycle.finalSucceeded ||
-    turn.progressContinuationAdopted ||
+    turn.finalHandoff !== undefined ||
     turn.context.ctxPayload.InboundEventKind === "room_event" ||
     !turn.previewLifecycle.finalFailed
   ) {
@@ -228,6 +231,7 @@ export function retainProgressDraft(turn: Turn, stream: TelegramDraftStream) {
     seed: `${turn.context.route.accountId}:${turn.context.chatId}:${turn.context.threadSpec.id ?? ""}`,
     reasoningGate: false,
     toolIcons: true,
+    compactToolRuns: true,
     updateOnLineChange: true,
     initialSnapshot: turn.progressCompositor.getSnapshot(),
     update: (_text, options) => {

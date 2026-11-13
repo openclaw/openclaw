@@ -197,6 +197,9 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  const { generateCodexValidators } = await import("./generate-codex-validators.mts");
+  await generateCodexValidators({ check: true });
+
   console.log(
     `Codex app-server generated protocol matches OpenClaw bridge assumptions: ${source.codexRepo}`,
   );

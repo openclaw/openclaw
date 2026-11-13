@@ -290,10 +290,13 @@ export async function requirePersonalGitHubPublicationConfirmationAsync(
   assertCurrent?: () => void,
 ) {
   const scope = mutationScope();
-  await personalMutation(
-    scope,
-    { operation: "restart", instanceId },
+  await scope.mutate(
+    {
+      type: "githubPublications.personalRestart",
+      input: { operation: "restart", instanceId, operationId: randomUUID() },
+    },
     assertCurrent ?? scope.assertCurrent,
+    publish,
   );
 }
 

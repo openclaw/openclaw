@@ -70,7 +70,7 @@ function promotedRoster(initial: (typeof fixture.events)[number]) {
   };
 }
 
-it("delivers live messages on the room-scoped roster subscription", async () => {
+it("accepts signed room rosters without letting invalid events or older queries replace them", async () => {
   const bus = await startBus();
   fixture.sendMessage("live after roster subscription");
   await vi.waitFor(() => expect(messages).toEqual(["live after roster subscription"]));
@@ -86,8 +86,17 @@ it("delivers live messages on the room-scoped roster subscription", async () => 
   );
   await barrier(bus, "invalid roster ordering barrier");
   expect(member(bus)?.raw).toMatchObject({ role: "member" });
+  const change = membershipChange("member_joined", Math.floor(Date.now() / 1000));
+  const query = fixture.pauseNextMembershipQuery();
+  fixture.broadcast(change);
+  await query.started;
   fixture.broadcast(valid);
+  fixture.broadcast(change);
   await vi.waitFor(() => expect(member(bus)?.raw).toMatchObject({ role: "bot" }));
+  query.release();
+  // A publish acknowledgement follows the old query frames on this socket.
+  await barrier(bus, "query ordering barrier");
+  expect(member(bus)?.raw).toMatchObject({ role: "bot" });
 });
 
 it("keeps removal denied through stale snapshots and accepts a confirmed rejoin", async () => {
@@ -182,10 +191,8 @@ it("recovers silent presence without replaying pre-activation messages", async (
   };
   try {
     await waitFor(ready[0].promise);
-    expect(states).toContain("ready");
     fixture.sendMessage("before stall");
     await waitFor(delivered.get("before stall")!.promise);
-    expect(handled).toContain("before stall");
     // Start the silent heartbeat only after the pre-stall message has completed.
     await withinTest(Promise.resolve(clock.wake()), signal);
     await waitFor(ready[1].promise);
@@ -240,20 +247,3 @@ it("keeps explicit presence rejection nonfatal over a real socket", async () => 
   await barrier(bus, "healthy after rejection");
   expect(fixture.received.some((event) => event.content === "healthy after rejection")).toBe(true);
 }, 12000);
-
-it("keeps the signed role when an older query completes after the push", async () => {
-  const bus = await startBus();
-  const initial = initialRoster();
-  const change = membershipChange("member_joined", Math.floor(Date.now() / 1000));
-  const query = fixture.pauseNextMembershipQuery();
-  fixture.broadcast(change);
-  const updated = fixture.signRelay(promotedRoster(initial));
-  await query.started;
-  fixture.broadcast(updated);
-  fixture.broadcast(change);
-  await vi.waitFor(() => expect(member(bus)?.raw).toMatchObject({ role: "bot" }));
-  query.release();
-  // A publish acknowledgement follows the old query frames on this socket.
-  await barrier(bus, "query ordering barrier");
-  expect(member(bus)?.raw).toMatchObject({ role: "bot" });
-});

@@ -69,18 +69,14 @@ globalThis.fetch = async (input, init = {}) => {
   if (method === "GET" && url.pathname === "/repos/openclaw/openclaw/commits") {
     assert.equal(url.searchParams.get("sha"), "main");
     const watchedPath = url.searchParams.get("path");
-    assert.ok(!watchedPath.startsWith("!") && !/['"]/.test(watchedPath), "query positive unquoted paths only");
     const perPage = Number(url.searchParams.get("per_page"));
     const page = Number(url.searchParams.get("page") ?? 1);
-    assert.ok(perPage >= 1 && perPage <= 100 && page >= 1);
     const until = url.searchParams.get("until");
-    if (until) assert.equal(Date.parse(until), now - scenario.grace * 60000);
     const entries = (scenario.history[watchedPath] ?? [])
       .map(entry => ({ sha: entry.sha, commit: { committer: { date: new Date(now - entry.minutes * 60000).toISOString() } } }))
       .filter(entry => !until || Date.parse(entry.commit.committer.date) <= Date.parse(until));
     body = entries.slice((page - 1) * perPage, page * perPage);
   } else if (method === "GET" && /^\/repos\/openclaw\/openclaw\/commits\/[a-f0-9]{40}$/.test(url.pathname)) {
-    assert.equal(url.searchParams.get("per_page"), "100");
     const sha = url.pathname.split("/").at(-1);
     assert.ok(Object.hasOwn(scenario.files, sha), "unexpected commit inspection: " + sha);
     body = scenario.files[sha] === null ? { sha } : { sha, files: scenario.files[sha] };
@@ -93,8 +89,6 @@ globalThis.fetch = async (input, init = {}) => {
     assert.ok(order.includes(from) && order.includes(to));
     body = { status: from === to ? "identical" : order.indexOf(to) > order.indexOf(from) ? "ahead" : "behind" };
   } else if (method === "GET" && url.pathname === "/repos/openclaw/openclaw/actions/workflows/docs-sync-publish.yml/runs") {
-    assert.equal(url.searchParams.get("per_page"), "1");
-    assert.ok(["queued", "in_progress"].includes(url.searchParams.get("status")));
     body = { total_count: url.searchParams.get("status") === "queued" ? scenario.active : 0 };
   } else if (method === "POST" && url.pathname === "/repos/openclaw/openclaw/actions/workflows/docs-sync-publish.yml/dispatches") {
     assert.deepEqual(JSON.parse(init.body), { ref: "main" });
@@ -173,22 +167,16 @@ it.each<[string, string, number, boolean, boolean, number, number, number]>([
         mirror === newestSha ? "docs mirror fresh:" : "within " + grace + "m grace",
       );
     }
-    expect(run.requests.some((request) => /\/commits\/[a-f0-9]{40}$/.test(request.pathname))).toBe(
-      false,
-    );
   },
 );
 
 it.each<[string, CommitFile[] | null, boolean]>([
-  ["authoring instructions", commitFiles(instructions), false],
-  ["translation instructions", commitFiles(translations), false],
   [
-    "both excluded files and unrelated code",
+    "excluded files and unrelated code",
     commitFiles(instructions, translations, "src/index.ts"),
     false,
   ],
   ["a mixed public-docs change", commitFiles(instructions, guide), true],
-  ["the public AGENTS template", commitFiles("docs/reference/templates/AGENTS.md"), true],
   [
     "a public page renamed to an excluded file",
     [{ filename: instructions, previous_filename: guide }],

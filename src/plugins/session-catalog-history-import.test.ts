@@ -10,9 +10,14 @@ import {
 } from "../config/io.js";
 import { appendTranscriptMessage } from "../config/sessions/session-accessor.js";
 import { upsertSessionEntry } from "../plugin-sdk/session-store-runtime.js";
-import { readVisibleSessionTranscriptMessageEntries as readMessages } from "../plugin-sdk/session-transcript-runtime.js";
+import {
+  readSessionTranscriptCatalogPage,
+  readVisibleSessionTranscriptMessageEntries as readMessages,
+} from "../plugin-sdk/session-transcript-runtime.js";
 import { withTempHome } from "../plugin-sdk/test-env.js";
 import * as externalContent from "../security/external-content.js";
+import { createNestedToolActivity } from "../sessions/nested-tool-activity.js";
+import { createPluginInlineViewResult, bindPluginInlineViewInvocation } from "./inline-view.js";
 import {
   importSessionCatalogHistory,
   preserveSessionCatalogHistory,
@@ -218,5 +223,107 @@ it("preserves items once across sync, including id-less duplicates and a shifted
     expect(texts.slice(1).every((text) => text.includes("EXTERNAL_UNTRUSTED_CONTENT"))).toBe(true);
     expect(texts.filter((text) => text.includes("Repeated source prompt"))).toHaveLength(2);
     expect(texts.at(-1)).toContain("New source answer");
+  });
+});
+
+it("preserves inline fallback through native storage, text catalog and untrusted import", async () => {
+  await withTempHome(async (home) => {
+    const { scope, config } = catalogStore(home, "inline-source");
+    const previous = getRuntimeConfigSnapshot();
+    setRuntimeConfigSnapshot(config);
+    try {
+      await initializeStore(scope);
+      const result = bindPluginInlineViewInvocation(
+        createPluginInlineViewResult(
+          "incidents",
+          "incident",
+          { incidentId: "INC-42" },
+          { version: 3, summary: "INC-42 is investigating." },
+        ),
+        "incidents",
+        "show_incident",
+        "call-1",
+      );
+      await appendTranscriptMessage(scope, {
+        message: {
+          role: "toolResult",
+          toolName: "show_incident",
+          toolCallId: "call-1",
+          ...result,
+          __openclaw: { runId: "run-1" },
+          timestamp: 1000,
+        },
+      });
+      const nested = bindPluginInlineViewInvocation(
+        createPluginInlineViewResult(
+          "incidents",
+          "incident",
+          { incidentId: "INC-43" },
+          { version: 3, summary: "INC-43 is resolved." },
+        ),
+        "incidents",
+        "show_incident",
+        "call-1",
+      );
+      await appendTranscriptMessage(scope, {
+        message: createNestedToolActivity({
+          runId: "run-2",
+          scopeId: "nested",
+          afterEntryId: null,
+          startOrder: 1,
+          parentToolCallId: "outer",
+          toolCallId: "call-1",
+          toolName: "show_incident",
+          input: {},
+          result: nested,
+          isError: false,
+          startedAt: 2000,
+          timestamp: 2100,
+        }),
+      });
+      const stored = await readMessages(scope);
+      expect(stored[0]).toMatchObject({
+        message: { details: result.details, __openclaw: { runId: "run-1" } },
+      });
+      const catalog = await readSessionTranscriptCatalogPage({
+        ...scope,
+        sourceDomain: "source",
+        pluginId: "catalog",
+        limit: 10,
+      });
+      expect(catalog.items.map((item) => [item.type, item.text])).toEqual([
+        ["agentMessage", "INC-43 is resolved."],
+        ["agentMessage", "INC-42 is investigating."],
+      ]);
+      const target = catalogStore(home, "inline-destination");
+      await initializeStore(target.scope);
+      await importSessionCatalogHistory({
+        ...target.scope,
+        config: target.config,
+        catalogId: "external",
+        threadId: "incident",
+        read: catalogReader(
+          catalog.items.toReversed().map((item) => ({
+            type: item.type,
+            text: item.text,
+            raw: result.details,
+          })),
+        ),
+      });
+      const imported = await readMessages(target.scope);
+      expect(imported[0]?.message).toMatchObject({
+        role: "assistant",
+        content: [{ type: "text", text: "INC-42 is investigating." }],
+      });
+      expect(JSON.stringify(imported)).not.toContain("pluginInlineView");
+      expect(JSON.stringify(imported)).not.toContain("plugin_view");
+      expect(imported).toHaveLength(2);
+    } finally {
+      if (previous) {
+        setRuntimeConfigSnapshot(previous);
+      } else {
+        clearRuntimeConfigSnapshot();
+      }
+    }
   });
 });

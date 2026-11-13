@@ -593,23 +593,23 @@ function updateRun(
     incoming.status === "completed" || incoming.status === "yielded"
       ? readSessionProjectionFinalMessageIdentity(incoming.message)
       : null;
+  const runs = {
+    ...previousRuns,
+    [incoming.runId]: {
+      ...(resumesErrorProjection ? {} : current),
+      ...normalizedIncoming,
+      ...(acceptedFinalIdentity ? { acceptedFinalMessageIdentities: [acceptedFinalIdentity] } : {}),
+      ...(!resumesErrorProjection &&
+      incoming.message === undefined &&
+      current?.message !== undefined
+        ? { message: current.message }
+        : {}),
+    },
+  };
   return {
     ...resumedState,
-    runs: retainSessionProjectionRuns({
-      ...previousRuns,
-      [incoming.runId]: {
-        ...(resumesErrorProjection ? {} : current),
-        ...normalizedIncoming,
-        ...(acceptedFinalIdentity
-          ? { acceptedFinalMessageIdentities: [acceptedFinalIdentity] }
-          : {}),
-        ...(!resumesErrorProjection &&
-        incoming.message === undefined &&
-        current?.message !== undefined
-          ? { message: current.message }
-          : {}),
-      },
-    }),
+    // Continuing a run changes neither membership nor the retention partition.
+    runs: current?.status === incoming.status ? runs : retainSessionProjectionRuns(runs),
   };
 }
 

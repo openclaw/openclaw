@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import {
   externalContentStamp,
+  nativeWebSearchCodecs,
   buildSearchCacheKey,
   DEFAULT_SEARCH_COUNT,
   mergeScopedSearchConfig,
@@ -18,20 +19,16 @@ import {
   resolveProviderWebSearchPluginConfig,
   resolveSearchCacheTtlMs,
   resolveSearchTimeoutSeconds,
-  resolveSiteName,
   type SearchConfigRecord,
   withTrustedWebSearchEndpoint,
-  wrapWebContent,
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
-  asOptionalObjectRecord,
   asOptionalRecord,
   isRecord,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-  normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const EXA_SEARCH_ENDPOINT = "https://api.exa.ai/search";
@@ -61,10 +58,10 @@ type ExaContentsArgs = {
   summary?: ExaSummaryContentsOption;
 };
 
-function invalidBaseUrlPayload(value: string) {
+function invalidBaseUrlPayload() {
   return {
     error: "invalid_base_url",
-    message: `plugins.entries.exa.config.webSearch.baseUrl must be a valid http(s) URL. Got: ${value}`,
+    message: "plugins.entries.exa.config.webSearch.baseUrl must be a valid http(s) URL.",
     docs: "https://docs.openclaw.ai/tools/exa-search",
   };
 }
@@ -105,17 +102,17 @@ export async function executeExaWebSearchProviderTool(
   const configured = normalizeOptionalString(exaConfig?.baseUrl);
   if (configured) {
     if (/^[a-z][a-z0-9+.-]*:\/\//i.test(configured) && !/^https?:\/\//i.test(configured)) {
-      return invalidBaseUrlPayload(configured);
+      return invalidBaseUrlPayload();
     }
     const candidate = /^https?:\/\//i.test(configured) ? configured : `https://${configured}`;
     let parsed: URL;
     try {
       parsed = new URL(candidate);
     } catch {
-      return invalidBaseUrlPayload(configured);
+      return invalidBaseUrlPayload();
     }
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return invalidBaseUrlPayload(configured);
+      return invalidBaseUrlPayload();
     }
     const pathname = parsed.pathname.replace(/\/+$/, "");
     parsed.pathname = pathname.endsWith("/search") ? pathname : `${pathname}/search`;
@@ -262,8 +259,7 @@ export async function executeExaWebSearchProviderTool(
   const start = Date.now();
   const timeoutSeconds = resolveSearchTimeoutSeconds(searchConfig);
   const body: Record<string, unknown> = {
-    query,
-    numResults: resolvedCount,
+    ...nativeWebSearchCodecs["exa.search"].request(endpoint, query, resolvedCount).body,
     type,
     contents: contents ?? { highlights: true },
   };
@@ -331,8 +327,7 @@ export async function executeExaWebSearchProviderTool(
         const payload: unknown = JSON.parse(
           new TextDecoder("utf-8", { fatal: true }).decode(bytes),
         );
-        const rows = asOptionalObjectRecord(payload)?.results;
-        return (Array.isArray(rows) ? rows.filter(isRecord) : []).slice(0, resolvedCount);
+        return nativeWebSearchCodecs["exa.search"].results(payload, resolvedCount);
       } catch (cause) {
         throw new Error("Exa API returned malformed JSON", { cause });
       }
@@ -346,36 +341,7 @@ export async function executeExaWebSearchProviderTool(
     count: results.length,
     tookMs: Date.now() - start,
     externalContent: externalContentStamp("exa"),
-    results: results.map((entry) => {
-      const title = typeof entry.title === "string" ? entry.title : "";
-      const url = typeof entry.url === "string" ? entry.url : "";
-      const description =
-        normalizeTrimmedStringList(entry.highlights).join("\n") ||
-        normalizeOptionalString(entry.summary) ||
-        normalizeOptionalString(entry.text) ||
-        "";
-      const summary = normalizeOptionalString(entry.summary) ?? "";
-      const highlightScores = Array.isArray(entry.highlightScores)
-        ? entry.highlightScores.filter(
-            (score): score is number => typeof score === "number" && Number.isFinite(score),
-          )
-        : [];
-      const published =
-        typeof entry.publishedDate === "string" && entry.publishedDate
-          ? entry.publishedDate
-          : undefined;
-      return Object.assign(
-        {
-          title: title ? wrapWebContent(title, `web_search`) : ``,
-          url,
-          description: description ? wrapWebContent(description, `web_search`) : ``,
-          published,
-          siteName: resolveSiteName(url) || undefined,
-        },
-        summary ? { summary: wrapWebContent(summary, `web_search`) } : {},
-        highlightScores.length > 0 ? { highlightScores } : {},
-      );
-    }),
+    results,
   };
 
   writeCachedSearchPayload(cacheKey, payload, cacheTtlMs);

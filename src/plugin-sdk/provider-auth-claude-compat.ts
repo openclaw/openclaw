@@ -10,6 +10,8 @@ import { loadJsonFileThroughSymlink } from "../infra/json-file.js";
 
 const CLAUDE_CLI_CREDENTIALS_FILE = ".credentials.json";
 const CLAUDE_CLI_USER_SETTINGS_FILE = "settings.json";
+const CLAUDE_MANAGED_SETTINGS_FILE = "managed-settings.json";
+const CLAUDE_MANAGED_SETTINGS_DROP_IN_DIR = "managed-settings.d";
 const CLAUDE_CLI_KEYCHAIN_SERVICE = "Claude Code-credentials";
 const CLAUDE_CLI_KEYCHAIN_TIMEOUT_MS = 2_000;
 const CLAUDE_CLI_KEYCHAIN_ACCOUNT_FALLBACK = "claude-code-user";
@@ -326,7 +328,8 @@ function readClaudeNativeLoginCredential(
     path.dirname(resolveClaudeCliCredentialsPath(homeDir, env)) !==
       resolveClaudeCliConfigDir(homeDir, env) ||
     readClaudeApiKeyHelper(homeDir, env) ||
-    userSettingsSelectNonNativeAuth(homeDir, env)
+    userSettingsSelectNonNativeAuth(homeDir, env) ||
+    managedSettingsSelectNonNativeAuth(options.platform ?? process.platform)
   ) {
     return undefined;
   }
@@ -381,16 +384,65 @@ function withClaudeAccountEmail(
 
 /**
  * Claude's user settings `env` block outranks the spawned environment, so it can select an
- * API key, token or cloud provider too. The bundled backend loads user settings only.
+ * API key, token or cloud provider too. The bundled backend loads no other settings source
+ * except admin-managed settings, which Claude always loads.
  */
 function userSettingsSelectNonNativeAuth(homeDir?: string, env: NodeJS.ProcessEnv = process.env) {
-  const settings = asNonArrayRecord(
+  return settingsEnvSelectsNonNativeAuth(
     loadJsonFileThroughSymlink(resolveClaudeCliPath(homeDir, CLAUDE_CLI_USER_SETTINGS_FILE, env)),
   );
-  const settingsEnv = asNonArrayRecord(settings.env);
+}
+
+function settingsEnvSelectsNonNativeAuth(settings: unknown): boolean {
+  const settingsEnv = asNonArrayRecord(asNonArrayRecord(settings).env);
   return CLAUDE_NON_NATIVE_AUTH_ENV_KEYS.some((key) => {
     const value = settingsEnv[key];
     return typeof value === "string" && value.trim() !== "";
+  });
+}
+
+function resolveClaudeManagedSettingsDir(platform: NodeJS.Platform): string {
+  return platform === "darwin"
+    ? "/Library/Application Support/ClaudeCode"
+    : platform === "win32"
+      ? "C:\\Program Files\\ClaudeCode"
+      : "/etc/claude-code";
+}
+
+/**
+ * Claude loads admin-managed settings whatever `--setting-sources` says: the managed file,
+ * then each non-hidden `*.json` drop-in. Any of them can set an API key helper or an `env`
+ * auth key. A later file can only blank such a key, so checking each file alone may refuse
+ * too often but never misses one. MDM and server-managed policy are not readable here.
+ */
+function managedSettingsSelectNonNativeAuth(platform: NodeJS.Platform): boolean {
+  const dir = resolveClaudeManagedSettingsDir(platform);
+  const dropInDir = path.join(dir, CLAUDE_MANAGED_SETTINGS_DROP_IN_DIR);
+  let dropIns: string[] = [];
+  try {
+    dropIns = fs
+      .readdirSync(dropInDir)
+      .filter((name) => name.endsWith(".json") && !name.startsWith("."));
+  } catch {
+    // A missing or unreadable drop-in directory contributes nothing, for Claude too.
+  }
+  return [
+    path.join(dir, CLAUDE_MANAGED_SETTINGS_FILE),
+    ...dropIns.map((name) => path.join(dropInDir, name)),
+  ].some((file) => {
+    let settings: Record<string, unknown>;
+    try {
+      settings = asNonArrayRecord(loadJsonFileThroughSymlink(file));
+    } catch {
+      // A file this process cannot resolve or read (EACCES) is unreadable for the Claude child
+      // running as the same user too, so it contributes nothing, like a missing file.
+      return false;
+    }
+    const helper = settings.apiKeyHelper;
+    return (
+      (typeof helper === "string" && helper.trim() !== "") ||
+      settingsEnvSelectsNonNativeAuth(settings)
+    );
   });
 }
 

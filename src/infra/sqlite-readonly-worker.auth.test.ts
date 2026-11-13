@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -26,6 +27,7 @@ import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contra
 import { revokeAgentDatabaseResources } from "../state/openclaw-agent-db-resources.js";
 import { ensureOpenClawAgentDatabaseSchema } from "../state/openclaw-agent-db-schema.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
+import * as directoryWatch from "./directory-watch-host.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
 import { cleanupSnapshotOperations } from "./sqlite-readonly-location-cleanup.js";
@@ -54,11 +56,10 @@ const skipBroker = process.platform === "win32";
 it.skipIf(skipBroker)(
   "reuses the Gateway reader through detached observations and retained-state restart",
   async () => {
-    // The macOS directory watch host bypasses fs.watch; keep the unavailable watcher in-process.
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    vi.spyOn(fs, "watch").mockImplementation(() => {
-      throw new Error("synthetic unavailable watcher");
-    });
+    // Hold native notifications so only explicit and recovery reads drive this transport proof.
+    vi.spyOn(directoryWatch, "watchDirectory").mockImplementation(() =>
+      Object.assign(new EventEmitter(), { close() {} }),
+    );
     const { source, store } = createAuthDatabase();
     const writer = openNodeSqliteDatabase(source);
     admitSqliteSchema(writer);
@@ -140,6 +141,61 @@ it.skipIf(skipBroker)(
       await restartedScope.close();
       await broker.close();
       writer.close();
+    }
+  },
+);
+
+it.skipIf(skipBroker)(
+  "keeps late-discovered auth directories on the bound Gateway readers",
+  async () => {
+    vi.spyOn(directoryWatch, "watchDirectory").mockImplementation(() =>
+      Object.assign(new EventEmitter(), { close() {} }),
+    );
+    const broker = createSpawnBrokerHost();
+    const gatewayReaders = createSqliteReadOnlyWorkerScope();
+    const callerReaders = createSqliteReadOnlyWorkerScope();
+    const publishFileChange = authProfileFileChanges.onChange;
+    const observed: unknown[] = [];
+    try {
+      await broker.ready();
+      const brokerSpawn = vi.spyOn(broker, "spawn");
+      vi.mocked(spawn).mockClear();
+      runWithSpawnBroker(broker, () => gatewayReaders.run(bindAuthProfileFileObservationReaders));
+      const { source, store } = createAuthDatabase();
+      vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+      authProfileFileChanges.onChange = async (change) => {
+        await publishFileChange?.(change);
+        if (change.directory === path.dirname(source)) {
+          observed.push((await read(source, "canonical")).store);
+        }
+      };
+      runWithSpawnBroker(broker, () =>
+        callerReaders.run(() => readAuthProfileDatabaseIdentity(source)),
+      );
+      await callerReaders.close();
+
+      await runInDetachedAsyncContext(refreshAuthProfileFileState);
+      await runInDetachedAsyncContext(refreshAuthProfileFileState);
+      expect(observed).toEqual([
+        { status: "readable", raw: store },
+        { status: "readable", raw: store },
+      ]);
+      expect(brokerSpawn).toHaveBeenCalledTimes(1);
+      expect(spawn).not.toHaveBeenCalled();
+
+      await gatewayReaders.close();
+      clearAuthState(source);
+      await runInDetachedAsyncContext(refreshAuthProfileFileState);
+      expect(observed).toHaveLength(2);
+      expect(brokerSpawn).toHaveBeenCalledTimes(1);
+      expect(spawn).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+      authProfileFileChanges.onChange = publishFileChange;
+      await closeOpenClawStateDatabaseAsync();
+      await callerReaders.close();
+      await gatewayReaders.close();
+      await broker.close();
     }
   },
 );

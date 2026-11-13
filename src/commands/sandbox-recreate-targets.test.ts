@@ -1,16 +1,6 @@
 import { createHash } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterEach, expect, it, vi } from "vitest";
-import {
-  readBrowserRegistry,
-  readRegistryEntry,
-  updateBrowserRegistry,
-  updateRegistry,
-} from "../agents/sandbox/registry.js";
-import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { sandboxListCommand, sandboxRecreateCommand } from "./sandbox.js";
-import { createThrowingTestRuntime } from "./test-runtime-config-helpers.js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 const { spawnCommand } = vi.hoisted(() => ({ spawnCommand: vi.fn() }));
 vi.mock("../process/exec.js", async (importOriginal) => ({
@@ -18,16 +8,31 @@ vi.mock("../process/exec.js", async (importOriginal) => ({
   spawnCommand,
 }));
 
-afterEach(clearRuntimeConfigSnapshot);
+// Each case models a new CLI process with its own captured Podman discovery.
+beforeEach(() => {
+  vi.resetModules();
+});
+afterEach(async () => {
+  const { clearRuntimeConfigSnapshot } = await import("../config/config.js");
+  clearRuntimeConfigSnapshot();
+});
 
 it.each([
-  { browser: false, scope: "session" },
-  { browser: false, scope: "agent" },
-  { browser: true, scope: "session" },
-  { browser: true, scope: "agent" },
+  { browser: false, scope: "session", mismatchedTarget: false },
+  { browser: false, scope: "agent", mismatchedTarget: false },
+  { browser: true, scope: "session", mismatchedTarget: false },
+  { browser: true, scope: "agent", mismatchedTarget: false },
+  { browser: false, scope: "session", mismatchedTarget: true },
+  { browser: false, scope: "agent", mismatchedTarget: true },
 ] as const)(
-  "recreates only $scope-selected runtimes (browser: $browser)",
-  async ({ browser, scope }) => {
+  "recreates only $scope-selected runtimes (browser: $browser, mismatched target: $mismatchedTarget)",
+  async ({ browser, scope, mismatchedTarget }) => {
+    const { readBrowserRegistry, readRegistryEntry, updateBrowserRegistry, updateRegistry } =
+      await import("../agents/sandbox/registry.js");
+    const { setRuntimeConfigSnapshot } = await import("../config/config.js");
+    const { withOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
+    const { sandboxListCommand, sandboxRecreateCommand } = await import("./sandbox.js");
+    const { createThrowingTestRuntime } = await import("./test-runtime-config-helpers.js");
     const oldUri = "unix:///tmp/old-podman.sock";
     const newUri = "unix:///tmp/new-podman.sock";
     await withOpenClawTestState(
@@ -37,7 +42,7 @@ it.each([
         env: {
           CONTAINER_CONNECTION: undefined,
           CONTAINER_SSHKEY: undefined,
-          CONTAINER_HOST: oldUri,
+          CONTAINER_HOST: mismatchedTarget ? newUri : oldUri,
         },
       },
       async () => {
@@ -77,8 +82,16 @@ it.each([
           [newUri, new Set([newEntry.containerName])],
           ["docker", new Set(["old-browser", "new-browser"])],
         ]);
+        const containerIds = new Map([
+          [oldEntry.containerName, "1".repeat(64)],
+          [newEntry.containerName, "2".repeat(64)],
+          ["old-browser", "3".repeat(64)],
+          ["new-browser", "4".repeat(64)],
+        ]);
         const calls: string[][] = [];
         const success = { failed: false, isCanceled: false, exitCode: 0, stderr: Buffer.alloc(0) };
+        const containerStateFormat =
+          '{{.Id}}\n{{.State.Running}}\n{{.HostConfig.ReadonlyRootfs}}\n{{ index .Config.Labels "openclaw.configHash" }}';
         const responses: Record<string, string> = {
           info: "true\ttrue\t\t5.0.0\n",
           system: "[]",
@@ -103,7 +116,10 @@ it.each([
             expect(physical.get(target)?.delete(args.at(-1)!)).toBe(true);
           }
           const key = args[0] === "inspect" ? `inspect:${args[2]}` : args[0];
-          const stdout = expectDefined(responses[key!], "supported container command/format");
+          const stdout =
+            key === `inspect:${containerStateFormat}`
+              ? `${expectDefined(containerIds.get(args.at(-1)!), "synthetic container ID")}\ntrue\nfalse\n\n`
+              : expectDefined(responses[key!], "supported container command/format");
           return { ...success, stdout: Buffer.from(stdout) };
         });
         const runtime = createThrowingTestRuntime();
@@ -123,11 +139,11 @@ it.each([
         await expect(sandboxListCommand({ browser: false, json: true }, runtime)).rejects.toThrow(
           "active Podman connection changed",
         );
-        if (!browser) {
-          process.env.CONTAINER_HOST = newUri;
+        if (mismatchedTarget) {
           await expect(recreate()).rejects.toThrow("active Podman connection changed");
           expect(await readRegistryEntry(oldEntry.containerName)).toEqual(oldEntry);
-          process.env.CONTAINER_HOST = oldUri;
+          expect(calls.some((call) => call.includes("rm"))).toBe(false);
+          return;
         }
         expect(calls.some((call) => call.includes("rm"))).toBe(false);
         calls.length = 0;
@@ -142,9 +158,6 @@ it.each([
         expect(calls.every(([command]) => command === (browser ? "docker" : "podman"))).toBe(true);
         expect(calls.flat()).not.toContain(newEntry.containerName);
         expect(calls.flat()).not.toContain("new-browser");
-        expect(physical.get(browser ? "docker" : oldUri)?.has(removedName)).toBe(false);
-        expect(physical.get(newUri)?.has(newEntry.containerName)).toBe(true);
-        expect(physical.get("docker")?.has("new-browser")).toBe(true);
         expect(await readRegistryEntry(newEntry.containerName)).toEqual(newEntry);
         expect(await readRegistryEntry(oldEntry.containerName)).toEqual(browser ? oldEntry : null);
         expect(

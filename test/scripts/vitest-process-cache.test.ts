@@ -4,11 +4,13 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { spawnOwnedVitestProcess } from "../../scripts/lib/vitest-process.mts";
+import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { resolveNativeFixtureShortPath } from "./native-boundary-fixture.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const shortTempRoot = process.platform === "win32" ? undefined : fs.realpathSync.native("/tmp");
 const testNodeExecPath = resolveTestNodeExecPath();
 const tsxPreload = pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm")).href;
 
@@ -23,17 +25,66 @@ async function run(spec: Parameters<typeof spawnOwnedVitestProcess>[0]) {
   return { result: await completion, ...output };
 }
 
+it.skipIf(process.platform === "win32").each([
+  [45, "x", false],
+  [46, "x", true],
+  [45, "é", true],
+  [100, "x", true],
+] as const)(
+  "leaves socket headroom for a %i-character temp root (%s)",
+  async (length, fill, relocated) => {
+    const base = fs.realpathSync(tempDirs.make("vt-", "/tmp"));
+    const root = path.join(base, fill.repeat(length - base.length - 1));
+    fs.mkdirSync(root);
+    const parent = createVitestResourceOwner(root);
+    const result = run({
+      command: testNodeExecPath,
+      args: [
+        "--input-type=module",
+        "-e",
+        `
+import fs from "node:fs";
+import net from "node:net";
+import os from "node:os";
+import path from "node:path";
+const root = os.tmpdir();
+const directory = fs.mkdtempSync(path.join(root, "org.chromium.Chromium."));
+const socket = path.join(directory, "SingletonSocket");
+if (Buffer.byteLength(socket) >= 104) throw new Error("Socket path too long: " + socket);
+const server = net.createServer();
+server.listen(socket, () => {
+  console.log(JSON.stringify([root, process.env.TMP, process.env.TEMP]));
+  server.close();
+});
+`,
+      ],
+      homeMode: "tooling",
+      options: {
+        env: { ...process.env, TMPDIR: root, TMP: root, TEMP: root },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    });
+    expect(() => parent.assertReleased()).toThrow("Unreleased Vitest resource claim");
+    const { result: completed, stdout, stderr } = await result;
+    expect(completed.code, stderr).toBe(0);
+    const [namespace, tmp, temp] = JSON.parse(stdout);
+    expect([tmp, temp]).toEqual([namespace, namespace]);
+    expect(path.dirname(namespace) === root).toBe(!relocated);
+    expect(() => parent.assertReleased()).not.toThrow();
+    expect(fs.existsSync(namespace)).toBe(false);
+  },
+);
+
 it.each([
   ["hermetic", undefined],
   ["live-aware", undefined],
   ["tooling", undefined],
   ["hermetic", "caller-cache"],
   ["hermetic", ""],
-  ["hermetic", "0"],
 ] as const)(
   "reuses owned source compiler caches (%s, Bun cache %s)",
   async (homeMode, bunCache) => {
-    const root = fs.realpathSync(tempDirs.make("oc-vt-source-cache-"));
+    const root = fs.realpathSync(tempDirs.make("oc-vt-source-cache-", shortTempRoot));
     const sourcePath = path.join(root, "source.mts");
     fs.writeFileSync(sourcePath, "export enum Value { Answer = 42 }\n");
     const script = `
@@ -69,7 +120,7 @@ console.log(JSON.stringify({ namespace, output, again, disabled: process.env.TSX
     };
     const { result, stdout, stderr } = await run({
       command: testNodeExecPath,
-      args: ["--import", tsxPreload, "--input-type=module", "-e", script],
+      args: ["--input-type=module", "-e", script],
       homeMode,
       options: { env, stdio: ["ignore", "pipe", "pipe"] },
     });
@@ -87,9 +138,7 @@ console.log(JSON.stringify({ namespace, output, again, disabled: process.env.TSX
           ? undefined
           : path.resolve(import.meta.dirname, "../../.cache/bun-transpiler")),
     );
-    expect(env.BUN_RUNTIME_TRANSPILER_CACHE_PATH).toBe(bunCache);
     expect(path.dirname(observed.namespace)).toBe(root);
-    expect(env.TSX_DISABLE_CACHE).toBe("1");
     expect(fs.existsSync(observed.namespace)).toBe(process.platform === "win32");
   },
 );
@@ -122,3 +171,44 @@ it.skipIf(process.platform !== "win32")(
     expect([tmp, temp]).toEqual([tmpdir, tmpdir]);
   },
 );
+
+it("isolates fixture module detection from an enclosing ESM package", async () => {
+  const root = tempDirs.make("oc-vt-package-scope-", shortTempRoot);
+  fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ type: "module" }));
+  const script = `
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+const fixtures = path.join(os.tmpdir(), "fixtures");
+fs.mkdirSync(fixtures);
+fs.writeFileSync(path.join(fixtures, "commonjs"), 'console.log(require("node:path").basename("/cjs"));');
+fs.writeFileSync(path.join(fixtures, "value.js"), 'export const value = "esm";');
+fs.writeFileSync(path.join(fixtures, "module.js"), 'import { value } from "./value.js"; console.log(value);');
+for (const name of ["commonjs", "module.js"]) {
+  const result = spawnSync(process.execPath, [path.join(fixtures, name)], { encoding: "utf8" });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(result.stderr);
+  process.stdout.write(result.stdout);
+}
+`;
+  const { child, completion } = spawnOwnedVitestProcess({
+    command: testNodeExecPath,
+    args: ["--input-type=module", "-e", script],
+    homeMode: "tooling",
+    options: {
+      env: { ...process.env, TMPDIR: root, TMP: root, TEMP: root },
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  });
+  let output = "";
+  let errorOutput = "";
+  child.stdout?.on("data", (chunk: Buffer) => {
+    output += chunk.toString();
+  });
+  child.stderr?.on("data", (chunk: Buffer) => {
+    errorOutput += chunk.toString();
+  });
+  expect((await completion).code, errorOutput).toBe(0);
+  expect(output).toBe("cjs\nesm\n");
+});

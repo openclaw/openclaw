@@ -1,10 +1,10 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { CHANNEL_CONFIG_METADATA_KEYS } from "../channels/config-metadata.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
+import { canonicalizeContainmentRootSync } from "../infra/path-containment.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { normalizePluginId, normalizePluginTargetConfig } from "./config-state.js";
-import { resetPluginSlotsToDefaults } from "./slots.js";
+import { resetPluginSlotsToDefaults, resolveRetainedContextEngineIds } from "./slots.js";
 
 export type PluginConfigUninstallActions = {
   entry: boolean;
@@ -41,12 +41,18 @@ function createEmptyConfigUninstallActions(): PluginConfigUninstallActions {
   };
 }
 
-/** Resolve canonically when present, otherwise preserve an absolute lexical path. */
-export { resolveRealpathOrAbsolute as resolveComparableUninstallPath };
+/**
+ * Recorded install, load, and root paths compare in the containment owner's spelling, so a
+ * missing install under an aliased state dir still matches its canonical root.
+ */
+export { canonicalizeContainmentRootSync as resolveComparableUninstallPath };
 
 /** Check whether a managed uninstall target stays inside its owning root. */
 export function isUninstallPathInsideOrEqual(parent: string, child: string): boolean {
-  return isPathInside(resolveRealpathOrAbsolute(parent), resolveRealpathOrAbsolute(child));
+  return isPathInside(
+    canonicalizeContainmentRootSync(parent),
+    canonicalizeContainmentRootSync(child),
+  );
 }
 
 /** Resolve channel config keys owned by a plugin during uninstall. */
@@ -62,7 +68,7 @@ export function resolveUninstallChannelConfigKeys(
 function loadPathMatchesInstallPath(loadPath: string, installPath: string): boolean {
   return (
     loadPath === installPath ||
-    resolveRealpathOrAbsolute(loadPath) === resolveRealpathOrAbsolute(installPath)
+    canonicalizeContainmentRootSync(loadPath) === canonicalizeContainmentRootSync(installPath)
   );
 }
 
@@ -100,7 +106,7 @@ function removeMatchingLoadPaths(
 export function removePluginRuntimePolicyFromConfig(
   cfg: OpenClawConfig,
   pluginId: string,
-  opts?: { channelIds?: string[]; loadPaths?: string[] },
+  opts?: { channelIds?: string[]; loadPaths?: string[]; contextEngineIds?: readonly string[] },
 ): { config: OpenClawConfig; actions: PluginConfigUninstallActions } {
   const actions = createEmptyConfigUninstallActions();
   const policyPluginId = normalizePluginId(pluginId);
@@ -131,13 +137,15 @@ export function removePluginRuntimePolicyFromConfig(
   actions.loadPath = loadResult.changed;
 
   let slots = pluginsConfig.slots;
+  const selectedEngineId = slots?.contextEngine;
+  const ownedEngineIds = opts?.contextEngineIds ?? resolveRetainedContextEngineIds(cfg, pluginId);
   if (slots?.memory === pluginId) {
     actions.memorySlot = true;
   }
-  if (slots?.contextEngine === pluginId) {
+  if (selectedEngineId && ownedEngineIds.includes(selectedEngineId)) {
     actions.contextEngineSlot = true;
   }
-  slots = resetPluginSlotsToDefaults(slots, pluginId);
+  slots = resetPluginSlotsToDefaults(slots, pluginId, ownedEngineIds);
   if (slots && Object.keys(slots).length === 0) {
     slots = undefined;
   }

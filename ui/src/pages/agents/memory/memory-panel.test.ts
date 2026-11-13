@@ -8,6 +8,7 @@ import { createDeferred as deferred } from "../../../../../test/helpers/promise.
 import { ShellLayoutOwner } from "../../../app/shell-layout-owner.ts";
 import { ShellLayoutProvider } from "../../../app/shell-layout-traits-solid.tsx";
 import { showConfirmDialog } from "../../../components/confirm-dialog.ts";
+import { configSnapshot } from "../../../lib/config/config-snapshot.test-support.ts";
 import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
@@ -39,7 +40,7 @@ afterEach(() => {
 
 const REPAIR = "doctor.memory.repairDreamingArtifacts";
 const PREVIEW = ".dreams-diary__preview-panel";
-const CONFIRM_BUTTON = ".exec-approval-actions button:last-child";
+const CONFIRM_BUTTON = ".oc-dialog__footer button:last-child";
 const PREVIEW_TEXT = ".dreams-diary__preview-pre";
 
 function memoryStatus(promotedToday: number, extra: Record<string, unknown> = {}) {
@@ -53,17 +54,17 @@ it.each([true, false])(
   async (enabled) => {
     const page = await createPage({ [STATUS]: () => ({ dreaming: { enabled } }) });
     page.context.setConfig({});
-    const toggle = getByRole<HTMLButtonElement>(page.container, "switch", { name: "Dreaming" });
+    const toggle = getByRole<HTMLInputElement>(page.container, "switch", { name: "Dreaming" });
     await waitForSolid(() => expect(toggle.disabled).toBe(false));
-    expect(toggle.getAttribute("aria-checked")).toBe(String(enabled));
+    expect(toggle.checked).toBe(enabled);
     toggle.click();
     flush();
     expect(page.toggle.open).toBe(true);
-    expect(toggle.getAttribute("aria-checked")).toBe(String(enabled));
+    expect(toggle.checked).toBe(enabled);
     page.toggle.onCancel();
     flush();
     expect(page.toggle.open).toBe(false);
-    expect(toggle.getAttribute("aria-checked")).toBe(String(enabled));
+    expect(toggle.checked).toBe(enabled);
   },
 );
 
@@ -86,18 +87,18 @@ it.each(["rejected", "declined"] as const)(
     } else {
       pending.resolve(false);
     }
-    await waitForSolid(() => expect(page.query(".exec-approval-error")).not.toBeNull());
+    await waitForSolid(() => expect(page.query(".oc-dialog .callout.danger")).not.toBeNull());
     expect(page.toggle.open).toBe(true);
     expect(page.query<HTMLButtonElement>(CONFIRM_BUTTON)?.disabled).toBe(false);
     const retry = deferred<boolean>();
     patch.mockReturnValueOnce(retry.promise);
     click(page.container, CONFIRM_BUTTON);
     await waitForSolid(() => expect(page.text(CONFIRM_BUTTON)).toBe("Saving…"));
-    expect(page.query(".exec-approval-error")).toBeNull();
+    expect(page.query(".oc-dialog .callout.danger")).toBeNull();
     retry.resolve(true);
     await waitForSolid(() => expect(page.toggle.open).toBe(false));
     expect(patch).toHaveBeenCalledTimes(2);
-    expect(page.query(".exec-approval-error")).toBeNull();
+    expect(page.query(".oc-dialog .callout.danger")).toBeNull();
   },
 );
 
@@ -134,7 +135,7 @@ it.each(["reconnect", "agent", "client", "access", "unmount"] as const)(
     }
     pending.reject(new Error("retired transport failure"));
     await Promise.resolve();
-    expect(page.query(".exec-approval-error")).toBeNull();
+    expect(page.query(".oc-dialog .callout.danger")).toBeNull();
   },
 );
 
@@ -204,10 +205,12 @@ it.each(["dreams", "insights", "wiki"] as const)(
       ).toBe(false),
     );
     page.context.setConfig({ plugins: { entries: { "memory-wiki": { enabled: true } } } });
-    click(page.container, "#dreams-tab-diary");
-    click(page.container, `#dream-diary-tab-${tab}`);
-    const toolbar = page.query(".dreams-diary__chrome");
-    const tabControl = page.query<HTMLButtonElement>(`#dream-diary-tab-${tab}`)!;
+    page.dreaming.onViewStateChange((draft) => {
+      draft.openReviewPanel = tab === "dreams" ? null : tab;
+    });
+    flush();
+    const toolbar = page.query(".dreams-page__stage");
+    const tabControl = page.query<HTMLButtonElement>(".dreams-review__row")!;
     tabControl.focus();
     const refresh = () => {
       ({
@@ -224,15 +227,15 @@ it.each(["dreams", "insights", "wiki"] as const)(
         initialRequests + 1,
       ),
     );
-    expect(page.query(".dreams-diary__chrome")).toBe(toolbar);
+    expect(page.query(".dreams-page__stage")).toBe(toolbar);
     failure.reject(new Error("Scoped read failed"));
     await page.waitText(".dreams-diary__error", "Scoped read failed");
-    expect(page.query(".dreams-diary__chrome")).toBe(toolbar);
+    expect(page.query(".dreams-page__stage")).toBe(toolbar);
     expect(document.activeElement).toBe(tabControl);
     fail = false;
     refresh();
     await waitForSolid(() => expect(page.query(".dreams-diary__error")).toBeNull());
-    expect(page.query(".dreams-diary__chrome")).toBe(toolbar);
+    expect(page.query(".dreams-page__stage")).toBe(toolbar);
     expect(document.activeElement).toBe(tabControl);
   },
 );
@@ -243,9 +246,9 @@ it("retains accepted scene status and its DOM when the status refresh fails", as
   const page = await createPage({
     [STATUS]: () => (fail ? failure.promise : memoryStatus(23)),
   });
-  await waitForSolid(() => expect(page.text(".dreams__status-detail")).toContain("23"));
+  await waitForSolid(() => expect(page.text(".dreams-controls__status")).toContain("23"));
   const scene = page.query(".dreams");
-  const detail = page.query(".dreams__status-detail");
+  const detail = page.query(".dreams-controls__status");
   fail = true;
   const pending = page.state.loadResources("dreamingStatus", false);
   await waitForSolid(() =>
@@ -255,7 +258,7 @@ it("retains accepted scene status and its DOM when the status refresh fails", as
   await pending;
   await page.waitText(".dreams__controls-error", "Status refresh failed");
   expect(page.query(".dreams")).toBe(scene);
-  expect(page.query(".dreams__status-detail")).toBe(detail);
+  expect(page.query(".dreams-controls__status")).toBe(detail);
   expect(detail?.textContent).toContain("23");
 });
 
@@ -296,10 +299,11 @@ it("scopes native memory requests to the current agent and releases shell layout
   expect(getInitialTarget).toHaveBeenCalledOnce();
   expect(request).toHaveBeenCalledWith(DIARY, { agentId: "support" });
   const host = content.querySelector<HTMLElement>("openclaw-agent-memory-panel")!;
-  expect(host.querySelector(".agent-memory-panel__header")).not.toBeNull();
+  expect(host.querySelector(".dreams-page")).not.toBeNull();
   expect(owner.current.toolbarHeader).toBe(true);
 
-  click(host, "#dreams-tab-diary");
+  host.querySelector<HTMLButtonElement>(".dreams-review__row")?.click();
+  flush();
   expect(originalTarget.subscriberCount()).toBe(1);
   setAgentTarget(replacementTarget);
   flush();
@@ -310,7 +314,7 @@ it("scopes native memory requests to the current agent and releases shell layout
   originalTarget.set("main");
   await waitForSolid(() => expect(request).toHaveBeenCalledWith(STATUS, { agentId: "main" }));
   expect(content.querySelector("openclaw-agent-memory-panel")).toBe(host);
-  expect(host.querySelector("#dreams-tab-diary")?.getAttribute("aria-selected")).toBe("true");
+  expect(host.querySelector(".dreams-review__row")?.getAttribute("aria-expanded")).toBe("true");
   view.unmount();
   expect(originalTarget.subscriberCount()).toBe(0);
   expect(owner.current.toolbarHeader).toBeUndefined();
@@ -362,8 +366,7 @@ it.each(["", "main"])(
     );
     const page = await createPage(request);
     await waitForSolid(() => expect(page.dreaming.dreamDiaryContent).toBe("main-only"));
-    click(page.container, "#dreams-tab-diary");
-    await page.waitText("#dream-diary-panel", "main-only\n");
+    await page.waitText(".dreams-diary__prose", "main-only\n");
     page.setAgentId("support");
     flush();
     expect(page.container.textContent).not.toContain("main-only");
@@ -399,7 +402,6 @@ it.each([false, true])(
     const hello = gatewayHelloForMethods([REPAIR], ["operator.read", "operator.write"]);
     const page = await createPage(request, "main", hello);
     const { context } = page;
-    click(page.container, "#dreams-tab-advanced");
     vi.mocked(showConfirmDialog).mockResolvedValueOnce(true);
     page.dreaming.onRepairDreamingArtifacts();
     await waitForSolid(() => expect(request).toHaveBeenCalledWith(REPAIR, { agentId: "main" }));
@@ -454,7 +456,6 @@ it("shows the replacement agent's diary while the retired action is pending", as
     gatewayHelloForMethods([STATUS, DIARY, method], ["operator.read", "operator.write"]),
   );
   try {
-    click(page.container, "#dreams-tab-diary");
     await waitForSolid(() =>
       expect(page.text(".dreams-diary__prose")).toContain("Sample main diary"),
     );
@@ -485,7 +486,6 @@ it("keeps a replacement agent's diary action busy after the old action settles",
     "main",
     gatewayHelloForMethods([STATUS, DIARY, method], ["operator.read", "operator.write"]),
   );
-  click(page.container, "#dreams-tab-advanced");
   page.dreaming.onBackfillDiary();
   await waitForSolid(() => expect(page.state.diaryActionBusy()).toBe(true));
   page.dreaming.onBackfillDiary();
@@ -496,15 +496,13 @@ it("keeps a replacement agent's diary action busy after the old action settles",
   page.dreaming.onBackfillDiary();
   await waitForSolid(() => expect(page.state.diaryActionBusy()).toBe(true));
   const working = () =>
-    Array.from(page.container.querySelectorAll<HTMLButtonElement>("button")).find(
-      (button) => button.textContent === "Working…",
-    );
-  await waitForSolid(() => expect(working()?.disabled).toBe(true));
+    page.container.querySelector(".settings-section__actions .settings-status")?.textContent;
+  await waitForSolid(() => expect(working()).toBe("Working…"));
   oldAction.resolve({ written: 1 });
   await oldAction.promise;
   flush();
   expect(page.state.diaryActionBusy()).toBe(true);
-  expect(working()?.disabled).toBe(true);
+  expect(working()).toBe("Working…");
 
   nextAction.resolve({ written: 2 });
   await waitForSolid(() => expect(page.state.diaryActionBusy()).toBe(false));
@@ -527,7 +525,6 @@ it("retains diary, preview and toggle drafts through reconnect while rejecting o
   const { context } = page;
   const hello = context.gateway.snapshot.hello;
   await waitForSolid(() => expect(page.dreaming.dreamDiaryContent).toBe("Retained diary"));
-  click(page.container, "#dreams-tab-diary");
   const preview = page.dreaming.onOpenWikiPage("retained.md");
   page.state.setEnabled(false);
   flush();
@@ -581,8 +578,7 @@ it.each(["agent", "client", "access", "unmount"] as const)(
       "support",
     );
     const { context } = page;
-    click(page.container, "#dreams-tab-diary");
-    await page.waitText("#dream-diary-panel", "support-only\n");
+    await page.waitText(".dreams-diary__prose", "support-only\n");
     const preview = page.dreaming.onOpenWikiPage("support.md");
     page.state.setEnabled(false);
     await waitForSolid(() => expect(page.query(PREVIEW)).not.toBeNull());
@@ -612,7 +608,6 @@ it.each(["agent", "client", "access", "unmount"] as const)(
 it.each(["support-only", ""])("loads scoped wiki preview content %j", async (content) => {
   const response = deferred<unknown>();
   const page = await createPage({ "wiki.get": () => response.promise }, "support");
-  click(page.container, "#dreams-tab-diary");
   const pending = page.dreaming.onOpenWikiPage("support.md");
   flush();
   const dialog = page.query("openclaw-modal-dialog");
@@ -641,7 +636,6 @@ it("keeps the preview dialog and focused close control when its read fails, then
     "wiki.get": () =>
       fail ? failure.promise : { title: "Fresh", path: "fresh.md", content: "Fresh wiki content" },
   });
-  click(page.container, "#dreams-tab-diary");
   const pending = page.dreaming.onOpenWikiPage("failed.md");
   flush();
   const dialog = page.query("openclaw-modal-dialog");
@@ -686,30 +680,30 @@ it("updates the mounted view across tab selection and owner notifications", asyn
   promotedToday = 9;
   await page.state.loadResources();
   await waitForSolid(() => expect(page.dreaming.readStatusData().promotedCount).toBe(9));
-  await waitForSolid(() => expect(page.text(".dreams__status-detail")).toContain("9 promoted"));
+  await waitForSolid(() =>
+    expect(page.text(".dreams-controls__status")).toContain("9 promoted today"),
+  );
   expect(page.query(".dreams")).toBe(scene);
-  expect(page.container.querySelectorAll(".dreams__phase--off")).toHaveLength(2);
-  click(page.container, "#dreams-tab-diary");
-  const dayChip = page.container.querySelectorAll<HTMLButtonElement>(".dreams-diary__day-chip")[1]!;
-  dayChip.focus();
-  dayChip.click();
+  expect(page.container.querySelectorAll(".dreams-controls__phase--off")).toHaveLength(2);
+  const older = page.query<HTMLButtonElement>('[aria-label="Older entry"]')!;
+  older.focus();
+  older.click();
   flush();
   await page.state.loadResources();
   flush();
-  expect(page.container.querySelectorAll(".dreams-diary__day-chip")[1]).toBe(dayChip);
-  expect(document.activeElement).toBe(dayChip);
-  expect(dayChip.classList.contains("dreams-diary__day-chip--active")).toBe(true);
-  click(page.container, "#dream-diary-tab-insights");
-  expect(page.text("#dream-diary-panel")).toContain("memory-wiki");
-  expect(page.query("#dream-diary-panel")?.getAttribute("aria-labelledby")).toBe(
-    "dream-diary-tab-insights",
-  );
+  expect(page.query('[aria-label="Older entry"]')).toBe(older);
+  expect(document.activeElement).toBe(older);
+  expect(page.query<HTMLSelectElement>(".dreams-diary__dates")?.value).toBe("1");
+  expect(page.container.textContent).toContain("memory-wiki");
   context.setConfig({ plugins: { entries: { "memory-wiki": { enabled: true } } } });
   context.emit({
     hello: gatewayHelloForMethods(["config.patch", "wiki.overview", "wiki.importInsights"]),
   });
   await page.state.loadResources("wikiOverview");
-  click(page.container, "#dream-diary-tab-wiki");
+  page.dreaming.onViewStateChange((draft) => {
+    draft.openReviewPanel = "wiki";
+  });
+  flush();
   const card = page.query("[data-wiki-page]")!;
   const details = card.querySelector<HTMLButtonElement>("button")!;
   details.focus();
@@ -718,7 +712,7 @@ it("updates the mounted view across tab selection and owner notifications", asyn
   title = "Refreshed title";
   await page.state.loadResources("wikiOverview");
   await waitForSolid(() =>
-    expect(card.querySelector(".dreams-diary__insight-title")?.textContent).toBe(title),
+    expect(card.querySelector(".settings-row__title")?.textContent).toBe(title),
   );
   expect(page.query("[data-wiki-page]")).toBe(card);
   expect(card.querySelector("button")).toBe(details);
@@ -742,12 +736,11 @@ it.each([false, true])(
       plugins.entries = { "memory-core": { config: { dreaming: { enabled: false } } } };
     }
     context.setConfig({ plugins });
-    await waitForSolid(() => expect(page.container.textContent).toContain("Memory engine is Off"));
-    const toggle = page.query<HTMLButtonElement>(".dreams__phase-toggle")!;
+    await waitForSolid(() => expect(page.container.textContent).toContain("Memory engine is off."));
+    const toggle = page.query<HTMLInputElement>('input[role="switch"]')!;
     expect(toggle.disabled).toBe(true);
-    expect(toggle.classList.contains("dreams__phase-toggle--on")).toBe(false);
+    expect(toggle.checked).toBe(false);
     expect(page.container.textContent).not.toContain("Using default: Enabled");
-    expect(page.container.textContent).toContain("0 promoted");
     expect(page.container.textContent).not.toContain("7 promoted");
     expect(page.container.textContent).not.toContain("Mars/Base");
     toggle.click();
@@ -815,18 +808,12 @@ describe.runIf(process.env.OPENCLAW_UI_MEMORY_CHROMIUM_E2E === "1")(
         featureMethods: ["chat.metadata", "chat.startup", STATUS, DIARY],
         methodResponses: {
           "agents.list": roster,
-          "config.get": {
-            config: {},
-            hash: "memory-proof-1",
-            issues: [],
-            raw: "{}",
-            valid: true,
-          },
+          "config.get": configSnapshot({}, "memory-proof-1", "{}"),
           [STATUS]: statusCases(11),
           [DIARY]: scoped({ main: agentDiary("main"), support: agentDiary("support") }),
         },
       });
-      const detail = () => page.locator("openclaw-agent-memory-panel .dreams__status-detail");
+      const detail = () => page.locator("openclaw-agent-memory-panel .dreams-controls__status");
       const requestCount = () => gateway.getRequests(STATUS).then((requests) => requests.length);
       const poll = <T>(read: () => T | Promise<T>) => expect.poll(read, { timeout: 15_000 });
       const expectPromoted = (count: number) =>

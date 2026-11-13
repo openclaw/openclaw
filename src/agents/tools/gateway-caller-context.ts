@@ -1,5 +1,3 @@
-// Ambient trusted caller context for model-mediated Gateway tool calls.
-import { AsyncLocalStorage } from "node:async_hooks";
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import { narrowSessionEventSettings } from "../../auto-reply/reply/session-event-policy.js";
@@ -25,6 +23,8 @@ import {
 } from "../../plugins/runtime/gateway-context-binding.js";
 import type { ReplyTurnParticipants } from "../../sessions/session-controller.contracts.js";
 import type { SessionControllerWatchdogAttempt } from "../../sessions/session-controller.watchdog.js";
+// Ambient trusted caller context for model-mediated Gateway tool calls.
+import { AsyncContext } from "../../shared/async-context.js";
 import { runWithAsyncStore } from "../../shared/async-store.js";
 import {
   captureAdmittedRunActiveAssertion,
@@ -45,6 +45,7 @@ import {
   type RequesterOrigin,
 } from "../requester-origin.js";
 import { readToolStringParam, type AnyAgentTool } from "./common.js";
+import type { GatewayToolCallerSource } from "./gateway-caller-context.types.js";
 import type { GatewayToolCallerReceiptAdmission } from "./gateway-caller-receipt.types.js";
 
 type ReceiptAuthority = (() => boolean | void) &
@@ -68,6 +69,8 @@ type GatewayToolCallerIdentity = {
   gatewayUiCommandTarget?: GatewayUiCommandTarget;
   /** Prepared requesting-tool posture; absent authority never bypasses approvals. */
   fullPermission?: boolean;
+  /** Host-held current delegation grant. A posture boolean alone never authorizes a write. */
+  assertAutoApproveChangesCurrent?: () => void;
   operationalRunInstance?: OperationalRunInstanceRef;
   embeddedRunToolAuthorityBinding?: EmbeddedRunToolAuthorityBinding;
   /** Exact run authority used to fence delegated system-agent approvals. */
@@ -93,6 +96,14 @@ type GatewayToolCallerIdentity = {
   workspaceBaseRefreshSandbox?: import("../sandbox/types.js").SandboxContext;
   /** Host handoff selects the exact settled conversation; never accepted from RPC input. */
   workspacePrAdoptionSessionId?: string;
+  /** Reporting attribution only; never restores the yielding turn's execution authority. */
+  workspacePublicationRunId?: string;
+  /** Effective requesting surface captured by local publication before yielding. */
+  workspacePublicationPolicy?: {
+    allow: string[];
+    deny: string[];
+    permissionMode?: SessionEntry["permissionMode"];
+  };
   /** Current tool's filesystem owner for inspected PR evidence; never serialized in RPC data. */
   workspaceEvidenceSandbox?: import("../sandbox/types.js").SandboxContext;
   /** Closure-bound Gateway capability; revalidates both owners at child admission. */
@@ -119,23 +130,13 @@ type GatewayToolCallerIdentity = {
   turnSourceThreadId?: string | number;
 };
 
-type GatewayToolCallerSource = {
-  agentSessionKey?: string;
-  gatewayUiCommandTarget?: GatewayUiCommandTarget;
-  agentChannel?: string;
-  currentMessagingTarget?: string;
-  currentChannelId?: string;
-  agentTo?: string;
-  agentAccountId?: string;
-  currentThreadTs?: string;
-  agentThreadId?: string | number;
-};
+const gatewayToolCallerStorage = new AsyncContext<GatewayToolCallerIdentity>(
+  Symbol("gatewayToolCaller"),
+);
 
-const gatewayToolCallerStorage = new AsyncLocalStorage<GatewayToolCallerIdentity>();
-
-const receiptAdmissionStorage = new AsyncLocalStorage<
+const receiptAdmissionStorage = new AsyncContext<
   ReadonlyMap<GatewayToolCallerReceiptAdmission, () => boolean>
->();
+>(Symbol("gatewayToolReceiptAdmission"));
 
 export function evaluateGatewayToolCallerReceiptAdmission(
   admission: GatewayToolCallerReceiptAdmission,
@@ -175,6 +176,7 @@ function composeReceiptAuthority(
     (predicate, index): predicate is ReceiptAuthority =>
       predicate !== undefined && predicates.indexOf(predicate) === index,
   );
+  const sources = checks.map((check) => captureGatewayToolReceiptAssertion(check));
   return checks.length === 0
     ? undefined
     : Object.assign(
@@ -189,9 +191,14 @@ function composeReceiptAuthority(
           }
           return active;
         },
-        composeSessionSourceAssertion(
-          checks.map((check) => captureGatewayToolReceiptAssertion(check)),
-        ),
+        composeSessionSourceAssertion(sources),
+        {
+          assertScopeCurrent: () => {
+            for (const source of sources) {
+              (source.assertScopeCurrent ?? source)();
+            }
+          },
+        },
       );
 }
 
@@ -206,11 +213,24 @@ export function captureGatewayToolReceiptAssertion(
     }
   };
   const prepare = receipt.prepareSessionSource?.bind(receipt);
+  const prepareEffect = receipt.prepareSessionSourceEffect?.bind(receipt);
   return Object.assign(() => assertAllowed(receipt()), {
     nativeSource: receipt.nativeSource,
     opaqueCommitGuard: receipt.opaqueCommitGuard,
     assertScopeCurrent: receipt.assertScopeCurrent?.bind(receipt),
     prepareSessionSourceScope: receipt.prepareSessionSourceScope?.bind(receipt),
+    ...(prepareEffect
+      ? {
+          async prepareSessionSourceEffect() {
+            const prepared = await prepareEffect();
+            return {
+              ...prepared,
+              assertCurrent: () => assertAllowed(prepared.assertCurrent()),
+              release: prepared.release?.bind(prepared),
+            };
+          },
+        }
+      : {}),
     ...(prepare
       ? {
           async prepareSessionSource() {
@@ -430,7 +450,10 @@ export function captureGatewayToolCallerAssertion(
   const assertCurrent = composeSessionSourceAssertion(
     [
       selection?.assertCurrent,
-      caller.operatorAuthority?.assertCurrent,
+      // Selection already checks its exact operator source in this synchronous guard.
+      selection?.operatorAuthority === caller.operatorAuthority
+        ? undefined
+        : caller.operatorAuthority?.assertCurrent,
       composeSessionSourceAssertion(
         isCurrent ? [captureGatewayToolReceiptAssertion(isCurrent)] : [],
         (assertReceipt) => {
@@ -596,6 +619,8 @@ export async function withGatewayToolCallerIdentity<T>(
           : (identity.sessionEventToolsAllow ?? inheritedOwner?.sessionEventToolsAllow),
       workspaceBaseRefreshSandbox: inheritedValue("workspaceBaseRefreshSandbox"),
       workspacePrAdoptionSessionId: inheritedValue("workspacePrAdoptionSessionId"),
+      workspacePublicationRunId: inheritedValue("workspacePublicationRunId"),
+      workspacePublicationPolicy: inheritedValue("workspacePublicationPolicy"),
       workspaceEvidenceSandbox: inheritedValue("workspaceEvidenceSandbox"),
       personalToolParticipants: inheritedValue("personalToolParticipants"),
       personalToolUser: inheritedValue("personalToolUser"),
@@ -606,6 +631,13 @@ export async function withGatewayToolCallerIdentity<T>(
         inheritedOwner?.fullPermission === false || identity.fullPermission === false
           ? false
           : inheritedValue("fullPermission"),
+      assertAutoApproveChangesCurrent:
+        inheritedOwner?.assertAutoApproveChangesCurrent || identity.assertAutoApproveChangesCurrent
+          ? () => {
+              inheritedOwner?.assertAutoApproveChangesCurrent?.();
+              identity.assertAutoApproveChangesCurrent?.();
+            }
+          : undefined,
       operationalRunInstance: inheritedValue("operationalRunInstance"),
       embeddedRunToolAuthorityBinding:
         identity.embeddedRunToolAuthorityBinding ?? inheritedOwner?.embeddedRunToolAuthorityBinding,

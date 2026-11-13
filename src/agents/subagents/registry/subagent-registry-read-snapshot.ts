@@ -1,14 +1,16 @@
 import { getAsyncWorkSignal } from "../../../shared/async-work-scope.js";
+import { freezeTrustedJsonSnapshot } from "../../../shared/immutable-data.js";
 import {
   executeExistingOpenClawStateRead,
   getActiveOpenClawStateDatabaseReadSnapshot,
 } from "../../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
+import { shouldPreserveSubagentForMaintenance } from "./subagent-delivery-state.js";
 import {
+  getSubagentActivationRuns,
   getSubagentSessionReadLookup,
   immutableSubagentRunSessionList,
-  isSubagentRunPayloadEvicted,
 } from "./subagent-registry-memory.js";
 import {
   acceptedFullSnapshot,
@@ -26,6 +28,7 @@ import {
 } from "./subagent-registry-read-cache.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import type { SubagentRunMaintenanceRecord, SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentRunPayloadEvicted } from "./subagent-run-payload-facts.js";
 import { collectSubagentSessionReadKeys } from "./subagent-session-read-scope.js";
 
 export type SubagentRunReadSelection = {
@@ -279,16 +282,16 @@ export async function prepareSubagentSessionRunReadSnapshot(params: {
   const { inMemoryRuns, fullCache } = params;
   const context = params.context ?? captureOpenClawStateWorkerContext();
   const signal = getAsyncWorkSignal();
-  const roots = Object.freeze(
-    [...new Set(params.sessionKeys.map((key) => key.trim()).filter(Boolean))].toSorted(),
-  );
+  const roots = [
+    ...new Set(params.sessionKeys.map((key) => key.trim()).filter(Boolean)),
+  ].toSorted();
   const links = getSubagentSessionReadLookup(inMemoryRuns).captureTopology();
   const reply = await executeExistingOpenClawStateRead(
     { path: context.admission.databasePath, env: context.environment },
-    {
+    freezeTrustedJsonSnapshot({
       type: "subagents.runs",
       scope: { kind: "descendants", sessionKeys: roots, liveTopology: links },
-    },
+    } as const),
     { context, current: true },
   );
   if (reply && (reply.projection === "maintenance" || !reply.descendants)) {
@@ -359,7 +362,12 @@ export async function prepareSubagentMaintenanceReadSnapshot(
         yield entry;
       }
     }
-    yield* inMemoryRuns.values();
+    // Every protected live row already belongs to the registry's unfinished-work index.
+    for (const entry of getSubagentActivationRuns(inMemoryRuns)) {
+      if (shouldPreserveSubagentForMaintenance(entry)) {
+        yield entry;
+      }
+    }
   }
   if (!context) {
     return {
@@ -377,7 +385,13 @@ export async function prepareSubagentMaintenanceReadSnapshot(
       if (reply && reply.projection !== "maintenance") {
         throw new Error("Unexpected subagent maintenance read result");
       }
-      return reply?.runs ?? new Map<string, SubagentRunMaintenanceRecord>();
+      const runs = reply?.runs ?? new Map<string, SubagentRunMaintenanceRecord>();
+      for (const [runId, entry] of runs) {
+        if (!shouldPreserveSubagentForMaintenance(entry)) {
+          runs.delete(runId);
+        }
+      }
+      return runs;
     },
     context,
   );

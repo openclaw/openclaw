@@ -182,6 +182,7 @@ export function TerminalPanelView(props: { view: () => TerminalPanelViewState })
         icon: terminalPanelTabIcon(),
         domId: `${idPrefix}-tab-${tab.id}`,
         closeLabel: `${t("terminal.closeSession")}: ${tab.label}`,
+        onActivate: () => props.view().onSelect(tab.id),
       }),
     ),
   );
@@ -280,6 +281,9 @@ export function TerminalPanelView(props: { view: () => TerminalPanelViewState })
             </Show>
             <Show when={!props.view().activeId && !props.view().connecting && !props.view().error}>
               <PanelEmptyState
+                presentation={
+                  props.view().embedded ? (props.view().mobile ? "mobile" : "desktop") : undefined
+                }
                 heading={t("chat.sidePanel.terminal")}
                 description={t("chat.sidePanel.terminalEmpty")}
                 icon={<Icon name="terminal" />}
