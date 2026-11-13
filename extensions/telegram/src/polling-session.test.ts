@@ -35,12 +35,12 @@ import {
 import { installTelegramIngressQueueRuntime } from "./runtime-state.test-support.js";
 import { getTelegramRuntime } from "./runtime.js";
 import { clearTelegramRuntimeForTest as clearTelegramRuntime } from "./runtime.test-support.js";
-import {
-  TELEGRAM_INGRESS_WORKER_RUNTIME_MARKER,
-  type TelegramIngressWorkerCommand,
-  type TelegramIngressWorkerMessage,
-  type TelegramIngressWorkerOptions,
+import type {
+  TelegramIngressWorkerCommand,
+  TelegramIngressWorkerMessage,
+  TelegramIngressWorkerOptions,
 } from "./telegram-ingress-worker.js";
+import { TELEGRAM_INGRESS_WORKER_RUNTIME_MARKER } from "./telegram-ingress-worker.protocol.js";
 import { createTestLifetime } from "./test-lifetime.test-support.js";
 import { createTelegramUpdateOffsetPersistence } from "./update-offset-persistence.js";
 

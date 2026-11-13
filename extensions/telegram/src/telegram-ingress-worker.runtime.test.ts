@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import * as telegramTransport from "./fetch.js";
+import * as telegramTransport from "./fetch-transport.js";
 import type {
   TelegramIngressWorkerCommand,
   TelegramIngressWorkerMessage,
@@ -73,7 +73,7 @@ function createRuntime(
     const responseIndex = Math.min(calls.length - 1, responses.length - 1);
     return expectDefined(responses[responseIndex], `Telegram response ${responseIndex}`);
   };
-  vi.spyOn(telegramTransport, "resolveTelegramTransport").mockReturnValue({
+  vi.spyOn(telegramTransport, "createTelegramTransport").mockReturnValue({
     fetch: fetchImpl,
     sourceFetch: fetchImpl,
     close: async () => {},
