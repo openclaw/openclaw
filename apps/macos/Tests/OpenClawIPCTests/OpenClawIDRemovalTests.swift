@@ -143,6 +143,11 @@ struct OpenClawIDRemovalTests {
         #expect(!html.contains("type:'reload'"))
         #expect(!html.contains("class=\"badge\""))
         #expect(html.contains(origin == .here ? "You removed it in Settings 2m ago" : "removed from another device"))
+        if origin == .here {
+            #expect(removal.dashboardMessage(now: Self.now.addingTimeInterval(120)) ==
+                "You removed it in Settings 2m ago. " +
+                "Chat, the dashboard and tools on this Mac no longer reach studio<&>.example.test.")
+        }
     }
 
     @Test func `removed menu offers sign in first without gateway not configured`() {

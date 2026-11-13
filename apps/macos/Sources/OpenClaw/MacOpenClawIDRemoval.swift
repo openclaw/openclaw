@@ -25,8 +25,7 @@ struct MacOpenClawIDRemoval: Equatable {
     func dashboardMessage(now: Date = Date()) -> String {
         if self.origin == .here {
             return "You removed it in Settings \(age(from: self.date, now: now)). " +
-                "Chat, the dashboard and tools on this Mac no longer reach \(self.hostname). " +
-                "Your other devices aren’t affected."
+                "Chat, the dashboard and tools on this Mac no longer reach \(self.hostname)."
         }
         return "It was removed from another device. To use it with \(self.shortName) again, " +
             "sign in and approve it from one of your devices, or with your recovery kit."
