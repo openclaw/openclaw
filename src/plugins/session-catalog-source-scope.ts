@@ -1,6 +1,5 @@
-import type { SessionEntry } from "../config/sessions.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import type { SessionCatalogEntrySnapshot } from "./session-catalog.js";
 
 type SourceQuery = {
   pluginId: string;
@@ -28,7 +27,7 @@ export function noteSessionCatalogEntryRead(snapshot: object) {
 }
 /** Record the existing adoption owner's neutral query; this never grants access. */
 export function readSessionCatalogAdoptedEntries<T>(
-  snapshot: SessionCatalogEntrySnapshot | undefined,
+  snapshot: object | undefined,
   query: SourceQuery,
   read: () => T,
 ): T {

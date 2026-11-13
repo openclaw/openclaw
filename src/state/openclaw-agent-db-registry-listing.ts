@@ -33,6 +33,8 @@ import {
   recordAgentDatabaseRegistrationChange,
   recordAgentDatabaseRegistrationPublication,
   type AgentDatabaseRegistrationTransition,
+  type AgentDatabaseRegistryMutation,
+  type AgentDatabaseRegistrySource,
 } from "./openclaw-agent-db-registration-provenance.js";
 import { readRegisteredAgentDatabaseRows } from "./openclaw-agent-db-registry.read.js";
 import {
@@ -49,18 +51,7 @@ import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
 import { captureOpenClawStateReadContext } from "./openclaw-state-worker-context.js";
 // Registry metadata is process-stable: registry writes invalidate after each commit;
 // other-process changes take effect on restart. Polling here puts schema probes back on hot reads.
-type AgentDatabaseRegistrySource = {
-  agentId: string;
-  path: string;
-  physicalPath: string;
-  identity: string;
-  schemaVersion: number;
-};
-
-export type AgentDatabaseRegistryMutation = {
-  kind: "upsert" | "remove";
-  sources: readonly AgentDatabaseRegistrySource[];
-};
+export type { AgentDatabaseRegistryMutation } from "./openclaw-agent-db-registration-provenance.js";
 
 function registeredPathKey(source: {
   agentId: string;

@@ -3,38 +3,41 @@ import {
   ErrorCodes,
   type SessionCatalogHost,
   type SessionCatalogSession,
-} from "../../../packages/gateway-protocol/src/index.js";
-import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
-import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import * as sessionAccessor from "../../config/sessions/session-accessor.js";
+} from "../../packages/gateway-protocol/src/index.js";
+import { setRuntimeConfigSnapshot } from "../../src/config/runtime-snapshot.js";
+import { resolveSessionStorePathCore } from "../../src/config/sessions/paths.js";
+import * as sessionAccessor from "../../src/config/sessions/session-accessor.js";
 import {
   deleteSessionEntryLifecycle,
   loadSessionEntryReadOnly,
   upsertSessionEntryCore,
-} from "../../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
+} from "../../src/config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
+import { sessionCatalogHandlers } from "../../src/gateway/server-methods/session-catalog.js";
+import type {
+  GatewayClient,
+  GatewayRequestContext,
+} from "../../src/gateway/server-methods/types.js";
+import { bindSessionRowProjection } from "../../src/gateway/session-row-projection-access.js";
+import { createSessionRowProjection } from "../../src/gateway/session-row-projection.js";
+import { createEmptyPluginRegistry } from "../../src/plugins/registry-empty.js";
+import { getActivePluginRegistry, setActivePluginRegistry } from "../../src/plugins/runtime.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
-} from "../../plugins/runtime/gateway-request-scope.js";
-import { createPluginRuntime } from "../../plugins/runtime/index.js";
+} from "../../src/plugins/runtime/gateway-request-scope.js";
+import { createPluginRuntime } from "../../src/plugins/runtime/index.js";
 import {
   listAdoptedSessionCatalogSessions,
   type SessionCatalogEntrySnapshot,
   type SessionCatalogProvider,
-} from "../../plugins/session-catalog.js";
-import { createDeferredCore } from "../../shared/deferred.js";
-import { linkEmail } from "../../state/user-profile-writes.worker.js";
-import { ensureProfileForEmail } from "../../state/user-profiles.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { bindSessionRowProjection } from "../session-row-projection-access.js";
-import { createSessionRowProjection } from "../session-row-projection.js";
+} from "../../src/plugins/session-catalog.js";
+import { createDeferredCore } from "../../src/shared/deferred.js";
+import { linkEmail } from "../../src/state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../src/state/user-profiles.js";
+import { withOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
+import { awaitGateBeforeSettlement } from "../helpers/promise.js";
 import { withConfidentialPi } from "./session-catalog-native-confidential.test-support.js";
-import { sessionCatalogHandlers } from "./session-catalog.js";
-import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const nativeSession = (overrides: Partial<SessionCatalogSession> = {}): SessionCatalogSession => ({
   threadId: "published-native",

@@ -8,7 +8,6 @@ import { assertPreparedSkillLibrarySelection } from "../../skills/library/select
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
-import type { ChatSendAdmissionParams } from "./chat-send-pre-admission.types.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import { isAttendedControlUiSessionCreator } from "./gateway-personal-caller.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -81,7 +80,18 @@ export async function prepareChatSendInitialEntry({
   session,
   client,
   context,
-}: Pick<ChatSendAdmissionParams, "request" | "session" | "client" | "context">) {
+}: {
+  request: Pick<NormalizedChatSendRequest, "systemInputProvenance" | "goalOperation">;
+  session: {
+    entry?: SessionEntry;
+    requestedSessionId?: string;
+    cfg: OpenClawConfig;
+    sessionKey: string;
+    agentId: string;
+  };
+  client: GatewayRequestHandlerOptions["client"];
+  context: Pick<GatewayRequestHandlerOptions["context"], "getRuntimeConfig">;
+}) {
   if (session.entry || session.requestedSessionId) {
     return undefined;
   }

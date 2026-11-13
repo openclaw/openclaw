@@ -7,32 +7,35 @@ import {
   piMessage,
   piSessionHeader,
   usePiFixtures,
-} from "../../../extensions/acpx/src/pi-session-catalog.test-support.js";
-import type { SessionCatalogHost } from "../../../packages/gateway-protocol/src/index.js";
-import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import type { SessionEntry } from "../../config/sessions.js";
-import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+} from "../../extensions/acpx/src/pi-session-catalog.test-support.js";
+import type { SessionCatalogHost } from "../../packages/gateway-protocol/src/index.js";
+import { setRuntimeConfigSnapshot } from "../../src/config/runtime-snapshot.js";
+import type { SessionEntry } from "../../src/config/sessions.js";
+import { resolveSessionStorePathCore } from "../../src/config/sessions/paths.js";
 import {
   upsertSessionEntryCore,
   loadSessionEntryReadOnly,
-} from "../../config/sessions/session-accessor.js";
-import { applySessionEntryCanonicalReplacements } from "../../config/sessions/session-accessor.sqlite-replacement-projection.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
-import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
-import { createPluginRuntime } from "../../plugins/runtime/index.js";
-import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
-import { ensureProfileForEmail } from "../../state/user-profiles.js";
+} from "../../src/config/sessions/session-accessor.js";
+import { applySessionEntryCanonicalReplacements } from "../../src/config/sessions/session-accessor.sqlite-replacement-projection.js";
+import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
+import { resolveSessionCatalogVisibility } from "../../src/gateway/server-methods/session-catalog-visibility.js";
+import { sessionCatalogHandlers } from "../../src/gateway/server-methods/session-catalog.js";
+import type {
+  GatewayClient,
+  GatewayRequestContext,
+} from "../../src/gateway/server-methods/types.js";
+import { bindSessionRowProjection } from "../../src/gateway/session-row-projection-access.js";
+import { createSessionRowProjection } from "../../src/gateway/session-row-projection.js";
+import { createEmptyPluginRegistry } from "../../src/plugins/registry-empty.js";
+import { getActivePluginRegistry, setActivePluginRegistry } from "../../src/plugins/runtime.js";
+import { withPluginRuntimeGatewayRequestScope } from "../../src/plugins/runtime/gateway-request-scope.js";
+import { createPluginRuntime } from "../../src/plugins/runtime/index.js";
+import { setUserProfileRole } from "../../src/state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../src/state/user-profiles.js";
 import {
   withOpenClawTestState,
   type createOpenClawTestState,
-} from "../../test-utils/openclaw-test-state.js";
-import { bindSessionRowProjection } from "../session-row-projection-access.js";
-import { createSessionRowProjection } from "../session-row-projection.js";
-import { resolveSessionCatalogVisibility } from "./session-catalog-visibility.js";
-import { sessionCatalogHandlers } from "./session-catalog.js";
-import type { GatewayClient, GatewayRequestContext } from "./types.js";
+} from "../../src/test-utils/openclaw-test-state.js";
 
 const nativePiFixtures = usePiFixtures();
 type PiConfidentialFixture = Awaited<ReturnType<typeof createConfidentialPiCatalog>>;

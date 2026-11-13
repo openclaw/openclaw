@@ -3,7 +3,8 @@ import type { SessionEntry } from "../config/sessions.js";
 import type { CreateGatewaySessionParams } from "./session-create-service.types.js";
 import { resolveSessionForkParentError } from "./session-fork-access.js";
 
-vi.mock("../state/user-profile-list.js", () => ({
+vi.mock("../state/user-profile-list.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/user-profile-list.js")>()),
   readResidentUserProfileAliases: () => new Set<string>(),
 }));
 

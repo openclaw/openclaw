@@ -28,16 +28,25 @@ export type SessionSourcePendingEffect = {
   fullEntries?: ReadonlyMap<string, SessionEntry>;
 };
 type PendingListener = (effect: SessionSourcePendingEffect, own: boolean, pending: boolean) => void;
-const state = resolveGlobalSingleton(Symbol.for("openclaw.sessionSourceEffectAdmissions"), () => ({
-  observers: new WeakMap<object, Set<Observer>>(),
-  captured: new WeakMap<object, Set<Observer>>(),
-  frame: undefined as
-    | { observers: Set<Observer>; nestedChanges: Set<SessionRowChange> }
-    | undefined,
-  observerCount: 0,
-  pending: new Map<object, { effect: SessionSourcePendingEffect; observers: Set<Observer> }>(),
-  listeners: new Set<{ observer: Observer; listen: PendingListener }>(),
-}));
+type SessionSourceEffectState = {
+  observers: WeakMap<object, Set<Observer>>;
+  captured: WeakMap<object, Set<Observer>>;
+  frame: { observers: Set<Observer>; nestedChanges: Set<SessionRowChange> } | undefined;
+  observerCount: number;
+  pending: Map<object, { effect: SessionSourcePendingEffect; observers: Set<Observer> }>;
+  listeners: Set<{ observer: Observer; listen: PendingListener }>;
+};
+const state = resolveGlobalSingleton<SessionSourceEffectState>(
+  Symbol.for("openclaw.sessionSourceEffectAdmissions"),
+  () => ({
+    observers: new WeakMap<object, Set<Observer>>(),
+    captured: new WeakMap<object, Set<Observer>>(),
+    frame: undefined,
+    observerCount: 0,
+    pending: new Map<object, { effect: SessionSourcePendingEffect; observers: Set<Observer> }>(),
+    listeners: new Set<{ observer: Observer; listen: PendingListener }>(),
+  }),
+);
 
 /** Record only an actual, successful root authorization inside a synchronous owner admission. */
 export function admitSessionSourceEffects(assertion: () => void): void {

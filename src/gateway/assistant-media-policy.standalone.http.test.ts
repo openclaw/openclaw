@@ -13,7 +13,7 @@ import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolveGatewayAuth } from "./auth.js";
-import { handleControlUiAssistantMediaRequest } from "./control-ui.js";
+import { handleControlUiAssistantMediaRequest } from "./control-ui-assistant-media-http.js";
 import { finishFailedGatewayHttpResponse } from "./http-common.js";
 
 type StandaloneVariant = {

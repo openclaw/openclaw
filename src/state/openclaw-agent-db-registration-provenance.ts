@@ -1,7 +1,18 @@
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { AgentDatabaseRegistryChange } from "./openclaw-agent-db-contract.js";
-import type { AgentDatabaseRegistryMutation } from "./openclaw-agent-db-registry-listing.js";
+export type AgentDatabaseRegistrySource = {
+  agentId: string;
+  path: string;
+  physicalPath: string;
+  identity: string;
+  schemaVersion: number;
+};
+
+export type AgentDatabaseRegistryMutation = {
+  kind: "upsert" | "remove";
+  sources: readonly AgentDatabaseRegistrySource[];
+};
 
 export type AgentDatabaseRegistrationTransition = {
   operation: symbol;

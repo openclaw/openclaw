@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
-import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { createDeferredCore } from "../../shared/deferred.js";
-import * as sessionCreation from "../session-create-service.js";
+import { setRuntimeConfigSnapshot } from "../../src/config/runtime-snapshot.js";
+import { upsertSessionEntryCore } from "../../src/config/sessions/session-accessor.js";
+import * as sessionCreation from "../../src/gateway/session-create-service.js";
+import { createDeferredCore } from "../../src/shared/deferred.js";
+import { awaitGateBeforeSettlement } from "../helpers/promise.js";
 import { withConfidentialPi } from "./session-catalog-native-confidential.test-support.js";
 
 describe("native catalog import source lease", () => {

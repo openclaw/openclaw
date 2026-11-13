@@ -1,20 +1,23 @@
 import { vi } from "vitest";
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { readVisibleSessionTranscriptMessageEntries } from "../../plugin-sdk/session-transcript-runtime.js";
-import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
-import type { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { prepareGatewayRecipientProfile } from "../expected-profile.js";
+import { loadSessionEntryReadOnly } from "../../src/config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
+import { prepareGatewayRecipientProfile } from "../../src/gateway/expected-profile.js";
+import { createSessionMutationTestContext } from "../../src/gateway/server-methods/sessions-mutations.owner.test-support.js";
+import type {
+  GatewayClient,
+  GatewayRequestContext,
+} from "../../src/gateway/server-methods/types.js";
 import {
   registerGatewayModelCatalogPrivateAccess,
   type PreparedGatewayModelCatalogSnapshot,
-} from "../server-model-catalog-auth.js";
-import { buildSessionCatalogImportKey } from "../session-create-key.js";
-import { bindSessionRowProjection } from "../session-row-projection-access.js";
-import type { createSessionRowProjection } from "../session-row-projection.js";
-import { createSessionMutationTestContext } from "./sessions-mutations.owner.test-support.js";
-import type { GatewayClient, GatewayRequestContext } from "./types.js";
+} from "../../src/gateway/server-model-catalog-auth.js";
+import { buildSessionCatalogImportKey } from "../../src/gateway/session-create-key.js";
+import { bindSessionRowProjection } from "../../src/gateway/session-row-projection-access.js";
+import type { createSessionRowProjection } from "../../src/gateway/session-row-projection.js";
+import { createSubsystemLogger } from "../../src/logging/subsystem.js";
+import { readVisibleSessionTranscriptMessageEntries } from "../../src/plugin-sdk/session-transcript-runtime.js";
+import { createPluginMetadataSnapshotFixture } from "../../src/plugins/plugin-metadata.test-support.js";
+import type { createOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
 
 export async function prepareNativeCatalogImport(params: {
   cfg: OpenClawConfig;
