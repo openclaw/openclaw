@@ -6,7 +6,9 @@ import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coe
 import { createConfigIO } from "../config/io.js";
 import { hashConfigRaw } from "../config/io.read-helpers.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
+import { resolveOAuthDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { formatErrorMessage } from "./errors.js";
 import { isPathInside } from "./path-guards.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
@@ -260,6 +262,36 @@ export function createLegacyStateMigrationPlanEnv(params: {
   const env = createLegacyStateMigrationCallerEnv(params);
   env.OPENCLAW_STATE_DIR = path.resolve(params.snapshot.stateDir);
   return env;
+}
+
+// Snapshot admission for the caller-configured OAuth migration directory decides
+// the OPENCLAW_OAUTH_DIR spelling the plan env hands to discovery. Containment
+// compares resolved identities rather than lexical spellings, so a directory
+// reached through a state-dir alias is refused only when its real location is
+// outside the copied state snapshot. The identity is resolved once and reused:
+// retargeting the alias after admission cannot redirect directory I/O outside
+// the admitted snapshot.
+export type SnapshotOAuthDirAdmission = {
+  /** Configured spelling, kept for refusal messages. */
+  callerOAuthDir: string;
+  /** Resolved identity of the configured directory. */
+  identity: string;
+  /** True when the resolved identity sits outside the copied state snapshot. */
+  outsideSnapshot: boolean;
+};
+
+export function resolveSnapshotOAuthDirAdmission(
+  env: NodeJS.ProcessEnv,
+  rawOAuthDir: string,
+  stateDir: string,
+): SnapshotOAuthDirAdmission {
+  const callerOAuthDir = resolveOAuthDir({ ...env, OPENCLAW_OAUTH_DIR: rawOAuthDir }, stateDir);
+  const identity = resolveIdentityPathViaExistingAncestorSync(callerOAuthDir);
+  return {
+    callerOAuthDir,
+    identity,
+    outsideSnapshot: !isPathInside(resolveIdentityPathViaExistingAncestorSync(stateDir), identity),
+  };
 }
 
 export function createLegacyStateMigrationPlan(params: {
