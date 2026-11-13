@@ -19,6 +19,7 @@ import type { CronJob } from "../cron/types.js";
 import type { Message } from "../llm/types.js";
 import { listKnownProviderAuthEnvVarNamesCore } from "../secrets/provider-env-vars.js";
 import { isProjectedForwardedMessage } from "./chat-display-projection.helpers.js";
+import { summarizeCronToolProbe } from "./gateway-cron-tools-allow.test-helpers.js";
 
 const describeLive =
   isLiveTestEnabled() && process.env.OPENAI_API_KEY?.trim() ? describe : describe.skip;
@@ -194,7 +195,16 @@ describeLive("cron tool allowlists through live harnesses", () => {
                 : [],
             );
             const results = history.messages.filter((message) => message.role === "toolResult");
-            expect(assistants.length, JSON.stringify(history)).toBeGreaterThan(0);
+            const assistantText = assistants
+              .map((message) =>
+                typeof message.content === "string"
+                  ? message.content.trim()
+                  : extractNonEmptyAssistantText(message.content),
+              )
+              .filter(Boolean)
+              .join(" ");
+            const diagnostic = summarizeCronToolProbe({ calls, results, assistantText, marker });
+            expect(assistants.length, diagnostic).toBeGreaterThan(0);
             if (cap === "") {
               // Codex model metadata (`tool_mode: code_mode_only`) outranks the thread's
               // `features.code_mode=false`, so Codex always registers `exec`/`wait` with an
@@ -204,22 +214,20 @@ describeLive("cron tool allowlists through live harnesses", () => {
               expect(results.filter((result) => !inertProbes.has(result.toolName))).toEqual([]);
               expect(JSON.stringify(results)).not.toContain(marker);
               expect(JSON.stringify(assistants)).not.toContain(marker);
-              const assistantText = assistants
-                .map((message) =>
-                  typeof message.content === "string"
-                    ? message.content.trim()
-                    : extractNonEmptyAssistantText(message.content),
-                )
-                .filter(Boolean)
-                .join(" ");
               expect(assistantText).toBe("NO_TOOLS");
             } else {
               const toolName = cap === "bash" ? "exec" : "read";
               const call = calls.find((entry) => entry.name === toolName);
-              expect(call, `${runtime} cap ${cap}: expected ${toolName} call`).toBeDefined();
+              expect(
+                call,
+                `${runtime} cap ${cap}: expected ${toolName} call; ${diagnostic}`,
+              ).toBeDefined();
               const result = results.find((entry) => entry.toolCallId === call?.id);
-              expect(result).toMatchObject({ toolName, isError: false });
-              expect(JSON.stringify(result?.content)).toContain(marker);
+              expect(
+                result && { toolName: result.toolName, isError: result.isError },
+                diagnostic,
+              ).toMatchObject({ toolName, isError: false });
+              expect(JSON.stringify(result?.content)?.includes(marker), diagnostic).toBe(true);
             }
             logLiveProgress(`cron ${runtime}: tools=${JSON.stringify(cap)} passed (${MODEL_KEY})`);
           }
