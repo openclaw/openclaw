@@ -282,18 +282,16 @@ export function createUsageControls(
             return (
               <span class="usage-query-chip">
                 {label}
-                <openclaw-tooltip prop:content={removeLabel()}>
-                  <button
-                    aria-label={removeLabel()}
-                    onClick={() =>
-                      props.callbacks.filters.onQueryDraftChange(
-                        removeQueryToken(props.filters.queryDraft, label),
-                      )
-                    }
-                  >
-                    <Icon name="x" />
-                  </button>
-                </openclaw-tooltip>
+                <button
+                  aria-label={removeLabel()}
+                  onClick={() =>
+                    props.callbacks.filters.onQueryDraftChange(
+                      removeQueryToken(props.filters.queryDraft, label),
+                    )
+                  }
+                >
+                  <Icon name="x" />
+                </button>
               </span>
             );
           }}

@@ -549,7 +549,7 @@ export function ProjectPickerContent(props: ProjectChipProps) {
               </>
             ) : undefined}
             {view().browseNeedsAdmin ? (
-              <openclaw-tooltip prop:content={t("newSession.browseRequiresAdmin")}>
+              <openclaw-tooltip prop:content={t("newSession.browseRequiresAdminTooltip")}>
                 {browseButton()}
               </openclaw-tooltip>
             ) : (

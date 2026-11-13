@@ -148,15 +148,13 @@ export function SessionDetailPanel(props: {
             </>
           ) : undefined}
         </div>
-        <openclaw-tooltip prop:content={t("usage.details.close")}>
-          <button
-            class="btn btn--sm btn--ghost session-detail-close"
-            onClick={() => props.onClose()}
-            aria-label={t("usage.details.close")}
-          >
-            <Icon name="x" />
-          </button>
-        </openclaw-tooltip>
+        <button
+          class="btn btn--sm btn--ghost session-detail-close"
+          onClick={() => props.onClose()}
+          aria-label={t("usage.details.close")}
+        >
+          <Icon name="x" />
+        </button>
       </div>
       {state().includedSessionCount > 0 ? (
         <div class="usage-lineage-note">

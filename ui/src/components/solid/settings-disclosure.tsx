@@ -88,18 +88,16 @@ export function SettingsDetailsRow(props: {
           <>
             {props.control}
             <Show when={available()}>
-              <openclaw-tooltip prop:content={props.detailsLabel}>
-                <IconButton
-                  size={28}
-                  glyph="row"
-                  class="settings-details-toggle"
-                  icon="chevronRight"
-                  label={props.detailsLabel}
-                  tooltip={false}
-                  aria-expanded={open() ? "true" : "false"}
-                  onClick={() => setOpen(!open())}
-                />
-              </openclaw-tooltip>
+              <IconButton
+                size={28}
+                glyph="row"
+                class="settings-details-toggle"
+                icon="chevronRight"
+                label={props.detailsLabel}
+                tooltip={false}
+                aria-expanded={open() ? "true" : "false"}
+                onClick={() => setOpen(!open())}
+              />
             </Show>
           </>
         }

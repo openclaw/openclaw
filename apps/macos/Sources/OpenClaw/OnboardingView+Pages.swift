@@ -239,7 +239,6 @@ extension OnboardingView {
                 }
                 .buttonStyle(.link)
                 .font(.caption)
-                .help("Retry discovery (Bonjour + Tailscale DNS-SD).")
                 Spacer(minLength: 0)
             }
             .padding(.leading, 4)

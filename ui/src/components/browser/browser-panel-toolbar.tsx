@@ -244,6 +244,7 @@ export function BrowserToolbar(
         <PanelIconButton
           class={["bp-icon", { "session-panel-rail__button": !props.mobilePresentation }]}
           label={t("browser.back")}
+          title={false}
           icon={<Icon name="chevronLeft" />}
           disabled={
             nativeTab()
@@ -258,6 +259,7 @@ export function BrowserToolbar(
         <PanelIconButton
           class={["bp-icon", { "session-panel-rail__button": !props.mobilePresentation }]}
           label={t("browser.forward")}
+          title={false}
           icon={<Icon name="chevronRight" />}
           disabled={
             nativeTab()
@@ -379,6 +381,7 @@ export function BrowserToolbar(
                 ? "browser.stop"
                 : "browser.reload",
           )}
+          title={false}
           icon={
             <Icon name={addressEdited() ? "arrowRight" : nativeTab()?.loading ? "x" : "refresh"} />
           }

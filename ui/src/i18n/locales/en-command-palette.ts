@@ -19,6 +19,7 @@ const enCommandPalette = {
     noResultsStart: "Press {shortcut} to start a new session.",
     startSession: "New session",
     startSessionBackground: "Start new session in background",
+    startsInBackground: "Starts in the background",
     startingSession: "Starting…",
     sessionStarted: "Session started",
     sessionCreated: "Session created",

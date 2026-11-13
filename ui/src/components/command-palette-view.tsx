@@ -567,7 +567,7 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
             }
             actions={
               <>
-                <openclaw-tooltip prop:content={reason() ?? t("palette.startSessionBackground")}>
+                <openclaw-tooltip prop:content={reason() ?? t("palette.startsInBackground")}>
                   <button
                     type="button"
                     class="cmd-palette__create"
