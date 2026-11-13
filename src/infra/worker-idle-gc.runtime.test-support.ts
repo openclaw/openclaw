@@ -16,16 +16,16 @@ globalThis.setTimeout = new Proxy(setTimeout, {
   },
 });
 
-const held = Buffer.alloc(8 * 1024 * 1024, 73);
+const held = Buffer.alloc(64 * 1024 * 1024, 73);
 const heldRef = new WeakRef(held);
-const owner: { payload?: Buffer } = { payload: Buffer.alloc(8 * 1024 * 1024, 37) };
+const owner: { payload?: Buffer } = { payload: Buffer.alloc(64 * 1024 * 1024, 37) };
 const released = new WeakRef(owner.payload!);
 // Publish the live allocation in Bun's counters before testing the idle growth threshold.
 await collectForRetentionCheck("held-worker-payload", 1);
 owner.payload = undefined;
 const control = new WeakRef({ unowned: true });
 scheduleWorkerIdleGc();
-assert.ok(collectIdle, "The first idle heap must schedule collection");
+assert.ok(collectIdle, "Payload growth must schedule idle collection");
 // Like the shared retention helper, collect from a native callback after this job unwinds.
 await new Promise<void>((resolve) => {
   setImmediate(() => {

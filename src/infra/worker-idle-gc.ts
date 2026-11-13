@@ -6,16 +6,12 @@ declare const Bun: { gc(full: boolean): number };
 const IDLE_GC_DELAY_MS = 1_000;
 const IDLE_GC_GROWTH_BYTES = 32 * 1024 * 1024;
 const bun = typeof Bun === "object" ? Bun : undefined;
-let collectedMemory: { heapUsed: number; external: number } | undefined;
+let collectedMemory = { heapUsed: 0, external: 0 };
 let session: Session | undefined;
 let pending: NodeJS.Timeout | undefined;
 let collecting = false;
 
 function hasIdleGarbageGrowth(): boolean {
-  // Release bootstrap garbage once, even when the initial heap is below the growth threshold.
-  if (!collectedMemory) {
-    return true;
-  }
   // These isolate-local counters avoid heap walks; external already includes ArrayBuffers.
   const memory = process.memoryUsage();
   return (
