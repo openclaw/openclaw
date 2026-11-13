@@ -4,6 +4,7 @@ import {
   createAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
+import * as modelsConfigState from "../../agents/models-config-state.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
 import type * as CompletionRuntime from "../../agents/simple-completion-runtime.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
@@ -22,6 +23,7 @@ import {
   createOperatorClient,
 } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { createSyntheticPluginRuntimeClient } from "../../gateway/server-plugin-runtime-client.js";
+import * as diagnosticEvents from "../../infra/diagnostic-events.js";
 import { AsyncWorkScope, trackAsyncWork } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import * as profileReader from "../../state/user-profile-list.js";
@@ -37,6 +39,7 @@ import type {
   LlmCompleteParams,
   LlmIsolatedAgentRuntimeCompleteParams,
 } from "./runtime-llm.types.js";
+import * as runtimeLogging from "./runtime-logging.js";
 
 const mocks = vi.hoisted(() => ({
   acquire: vi.fn<typeof CompletionRuntime.acquireSimpleCompletionModelForAgent>(),
@@ -136,9 +139,9 @@ function request(mode: CompletionMode): LlmCompleteParams {
     : { messages, model: "friendly-alias" };
 }
 
-function completion() {
+function completion(config = cfg) {
   return createRuntimeLlm({
-    getConfig: () => cfg,
+    getConfig: () => config,
     authority: {
       allowComplete: true,
       allowModelOverride: true,
@@ -695,22 +698,36 @@ describe("operator model policy on plugin completions", () => {
   });
 
   it.each(["direct", "isolated"] as const)(
-    "rechecks a retired requester after awaited %s work",
+    "rechecks a retired requester after awaited %s pricing before publishing usage",
     async (mode) => {
       const started = createDeferredCore();
       const resume = createDeferredCore();
       const { authority, retire, release, retain } = requester();
-      pauseExecution(mode, async () => {
-        started.resolve();
-        await resume.promise;
-      });
-      const pending = completeAs(authority, mode);
-      await waitForWork(started.promise, pending);
-      retire();
-      resume.resolve();
-      await expectDenied(pending, "requester retired");
-      expect(mocks.complete).not.toHaveBeenCalled();
-      expect(release).toHaveBeenCalledTimes(retain.mock.calls.length);
+      using pricing = vi
+        .spyOn(modelsConfigState, "captureModelsJsonCostSource")
+        .mockImplementation(async () => {
+          started.resolve();
+          await resume.promise;
+          return { providers: undefined };
+        });
+      using log = vi.spyOn(runtimeLogging, "writeRuntimeLog").mockImplementation(() => {});
+      using diagnostic = vi.spyOn(diagnosticEvents, "emitTrustedDiagnosticEvent");
+      mocks.isolated.mockResolvedValue({ ...isolatedAnswer(), usage: { input: 1, output: 1 } });
+      const llm = completion({ ...cfg, diagnostics: { enabled: true } });
+      const pending = withWork(() => asOperator(authority, () => llm.complete(request(mode))));
+      try {
+        await waitForWork(started.promise, pending);
+        retire();
+        resume.resolve();
+        await expectDenied(pending, "requester retired");
+        expect(pricing).toHaveBeenCalledOnce();
+        expect(log).not.toHaveBeenCalled();
+        expect(diagnostic).not.toHaveBeenCalled();
+        expect(release).toHaveBeenCalledTimes(retain.mock.calls.length);
+      } finally {
+        resume.resolve();
+        await Promise.allSettled([pending]);
+      }
     },
   );
 

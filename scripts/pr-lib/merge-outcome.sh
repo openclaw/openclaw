@@ -196,6 +196,9 @@ merge_outcome_load_local() {
         (if has("workflowRecovery") then has("recovery") and
           (.workflowRecovery | keys == ["binding","from","to"] and all(.[]; oid))
          else true end) and
+        (if has("workflowRetirement") then has("cancellation") and
+          (.workflowRetirement | keys == ["binding","from","to"] and all(.[]; oid))
+         else true end) and
         (if has("cancellation") then . as $record | .route == "auto" and
           (.cancellation |
             (if has("observedHead") then keys == ["actor","observedHead","outcome","state"] and
@@ -248,21 +251,25 @@ merge_outcome_load_local() {
       case " $parents " in *" $retained "*) ;; *) merge_outcome_stop "record does not retain required commit $retained"; return 1 ;; esac
       GIT_NO_LAZY_FETCH=1 pr_git cat-file -e "$retained^{commit}" || { merge_outcome_stop "required historical commit $retained is unavailable"; return 1; }
     done
-    if printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e 'has("workflowAdmission")' >/dev/null; then
-      # Older bound writers preserve the record and predecessor, but do not add
-      # these new fields as direct parents. Their ancestry still retains the proof.
-      local admission_binding admission_from admission_to
-      IFS=$'\t' read -r admission_binding admission_from admission_to < <(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r '.workflowAdmission | [.binding,.from,.to] | @tsv')
-      for retained in "$admission_binding" "$admission_from" "$admission_to"; do
+    local workflow_kind workflow_field workflow_binding workflow_from workflow_to
+    for workflow_kind in Admission Retirement; do
+      workflow_field="workflow$workflow_kind"
+      if ! printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e --arg field "$workflow_field" 'has($field)' >/dev/null; then
+        continue
+      fi
+      # Older bound writers preserve unknown fields and their predecessor, but
+      # do not add new provenance fields as direct parents. Ancestry retains it.
+      IFS=$'\t' read -r workflow_binding workflow_from workflow_to < <(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r --arg field "$workflow_field" '.[$field] | [.binding,.from,.to] | @tsv')
+      for retained in "$workflow_binding" "$workflow_from" "$workflow_to"; do
         GIT_NO_LAZY_FETCH=1 pr_git merge-base --is-ancestor "$retained" "$MERGE_OUTCOME_OID" || {
-          merge_outcome_stop "unretained workflow admission provenance"; return 1;
+          merge_outcome_stop "unretained $workflow_field provenance"; return 1;
         }
       done
-      pr_batch_wrapper_git workflow-history "$canonical_repo_root" "$pr" "$admission_binding" "$admission_from" >/dev/null &&
-        GIT_NO_LAZY_FETCH=1 pr_git merge-base --is-ancestor "$admission_from" "$admission_to" || {
-        merge_outcome_stop "invalid retained workflow admission provenance"; return 1;
+      pr_batch_wrapper_git workflow-history "$canonical_repo_root" "$pr" "$workflow_binding" "$workflow_from" >/dev/null &&
+        GIT_NO_LAZY_FETCH=1 pr_git merge-base --is-ancestor "$workflow_from" "$workflow_to" || {
+        merge_outcome_stop "invalid retained $workflow_field provenance"; return 1;
       }
-    fi
+    done
     if printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e 'has("workflowRecovery")' >/dev/null; then
       local workflow_binding workflow_from workflow_to
       IFS=$'\t' read -r workflow_binding workflow_from workflow_to < <(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r '.workflowRecovery | [.binding,.from,.to] | @tsv')
@@ -394,7 +401,7 @@ merge_outcome_write() {
   shift
   mark_pr_operation_side_effects_started || return 1
   local parents=()
-  for parent in $(printf '%s\n' "$record" | jq -r '[.head,.main,.landed,.localHead,.legacyRefusal.head,.legacyRefusal.preparedBase,.priorCiAdmin.priorHead,.priorCiAdmin.testedMerge,.headDrift.mergedHead,.cancellation.observedHead,.workflowRecovery.binding,.workflowRecovery.from,.workflowRecovery.to,.workflowAdmission.binding,.workflowAdmission.from,.workflowAdmission.to] | unique | .[] | select(. != null)'); do
+  for parent in $(printf '%s\n' "$record" | jq -r '[.head,.main,.landed,.localHead,.legacyRefusal.head,.legacyRefusal.preparedBase,.priorCiAdmin.priorHead,.priorCiAdmin.testedMerge,.headDrift.mergedHead,.cancellation.observedHead,.workflowRecovery.binding,.workflowRecovery.from,.workflowRecovery.to,.workflowAdmission.binding,.workflowAdmission.from,.workflowAdmission.to,.workflowRetirement.binding,.workflowRetirement.from,.workflowRetirement.to] | unique | .[] | select(. != null)'); do
     parents+=(-p "$parent")
   done
   [ -z "$MERGE_OUTCOME_OID" ] || parents+=(-p "$MERGE_OUTCOME_OID")
@@ -816,12 +823,18 @@ merge_outcome_read_remote() {
 
 merge_outcome_require_commit() {
   local oid="$1" role="$2"
-  # Fetch immutable objects only. Do not replace a pinned observation with the
-  # moving origin/main tracking ref or FETCH_HEAD.
-  if ! GIT_NO_LAZY_FETCH=1 pr_git cat-file -e "$oid^{commit}" 2>/dev/null; then
-    pr_git fetch --no-tags --no-write-fetch-head "$MERGE_REPO_URL" "$oid" || { merge_outcome_stop "cannot fetch authoritative $role $oid"; return 1; }
+  # Older Git ignores GIT_NO_LAZY_FETCH; reject it before any object lookup.
+  if ! pr_run_bounded pr_git --no-lazy-fetch --version >/dev/null 2>&1; then
+    echo "Merge outcome: commit acquisition requires Git with --no-lazy-fetch support (Git 2.45+); check OPENCLAW_PR_GIT." >&2
+    return 1
   fi
-  GIT_NO_LAZY_FETCH=1 pr_git cat-file -e "$oid^{commit}"
+  # Fetch immutable objects only. Do not replace a pinned observation with the
+  # moving origin/main tracking ref or FETCH_HEAD. The URL is the repository the
+  # observation names, which origin need not be; blobs stay lazily fetched from origin.
+  if ! GIT_NO_LAZY_FETCH=1 pr_git --no-lazy-fetch cat-file -e "$oid^{commit}" 2>/dev/null; then
+    fetch_source_with_canonical_promisor "$MERGE_REPO_URL" "$oid" --no-write-fetch-head || { merge_outcome_stop "cannot fetch authoritative $role $oid"; return 1; }
+  fi
+  GIT_NO_LAZY_FETCH=1 pr_git --no-lazy-fetch cat-file -e "$oid^{commit}"
 }
 
 merge_outcome_require_main() {
@@ -1344,7 +1357,9 @@ merge_outcome_cancel_auto() {
     # Retain retirement intent without rewriting the original acknowledgment.
     # A lost cancellation reply remains observation-only on retry.
     merge_outcome_write "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c --arg actor "$actor" --arg outcome "$expected_oid" \
-      '.cancellation={actor:$actor,outcome:$outcome,state:"requested"}')" ${captures[@]+"${captures[@]}"} || return 1
+      --argjson workflow "${PR_WORKFLOW_RECOVERY_PROVENANCE:-null}" \
+      '.cancellation={actor:$actor,outcome:$outcome,state:"requested"} |
+       if $workflow == null then . else .workflowRetirement=$workflow end')" ${captures[@]+"${captures[@]}"} || return 1
     if printf '%s\n' "$MERGE_OBSERVATION" | jq -e '.pr.autoMergeRequest != null' >/dev/null; then
       pr_gh_plain api graphql --hostname "$MERGE_REPO_HOST" \
         -f "id=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .prId)" \
@@ -1367,7 +1382,10 @@ merge_outcome_cancel_auto() {
   fi
   merge_outcome_stable "$pr" false cancel-auto || return 1
   if [ "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .cancellation.state)" != confirmed ]; then
-    merge_outcome_write "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c '.cancellation.state="confirmed"')" || return 1
+    merge_outcome_write "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c \
+      --argjson workflow "${PR_WORKFLOW_RECOVERY_PROVENANCE:-null}" \
+      '.cancellation.state="confirmed" |
+       if $workflow == null then . else .workflowRetirement=$workflow end')" || return 1
   fi
   echo "Auto request retirement confirmed for PR #$pr; no merge requested. Retained outcome: $MERGE_OUTCOME_OID"
   echo "Repair, review, and prepare the intended head before explicit merge-recover with this outcome OID."

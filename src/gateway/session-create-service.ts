@@ -37,10 +37,6 @@ import {
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
-import {
-  AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
-  isAgentHarnessSessionKey,
-} from "../sessions/agent-harness-session-key.js";
 import { isModelSelectionLocked } from "../sessions/model-overrides.js";
 import { runSessionMutation } from "../sessions/session-controller.lifecycle.js";
 import { recordSessionCreated } from "../sessions/session-created.js";
@@ -57,6 +53,7 @@ import {
 import { resolveActiveParentSessionCreate } from "./session-create-active-parent.js";
 import {
   completeGatewaySessionCreation,
+  projectPendingSessionInitialization,
   rollbackAtomicGatewaySessionCreation,
 } from "./session-create-completion.js";
 import {
@@ -76,6 +73,7 @@ import {
 import {
   resolveSessionCreateTrustedOwners,
   validateFreshSessionConstraints,
+  validateSessionCreateTarget,
   withInitialAssistantTranscript,
 } from "./session-create-initial-assistant.js";
 import { buildDashboardSessionKey, resolveSessionCreateTargetKey } from "./session-create-key.js";
@@ -254,13 +252,16 @@ async function createGatewaySessionInScope(
   }
   const explicitTarget = await readRequestedSessionCreateTarget(params, agentId, explicitTargetKey);
   const initialTargetEntry = explicitTarget?.entry;
-  if (
-    explicitTargetKey &&
-    isAgentHarnessSessionKey(explicitTargetKey) &&
-    !authorizedHarnessCreation &&
-    (!initialTargetEntry || initialTargetEntry.modelSelectionLocked === true)
-  ) {
-    return invalidSessionRequest(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
+  if (params.deferInitialization && initialTargetEntry) {
+    return invalidSessionRequest("deferred initialization requires a new ordinary session");
+  }
+  const initialTargetError = validateSessionCreateTarget(
+    explicitTargetKey,
+    initialTargetEntry,
+    authorizedHarnessCreation,
+  );
+  if (initialTargetError) {
+    return initialTargetError;
   }
 
   const childIntentError = resolveSessionCreateChildIntentError(params, parentSessionKey);
@@ -673,12 +674,13 @@ async function createGatewaySessionInScope(
             return { ok: false, error: creationError };
           }
         }
-        if (
-          isAgentHarnessSessionKey(target.canonicalKey) &&
-          !authorizedHarnessCreation &&
-          (!existingEntry || existingEntry.modelSelectionLocked === true)
-        ) {
-          return invalidSessionRequest(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
+        const targetError = validateSessionCreateTarget(
+          target.canonicalKey,
+          existingEntry,
+          authorizedHarnessCreation,
+        );
+        if (targetError) {
+          return targetError;
         }
         const freshSessionError = validateFreshSessionConstraints({
           params,
@@ -856,10 +858,7 @@ async function createGatewaySessionInScope(
           ...(authorizedPluginCreation && params.initialEntry?.cliSessionBindings
             ? { cliSessionBindings: structuredClone(params.initialEntry.cliSessionBindings) }
             : {}),
-          ...(params.initialEntry?.initializationPending === true ||
-          params.atomicInitialization === true
-            ? { initializationPending: true }
-            : {}),
+          ...projectPendingSessionInitialization(params),
           ...(params.initialEntry?.modelSelectionLocked === true
             ? { modelSelectionLocked: true }
             : {}),

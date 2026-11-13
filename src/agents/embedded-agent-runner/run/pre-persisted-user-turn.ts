@@ -27,7 +27,7 @@ import {
   isSessionWorkStartInvalidatedError,
   SessionWorkStartChangedError,
 } from "../../../config/sessions/work-start-error.js";
-import { readNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
+import { readOwnNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import type {
   PersistedUserTurnMessage,
   UserTurnTranscriptRecorder,
@@ -73,7 +73,7 @@ function isInterruptedTurnEntry(entry: SessionEntry, runId: string): boolean {
   }
   const message = entry.message;
   if (message.role === "custom") {
-    return readNestedToolActivity(message)?.details.runId === runId;
+    return readOwnNestedToolActivity(message)?.details.runId === runId;
   }
   const delivery = isOpenClawDeliveryMirrorAssistantMessage(message)
     ? asOptionalRecord(Reflect.get(message, "openclawDeliveryMirror"))

@@ -1178,6 +1178,15 @@ describe("cache lease completion", () => {
           configs.map((config) => runPlan(config)),
         );
       }
+      const workerCompiler = createControlledWorkerCompiler(
+        tempDirs.make("scheduler-worker-"),
+        process.env,
+      );
+      commands.prepare.mockImplementation((command) =>
+        path.basename(command.args[0]) === "vitest-worker-compiler.mts"
+          ? runCliCommand({ ...command, args: workerCompiler.args(command.args[1]) })
+          : Promise.resolve(0),
+      );
       const selections: unknown[] = [];
       await assertSchedulerDrain({
         args: focused ? [databaseConfig] : scope === "ci-full-suite" ? [] : configs,

@@ -2,7 +2,11 @@ import Foundation
 import Observation
 import OpenClawKit
 import OpenClawProtocol
+import SwiftUI
 import Testing
+#if os(macOS)
+import AppKit
+#endif
 @testable import OpenClawChatUI
 
 private func chatTextMessage(
@@ -15398,3 +15402,35 @@ struct ChatHistoryMutationTests {
         #expect(model.messages.isEmpty)
     }
 }
+
+#if os(macOS)
+struct ChatObscuredStreamPacingTests {
+    @Test @MainActor func `covered chat paces live text slower until it is revealed`() {
+        _ = NSApplication.shared
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: TestChatTransport(historyResponses: []))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 640),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false)
+        window.isReleasedWhenClosed = false
+        func content(obscured: Bool) -> some View {
+            OpenClawChatView(viewModel: vm, showsComposer: false)
+                .environment(\.openClawChatIsObscured, obscured)
+        }
+        let host = NSHostingView(rootView: content(obscured: true))
+        window.contentView = host
+        defer {
+            vm.detachTransport()
+            window.contentView = nil
+            window.close()
+        }
+        host.layoutSubtreeIfNeeded()
+        #expect(vm.streamPacing.interval == 0.5)
+
+        host.rootView = content(obscured: false)
+        host.layoutSubtreeIfNeeded()
+        #expect(vm.streamPacing.interval == 0.15)
+    }
+}
+#endif

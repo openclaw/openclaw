@@ -221,6 +221,25 @@ suite.define(() => {
       expect(await page.getByRole("button", { name: "Save skill", exact: true }).count()).toBe(0);
       expect(await page.getByLabel("Retained revision", { exact: true }).count()).toBe(0);
       const panel = page.locator(".skill-library-dialog");
+      const details = panel.locator("details");
+      const summary = details.locator("summary");
+      await summary.scrollIntoViewIfNeeded();
+      const chevron = await summary.locator("svg").boundingBox();
+      expect(chevron?.width).toBe(15);
+      expect(chevron?.height).toBe(15);
+      expect((await summary.boundingBox())?.height).toBe(48);
+      await summary.focus();
+      await page.keyboard.press("Enter");
+      await expect.poll(() => details.getAttribute("open")).not.toBeNull();
+      expect(await details.getByText(alice.entry.skillId, { exact: true }).isVisible()).toBe(true);
+      await page.keyboard.press("Space");
+      await expect.poll(() => details.getAttribute("open")).toBeNull();
+      await page.emulateMedia({ forcedColors: "active" });
+      expect(await summary.evaluate((node) => getComputedStyle(node).outlineStyle)).toBe("solid");
+      expect(await summary.evaluate((node) => getComputedStyle(node).outlineColor)).not.toBe(
+        "rgba(0, 0, 0, 0)",
+      );
+      await page.emulateMedia({ forcedColors: "none" });
       expect(
         await panel.evaluate(
           (node) => node.clientWidth > 0 && node.scrollWidth <= node.clientWidth + 1,

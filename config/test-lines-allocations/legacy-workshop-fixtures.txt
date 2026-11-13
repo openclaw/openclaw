@@ -1,2 +1,0 @@
-14
-# Isolate Workshop-independent fixtures and split supervision coverage below the file cap.

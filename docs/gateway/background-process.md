@@ -264,6 +264,10 @@ broker. One-shot CLI commands, native file-descriptor inputs, and independently
 launched applications keep their local process transport, as do Bun, macOS, and Windows.
 The broker has its own process group, which the Gateway terminates on broker loss;
 service relays also retain their own parent-loss cleanup.
+When the host denies group signals, the broker's own process group and the worker's retained
+detached groups are signaled member by member, and their extinction is confirmed from the process
+table. A detached child lost with the broker before its group identity was recorded can only be
+confirmed, not signaled.
 Broker cleanup grace periods use elapsed time and are unaffected by system-clock corrections.
 A detached child can survive a broker crash before its PID is reported, matching
 the existing residual for directly spawned children when the Gateway crashes.
@@ -352,7 +356,7 @@ Actions:
 Notes:
 
 - Only backgrounded sessions are listed. Ordinary records stay in memory and are lost on process restart; durable records are adopted from SQLite. New handles include an opaque boot suffix so old handles cannot select a different process after restart. A durable process keeps its original handle when adopted. Looking up a lost ordinary handle advises checking saved output and side effects before rerunning. Older handles without a boot suffix cannot distinguish restart from expiry or removal.
-- Graceful Gateway shutdown stops ordinary supervised process trees and waits for their cleanup; durable units keep running under the systemd user manager. If earlier Gateway cleanup fails, the spawn broker remains available while command results, output, and process-tree cleanup settle. The shutdown caller still obeys its existing deadline and reports incomplete cleanup. After an abrupt crash, ordinary service-managed child processes have parent-loss cleanup; raw detached processes and native PTY descendants may survive. A lost handle does not establish that the process stopped.
+- Graceful Gateway shutdown stops ordinary supervised process trees and waits for their cleanup; durable units keep running under the systemd user manager. Restart interruption signals active requests' ordinary commands after saving restart markers, so their cleanup grace overlaps request draining. Accepted finalizers still finish before database sealing. If earlier Gateway cleanup fails, the spawn broker remains available while command results, output, and process-tree cleanup settle. The shutdown caller still obeys its existing deadline and reports incomplete cleanup. After an abrupt crash, ordinary service-managed child processes have parent-loss cleanup; raw detached processes and native PTY descendants may survive. A lost handle does not establish that the process stopped.
 - Resetting or deleting a session clears only its completed background processes; other sessions, explicit shared scopes, and running processes remain unaffected.
 - A live ordinary background session blocks cooperative host suspension and safe Gateway restart until the process owner confirms its actual exit. Durable units do not block either operation.
 - `process remove` can hide a running session immediately after requesting termination; ordinary processes keep suspension and restart blocked until exit confirmation.

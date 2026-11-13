@@ -1,6 +1,5 @@
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import type { NpmSpecResolution } from "../infra/install-source-utils.js";
-import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
+import { parseRegistryNpmSpec, type NpmSpecResolution } from "../infra/npm-registry-spec.js";
 import { resolveTrustedOfficialPrereleaseResolution } from "./install-npm-metadata.js";
 import {
   expectedIntegrityForNpmUpdate,

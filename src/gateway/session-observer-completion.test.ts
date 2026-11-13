@@ -340,3 +340,45 @@ it("budgets one model call per configured utility candidate", async () => {
   expect(signal?.aborted).toBe(true);
   await expect(settled).resolves.toBeInstanceOf(Error);
 });
+
+it("uses a healthy configured fallback when the primary returns invalid observer JSON", async () => {
+  const cfg = {
+    agents: {
+      defaults: {
+        utilityModel: { primary: "fixture/primary", fallbacks: ["fixture/recovery"] },
+      },
+    },
+  };
+  const attempted: string[] = [];
+  const complete: NonNullable<Parameters<typeof runUtilityCompletion>[1]> = async (request) => {
+    attempted.push(request.model);
+    return {
+      ...modelMessage(
+        request.model === "recovery"
+          ? { headline: "Recovered", health: "on-track" }
+          : { headline: "Invalid optional field", health: "on-track", planProgress: null },
+      ),
+      provider: request.provider,
+      model: request.model,
+    };
+  };
+  const request = createSessionObserverCompletion({
+    getConfig: () => cfg,
+    prepareModel: async () => ({
+      ...preparedModel(),
+      config: cfg,
+      provider: "fixture",
+      model: "primary",
+      useUtilityModel: true,
+    }),
+    completeModel: (params) => runUtilityCompletion(params, complete),
+    isCurrent: () => true,
+  });
+  const result = await request(observerState({ utilityModelRef: "fixture/primary" }), []).catch(
+    (error: unknown) => error,
+  );
+  expect({ result, attempted }).toMatchObject({
+    result: { headline: "Recovered", health: "on-track" },
+    attempted: ["primary", "recovery"],
+  });
+});

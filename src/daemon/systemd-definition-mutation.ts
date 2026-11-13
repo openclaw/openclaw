@@ -118,7 +118,7 @@ async function inspect(
   let repairStateDirectory = false;
   const result = (capability: ServiceDefinitionMutationCapability) => ({
     capability:
-      capability.kind !== "writable" && capability.artifact === "service-file" && artifactPath
+      capability.kind !== "writable" && artifactPath
         ? { ...capability, path: artifactPath }
         : capability,
     snapshots,

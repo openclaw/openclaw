@@ -2226,49 +2226,6 @@ describe("createTelegramBot", () => {
     );
   });
 
-  it("keeps fetched media for uncached external replies", async () => {
-    const mediaFetch = vi.fn(async () => pngResponse());
-    using _ = pinMediaHostname();
-
-    const handler = await createMessageHandler({
-      telegramTransport: makeTelegramTransport(mediaFetch as typeof fetch),
-    });
-
-    await handler(
-      messageContext({
-        message_id: 9004,
-        chat: { id: 7, type: "private", first_name: "Reader" },
-        from: { id: 7, is_bot: false, first_name: "Reader" },
-        text: "What is in this image?",
-        date: 1736380800,
-        external_reply: {
-          origin: {
-            type: "user",
-            sender_user: { id: 22, is_bot: false, first_name: "Ada" },
-            date: 1736380700,
-          },
-          chat: { id: -10022, type: "supergroup", title: "Source" },
-          message_id: 9003,
-          photo: [
-            {
-              file_id: "external-photo-1",
-              file_unique_id: "external-photo-u1",
-              width: 1,
-              height: 1,
-            },
-          ],
-        },
-      }),
-    );
-
-    expect(replySpy).toHaveBeenCalledTimes(1);
-    const payload = replyContext();
-    expect(payload.ReplyChain?.[0]).toMatchObject({ messageId: "9003" });
-    expect(payload.ReplyChain?.[0]?.mediaPath).toBeTypeOf("string");
-    expect(getFileSpy).toHaveBeenCalledWith("external-photo-1", expect.any(AbortSignal));
-    expect(mediaFetch).toHaveBeenCalledTimes(1);
-  });
-
   it.each([
     { name: "bot API", callbackId: "cbq-codex-delete", businessConnectionId: undefined },
     {

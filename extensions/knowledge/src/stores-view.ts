@@ -1,5 +1,5 @@
 import type { FeatureOutput } from "openclaw/plugin-sdk/feature-contract";
-import type { contract } from "./contract.js";
+import type { FullOutputContract } from "./contract.js";
 import { button, el } from "./page-dom.js";
 import {
   accessText,
@@ -349,7 +349,7 @@ export function vaultFacts(rows: [string, string | Node][]) {
   return grid;
 }
 
-type Maintenance = FeatureOutput<typeof contract, "maintenance_status">;
+type Maintenance = FeatureOutput<FullOutputContract, "maintenance_status">;
 /** Scheduled maintenance: schedule, next and last pass, and each store's result (spec §11). */
 export function maintenanceSection(status: Maintenance, when: (iso: string) => string) {
   const root = el("div");

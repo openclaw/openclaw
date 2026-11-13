@@ -20,14 +20,11 @@ function NodeRow(props: {
         "removed owner device");
   return (
     <li class="ocid-access__row">
-      <div>
+      <div class="ocid-access__node-info">
         <div class="ocid-access__title">{props.node.label}</div>
-        <p class="ocid-access__hint">
-          {props.node.description.display_name} · {props.node.description.platform}
-        </p>
-        <p class="ocid-access__hint">
-          Last seen {new Date(props.node.lastSeen * 1000).toLocaleString(props.locale)} · Added by{" "}
-          {addedBy()}
+        <p class="ocid-access__hint ocid-access__node-details">
+          {props.node.description.display_name} · {props.node.description.platform} · Last seen{" "}
+          {new Date(props.node.lastSeen * 1000).toLocaleString(props.locale)} · Added by {addedBy()}
         </p>
         <Show when={confirming()}>
           <p role="note">
@@ -42,7 +39,7 @@ function NodeRow(props: {
           fallback={
             <button
               type="button"
-              class="btn btn--sm"
+              class="btn btn--sm ocid-access__node-remove"
               disabled={props.disabled}
               onClick={() => setConfirming(true)}
             >
@@ -86,7 +83,7 @@ export function NodeSection(props: {
         <h2 id="ocid-nodes">Nodes</h2>
         <button
           type="button"
-          class="btn primary btn--sm"
+          class="btn btn--sm"
           disabled={props.disabled}
           onClick={() => setSelected("new")}
         >

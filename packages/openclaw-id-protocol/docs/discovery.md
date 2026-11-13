@@ -60,7 +60,8 @@ ready message.
 | registerClaw            | `POST /v1/claws`                                      | gateway (key = binding.k_gw)              | `{ code, descriptor }` -> `{ claw_id, owner_account_id }`                                          |
 | getRegistration         | `GET /v1/claws/{claw_id}/registration`                | gateway (current registered K_gw only)    | -> `{ claw_id, owner_account_id, descriptor }`; no account-session fallback                        |
 | listClaws               | `GET /v1/claws`                                       | user                                      | -> `{ claws: [{ claw_id, hostname, name, relationship, role, online, descriptor_published_at }] }` |
-| publishDescriptor       | `PUT /v1/claws/{claw_id}/descriptor`                  | gateway                                   | `{ descriptor }` -> 204; `stale_binding` if binding_seq decreases                                  |
+| publishDescriptor       | `PUT /v1/claws/{claw_id}/descriptor`                  | gateway (stored K_gw, or see Re-bind)     | `{ descriptor, snapshot?, code? }` -> 204; `stale_binding` if binding_seq decreases                |
+| getPublishedDescriptor  | `POST /v1/claws/{claw_id}/published-descriptor`       | gateway (any key) + owner-account code    | `{ code }` -> `{ descriptor }`; code not spent (Re-bind)                                           |
 | getDescriptor           | `GET /v1/claws/{claw_id}/descriptor`                  | user                                      | -> `{ descriptor }`                                                                                |
 | publishSnapshot         | `PUT /v1/claws/{claw_id}/snapshot`                    | gateway                                   | `{ snapshot }` -> 204; `stale_snapshot` unless newer by (seq, issued_at)                           |
 | getSnapshot             | `GET /v1/claws/{claw_id}/snapshot`                    | user                                      | -> `{ snapshot }`                                                                                  |
@@ -233,6 +234,13 @@ match `code` only.
 | `payload_too_large`  | 413  | mailbox payload over 64 KiB                                                 |
 | `rate_limited`       | 429  | per claw / account / address limit                                          |
 | `unavailable`        | 503  | temporary failure                                                           |
+
+A descriptor publish refused with `stale_binding`, or with `conflict` for a different binding at
+the same binding_seq, carries `binding`: the ServerBinding Discovery publishes. Only a caller
+whose binding verified under the claw's root and who signs with its K_gw gets this far. The
+Gateway verifies it under the root: naming other keys, this machine is `binding_superseded`
+(restored from an older backup, or someone with the kit moved the claw); not verifying, it is
+an integrity error.
 
 ## Open questions
 

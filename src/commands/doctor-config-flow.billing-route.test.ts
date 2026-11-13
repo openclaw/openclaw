@@ -115,6 +115,38 @@ it("does not compare Decision selectors through conversational billing routes", 
   });
 });
 
+it("compares credential kinds for providers without catalog billing routes", async () => {
+  await withDoctorConfigPreflightHome(async (home) => {
+    const withPrimary = (model: string): OpenClawConfig => ({
+      agents: { defaults: { model }, entries: { main: {} } },
+      gateway: { mode: "local" },
+    });
+    const before = withPrimary("anthropic/claude-opus-4-6@anthropic:default");
+    const configPath = await writeOpenClawConfig(home, before);
+    const agentDir = path.join(path.dirname(configPath), "agents", "main", "agent");
+    await fs.mkdir(agentDir, { recursive: true });
+    await writeFixtureJson(path.join(agentDir, "auth-profiles.json"), {
+      version: 1,
+      profiles: {
+        "anthropic:default": { type: "api_key", provider: "anthropic", key: "synthetic-api-key" },
+        "anthropic:sub": { type: "token", provider: "anthropic", token: "synthetic-token" },
+      },
+    });
+    await maybeMigrateAuthProfileJsonStoresToSqlite({
+      cfg: before,
+      prompter: { confirmAutoFix: async () => true },
+    });
+    expect(
+      collectModelBillingRouteMigrationWarnings({
+        before,
+        after: withPrimary("anthropic/claude-opus-4-6@anthropic:sub"),
+      }),
+    ).toContain(
+      "Billing route changed for agents.entries.main.model.primary (agent main): anthropic/claude-opus-4-6 via metered API-key profile anthropic:default -> anthropic/claude-opus-4-6 via subscription/OAuth profile anthropic:sub. Review its model and authentication settings.",
+    );
+  });
+});
+
 it.each([false, true])(
   "preserves served utility models without changing billing (multiagent: %s)",
   async (multiagent) => {

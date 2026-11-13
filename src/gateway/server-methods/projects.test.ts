@@ -23,6 +23,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as gitWorker from "../../infra/git-worker.js";
 import { registerProjectRegistry } from "../../projects/project-registry.js";
+import { registerClonedProjectRegistry } from "../../projects/project-registry.test-support.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -303,53 +304,71 @@ test("registered anonymous native search does not borrow the service credential"
   }
 });
 
-test("checkout options preserve permitted Current access without exposing paths", async () => {
-  await withProjectState(async (state) => {
-    const workspace = await initializeRepository(state.root, "workspace");
-    const outside = await initializeRepository(state.root, "outside");
-    const project = await registerProjectRegistry({ path: outside });
-    // Session-scoped callers may open public GitHub repositories only.
-    mockRepositoryVisibility({ "openclaw/openclaw": "public" });
-    using gitReads = vi.spyOn(worktreeGit, "runGit").mockRejectedValue(new Error("Git is stalled"));
-    const cfg: OpenClawConfig = {
-      agents: { entries: { main: { workspace, sandbox: { mode: "off" } } } },
-    };
-    for (const scopes of [
-      ["operator.admin"],
-      ["operator.sessions.read", "operator.sessions.write"],
-    ]) {
+test.each(["registered", "cloned"] as const)(
+  "checkout options keep %s project placement with its owner",
+  async (source) => {
+    await withProjectState(async (state) => {
+      const workspace = await initializeRepository(state.root, "workspace");
+      const outside = await initializeRepository(state.root, "outside");
+      const project =
+        source === "cloned"
+          ? await registerClonedProjectRegistry({
+              path: outside,
+              name: "Shared clone",
+              originUrl: "https://github.com/openclaw/openclaw.git",
+            })
+          : await registerProjectRegistry({ path: outside });
+      // Session-scoped callers may open public GitHub repositories only.
+      mockRepositoryVisibility({ "openclaw/openclaw": "public" });
+      using gitReads = vi
+        .spyOn(worktreeGit, "runGit")
+        .mockRejectedValue(new Error("Git is stalled"));
+      const cfg: OpenClawConfig = {
+        agents: { entries: { main: { workspace, sandbox: { mode: "off" } } } },
+      };
+      for (const scopes of [
+        ["operator.admin"],
+        ["operator.sessions.read", "operator.sessions.write"],
+      ]) {
+        expect(
+          await invoke(
+            "projects.checkoutOptions",
+            { projectId: project.id, agentId: "main" },
+            cfg,
+            scopes,
+          ),
+        ).toEqual({
+          ok: true,
+          payload: { current: source !== "cloned", worktree: true },
+          error: undefined,
+        });
+        expect(gitReads).not.toHaveBeenCalled();
+        gitReads.mockClear();
+      }
+      const params = { projectId: project.id, agentId: "main" };
+      expect(
+        await invoke("projects.checkoutOptions", params, cfg, ["operator.read"]),
+      ).toMatchObject({
+        ok: true,
+        payload: { current: false, worktree: false },
+      });
+      let authorityChecks = 0;
       expect(
         await invoke(
           "projects.checkoutOptions",
-          { projectId: project.id, agentId: "main" },
+          params,
           cfg,
-          scopes,
+          ["operator.admin"],
+          undefined,
+          projectsHandlers,
+          undefined,
+          () => cfg,
+          { hasCurrentClientAuthority: () => ++authorityChecks === 1 },
         ),
-      ).toEqual({ ok: true, payload: { current: true, worktree: true }, error: undefined });
-      expect(gitReads).not.toHaveBeenCalled();
-      gitReads.mockClear();
-    }
-    const params = { projectId: project.id, agentId: "main" };
-    expect(await invoke("projects.checkoutOptions", params, cfg, ["operator.read"])).toMatchObject({
-      ok: true,
-      payload: { current: false, worktree: false },
+      ).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
     });
-    let authorityChecks = 0;
-    expect(
-      await invoke(
-        "projects.checkoutOptions",
-        params,
-        cfg,
-        ["operator.admin"],
-        undefined,
-        projectsHandlers,
-        undefined,
-        () => cfg,
-        { hasCurrentClientAuthority: () => ++authorityChecks === 1 },
-      ),
-    ).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
-  });
-});
+  },
+);
 
 test("projects.list exposes a normalized configured default repository", async () => {
   const config = {

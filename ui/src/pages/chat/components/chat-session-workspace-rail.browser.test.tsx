@@ -480,3 +480,100 @@ it("keeps native file navigation and selection while windowing a large leaf fold
     expect(button(filename(550))).not.toBeNull();
   });
 });
+
+it.each([400, 820, 1280])(
+  "keeps default Files actions reachable in a bounded %spx catalog",
+  async (width) => {
+    const { page, userEvent } = await import("vitest/browser");
+    await page.viewport(width, 800);
+    const container = document.createElement("div");
+    container.style.cssText = `position:fixed;left:0;top:0;width:${Math.min(width, 440)}px;height:420px`;
+    document.body.append(container);
+    onTestFinished(() => container.remove());
+    const [query, setQuery] = createSignal("");
+    const opened: unknown[][] = [];
+    const filename = (index: number) => `folder/file-${String(index).padStart(3, "0")}.md`;
+    const workspace = (): SessionWorkspaceProps => ({
+      sessionKey: "catalog:imported",
+      loading: false,
+      error: null,
+      activeId: null,
+      filter: "all",
+      browserPath: "",
+      browserSearch: query(),
+      navigation: {
+        browserPath: "",
+        browserSearch: query(),
+        filter: "all",
+        expandedPaths: [""],
+        searchOpen: Boolean(query()),
+        sessionExpanded: true,
+        treeVisible: true,
+        treeScroll: 0,
+        sessionScroll: 0,
+      },
+      list: {
+        sessionKey: "catalog:imported",
+        root: "/workspace/" + "long-project-name/".repeat(20),
+        files: [],
+        browser: {
+          path: "",
+          ...(query() ? { search: query() } : {}),
+          entries: Array.from({ length: 500 }, (_, index) => ({
+            path: filename(index),
+            name: filename(index).split("/").at(-1)!,
+            kind: "file" as const,
+            size: 2048,
+          })).filter((entry) => entry.path.includes(query())),
+        },
+      },
+      onBrowsePath: () => {},
+      onRetry: () => {},
+      onOpenFile: (...args) => opened.push(args),
+      onSearch: setQuery,
+      onSetFilter: () => {},
+      onOpenArtifact: () => {},
+    });
+    const mounted = mountSolid(() => <SessionWorkspaceRail workspace={workspace()} />, {
+      container,
+    });
+    onTestFinished(mounted.unmount);
+    const rows = () => [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        ".workspace-desktop__project-scroll .workspace-desktop__row",
+      ),
+    ];
+    await waitForSolid(() => {
+      expect(rows().length).toBeGreaterThan(2);
+      expect(rows().length).toBeLessThan(80);
+      expect(container.scrollWidth).toBeLessThanOrEqual(container.clientWidth);
+    });
+    const heading = container.querySelector<HTMLElement>(".workspace-desktop__heading")!;
+    container.style.setProperty("--control-ui-text-xs", "18px");
+    await waitForSolid(() => expect(getComputedStyle(heading).fontSize).toBe("18px"));
+    container.style.removeProperty("--control-ui-text-xs");
+    const boundary = rows().findLast(
+      (row) => Number(row.getAttribute("aria-label")!.match(/file-(\d+)/)![1]) < 100,
+    )!;
+    const next = filename(Number(boundary.getAttribute("aria-label")!.match(/file-(\d+)/)![1]) + 1);
+    boundary.focus();
+    await waitForSolid(() =>
+      expect(container.querySelector(`button[aria-label="${next}"]`)).not.toBeNull(),
+    );
+    await userEvent.keyboard("{Tab}");
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("Preview");
+    await userEvent.keyboard("{Tab}");
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("Copy path");
+    await userEvent.keyboard("{Tab}");
+    expect(document.activeElement?.getAttribute("aria-label")).toBe(next);
+    await userEvent.keyboard("{Enter}");
+    expect(opened.at(-1)).toEqual([next, "workspace", undefined]);
+    await userEvent.fill(mounted.getByRole("searchbox"), "file-490");
+    await waitForSolid(() => {
+      expect(container.querySelector(".workspace-desktop__catalog")).not.toBeNull();
+      expect(container.querySelectorAll(".workspace-desktop__row")).toHaveLength(1);
+    });
+    await userEvent.fill(mounted.getByRole("searchbox"), "");
+    await waitForSolid(() => expect(rows().length).toBeGreaterThan(2));
+  },
+);

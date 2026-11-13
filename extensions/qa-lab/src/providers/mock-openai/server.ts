@@ -216,6 +216,7 @@ import {
   isSnackRecallPrompt,
   extractSnackPreference,
 } from "./mock-openai-tooling.js";
+import { resolveQaUxStream } from "./mock-openai-ux-stream.js";
 import type { QaMockOpenAiServerOptions } from "./server-options.js";
 import {
   createQaSessionIdentityResolver,
@@ -1957,6 +1958,7 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
     }
     const inflightRequestId = nextInflightRequestId++;
     inflightRequests.set(inflightRequestId, { prompt, allInputText });
+    const uxStream = resolveQaUxStream(splitMockConversationContext(prompt).current);
     let events: StreamEvent[];
     let injectedFailure: QaMockProviderDispatchResult["failure"];
     try {
@@ -1986,6 +1988,8 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
             : shouldFail
               ? buildAssistantEvents("")
               : buildAssistantEvents("ANTHROPIC-THINKING-ERROR-RECOVERED-OK");
+      } else if (uxStream) {
+        events = uxStream.events;
       } else {
         events = await buildResponsesPayload(body, scenarioState, {
           subagentTurn,
@@ -2070,6 +2074,7 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
           }
         : {}),
       ...(failure ? { failure } : {}),
+      ...(uxStream ? { deltaIntervalMs: uxStream.deltaIntervalMs } : {}),
       ...((() => {
         const telegramPause = resolveTelegramChannelStreamingPause(
           splitMockConversationContext(prompt).current,

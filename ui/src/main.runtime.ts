@@ -9,6 +9,7 @@ import {
   installMissingStylesheetRecovery,
   installStaleChunkReloadListener,
 } from "./app/stale-chunk-reload.ts";
+import { refreshControlUiServiceWorker } from "./app/sw-refresh.ts";
 import { CONTROL_UI_BUILD_INFO, controlUiWorkerActivationRetires } from "./build-info.ts";
 import { installKeyboardHints } from "./lib/keyboard-hints.ts";
 import { listen } from "./lib/reactive/listener.ts";
@@ -70,11 +71,9 @@ export async function startControlUi(
       swUrl.searchParams.set("session-entry", "1");
     }
     const refresh = () =>
-      import("./app/sw-refresh.runtime.ts")
-        .then(({ refreshControlUiServiceWorker }) => refreshControlUiServiceWorker())
-        .catch((error: unknown) => {
-          console.warn("OpenClaw service worker refresh failed.", error);
-        });
+      refreshControlUiServiceWorker().catch((error: unknown) => {
+        console.warn("OpenClaw service worker refresh failed.", error);
+      });
     // Non-DOM platform listener: document lifetime owns it; no removal is needed.
     listen(navigator.serviceWorker, "message", (event) => {
       if (

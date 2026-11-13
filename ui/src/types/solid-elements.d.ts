@@ -121,9 +121,7 @@ declare module "@solidjs/web" {
           "prop:replacementCompanion"?: unknown;
           "prop:presented": boolean;
         };
-      "openclaw-message-reaction-picker": HTMLAttributes<HTMLElement> & {
-        compact?: boolean;
-      };
+      "openclaw-message-reaction-picker": HTMLAttributes<HTMLElement>;
       "openclaw-chat-clawhub-card": HTMLAttributes<HTMLElement> & {
         "prop:recommendation"?: ClawHubRecommendation;
         "prop:agentId"?: string;

@@ -1,9 +1,9 @@
 import type { ToolProfileId } from "../agents/tool-policy-shared.js";
 
 export const TEMPLATE_SCHEMA_VERSION = 1 as const;
-export const TEMPLATE_PACKAGE_KINDS = ["skill", "plugin"] as const;
+const TEMPLATE_PACKAGE_KINDS = ["skill", "plugin"] as const;
 export const TEMPLATE_PACKAGE_SOURCE = "clawhub" as const;
-export const TEMPLATE_EXTENSION_FORMATS = ["openclaw", "claude", "codex", "cursor"] as const;
+const TEMPLATE_EXTENSION_FORMATS = ["openclaw", "claude", "codex", "cursor"] as const;
 
 export type TemplatePackageKind = (typeof TEMPLATE_PACKAGE_KINDS)[number];
 export type TemplatePackageSource = typeof TEMPLATE_PACKAGE_SOURCE;
@@ -32,6 +32,7 @@ export type TemplateSourceIdentity = {
 export type TemplateCronJob = {
   id: string;
   name?: string;
+  enabled?: boolean;
   schedule: { cron: string; timezone: string };
   session: "main" | "isolated";
   message: string;

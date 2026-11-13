@@ -1,0 +1,3 @@
+# Extend the existing owner-publication boundary proof: eager/deferred snapshot work count,
+# synchronous facts, unchanged sibling identity, pending-output terminal preservation and no tail revival.
+29

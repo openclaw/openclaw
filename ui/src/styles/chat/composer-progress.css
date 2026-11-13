@@ -120,7 +120,7 @@
   display: flex;
   align-items: center;
   flex-shrink: 0;
-  gap: 2px;
+  gap: 4px;
 }
 
 .agent-chat__goal-command-actions {

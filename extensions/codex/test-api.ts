@@ -34,6 +34,7 @@ import {
 
 export { CODEX_APP_SERVER_VERSION } from "./src/app-server/version.js";
 export { createCodexDynamicToolBridge };
+export { codexDynamicToolsFingerprint } from "./src/app-server/thread-fingerprints.js";
 export type { JsonObject };
 
 /** Keeps host integration tests on the plugin's test boundary without exposing runtime internals. */

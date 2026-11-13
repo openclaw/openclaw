@@ -72,12 +72,17 @@ export type WidgetPresenterContext = Readonly<{
   nativeChannelId?: string;
   currentChannelId?: string;
   currentMessagingTarget?: string;
+  /** Channel-local id of the inbound message this turn answers. */
+  currentMessageId?: string;
   sessionKey?: string;
 }>;
 
 export type WidgetPresenterDocument = Readonly<{
   kind: "html";
+  /** Core-wrapped document for hosts that run widgets inside OpenClaw's iframe bridge. */
   html: string;
+  /** Agent-authored widget code before wrapping, for hosts with their own widget runtime. */
+  source: string;
   hostedUrl?: string;
 }>;
 
@@ -89,7 +94,13 @@ export type WidgetPresentationError =
 
 export type WidgetPresentationSuccess =
   | { kind: "node"; nodeId: string; nodeName?: string }
-  | { kind: "message"; receipt: MessageReceipt };
+  | {
+      kind: "message";
+      receipt: MessageReceipt;
+      updated?: boolean;
+      /** Advisory findings for the model; the widget was still delivered. */
+      notes?: readonly string[];
+    };
 
 export type WidgetPresenter = {
   description: string;
@@ -99,6 +110,10 @@ export type WidgetPresenter = {
   present: (params: {
     document: WidgetPresenterDocument;
     title: string;
+    /** Stable widget name: the explicit `name`, or one derived from the title. */
+    name: string;
+    /** Agent-written widget state, passed only to presenters that declare `capabilities.state`. */
+    state?: string;
     context: WidgetPresenterContext;
   }) => Promise<Result<WidgetPresentationSuccess, WidgetPresentationError>>;
 } & (
@@ -113,6 +128,13 @@ export type WidgetPresenter = {
       capabilities: Readonly<{
         sourceKinds: readonly string[];
         maxSourceBytes?: number;
+        /**
+         * Replaces the browser-host authoring rules in the `show_widget` description while this
+         * presenter owns the current channel. Keep it bounded; it is part of the tool prompt.
+         */
+        authoringGuidance?: string;
+        /** Accepts the `state` argument: a UTF-8 string of at most `maxBytes` the widget reads. */
+        state?: Readonly<{ maxBytes: number; description: string }>;
       }>;
     }
 );
