@@ -429,7 +429,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
             runtime.toolSearchCatalogRef?.current?.entries ?? [],
           ),
         };
-        (await prepared.prepareSystemPromptUpdate!("listing proof")).commit();
+        (await prepared.prepareSystemPromptUpdate!("listing proof")).commit?.();
         await owner.persistSessionSystemPrompt(prepared.sessionPromptState, (customType, data) =>
           fixture.appendCustomEntryAsync(customType, structuredClone(data)),
         );
@@ -528,7 +528,12 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
     ["proxy", "claude-opus-5", "anthropic-messages", "https://proxy.example.test"],
     ["custom-openai", "gpt-5.4-mini", "openai-completions", "https://compat.example.test/v1"],
     ["google", "gemini-3-pro", "google-generative-ai", "https://generativelanguage.googleapis.com"],
-    ["amazon-bedrock", "anthropic.claude-opus-5", "bedrock-converse-stream", undefined],
+    [
+      "amazon-bedrock",
+      "anthropic.claude-opus-5",
+      "bedrock-converse-stream",
+      "https://bedrock-runtime.us-east-1.amazonaws.com",
+    ],
   ] as const)(
     "pins the session prompt on %s %s (%s) without in-history system messages",
     async (provider, id, api, baseUrl) => {
