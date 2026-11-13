@@ -730,6 +730,22 @@ the intended guard. The separate Ollama transport integration supplies the
 positive provider-owned link-local exemption proof. These additional retention
 decisions are source-only; no runtime result or removal is claimed for them.
 
+### Runtime FormData payload fidelity
+
+At `5dfccbb92b2ab016c8c2082968f0b87798dc13bb`, source review retains the two
+runtime-fetch declarations and four proxy-fetch declarations (six cases).
+The runtime FormData case checks the filename but not file bytes or MIME type.
+Strengthening that existing case is pending baseline and mutation proof;
+no production defect or runtime result is claimed yet.
+
+The adjacent SSRF, dispatcher-pool, guarded-body-stream, hostname and FormData
+helper suites retain 25 declarations and 52 expanded cases. They protect policy
+and DNS boundaries, pool capacity and lifetime, stream cleanup and metadata,
+hostname normalization, and malformed FormData rejection. The request-body,
+authority and release suites retain another ten declarations and 21 expanded
+cases covering wire payloads, caller authority and release ownership. These
+retention decisions are source-only; no runtime pass or removal is claimed.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Retain Twitch's pre-abort pending check: it protects the passive account lifecycle. Its post-await settled check remains a separate live-test cleanup candidate.
