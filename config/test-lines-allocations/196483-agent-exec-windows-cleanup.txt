@@ -1,0 +1,4 @@
+# Regression test in src/commands/agent-exec.test.ts verifying that temporary
+# state cleanup drains plugin source-capture staging tokens before removing the
+# temporary state directory to prevent Windows EBUSY failures. PR #196483 (#196463).
+28
