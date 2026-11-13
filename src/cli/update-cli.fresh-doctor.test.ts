@@ -169,71 +169,105 @@ describe("update-cli", () => {
     mocks.serviceDefinitionMutationCapability.mockResolvedValue({ kind, reason });
   };
 
-  it("preserves split-root package updates when the service definition is writable-overridden", async () => {
-    const oldInstall = await f.setupServicePackageAtPrefix({
-      prefix: f.tempDirs.make("sealed-node-a-"),
-    });
-    const shellInstall = await f.setupServicePackageAtPrefix({
-      prefix: f.tempDirs.make("sealed-node-b-"),
-    });
-    f.mockPackageInstallStatus(shellInstall.root);
-    mocks.readPackageVersion.mockImplementation(installedVersion);
-    const originalCommand = [oldInstall.serviceNode, oldInstall.entrypoint, "gateway"];
-    mockRunningService(originalCommand, "writable", "inspection-failed");
-    const overriddenCommand = {
-      programArguments: originalCommand,
-      environment: { NODE_OPTIONS: "--max-old-space-size=4096" },
-      managedDefinition: { programArguments: originalCommand },
-      managedOverrides: { environment: { keys: ["NODE_OPTIONS"] } },
-    };
-    mocks.serviceReadCommand.mockResolvedValue(overriddenCommand);
-    f.primeNpmChannelTag("latest", "2026.5.20");
-    f.mockFileBackedPathExists();
-    const transports = [oldInstall, shellInstall].map((install) => {
-      f.mockServicePackageCommands({
-        nodeModules: install.nodeModules,
-        packageRoot: install.root,
-        targetVersion: "2026.5.20",
-        npmCommands: ["npm", install.serviceNpm, requireValue(install.serviceNpmReal, "npm")],
-        nodeVersions: { [oldInstall.serviceNode]: "v24.19.0" },
+  it.each([false, true])(
+    "updates the correct split root with launcher override=%s",
+    async (launcherOverride) => {
+      const oldInstall = await f.setupServicePackageAtPrefix({
+        prefix: f.tempDirs.make("sealed-node-a-"),
       });
-      return requireValue(
-        vi.mocked(update.runCommandWithTimeout).getMockImplementation(),
-        "package transport",
+      const shellInstall = await f.setupServicePackageAtPrefix({
+        prefix: f.tempDirs.make("sealed-node-b-"),
+      });
+      f.mockPackageInstallStatus(shellInstall.root);
+      mocks.readPackageVersion.mockImplementation(installedVersion);
+      const originalCommand = [oldInstall.serviceNode, oldInstall.entrypoint, "gateway"];
+      mockRunningService(originalCommand, "writable", "inspection-failed");
+      const overriddenCommand = {
+        programArguments: originalCommand,
+        environment: { NODE_OPTIONS: "--max-old-space-size=4096" },
+        managedDefinition: { programArguments: originalCommand },
+        managedOverrides: {
+          ...(launcherOverride ? { launcher: "command" as const } : {}),
+          environment: { keys: ["NODE_OPTIONS"] },
+        },
+      };
+      mocks.serviceReadCommand.mockResolvedValue(overriddenCommand);
+      // The retained service must report its own installed version, not the
+      // generic 1.0.0 default, before the updater can certify safe compensation.
+      f.mockGatewayHealth(await installedVersion(oldInstall.root), "original-gateway");
+      f.primeNpmChannelTag("latest", "2026.5.20");
+      f.mockFileBackedPathExists();
+      const transports = [oldInstall, shellInstall].map((install) => {
+        f.mockServicePackageCommands({
+          nodeModules: install.nodeModules,
+          packageRoot: install.root,
+          targetVersion: "2026.5.20",
+          npmCommands: ["npm", install.serviceNpm, requireValue(install.serviceNpmReal, "npm")],
+          nodeVersions: { [oldInstall.serviceNode]: "v24.19.0" },
+          onGatewayInstall: (argv) => {
+            if (!launcherOverride) {
+              const programArguments = [
+                requireValue(argv[0], "Node"),
+                requireValue(argv[1], "entrypoint"),
+                "gateway",
+              ];
+              mocks.serviceReadCommand.mockResolvedValue({
+                ...overriddenCommand,
+                programArguments,
+                managedDefinition: { programArguments },
+              });
+            }
+          },
+        });
+        return requireValue(
+          vi.mocked(update.runCommandWithTimeout).getMockImplementation(),
+          "package transport",
+        );
+      });
+      const oldPrefix = path.dirname(path.dirname(oldInstall.serviceNode));
+      vi.mocked(update.runCommandWithTimeout).mockImplementation((argv, options) => {
+        const context =
+          typeof options === "object" && options !== null
+            ? [options.cwd ?? "", options.env?.PATH ?? ""]
+            : [];
+        const old = [...argv, ...context].some((value) => value.includes(oldPrefix));
+        return transports[old ? 0 : 1]!(argv, options);
+      });
+      await update.updateCommand({ yes: true }).catch((cause: unknown) => {
+        throw new Error(getErrorOutput() + getLogOutput(), { cause });
+      });
+      const target = launcherOverride ? oldInstall : shellInstall;
+      const retained = launcherOverride ? shellInstall : oldInstall;
+      const node = launcherOverride ? oldInstall.serviceNode : process.execPath;
+      expect(await installedVersion(target.root)).toBe("2026.5.20");
+      expect(await installedVersion(retained.root)).toBe("2026.5.18");
+      expect(await mocks.serviceReadCommand(process.env)).toEqual(
+        launcherOverride
+          ? overriddenCommand
+          : {
+              ...overriddenCommand,
+              programArguments: [node, target.entrypoint, "gateway"],
+              managedDefinition: { programArguments: [node, target.entrypoint, "gateway"] },
+            },
       );
-    });
-    const oldPrefix = path.dirname(path.dirname(oldInstall.serviceNode));
-    vi.mocked(update.runCommandWithTimeout).mockImplementation((argv, options) => {
-      const context =
-        typeof options === "object" && options !== null
-          ? [options.cwd ?? "", options.env?.PATH ?? ""]
-          : [];
-      const old = [...argv, ...context].some((value) => value.includes(oldPrefix));
-      return transports[old ? 0 : 1]!(argv, options);
-    });
-    await update.updateCommand({ yes: true }).catch((cause: unknown) => {
-      throw new Error(getErrorOutput() + getLogOutput(), { cause });
-    });
-    expect(await installedVersion(oldInstall.root)).toBe("2026.5.20");
-    expect(await installedVersion(shellInstall.root)).toBe("2026.5.18");
-    expect(await mocks.serviceReadCommand(process.env)).toEqual(overriddenCommand);
-    const installCalls = commandCalls().filter(
-      ([argv]) => argv[2] === "gateway" && argv[3] === "install",
-    );
-    expect(installCalls).toHaveLength(1);
-    expect(installCalls[0]?.[0].slice(0, 4)).toEqual([
-      oldInstall.serviceNode,
-      oldInstall.entrypoint,
-      "gateway",
-      "install",
-    ]);
-    expect(installCalls[0]?.[1]).toMatchObject({
-      cwd: oldInstall.root,
-      input: expect.stringContaining('"targetRoot":' + JSON.stringify(oldInstall.root)),
-    });
-    expect(mocks.serviceStop).toHaveBeenCalledOnce();
-    expect(getLogOutput()).toContain("Gateway: restarted and verified");
-  });
+      const installCalls = commandCalls().filter(
+        ([argv]) => argv[2] === "gateway" && argv[3] === "install",
+      );
+      expect(installCalls).toHaveLength(1);
+      expect(installCalls[0]?.[0].slice(0, 4)).toEqual([
+        node,
+        target.entrypoint,
+        "gateway",
+        "install",
+      ]);
+      expect(installCalls[0]?.[1]).toMatchObject({
+        cwd: target.root,
+        input: expect.stringContaining('"targetRoot":' + JSON.stringify(target.root)),
+      });
+      expect(mocks.serviceStop).toHaveBeenCalledOnce();
+      expect(getLogOutput()).toContain("Gateway: restarted and verified");
+    },
+  );
 
   it.each([{ capability: "sealed" }, { capability: "writable" }] as const)(
     "refuses incompatible registry targets before mutating a $capability service launcher",
