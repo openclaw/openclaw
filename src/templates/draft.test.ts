@@ -97,8 +97,8 @@ describe("agent-created Template drafts", () => {
 
     const choices = {
       name: "research-brief",
-      displayName: "Engineering Partner",
-      description: "A collaborative engineering partner.",
+      displayName: "  Engineering Partner  ",
+      description: " A collaborative engineering partner. ",
       excluded: [],
     };
     await using prepared = await prepareTemplateDraft({ ...target, choices });
@@ -109,6 +109,12 @@ describe("agent-created Template drafts", () => {
     expect(prepared.files.find((file) => file.path === "CLAW.md")?.content).toContain(
       "id: research-brief\n  name: Engineering Partner",
     );
+
+    await using blankName = await prepareTemplateDraft({
+      ...target,
+      choices: { ...choices, displayName: "   " },
+    });
+    expect(blankName.displayName).toBe("Research Brief");
   });
 
   it("builds only the reviewed proposal, excluding the source workspace and private draft metadata", async () => {

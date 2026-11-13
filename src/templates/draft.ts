@@ -226,9 +226,10 @@ export async function prepareTemplateDraft(params: {
   }
   const draftName = choices?.name ?? authored.name;
   const displayName =
-    choices?.displayName ?? titleCaseTemplateName(draftManifest.agent.name ?? draftName);
-  const description =
+    choices?.displayName?.trim() || titleCaseTemplateName(draftManifest.agent.name ?? draftName);
+  const untrimmedDescription =
     choices?.description ?? authored.description ?? draftManifest.agent.description ?? "";
+  const description = untrimmedDescription.trim();
   draftManifest.agent.id = draftName;
   draftManifest.agent.name = displayName;
   draftManifest.agent.description = description || undefined;
