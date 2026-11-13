@@ -115,6 +115,10 @@ After the Gateway applies the change, reload the browser page or reconnect to pi
 
 ## Personal identity
 
+For Discord linking, Profile initially selects an already-linked Gateway account, even if it is unavailable for new links. Otherwise, it selects an available account when one exists. Refreshing account status preserves your selection while that account is still listed, even if it becomes unavailable.
+
+A session writer can set or reset **Symbol & Color** for a session they own from the sidebar, Chat header, or Sessions page without Gateway-wide write access. Read-only access or access to someone else’s session does not grant this permission.
+
 **Settings → Profile → Your access** shows your current permissions. To request broader access, use **Admin access**; an admin must approve this device separately.
 
 **Personal instructions** keeps your preferences in your personal `USER.md`, separate from the shared workspace file. A missing profile asks you to sign in. If you’re already signed in but lack permission to view your own sessions, ask an admin for access instead. Your unsaved draft stays private when your profile or access changes.

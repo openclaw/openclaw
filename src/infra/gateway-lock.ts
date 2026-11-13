@@ -9,7 +9,7 @@ import {
   resolveTimestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
 import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
-import { formatConsoleDiagnosticLine } from "../logging/json-console-line.js";
+import { writeConsoleDiagnosticWarning } from "../logging/json-console-line.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isPidAlive, isPidDefinitelyDead } from "../shared/pid-alive.js";
 import {
@@ -50,11 +50,12 @@ import {
   type GatewayOwnerLease,
 } from "./gateway-owner-lease.js";
 import type { GatewayOwnerSupervisor } from "./gateway-owner-lease.types.js";
+import { createGatewayPostgresCustody } from "./gateway-postgres-custody.js";
 import { classifyOpenClawArgv } from "./gateway-process-argv.js";
 import { captureStalledGatewayStartup } from "./gateway-startup-owner.js";
+import { createGatewayStateProjection } from "./gateway-state-owner-lifecycle.js";
 import {
   acquireGatewayStateOwner,
-  createGatewayStateProjection,
   type GatewayStateProjection,
   GatewayStateOwnerContentionError,
   resolveGatewayStateOwnerPath,
@@ -71,6 +72,11 @@ export type GatewayLockHandle = {
   release: () => Promise<void>;
   run<T>(operation: () => T): T;
   markListening?: () => void;
+  /**
+   * Takes PostgreSQL custody for an engine selection resolved after this lock, as cold CLI
+   * owners do. Its loss retires this owner; release ends it.
+   */
+  acquireConfiguredPostgresOwner?: () => Promise<void>;
 };
 
 export type GatewayLockOptions = {
@@ -489,14 +495,14 @@ export async function acquireGatewayLock(
   let databaseFailure: { error: unknown } | undefined;
   let waited = false;
   // A waiter does not own the state directory where default file logs are written.
-  const onWait =
-    opts.onWait ??
-    ((message: string) => {
-      process.stderr.write(`${formatConsoleDiagnosticLine({ level: "warn", message })}\n`);
-    });
+  const onWait = opts.onWait ?? writeConsoleDiagnosticWarning;
   // Lock file that blocked the failing attempt, named in the timeout error.
   let contendedLockPath: string | undefined;
   let projection: GatewayStateProjection | undefined;
+  // database.postgres.ownership installation: the install's PostgreSQL session lock excludes other hosts too.
+  const postgres = createGatewayPostgresCustody();
+  // Retained schema leases keep the process owner, so its PostgreSQL session ends with it.
+  let postgresEnded: Promise<void> | undefined;
   let stateOwner: ReturnType<typeof acquireGatewayStateOwner>;
   try {
     stateOwner =
@@ -517,6 +523,11 @@ export async function acquireGatewayLock(
             payload,
             projectionPath: paths.stateLockPath,
             getProjection: () => projection,
+            // PostgreSQL custody loss retires the process owner that admits all state work.
+            custody: postgres.signal(),
+            onReleased: () => {
+              postgresEnded = postgres.release();
+            },
           });
           try {
             if (opts.databasePortRecovery) {
@@ -528,6 +539,9 @@ export async function acquireGatewayLock(
               assertDatabasePortStartupAllowed(paths.stateDir);
             }
             await assertHistoricalGatewayOwnerStopped(paths, opts, (contended) => {
+              contendedLockPath = contended;
+            });
+            await postgres.acquire((contended) => {
               contendedLockPath = contended;
             });
             if (!opts.databasePortRecovery && opts.databaseAccess !== "none") {
@@ -550,6 +564,7 @@ export async function acquireGatewayLock(
             if (error instanceof GatewayStateOwnerContentionError) {
               contendedLockPath ??= paths.ownerLockPath;
             }
+            await postgres.release();
             owner.release();
             throw error;
           }
@@ -688,6 +703,7 @@ export async function acquireGatewayLock(
   } catch (error) {
     await ownerLease?.release();
     projection?.release();
+    await postgres.release();
     stateOwner.release();
     throw new GatewayLockError(
       "failed to acquire gateway state ownership",
@@ -712,6 +728,12 @@ export async function acquireGatewayLock(
         log.warn("Gateway listener bound, but startup readiness could not be recorded");
       }
     },
+    acquireConfiguredPostgresOwner: async () => {
+      assertStateOwnerCurrent();
+      // No-op once held, after release, or for a borrowed owner covered by its parent.
+      await postgres.acquire();
+      assertStateOwnerCurrent();
+    },
     run: (operation) => {
       if (resources) {
         // Reenter held custody before policy reads inspect this scope's database handles.
@@ -727,6 +749,7 @@ export async function acquireGatewayLock(
         projection?.release();
         projection = undefined;
         stateOwner.release();
+        await postgresEnded;
       })().catch((error: unknown) => {
         released = undefined;
         throw error;

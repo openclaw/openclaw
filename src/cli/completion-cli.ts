@@ -4,7 +4,7 @@ import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { isInvalidConfigError } from "../config/io.invalid-config.js";
 import { routeLogsToStderr } from "../logging/console.js";
-import { formatConsoleDiagnosticLine } from "../logging/json-console-line.js";
+import { writeConsoleDiagnosticWarning } from "../logging/json-console-line.js";
 import { generateBashCompletion } from "./completion-bash.js";
 import {
   collectShellCompletionCommandTree,
@@ -52,7 +52,7 @@ function createCompletionScriptGenerator(program: Command): (shell: CompletionSh
 
 function writeCompletionRegistrationWarning(message: string): void {
   const diagnostic = `[completion] ${message}`;
-  process.stderr.write(`${formatConsoleDiagnosticLine({ level: "warn", message: diagnostic })}\n`);
+  writeConsoleDiagnosticWarning(diagnostic);
 }
 
 export function registerCompletionCli(program: Command) {

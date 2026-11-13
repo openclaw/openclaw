@@ -284,6 +284,7 @@ export async function prepareWorktreeTemplate(params: {
   sourceCommit: string;
   backend: string;
   reuseOnly?: boolean;
+  backgroundUsedAt?: number;
   requireSpace: () => Promise<void>;
   /** Immutable generations consume producer validation; mutable templates revalidate on reuse. */
   validate?: (
@@ -318,7 +319,7 @@ export async function prepareWorktreeTemplate(params: {
           cacheKey: params.cacheKey,
           contentKey: params.contentKey,
           backend: params.backend,
-          now: retainCommits ? params.now() : undefined,
+          now: retainCommits ? (params.backgroundUsedAt ?? params.now()) : undefined,
         },
         assertCallerCurrent,
         undefined,
@@ -429,11 +430,12 @@ export async function prepareWorktreeTemplate(params: {
               undefined,
               options.workerAuthority,
             );
-            if (!hasReaders) {
+            const usedAt = params.backgroundUsedAt ?? params.now();
+            if (!hasReaders && usedAt > existing.lastUsedAt) {
               await markTemplateReadyAsync(
                 params.env,
                 existing.id,
-                params.now(),
+                usedAt,
                 assertCurrent,
                 undefined,
                 options.workerAuthority,
@@ -488,7 +490,7 @@ export async function prepareWorktreeTemplate(params: {
           contentKey: params.contentKey,
           status: "preparing",
           createdAt: params.now(),
-          lastUsedAt: params.now(),
+          lastUsedAt: Math.max(params.backgroundUsedAt ?? params.now(), existing?.lastUsedAt ?? 0),
         };
         await reserveTemplateAsync(params.env, record, assertCurrent, options.workerAuthority);
         built = true;
@@ -541,7 +543,7 @@ export async function prepareWorktreeTemplate(params: {
         await markTemplateReadyAsync(
           params.env,
           id,
-          params.now(),
+          params.backgroundUsedAt === undefined ? params.now() : record.lastUsedAt,
           assertCurrent,
           {
             cacheKey,

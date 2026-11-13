@@ -15,6 +15,38 @@ export type StateOwnerFile = Pick<
   GatewayStateProjection,
   "lockPath" | "verifyStillHeld" | "release"
 >;
+
+/** Carry the same physical sidecar through relocation and accepted schema work. */
+export function createGatewayStateProjection(lock: StateOwnerFile): GatewayStateProjection {
+  let references = 1;
+  const reference = (): GatewayStateProjection => {
+    let released = false;
+    return {
+      lockPath: lock.lockPath,
+      verifyStillHeld: () => !released && lock.verifyStillHeld(),
+      retain() {
+        if (released || !lock.verifyStillHeld()) {
+          throw new Error("Gateway state projection is no longer current");
+        }
+        references += 1;
+        return reference();
+      },
+      release() {
+        readOwnerPaths.clear();
+        if (released) {
+          return;
+        }
+        if (references === 1) {
+          lock.release();
+        }
+        references -= 1;
+        released = true;
+      },
+    };
+  };
+  return reference();
+}
+
 export type ProcessOwner = {
   key: string;
   path: string;
@@ -28,6 +60,8 @@ export type ProcessOwner = {
   projectionDirectories: StateOwnerDirectoryIdentity[];
   // Retained leases keep custody after this stops new admission.
   accepting: boolean;
+  /** Runs once physical custody ends, after the last retained lease. */
+  onReleased?: () => void;
 };
 
 export function hasPhysicalOwnership(owner: ProcessOwner): boolean {

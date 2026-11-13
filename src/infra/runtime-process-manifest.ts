@@ -285,24 +285,20 @@ export const pluginRuntimeProcessManifest = {
     },
   },
   fileTransferDirFetch: {
-    plugin: "file-transfer",
-    ownerSource: "extensions/file-transfer/src/node-host/dir-fetch-archive.ts",
+    ...pluginRuntimeProcess(
+      "file-transfer",
+      "src/node-host/dir-fetch-archive",
+      "src/node-host/dir-fetch-archive.worker",
+    ),
     sourceWorkerName: "dir-fetch-archive.worker",
-    distWorkerPath: "extensions/file-transfer/src/node-host/dir-fetch-archive.worker.js",
-    package: {
-      name: "@openclaw/file-transfer",
-      distWorkerPath: "src/node-host/dir-fetch-archive.worker.js",
-    },
   },
   fileTransferDirList: {
-    plugin: "file-transfer",
-    ownerSource: "extensions/file-transfer/src/node-host/dir-list-worker-command.ts",
+    ...pluginRuntimeProcess(
+      "file-transfer",
+      "src/node-host/dir-list-worker-command",
+      "src/node-host/dir-list.worker",
+    ),
     sourceWorkerName: "dir-list.worker",
-    distWorkerPath: "extensions/file-transfer/src/node-host/dir-list.worker.js",
-    package: {
-      name: "@openclaw/file-transfer",
-      distWorkerPath: "src/node-host/dir-list.worker.js",
-    },
   },
   iMessageChatDb: {
     ...pluginRuntimeProcess("imessage", "src/chat-db", "src/chat-db.worker"),

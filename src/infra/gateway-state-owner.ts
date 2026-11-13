@@ -58,39 +58,6 @@ export type StateDatabaseSchemaLease = {
   release(this: void): void;
 };
 
-/** Carry the same physical sidecar through relocation and accepted schema work. */
-export function createGatewayStateProjection(
-  lock: ReturnType<typeof acquireFileLockSync>,
-): GatewayStateProjection {
-  let references = 1;
-  const reference = (): GatewayStateProjection => {
-    let released = false;
-    return {
-      lockPath: lock.lockPath,
-      verifyStillHeld: () => !released && lock.verifyStillHeld(),
-      retain() {
-        if (released || !lock.verifyStillHeld()) {
-          throw new Error("Gateway state projection is no longer current");
-        }
-        references += 1;
-        return reference();
-      },
-      release() {
-        readOwnerPaths.clear();
-        if (released) {
-          return;
-        }
-        if (references === 1) {
-          lock.release();
-        }
-        references -= 1;
-        released = true;
-      },
-    };
-  };
-  return reference();
-}
-
 type StateOwnerIdentity = ReturnType<typeof resolveStateOwnerIdentity>;
 
 const schemaOwners = resolveGlobalSingleton(
@@ -214,6 +181,7 @@ function leaseForFile(
           void owner.heartbeat?.stop();
           owner.accepting = false;
           owners.delete(owner.key);
+          owner.onReleased?.();
         }
       }
       // A failed directory cleanup remains retryable after physical lock release.
@@ -231,6 +199,10 @@ export function acquireGatewayStateOwner(params: {
   payload?: LockPayload;
   projectionPath?: string;
   getProjection?: () => GatewayStateProjection | undefined;
+  /** Custody held outside this process, such as the PostgreSQL install lock; abort retires it. */
+  custody?: AbortSignal;
+  /** Ends that outside custody once physical custody ends, including retained leases. */
+  onReleased?: () => void;
 }): StateDatabaseSchemaLease {
   const identity = resolveStateOwnerIdentity(params.databasePath);
   const pathname = identity.ownerPath;
@@ -263,6 +235,7 @@ export function acquireGatewayStateOwner(params: {
     projectionDirectories: [],
     lost: new AbortController(),
     accepting: true,
+    onReleased: params.onReleased,
   };
   const lock = acquireGatewayStateOwnerFile(params.databasePath, pathname, payload);
   owner.locks.add(lock);
@@ -273,6 +246,13 @@ export function acquireGatewayStateOwner(params: {
     owner.heartbeat = startGatewayStateOwnerHeartbeat(owner.locks, (error, lockPath) =>
       observeOwnerLoss(owner, error, lockPath),
     );
+    // Admission, workers and the server lifecycle all observe this owner's lost signal.
+    const custody = params.custody;
+    const onCustodyLost = () => {
+      const reason: unknown = custody?.reason;
+      loseOwner(owner, reason instanceof Error ? reason : new Error("State custody was lost"));
+    };
+    custody?.addEventListener("abort", onCustodyLost, { once: true });
     lease.assertCurrent();
   } catch (error) {
     return runWithSqliteCleanup(lease, "state process ownership verification", () => {

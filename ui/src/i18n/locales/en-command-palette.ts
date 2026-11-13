@@ -15,8 +15,13 @@ const enCommandPalette = {
   },
   palette: {
     placeholder: en.palette.placeholder,
+    searchPlaceholder: en.palette.searchPlaceholder,
+    composePlaceholder: en.palette.composePlaceholder,
+    modeLabel: en.palette.modeLabel,
+    modes: en.palette.modes,
+    modeSwitch: en.palette.modeSwitch,
     noResults: "No results match your search.",
-    noResultsStart: "Press {shortcut} to start a new session.",
+    noResultsStart: "Press {shortcut} to compose a new session.",
     startSession: "New session",
     startSessionBackground: "Start new session in background",
     startingSession: "Starting…",
@@ -61,6 +66,7 @@ const enCommandPalette = {
     footer: {
       navigate: "navigate",
       select: "select",
+      send: "send",
       close: "close",
       newline: "newline",
     },

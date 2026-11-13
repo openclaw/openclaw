@@ -247,6 +247,12 @@ export function prepareMessageGroupFrame(
     lastMessageIndex,
     footerActionDetails,
     footerActionMessageKey,
+    rowReactions:
+      normalizedRole === "assistant" &&
+      !forwardedSource &&
+      !opts.bubbleMode &&
+      !isTurnBlock &&
+      opts.frameFooter !== false,
     hasUserFooterActions,
     // An undelivered steer's footer slot holds only its steer row; identity, time and
     // actions follow delivery.

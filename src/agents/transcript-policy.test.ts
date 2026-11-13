@@ -195,15 +195,13 @@ describe("resolveTranscriptPolicy", () => {
       api: "anthropic-messages",
       baseUrl: "https://api.anthropic.com",
     });
-    // Every Anthropic Messages route pins the session prompt; only direct API-key routes
-    // can carry its updates as in-history system messages.
-    for (const [directApiKey, provider, api, baseUrl, expected, pinned] of [
-      [false, "anthropic", "anthropic-messages", model.baseUrl, false, true],
-      [true, "anthropic", "anthropic-messages", model.baseUrl, true, true],
-      [true, "anthropic", "anthropic-messages", "https://proxy.example.test", false, true],
-      [true, "amazon-bedrock", "bedrock-converse-stream", model.baseUrl, false, false],
-      [true, "google-vertex", "anthropic-messages", model.baseUrl, false, true],
-      [true, "microsoft-foundry", "anthropic-messages", model.baseUrl, false, true],
+    for (const [directApiKey, provider, api, baseUrl, expected] of [
+      [false, "anthropic", "anthropic-messages", model.baseUrl, false],
+      [true, "anthropic", "anthropic-messages", model.baseUrl, true],
+      [true, "anthropic", "anthropic-messages", "https://proxy.example.test", false],
+      [true, "amazon-bedrock", "bedrock-converse-stream", model.baseUrl, false],
+      [true, "google-vertex", "anthropic-messages", model.baseUrl, false],
+      [true, "microsoft-foundry", "anthropic-messages", model.baseUrl, false],
     ] as const) {
       const policy = resolveTranscriptPolicy({
         config: {},
@@ -214,8 +212,7 @@ describe("resolveTranscriptPolicy", () => {
         model: { ...model, provider, api, baseUrl },
       });
       expect(policy.inHistorySystemUpdates).toBe(expected);
-      expect(policy.appendOnlyRuntimeContext).toBe(expected);
-      expect(policy.pinnedSystemPrompt).toBe(pinned);
+      expect(policy.appendOnlyRuntimeContext).toBe(true);
     }
   });
 
@@ -233,7 +230,7 @@ describe("resolveTranscriptPolicy", () => {
         env: { ANTHROPIC_BASE_URL: baseUrl },
       });
       expect(policy.inHistorySystemUpdates).toBe(expected);
-      expect(policy.appendOnlyRuntimeContext).toBe(expected);
+      expect(policy.appendOnlyRuntimeContext).toBe(true);
     }
   });
 
@@ -256,7 +253,7 @@ describe("resolveTranscriptPolicy", () => {
         runtimeHandle: updatingPlugin(provider),
       });
       expect(policy.inHistorySystemUpdates).toBe(expected);
-      expect(policy.appendOnlyRuntimeContext).toBe(api === "openai-completions" || expected);
+      expect(policy.appendOnlyRuntimeContext).toBe(true);
     }
   });
 
@@ -272,6 +269,7 @@ describe("resolveTranscriptPolicy", () => {
         runtimeHandle: updatingPlugin("anthropic", false),
       });
       expect(policy.inHistorySystemUpdates).toBe(directApiKey);
+      // An explicit provider opt-out holds unless in-history updates need retained carriers.
       expect(policy.appendOnlyRuntimeContext).toBe(directApiKey);
     },
   );
@@ -306,39 +304,39 @@ describe("resolveTranscriptPolicy", () => {
     }
   });
 
-  it.each([
-    ["claude-fable-5-1", true],
-    ["claude-mythos-5-1", true],
-    ["claude-fable-5", false],
-  ])("scopes persisted context and consecutive-turn merging for %s", (modelId, appendOnly) => {
-    const messages: AgentMessage[] = [
-      { role: "user", content: "First request", timestamp: 1 },
-      { role: "user", content: "Second request", timestamp: 2 },
-    ];
-    for (const modelApi of ["anthropic-messages", "bedrock-converse-stream"]) {
-      for (const provider of ["anthropic", "amazon-bedrock", "custom-proxy"]) {
-        const policy = resolveTranscriptPolicy({ provider, modelId, modelApi });
-        expect(policy.appendOnlyRuntimeContext).toBe(appendOnly);
-        const replay = validateAnthropicTurns(messages, {
-          mergeConsecutiveTurns: shouldMergeConsecutiveTurns(policy, modelApi),
-        });
-        expect(replay).toEqual(
-          appendOnly && modelApi === "anthropic-messages"
-            ? messages
-            : [
-                {
-                  role: "user",
-                  content: [
-                    { type: "text", text: "First request" },
-                    { type: "text", text: "Second request" },
-                  ],
-                  timestamp: 2,
-                },
-              ],
-        );
+  // Every route keeps earlier runtime context; only Bedrock Converse still merges consecutive turns.
+  it.each(["claude-fable-5-1", "claude-mythos-5-1", "claude-fable-5"])(
+    "scopes persisted context and consecutive-turn merging for %s",
+    (modelId) => {
+      const messages: AgentMessage[] = [
+        { role: "user", content: "First request", timestamp: 1 },
+        { role: "user", content: "Second request", timestamp: 2 },
+      ];
+      for (const modelApi of ["anthropic-messages", "bedrock-converse-stream"]) {
+        for (const provider of ["anthropic", "amazon-bedrock", "custom-proxy"]) {
+          const policy = resolveTranscriptPolicy({ provider, modelId, modelApi });
+          expect(policy.appendOnlyRuntimeContext).toBe(true);
+          const replay = validateAnthropicTurns(messages, {
+            mergeConsecutiveTurns: shouldMergeConsecutiveTurns(policy, modelApi),
+          });
+          expect(replay).toEqual(
+            modelApi === "anthropic-messages"
+              ? messages
+              : [
+                  {
+                    role: "user",
+                    content: [
+                      { type: "text", text: "First request" },
+                      { type: "text", text: "Second request" },
+                    ],
+                    timestamp: 2,
+                  },
+                ],
+          );
+        }
       }
-    }
-  });
+    },
+  );
 
   it.each(["claude-fable-5-1", "claude-mythos-5-1"])(
     "uses canonical deployment identity for unowned %s replay",
