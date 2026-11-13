@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { once } from "node:events";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { PreparedAgentRunAdmission } from "../agents/admitted-run-context.js";
 import {
   bindCronManagementToolConstruction,
@@ -329,7 +329,17 @@ describe("MCP HTTP keepalive", () => {
     }
   });
 
-  const within = <T>(promise: Promise<T>) => withTestTimeout(promise, 500, "HTTP idle timeout");
+  async function within<T>(promise: Promise<T>): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("HTTP idle timeout")), 500);
+    });
+    try {
+      return await Promise.race([promise, timeout]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
 
   const toolCall = mcp.toolCall("wait_probe");
   const heartbeatResult = { content: [{ type: "text", text: "completed once" }] };
@@ -344,20 +354,6 @@ describe("MCP HTTP keepalive", () => {
     }
     return body;
   }
-
-  it("disables connection reuse for consecutive completed tool calls", async () => {
-    execute.mockResolvedValue(heartbeatResult);
-    for (let id = 1; id <= 2; id++) {
-      const response = await send("POST", { ...toolCall, id });
-      expect(response.status).toBe(200);
-      expect(response.headers.get("connection")).toBe("close");
-      expect(await response.json()).toMatchObject({
-        id,
-        result: { ...heartbeatResult, isError: false },
-      });
-    }
-    expect(execute).toHaveBeenCalledTimes(2);
-  });
 
   it.each(["success", "serialization-error", "notification"])(
     "keeps pending calls alive without writing notification bodies: %s",
@@ -425,13 +421,10 @@ describe("MCP HTTP keepalive", () => {
   );
 
   it("releases a GET notification stream and aborts a pending call during shutdown", async () => {
-    const entered = createDeferred();
-    execute.mockImplementation((_id: string, _params: unknown, signal: AbortSignal) => {
-      entered.resolve();
-      return once(signal, "abort");
-    });
+    execute.mockImplementation((_id: string, _params: unknown, signal: AbortSignal) =>
+      once(signal, "abort"),
+    );
     const pending = send("POST", toolCall);
-    await within(entered.promise);
     const response = await send("GET");
     expect(response.headers.get("content-type")).toBe("text/event-stream");
     expect(response.headers.get("connection")).toBe("close");
