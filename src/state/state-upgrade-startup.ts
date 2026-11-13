@@ -1,9 +1,11 @@
 // Gateway startup entry for the copy-and-swap state upgrade.
 import fs from "node:fs";
+import path from "node:path";
 import { parseConfigJson5 } from "../config/io.read-helpers.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "./openclaw-state-db-cache.js";
 import { upgradeStateDirectory } from "./state-upgrade.js";
 
 const log = createSubsystemLogger("state/upgrade");
@@ -32,7 +34,16 @@ export async function upgradeStateOnGatewayStart(
   // File-only ownership: the old databases are not opened for writing.
   const lock = await acquireGatewayLock({ env, databaseAccess: "none", allowInTests: true });
   try {
-    await upgradeStateDirectory({ env, log });
+    const statePath = path.join(resolveStateDir(env), "state", "openclaw.sqlite");
+    await upgradeStateDirectory({
+      env,
+      log,
+      // Selecting the environment read the config, which can leave a worker on a
+      // current shared database; it must reopen the swapped file, not the old one.
+      beforeSwap: async () => {
+        await closeOpenClawStateDatabaseByPathAsync(statePath);
+      },
+    });
   } finally {
     await lock?.release();
   }
