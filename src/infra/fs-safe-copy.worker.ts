@@ -19,6 +19,7 @@ import type {
   ProvisionCopyDetails,
 } from "./fs-safe-copy-worker-contract.js";
 import { normalizeFsSafeNativeEnv } from "./fs-safe-env.js";
+import type { ScratchTreeRequest } from "./scratch-cleanup-tree.js";
 import { workerMutationAssertion } from "./worker-mutation-authority.js";
 
 function failure(error: unknown): FsSafeCopyReply {
@@ -56,11 +57,29 @@ if (parentPort) {
   const nativeConfig = getFsSafeNativeConfig();
   const { serveWorkerTasks } = await import("./worker-task-server.js");
   configureFsSafeNative(nativeConfig);
-  serveWorkerTasks<FsSafeCopyReply, FsSafeCopyRead | FsSafeProvisionCopy>(
+  serveWorkerTasks<FsSafeCopyReply, FsSafeCopyRead | FsSafeProvisionCopy | ScratchTreeRequest>(
     async (command, channel, control) => {
       let copyDetails: ProvisionCopyDetails | undefined;
       try {
         switch (command.type) {
+          case "scratch": {
+            if (!channel) {
+              throw new Error("Scratch cleanup requires its live host channel");
+            }
+            const { walkScratchTree } = await import("./scratch-cleanup-tree.js");
+            let progress: import("./scratch-cleanup-tree.js").ScratchTreeResult;
+            const checkpoint = workerMutationAssertion(
+              command.decision,
+              () => channel.notify(progress),
+              control.throwIfCancelled,
+            );
+            return await control.runNativeSection(() =>
+              walkScratchTree(command, control.throwIfCancelled, async (next) => {
+                progress = next;
+                checkpoint();
+              }),
+            );
+          }
           case "provision": {
             copyDetails = {
               copier: "portable",

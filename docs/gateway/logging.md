@@ -136,6 +136,13 @@ details. Plain-text timeout warnings include the bounded structured fields.
 
 The Control UI Logs tab tails this file via the gateway (`logs.tail`). The CLI does the same:
 
+Gateway tail reads and redaction run in a bounded background worker, so opening
+the Logs tab does not tokenize log records on the shared chat event loop. Each
+response keeps the requested line and byte limits (at most 5,000 lines and 1 MB).
+The byte cursor skips completed records on subsequent polls. The reader may
+inspect older bytes to preserve private-key redaction across window boundaries;
+it uses the current redaction patterns and registered secrets for each request.
+
 ```bash
 openclaw logs --follow
 ```

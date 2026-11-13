@@ -57,12 +57,31 @@ it("expires only entries whose newest file is older than 24 hours, retaining bou
   const result = await f.run();
   expect(result).toMatchObject({ entriesRemoved: 1, bytesRemoved: 5, skippedLive: 0, errors: [] });
   await expect(fs.stat(expired)).rejects.toMatchObject({ code: "ENOENT" });
+  expect((await fs.readdir(path.join(f.root, ".openclaw/tmp"))).toSorted()).toEqual([
+    "boundary",
+    "mixed",
+  ]);
   for (const file of [boundary, fresh, oldSibling, outside]) {
     expect(await fs.readFile(file, "utf8")).toBe("proof");
   }
 });
 
-it("skips live or queued custody and stops paced deletion when custody becomes live", async () => {
+it("retains a replacement entry when identity changes after expiry inspection", async () => {
+  const f = await fixture();
+  const directory = path.dirname(await f.file(".openclaw/tmp/expired/proof"));
+  let preparations = 0;
+  f.target.prepare = async () => {
+    if (++preparations === 2) {
+      await fs.rename(directory, path.join(f.root, "retained-original"));
+      await f.file(".openclaw/tmp/expired/fresh", 1);
+    }
+  };
+  expect(await f.run()).toMatchObject({ entriesRemoved: 0, filesRemoved: 0, deferred: 1 });
+  expect(await fs.readFile(path.join(directory, "fresh"), "utf8")).toBe("proof");
+  expect(await fs.readFile(path.join(f.root, "retained-original/proof"), "utf8")).toBe("proof");
+});
+
+it("skips live custody and isolates claimed cleanup from new work at the original path", async () => {
   const f = await fixture();
   f.target.isLive = () => true;
   const file = await f.file(".openclaw/tmp/proof/file");
@@ -73,11 +92,37 @@ it("skips live or queued custody and stops paced deletion when custody becomes l
     await f.file(`.openclaw/tmp/proof/${index}`);
   }
   f.pause.mockImplementation(async () => {
+    await expect(fs.stat(path.dirname(file))).rejects.toMatchObject({ code: "ENOENT" });
+    await f.file(".openclaw/tmp/proof/fresh", 1);
     f.target.isLive = () => true;
   });
-  expect(await f.run()).toMatchObject({ skippedLive: 1, filesRemoved: 128, entriesRemoved: 0 });
+  expect(await f.run()).toMatchObject({ filesRemoved: 131, entriesRemoved: 1, errors: [] });
   expect(f.pause).toHaveBeenCalledExactlyOnceWith(100);
-  expect((await fs.readdir(path.dirname(file))).length).toBe(2);
+  expect(await fs.readdir(path.dirname(file))).toEqual(["fresh"]);
+});
+
+it("joins worker cancellation at a deletion checkpoint before releasing the checkout", async () => {
+  const f = await fixture();
+  const controller = new AbortController();
+  for (let index = 0; index < 130; index++) {
+    await f.file(`.openclaw/tmp/proof/${index}`);
+  }
+  await expect(
+    cleanScratch({
+      targets: [f.target],
+      now,
+      cursor: f.cursor,
+      signal: controller.signal,
+      assertCurrent: () => controller.signal.throwIfAborted(),
+      pause: async () => controller.abort(),
+    }),
+  ).rejects.toMatchObject({ name: "AbortError" });
+  const remaining = await fs.readdir(path.join(f.root, ".openclaw/tmp"));
+  expect(remaining).toHaveLength(1);
+  expect(await fs.readdir(path.join(f.root, ".openclaw/tmp", remaining[0]!))).toHaveLength(2);
+  // Ordinary expiry rediscovers the partially drained entry without a claim journal.
+  expect(await f.run()).toMatchObject({ entriesRemoved: 1, filesRemoved: 3, errors: [] });
+  expect(await fs.readdir(path.join(f.root, ".openclaw/tmp"))).toEqual([]);
 });
 
 it("refuses symlink scratch roots but expires contained links without following their targets", async () => {

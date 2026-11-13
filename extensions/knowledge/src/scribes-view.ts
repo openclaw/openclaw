@@ -532,7 +532,7 @@ function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[], detection
               job,
               agentId,
               () => true,
-              () => repairScribe(host, snapshot, job, agentId),
+              (current) => repairScribe(current.s.context.host, snapshot, job, agentId),
             );
           }
         },

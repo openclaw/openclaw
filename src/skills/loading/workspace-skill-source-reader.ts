@@ -1,7 +1,6 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { shouldRejectHardlinkedPluginFiles } from "../../plugins/hardlink-policy.js";
-import { readWorkspaceSkillStatusFacts } from "../discovery/status-files.js";
 import type { SkillEntry } from "../types.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
 import { hasBinary, resolveSkillRequiredBins } from "./config.js";
@@ -22,10 +21,10 @@ import type {
 } from "./workspace-skill-sources.types.js";
 
 /** Run on the workspace host using an admitted source plan and native discovery limits. */
-export function readWorkspaceSkillSources(
+export async function readWorkspaceSkillSources(
   request: WorkspaceSkillSourceRequest,
   batch?: SkillSourceReadBatch,
-): WorkspaceSkillSources {
+): Promise<WorkspaceSkillSources> {
   const config: OpenClawConfig = {
     skills: {
       limits: request.limits,
@@ -57,20 +56,19 @@ export function readWorkspaceSkillSources(
   ]
     .filter(hasBinary)
     .toSorted();
+  const status = request.status
+    ? (await import("../discovery/status-files.js")).readWorkspaceSkillStatusFacts({
+        entries: mergeSkillRecords(entries, request.sourcePlan.workspaceDir),
+        workspaceDir: request.sourcePlan.workspaceDir,
+        managedSkillsDir: request.sourcePlan.managedSkillsDir,
+        skillCardKey: request.status.skillCardKey,
+      })
+    : undefined;
   return {
     entries,
     executionEntries,
     runtime: { platform: process.platform, bins },
-    ...(request.status
-      ? {
-          status: readWorkspaceSkillStatusFacts({
-            entries: mergeSkillRecords(entries, request.sourcePlan.workspaceDir),
-            workspaceDir: request.sourcePlan.workspaceDir,
-            managedSkillsDir: request.sourcePlan.managedSkillsDir,
-            skillCardKey: request.status.skillCardKey,
-          }),
-        }
-      : {}),
+    ...(status ? { status } : {}),
   };
 }
 

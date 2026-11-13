@@ -81,6 +81,12 @@ export const mcpAppSettingsSchema = z.object({
 });
 
 export type McpAppIcon = SchemaContract<z.infer<typeof mcpAppIconSchema>>;
+export type McpAppIdentity = {
+  label: string;
+  icons?: McpAppIcon[];
+  /** An installed plugin with portable identity artwork. */
+  pluginId?: string;
+};
 type McpAppEntrypoint = SchemaContract<z.infer<typeof mcpAppEntrypointSchema>>;
 export type McpAppToolExtensions = {
   entrypoints?: McpAppEntrypoint[];

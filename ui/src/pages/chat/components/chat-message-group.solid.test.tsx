@@ -263,7 +263,6 @@ it.each([false, true])(
         frame={frame}
         options={{
           streamOptions: { bubbleMode },
-          workPreviews: new Map(),
           partDependencies: (part) => [part],
           renderGroupOptions: () => ({
             bubbleMode,

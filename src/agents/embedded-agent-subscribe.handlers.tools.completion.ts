@@ -512,14 +512,8 @@ export async function prepareToolExecutionEnd(
       data: createResultData(),
     });
 
-    // Retire accepted catalog wrappers now, before a later model call or quiet
-    // yield can leave their duplicate start rows as the last visible preview.
-    if (
-      startData?.parentToolCallId ||
-      ctx.state.toolMetas.some((call) => call.parentToolCallId === toolCallId)
-    ) {
-      finalizeToolActivity(ctx);
-    }
+    ctx.state.toolActivityPresentation.complete(terminalMeta);
+    finalizeToolActivity(ctx);
 
     if (isExecToolName(toolName)) {
       const commandItemId = buildCommandItemId(toolCallId);

@@ -6,24 +6,28 @@ import { needsUpdate, updateScribe } from "./scribes-actions.js";
 import type { ScribeJob, ScribeSnapshot } from "./scribes-state.js";
 
 /**
- * Per Gateway connection: update attempts by automation revision. An attempt keeps its identity
- * until its turn is sent, so a transport retry after a failed send is the same request. A sent
- * attempt is not repeated on reloads, since the revision stays until the turn re-declares the
- * automation; Try again after it stayed unchanged starts a new attempt.
+ * Per Gateway, by its Control UI base path: the page gets a new host on every reconnect, and a lost
+ * response usually arrives as a dropped connection. State kept per host would be forgotten then,
+ * and the reloaded page would send an unsent attempt again as a new request.
+ *
+ * Update attempts by automation revision. An attempt keeps its identity until its turn is sent,
+ * so a transport retry after a failed send is the same request. A sent attempt is not repeated on
+ * reloads, since the revision stays until the turn re-declares the automation; Try again after it
+ * stayed unchanged starts a new attempt.
  */
 type Attempt = { id: string; sent: boolean };
-const attempts = new WeakMap<object, Map<string, Attempt>>();
+const attempts = new Map<string, Map<string, Attempt>>();
 const attemptsOf = (ui: Page) => {
-  const host = ui.s.context.host;
-  let map = attempts.get(host);
+  const gateway = ui.s.context.host.basePath;
+  let map = attempts.get(gateway);
   if (!map) {
     map = new Map();
-    attempts.set(host, map);
+    attempts.set(gateway, map);
   }
   return map;
 };
 /**
- * Per Gateway connection: automations a turn was just asked to change (an update, Replace with
+ * Per Gateway, like attempts: automations a turn was just asked to change (an update, Replace with
  * new, or Repair), by job id, with the revision they had then, and the page's watch over them.
  * The page shows them as updating and reloads until the revision changes; after
  * `UPDATE_WAIT_MS` it says the automation did not change instead.
@@ -34,21 +38,24 @@ type UpdateEntry = {
   since: number;
   /** Whether a read shows the change landed; a turn can write more than once. */
   applied: (snapshot: ScribeSnapshot) => boolean;
-  /** Sends the same change again as a new attempt, for Try again once it is late. */
-  retry: () => Promise<unknown>;
+  /**
+   * Sends the same change again as a new attempt, for Try again once it is late, through the
+   * page that asks: the page that marked it may have been replaced by a reconnect.
+   */
+  retry: (ui: Page) => Promise<unknown>;
   late?: boolean;
 };
-const updates = new WeakMap<
-  object,
+const updates = new Map<
+  string,
   { pending: Map<string, UpdateEntry>; watch?: { ui: Page; stop: () => void } }
 >();
 const UPDATE_WAIT_MS = 3 * 60_000;
 const updatesOf = (ui: Page) => {
-  const host = ui.s.context.host;
-  let state = updates.get(host);
+  const gateway = ui.s.context.host.basePath;
+  let state = updates.get(gateway);
   if (!state) {
     state = { pending: new Map() };
-    updates.set(host, state);
+    updates.set(gateway, state);
   }
   return state;
 };
@@ -84,9 +91,11 @@ export async function update(
       job,
       agentId,
       (next) => !needsUpdate(next),
-      async () => {
-        map.delete(asked);
-        await update(ui, snapshot, agentId, true);
+      async (current) => {
+        if (map.get(asked)?.sent) {
+          map.delete(asked);
+        }
+        await update(current, snapshot, agentId, true);
       },
     );
     ui.announce(`${snapshot.scribe.title}: updating for this version of Knowledge…`);
@@ -235,14 +244,24 @@ export function updateNotice(
         "Replace with new",
         async () => {
           await updateScribe(ui.s.context.host, snapshot, job, agentId, next, attempt);
-          // Try again is a new attempt.
+          // Keep a late retry's identity until its send succeeds.
+          let retryAttempt = crypto.randomUUID();
           markUpdating(
             ui,
             job,
             agentId,
             (read) => read.job?.payload?.message === next,
-            () =>
-              updateScribe(ui.s.context.host, snapshot, job, agentId, next, crypto.randomUUID()),
+            async (current) => {
+              await updateScribe(
+                current.s.context.host,
+                snapshot,
+                job,
+                agentId,
+                next,
+                retryAttempt,
+              );
+              retryAttempt = crypto.randomUUID();
+            },
           );
           ui.announce(`${scribe.title}: replacing the run message…`);
           void ui.load();
@@ -276,7 +295,7 @@ export function updatingNotice(ui: Page, snapshot: ScribeSnapshot, state: "updat
       () => {
         again.disabled = true;
         updatesOf(ui).pending.delete(job.id);
-        entry.retry().then(
+        entry.retry(ui).then(
           () => {
             // A retry that went through `update` marks itself; any other is marked here.
             if (!updatesOf(ui).pending.has(job.id)) {
