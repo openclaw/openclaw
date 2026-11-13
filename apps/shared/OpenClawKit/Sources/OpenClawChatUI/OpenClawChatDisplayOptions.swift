@@ -13,4 +13,3 @@ public struct OpenClawChatDisplayOptions: OptionSet, Sendable {
         isVisible ? .assistantTrace : []
     }
 }
-
