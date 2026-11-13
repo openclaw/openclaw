@@ -3,8 +3,8 @@ import { expect, it, vi, beforeEach } from "vitest";
 import { uploadFile } from "../tlon-api.js";
 import { uploadImageFromUrl } from "./upload.js";
 
-vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
-  buildOutboundMediaLoadOptions: () => ({}),
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
   MAX_IMAGE_BYTES: 6 * 1024 * 1024,
   readRemoteMediaBuffer: vi.fn(),
 }));
