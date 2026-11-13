@@ -12,6 +12,7 @@ import {
   resolvePluginCandidateInstallOwner,
 } from "./candidate-install-owner.js";
 import { capabilityCatalogFamilies, resolvePluginCapabilityCatalog } from "./capability-catalog.js";
+import { isMemorySidecarEnabled } from "./config-normalization-shared.js";
 import { resolveMemorySlotDecision } from "./config-state.js";
 import {
   PluginDashboardDeclarationError,
@@ -283,7 +284,7 @@ export function* loadRuntimePluginCandidate(params: {
       kind,
       slot: memorySlot,
       selectedId: state.selectedMemoryPluginId,
-      sidecar: context.normalized.entries[record.id]?.memorySidecar === true,
+      sidecar: isMemorySidecarEnabled(context.normalized, record.id),
     });
   if (
     registrationPlan.runRuntimeCapabilityPolicy &&

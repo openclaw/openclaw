@@ -172,6 +172,17 @@ function normalizePluginEntries(
   return normalized;
 }
 
+/**
+ * Reads plugins.entries.<id>.memory.sidecar for a manifest id. Entries are keyed by the canonical
+ * policy id, so a mixed-case manifest id must be looked up through that key.
+ */
+export function isMemorySidecarEnabled(
+  config: Pick<NormalizedPluginsConfig, "entries">,
+  pluginId: string,
+): boolean {
+  return config.entries[normalizePluginPolicyId(pluginId)]?.memorySidecar === true;
+}
+
 /** Normalizes plugin config while allowing callers to resolve aliases first. */
 export function normalizePluginsConfigWithResolverCore(
   config?: OpenClawConfig["plugins"],

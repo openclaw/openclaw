@@ -174,7 +174,11 @@ export function resolveMemorySlotDecisionShared(params: {
   }
   // An operator-approved sidecar loads beside whichever plugin owns the slot and never takes
   // the slot itself. It is not selected, so the registrar strips its slot-owner fields.
-  if (params.sidecar === true && params.slot !== null && params.slot !== params.id) {
+  if (
+    params.sidecar === true &&
+    params.slot !== null &&
+    normalizePluginPolicyId(params.slot ?? "") !== normalizePluginPolicyId(params.id)
+  ) {
     return { enabled: true };
   }
   // A dual-kind plugin (e.g. ["memory", "context-engine"]) that lost the

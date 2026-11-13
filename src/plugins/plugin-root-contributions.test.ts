@@ -79,6 +79,31 @@ describe("plugin root contribution selection", () => {
     expect(Array.from(selected, ({ record }) => record.id)).toEqual(expected);
   });
 
+  it.each([
+    { slot: undefined, expected: ["memory-core", "MiXeD-memory", "ordinary"] },
+    { slot: "none", expected: ["ordinary"] },
+  ])(
+    "admits a mixed-case memory sidecar through its lowercase entry with slot $slot",
+    ({ slot, expected }) => {
+      const selected = iteratePluginRootContributions({
+        metadataSnapshot: metadata([
+          plugin("memory-core", { kind: "memory" }),
+          plugin("MiXeD-memory", { kind: "memory" }),
+          plugin("ordinary"),
+        ]),
+        config: {
+          plugins: {
+            slots: { memory: slot },
+            entries: { "mixed-memory": { memory: { sidecar: true } } },
+          },
+        },
+        contribution: "hooks",
+      });
+
+      expect(Array.from(selected, ({ record }) => record.id)).toEqual(expected);
+    },
+  );
+
   it("keeps declared root order and values for consumer-owned validation", () => {
     const selected = iteratePluginRootContributions({
       metadataSnapshot: metadata([

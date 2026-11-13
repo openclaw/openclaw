@@ -1,5 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isMemorySidecarEnabled } from "./config-normalization-shared.js";
 import {
+  normalizePluginsConfig,
   resolveSelectedContextEnginePluginId,
   type ContextEngineOwnerMetadata,
 } from "./config-state.js";
@@ -10,17 +12,6 @@ import {
   type PluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.js";
 import { applyExclusiveSlotSelection } from "./slots.js";
-
-function isMemorySidecarEntry(config: OpenClawConfig, pluginId: string): boolean {
-  const entry: unknown = config.plugins?.entries?.[pluginId];
-  if (!entry || typeof entry !== "object") {
-    return false;
-  }
-  const memory = (entry as { memory?: unknown }).memory;
-  return (
-    !!memory && typeof memory === "object" && (memory as { sidecar?: unknown }).sidecar === true
-  );
-}
 
 function withoutMemoryKind(kind: PluginKind | PluginKind[] | undefined) {
   if (kind === "memory") {
@@ -82,7 +73,7 @@ export async function applySlotSelectionForPlugin(
   }
 
   // An operator-approved memory sidecar is enabled beside the slot owner; it never takes the slot.
-  if (isMemorySidecarEntry(config, plugin.id)) {
+  if (isMemorySidecarEnabled(normalizePluginsConfig(config.plugins), plugin.id)) {
     selectedKind = withoutMemoryKind(selectedKind);
   }
   return applyExclusiveSlotSelection({

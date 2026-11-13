@@ -16,9 +16,11 @@ beforeEach(() => {
 afterEach(globalAfterEach0);
 afterAll(globalAfterAll1);
 
-function loadWithSidecar(entry: Record<string, unknown>) {
+function loadWithSidecar(entry: Record<string, unknown>, sidecarId = "memory-sidecar") {
+  // Policy keys are lowercase; the manifest id keeps the author's casing.
+  const policyId = sidecarId.toLowerCase();
   const { bundledDir } = setupBundledDreamingMemoryPlugins({
-    selectedId: "memory-sidecar",
+    selectedId: sidecarId,
     coreBody: `module.exports = {
       id: "memory-core",
       kind: "memory",
@@ -28,11 +30,11 @@ function loadWithSidecar(entry: Record<string, unknown>) {
     };`,
   });
   writePlugin({
-    id: "memory-sidecar",
-    dir: path.join(bundledDir, "memory-sidecar"),
+    id: sidecarId,
+    dir: path.join(bundledDir, sidecarId),
     filename: "index.cjs",
     body: `module.exports = {
-      id: "memory-sidecar",
+      id: ${JSON.stringify(sidecarId)},
       kind: "memory",
       register(api) {
         api.registerMemoryCapability({
@@ -47,9 +49,9 @@ function loadWithSidecar(entry: Record<string, unknown>) {
     cache: false,
     config: {
       plugins: {
-        allow: ["memory-core", "memory-sidecar"],
+        allow: ["memory-core", policyId],
         slots: { memory: "memory-core" },
-        entries: { "memory-core": { enabled: true }, "memory-sidecar": entry },
+        entries: { "memory-core": { enabled: true }, [policyId]: entry },
       },
     },
   });
@@ -69,6 +71,17 @@ describe("memory sidecar plugins", () => {
     const resolved = resolveMemoryCapabilityRegistration(registry.memoryCapabilities);
     expect(resolved?.pluginId).toBe("memory-core");
     expect(resolved?.capability.recallToolNames).toBeUndefined();
+  });
+
+  it("matches a mixed-case manifest id against its lowercase policy entry", () => {
+    const registry = loadWithSidecar({ enabled: true, memory: { sidecar: true } }, "MiXeD-memory");
+    const sidecar = registry.plugins.find((entry) => entry.id === "MiXeD-memory");
+    expect(sidecar?.status).toBe("loaded");
+    expect(sidecar?.memorySlotSelected).not.toBe(true);
+    expect(registry.typedHooks.some((hook) => hook.pluginId === "MiXeD-memory")).toBe(true);
+    expect(resolveMemoryCapabilityRegistration(registry.memoryCapabilities)?.pluginId).toBe(
+      "memory-core",
+    );
   });
 
   it("keeps an unapproved memory plugin disabled when another plugin owns the slot", () => {
