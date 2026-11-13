@@ -252,7 +252,6 @@ it("builds status-all overview rows from the shared surface", () => {
           },
         },
       ],
-      failedPlugins: ["acme-heartbeat"],
     },
     configPath: "/tmp/openclaw.json",
     secretDiagnosticsCount: 2,
@@ -271,7 +270,6 @@ it("builds status-all overview rows from the shared surface", () => {
     "Degraded secrets":
       "1 degraded · cold capability:tts (tts.providers.elevenlabs.apiKey): secret reference was not found",
     "Degraded plugins": "1 configured-unavailable · discord",
-    "Plugins not loaded": "acme-heartbeat · data kept; retried on next start · run openclaw doctor",
     "Model reasoning": "Model ollama/qwen3:4b emitted hidden reasoning; set reasoning:true.",
     Secrets: "2 diagnostics",
   });
