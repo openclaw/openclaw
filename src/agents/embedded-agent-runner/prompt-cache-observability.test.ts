@@ -22,6 +22,15 @@ import {
   retainEmbeddedSessionPromptState,
 } from "./session-prompt-state.js";
 
+// These tests change the prefix on purpose to exercise the production drop diagnostics and
+// warnings; the suite-wide prefix assertion stays on only where a test opts in.
+beforeEach(() => {
+  vi.stubEnv("OPENCLAW_PROMPT_CACHE_ASSERT", "0");
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 let testScope = 0;
 
 function scopedKey(value: string): string {
