@@ -1,0 +1,5 @@
+# Channel-ingress Gateway delegation coverage: the reply session context now carries the
+# channel's own Gateway resolver, so the suites pin slot retention, ingress rollback, request
+# scope, and the delegated system-agent apply fence across live/unbound/retired/replaced
+# channel authority. Exact net growth for PR #139620.
+922
