@@ -21,6 +21,7 @@ import {
 } from "../../agents/auth-profiles.js";
 import { resolveAuthProfileOrderWithMetadata } from "../../agents/auth-profiles/order.js";
 import { getScopedAuthProfileEnv } from "../../agents/auth-profiles/store.js";
+import { CONNECTION_CHECK_PROMPT } from "../../agents/connection-check.js";
 import { describeFailoverError } from "../../agents/failover-error.js";
 import { FAILOVER_PROBE_STATUS as PROBE_STATUS_BY_FAILOVER_REASON } from "../../agents/failover/probe-status.js";
 import { isNonSecretApiKeyMarker } from "../../agents/model-auth-markers.js";
@@ -36,7 +37,6 @@ import { findNormalizedProviderValue, normalizeProviderId } from "../../agents/m
 import { readPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { prepareLocalCapabilityAccountSecrets } from "../../cli/capability-cli/local-account-secrets.js";
-import { formatCliCommand } from "../../cli/command-format.js";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { resolveMergedModelProviderEntry } from "../../config/model-provider-config.js";
 import {
@@ -50,16 +50,13 @@ import {
   normalizeSecretInputString,
   resolveSecretInputRef,
 } from "../../config/types.secrets.js";
-import type { EmbeddedStateLockHandle } from "../../infra/embedded-state-lock.js";
-import type { GatewayLockIdentity } from "../../infra/gateway-lock.js";
 import { type SecretRefResolveCache, resolveSecretRefString } from "../../secrets/resolve.js";
 import { appendConfigPathSegment } from "../../shared/dot-path.js";
+import { monotonicNow } from "../../shared/monotonic-time.js";
 import { redactStatusSecrets as redactAuthProbeError } from "../status-all/format.js";
 import { createAuthProbeWork, disposeAuthProbeDirectory } from "./list.probe.cleanup.js";
 import { buildProbeCandidateMap, selectProbeModel } from "./list.probe.models.js";
 import { formatMs } from "./shared.js";
-
-const PROBE_PROMPT = "Reply with OK. Do not use tools.";
 
 export { redactAuthProbeError };
 
@@ -134,7 +131,8 @@ export type AuthProbeOptions = {
   includeDirectKeys?: boolean;
   timeoutMs: number;
   concurrency: number;
-  maxTokens: number;
+  /** Optional output cap; unset sends no cap, matching chat (see CONNECTION_CHECK_PROMPT). */
+  maxTokens?: number;
 };
 
 const ELIGIBILITY_PROBE_ERRORS = {
@@ -575,10 +573,6 @@ export async function buildProbeTargets(params: {
   return { targets, results };
 }
 
-function formatActiveGatewayModelsProbeRefusal(identity: GatewayLockIdentity): string {
-  return `A Gateway is running for this state directory (pid ${identity.pid}, port ${identity.port}). Stop the Gateway first (${formatCliCommand("openclaw gateway stop")}), then rerun models status --probe.`;
-}
-
 type AuthProbeStateOwnership = {
   mode: "exclusive";
 };
@@ -591,32 +585,24 @@ export async function withAuthProbeStateOwnership<T>(
   if (!ownership) {
     return await run();
   }
-  const { acquireEmbeddedStateLock, createEmbeddedStateSignalBridge } =
-    await import("../../infra/embedded-state-lock.js");
-  const signalBridge = createEmbeddedStateSignalBridge();
-  let stateLock: EmbeddedStateLockHandle | null | undefined;
-  let work: Awaited<ReturnType<typeof createAuthProbeWork>> | undefined;
-  try {
-    work = await createAuthProbeWork(signalBridge.signal);
-    stateLock = await acquireEmbeddedStateLock({
-      signal: signalBridge.signal,
-      formatActiveGatewayRefusal: formatActiveGatewayModelsProbeRefusal,
-    });
-    return await work.run(() => run(signalBridge.signal));
-  } finally {
-    const release = async () => {
+  const { runWithLocalStateOwner } = await import("../../cli/local-state-owner.js");
+  return await runWithLocalStateOwner({
+    method: "models status --probe",
+    params: {},
+    target: "model credentials",
+    onForeignOwner: "refuse",
+    onlineAlternative: "Omit --probe to read status without live checks.",
+    runLocal: async ({ signal }) => {
+      const work = await createAuthProbeWork(signal);
       try {
-        await stateLock?.release();
+        return await work.run(() => run(signal));
       } finally {
-        signalBridge.dispose();
+        // Ownership outlives a failed batch until its in-flight probes settle.
+        await work.settle(async () => {});
+        await work.settled;
       }
-    };
-    if (work) {
-      await work.settle(release);
-    } else {
-      await release();
-    }
-  }
+    },
+  });
 }
 
 export async function runAuthProbes(
@@ -627,6 +613,7 @@ export async function runAuthProbes(
 ) {
   return await withAuthProbeStateOwnership(params.stateOwnership, async (abortSignal) => {
     const startedAt = Date.now();
+    const startedAtMonotonic = monotonicNow();
     const plan = await buildProbeTargets(params);
 
     const totalTargets = plan.targets.length;
@@ -743,11 +730,11 @@ export async function runAuthProbes(
                   // Preserve the existing raw transport and persistent credential-refresh owner.
                   agentHarnessRuntimeOverride: "openclaw",
                   systemPrompt: "",
-                  prompt: PROBE_PROMPT,
+                  prompt: CONNECTION_CHECK_PROMPT,
                   timeoutMs,
                   abortSignal: probeAbortSignal,
                   thinkLevel: "off",
-                  streamParams: { maxTokens },
+                  ...(maxTokens !== undefined ? { streamParams: { maxTokens } } : {}),
                   outputTextPolicy: "strict-visible",
                   onRequestComplete: (durationMs) => {
                     latencyMs = Math.round(durationMs);
@@ -786,12 +773,10 @@ export async function runAuthProbes(
       );
     }
 
-    const finishedAt = Date.now();
-
     return {
       startedAt,
-      finishedAt,
-      durationMs: finishedAt - startedAt,
+      finishedAt: Date.now(),
+      durationMs: Math.round(monotonicNow() - startedAtMonotonic),
       totalTargets,
       options: params.options,
       results: [...plan.results, ...results],

@@ -4,6 +4,7 @@
 import { expect } from "vitest";
 import type { AssistantMessage } from "../llm/types.js";
 import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
+import { Agent } from "./runtime/index.js";
 import { sessionManagerReadTranscriptStart } from "./sessions/session-manager-current-turn.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 
@@ -13,21 +14,13 @@ type EmbeddedAgentSession = Parameters<SubscribeEmbeddedAgentSession>[0]["sessio
 type OnBlockReply = NonNullable<SubscribeEmbeddedAgentSessionParams["onBlockReply"]>;
 type BlockReplyChunking = NonNullable<SubscribeEmbeddedAgentSessionParams["blockReplyChunking"]>;
 
-export const THINKING_TAG_CASES = [
-  { tag: "think", open: "<think>", close: "</think>" },
-  { tag: "thinking", open: "<thinking>", close: "</thinking>" },
-  { tag: "thought", open: "<thought>", close: "</thought>" },
-  { tag: "antthinking", open: "<antthinking>", close: "</antthinking>" },
-  { tag: "antml:thinking", open: "<antml:thinking>", close: "</antml:thinking>" },
-  { tag: "mm:think", open: "<mm:think>", close: "</mm:think>" },
-] as const;
-
 export function createStubSessionHarness(): {
   session: EmbeddedAgentSession;
   emit: (evt: unknown) => void;
 } {
   let handlers: Array<(evt: unknown) => void> = [];
   const session = {
+    agent: new Agent(),
     sessionManager: { [sessionManagerReadTranscriptStart]: () => null },
     subscribe: (fn: (evt: unknown) => void) => {
       handlers = [...handlers, fn];

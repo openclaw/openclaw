@@ -804,7 +804,7 @@ describe("signal createSignalEventHandler inbound context", () => {
     try {
       await receiveMessage(handler, { message: "hi" });
 
-      expect(sendTypingMock).toHaveBeenCalledWith("+15550001111", {
+      const rpcOpts = {
         cfg: {
           messages: { inbound: { debounceMs: 0 } },
           channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
@@ -812,19 +812,18 @@ describe("signal createSignalEventHandler inbound context", () => {
         baseUrl: "http://localhost",
         account: "+15550009999",
         accountId: "default",
-      });
-      expect(sendReadReceiptMock).toHaveBeenCalledWith("signal:+15550001111", 1700000000000, {
-        cfg: {
-          messages: { inbound: { debounceMs: 0 } },
-          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-        },
-        baseUrl: "http://localhost",
-        account: "+15550009999",
-        accountId: "default",
-      });
-
+      };
+      expect(sendReadReceiptMock).toHaveBeenCalledWith(
+        "signal:+15550001111",
+        1700000000000,
+        rpcOpts,
+      );
+      // The finished reply turn must clear the indicator it started, without keepalive repeats.
       await vi.advanceTimersByTimeAsync(3_000);
-      expect(sendTypingMock).toHaveBeenCalledTimes(1);
+      expect(sendTypingMock.mock.calls).toEqual([
+        ["+15550001111", rpcOpts],
+        ["+15550001111", { ...rpcOpts, stop: true }],
+      ]);
     } finally {
       vi.useRealTimers();
     }

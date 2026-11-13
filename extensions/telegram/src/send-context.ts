@@ -26,6 +26,10 @@ import {
   bindTelegramRequestAuthority,
   findTelegramRequestAuthorityError,
 } from "./request-authority.js";
+import {
+  TELEGRAM_CLIENT_TIMEOUT_BACKSTOP_SECONDS,
+  telegramUploadTimeoutTransformer,
+} from "./request-timeouts.js";
 import type { TelegramRichMessageContextParams } from "./rich-message.js";
 import { maybePersistResolvedTelegramTarget } from "./target-writeback.js";
 import {
@@ -148,6 +152,7 @@ function resolveTelegramClientOptions(
   const entry: CachedTelegramClientOptions = {
     clientOptions: {
       fetch: asTelegramClientFetch(fetchImpl),
+      timeoutSeconds: TELEGRAM_CLIENT_TIMEOUT_BACKSTOP_SECONDS,
       ...(normalizedApiRoot ? { apiRoot: normalizedApiRoot } : {}),
     },
     transport,
@@ -247,6 +252,11 @@ export function isTelegramMessageDeleteNoopError(err: unknown): boolean {
   return MESSAGE_DELETE_NOOP_RE.test(formatErrorMessage(err));
 }
 
+// Only absence proves the requested end state; the other no-op refusals leave the message visible.
+export function isTelegramMessageAlreadyDeletedError(err: unknown): boolean {
+  return /message to delete not found/i.test(formatErrorMessage(err));
+}
+
 export type TelegramApiContext = {
   cfg: OpenClawConfig;
   account: ResolvedTelegramAccount;
@@ -294,6 +304,7 @@ export async function withTelegramApiContext<T>(
         }
       : client.clientOptions;
     const bot = new Bot(token, { client: clientOptions });
+    bot.api.config.use(telegramUploadTimeoutTransformer);
     if (opts.signal || opts.assertPlatformSendAuthorized) {
       // grammY wraps later transformers around earlier ones. Check authority
       // after the account queue drains, immediately before its HTTP client runs.

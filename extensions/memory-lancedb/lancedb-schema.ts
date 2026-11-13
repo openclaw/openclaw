@@ -1,6 +1,14 @@
 export const MEMORY_TABLE_NAME = "memories";
 export const MEMORY_AGENT_ID_COLUMN = "agentId";
 
+export const MEMORY_QUERY_COLUMNS = ["id", "text", "importance", "category", "createdAt"] as const;
+export type MemoryQueryColumn = (typeof MEMORY_QUERY_COLUMNS)[number];
+export type MemoryQueryFilter = {
+  column: MemoryQueryColumn;
+  operator: "=" | "!=" | "<>" | "<" | "<=" | ">" | ">=" | "LIKE";
+  value: string | number;
+};
+
 export function quoteLanceSqlString(value: string): string {
   return `'${value.replaceAll("'", "''")}'`;
 }

@@ -7,11 +7,19 @@ import { isPathInside } from "../../infra/path-guards.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
-import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
 import type { PluginSkillRoot } from "./plugin-skill-root.js";
-import { resolvePluginSkillRoots, resolvePluginSkillRootsFromMetadata } from "./plugin-skills.js";
-import { resolvePluginSkillsDir, resolveSkillsUserHomeDir } from "./skill-paths.js";
+import {
+  capturePluginAgentSkillsDirs,
+  resolvePluginAgentSkillsDirs,
+  resolvePluginSkillRoots,
+  resolvePluginSkillRootsFromMetadata,
+} from "./plugin-skills.js";
+import {
+  resolveAgentSkillsRoot,
+  resolvePluginSkillsDir,
+  resolveSkillsUserHomeDir,
+} from "./skill-paths.js";
 import {
   resolveWorkspaceSkillDirectories,
   type ExecutionSkillWorkspace,
@@ -87,6 +95,8 @@ export type WorkspaceSkillSourcePlanOptions = {
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
   /** Prepared on the discovery worker when the caller only needs root composition. */
   pluginSkillRoots?: PluginSkillRoot[];
+  /** Plugin-declared per-agent learned skill folder names, captured with the plugin roots. */
+  agentSkillsDirs?: string[];
 };
 
 /** Source selection and precedence are shared by local discovery and provisioned remote discovery. */
@@ -111,6 +121,16 @@ export function resolveWorkspaceSkillSourcePlan(
             metadataSnapshot: opts.pluginMetadataSnapshot,
           })
         : resolvePluginSkillRoots(pluginParams)));
+  const agentSkillsDirs =
+    workspaceOnly || !opts?.config || !opts.agentId
+      ? []
+      : (opts.agentSkillsDirs ??
+        (opts.pluginMetadataSnapshot
+          ? capturePluginAgentSkillsDirs({
+              config: opts.config,
+              metadataSnapshot: opts.pluginMetadataSnapshot,
+            })
+          : resolvePluginAgentSkillsDirs(pluginParams)));
   const roots: WorkspaceSkillSource[] = [];
   if (!workspaceOnly) {
     roots.push(
@@ -138,11 +158,13 @@ export function resolveWorkspaceSkillSourcePlan(
       }
     }
     if (opts?.config && opts.agentId) {
-      roots.push({
-        dir: resolveWorkshopSkillsDir(opts.config, opts.agentId),
-        source: "openclaw-workshop",
-        tier: "workshop",
-      });
+      for (const dirName of agentSkillsDirs) {
+        roots.push({
+          dir: resolveAgentSkillsRoot({ config: opts.config, agentId: opts.agentId, dirName }),
+          source: "openclaw-workshop",
+          tier: "workshop",
+        });
+      }
     }
     roots.push({ dir: managedSkillsDir, source: "openclaw-managed", tier: "managed" });
     if (isDefaultStateDir()) {

@@ -90,8 +90,25 @@ export async function runDiscordGatewayLifecycle(params: {
   const gatewayEmitter = params.gatewaySupervisor.emitter;
   const loggingRuntime = params.runtime;
   let lifecycleStopping = false;
+  let hasConnected = gatewayReadyAtLifecycleStart;
+  let reconnectStartedAt: number | undefined;
 
   const pushStatus = (patch: Parameters<DiscordMonitorStatusSink>[0]) => {
+    if (patch.connected === true) {
+      if (reconnectStartedAt !== undefined) {
+        loggingRuntime.log?.("discord gateway: connection recovered");
+      }
+      hasConnected = true;
+      reconnectStartedAt = undefined;
+    } else if (patch.connected === false && patch.lifecycle === "recovering") {
+      // One outage owns one deadline; socket replacement and retries cannot renew it.
+      patch.lastDisconnect = hasConnected
+        ? {
+            ...(typeof patch.lastDisconnect === "object" ? patch.lastDisconnect : {}),
+            at: (reconnectStartedAt ??= Date.now()),
+          }
+        : null;
+    }
     params.statusSink?.(patch);
   };
   const gatewayReadyTimeoutMs =
@@ -208,7 +225,10 @@ export async function runDiscordGatewayLifecycle(params: {
   const waitForGatewayReady = async (): Promise<void> => {
     const { abortSignal, runtime } = params;
     const waitUntilReady = async (): Promise<GatewayReadyWaitResult> => {
-      const deadlineAt = Date.now() + gatewayReadyTimeoutMs;
+      // The READY budget is consumed by setTimeout polls on the monotonic clock;
+      // the deadline must live there too, or a wall-clock step (NTP correction,
+      // VM resume) inflates or shrinks the wait past its configured bound.
+      const deadlineAt = performance.now() + gatewayReadyTimeoutMs;
       for (;;) {
         if (abortSignal?.aborted) {
           return "stopped";
@@ -221,7 +241,7 @@ export async function runDiscordGatewayLifecycle(params: {
           pushStatus(createDiscordReadyStatusPatch(at));
           return "ready";
         }
-        if (Date.now() >= deadlineAt) {
+        if (performance.now() >= deadlineAt) {
           return "timeout";
         }
         await new Promise<void>((resolve) => {

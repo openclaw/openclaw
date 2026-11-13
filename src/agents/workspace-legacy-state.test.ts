@@ -147,6 +147,9 @@ describe("legacy workspace reset cleanup", () => {
     expect(checkReady).toThrow(
       `Run openclaw doctor --fix. Legacy workspace setup state requires migration for ${workspaceDirs.join(", ")}.`,
     );
+    expect(() =>
+      assertWorkspaceStateMigrationReady({ workspaceDirs, ...options, operation: "doctor" }),
+    ).toThrow("restore the retained setup file or claim from a verified backup");
     for (const dir of workspaceDirs) {
       await fs.unlink(path.join(dir, "openclaw-workspace-state.json"));
     }

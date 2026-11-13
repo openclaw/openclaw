@@ -41,6 +41,23 @@ const MALFORMED_STREAMING_FRAGMENT_USER_MESSAGE =
 
 type ErrorPayload = Record<string, unknown>;
 
+const PROVIDER_PRECAUTION_NOTICE =
+  "Chat stopped as a precaution. Review the findings in chat before continuing.";
+// Older transcripts retain only the error code, so this copy is a live producer too.
+const PROVIDER_LEGACY_MISALIGNMENT_NOTICE =
+  "The provider stopped this request as a safety precaution (misalignment).";
+const PROVIDER_REFUSAL_NOTICE_RE =
+  /^The provider refused this request(?: \(category: [a-zA-Z0-9_-]{1,64}\))?\. Revise the request and try again\.$/u;
+
+/** Recognize canonical display copy, not refusal or retry authority. */
+export function isProviderRefusalNoticeText(text: string): boolean {
+  return (
+    text === PROVIDER_PRECAUTION_NOTICE ||
+    text === PROVIDER_LEGACY_MISALIGNMENT_NOTICE ||
+    PROVIDER_REFUSAL_NOTICE_RE.test(text)
+  );
+}
+
 export function formatProviderRefusalText(message: {
   diagnostics?: unknown;
   errorCode?: unknown;
@@ -53,14 +70,14 @@ export function formatProviderRefusalText(message: {
   if (!refusal) {
     // Older transcripts retain the code but have no review findings or continuation state.
     return message.errorCode === "misalignment_policy_violation"
-      ? "The provider stopped this request as a safety precaution (misalignment)."
+      ? PROVIDER_LEGACY_MISALIGNMENT_NOTICE
       : undefined;
   }
   const category = asOptionalRecord(asOptionalRecord(refusal)?.details)?.category;
   const safeCategory =
     typeof category === "string" && /^[a-z0-9_-]{1,64}$/i.test(category) ? category : undefined;
   if (safeCategory === "misalignment") {
-    return "Chat stopped as a precaution. Review the findings in chat before continuing.";
+    return PROVIDER_PRECAUTION_NOTICE;
   }
   return `The provider refused this request${safeCategory ? ` (category: ${safeCategory})` : ""}. Revise the request and try again.`;
 }

@@ -5,7 +5,6 @@ import { afterEach, expect, it } from "vitest";
 import { encodeNodeTestGroups } from "../../scripts/lib/ci-node-test-groups-codec.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { scriptFiles } from "./run-vitest.test-support.js";
-
 const tempRoots = useAutoCleanupTempDirTracker(afterEach);
 const run = {
   id: 321,
@@ -23,11 +22,12 @@ const baseline = {
   updatedAt: "2026-09-01",
   source: "fixture",
   compactGroupSeconds: {
+    boat: {},
     blacksmith: { other: 99 },
     github: { compact: 17, "release-full-retained": 2000 },
   },
-  runtimePlacementTimings: { blacksmith: [], github: [] },
-  toolingFileSeconds: { blacksmith: {}, github: {} },
+  runtimePlacementTimings: { blacksmith: [], github: [], boat: [] },
+  toolingFileSeconds: { blacksmith: {}, github: {}, boat: {} },
   repoE2eFileSeconds: {},
   uiE2e: { fileSeconds: {}, perFileOverheadSeconds: 0 },
 };
@@ -57,6 +57,8 @@ function log(shard_name: string, timing_key?: string, files?: string[]) {
 function execute(
   options: {
     after?: typeof run;
+    maxPageSize?: number;
+    failure?: { message: string; count: number };
     jobs?: readonly (typeof job)[];
     logs?: Record<string, string>;
   } = {},
@@ -70,6 +72,8 @@ function execute(
     "fixture.json",
     JSON.stringify({
       run,
+      maxPageSize: options.maxPageSize,
+      failure: options.failure,
       after: options.after ?? run,
       jobs: options.jobs ?? [job],
       logs: options.logs ?? { "1": log("fixture") },
@@ -77,7 +81,7 @@ function execute(
   );
   files.write(
     "gh",
-    `#!${process.execPath}\nconst fs = require('node:fs'); const path = require('node:path'); const root = __dirname; const fixture = JSON.parse(fs.readFileSync(path.join(root, 'fixture.json'))); const endpoint = process.argv[3]; if (endpoint === '--help') { process.stdout.write('--allow-escape-sequences'); process.exit(0); } let result; if (endpoint.endsWith('/actions/runs/321')) { const counter = path.join(root, 'read'); result = fs.existsSync(counter) ? fixture.after : fixture.run; fs.writeFileSync(counter, '1'); } else if (endpoint.includes('/attempts/1/jobs?')) { result = { total_count: fixture.jobs.length, jobs: fixture.jobs }; } else { const id = /jobs\\/(\\d+)\\/logs$/.exec(endpoint)?.[1]; if (!id || !fixture.logs[id]) process.exit(7); process.stdout.write(fixture.logs[id]); process.exit(0); } process.stdout.write(JSON.stringify(result));\n`,
+    `#!${process.execPath}\nconst fs = require('node:fs'); const path = require('node:path'); const root = __dirname; const fixture = JSON.parse(fs.readFileSync(path.join(root, 'fixture.json'))); const endpoint = process.argv[3]; if (endpoint === '--help') { process.stdout.write('--allow-escape-sequences'); process.exit(0); } if (endpoint.includes('/attempts/1/jobs?') && fixture.failure) { const counterPath = path.join(root, 'failures'); const count = fs.existsSync(counterPath) ? Number(fs.readFileSync(counterPath, 'utf8')) : 0; if (count < fixture.failure.count) { fs.writeFileSync(counterPath, String(count + 1)); process.stderr.write(fixture.failure.message); process.exit(1); } } let result; if (endpoint.endsWith('/actions/runs/321')) { const counter = path.join(root, 'read'); result = fs.existsSync(counter) ? fixture.after : fixture.run; fs.writeFileSync(counter, '1'); } else if (endpoint.includes('/attempts/1/jobs?')) { const url = new URL(endpoint, 'https://api.github.com/'); const size = Number(url.searchParams.get('per_page')); const page = Number(url.searchParams.get('page')); if (fixture.maxPageSize && size > fixture.maxPageSize) { process.stderr.write('HTTP 502: jobs page too large'); process.exit(1); } result = { total_count: fixture.jobs.length, jobs: fixture.jobs.slice((page - 1) * size, page * size) }; } else { const id = /jobs\\/(\\d+)\\/logs$/.exec(endpoint)?.[1]; if (!id || !fixture.logs[id]) process.exit(7); process.stdout.write(fixture.logs[id]); process.exit(0); } process.stdout.write(JSON.stringify(result));\n`,
   );
   chmodSync(files.path("gh"), 0o755);
   const script = "scripts/ci-shard-timings-refresh.mts";
@@ -92,6 +96,23 @@ function execute(
   );
   return { result, before, bytes: files.read("timings.json") };
 }
+
+it("collects every job when the API only serves smaller pages", () => {
+  const { result, bytes } = execute({
+    maxPageSize: 50,
+    jobs: Array.from({ length: 252 }, (_, index) => ({
+      ...job,
+      id: index + 1,
+      conclusion: index === 251 ? "success" : "failure",
+    })),
+    logs: { "252": log("last-page") },
+  });
+  expect(result.status, result.stderr).toBe(0);
+  expect(JSON.parse(bytes).compactGroupSeconds.github).toEqual({
+    ...baseline.compactGroupSeconds.github,
+    "release-full-last-page": 900,
+  });
+});
 
 it.each(["bun-all", "dual-all"])("keeps %s release wall costs separate from Node", (policy) => {
   const runtimeLog =
@@ -130,6 +151,16 @@ it.each([
       },
       { ...job, id: 7, name: "checks-node-compact-small-1" },
       { ...job, id: 8, name: "checks-node-release-packed-1" },
+      { ...job, id: 100, name: "checks-node-worker-e2e" },
+      ...[
+        ["boat"],
+        ["boat-small/from=snapshot"],
+        ["boat-large", "ubuntu-24.04"],
+        ["boat-xlarge"],
+        ["ubuntu-24.04", "runson"],
+        ["ubuntu-24.04", "unknown-runner"],
+        [],
+      ].map((labels, index) => Object.assign({}, job, { id: 9 + index, labels })),
     ],
     logs: {
       "1": log("fixture", undefined, files),
@@ -148,6 +179,7 @@ it.each([
     ]);
   } else {
     expect(written.compactGroupSeconds).toEqual({
+      boat: {},
       blacksmith: { other: 99 },
       github: { compact: 17, "release-full-fixture": 900, "release-full-retained": 2000 },
     });
@@ -180,4 +212,24 @@ it.each([
   expect(result.status).toBe(1);
   expect(result.stderr).toMatch(error);
   expect(bytes).toBe(before);
+});
+
+it.each(["HTTP 502: Server Error", "unexpected EOF"])(
+  "recovers a transient %s without dropping inventory",
+  (message) => {
+    const { result, bytes } = execute({ failure: { message, count: 1 } });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toContain("retry 1/2");
+    expect(JSON.parse(bytes).compactGroupSeconds.github["release-full-fixture"]).toBe(900);
+  },
+);
+
+it.each([
+  ["HTTP 502: Server Error", true],
+  ["HTTP 403: Forbidden", false],
+])("preserves output after persistent %s", (message, retries) => {
+  const { result, before, bytes } = execute({ failure: { message, count: 10 } });
+  expect(result.status).toBe(1);
+  expect(bytes).toBe(before);
+  expect(result.stderr.includes("retry 2/2")).toBe(retries);
 });

@@ -19,7 +19,7 @@ type NavigationPresentation = readonly [icon: IconName, titleKey: string, subtit
 // Worktrees is a tab of the Sessions hub, so it is not listed either.
 // Workboard is plugin-owned and enters the zone through its Control UI descriptor.
 export const SIDEBAR_NAV_ROUTES = [
-  "claws",
+  "templates",
   "dashboards",
   "usage",
   "cron",
@@ -307,7 +307,7 @@ function navigationPresentation(icon: IconName, key: string): NavigationPresenta
 
 const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation> = {
   settings: ["settings", "nav.settings", "common.settingsSections"],
-  claws: navigationPresentation("bot", "claws"),
+  templates: navigationPresentation("blobster", "templates"),
   agents: navigationPresentation("bot", "agents"),
   activity: navigationPresentation("activity", "activity"),
   meetings: navigationPresentation("book", "meetings"),
@@ -379,6 +379,19 @@ export function navigationIconForRoute(routeId: NavigationRouteId): IconName {
 export function titleForRoute(routeId: NavigationRouteId, translate = t): string {
   const [, titleKey] = NAVIGATION_PRESENTATION[routeId];
   return translate(titleKey);
+}
+
+/** The title a route's own page shows: the actual device on the device route, and the
+ * plugin page's own label on the shared plugin route once that label is known. */
+export function pageTitleForRoute(
+  routeId: NavigationRouteId,
+  deviceSnapshot?: NativeDeviceSettingsSnapshot | null,
+  pluginPageLabel?: () => string | undefined,
+): string {
+  if (routeId === "device") {
+    return t(deviceSettingsGroupLabelKey(deviceSnapshot));
+  }
+  return (routeId === "plugin" && pluginPageLabel?.()) || titleForRoute(routeId);
 }
 
 /** Window/tab title, attention leftmost because tabs truncate from the right.

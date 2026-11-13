@@ -148,7 +148,9 @@ suite.define(() => {
       });
       await expect.poll(() => f.status.getAttribute("data-state")).toBe("failed");
       expect(await f.button.isEnabled()).toBe(true);
-      expect(await f.status.textContent()).toContain("Could not refresh. Previous update kept.");
+      expect(await f.status.textContent()).toContain(
+        "Couldn’t refresh progress. Try again. Your last update is saved.",
+      );
       expect(await f.status.isVisible()).toBe(true);
       expect(
         await f.status.evaluate((element) => element.getBoundingClientRect().height),

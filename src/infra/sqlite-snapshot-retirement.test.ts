@@ -48,6 +48,62 @@ it("preserves a live child during parent cleanup", async () => {
 });
 
 const prefix = "openclaw-sqlite-readonly-v2-";
+it.each(["sync", "async", "tokenless", "aliases"])(
+  "releases oversized snapshot payload in bounded steps (%s)",
+  async (mode) => {
+    const { cache } = createFixture();
+    const directory = ["tokenless", "aliases"].includes(mode)
+      ? path.join(cache, "legacy")
+      : createStagingSync(cache);
+    fs.mkdirSync(directory, { recursive: true });
+    const payload = path.join(directory, "database.sqlite");
+    fs.closeSync(fs.openSync(payload, "w", 0o600));
+    const size = 192 * 1024 ** 2 + 1;
+    fs.truncateSync(payload, size);
+    if (mode === "aliases") {
+      fs.linkSync(payload, path.join(directory, "second.sqlite"));
+    }
+    let released = 0;
+    const countRelease = (fd: number, length: number) => {
+      const previous = fs.fstatSync(fd).size;
+      expect(previous - length).toBeLessThanOrEqual(64 * 1024 ** 2);
+      released += previous - length;
+    };
+    const truncate = fs.ftruncateSync;
+    using synchronous = vi.spyOn(fs, "ftruncateSync").mockImplementation((fd, length = 0) => {
+      countRelease(fd, length);
+      truncate(fd, length);
+    });
+    const truncateAsync = fs.ftruncate;
+    using asynchronous = vi
+      .spyOn(fs, "ftruncate")
+      .mockImplementation(
+        (
+          fd: number,
+          length: number | fs.NoParamCallback | undefined,
+          callback?: fs.NoParamCallback,
+        ) => {
+          countRelease(fd, typeof length === "number" ? length : 0);
+          if (typeof length === "function") {
+            truncateAsync(fd, length);
+          } else {
+            if (!callback) {
+              throw new Error("truncate callback is required");
+            }
+            truncateAsync(fd, length, callback);
+          }
+        },
+      );
+    expect(mode === "async" ? await removeAsync(directory) : remove(directory)).toBe(true);
+    if (mode === "async") {
+      expect(synchronous).not.toHaveBeenCalled();
+      expect(asynchronous).toHaveBeenCalledTimes(3);
+    }
+    expect(released).toBeGreaterThanOrEqual(size - 64 * 1024 ** 2);
+    expect(fs.existsSync(directory)).toBe(false);
+  },
+);
+
 it.each([
   [`${prefix}Parent`, "", "owner.sqlite-journal", true],
   [`${prefix}Parent`, "other", undefined, true],

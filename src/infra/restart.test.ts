@@ -27,6 +27,7 @@ vi.mock("../config/paths.js", () => ({
 
 const {
   consumeGatewayRestartAuthorization,
+  hasPendingGatewayRestart,
   normalizeGatewayRestartDelayMs,
   requestGatewayRestartWithSignalAdmission,
   resetGatewayRestartStateForInProcessRestart,
@@ -111,4 +112,21 @@ it("does not emit an overflow-sized restart before its effective 60-second delay
   expect(restart.delayMs).toBe(60_000);
   await vi.advanceTimersByTimeAsync(59_999);
   expect(killSpy).not.toHaveBeenCalled();
+});
+
+it("retires live recovery after a scheduled custom emission fails", async () => {
+  vi.useFakeTimers();
+  const afterEmitFailed = vi.fn();
+  const scheduled = scheduleGatewayRestart({
+    delayMs: 0,
+    emitHooks: {
+      emitRestart: () => ({ status: "failed" }),
+      afterEmitFailed,
+    },
+  });
+  expect(hasPendingGatewayRestart()).toBe(true);
+  await vi.advanceTimersByTimeAsync(scheduled.delayMs);
+  expect(afterEmitFailed).toHaveBeenCalledOnce();
+  expect(hasPendingGatewayRestart()).toBe(false);
+  expect(isGatewayWorkAdmissionClosed()).toBe(false);
 });

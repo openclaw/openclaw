@@ -75,6 +75,7 @@ export function createUsageExportRequest(
     },
     onError: (error) => {
       showToast({
+        severity: "error",
         message: `${t("usage.export.label")}: ${formatUiError(error, "request failed")}`,
       });
     },

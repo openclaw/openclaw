@@ -51,6 +51,7 @@ vi.mock("./prepared-model-runtime.js", async (importOriginal) => ({
   prepareModelRuntimeSnapshot: (input: PreparedModelRuntimeInput) => preparedSnapshotMock(input),
   acquireReadOnlyPreparedModelRuntime: async (input: PreparedModelRuntimeInput) => ({
     snapshot: await acquireSnapshotMock(input),
+    run: <T>(run: () => T): T => run(),
     [Symbol.asyncDispose]: releaseSnapshotMock,
   }),
 }));
@@ -338,3 +339,27 @@ it("rejects published capabilities from a different route", async () => {
   ).toEqual([]);
   expectUnused(manifestCatalogMock, scopedCatalogMock);
 });
+
+it.each([
+  { runtime: "native-one", acquired: true },
+  { runtime: "openclaw", acquired: false },
+])(
+  "prewarms the default native catalog with the first turn's selection (runtime=$runtime)",
+  async ({ runtime, acquired }) => {
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: `${entry.provider}/${entry.id}`,
+          models: { [`${entry.provider}/${entry.id}`]: { agentRuntime: { id: runtime } } },
+        },
+      },
+    };
+    const loadNativeModelCatalog = vi.fn(async () => catalog([nativeEntry()]));
+    publishedSnapshotMock.mockReturnValue({ ...owner(config, [entry]), loadNativeModelCatalog });
+    const { prewarmDefaultNativeModelCatalog } = await import("./prepared-model-catalog.js");
+    await prewarmDefaultNativeModelCatalog(config);
+    expect(loadNativeModelCatalog.mock.calls).toEqual(
+      acquired ? [[{ provider: entry.provider, modelId: entry.id, runtime }]] : [],
+    );
+  },
+);

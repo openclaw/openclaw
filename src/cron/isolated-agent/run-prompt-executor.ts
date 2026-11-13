@@ -40,15 +40,16 @@ import {
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { resolveCronJobToolPolicyContext } from "../execution-context-admission.js";
+import { resolveScheduledRunMemoryReceipt } from "../execution-context-registry.js";
 import { prepareCronRunAdmission } from "../run-admission.js";
 import { prepareCronRunInference } from "../run-inference.js";
 import { resolveCronAuthenticatedChannelRequester } from "../tools-allow-provenance.js";
 import type { CronAgentExecutionPhaseUpdate } from "../types.js";
 import { isCommandStyleCronMessage } from "./command-style-prompt.js";
-import { resolveIsolatedCronPromptCacheKey } from "./prompt-cache-key.js";
 import {
   assertCronCandidateSandboxPlacement,
   assertCronRuntimeAuthorityCandidate,
+  resolveCliChildAbortSignal,
   resolveCronSandboxPlacement,
   type CronSandboxPlacement,
 } from "./run-admission.js";
@@ -78,18 +79,6 @@ type CronEmbeddedRuntime = typeof import("./run-embedded.runtime.js");
 const cronEmbeddedRuntimeLoader = createLazyImportLoader<CronEmbeddedRuntime>(
   () => import("./run-embedded.runtime.js"),
 );
-
-// A CLI child in its parent's workspace runs native tools no tool check sees, so
-// its process also ends when the parent resets.
-function resolveCliChildAbortSignal(
-  runSignal: AbortSignal | undefined,
-  parentSignal: AbortSignal | undefined,
-): AbortSignal | undefined {
-  if (!parentSignal) {
-    return runSignal;
-  }
-  return runSignal ? AbortSignal.any([runSignal, parentSignal]) : parentSignal;
-}
 
 function hasCliSessionReuseMetadata(binding: CliSessionBinding): boolean {
   return Object.entries(binding).some(([key, value]) => key !== "sessionId" && value !== undefined);
@@ -173,9 +162,11 @@ export function createCronPromptExecutor(
   let sandboxPlacement: CronSandboxPlacement | undefined;
 
   return async (promptText: string, runStartedAt: number): Promise<CronCompletedPromptRun> => {
+    let currentContextSnapshot: CronCompletedPromptRun["currentContextSnapshot"];
     using inferenceLease = new DisposableStack();
     const binding = params.job.inferenceBinding;
     const inference = await prepareCronRunInference({
+      job: params.job,
       binding,
       cfg: params.cfgWithAgentDefaults,
       agentDir: params.agentDir,
@@ -237,6 +228,11 @@ export function createCronPromptExecutor(
       executionIdentity: params.executionIdentity,
     });
     params.onPromptAdmission(cronAdmission);
+    // Sessions this attempt spawns resolve memory through the row's receipt, so
+    // it must name this occurrence's admitted parent before the agent runs.
+    await params.recordScheduledMemoryParent?.(
+      resolveScheduledRunMemoryReceipt(scheduledExecution.result),
+    );
     // Record the cron source fact at its producer for the run's lifetime so
     // exec-approval creation and standing-grant use never infer job identity
     // from session keys or run ids. Cleared when the run settles. A job whose
@@ -314,6 +310,7 @@ export function createCronPromptExecutor(
       sessionOverride: { kind: "preserve" },
       abortSignal: params.abortSignal,
       runCandidate: async (providerOverride, modelOverride, runOptions) => {
+        currentContextSnapshot = undefined;
         const preparedSessionPersisted = canReusePreparedSession;
         canReusePreparedSession = false;
         params.lifecycle.beginAttempt();
@@ -456,6 +453,7 @@ export function createCronPromptExecutor(
             messageActionTurnCapability: cronAdmission.messageActionTurnCapability,
             config: params.cfgWithAgentDefaults,
             prompt: promptText,
+            inputProvenance: params.inputProvenance,
             finalizePromptForResolvedTools,
             model: modelOverride,
             thinkLevel: candidateThinkLevel,
@@ -494,7 +492,7 @@ export function createCronPromptExecutor(
             userTurnTranscriptRecorder,
             suppressNextUserMessagePersistence:
               userTurnTranscriptRecorder.hasPersisted() || userTurnTranscriptRecorder.isBlocked(),
-          }) satisfies Partial<Parameters<CronEmbeddedRuntime["runEmbeddedAgent"]>[0]>;
+          }) satisfies Partial<Parameters<CronEmbeddedRuntime["runCronEmbeddedAgent"]>[0]>;
         if (cliExecution) {
           const allowCliAuthProfileForwarding = cliBackendAcceptsAuthProfileForwarding({
             provider: executionProvider,
@@ -540,18 +538,27 @@ export function createCronPromptExecutor(
                         selected,
                       })
                     : Promise.resolve(undefined);
-                // A recorded account runs only when this backend forwards exactly that account.
+                const resolveLiveProfile = () =>
+                  resolveForwardedProfile(
+                    params.liveSelection.authProfileId
+                      ? {
+                          authProfileId: params.liveSelection.authProfileId,
+                          authProfileIdSource:
+                            params.liveSelection.authProfileIdSource === "user" ? "user" : "auto",
+                        }
+                      : undefined,
+                  );
+                // The recorded provider runs only when this backend forwards exactly its account;
+                // other providers select their account live.
                 const authProfileId = inference
-                  ? await inference.resolveCliAuthProfile(resolveForwardedProfile)
-                  : await resolveForwardedProfile(
-                      params.liveSelection.authProfileId
-                        ? {
-                            authProfileId: params.liveSelection.authProfileId,
-                            authProfileIdSource:
-                              params.liveSelection.authProfileIdSource === "user" ? "user" : "auto",
-                          }
-                        : undefined,
-                    );
+                  ? await inference.resolveCliAuthProfile(
+                      providerOverride,
+                      resolveForwardedProfile,
+                      () =>
+                        // A bound job's selection names its recorded account; others select live.
+                        resolveForwardedProfile(undefined),
+                    )
+                  : await resolveLiveProfile();
                 if (trigger === "cron" && !binding && authProfileId) {
                   throw createUnrecordedScheduledAccountRefusal({
                     runtime: executionProvider,
@@ -565,8 +572,6 @@ export function createCronPromptExecutor(
                     : undefined;
                 const candidateResult = await runCliAgent({
                   ...buildCommonRunParams(),
-                  // The CLI backend marks internal provenance as non-user input.
-                  inputProvenance: params.inputProvenance,
                   diagnosticOwner,
                   sessionEntry: params.cronSession.sessionEntry,
                   contextWindow: params.cronSession.sessionEntry.contextWindow,
@@ -586,7 +591,7 @@ export function createCronPromptExecutor(
                   assertCurrent: inference
                     ? () => {
                         assertSettlementCurrent();
-                        inference.runParams.authProfileBinding?.assertCurrent();
+                        inference.assertCurrent(providerOverride);
                       }
                     : undefined,
                   nativeAuthOnly: trigger === "cron" && !binding ? true : undefined,
@@ -641,19 +646,11 @@ export function createCronPromptExecutor(
             await deferredLifecycle.complete();
           }
         }
-        const { runEmbeddedAgent } = await cronEmbeddedRuntimeLoader.load();
-        const promptCacheKey = resolveIsolatedCronPromptCacheKey({
-          job: params.job,
-          agentId: params.agentId,
-          agentSessionKey: params.agentSessionKey,
-          provider: providerOverride,
-          model: modelOverride,
-        });
+        const { runCronEmbeddedAgent } = await cronEmbeddedRuntimeLoader.load();
         // Embedded runs receive both the explicit route and the current-channel
         // id so message-tool policy can target the same chat as fallback delivery.
-        const result = await runEmbeddedAgent({
+        const embeddedRunParams: Parameters<CronEmbeddedRuntime["runCronEmbeddedAgent"]>[0] = {
           ...buildCommonRunParams(),
-          promptCacheKey,
           cleanupBundleMcpOnRunEnd: params.usesDetachedRunSession,
           allowGatewaySubagentBinding: true,
           messageTo: params.resolvedDelivery.to,
@@ -677,7 +674,7 @@ export function createCronPromptExecutor(
           authProfileIdSource: runOptions.authProfileId
             ? "user"
             : params.liveSelection.authProfileIdSource,
-          ...inference?.runParams,
+          ...inference?.runParams(providerOverride),
           // Cron keeps overload failures local while sharing real credential failures.
           authProfileFailurePolicy: runOptions.authProfileFailurePolicy ?? "local_transient",
           verboseLevel: params.resolvedVerboseLevel,
@@ -701,6 +698,9 @@ export function createCronPromptExecutor(
           assistantErrorTranscript: runOptions.assistantErrorTranscript,
           abortSignal: params.abortSignal,
           onLaneWait: params.onLaneWait,
+        };
+        const result = await runCronEmbeddedAgent(embeddedRunParams, params, (snapshot) => {
+          currentContextSnapshot = snapshot;
         });
         bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
           result.meta?.systemPromptReport,
@@ -738,6 +738,7 @@ export function createCronPromptExecutor(
     });
     const completed = {
       runResult: fallbackResult.result,
+      currentContextSnapshot,
       fallbackProvider: fallbackResult.provider,
       fallbackModel: fallbackResult.model,
       runStartedAt,

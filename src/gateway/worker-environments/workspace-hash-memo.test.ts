@@ -69,10 +69,15 @@ it("rehashes recent files even when a same-size edit preserves the stat identity
 });
 
 const hashMetrics = () => ({ contentHashCount: 0, memoHitCount: 0 });
-function remoteCapture(workspace: string, home: string, script = remoteWorkspaceManifestScript) {
+function remoteCapture(
+  workspace: string,
+  home: string,
+  script = remoteWorkspaceManifestScript,
+  prior: string[] = [],
+) {
   return async (memo: [string, string][]): Promise<RemoteWorkspaceManifestEnvelope> => {
     const result = await runCommandWithTimeout(
-      [process.execPath, "-e", script, workspace, "", "memo-v1"],
+      [process.execPath, "-e", script, workspace, "", "all", ...prior, "memo-v1"],
       { timeoutMs: 10_000, baseEnv: { ...process.env, HOME: home }, input: JSON.stringify(memo) },
     );
     expect(result).toMatchObject({ code: 0, stderr: "" });
@@ -84,6 +89,7 @@ async function remoteFixture(script = remoteWorkspaceManifestScript) {
   const workspace = await fs.realpath(tempDirs.make("openclaw-remote-workspace-"));
   return {
     workspace,
+    home,
     capture: remoteCapture(workspace, home, `Date.now = () => ${Date.now() + 60_000};\n${script}`),
   };
 }
@@ -256,7 +262,7 @@ it("bounds the remote memo to the largest files and reports truncation", async (
     "const MAX_WORKSPACE_HASH_MEMO_ENTRIES = 2;",
   );
   expect(limitedScript).not.toBe(REMOTE_WORKSPACE_MANIFEST_JS);
-  const { workspace, capture } = await remoteFixture(limitedScript);
+  const { workspace, home, capture } = await remoteFixture(limitedScript);
   await Promise.all([
     fs.writeFile(path.join(workspace, "small.txt"), "1"),
     fs.writeFile(path.join(workspace, "medium.txt"), "22"),
@@ -283,8 +289,20 @@ it("bounds the remote memo to the largest files and reports truncation", async (
     memoHitCount: 2,
     memoTruncatedCount: 1,
   });
+  const restored = await remoteCapture(
+    workspace,
+    home,
+    `Date.now = () => ${Date.now() + 60_000};\n${limitedScript}`,
+    [first.manifestRef.slice(7)],
+  )([]);
+  expect(restored.manifestRef).toBe(first.manifestRef);
+  expect(restored.metrics).toMatchObject({
+    contentHashCount: 0,
+    memoHitCount: 3,
+    memoTruncatedCount: 1,
+  });
 });
-it("keeps a placement memo under the byte cap and clears one that exceeds it", () => {
+it("keeps the newest placement hashes when pruning to the byte cap", () => {
   const retained: WorkspaceHashMemo = new Map([
     ["worker:1:2:3:4:5", "a".repeat(64)],
     ["gateway:1:2:3:4:5", "b".repeat(64)],
@@ -300,6 +318,12 @@ it("keeps a placement memo under the byte cap and clears one that exceeds it", (
     oversized.set(identity, digest);
     bytes += identity.length + digest.length;
   }
+  const newest = [...oversized.keys()].at(-1)!;
   pruneWorkspaceHashMemo(oversized);
-  expect(oversized.size).toBe(0);
+  expect(oversized.size).toBeGreaterThan(0);
+  expect(oversized.has("gateway:0:0:0:0:0")).toBe(false);
+  expect(oversized.get(newest)).toBe(digest);
+  expect(
+    [...oversized].reduce((size, [identity, hash]) => size + identity.length + hash.length, 0),
+  ).toBeLessThanOrEqual(MAX_WORKSPACE_HASH_MEMO_BYTES);
 });

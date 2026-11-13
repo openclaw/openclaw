@@ -853,7 +853,7 @@ describeLive("quiet steering with real caller authority", () => {
         );
         return { rejected: rejected.runId, receipt: before.inputReceipts };
       });
-      // The public personal default, not an explicitly enabled collaboration override.
+      // Exercise the public default without an explicit collaboration override.
       await restartQueue(undefined, "queue");
       for (const highIncumbent of [true, false]) {
         await caseRun(

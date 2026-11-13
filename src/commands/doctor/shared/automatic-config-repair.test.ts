@@ -324,6 +324,43 @@ describe("automatic config repair", () => {
     }
   });
 
+  it.each([false, true])(
+    "projects heartbeat only for backup (legacy session=%s)",
+    async (legacySession) => {
+      await withDoctorConfigPreflightHome(async (home) => {
+        const { configPath, raw } = await writeFixture(home, {
+          ...(legacySession ? { session: { idleMinutes: 45 } } : {}),
+          agents: {
+            defaults: {
+              model: { primary: "${BACKUP_HEARTBEAT_MODEL}" },
+              heartbeat: { every: "30m" },
+            },
+            entries: { main: { heartbeat: { every: "1h" } } },
+          },
+        });
+        const snapshot = await readFixture(configPath, {
+          env: { ...process.env, BACKUP_HEARTBEAT_MODEL: "openai/gpt-4.1" },
+        });
+        const original = structuredClone(snapshot.sourceConfig);
+        const resolved = await resolveLegacyConfigSnapshotForBackup(snapshot);
+        expect(resolved?.valid).toBe(true);
+        expect(resolved?.sourceConfig.session?.reset?.idleMinutes).toBe(
+          legacySession ? 45 : undefined,
+        );
+        expect(resolved?.sourceConfig.agents?.defaults).not.toHaveProperty("heartbeat");
+        expect(resolved?.sourceConfig.agents?.entries?.main).not.toHaveProperty("heartbeat");
+        expect(
+          getResolvedConfigEnvSecretRef(resolved?.sourceConfig, "agents.defaults.model.primary")
+            ?.id,
+        ).toBe("BACKUP_HEARTBEAT_MODEL");
+        expect(await planAutomaticConfigRepair(snapshot)).toBeNull();
+        expect(snapshot.sourceConfig).toEqual(original);
+        expect(snapshot.raw).toBe(raw);
+        expect(await fs.readFile(configPath, "utf8")).toBe(raw);
+      });
+    },
+  );
+
   it.each<[string, Record<string, unknown>, string[]?]>([
     ["a non-legacy type error", { gateway: { port: "not-a-number" } }],
     [
@@ -331,6 +368,11 @@ describe("automatic config repair", () => {
       idleConfig({ agents: { entries: { main: { default: true }, ops: { default: true } } } }),
     ],
     ["a migration with a remaining type error", idleConfig({ gateway: { port: "not-a-number" } })],
+    ["malformed retired heartbeat", { agents: { defaults: { heartbeat: { every: 42 } } } }],
+    [
+      "an unknown heartbeat sibling",
+      { agents: { defaults: { heartbeat: { every: "30m" }, unknownSetting: true } } },
+    ],
     ["an included config source", idleConfig(), ["/tmp/included.json"]],
     [
       "an include directive without recorded include paths",
@@ -351,8 +393,6 @@ describe("automatic config repair", () => {
   ])("refuses %s", async (_name, config, includedPaths) => {
     const snapshot = invalidSnapshot(config, [], includedPaths);
     expect(await planAutomaticConfigRepair(snapshot)).toBeNull();
-    if (config.plugins && typeof config.plugins === "object" && "installs" in config.plugins) {
-      expect(await resolveLegacyConfigSnapshotForBackup(snapshot)).toBeUndefined();
-    }
+    expect(await resolveLegacyConfigSnapshotForBackup(snapshot)).toBeUndefined();
   });
 });

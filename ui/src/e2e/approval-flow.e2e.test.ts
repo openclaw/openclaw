@@ -148,7 +148,7 @@ suite.define(() => {
     await expect
       .poll(() => inboxRow.locator(".sidebar-approval-row__command").textContent())
       .toContain("echo review only");
-    await inboxRow.getByText("You don’t have permission to approve.", { exact: true }).waitFor();
+    await inboxRow.getByText("You need approval access to approve.", { exact: true }).waitFor();
     expect(
       await inboxRow
         .locator(".sidebar-approval-row__actions button")

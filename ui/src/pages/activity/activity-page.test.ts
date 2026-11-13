@@ -13,7 +13,6 @@ import {
   createGatewayEvent,
   createGatewayStoreTestStore,
 } from "../../app/gateway-store.test-support.ts";
-import { loadSettings } from "../../app/settings.ts";
 import { presentResult } from "../../e2e/activity-run-inspector.test-fixtures.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
@@ -27,6 +26,7 @@ import {
   activityHello,
   activityResponse,
   activityRoster,
+  activitySettings,
   createActivityGatewayStub,
   inspectorGateway,
   createActivityPage,
@@ -66,13 +66,7 @@ function activityContext(source: ApplicationContext["gateway"], basePath = ""): 
 
 function activityGateway() {
   const store = createGatewayStoreTestStore({
-    settings: {
-      ...loadSettings(),
-      gatewayUrl: "wss://activity.example.test",
-      token: "",
-      sessionKey: "main",
-      lastActiveSessionKey: "main",
-    },
+    settings: activitySettings(),
   });
   activeGateways.add(store.gateway);
   activityContext(store.gateway);
@@ -285,8 +279,8 @@ describe("ActivityPage gateway lifecycle", () => {
     await i18n.setLocale("en");
     const { gateway: source, current } = activityGateway();
     const { container } = await bindActivity(source, "/control");
-    current().testOptions.onEvent?.(toolEvent("exec", "main", "exec", "live run:a/b"));
-    current().testOptions.onEvent?.(toolEvent("read"));
+    current().testOptions.onEvent?.(toolEvent("Mu\u0308nchen", "main", "exec", "live run:a/b"));
+    current().testOptions.onEvent?.(toolEvent("Caf\u00e9"));
     const toolbar = container.querySelector(".activity-live-toolbar");
     expect(
       toolbar?.querySelectorAll('.activity-status-filter input[type="checkbox"]'),
@@ -330,22 +324,17 @@ describe("ActivityPage gateway lifecycle", () => {
     const [expand, collapse] = container.querySelectorAll<HTMLButtonElement>(
       ".activity-page .settings-section__actions button",
     );
+    const expansionState = () =>
+      Array.from(
+        container.querySelectorAll<HTMLDetailsElement>(".activity-entry"),
+        (row) => row.open,
+      );
     expand?.click();
     flush();
-    expect(
-      Array.from(
-        container.querySelectorAll<HTMLDetailsElement>(".activity-entry"),
-        (row) => row.open,
-      ),
-    ).toEqual([true, true]);
+    expect(expansionState()).toEqual([true, true]);
     collapse?.click();
     flush();
-    expect(
-      Array.from(
-        container.querySelectorAll<HTMLDetailsElement>(".activity-entry"),
-        (row) => row.open,
-      ),
-    ).toEqual([false, false]);
+    expect(expansionState()).toEqual([false, false]);
 
     const search = toolbar?.querySelector<HTMLInputElement>('input[type="search"]');
     if (!search) {
@@ -355,10 +344,15 @@ describe("ActivityPage gateway lifecycle", () => {
     search.dispatchEvent(new Event("input", { bubbles: true }));
     flush();
     expect(container.querySelectorAll(".activity-entry")).toHaveLength(0);
-    search.value = "run";
+    search.value = "m\u00fcnchen";
     search.dispatchEvent(new Event("input", { bubbles: true }));
     flush();
-    expect(container.querySelectorAll(".activity-entry")).toHaveLength(2);
+    expect(container.querySelectorAll(".activity-entry")).toHaveLength(1);
+    expect(container.textContent).toContain("Mu\u0308nchen output");
+    search.value = "cafe\u0301";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    flush();
+    expect(container.querySelectorAll(".activity-entry")).toHaveLength(1);
 
     const tool = container.querySelector<HTMLSelectElement>(".activity-live-filter-popover select");
     if (!tool) {
@@ -460,6 +454,11 @@ describe("ActivityPage gateway lifecycle", () => {
   it("starts empty on initial bind and source replacement", async () => {
     const first = activityGateway();
     const page = await bindActivity(first.gateway);
+    // A frame may arrive before the queued Live Activity publication task.
+    using _ = vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((callback) => {
+      queueMicrotask(() => callback(performance.now()));
+      return 0;
+    });
     first.current().testOptions.onEvent?.(toolEvent("old"));
     await waitForSolid(() => expect(previews(page)).toEqual(["old output"]));
     page.dispose();
@@ -574,7 +573,7 @@ describe("ActivityPage gateway lifecycle", () => {
       page.container.querySelector<HTMLButtonElement>(".activity-current-work__feedback button");
     await waitForSolid(() => expect(retry()?.textContent?.trim()).toBe("Retry"));
     expect(page.container.querySelector(".activity-current-work__feedback")?.textContent).toContain(
-      "Could not load active sessions",
+      "Couldn’t load active sessions. Try again.",
     );
     expect(rows()).toHaveLength(2);
     expect(rows()[0]).toBe(firstRow);

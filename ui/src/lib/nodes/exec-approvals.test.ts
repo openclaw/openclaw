@@ -69,6 +69,30 @@ it("keeps an edited policy on its original base when a refresh sees another writ
   });
 });
 
+it("notes an accepted save until the next edit, and never a rejected one", async () => {
+  request.mockImplementation(async (method) => {
+    if (method === "exec.approvals.set") {
+      throw new Error("Policy changed");
+    }
+    return snapshot({ version: 1 });
+  });
+  await approvals.loadExecApprovals(state);
+  approvals.updateExecApprovalsFormValue(state, ["defaults", "security"], "allowlist");
+  await approvals.saveExecApprovals(state);
+  expect(state.execApprovalsSavedNotice).toBe(false);
+  expect(state.execApprovalsDirty).toBe(true);
+  expect(state.execApprovalsError).toContain("Policy changed");
+
+  request.mockImplementation(async () => snapshot({ version: 1 }));
+  await approvals.saveExecApprovals(state);
+  expect(state.execApprovalsSavedNotice).toBe(true);
+  expect(state.execApprovalsDirty).toBe(false);
+  expect(state.execApprovalsError).toBeNull();
+
+  approvals.updateExecApprovalsFormValue(state, ["defaults", "security"], "full");
+  expect(state.execApprovalsSavedNotice).toBe(false);
+});
+
 it("keeps native snapshots read-only", async () => {
   request.mockResolvedValue({
     enabled: true,
@@ -82,10 +106,10 @@ it("keeps native snapshots read-only", async () => {
   expect(state.execApprovalsDirty).toBe(false);
   approvals.updateExecApprovalsFormValue(state, ["defaults", "security"], "full");
   expect(state.execApprovalsDirty).toBe(false);
-  expect(state.lastError).toContain("read-only");
+  expect(state.execApprovalsError).toContain("read-only");
   await approvals.saveExecApprovals(state, target);
   expect(request).toHaveBeenCalledTimes(1);
-  expect(state.lastError).toContain("read-only");
+  expect(state.execApprovalsError).toContain("read-only");
 });
 
 it("isolates approval loads across a same-client reconnect", async () => {

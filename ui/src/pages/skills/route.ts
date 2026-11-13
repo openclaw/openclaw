@@ -1,6 +1,7 @@
 import { definePage, type RouteLoaderOptions } from "@openclaw/uirouter";
 import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { loadSkillStatusReport } from "../../lib/skills/status-report.ts";
 import type { SkillsRouteData } from "./view-types.ts";
@@ -25,7 +26,6 @@ function defineSkillsPage(routeId: "skills" | "skill-settings", surface: "discov
       const client = gatewaySnapshot.client;
       let error: string | null = null;
       let selectedAgentId: string | null = null;
-      let report: SkillsRouteData["report"] = null;
       if (gatewaySnapshot.phase === "connected" && client) {
         try {
           const loadedAgentsList = await agents.ensureList();
@@ -37,21 +37,29 @@ function defineSkillsPage(routeId: "skills" | "skill-settings", surface: "discov
         } catch (err) {
           error = formatUiError(err);
         }
-        if (selectedAgentId) {
-          try {
-            report = (await loadSkillStatusReport(client, selectedAgentId)) ?? null;
-          } catch (err) {
-            error ??= formatUiError(err);
-          }
-        }
       }
+      // Metadata-only snapshots preserve the transport while inventory overlaps lazy page code.
+      const current = gateway.snapshot;
+      const reportRead =
+        client &&
+        selectedAgentId &&
+        options.shouldRun() &&
+        current.phase === "connected" &&
+        current.client === client &&
+        current.hello === gatewaySnapshot.hello &&
+        hasOperatorReadAccess(current.hello?.auth ?? null) &&
+        selectionOwner.intentRevision === selectionIntentRevision
+          ? loadSkillStatusReport(client, selectedAgentId)
+          : undefined;
+      // A preload can be abandoned before a view adopts its failure.
+      void reportRead?.catch(() => undefined);
       return {
         gateway,
         gatewaySnapshot,
         agents,
         selectedAgentId,
         selectionIntentRevision,
-        report,
+        reportRead,
         error,
         clawhubRef,
       };

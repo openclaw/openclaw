@@ -14,6 +14,7 @@ import {
   finalizeCapturedOutput,
 } from "../process/exec-output.js";
 import type { ProcessCleanupResult } from "../process/supervisor/types.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import { McpStdioFrameDecoder, McpStdioFrameError } from "./mcp-stdio-frame-decoder.js";
 import { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
 
@@ -150,17 +151,21 @@ export function createMcpStdioClient(params: McpStdioClientParams): McpStdioClie
     appendCapturedOutput(stderr, chunk, MAX_STDERR_BYTES, "tail");
   };
   transport.stderr.on("data", onStderr);
-  const startupDeadline = Date.now() + startupTimeoutMs;
+  const startupDeadline = monotonicNow() + startupTimeoutMs;
   const startup = import("./mcp-client-lifecycle.js")
     .then(({ connectMcpClient }) => {
       if (stopped || failure) {
         throw failure ?? errors.unavailable("proxy is stopping");
       }
-      const remainingMs = startupDeadline - Date.now();
+      const remainingMs = startupDeadline - monotonicNow();
       if (remainingMs <= 0) {
         throw errors.unavailable(`initialize timed out after ${startupTimeoutMs}ms`);
       }
-      return connectMcpClient({ client: protocol, transport, timeoutMs: remainingMs });
+      return connectMcpClient({
+        client: protocol,
+        transport,
+        timeoutMs: Math.max(1, Math.floor(remainingMs)),
+      });
     })
     .catch((error: unknown) => {
       fail(error instanceof Error ? error : errors.unavailable("proxy failed to start", error));

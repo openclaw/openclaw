@@ -166,13 +166,13 @@ describe("worker placement session evidence", () => {
         await writeSession(identity);
       }
       const database = openOpenClawAgentDatabase({ agentId: "main" });
-      // Retain an admitted reader so one later corrupt row does not block unrelated evidence.
+      // Retain an admitted reader so an uncertified row does not block unrelated evidence.
       expect(readEvidence(database, identities.slice(0, 2)).map((row) => row.status)).toEqual([
         "current",
         "current",
       ]);
       database.db
-        .prepare("UPDATE session_nodes SET entry_json = ?, entry_valid = 1 WHERE session_key = ?")
+        .prepare("UPDATE session_nodes SET entry_json = ?, entry_valid = 0 WHERE session_key = ?")
         .run("{", identities[1]!.sessionKey);
       const forceDestroyEnvironment = vi.fn();
       const retirement = createPlacementSessionRetirement({

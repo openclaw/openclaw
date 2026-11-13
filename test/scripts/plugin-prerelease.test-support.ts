@@ -64,6 +64,9 @@ export function createPrereleaseFixtures() {
       const run = expectDefined(
         findStep(readWorkflow().jobs.preflight, "Build plugin prerelease manifest").run,
         "plugin prerelease manifest script",
+      ).replace(
+        "./.frv-tooling/scripts/lib/ci-blacksmith-capacity.mjs",
+        new URL("../../scripts/lib/ci-blacksmith-capacity.mjs", import.meta.url).href,
       );
       const result = spawnSync("bash", ["-c", run], {
         cwd,

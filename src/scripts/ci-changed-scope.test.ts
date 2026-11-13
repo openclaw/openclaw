@@ -8,8 +8,8 @@ import { writeFixtureFiles as writeFiles } from "../../test/scripts/z0632-fixtur
 
 const {
   detectChangedScope,
-  detectInstallSmokeScope,
   detectNodeFastScope,
+  hasMlxNativeProofInputs,
   isNodeTestDataOnlyPath,
   listChangedPaths,
   parseArgs,
@@ -17,6 +17,61 @@ const {
 } = await import("../../scripts/ci-changed-scope.mjs");
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it.each([
+  ["apps/macos-mlx-tts/Package.swift", true],
+  ["apps/shared/OpenClawMLXTTSProtocol/Sources/Protocol.swift", true],
+  ["scripts/test-macos-mlx-native.py", true],
+  ["scripts/macos-health-render.sb", true],
+  ["scripts/ci-build-manifest.mjs", true],
+  ["scripts/ci-changed-scope.mjs", true],
+  [".github/workflows/ci.yml", true],
+  ["apps/macos/Sources/Settings.swift", false],
+  ["apps/shared/OpenClawKit/Sources/Client.swift", false],
+  ["src/config/types.queue.ts", false],
+  ["src/gateway/talk/handlers/voice.ts", false],
+  ["src/talk/agent-target.ts", false],
+  ["packages/gateway-protocol/src/schema/sessions.ts", false],
+  ["docs/mlx.md", false],
+])("classifies extended MLX inputs without broad native fallback for %s", (file, selected) => {
+  expect(hasMlxNativeProofInputs([file])).toBe(selected);
+});
+
+it.each([
+  "scripts/lib/macos-mlx-settings-manifest.mts",
+  "scripts/lib/macos-mlx-settings-producer.mts",
+  "test/scripts/macos-mlx-settings-producer.test.ts",
+  "apps/macos/Sources/OpenClaw/AppProfile.swift",
+  "apps/macos/Sources/OpenClaw/OpenClawPaths.swift",
+  "apps/macos/Sources/OpenClaw/OpenClawConfigFile.swift",
+  "apps/macos/Sources/OpenClaw/Constants.swift",
+  "apps/macos/Sources/OpenClaw/ConfigStore.swift",
+  "apps/macos/Sources/OpenClaw/TalkModeGatewayConfig.swift",
+  "apps/shared/OpenClawKit/Sources/OpenClawKit/TalkConfigSnapshot.swift",
+  "apps/shared/OpenClawKit/Sources/OpenClawKit/TalkConfigParsing.swift",
+  "src/config/paths.ts",
+  "src/config/io.ts",
+  "src/config/runtime-config-capture-state.ts",
+  "src/config/runtime-source-projection.ts",
+  "src/config/config.ts",
+  "src/config/talk.ts",
+  "src/gateway/talk/handlers/index.ts",
+  "src/talk/provider-registry.ts",
+  "src/tts/provider-registry.ts",
+  "src/tts/provider-registry-core.ts",
+  "packages/gateway-protocol/src/index.ts",
+  "packages/gateway-protocol/src/schema/channels.ts",
+  "packages/gateway-protocol/src/validators/integrations.ts",
+  "packages/gateway-protocol/src/compiled/protocol.generated/validators-integrations.js",
+])("selects the directly exercised retained-settings owner %s", (file) => {
+  expect(hasMlxNativeProofInputs([file])).toBe(true);
+  expect(hasMlxNativeProofInputs([`${file}.unrelated`])).toBe(false);
+});
+
+it("requires known affected inputs before downloading a model", () => {
+  expect(hasMlxNativeProofInputs(null)).toBe(false);
+  expect(hasMlxNativeProofInputs([])).toBe(false);
+});
 
 function parseGitHubOutput(output: string): Record<string, string> {
   return Object.fromEntries(
@@ -49,8 +104,7 @@ it("rejects missing CI diff refs", () => {
 });
 
 function expectedScope(enabled = "") {
-  const lanes =
-    "Node Macos MacosNode IosBuild Android Windows SkillsPython ChangedSmoke ControlUiI18n UiTests";
+  const lanes = "Node Macos MacosNode IosBuild Android Windows SkillsPython ControlUiI18n UiTests";
   return Object.fromEntries(
     lanes.split(" ").map((lane) => [`run${lane}`, enabled.split(" ").includes(lane)]),
   );
@@ -66,6 +120,7 @@ it.each<[string | string[], string, boolean?]>([
   [["docs/ci.md", "docs/docs.json", "README.md"], ""],
   [["src/config/defaults.ts", "docs/docs.json"], "Node"],
   [".crabbox.yaml", "Node"],
+  ["config/test-lines-allocations/regression.txt", "Node"],
   ["src/skills/runtime/refresh.ts", "Node MacosNode Windows"],
   [".github/actions/setup-android-toolchain/action.yml", "Node Android"],
   ["apps/macos/Sources/Foo.swift", "Macos MacosNode"],
@@ -78,19 +133,19 @@ it.each<[string | string[], string, boolean?]>([
   ["scripts/package-mac-app.sh", "Node Macos MacosNode"],
   ["scripts/lib/openclaw-bun.json", "Node Macos MacosNode"],
   ["scripts/stage-openclaw-bun.sh", "Node Macos MacosNode"],
+  ["scripts/lib/macos-mlx-settings-manifest.mts", "Node Macos MacosNode"],
+  ["scripts/lib/macos-mlx-settings-producer.mts", "Node Macos MacosNode"],
+  ["test/scripts/macos-mlx-settings-producer.test.ts", "Node Macos MacosNode"],
   ["skills/skill-creator/scripts/test_quick_validate.py", "Node SkillsPython"],
   [".github/workflows/ci.yml", "Node Windows UiTests"],
   ["scripts/lib/ci-test-runtime.mts", "Node UiTests"],
   ["scripts/ci-xcodebuild.py", "Node IosBuild"],
   ["scripts/ci-xcodebuild.py.bak", "Node"],
-  ["scripts/install.ps1", "Node Windows ChangedSmoke"],
-  ["scripts/install.sh", "Node ChangedSmoke"],
-  [".github/workflows/install-smoke.yml", "Node ChangedSmoke"],
-  ["src/plugins/loader.ts", "Node ChangedSmoke"],
-  [
-    "packages/gateway-protocol/src/schema/messages.ts",
-    "Node ChangedSmoke Macos MacosNode IosBuild Android",
-  ],
+  ["scripts/install.ps1", "Node Windows"],
+  ["scripts/install.sh", "Node"],
+  [".github/workflows/install-smoke.yml", "Node"],
+  ["src/plugins/loader.ts", "Node"],
+  ["packages/gateway-protocol/src/schema/messages.ts", "Node Macos MacosNode IosBuild Android"],
   ["src/plugins/loader.test.ts", "Node"],
   ["scripts/install-simslim.sh", "Node IosBuild", true],
   ["scripts/install-simslim.sh.bak", "Node", false],
@@ -111,18 +166,6 @@ it.each([
   ["src/wizard/i18n/locales/helpers/format.ts", false],
 ] as const)("classifies data-only inputs: %s", (file, dataOnly) => {
   expect(isNodeTestDataOnlyPath(file)).toBe(dataOnly);
-});
-
-it.each<[string[], boolean, boolean]>([
-  [[], true, true],
-  [["docs/ci.md"], false, false],
-  [["scripts/install.sh"], true, true],
-  [["extensions/matrix/package.json"], true, false],
-  [["src/plugins/loader.ts"], true, false],
-  [["src/plugins/loader.test.ts"], false, false],
-  [["extensions/matrix/index.ts"], false, false],
-])("splits install smoke for %j", (paths, runFastInstallSmoke, runFullInstallSmoke) => {
-  expect(detectInstallSmokeScope(paths)).toEqual({ runFastInstallSmoke, runFullInstallSmoke });
 });
 
 it.each<[string[], string]>([
@@ -244,7 +287,7 @@ it.each<[string, string, keyof typeof manifests | "missing", string | null, stri
 
     const output = parseGitHubOutput(fs.readFileSync(outputPath, "utf8"));
     const flags =
-      "run_android run_android_screenshots run_changed_smoke run_control_ui_i18n run_fast_install_smoke run_full_install_smoke run_ios_build run_ios_screenshots run_macos run_macos_node run_native_i18n run_node run_node_fast_ci_routing run_node_fast_only run_node_fast_plugin_contracts run_skills_python run_ui_tests run_windows strict_control_ui_i18n strict_native_i18n".split(
+      "run_android run_android_screenshots run_control_ui_i18n run_ios_build run_ios_screenshots run_macos run_macos_node run_native_i18n run_node run_node_fast_ci_routing run_node_fast_only run_node_fast_plugin_contracts run_skills_python run_ui_tests run_windows strict_control_ui_i18n strict_native_i18n".split(
         " ",
       );
     const enabled = failSafe

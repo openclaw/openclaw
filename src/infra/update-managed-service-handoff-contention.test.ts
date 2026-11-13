@@ -12,9 +12,10 @@ import * as leases from "./update-managed-service-handoff-database.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 
-it.for([false, true])(
-  "serializes writers (existing identity: %s)",
-  async (existing, { signal }) => {
+it.for(["initial", "existing", "timeout"])(
+  "serializes writers or diagnoses contention (%s)",
+  async (mode, { signal }) => {
+    const existing = mode !== "initial";
     const root = fs.realpathSync(dirs.make("handoff-writer-contention-"));
     const databasePath = path.join(root, "managed-update-handoffs.sqlite");
     leases.createManagedHandoffLeaseDatabase(databasePath)(true, () => undefined);
@@ -64,7 +65,8 @@ it.for([false, true])(
             release();
           }
         } else {
-          owner(true, db => owner.transact(db, () => insert(db), {}));
+          try { owner(true, db => owner.transact(db, () => insert(db), {})); }
+          catch (error) { send({ code: error.code, phase: error.phase, holder: error.holder, message: error.message }); process.exitCode = 1; }
         }
     `;
     const runner = ["--import", path.resolve("scripts/tsx.mjs"), "--input-type=module", "--eval"];
@@ -101,16 +103,32 @@ it.for([false, true])(
     expect(JSON.parse((await holder.ready)[0]), holder.output()).toEqual({ phase: "holding" });
     await using waiter = launch("waiter", holder.child.pid);
     const observation = JSON.parse((await waiter.ready)[0]);
+    if (mode === "timeout") {
+      expect(await withinTest(waiter.closed, signal), waiter.output()).toEqual([1, null]);
+      const diagnostic = JSON.parse(waiter.output().trim().split("\n").at(-1)!);
+      expect(diagnostic).toMatchObject({
+        code: "file_lock_timeout",
+        phase: "managed-handoff:writer-admission",
+        holder: { pid: holder.child.pid, alive: true },
+      });
+      expect(diagnostic.message).toContain(databasePath + ".lock");
+      expect(diagnostic.message).toMatch(/timeout \d+ ms/);
+      expect(JSON.parse(fs.readFileSync(databasePath + ".lock", "utf8")).pid).toBe(
+        holder.child.pid,
+      );
+    }
     holder.child.stdin.end("x");
     const results = await withinTest(Promise.all([holder.closed, waiter.closed]), signal);
     expect(results, `holder: ${holder.output()}\nwaiter: ${waiter.output()}`).toEqual([
       [0, null],
-      [0, null],
+      [mode === "timeout" ? 1 : 0, null],
     ]);
     expect(observation).toEqual({ phase: "contended" });
     using database = openNodeSqliteDatabase(databasePath, { readOnly: true });
     expect(
       database.prepare("SELECT owner FROM managed_update_handoffs ORDER BY owner").all(),
-    ).toEqual([{ owner: "holder" }, { owner: "waiter" }]);
+    ).toEqual(
+      mode === "timeout" ? [{ owner: "holder" }] : [{ owner: "holder" }, { owner: "waiter" }],
+    );
   },
 );

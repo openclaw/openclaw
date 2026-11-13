@@ -116,12 +116,11 @@ it("keeps success and old references when automatic retention is full", async ()
 });
 
 it.each([
-  ["byte allowance", 1024, undefined, 1024, false, "data allowance"],
-  ["complete capture with model budget", 65536, 4096, 1024, false, "data allowance"],
-  ["restart-safe", 1024, undefined, 10485760, true, "restart-safe"],
+  ["byte allowance", 1024, undefined, 1024, "data allowance"],
+  ["complete capture with model budget", 65536, 4096, 1024, "data allowance"],
 ] as const)(
   "returns successful truncation for %s",
-  async (_name, bytes, context, snapshot, restartSafe, guidance) => {
+  async (_name, bytes, context, snapshot, guidance) => {
     const { run } = createResultsHarness(
       { codeMode: { maxOutputBytes: bytes, maxSnapshotBytes: snapshot } },
       context,
@@ -129,7 +128,6 @@ it.each([
     const output = await run(
       'return {rows:Array.from({length:180}, (_,id) => ({id,payload:"🦞".repeat(10)}))};',
       "large",
-      { restartSafe },
     );
     expectUnretained(output, guidance);
     expect(output).not.toHaveProperty("error");

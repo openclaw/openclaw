@@ -63,17 +63,21 @@ async function renderControls(
   return container;
 }
 
-function renderRuntimeModel(
-  entry: ModelCatalogEntry,
-  selectedRuntime?: string,
-  observedModel = false,
-) {
-  const result = createSessionsListResult({
+const sessionsFor = (entry: ModelCatalogEntry) =>
+  createSessionsListResult({
     model: entry.id,
     modelProvider: entry.provider,
     defaultsModel: entry.id,
     defaultsProvider: entry.provider,
   });
+
+function renderRuntimeModel(
+  entry: ModelCatalogEntry,
+  selectedRuntime?: string,
+  observedModel = false,
+) {
+  const result = sessionsFor(entry);
+  result.defaults.agentRuntime = entry.agentRuntime;
   if (selectedRuntime) {
     result.sessions[0]!.agentRuntime = { id: selectedRuntime, source: "session-key" };
   }
@@ -234,7 +238,7 @@ describe("chat model runtime choices", () => {
     ).toBe("unavailable");
     expect(
       container.querySelector(".chat-controls__model-capability-badge")?.textContent,
-    ).toContain("Chat only");
+    ).toContain("No tools");
   });
 
   it("labels an observed Codex default with an alternate runtime", async () => {
@@ -274,6 +278,14 @@ describe("chat model runtime choices", () => {
     expect(container.querySelector('[data-chat-thinking-option="medium"]')).toBeNull();
   });
 
+  it("groups a pinned session's Default under its configured runtime", async () => {
+    const opus = { ...model, id: "claude-opus-5-5", provider: "anthropic" };
+    const claudeCli = { id: "claude-cli", source: "model" } as const;
+    const container = await renderRuntimeModel({ ...opus, agentRuntime: claudeCli }, "codex");
+    const row = container.querySelector('[data-chat-model-default="true"]');
+    expect(row?.closest("section")?.dataset.chatModelProviderGroup).toBe("claude-cli");
+  });
+
   it.each(["missing-auth", "unsupported-runtime", "locked"] as const)(
     "preserves the %s guard for additional harness rows",
     async (guard) => {
@@ -310,4 +322,35 @@ describe("chat model runtime choices", () => {
       expect(onSetup).toHaveBeenCalledTimes(guard === "missing-auth" ? 1 : 0);
     },
   );
+});
+
+it("carries provider presentation from the admitted catalog into trigger and picker rows", async () => {
+  const entry: ModelCatalogEntry = {
+    provider: "workstation",
+    id: "local",
+    name: "Local model",
+    available: true,
+    providerName: "Research Lab",
+  };
+  const result = sessionsFor(entry);
+  const onModelSelect = vi.fn(async () => {});
+  const container = await renderControls(result, [entry], { onModelSelect });
+  const group = () => container.querySelector('[data-chat-model-provider-group="workstation"]');
+  expect(container.querySelector(".chat-controls__trigger-provider-icon")?.textContent).toBe("R");
+  expect(group()?.querySelector(".chat-controls__provider-label")?.textContent).toBe(
+    "Research Lab",
+  );
+  expect(group()?.querySelector(".chat-controls__provider-icon")?.textContent).toBe("R");
+  await renderControls(
+    result,
+    [{ ...entry, providerName: "Alpha workstation" }],
+    { onModelSelect },
+    container,
+  );
+  expect(container.querySelector(".chat-controls__trigger-provider-icon")?.textContent).toBe("A");
+  expect(group()?.querySelector(".chat-controls__provider-label")?.textContent).toBe(
+    "Alpha workstation",
+  );
+  expect(container.querySelector('[data-chat-model-option="workstation/local"]')).not.toBeNull();
+  expect(onModelSelect).not.toHaveBeenCalled();
 });

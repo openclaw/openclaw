@@ -4,6 +4,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, assert, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { t } from "../../i18n/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import type {
   SessionRowEventListener,
@@ -31,6 +32,7 @@ import {
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
 import { reduceChatSessionProjection } from "./history-merge.ts";
+import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
 import { adoptStartedChatRun } from "./run-lifecycle.ts";
 import { RealtimeTalkSession } from "./talk/session.ts";
 
@@ -60,7 +62,7 @@ function composerControls(state: ChatPageHost, agentDefaultModel?: string) {
 }
 
 describe("mounted pane session event ownership", () => {
-  it("keeps completed-work metadata when the retained roster omits the observed conversation", async () => {
+  it("keeps completed-work timing when the retained roster omits the observed conversation", async () => {
     const row: GatewaySessionRow = {
       key: "agent:main:dashboard:observed-work",
       agentId: "main",
@@ -69,7 +71,6 @@ describe("mounted pane session event ownership", () => {
       label: "Observed work",
       status: "done",
       lastRunId: "work-run",
-      runtimeMs: 180_000,
     };
     const history = {
       sessionId: row.sessionId,
@@ -79,7 +80,7 @@ describe("mounted pane session event ownership", () => {
           role: "user",
           content: "Review the report",
           timestamp: 1_000,
-          __openclaw: { id: "request" },
+          __openclaw: { id: "request", idempotencyKey: "work-run:user" },
         },
         {
           role: "toolResult",
@@ -89,7 +90,12 @@ describe("mounted pane session event ownership", () => {
           content: "Report read",
           timestamp: 2_000,
         },
-        { role: "assistant", runId: "work-run", content: "Report reviewed", timestamp: 3_000 },
+        {
+          role: "assistant",
+          runId: "work-run",
+          content: "Report reviewed",
+          __openclaw: { recordTimestampMs: 181_000 },
+        },
       ],
     };
     const { context, mount } = createMountedPanes([row], "main", undefined, {
@@ -113,9 +119,9 @@ describe("mounted pane session event ownership", () => {
     });
     transcript.start();
     await flushDeferredRowPrune();
-    expect(layout.primary.chat.selectedSession?.lastRunId).toBe("work-run");
-    expect(layout.primary.chat.selectedSession?.runtimeMs).toBe(180_000);
-    expect(view.container.querySelector(".chat-activity-group__label")?.textContent).toBe("Worked");
+    expect(view.container.querySelector(".chat-activity-group__label")?.textContent).toBe(
+      "Worked for 3m",
+    );
   });
 
   it("retires Talk on a provider pause and prevents it from starting again", async () => {
@@ -781,7 +787,8 @@ describe("mounted pane session event ownership", () => {
       expect(
         list.mock.calls.some(([, params]) => asOptionalRecord(params)?.agentId === "research"),
       ).toBe(true);
-      expect(state.chatError).toContain("Permission application unavailable");
+      expect(state.chatError).toBe(t("chat.permissionControls.updateFailed"));
+      expect(state.lastErrorDetail).toEqual(new Error("Permission application unavailable"));
       const failedChoice = draw();
       expect(failedChoice?.dataset.chatSelectValue).toBe("full");
       expect(failedChoice?.disabled).toBe(false);
@@ -820,6 +827,7 @@ describe("mounted pane session event ownership", () => {
   it.each(["stale", "current", "rowless", "reentrant"] as const)(
     "keeps lifecycle reset delivery within its admitted incarnation (%s)",
     async (generation) => {
+      installOutboxBrowserStorage();
       const reentrant = generation === "reentrant";
       const preservesSuccessor = generation === "stale" || reentrant;
       const row: GatewaySessionRow = {

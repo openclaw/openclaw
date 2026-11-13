@@ -11,6 +11,33 @@ import { WORKSPACE_TEMPLATE_PACK_PATHS } from "../../scripts/lib/workspace-boots
 import { resolveNpmRunner } from "../../scripts/npm-runner.mts";
 import { resolvePnpmRunner } from "../../scripts/pnpm-runner.mts";
 
+export const AI_RUNTIME_PACKAGE_JSON = JSON.stringify({
+  name: "@openclaw/ai",
+  version: "2026.6.11",
+  exports: {
+    ".": { import: "./dist/index.mjs" },
+    "./providers": { import: "./dist/providers.mjs" },
+    "./transports": { import: "./dist/transports.mjs" },
+    "./internal/*": { import: "./dist/internal/*.mjs" },
+    "./internal/tool-schema": { import: "./dist/internal/tool-schema.mjs" },
+  },
+});
+export const AI_RUNTIME_FILES = {
+  "dist/index.js": "export {};\n",
+  "node_modules/@openclaw/ai/package.json": AI_RUNTIME_PACKAGE_JSON,
+  "node_modules/@openclaw/ai/dist/index.mjs": "export {};\n",
+  "node_modules/@openclaw/ai/dist/providers.mjs": "export {};\n",
+  "node_modules/@openclaw/ai/dist/transports.mjs": "export {};\n",
+  "node_modules/@openclaw/ai/dist/internal/openai-responses-payload-policy.mjs": "export {};\n",
+  "node_modules/@openclaw/ai/dist/internal/runtime.mjs": "export {};\n",
+  "node_modules/@openclaw/ai/dist/internal/tool-schema.mjs": "export {};\n",
+};
+export const BUNDLED_AI_PACKAGE_OPTIONS = {
+  packageJson: {
+    dependencies: { "@openclaw/ai": "2026.6.11" },
+    bundleDependencies: ["@openclaw/ai"],
+  },
+};
 export const CODE_MODE_WORKER_PATH = "dist/agents/code-mode.worker.js";
 
 export function expectPackageCommandSuccess(result: SpawnSyncReturns<string>, label: string) {
@@ -63,7 +90,7 @@ export function withTarball(
     includeLifecycleMarker?: boolean;
     includeWorkspaceTemplates?: boolean;
     inventoryBody?: string | null;
-    packageJson?: Record<string, unknown>;
+    packageJson?: Record<string, unknown> & { name?: string };
     pack?: "npm" | "pnpm";
     beforePack?: (packageRoot: string) => void;
     postinstall?: boolean;
@@ -159,8 +186,9 @@ export function withTarball(
     // against restrictive host umasks the way the packer normalizes artifacts.
     chmodTreeWorldReadable(packageRoot);
 
+    const packageName = options.packageJson?.name ?? "openclaw";
     const tarball = options.pack
-      ? join(root, `openclaw-${version}.tgz`)
+      ? join(root, `${packageName.replace(/^@/u, "").replaceAll("/", "-")}-${version}.tgz`)
       : join(root, process.platform === "win32" ? "openclaw.tgz" : "openclaw:local.tgz");
     const packRunner =
       options.pack === "pnpm"

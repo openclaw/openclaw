@@ -34,7 +34,7 @@ Behavior:
 - Uses the active runtime's steering path, so the model sees the guidance at
   the next supported runtime boundary.
 
-With `messages.queue.allowCollaborativeSteering: false` and quiet fallback selected, steering another person’s
+With an explicit `messages.queue.allowCollaborativeSteering: false` and quiet fallback selected, steering another person’s
 active turn queues quietly as a separate turn under the sender’s identity and
 current policy. Set `messages.queue.collaborativeSteeringFallback: "reject"` to
 refuse instead and offer `/followup <message>` for an explicit separate turn. This applies to `/steer` and

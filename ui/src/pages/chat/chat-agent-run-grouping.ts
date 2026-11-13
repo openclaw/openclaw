@@ -1,10 +1,12 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import type { MessageGroup, SystemEventGroup } from "../../lib/chat/chat-types.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
+import type { ChatItem, MessageGroup, SystemEventGroup } from "../../lib/chat/chat-types.ts";
 import {
   assistantMessageCanOwnTurnActions,
   assistantMessageIsInterrupted,
   groupEndsRunInFailure,
+  isProviderVoiceTranscript,
   resolveAssistantReplyPhase,
 } from "./chat-assistant-reply.ts";
 import { transcriptRunId } from "./chat-thread-run-identity.ts";
@@ -21,6 +23,7 @@ import {
   type StreamRunRenderItem,
   type WorkGroupRenderItem,
 } from "./chat-turn-presentation.ts";
+import { isLiveTerminalForRun } from "./terminal-message-identity.ts";
 
 type AgentRunFramePart =
   | MessageGroup
@@ -39,12 +42,24 @@ export type AgentRunFrameRenderItem = {
     | { kind: "interrupted" }
     | { kind: "failed" };
   parts: AgentRunFramePart[];
+  /** Completed runs share one identity/footer across independently virtualized rows. */
+  fragment?: {
+    source: AgentRunFrameRenderItem;
+    first: boolean;
+    last: boolean;
+    firstAssistant: MessageGroup | undefined;
+    representative: MessageGroup | undefined;
+    firstBubbleKey: string | null;
+    work: WorkGroupRenderItem | undefined;
+  };
+  /** This run's groups held by an earlier rollup that no visible reply owns. */
+  detachedGroups?: MessageGroup[];
 };
 
 type AgentRunFrameInput = CompletedTurnRenderItem | ActivityRunRenderItem;
 
 export function chatItemGroups(
-  item: AgentRunFrameInput | AgentRunFrameRenderItem | SystemEventGroup,
+  item: AgentRunFrameInput | AgentRunFrameRenderItem | SystemEventGroup | ChatItem,
 ): MessageGroup[] {
   if (item.kind === "agent-run-frame") {
     return item.parts.flatMap(chatItemGroups);
@@ -63,8 +78,9 @@ function itemRunId(item: AgentRunFramePart): string | undefined {
     if (item.replyRunId) {
       return item.replyRunId;
     }
-    // Matching execution IDs cannot erase a forwarded presentation boundary.
-    if (item.groups.some(hasForwardedSource)) {
+    // Matching execution IDs cannot erase a forwarded presentation boundary
+    // or frame a rollup that no visible reply owns.
+    if (item.ownerless || item.groups.some(hasForwardedSource)) {
       return undefined;
     }
   }
@@ -105,10 +121,8 @@ function completedFrameActionOwner(
   const messages = parts
     .flatMap(chatItemGroups)
     .flatMap((group) => (group.role === "assistant" ? group.messages : []));
-  const explicit = messages.findLast(
-    (source) =>
-      source.presentationOwnsFooter !== false &&
-      assistantMessageCanOwnTurnActions(source.actionMessage ?? source.message, true),
+  const explicit = messages.findLast(({ message }) =>
+    assistantMessageCanOwnTurnActions(message, true),
   );
   if (explicit) {
     return explicit;
@@ -118,11 +132,7 @@ function completedFrameActionOwner(
     return null;
   }
   const last = lastPart.messages.at(-1);
-  return last &&
-    last.presentationOwnsFooter !== false &&
-    assistantMessageCanOwnTurnActions(last.actionMessage ?? last.message)
-    ? last
-    : null;
+  return last && assistantMessageCanOwnTurnActions(last.message) ? last : null;
 }
 
 export function agentRunFrameActiveStatusParts(
@@ -142,6 +152,27 @@ export function agentRunFrameActiveStatusParts(
     : undefined;
 }
 
+function hasTerminalRunOutcome(message: unknown, runId: string): boolean {
+  const record = asRecord(message);
+  const metadata = asRecord(record?.["__openclaw"]);
+  if (
+    isLiveTerminalForRun(message, runId) ||
+    metadata?.runTerminal === true ||
+    assistantMessageIsInterrupted(message) ||
+    record?.stopReason === "error"
+  ) {
+    return true;
+  }
+  // Provider speech, commentary and reasoning mirrors can stop a message without ending its run.
+  const phase = resolveAssistantReplyPhase(message);
+  return (
+    !isProviderVoiceTranscript(message) &&
+    phase !== "commentary" &&
+    metadata?.mirrorOrigin !== "codex-app-server" &&
+    (phase === "final_answer" || record?.stopReason === "stop")
+  );
+}
+
 /** Wrap semantic work/activity rows in one run-owned presentation frame. */
 export function coalesceAgentRunFrames(
   items: AgentRunFrameInput[],
@@ -150,25 +181,25 @@ export function coalesceAgentRunFrames(
     /** Source history includes silent/empty terminals omitted from rendered groups. */
     messages?: readonly unknown[];
     activeRunId?: string | null;
+    /** Session-wide liveness does not grant foreground stream ownership. */
+    activeRunIds?: readonly string[];
+    session?: Pick<GatewaySessionRow, "lastRunId" | "abortedLastRun">;
   } = {},
 ): Array<AgentRunFrameInput | AgentRunFrameRenderItem> {
   if (opts.searchActive) {
     return items;
   }
   const result: Array<AgentRunFrameInput | AgentRunFrameRenderItem> = [];
-  const lastAssistantByRun = new Map<string, unknown>();
   const terminalRuns = new Set<string>();
+  const activeRunIds = new Set(opts.activeRunIds);
   for (const message of opts.messages ?? []) {
     const id = transcriptRunId(message);
     const record = asRecord(message);
     if (id && record?.role === "assistant") {
-      lastAssistantByRun.set(id, message);
-      if (
-        record.stopReason === "stop" ||
-        record.stopReason === "error" ||
-        assistantMessageIsInterrupted(message) ||
-        resolveAssistantReplyPhase(message) === "final_answer"
-      ) {
+      const terminal = hasTerminalRunOutcome(message, id);
+      // A delayed active-session snapshot cannot revive a run whose terminal we already observed.
+      if (terminal) {
+        activeRunIds.delete(id);
         terminalRuns.add(id);
       }
     }
@@ -179,6 +210,7 @@ export function coalesceAgentRunFrames(
   let segmentId: string | undefined;
   let runId: string | undefined;
   let parts: AgentRunFramePart[] = [];
+  let detached: MessageGroup[] = [];
   // A run that resumes a handoff continues the open frame: one answer, one
   // footer. The frame keeps the identity it opened with, so resuming reuses its
   // row; `resuming` lets exactly the next run in.
@@ -206,15 +238,17 @@ export function coalesceAgentRunFrames(
     if (!runId || !frameRunId || parts.length === 0) {
       return;
     }
-    const active = runId === opts.activeRunId || parts.some(itemIsActive);
-    // A stopped history snapshot can end between tool iterations. Keep its
-    // saved output, but never claim that the absent final answer completed.
+    const active =
+      runId === opts.activeRunId || activeRunIds.has(runId) || parts.some(itemIsActive);
+    // A run stopped between tool iterations has no interrupted reply of its own;
+    // only the session's explicit abort marks it. Yielding to background work is not one.
     const interrupted =
       !active &&
       !handedOff &&
       !terminalRuns.has(runId) &&
       frameRunId !== opts.activeRunId &&
-      asRecord(lastAssistantByRun.get(runId))?.stopReason === "toolUse";
+      opts.session?.abortedLastRun === true &&
+      opts.session.lastRunId === runId;
     const actionOwner = active || failed ? null : completedFrameActionOwner(parts);
     if (!openedBoundaryId && !active && !actionOwner && !interrupted) {
       result.push(...parts);
@@ -241,6 +275,7 @@ export function coalesceAgentRunFrames(
         )
       : semanticKey;
     emittedFrameKeys.add(semanticKey);
+    const detachedGroups = detached.filter((group) => group.runId === runId);
     result.push({
       kind: "agent-run-frame",
       key,
@@ -254,6 +289,7 @@ export function coalesceAgentRunFrames(
             ? { kind: "interrupted" }
             : { kind: "completed", actionOwner },
       parts,
+      ...(detachedGroups.length > 0 ? { detachedGroups } : {}),
     });
     parts = [];
     runId = undefined;
@@ -280,6 +316,7 @@ export function coalesceAgentRunFrames(
     const boundaryGroup = chatItemGroups(item)[0];
     if (boundaryGroup && chatItemStartsDisplayTurn(boundaryGroup)) {
       flush();
+      detached = [];
       presentationBoundaryKey = boundaryGroup.key;
       segmentId = undefined;
       const nextBoundaryId = groupBoundaryId(boundaryGroup);
@@ -297,9 +334,15 @@ export function coalesceAgentRunFrames(
     }
     const candidateBoundaryId = item.kind === "stream-run" ? item.boundaryId : undefined;
     const candidateRunId = itemRunId(item);
-    if (resuming && !candidateRunId && item.kind === "stream-run" && !candidateBoundaryId) {
-      // The resumed run can be working before the pane learns its run id. Its
-      // status belongs here already, so the block does not split and rejoin.
+    if (
+      resuming &&
+      !candidateRunId &&
+      ((item.kind === "stream-run" && !candidateBoundaryId) ||
+        (item.kind === "group" && item.role === "assistant"))
+    ) {
+      // The resumed run can be working before the pane learns its run id, and a
+      // handoff reports its result without one. Both belong to the open answer,
+      // so the block does not split into separate turns.
       addPart(item);
       continue;
     }
@@ -320,6 +363,9 @@ export function coalesceAgentRunFrames(
     if (!candidateRunId) {
       flush();
       result.push(item);
+      if (item.kind === "work-group" && item.ownerless) {
+        detached.push(...item.groups);
+      }
       if (item.kind === "activity-run") {
         // A mixed-run log owns no frame, but does not end its surrounding turn.
         // Retain the latest projected boundary for subsequent replies and status.

@@ -1,7 +1,6 @@
 import {
   formatThreadBindingDurationLabel,
   resolveThreadBindingEffectiveExpiresAt,
-  type BindingTargetKind,
   type SessionBindingRecord,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -42,7 +41,7 @@ export function fromSessionBindingInput(params: {
   existing?: TelegramThreadBindingRecord;
   input: {
     targetSessionKey: string;
-    targetKind: BindingTargetKind;
+    targetKind: TelegramThreadBindingRecord["targetKind"];
     conversationId: string;
     metadata?: Record<string, unknown>;
   };
@@ -50,11 +49,11 @@ export function fromSessionBindingInput(params: {
   const now = Date.now();
   const metadata = params.input.metadata ?? {};
   const existing = params.existing;
-  const targetKind = params.input.targetKind === "subagent" ? "subagent" : "acp";
+  const targetKind = params.input.targetKind;
   // Runtime metadata follows the target; conversation lifecycle settings still carry forward below.
   const previous =
     existing?.targetSessionKey === params.input.targetSessionKey &&
-    existing.targetKind === targetKind
+    (existing.targetKind === "subagent") === (targetKind === "subagent")
       ? existing
       : undefined;
 

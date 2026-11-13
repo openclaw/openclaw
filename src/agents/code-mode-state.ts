@@ -9,10 +9,10 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { PluginRuntimeCloseRetainedError } from "../plugins/runtime-close-error.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { createPendingPromiseTracker } from "../shared/pending-promises.js";
 import { observeAgentRunApprovalWait } from "./agent-run-approval-wait.js";
 import { raceWithAbortSignal } from "./agent-tools.abort.js";
-import { runBridgeRequest } from "./code-mode-bridge.js";
 import type { CodeModeCatalogProjection } from "./code-mode-catalog.js";
 import { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "./code-mode-control-tools.js";
 import type {
@@ -36,6 +36,9 @@ import type { ToolSearchRuntime } from "./tool-search-runtime.js";
 import type { ToolSearchToolContext } from "./tool-search-types.js";
 import { ToolInputError } from "./tools/common.js";
 
+const loadCodeModeBridge = createLazyRuntimeModule(() => import("./code-mode-bridge.js"));
+type RunBridgeRequest = typeof import("./code-mode-bridge.js").runBridgeRequest;
+
 export type CodeModeBridgeDispatchState = {
   started: boolean;
   workerId?: string;
@@ -58,8 +61,6 @@ type CodeModeRunState = {
   continuation: CodeModeExecutorContinuation;
   pending: PendingBridgeState[];
   settlementMode: CodeModeSettlementMode;
-  // True only when every future bridge call is enforced read-only before execution.
-  replaySafe: boolean;
   output: CodeModeOutputState;
   expiresAt: number;
   agentWaitRetainUntil?: number;
@@ -453,7 +454,9 @@ export function reserveActiveRunSlot(ownedRunId?: string): () => void {
   if (ownedRunId === undefined) {
     removeExpiredRuns();
     if (activeRuns.size + activeRunReservations >= MAX_ACTIVE_CODE_MODE_RUNS) {
-      throw new ToolInputError("too many suspended code mode runs.");
+      throw new ToolInputError(
+        "too many suspended code mode runs. Resume an existing run with wait, or use exec with awaitResults:true to collect an existing tool result without suspending. Do not repeat already-dispatched work.",
+      );
     }
   } else {
     const state = activeRuns.get(ownedRunId);
@@ -476,59 +479,16 @@ export function reserveActiveRunSlot(ownedRunId?: string): () => void {
   };
 }
 
-export function pendingBridgeRequestsReplaySafe(
-  pending: readonly PendingBridgeRequest[],
-  runtime: ToolSearchRuntime,
-  catalogProjection: CodeModeCatalogProjection,
-): boolean {
-  return pending.every((request) =>
-    isPendingBridgeRequestReplaySafe(request, runtime, catalogProjection),
-  );
-}
-
-function isPendingBridgeRequestReplaySafe(
-  request: PendingBridgeRequest,
-  runtime: ToolSearchRuntime,
-  catalogProjection: CodeModeCatalogProjection,
-): boolean {
-  if (
-    request.method === "search" ||
-    request.method === "describe" ||
-    request.method === "yield" ||
-    request.method === "agentSpawn" ||
-    request.method === "agentWait" ||
-    request.method === "skillsList" ||
-    request.method === "skillsSearch" ||
-    request.method === "skillsRead" ||
-    request.method === "sleep"
-  ) {
-    return true;
-  }
-  if (request.method === "nodes") {
-    return request.args[0] === "list" || request.args[0] === "get";
-  }
-  // Saved references are transient, and deletion cannot be replayed safely.
-  // Result operations intentionally stay outside restart-safe execution.
-  if (request.method !== "callValue") {
-    return false;
-  }
-  const callableName = Array.isArray(request.args) ? request.args[0] : undefined;
-  if (typeof callableName !== "string") {
-    return false;
-  }
-  const binding = catalogProjection.byCallableName.get(callableName);
-  return binding ? runtime.isReplaySafeExactId(binding.id) : false;
-}
-
 export function createPendingBridgeStates(
   pendingRequests: PendingBridgeRequest[],
-  params: Omit<Parameters<typeof runBridgeRequest>[0], "request" | "reply" | "signal"> & {
+  params: Omit<Parameters<RunBridgeRequest>[0], "request" | "reply" | "signal"> & {
     inbox: CodeModeProgramDataInbox;
     activeRunId?: string;
     signal: AbortSignal;
     bridgeDispatch: CodeModeBridgeDispatchState;
   },
 ): PendingBridgeState[] {
+  const deadline = performance.now() + params.remainingMs;
   // Pending siblings retain dispatch context, never the original request batch.
   return pendingRequests.map((request) => {
     // Bridge calls start while the guest is parked. The wait tool delivers
@@ -549,7 +509,7 @@ export function createPendingBridgeStates(
     if (request.method !== "sleep") {
       params.bridgeDispatch.started = true;
     }
-    const bridgeCall = runBridgeRequest({
+    const bridgeParams = {
       activeRunId: params.activeRunId,
       workerId: params.bridgeDispatch.workerId,
       runtime: params.runtime,
@@ -560,12 +520,19 @@ export function createPendingBridgeStates(
       parentToolCallId: params.parentToolCallId,
       codeModeRunId: params.codeModeRunId,
       reply,
-      remainingMs: Math.max(1, params.remainingMs),
       completionRequired: params.completionRequired,
       ctx: params.ctx,
       request,
       signal,
       onUpdate: params.onUpdate,
+    };
+    const bridgeCall = loadCodeModeBridge().then(({ runBridgeRequest }) => {
+      // Cold loading consumes the existing call budget rather than extending it.
+      const remainingMs = deadline - performance.now();
+      if (remainingMs <= 0) {
+        throw new Error("interrupted");
+      }
+      return runBridgeRequest({ ...bridgeParams, remainingMs });
     });
     const completion = raceWithAbortSignal(bridgeCall, signal).catch(() => {
       // Canceled leases are fenced; this cannot retain an arbitrary abort reason.
@@ -639,7 +606,6 @@ export function storeSuspendedRun(
       runId,
       reason: codeModeWaitingReason(params.pending),
       pendingToolCalls: pendingToolCalls(params.pending),
-      replaySafe: params.replaySafe,
       telemetry: telemetry(params.runtime),
     },
     {},
@@ -658,7 +624,6 @@ export function storeSuspendedRun(
 export function codeModeAbortedResult(params: {
   bridgeDispatch: CodeModeBridgeDispatchState;
   output: CodeModeOutputState;
-  replaySafe: boolean;
   runtime: ToolSearchRuntime;
 }) {
   return params.output.takeResult(
@@ -667,7 +632,6 @@ export function codeModeAbortedResult(params: {
       code: "aborted" as const,
       failurePhase: params.bridgeDispatch.started ? ("bridge" as const) : ("host" as const),
       bridgeDispatchStarted: params.bridgeDispatch.started,
-      replaySafe: params.replaySafe,
       telemetry: telemetry(params.runtime),
     },
     { error: "code mode execution aborted" },

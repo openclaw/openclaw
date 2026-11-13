@@ -109,6 +109,61 @@ suite.define(() => {
           await listRow(label).locator(".session-details-toggle").click();
           await detailsLabel.waitFor();
         };
+        const closeMenu = async () => {
+          // Roster updates can move keyboard focus; an outside click dismisses the whole menu.
+          await page.locator("#control-ui-main").click({ position: { x: 40, y: 20 } });
+          await expect.poll(() => page.getByRole("menu").count()).toBe(0);
+        };
+        const exerciseAppearance = async (
+          panel: import("playwright").Locator,
+          surface: string,
+          reopen: () => Promise<void>,
+        ) => {
+          await support.openSessionMenuSubmenu(page, "Advanced");
+          await support.openSessionMenuSubmenu(page, "Icon & color");
+          const red = ui.button(panel, "Red");
+          const rocket = panel.locator(".session-menu__icon-choice").filter({ hasText: /^🚀$/u });
+          await support.captureUiProof(suite, page, `${surface}-before.png`);
+          await red.click();
+          await ui.sessionPatch(gateway, own.key, { color: "red" });
+          await expect
+            .poll(() =>
+              ownRow.evaluate((element) => element.style.getPropertyValue("--session-color")),
+            )
+            .toBe("var(--session-color-red)");
+          await closeMenu();
+          await reopen();
+          await support.openSessionMenuSubmenu(page, "Advanced");
+          await support.openSessionMenuSubmenu(page, "Icon & color");
+          await expect.poll(() => red.getAttribute("aria-pressed")).toBe("true");
+          await rocket.waitFor({ state: "visible" });
+          await rocket.press("Space");
+          await ui.sessionPatch(gateway, own.key, { icon: "🚀" });
+          await ui.expectText(ownRow, "🚀");
+          await closeMenu();
+          await reopen();
+          await support.openSessionMenuSubmenu(page, "Advanced");
+          await support.openSessionMenuSubmenu(page, "Icon & color");
+          // Reopening reads the acknowledged session metadata, not picker-local state.
+          await expect.poll(() => red.getAttribute("aria-pressed")).toBe("true");
+          await expect.poll(() => rocket.getAttribute("aria-pressed")).toBe("true");
+          await support.captureUiProof(suite, page, `${surface}-after.png`);
+          await panel.locator(".session-menu__icon-remove").click();
+          await ui.sessionPatch(gateway, own.key, { icon: null, color: null });
+          await expect
+            .poll(async () => {
+              const row = await gateway.getSessionRow(own.key);
+              return { icon: row?.icon, color: row?.color };
+            })
+            .toEqual({ icon: null, color: null });
+          await closeMenu();
+          await reopen();
+          await support.openSessionMenuSubmenu(page, "Advanced");
+          await support.openSessionMenuSubmenu(page, "Icon & color");
+          await expect.poll(() => red.getAttribute("aria-pressed")).toBe("false");
+          await expect.poll(() => rocket.getAttribute("aria-pressed")).toBe("false");
+          await closeMenu();
+        };
         await page.goto(support.controlUiSessionUrl(suite.server.baseUrl, own.key));
         await historyText.waitFor();
         await openOwnMenu();
@@ -121,16 +176,30 @@ suite.define(() => {
           name: "Label",
           exact: true,
         });
+        await ui.button(listRow("Shared notes"), "Open session menu", false).click();
+        await support.openSessionMenuSubmenu(page, "Advanced");
+        await forceDisabled(ui.menuItem(menu, "Icon & color"));
+        await closeMenu();
         await showDetails("Shared notes");
         expect(await detailsLabel.isDisabled()).toBe(true);
         await showDetails("My workspace");
 
         expect(await detailsLabel.isEditable()).toBe(canOrganize);
+        if (!canOrganize) {
+          await ui.button(listRow("My workspace"), "Open session menu", false).click();
+          await support.openSessionMenuSubmenu(page, "Advanced");
+          await forceDisabled(ui.menuItem(menu, "Icon & color"));
+          await closeMenu();
+        }
         if (canOrganize) {
           await detailsLabel.fill("List workspace");
           await detailsLabel.press("Tab");
           await ui.sessionPatch(gateway, own.key, { label: "List workspace" });
-          await ui.button(listRow("List workspace"), "Open session menu", false).click();
+          const openListMenu = () =>
+            ui.button(listRow("List workspace"), "Open session menu", false).click();
+          await openListMenu();
+          await exerciseAppearance(menu, "sessions", openListMenu);
+          await openListMenu();
           await ui.menuItem(menu, "Mark as unread").click();
           await ui.sessionPatch(gateway, own.key, { unread: true });
         }
@@ -150,7 +219,9 @@ suite.define(() => {
         expect(await menu.locator('[data-value="toggle-unread"]').isDisabled()).toBe(true);
         await rename.click({ force: true });
         await archive.click({ force: true });
-        await page.keyboard.press("Escape");
+        await support.openSessionMenuSubmenu(page, "Advanced");
+        await forceDisabled(ui.menuItem(menu, "Icon & color"));
+        await closeMenu();
 
         await navigate(own.key);
         const unreadBadge = ownRow.locator(".sidebar-session-indicator .session-unread-dot");
@@ -165,14 +236,19 @@ suite.define(() => {
           await model.click({ force: true });
           await permission.click({ force: true });
           expect(await activePane.locator(".chat-controls__model-picker[open]").count()).toBe(0);
+          await activePane.locator(".chat-header-session-menu__trigger").click();
+          await support.openSessionMenuSubmenu(page, "Advanced");
+          await forceDisabled(
+            ui.menuItem(activePane.locator("openclaw-chat-header-session-menu"), "Icon & color"),
+          );
+          await closeMenu();
         }
         const sharing = ui.button(activePane, "Session sharing");
         expect((await sharing.count()) > 0 && !(await sharing.isDisabled())).toBe(false);
         await openOwnMenu();
-        for (const control of [rename, archive]) {
+        for (const control of [rename, archive, fork]) {
           expect((await control.getAttribute("disabled")) === null).toBe(canOrganize);
         }
-        expect(await fork.getAttribute("disabled")).not.toBeNull();
         const unread = menu.locator('[data-value="toggle-unread"]');
         expect(await unread.isDisabled()).toBe(!canOrganize);
         if (canOrganize) {
@@ -184,14 +260,24 @@ suite.define(() => {
             .click();
           await activePane.locator(".chat-header-session-menu__panel").waitFor({ state: "hidden" });
           await unreadBadge.waitFor({ state: "hidden" });
+          const headerMenu = activePane.locator("openclaw-chat-header-session-menu");
+          const openHeaderMenu = () =>
+            activePane.locator(".chat-header-session-menu__trigger").click();
+          await openHeaderMenu();
+          await exerciseAppearance(headerMenu, "chat-header", openHeaderMenu);
           await openOwnMenu();
         } else {
           await unread.click({ force: true });
         }
         await forceDisabled(ui.menuItem(menu, "Move to group", false));
-        await support.openSessionMenuSubmenu(page, "Advanced");
-        await forceDisabled(ui.menuItem(menu, "Icon & color"));
-        await page.keyboard.press("ArrowLeft");
+        if (canOrganize) {
+          await exerciseAppearance(menu, "sidebar", openOwnMenu);
+          await openOwnMenu();
+        } else {
+          await support.openSessionMenuSubmenu(page, "Advanced");
+          await forceDisabled(ui.menuItem(menu, "Icon & color"));
+          await page.keyboard.press("ArrowLeft");
+        }
         if (canOrganize) {
           await rename.click();
           await support.submitInputDialog(page, "Organized workspace");
@@ -202,8 +288,9 @@ suite.define(() => {
           await ui.button(ownRow, "Unpin session").waitFor();
           await ownRow.click({ button: "right" });
           await support.activateSelfRemovingControl(archive);
-          await ui.sessionPatch(gateway, own.key, { archived: true });
           await ui.button(page, "Undo").waitFor();
+          await ui.closeArchiveUndoToast(page);
+          await ui.sessionPatch(gateway, own.key, { archived: true });
 
           await showSessions("?status=archived");
           const archivedRow = listRow("Organized workspace");
@@ -220,7 +307,7 @@ suite.define(() => {
           await archivedRow.waitFor({ state: "detached" });
           await navigate(own.key);
           await ui.expectText(ownRow, "Organized workspace");
-          // Ordinary Unarchive leaves personal pins cleared; only Undo restores them.
+          // The committed archive cleared the personal pin; Unarchive does not restore it.
           await ui.expectCount(
             page.locator(`[data-session-section="pinned"] [data-session-key="${own.key}"]`),
             0,
@@ -273,6 +360,17 @@ suite.define(() => {
         const patches = (await gateway.getRequests("sessions.patch")).map((request) =>
           support.requireRecord(request.params),
         );
+        for (const patch of patches) {
+          expect(patch.key).toBe(own.key);
+          if ("icon" in patch || "color" in patch) {
+            expect(patch.expectedSessionId).toBe(own.sessionId);
+          }
+        }
+        const appearancePatches = [
+          { key: own.key, color: "red" },
+          { key: own.key, icon: "🚀" },
+          { key: own.key, icon: null, color: null },
+        ];
         const envelopeKeys = new Set([
           "agentId",
           "expectedSessionId",
@@ -287,10 +385,13 @@ suite.define(() => {
           canOrganize
             ? [
                 { key: own.key, label: "List workspace" },
+                ...appearancePatches,
                 { key: own.key, unread: true },
                 { key: own.key, unread: false },
                 { key: own.key, unread: true },
                 { key: own.key, unread: false },
+                ...appearancePatches,
+                ...appearancePatches,
                 { key: own.key, label: "Organized workspace" },
                 { key: own.key, archived: true },
                 { key: own.key, archived: false },

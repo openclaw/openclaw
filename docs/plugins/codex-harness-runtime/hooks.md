@@ -12,14 +12,35 @@ The three hook layers around a Codex turn and the events each one owns. Part of 
 ## Hook boundaries
 
 For ordinary persistent conversations, a `before_prompt_build` result containing
-`systemPrompt` replaces the complete OpenClaw generic developer policy. An explicit
-empty string withdraws that policy. Unchanged, configuration-proven warm threads
-stay warm, with the retained subscription and host authority rechecked after plugin
+`systemPrompt` replaces the complete OpenClaw generic developer policy in native
+configuration. An explicit empty string clears that configured policy. Unchanged,
+configuration-proven warm threads stay warm, with the retained subscription and host authority rechecked after plugin
 policy awaits. A closed or archived thread cannot be reused merely because its
 connection is still open. Cold resumes and changed-policy resumes preserve the native thread and
 history, verify that Codex unloaded the previous configuration, then append a
-complete superseding policy message before admitting the turn. Historical policy
-text can remain in the transcript; the later policy explicitly supersedes it.
+complete superseding policy message before admitting the turn. Earlier delimited
+policy blocks can remain in the transcript; the later block explicitly supersedes
+them.
+
+The complete native-thread carrier is delimited by `<thread_policy>` on
+initial creation and refresh. The replacement notice targets earlier OpenClaw policy blocks
+with the same delimiters and legacy unframed OpenClaw generic policy. It does not
+replace independent instructions or the enclosing native developer message. Separately supplied parent-request persona, skills, memory and conversation
+instructions, independent native/project
+instructions, and user requests retain their authority. On connections without
+the inference relay, eligible workspace and refreshable instructions remain part
+of this native carrier and follow its existing replacement/removal semantics.
+
+Framing happens after native developer-policy composition. When native
+`instructions` or `model_instructions_file` is authored, OpenClaw's fallback base
+policy is included inside the same frame; the authored native instructions remain
+independent. Otherwise OpenClaw's base prompt keeps its separate native placement.
+The legacy withdrawal clause preserves the existing contract for conversations
+created before framing; it does not rewrite their transcript.
+
+Unchanged warm reuse adds no policy message. Explicit cold resumes still reassert
+the policy even when its text has not changed: the configuration fingerprint does
+not attest which policy remains in reconstructed model-visible history.
 
 Ordinary conversations use the same unsubscribe-and-resume flow over local stdio,
 WebSocket, Unix-socket, and stdio-proxy connections. The native conversation ID
@@ -78,6 +99,11 @@ commands can use the existing Gateway fallback. Policy preparation must still
 succeed; Gateway invocation waits for that snapshot independently of publication.
 Registration returns a synchronous handle whose optional `deferMcpToolApprovals`
 field remains undefined until policy preparation finishes.
+
+Foreground hook callbacks must name the native thread and accepted turn of the
+current run, even when warm threads reuse their hook commands and generation.
+Late callbacks cannot inherit a successor run's policy. Separately admitted
+direct children keep their existing retained authority.
 
 The cold hook CLI reads the locator without loading shared-state writer startup.
 On Node, this one-shot process uses a read-only connection with no SQLite lock
@@ -141,6 +167,19 @@ dynamic calls; callers must parse JSON-looking results and cannot rely on
 native tool record; OpenClaw can mirror selected events but cannot rewrite
 the native thread unless Codex exposes that through app-server or native hook
 callbacks.
+
+A `before_tool_call` rewrite on a Codex `PreToolUse` event returns the
+replacement as `updatedInput` when Codex can apply it: `command` for native
+shell and `apply_patch`, or the JSON object arguments for MCP tools within the
+[size, depth, and number limits](/plugins/codex-harness-runtime/v1-support-contract).
+Codex then applies its normal approval and sandbox policy to the replacement. OpenClaw
+denies the call for any other rewrite, including extra shell fields such as
+`workdir`, other native tools, and rewrites that arrive during a report-mode
+approval, when Codex has already fixed the command.
+
+Codex keeps the last completed `updatedInput` from its `PreToolUse` hooks, so a
+separate Codex hook from another config layer can replace an OpenClaw rewrite.
+OpenClaw policy does not see that hook's input.
 
 Codex app-server report-mode `PreToolUse` events defer plugin approval to the
 matching app-server approval. If an OpenClaw `before_tool_call` hook returns

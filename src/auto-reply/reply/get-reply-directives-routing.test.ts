@@ -63,13 +63,15 @@ describe("sender-owned directive projection", () => {
   });
 
   const tail = "/think high\n  code()";
-  const forwardedStatus = `Please summarize\n[Forwarded message]\n/status marker\n${tail}`;
+  const prose =
+    "Prüfe anschließend, ob das Modell über /model bzw. /models in Telegram auswählbar ist.";
+  const forwardedStatus = `${prose}\n[Forwarded message]\n/status marker\n${tail}`;
   it.each<[string, string, string, boolean, string?, string?, boolean?]>([
-    ["preserves forwarded status beside a caption", "Please summarize", forwardedStatus, false],
+    ["preserves model prose and forwarded status", prose, forwardedStatus, false],
     [
       "removes only sender status",
-      "Please /status summarize",
-      `Please /status summarize\n[Forwarded message]\n/status marker\n${tail}`,
+      `${prose} /status`,
+      `${prose} /status\n[Forwarded message]\n/status marker\n${tail}`,
       true,
       forwardedStatus,
     ],
@@ -106,10 +108,14 @@ describe("sender-owned directive projection", () => {
         BodyForAgent: agentText,
         CommandAuthorized: true,
       });
-      const result = await route(ctx, { resetTriggered });
+      const result = await route(ctx, {
+        resetTriggered,
+        preparedModelCatalog: { entries: [], routeVariants: [] },
+      });
       expect(result.cleanedBody).toBe(expected);
       expect(result.inlineStatusRequested).toBe(inlineStatus);
       expect(result.directives.hasThinkDirective).toBe(false);
+      expect(result.directives.hasModelDirective).toBe(false);
     },
   );
 

@@ -66,6 +66,7 @@ function executeCliTurn(
   followupRun: ReturnType<typeof createFollowupRun>,
   opts: GetReplyOptions,
   typingSignals = createMockTypingSignaler(),
+  onCompactionNoticePayload?: GetReplyOptions["onBlockReply"],
 ) {
   return executeAgentTurn({
     commandBody: "hi",
@@ -73,11 +74,64 @@ function executeCliTurn(
     sessionCtx: { Provider: "telegram", MessageSid: "msg" },
     opts,
     typingSignals,
+    onCompactionNoticePayload,
     ...createAgentTurnExecutionDefaults(),
   });
 }
 
 describe("executeAgentTurn: CLI progress bridging", () => {
+  it.each([
+    [true, false],
+    [false, false],
+    [undefined, false],
+    [true, true],
+  ] as const)(
+    "delivers CLI compaction notices with notifyUser=%s and fallback=%s",
+    async (notifyUser, fallback) => {
+      const followupRun = createCliRun("claude-cli", "claude-opus-4-6");
+      followupRun.run.config = { agents: { defaults: { compaction: { notifyUser } } } };
+      mockCliEvents([
+        ["compaction", { phase: "start" }],
+        ["compaction", { phase: "end", completed: true }],
+        ["compaction", { phase: "start" }],
+        ["compaction", { phase: "end", completed: false }],
+      ]);
+      const notices: string[] = [];
+      const onCompactionStart = vi.fn();
+      const onCompactionEnd = vi.fn();
+      const deliver = async (
+        payload: Parameters<NonNullable<GetReplyOptions["onBlockReply"]>>[0],
+      ) => {
+        if (payload.isCompactionNotice) {
+          expect(payload.replyToId).toBe("msg");
+          notices.push(payload.text ?? "");
+        }
+      };
+      await executeCliTurn(
+        followupRun,
+        {
+          onCompactionStart,
+          onCompactionEnd,
+          onBlockReply: fallback ? undefined : deliver,
+        },
+        undefined,
+        fallback ? deliver : undefined,
+      );
+      expect(notices).toEqual(
+        notifyUser
+          ? [
+              "🧹 Compacting context...",
+              "🧹 Compaction complete",
+              "🧹 Compacting context...",
+              "🧹 Compaction incomplete",
+            ]
+          : [],
+      );
+      expect(onCompactionStart).toHaveBeenCalledTimes(2);
+      expect(onCompactionEnd.mock.calls).toEqual([[{ completed: true }], [{ completed: false }]]);
+    },
+  );
+
   it("serializes and drains bridged CLI assistant previews before completing (#76869)", async () => {
     const followupRun = createCliRun("claude-cli", "claude-opus-4-6");
     mockCliEvents(

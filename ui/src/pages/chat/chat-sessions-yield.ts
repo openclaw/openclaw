@@ -1,3 +1,4 @@
+import { extractBalancedJsonPrefix } from "@openclaw/normalization-core";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNodePermissionRequest } from "../../../../packages/gateway-protocol/src/node-permissions.js";
@@ -25,35 +26,68 @@ import { transcriptRunId } from "./chat-thread-run-identity.ts";
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
 import { chatItemStartsUserTurn } from "./chat-turn-boundary.ts";
 
+function readYieldReceipt(card: ToolCard): Record<string, unknown> | null {
+  const details = asRecord(card.details);
+  if (details && Object.hasOwn(details, "status")) {
+    return details;
+  }
+  // Plugin result hooks can append text after the receipt; only its leading object is authoritative.
+  const receipt = extractBalancedJsonPrefix((card.outputText ?? "").trimStart(), {
+    openers: ["{"],
+  });
+  return receipt?.startIndex === 0 ? (safeParseJsonRecord(receipt.json) ?? null) : null;
+}
+
 function isConfirmedYield(card: ToolCard): boolean {
   return (
     card.name === "sessions_yield" &&
     Object.hasOwn(card, "args") &&
     card.completed === true &&
     card.isError !== true &&
-    (asRecord(card.details)?.status === "yielded" ||
-      safeParseJsonRecord(card.outputText ?? "")?.status === "yielded")
+    readYieldReceipt(card)?.status === "yielded"
   );
 }
 
-function isConfirmedPrPreparationHandoff(card: ToolCard): boolean {
+function isPublicHandoffTool(name: unknown): boolean {
+  return (
+    name === "github_publish" ||
+    name === "image_generate" ||
+    name === "video_generate" ||
+    name === "music_generate"
+  );
+}
+
+// These owners finish in the background and resume the conversation with their
+// result. Only a paired, accepted receipt proves the turn intentionally handed off.
+function isConfirmedPublicHandoff(card: ToolCard): boolean {
   if (
-    card.name !== "github_publish" ||
-    asRecord(card.args)?.action !== "prepare_pr" ||
+    !isPublicHandoffTool(card.name) ||
+    !Object.hasOwn(card, "args") ||
     card.completed !== true ||
     card.isError === true
   ) {
     return false;
   }
-  const receipt = asRecord(card.details) ?? safeParseJsonRecord(card.outputText ?? "");
-  return receipt?.status === "started" && receipt.async === true && receipt.yielded === true;
+  const receipt = readYieldReceipt(card);
+  return (
+    receipt?.status === "started" &&
+    receipt.async === true &&
+    (card.name === "github_publish"
+      ? receipt.yielded === true
+      : typeof receipt.taskId === "string" && receipt.taskId.length > 0)
+  );
 }
 
 /** Keep handoff-capable calls and results until the projection can pair them. */
 export function hasHandoffToolCall(message: unknown): boolean {
   return extractToolCardsCached(message).some(
-    (card) => card.name === "sessions_yield" || card.name === "github_publish",
+    (card) => card.name === "sessions_yield" || isPublicHandoffTool(card.name),
   );
+}
+
+/** Handoff boundaries shape grouping but never occupy a transcript row. */
+export function isHandoffBoundaryItem(item: { kind: string; handoffBoundary?: boolean }): boolean {
+  return item.kind === "notice" && item.handoffBoundary === true;
 }
 
 /**
@@ -140,9 +174,9 @@ function scanSessionsYieldItems(
     const yields = yieldCards.filter(isConfirmedYield);
     const lastYield = yields.at(-1);
     const boundary: ChatItem[] = [];
-    // PR preparation also yields, but its public tool details and non-subagent
+    // Public tool handoffs also yield, but their details and non-subagent
     // lifecycle must not enter the private sessions_yield projection below.
-    const handoff = lastYield ?? cards.findLast(isConfirmedPrPreparationHandoff);
+    const handoff = lastYield ?? cards.findLast(isConfirmedPublicHandoff);
     if (handoff) {
       // The invisible boundary keeps handed-off rows in place and separates
       // their run from a continuation without declaring an interruption.
@@ -177,7 +211,7 @@ function scanSessionsYieldItems(
       ) {
         handoffRunIds.unshift(handoffRunId);
       }
-      const facts = asRecord(lastYield.details) ?? safeParseJsonRecord(lastYield.outputText ?? "");
+      const facts = readYieldReceipt(lastYield);
       const acknowledgment =
         typeof facts?.acknowledgment === "string" ? facts.acknowledgment.trim() : "";
       if (acknowledgment) {
@@ -221,26 +255,26 @@ function scanSessionsYieldItems(
     let remaining: ChatItem[] = [item];
     // Public handoff details follow the display preference after recognition.
     // Private continuation filtering below still uses only sessions_yield IDs.
-    const hiddenGithubCards = showToolCalls
+    const hiddenPublicCards = showToolCalls
       ? []
       : cards.filter(
           (card) =>
-            card.name === "github_publish" &&
+            isPublicHandoffTool(card.name) &&
             !readNodePermissionRequest(asRecord(card.details)?.permissionMissing),
         );
-    const filterTools = yieldCards.length > 0 || hiddenGithubCards.length > 0;
+    const filterTools = yieldCards.length > 0 || hiddenPublicCards.length > 0;
     if (
       message &&
       filterTools &&
       !showToolCalls &&
       isStandaloneToolMessageForDisplay(message) &&
-      (yieldCards.length > 0 || hiddenGithubCards.length === cards.length)
+      (yieldCards.length > 0 || hiddenPublicCards.length === cards.length)
     ) {
       remaining = [];
     } else if (message && filterTools && Array.isArray(message.content)) {
       const yieldIds = new Set(yieldCards.map((card) => card.callId));
       const ids = new Set(yields.map((card) => card.callId));
-      const hiddenGithubIds = new Set(hiddenGithubCards.map((card) => card.callId));
+      const hiddenPublicIds = new Set(hiddenPublicCards.map((card) => card.callId));
       const content = message.content.filter((block: unknown) => {
         const raw = asRecord(block);
         if (!raw || (!isToolCallContentType(raw.type) && !isToolResultContentType(raw.type))) {
@@ -248,11 +282,11 @@ function scanSessionsYieldItems(
         }
         const id = resolveToolBlockId(raw, message);
         // A retained mixed row can also own an actionable permission request.
-        // Hide only GitHub's cards; its siblings keep their original projection.
+        // Hide only public handoff cards; siblings keep their original projection.
         if (!showToolCalls) {
           return (
             yieldCards.length === 0 &&
-            (id ? !hiddenGithubIds.has(id) : raw.name !== "github_publish")
+            (id ? !hiddenPublicIds.has(id) : !isPublicHandoffTool(raw.name))
           );
         }
         // Live inputs can precede the sanitized history row. Yield context is never a tool detail.
@@ -276,7 +310,7 @@ function scanSessionsYieldItems(
                   showToolCalls
                     ? !yieldIds.has(activity.toolCallId ?? activity.itemId)
                     : yieldCards.length === 0 &&
-                      !hiddenGithubIds.has(activity.toolCallId ?? activity.itemId),
+                      !hiddenPublicIds.has(activity.toolCallId ?? activity.itemId),
                 ),
               },
             },
@@ -358,12 +392,40 @@ function scanSessionsYieldItems(
  * rows. A resumed run's request and handoffs are facts of the whole transcript,
  * so working and waiting statuses are taken from there, not from the matching rows.
  */
+// Hidden tool calls keep assistant text, whose ordinary calls coalescing split
+// into their own rows. Only handoff and permission rows stay visible.
+function keepsRowWithToolsHidden(item: ChatItem): boolean {
+  if (item.kind !== "message") {
+    return true;
+  }
+  const cards = extractToolCardsCached(item.message);
+  const message = asRecord(item.message);
+  // Anonymous calls cannot be split into identified invocation rows. Keep their
+  // accompanying content; the message renderer already hides the tool cards.
+  const hasContent =
+    (message?.role === "assistant" || message?.role === "user") &&
+    (typeof message.content === "string"
+      ? Boolean(message.content.trim())
+      : Array.isArray(message.content) &&
+        message.content.some((block) => {
+          const type = asRecord(block)?.type;
+          return !isToolCallContentType(type) && !isToolResultContentType(type);
+        }));
+  return (
+    cards.length === 0 ||
+    hasContent ||
+    hasHandoffToolCall(item.message) ||
+    cards.some((card) => readNodePermissionRequest(asRecord(card.details)?.permissionMissing))
+  );
+}
+
 export function projectSessionsYieldItems(
   items: ChatItem[],
   showToolCalls = true,
   complete?: readonly ChatItem[],
 ): ChatItem[] {
-  const projected = scanSessionsYieldItems(items, showToolCalls).items;
+  const shown = showToolCalls ? items : items.filter(keepsRowWithToolsHidden);
+  const projected = scanSessionsYieldItems(shown, showToolCalls).items;
   const status = complete?.find(isTurnStatus);
   const completeKeys = complete && new Set(complete.map((item) => item.key));
   const visible = completeKeys

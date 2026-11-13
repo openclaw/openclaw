@@ -6,6 +6,41 @@ import { SessionSchema } from "./zod-schema.session.js";
 
 const accepts = (raw: unknown) => OpenClawSchema.safeParse(raw).success;
 
+test("accepts opt-in proxy credit headers without changing the user principal header", () => {
+  expect(
+    accepts({
+      gateway: {
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: {
+            userHeader: "x-occ-identity",
+            gitCoauthor: { nameHeader: "x-credit-name", emailHeader: "x-credit-email" },
+          },
+        },
+      },
+    }),
+  ).toBe(true);
+});
+
+test.each([
+  { nameHeader: "", emailHeader: "x-email" },
+  { nameHeader: "x-name\r\ninjected", emailHeader: "x-email" },
+  { nameHeader: "x-name" },
+])("rejects invalid or incomplete proxy credit mapping %j", (gitCoauthor) => {
+  expect(
+    accepts({
+      gateway: {
+        auth: {
+          trustedProxy: {
+            userHeader: "x-user",
+            gitCoauthor,
+          },
+        },
+      },
+    }),
+  ).toBe(false);
+});
+
 function expectSchemaIssue(raw: unknown, path: string[], message?: string) {
   const result = OpenClawSchema.safeParse(raw);
   expect(result.error?.issues).toContainEqual(
@@ -55,6 +90,12 @@ const rolesConfig = (overrides: Record<string, unknown>) => ({
 const modelConfig = (modelPolicy: unknown, extraRoles = {}) => ({
   agents: { entries: { shared: { models: { "fixture/fallback": { alias: "backup" } } } } },
   ...rolesConfig({ definitions: { guest: { ...validRole, modelPolicy }, ...extraRoles } }),
+});
+
+test("accepts a conversation-scoped automation role without operator.write", () => {
+  const scopes = ["operator.sessions.write", "operator.cron"];
+  const config = validated(rolesConfig({ definitions: { guest: { ...validRole, scopes } } }));
+  expect(config.gateway?.roles?.definitions.guest?.scopes).toEqual(scopes);
 });
 
 test.each([

@@ -89,6 +89,7 @@ export function packageActivationIdentity(
 export function privatePackageActivationIdentity(
   file: string,
   role: "anchor" | "control" | "journal" | "helper" | "rollback-journal",
+  repairPermissions = true,
 ): string {
   const directory = role === "anchor" || role === "control";
   const value = packageActivationIdentity(file, directory);
@@ -103,6 +104,9 @@ export function privatePackageActivationIdentity(
     throw refusal("expected nlink=1. Run openclaw doctor --fix.");
   }
   if ((stat.mode & 0o077n) !== 0n) {
+    if (!repairPermissions) {
+      throw refusal("expected owner-only permissions. Run openclaw doctor --fix.");
+    }
     // POSIX ACL masks occupy the group mode bits. chmod clears their effective
     // grants too; getfacl is optional and only improves the repair diagnostic.
     const acl =

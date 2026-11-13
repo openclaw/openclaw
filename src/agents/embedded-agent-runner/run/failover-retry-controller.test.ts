@@ -36,9 +36,12 @@ const nativeRuntime = {
 
 function clock(initialMs = 1_000_000) {
   let nowMs = initialMs;
-  vi.spyOn(Date, "now").mockImplementation(() => nowMs);
-  return (ms: number) => {
+  let wallOffsetMs = 0;
+  vi.spyOn(Date, "now").mockImplementation(() => nowMs + wallOffsetMs);
+  vi.spyOn(performance, "now").mockImplementation(() => nowMs - initialMs);
+  return (ms: number, wallStepMs = 0) => {
     nowMs += ms;
+    wallOffsetMs += wallStepMs;
   };
 }
 function expectNoRetry() {
@@ -178,11 +181,7 @@ it("waits for the provider floor before exhausting recovery and rotating credent
     fallbackConfigured: true,
   });
   controller.observeAttempt({ providerRetryMaxRetries: 1 });
-  const retry = {
-    reason: "rate_limit" as const,
-    retryAfterMs: 2000,
-    failoverEligible: true,
-  };
+  const retry = { reason: "rate_limit" as const, retryAfterMs: 2000 };
   await checkRetry(retry);
   expect(sleep).toHaveBeenCalledExactlyOnceWith(2000, undefined);
   await checkRetry(retry, false);
@@ -196,48 +195,48 @@ it("waits for the provider floor before exhausting recovery and rotating credent
   expect(advance).toHaveBeenCalledTimes(1);
 });
 
-it("bounds shared TPM recovery before model fallback by retries and elapsed waiting", async () => {
-  const advanceTime = clock();
-  vi.spyOn(Math, "random").mockReturnValue(0.5);
-  sleep.mockImplementation(async (delayMs) => advanceTime(delayMs));
-  const advance = vi.fn(async () => true);
-  controller = createRetryController({
-    fallbackConfigured: true,
-    runtime: { advanceAttemptAuthProfile: advance },
-  });
-  const retry = {
-    reason: "rate_limit" as const,
-    message:
-      "429 Rate limit reached for mock-primary in organization org-example on tokens per min (TPM). Please try again in 48ms.",
-    retryAfterMs: 48,
-    failoverEligible: true,
-  };
-  await checkRetry(retry);
-  const queuedRetry = {
-    ...retry,
-    message: "429 Shared organization token rate limit wait budget.",
-  };
-  await checkRetry(queuedRetry);
-  await checkRetry(queuedRetry, false);
-  await expect(rotate()).resolves.toBe(false);
-  expect(advance).not.toHaveBeenCalled();
-  expect(sleep.mock.calls.map(([delay]) => delay)).toEqual([1_000, 2_000]);
-  // A later attempt that cannot safely switch models retains ordinary recovery.
-  await checkRetry({ ...retry, failoverEligible: false });
-  expect(sleep).toHaveBeenLastCalledWith(4_000, undefined);
+it.each([-90_000, 0, 90_000])(
+  "bounds shared TPM recovery across a %sms wall-clock step by retries and elapsed waiting",
+  async (wallStepMs) => {
+    const advanceTime = clock();
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    sleep.mockImplementation(async (delayMs) => advanceTime(delayMs));
+    const advance = vi.fn(async () => true);
+    controller = createRetryController({
+      fallbackConfigured: true,
+      runtime: { advanceAttemptAuthProfile: advance },
+    });
+    const retry = {
+      reason: "rate_limit" as const,
+      message: "429 Rate limit reached in organization org-example on tokens per min (TPM).",
+      retryAfterMs: 48,
+    };
+    await checkRetry(retry);
+    advanceTime(0, wallStepMs);
+    const queuedRetry = { ...retry, message: "429 Shared organization token rate limit budget." };
+    await checkRetry(queuedRetry);
+    await checkRetry(queuedRetry, false);
+    await expect(rotate()).resolves.toBe(false);
+    expect(advance).not.toHaveBeenCalled();
+    expect(sleep.mock.calls.map(([delay]) => delay)).toEqual([1_000, 2_000]);
+    // A later attempt that cannot safely switch models retains ordinary recovery.
+    await checkRetry({ ...retry, failoverEligible: false });
+    expect(sleep).toHaveBeenLastCalledWith(4_000, undefined);
 
-  controller.observeAttempt({ hasSuccessfulModelResponse: true });
-  await checkRetry({ ...retry, retryAfterMs: 10_000 });
-  await checkRetry({ ...retry, retryAfterMs: 10_000 }, false);
-  expect(sleep).toHaveBeenCalledTimes(4);
-});
+    controller.observeAttempt({ hasSuccessfulModelResponse: true });
+    await checkRetry({ ...retry, retryAfterMs: 10_000 });
+    await checkRetry({ ...retry, retryAfterMs: 10_000 }, false);
+    expect(sleep).toHaveBeenCalledTimes(4);
+  },
+);
 
 it.each([
   ["fallback", undefined, 30_000, "rate_limit", 9_897_000, false],
-  ["replay-unsafe", false, 30_000, "rate_limit", 9_897_000, true],
+  ["replay-unsafe", false, 30_000, "rate_limit", 9_897_000, false],
   ["disabled cap", undefined, 0, "rate_limit", 9_897_000, true],
   ["absent cap", undefined, undefined, "rate_limit", 9_897_000, true],
   ["inside cap", undefined, 30_000, "rate_limit", 20_000, true],
+  ["replay-unsafe at cap", false, 30_000, "rate_limit", 30_000, true],
   ["non-rate limit", undefined, 30_000, "server_error", 60_000, true],
   ["unrepresentable", undefined, undefined, "rate_limit", Infinity, false],
 ] as const)(
@@ -249,20 +248,13 @@ it.each([
       runParams: { timeoutMs: 2_147_483_647 },
     });
     await checkRetry(
-      {
-        reason,
-        retryAfterMs,
-        maxRetryDelayMs,
-        failoverEligible,
-        onRetry,
-      },
+      { reason, retryAfterMs, maxRetryDelayMs, failoverEligible, onRetry },
       expected,
     );
     if (expected) {
       expect(sleep).toHaveBeenCalledWith(Math.max(1_000, retryAfterMs), undefined);
     } else {
-      expect(sleep).not.toHaveBeenCalled();
-      expect(onRetry).not.toHaveBeenCalled();
+      expectNoRetry();
     }
   },
 );
@@ -311,7 +303,7 @@ it.each([
   ["replay unsafe", true, {}, {}, { failoverEligible: false }, true],
   ["native", true, {}, {}, {}, true, nativeRuntime],
 ] as const)(
-  "reserves bounded recovery time for fallback: %s",
+  "reserves bounded recovery time for fallback across a wall-clock step: %s",
   async (_name, fallback, params, settings, retryOptions, again, runtime?) => {
     const advanceTime = clock();
     controller = createRetryController({
@@ -322,25 +314,19 @@ it.each([
     controller.observeAttempt(settings);
     advanceTime(60_000);
     await checkRetry({ reason: "timeout", ...retryOptions });
-    advanceTime(61_000);
+    advanceTime(61_000, 90_000);
     await checkRetry({ reason: "timeout", ...retryOptions }, again);
     expect(sleep).toHaveBeenCalledTimes(again ? 2 : 1);
   },
 );
 
 it("bounds transient retries across reasons and honors Retry-After", async () => {
-  // Retry exhaustion includes sleep time.
   const advanceTime = clock();
-  sleep.mockImplementation(async (delayMs: number) => {
-    advanceTime(delayMs);
-  });
+  sleep.mockImplementation(async (delayMs) => advanceTime(delayMs));
   await checkRetry({ reason: "server_error", retryAfterMs: 60_000 });
   await checkRetry({ reason: "timeout", retryAfterMs: 30_000 });
   await checkRetry({ reason: "overloaded" }, false);
-  expect(sleep.mock.calls).toEqual([
-    [60_000, undefined],
-    [30_000, undefined],
-  ]);
+  expect(sleep.mock.calls.map(([delay]) => delay)).toEqual([60_000, 30_000]);
 });
 
 it("allows eight transient retries across failure reasons when the ceiling has room", async () => {

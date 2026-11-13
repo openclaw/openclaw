@@ -15,8 +15,13 @@ import {
   type SenderIdentity,
 } from "../../lib/chat/sender-label.ts";
 import { hasVisiblePreparedActivity } from "../../lib/chat/tool-call-grouping.ts";
-import { assistantMessageIsInterrupted, assistantMessageKind } from "./chat-assistant-reply.ts";
+import {
+  assistantMessageCanOwnTurnActions,
+  assistantMessageIsInterrupted,
+  assistantMessageKind,
+} from "./chat-assistant-reply.ts";
 import { prepareMessagesForGrouping } from "./chat-thread-duplicates.ts";
+import { persistedMessageEntryId } from "./chat-thread-items.ts";
 import { transcriptRunId } from "./chat-thread-run-identity.ts";
 import {
   assistantGroupIsIndependentBoundary,
@@ -44,6 +49,16 @@ export type ReplyAttributionContext = {
   people?: readonly string[];
   /** Key of the signed-in viewer, who authors local user messages without a sender. */
   localPerson?: string;
+  /** Receives the transcript-wide attribution facts. */
+  facts?: ReplyAttributionFacts;
+};
+
+export type ReplyAttributionFacts = {
+  people?: ReadonlySet<string>;
+  /** Prompts per persisted user-turn run; a repeated run has no single prompt. */
+  prompts?: ReadonlyMap<string, number>;
+  /** Runs whose shown replies answer the prompt that started them. */
+  currentReplies?: ReadonlySet<string>;
 };
 
 const groupedSegments = new WeakMap<
@@ -179,6 +194,7 @@ export function groupMessages(
   // reply_to_current names the prompt that started the run. Only the persisted
   // user-turn run identity resolves it; an ambiguous owner stays unresolved.
   const runPrompts = new Map<string, MessageGroup["messages"][number] | null>();
+  const promptCounts = new Map<string, number>();
   const stateBefore = new Map<string, ReplyState>();
   let state: ReplyState = {};
   for (const item of context) {
@@ -188,19 +204,20 @@ export function groupMessages(
       state = {};
     }
     if (item.kind === "stream") {
-      stateBefore.set(item.key, state);
+      stateBefore.set(item.key, { ...state });
     }
     if (item.kind !== "group") {
       continue;
     }
     for (const source of item.messages) {
-      stateBefore.set(source.key, state);
+      stateBefore.set(source.key, { ...state });
     }
     if (item.role === "user") {
       for (const source of item.messages) {
         const runId = userTurnRunId(source.message);
         if (runId) {
           runPrompts.set(runId, runPrompts.has(runId) ? null : source);
+          promptCounts.set(runId, (promptCounts.get(runId) ?? 0) + 1);
         }
       }
       // A local message carries no sender metadata: its author is the signed-in
@@ -245,11 +262,15 @@ export function groupMessages(
   }
   // Automatic attribution is only useful when several people share the thread.
   const shared = people.size >= 2;
+  const currentReplies = new Set<string>();
+  if (replyContext.facts) {
+    Object.assign(replyContext.facts, { people, prompts: promptCounts, currentReplies });
+  }
 
   // Rows outside the context (live output) take the state of the next row that
   // has one, or the transcript end.
   const states: ReplyState[] = [];
-  let next = state;
+  let next: ReplyState = state;
   for (let index = result.length - 1; index >= 0; index -= 1) {
     const item = result[index]!;
     const known =
@@ -261,9 +282,21 @@ export function groupMessages(
     next = known ?? next;
     states[index] = next;
   }
+  let previousMessageId: string | undefined;
   for (const [index, item] of result.entries()) {
     const { sender, message, turnSource } = states[index]!;
+    if (item.kind === "group" || item.kind === "stream") {
+      item.replyPreviousMessageId = previousMessageId;
+    }
     if (item.kind === "group") {
+      // Excerpts are redundant only when their source is in the displayed projection.
+      if (item.role === "user" || item.role === "assistant") {
+        for (const source of item.messages) {
+          if (source.hasVisibleContent) {
+            previousMessageId = persistedMessageEntryId(source.message) ?? undefined;
+          }
+        }
+      }
       // Every strip follows the thread: an unattributed source is "You" only in 1:1.
       if (shared) {
         item.replyShared = true;
@@ -275,10 +308,13 @@ export function groupMessages(
       ) {
         continue;
       }
-      const currentSource =
-        item.runId && item.messages.some((source) => source.replyTarget?.kind === "current")
-          ? runPrompts.get(item.runId)
-          : undefined;
+      const currentRun = item.messages.some((source) => source.replyTarget?.kind === "current")
+        ? item.runId
+        : undefined;
+      if (currentRun) {
+        currentReplies.add(currentRun);
+      }
+      const currentSource = currentRun ? runPrompts.get(currentRun) : undefined;
       if (turnSource) {
         item.replyTurnSource = turnSource;
       }
@@ -325,15 +361,18 @@ function groupChatItemSegment(
       !identity.isImported &&
       visibleReasoning.has(JSON.stringify([identity.runId, identity.id])) &&
       Boolean(extractThinkingCached(item.message));
+    const normalizedRole = normalizeRoleForGrouping(normalized.role);
     const hasAssistantText =
+      normalizedRole === "tool" &&
       record?.role === "assistant" &&
-      record.stopReason === "toolUse" &&
+      (record.stopReason === "toolUse" ||
+        assistantMessageCanOwnTurnActions(item.message, Boolean(normalized.senderSession))) &&
       Boolean(resolveMessageDisplayMarkdown(item.message, normalized).trim());
     // Saved reasoning stays visible until its live owner retires the receipts.
-    // Legacy mixed rows retain their tool grouping and file-link attribution.
+    // Mixed answers retain assistant ownership; forwarded narration needs an
+    // explicit answer before gaining its own display-turn boundary.
     // Classify after content projection; prepared outcomes may outlive their blocks.
     const visibleContent = resolveMessageVisibleContent(item.message, normalized);
-    const normalizedRole = normalizeRoleForGrouping(normalized.role);
     const hasPreparedActivity =
       normalizedRole === "assistant" &&
       visibleContent === "none" &&

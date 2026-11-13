@@ -504,42 +504,61 @@ describe("enableConsoleCapture", () => {
   });
 
   it.each([
-    { outcome: "recovered", code: 0 },
-    { outcome: "command failed", code: 2 },
-    { outcome: "recovery failed", code: 1 },
-  ])("waits for maintenance recovery on EPIPE ($outcome)", async ({ outcome, code }) => {
-    const originalExitCode = process.exitCode;
-    process.exitCode = undefined;
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
-      throw new Error("forced process exit");
-    });
-    const recovery = createDeferredCore();
-    const unregister = registerSignalExitGate(recovery.promise);
-    try {
-      setLoggerOverride({ level: "info", file: tempLogPath() });
-      enableConsoleCapture();
-      process.stdout.emit("error", Object.assign(new Error("write EPIPE"), { code: "EPIPE" }));
-      expect(exitSpy).not.toHaveBeenCalled();
-      if (outcome === "command failed") {
-        process.exitCode = code;
-      }
-      if (outcome === "recovery failed") {
-        recovery.reject(new Error("Restoration failed"));
-      } else {
+    { outcome: "recovered", code: 0, errorCode: "EPIPE", reason: "output pipe closed (EPIPE)" },
+    {
+      outcome: "command failed",
+      code: 2,
+      errorCode: "EPIPE",
+      reason: "output pipe closed (EPIPE)",
+    },
+    {
+      outcome: "recovery failed",
+      code: 1,
+      errorCode: "EPIPE",
+      reason: "output pipe closed (EPIPE)",
+    },
+    { outcome: "I/O failure", code: 0, errorCode: "EIO", reason: "output I/O failed (EIO)" },
+  ])(
+    "waits for maintenance recovery on broken output ($outcome)",
+    async ({ outcome, code, errorCode, reason }) => {
+      const originalExitCode = process.exitCode;
+      process.exitCode = undefined;
+      const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
+        throw new Error("forced process exit");
+      });
+      const recovery = createDeferredCore();
+      const interrupt = vi.fn();
+      const unregister = registerSignalExitGate(recovery.promise, interrupt);
+      try {
+        setLoggerOverride({ level: "info", file: tempLogPath() });
+        enableConsoleCapture();
+        process.stdout.emit(
+          "error",
+          Object.assign(new Error("private-output-sentinel"), { code: errorCode }),
+        );
+        expect(interrupt).toHaveBeenCalledExactlyOnceWith(undefined, reason);
+        expect(exitSpy).not.toHaveBeenCalled();
+        if (outcome === "command failed") {
+          process.exitCode = code;
+        }
+        if (outcome === "recovery failed") {
+          recovery.reject(new Error("Restoration failed"));
+        } else {
+          recovery.resolve();
+        }
+        await expect(waitForCliSignalExit()).resolves.toBe(code);
+        expect(process.exitCode).toBe(code);
+        expect(exitSpy).not.toHaveBeenCalled();
+      } finally {
         recovery.resolve();
+        unregister();
+        await waitForSignalExitBarriers();
+        await waitForCliSignalExit();
+        process.exitCode = originalExitCode;
+        exitSpy.mockRestore();
       }
-      await expect(waitForCliSignalExit()).resolves.toBe(code);
-      expect(process.exitCode).toBe(code);
-      expect(exitSpy).not.toHaveBeenCalled();
-    } finally {
-      recovery.resolve();
-      unregister();
-      await waitForSignalExitBarriers();
-      await waitForCliSignalExit();
-      process.exitCode = originalExitCode;
-      exitSpy.mockRestore();
-    }
-  });
+    },
+  );
 
   it("preserves an existing nonzero exit code on async EPIPE", async () => {
     const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {}) as typeof process.exit);

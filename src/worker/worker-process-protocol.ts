@@ -97,7 +97,28 @@ const ProcessResultSchema = workerProtocolObject({
       result.status === "completed" ||
       (result.status === "failed" && result.reason === "turn-failed")),
 );
+const mcpCallIdentity = { turnId: TurnIdSchema, requestId: TurnIdSchema };
+const McpResultSchema = z.union([
+  workerProtocolObject({
+    type: z.literal("mcp-result"),
+    ...mcpCallIdentity,
+    result: workerProtocolObject({
+      content: z.array(z.unknown()),
+      structuredContent: z.record(z.string(), z.unknown()).optional(),
+      isError: z.boolean().optional(),
+    }),
+  }),
+  workerProtocolObject({ type: z.literal("mcp-result"), ...mcpCallIdentity, error: z.string() }),
+]);
+export type WorkerMcpResult = z.infer<typeof McpResultSchema>;
 const ProcessMessageSchema = z.union([
+  workerProtocolObject({
+    type: z.literal("mcp-call"),
+    ...mcpCallIdentity,
+    toolId: TurnIdSchema,
+    arguments: z.record(z.string(), z.unknown()),
+  }),
+  workerProtocolObject({ type: z.literal("mcp-cancel"), ...mcpCallIdentity }),
   WorkerProcessObservationResultSchema,
   workerProtocolObject({ type: z.literal("processes-changed") }),
   ProcessResultSchema,
@@ -112,6 +133,9 @@ export type WorkerProcessResult = z.infer<typeof ProcessResultSchema>;
 export type WorkerProcessMessage = z.infer<typeof ProcessMessageSchema>;
 
 export function parseWorkerProcessRequest(value: unknown) {
+  if (isRecord(value) && value.type === "mcp-result") {
+    return McpResultSchema.parse(value);
+  }
   const observation = WorkerProcessObservationRequestSchema.safeParse(value);
   if (observation.success) {
     return observation.data;

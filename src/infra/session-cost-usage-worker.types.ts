@@ -45,7 +45,6 @@ type UsageCostWorkerRange = {
 export type UsageCostWorkerSession = {
   sessionId?: string;
   sessionFile: string;
-  transcriptFile?: UsageCostTranscriptFile;
 };
 
 /** A SQLite transcript as `[stores index, session id]`, so worker inputs name each store once. */
@@ -55,9 +54,6 @@ export type UsageCostWorkerOperation =
   | {
       kind: "inventory";
       minMtimeMs?: number;
-      sessionFiles?: string[];
-      /** False lists SQLite sessions without transcript statistics (overview selection). */
-      statistics?: false;
     }
   | ({ kind: "summary"; pricingFingerprint: string } & UsageCostWorkerRange)
   | {
@@ -66,7 +62,6 @@ export type UsageCostWorkerOperation =
       sessions: Array<{
         sessionId?: string;
         sessionFile: string;
-        transcriptFile?: UsageCostTranscriptFile;
       }>;
       startMs?: number;
       endMs?: number;
@@ -108,11 +103,7 @@ export type UsageCostPendingFile = { sessionFile: string; rollupId: string };
 export type UsageCostWorkerResult =
   | {
       kind: "inventory";
-      files: Array<
-        Pick<UsageCostTranscriptFile, "kind" | "sourcePath" | "sessionId" | "mtimeMs"> & {
-          transcriptFile?: UsageCostTranscriptFile;
-        }
-      >;
+      files: Array<Pick<UsageCostTranscriptFile, "kind" | "sourcePath" | "sessionId" | "mtimeMs">>;
     }
   | {
       kind: "summary";
@@ -141,7 +132,13 @@ export type UsageCostWorkerResult =
       staleSessionFiles: string[];
       invalidRows: SessionCostUsageRollupRow[];
     }
-  | { kind: "refresh"; changed: boolean; remainingFiles?: UsageCostPendingFile[] };
+  | {
+      kind: "refresh";
+      changed: boolean;
+      remainingFiles?: UsageCostPendingFile[];
+      /** Archives that cannot be decoded; their last rollup is kept and the batch completes. */
+      unreadableFiles?: Array<{ sessionFile: string; message: string }>;
+    };
 
 export type UsageCostWorkerFailure = {
   message: string;
@@ -183,7 +180,6 @@ export type UsageCostWorkerHostEffects = {
     output: Array<ModelCostConfig | undefined>;
   };
   "prune-rows": { input: UsageCostPruneRow[]; output: void };
-  prune: { input: Record<string, never>; output: void };
   write: { input: UsageCostPreparedRollup[]; output: boolean };
   "write-quarters": { input: UsageCostQuarterBackfillRow[]; output: boolean };
 };

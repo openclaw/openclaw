@@ -1,7 +1,6 @@
 import type { SystemInfoResult } from "../../packages/gateway-protocol/src/schema/system-info.js";
 import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { readStartupRecoveryWarning } from "../agents/main-session-recovery/main-session-restart-recovery-diagnostics.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { resolveProjectedSessionContextTokens } from "../config/sessions/context-token-provenance.js";
@@ -45,6 +44,7 @@ import {
   listActiveDegradedSecretOwners,
   redactSecretDegradationReason,
 } from "../secrets/runtime-degraded-state.js";
+import { settleCurrentReadPreparations } from "../shared/current-read-authority.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { sortAndLimitBy } from "../shared/sort-and-limit.js";
@@ -120,8 +120,10 @@ async function prepareSessionStatusDetails(
     createStatusModelContextResolver,
   } = await loadStatusSummaryRuntimeModule();
   // Read runtime metadata once for every displayed row, including overlapping windows.
-  const metadata = await readSessionRuntimeMetadata(cfg, candidates);
-  const resolveModelContext = await createStatusModelContextResolver(cfg);
+  const [metadata, resolveModelContext] = await settleCurrentReadPreparations([
+    readSessionRuntimeMetadata(cfg, candidates),
+    createStatusModelContextResolver(cfg),
+  ] as const);
 
   const resolved = resolveConfiguredStatusModelRef({
     cfg,
@@ -328,16 +330,18 @@ export async function prepareStatusSummary(
       .then(({ hasConfiguredChannelsForReadOnlyScopeAsync }) =>
         hasConfiguredChannelsForReadOnlyScopeAsync(channelScopeConfig),
       ));
-  const linkContext = needsChannelPlugins
-    ? await linkChannelModuleLoader
-        .load()
-        .then(({ resolveLinkChannelContext }) =>
-          resolveLinkChannelContext(cfg, { sourceConfig: options.sourceConfig }),
-        )
-    : null;
-  const agentList = await listGatewayAgentsBasic(cfg);
   // Receipts list the primary job first; retain it when converted siblings share an agent.
-  const heartbeat = await readHeartbeatSummaryForStatus(() => readHeartbeatSummarySnapshot(cfg));
+  const [linkContext, agentList, heartbeat] = await settleCurrentReadPreparations([
+    needsChannelPlugins
+      ? linkChannelModuleLoader
+          .load()
+          .then(({ resolveLinkChannelContext }) =>
+            resolveLinkChannelContext(cfg, { sourceConfig: options.sourceConfig }),
+          )
+      : null,
+    listGatewayAgentsBasic(cfg),
+    readHeartbeatSummaryForStatus(() => readHeartbeatSummarySnapshot(cfg)),
+  ] as const);
   const heartbeatJobs = new Map(heartbeat.jobs.toReversed().map((job) => [job.agentId, job]));
   // Share the remaining per-agent main-session resolution across the fleet.
   const heartbeatInputs = withAgentRosterFactsBatch(cfg, () => {
@@ -437,36 +441,36 @@ export async function prepareStatusSummary(
     }
     heartbeatAgents.push(status);
   }
-  const channelSummary = needsChannelPlugins
-    ? await channelSummaryModuleLoader.load().then(({ buildChannelSummary }) =>
-        buildChannelSummary(cfg, {
-          colorize: true,
-          includeAllowFrom: true,
-          sourceConfig: options.sourceConfig,
-        }),
-      )
-    : [];
-  const now = Date.now();
-
-  const sessionStores =
+  const [channelSummary, sessionStores] = await settleCurrentReadPreparations([
+    needsChannelPlugins
+      ? channelSummaryModuleLoader.load().then(({ buildChannelSummary }) =>
+          buildChannelSummary(cfg, {
+            colorize: true,
+            includeAllowFrom: true,
+            sourceConfig: options.sourceConfig,
+          }),
+        )
+      : [],
     options.sessionStores ??
-    (await prepareStatusSessionStores(
-      cfg,
-      agentList.agents,
-      includeSensitive ? STATUS_RECENT_SESSION_LIMIT : 0,
-      { projection: options.sessionRowProjection },
-    ));
-  const sessionDetails = includeSensitive
-    ? await prepareSessionStatusDetails(cfg, now, sessionStores.candidates)
-    : undefined;
-  const hostDesktopStatus =
-    options.hostDesktopStatus ??
-    (
-      await (
-        await import("../gateway/desktop/host-source.js")
-      ).inspectHostDesktop({ config: cfg.desktop?.host })
-    ).status;
-  const secretEgressProxy = await getSecretEgressCertificateStatus();
+      prepareStatusSessionStores(
+        cfg,
+        agentList.agents,
+        includeSensitive ? STATUS_RECENT_SESSION_LIMIT : 0,
+        { projection: options.sessionRowProjection },
+      ),
+  ] as const);
+  // Join independent snapshots before publication revalidates surviving agents.
+  const [sessionDetails, hostDesktopStatus, secretEgressProxy] =
+    await settleCurrentReadPreparations([
+      includeSensitive
+        ? prepareSessionStatusDetails(cfg, Date.now(), sessionStores.candidates)
+        : undefined,
+      options.hostDesktopStatus ??
+        import("../gateway/desktop/host-source.js")
+          .then(({ inspectHostDesktop }) => inspectHostDesktop({ config: cfg.desktop?.host }))
+          .then(({ status }) => status),
+      Promise.resolve().then(getSecretEgressCertificateStatus),
+    ] as const);
   const databaseStores = options.includeCliProjection
     ? (
         await import("../infra/database-engine/admitted-diagnostics.js")
@@ -564,7 +568,6 @@ export async function prepareStatusSummary(
             [readStartupMigrationWarning(includeSensitive), heartbeat.selectionWarning]
               .filter(Boolean)
               .join("\n") || undefined,
-          startupRecoveryWarning: readStartupRecoveryWarning(includeSensitive),
           modelReasoningWarning: readModelReasoningWarning(includeSensitive),
           installationReplacementWarning: getGatewayInstallationReplacement()?.message,
           ...(utilityModelWarnings.length
@@ -621,6 +624,7 @@ export type StatusSummary = Omit<
     "heartbeat" | "channelSummary" | "queuedSystemEvents" | "sessions"
   > & {
     runtimeVersion?: string | null;
+    recentCrashes?: readonly import("../infra/gateway-crash.js").GatewayCrashRecord[];
     childRuntime?: {
       execPath: string;
       available: boolean;

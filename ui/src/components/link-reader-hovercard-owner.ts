@@ -38,6 +38,7 @@ import {
   type PageHoverTarget,
   type LinkReaderTarget,
 } from "./link-reader-target.ts";
+import { updateLinkReaderDisplay } from "./markdown-link-display.ts";
 import { createPortaledHovercard, createPortaledHovercardOwner } from "./portaled-hovercard.ts";
 
 registerLinkReaderEnglish();
@@ -208,15 +209,7 @@ export class HovercardOwner {
       }
       const target = resolveLinkReaderTarget(anchor.href, this.host.readers);
       const preview = target ? this.previews.get(target)?.preview : undefined;
-      if (!preview?.badge) {
-        delete anchor.dataset.linkReaderTone;
-        anchor.removeAttribute("aria-description");
-      } else if (anchor.getAttribute("aria-description") !== preview.badge.label) {
-        anchor.setAttribute("aria-description", preview.badge.label);
-      }
-      if (preview?.badge && anchor.dataset.linkReaderTone !== preview.badge.tone) {
-        anchor.dataset.linkReaderTone = preview.badge.tone;
-      }
+      updateLinkReaderDisplay(anchor, preview);
     }
   }
 

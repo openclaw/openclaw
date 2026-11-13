@@ -725,3 +725,30 @@ it.each(["missing", "oversized-first", "oversized-last", "identity-length"])(
     });
   },
 );
+
+it.each([
+  ["recorded its cost", { cost: 0.5 }, false],
+  ["needed a catalog estimate", {}, true],
+] as const)(
+  "keeps a rollup across a pricing change only when every turn %s",
+  async (_label, costOptions, rebuilds) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const agentId = "usage-pricing-change";
+      const sessionFile = state.path("pricing-change.jsonl");
+      const { options } = await cacheSession(
+        agentId,
+        sessionFile,
+        JSON.stringify(fixtures.createUsageTranscriptEntry(7, costOptions)) + "\n",
+      );
+      // A new build or catalog update changes the fingerprint for every model.
+      const result = await runUsageCostWorker(
+        prepareUsageCostWorker(options),
+        sessionsOperation(sessionFile, "changed-pricing"),
+      );
+      expect(result).toMatchObject({
+        kind: "sessions",
+        staleSessionFiles: rebuilds ? [sessionFile] : [],
+      });
+    });
+  },
+);

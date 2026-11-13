@@ -1,11 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { SessionGroupNotEmptyError, SessionGroupNotFoundError } from "../session-groups.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const groupMocks = vi.hoisted(() => ({
-  NotEmpty: class SessionGroupNotEmptyError extends Error {},
-  NotFound: class SessionGroupNotFoundError extends Error {},
   put: vi.fn(),
   rename: vi.fn(),
   update: vi.fn(),
@@ -16,12 +15,12 @@ const pathMocks = vi.hoisted(() => ({
   resolveContainment: vi.fn(),
 }));
 
-vi.mock("../session-groups.js", () => ({
+vi.mock("../session-groups.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../session-groups.js")>()),
   deleteSessionGroup: vi.fn(),
+  ensureSessionGroupRegistered: vi.fn(),
   putSessionGroups: groupMocks.put,
   renameSessionGroup: groupMocks.rename,
-  SessionGroupNotEmptyError: groupMocks.NotEmpty,
-  SessionGroupNotFoundError: groupMocks.NotFound,
   updateSessionGroupDefaults: groupMocks.update,
 }));
 vi.mock("../session-group-catalog.js", async (importOriginal) => ({
@@ -85,13 +84,11 @@ beforeEach(() => {
 
 describe("sessions.groups.put", () => {
   it("rejects dropping a non-empty group as an invalid request", async () => {
-    const message = "cannot drop Gone; remove it via sessions.groups.delete";
-    groupMocks.put.mockImplementation(() => {
-      throw new groupMocks.NotEmpty(message);
-    });
+    const error = new SessionGroupNotEmptyError([{ name: "Gone", memberSessions: 1 }]);
+    groupMocks.put.mockRejectedValue(error);
     const h = groupRequest("sessions.groups.put", { names: ["Keep"] });
     await h.invoke();
-    expectFailure(h.respond, { code: "INVALID_REQUEST", message });
+    expectFailure(h.respond, { code: "INVALID_REQUEST", message: error.message });
   });
 
   it("rethrows changed authorization instead of mapping it to an unavailable response", async () => {
@@ -198,7 +195,7 @@ describe("sessions.groups.update", () => {
 });
 
 it("sessions.groups.rename rejects an unknown source group", async () => {
-  groupMocks.rename.mockRejectedValue(new groupMocks.NotFound("unknown session group: Missing"));
+  groupMocks.rename.mockRejectedValue(new SessionGroupNotFoundError("Missing"));
   const h = groupRequest("sessions.groups.rename", { name: "Missing", to: "Other" });
   await h.invoke();
   expectFailure(h.respond, {

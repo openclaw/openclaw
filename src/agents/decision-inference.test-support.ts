@@ -4,7 +4,8 @@ import path from "node:path";
 import { expect, onTestFinished, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { DecisionEvaluateOptionsV2, DecisionRuntimeV2 } from "../decisions/types-v2.js";
+import type { DecisionEvaluateOptionsV2 } from "../decisions/execution-types.js";
+import type { DecisionRuntimeV2 } from "../decisions/runtime-types.js";
 import {
   onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -19,7 +20,7 @@ import {
   createColdPluginFixture,
   createColdPluginHermeticEnv,
 } from "../plugins/test-helpers/cold-plugin-fixtures.js";
-import { resolveAgentDir, resolveDefaultAgentId } from "./agent-scope.js";
+import { resolveAgentDir, resolveAgentWorkspaceDir, resolveDefaultAgentId } from "./agent-scope.js";
 import { acquireAgentRunPreparedModelRuntime } from "./prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
 
@@ -103,15 +104,21 @@ export async function activateDecisionRegistry(
   return registry;
 }
 
-export function prepareDecisionRuntime(config: OpenClawConfig, provider: string, modelId: string) {
-  const agentId = resolveDefaultAgentId(config);
+export function prepareDecisionRuntime(
+  config: OpenClawConfig,
+  provider: string,
+  modelId: string,
+  agentId = resolveDefaultAgentId(config),
+) {
+  // Retain the same agent workspace and purpose that withPreparedModelInference acquires.
   return acquireAgentRunPreparedModelRuntime(
     {
       config,
       agentId,
       agentDir: resolveAgentDir(config, agentId),
-      workspaceDir: config.agents?.defaults?.workspace,
+      workspaceDir: resolveAgentWorkspaceDir(config, agentId),
       loadRuntimePlugins: true,
+      runtimePluginPurpose: "isolated-completion",
       runtimePluginSelections: [{ provider, modelId, agentId }],
     },
     { catalogMode: "static" },

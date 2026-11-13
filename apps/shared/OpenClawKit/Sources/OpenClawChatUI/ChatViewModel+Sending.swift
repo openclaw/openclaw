@@ -69,7 +69,9 @@ extension OpenClawChatViewModel {
         // hydration cannot retire its owner before asynchronous validation starts.
         guard let draft = captureSendDraft(queueMode: queueMode) else { return nil }
         isSubmittingDraft = true
-        return Task { await self.performSend(draft) }
+        let task = Task { await self.performSend(draft) }
+        self.composerDraftSync.send = task
+        return task
     }
 
     public func loadSlashCommandsIfNeeded() {
@@ -361,7 +363,7 @@ extension OpenClawChatViewModel {
             session: currentSessionSnapshot(),
             replyTarget: Self.isSlashCommandDraft(trimmed) ? nil : replyTarget,
             queueMode: queueMode,
-            composerSessionKey: self.composerSessionKey(for: sessionKey),
+            composerSessionKey: self.visibleComposerKey,
             composerRevision: composerRevision(for: sessionKey))
     }
 
@@ -376,8 +378,9 @@ extension OpenClawChatViewModel {
                 return false
             }
             if input == draft.input { input = "" }
+            self.flushComposerDraftText()
             switch command {
-            case "/new": await performStartNewSession(worktree: false)
+            case "/new": await performStartNewSession(inheritCurrentSession: true, worktree: false)
             case "/compact": await performCompact()
             default: await performReset()
             }
@@ -447,6 +450,7 @@ extension OpenClawChatViewModel {
             text: draft.outgoingMessageText,
             draftInput: draft.input,
             draftRevision: draft.composerRevision,
+            draftComposerKey: draft.composerSessionKey,
             draftAttachments: draft.attachments,
             queueMode: draft.queueMode,
             session: draft.session)
@@ -530,6 +534,8 @@ extension OpenClawChatViewModel {
         }
         let sentAttachmentIDs = Set(draft.attachments.map(\.id))
         attachments.removeAll { sentAttachmentIDs.contains($0.id) }
+        // A live send has no outbox insert to clear its draft, so write the cleared composer now.
+        self.flushComposerDraftText()
 
         return LiveSendAttempt(
             draft: draft,
@@ -563,7 +569,7 @@ extension OpenClawChatViewModel {
 
     private func deliverLiveSend(_ attempt: LiveSendAttempt) async {
         let sessionKey = attempt.draft.session.key
-        var durableSessionSettingsExpectation: OpenClawChatSessionSettingsExpectation?
+        var preparedDelivery: (settings: OpenClawChatSessionSettingsExpectation, thinking: String)?
         do {
             if let settingsError = await waitForCapabilitySettingsBarrier(in: sessionKey) {
                 await self.handleLiveSendFailure(
@@ -576,8 +582,8 @@ extension OpenClawChatViewModel {
             }
             guard isCurrentSession(attempt.draft.session) else { return }
             let sendSessionSettingsExpectation = self.composerSessionSettingsExpectation()
-            durableSessionSettingsExpectation = self.durableSessionSettingsExpectation()
             let thinkingLevel = effectiveThinkingLevelForSend(attempt.storedThinkingLevel)
+            preparedDelivery = (self.durableSessionSettingsExpectation(), thinkingLevel)
             let response = try await transport.sendMessage(
                 sessionKey: sessionKey,
                 target: OpenClawChatSendTarget(
@@ -599,7 +605,7 @@ extension OpenClawChatViewModel {
             await self.handleLiveSendFailure(
                 error,
                 attempt: attempt,
-                durableSessionSettingsExpectation: durableSessionSettingsExpectation)
+                preparedDelivery: preparedDelivery)
         }
     }
 
@@ -668,31 +674,33 @@ extension OpenClawChatViewModel {
     private func handleLiveSendFailure(
         _ error: Error,
         attempt: LiveSendAttempt,
-        durableSessionSettingsExpectation: OpenClawChatSessionSettingsExpectation? = nil) async
+        preparedDelivery: (settings: OpenClawChatSessionSettingsExpectation, thinking: String)? = nil) async
     {
-        guard isCurrentSession(attempt.draft.session) else { return }
-        let restartRejected = Self.isRestartRejectedSend(error)
-        if let durableSessionSettingsExpectation,
+        let admissionRejected = Self.isRetryableAdmissionRejection(error)
+        // Known-unsent work still belongs to its captured session after navigation.
+        guard isCurrentSession(attempt.draft.session) || admissionRejected else { return }
+        if let preparedDelivery,
            attempt.encodedAttachments.isEmpty,
-           !(error is GatewayResponseError) || restartRejected,
+           !(error is GatewayResponseError) || admissionRejected,
            !(error is OpenClawChatSendOwnershipError)
         {
             runMessageScopesByRunID.removeValue(forKey: attempt.runId)
             clearPendingRun(attempt.runId)
-            let deliveryIsAmbiguous = !(error is OpenClawChatTransportSendError) && !restartRejected
-            if restartRejected {
+            let deliveryIsAmbiguous = !(error is OpenClawChatTransportSendError) && !admissionRejected
+            if admissionRejected {
                 applyTransportHealth(false)
             }
             let preserved = await preserveFailedLiveSend(
                 runId: attempt.runId,
                 text: attempt.draft.outgoingMessageText,
-                thinking: effectiveThinkingLevelForSend(attempt.storedThinkingLevel),
+                thinking: preparedDelivery.thinking,
                 messageID: attempt.userMessageID,
                 session: attempt.draft.session,
-                expectedSessionSettings: durableSessionSettingsExpectation,
+                expectedSessionSettings: preparedDelivery.settings,
                 deliveryIsAmbiguous: deliveryIsAmbiguous)
             if preserved {
                 self.finishAcceptedComposerSend(attempt.draft)
+                guard isCurrentSession(attempt.draft.session) else { return }
                 applyTransportHealth(false)
                 let outcome = deliveryIsAmbiguous ? "delivery unconfirmed" : "queued after route change"
                 logDiagnostic(

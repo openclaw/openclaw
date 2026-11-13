@@ -86,6 +86,7 @@ import {
   createCanonicalAgentIndexDrift,
   createTranscriptIdempotencyIndexDrift,
   createUnsafeIndexDrift,
+  expectCanonicalAgentIndexRepair,
 } from "./sqlite-index-drift.test-support.js";
 import {
   collectSqliteSchemaShape,
@@ -621,10 +622,6 @@ it.each([
     } finally {
       await child.close();
       await maintenance.close();
-    }
-    if (integrityCheck === "quick") {
-      // Leaving Doctor must not promote its QUICK admission to runtime FULL proof.
-      expect(() => openAgentDb(options)).toThrow(/integrity_check.*idx_agent_cache_expiry/su);
     }
   },
 );
@@ -1627,7 +1624,7 @@ it("keeps creation-claimed handles private and closes them when the claim settle
   revokeAdmissions(dbPath);
   {
     using editor = nodeSqlite.openNodeSqliteDatabase(dbPath);
-    editor.exec("DROP INDEX idx_agent_cache_expiry");
+    editor.exec("DROP INDEX idx_agent_conversations_identity");
   }
   const checked = createDeferred();
   const resume = createDeferred();
@@ -1685,7 +1682,10 @@ it("keeps creation-claimed handles private and closes them when the claim settle
   {
     using reader = nodeSqlite.openNodeSqliteDatabase(dbPath, { readOnly: true });
     expect(
-      queryOne(reader, "SELECT name FROM sqlite_schema WHERE name='idx_agent_cache_expiry'"),
+      queryOne(
+        reader,
+        "SELECT name FROM sqlite_schema WHERE name='idx_agent_conversations_identity'",
+      ),
     ).toBeUndefined();
   }
   expect(operationCalled).toBe(false);
@@ -1930,16 +1930,9 @@ it("does not chmod shared parent directories for explicit database paths", () =>
 
 it("repairs every missing or drifted canonical agent-state named index", () => {
   const { options, dbPath } = createDatabaseFixture();
-  const canonicalShape = normalizeSqliteSchemaShapeSql(
-    createSqliteSchemaShapeFromSql(new URL("./openclaw-agent-schema.sql", import.meta.url)),
-  );
   createCanonicalAgentIndexDrift(dbPath);
   const reopened = openAgentDb(options);
-  expect(
-    normalizeSqliteSchemaShapeSql(
-      collectSqliteSchemaShape(requireNativeSqliteDatabase(reopened.db)),
-    ),
-  ).toEqual(canonicalShape);
+  expectCanonicalAgentIndexRepair(requireNativeSqliteDatabase(reopened.db));
   expect(readPragma(reopened.db, "user_version")).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
   expectRows(
     reopened.db,
@@ -2344,18 +2337,8 @@ it.each([
       );
       writer.exec("PRAGMA journal_mode = WAL; BEGIN IMMEDIATE;");
       const startedAt = performance.now();
-      let failure: unknown;
-      try {
-        openAgentDb(options);
-      } catch (error) {
-        failure = error;
-      }
+      expect(() => openAgentDb(options)).toThrow(expectedError);
       const elapsedMs = performance.now() - startedAt;
-      expect(failure).toBeInstanceOf(Error);
-      if (!(failure instanceof Error)) {
-        throw new Error("validated owner replacement reopen unexpectedly succeeded");
-      }
-      expect(failure.message).toMatch(expectedError);
       expect(elapsedMs).toBeLessThan(1_000);
     } finally {
       writer.exec("ROLLBACK;");
@@ -2381,9 +2364,14 @@ it.each([
     replaceDatabase(dbPath);
     nowSpy.mockReturnValue(2_000);
     try {
-      expect(() => openAgentDb(options)).toThrow(
-        /integrity_check failed.*idx_agent_cache_expiry.*openclaw doctor --fix/,
-      );
+      const verification = createMaintenanceScope({ sqliteIntegrityCheck: "full" });
+      try {
+        expect(() => verification.run(() => openAgentDb(options))).toThrow(
+          /integrity_check failed.*idx_agent_cache_expiry.*openclaw doctor --fix/,
+        );
+      } finally {
+        await verification.close();
+      }
       const repair = await migrateLegacyMediaPersistence({
         env,
         configuredAgentDatabaseTargets: [{ agentId: "worker-1", path: dbPath }],

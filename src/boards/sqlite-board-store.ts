@@ -25,12 +25,10 @@ import {
   type DatabaseFileIdentity,
 } from "../infra/sqlite-worker-identity.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import { assertAgentDatabaseReadAdmitted } from "../state/agent-database-admission.js";
 import { IncognitoSessionMissingError } from "../state/incognito-session-error.js";
-import {
-  resolveOpenClawAgentSqlitePath,
-  withOpenClawAgentDatabaseRuntime,
-} from "../state/openclaw-agent-db.js";
-import { openOpenClawAgentSqliteWorkerStore } from "../state/openclaw-agent-worker-store.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
+import { openOpenClawAgentSqliteWorkerStoreV2 } from "../state/openclaw-agent-worker-store.js";
 import {
   runOpenClawAgentBoardReadAdmission,
   runOpenClawAgentWriteAdmission,
@@ -168,77 +166,69 @@ export class SqliteBoardStore implements BoardStore {
           assertDatabaseCurrent();
           assertCurrent();
         };
-        return withOpenClawAgentDatabaseRuntime(
+        options?.assertCurrent?.();
+        if (prepare) {
+          await prepare();
+        }
+        assertPreparedCurrent();
+        const publication = await openOpenClawAgentSqliteWorkerStoreV2<BoardWriteOperations>(
           databaseOptions,
-          async (database) => {
-            if (prepare) {
-              await prepare();
-            }
-            assertPreparedCurrent();
-            const publication = await openOpenClawAgentSqliteWorkerStore<BoardWriteOperations>(
-              databaseOptions,
-              database.db,
-              {
-                moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.boardStore),
-                input: {
-                  agentId: databaseOptions.agentId,
-                  sessionKey: resolved.sessionKey,
-                  expectedSession,
-                } satisfies BoardWorkerInput,
-              },
-            );
-            let outcome: Result<T, unknown>;
-            try {
-              const value = await publication.run(async (scope) => {
-                // Source revocation blocks new admissions; admitted writes may finish their commit.
-                options?.assertCurrent?.();
-                let committed: BoardWriteOutcome<T>;
-                try {
-                  committed = await worker(scope, resolved.sessionKey);
-                } catch (error) {
-                  if (hasUnknownBoardWriteOutcome(error)) {
-                    sessionChanges.emit({
-                      sessionKey: resolved.sessionKey,
-                      storePath: database.path,
-                    });
-                  }
-                  throw error;
-                }
-                // Committed invalidation belongs to the original store, even after caller revocation.
-                sessionChanges.emitBatch(committed.changes);
-                return committed.value;
-              }, assertPreparedCurrent);
-              outcome = { ok: true, value };
-            } catch (error) {
-              outcome = { ok: false, error: restoreBoardError(error) };
-            }
-            let cleanup: Result<void, unknown>;
-            try {
-              await publication.close();
-              cleanup = { ok: true, value: undefined };
-            } catch (error) {
-              cleanup = { ok: false, error };
-            }
-            if (!outcome.ok) {
-              if (!cleanup.ok) {
-                throw new AggregateError(
-                  [outcome.error, cleanup.error],
-                  "Board publication and cleanup failed",
-                  { cause: outcome.error },
-                );
-              }
-              throw outcome.error;
-            }
-            if (!cleanup.ok) {
-              reportBoardCleanupFailure(cleanup.error);
-            }
-            return outcome.value;
-          },
-          () => {
-            options?.assertCurrent?.();
-            assertPreparedCurrent();
+          { version: 2, assertCurrent: assertPreparedCurrent },
+          {
+            moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.boardStore),
+            input: {
+              agentId: databaseOptions.agentId,
+              sessionKey: resolved.sessionKey,
+              expectedSession,
+            } satisfies BoardWorkerInput,
           },
         );
+        let outcome: Result<T, unknown>;
+        try {
+          const value = await publication.run(async (scope) => {
+            // Source revocation blocks new admissions; admitted writes may finish their commit.
+            options?.assertCurrent?.();
+            let committed: BoardWriteOutcome<T>;
+            try {
+              committed = await worker(scope, resolved.sessionKey);
+            } catch (error) {
+              if (hasUnknownBoardWriteOutcome(error)) {
+                sessionChanges.emit({
+                  sessionKey: resolved.sessionKey,
+                  storePath: identity.canonicalPath,
+                });
+              }
+              throw error;
+            }
+            // Committed invalidation belongs to the original store, even after caller revocation.
+            sessionChanges.emitBatch(committed.changes);
+            return committed.value;
+          }, assertPreparedCurrent);
+          outcome = { ok: true, value };
+        } catch (error) {
+          outcome = { ok: false, error: restoreBoardError(error) };
+        }
+        let cleanup: Result<void, unknown>;
+        try {
+          await publication.close();
+          cleanup = { ok: true, value: undefined };
+        } catch (error) {
+          cleanup = { ok: false, error };
+        }
+        if (!outcome.ok) {
+          if (!cleanup.ok) {
+            throw new AggregateError(
+              [outcome.error, cleanup.error],
+              "Board publication and cleanup failed",
+              { cause: outcome.error },
+            );
+          }
+          throw outcome.error;
+        }
+        if (!cleanup.ok) {
+          reportBoardCleanupFailure(cleanup.error);
+        }
+        return outcome.value;
       },
       true,
     );
@@ -254,7 +244,8 @@ export class SqliteBoardStore implements BoardStore {
     return this.withSession<BoardSnapshotWithHtmlViewMetadata>(
       target,
       (store) => store.getSnapshotWithHtmlViewMetadata(target),
-      (resolved) => this.consumeSnapshotWithHtmlViewMetadata(resolved, (snapshot) => snapshot),
+      (resolved) =>
+        this.consumeSnapshotWithHtmlViewMetadata(resolved, (snapshot) => snapshot, true),
       () => ({
         snapshot: { sessionKey: target.sessionKey, revision: 0, tabs: [], widgets: [] },
         htmlViewMetadata: new Map(),
@@ -271,6 +262,7 @@ export class SqliteBoardStore implements BoardStore {
       expectedIdentity: DatabaseFileIdentity,
     ) => Promise<Value | undefined>,
     consume: (value: Value | undefined, sessionKey: string) => T,
+    snapshotOnly = false,
   ): Promise<Awaited<T>> {
     if (resolved.absent) {
       resolved.assertCurrent?.();
@@ -291,6 +283,9 @@ export class SqliteBoardStore implements BoardStore {
     const runInCallerContext = AsyncLocalStorage.snapshot();
     const accept = (value: Value | undefined) => {
       resolved.assertCurrent?.();
+      if (snapshotOnly) {
+        assertAgentDatabaseReadAdmitted(captured.agentId, { env });
+      }
       const result = runInCallerContext(consume, value, captured.sessionKey);
       // Cleanup may await the worker after consumption has already rejected.
       if (isPromise(result)) {
@@ -309,12 +304,16 @@ export class SqliteBoardStore implements BoardStore {
     const result = await withSessionHistoryWorkerDatabase(
       { ...captured, path: identity.canonicalPath, requestedPaths: [captured.path] },
       (reader) =>
-        runOpenClawAgentBoardReadAdmission(captured, async () => {
-          resolved.assertCurrent?.();
-          const value = await worker(reader, captured.sessionKey, env, identity);
-          reader.assertCurrent();
-          return accept(value);
-        }),
+        runOpenClawAgentBoardReadAdmission(
+          captured,
+          async () => {
+            resolved.assertCurrent?.();
+            const value = await worker(reader, captured.sessionKey, env, identity);
+            reader.assertCurrent();
+            return accept(value);
+          },
+          snapshotOnly,
+        ),
       targetDiscoveryLane,
     ).catch((error: unknown) => {
       throw restoreBoardError(error);
@@ -352,6 +351,7 @@ export class SqliteBoardStore implements BoardStore {
   private consumeSnapshotWithHtmlViewMetadata<T>(
     resolved: PreparedBoardSession,
     consume: (snapshot: BoardSnapshotWithHtmlViewMetadata) => T,
+    snapshotOnly = false,
   ): Promise<Awaited<T>> {
     return this.consumeRead(
       resolved,
@@ -364,6 +364,7 @@ export class SqliteBoardStore implements BoardStore {
             htmlViewMetadata: new Map(),
           },
         ),
+      snapshotOnly,
     );
   }
 

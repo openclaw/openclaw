@@ -46,6 +46,10 @@ import { buildCodexMigrationProvider } from "./src/migration/provider.js";
 import { createCodexPluginsTool } from "./src/native-plugin-tool.js";
 import { createCodexThreadsTool } from "./src/native-thread-tool.js";
 import {
+  createCodexNodeAppServerCommand,
+  createCodexNodeAppServerInvokePolicy,
+} from "./src/node-app-server.js";
+import {
   createCodexCliSessionNodeHostCommands,
   createCodexCliSessionNodeInvokePolicies,
   listCodexCliSessionsOnNode,
@@ -277,6 +281,7 @@ export default definePluginEntry({
       );
     }
     const agentHarnessOptions = {
+      pluginConfig: registrationConfig,
       bindingStore,
       sessionCatalogControlFactory,
       resolveConfig: resolveCurrentConfig,
@@ -340,6 +345,8 @@ export default definePluginEntry({
     for (const policy of createCodexCliSessionNodeInvokePolicies()) {
       api.registerNodeInvokePolicy(policy);
     }
+    api.registerNodeHostCommand(createCodexNodeAppServerCommand());
+    api.registerNodeInvokePolicy(createCodexNodeAppServerInvokePolicy());
     api.registerNodeHostCommand(createCodexNodeExecServerCommand());
     api.registerNodeInvokePolicy(createCodexNodeExecServerInvokePolicy());
     api.registerCommand(

@@ -1,5 +1,5 @@
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
-import { createEffect, createSignal, onSettled } from "solid-js";
+import { createEffect, createMemo, createSignal, onSettled } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../../app/operator-access.ts";
@@ -16,6 +16,7 @@ import {
 import { projectAgents, projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
 import { observeState } from "../../lib/reactive/observe-state.ts";
+import { navigateToAgent } from "../agents/route-navigation.ts";
 import { UsageRefreshPolicy } from "../usage/refresh-policy.ts";
 import { createModelProviderConfigActions } from "./config-actions.ts";
 import { createModelProviderMutationPresentation } from "./config-mutation-presentation.ts";
@@ -61,6 +62,7 @@ export function createModelProviders(
     profileOrders: {},
     addProviderId: "",
     addProviderKey: "",
+    addStartChat: null,
     defaultsDraft: null,
     selectedAgentId: "",
     accountUsageRevision: 0,
@@ -93,22 +95,17 @@ export function createModelProviders(
       }
     },
     onComplete: ({ client, data }) => {
-      // A page refresh settles its feedback; an overlapping picker Retry is best effort.
-      core.resetCatalog();
       supplemental.adoptCoreData(client, data);
     },
     onCatalogComplete: (result) => {
-      if (state.data) {
-        state.data = {
-          ...state.data,
-          providerOutcomes: result.providerOutcomes ?? [],
-          catalogError: null,
-        };
-      }
+      state.data &&= {
+        ...state.data,
+        ...result,
+      };
     },
   });
   const refreshPolicy = new UsageRefreshPolicy({
-    isLoading: () => loaderPending || !routeDataObserved || core.loading || supplemental.loading,
+    isLoading: () => loaderPending || !routeDataObserved || supplemental.loading,
     reload: () => supplemental.loadUsage(),
     onIncompleteUsageExhausted: notify,
   });
@@ -256,6 +253,7 @@ export function createModelProviders(
     onApiKey: (provider) => {
       state.addProviderId = provider;
       state.addProviderKey = "";
+      state.addStartChat = null;
       setAddProviderOpen(true);
       setMessage("add", null);
     },
@@ -286,12 +284,6 @@ export function createModelProviders(
       core.invalidate();
       routeDataObserved = true;
       setSelectedAgent(context.settingsAgentSelection.state.selectedId ?? "");
-      // The catalog can change after preload completes but before this page subscribes.
-      const catalogScope = { agentId: state.selectedAgentId };
-      const catalogCurrent =
-        !data.client ||
-        !modelCatalog.peekModelCatalog(data.client, catalogScope, { allowStale: true }) ||
-        modelCatalog.peekModelCatalog(data.client, catalogScope) !== undefined;
       if (
         readAccess &&
         (data.agentId ?? "") === state.selectedAgentId &&
@@ -299,10 +291,19 @@ export function createModelProviders(
         gateway.isRouteDataCurrent(data)
       ) {
         supplemental.adoptCoreData(data.client, data.data);
-        if (!catalogCurrent) {
-          retryCatalog();
-        }
+        const client = data.client;
+        const epoch = gateway.epoch;
+        const capturedAgentEpoch = agentEpoch;
+        void core.adoptPreloadedCatalog(
+          data,
+          () =>
+            client !== null &&
+            gateway.isCurrent({ client, epoch }) &&
+            state.selectedAgentId === data.agentId &&
+            agentEpoch === capturedAgentEpoch,
+        );
       } else {
+        data.catalog?.controller.abort();
         state.data = null;
         dataClient = null;
         refreshPolicy.resetPayload();
@@ -310,6 +311,7 @@ export function createModelProviders(
       ensureInitialData();
     }
     if (loaderChanged && !pending) {
+      ensureInitialData();
       supplemental.resume();
     }
     notify();
@@ -383,6 +385,8 @@ export function createModelProviders(
     synchronizeRoute(inputs.routeData, inputs.loaderPending ?? false);
     return () => {
       mutations.retire();
+      // A coalesced catalog reload must not fire after the page is gone.
+      core.invalidate();
       projection.dispose();
       connected = false;
       for (const cleanup of cleanups) {
@@ -472,6 +476,7 @@ export function createModelProviders(
     setAddProviderOpen(false);
     state.addProviderId = "";
     state.addProviderKey = "";
+    state.addStartChat = null;
   }
 
   function setSelectedAgent(agentId: string): boolean {
@@ -530,7 +535,7 @@ export function createModelProviders(
   const setMessage = (key: string, message: ModelProviderRowMessage | null) =>
     (state.messages = updateRecordEntry(state.messages, key, message));
 
-  const { closeKeyEditor, mutateApiKey, saveDefaults } = createModelProviderConfigActions({
+  const configActions = createModelProviderConfigActions({
     context,
     gateway,
     state,
@@ -542,6 +547,56 @@ export function createModelProviders(
     setBusy,
     setMessage,
     setAddProviderOpen,
+  });
+  const { closeKeyEditor, mutateApiKey, saveDefaults } = configActions;
+
+  // Page-local snapshots are replaced by their writers; external mutable owners
+  // below still invalidate presentation on every notification.
+  const providerData = createMemo(() => projection.read().data);
+  const selectedAgentId = createMemo(() => projection.read().selectedAgentId);
+  const defaultsDraft = createMemo(() => projection.read().defaultsDraft);
+  const catalogSnapshot = createMemo(() => {
+    projection.read();
+    gatewayState.read();
+    const client = readAccess ? context.gateway.snapshot.client : null;
+    const agentId = state.selectedAgentId;
+    return client && agentId
+      ? modelCatalog.peekModelCatalog(client, { agentId }, { allowStale: true })
+      : undefined;
+  });
+  const catalogRetired = createMemo(() => {
+    projection.read();
+    gatewayState.read();
+    const client = readAccess ? context.gateway.snapshot.client : null;
+    return modelCatalog.readAgentModelCatalog(client, state.selectedAgentId).retired;
+  });
+  const presentation = createMemo(() => {
+    i18nRevision();
+    runtimeConfig.read();
+    agents.read();
+    gatewayState.read();
+    selection.read();
+    overlays.read();
+    catalogSnapshot();
+    catalogRetired();
+    const configObject = mutations.configObject();
+    return buildModelProviderPresentation({
+      configObject,
+      behavior: readModelBehaviorConfig(
+        asConfigRecord(asConfigRecord(configObject?.agents)?.defaults),
+      ),
+      catalog: modelCatalog.readAgentModelCatalog(
+        readAccess ? context.gateway.snapshot.client : null,
+        state.selectedAgentId,
+      ),
+      data: {
+        ...(providerData() ?? EMPTY_MODEL_PROVIDERS_DATA),
+        authStatus: mutations.authStatus(),
+      },
+      agentsState: context.agents.state,
+      agentId: selectedAgentId(),
+      defaultsDraft: defaultsDraft(),
+    });
   });
 
   function viewProps() {
@@ -557,23 +612,12 @@ export function createModelProviders(
       ...(state.data ?? EMPTY_MODEL_PROVIDERS_DATA),
       authStatus: mutations.authStatus(),
     };
-    const configObject = mutations.configObject();
     const catalog = modelCatalog.readAgentModelCatalog(
       readAccess ? gatewaySnapshot.client : null,
       state.selectedAgentId,
     );
     const { configuredDefaults, cards, noSelectableAgents, rosterError, agentLabel, values } =
-      buildModelProviderPresentation({
-        configObject,
-        behavior: readModelBehaviorConfig(
-          asConfigRecord(asConfigRecord(configObject?.agents)?.defaults),
-        ),
-        catalog,
-        data,
-        agentsState: context.agents.state,
-        agentId: state.selectedAgentId,
-        defaultsDraft: state.defaultsDraft,
-      });
+      presentation();
     const stageDefaults = (
       patch: Partial<DefaultsDraft>,
       field: ModelDefaultsSaveField = "defaults",
@@ -607,6 +651,8 @@ export function createModelProviders(
       providerUsageFailed: data.providerUsageFailed,
       updatedAt: data.updatedAt,
       onOpenUsage: () => context.navigate("usage"),
+      onOpenAgent: (agentId: string) => navigateToAgent(context, agentId, null, "overview"),
+      basePath: context.basePath,
       credentialAgentLabel: agentLabel,
       cards: noSelectableAgents ? [] : installedAgents.filterProviders(cards),
       ...values,
@@ -649,18 +695,8 @@ export function createModelProviders(
       onRequestLogout: (pending: Parameters<typeof profileActions.requestLogout>[0]) =>
         void profileActions.requestLogout(pending),
       onProfileOrderChange: profileActions.setOrder,
-      onAddProviderToggle: () => {
-        setAddProviderOpen((open) => !open);
-        state.addProviderKey = "";
-        setMessage("add", null);
-      },
-      onAddProviderKeyChange: (value: string) => (state.addProviderKey = value),
-      onAddProvider: () => {
-        const provider = state.addProviderId;
-        if (provider) {
-          void mutateApiKey(provider, provider, state.addProviderKey.trim(), "add");
-        }
-      },
+      addStartChat: state.addStartChat,
+      ...configActions.addProviderActions,
       ...modelDefaultsActions(() => state.defaultsDraft ?? configuredDefaults, stageDefaults),
       onCatalogRetry: () => retryCatalog(),
       ...login.providerActions,

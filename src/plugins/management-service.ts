@@ -12,6 +12,7 @@ import { resolveIsConfigReadOnly } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveClawHubBaseUrl } from "../infra/clawhub-client.js";
 import { fetchClawHubPluginDetail } from "../infra/clawhub-plugin-catalog.js";
+import { idFeatureVisible } from "../shared/openclaw-id-policy.js";
 import { resolvePluginActivationSourceConfig } from "./activation-source-config.js";
 import { resolvePendingPluginCapabilityReview } from "./capability-consent.js";
 import {
@@ -335,6 +336,8 @@ export const listManagedPlugins = withManagedPluginCache(
               ? "needs-setup"
               : "disabled",
         removable,
+        hasNativeUi: manifest ? Boolean(manifest.controlUi) : undefined,
+        recommendedPrompts: manifest?.recommendedPrompts,
       };
       Object.assign(plugin, projectPluginCatalogCategoryFacts(manifest, enabled));
       if (record.packageName) {
@@ -538,7 +541,7 @@ export const listManagedPlugins = withManagedPluginCache(
       });
     }
     return {
-      plugins: plugins.toSorted(compareCatalogEntries),
+      plugins: plugins.filter(idFeatureVisible(params.config)).toSorted(compareCatalogEntries),
       diagnostics,
       mutationAllowed: !resolveIsConfigReadOnly(env),
     };

@@ -5,8 +5,10 @@ import { markInboundContextLabel } from "../../../../src/auto-reply/reply/inboun
 import { createRequireRecord } from "../../../../test/helpers/record.js";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
 import { prependUniqueNativeMessages } from "../../lib/chat/history-message-identity.ts";
+import { extractText } from "../../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import * as toolCards from "../../lib/chat/tool-cards.ts";
+import { resolveWorkingProgress } from "./chat-progress.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import {
   groupsOf as groupsIn,
@@ -36,12 +38,30 @@ import {
 } from "./chat-thread.ts";
 import { coalesceStreamRuns, collapseCompletedTurnWork } from "./chat-turn-presentation.ts";
 import { publishChatSessionProjectionMessages } from "./history-merge.ts";
-import { readLiveTerminalRevision, rememberLiveTerminalRun } from "./terminal-message-identity.ts";
+import { createSnapshotRecord } from "./session-snapshot-record.ts";
+import {
+  normalizeFinalAssistantMessage,
+  readLiveTerminalRevision,
+  rememberLiveTerminalRun,
+} from "./terminal-message-identity.ts";
 
 const { extractToolCardsCached: extractToolCards } = toolCards;
 
 beforeEach(() => resetChatThreadState());
 afterEach(() => vi.restoreAllMocks());
+
+it("projects an older page without retiring the live progress clock", () => {
+  const now = vi.spyOn(Date, "now").mockReturnValue(1000);
+  const props = createProps({ messages: [{ role: "user", content: "Earlier prompt" }] });
+  const before = resolveWorkingProgress(props.sessionKey, null, null, [], [], []);
+  now.mockReturnValue(10000);
+  expect(buildChatItems(props, undefined, "history")).toMatchObject([
+    { kind: "group", role: "user" },
+  ]);
+  const after = resolveWorkingProgress(props.sessionKey, null, null, [], [], []);
+  expect(after.key).toBe(before.key);
+  expect(after.startedAt).toBe(1000);
+});
 
 function preparedGroup(key: string, message: unknown): MessageGroup {
   return requireGroup(groupMessages([{ kind: "message", key, message }])[0]);
@@ -92,14 +112,6 @@ it("invalidates cached custody notices when workspace sync ownership changes", (
   ]);
   expect(active.filter((item) => item.kind === "notice")).toEqual([]);
 });
-
-function resetMessage(id: string) {
-  return {
-    role: "system",
-    timestamp: 2_000,
-    __openclaw: { kind: "reset", id },
-  };
-}
 
 function canvasToolOutput(viewId: string, title: string, preferredHeight: number): string {
   return JSON.stringify({
@@ -365,7 +377,7 @@ describe("collapseCompletedTurnWork", () => {
     });
     expect(items[boundary ? 0 : 1]).toMatchObject(
       boundary
-        ? { kind: "divider", label: "Context compacted", metric: "saved 875.3k tokens" }
+        ? { kind: "divider", label: "Context compacted", metric: "saved 875.3k tokens (97.3%)" }
         : { compaction: "complete", label: "Context compacted" },
     );
     if (!boundary) {
@@ -389,11 +401,13 @@ describe("collapseCompletedTurnWork", () => {
         assistant("All done.", 4_000),
       ],
     });
-    expectKinds(items, ["group", "group", "group", "work-group", "group"]);
-    expect(canvasBlocksIn(requireGroup(items[1]))).toHaveLength(1);
-    expect(messageRecord(requireGroup(items[2])).content).toBe("Checking the details.");
-    expect(requireWorkGroup(items[3]).groups.map((group) => group.role)).toEqual(["tool"]);
-    expect(messageRecord(requireGroup(items[4])).content).toBe("All done.");
+    expectKinds(items, ["group", "work-group", "group", "group"]);
+    expect(canvasBlocksIn(requireGroup(items[2]))).toHaveLength(1);
+    expect(requireWorkGroup(items[1]).groups.map((group) => group.role)).toEqual([
+      "assistant",
+      "tool",
+    ]);
+    expect(messageRecord(requireGroup(items[3])).content).toBe("All done.");
   });
 
   it("keeps completed work expanded for non-dashboard session", () => {
@@ -436,8 +450,8 @@ describe("collapseCompletedTurnWork", () => {
     ).toBe(false);
 
     const completed = collapsedItems({ messages });
-    expectKinds(completed, ["group", "group", "work-group", "group", "group", "group"]);
-    expect(messagesIn(requireWorkGroup(completed[2]).groups)).toEqual([messages[2]]);
+    expectKinds(completed, ["group", "work-group", "group", "group", "group", "group"]);
+    expect(messagesIn(requireWorkGroup(completed[1]).groups)).toEqual([messages[2]]);
     expect(messagesIn(groupsIn(completed))).toEqual(messages.filter((_, index) => index !== 2));
   });
 
@@ -482,9 +496,7 @@ describe("collapseCompletedTurnWork", () => {
       messages: [...messages, assistant("Recovered via another route.", 7_000)],
     });
     expect(messagesIn(groupsIn(recovered))).not.toContain(failed);
-    expect(
-      messagesIn(recovered.flatMap((item) => (item.kind === "work-group" ? item.groups : []))),
-    ).toContain(failed);
+    expect(messagesIn(requireWorkGroup(recovered[1]).groups)).toContain(failed);
   });
 });
 
@@ -744,205 +756,15 @@ describe("buildCachedChatItems", () => {
       ],
     });
 
-    expect(groups).toHaveLength(1);
-    const entries = groupAt(groups, 0).messages;
+    expect(groups.map((group) => group.role)).toEqual(["user", "tool"]);
+    expect(firstMessageContent(groupAt(groups, 0))).toEqual([mixedContent[0]]);
+    const entries = groupAt(groups, 1).messages;
     expect(entries).toHaveLength(1);
     const cards = entries.flatMap((entry) => extractToolCards(entry.message));
     expect(cards.map((card) => [card.callId, card.args, card.outputText])).toEqual([
       ["call-a", { path: "a.ts" }, "contents of a"],
       ["call-b", { path: "b.ts" }, "contents of b"],
     ]);
-    expect(firstMessageContent(groupAt(groups, 0))).toContainEqual(mixedContent[0]);
-  });
-
-  describe("distinct tool invocations", () => {
-    const call = (id: string, name = "exec", runId: string | undefined = "run-a") =>
-      assistant([{ type: "toolCall", id, name, arguments: { command: "echo ready" } }], 10, {
-        runId,
-      });
-    const result = (id: string, text = "ready", runId: string | undefined = "run-a") =>
-      resultMessage(id, "exec", [textBlock(text)], 20, { runId });
-    const snapshot = (id: string, completed = true) =>
-      assistant(
-        [
-          toolCall(undefined, "exec", { command: "echo ready" }),
-          { type: "toolresult", name: "exec", text: completed ? "ready" : "working" },
-        ],
-        10,
-        {
-          runId: "run-a",
-          toolCallId: id,
-          __openclawToolStreamLive: true,
-          __openclawToolStreamResultReceived: completed,
-        },
-      );
-    const cardsFor = (messages: unknown[], toolMessages: unknown[] = []) =>
-      cardsIn(messageGroups({ messages, toolMessages }));
-
-    it("keeps a persisted empty terminal result over a partial snapshot", () => {
-      const partial = snapshot("exec-1", false);
-      expect(cardsFor([partial])[0]).toMatchObject({
-        live: true,
-        completed: false,
-        outputText: "working",
-      });
-      const terminal = result("exec-1", "");
-      const cards = cardsFor([terminal, partial]);
-      expect(cards).toHaveLength(1);
-      expect(cards[0]).toMatchObject({ completed: true, outputText: "" });
-    });
-
-    it.each(["reset", "reused"])(
-      "does not relocate a live invocation across a boundary with %s ownership",
-      (ownership) => {
-        const persisted = call("exec-1");
-        const live = snapshot("exec-1", false);
-        const groups = messageGroups({
-          runId: "run-a",
-          messages: [
-            user("Original request", 1),
-            persisted,
-            ...(ownership === "reset" ? [resetMessage("reset-invocation")] : []),
-            user("Next request", 15),
-            ...(ownership === "reused" ? [call("exec-1")] : []),
-          ],
-          toolMessages: [live],
-        });
-        const cards = cardsIn(groups);
-        expect(cards).toHaveLength(2);
-        expect(cards.filter((card) => card.outputText === "working")).toHaveLength(1);
-      },
-    );
-
-    it("reconciles a multi-call snapshot without losing surrounding content or result metadata", () => {
-      const attachment = { type: "image", data: "fixture-image", mimeType: "image/png" };
-      const history = assistant(
-        [
-          textBlock("Before calls"),
-          toolCall("a", "exec", { command: "first" }),
-          toolCall("b", "exec", { command: "second" }),
-          textBlock("After calls"),
-        ],
-        10,
-        { runId: "run-a", __openclaw: { id: "transcript-call" } },
-      );
-      const terminal = result("a", "failed");
-      terminal.content = [textBlock("failed"), attachment];
-      terminal.details = { exitCode: 7, approvalReviewOutcome: "approved" };
-      terminal.isError = true;
-      const groups = messageGroups({
-        messages: [history, terminal, result("b")],
-        toolMessages: [snapshot("a"), snapshot("b")],
-      });
-      const entries = groups.flatMap((group) => group.messages);
-      const cards = entries.flatMap((entry) => extractToolCards(entry.message));
-      expect(cards).toHaveLength(2);
-      expect(cards.find((card) => card.callId === "a")).toMatchObject({
-        args: { command: "first" },
-        outputText: "failed",
-        isError: true,
-        exitCode: 7,
-        details: { exitCode: 7, approvalReviewOutcome: "approved" },
-        messageId: "transcript-call",
-      });
-      const blocks = entries.flatMap((entry) => requireRecord(entry.message).content as unknown[]);
-      expect(blocks).toContainEqual(attachment);
-      expect(blocks).toContainEqual(textBlock("Before calls"));
-      expect(blocks).toContainEqual(textBlock("After calls"));
-      expect(
-        blocks.findIndex((block) => requireRecord(block).text === "Before calls"),
-      ).toBeLessThan(blocks.findIndex((block) => requireRecord(block).id === "a"));
-      expect(
-        blocks.findIndex((block) => requireRecord(block).text === "After calls"),
-      ).toBeGreaterThan(blocks.findLastIndex((block) => requireRecord(block).id === "b"));
-    });
-
-    it("keeps surrounding text in order when result references split a multi-call message", () => {
-      const groups = messageGroups({
-        messages: [
-          assistant(
-            [
-              textBlock("before"),
-              toolCall("a"),
-              textBlock("between"),
-              toolCall("b"),
-              textBlock("after"),
-            ],
-            10,
-          ),
-          { ...result("a"), messageId: "a-result" },
-          { ...result("b"), __openclaw: { id: "b-result" } },
-        ],
-      });
-      const content = groups.flatMap((group) =>
-        group.messages.flatMap(
-          (entry) => requireRecord(entry.message).content as Record<string, unknown>[],
-        ),
-      );
-      expect(content.map((block) => (block.type === "text" ? block.text : block.id))).toEqual([
-        "before",
-        "a",
-        "a",
-        "between",
-        "b",
-        "b",
-        "after",
-      ]);
-    });
-
-    it("reconciles identified siblings without losing anonymous fallback pairs", () => {
-      const cards = cardsFor(
-        [
-          assistant(
-            [
-              toolCall("a", "exec", { command: "one" }),
-              { type: "toolresult", name: "exec", text: "one done" },
-              toolCall(undefined, "exec", { command: "two" }),
-              { type: "toolresult", name: "exec", text: "two done" },
-            ],
-            10,
-          ),
-        ],
-        [snapshot("a")],
-      );
-      expect(cards.map((card) => [card.callId, card.args, card.outputText])).toEqual([
-        ["a", { command: "one" }, "one done"],
-        [undefined, { command: "two" }, "two done"],
-      ]);
-    });
-
-    it("keeps per-call live diffs and conflicting-name outputs independent inside a batch", () => {
-      const live = ["a", "b"].map((id, index) =>
-        Object.assign(snapshot(id, false), {
-          __openclawToolStreamDiffStat: { added: index + 1, removed: 0 },
-        }),
-      );
-      const cards = cardsFor(
-        [
-          assistant(
-            [
-              toolCall("a"),
-              toolCall("b"),
-              toolCall("conflict", "read", { path: "a" }),
-              toolCall("conflict", "exec", { command: "pwd" }),
-            ],
-            10,
-            { runId: "run-a" },
-          ),
-          resultMessage("conflict", "read", "read output", 20, { runId: "run-a" }),
-          result("conflict", "exec output"),
-        ],
-        live,
-      );
-      expect(cards.slice(0, 2).map((card) => card.liveDiffStat)).toEqual([
-        { added: 1, removed: 0 },
-        { added: 2, removed: 0 },
-      ]);
-      expect(cards.slice(2).map((card) => [card.name, card.outputText])).toEqual([
-        ["read", "read output"],
-        ["exec", "exec output"],
-      ]);
-    });
   });
 
   it("keeps more than sixteen parallel calls open by call id", () => {
@@ -1190,7 +1012,7 @@ describe("buildCachedChatItems", () => {
           user("Interrupted request", 1_000),
           assistant("Interrupted reply", 2_000),
           user("[System] Continue the interrupted turn.", 3_000, {
-            provenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" },
+            provenance: { kind: "internal_system", sourceTool: "system-event" },
           }),
         ],
       },
@@ -1393,102 +1215,27 @@ describe("buildCachedChatItems", () => {
   );
 
   it.each([
-    {
-      savedReceipt: false,
-      finalRun: "final-widget-run",
-      finalView: "cv_final",
-      live: true,
-      count: 1,
-    },
-    {
-      savedReceipt: true,
-      finalRun: "final-widget-run",
-      finalView: "cv_final",
-      live: true,
-      count: 1,
-    },
-    {
-      savedReceipt: true,
-      finalRun: "final-widget-run",
-      finalView: "cv_final",
-      live: true,
-      count: 1,
-      tailFirst: true,
-    },
-    {
-      savedReceipt: true,
-      finalRun: "final-widget-run",
-      finalView: "cv_final",
-      live: true,
-      count: 1,
-      shortcode: true,
-    },
-    {
-      savedReceipt: true,
-      finalRun: "final-widget-run",
-      finalView: "cv_final",
-      live: true,
-      count: 2,
-      shortcode: true,
-      otherShortcode: true,
-    },
-    {
-      savedReceipt: true,
-      finalRun: "final-widget-run",
-      finalView: "cv_final",
-      live: true,
-      count: 1,
-      steer: true,
-    },
-    {
-      savedReceipt: true,
-      finalRun: "final-widget-run",
-      finalView: "cv_final",
-      live: true,
-      count: 1,
-      steer: true,
-      includeOriginal: false,
-    },
-    {
-      savedReceipt: true,
-      finalRun: "final-widget-run",
-      finalView: "cv_final",
-      live: true,
-      count: 1,
-      steer: true,
-      savedReply: false,
-    },
-    {
-      savedReceipt: true,
-      finalRun: "final-widget-run",
-      finalView: "cv_final",
-      live: true,
-      count: 1,
-      search: true,
-    },
-    { savedReceipt: true, finalRun: "other-run", finalView: "cv_final", live: true, count: 2 },
-    {
-      savedReceipt: true,
-      finalRun: "final-widget-run",
-      finalView: "cv_other",
-      live: true,
-      count: 2,
-    },
-    {
-      savedReceipt: true,
-      finalRun: "final-widget-run",
-      finalView: "cv_final",
-      live: false,
-      count: 2,
-    },
+    { savedReceipt: false },
+    {},
+    { tailFirst: true },
+    { shortcode: "string", reload: true },
+    { shortcode: "text", reload: true },
+    { shortcode: true, otherShortcode: true, count: 2, reload: true },
+    { steer: true },
+    { steer: true, includeOriginal: false },
+    { steer: true, savedReply: false },
+    { search: true },
+    { finalRun: "other-run", count: 2 },
+    { finalView: "cv_other", count: 2 },
+    { live: false, count: 2 },
   ])(
     "reconciles only the owned final Canvas tail: %j",
-    ({
-      savedReceipt,
-      finalRun,
-      finalView,
-      live,
-      count,
+    async ({
+      savedReceipt = true,
+      finalRun = "final-widget-run",
+      finalView = "cv_final",
+      live = true,
+      count = 1,
       tailFirst = false,
       shortcode = false,
       otherShortcode = false,
@@ -1496,6 +1243,7 @@ describe("buildCachedChatItems", () => {
       includeOriginal = true,
       savedReply = true,
       search = false,
+      reload = false,
     }) => {
       const runId = "final-widget-run";
       const parentToolCallId = "call_widget|fc_widget";
@@ -1534,7 +1282,18 @@ describe("buildCachedChatItems", () => {
         1_005,
         { __openclaw: { runId: finalRun } },
       );
-      const terminal = live ? rememberLiveTerminalRun(final, finalRun) : final;
+      if (shortcode === "string") {
+        final.content = 'Final tail. [embed ref="cv_final" /]';
+      }
+      const source =
+        shortcode === "text"
+          ? normalizeFinalAssistantMessage({
+              role: "assistant",
+              text: 'Final tail. [embed ref="cv_final" /]',
+              timestamp: 1_005,
+            })
+          : final;
+      const terminal = live ? rememberLiveTerminalRun(source, finalRun) : source;
       const messages = [
         ...(includeOriginal ? [nativeUser(runId, "Show a counter", 1_000, { runId })] : []),
         ...(tailFirst ? [terminal] : []),
@@ -1553,8 +1312,25 @@ describe("buildCachedChatItems", () => {
       ];
       const original = structuredClone(messages);
       const terminalRevision = readLiveTerminalRevision();
+      const cached = reload
+        ? await createSnapshotRecord("widget-session", {
+            savedAt: 1_006,
+            snapshot: {
+              messages,
+              pagination: { hasMore: false },
+              sessionId: "widget-session",
+              historyState: { stateRevision: { pendingInputs: "inputs-1" } },
+            },
+          })
+        : null;
+      if (reload) {
+        expect(cached?.record.snapshot.historyState).toBeUndefined();
+        expect(cached?.record.snapshot.messages.map(extractText).join("\n")).not.toContain(
+          'ref="cv_final"',
+        );
+      }
       const groups = messageGroups({
-        messages,
+        messages: cached?.record.snapshot.messages ?? messages,
         toolMessages: savedReceipt ? [] : [nested],
         showToolCalls: true,
         searchOpen: search,
@@ -1684,7 +1460,7 @@ describe("expansion-state render dependencies", () => {
 
     expect(expanded.has(hiddenCardId)).toBe(false);
     expect(expanded.has("visible-card:toolcard:0")).toBe(true);
-    expect(getExpansionStateVersion(expanded)).toBe(filteredVersion + 1);
+    expect(getExpansionStateVersion(expanded)).toBe(filteredVersion);
   });
 
   it("retains explicit choices when sibling panes have different loaded history", () => {

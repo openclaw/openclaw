@@ -97,6 +97,7 @@ export async function openOwnedGatewayNodeDuplex(options: {
     try {
       signal.throwIfAborted();
       options.assertCurrent();
+      params.assertCurrent?.();
     } catch (error) {
       controller.abort(error);
       throw error;

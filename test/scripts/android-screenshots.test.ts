@@ -50,6 +50,83 @@ it("keeps artifact cleanup inside the repository-owned evidence directory", () =
   expect(result.stdout).not.toContain(`Android screenshot artifacts: ${process.env.HOME}\n`);
 });
 
+it("captures the visible phone diagram after rendering when the latest reply prose is offscreen", () => {
+  const { root, run } = captureFixture("phone");
+  const adb = executable(
+    root,
+    "adb",
+    `case "$*" in
+  devices) printf 'List of devices attached\\nemulator-5554\\tdevice\\n' ;;
+  '-s emulator-5554 emu avd name') echo OpenClaw_Screenshots_API36 ;;
+  '-s emulator-5554 shell getprop ro.kernel.qemu') echo 1 ;;
+  '-s emulator-5554 shell cmd time_zone_detector is_auto_detection_enabled') echo true ;;
+  '-s emulator-5554 shell getprop persist.sys.timezone') echo UTC ;;
+  '-s emulator-5554 shell wm size') echo 'Physical size: 1440x2560' ;;
+  '-s emulator-5554 shell wm density') echo 'Physical density: 560' ;;
+  *'shell am start -W '*) echo "\${!#}" > "$FIXTURE_ROOT/scene" ;;
+  '-s emulator-5554 exec-out uiautomator dump /dev/tty')
+    scene=$(cat "$FIXTURE_ROOT/scene")
+    case "$scene" in
+      home) echo '<node text="Overview" />' ;;
+      chat)
+        count=$(cat "$FIXTURE_ROOT/chat-dumps" 2>/dev/null || echo 0)
+        count=$((count + 1))
+        echo "$count" > "$FIXTURE_ROOT/chat-dumps"
+        case "$count" in
+          1) echo '<node text="The Android release is close. Rendering diagram…" />' ;;
+          2) echo '<node text="The Android release is close. Mermaid diagram flowchart TD" />' ;;
+          *) echo '<node text="" content-desc="Mermaid diagram" bounds="[98,175][1342,1492]" />' ;;
+        esac
+        ;;
+      settings) echo '<node text="Device name and identity" />' ;;
+      gateway) echo '<node text="Connection between this phone and OpenClaw." />' ;;
+      voice-wake) echo '<node text="Wake listener" />' ;;
+    esac
+    ;;
+  '-s emulator-5554 exec-out screencap -p')
+    scene=$(cat "$FIXTURE_ROOT/scene")
+    if [[ "$scene" == chat ]]; then
+      cat "$FIXTURE_ROOT/chat-dumps" > "$FIXTURE_ROOT/chat-captured-at-dump"
+    fi
+    echo 'synthetic screenshot bytes'
+    ;;
+  '-s emulator-5554 shell '*|'-s emulator-5554 logcat '*) ;;
+  *) printf 'unexpected adb invocation: %s\\n' "$*" >&2; exit 97 ;;
+esac
+`,
+  );
+  const sips = executable(root, "sips", 'cp "$7" "$9"\n');
+  executable(root, "file", "echo 'JPEG image data, 1440x2560'\n");
+  executable(
+    root,
+    "git",
+    `[[ "$*" == "-C $FIXTURE_ROOT rev-parse HEAD" ]] || exit 97
+printf '%s\\n' '${"a".repeat(40)}'
+`,
+  );
+  // Readiness polling is exercised without spending real time between fixed UI states.
+  executable(root, "sleep", "exit 0\n");
+  const result = run({
+    ADB: adb,
+    SIPS: sips,
+    PATH: `${root}:${process.env.PATH}`,
+    FIXTURE_ROOT: root,
+    ANDROID_SCREENSHOT_DEVICE: "",
+    ANDROID_SCREENSHOT_AVD: "OpenClaw_Screenshots_API36",
+    ANDROID_SCREENSHOT_SCENE_TIMEOUT_SECONDS: "2",
+  });
+
+  expect(result.status, result.stderr).toBe(0);
+  expect(readFileSync(path.join(root, "chat-captured-at-dump"), "utf8")).toBe("3\n");
+  const artifacts = path.join(root, ".artifacts/android-screenshots/latest/phone");
+  const chatDump = readFileSync(path.join(artifacts, "ui-dumps/openclaw-chat.xml"), "utf8");
+  expect(chatDump).toContain('content-desc="Mermaid diagram"');
+  expect(chatDump).not.toContain("The Android release is close.");
+  for (const scene of ["home", "chat", "settings", "gateway", "voice-wake"]) {
+    expect(existsSync(path.join(artifacts, `screenshots/openclaw-${scene}.jpg`))).toBe(true);
+  }
+});
+
 it("rejects a physical device selected during screenshot discovery", () => {
   const { root, run } = captureFixture("phone");
   const adb = executable(

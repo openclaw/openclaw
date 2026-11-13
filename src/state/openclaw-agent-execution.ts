@@ -4,6 +4,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { assertAgentSessionWriteAdmission } from "../sessions/session-agent-work-admission.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import * as creationClaims from "./agent-creation-claim.js";
+import { isAgentDatabaseStartupReadReady } from "./agent-database-admission.js";
 import {
   assertAgentDeletionCleanupAliases,
   assertAgentDeletionExecutionCleanupAccess,
@@ -14,11 +15,11 @@ import {
   isSameOpenClawAgentDatabasePath,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.paths.js";
-import type { OpenClawAgentDatabaseExecution } from "./openclaw-agent-execution-contract.js";
-import {
-  createAgentDatabaseExecution,
-  type AgentDatabaseExecutionState,
-} from "./openclaw-agent-execution-owner.js";
+import type {
+  OpenClawAgentDatabaseExecution,
+  AgentDatabaseExecutionState,
+} from "./openclaw-agent-execution-contract.js";
+import { createAgentDatabaseExecution } from "./openclaw-agent-execution-owner.js";
 import {
   assertAgentDatabaseExecutionCreationIdentity,
   assertAgentDatabaseExecutionSharedState,
@@ -39,8 +40,12 @@ const executions = executionState.owners;
 /** Observe initial schema and registry publication through an already-captured physical path. */
 export function getPendingOpenClawAgentDatabasePreparation(
   physicalPath: string,
+  admission: "read" | "write" = "write",
 ): Promise<void> | undefined {
-  return executions.get(physicalPath)?.getPendingPreparation();
+  const pending = executions.get(physicalPath)?.getPendingPreparation();
+  return pending && admission === "read" && isAgentDatabaseStartupReadReady(physicalPath)
+    ? undefined
+    : pending;
 }
 
 /** Explicit preparation joins the file owner's already-captured creation target. */

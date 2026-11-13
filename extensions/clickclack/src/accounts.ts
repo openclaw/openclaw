@@ -78,8 +78,9 @@ function mergeClickClackGroups(
 
 export function resolveClickClackAccountConfig(
   cfg: CoreConfig,
-  accountId: string,
+  rawAccountId?: string | null,
 ): ClickClackAccountConfig {
+  const accountId = normalizeAccountId(rawAccountId);
   const channel = cfg.channels?.clickclack;
   const merged = resolveMergedClickClackAccountConfig(cfg, accountId);
   const account = resolveNormalizedAccountEntry(channel?.accounts, accountId, normalizeAccountId);
@@ -140,6 +141,16 @@ export function isClickClackAccountCurrent(params: {
   );
 }
 
+function tokenFileConfigPath(cfg: CoreConfig, accountId: string): string {
+  return resolveNormalizedAccountEntry(
+    cfg.channels?.clickclack?.accounts,
+    accountId,
+    normalizeAccountId,
+  )?.tokenFile?.trim()
+    ? `channels.clickclack.accounts.${accountId}.tokenFile`
+    : "channels.clickclack.tokenFile";
+}
+
 function resolveClickClackToken(params: {
   cfg: CoreConfig;
   value: unknown;
@@ -150,19 +161,12 @@ function resolveClickClackToken(params: {
   Pick<ResolvedClickClackAccount, "credentialDiagnostics"> {
   const tokenFile = params.tokenFile?.trim();
   if (tokenFile) {
-    const accountTokenFile = resolveNormalizedAccountEntry(
-      params.cfg.channels?.clickclack?.accounts,
-      params.accountId,
-      normalizeAccountId,
-    )?.tokenFile?.trim();
     const result = tryReadSecretFileSync(
       tokenFile,
       "ClickClack bot token",
       { rejectSymlink: true },
       {
-        configPath: accountTokenFile
-          ? `channels.clickclack.accounts.${params.accountId}.tokenFile`
-          : "channels.clickclack.tokenFile",
+        configPath: tokenFileConfigPath(params.cfg, params.accountId),
       },
     );
     return result.status === "available"
@@ -223,7 +227,7 @@ function resolveClickClackToken(params: {
   return { token: resolved.value, tokenSource: "config", tokenStatus: "available" };
 }
 
-export function resolveClickClackAccount(params: {
+export function resolveClickClackAccountMetadata(params: {
   cfg: CoreConfig;
   accountId?: string | null;
   env?: NodeJS.ProcessEnv;
@@ -233,13 +237,9 @@ export function resolveClickClackAccount(params: {
   const baseEnabled = params.cfg.channels?.clickclack?.enabled !== false;
   const enabled = baseEnabled && merged.enabled !== false;
   const { baseUrl, apiEndpoint } = resolveClickClackAccountEndpoints(merged);
-  const token = resolveClickClackToken({
-    cfg: params.cfg,
-    value: merged.token,
-    tokenFile: merged.tokenFile,
-    accountId,
-    env: params.env,
-  });
+  const token = merged.tokenFile?.trim()
+    ? { token: "", tokenSource: "tokenFile" as const, tokenStatus: undefined }
+    : resolveClickClackToken({ cfg: params.cfg, value: merged.token, accountId, env: params.env });
   const workspace = merged.workspace?.trim() ?? "";
   const discussionsWorkspace = merged.discussions?.workspace?.trim() || workspace;
   const controlUrlBase = merged.discussions?.controlUrlBase?.trim();
@@ -289,6 +289,81 @@ export function resolveClickClackAccount(params: {
       allowFrom: merged.allowFrom ?? ["*"],
     },
     apiEndpoint,
+  };
+}
+
+/** Compatibility for explicit synchronous SDK account and scoped-access callers. */
+export function resolveClickClackAccount(
+  params: Parameters<typeof resolveClickClackAccountMetadata>[0],
+): ResolvedClickClackAccount {
+  const account = resolveClickClackAccountMetadata(params);
+  return account.config.tokenFile?.trim()
+    ? {
+        ...account,
+        ...resolveClickClackToken({
+          cfg: params.cfg,
+          value: account.config.token,
+          tokenFile: account.config.tokenFile,
+          accountId: account.accountId,
+          env: params.env,
+        }),
+      }
+    : account;
+}
+
+/** Operational callers prepare the current external credential without blocking the Gateway. */
+export async function resolveClickClackAccountAsync(
+  params: Parameters<typeof resolveClickClackAccountMetadata>[0],
+): Promise<ResolvedClickClackAccount> {
+  const account = resolveClickClackAccountMetadata(params);
+  const tokenFile = account.config.tokenFile?.trim();
+  if (!tokenFile) {
+    return account;
+  }
+  const [{ readSecretFile }, { FsSafeError }] = await Promise.all([
+    import("openclaw/plugin-sdk/secret-file"),
+    import("openclaw/plugin-sdk/security-runtime"),
+  ]);
+  try {
+    return {
+      ...account,
+      token: await readSecretFile(tokenFile, "ClickClack bot token", { rejectSymlink: true }),
+      tokenStatus: "available",
+    };
+  } catch (error) {
+    if (!(error instanceof FsSafeError)) {
+      throw error;
+    }
+    return {
+      ...account,
+      tokenStatus: "configured_unavailable",
+      credentialDiagnostics: [
+        {
+          code: "CREDENTIAL_FILE_UNAVAILABLE",
+          path: tokenFileConfigPath(params.cfg, account.accountId),
+          reason: error.code,
+        },
+      ],
+    };
+  }
+}
+
+/** Read-only snapshots use configured facts; the channel lifetime owns credential health. */
+export function inspectClickClackAccount(cfg: CoreConfig, rawAccountId?: string | null) {
+  const accountId = normalizeAccountId(rawAccountId);
+  const config = resolveClickClackAccountConfig(cfg, accountId);
+  const { baseUrl } = resolveClickClackAccountEndpoints(config);
+  const credential = config.tokenFile?.trim()
+    ? { tokenSource: "tokenFile" as const }
+    : resolveClickClackToken({ cfg, value: config.token, accountId });
+  return {
+    accountId,
+    name: normalizeOptionalString(config.name),
+    enabled: cfg.channels?.clickclack?.enabled !== false && config.enabled !== false,
+    configured: Boolean(baseUrl && config.workspace?.trim() && credential.tokenSource !== "none"),
+    baseUrl,
+    tokenSource: credential.tokenSource,
+    ...("tokenStatus" in credential ? { tokenStatus: credential.tokenStatus } : {}),
   };
 }
 

@@ -10,7 +10,6 @@ import assert from "node:assert/strict";
 import { hash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { Session, type HeapProfiler } from "node:inspector/promises";
-import { registerHooks } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { PerformanceObserver } from "node:perf_hooks";
@@ -18,6 +17,7 @@ import { setImmediate } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { TranscriptEvent } from "../../src/config/sessions/session-accessor.sqlite-contract.js";
+import { registerPerfOwnerReplacement } from "../lib/perf-owner-replacement.ts";
 
 const { values } = parseArgs({
   options: {
@@ -59,22 +59,10 @@ const ownerUrl = new URL(
 const sourceUrl = values["owner-file"]
   ? pathToFileURL(path.resolve(values["owner-file"]))
   : ownerUrl;
-let ownerLoaded = false;
-if (values["owner-file"]) {
-  registerHooks({
-    load(url, context, nextLoad) {
-      if (url === ownerUrl.href) {
-        ownerLoaded = true;
-        const loaded = nextLoad(sourceUrl.href, context);
-        return { format: loaded.format, source: loaded.source, shortCircuit: true };
-      }
-      return nextLoad(url, context);
-    },
-  });
-}
+const wasOwnerReplaced = registerPerfOwnerReplacement(ownerUrl.href, values["owner-file"]);
 const { readSessionTranscriptModelContext: read } =
   await import("../../src/config/sessions/session-accessor.sqlite-model-context.js");
-assert(!values["owner-file"] || ownerLoaded, "Baseline owner substitution was not loaded");
+assert(!values["owner-file"] || wasOwnerReplaced(), "Baseline owner substitution was not loaded");
 const { importSqliteSessionRowsBatch } =
   await import("../../src/config/sessions/session-accessor.sqlite-import.js");
 const { resolveOpenClawAgentSqlitePath, closeOpenClawAgentDatabasesAsync } =

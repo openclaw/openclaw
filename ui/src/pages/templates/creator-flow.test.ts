@@ -1,0 +1,279 @@
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { showToast } from "../../lib/toast.ts";
+import {
+  createContext,
+  createRuntimeConfigStub,
+} from "../skill-workshop/skill-workshop-page.test-support.ts";
+import { TemplateCreatorFlow } from "./creator-flow.ts";
+
+vi.mock("../../lib/toast.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../lib/toast.ts")>()),
+  showToast: vi.fn(() => true),
+}));
+
+const draftId = "ec8f46b0-4ca3-4991-8a73-dfdcc8764087";
+const prompt =
+  "$create-template Create a Template from this agent and turn it into a shareable Template.";
+const createdDraft = (id = draftId) => ({ draftId: id, prompt });
+function startResult(method: string) {
+  if (method === "templates.drafts.create") {
+    return createdDraft();
+  }
+  if (method === "chat.send") {
+    return { status: "started" };
+  }
+  throw new Error(`Unexpected method ${method}`);
+}
+function expectToast(message: string, actionLabel: string) {
+  expect(showToast).toHaveBeenCalledWith(
+    expect.objectContaining({ message, actionLabel, onAction: expect.any(Function) }),
+  );
+}
+const scope = {
+  input: "A public repository",
+  job: "Summarize releases",
+  output: "A release brief",
+  authority: "Read public sources only",
+};
+
+beforeEach(() => vi.useFakeTimers());
+afterEach(() => {
+  vi.clearAllTimers();
+  vi.useRealTimers();
+  vi.mocked(showToast).mockClear();
+});
+
+it("invokes the bundled skill in the existing main session, then reviews and publishes the reviewed archive", async () => {
+  const request = vi.fn(async (method: string, _params: Record<string, unknown>) => {
+    switch (method) {
+      case "templates.drafts.read":
+        return { revision: "a".repeat(64), content: JSON.stringify({ scope }) };
+      case "templates.drafts.review": {
+        return {
+          revision: "a".repeat(64),
+          reviewToken: "b".repeat(64),
+          publisher: "maker",
+          name: "@maker/release-brief",
+          displayName: "Release Brief",
+          version: "0.1.0",
+          description: "Summarizes releases",
+          items: [
+            {
+              id: "file:workspace/checklist.md",
+              kind: "file",
+              label: "workspace/checklist.md",
+              included: true,
+            },
+          ],
+          files: [{ path: "CLAW.md", content: "Portable instructions" }],
+          scope,
+        };
+      }
+      case "templates.drafts.publish":
+        return {
+          name: "@maker/release-brief",
+          version: "0.1.0",
+          url: "https://clawhub.ai/packages/%40maker%2Frelease-brief",
+          publicationStatus: "pending",
+        };
+      default:
+        return startResult(method);
+    }
+  });
+  const context = createContext(request, {
+    methods: ["templates.drafts.create", "chat.send"],
+    runtimeConfig: createRuntimeConfigStub({
+      sourceConfig: { gateway: { controlUi: { experimental: { templates: true } } } },
+    }),
+  });
+  const flow = new TemplateCreatorFlow(context);
+  await flow.start("research");
+  const calls = request.mock.calls;
+  expect(calls.map(([method]) => method)).toEqual(["templates.drafts.create", "chat.send"]);
+  const sent = calls[1]![1];
+  expect(sent).toMatchObject({
+    sessionKey: "agent:research:main",
+    deliver: false,
+    workContext: { page: "template-create", detail: { draftId } },
+    message: prompt,
+  });
+  expect(sent).not.toHaveProperty("parentSessionKey");
+  expect(sent).not.toHaveProperty("fork");
+  expect(context.navigate).toHaveBeenCalledWith("chat", expect.anything());
+
+  await vi.advanceTimersByTimeAsync(2500);
+  expect(flow.reviewCurrent).toBe(true);
+  const choices = {
+    name: "release-brief",
+    displayName: "Release Brief",
+    description: "Summarizes releases",
+    excluded: [],
+  };
+  await flow.publish();
+  expect(flow.publication).toMatchObject({ publicationStatus: "pending" });
+  expect(showToast).not.toHaveBeenCalled();
+  expect(request.mock.lastCall).toEqual([
+    "templates.drafts.publish",
+    expect.objectContaining({ reviewToken: "b".repeat(64), choices }),
+  ]);
+  expect(calls.some(([method]) => method === "sessions.create")).toBe(false);
+});
+
+it("reviews an agent-authored draft in the requesting conversation without another model turn or publication", async () => {
+  const request = vi.fn(async (method: string) => {
+    if (method === "templates.drafts.read") {
+      return { revision: "a".repeat(64), content: JSON.stringify({ scope }) };
+    }
+    if (method === "templates.drafts.review") {
+      return {
+        revision: "a".repeat(64),
+        reviewToken: "b".repeat(64),
+        name: "@maker/research-brief",
+        displayName: "Research Brief",
+        description: "Research summaries",
+        items: [],
+        files: [],
+        scope,
+      };
+    }
+    throw new Error(`Unexpected RPC ${method}`);
+  });
+  const context = createContext(request);
+  const flow = new TemplateCreatorFlow(context);
+  const sessionKey = "agent:research:dashboard:requesting-conversation";
+  flow.open("research", draftId, sessionKey);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(flow.reviewCurrent).toBe(true);
+  expect(context.navigate).toHaveBeenCalledWith(
+    "chat",
+    expect.objectContaining({
+      pathname: expect.stringContaining("requesting-conversation"),
+    }),
+  );
+  expect(request.mock.calls.map(([method]) => method)).toEqual([
+    "templates.drafts.read",
+    "templates.drafts.review",
+  ]);
+  expect(request).toHaveBeenCalledWith("templates.drafts.review", { agentId: "research", draftId });
+});
+
+it("does not let an earlier sidebar initiation replace a newer chat review", async () => {
+  const created = Promise.withResolvers<{ draftId: string; prompt: string }>();
+  const request = vi.fn((method: string) => {
+    if (method === "templates.drafts.create") {
+      return created.promise;
+    }
+    throw new Error(`Unexpected RPC ${method}`);
+  });
+  const context = createContext(request);
+  const flow = new TemplateCreatorFlow(context);
+  const starting = flow.start("research");
+  flow.open("research", draftId, "agent:research:dashboard:newer-review");
+  created.resolve({ draftId: "older-draft", prompt: "Older sidebar request" });
+  await starting;
+  expect(context.navigate).toHaveBeenCalledTimes(1);
+  expect(context.navigate).toHaveBeenCalledWith(
+    "chat",
+    expect.objectContaining({ pathname: expect.stringContaining("newer-review") }),
+  );
+  expect(request.mock.calls.map(([method]) => method)).toEqual(["templates.drafts.create"]);
+});
+
+it("keeps overlapping skill turns bound to their own draft ids", async () => {
+  const ids = {
+    research: draftId,
+    writer: "ed9f46b0-4ca3-4991-8a73-dfdcc8764088",
+  };
+  const createResolvers = new Map<string, (value: unknown) => void>();
+  const request = vi.fn((method: string, params: Record<string, unknown>) => {
+    if (method === "templates.drafts.create") {
+      return new Promise((resolve) => {
+        createResolvers.set(params.agentId as string, resolve);
+      });
+    }
+    if (method === "chat.send") {
+      return Promise.resolve(startResult(method));
+    }
+    throw new Error(`Unexpected method ${method}`);
+  });
+  const context = createContext(request);
+  const researchStart = new TemplateCreatorFlow(context).start("research");
+  const writerStart = new TemplateCreatorFlow(context).start("writer");
+  expect(createResolvers.size).toBe(2);
+
+  // Resolve in reverse order to prove IDs travel with each specific request.
+  createResolvers.get("writer")!(createdDraft(ids.writer));
+  createResolvers.get("research")!(createdDraft(ids.research));
+  await Promise.all([researchStart, writerStart]);
+
+  expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(2);
+  for (const [agentId, id] of Object.entries(ids)) {
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        workContext: expect.objectContaining({ agentId, detail: { draftId: id } }),
+        message: prompt,
+      }),
+    );
+  }
+});
+
+it.each(["templates.drafts.create", "chat.send"])(
+  "can start again after a client change interrupts %s",
+  async (pendingMethod) => {
+    const pending = Promise.withResolvers<unknown>();
+    const oldRequest = vi.fn((method: string) => {
+      if (method === pendingMethod) {
+        return pending.promise;
+      }
+      if (method === "templates.drafts.create") {
+        return Promise.resolve(createdDraft());
+      }
+      throw new Error(`Unexpected method ${method}`);
+    });
+    const context = createContext(oldRequest);
+    const listeners = new Set<(snapshot: typeof context.gateway.snapshot) => void>();
+    context.gateway.subscribe = (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    };
+    const flow = new TemplateCreatorFlow(context);
+    const interrupted = flow.start("research");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(oldRequest).toHaveBeenCalledWith(pendingMethod, expect.anything());
+    expect(flow.busy).toBe("starting");
+
+    const newRequest = vi.fn(async (method: string) => startResult(method));
+    Object.assign(context.gateway.snapshot, {
+      client: { request: newRequest } as unknown as GatewayBrowserClient,
+    });
+    for (const listener of listeners) {
+      listener(context.gateway.snapshot);
+    }
+    expect(flow.busy).toBeNull();
+
+    await flow.start("research");
+    expect(newRequest).toHaveBeenCalledWith("chat.send", expect.anything());
+    pending.resolve(startResult(pendingMethod));
+    await interrupted;
+    expect(flow.busy).toBeNull();
+  },
+);
+
+it("surfaces a failed start on agent settings with a retry action", async () => {
+  const request = vi.fn(async (method: string) => {
+    if (method === "templates.drafts.create") {
+      throw new Error("The agent workspace is unavailable");
+    }
+    throw new Error(`Unexpected method ${method}`);
+  });
+  const context = createContext(request);
+  const flow = new TemplateCreatorFlow(context);
+  await flow.start("research");
+
+  expect(flow).toMatchObject({ busy: null, hasActiveDraft: false });
+  expect(context.navigate).not.toHaveBeenCalled();
+  expectToast("The agent workspace is unavailable", "Retry");
+});
