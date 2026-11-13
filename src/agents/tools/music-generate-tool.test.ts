@@ -146,7 +146,6 @@ vi.mock("../../media/store.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../../media/store.js")>();
   return {
     ...mediaStoreMocks,
-    extractOriginalFilename: original.extractOriginalFilename,
     getMediaDir: original.getMediaDir,
   };
 });

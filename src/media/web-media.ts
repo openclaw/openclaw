@@ -57,8 +57,8 @@ import {
   readImageProbeFromHeader,
   type ImageMetadata,
 } from "./media-services.js";
-import { extractOriginalFilename, getMediaDir } from "./store.js";
-import { formatMediaSize, SaveMediaSourceError } from "./store.shared.js";
+import { getMediaDir } from "./store-path.js";
+import { extractOriginalFilename, formatMediaSize, SaveMediaSourceError } from "./store.shared.js";
 
 export { getDefaultLocalRootsCore, LocalMediaAccessError };
 export type { LocalMediaAccessErrorCode };

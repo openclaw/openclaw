@@ -47,7 +47,8 @@ export { renderQrPngBase64, renderQrPngDataUrl, writeQrPngTempFile } from "../me
 export { renderQrTerminal } from "../media/qr-terminal.ts";
 
 export { readResponseTextSnippet, readResponseWithLimit } from "../infra/http-body.js";
-export { ensureMediaDir, extractOriginalFilename, saveMediaSource } from "../media/store.js";
+export { ensureMediaDir, saveMediaSource } from "../media/store.js";
+export { extractOriginalFilename } from "../media/store.shared.js";
 export type { SavedMedia } from "../media/store.js";
 export { unlinkIfExists } from "../media/temp-files.js";
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";

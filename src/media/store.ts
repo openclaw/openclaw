@@ -7,11 +7,7 @@ import {
   sanitizeUntrustedFileName,
 } from "@openclaw/fs-safe/advanced";
 import { fileStore } from "@openclaw/fs-safe/store";
-import {
-  basenameFromAnyPath,
-  extnameFromAnyPath,
-  nameFromAnyPath,
-} from "@openclaw/media-core/file-name";
+import { extnameFromAnyPath, nameFromAnyPath } from "@openclaw/media-core/file-name";
 import {
   detectMime,
   extensionForMime,
@@ -114,26 +110,6 @@ function sanitizeFilename(name: string): string {
   const base = sanitizeUntrustedFileName(name, "_").normalize("NFC");
   const sanitized = base.replace(/[^\p{L}\p{N}._-]+/gu, "_");
   return truncateUtf16Safe(sanitized.replace(/_+/g, "_").replace(/^_|_$/g, ""), 60);
-}
-
-/** Restores the caller-facing filename from media-store paths with embedded UUID suffixes. */
-export function extractOriginalFilename(filePath: string): string {
-  const basename = basenameFromAnyPath(filePath);
-  if (!basename) {
-    return "file.bin";
-  }
-
-  const ext = extnameFromAnyPath(basename);
-  const nameWithoutExt = path.basename(basename, ext);
-
-  const match = nameWithoutExt.match(
-    /^(.+)---[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i,
-  );
-  if (match?.[1]) {
-    return `${match[1]}${ext}`;
-  }
-
-  return basename;
 }
 
 /** Creates the configured media-store root with private directory permissions. */
