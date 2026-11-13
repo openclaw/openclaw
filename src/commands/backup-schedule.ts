@@ -219,7 +219,9 @@ export async function backupDisableCommand(
     if (signal?.aborted) {
       break;
     }
-    await callGatewayFromCli("cron.remove", options, { id: job.id }, { signal });
+    // An admitted removal keeps its reply: cancellation stops the next request,
+    // never aborts a schedule whose removal may already have settled.
+    await callGatewayFromCli("cron.remove", options, { id: job.id });
   }
   runtime.log(`${label} disabled.`);
   return { removed: true };

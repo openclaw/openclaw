@@ -593,10 +593,11 @@ describe("scheduled backups", () => {
     });
     vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
     await scope.run(() => runCli(["backup", "disable"]));
-    expect(
-      gatewayRpc.call.mock.calls
-        .filter(([method]) => method === "cron.remove")
-        .map((call) => call[2]),
-    ).toEqual([{ id: "git-job" }]);
+    const removes = gatewayRpc.call.mock.calls.filter(([method]) => method === "cron.remove");
+    expect(removes.map((call) => call[2])).toEqual([{ id: "git-job" }]);
+    // An admitted removal keeps its reply: the mutation RPC carries no abort signal.
+    for (const call of removes) {
+      expect(call[3]).not.toHaveProperty("signal");
+    }
   });
 });
