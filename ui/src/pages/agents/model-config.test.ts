@@ -137,6 +137,20 @@ describe("agent model config", () => {
     expect(runtimeConfig.state.configForm).toEqual({ agents: { defaults, entries: { main: {} } } });
     runtimeConfig.dispose();
   });
+  it("sets and clears the agent's thinking default without touching the global one", async () => {
+    const defaults = { thinkingDefault: "low" };
+    const runtimeConfig = createRuntimeConfig({ agents: { defaults, entries: { coder: {} } } });
+    await runtimeConfig.ensureLoaded();
+    modelActionsFor(runtimeConfig).onThinkingDefaultChange("coder", "high");
+    expect(runtimeConfig.state.configForm).toEqual({
+      agents: { defaults, entries: { coder: { thinkingDefault: "high" } } },
+    });
+    modelActionsFor(runtimeConfig).onThinkingDefaultChange("coder", null);
+    expect(runtimeConfig.state.configForm).toEqual({
+      agents: { defaults, entries: { coder: {} } },
+    });
+    runtimeConfig.dispose();
+  });
   it("writes primary and fallback changes through keyed agent entries", async () => {
     const runtimeConfig = createRuntimeConfig({
       agents: {

@@ -133,6 +133,7 @@ const enSettings = {
       utilityModelInheritAutomatic: "Automatic",
       utilityModelDisabled: "Disabled for this agent",
       utilityModelFallbacks: "This agent's utility fallbacks: {models}",
+      inheritDefaultThinking: "Inherit default ({level})",
       fallbacks: "Fallbacks",
       addFallback: "Add fallback…",
     },

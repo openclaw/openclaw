@@ -122,21 +122,113 @@ it("shows Overview context as rows that open their owning tabs", async () => {
   expect(onSelectPanel).toHaveBeenLastCalledWith("files");
 });
 
-it("leaves out read-only facts the agent does not have", () => {
+it("leaves out facts and settings the agent does not have", () => {
   const { container } = renderOverview();
   expect(overviewRow(container, "Thinking default")).toBeUndefined();
   expect(overviewRow(container, "Runtime")).toBeUndefined();
 });
 
-it("shows read-only facts the agent has", () => {
-  const { container } = renderOverview({
-    thinkingDefault: "xhigh",
-    agentRuntime: { id: "codex", fallback: "pi" },
+it("shows the runtime the agent has", () => {
+  const { container } = renderOverview({ agentRuntime: { id: "codex", fallback: "pi" } });
+  expect(
+    overviewRow(container, "Runtime")?.querySelector(".settings-row__value")?.textContent,
+  ).toBe("codex (fallback pi)");
+});
+
+const thinkingLevels = [
+  { id: "off", label: "off" },
+  { id: "low", label: "low" },
+  { id: "high", label: "high" },
+  { id: "xhigh", label: "xhigh" },
+];
+
+it("edits the agent's thinking default from the levels its model accepts", () => {
+  const onThinkingDefaultChange = vi.fn();
+  // The Gateway's resolved level wins over agents.defaults (per-model params, clamping).
+  const container = renderAgents({
+    configForm: agentConfig({ thinkingDefault: "low" }),
+    overview: { onThinkingDefaultChange },
+    readData: () => ({
+      ...data,
+      agentsPanel: "overview",
+      agentsList: {
+        ...data.agentsList!,
+        agents: [{ id: "beta", thinkingLevels, thinkingDefault: "xhigh" }],
+      },
+    }),
   });
-  const value = (label: string) =>
-    overviewRow(container, label)?.querySelector(".settings-row__value")?.textContent;
-  expect(value("Thinking default")).toBe("Extra high");
-  expect(value("Runtime")).toBe("codex (fallback pi)");
+  const select = overviewRow(container, "Thinking default")?.querySelector("select");
+  assert(select);
+  expect(select.disabled).toBe(false);
+  expect(Array.from(select.options, (option) => option.textContent)).toEqual([
+    "Inherit default (Extra high)",
+    "Off",
+    "Low",
+    "High",
+    "Extra high",
+  ]);
+  expect(select.value).toBe("");
+  select.value = "high";
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+  expect(onThinkingDefaultChange).toHaveBeenLastCalledWith("beta", "high");
+  select.value = "";
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+  expect(onThinkingDefaultChange).toHaveBeenLastCalledWith("beta", null);
+});
+
+it("keeps a saved thinking default the model no longer offers", () => {
+  const container = renderAgents({
+    configForm: agentConfig({ thinkingDefault: "low" }, { thinkingDefault: "max" }),
+    readData: () => ({
+      ...data,
+      agentsPanel: "overview",
+      agentsList: {
+        ...data.agentsList!,
+        agents: [{ id: "beta", thinkingLevels, thinkingDefault: "max" }],
+      },
+    }),
+  });
+  const select = overviewRow(container, "Thinking default")?.querySelector("select");
+  assert(select);
+  expect(select.value).toBe("max");
+  expect(select.options[0]?.textContent).toBe("Inherit default (Low)");
+  expect(select.selectedOptions[0]).toMatchObject({ textContent: "Maximum", disabled: true });
+});
+
+it("edits the thinking default while the model catalog restricts model choices", () => {
+  const container = renderAgents({
+    configForm: agentConfig({}, { thinkingDefault: "high" }),
+    overview: { modelSelectionPolicy: { restricted: true, defaultModel: inheritedAgentModel } },
+    readData: () => ({
+      ...data,
+      agentsPanel: "overview",
+      agentsList: {
+        ...data.agentsList!,
+        agents: [{ id: "beta", thinkingLevels, thinkingDefault: "high" }],
+      },
+    }),
+  });
+  const select = overviewRow(container, "Thinking default")?.querySelector("select");
+  assert(select);
+  expect(select.value).toBe("high");
+  expect(select.disabled).toBe(false);
+});
+
+it("shows the resolved thinking level, disabled, until config is readable", () => {
+  const container = renderAgents({
+    readData: () => ({
+      ...data,
+      agentsPanel: "overview",
+      agentsList: {
+        ...data.agentsList!,
+        agents: [{ id: "beta", thinkingLevels, thinkingDefault: "high" }],
+      },
+    }),
+  });
+  const select = overviewRow(container, "Thinking default")?.querySelector("select");
+  assert(select);
+  expect(select.disabled).toBe(true);
+  expect(select.selectedOptions[0]?.textContent).toBe("High");
 });
 
 it("edits models without a Save or Reload of its own", () => {
