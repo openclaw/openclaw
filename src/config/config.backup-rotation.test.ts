@@ -96,6 +96,18 @@ describe("config backup rotation", () => {
     });
   });
 
+  it("keeps the file an older release wrote beside the first rewrite", async () => {
+    const original =
+      '{"gateway":{"mode":"local","port":19000},"meta":{"lastTouchedVersion":"2026.10.10"}}\n';
+    await withConfig("openclaw-config-older-release-", original, async ({ configPath }) => {
+      await set("gateway.port", "19001");
+      await set("gateway.port", "19002");
+
+      await expectFile(`${configPath}.pre-2026.10.10`, original, 0o600);
+      expect(JSON.parse(await fs.readFile(configPath, "utf8")).gateway.port).toBe(19002);
+    });
+  });
+
   it("openclaw config set preserves original include bytes in private recovery backups", async () => {
     const original = '{"level":"info"}\n';
     await withLoggingConfig(async ({ configPath, tempDir }) => {

@@ -9,6 +9,7 @@ import * as manifestRegistry from "../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { VERSION } from "../version.js";
 import { createConfigIoContext } from "./io.context.js";
 import { createConfigIO } from "./io.factory.js";
 import { createConfigReadError } from "./io.invalid-config.js";
@@ -282,3 +283,38 @@ it.each([false, true])("loads metadata only for valid snapshots (invalid=%s)", a
     expect(result.pluginMetadataSnapshot?.configFingerprint).toMatch(/^[a-f0-9]{64}$/u);
   }
 });
+
+it.each([
+  { writer: "2026.10.10", valid: true, heartbeat: false },
+  { writer: "2026.10.10", valid: true, heartbeat: true },
+  { writer: VERSION, valid: false, heartbeat: false },
+])(
+  "runs retired keys from an older release in memory (writer=$writer, heartbeat=$heartbeat)",
+  async (scenario) => {
+    const retired = { model: "openai/gpt-6-astra" };
+    const context = fixture(
+      {
+        meta: { lastTouchedVersion: scenario.writer },
+        agents: { defaults: { compaction: { memoryFlush: retired } } },
+        ...(scenario.heartbeat
+          ? { channels: { defaults: { heartbeatVisibility: { showOk: true } } } }
+          : {}),
+      },
+      { pluginValidation: "core-only" },
+    );
+    const raw = fs.readFileSync(context.configPath, "utf8");
+
+    const snapshot = await readSnapshot(context);
+
+    expect(snapshot.valid).toBe(scenario.valid);
+    // The file and source config keep the authored value for Doctor to migrate and save.
+    expect(fs.readFileSync(context.configPath, "utf8")).toBe(raw);
+    expect(snapshot.sourceConfig.agents?.defaults?.compaction?.memoryFlush).toEqual(retired);
+    if (scenario.valid) {
+      expect(snapshot.config.agents?.defaults?.compaction?.memoryFlush?.model).toBeUndefined();
+      const warning = snapshot.warnings.find((entry) => entry.path === "meta.lastTouchedVersion");
+      expect(warning?.message).toContain("openclaw doctor --fix");
+      expect(warning?.message.includes("heartbeat settings are paused")).toBe(scenario.heartbeat);
+    }
+  },
+);

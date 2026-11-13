@@ -10,7 +10,29 @@ Checks 0-2 cover config normalization and the legacy config key migrations,
 plus how doctor publishes shared-state schema during an update.
 
 Doctor applies known migrations before removing unrecognized config keys, including
-during updates. Repairs use the normal config backup and write flow. Inputs retained
+during updates. Repairs use the normal config backup and write flow.
+
+## Configs written by an older release
+
+An upgrade never refuses settings the previous release accepted. When the Gateway
+reads a config whose `meta.lastTouchedVersion` is an older supported release (2026.7.1
+or newer) and the config fails validation, it runs Doctor's state-free config transform
+in memory: known migrations, then removal of unrecognized keys. If the result is valid,
+the Gateway starts with it and reports one warning that lists each change and asks you
+to run `openclaw doctor --fix`. The file on disk is unchanged. Retired heartbeat
+settings are paused until Doctor converts them to automations.
+
+The boundary is the writer stamp. Once the current release writes the config, by
+`openclaw config set`, Doctor, or any other validated writer, validation is strict
+again, and `openclaw config validate` always checks the file as written. A config
+write never saves a retired key: the writer refuses it and names `openclaw doctor --fix`.
+
+When the current release first rewrites a config an older release wrote, it keeps the
+original bytes beside it as `openclaw.json.pre-<version>`, outside the rotating `.bak`
+ring. That copy is never overwritten. Doctor never replaces a readable invalid config
+with its last-known-good copy, because that discards newer settings; it repairs the
+active file in place. Only a file that cannot be parsed at all is restored from
+last-known-good. Inputs retained
 for a deferred plugin migration remain untouched until their owner can migrate them.
 
 Legacy `memorySearch` moves to `memory.search`, audio model lists move to
@@ -52,9 +74,10 @@ Doctor preserves explicit `true` and `false` values and leaves an unset grant
 unset. It removes the old key only after copying its value, or confirming both
 keys have the same boolean value. Conflicting or invalid values stop the repair
 before config publication; resolve the reported keys and run Doctor again.
-Ordinary reads reject the retired key instead of ignoring a denial. Doctor also
-keeps active legacy prompt policy ahead of last-known-good recovery, so an older
-backup cannot replace a newer grant or denial while an include needs repair. Existing
+Ordinary reads reject the retired key instead of ignoring a denial; a config an
+older release wrote runs with this migration in memory until Doctor saves it. An
+older backup never replaces a readable config, so it cannot replace a newer grant
+or denial. Existing
 include-write constraints still apply, and plugin-owned `config` fields are not
 renamed. No permission default or enforcement changes. Inspection responses keep
 the existing `grants.hooks.allowPromptInjection` field for API compatibility.
@@ -218,8 +241,10 @@ Unsafe heartbeat sources still require repair before migration.
 Noninteractive updates and `openclaw doctor --fix --yes` do not guess. They keep
 the original retired heartbeat fields and report: run `openclaw doctor --fix`
 interactively to select the cron partition and migrate heartbeat settings.
-Retired heartbeat fields already make the config invalid, so that older config
-still requires interactive Doctor before the Gateway can start.
+Retired heartbeat fields make the config invalid for the current release. A config
+an older release wrote still starts with those heartbeats paused (see
+[Configs written by an older release](#configs-written-by-an-older-release)); run
+interactive Doctor to convert them.
 
 `openclaw doctor --fix` converts supported July 2026 or newer heartbeat settings,
 persisted monitors, and structured heartbeat tasks into ordinary editable
@@ -1351,7 +1376,7 @@ against the current SQLite owners before the import can rename profiles.
 
     Other commands that encounter legacy keys still ask you to run `openclaw doctor`. Doctor explains the issues, shows its migrations, and rewrites `~/.openclaw/openclaw.json` with the updated schema. Cron job store migrations are also handled by `openclaw doctor --fix`; automatic config-key migration does not import legacy session stores or repair services.
 
-    When a readable active config can be fully migrated, Doctor preserves it before considering last-known-good recovery. This includes legacy multi-agent rosters with a `default: true` owner: unrelated settings and the original agent ownership survive the migration.
+    Doctor repairs a readable active config in place and never restores last-known-good over it. This includes legacy multi-agent rosters with a `default: true` owner: unrelated settings and the original agent ownership survive the migration.
 
     Per-agent migrations apply to both keyed `agents.entries` and legacy `agents.list` rosters, including rosters that already set `agents.ownership: "explicit"`. For example, Doctor preserves an agent's legacy `memorySearch` settings under `memory.search`. Existing values at the current config paths take precedence.
 
