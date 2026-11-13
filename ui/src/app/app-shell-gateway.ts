@@ -366,7 +366,8 @@ export class ShellGatewayOwner {
       return;
     }
     if (command.kind === "agent-github-settings") {
-      void (async () => (await import("./github-accounts.ts")).openGitHubAccounts(context))();
+      // Every agent's GitHub account, and the shared agent account, are changed in Profile.
+      context.navigate("profile", { hash: "#settings-profile-github-connections" });
       return;
     }
     if (command.kind === "sidebar") {

@@ -104,7 +104,6 @@ it("opens the current agent GitHub identity panel without exposing authorization
     },
   });
 
-  await vi.dynamicImportSettled();
   expect(navigate).toHaveBeenCalledWith("profile", {
     hash: "#settings-profile-github-connections",
   });
