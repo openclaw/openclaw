@@ -1,0 +1,5 @@
+113
+# PR #194094 / issue #194093: AWS ARN diagnostic-redaction regressions.
+# Exact net growth: 40 production logger lines + 73 focused redaction test lines.
+# Retains genuine Telegram token masking, malformed ARN and boundary controls,
+# configured-regex/registered-secret precedence, and diagnostic/log-tail proof.

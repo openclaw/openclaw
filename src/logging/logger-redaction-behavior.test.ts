@@ -23,9 +23,12 @@ import {
   toPinoLikeLogger,
 } from "./logger.js";
 import { testApi as loggerTest } from "./logger.test-support.js";
+import { registerSecretValueForRedaction } from "./secret-redaction-registry.js";
+import { resetSecretRedactionRegistryForTest } from "./secret-redaction-registry.test-support.js";
 import { createDiagnosticLogRecordCapture } from "./test-helpers/diagnostic-log-capture.js";
 
 const secret = "sk-testsecret1234567890abcd";
+const snsArn = "arn:aws:sns:us-east-1:123456789012:application-notifications-topic";
 const TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736";
 const SPAN_ID = "00f067aa0ba902b7";
 const logPathTracker = createSuiteLogPathTracker("openclaw-log-redaction-");
@@ -58,6 +61,43 @@ afterEach(() => {
 });
 
 afterAll(() => logPathTracker.cleanup());
+
+it("preserves nonsecret AWS ARNs through diagnostic records and log-tail egress", async () => {
+  const capture = createDiagnosticLogRecordCapture();
+  const telegramToken = "123456789012:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghi";
+  getLogger().info(
+    { resource: snsArn },
+    `Resource ${snsArn}; credentials ${telegramToken} bot${telegramToken}`,
+  );
+  await capture.flush();
+
+  expect(await readLogFile()).toContain(snsArn);
+  const diagnostics = JSON.stringify(capture.records);
+  const tail = (await readConfiguredLogTail()).lines.join("\n");
+  for (const output of [diagnostics, tail]) {
+    expect(output).toContain(snsArn);
+    expect(output).not.toContain(telegramToken);
+  }
+});
+
+it("masks an explicitly registered ARN at diagnostic and log-tail egress", async () => {
+  const capture = createDiagnosticLogRecordCapture();
+  registerSecretValueForRedaction(snsArn);
+  try {
+    getLogger().info({ resource: snsArn }, `Resource ${snsArn}`);
+    await capture.flush();
+    expect(await readLogFile()).toContain(snsArn);
+    for (const output of [
+      JSON.stringify(capture.records),
+      (await readConfiguredLogTail()).lines.join("\n"),
+    ]) {
+      expect(output).not.toContain(snsArn);
+      expect(output).toContain("arn:aw…opic");
+    }
+  } finally {
+    resetSecretRedactionRegistryForTest();
+  }
+});
 it.each([{ aggregate: false }, { aggregate: true }])(
   "retains plugin-state failure origin and raw causes (aggregate=$aggregate)",
   async ({ aggregate }) => {
