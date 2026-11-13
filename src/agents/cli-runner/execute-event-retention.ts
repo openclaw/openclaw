@@ -43,6 +43,16 @@ export const MAX_RETAINED_TOOL_ARG_CHARS = 8 * 1024 * 1024;
  */
 export const MAX_REDUCED_MESSAGING_ARG_CHARS = 8 * 1024;
 /**
+ * Ceiling on the delivery evidence a run keeps for sends that have already
+ * settled. Same number as `MAX_RETAINED_TOOL_ARG_CHARS` and for the same
+ * reason: what a run retains may not outgrow the traffic a whole turn is
+ * allowed to be charged for. It is a second budget rather than a share of that
+ * one because the pending charge is refunded when a result arrives, so a
+ * sequence of sends that each fit the pending budget would otherwise accumulate
+ * settled copies without limit. See `execute-settled-evidence.ts`.
+ */
+export const MAX_SETTLED_MESSAGING_EVIDENCE_CHARS = 8 * 1024 * 1024;
+/**
  * Ceiling on one retained value inside a reduced entry. Every argument the
  * settle path reads to decide routing — the action, the explicit-route keys,
  * `dryRun`, `final` — is a short scalar well under this; what exceeds it is

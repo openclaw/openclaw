@@ -31,10 +31,7 @@ import {
   isMessagingToolDeliveryAction,
   isMessagingToolSendAction,
 } from "../embedded-agent-messaging.js";
-import type {
-  MessagingToolSend,
-  MessagingToolSourceReplyPayload,
-} from "../embedded-agent-messaging.types.js";
+import type { MessagingToolSend } from "../embedded-agent-messaging.types.js";
 import {
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
@@ -52,11 +49,11 @@ import { createPendingMessagingCalls } from "./execute-messaging-evidence.js";
 import {
   appendUniqueCliMessagingEvidence,
   buildMessagingToolSendEvidenceKey,
-  CLI_MESSAGING_EVIDENCE_MAX_CALLS,
   extractCliMessagingContent,
   extractCliMessagingTarget,
   isPreparedCliInternalSourceReply,
 } from "./execute-messaging.js";
+import { createSettledMessagingEvidence } from "./execute-settled-evidence.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 const CLI_LOOPBACK_CORRELATION_MAX_CALLS = 64;
@@ -113,10 +110,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     activeCliTools,
     () => cliLoopbackCorrelationOverflowed,
   );
-  const messagingToolSentTexts = new Set<string>();
-  const messagingToolSentMediaUrls = new Set<string>();
-  const messagingToolSentTargets = new Map<string, MessagingToolSend>();
-  const messagingToolSourceReplyPayloads: MessagingToolSourceReplyPayload[] = [];
+  const settledMessagingEvidence = createSettledMessagingEvidence();
   const toolMediaUrls = new Set<string>();
   let toolAudioAsVoice = false;
   let toolTrustedLocalMedia = false;
@@ -310,8 +304,8 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       sourceReplyDelivered = true;
     }
     if (isMessagingSend) {
-      appendUniqueCliMessagingEvidence(messagingToolSentTexts, content.text ? [content.text] : []);
-      appendUniqueCliMessagingEvidence(messagingToolSentMediaUrls, content.mediaUrls ?? []);
+      settledMessagingEvidence.appendTexts(content.text ? [content.text] : []);
+      settledMessagingEvidence.appendMediaUrls(content.mediaUrls ?? []);
     }
     if (deliveredCurrentSourceReply || (sourceReplyPayload && sourceReplyFinal)) {
       didDeliverSourceReplyViaMessageTool ||= deliveredCurrentSourceReply;
@@ -319,15 +313,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         ? sourceReplyPayload
         : extractMessagingToolSourceReplyPayload(params.result);
       if (payload) {
-        if (messagingToolSourceReplyPayloads.length >= CLI_MESSAGING_EVIDENCE_MAX_CALLS) {
-          messagingToolSourceReplyPayloads.shift();
-        }
-        // Each internal source-reply send is a distinct delivery, even when
-        // two intentional sends have identical text or media.
-        messagingToolSourceReplyPayloads.push({
-          ...payload,
-          ...(sourceReplyFinal !== undefined ? { sourceReplyFinal } : {}),
-        });
+        settledMessagingEvidence.pushSourceReplyPayload(payload, sourceReplyFinal);
       }
     }
     if (!confirmedTarget) {
@@ -339,16 +325,10 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       ...(sourceReplyFinal !== undefined ? { sourceReplyFinal } : {}),
     };
     const evidenceKey = buildMessagingToolSendEvidenceKey(targetWithContent);
-    if (messagingToolSentTargets.has(evidenceKey)) {
+    if (settledMessagingEvidence.hasTarget(evidenceKey)) {
       return;
     }
-    if (messagingToolSentTargets.size >= CLI_MESSAGING_EVIDENCE_MAX_CALLS) {
-      for (const oldest of messagingToolSentTargets.keys()) {
-        messagingToolSentTargets.delete(oldest);
-        break;
-      }
-    }
-    messagingToolSentTargets.set(evidenceKey, targetWithContent);
+    settledMessagingEvidence.admitTarget(evidenceKey, targetWithContent);
   };
   const beginGatewayCapture = (captureKey: string | undefined, assertCurrent: () => void) => {
     if (!captureKey || gatewayCaptureKey === captureKey) {
@@ -703,10 +683,10 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     didSendViaMessagingTool,
     didDeliverSourceReplyViaMessageTool,
     sourceReplyDelivered,
-    messagingToolSentTexts: [...messagingToolSentTexts],
-    messagingToolSentMediaUrls: [...messagingToolSentMediaUrls],
-    messagingToolSentTargets: [...messagingToolSentTargets.values()],
-    messagingToolSourceReplyPayloads,
+    messagingToolSentTexts: settledMessagingEvidence.texts(),
+    messagingToolSentMediaUrls: settledMessagingEvidence.mediaUrls(),
+    messagingToolSentTargets: settledMessagingEvidence.targets(),
+    messagingToolSourceReplyPayloads: settledMessagingEvidence.sourceReplyPayloads(),
     toolMediaUrls: [...toolMediaUrls],
     toolAudioAsVoice,
     toolTrustedLocalMedia,
@@ -729,7 +709,10 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     handleCliToolResult,
     dropRetainedToolArgs,
     /** Retained delivery-evidence sizes, for the retention gate's measurement. */
-    getRetainedMessagingSizes: pendingMessagingCalls.sizes,
+    getRetainedMessagingSizes: () => ({
+      ...pendingMessagingCalls.sizes(),
+      ...settledMessagingEvidence.sizes(),
+    }),
     resolveCliLoopbackTerminalOutcome,
     resolveCliLoopbackBrowserTab(toolCallId: string): unknown {
       const activeTool = activeCliTools.get(toolCallId);
@@ -740,7 +723,6 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     finalizeCapture,
     withExecutionEvidence(output: CliOutput): CliOutput {
       const current = evidence();
-      current.messagingToolSourceReplyPayloads = current.messagingToolSourceReplyPayloads.slice();
       return {
         ...output,
         ...(shouldSuppressAssistantOutput()

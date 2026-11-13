@@ -13,8 +13,10 @@ import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import {
   MAX_REDUCED_MESSAGING_ARG_CHARS,
   MAX_RETAINED_TOOL_ARG_CHARS,
+  MAX_SETTLED_MESSAGING_EVIDENCE_CHARS,
 } from "./execute-event-retention.js";
 import { createCliEventHandlers } from "./execute-events.js";
+import { CLI_MESSAGING_EVIDENCE_MAX_CALLS } from "./execute-messaging.js";
 import { createCliToolTracking } from "./execute-tool-tracking.js";
 import type { PreparedCliRunContext } from "./types.js";
 
@@ -216,6 +218,57 @@ describe("CLI delivery-evidence retention bounds", () => {
       provider: "slack",
       sourceReplyFinal: false,
     });
+  });
+
+  // Sequential settlement is the case the pending budget cannot see: each send
+  // starts, settles and refunds its arguments before the next one starts, so
+  // `retainedToolArgChars` is back to zero while the settled evidence of all of
+  // them is still reachable. Count caps are far out of reach here too.
+  const SEQUENTIAL_SENDS = 12;
+  it("bounds the evidence of sends that settled one at a time", () => {
+    const { toolTracking, handlers } = buildRuntime();
+    for (let index = 0; index < SEQUENTIAL_SENDS; index += 1) {
+      startSend(handlers, `settled-${index}`, {
+        action: "send",
+        channel: "slack",
+        target: `c${index}`,
+        content: sendBody(index),
+      });
+      finishSend(handlers, `settled-${index}`);
+    }
+    // A duplicate of the last send, settled the same way: suppression has to
+    // survive the payload the holder dropped.
+    startSend(handlers, "settled-duplicate", {
+      action: "send",
+      channel: "slack",
+      target: `c${SEQUENTIAL_SENDS - 1}`,
+      content: sendBody(SEQUENTIAL_SENDS - 1),
+    });
+    finishSend(handlers, "settled-duplicate");
+    expect(SEND_CHARS * SEQUENTIAL_SENDS).toBeGreaterThan(MAX_SETTLED_MESSAGING_EVIDENCE_CHARS);
+    expect(SEQUENTIAL_SENDS + 1).toBeLessThan(CLI_MESSAGING_EVIDENCE_MAX_CALLS);
+
+    const retained = handlers.getRetainedStateSizes();
+    expect(retained.retainedToolArgChars).toBe(0);
+    expect(retained.reducedSettledMessagingEntries).toBeGreaterThan(0);
+    expect(retained.settledMessagingEvidenceChars).toBeLessThanOrEqual(
+      MAX_SETTLED_MESSAGING_EVIDENCE_CHARS + MAX_REDUCED_MESSAGING_ARG_CHARS * SEQUENTIAL_SENDS,
+    );
+
+    const evidence = toolTracking.withExecutionEvidence({ text: "" });
+    // Delivery facts: every send settled, and every distinct send is still one
+    // distinct, de-duplicated target.
+    expect(evidence.didSendViaMessagingTool).toBe(true);
+    expect(evidence.messagingToolSentTargets).toHaveLength(SEQUENTIAL_SENDS);
+    const texts = evidence.messagingToolSentTexts ?? [];
+    expect(new Set(texts).size).toBe(texts.length);
+    // Early sends keep their real content; a send past the budget keeps its
+    // routing facts and loses only the echo of its body.
+    expect(texts).toContain(sendBody(0));
+    expect(texts).not.toContain(sendBody(SEQUENTIAL_SENDS - 1));
+    const last = evidence.messagingToolSentTargets?.at(-1);
+    expect(last).toMatchObject({ provider: "slack", to: `channel:c${SEQUENTIAL_SENDS - 1}` });
+    expect(last?.text).toBeUndefined();
   });
 
   it("does not touch a send that stays well inside every bound", () => {
