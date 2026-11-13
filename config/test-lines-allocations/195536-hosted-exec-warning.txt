@@ -1,0 +1,2 @@
+10
+# Hosted exec warning: extend existing node/sandbox and gateway tool-surface tests to verify diagnostics without changing shell restrictions.
