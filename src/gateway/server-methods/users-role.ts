@@ -18,7 +18,7 @@ import {
   resolveUserRoleAssignmentError,
 } from "./users-profile-access.js";
 
-export async function setUserProfileRole(
+export async function handleUsersSetRole(
   options: Omit<GatewayRequestHandlerOptions, "params"> & { params: UsersSetRoleParams },
 ): Promise<void> {
   const { context, params, respond } = options;

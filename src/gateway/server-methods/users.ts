@@ -99,7 +99,7 @@ import {
   prepareProfileMutationAccess,
   prepareUserProfileAdministration,
 } from "./users-profile-access.js";
-import { listUserProfiles, setUserProfileRole } from "./users-role.js";
+import { handleUsersSetRole, listUserProfiles } from "./users-role.js";
 import {
   assertValidParams,
   defineValidatedGatewayHandler,
@@ -660,7 +660,7 @@ export const usersHandlers: GatewayRequestHandlers = {
   "users.setRole": defineValidatedGatewayHandler(
     "users.setRole",
     validateUsersSetRoleParams,
-    setUserProfileRole,
+    handleUsersSetRole,
     profileError,
   ),
   "users.setAvatar": async (options) => {

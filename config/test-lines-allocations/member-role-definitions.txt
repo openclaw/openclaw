@@ -6,4 +6,5 @@
 # needed by the rebased line cap.
 # Main restack: explicit member catalogs in delegated ingress/MCP fixtures and
 # a transient policy recovery regression retaining the resolved membership role.
-945
+# CI consumer fixtures: explicit member catalogs, runtime publication, and cleanup.
+986
