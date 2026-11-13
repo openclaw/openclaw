@@ -179,6 +179,49 @@ describe("prepareWorkerGitHubEnvironment", () => {
     expect(warn.mock.lastCall?.[0]).toContain(remoteHead.slice(0, 7));
   });
 
+  it("keeps non-GitHub credential helpers while using the managed GitHub identity", async () => {
+    const forgejoCredentials = path.join(root, "forgejo.credentials");
+    await fs.writeFile(
+      forgejoCredentials,
+      "https://forgejo-fixture:forgejo-synthetic-secret@forgejo.example\n",
+      { mode: 0o600 },
+    );
+    await git(
+      root,
+      "config",
+      "--global",
+      "credential.https://forgejo.example.helper",
+      `store --file=${forgejoCredentials}`,
+    );
+
+    const prepared = await prepare();
+    if (!prepared) {
+      throw new Error("Expected a turn-owned GitHub profile");
+    }
+    const fill = async (host: string) => {
+      const result = await exec.runExec("git", ["credential", "fill"], {
+        timeoutMs: 10_000,
+        logOutput: false,
+        input: `protocol=https\nhost=${host}\n\n`,
+        env: {
+          ...process.env,
+          ...prepared.localIdentityEnv,
+          ...prepared.credentialScrubEnv,
+        },
+      });
+      return result.stdout;
+    };
+
+    const forgejo = await fill("forgejo.example");
+    expect(forgejo).toContain("username=forgejo-fixture");
+    expect(forgejo).toContain("password=forgejo-synthetic-secret");
+
+    const github = await fill("github.com");
+    expect(github).toContain("password=worker-checkout-synthetic-token");
+    expect(github).not.toContain("forgejo-synthetic-secret");
+    await disposeWorkerGitHubEnvironment(path.join(root, "state"), "turn");
+  });
+
   it("never starts the credentialed fetch for a fenced turn", async () => {
     const remoteHead = await publishEarlierTurn();
     const controller = new AbortController();
@@ -287,9 +330,9 @@ describe("prepareWorkerGitHubEnvironment", () => {
     expect(prepared?.localIdentityEnv).toMatchObject({
       GH_CONFIG_DIR: expect.stringContaining(path.join(root, "state", "github-profiles")),
       GIT_CONFIG_COUNT: "4",
-      GIT_CONFIG_KEY_0: "credential.helper",
+      GIT_CONFIG_KEY_0: "credential.https://github.com.helper",
       GIT_CONFIG_VALUE_0: "",
-      GIT_CONFIG_KEY_1: "credential.helper",
+      GIT_CONFIG_KEY_1: "credential.https://github.com.helper",
       GIT_CONFIG_VALUE_1: "!gh auth git-credential",
       GIT_AUTHOR_NAME: binding.gitAuthor.name,
       GIT_AUTHOR_EMAIL: binding.gitAuthor.email,
