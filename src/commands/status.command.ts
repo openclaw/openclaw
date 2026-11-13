@@ -70,6 +70,9 @@ export async function statusCommand(
   const scan = await import("./status.scan.js")
     .then(({ scanStatus }) => scanStatus({ ...probeBudget, deep: opts.deep }))
     .catch((error: unknown) => reportStatusScanFailure(error, runtime, opts.timeoutMs));
+  if (!scan) {
+    return;
+  }
 
   const {
     cfg,

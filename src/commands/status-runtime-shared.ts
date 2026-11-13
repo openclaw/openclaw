@@ -19,6 +19,7 @@ import type { CallGatewayOptions } from "../gateway/call.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import type { HealthSummary } from "./health.js";
 import type { StatusUsageSummaryOptions } from "./status-usage.runtime.js";
 import { formatDaemonRuntimeShort } from "./status.format.js";
@@ -242,7 +243,11 @@ export async function reportStatusScanFailure(
   error: unknown,
   runtime: RuntimeEnv,
   timeoutMs?: number,
-): Promise<never> {
+): Promise<undefined> {
+  const signal = getAsyncWorkSignal();
+  if (signal?.aborted && error === signal.reason) {
+    return undefined;
+  }
   try {
     const { installationDrift } = await buildDaemonStatusSummary(
       "gateway",

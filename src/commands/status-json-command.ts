@@ -51,6 +51,9 @@ export async function runStatusJsonCommand(params: {
       ),
     )
     .catch((error: unknown) => reportStatusScanFailure(error, params.runtime, opts.timeoutMs));
+  if (!scan) {
+    return;
+  }
   const updateRunStatus = await readUpdateRunStatus();
   const includeSecurityAudit = opts.all === true || opts.deep === true;
   const inspectionReason = "Local plugin inspection is not collected in online status.";
