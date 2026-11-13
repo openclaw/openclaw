@@ -15,7 +15,7 @@ import {
   prepareSessionMutationFacts,
   type SessionFactsRead,
 } from "../session-sharing-preparation.js";
-import { createSessionListEntryFilter, type canReceiveSessionEvent } from "../session-sharing.js";
+import { prepareSessionSharing, type canReceiveSessionEvent } from "../session-sharing.js";
 import { resolveSessionStoreIdentity } from "../session-store-key.js";
 import type { ApprovalRequestAuthority } from "./approval-request-authority.js";
 import type { GatewayClient, RespondFn } from "./types.js";
@@ -45,9 +45,9 @@ export function canAccessApprovalSession(params: {
   if (cap !== "none" && cap !== "invited") {
     return true;
   }
-  const visibilityFilter = params.prepared
-    ? params.prepared.sharing.entryFilter
-    : createSessionListEntryFilter({ client: params.client, cfg: params.cfg });
+  const sharing =
+    params.prepared?.sharing ?? prepareSessionSharing({ client: params.client, cfg: params.cfg });
+  const visibilityFilter = sharing.entryFilter;
   if (!visibilityFilter) {
     return true;
   }
@@ -62,11 +62,11 @@ export function canAccessApprovalSession(params: {
     target &&
     (params.prepared
       ? params.prepared.sharing.canReadTarget(target)
-      : createSessionListEntryFilter({
-          client: params.client,
-          cfg: params.cfg,
-          membership: facts?.membership,
-        })?.(target.storeKey, target.entry) !== false),
+      : visibilityFilter(
+          target.storeKey,
+          target.entry,
+          Boolean(sharing.identity && facts?.membership.has(sharing.identity.id)),
+        ) !== false),
   );
 }
 

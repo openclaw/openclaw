@@ -58,6 +58,7 @@ function row(access?: SessionEntry["access"]): SessionEntry {
 async function subscribe(
   access?: SessionEntry["access"],
   options: {
+    includeApprovals?: boolean;
     direct?: boolean;
     grant?: boolean;
     account?: string;
@@ -94,8 +95,17 @@ async function subscribe(
           },
         };
       }
+      cfg.gateway!.roles!.definitions!.none!.scopes!.push("operator.approvals");
       await state.writeConfig(cfg);
       setRuntimeConfigSnapshot(cfg);
+      client.connect.scopes!.push("operator.approvals");
+      client.connect.device = {
+        id: "synthetic-device",
+        publicKey: "key",
+        signature: "signature",
+        signedAt: 1,
+        nonce: "nonce",
+      };
       Object.assign(client, { connId: "staff-browser", connectionSignal: controller.signal });
       const sessionKey = options.direct
         ? `agent:editor123:telegram:direct:123${options.thread === undefined ? "" : `:thread:123:${options.thread}`}`
@@ -129,10 +139,16 @@ async function subscribe(
         subscribeSessionMessageEvents: subscribers.subscribe,
         unsubscribeSessionMessageEvents: subscribers.unsubscribe,
       });
+      context.listSessionPendingApprovals = async () => ({
+        replay: { sessionKey, updatedAtMs: 42, approvals: [], truncated: false },
+        isCurrent: () => true,
+        release: () => {},
+      });
       const respond = vi.fn<RespondFn>();
       const params = {
         key: sessionKey,
         subscriptionId: "gui",
+        ...(options.includeApprovals ? { includeApprovals: true } : {}),
         initialHistory: { limit: 80, maxBytes: 262144, toolResultMaxChars: 2000 },
       };
       try {
@@ -218,6 +234,26 @@ it("rolls back DM subscription if identity is unlinked during initial history", 
     mocks.linked = false;
   };
   const result = await subscribe(undefined, { direct: true });
+  expect(result.calls[0]?.[0]).toBe(false);
+  expect(result.observers).toBe(0);
+});
+
+it("opens a linked group on a fresh GUI subscription with approval replay", async () => {
+  const result = await subscribe(undefined, { includeApprovals: true });
+  expect(result.calls[0]?.[0]).toBe(true);
+  expect(result.calls[0]?.[1]).toEqual(
+    expect.objectContaining({
+      approvalReplay: expect.objectContaining({ sessionKey: key, approvals: [] }),
+    }),
+  );
+  expect(result.observers).toBe(1);
+});
+
+it("rolls back approval replay after membership revocation", async () => {
+  mocks.onHistory = () => {
+    mocks.linked = false;
+  };
+  const result = await subscribe(undefined, { includeApprovals: true });
   expect(result.calls[0]?.[0]).toBe(false);
   expect(result.observers).toBe(0);
 });
