@@ -1122,12 +1122,12 @@ openclaw-chat-sidebar-region,
   --resize-handle-line-size: var(--shell-divider-size);
   --resize-handle-active-line-size: calc(var(--shell-divider-size) * 2);
 
-  z-index: 2;
   grid-area: divider;
 }
 
 /* Paint the complete line inside the gutter, clear of the overlapping panel. */
 .sidebar-column__divider::after {
+  z-index: 2;
   inset-inline-start: auto;
   inset-inline-end: 0;
   transform: none;
@@ -1136,6 +1136,18 @@ openclaw-chat-sidebar-region,
 .sidebar-column__divider[orientation="horizontal"]::after {
   top: auto;
   bottom: 0;
+}
+
+/* The line ends the gutter, so the pointer target reaches as far past the line
+   as the gutter leads up to it. Only the target rises above the desktop side
+   panel: the line stays below, hidden while the gutter animates in behind it. */
+.sidebar-column__divider::before {
+  z-index: 4;
+  inset-inline: 0 calc(var(--shell-divider-size) - var(--resize-handle-size, 6px));
+}
+
+.sidebar-column__divider[orientation="horizontal"]::before {
+  inset-block: 0 calc(var(--shell-divider-size) - var(--resize-handle-size, 6px));
 }
 
 .sidebar-region--narrow.sidebar-region--open:not(.sidebar-region--expanded) {

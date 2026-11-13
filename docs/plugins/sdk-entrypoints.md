@@ -354,6 +354,15 @@ personal-overlay refresh, turn-scoped project or memory guidance, native forks,
 or Gateway-to-hosted-workspace path projection. Those remain MVP integration gaps;
 shared preparation does not enable those operations.
 
+## Subagent progress references
+
+`formatSubagentProgressReference(id)` from
+`openclaw/plugin-sdk/agent-harness-runtime` returns a display-only four-character
+UUID suffix, or `undefined` when no UUID is available. Keep human labels and
+the original identity: short references can collide and must never be used
+for routing, authorization, deduplication, or lifecycle keys. Native harnesses
+should pass their actual worker/thread ID, not infer a session ID from a path.
+
 ## Tool failure diagnostics
 
 Agent harnesses can import `readToolOperatorHint(error)` from

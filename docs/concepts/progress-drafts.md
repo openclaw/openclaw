@@ -187,6 +187,11 @@ request IDs and timeout flags: for example, `Remember knowledge`,
 `Read session history`, or `Start subagent: Check streaming`. Node invocations
 include the requested operation and target, without their argument payload.
 These labels describe a tool operation, not a successful task or publication.
+Subagent rows and session targets show a four-character UUID suffix such as
+`…2633` when the full identity is available, alongside any task label. This is
+a visual cue, not a unique identifier: routing, lifecycle keys, and verbose
+diagnostics retain the full identity. Native worker thread IDs are shortened
+independently; they are not inferred from task paths or mapped to session IDs.
 
 On Telegram, the quiet draft keeps one current-operation status and bounded
 delegated-task status rows. These use public operation names and

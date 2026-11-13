@@ -59,7 +59,7 @@ suite.define(() =>
       const row = (label: string) =>
         page
           .locator(".session-data-row")
-          .filter({ has: page.locator(`.session-label-chip[title="${label}"]`) });
+          .filter({ has: page.getByRole("link", { name: label, exact: true }) });
       const mainRow = row(main.label);
       const researchRow = row(research.label);
       await mainRow.waitFor({ state: "visible", timeout: 10_000 });
@@ -74,7 +74,7 @@ suite.define(() =>
         .poll(() =>
           page.locator(".session-data-row").evaluateAll((rows) =>
             rows.map((element) => ({
-              label: element.querySelector(".session-label-chip")?.getAttribute("title"),
+              label: element.querySelector(".session-key-cell__primary .session-link")?.textContent,
               visible: element.checkVisibility({ visibilityProperty: true }),
             })),
           ),

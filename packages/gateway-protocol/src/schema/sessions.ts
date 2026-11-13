@@ -511,6 +511,8 @@ export const SessionsMessagesSubscribeParamsSchema = closedObject({
   mode: Type.Optional(Type.Literal("narration")),
   /** Opt in to sanitized durable approval events for this session and its descendants. */
   includeApprovals: Type.Optional(Type.Literal(true)),
+  /** Opt in to optional live tool stdout; legacy tool updates and history are unchanged. */
+  includeLiveToolOutput: Type.Optional(Type.Literal(true)),
   /** Read the first transcript snapshot after this observer is admitted. */
   initialHistory: Type.Optional(
     closedObject({

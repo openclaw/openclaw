@@ -103,9 +103,7 @@ export function estimateToolSchemaTokenPressure(
 }
 
 function estimateTranscriptBoundaryTokenPressure(
-  params: Parameters<typeof estimateLlmBoundaryTokenPressure>[0] & {
-    llmBoundaryTokenPressure?: LlmBoundaryTokenPressure | (() => LlmBoundaryTokenPressure);
-  },
+  params: Parameters<typeof estimateLlmBoundaryTokenPressure>[0],
 ): TranscriptBoundaryTokenPressure {
   const replay = params.replay
     ? resolveCompactionReplayPressure(
@@ -177,6 +175,7 @@ function estimateTranscriptBoundaryTokenPressure(
 
 export function estimateLlmBoundaryTokenPressure(params: {
   messages: AgentMessage[];
+  llmBoundaryTokenPressure?: LlmBoundaryTokenPressure | (() => LlmBoundaryTokenPressure);
   systemPrompt?: string;
   prompt: string;
   replay?: CompactionReplayPressureContext;

@@ -1,2 +1,0 @@
-# Exact net test-line growth from the claude-cli manual-compaction cache fix (#196885): compaction prefix parity through prepare+execute, refused compaction tool calls, slash-command preservation.
-191

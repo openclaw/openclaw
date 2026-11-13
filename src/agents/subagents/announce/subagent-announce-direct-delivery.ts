@@ -17,7 +17,10 @@ import {
   isGatewayMessageChannel,
   normalizeMessageChannel,
 } from "../../../utils/message-channel.js";
-import { resolveEmbeddedRunAbandonment } from "../../embedded-agent-runner/runs.js";
+import {
+  isEmbeddedAgentRunHandleActive,
+  resolveEmbeddedRunAbandonment,
+} from "../../embedded-agent-runner/runs.js";
 import { isReplaySafeTranscriptConflict } from "../../embedded-agent-runner/transcript-conflict.js";
 import {
   hasFailedSubagentNoOutputCompletion,
@@ -341,16 +344,20 @@ async function sendSubagentAnnounceDirectlyBound(
         return sourceOwnerChangedResult();
       }
     }
+    // A cron run keeps its session turn through finalization, so a requester turn queued
+    // after its agent attempt ended would wait out the run; the run reads this row itself.
     if (
       params.expectsCompletionMessage &&
       isCronRunSessionKey(canonicalRequesterSessionKey) &&
-      !resolveRequesterSessionActivity(
-        params.targetRequesterSessionKey,
-        await loadRequesterSessionEntry(params.targetRequesterSessionKey, params.requesterAgentId),
-      ).isActive &&
       !agentMediatedCompletion
     ) {
-      return completionHandoffPendingResult();
+      const { sessionId } = resolveRequesterSessionActivity(
+        params.targetRequesterSessionKey,
+        await loadRequesterSessionEntry(params.targetRequesterSessionKey, params.requesterAgentId),
+      );
+      if (!sessionId || !isEmbeddedAgentRunHandleActive(sessionId)) {
+        return completionHandoffPendingResult();
+      }
     }
     if (params.signal?.aborted) {
       return { delivered: false, path: "none" };

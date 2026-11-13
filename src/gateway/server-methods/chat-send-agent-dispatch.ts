@@ -428,11 +428,9 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
                   fastModeOverride: p.fastMode,
                   queueModeOverride: p.queueMode,
                   userTurnTranscriptRecorder: userTurnRecorder,
-                  ...(injectionDisposition.isCollaborationBlocked()
-                    ? { messageInjectionDisposition: "collaborative-steering-disabled" as const }
-                    : p.queueMode === "steer" && messageInjectionTarget
-                      ? { messageInjectionDisposition: "rejected" as const }
-                      : {}),
+                  ...injectionDisposition.replyOptions(
+                    p.queueMode === "steer" && Boolean(messageInjectionTarget),
+                  ),
                   fastModeAutoOnSecondsOverride: p.fastAutoOnSeconds,
                   onAgentRunStart,
                   onPreparedAgentRunStart: ({

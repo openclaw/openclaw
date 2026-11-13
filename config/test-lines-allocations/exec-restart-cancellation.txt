@@ -1,2 +1,0 @@
-# Existing exec lifecycle table now covers restart cancellation alongside explicit Stop.
-4

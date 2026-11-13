@@ -22,7 +22,7 @@ const probabilities = { support: 0.8, sales: 0.19 };
 const choice = { type: "choice", choice: "support", probabilities, confidence: 0.61 };
 const score = { type: "score", score: 0.607, probabilities: [0.4, 0.6], confidence: 0.5 };
 const normalized = {
-  model: "subq-snap-preview",
+  model: "synthetic-decision-model",
   answers: { escalate: { type: "boolean", probabilityTrue: 0.92 }, queue: choice, urgency: score },
   usage: { inputTokens: 477, outputTokens: 0 },
 };
@@ -41,7 +41,7 @@ let selected: Decisions.DecisionProviderV1;
 const fetch = vi.fn<(url: RequestInfo | URL, init?: RequestInit) => Promise<Response>>();
 const evaluate = (overrides: Partial<Context> = {}, input = batch) =>
   selected.evaluate(input, {
-    model: "subq-snap-preview",
+    model: "synthetic-decision-model",
     signal: new AbortController().signal,
     deadlineMonotonicMs: performance.now() + 30_000,
     ...overrides,
@@ -75,7 +75,7 @@ it("posts the documented typed contract and preserves fractional/rounded results
   expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer " + key);
   assert(typeof init?.body === "string");
   expect(JSON.parse(init.body)).toEqual({
-    model: "subq-snap-preview",
+    model: "synthetic-decision-model",
     state: batch.state,
     questions: {
       ...batch.questions,
@@ -87,7 +87,7 @@ it("posts the documented typed contract and preserves fractional/rounded results
 it.each<Decisions.DecisionBatch>([
   { ...batch, state: null },
   { ...batch, state: "x".repeat(1024 * 1024) },
-  withQuestions(entries(17, { type: "boolean" })),
+  withQuestions(entries(129, { type: "boolean" })),
   withQuestions({ ["q".repeat(101)]: { type: "boolean" } }),
   withQuestions({ q: { type: "choice", criteria: entries(256, null) } }),
   withQuestions({ q: { type: "score", criteria: Array(11).fill("level") } }),
@@ -96,8 +96,8 @@ it.each<Decisions.DecisionBatch>([
   expect(fetch).not.toHaveBeenCalled();
 });
 
-it("rejects chat model IDs and observes prepared credential rotation/loss, not ambient keys", async () => {
-  expect(await evaluate({ model: "subq-preview" })).toEqual(unavailable("unsupported-input"));
+it("refuses retired model IDs and observes prepared credential rotation/loss, not ambient keys", async () => {
+  expect(await evaluate({ model: "subq-snap-preview" })).toEqual(unavailable("unsupported-input"));
   expect(fetch).not.toHaveBeenCalled();
   for (const value of ["synthetic-rotated", undefined, "synthetic-restored"]) {
     vi.mocked(getPreparedPluginSecretInput).mockReturnValue({ revision: 2, value });
@@ -114,7 +114,7 @@ it("rejects chat model IDs and observes prepared credential rotation/loss, not a
 
 it.each<[string, (payload: ReturnType<typeof result>) => unknown]>([
   ["missing answer", (p) => Reflect.deleteProperty(p.answers, "queue")],
-  ["wrong model", (p) => (p.model = "subq-preview")],
+  ["missing model", (p) => (p.model = "")],
   ["wrong type", (p) => (p.answers.escalate.type = "boolean")],
   ["invalid probability", (p) => (p.answers.escalate.noul = 1.1)],
   ["wrong labels", (p) => Reflect.deleteProperty(p.answers.queue.probabilities, "sales")],

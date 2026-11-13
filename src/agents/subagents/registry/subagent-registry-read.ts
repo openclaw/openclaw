@@ -395,6 +395,10 @@ export function listSubagentRunsForRequester(
     lookup
       .selectReadScope([requesterSessionKey], lookup, false)
       .map((runId) => subagentRuns.get(runId)!),
+    {
+      getLatestSubagentRun: (key, agentId) =>
+        getLatestLiveSubagentRunByChildSessionKey(key, undefined, agentId),
+    },
   );
 }
 

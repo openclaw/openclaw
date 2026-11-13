@@ -1,3 +1,0 @@
-# Covers the browser focus/draft regression and session-scoped panel show/hide siblings.
-# Exact net test-line growth; no shared baseline increase.
-116

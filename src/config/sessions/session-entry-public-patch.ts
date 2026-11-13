@@ -21,6 +21,9 @@ function generationValidPrivateFieldsForSameSession(
       ? { localWorkspaceHandoff: existingEntry.localWorkspaceHandoff }
       : {}),
     ...(existingEntry.priorWorkspace ? { priorWorkspace: existingEntry.priorWorkspace } : {}),
+    ...(existingEntry.scheduledMemoryParent
+      ? { scheduledMemoryParent: existingEntry.scheduledMemoryParent }
+      : {}),
     ...(existingEntry.cliHistoryBoundary
       ? { cliHistoryBoundary: existingEntry.cliHistoryBoundary }
       : {}),

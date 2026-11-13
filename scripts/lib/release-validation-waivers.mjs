@@ -35,6 +35,23 @@ export const RELEASE_VALIDATION_WAIVERS = [
       "that exception only; it does not measure or qualify the new candidate.",
   },
   {
+    targetVersion: "2026.11.4",
+    childRole: "productPerformance",
+    jobName: "Kova mock provider performance",
+    evidence: { runId: "43341818523", runAttempt: 1 },
+    reason:
+      "Dallin Romney authorized the 2026.11.4 RSS exception on " +
+      "2026-11-13 at 04:56 UTC and explicitly included the specific CPU " +
+      "overage at 04:58 UTC. The retained report kova-261113-010427-2123eb " +
+      "(artifact 14001427085; C/Q 7420e1f380799b5239b5e4df6d83f9f6c3a3c196) " +
+      "contains 21 RSS threshold violations and one bundled-plugin-startup/fresh " +
+      "resourceByRole.gateway.maxCpuPercent violation (410.6 > 360). Only this " +
+      "reviewed child attempt is waived; retain its raw failure and report. " +
+      "There is no not-run exemption. Other jobs, missing or cancelled evidence, " +
+      "later attempts, and new candidate executions remain blocking; this " +
+      "does not grant latency, crash, correctness, or other release exceptions.",
+  },
+  {
     targetVersion: "2026.11.3",
     childRole: "productPerformance",
     jobName: "Kova mock provider performance",

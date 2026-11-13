@@ -258,12 +258,7 @@ export const SETTINGS_SEARCH_TARGETS = {
     routeId: "profile",
     labelKey: "githubConnections.title",
     hash: `#${PROFILE_SETTINGS_TARGET_IDS.githubConnections}`,
-    searchKeys: [
-      "githubConnections.mine",
-      "githubConnections.system",
-      "githubConnections.forMe",
-      "githubConnections.forSystem",
-    ],
+    searchKeys: ["githubConnections.mine", "githubConnections.system"],
     aliases:
       "github oauth account connection publication authentication auth status dashboard actions",
   },

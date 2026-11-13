@@ -15,6 +15,7 @@ import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
+import { ChatPermissionCard } from "./chat-message-deferred.tsx";
 import { formatModelLabel } from "./chat-model-picker-options.ts";
 import { registerChatSearchTextBlock } from "./chat-search-highlight.ts";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
@@ -36,9 +37,6 @@ export type ChatNoticeProps = {
 };
 
 // Text-only notices paint with their transcript row; only interactive cards load later.
-const ChatPermissionCard = lazy(() => import("./chat-permission-card.tsx"), {
-  export: "ChatPermissionCard",
-});
 const ChatSkillLearnedNotice = lazy(() => import("./chat-skill-learned-notice.tsx"), {
   export: "ChatSkillLearnedNotice",
 });
@@ -304,12 +302,10 @@ export function ChatNoticeDetails(props: ChatNoticeProps) {
     >
       <Match when={props.item.permissionMissing}>
         <div data-chat-row-key={props.item.key} data-ts={String(props.item.timestamp)}>
-          <ChatLazyBoundary>
-            <ChatPermissionCard
-              request={props.item.permissionMissing!}
-              onRetry={props.onPermissionRetry}
-            />
-          </ChatLazyBoundary>
+          <ChatPermissionCard
+            request={props.item.permissionMissing!}
+            onRetry={props.onPermissionRetry}
+          />
         </div>
       </Match>
       <Match when={props.item.collapsedBody && props.item.text}>

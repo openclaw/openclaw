@@ -5,8 +5,6 @@ import { t } from "../../i18n/index.ts";
 import { registerCommandPaletteEnglish } from "../../i18n/locales/en-command-palette.ts";
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
-import { showToast } from "../../lib/toast.ts";
 import { resolveChatAttachmentLimits } from "../chat/components/chat-attachment-admission.ts";
 import type { ChatAttachmentControlsProps } from "../chat/components/chat-attachment-controls.types.ts";
 import {
@@ -17,6 +15,7 @@ import {
 import "../../styles/new-session.css";
 import "../../styles/chat/composer.css";
 import type { ChatCommentAction } from "../chat/components/chat-selection-annotations.tsx";
+import { showBackgroundSessionCreated } from "./background-session-notice.ts";
 import { ConnectMachineSetupState } from "./connect-machine-dialog.ts";
 import { NewSessionDraft } from "./draft.ts";
 import type { NewSessionRouteData } from "./location.ts";
@@ -24,7 +23,6 @@ import { resolveNewSessionMentionDirectory } from "./mention-directory.ts";
 import { PaletteSessionPreferences } from "./palette-session-preferences.ts";
 import { PaletteDraftSlot, PaletteReleasedStarts } from "./palette-session-starts.ts";
 import type { PaletteSessionPreference } from "./preferences.ts";
-import { captureSessionNoticeOwner, openSessionNoticeTarget } from "./session-notice-owner.ts";
 import type { SubmissionPresentation } from "./submission-action.ts";
 
 registerCommandPaletteEnglish();
@@ -359,7 +357,16 @@ export class PaletteSessionDraft {
         },
         onAccepted: (result) => {
           slot.accepted = true;
-          this.accepted(result);
+          showBackgroundSessionCreated(
+            () => this.read().context,
+            result,
+            () => {
+              // The destination owns rejected-turn recovery; close the launcher over it.
+              if (this.read().open) {
+                this.callbacks.onClose();
+              }
+            },
+          );
         },
       },
     );
@@ -555,38 +562,5 @@ export class PaletteSessionDraft {
       this.draft?.submission.restoreMessage("");
     }
     this.owner = { gateway, url, scope };
-  }
-
-  private accepted(result: SessionCreateOutcome & { agentId: string }) {
-    const context = this.read().context;
-    if (!context) {
-      return;
-    }
-    const isCurrentOwner = captureSessionNoticeOwner(context);
-    const message =
-      result.initialRun.status === "rejected"
-        ? t("palette.sessionCreatedWithError", { error: formatUiError(result.initialRun.error) })
-        : t(
-            result.initialRun.status === "started"
-              ? "palette.sessionStarted"
-              : "palette.sessionCreated",
-          );
-    const openSession = () => {
-      if (this.read().context !== context || !isCurrentOwner()) {
-        return;
-      }
-      openSessionNoticeTarget(context, result.key, result.agentId);
-      // The destination owns a rejected first turn and its retry; dismiss the launcher over it.
-      if (this.read().open) {
-        this.callbacks.onClose();
-      }
-    };
-    showToast({
-      message,
-      dedupeKey: `session-create:${result.agentId}:${result.key}`,
-      severity: result.initialRun.status === "rejected" ? "error" : "success",
-      actionLabel: t("sessionsView.openSession"),
-      onAction: openSession,
-    });
   }
 }

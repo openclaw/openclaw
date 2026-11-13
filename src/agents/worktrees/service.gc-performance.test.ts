@@ -542,6 +542,8 @@ describe("worktree Git maintenance", () => {
   ])(
     "consolidates a backlog exceeding the old $label budget",
     async ({ packBytes, indexBytes }) => {
+      // This proves byte-budget admission; retirement deadlines are covered separately.
+      vi.spyOn(performance, "now").mockReturnValue(0);
       const repo = await initRepo(tempDirs.make("worktree-backlog-"));
       const { objects, packs: stems } = await packBlobs(repo, [
         "backlog-a",
