@@ -2149,6 +2149,7 @@ src/state/openclaw-agent-standing-intents-schema.ts
 src/state/openclaw-agent-storage-migration.ts
 src/state/openclaw-agent-storage-schema.ts
 src/state/openclaw-agent-text-search-migration.ts
+src/state/openclaw-agent-tool-usage-schema.ts
 src/state/openclaw-agent-trajectory-storage-migration.ts
 src/state/openclaw-agent-transcript-fts-schema-source.ts
 src/state/openclaw-agent-transcript-fts-schema.ts

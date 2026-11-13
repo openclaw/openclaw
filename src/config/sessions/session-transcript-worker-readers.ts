@@ -105,6 +105,14 @@ function reader<Input extends object, Request extends SessionHistoryWorkerPrepar
   };
 }
 const readers: Readers & ThisType<ReaderContext> = {
+  readAgentToolUsage: reader(
+    (input) => ({ kind: "agent-tool-usage", ...input }),
+    (value) => value.status,
+  ),
+  readAgentToolUsageImport: reader(
+    (input) => ({ kind: "agent-tool-usage-import", ...input }),
+    (value) => value.scan,
+  ),
   readTrajectoryEvents: reader(
     (input) => ({ kind: "trajectory-events", ...input }),
     (value) => value.events,
