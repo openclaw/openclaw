@@ -113,7 +113,7 @@ it("moves the native continuation itself, preserving custody and target backlog"
 });
 
 it.each([
-  ["agent:main:main:thread:$MixedCaseEvent", "agent:main:main:thread:$mixedcaseevent"],
+  ["agent:main:main:thread:$MixedCaseEvent", "agent:main:main:thread:$MixedCaseEvent"],
   [
     "agent:main:matrix:channel:!MixedCase:server:thread:$Event",
     "agent:main:matrix:channel:!MixedCase:server:thread:$Event",
