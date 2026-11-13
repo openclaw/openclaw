@@ -200,283 +200,315 @@ export function registerModelCapabilityCommands(capability: Command): void {
           defaultTransport: "local",
         });
         const agent = resolveCapabilityAgentOption(command, opts.agent);
-        const files = opts.file as string[] | undefined;
-        const requestedModel = opts.model as string | undefined;
-        const {
-          requireProviderModelOverride,
-          resolveCapabilityProviderAgentId,
-          resolveLocalCapabilityRuntimeConfig,
-        } = await import("./shared.js");
-        const { getModelsCommandSecretTargetIds } = await import("../command-secret-targets.js");
-        const { captureRuntimeConfigAsyncReader } = await import("../../config/config.js");
-        const { canonicalizeCaseOnlyCatalogModelRef } =
-          await import("../../agents/model-selection.js");
-        const { hasObservedModelUsage, normalizeUsage } = await import("../../agents/usage.js");
-        const explicitModelOverride = requireProviderModelOverride(requestedModel);
-        const cfg =
-          transport === "local"
+        const run = async (
+          gateway?: <R>(params: Record<string, unknown>, modelOverride: boolean) => Promise<R>,
+        ): Promise<CapabilityEnvelope> => {
+          const files = opts.file as string[] | undefined;
+          const requestedModel = opts.model as string | undefined;
+          const {
+            requireProviderModelOverride,
+            resolveCapabilityProviderAgentId,
+            resolveLocalCapabilityRuntimeConfig,
+          } = await import("./shared.js");
+          const { getModelsCommandSecretTargetIds } = await import("../command-secret-targets.js");
+          const { captureRuntimeConfigAsyncReader } = await import("../../config/config.js");
+          const { canonicalizeCaseOnlyCatalogModelRef } =
+            await import("../../agents/model-selection.js");
+          const { hasObservedModelUsage, normalizeUsage } = await import("../../agents/usage.js");
+          const explicitModelOverride = requireProviderModelOverride(requestedModel);
+          const cfg = !gateway
             ? await resolveLocalCapabilityRuntimeConfig({
                 commandName: "infer model run",
                 targetIds: getModelsCommandSecretTargetIds(),
               })
             : await captureRuntimeConfigAsyncReader()();
-        const agentId = resolveCapabilityProviderAgentId(cfg, agent, "infer model run");
-        const modelRef = await canonicalizeCaseOnlyCatalogModelRef({
-          raw: requestedModel,
-          cfg,
-          defaultProvider: DEFAULT_PROVIDER,
-          loadCatalog: () => loadModelCatalogForInspection(cfg, agentId),
-          preserveAuthProfile: transport === "local",
-        });
-        const hasExplicitProviderModelOverride = Boolean(explicitModelOverride);
-        const imageFiles = await Promise.all(
-          (files ?? []).map(async (filePath) => {
-            const resolvedPath = path.resolve(filePath);
-            const buffer = await fs.readFile(resolvedPath);
-            const mimeType = normalizeMimeType(
-              await detectMime({
-                buffer,
-                filePath: resolvedPath,
-              }),
-            );
-            if (!mimeType?.startsWith("image/")) {
-              throw new Error(
-                `Unsupported --file for model run: ${resolvedPath}. Only image files are supported; use infer audio transcribe for audio files.`,
-              );
-            }
-            const isHeic = HEIC_MODEL_RUN_MIMES.has(mimeType);
-            const imageBuffer = isHeic
-              ? await (await import("../../media/media-services.js")).convertHeicToJpeg(buffer)
-              : buffer;
-            return {
-              path: resolvedPath,
-              fileName: path.basename(resolvedPath),
-              mimeType: isHeic ? "image/jpeg" : mimeType,
-              data: imageBuffer.toString("base64"),
-            };
-          }),
-        );
-        const inputs =
-          imageFiles.length > 0
-            ? {
-                inputs: imageFiles.map((image) => ({ path: image.path, mimeType: image.mimeType })),
-              }
-            : {};
-        const messageContent =
-          imageFiles.length > 0
-            ? [
-                { type: "text" as const, text: prompt },
-                ...imageFiles.map((image) => ({
-                  type: "image" as const,
-                  data: image.data,
-                  mimeType: image.mimeType,
-                })),
-              ]
-            : prompt;
-        if (transport === "local") {
-          const {
-            acquireSimpleCompletionModelForAgent,
-            completeWithPreparedSimpleCompletionModel,
-          } = await import("../../agents/simple-completion-runtime.js");
-          const callerResult = createDeferredCore<CapabilityEnvelope>();
-          const trackOwner = captureAsyncWorkTracker();
-          // Command completion can precede response callbacks and cancellation drainage.
-          void trackOwner(async () => {
-            const { prepareLocalCapabilityAccountSecrets } =
-              await import("./local-account-secrets.js");
-            await prepareLocalCapabilityAccountSecrets({ cfg, agentId });
-            const prepared = await acquireSimpleCompletionModelForAgent({
-              cfg,
-              agentId,
-              modelRef,
-              allowMissingApiKeyModes: ["aws-sdk"],
-              ...(hasExplicitProviderModelOverride
-                ? { allowBundledStaticCatalogFallback: true }
-                : {}),
-              skipAgentDiscovery: true,
-            });
-            if ("error" in prepared) {
-              throw new Error(prepared.error);
-            }
-            const work = new AsyncWorkScope();
-            try {
-              callerResult.resolve(
-                await work.track(async () => {
-                  if (prepared.selection.provider === "codex") {
-                    throw new Error(
-                      'The codex provider is served by the Codex app-server agent runtime, not the local simple-completion transport. Use an openai/<model> ref with provider/model agentRuntime.id: "codex", run through the gateway, or use /codex commands.',
-                    );
-                  }
-                  // Provider transcript transforms replace images with a placeholder for text-only
-                  // models, so a raw local run would answer without ever seeing the --file input.
-                  if (imageFiles.length > 0 && !prepared.model.input.includes("image")) {
-                    throw new Error(
-                      `Model "${prepared.selection.provider}/${prepared.selection.modelId}" does not accept image input, so --file cannot be sent to it. Use an image-capable model, run openclaw infer image describe, or add --gateway to describe images for text-only models.`,
-                    );
-                  }
-                  const localModelRunSystemPrompt =
-                    prepared.model.api === "openai-chatgpt-responses"
-                      ? LOCAL_MODEL_RUN_SYSTEM_PROMPT
-                      : undefined;
-                  const result = await completeWithPreparedSimpleCompletionModel({
-                    model: prepared.model,
-                    auth: prepared.auth,
-                    cfg,
-                    context: {
-                      ...(localModelRunSystemPrompt
-                        ? { systemPrompt: localModelRunSystemPrompt }
-                        : {}),
-                      messages: [
-                        {
-                          role: "user",
-                          content: messageContent,
-                          timestamp: Date.now(),
-                        },
-                      ],
-                    },
-                    options: {
-                      maxTokens:
-                        typeof prepared.model.maxTokens === "number" &&
-                        Number.isFinite(prepared.model.maxTokens)
-                          ? prepared.model.maxTokens
-                          : undefined,
-                      ...(thinking ? { reasoning: thinking } : {}),
-                      signal,
-                    },
-                  });
-                  const text = collectTextContentBlocks(result.content).join("").trim();
-                  const detail = result.errorMessage?.trim();
-                  const target = `for provider "${prepared.selection.provider}" model "${prepared.selection.modelId}"${detail ? `: ${detail}` : ""}.`;
-                  if (!text) {
-                    // Keep AI runtime imports out of command registration and help loading.
-                    const { hasOnlyAssistantReasoningContent, isReasoningOnlyLengthAssistantTurn } =
-                      await import("@openclaw/ai/internal/shared");
-                    // Failed or aborted streams can keep partial reasoning; report those as provider failures.
-                    const completedWithoutError =
-                      (result.stopReason === "stop" || result.stopReason === "length") && !detail;
-                    if (completedWithoutError && hasOnlyAssistantReasoningContent(result)) {
-                      const limitHint = isReasoningOnlyLengthAssistantTurn(result)
-                        ? " It stopped at the output token limit while reasoning; a lower --thinking level may leave room for text."
-                        : "";
-                      throw new Error(
-                        `Model returned reasoning but no text output ${target}${limitHint}`,
-                      );
-                    }
-                    throw new Error(`No text output returned ${target}`);
-                  }
-                  if (result.stopReason === "error" || result.stopReason === "aborted") {
-                    throw new Error(
-                      `Model run ${result.stopReason === "aborted" ? "aborted" : "failed"} ${target}`,
-                    );
-                  }
-                  const normalizedUsage = normalizeUsage(result.usage);
-                  const usage = hasObservedModelUsage(normalizedUsage)
-                    ? normalizedUsage
-                    : undefined;
-                  return {
-                    ok: true,
-                    capability: "model.run",
-                    transport: "local" as const,
-                    provider: prepared.selection.provider,
-                    model: prepared.selection.modelId,
-                    usage,
-                    lastCallUsage: usage,
-                    attempts: [],
-                    ...inputs,
-                    outputs: [
-                      {
-                        text,
-                        mediaUrl: null,
-                      },
-                    ],
-                  } satisfies CapabilityEnvelope;
+          const agentId = resolveCapabilityProviderAgentId(cfg, agent, "infer model run");
+          const modelRef = await canonicalizeCaseOnlyCatalogModelRef({
+            raw: requestedModel,
+            cfg,
+            defaultProvider: DEFAULT_PROVIDER,
+            loadCatalog: () => loadModelCatalogForInspection(cfg, agentId),
+            preserveAuthProfile: !gateway,
+          });
+          const hasExplicitProviderModelOverride = Boolean(explicitModelOverride);
+          const imageFiles = await Promise.all(
+            (files ?? []).map(async (filePath) => {
+              const resolvedPath = path.resolve(filePath);
+              const buffer = await fs.readFile(resolvedPath);
+              const mimeType = normalizeMimeType(
+                await detectMime({
+                  buffer,
+                  filePath: resolvedPath,
                 }),
               );
-            } catch (error) {
-              callerResult.reject(error);
-            } finally {
-              await work.drain();
-              await prepared[Symbol.asyncDispose]();
-            }
-          }).catch((error: unknown) => callerResult.reject(error));
-          return await callerResult.promise;
-        }
-
-        const { buildExplicitSessionIdSessionKey } =
-          await import("../../agents/command/session.js");
-        const { callGateway, randomIdempotencyKey } = await import("../../gateway/call.js");
-        const { provider, model: gatewayModel } = requireProviderModelOverride(modelRef) ?? {};
-        // Provider/model overrides require trusted-operator scope. Use the backend
-        // shared-secret lane so local gateway smokes do not depend on paired CLI device scopes.
-        const hasModelOverride = Boolean(provider || gatewayModel);
-        const sessionId = `model-run-${randomUUID()}`;
-        const sessionKey = buildExplicitSessionIdSessionKey({ agentId, sessionId });
-        const response: {
-          status?: string;
-          summary?: string;
-          result?: EmbeddedAgentRunResult;
-        } = await callGateway({
-          method: "agent",
-          params: {
-            agentId,
-            sessionId,
-            sessionKey,
-            message: prompt,
-            attachments:
-              imageFiles.length > 0
-                ? imageFiles.map((image) => ({
-                    type: "image",
-                    fileName: image.fileName,
+              if (!mimeType?.startsWith("image/")) {
+                throw new Error(
+                  `Unsupported --file for model run: ${resolvedPath}. Only image files are supported; use infer audio transcribe for audio files.`,
+                );
+              }
+              const isHeic = HEIC_MODEL_RUN_MIMES.has(mimeType);
+              const imageBuffer = isHeic
+                ? await (await import("../../media/media-services.js")).convertHeicToJpeg(buffer)
+                : buffer;
+              return {
+                path: resolvedPath,
+                fileName: path.basename(resolvedPath),
+                mimeType: isHeic ? "image/jpeg" : mimeType,
+                data: imageBuffer.toString("base64"),
+              };
+            }),
+          );
+          const inputs =
+            imageFiles.length > 0
+              ? {
+                  inputs: imageFiles.map((image) => ({
+                    path: image.path,
                     mimeType: image.mimeType,
-                    content: image.data,
-                  }))
+                  })),
+                }
+              : {};
+          const messageContent =
+            imageFiles.length > 0
+              ? [
+                  { type: "text" as const, text: prompt },
+                  ...imageFiles.map((image) => ({
+                    type: "image" as const,
+                    data: image.data,
+                    mimeType: image.mimeType,
+                  })),
+                ]
+              : prompt;
+          if (!gateway) {
+            const {
+              acquireSimpleCompletionModelForAgent,
+              completeWithPreparedSimpleCompletionModel,
+            } = await import("../../agents/simple-completion-runtime.js");
+            const callerResult = createDeferredCore<CapabilityEnvelope>();
+            const trackOwner = captureAsyncWorkTracker();
+            // Command completion can precede response callbacks and cancellation drainage.
+            void trackOwner(async () => {
+              const { prepareLocalCapabilityAccountSecrets } =
+                await import("./local-account-secrets.js");
+              await prepareLocalCapabilityAccountSecrets({ cfg, agentId });
+              const prepared = await acquireSimpleCompletionModelForAgent({
+                cfg,
+                agentId,
+                modelRef,
+                allowMissingApiKeyModes: ["aws-sdk"],
+                ...(hasExplicitProviderModelOverride
+                  ? { allowBundledStaticCatalogFallback: true }
+                  : {}),
+                skipAgentDiscovery: true,
+              });
+              if ("error" in prepared) {
+                throw new Error(prepared.error);
+              }
+              const work = new AsyncWorkScope();
+              try {
+                callerResult.resolve(
+                  await work.track(async () => {
+                    if (prepared.selection.provider === "codex") {
+                      throw new Error(
+                        'The codex provider is served by the Codex app-server agent runtime, not the local simple-completion transport. Use an openai/<model> ref with provider/model agentRuntime.id: "codex", run through the gateway, or use /codex commands.',
+                      );
+                    }
+                    // Provider transcript transforms replace images with a placeholder for text-only
+                    // models, so a raw local run would answer without ever seeing the --file input.
+                    if (imageFiles.length > 0 && !prepared.model.input.includes("image")) {
+                      throw new Error(
+                        `Model "${prepared.selection.provider}/${prepared.selection.modelId}" does not accept image input, so --file cannot be sent to it. Use an image-capable model, run openclaw infer image describe, or add --gateway to describe images for text-only models.`,
+                      );
+                    }
+                    const localModelRunSystemPrompt =
+                      prepared.model.api === "openai-chatgpt-responses"
+                        ? LOCAL_MODEL_RUN_SYSTEM_PROMPT
+                        : undefined;
+                    const result = await completeWithPreparedSimpleCompletionModel({
+                      model: prepared.model,
+                      auth: prepared.auth,
+                      cfg,
+                      context: {
+                        ...(localModelRunSystemPrompt
+                          ? { systemPrompt: localModelRunSystemPrompt }
+                          : {}),
+                        messages: [
+                          {
+                            role: "user",
+                            content: messageContent,
+                            timestamp: Date.now(),
+                          },
+                        ],
+                      },
+                      options: {
+                        maxTokens:
+                          typeof prepared.model.maxTokens === "number" &&
+                          Number.isFinite(prepared.model.maxTokens)
+                            ? prepared.model.maxTokens
+                            : undefined,
+                        ...(thinking ? { reasoning: thinking } : {}),
+                        signal,
+                      },
+                    });
+                    const text = collectTextContentBlocks(result.content).join("").trim();
+                    const detail = result.errorMessage?.trim();
+                    const target = `for provider "${prepared.selection.provider}" model "${prepared.selection.modelId}"${detail ? `: ${detail}` : ""}.`;
+                    if (!text) {
+                      // Keep AI runtime imports out of command registration and help loading.
+                      const {
+                        hasOnlyAssistantReasoningContent,
+                        isReasoningOnlyLengthAssistantTurn,
+                      } = await import("@openclaw/ai/internal/shared");
+                      // Failed or aborted streams can keep partial reasoning; report those as provider failures.
+                      const completedWithoutError =
+                        (result.stopReason === "stop" || result.stopReason === "length") && !detail;
+                      if (completedWithoutError && hasOnlyAssistantReasoningContent(result)) {
+                        const limitHint = isReasoningOnlyLengthAssistantTurn(result)
+                          ? " It stopped at the output token limit while reasoning; a lower --thinking level may leave room for text."
+                          : "";
+                        throw new Error(
+                          `Model returned reasoning but no text output ${target}${limitHint}`,
+                        );
+                      }
+                      throw new Error(`No text output returned ${target}`);
+                    }
+                    if (result.stopReason === "error" || result.stopReason === "aborted") {
+                      throw new Error(
+                        `Model run ${result.stopReason === "aborted" ? "aborted" : "failed"} ${target}`,
+                      );
+                    }
+                    const normalizedUsage = normalizeUsage(result.usage);
+                    const usage = hasObservedModelUsage(normalizedUsage)
+                      ? normalizedUsage
+                      : undefined;
+                    return {
+                      ok: true,
+                      capability: "model.run",
+                      transport: "local" as const,
+                      provider: prepared.selection.provider,
+                      model: prepared.selection.modelId,
+                      usage,
+                      lastCallUsage: usage,
+                      attempts: [],
+                      ...inputs,
+                      outputs: [
+                        {
+                          text,
+                          mediaUrl: null,
+                        },
+                      ],
+                    } satisfies CapabilityEnvelope;
+                  }),
+                );
+              } catch (error) {
+                callerResult.reject(error);
+              } finally {
+                await work.drain();
+                await prepared[Symbol.asyncDispose]();
+              }
+            }).catch((error: unknown) => callerResult.reject(error));
+            return await callerResult.promise;
+          }
+
+          const { buildExplicitSessionIdSessionKey } =
+            await import("../../agents/command/session.js");
+          const { randomIdempotencyKey } = await import("../../gateway/call.js");
+          const { provider, model: gatewayModel } = requireProviderModelOverride(modelRef) ?? {};
+          const sessionId = `model-run-${randomUUID()}`;
+          const sessionKey = buildExplicitSessionIdSessionKey({ agentId, sessionId });
+          const response: {
+            status?: string;
+            summary?: string;
+            result?: EmbeddedAgentRunResult;
+          } = await gateway(
+            {
+              agentId,
+              sessionId,
+              sessionKey,
+              message: prompt,
+              attachments:
+                imageFiles.length > 0
+                  ? imageFiles.map((image) => ({
+                      type: "image",
+                      fileName: image.fileName,
+                      mimeType: image.mimeType,
+                      content: image.data,
+                    }))
+                  : undefined,
+              provider,
+              model: gatewayModel,
+              ...(thinking ? { thinking } : {}),
+              modelRun: true,
+              promptMode: "none",
+              cleanupBundleMcpOnRunEnd: true,
+              idempotencyKey: randomIdempotencyKey(),
+            },
+            Boolean(provider || gatewayModel),
+          );
+          if (response.status && response.status !== "ok" && response.status !== "completed") {
+            throw new Error(
+              response.result?.meta?.error?.message ||
+                response.summary ||
+                `Gateway model run ${response.status}.`,
+            );
+          }
+          const agentMeta = response.result?.meta?.agentMeta;
+          return {
+            ok: true,
+            capability: "model.run",
+            transport: "gateway" as const,
+            provider: agentMeta?.provider,
+            model: agentMeta?.model,
+            usage:
+              agentMeta?.usage?.costStatus !== undefined || hasObservedModelUsage(agentMeta?.usage)
+                ? agentMeta?.usage
                 : undefined,
-            provider,
-            model: gatewayModel,
-            ...(thinking ? { thinking } : {}),
-            modelRun: true,
-            promptMode: "none",
-            cleanupBundleMcpOnRunEnd: true,
-            idempotencyKey: randomIdempotencyKey(),
-          },
-          expectFinal: true,
-          signal,
-          timeoutMs: 120_000,
-          clientName: hasModelOverride
-            ? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT
-            : GATEWAY_CLIENT_NAMES.CLI,
-          mode: hasModelOverride ? GATEWAY_CLIENT_MODES.BACKEND : GATEWAY_CLIENT_MODES.CLI,
-          ...(hasModelOverride ? { scopes: [ADMIN_SCOPE] } : {}),
-        });
-        if (response.status && response.status !== "ok" && response.status !== "completed") {
-          throw new Error(
-            response.result?.meta?.error?.message ||
-              response.summary ||
-              `Gateway model run ${response.status}.`,
+            lastCallUsage: hasObservedModelUsage(agentMeta?.lastCallUsage)
+              ? agentMeta.lastCallUsage
+              : undefined,
+            attempts: agentMeta?.fallbackAttempts ?? [],
+            outputs: (response?.result?.payloads ?? []).map((payload) => ({
+              text: payload.text,
+              mediaUrl: payload.mediaUrl,
+              mediaUrls: payload.mediaUrls,
+            })),
+            ...inputs,
+          } satisfies CapabilityEnvelope;
+        };
+        if (transport === "gateway") {
+          const { callGateway } = await import("../../gateway/call.js");
+          return await run((params, modelOverride) =>
+            callGateway({
+              method: "agent",
+              params,
+              expectFinal: true,
+              signal,
+              timeoutMs: 120_000,
+              // Provider/model overrides require trusted-operator scope. Use the backend
+              // shared-secret lane so local gateway smokes do not depend on paired CLI device scopes.
+              clientName: modelOverride
+                ? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT
+                : GATEWAY_CLIENT_NAMES.CLI,
+              mode: modelOverride ? GATEWAY_CLIENT_MODES.BACKEND : GATEWAY_CLIENT_MODES.CLI,
+              ...(modelOverride ? { scopes: [ADMIN_SCOPE] } : {}),
+            }),
           );
         }
-        const agentMeta = response.result?.meta?.agentMeta;
-        return {
-          ok: true,
-          capability: "model.run",
-          transport: "gateway" as const,
-          provider: agentMeta?.provider,
-          model: agentMeta?.model,
-          usage:
-            agentMeta?.usage?.costStatus !== undefined || hasObservedModelUsage(agentMeta?.usage)
-              ? agentMeta?.usage
-              : undefined,
-          lastCallUsage: hasObservedModelUsage(agentMeta?.lastCallUsage)
-            ? agentMeta.lastCallUsage
-            : undefined,
-          attempts: agentMeta?.fallbackAttempts ?? [],
-          outputs: (response?.result?.payloads ?? []).map((payload) => ({
-            text: payload.text,
-            mediaUrl: payload.mediaUrl,
-            mediaUrls: payload.mediaUrls,
-          })),
-          ...inputs,
-        } satisfies CapabilityEnvelope;
+        // A running Gateway owns the shared credentials, including OAuth refresh. A local
+        // run must not refresh them beside it, so it runs through that Gateway (#198108).
+        const { runWithLocalStateOwner } = await import("../local-state-owner.js");
+        return await runWithLocalStateOwner({
+          method: "infer model run",
+          params: {},
+          target: "agent model credentials",
+          timeoutMs: 120_000,
+          requireLocalBackendSharedAuth: true,
+          onlineAlternative: "Omit --local to run it through the Gateway.",
+          onForeignOwner: opts.local
+            ? "refuse"
+            : ({ requestOwner }) =>
+                run((params) => requestOwner("agent", params, { expectFinal: true })),
+          runLocal: () => run(),
+        });
       }),
     );
 

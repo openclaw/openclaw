@@ -101,6 +101,8 @@ const enBrowser = {
     downloadFile: "Download file",
     inputLabel: "Browser input: click a field in the page, then type or paste",
     manualTextCorrection: "Autocorrect is unavailable in browser control. Edit the text directly.",
+    inputBlockedByDialog: "The page opened a dialog, so input after it was not sent.",
+    inputDroppedAfterNavigation: "The page changed, so input typed before it loaded was not sent.",
   },
 } satisfies TranslationMap;
 

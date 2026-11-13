@@ -337,6 +337,8 @@ describe("production lint suppressions", () => {
         "src/gateway/methods/read-share-keys.ts|unicorn/no-array-sort|1",
         "src/gateway/node-connection-notifications.ts|unicorn/no-array-sort|1",
         "src/gateway/node-plugin-tool-snapshot.ts|unicorn/no-array-sort|1",
+        // The crash checkpoint assertion compares the JSON-persisted completion, which omits undefined fields.
+        "src/gateway/server-database-engine-delivery-crash.test-support.ts|unicorn/prefer-structured-clone|1",
         // These handlers sort only fresh private arrays, preserving their upstream sources.
         "src/gateway/server-methods/session-files-root.ts|unicorn/no-array-sort|1",
         "src/gateway/server-methods/sessions-read.ts|unicorn/no-array-sort|1",
