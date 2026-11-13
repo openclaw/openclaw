@@ -27,6 +27,11 @@ Ordinary steering does not interrupt a tool call that is already running. An ass
 
 This keeps every requested tool call paired with a result without discarding a freshly requested plan before any tool executes.
 
+Input accepted during continuation preparation or background-result placement is
+checked before model dispatch, including after a failed Code Mode cell. It does not wait for an
+extra model response. One-at-a-time steering still delivers one queued input per
+request.
+
 In the Control UI, a waiting steer has a small **Send now** link below its normal
 user bubble. A session writer can use it to interrupt supported running tools
 without aborting the run. Each interrupted tool records that the user interrupted
