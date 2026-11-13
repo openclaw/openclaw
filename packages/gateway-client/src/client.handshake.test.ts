@@ -422,7 +422,7 @@ describe("GatewayClient", () => {
     vi.useRealTimers();
   });
 
-  test("rejects an unbounded request, reconnects, and does not replay it", async () => {
+  test("times out and reconnects without replay after a backward clock step", async () => {
     const { server, url } = await startWebSocketServer();
 
     const methodsByConnection: string[][] = [];
@@ -475,6 +475,8 @@ describe("GatewayClient", () => {
 
     client.start();
     await firstHello.promise;
+    // Wall-clock corrections must not delay silence detection or reconnect.
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() - 3_600_000);
     const stalledRequest = client.request("chat.send", undefined, { expectFinal: true });
     const finiteRequest = client.request("finite", undefined, { timeoutMs: 10_000 });
     const settlements = Promise.allSettled([stalledRequest, finiteRequest]);
