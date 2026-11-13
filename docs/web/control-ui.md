@@ -124,7 +124,8 @@ Open the command palette with **Cmd+K** on macOS or **Ctrl+K** elsewhere. Drop
 images or files onto the palette, or paste images into its input, to prepare a
 new background session without changing your current conversation or composer.
 
-The first attachment switches the palette to **Compose**.
+Each newly added attachment switches the palette to **Compose**, including after
+you return to Search with an attachment still in the draft.
 Add optional instructions, choose the agent, folder, and worktree, then send
 or press **Cmd/Ctrl+Enter**. Dropping a file does not start the session by itself.
 Files remain visible while preparing. If a file is rejected, an error toast

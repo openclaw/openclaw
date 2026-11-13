@@ -525,6 +525,7 @@
   "ui/src/components/cloud-worker-stop.ts",
   "ui/src/components/command-palette-contract.ts",
   "ui/src/components/command-palette-input.tsx",
+  "ui/src/components/command-palette-mode.ts",
   "ui/src/components/community-invite-state.ts",
   "ui/src/components/composer-menu.ts",
   "ui/src/components/config-error.tsx",

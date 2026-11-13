@@ -80,10 +80,7 @@ describe("CommandPalette pending searches", () => {
         method === "sessions.search" ? transcript.promise : catalog.promise,
       );
       const list = vi.fn(() => metadata.promise);
-      const { palette, query, queryAll } = await mountSearch(
-        { methods: ["sessions.search"], request },
-        list,
-      );
+      const { palette, query } = await mountSearch({ methods: ["sessions.search"], request }, list);
       await enterQuery(palette, "zzfixtureunique");
       await settlePalette(palette, dispatched ? 200 : 199);
       expect(list).toHaveBeenCalledTimes(dispatched ? 1 : 0);

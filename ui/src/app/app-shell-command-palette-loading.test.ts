@@ -84,6 +84,25 @@ function type(input: HTMLTextAreaElement, value: string) {
 }
 
 describe("cold command palette input custody", () => {
+  it.each([false, true])(
+    "queues a long cold prompt after composition settles (IME: %s)",
+    async (ime) => {
+      const { state, input } = await mountLoader();
+      if (ime) {
+        compose(input);
+      }
+      type(input, "Summarize the changes and explain the next steps in a new background task.");
+      if (ime) {
+        expect(state.mode()).toBe("search");
+        compose(input, true);
+        await vi.advanceTimersByTimeAsync(20);
+      }
+      expect(state.mode()).toBe("compose");
+      keydown(input, { ctrlKey: true });
+      expect(state.captureHandoff()()).toMatchObject({ value: input.value, submitRequested: true });
+    },
+  );
+
   it("never queues a mobile session submit while the palette loads", async () => {
     vi.spyOn(navigator, "userAgent", "get").mockReturnValue("iPhone");
     const { state, input } = await mountLoader();
@@ -281,7 +300,7 @@ describe("cold command palette input custody", () => {
         await Promise.resolve();
       }
       expect(take()).toEqual({
-        mode: "search",
+        mode: undefined,
         value,
         selectionStart: start,
         selectionEnd: end,

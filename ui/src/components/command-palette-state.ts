@@ -216,8 +216,7 @@ export class CommandPaletteState {
       this.settledModels = this.modelReader.snapshot;
       this.modelItems = getCommandPaletteModelItems(this.settledModels);
     }
-    // Usage and model-only publications do not invalidate skills or plugins.
-    // ModelCatalogReader owns the independent model refresh.
+    // ModelCatalogReader refreshes models without invalidating skills or plugins.
     const commandsChanged =
       event.event === "chat.metadata.changed" &&
       asNullableRecord(event.payload)?.commandsChanged !== false;
@@ -281,8 +280,8 @@ export class CommandPaletteState {
       returnFocus,
     };
     if (typeof this.initialInput !== "function") {
-      this.modes.open(this.initialInput);
       this.draft.setMessage(this.initialInput.value);
+      this.modes.open(this.initialInput);
     }
     this.activeId = null;
     this.filter = "all";
@@ -342,9 +341,8 @@ export class CommandPaletteState {
     }
     this.stopInputFocus?.();
     this.inputElement = element instanceof HTMLTextAreaElement ? element : undefined;
-    this.stopInputFocus = this.inputElement
-      ? listen(this.inputElement, "focus", this.adoptInitialInput)
-      : undefined;
+    this.stopInputFocus =
+      this.inputElement && listen(this.inputElement, "focus", this.adoptInitialInput);
     // The dialog may have focused the field before its committed ref arrived.
     this.adoptInitialInput();
   };
@@ -354,26 +352,21 @@ export class CommandPaletteState {
     if (!this.open || !element?.isConnected || document.activeElement !== element) {
       return;
     }
-    if (typeof this.initialInput === "function") {
-      const take = this.initialInput;
-      this.initialInput = undefined;
-      const input = take();
-      if (!input) {
-        this.closePalette();
-        return;
-      }
-      this.initialInput = input;
-      this.modes.open(input);
-      this.draft.setMessage(input.value);
-      // The dialog has accepted focus. Publish the captured value synchronously
-      // before the next key, then let the normal binding retain that same value.
-      element.value = input.value;
-    }
-    const input = this.initialInput;
+    const take = this.initialInput;
+    const handoff = typeof take === "function";
+    this.initialInput = undefined;
+    const input = typeof take === "function" ? take() : take;
     if (!input) {
+      if (handoff) {
+        this.closePalette();
+      }
       return;
     }
-    this.initialInput = undefined;
+    if (handoff) {
+      this.draft.setMessage(input.value);
+      // Publish captured text before the next key after the dialog accepts focus.
+      element.value = input.value;
+    }
     if (input.returnFocus !== undefined) {
       element
         .closest<OpenClawModalDialog>("openclaw-modal-dialog")
@@ -396,6 +389,11 @@ export class CommandPaletteState {
       this.draft.adoptAttachmentFiles(input.attachmentFiles, input.submitRequested);
     } else if (input.submitRequested) {
       this.draft.submitCold();
+    }
+    if (handoff) {
+      // Restore the loading view choice after its text and files have been adopted.
+      this.modes.open(input);
+      this.changed();
     }
   };
 
@@ -591,10 +589,7 @@ export class CommandPaletteState {
         search,
       });
     } catch {
-      // Session search is best-effort; navigation commands stay usable. But a
-      // failed search must not render as "No results" — that reads as a
-      // successful search with zero matches and hides gateway-side failures
-      // (e.g. a store needing doctor migration) from the operator.
+      // Keep search failures visible rather than presenting a successful empty result.
       if (isCurrent()) {
         this.sessionSearchFailed = true;
       }
@@ -619,7 +614,6 @@ export class CommandPaletteState {
 
   private updateMentionMenu(event?: InputEvent) {
     this.mentionMenu.syncDirectory(this.draft.mentionDirectory);
-    // Search never opens the mention menu.
     if (this.modes.current !== "compose" || (!this.mentionMenu.open && !event)) {
       return;
     }
@@ -680,6 +674,7 @@ export class CommandPaletteState {
       },
       onCompositionEnd: () => {
         this.composing = false;
+        this.modes.follow();
         const wasOpen = this.mentionMenu.open;
         this.updateMentionMenu();
         // The menu callback handles closes; closed menus still need the IME refresh.

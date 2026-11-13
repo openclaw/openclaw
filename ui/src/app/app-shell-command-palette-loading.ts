@@ -10,6 +10,7 @@ import {
   type CommandPaletteOpenInput,
   type CommandPaletteMode,
 } from "../components/command-palette-contract.ts";
+import { CommandPaletteModes, paletteDraftShape } from "../components/command-palette-mode.ts";
 import type { OpenClawModalDialog } from "../components/modal-dialog.tsx";
 import { keepMobileReturnNative } from "../lib/browser-platform.ts";
 import type { ChatAttachment } from "../lib/chat/chat-types.ts";
@@ -173,6 +174,12 @@ function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "contex
   let compositionFrame: number | undefined;
   let handoffPending = false;
   let generation = 0;
+  const modes = new CommandPaletteModes({
+    draft: () =>
+      paletteDraftShape(snapshot()?.value ?? "", attachmentFiles.length > 0 || staged.length > 0),
+    locked: () => composing || current.submitRequested,
+    switched: () => publish({ ...current, mode: modes.current }),
+  });
 
   function cancelCompositionFrame() {
     if (compositionFrame !== undefined) {
@@ -181,7 +188,7 @@ function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "contex
     }
   }
   function reset() {
-    current = { mode: current.mode, submitRequested: false };
+    current = { mode: "search", submitRequested: false };
     generation += 1;
     handoffPending = false;
     cancelCompositionFrame();
@@ -191,6 +198,8 @@ function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "contex
     attachmentFiles = [];
     staged = [];
     mentionTrigger = undefined;
+    modes.open();
+    current.mode = modes.current;
   }
   onSettled(() => reset);
   function snapshot(): CommandPaletteInputSnapshot | undefined {
@@ -221,7 +230,8 @@ function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "contex
       selectionEnd: 0,
       selectionDirection: "none" as const,
     };
-    const { returnFocus, submitRequested, mode } = current;
+    const { returnFocus, submitRequested } = current;
+    const mode = modes.handoffMode;
     const files = attachmentFiles;
     const attachments = staged;
     const trigger = mentionTrigger;
@@ -250,7 +260,7 @@ function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "contex
         return;
       }
       mentionTrigger = undefined;
-      publish({ ...current, mode });
+      modes.choose(mode);
       input?.focus({ preventScroll: true });
     },
     hasAttachments: () => {
@@ -294,6 +304,7 @@ function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "contex
       }
       // The live field owns text and selection until replacement focus accepts it.
       publish({ ...current, draft: snapshot() });
+      modes.follow();
     },
     inputRef(element: Element | undefined, previous?: HTMLTextAreaElement): void {
       if (previous && previous !== input) {
@@ -340,6 +351,7 @@ function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "contex
       // compositionend may precede final input; take only when replacement focus accepts it.
       compositionFrame = requestAnimationFrame(() => {
         compositionFrame = undefined;
+        modes.follow();
         const handoff = pendingHandoff;
         pendingHandoff = undefined;
         handoff?.();
@@ -359,7 +371,8 @@ function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "contex
           return;
         }
         attachmentFiles.push(...files);
-        publish({ ...current, mode: "compose" });
+        modes.follow(true);
+        publish({ ...current, mode: modes.current });
       }
     },
     handleDragOver(event: DragEvent): void {
@@ -393,7 +406,8 @@ function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "contex
       }
       // Keep raw Files in memory until the canonical draft owns admission/reads.
       attachmentFiles.push(...event.dataTransfer.files);
-      publish({ ...current, mode: "compose" });
+      modes.follow(true);
+      publish({ ...current, mode: modes.current });
     },
     handleKeydown(event: KeyboardEvent): void {
       if (keepMobileReturnNative(event)) {
@@ -435,7 +449,8 @@ function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "contex
     stage(attachments: readonly ChatAttachment[]): void {
       if (attachments.length) {
         staged.push(...attachments);
-        publish({ ...current });
+        modes.follow(true);
+        publish({ ...current, mode: modes.current });
       }
     },
     handoff(open: () => void): void {

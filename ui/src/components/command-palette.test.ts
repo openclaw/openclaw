@@ -260,25 +260,38 @@ describe("CommandPalette search", () => {
     },
   );
 
-  it("moves a long query to Compose until Search is chosen for it", async () => {
-    const list = vi.fn(async () => null);
-    const { palette } = await mountSearch({ methods: ["sessions.search"] }, list);
-    const query =
-      "Search for this full sentence without starting a background session.\nKeep searching.";
-    await searchPalette(palette, query);
-    const input = paletteInput(palette);
-    expectPalettePromptMode(palette);
-    expect(list).not.toHaveBeenCalled();
+  it.each([false, true])(
+    "moves a long query to Compose until Search is chosen (IME: %s)",
+    async (ime) => {
+      const list = vi.fn(async () => null);
+      const { palette } = await mountSearch({ methods: ["sessions.search"] }, list);
+      const query =
+        "Search for this full sentence without starting a background session.\nKeep searching.";
+      await openPalette(palette);
+      const input = paletteInput(palette);
+      if (ime) {
+        input.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+      }
+      setInputValue(input, query);
+      if (ime) {
+        await palette.updateComplete;
+        expect(input.getAttribute("aria-controls")).toBe("cmd-palette-listbox");
+        input.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+      }
+      await settlePalette(palette);
+      expectPalettePromptMode(palette);
+      expect(list).not.toHaveBeenCalled();
 
-    pressKey(input, "Tab", { cancelable: true });
-    setInputValue(input, query + " Still searching.");
-    await settlePalette(palette);
-    expect(input.getAttribute("aria-controls")).toBe("cmd-palette-listbox");
-    expect(list).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ search: query + " Still searching." }),
-    );
-    expect(palette.querySelector(".cmd-palette__create")).toBeNull();
-  });
+      pressKey(input, "Tab", { cancelable: true });
+      setInputValue(input, query + " Still searching.");
+      await settlePalette(palette);
+      expect(input.getAttribute("aria-controls")).toBe("cmd-palette-listbox");
+      expect(list).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ search: query + " Still searching." }),
+      );
+      expect(palette.querySelector(".cmd-palette__create")).toBeNull();
+    },
+  );
   it("waits for two characters before searching sessions", async () => {
     const list = vi.fn(async () => createSessionResult("agent:main:test", "Test"));
     const { palette, query } = await mountSearch({ methods: ["sessions.search"] }, list);

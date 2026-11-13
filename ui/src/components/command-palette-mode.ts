@@ -31,14 +31,18 @@ export class CommandPaletteModes {
   constructor(private readonly hooks: ModeHooks) {}
 
   /** An entry point that names a mode is a choice; a retained file or draft may still move it. */
-  open(input: CommandPaletteOpenInput) {
+  open(input: Pick<CommandPaletteOpenInput, "mode" | "submitRequested"> = {}) {
     if (input.mode) {
       this.chosen = input.mode;
-      this.keepSearch = false;
+      this.keepSearch = input.mode === "search" && this.hooks.draft().prompt;
     }
     this.current = input.mode ?? (input.submitRequested ? "compose" : this.chosen);
     this.automatic = false;
     this.follow();
+  }
+
+  get handoffMode(): CommandPaletteMode | undefined {
+    return this.keepSearch ? "search" : this.chosen === "compose" ? "compose" : undefined;
   }
 
   readonly choose = (mode: CommandPaletteMode) => this.switch(mode, true);
