@@ -18,6 +18,8 @@ Use a **node host** when your Gateway runs on one machine and you want commands 
 | Node host    | Executes `system.run`/`system.which` on the node machine.                                |
 | Approvals    | Enforced on the node host via `~/.openclaw/state/openclaw.sqlite#exec_approvals_config`. |
 
+Command output is capped at 200,000 bytes of combined stdout and stderr per run. As with Gateway exec, the node keeps the end of the output, where builds and test runners usually report failures, and starts the result with `... (truncated)` when earlier output was dropped.
+
 Approval note:
 
 - Approval-backed node runs bind exact request context. The exec path prepares a `systemRunPlan` before approval; once granted, the gateway forwards that stored plan, not any later caller-edited command/cwd/session fields, and re-validates the working directory before running.
