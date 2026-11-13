@@ -8,6 +8,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { parsePairingList } from "../../shared/node-list-parse.js";
 import type { PendingRequest } from "../../shared/node-list-types.js";
 import { formatCliCommand } from "../command-format.js";
+import { throwExpectedCliError } from "../expected-cli-error.js";
 import {
   formatConnectionFlagReminder,
   getNodesTheme,
@@ -45,7 +46,8 @@ async function resolveApproveScopesForRequest(
     .filter((id): id is string => typeof id === "string" && id.length > 0);
   const request = pending.find((candidate) => candidate.requestId === requestId);
   if (!request) {
-    throw new Error(buildUnknownNodePairRequestIdMessage(requestId, opts, pendingRequestIds));
+    // approve and reject own machine output, so only an expected error shows its reason on stderr.
+    throwExpectedCliError(buildUnknownNodePairRequestIdMessage(requestId, opts, pendingRequestIds));
   }
   return {
     scopes: resolveNodePairApprovalScopes(request.commands, request.requiredApproveScopes),
@@ -145,9 +147,8 @@ export function registerNodesPairingCommands(nodes: Command) {
                 : await callNodesGatewayCli("node.pair.reject", opts, { requestId });
             } catch (error) {
               if (isUnknownNodePairRequestIdError(error)) {
-                // Preserve the gateway error without appending its raw cause.
-                error.name = "Error";
-                error.message = buildUnknownNodePairRequestIdMessage(requestId, opts);
+                // Replace the raw gateway error with the remedy; its cause adds nothing.
+                throwExpectedCliError(buildUnknownNodePairRequestIdMessage(requestId, opts));
               }
               throw error;
             }
