@@ -1,204 +1,168 @@
-name: Release 11a bounded performance attribution (NOT qualification)
-run-name: 11a Kova Beam attribution ${{ github.run_id }}
+name: Modal click boundary diagnostic 11a
 'on':
   workflow_dispatch:
     inputs:
       workflow_ref:
-        description: Exact reviewed workflow commit SHA
+        description: Exact reviewed diagnostic workflow commit SHA
         required: true
         type: string
 permissions:
   contents: read
 concurrency:
-  group: release-11a-performance-attribution
+  group: modal-click-diagnostic-11a
   cancel-in-progress: false
 env:
   CI: 'true'
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
-  CANDIDATE_SHA: 11a0a9680d22977f0570409dbe8016c85a1ec3fd
-  SOURCE_TREE: 66430b2810752b2d6e43f6df8849607cf289c53c
-  PUBLISHER_SHA: 514a224c6eab039a926e4c47b22bb42e51484408
+  OPENCLAW_RELEASE_CONTEXT_REF: release/2026.11.4
+  TARGET_SHA: 11a0a9680d22977f0570409dbe8016c85a1ec3fd
   WORKFLOW_SHA: ${{ github.workflow_sha }}
   EXPECTED_WORKFLOW_SHA: ${{ inputs.workflow_ref }}
-  KOVA_REPOSITORY: openclaw/Kova
-  KOVA_REF: 8c8764f443ecc703ec6d035fc322c2b0b3c9e96b
-  OCM_VERSION: v0.2.48
-  OCM_LINUX_X64_SHA256: d0bdb49d69fa8bf3c3487ff04f4be82126828876f81690afdc002c427e22c1ac
 jobs:
-  diagnostic:
-    runs-on: blacksmith-16vcpu-ubuntu-2404
-    timeout-minutes: 60
+  modal:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      SAFE_PROOF: .artifacts/modal-click-public
+      PRIVATE_PROOF: ${{ runner.temp }}/modal-click-private
+      PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/modal-click-browsers
     steps:
-    - name: Prepare Git owner
-      uses: openclaw/openclaw/.github/actions/git-owner@a379bbd73e30b84a89aca4d54744ab9ca19082e7
-    - name: Checkout immutable candidate
-      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: openclaw/openclaw
         ref: 11a0a9680d22977f0570409dbe8016c85a1ec3fd
-        fetch-depth: 1
         persist-credentials: false
-    - name: Stage bounded gzip-base64 diagnostic payload
-      id: stage
+        fetch-depth: 1
+    - name: Initialize private capsule
       shell: bash
-      run: |
-        set -euo pipefail
-        umask 077
-        test "$WORKFLOW_SHA" = "$EXPECTED_WORKFLOW_SHA"
-        test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
-        test "$(git rev-parse HEAD^{tree})" = "$SOURCE_TREE"
-        test -z "$(git status --porcelain --untracked-files=no)"
-        python3 - <<'PY'
-        import base64,gzip,hashlib,json,os,pathlib
-        p=pathlib.Path(os.environ['PREP_DIR']);p.mkdir(parents=True)
-        blobs={'run-hosted.sh': 'H4sIAAAAAAAC/51W23LbNhB951cgdFpKU5O62PFFCZvKstKovkiRlaQZ16OBwKWFmARYAJSlXP69C1KSZTWZdOoHmQR2wd2zZ89i50kt16o24aIGYkYmVE+dHTLMBZEiWeAPMVMgGVUgjKdJxHUmNZ0ksEs0MAUmAa3JORf5nGRKyphMpTaBo8EQH3JJMp5BTHni5CnVd6R+eOi0iPv081n/XXt8Ney0XlpTmFNmCBfa0CSBiJzJGSVsCuxO5uarW7oMht3B+LQ3LF0UzDjcoy01RvFJbrgUfqYgwyAVMCPVAh07YaNB6/T44KgeNZvHh4dx/dlhfb9+HE3gqN44YEfPaAPYXhw5Z+EROzo82I/39/eAscM6/h5E9b1nMdtrNllzUp/ssWM4Ppg4BrTBiCq3vIjDR3w0kNfd9mnVJSHudNxHNn4Hn1YZu992OXtwETIC4vszUBqTKvZnzf2g2QwapY3/aXUyAmZyjcaZVAwSygU+58Ioyu4g8mOO9QmFrLrbjlsh/Z9zPl/2T7vj/mDU619etXxEe4d0aKbzBBmDhUDSaBIr+QkEiSADEYFgHPQukkIIrFy/c7FLUiroLb5oUDPOgFCBzwuBtDOcIZtSCPDcghDyXmjCjSaJZDTxJzlPIqIwSp7CcxJJIqSxXy43pCI0MaCQwRSBApNngdN/Owrdp4P3p7WAKsNjpJ2ubTII6bLM8QkSGLNED9dJ75BUxM/K91qm+IwacJevmsbgOjBH7AwpMH3dv+iGj2xrd5iBb9N5bNkfdC875+33407/8lXvd/tvNGx3RiGjQgqOeTpU3eqwgqVR0tYB6ZMA1ZYhBrewFdwNPFo2ORf3uGBJjjzSDARVXLZiLMfUX/bY7noZwRfGZzKJ/HuqUj/FhsY1PAHmyxOQG9CSYiKpipAMOZbKMoUq26wJaeALlhsQ5UbVKcj7QK1CWmzuQfpRu1hthBqlIqHCMsimdv3bzVcb8EeNavPrY4Rr1jCwO66TLcxUij3if9eEvHjhDT54Dk8LfO3arl5oJwvtY5BIGlUk8rCCi1j+29l146ZadajGhJAh6ANRpTK/9lbgeDfXHo+8m127ZlHYXsi1d1MlMVJtjupFsmsPwVTIcbschuS64n0HX2/XSyW78208lNvazngECpevuufdzqh76lV3K96jouFm8f7I6GYVP36cSfy6TLQNs6yIdxOGjaKntrZX1SsMnMGHQrF/gf9WPuy57erR3EyJzQif7Rlrtvr+LQJnyYpdimrup5oc1+1fSRtE3bfN9bio5YZ2CxoCy4sTvsmQIrhE3rqk+evPDacMfNQevb0Kn75cziEHjYWJifeT/kt46/QKK3d9om3jsk1hzm3JIgjM3FhZOykUxY7CE6ApUiVHlbQpTsDOREPuOaZv98tJpo1FYmUGChmCOofqhhIGCmVo1fUnb3vnp+PBsPeuPeqO37SxWEv1X5LY6Dm2sOIZ6lTR4D6WLUhRBMvTBxuHb0MzwVhLVdgAqNTvuAi7BnMDwg4ZXRjXOGr0HJvJWQUhMqyYWWQQpjKywo6a6C1Diwt1T4lrjVuxdp8THlf+uOpfBsV0q8Q6UECjV0iDq4VgFbf4ZpkFF7Esu7ZaDZhMU5xJT7BjEFOGHbJuz9W7LUmlUfXK4bpDRlOO1xFIDCX4MKVKoJVfXFos23GNZlnCcbC0X426w4fa+CVu5URBItvp0jPWwU6Pv3Oa8Ni6dWpvCNieFMuhlOYInLXBmpcBo1zYKZPlk4TrKUSBYyer/e4CsSuuLxju6tpSlkNO7KBDDmTUsKm74fEjy+XUWFOndzHoD0fj7p+90bh/ctUdIoVwEtsDwg1Cl2dpd9XgmchSYknQeih+K4UU70sYdNFvy2ViXW0iUrBc4Q2QLQqt13c8w8UUpQEBWLblv5m31ORvkXKDjifd9sWP+3XDaqtfi/S2+nU1KTYQLcHzrUuQLdzVXN8hAxRUCzNWVnwCJZc3Iby5UL2u//pyYXIlkAybd85CDDFaSSixShc4PCaVCtmQGCQ2qZMvX8hGGuVatfrcMlMQmwFpPCcxd/4ByMKvdpMLAAA=', 'beam-observer.patch': 'H4sIAAAAAAAC/41WbVPiSBD+zq/opaytUJAA6qIHy66u4BV1IhbC7l1dXeGYDDJrMpObmaCU8t+vJwkvhuAtH0Cn35/ufmZs2wZSVa5koVbVUIop86lNnzXligluBzQQcuEEWhXK5TLc/5rq2RnYR/VKA8r4fQpnZwVgQSikhheYETXmPwXj1Psh5GMFGFchdXWfcPJAvRspXKrU71JEISxhKkUARafqs/tqkGjY7oz5nh0miiZesbXlPyRS0RuhmGZz2uM644RHAZXMtUWoMWk0/xmbF8prB67wfcznO9NU6UtMcaA6jDxwoTRzVcbdPNayp6hmC2V7G8U0sXIBHXKlodO9PB9fjSYXg+uL8XDYvb74C9rQaGXlo16/OxiPJv1bFP9Wm9Rqtdauj/633nW381a5fppqG/gPj48M/ofHnyr1WtwBAJ9qkFSJSLp0RJiPNkVTPKTuxb2ick4MME0EYqWqmtCLwRmuDuAVeOT7iEX7rV5yuuXSFUGIYdFjn8hHKtHgbjIZ3GD5V+c/Jr3+zWAY13Nz1R11J5P2wYsk3BPBeNzrWKXlHSIIUK3CpgXY4YUviAeC+4tmmjQFPaNAnxlq8AeIR6QCnM4xpDsj/IEC0wpEpDEj6hinBg000INN1SOGw9GEIdWR5KNFSD9r/BJTUFQbGZp/wdoj7tGpGeDWHj9NwDEOmKKf54J5uyYJNhmjDjPoUD53svB0/+yNJoNvt93h9/NRb3A96fSGrVVDU4Sph8ZT4iu6lmjM2BtEekfg+kJt68fr2jiM97VxWjmsp/Oy+eB8g5Vk7WMVgJCsun6F/6sSvLw1AGBTsGLddru9MwY5+vCmEi0jGkO16zQHto8f4UNeK02YHR+Q23WMuWmyZZWg/SXfOEniQzxhX52QefD6miJa2mcBiJYZqVa+eJl/nOBtIrSTgTbR9rjIlGQs3qUxC12VHNwZblkaOfy9egGCR4/J2wV3c8CvxAzgRlIh3zbjxlUgEB7+XRMntRosS619fp8kZneJ10jsOyR65pibITdKMSFo28jsIpRjYMrIw/pZF0sVMFWYXFahG++FXpYcl2h39n6jkxYInzpUSiGt4t/Z2+6fGPht4sRNJ3PkVnLv0+L+8LmCZQXqhsHzpXlT60Rc0ulXx8ozWRb+7yCZMEXM3uHIxFdnhurjHS61spbIyNcINHhUuZR7hCO5uoTjZT7D61XHbBxKGvM08jko7SGGDgyQs40w4ZzTmHOOa0eVkwzlPJFHam2H3cqdPBGDeULlW3W7PiVytcG5dLDl742yzkrNiq9XLkNWWPrFjMgHui6SBYwTuQDFSahmAqsXsX+OTxgtRAuvHgMORwkG5UDi6o8/NbDs8vHJaaWeZdwm3B28cBLQZRMOXjbs+Qfj3hKJ6t+IchfRxxUwXlfMebcuIeEbQ9KRr9PTZalgm18HLyLi+4t0+COuJXEfz13zYLogilriiSMcq5FaqxOFWwqZjfkV0MvbfcvorKX70kgVlqXth4qRxG8PpUVY2bpe0seHxm6kTdvn9T81El29+goAAA==', 'export-safe.py': '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', 'finalize-safe.py': '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', 'manifest.json': 'H4sIAAAAAAAC/02STW4bMQyF9zlF4HUdSCRFSV32Cu0FKP7ARhPbmLGDpkHuXtlOiy5GwEh8n8in9/7w+LhZdecvsvn6uJHzedmPy3l/PGxVTuvl2bevefPlWqVysL3J2a+FOUuSzi0ZQK81UqmJUrfhLWXWViS7YthderqM5/268+UqLZkEgJRdRsIuHdhJqQ6AMQh8njei1O7S9XhZ1H8sfruWmTANaDnVAgNsKjHYojXqnKoGtK4F9a79eXy9TdW0VaYgQletaa5sCUsoAiiMNFC7dx6fzcrb81Fsncr3+T93lsthuzuuZ7endXcFdjUC5BFFRyqRoqqmkVw6CmjLDYBj9PkJ1oGz3dQdvCoUag3uo03wcHnZHsfqy6svTyc56w1f2KS7jaAqBSeWjbsXbSrRcoRhSZHmFbNpyyVVS84yXWl1ZGP5i/dfp+Ny3q4S/nR6u5KHI1L1IK3ZPPWeDNmZA6MMo67eApwSdZmmUgmTjEUij9qM6R859gd53v/2/9nAnKC2mM9XZVT03mzaStMFrN4tYDqPGWNmhMWN20xJR2M0iCa+meiPzxeYRrh9m+583wkUviWupcYxcbWWYjN2AydBe1gEDZVCczIoTsWckcaspzzTRRVrRY7Nw8fDHzI+r0DuAgAA'}
-        for name,encoded in blobs.items():
-            (p/name).write_bytes(gzip.decompress(base64.b64decode(encoded,validate=True)))
-        PY
-    - name: Bind source and verify diagnostic payload hashes
-      id: bind
+      run: 'set -euo pipefail
+
+        mkdir -m 700 "$PRIVATE_PROOF"
+
+        : > "$PRIVATE_PROOF/hosted.py.b64"
+
+        : > "$PRIVATE_PROOF/verify_results.py.b64"
+
+        : > "$PRIVATE_PROOF/modal_data.py.b64"
+
+        : > "$PRIVATE_PROOF/manifest.json.b64"
+
+        : > "$PRIVATE_PROOF/proposed.patch.b64"
+
+        '
+    - name: Transport hosted.py chunk 1
       shell: bash
-      run: |
-        set -euo pipefail
-        umask 077
-        test "$WORKFLOW_SHA" = "$EXPECTED_WORKFLOW_SHA"
-        test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
-        test "$(git rev-parse HEAD^{tree})" = "$SOURCE_TREE"
-        test -z "$(git status --porcelain --untracked-files=no)"
-        python3 - <<'PY'
-        import hashlib,json,os,pathlib
-        p=pathlib.Path(os.environ['PREP_DIR'])
-        assert hashlib.sha256((p/'manifest.json').read_bytes()).hexdigest()=='5faf9cbea841fbcb68f6b96923362787cbc99f9c641609c99e67bacda96f2721'
-        m=json.loads((p/'manifest.json').read_text())
-        assert all(hashlib.sha256((p/name).read_bytes()).hexdigest()==expected for name,expected in m['payloads'].items())
-        e=pathlib.Path(os.environ['RUNNER_TEMP'])/'attribution-egress';e.mkdir()
-        (e/'identity-before.json').write_text(json.dumps({'candidate':m['candidate'],'publisher':m['publisher'],'sourceTree':m['sourceTree'],'payloads':m['payloads'],'manifestSha256':'5faf9cbea841fbcb68f6b96923362787cbc99f9c641609c99e67bacda96f2721','workflowSha':os.environ['WORKFLOW_SHA'],'runId':os.environ['GITHUB_RUN_ID'],'attempt':os.environ['GITHUB_RUN_ATTEMPT'],'qualification':False},indent=2))
-        PY
-    - name: Frozen Node dependencies and managed systemd setup
-      id: setup
-      timeout-minutes: 10
-      uses: ./.github/actions/setup-node-env
+      run: 'set -euo pipefail
+
+        printf %s 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 >> "$PRIVATE_PROOF/hosted.py.b64"
+
+        '
+    - name: Transport verify_results.py chunk 1
+      shell: bash
+      run: 'set -euo pipefail
+
+        printf %s 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 >> "$PRIVATE_PROOF/verify_results.py.b64"
+
+        '
+    - name: Transport modal_data.py chunk 1
+      shell: bash
+      run: 'set -euo pipefail
+
+        printf %s H4sIAAAAAAAC/5VXbU/bSBD+nl+x4j7Y5kyaAOXA4EppQW3UliIa9a4KUbSJl2QPZ9faXQMp4r/fzK5fk1L1LEW2Z2afnZdn1pOdnZ2rXDGSUEMJWyimdUSYyFevZlKmjIpXt1xww/ZANGOKKDaXKtFEinR9SoQkVM24UVStSSoXuruzs9Phq0wqQ/7VUoRkRc0yhGUh0UblcxOSJdXLlM863wbXw8Hl6CuJydhLFH1gyguJd8/ZA67fY8mC7Rlp796k83F4eY62Tx6dGy6FF3oJp7ApPDjJ3nzJ06SSV69CCgY3aZaww3Nn9P3qwgFlkgvDVCIfEG0lc82K50KTZ6XcPs1TPr8DhM+D648X1wDhTadfri4u330a/D39/OV88Gl6Phy8v/zydTR8N53GHlj+M726fD99+31k93xNdkm/t39Y3DqdhN2SO7bW/j1Nc0iSoCumg6hD4KJaM8ijWWfMqQPCNUn43BAqEqKZKcVxbN/cYgfq6lXCrqCIq3wV7/V77sLCPFpRKfnFpoL4kI7wNpXUBHZvrGqXa8eN0s4q3EbkLCZWig/FThZeMZMr4XTO0YJnBcivIkfLF0CAloaKRcpaMI3Ejr1HKOAafg88MUu4LxlfLI03CZqQT3dRM3Hju0nYIxxKhEkYb60lLNWMVEkNyK1UztYuf3bOaUEzvZTmZd8ssRhyVWYM+ccFxI+Mk0JAaFa1TfuyVeBRz5VM05G0NGXI3Q+8Cq7ea1yvmYTjF3JRZL9Y0EDDwGwbtlK2uwtZa1UR0tZIxW+FN3kOLSheZaTRRlXHpWISVEnYtikUYFMDVkFHmwVu5AOL3Q/7RwfHhy3vN5PU9LRO+wZsrUBn6xxG21ktWAJ+L4TUhs9f5omeL9mKYuWp4lRgCmcMXMXjjd4aPEA9dg/QeqOWdSdVIBPbU9DXtm83dHHcb4rL7SwDynP7JfzKAcRPuXYbpExsGZzF+z2L4iTxeGLfMPesaqLaPqrybpOCCcF9IWZD1YJhNsomd0QZiitqS7dBO0g3zVNzpSwysi+ooIuAWIFtI3ZfDIwCxW6vjWaoo+jSDHZL/CcHEFVIlZtRAwVdLqnD8JBCuqybonWLyni1Gm6r2f5v6M/P7ROw5EDUr2kWbfKg4l3UPtzGpbzVfo6aW6ZOjAEXFY7cvWiIjCrNpjA1MLry3a3oiWIIAb6cQsyAxpO4d0rkPVOa/2DwYs3+IG9lLhKWwAKapJAC+L5KQ3Ixa8gJpC7LZ0DUJRcLQonOs0zCJJCuQZ9QPJ5wtulazAeYKRgZqZzVbETk2DnYLXfyD/b/OjqpaQXfENwaVdEMjO6aGuwN1ARvcNVx1Kp2FdWfcb+lcK7gOkvNEr4L5NMP3Cx970Z4QfQ73uEFZ7HhAj6oDceKQQehgVvW+S0zo9Zth2GSi60jOku58R1G2A/G/UkX/OCZH2zZK7DOZ77ybh77s5vxuLd3cjrZXQFhvRD0Gwts+ePGgYmjZhemk0T7aN02LxJckCZ4E+9jyalY+6rB6Dh2Bs3DDrtKYeTl2khRDh/8b8jfC6Wk8n/mWXUEuNfahD3OWWaIP7BnDHSpxQhruHAEJ4V7+sjW9iGICoaX5f9Znxb72q8hPmC/20XXpQLmMr+QhcW40uzQimSfoHCFeSX72YK5XGUpM3AANHMbQ26Ri2VTxj37WjdmIXhSv0rzcxzjNFt+Z4LyPBCLKRe30sf/Ku1B8eDgLEY/rOYsbk/duCEqxtExVHkGFDs+Ae2NuhHANgpN0oSylsdR/6iw7fWqnxp+OL92xnYmCN1EELs/Nt1cZHR+53tvhkMvtDD9o2j/cBKcFtD9s9iuO4sPeydH1i8QORAnaxd4tjZYiyqwcnaN3O7lQBK5O8yAS7r/+gje3R+srnt3a7tL9pjwBdPGh3z+BzT7YRf2DQAA >> "$PRIVATE_PROOF/modal_data.py.b64"
+
+        '
+    - name: Transport manifest.json chunk 1
+      shell: bash
+      run: 'set -euo pipefail
+
+        printf %s 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 >> "$PRIVATE_PROOF/manifest.json.b64"
+
+        '
+    - name: Transport proposed.patch chunk 1
+      shell: bash
+      run: 'set -euo pipefail
+
+        printf %s H4sIAAAAAAAC/61XbW/bNhD+3l9x0IfChiU5KTAUcOq8Z2uGJA7aAN0wFAYt0TZbmlRJyi/I8t93fJEsOS/LhhZBQ/HunjvePTxekiQB0i9ZX6usn8lFIQUVRve15CzvL2ROeJIzwuUsnSi50lSlhmqTGr1+0+v1YPI/bY+PIdmP30PP/nd8/AYYmisD95BxSkRZxKCoyKmCB5gquYDo2MF+032LwcQs4WyiiNpEBw3jKS/1vDZxFsk33VIhU0PVBcnmMeRUZ4pNaAx0XdDMxMBMbbxk1hGaJrVpiUe4WOIZd5T64Xio3KuVCzJD4FeY7IR2bfP2keU5FbVNmvbxx9olc8oLqnQ7vaZ9RAdx7kQxmE1BYVRQccbJqiFpgj8B5iv0fi/e38Mi4e9f9l2d/L9u96BaupR3tt+ZFNoAyQyTAoawZHSVzqg53XySnHaiSWmMFFGMYQqyoAOITiXuLIJFBA8IlXgosiJYkDqFacZZ9r3jFbdavnYdJ6R5NzXylHaMKukjFW/popGlyJFEZ5wh8Ccr7KYTF4gHuKJa382JGKmLHyXhnRUTuVylTAiqPlI2m5tH6IttbjtomXPatREjfjB4PXDPA/f7gHgzIZHwWSIF3wxATjAdSwrUkSqnnC2p2sCKmbksMe+5PRYQKBRNXEp8FtMK05fHlxrL80TQB21V50gP4EQpsvmAqZIq/6CNQjdIb/FdyJU4PESov77uWGacaM2mG5R1DFGY9gG4Qt65D/gbRMl5F4aHlR2A14PhcFhR6AiiihqDpjgcAcV+heItTA3EMBAiMiqncCNzCm/fBtwUYzQExSG07tZRks0Zz3fwXkIMF+cpRC96BrF1XJsLayGwi9qjRtLMfUtp5lQh02w+KacLzCQm1C9sFuF+C++1J3KNykH3Od4fbK0UNaUSeDXXA2ubrmPY+NUmRorlZu6/3DKGueOr3/JreKjRHnYi14IUei5d9C9F+/IlfSLYZk5DE4hBYsMbVIWxH9jb8YaZes99xdazQGCaDyrHTJ9Ve3ET2osHrgJVD4oDWtj1H92Wme1/ti0PMKshg80r/6WdycfdAB5acPhgSc7vZFHHWxB8KE2gwVFaK8DREey1bDNUQFiGfqqr2cllVjpyBJL8ik/CrWTCdFz9obetN/ThXezJELZDzXG/2zz08xyompcl8NLR91pie3dNYZcTbBqUdMqpmKH/wyG82+uGujeIELQK+w612GCfvoEXp3YdQ9WG6vMHob+wrWytK0vfw/9wV6G58+cT9LgUt8SWOOjZmUjT3O7h+8JExkucOWr2NO1fS9icTknJza1yLixvva/d/WY9us8WxGZF294dFbboVCH77OMcLWxdqo8gK4ta4pfutkVfgWgPV4NPpYLO1gNgr3SeulDzDR8qV/Yrpg3Fo3V8gQJDsFL+AW9FO6EIbNlT9ZJGPzD4CDaK/y+jw5Y7LwwPu0o/e3zYxf/5AwSOeEwQzjePm62bNZ9O5avqp+hCLul/KKF3jDNgas8Xjcej24ubs6uTL+Pr0fnJ1fj88uS3m9Hnu8uz8XgYYYf5/fPoJvWDhr2p99j75nRBBrAfw5IoRgReB0+J2B8nDq0AGd/067lg53HbHSkV7rx2QrdXNQzX9ieM5sQY/PNg4f6WqSfjagqzkQXvuIrSQsyi1g3zczB2bTsm41RsZf8AAlFo32YNAAA= >> "$PRIVATE_PROOF/proposed.patch.b64"
+
+        '
+    - name: Verify exact capsule and apply test-only overlay
+      shell: bash
+      run: 'set -euo pipefail
+
+        base64 --decode "$PRIVATE_PROOF/hosted.py.b64" | gzip -d > "$PRIVATE_PROOF/hosted.py"
+
+        echo 517a491a9b181239e74429ddf9a059bda7be70e94e4c6e8d824c40ff46ad6488  "$PRIVATE_PROOF/hosted.py" | sha256sum --check --strict
+
+        base64 --decode "$PRIVATE_PROOF/verify_results.py.b64" | gzip -d > "$PRIVATE_PROOF/verify_results.py"
+
+        echo a35f424ae1c0fe86dd44c034ad7125f166bbbc9749617720a70288430541a32c  "$PRIVATE_PROOF/verify_results.py" | sha256sum --check --strict
+
+        base64 --decode "$PRIVATE_PROOF/modal_data.py.b64" | gzip -d > "$PRIVATE_PROOF/modal_data.py"
+
+        echo 1ae3b13752811c617ac567028d6cdd4c4740cee208211dfe0b7a8c8bdad4aff4  "$PRIVATE_PROOF/modal_data.py" | sha256sum --check --strict
+
+        base64 --decode "$PRIVATE_PROOF/manifest.json.b64" | gzip -d > "$PRIVATE_PROOF/manifest.json"
+
+        echo fbde0e9ce4a42d35b58e57dfc619b39c4013e8a3ad285f83218b9e3ceff2123b  "$PRIVATE_PROOF/manifest.json" | sha256sum --check --strict
+
+        base64 --decode "$PRIVATE_PROOF/proposed.patch.b64" | gzip -d > "$PRIVATE_PROOF/proposed.patch"
+
+        echo 82e8f58e12fdc2565962ad4fc283946df2f248951f78dae0eaca0e2472492964  "$PRIVATE_PROOF/proposed.patch" | sha256sum --check --strict
+
+        python3 "$PRIVATE_PROOF/hosted.py" bind
+
+        '
+    - uses: ./.github/actions/setup-node-env
       with:
-        node-version: 24.22.1
         semantic-checks: 'true'
-        cache-mode: 'off'
         install-bun: 'false'
+        cache-mode: 'off'
         frozen-lockfile: 'true'
-    - name: Install OCM and Kova
-      env:
-        GH_TOKEN: ${{ github.token }}
+        node-version: 24.22.1
+      timeout-minutes: 15
+    - uses: ./.github/actions/setup-test-bun
+    - name: Install canonical Chromium prerequisite
       shell: bash
-      run: |
-        set -euo pipefail
-        KOVA_SRC="${RUNNER_TEMP}/kova-src"
-        echo "KOVA_SRC=$KOVA_SRC" >> "$GITHUB_ENV"
-        mkdir -p "$HOME/.local/bin" "$(dirname "$KOVA_SRC")" "${RUNNER_TEMP}/ocm-install"
-
-        ocm_archive="${RUNNER_TEMP}/ocm-${OCM_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
-        # retry-max-time only gates new retries; cap an active transfer separately
-        # so a stalled release asset cannot consume the entire Kova job deadline.
-        curl -fsSL --proto '=https' --tlsv1.2 \
-          --max-time 180 \
-          --retry 8 --retry-max-time 180 --retry-all-errors --retry-connrefused \
-          -o "$ocm_archive" \
-          "https://github.com/openclaw/ocm/releases/download/${OCM_VERSION}/ocm-x86_64-unknown-linux-gnu.tar.gz"
-        echo "${OCM_LINUX_X64_SHA256}  ${ocm_archive}" | sha256sum -c -
-        tar -xzf "$ocm_archive" -C "${RUNNER_TEMP}/ocm-install"
-        install -m 0755 "${RUNNER_TEMP}/ocm-install/ocm" "$HOME/.local/bin/ocm"
-
-        python3 -I -S "$CI_GIT_OWNER" --policy - "$KOVA_SRC" <<'PYTHON'
-        import base64
-        import os
-        import sys
-        from ci_git_owner import checkout_environment, fetch, fetch_timeout_seconds, git_auth_environment, run_git
-
-        remote = f"https://github.com/{os.environ['KOVA_REPOSITORY']}.git"
-        token = os.environ.pop("GH_TOKEN")
-        print("::add-mask::" + base64.b64encode(f"x-access-token:{token}".encode()).decode(), flush=True)
-        checkout_environment.update(git_auth_environment(remote, token))
-        del token
-        source = sys.argv[3]
-        os.makedirs(source, exist_ok=True)
-        run_git(source, "init", "-b", "main")
-        run_git(source, "remote", "add", "origin", remote)
-        fetch(source, os.environ["KOVA_REF"], blobless=True, max_attempts=3, retry_failures=True)
-        # Filtered checkout can fetch promised blobs; retain process-only auth
-        # and the network deadline until the complete worktree is available.
-        run_git(source, "checkout", "--detach", "FETCH_HEAD", timeout=fetch_timeout_seconds)
-        PYTHON
-        unset GH_TOKEN
-        npm --prefix "$KOVA_SRC" ci --ignore-scripts --no-audit --no-fund
-        node - "$KOVA_SRC" <<'NODE'
-        const fs = require("node:fs");
-        const path = require("node:path");
-
-        const root = process.argv[2];
-        const packageJsonPath = require.resolve("mock-ai-provider/package.json", {
-          paths: [root],
-        });
-        const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
-        const bin =
-          typeof packageJson.bin === "string"
-            ? packageJson.bin
-            : packageJson.bin?.["mock-ai-provider"];
-        if (typeof bin !== "string" || bin.length === 0) {
-          throw new Error("mock-ai-provider does not declare its CLI entrypoint");
-        }
-        fs.accessSync(path.resolve(path.dirname(packageJsonPath), bin), fs.constants.R_OK);
-        fs.accessSync(
-          path.join(root, "node_modules", ".bin", "mock-ai-provider"),
-          fs.constants.X_OK,
-        );
-        require.resolve("zod", { paths: [root] });
-        NODE
-        cat > "$HOME/.local/bin/kova" <<EOF
-        #!/usr/bin/env bash
-        export KOVA_HOME="${KOVA_HOME}"
-        exec node "${KOVA_SRC}/bin/kova.mjs" "\$@"
-        EOF
-        chmod 0755 "$HOME/.local/bin/kova"
-        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      id: install
       timeout-minutes: 5
-    - name: Two profiled samples and Beam exit observer
-      id: workload
-      timeout-minutes: 38
+      run: 'set -euo pipefail
+
+        pnpm --dir ui exec playwright install --with-deps chromium > "$PRIVATE_PROOF/browser-install.log" 2>&1
+
+        '
+    - name: Run entire modal file through normal router
       shell: bash
-      run: |
-        set -euo pipefail
-        umask 077
-        test "$(node --version)" = v24.22.1
-        systemctl --user show-environment >/dev/null
-        test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
-        test -z "$(git status --porcelain --untracked-files=no)"
-        mkdir -p "$RUNNER_TEMP/attribution-home"
-        # No Actions tokens, auth, inherited NODE_OPTIONS or user config enter the workload.
-        env -i HOME="$RUNNER_TEMP/attribution-home" PATH="$PATH" CI=true   XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-}"   KOVA_SRC="$KOVA_SRC" PREP_DIR="$PREP_DIR" GITHUB_WORKSPACE="$GITHUB_WORKSPACE"   PNPM_CONFIG_FROZEN_LOCKFILE=true   bash "$PREP_DIR/run-hosted.sh"
-    - name: Always bind final source and project safe artifacts
-      id: finalize
-      if: always() && steps.bind.outcome == 'success'
-      timeout-minutes: 2
-      shell: bash
-      env:
-        SETUP_OUTCOME: ${{ steps.setup.outcome }}
-        INSTALL_OUTCOME: ${{ steps.install.outcome }}
-        WORKLOAD_OUTCOME: ${{ steps.workload.outcome }}
-      run: python3 "$PREP_DIR/finalize-safe.py"
-    - name: Always collect only explicitly allowlisted evidence
+      run: 'python3 "$PRIVATE_PROOF/hosted.py" run
+
+        '
+    - name: Capture safe diagnostics after any outcome
       if: always()
-      timeout-minutes: 2
+      shell: bash
+      run: 'if [ -f "$PRIVATE_PROOF/hosted.py" ]; then python3 "$PRIVATE_PROOF/hosted.py" finalize; fi
+
+        '
+    - name: Upload explicit synthetic evidence only
+      if: always()
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
       with:
-        name: attribution-11a-${{ github.run_id }}-${{ github.run_attempt }}
-        path: |-
-          ${{ runner.temp }}/attribution-egress/identity-before.json
-          ${{ runner.temp }}/attribution-egress/identity-after.json
-          ${{ runner.temp }}/attribution-egress/summary.json
-          ${{ runner.temp }}/attribution-egress/kova-exit-code.txt
-          ${{ runner.temp }}/attribution-egress/beam-exit-code.txt
-          ${{ runner.temp }}/attribution-egress/beam-os/import-exit-*.txt
+        name: modal-click-11a-${{ github.run_id }}-${{ github.run_attempt }}
+        path: '.artifacts/modal-click-public/identity.json
+
+          .artifacts/modal-click-public/report.json
+
+          .artifacts/modal-click-public/tests.json
+
+          .artifacts/modal-click-public/inner-status.json
+
+          .artifacts/modal-click-public/modal.json
+
+          .artifacts/modal-click-public/images.json
+
+          .artifacts/modal-click-public/capture-error.json
+
+          .artifacts/modal-click-public/modal-diagnostic-drawer.png
+
+          .artifacts/modal-click-public/modal-diagnostic-viewport-edge-to-edge.png
+
+          .artifacts/modal-click-public/file-hashes.json'
+        include-hidden-files: true
         if-no-files-found: error
-        retention-days: 7
-    env:
-      PREP_DIR: ${{ runner.temp }}/attribution-prep
-      KOVA_HOME: ${{ runner.temp }}/attribution-home/kova
+        retention-days: 14
