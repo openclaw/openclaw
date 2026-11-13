@@ -482,6 +482,20 @@ Gateway before preparing credentials and installing the updated service.
 Normal migrations complete automatically; unsupported or inconsistent state
 requires Doctor recovery.
 
+The app leaves a local Gateway on the extended-stable channel, a channel install
+policy, or an independently managed service at its selected version. When
+credential maintenance is required but a running Gateway still holds the shared
+state, the app leaves that Gateway running and stops before the maintenance.
+This conflict does not establish version incompatibility: maintenance can also
+reconcile a receipt after a filesystem remount without changing the credential
+layout.
+
+The app explains which owner keeps the Gateway and offers **Retry**. Resolve the
+reported conflict through the tool that manages the Gateway, then choose
+**Retry**. Change the Gateway or app version only if recovery identifies a
+version incompatibility. Background launches print the same guidance and quit.
+Other credential preparation failures keep the generic recovery alert.
+
 For storage, migration, and rollback details, see
 [local client credentials](/reference/database-schemas/versioning#local-client-credentials).
 

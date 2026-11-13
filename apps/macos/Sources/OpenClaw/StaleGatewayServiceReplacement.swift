@@ -24,54 +24,75 @@ struct StaleGatewayServiceReplacement {
         return await self.install()
     }
 
+    enum Detection {
+        case none
+        case replace(StaleGatewayServiceReplacement)
+        /// Another owner keeps this service and its version; a Gateway-held failure names that owner.
+        case excluded(CLIInstallPrompter.ManagedRepairExclusion)
+    }
+
+    enum Admission: Equatable {
+        case notHosted
+        case excluded(CLIInstallPrompter.ManagedRepairExclusion)
+        case admitted
+    }
+
     /// Replacing the service moves the Gateway to this build's version, so it follows the same
     /// update policy as setup and post-update repair: extended-stable and channel install
     /// policies keep the operator's Gateway.
-    nonisolated static func admits(
+    nonisolated static func admission(
         connectionMode: AppState.ConnectionMode,
         hostsLocalGateway: Bool,
         isPaused: Bool,
         launchAgentUsesManagedCLI: Bool,
         gatewayUpdateChannel: String?,
         installPolicy: String?,
-        launchAgentWriteDisabled: Bool) -> Bool
+        launchAgentWriteDisabled: Bool) -> Admission
     {
-        GatewayAutostartPolicy.shouldStartGateway(
+        guard GatewayAutostartPolicy.shouldStartGateway(
             mode: connectionMode,
             paused: isPaused,
-            hostsLocalGateway: hostsLocalGateway) && CLIInstallPrompter.managedRepairGatesOpen(
+            hostsLocalGateway: hostsLocalGateway)
+        else { return .notHosted }
+        return CLIInstallPrompter.managedRepairExclusion(
             launchAgentUsesManagedCLI: launchAgentUsesManagedCLI,
             gatewayUpdateChannel: gatewayUpdateChannel,
             installPolicy: installPolicy,
-            launchAgentWriteDisabled: launchAgentWriteDisabled)
+            launchAgentWriteDisabled: launchAgentWriteDisabled).map(Admission.excluded) ?? .admitted
     }
 
-    static func detect(bundle: Bundle = .main, profile: AppProfile = .current) async -> Self? {
+    static func detect(bundle: Bundle = .main, profile: AppProfile = .current) async -> Detection {
         let app = AppStateStore.shared
         let hostsLocalGateway = app.hostsLocalGatewayWithRemotePrimary
         let allowUnconfigured = app.connectionMode == .remote && hostsLocalGateway
         let runtimes = profile.stateDirectoryURL().appendingPathComponent("runtime", isDirectory: true)
         guard let buildID = bundle.infoDictionary?["OpenClawRuntimeBuildID"] as? String,
-              let previous = GatewayLaunchAgentManager.installedServiceCLI()
-        else { return nil }
+              let previous = GatewayLaunchAgentManager.installedServiceCLI(),
+              // Ordinary launches stop here; only a stale service seeds this build early.
+              !previous.matchesBundledRuntime(BundledRuntime(root: runtimes.appendingPathComponent(buildID)))
+        else { return .none }
         let appManaged = CLIInstallPrompter.launchAgentUsesManagedCLI(programArguments: previous.prefix + ["gateway"])
-        guard Self.admits(
+        switch Self.admission(
             connectionMode: app.connectionMode,
             hostsLocalGateway: hostsLocalGateway,
             isPaused: app.isPaused,
             launchAgentUsesManagedCLI: appManaged,
             gatewayUpdateChannel: OpenClawConfigFile.gatewayUpdateChannel(),
             installPolicy: CLIInstallPolicy.storedPolicy(),
-            launchAgentWriteDisabled: GatewayLaunchAgentManager.isLaunchAgentWriteDisabled()),
-            GatewayLaunchAgentManager.bundledRuntimeReplacementError(
-                appManaged: appManaged,
-                installedRuntimePath: previous.prefix.first,
-                stateDirectory: profile.stateDirectoryURL()) == nil,
-            // Ordinary launches stop here; only a stale service seeds this build early.
-            !previous.matchesBundledRuntime(BundledRuntime(root: runtimes.appendingPathComponent(buildID))),
-            let runtime = try? await BundledRuntime.seed(bundle: bundle, profile: profile)
-        else { return nil }
-        return Self.replacing(previous, with: runtime, allowUnconfigured: allowUnconfigured)
+            launchAgentWriteDisabled: GatewayLaunchAgentManager.isLaunchAgentWriteDisabled())
+        {
+        case .notHosted: return .none
+        case let .excluded(exclusion): return .excluded(exclusion)
+        case .admitted: break
+        }
+        guard GatewayLaunchAgentManager.bundledRuntimeReplacementError(
+            appManaged: appManaged,
+            installedRuntimePath: previous.prefix.first,
+            stateDirectory: profile.stateDirectoryURL()) == nil,
+            let runtime = try? await BundledRuntime.seed(bundle: bundle, profile: profile),
+            let replacement = Self.replacing(previous, with: runtime, allowUnconfigured: allowUnconfigured)
+        else { return .none }
+        return .replace(replacement)
     }
 
     /// Every lifecycle call keeps the service custody captured at detection, so a service the
