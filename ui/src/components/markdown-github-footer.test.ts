@@ -14,7 +14,7 @@ const renderers = [
 ];
 
 describe("GitHub source footer", () => {
-  it("bounds dense trailing sources without losing links or descriptive names", () => {
+  it("keeps all trailing sources comma-separated without losing descriptive names", () => {
     for (const render of renderers) {
       const fragment = htmlFragment(
         render(`Answer with [an inline link](https://github.com/example/project/pull/100).
@@ -23,14 +23,16 @@ ${links}`),
       );
       const footer = fragment.querySelector(".markdown-source-footer")!;
       expect(footer).not.toBeNull();
-      expect(footer.querySelectorAll(":scope > .markdown-source-footer__row")).toHaveLength(5);
+      expect(footer.querySelectorAll("div, br, details, summary")).toHaveLength(0);
+      expect(footer.textContent).toBe(
+        Array.from({ length: 8 }, (_, i) => `#${i + 101}`).join(", "),
+      );
       expect(footer.querySelectorAll("a")).toHaveLength(8);
       expect(footer.querySelector("a")?.textContent).toBe("#101");
       expect(footer.querySelector("a")?.getAttribute("aria-label")).toContain(
         "Fix session memory usage",
       );
-      expect(footer.querySelector("details")?.hasAttribute("open")).toBe(false);
-      expect(footer.querySelector("summary")?.textContent).toContain("3");
+      expect(footer.querySelector("details")).toBeNull();
       expect(fragment.querySelector("p a")?.textContent).toBe("an inline link");
     }
   });
@@ -48,9 +50,25 @@ ${links}`),
     const pair =
       "[First fix](https://github.com/example/project/pull/1) [Second fix](https://github.com/example/project/pull/2)";
     const short = htmlFragment(toSanitizedMarkdownHtml(pair));
-    expect(short.querySelectorAll(".markdown-source-footer__row")).toHaveLength(2);
+    expect(short.querySelectorAll(".markdown-source-footer a")).toHaveLength(2);
     expect(short.querySelector("a")?.textContent).toBe("First fix");
     expect(short.querySelector("details")).toBeNull();
+  });
+
+  it.each([4, 5])("shortens only when the source count reaches five (%s)", (count) => {
+    const sources = Array.from(
+      { length: count },
+      (_, i) => `[Fix ${i + 1}](https://github.com/example/project/pull/${i + 1})`,
+    );
+    for (const render of renderers) {
+      const footer = htmlFragment(render(sources.join("\n"))).querySelector(
+        ".markdown-source-footer",
+      )!;
+      expect(footer.textContent).toBe(
+        sources.map((_, i) => (count >= 5 ? `#${i + 1}` : `Fix ${i + 1}`)).join(", "),
+      );
+      expect(footer.querySelector("br, details")).toBeNull();
+    }
   });
 
   it("leaves prose, nested content, and documents alone", () => {

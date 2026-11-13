@@ -1,8 +1,5 @@
 import type { MarkdownIt, Token } from "markdown-it";
-import { t } from "../i18n/index.ts";
 import { formatGitHubItemReference, parseGitHubLinkTarget } from "./github-link-target.ts";
-
-const VISIBLE_SOURCES = 5;
 
 /** Only a trailing, top-level link-only paragraph is a source footer, never prose. */
 export function installMarkdownGitHubFooter(parser: MarkdownIt): void {
@@ -55,27 +52,15 @@ export function installMarkdownGitHubFooter(parser: MarkdownIt): void {
       targets.flatMap((target) => (target ? [`${target.owner}/${target.repo}`.toLowerCase()] : [])),
     );
     const result: Token[] = [];
-    const tag = (name: string, nesting: -1 | 1, className?: string) => {
-      const token = new state.Token(`${name}_${nesting === 1 ? "open" : "close"}`, name, nesting);
-      token.block = true;
-      if (className) {
-        token.attrSet("class", className);
-      }
-      result.push(token);
-    };
-    tag("div", 1, "markdown-source-footer");
-    links.forEach((source, index) => {
-      let link = source;
-      if (index === VISIBLE_SOURCES) {
-        tag("details", 1, "markdown-source-footer__more");
-        tag("summary", 1);
-        const label = new state.Token("text", "", 0);
-        label.content = `${t("chat.messages.showMore")} (${links.length - VISIBLE_SOURCES})`;
-        result.push(label);
-        tag("summary", -1);
+    open.attrJoin("class", "markdown-source-footer");
+    links.forEach((link, index) => {
+      if (index > 0) {
+        const separator = new state.Token("text", "", 0);
+        separator.content = ", ";
+        result.push(separator);
       }
       const target = targets[index];
-      if (links.length > 3 && target) {
+      if (links.length >= 5 && target) {
         const anchor = link[0]!;
         const title = link
           .slice(1, -1)
@@ -88,18 +73,11 @@ export function installMarkdownGitHubFooter(parser: MarkdownIt): void {
         anchor.attrSet("data-github-kind", target.kind);
         anchor.attrSet("aria-label", `${label.content}: ${title}`);
         anchor.attrSet("title", title);
-        link = [anchor, label, link.at(-1)!];
+        result.push(anchor, label, link.at(-1)!);
+      } else {
+        result.push(...link);
       }
-      tag("div", 1, "markdown-source-footer__row");
-      const row = new state.Token("inline", "", 0);
-      row.children = link;
-      result.push(row);
-      tag("div", -1);
     });
-    if (links.length > VISIBLE_SOURCES) {
-      tag("details", -1);
-    }
-    tag("div", -1);
-    state.tokens.splice(start, 3, ...result);
+    inline.children = result;
   });
 }

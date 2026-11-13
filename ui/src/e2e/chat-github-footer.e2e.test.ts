@@ -46,7 +46,7 @@ const text =
     .join(" ");
 
 suite.define(() => {
-  it.each([1200, 400])("keeps sources bounded and keyboard-expandable at %s px", async (width) => {
+  it.each([1200, 400])("keeps all sources comma-separated and visible at %s px", async (width) => {
     await suite.withPage(
       { viewport: { width, height: 900 }, colorScheme: "dark" },
       async ({ page }) => {
@@ -69,20 +69,15 @@ suite.define(() => {
         );
         await writeFile(`${suite.artifactDir}/after-${width}.png`, frame.elements[0]!.png);
         expect(await footer.count()).toBe(1);
-        expect(await footer.locator(":scope > .markdown-source-footer__row").count()).toBe(5);
+        expect(await footer.locator("br, details, summary").count()).toBe(0);
+        expect(await footer.textContent()).toContain(", #101, ");
         expect(await footer.locator("a").count()).toBe(8);
         expect(await footer.locator('a[href$="/pull/101"]').textContent()).toBe("#101");
         const last = footer.locator('a[href$="/issues/106"]');
-        expect(await last.isVisible()).toBe(false);
-        const summary = footer.locator("summary");
-        await summary.focus();
-        await page.keyboard.press("Enter");
-        await last.waitFor({ state: "visible" });
+        expect(await last.isVisible()).toBe(true);
         expect(await footer.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
           true,
         );
-        await page.keyboard.press("Enter");
-        await last.waitFor({ state: "hidden" });
       },
     );
   });
