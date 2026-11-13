@@ -11,7 +11,7 @@
  * SCHEMA_CROSSING_WAL_MIB leaves that many committed padding pages in the largest
  * agent's WAL, including a committed session-row change. Preparation is unmeasured.
  * Set SCHEMA_CROSSING_TEMP_ROOT to a task-owned secure staging volume when the
- * fixture volume has shared ancestors; recovery backups stay beside the fixture.
+ * fixture volume has shared ancestors; recovery backups use that volume too.
  * Build each pinned checkout before measurement so bundled Doctor owners exist.
  * Copy that fixture before each run, then:
  * node --import ./scripts/tsx.mjs scripts/perf/schema-crossing-measure.ts run .local/crossing-base [allocation|timing|memory]
@@ -338,7 +338,9 @@ if (mode === "seed") {
       const migrationStarted = performance.now();
       try {
         await pluginResources.run(() =>
-          updateMigrateCommand(path.join(root, "recovery", "native")),
+          updateMigrateCommand(
+            path.join(process.env.SCHEMA_CROSSING_TEMP_ROOT ?? root, "recovery", "native"),
+          ),
         );
       } finally {
         migrationMs = performance.now() - migrationStarted;

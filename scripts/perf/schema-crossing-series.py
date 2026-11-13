@@ -1,8 +1,9 @@
 """Serial synthetic WAL-update A/A and A/B proof; retire fixture copies after every arm.
 
 Run from the candidate checkout with pinned, built baseline/candidate worktrees.
-The seed must be produced by schema-crossing-measure.ts. Staging must have secure
-ancestors and enough room for a full agent image. No operator state is accepted.
+The seed must be produced by schema-crossing-measure.ts. Staging must use a private,
+non-reflinking volume with room for the recovery payload and a full agent image.
+No operator state is accepted.
 """
 import argparse
 import hashlib
@@ -64,10 +65,11 @@ for label in sequence:
     subprocess.run(command + [str(args.seed), str(run)], check=True)
     env = dict(os.environ, SCHEMA_CROSSING_TEMP_ROOT=str(staging),
                SCHEMA_CROSSING_CHILD_OBSERVATIONS=str(observations),
-               SCHEMA_CROSSING_CHILD_ALLOCATIONS="1", FS_SAFE_NATIVE_MODE="off",
+               SCHEMA_CROSSING_CHILD_ALLOCATIONS="1", FS_SAFE_NATIVE_MODE="auto",
                NODE_OPTIONS="--require=" + str(tree / "scripts/perf/schema-crossing-child-observer.cjs") +
                " --cpu-prof --cpu-prof-dir=" + str(profiles))
-    # fs-safe off uses its byte-copy fallback: APFS clone preparation is outside timing.
+    # Native safety checks stay enabled; the staging filesystem cannot reflink.
+    # APFS clone preparation is outside timing.
     command = ["/usr/bin/time", "-l", str(args.node), "--import", "./scripts/tsx.mjs",
                "scripts/perf/schema-crossing-measure.ts", "run", str(run), "allocation"]
     print("START", label, time.strftime("%FT%T%z"), flush=True)
@@ -96,12 +98,12 @@ for label in sequence:
             connection.close()
         reference = reference or outcomes
         assert outcomes == reference, f"{label} changed session/migration outcomes"
-        receipt = json.loads((run / "recovery/native.receipt.json").read_text())
+        receipt = json.loads((staging / "recovery/native.receipt.json").read_text())
         assert receipt["status"] == "migrated"
         summary.update(outcomes=outcomes, receiptStatus=receipt["status"],
             backupBytes=sum(row["sizeBytes"] for row in receipt["backup"]["databases"]))
         result.write_text(json.dumps(summary, indent=2))
-        shutil.copy2(run / "recovery/native.receipt.json", args.output / (label + "-receipt.json"))
+        shutil.copy2(staging / "recovery/native.receipt.json", args.output / (label + "-receipt.json"))
         print("DONE", label, round(summary["elapsedMs"] / 1000, 3), "seconds", flush=True)
     finally:
         assert (run / "fixture.json").is_file()
