@@ -1,5 +1,5 @@
 import { createSignal } from "solid-js";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { registerMenuShortcuts } from "../../../components/menu-shortcuts.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
@@ -510,3 +510,69 @@ it("keeps the desktop panel fixed above its model chip across provider and searc
     container.removeAttribute("style");
   }
 });
+
+it.each(["cancel", "drop"])(
+  "keeps the dragged provider visible and restores tabs on %s",
+  async (end) => {
+    await page.viewport(1280, 900);
+    const { picker, open, params, update } = mountPicker();
+    params.modelOptions.push(modelOption("third", "delta", { label: "Delta" }));
+    update();
+    await open();
+    const tabs = [...picker.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+    const [selected, dragged] = tabs;
+    const orderKey = "openclaw.control.modelProviderOrder.v1";
+    const previousOrder = localStorage.getItem(orderKey);
+    onTestFinished(() => {
+      if (previousOrder === null) {
+        localStorage.removeItem(orderKey);
+      } else {
+        localStorage.setItem(orderKey, previousOrder);
+      }
+    });
+    const bounds = dragged.getBoundingClientRect();
+    const point = { clientX: Math.round(bounds.x + 18), clientY: Math.round(bounds.y + 18) };
+    const destination = { ...point, clientY: point.clientY + 40 };
+    dragged.dispatchEvent(new DragEvent("dragstart", { ...point, bubbles: true }));
+    flush();
+    // Hit the painted destination, rather than dispatching to a preselected node.
+    const target = () => document.elementFromPoint(destination.clientX, destination.clientY)!;
+    target().dispatchEvent(new DragEvent("dragover", { ...destination, bubbles: true }));
+    // Native source drag events can carry zero coordinates.
+    dragged.dispatchEvent(new DragEvent("drag", { bubbles: true }));
+    flush();
+    await vi.waitFor(() => {
+      const style = getComputedStyle(dragged);
+      expect(style.opacity).toBe("1");
+      expect(style.position).toBe("relative");
+      expect(style.zIndex).toBe("2");
+      expect(style.transform).toBe("matrix(1.08, 0, 0, 1.08, 0, 40)");
+      expect(style.transitionDuration).toBe("0s");
+      expect(dragged.checkVisibility()).toBe(true);
+      expect(selected.ariaSelected).toBe("true");
+      expect(getComputedStyle(selected).opacity).toBe("0.38");
+      expect(getComputedStyle(selected).backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
+    });
+    if (end === "drop") {
+      target().dispatchEvent(new DragEvent("dragover", { ...destination, bubbles: true }));
+      flush();
+      await vi.waitFor(() =>
+        expect(getComputedStyle(tabs[2]).transform).toBe("matrix(1, 0, 0, 1, 0, -38)"),
+      );
+      target().dispatchEvent(new DragEvent("drop", { ...destination, bubbles: true }));
+    }
+    dragged.dispatchEvent(new DragEvent("dragend", { bubbles: true }));
+    flush();
+    await vi.waitFor(() => {
+      for (const tab of tabs) {
+        const style = getComputedStyle(tab);
+        expect(style.opacity).toBe("1");
+        expect(style.transform).toBe("matrix(1, 0, 0, 1, 0, 0)");
+        expect(style.zIndex).toBe("auto");
+      }
+    });
+    expect([...picker.querySelectorAll('[role="tab"]')].map((tab) => tab.ariaLabel)).toEqual(
+      end === "drop" ? ["Example", "Third", "Other"] : ["Example", "Other", "Third"],
+    );
+  },
+);

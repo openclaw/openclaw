@@ -4044,9 +4044,12 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 
 .chat-controls__provider-tab[data-dragging] {
   position: relative;
-  z-index: 1;
+  z-index: 2;
+  opacity: 1;
+  background: var(--popover);
   box-shadow: var(--menu-shadow);
-  transform: scale(1.08);
+  transform: translate(var(--rail-drag-x, 0px), var(--rail-drag-y, 0px)) scale(1.08);
+  transition: none;
 }
 
 .chat-controls__model-pane {
@@ -4154,6 +4157,16 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   flex: 0 0 36px;
 }
 
+.chat-controls__provider-rail[data-dragging] > openclaw-tooltip {
+  /* Override the tooltip's inline display: contents to retain native drop targets. */
+  display: block !important;
+}
+
+.chat-controls__provider-rail[data-dragging] .chat-controls__provider-tab {
+  /* Moving tabs must not displace the tooltip hosts' stationary drop targets. */
+  pointer-events: none;
+}
+
 @media not ((max-width: 640px) or ((max-width: 932px) and (max-height: 500px) and (orientation: landscape))) {
   .chat-controls__model-menu {
     height: 350px;
@@ -4181,7 +4194,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
     border-radius: min(12px, var(--radius-menu-item));
   }
 
-  .chat-controls__provider-tab:not([aria-selected="true"]):hover {
+  .chat-controls__provider-tab:not([aria-selected="true"]):not([data-dragging]):hover {
     background: var(--menu-hover);
   }
 

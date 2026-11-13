@@ -36,6 +36,8 @@ export function ChatModelProviderRail(props: {
   ]);
   let root!: HTMLDivElement;
   let source: string | undefined;
+  let dragOrigin = { x: 0, y: 0 };
+  const [dragOffset, setDragOffset] = createSignal({ x: 0, y: 0 });
   const [drag, setDrag] = createSignal<{ from: number; to: number }>();
   const [announcement, announce] = createSignal("");
   const move = (id: string, to: number) => {
@@ -70,6 +72,7 @@ export function ChatModelProviderRail(props: {
   const endDrag = () => {
     source = undefined;
     setDrag(undefined);
+    setDragOffset({ x: 0, y: 0 });
   };
   return (
     <>
@@ -77,13 +80,44 @@ export function ChatModelProviderRail(props: {
         ref={(element) => (root = element)}
         class="chat-controls__provider-rail"
         data-dragging={drag() ? "" : undefined}
+        style={{
+          "--rail-drag-x": `${dragOffset().x}px`,
+          "--rail-drag-y": `${dragOffset().y}px`,
+        }}
         role="tablist"
         aria-label={t("chat.selectors.model")}
         aria-orientation="vertical"
+        onDragOver={(event) => {
+          if (source) {
+            setDragOffset({
+              x: event.clientX - dragOrigin.x,
+              y: event.clientY - dragOrigin.y,
+            });
+          }
+        }}
       >
         <For each={items()} keyed={(item) => item.id}>
           {(item) => (
-            <Tooltip content={item().label} disabled={props.active === item().id}>
+            <Tooltip
+              content={item().label}
+              disabled={props.active === item().id}
+              onDragOver={(event) => {
+                if (source && item().draggable) {
+                  event.preventDefault();
+                  setDrag({
+                    from: providers().indexOf(source),
+                    to: providers().indexOf(item().id),
+                  });
+                }
+              }}
+              onDrop={(event) => {
+                event.preventDefault();
+                if (source && item().draggable) {
+                  move(source, providers().indexOf(item().id));
+                }
+                endDrag();
+              }}
+            >
               <button
                 ref={[tabs.ref(item().id)]}
                 type="button"
@@ -100,25 +134,12 @@ export function ChatModelProviderRail(props: {
                 data-dragging={drag()?.from === providers().indexOf(item().id) ? "" : undefined}
                 onDragStart={(event) => {
                   source = item().id;
+                  dragOrigin = { x: event.clientX, y: event.clientY };
                   const index = providers().indexOf(source);
                   setDrag({ from: index, to: index });
                   event.dataTransfer?.setData("text/plain", source);
-                }}
-                onDragOver={(event) => {
-                  if (source && item().draggable) {
-                    event.preventDefault();
-                    setDrag({
-                      from: providers().indexOf(source),
-                      to: providers().indexOf(item().id),
-                    });
-                  }
-                }}
-                onDrop={(event) => {
-                  event.preventDefault();
-                  if (source && item().draggable) {
-                    move(source, providers().indexOf(item().id));
-                  }
-                  endDrag();
+                  // Paint the moving tab in the rail instead of the browser's drag image.
+                  event.dataTransfer?.setDragImage(document.createElement("canvas"), 0, 0);
                 }}
                 onDragEnd={endDrag}
                 onClick={(event) => {
