@@ -1,4 +1,8 @@
-import { normalizeMediaProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
+import {
+  getMediaProviderFromRegistry,
+  normalizeMediaProviderId,
+  normalizeMediaProviderKey,
+} from "../../packages/media-understanding-common/src/provider-id.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolvePluginCapabilityProviders } from "../plugins/capability-provider-runtime.js";
 import {
@@ -12,7 +16,9 @@ function mergeProviderIntoRegistry(
   provider: MediaUnderstandingProvider,
   registryKey = provider.id,
 ) {
-  const normalizedKey = normalizeMediaProviderId(registryKey);
+  // Historical aliases (gemini -> google) must not fold a separately registered
+  // provider into the canonical one. That merge copies hooks across identities.
+  const normalizedKey = normalizeMediaProviderKey(registryKey);
   const existing = registry.get(normalizedKey);
   const merged = existing
     ? {
@@ -56,7 +62,7 @@ export function buildMediaUnderstandingRegistry(
   // Auto-register media-understanding for config providers with image-capable models (#51392)
   for (const providerId of listImageCapableConfiguredProviders(cfg)) {
     const normalizedKey = normalizeMediaProviderId(providerId);
-    if (!registry.has(normalizedKey)) {
+    if (!getMediaUnderstandingProvider(providerId, registry)) {
       mergeProviderIntoRegistry(registry, {
         id: normalizedKey,
         capabilities: ["image"],
@@ -71,10 +77,10 @@ export function buildMediaUnderstandingRegistry(
   return registry;
 }
 
-/** Looks up a media-understanding provider using the same id normalization as registry builds. */
+/** Looks up a media-understanding provider. An exact registration wins; the historical alias is only the fallback. */
 export function getMediaUnderstandingProvider(
   id: string,
   registry: Map<string, MediaUnderstandingProvider>,
 ): MediaUnderstandingProvider | undefined {
-  return registry.get(normalizeMediaProviderId(id));
+  return getMediaProviderFromRegistry(id, registry);
 }

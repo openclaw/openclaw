@@ -1,8 +1,10 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
+  getMediaProviderFromRegistry,
   normalizeMediaExecutionProviderId,
   normalizeMediaProviderId,
+  normalizeMediaProviderKey,
 } from "../../packages/media-understanding-common/src/provider-id.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
@@ -41,16 +43,14 @@ function buildMediaUnderstandingManifestMetadataRegistry(
   for (const plugin of snapshot.plugins) {
     // Metadata only counts when the manifest also declares the provider contract.
     const declaredProviders = new Set(
-      (plugin.contracts?.mediaUnderstandingProviders ?? []).map((providerId) =>
-        normalizeMediaProviderId(providerId),
-      ),
+      (plugin.contracts?.mediaUnderstandingProviders ?? []).map(normalizeMediaProviderKey),
     );
     for (const [providerId, metadata] of Object.entries(
       plugin.mediaUnderstandingProviderMetadata ?? {},
     )) {
       // Metadata is trusted only when the plugin also declares the corresponding
       // provider contract; stray manifest fields must not register providers.
-      const normalizedProviderId = normalizeMediaProviderId(providerId);
+      const normalizedProviderId = normalizeMediaProviderKey(providerId);
       if (!normalizedProviderId || !declaredProviders.has(normalizedProviderId)) {
         continue;
       }
@@ -72,17 +72,16 @@ function resolveConfiguredImageProviderModel(params: {
   cfg?: OpenClawConfig;
   providerId: string;
 }): string | undefined {
-  const normalizedProviderId = normalizeMediaProviderId(params.providerId);
-  for (const [providerKey, providerCfg] of Object.entries(params.cfg?.models?.providers ?? {})) {
-    if (normalizeMediaProviderId(providerKey) !== normalizedProviderId) {
-      continue;
-    }
-    const match = (providerCfg.models ?? []).find(
-      (model) => Boolean(normalizeOptionalString(model.id)) && model.input?.includes("image"),
-    );
-    return normalizeOptionalString(match?.id);
-  }
-  return undefined;
+  const providerId = normalizeMediaProviderKey(params.providerId);
+  const providers = Object.entries(params.cfg?.models?.providers ?? {});
+  const exact = providers.find(([key]) => normalizeMediaProviderKey(key) === providerId);
+  const canonicalId = normalizeMediaProviderId(providerId);
+  const provider =
+    exact ?? providers.find(([key]) => normalizeMediaProviderId(key) === canonicalId);
+  const model = provider?.[1].models?.find(
+    (entry) => Boolean(normalizeOptionalString(entry.id)) && entry.input?.includes("image"),
+  );
+  return normalizeOptionalString(model?.id);
 }
 
 function resolveConfiguredImageProviderIds(cfg?: OpenClawConfig): string[] {
@@ -165,7 +164,7 @@ export function providerSupportsNativePdfDocument(params: {
   workspaceDir?: string;
 }): boolean {
   const registry = buildMediaUnderstandingManifestMetadataRegistry(params.cfg, params.workspaceDir);
-  const provider = registry.get(normalizeMediaProviderId(params.providerId));
+  const provider = getMediaProviderFromRegistry(params.providerId, registry);
   return provider?.nativeDocumentInputs?.includes("pdf") ?? false;
 }
 
@@ -177,7 +176,7 @@ export function resolveDocumentMediaModel(params: {
   workspaceDir?: string;
 }): string | false | undefined {
   const registry = buildMediaUnderstandingManifestMetadataRegistry(params.cfg, params.workspaceDir);
-  const provider = registry.get(normalizeMediaProviderId(params.providerId));
+  const provider = getMediaProviderFromRegistry(params.providerId, registry);
   const value = provider?.documentModels?.pdf?.[params.mode];
   if (value === false) {
     return false;

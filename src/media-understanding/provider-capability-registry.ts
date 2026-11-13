@@ -1,4 +1,8 @@
-import { normalizeMediaProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
+import {
+  getMediaProviderFromRegistry,
+  normalizeMediaProviderId,
+  normalizeMediaProviderKey,
+} from "../../packages/media-understanding-common/src/provider-id.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolvePluginCapabilityProvider } from "../plugins/capability-provider-runtime.js";
 import {
@@ -20,30 +24,38 @@ export function buildMediaUnderstandingCapabilityRegistry(
       (entry.type ?? (entry.command ? "cli" : "provider")) === "provider" &&
       !resolveConfiguredMediaEntryCapabilities(entry)
     ) {
-      const providerId = normalizeMediaProviderId(entry.provider);
+      const providerId = normalizeMediaProviderKey(entry.provider);
       if (providerId) {
         providerIds.add(providerId);
       }
     }
   }
   for (const providerId of providerIds) {
-    const provider = resolvePluginCapabilityProvider({
-      key: "mediaUnderstandingProviders",
-      providerId,
-      cfg,
-    });
+    const canonicalId = normalizeMediaProviderId(providerId);
+    const provider =
+      resolvePluginCapabilityProvider({ key: "mediaUnderstandingProviders", providerId, cfg }) ??
+      (canonicalId !== providerId
+        ? resolvePluginCapabilityProvider({
+            key: "mediaUnderstandingProviders",
+            providerId: canonicalId,
+            cfg,
+          })
+        : undefined);
     if (provider) {
-      // Keep canonical keys: runtime aliases do not independently opt entries into inference.
-      registry.set(normalizeMediaProviderId(provider.id), {
+      registry.set(normalizeMediaProviderKey(provider.id), {
         capabilities: resolveConfiguredMediaProviderCapabilities(provider, cfg),
         sharedEntryCapabilities: provider.sharedEntryCapabilities,
       });
     }
   }
+  const canonicalProviderIds = new Set([...providerIds].map(normalizeMediaProviderId));
   for (const configuredId of listImageCapableConfiguredProviders(cfg)) {
     const providerId = normalizeMediaProviderId(configuredId);
     // A runtime declaration owns capability truth, including an explicitly absent capability set.
-    if (providerIds.has(providerId) && !registry.has(providerId)) {
+    if (
+      canonicalProviderIds.has(providerId) &&
+      !getMediaProviderFromRegistry(configuredId, registry)
+    ) {
       registry.set(providerId, { capabilities: ["image"] });
     }
   }

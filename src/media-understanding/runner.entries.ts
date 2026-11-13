@@ -5,7 +5,10 @@ import { ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { MediaUnderstandingSkipError } from "../../packages/media-understanding-common/src/errors.js";
-import { normalizeMediaExecutionProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
+import {
+  normalizeMediaExecutionProviderId,
+  resolveMediaProviderKey,
+} from "../../packages/media-understanding-common/src/provider-id.js";
 import type {
   AudioTranscriptionResult,
   MediaAttachment,
@@ -197,8 +200,12 @@ export async function runProviderEntry(params: {
   if (!providerIdRaw) {
     throw new Error(`Provider entry missing provider for ${capability}`);
   }
-  const providerId = normalizeMediaProviderId(providerIdRaw);
-  const requestProviderId = normalizeMediaExecutionProviderId(providerIdRaw);
+  const providerId = resolveMediaProviderKey(providerIdRaw, params.providerRegistry);
+  const requestProviderId = resolveMediaProviderKey(
+    providerIdRaw,
+    params.providerRegistry,
+    normalizeMediaExecutionProviderId,
+  );
   assertRuntimeMediaRequestSecretOwnerAvailable({ capability, entry });
   if (params.secretOwnerId) {
     assertSecretOwnerAvailable("capability", params.secretOwnerId);
@@ -315,6 +322,7 @@ export async function runProviderEntry(params: {
     });
     const model =
       entry.model?.trim() ||
+      provider.defaultModels?.audio ||
       (await import("./defaults.js")).resolveDefaultMediaModel({
         cfg,
         providerId,
