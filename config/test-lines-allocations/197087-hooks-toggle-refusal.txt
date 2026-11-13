@@ -1,0 +1,6 @@
+# Exact net test-line growth from the hooks toggle refusal change (online config
+# guidance for both enable/disable refusals while the Gateway owns state) that
+# left main over the ceiling: 11 for the original refusal regression, plus 30
+# for the ClawSweeper review fix (resolved hook key, enable master switch,
+# qualified reload promise, key-discovery and ambiguity refusals).
+41
