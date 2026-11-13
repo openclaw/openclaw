@@ -48,15 +48,16 @@ async function fixture(sharedLargest = false, wal = false) {
     }
   }
   const files = [shared, agent, ...(wal ? [`${agent}-wal`, `${agent}-shm`] : [])];
-  const hashes = async () =>
+  const artifacts = async () =>
     Promise.all(
-      files.map(async (file) =>
-        createHash("sha256")
+      files.map(async (file) => ({
+        sha256: createHash("sha256")
           .update(await fs.readFile(file))
           .digest("hex"),
-      ),
+        mtimeNs: (await fs.stat(file, { bigint: true })).mtimeNs,
+      })),
     );
-  const before = await hashes();
+  const before = await artifacts();
   const input = { stateDir, backupRoot, stagingRoot, config: {}, env: {} };
   const inspectionPlan = await discoverUpdateStateSchemaInspectionInProcess(input);
   return {
@@ -65,7 +66,7 @@ async function fixture(sharedLargest = false, wal = false) {
     agent,
     directory,
     inspectionPlan,
-    unchanged: async () => expect(await hashes()).toEqual(before),
+    unchanged: async () => expect(await artifacts()).toEqual(before),
   };
 }
 
@@ -108,19 +109,20 @@ it.each([false, true])(
 );
 
 it.each([
-  { freeMiB: 71, sharedLargest: false, postgres: false },
-  { freeMiB: 82, sharedLargest: true, postgres: false },
-  { freeMiB: 82, sharedLargest: false, postgres: true },
+  { freeMiB: 71, sharedLargest: false, postgres: false, wal: true },
+  { freeMiB: 82, sharedLargest: true, postgres: false, wal: false },
+  { freeMiB: 82, sharedLargest: false, postgres: true, wal: false },
 ])(
-  "refuses insufficient activation space before capture ($freeMiB MiB, sharedLargest=$sharedLargest, postgres=$postgres)",
-  async ({ freeMiB, sharedLargest, postgres }) => {
-    const f = await fixture(sharedLargest);
+  "refuses insufficient activation space before capture ($freeMiB MiB, sharedLargest=$sharedLargest, postgres=$postgres, WAL=$wal)",
+  async ({ freeMiB, sharedLargest, postgres, wal }) => {
+    const f = await fixture(sharedLargest, wal);
     const config = postgres ? { database: { engine: "postgres" as const } } : {};
     const statfs = fsSync.statfsSync;
+    let availableMiB = wal ? 74 : freeMiB;
     vi.spyOn(fsSync, "statfsSync").mockImplementation((...args) =>
       Object.assign(statfs(...args), {
         bsize: 1,
-        bavail: freeMiB * 1024 ** 2,
+        bavail: availableMiB * 1024 ** 2,
       }),
     );
     const preflight = await assessInitialUpdateSnapshotCapacity({
@@ -128,8 +130,13 @@ it.each([
       config,
       backupDirectory: f.directory,
     });
-    expect(preflight.exitCode).toBe(1);
-    expect(preflight.stderrTail).toContain("snapshot-capacity-insufficient");
+    expect(preflight.exitCode).toBe(wal ? 0 : 1);
+    if (!wal) {
+      expect(preflight.stderrTail).toContain("snapshot-capacity-insufficient");
+    }
+    await f.unchanged();
+    // Preflight reserves no space: admission must precede even a WAL checkpoint.
+    availableMiB = freeMiB;
     await expect(
       createUpdateDatabaseBackupInProcess({ ...f, config, stopped: true }),
     ).rejects.toMatchObject({ name: "UpdateCaptureSpaceError" });

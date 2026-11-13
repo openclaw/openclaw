@@ -241,14 +241,15 @@ export async function createUpdateDatabaseBackupInProcess(
       input.excludedDatabasePaths,
     );
   const inventory = await inventoryFor(inspectionPlan);
-  const { identities, checkpointed } = await prepareRestorableDatabaseFiles(
-    inventory.present,
-    input.stopped,
-  );
+  // Preflight reserves no space; admit the complete family before checkpointing.
   const { warnings } = await checkUpdateDatabaseBackupSpace(
     directory,
     await measureUpdateStateFiles(inventory.present),
     input,
+  );
+  const { identities, checkpointed } = await prepareRestorableDatabaseFiles(
+    inventory.present,
+    input.stopped,
   );
   const { buildBackupArchivePath } = await import("./backup-archive-path-policy.js");
   const { createStoppedSqliteSnapshot, createVerifiedSqliteSnapshot } =
