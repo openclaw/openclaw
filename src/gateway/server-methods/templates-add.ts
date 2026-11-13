@@ -75,8 +75,10 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
       assertTemplatesLabsEnabled(context.getRuntimeConfig());
       respond(true, plan);
     } catch (error) {
+      // A preview never mutates state; say so, or owner-routed CLIs report a possible partial Add.
+      const noEffect = { details: { mutationAccepted: false } };
       if (error instanceof TemplatesLabsDisabledError) {
-        respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, error.message));
+        respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, error.message, noEffect));
         return;
       }
       log.error(
@@ -86,7 +88,7 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
         error instanceof ClawHubSourceError
           ? error.message
           : "Template Add preview is unavailable. Review Gateway logs.";
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message));
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message, noEffect));
     }
   },
   "templates.add.apply": async (options) => {
