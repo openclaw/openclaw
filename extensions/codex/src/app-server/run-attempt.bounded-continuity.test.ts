@@ -1,24 +1,34 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
-import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { describe, expect, it, vi } from "vitest";
+import {
+  createMockPluginRegistry,
+  loadUserTurnTranscriptRecorderFactoryForTest,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { readMirroredSessionHistoryMessages } from "./attempt-context.js";
 import { requestParams } from "./run-attempt-continuity.test-support.js";
 import {
   assistantMessage,
+  bindProductionHarnessHostCapabilitiesForTest,
   createParams,
   createStartedThreadHarness,
   mockCall,
   runCodexAppServerAttempt,
   setupRunAttemptTestHooks,
   tempDir,
+  threadStartResult,
+  turnStartResult,
   userMessage,
 } from "./run-attempt-test-harness.js";
 import { requireRecord } from "./run-attempt.context-engine.test-support.js";
 import { writeCodexAppServerBinding } from "./session-binding.test-helpers.js";
-import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
+import {
+  appendSqliteHistoryMessage,
+  attachSqliteSessionTarget,
+} from "./sqlite-session.test-helpers.js";
 
 setupRunAttemptTestHooks();
 
@@ -192,5 +202,89 @@ describe("Codex bounded assistant continuity", () => {
       prompt: expectedInput,
       historyMessages: [],
     });
+  });
+
+  it("replays a host row that arrived during the previous native turn, once", async () => {
+    const params = createParams(
+      path.join(tempDir, "exact-coverage.jsonl"),
+      path.join(tempDir, "exact-coverage-workspace"),
+    );
+    await attachSqliteSessionTarget(
+      params,
+      path.join(tempDir, "exact-coverage.sqlite"),
+      params.sessionId,
+    );
+    const coveredText = "Host context already present before the first prompt.";
+    await appendSqliteHistoryMessage(params, userMessage(coveredText, 50));
+    const createRecorder = await loadUserTurnTranscriptRecorderFactoryForTest();
+    const target = {
+      agentId: "main",
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey!,
+      storePath: params.sessionTarget!.storePath!,
+      sessionEntry: undefined,
+    };
+    let closeHost = () => {};
+    const startAttempt = async (runId: string, prompt: string, idempotencyKey: string) => {
+      const recorder = createRecorder({
+        input: { text: prompt, idempotencyKey, timestamp: 100 },
+        target,
+      });
+      await recorder.persistApproved();
+      params.runId = runId;
+      params.prompt = prompt;
+      params.userTurnTranscriptRecorder = recorder;
+      closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
+      onTestFinished(closeHost);
+      return { run: runCodexAppServerAttempt(params) };
+    };
+
+    let turnNumber = 0;
+    const harness = createStartedThreadHarness(
+      async (method) => {
+        if (method === "thread/resume") {
+          return threadStartResult("thread-1");
+        }
+        if (method === "turn/start") {
+          return turnStartResult(`turn-${++turnNumber}`);
+        }
+        return undefined;
+      },
+      { persistedThreads: ["thread-1"] },
+    );
+    const finish = async (run: Promise<unknown>) => {
+      await harness.notify({
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: `turn-${turnNumber}`,
+          item: { id: `final-${turnNumber}`, type: "agentMessage", text: "Done." },
+        },
+      });
+      await harness.completeTurn({ threadId: "thread-1", turnId: `turn-${turnNumber}` });
+      await run;
+      closeHost();
+    };
+    const lastTurnInput = () =>
+      JSON.stringify(harness.requests.findLast(({ method }) => method === "turn/start")?.params);
+
+    const promptAnnotated = createDeferred<void>();
+    params.onUserMessagePersisted = () => promptAnnotated.resolve();
+    const { run: first } = await startAttempt("run-1", "First request.", "first:user");
+    await first.waitForTurnAccepted();
+    await promptAnnotated.promise;
+    // The row is stored while the first turn runs and is not steered into it.
+    const lateText = "Row that arrived while the first turn was running.";
+    await appendSqliteHistoryMessage(params, userMessage(lateText, 100));
+    await finish(first);
+
+    params.onUserMessagePersisted = undefined;
+    const { run: second } = await startAttempt("run-2", "Second request.", "second:user");
+    await second.waitForTurnAccepted();
+    const sent = lastTurnInput();
+    await finish(second);
+    expect(sent).not.toContain(coveredText);
+    expect(sent.split(lateText)).toHaveLength(2);
+    expect(sent).toContain("Second request.");
   });
 });

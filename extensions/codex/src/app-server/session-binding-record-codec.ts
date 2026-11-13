@@ -66,6 +66,13 @@ const readOnlyToolsSchema = z
       .strict(),
   )
   .optional();
+const transcriptCoverageSchema = z
+  .object({
+    threadId: z.string().trim().min(1),
+    runId: z.string().trim().min(1),
+    idempotencyKey: z.string().trim().min(1),
+  })
+  .strict();
 const destructiveApprovalModeSchema = z.enum(["allow", "deny", "auto", "ask"]).optional();
 // Account-connected apps are admitted without a plugin package; both entry
 // shapes must round-trip or stored policy context silently drops on read.
@@ -188,6 +195,8 @@ const threadBindingSchema = z
     conversationIncognito: z.literal(true).optional(),
     conversationSourceTransferComplete: z.literal(true).optional().catch(undefined),
     historyCoveredThrough: optionalTimestampSchema,
+    // Host user row sent with the last completed turn. Rows after it are unseen.
+    transcriptCoverage: transcriptCoverageSchema.optional().catch(undefined),
     // Observed density of the last completed turn on this thread: prompt chars
     // actually sent vs provider-reported input tokens. Read by the no-engine
     // continuity cap so the next projection is sized from this session's real
