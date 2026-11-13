@@ -93,6 +93,16 @@ describe("classifyAttachmentBytes", () => {
     ).resolves.toEqual({ mime: "application/zip", class: "archive" });
   });
 
+  it.each([
+    Buffer.from("SQLite format 3".padEnd(4096, "\0")),
+    Buffer.from("SQLite format 3\0".padEnd(4096, "A")),
+  ])("keeps a signature-identified SQLite database binary", async (buffer) => {
+    await expect(classifyAttachmentBytes({ buffer, name: "spoof.txt" })).resolves.toEqual({
+      mime: "application/x-sqlite3",
+      class: "binary",
+    });
+  });
+
   it("keeps declared octet-stream content binary without a text extension", async () => {
     await expect(
       classifyAttachmentBytes({
