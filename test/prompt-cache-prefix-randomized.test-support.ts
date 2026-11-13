@@ -47,7 +47,9 @@ export const TURN_KINDS = [
   "modelSwitch",
 ] as const;
 export type TurnKind = (typeof TURN_KINDS)[number];
-const REBUILD_KINDS = new Set<TurnKind>(["compaction", "modelSwitch"]);
+// Allowed rebuild points: compaction, a model or provider switch, and a deliberate tool-policy
+// config change (a new tool set is a new prefix; Hermes starts a new session for it).
+const REBUILD_KINDS = new Set<TurnKind>(["compaction", "modelSwitch", "toolsChanged"]);
 
 /** Deterministic PRNG (mulberry32), so a failing seed reproduces exactly. */
 function prng(seed: number) {
@@ -391,7 +393,10 @@ export function usePrefixRandomizedJourney() {
             unexpected.push({ step: current.step, kind: current.kind, change });
           }
         }
-        expect(unexpected, `seed=${seed} journey=${journey.join(",")}`).toEqual([]);
+        expect(
+          JSON.stringify(unexpected, null, 1),
+          `seed=${seed} journey=${journey.join(",")}`,
+        ).toBe("[]");
       } catch (error) {
         throw new Error(`${String(error)}\n${seen.join("\n")}`, { cause: error });
       }
