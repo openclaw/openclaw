@@ -8,7 +8,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewaySessionRow } from "../../api/types.ts";
+import type { GatewaySessionRow, ModelAuthStatusResult } from "../../api/types.ts";
 import {
   captureChatOutboxAdmission,
   storedChatOutboxScopeKey,
@@ -50,8 +50,10 @@ describe("chat account selection", () => {
   function mountAccountControl(
     request: GatewayRequestHandler,
     selection: ChatAccountSelection | null,
+    modelAuthStatusResult?: ModelAuthStatusResult,
   ) {
-    const container = document.createElement("div");
+    const container = document.body.appendChild(document.createElement("div"));
+    onTestFinished(() => container.remove());
     let current = true;
     const state = projectChatFields<Pick<ChatPageHost, "client" | "chatAccountSelection">>({
       client: createTestGatewayClient(request),
@@ -63,6 +65,7 @@ describe("chat account selection", () => {
       () => {
         const section = createMemo(() =>
           renderChatModelAccountControl({
+            modelAuthStatusResult,
             owner: state,
             client: state.client,
             selection: state.chatAccountSelection,
@@ -90,13 +93,15 @@ describe("chat account selection", () => {
       retire: () => {
         current = false;
       },
-      open: () =>
-        container.querySelector<HTMLButtonElement>("[data-chat-account-group-toggle]")?.click(),
+      open: () => {
+        container.querySelector<HTMLButtonElement>(".chat-controls__account-trigger")?.click();
+        flush();
+      },
       select: (value: string) => {
         container
           .querySelector<HTMLButtonElement>(`[data-chat-account-option="${value}"]`)
           ?.click();
-        return container.querySelector("[data-chat-account-group-toggle]")?.textContent?.trim();
+        return container.querySelector(".chat-controls__account-trigger")?.textContent?.trim();
       },
     };
   }
@@ -138,12 +143,12 @@ describe("chat account selection", () => {
     expect(request).not.toHaveBeenCalled();
     expect(
       view.container
-        .querySelector("[data-chat-account-group-toggle]")
+        .querySelector(".chat-controls__account-trigger")
         ?.getAttribute("aria-expanded"),
     ).toBe("false");
     view.open();
     await vi.waitFor(() => expect(view.container.textContent).toContain("Work workspace"));
-    expect(view.container.querySelector("[data-chat-account-group-toggle]")?.textContent).toContain(
+    expect(view.container.querySelector(".chat-controls__account-trigger")?.textContent).toContain(
       "Personal workspace",
     );
     expect(view.container.textContent).not.toContain("Claude account");
@@ -151,7 +156,7 @@ describe("chat account selection", () => {
     expect(view.onSelect).toHaveBeenCalledWith(
       expect.objectContaining({ authProfileId: "openai:work", label: "Work workspace" }),
     );
-    expect(view.container.querySelector("[data-chat-account-group-toggle]")?.textContent).toContain(
+    expect(view.container.querySelector(".chat-controls__account-trigger")?.textContent).toContain(
       "Personal workspace",
     );
     expect(request.mock.calls.map(([method]) => method)).toEqual(["users.listModelAccounts"]);
@@ -163,7 +168,7 @@ describe("chat account selection", () => {
       source: "user",
     };
     flush();
-    expect(view.container.querySelector("[data-chat-account-group-toggle]")?.textContent).toContain(
+    expect(view.container.querySelector(".chat-controls__account-trigger")?.textContent).toContain(
       "Work workspace",
     );
     view.select("manage");
@@ -204,6 +209,82 @@ describe("chat account selection", () => {
     await vi.waitFor(() => expect(view.container.textContent).toContain("Work workspace"));
     expect(view.container.querySelector('[role="alert"]')).toBeNull();
     expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows account names and emails without provider usage", async () => {
+    const request = vi.fn().mockResolvedValue({
+      profileId: "owner",
+      links: [],
+      accounts: [
+        {
+          provider: "openai",
+          authProfileId: "openai:work",
+          label: "Work",
+          authType: "oauth",
+          selected: false,
+        },
+      ],
+    } satisfies UsersListModelAccountsResult);
+    const view = mountAccountControl(
+      request,
+      {
+        kind: "personal",
+        label: "Personal",
+        authProfileId: "openai:personal",
+        source: "user",
+      },
+      {
+        ts: 1,
+        providers: [
+          {
+            provider: "openai",
+            displayName: "OpenAI",
+            status: "ok",
+            profiles: [
+              {
+                profileId: "openai:personal",
+                type: "oauth",
+                status: "ok",
+                email: "personal@example.com",
+              },
+              { profileId: "openai:work", type: "oauth", status: "ok", email: "work@example.com" },
+            ],
+            usage: {
+              providerId: "openai",
+              accountEmail: "personal@example.com",
+              windows: [
+                { label: "5h", usedPercent: 38 },
+                { label: "Week", usedPercent: 91 },
+              ],
+            },
+          },
+        ],
+      },
+    );
+    expect(view.container.querySelector(".chat-controls__account-trigger")?.textContent).toContain(
+      "Personal",
+    );
+    view.open();
+    await vi.waitFor(() =>
+      expect(
+        view.container.querySelector('[data-chat-account-option="account:openai:work"]'),
+      ).not.toBeNull(),
+    );
+    expect(
+      view.container.querySelector('[data-chat-account-option="current"]')?.textContent,
+    ).toContain("personal@example.com");
+    expect(
+      view.container.querySelector('[data-chat-account-option="account:openai:work"]')?.textContent,
+    ).toContain("work@example.com");
+    expect(view.container.textContent).not.toContain("5h");
+    expect(view.container.textContent).not.toContain("Week");
+    expect(view.container.querySelector('[data-chat-account-option="automatic"]')).toBeNull();
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(
+      view.container
+        .querySelector(".chat-controls__account-trigger")
+        ?.getAttribute("aria-expanded"),
+    ).toBe("true");
   });
 
   it("discards a late inventory after leaving its initiating chat", async () => {

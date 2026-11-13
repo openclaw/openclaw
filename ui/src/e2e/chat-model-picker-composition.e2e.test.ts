@@ -49,10 +49,11 @@ suite.define(() => {
       const { picker, trigger, search } = modelPicker(page);
       await trigger.click();
       await polledCount(picker.locator("[data-chat-model-provider-toggle]")).toBe(0);
-      const account = picker.locator(".chat-controls__account-selection");
-      await polledText(account).toContain("previous@example.test");
-      const accountToggle = picker.locator("[data-chat-account-group-toggle]");
+      const accountToggle = picker.locator(".chat-controls__account-trigger");
+      await polledText(accountToggle).toContain(accountLabel);
       await accountToggle.click();
+      const account = picker.locator('[data-chat-account-option="current"]');
+      await polledText(account).toContain("previous@example.test");
       const oldAlternate = picker.locator(
         '[data-chat-account-option="account:openai:old-alternate"]',
       );
@@ -73,10 +74,12 @@ suite.define(() => {
         modelCatalogChanged: true,
       });
       await gateway.waitForRequest("models.list", { after: catalogReads });
+      if ((await accountToggle.getAttribute("aria-expanded")) !== "true") {
+        await accountToggle.click();
+      }
       await polledText(account).toContain("replacement@example.test");
       expect(await account.textContent()).not.toContain("previous@example.test");
       expect(await picker.getAttribute("open")).not.toBeNull();
-      await accountToggle.click();
       const newAlternate = picker.locator(
         '[data-chat-account-option="account:openai:new-alternate"]',
       );
