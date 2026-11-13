@@ -169,8 +169,8 @@ supported. See [Google's model documentation](https://ai.google.dev/gemini-api/d
 
 `google/gemini-4-hydrogen` has a 1,048,576-token context window shared by input
 and output, and up to 65,536 output tokens by default. Google accepts text,
-image, video, audio, and PDF input. Thinking levels are low, medium, high, and
-xhigh (Google's `XHIGH`). Like Argon, it supports implicit context caching only.
+image, video, audio, and PDF input. Thinking levels are low, medium, and high;
+xhigh currently sends high. Like Argon, it supports implicit context caching only.
 The catalog prices it at Google's paid-tier rates per million tokens: $1.50 input,
 $7.50 output (thinking tokens included), and $0.075 cached input. See
 [Google's model documentation](https://ai.google.dev/gemini-api/docs/models/gemini-4-hydrogen)
@@ -278,9 +278,9 @@ Gemini 4 Argon supports `low`, `medium`, and `high`. OpenClaw maps `minimal` and
 
 Only some Gemini models accept `xhigh`: Gemini 4 Hydrogen does, while Gemini 4
 Carbon rejects it. OpenClaw offers `xhigh` and sends `thinkingLevel: XHIGH` only
-for model rows with `thinkingLevelMap: { xhigh: "xhigh" }`, as the bundled
-Hydrogen row has. Add the same entry to a custom `models.providers.*.models` row
-(for example a Vertex row) to enable it there; without it, `xhigh` sends `HIGH`.
+for model rows with `thinkingLevelMap: { xhigh: "xhigh" }`. Add that entry to a
+custom `models.providers.*.models` row (for example a Vertex row) to enable it;
+without it, `xhigh` sends `HIGH`.
 
 Gemma 4 models (for example `gemma-4-26b-a4b-it`) support thinking mode. OpenClaw
 rewrites `thinkingBudget` to a supported Google `thinkingLevel` for Gemma 4.
