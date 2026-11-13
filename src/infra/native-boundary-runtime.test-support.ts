@@ -9,4 +9,8 @@ export const nativeBoundaryTestEntrypoints = {
   cliProfile: entrypoint("../cli/profile", "cli/profile.js"),
   handoffProcess: entrypoint("update-managed-service-handoff-process"),
   handoffDatabase: entrypoint("update-managed-service-handoff-database"),
+  fileLogTransport: entrypoint(
+    "../logging/logger-file-transport.process.test-support",
+    "logging/logger-file-transport.process.test-support.js",
+  ),
 } as const;

@@ -551,9 +551,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // startup completion must not reacquire custody during shutdown.
             await credentialStartup?.value
             async let hostedGatewayCleanup: Void = GatewayProcessManager.shared.shutdownAppHostedGateway()
+            async let composerDraftSave: Void = WebChatManager.shared.persistComposerDrafts()
             async let processCleanupResult: Void = Self.cleanUpProcesses()
             async let bridgeCleanupResult: Void = PeekabooBridgeHostCoordinator.shared.shutdown()
-            _ = await (hostedGatewayCleanup, processCleanupResult, bridgeCleanupResult)
+            _ = await (hostedGatewayCleanup, processCleanupResult, bridgeCleanupResult, composerDraftSave)
             self?.finishTerminationCleanup(for: sender)
         }
         self.terminationDeadlineTask = Task { @MainActor [weak self] in
@@ -577,21 +578,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func scheduleFirstRunOnboardingIfNeeded() async {
-        if await OnboardingController.shared.startFirstRunIfFresh() {
-            return
-        }
-        let connectionMode = AppStateStore.shared.connectionMode
-        let onboardingSeen = AppStateStore.shared.onboardingSeen
-        if connectionMode != .unconfigured, onboardingSeen {
-            OnboardingController.markComplete()
-            return
-        }
-        let seenVersion = AppDefaults.standard.integer(forKey: onboardingVersionKey)
-        let shouldShow = seenVersion < currentOnboardingVersion || !AppStateStore.shared.onboardingSeen
-        guard shouldShow else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-            guard !AppStateStore.shared.onboardingSeen else { return }
-            OnboardingController.shared.show()
-        }
+        OnboardingFirstRun.presentIfNeeded(
+            connectionMode: AppStateStore.shared.connectionMode,
+            onboardingSeen: AppStateStore.shared.onboardingSeen,
+            onboardingVersion: AppDefaults.standard.integer(forKey: onboardingVersionKey),
+            markComplete: { OnboardingController.markComplete() },
+            show: {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                    guard !AppStateStore.shared.onboardingSeen else { return }
+                    OnboardingController.shared.show()
+                }
+            })
     }
 }

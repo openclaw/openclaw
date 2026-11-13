@@ -1,17 +1,31 @@
 import path from "node:path";
-import { afterAll, afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  assert,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import { acknowledgeInternalToolResult } from "../../packages/agent-core/src/internal-hooks.js";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { captureRuntimeConfigAsyncReader, type OpenClawConfig } from "../config/config.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { bindScheduledExecutionContext } from "../cron/execution-context-registry.js";
+import type { ScheduledExecutionContext } from "../cron/scheduled-occurrence.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
+import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { addSession, markExited } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
+import { settleRequesterRun } from "./requester-run-settlement.js";
 import * as persistence from "./subagents/registry/subagent-registry-persistence.js";
 import { mutateSubagentRuns } from "./subagents/registry/subagent-registry-persistence.js";
 import {
@@ -440,22 +454,68 @@ describe("requester yield ownership", () => {
     }
   });
 
-  it("ends the automation execution and leaves child delivery scheduler-owned", async () => {
-    await seedRequiredChild();
-    const before = structuredClone(getSubagentRunByRunId("run-child"));
-    const onYield = vi.fn();
-    const tools = createTestOpenClawTools({
-      sessionKey: "agent:main:telegram:default:direct:1234",
-      runSessionKey: CRON_RUN_KEY,
-      sessionId: "cron-requester-session",
-      runId: "run-requester",
-      onYield,
-    });
+  it.each(["cron run session", "in-session automation"] as const)(
+    "ends a %s execution and releases its child to scheduler-owned delivery",
+    async (placement) => {
+      const runSessionKey = placement === "cron run session" ? CRON_RUN_KEY : "agent:main:main";
+      await seedRequiredChild(runSessionKey);
+      const before = structuredClone(getSubagentRunByRunId("run-child"));
+      const admission = prepareSystemAgentRunAdmission({}, "run-requester", "main", "cron-yield");
+      onTestFinished(() => admission.close());
+      await admission.admit("embedded");
+      if (placement === "in-session automation") {
+        const context = {
+          placement: "in-session",
+          principal: { kind: "operator" },
+          authority: { basis: "operator-source", owner: true },
+          resources: { boardSessionKey: runSessionKey },
+          toolPolicy: {},
+        } as unknown as ScheduledExecutionContext;
+        onTestFinished(bindScheduledExecutionContext(admission.operationalRunInstance, context));
+      }
+      const onYield = vi.fn();
+      const tools = createTestOpenClawTools({
+        sessionKey: "agent:main:telegram:default:direct:1234",
+        runSessionKey,
+        sessionId: "cron-requester-session",
+        runId: "run-requester",
+        operationalRunInstance: admission.operationalRunInstance,
+        onYield,
+      });
 
-    await expectYield(requireTool(tools, "sessions_yield"), "yielded");
-    expect(onYield).toHaveBeenCalledExactlyOnceWith("Turn yielded.", undefined, undefined);
-    expect(getSubagentRunByRunId("run-child")).toEqual(before);
-  });
+      await expectYield(requireTool(tools, "sessions_yield"), "yielded");
+      expect(onYield).toHaveBeenCalledExactlyOnceWith("Turn yielded.", undefined, undefined);
+      expect(getSubagentRunByRunId("run-child")).toEqual(before);
+
+      // The run still reports its yield; settlement must end it as an ordinary turn.
+      const result = {
+        acceptedSessionSpawns: [
+          {
+            runId: "run-child",
+            childSessionKey: "agent:main:subagent:child",
+            expectsCompletionMessage: true,
+          },
+        ],
+        meta: { durationMs: 1, yielded: true },
+      };
+      await settleRequesterRun(
+        {
+          sessionKey: runSessionKey,
+          agentId: "main",
+          runId: "run-requester",
+          preparedRunAdmission: admission,
+        },
+        result,
+        () => {},
+      );
+      expect(result).not.toHaveProperty("requesterContinuationSettled");
+      const released = getSubagentRunByRunId("run-child");
+      expect(released?.requesterTurnRunId).toBeUndefined();
+      expect(released?.requesterTurnYielded).toBeUndefined();
+      expect(released?.requesterSettleWake).toBeUndefined();
+      expect(released).toMatchObject({ delivery: { status: "pending" } });
+    },
+  );
 
   it.each([
     ["agent:main:subagent:watcher", undefined, undefined],

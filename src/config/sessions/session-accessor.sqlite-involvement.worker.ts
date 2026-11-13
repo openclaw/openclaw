@@ -37,7 +37,8 @@ export function updatePreparedSessionProfileInvolvement(
   );
 }
 
-function updateSessionProfileInvolvementInTransaction(
+/** Original transcript commits reuse this effect inside their existing transaction. */
+export function updateSessionProfileInvolvementInTransaction(
   database: OpenClawAgentDatabase,
   resolved: Pick<ResolvedSqliteScope, "agentId" | "sessionKey">,
   params: SessionInvolvementMutation & { assertCurrent?: () => void },

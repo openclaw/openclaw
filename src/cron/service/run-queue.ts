@@ -38,6 +38,7 @@ import {
 } from "./run-queue-requests.js";
 import {
   listCronRunQueueOwners,
+  notifyCronRunQueueTurn,
   registerCronRunQueue,
   releaseCronRunQueue,
   wakeCronRunQueues,
@@ -323,7 +324,9 @@ export async function drainCronRunQueue(state: CronServiceState): Promise<void> 
   if (
     state.stopped ||
     (![...launchState(state).contexts.values()].some((pending) => !pending.started) &&
-      !state.store?.jobs.some((job) => job.state.queuedAtMs !== undefined))
+      !state.store?.jobs.some(
+        (job) => job.state.queuedAtMs !== undefined || job.state.runSlotWaitReceiptId !== undefined,
+      ))
   ) {
     return;
   }
@@ -442,6 +445,7 @@ export async function launchCronRunQueueResult(
   context = captureOpenClawStateWorkerContext(),
   observedRevision = getCronJobsStoreRevision(state.deps.storeKey),
 ): Promise<void> {
+  notifyCronRunQueueTurn(state);
   if (result.launches.length || result.skipped.length) {
     const jobs = [...result.skipped, ...result.launches].flatMap(({ job }) => (job ? [job] : []));
     applyCronRuntimeRowsToState(state, jobs);
@@ -639,4 +643,15 @@ export async function waitForCronJobRun(state: CronServiceState, jobId: string):
   );
   await Promise.allSettled(runs);
   return runs.length > 0;
+}
+
+/** Receipts same-store owners will settle; recovery takes a stopped owner's runs. */
+export function listLiveCronRunReceiptIds(state: CronServiceState): string[] {
+  const receiptIds: string[] = [];
+  for (const owner of listCronRunQueueOwners(state)) {
+    if (!owner.stopped || owner.handedOver) {
+      receiptIds.push(...launchState(owner).contexts.keys());
+    }
+  }
+  return receiptIds;
 }

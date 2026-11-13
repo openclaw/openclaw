@@ -82,6 +82,7 @@ public actor GatewayNodeSession {
     private static let computerInvokeReceiptLimit = 256
     private var channel: GatewayChannelActor?
     private var activeURL: URL?
+    private var activeWorkerTransportURL: String?
     private var activeCredentials: GatewayNodeSessionCredentials?
     private var activeSessionIdentity: ObjectIdentifier?
     private var channelGeneration: UInt64 = 0
@@ -153,6 +154,7 @@ public actor GatewayNodeSession {
         credentials: GatewayNodeSessionCredentials,
         connectOptions: GatewayConnectOptions,
         sessionBox: WebSocketSessionBox?,
+        workerTransportURL: String? = nil,
         extraHeadersProvider: (@Sendable () async throws -> [String: String])? = nil,
         onConnected: @escaping @Sendable () async -> Void,
         onDisconnected: @escaping @Sendable (String) async -> Void,
@@ -167,6 +169,7 @@ public actor GatewayNodeSession {
         let ownerChanged = self.connectOptions?.deviceAuthGatewayID.map { Array($0.utf8) } !=
             connectOptions.deviceAuthGatewayID.map { Array($0.utf8) }
         let shouldReconnect = self.activeURL != url ||
+            self.activeWorkerTransportURL != workerTransportURL ||
             self.activeCredentials != credentials ||
             self.connectOptions != connectOptions || ownerChanged ||
             self.activeSessionIdentity != nextSessionIdentity ||
@@ -217,6 +220,7 @@ public actor GatewayNodeSession {
                 extraHeadersProvider: extraHeadersProvider)
             self.channel = channel
             self.activeURL = url
+            self.activeWorkerTransportURL = workerTransportURL
             self.activeCredentials = credentials
             self.activeSessionIdentity = nextSessionIdentity
             self.activeTLSRouteMetadataProvider = nextTLSRouteMetadataProvider
@@ -296,6 +300,7 @@ public actor GatewayNodeSession {
 
     private func clearActiveRoute() {
         self.activeURL = nil
+        self.activeWorkerTransportURL = nil
         self.activeCredentials = nil
         self.activeSessionIdentity = nil
         self.activeTLSRouteMetadataProvider = nil
@@ -567,16 +572,20 @@ public actor GatewayNodeSession {
             socketGeneration: socketGeneration)
     }
 
-    /// Private app-worker context from the authenticated socket, never configured fallback routes.
+    /// Private app-worker context from the authenticated socket. Native transports
+    /// supply their bounded worker bridge rather than expose the logical public URL.
+    /// That bridge carries worker ingress/HTTP transfers, not ticketed portal attachments.
     public func workerConnectionData(ifCurrentRoute route: GatewayNodeSessionRoute) async -> Data? {
         guard self.isCurrentRoute(route), let channel, let url = self.activeURL,
               let hello = self.workerHello else { return nil }
         let edge = await channel.currentWorkerEdgeCredentials()
         guard self.isCurrentRoute(route), self.channel === channel else { return nil }
         var connection: [String: Any] = [
-            "url": url.absoluteString,
+            "url": self.activeWorkerTransportURL ?? url.absoluteString,
             "protocol": hello.protocolVersion,
-            "capabilities": hello.capabilities.sorted(),
+            "capabilities": hello.capabilities.filter {
+                self.activeWorkerTransportURL == nil || $0 != "node-worker-portal-stream-v1"
+            }.sorted(),
         ]
         if let fingerprint = self.activeTLSRouteMetadataProvider?.effectiveTLSFingerprintSHA256 {
             connection["tlsFingerprint"] = fingerprint
