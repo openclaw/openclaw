@@ -66,22 +66,6 @@ export function createMattermostDraftStream(params: {
   const sealedAssistantTexts: Array<{ text: string; requiresBlockBoundary: boolean }> = [];
   const publishedAssistantParts = new Map<string, MattermostDraftPublishedPart>();
 
-  // Generations publish in order, so the current preview is this draft's newest post: anything
-  // after it came from someone else (message tool, a person, another bot). Without collapsed
-  // threads every reply renders in the channel stream, so root-level previews check the whole
-  // channel. Accepted gap: 200+ newer channel posts outside a threaded preview's thread.
-  const findPostAfter = async (postId: string): Promise<string | undefined> => {
-    const { messages } = await fetchMattermostChannelPosts(params.client, params.channelId, {
-      after: postId,
-      limit: 200,
-      skipFetchThreads: true,
-    });
-    return messages.find(
-      (post) =>
-        !post.type?.startsWith("system_") && (!params.rootId || post.root_id === params.rootId),
-    )?.id;
-  };
-
   const sendOrEditStreamMessage = async (text: string): Promise<boolean> => {
     const target = currentGeneration;
     const isAssistantText = text === target.latestAssistantText;
@@ -111,19 +95,7 @@ export function createMattermostDraftStream(params: {
       target.lastSentAssistantSource !== undefined &&
       text.startsWith(target.lastSentAssistantSource);
     if (target.postId && isAssistantText && !extendsSentAnswer) {
-      if (!target.newerPostId) {
-        target.newerPostId = await findPostAfter(target.postId).catch((err: unknown) => {
-          params.warn?.(
-            `mattermost preview order check failed; streaming the answer in place (${String(err)})`,
-          );
-          return undefined;
-        });
-        if (target.newerPostId) {
-          params.log?.(
-            `mattermost preview ${target.postId} is above newer post ${target.newerPostId}; keeping answer text out of it`,
-          );
-        }
-      }
+      target.newerPostId ??= await findPostAfter(target.postId).catch(() => undefined);
       if (target.newerPostId) {
         return true;
       }
@@ -372,6 +344,22 @@ export function createMattermostDraftStream(params: {
     return remaining
       ? { kind: "remaining" as const, text: remaining, publishedParts }
       : { kind: "already-delivered" as const, publishedParts };
+  };
+
+  // Generations publish in order, so the current preview is this draft's newest post: anything
+  // after it came from someone else (message tool, a person, another bot). Without collapsed
+  // threads every reply renders in the channel stream, so root-level previews check the whole
+  // channel. Accepted gap: 200+ newer channel posts outside a threaded preview's thread.
+  const findPostAfter = async (postId: string): Promise<string | undefined> => {
+    const { messages } = await fetchMattermostChannelPosts(params.client, params.channelId, {
+      after: postId,
+      limit: 200,
+      skipFetchThreads: true,
+    });
+    return messages.find(
+      (post) =>
+        !post.type?.startsWith("system_") && (!params.rootId || post.root_id === params.rootId),
+    )?.id;
   };
 
   params.log?.(
