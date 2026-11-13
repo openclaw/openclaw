@@ -175,6 +175,7 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
   return {
     ...bootstrapBudget,
     bootstrapMode,
+    bootstrapCompleted: bootstrapRouting.bootstrapCompleted,
     contextFiles,
     bootstrapInjectionStats,
     shouldRecordCompletedBootstrapTurn,
