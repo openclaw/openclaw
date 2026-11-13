@@ -16,6 +16,7 @@ import { cronJobUsesToolRuntime } from "../../cron/tools-allow.js";
 import type { CronDeliveryPreview, CronJobCreate } from "../../cron/types.js";
 import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { normalizeAccountId } from "../../routing/account-id.js";
 import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import {
   applyCronCreateCallerScopeDefault,
@@ -72,6 +73,45 @@ export const cronAddHandler: GatewayRequestHandler = async ({
   // SAFETY: cron.add validates this shape; createJob normalizes its nullable selectors.
   const jobCreate = applyCronCreateCallerScopeDefault(candidate as CronJobCreate, callerScope);
   const cfg = context.getRuntimeConfig();
+  if (callerScope?.personalReminder) {
+    // The run-bound grant preserves the original route even for a child runtime.
+    const origin = callerScope.personalReminderOrigin;
+    const delivery = jobCreate.delivery;
+    const sameThread = String(delivery?.threadId ?? "") === String(origin?.threadId ?? "");
+    if (
+      !callerScope.creatorProfileId ||
+      !callerScope.sessionKey ||
+      jobCreate.schedule.kind !== "at" ||
+      jobCreate.deleteAfterRun !== true ||
+      jobCreate.sessionTarget !== "current" ||
+      jobCreate.sessionKey !== callerScope.sessionKey ||
+      jobCreate.payload.kind !== "agentTurn" ||
+      jobCreate.payload.toolsAllowIsDefault === true ||
+      jobCreate.trigger !== undefined ||
+      (jobCreate.failureAlert !== undefined && jobCreate.failureAlert !== false) ||
+      !Array.isArray(jobCreate.payload.toolsAllow) ||
+      jobCreate.payload.toolsAllow.length !== 0 ||
+      !origin?.to ||
+      delivery?.mode !== "announce" ||
+      delivery.channel !== "telegram" ||
+      delivery.to !== origin.to ||
+      normalizeAccountId(delivery.accountId) !== callerScope.accountId ||
+      !sameThread ||
+      delivery.target ||
+      delivery.completionDestination ||
+      delivery.failureDestination ||
+      jobCreate.declarationKey
+    ) {
+      respondInvalidCronParams(
+        respond,
+        "cron.add",
+        "Personal reminders require a one-shot tool-free job in the original Telegram conversation.",
+      );
+      return;
+    }
+    // Do not inherit a gateway-wide failure destination for a personal reminder.
+    jobCreate.failureAlert = false;
+  }
   const creator = await prepareCronCreatorSession({
     context,
     client,

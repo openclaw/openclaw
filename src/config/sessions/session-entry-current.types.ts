@@ -40,6 +40,7 @@ export type SessionEntryCurrentFacts = {
   completionOwnerSessionKey?: unknown;
   subagentRole?: unknown;
   subagentControlScope?: unknown;
+  personalReminderSurface?: unknown;
   inheritedToolPolicyVersion?: unknown;
   inheritedToolPolicySource?: unknown;
   inheritedToolAllow?: unknown;

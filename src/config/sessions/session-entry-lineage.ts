@@ -24,6 +24,7 @@ type SpawnAuthorityReceipt = Pick<
 
 type InheritedSessionToolPolicy = Pick<
   SessionEntry,
+  | "personalReminderSurface"
   | "inheritedToolPolicyVersion"
   | "inheritedToolPolicySource"
   | "inheritedToolAllow"
@@ -36,6 +37,7 @@ export function preserveSessionInheritedToolPolicy(
   entry: InheritedSessionToolPolicy | undefined,
 ): InheritedSessionToolPolicy {
   return {
+    ...(entry?.personalReminderSurface ? { personalReminderSurface: true } : {}),
     ...(entry?.delegatedToolPolicy
       ? { delegatedToolPolicy: structuredClone(entry.delegatedToolPolicy) }
       : {}),

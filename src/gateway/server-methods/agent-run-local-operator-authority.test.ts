@@ -1,10 +1,15 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, expect, it } from "vitest";
-import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import {
+  createAdmittedRunOperatorAuthority,
+  createOperationalRunInstanceRef,
+} from "../../agents/admitted-run-context.js";
+import {
+  capturePersonalReminderDelegation,
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
 } from "../../agents/cron-creator-authority-context.js";
+import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import {
   claimAgentRunDelegatedAuthority,
   resetAgentRunRegistryForTest,
@@ -64,6 +69,97 @@ function admitAgent({
     request: { message: "create an automation", idempotencyKey: "run-local-operator", ...request },
   });
 }
+
+it("keeps the original human on a native child after its parent settles", async () => {
+  const parentRunId = "personal-parent";
+  const sessionKey = "agent:main:telegram:group:room:topic:1";
+  const origin = {
+    profileId: "human-a",
+    agentId: "main",
+    sessionKey,
+    sessionId: "parent-session",
+    accountId: "default",
+    to: "room",
+    threadId: "1",
+  };
+  const cancellation = new AbortController();
+  let holds = 0;
+  let humanCurrent = true;
+  const operator = createAdmittedRunOperatorAuthority({
+    profileId: "human-a",
+    scopes: ["operator.write"],
+    assertCurrent: () => {
+      if (!humanCurrent) {
+        throw new Error("human revoked");
+      }
+    },
+    retain: () => {
+      holds++;
+      return () => {
+        holds--;
+      };
+    },
+  });
+  const parentInstance = createOperationalRunInstanceRef(parentRunId);
+  const parentAuthority = claimAgentRunDelegatedAuthority(parentInstance);
+  const scope = createCronCreatorAuthorityCapability(
+    parentRunId,
+    { kind: "external", channel: "telegram" },
+    undefined,
+    () => true,
+    undefined,
+    undefined,
+    true,
+    origin,
+  )!;
+  const child = await runWithCronCreatorAuthorityCapability(
+    scope,
+    () =>
+      withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey,
+          operationalRunInstance: parentInstance,
+          approvalAuthority: parentAuthority,
+          requesterOrigin: { sessionKey, delegatedCreatorProfileId: "human-a" },
+        },
+        () => {
+          const personalReminder = capturePersonalReminderDelegation(operator);
+          expect(personalReminder).toBeDefined();
+          return admitAgent({
+            runId: "personal-child",
+            resolvedSessionKey: "agent:main:subagent:child",
+            spawnedBy: sessionKey,
+            client: createClient(
+              {
+                syntheticClient: true,
+                agentRunTracking: "native_subagent",
+                agentToolCaller: {
+                  agentId: "main",
+                  sessionKey,
+                  requesterOrigin: { sessionKey, delegatedCreatorProfileId: "human-a" },
+                  personalReminder,
+                },
+              },
+              ["operator.write"],
+            ),
+            request: { lane: "subagent" },
+          });
+        },
+      ),
+    cancellation.signal,
+  );
+  expect(child?.personalReminder).toEqual(origin);
+  expect(child?.isCurrent?.()).toBe(true);
+  expect(holds).toBe(1);
+  humanCurrent = false;
+  expect(child?.isCurrent?.()).toBe(false);
+  humanCurrent = true;
+  cancellation.abort();
+  expect(child?.isCurrent?.()).toBe(false);
+  child?.release?.();
+  expect(holds).toBe(0);
+});
 
 it.each([
   ["missing Gateway client", { client: null }],

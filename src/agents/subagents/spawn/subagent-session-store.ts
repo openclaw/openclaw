@@ -37,6 +37,7 @@ type PersistedSessionCapabilityEntry = Pick<
   | "subagentControlScope"
   | "spawnedBy"
   | "completionOwnerSessionKey"
+  | "personalReminderSurface"
   | "inheritedToolPolicyVersion"
   | "inheritedToolPolicySource"
   | "inheritedToolAllow"
@@ -183,6 +184,7 @@ const capabilityFields = [
   "subagentControlScope",
   "spawnedBy",
   "completionOwnerSessionKey",
+  "personalReminderSurface",
   "inheritedToolPolicyVersion",
   "inheritedToolPolicySource",
   "inheritedToolAllow",

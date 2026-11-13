@@ -1,11 +1,14 @@
 import {
   createCronCreatorAuthorityCapability,
+  isPersonalReminderDelegation,
   type CronCreatorAuthorityCapability,
 } from "../../agents/cron-creator-authority-context.js";
+import { requesterCreatorProfileId } from "../../agents/requester-origin.js";
 import {
   consumeRequesterCronAuthorityAdmission,
   revokeRequesterCronAuthority,
 } from "../../agents/subagents/requester-cron-authority.js";
+import type { CronScheduledToolCallerOrigin } from "../../cron/scheduled-tool-policy.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import { revokeCronCreatorAuthorityRunScope } from "../cron-creator-authority-grant.js";
@@ -15,11 +18,12 @@ import type { GatewayClient } from "./shared-types.js";
 
 export type GatewayCronCreatorAuthorityAdmission = Readonly<{
   runId: string;
-  callerOrigin: { kind: "local" } | { kind: "unknown" };
+  callerOrigin: CronScheduledToolCallerOrigin;
   managementEntitlement?: CronCreatorAuthorityCapability["managementEntitlement"];
   requesterOwner?: CronCreatorAuthorityCapability["requesterOwner"];
   /** Fresh remote user input may create under its existing caller restrictions. */
   callerScopedCreation?: true;
+  personalReminder?: CronCreatorAuthorityCapability["personalReminder"];
   isCurrent?: () => boolean;
   bindRunScope?: (scope: CronCreatorAuthorityCapability) => void;
   /** Exact requester scope already bound before Gateway acceptance. */
@@ -116,6 +120,34 @@ export function resolveGatewayCronCreatorAuthorityAdmission(params: {
   isOneShotModelRun: boolean;
 }): GatewayCronCreatorAuthorityAdmission | undefined {
   const request = params.request;
+  const caller = params.client?.internal?.agentToolCaller;
+  const delegated = caller?.personalReminder;
+  if (
+    params.client?.internal?.syntheticClient === true &&
+    params.client.internal.agentRunTracking === "native_subagent" &&
+    request.lane === "subagent" &&
+    !params.hasRestoredCronContinuation &&
+    !params.isOneShotModelRun &&
+    isPersonalReminderDelegation(delegated) &&
+    caller?.requesterOrigin?.sessionKey === delegated.origin.sessionKey &&
+    requesterCreatorProfileId(caller.requesterOrigin) === delegated.origin.profileId &&
+    delegated.isCurrent()
+  ) {
+    // Admission transfers an independently retained human source; the parent
+    // run's ordinary settlement must not retire the accepted child's authority.
+    const childSource = delegated.claim();
+    if (!childSource) {
+      return undefined;
+    }
+    return Object.freeze({
+      runId: params.runId,
+      callerOrigin: { kind: "external" as const, channel: "telegram" },
+      callerScopedCreation: true as const,
+      personalReminder: delegated.origin,
+      isCurrent: childSource.isCurrent,
+      release: childSource.release,
+    });
+  }
   if (
     params.client?.internal?.syntheticClient === true &&
     !params.hasRestoredCronContinuation &&
@@ -186,6 +218,7 @@ export function prepareGatewayCronCreatorAuthorityAdmission(
       undefined,
       authority.requesterOwner,
       authority.callerScopedCreation,
+      authority.personalReminder,
     );
     if (!boundRunScope) {
       throw new Error("Requester continuation run scope could not be created");

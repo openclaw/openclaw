@@ -42,6 +42,7 @@ import type { SandboxToolPolicy } from "./sandbox/types.js";
 import {
   isVisibleSpawnedSession,
   resolveSubagentCapabilityStore,
+  resolveSessionCapabilityEntry,
   resolveStoredSubagentInheritedToolAllowlist,
   resolveStoredSubagentInheritedToolDenylist,
   resolveStoredSubagentCapabilities,
@@ -106,8 +107,14 @@ export function resolveSubagentToolPolicyForSession(
   const visibleSpawn = isVisibleSpawnedSession(sessionKey, { cfg, store });
   const leaf =
     !visibleSpawn && resolveStoredSubagentCapabilities(sessionKey, { cfg, store }).role === "leaf";
+  const personalReminderSurface =
+    resolveSessionCapabilityEntry({ sessionKey, cfg, store })?.personalReminderSurface === true;
   const deny = [
-    ...(visibleSpawn ? [] : SUBAGENT_TOOL_DENY_ALWAYS),
+    ...(visibleSpawn
+      ? []
+      : SUBAGENT_TOOL_DENY_ALWAYS.filter(
+          (name) => name !== AUTOMATIONS_TOOL_NAME || !personalReminderSurface,
+        )),
     ...(leaf ? SUBAGENT_TOOL_DENY_LEAF : []),
     ...(configured?.deny ?? []),
   ];

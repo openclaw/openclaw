@@ -412,6 +412,8 @@ type SessionEntryCore = SessionEntryProvenance &
     subagentControlScope?: "children" | "none";
     /** Spawn-time blind child: its rendered prompt omits its model, identity and workspace path. */
     blindPrompt?: true;
+    /** Host-created child surface fact; never conveys live reminder authority. */
+    personalReminderSurface?: true;
     /** Version of the requester tool-policy snapshot captured when this child was spawned. */
     inheritedToolPolicyVersion?: 1;
     /** Sender/channel restriction provenance retained with the inherited tool snapshot. */

@@ -26,6 +26,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
 import {
   getCronManagementAuthority,
+  resolveCronCreatorAuthorityGrantProvenance,
   withCronManagementGrant,
 } from "../cron-creator-authority-grant.js";
 import { retainCronControlSource } from "../cron-operator-source.js";
@@ -612,6 +613,22 @@ for (const [method, handler] of Object.entries(cronHandlers)) {
     let succeeded = false;
     const run = async () => {
       assertActiveAgentRuntimeAuthority(args.client, args.context);
+      const requesterGrant = identity.cronCreatorAuthorityGrant;
+      const provenance =
+        requesterGrant &&
+        resolveCronCreatorAuthorityGrantProvenance(
+          requesterGrant,
+          identity.operationalRunInstance.runId,
+        );
+      if (requesterGrant && !provenance) {
+        throw new TypeError("Automation requester authority is no longer active.");
+      }
+      if (
+        provenance?.personalReminder &&
+        !["cron.list", "cron.get", "cron.add", "cron.remove"].includes(method)
+      ) {
+        throw new TypeError("Personal reminders allow only list, get, add, and remove.");
+      }
       await handler({
         ...args,
         respond: (...response) => {
@@ -624,6 +641,15 @@ for (const [method, handler] of Object.entries(cronHandlers)) {
             method === "cron.history"
           ) {
             assertActiveAgentRuntimeAuthority(args.client, args.context);
+            if (
+              requesterGrant &&
+              !resolveCronCreatorAuthorityGrantProvenance(
+                requesterGrant,
+                identity.operationalRunInstance.runId,
+              )
+            ) {
+              throw new TypeError("Automation requester authority is no longer active.");
+            }
             getCronManagementAuthority(identity)?.();
           }
           succeeded = response[0];

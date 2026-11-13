@@ -18,6 +18,7 @@ import type { WorkerTurnExecutionIdentity } from "../../../gateway/worker-enviro
 import { getActiveAgentRunDelegatedAuthority } from "../../../infra/agent-run-registry.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { monotonicNow } from "../../../shared/monotonic-time.js";
+import { capturePersonalReminderDelegation } from "../../cron-creator-authority-context.js";
 import { captureRequesterOrigin, requesterCreatorProfileId } from "../../requester-origin.js";
 import {
   getGatewayToolCallerIdentity,
@@ -67,6 +68,7 @@ export function captureSubagentSpawnGatewayContext() {
           agentId: gatewayCaller.agentId,
           sessionKey: gatewayCaller.sessionKey,
           requesterOrigin,
+          personalReminder: capturePersonalReminderDelegation(operatorAuthority),
         })
       : undefined;
   return {
@@ -173,6 +175,7 @@ async function dispatchSubagentGateway(
               agentId: workerIdentity.agentId,
               sessionKey: workerIdentity.sessionKey,
               requesterOrigin: workerIdentity.requesterOrigin,
+              personalReminder: options?.requester?.personalReminder,
             }
           : undefined
         : options?.requester;

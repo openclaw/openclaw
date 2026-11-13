@@ -231,6 +231,7 @@ export function dispatchAgentRunFromGateway(params: {
         undefined,
         params.cronCreatorAuthority.requesterOwner,
         params.cronCreatorAuthority.callerScopedCreation,
+        params.cronCreatorAuthority.personalReminder,
       ))
     : undefined;
   if (cronCreatorAuthorityCapability && !params.cronCreatorAuthority?.boundRunScope) {

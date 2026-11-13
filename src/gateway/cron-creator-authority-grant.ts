@@ -53,6 +53,18 @@ export type CronManagementEntitlement =
   | Readonly<{ source: "control-ui-admin" }>
   | Readonly<{ source: "channel-owner"; isCurrent: () => boolean }>;
 
+/** Original human conversation, captured by the host before any child dispatch. */
+export type PersonalReminderOrigin = Readonly<{
+  profileId: string;
+  agentId: string;
+  sessionKey: string;
+  sessionId: string;
+  lifecycleRevision?: string;
+  accountId: string;
+  to: string;
+  threadId?: string | number;
+}>;
+
 export type CronCreatorAuthorityRunScope = {
   readonly runId: string;
   readonly callerOrigin: CronScheduledToolCallerOrigin;
@@ -68,6 +80,8 @@ export type CronCreatorAuthorityRunScope = {
   }>;
   /** Fresh admission only; never transferred with a management continuation. */
   readonly callerScopedCreation?: true;
+  /** Narrow channel reminder authority; never an automation management grant. */
+  readonly personalReminder?: PersonalReminderOrigin;
   /** @deprecated Read managementEntitlement. Harness source compatibility lasts through 2026-10-12. */
   readonly controlUiAdmin?: true;
   readonly isCurrent?: () => boolean;
@@ -110,6 +124,7 @@ export function createCronCreatorAuthorityRunScope(
   channelRequester?: CronAuthenticatedChannelRequester,
   requesterOwner?: CronCreatorAuthorityRunScope["requesterOwner"],
   callerScopedCreation?: true,
+  personalReminder?: PersonalReminderOrigin,
 ): CronCreatorAuthorityRunScope {
   const abortController = new AbortController();
   const requester = normalizeCronAuthenticatedChannelRequester(channelRequester);
@@ -121,6 +136,7 @@ export function createCronCreatorAuthorityRunScope(
     ...(managementEntitlement ? { managementEntitlement } : {}),
     ...(requesterOwner ? { requesterOwner } : {}),
     ...(callerScopedCreation ? { callerScopedCreation } : {}),
+    ...(personalReminder ? { personalReminder: Object.freeze({ ...personalReminder }) } : {}),
     get controlUiAdmin(): true | undefined {
       return managementEntitlement?.source === "control-ui-admin" ? true : undefined;
     },
@@ -170,6 +186,9 @@ export function mintCronCreatorAuthorityGrant(
       !scope.managementEntitlement.isCurrent())
   ) {
     throw management ? expiredManagementError() : expiredAuthorityError();
+  }
+  if (scope.personalReminder && creatorProfileId !== scope.personalReminder.profileId) {
+    throw new TypeError("Personal reminder requester does not match the admitted human.");
   }
   // Remote admission can prove the requester, never materialize fresh runtime authority.
   if (
@@ -232,6 +251,7 @@ export function resolveCronCreatorAuthorityGrantProvenance(
   | {
       capturesRuntimeAuthority: boolean;
       callerScopedCreation?: true;
+      personalReminder?: PersonalReminderOrigin;
       /** Host-captured causal human; never permission or model input. */
       creatorProfileId?: string;
       callerOrigin?: CronScheduledToolCallerOrigin;
@@ -260,6 +280,7 @@ export function resolveCronCreatorAuthorityGrantProvenance(
   return {
     capturesRuntimeAuthority: entry.capturesRuntimeAuthority,
     ...(scope.callerScopedCreation ? { callerScopedCreation: true as const } : {}),
+    ...(scope.personalReminder ? { personalReminder: scope.personalReminder } : {}),
     ...(entry.creatorProfileId ? { creatorProfileId: entry.creatorProfileId } : {}),
     ...(scope.callerOrigin.kind === "local" ? { callerOrigin: { kind: "local" as const } } : {}),
     ...(channelRequester ? { channelRequester: { ...channelRequester } } : {}),

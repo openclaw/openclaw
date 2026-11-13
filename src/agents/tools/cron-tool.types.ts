@@ -48,6 +48,8 @@ export type CronCreatorToolAuthoritySnapshot = Omit<
 };
 
 export type CronToolOptions = {
+  /** Host-admitted restricted reminder surface. */
+  personalReminder?: import("../../gateway/cron-creator-authority-grant.js").PersonalReminderOrigin;
   agentSessionKey?: string;
   agentId?: string;
   /** Authenticated source account; authority must not be inferred from delivery. */

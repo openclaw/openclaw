@@ -70,9 +70,28 @@ export async function prepareCronCreatorSession(
       )
     : undefined;
   const creatorSession = creator?.entry;
+  const reminderOrigin = callerScope?.personalReminderOrigin;
+  if (
+    callerScope?.personalReminder &&
+    (!creatorSession ||
+      !reminderOrigin ||
+      creatorSession.sessionId !== reminderOrigin.sessionId ||
+      creatorSession.lifecycleRevision !== reminderOrigin.lifecycleRevision)
+  ) {
+    throw new Error("Personal reminder source session has changed.");
+  }
   // Agent-tool clients own one exact signed session. Read that session's creator instead of
   // reclassifying spawn context as the automation creator; params never carry this provenance.
-  const actor = operatorActor ?? creatorSession?.createdActor;
+  // The session creator can be a different person in a shared channel. A scoped
+  // reminder records the host-authenticated requester, never the session creator.
+  const actor = callerScope?.personalReminder
+    ? callerScope.creatorProfileId
+      ? { type: "human" as const, source: "profile" as const, id: callerScope.creatorProfileId }
+      : undefined
+    : (operatorActor ?? creatorSession?.createdActor);
+  if (callerScope?.personalReminder && !actor) {
+    throw new TypeError("A verified requester profile is required for personal reminders.");
+  }
   const actorId = normalizeOptionalString(actor?.id);
   const createdActor = actor ? { ...actor, ...(actorId ? { id: actorId } : {}) } : undefined;
   const selectionIdentity = JSON.stringify(creatorSession?.skillLibrarySelections);

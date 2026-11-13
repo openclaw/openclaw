@@ -16,6 +16,7 @@ import { callGatewayTool, shouldUseInProcessGatewayTool } from "./gateway.js";
 export function createCronToolGatewayCaller({
   managementAuthority,
   requesterAuthority,
+  personalReminder,
   operationSignal,
   readStreamExecPolicy,
   onEffectsStart,
@@ -23,6 +24,7 @@ export function createCronToolGatewayCaller({
 }: {
   managementAuthority: ReturnType<typeof bindCronManagementGrant>;
   requesterAuthority: ReturnType<typeof bindCronRequesterGrant>;
+  personalReminder?: boolean;
   operationSignal?: AbortSignal;
   readStreamExecPolicy: () => CronStreamExecPolicy | undefined;
   onEffectsStart?: () => void;
@@ -39,9 +41,14 @@ export function createCronToolGatewayCaller({
     const requesterGrant =
       !grant &&
       !identity?.cronCreatorAuthorityGrant &&
-      (request[0] === "cron.add" || request[0] === "cron.update")
+      (request[0] === "cron.add" ||
+        request[0] === "cron.update" ||
+        (personalReminder && ["cron.list", "cron.get", "cron.remove"].includes(request[0])))
         ? (requesterAuthority ?? identity?.mintCronRequesterGrant)?.(operationSignal)
         : undefined;
+    if (personalReminder && !requesterGrant && !identity?.cronCreatorAuthorityGrant) {
+      throw new Error("Personal reminder requester authority is no longer active.");
+    }
     if ((grant || requesterGrant) && !identity) {
       throw new Error(
         "Automation management requires the active configured channel owner or Control UI administrator turn.",

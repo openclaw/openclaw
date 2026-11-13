@@ -63,6 +63,10 @@ import {
   loadSessionUpdatesRuntime,
 } from "./get-reply-run-helpers.js";
 import { runPreparedReply } from "./get-reply-run.js";
+import {
+  createOwnerIngress,
+  registerQueuedPersonalReminderCase,
+} from "./get-reply-run.queued-personal-reminder.test-support.js";
 import { registerPendingRequesterAuthorityCases } from "./get-reply-run.requester-authority.test-support.js";
 import { registerSteeringIntentProducerCases } from "./get-reply-run.steering-intent.test-support.js";
 import { registerSystemEventAdmissionCases } from "./get-reply-run.system-event-admission.test-support.js";
@@ -402,32 +406,6 @@ function createConfig(overrides: Partial<ReplyRunParams["cfg"]> = {}): ReplyRunP
   return { session: {}, channels: {}, agents: { defaults: {} }, ...overrides };
 }
 
-function createOwnerIngress(kind: string, channel: string, body: string, runId: string) {
-  const params = ownerParams();
-  params.command.senderId = "owner-1";
-  params.command.senderIsOwner = kind !== "non-owner" && kind !== "discord-promoted-before-drain";
-  return {
-    ...params,
-    ...turn(body, {
-      ...createProviderSurface(channel),
-      ChatType: "group",
-      SenderId:
-        kind === "owner-alias" || kind === "discord-owner-alias" ? "transport-alias" : "owner-1",
-      InboundEventKind: kind === "room-event" ? "room_event" : undefined,
-      InputProvenance:
-        kind === "internal" || kind === "inter-session"
-          ? { kind: "inter_session" as const, sourceTool: "sessions_send" }
-          : undefined,
-    }),
-    conversation: undefined,
-    sessionEntry:
-      kind === "spawned"
-        ? { sessionId: "spawned-session", updatedAt: 1, spawnedBy: "agent:parent:main" }
-        : undefined,
-    opts: { runId, suppressNextUserMessagePersistence: kind === "replay" },
-  };
-}
-
 async function useActualSystemEventDrain() {
   const actual = await vi.importActual<typeof import("./session-system-events.js")>(
     "./session-system-events.js",
@@ -451,6 +429,8 @@ function expectTurnText(call: ReturnType<typeof requireRunReplyAgentCall>, text:
 }
 
 describe("runPreparedReply media-only handling", () => {
+  registerQueuedPersonalReminderCase({ runPrepared });
+
   describe.each(["followup", "collect"] as const)("queued owner authority: %s", (mode) => {
     it.each([
       "owner",
