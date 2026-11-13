@@ -2,6 +2,7 @@ import { filterStringEntries } from "@openclaw/normalization-core/string-normali
 import { isSessionBoundaryCommandText } from "../../auto-reply/command-detection.js";
 import type { HistoryEntry } from "../../auto-reply/reply/history.types.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
+import type { SessionRecentConversationTurn } from "../../config/sessions/transcript-recent-text.js";
 import {
   readRecentUserAssistantTextForSession,
   readRecentUserAssistantTurnsForSession,
@@ -52,6 +53,42 @@ function mergeableChatWindowEntries(ctx: FinalizedMsgContext) {
   );
 }
 
+const RECONCILIATION_READ_ATTEMPTS = 3;
+
+/**
+ * A candidate budget assumes two rows per answer, but internal runtime inputs and
+ * their NO_REPLY pairs sit between candidate pairs and spend that same budget, so a
+ * read that hits its limit can stop before an older candidate and leave it eligible.
+ * Extend by exactly the rows that cannot answer a candidate and read again, bounded
+ * so a candidate that never entered this session cannot widen the window without end.
+ */
+async function readRecentTurnsCoveringCandidates(
+  read: (limit: number) => Promise<SessionRecentConversationTurn[]>,
+  candidateIds: Set<string>,
+): Promise<SessionRecentConversationTurn[]> {
+  let limit = candidateIds.size * 2;
+  for (let attempt = 1; ; attempt++) {
+    const turns = await read(limit);
+    // A read under its limit reached the start of the transcript.
+    if (turns.length < limit || attempt >= RECONCILIATION_READ_ATTEMPTS) {
+      return turns;
+    }
+    const seen = new Set(
+      turns.flatMap((turn) => (turn.role === "user" && turn.messageId ? [turn.messageId] : [])),
+    );
+    if ([...candidateIds].every((id) => seen.has(id))) {
+      return turns;
+    }
+    const unanswerable = turns.filter(
+      (turn) => !turn.messageId || !candidateIds.has(turn.messageId),
+    ).length;
+    if (unanswerable === 0) {
+      return turns;
+    }
+    limit += unanswerable;
+  }
+}
+
 /**
  * A platform-selected recent window keeps its own rows, except rows the model
  * already answered as user turns of this session: the conversation (and a
@@ -66,21 +103,23 @@ async function omitAnsweredRecentHistory(params: {
   storePath: string;
 }): Promise<void> {
   const history = params.ctx.InboundHistory ?? [];
-  let candidates = 0;
-  for (const entry of history) {
-    candidates += entry.messageId ? 1 : 0;
-  }
-  if (candidates === 0) {
+  const candidateIds = new Set(
+    history.flatMap((entry) => (entry.messageId ? [entry.messageId] : [])),
+  );
+  if (candidateIds.size === 0) {
     return;
   }
-  // Roughly one user row and one reply per answered turn; a shorter read only keeps rows.
-  const turns = await readRecentUserAssistantTurnsForSession({
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    storePath: params.storePath,
-    limit: candidates * 2,
-    includeMessageToolSourceReplies: true,
-  });
+  const turns = await readRecentTurnsCoveringCandidates(
+    (limit) =>
+      readRecentUserAssistantTurnsForSession({
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+        limit,
+        includeMessageToolSourceReplies: true,
+      }),
+    candidateIds,
+  );
   // A reply proves only the user row right before it; earlier rows in the same gap
   // (a failed turn, or collected extras) stay, since a duplicate beats lost context.
   const answered = new Map<string, string>();

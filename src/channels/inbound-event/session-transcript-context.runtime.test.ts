@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-meta.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
-import { readRecentUserAssistantTextForSession } from "../../config/sessions/transcript.js";
+import {
+  readRecentUserAssistantTextForSession,
+  readRecentUserAssistantTurnsForSession,
+} from "../../config/sessions/transcript.js";
 import { mergeSessionTranscriptContext } from "./session-transcript-context.runtime.js";
 
 // mock-isolation: Supply transcript rows without real session state; the adjacent SQLite suite covers persistence.
@@ -11,6 +14,7 @@ vi.mock("../../config/sessions/transcript.js", () => ({
 }));
 
 const readRecent = vi.mocked(readRecentUserAssistantTextForSession);
+const readRecentTurns = vi.mocked(readRecentUserAssistantTurnsForSession);
 
 function transcriptPair(question: string, reply: string) {
   return [
@@ -198,6 +202,53 @@ describe("session transcript inbound context", () => {
     for (const text of ["Graph parent", "Graph reply", "canonical reply", "pending backlog"]) {
       expect(prompt).toContain(text);
     }
+  });
+
+  it("omits an older answered candidate when internal rows spend the read budget", async () => {
+    const answer = (text: string, timestamp: number) => ({
+      role: "assistant" as const,
+      text,
+      timestamp,
+      isCompletedAnswer: true as const,
+    });
+    const bodies = ["target", "newer-1", "newer-2", "newer-3", "newer-4", "newer-5"];
+    const rows = [
+      { role: "user" as const, text: "target", messageId: "m-target", timestamp: 1_000 },
+      answer("answered target", 2_000),
+      // An internal runtime input and its NO_REPLY pair cannot answer a candidate,
+      // yet they take the same two rows the candidate budget assumed per answer.
+      {
+        role: "user" as const,
+        text: "internal runtime input",
+        messageId: "m-internal-runtime-input",
+        timestamp: 3_000,
+      },
+      answer("NO_REPLY", 4_000),
+      ...bodies.slice(1).flatMap((body, index) => [
+        {
+          role: "user" as const,
+          text: body,
+          messageId: `m-${body}`,
+          timestamp: 10_000 + index * 2,
+        },
+        answer(`answered ${body}`, 10_001 + index * 2),
+      ]),
+    ];
+    readRecentTurns.mockImplementation(async (params) =>
+      rows.slice(-Math.max(1, params.limit ?? rows.length)),
+    );
+
+    const ctx = await merged({
+      SessionTranscriptContext: { historyLimit: 20, historyKind: "recent" },
+      InboundHistory: bodies.map((body) => ({
+        messageId: `m-${body}`,
+        sender: "Alice",
+        body,
+        timestamp: 1_000,
+      })),
+    });
+
+    expect(ctx.InboundHistory).toEqual([]);
   });
 
   it("fails closed for an unscoped session key without a routed agent owner", async () => {
