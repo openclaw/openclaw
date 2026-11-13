@@ -9,6 +9,9 @@ import {
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { stripInlineDirectiveTagsForDelivery } from "../../utils/directive-tags.js";
 
+/** Extra rows, beyond two per candidate, for one wider answered-row lookup. */
+const RECENT_HISTORY_LOOKUP_EXTRA_ROWS = 200;
+
 type PromptMessage = Record<string, unknown>;
 type TranscriptMessage = {
   entry: HistoryEntry;
@@ -66,21 +69,34 @@ async function omitAnsweredRecentHistory(params: {
   storePath: string;
 }): Promise<void> {
   const history = params.ctx.InboundHistory ?? [];
-  let candidates = 0;
+  const candidateIds = new Set<string>();
   for (const entry of history) {
-    candidates += entry.messageId ? 1 : 0;
+    if (entry.messageId) {
+      candidateIds.add(entry.messageId);
+    }
   }
-  if (candidates === 0) {
+  if (candidateIds.size === 0) {
     return;
   }
-  // Roughly one user row and one reply per answered turn; a shorter read only keeps rows.
-  const turns = await readRecentUserAssistantTurnsForSession({
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    storePath: params.storePath,
-    limit: candidates * 2,
-    includeMessageToolSourceReplies: true,
-  });
+  const readTurns = (limit: number) =>
+    readRecentUserAssistantTurnsForSession({
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+      limit,
+      includeMessageToolSourceReplies: true,
+    });
+  // Roughly one user row and one reply per answered turn. Tool-progress text and
+  // internal runtime exchanges take rows too, so a full read that has not reached
+  // every candidate gets one wider, still bounded read; a shorter read only keeps rows.
+  const limit = candidateIds.size * 2;
+  let turns = await readTurns(limit);
+  if (turns.length >= limit) {
+    const seen = new Set(turns.map((turn) => turn.messageId));
+    if ([...candidateIds].some((id) => !seen.has(id))) {
+      turns = await readTurns(limit + RECENT_HISTORY_LOOKUP_EXTRA_ROWS);
+    }
+  }
   // A reply proves only the user row right before it; earlier rows in the same gap
   // (a failed turn, or collected extras) stay, since a duplicate beats lost context.
   const answered = new Map<string, string>();
