@@ -825,14 +825,14 @@ export function ${first}() { return read(); }`,
         [legacyFile, legacy],
         ...consumers.map((file): [string, string] => [
           file,
-          `import { ${first} } from './plugin-sdk/sqlite-runtime-legacy.js'; ${first}(); missing.${first}();`,
+          `import { ${first} } from './plugin-sdk/sqlite-runtime-legacy.js'; ${first}(); missing.${first}(); consume({ ${first} });`,
         ]),
       ]),
       undefined,
       undefined,
       false,
     );
-    expect(result.violations).toHaveLength(consumers.length);
+    expect(result.violations).toHaveLength(consumers.length * 2);
     const credentialResult = inspectSources({
       "src/state/user-model-accounts.ts": "export function connectUserModelAccount() {}",
       "src/credential-consumer.ts": `

@@ -1058,12 +1058,26 @@ export function inspectDatabaseWorkerBoundaries(
     return { file, source, references };
   });
   // Reference discovery is independent across files in this immutable snapshot.
-  // Shorthand properties use their value-symbol query during caller classification.
+  // Shorthand properties need a separate value-symbol query.
   symbolsAt(
     sourceReferences.flatMap(({ references }) =>
       references.filter((node) => !ts.isShorthandPropertyAssignment(node.parent)),
     ),
   );
+  const shorthands = sourceReferences.flatMap(({ references }) =>
+    references.map((node) => node.parent).filter(ts.isShorthandPropertyAssignment),
+  );
+  const shorthandSymbols = new Map<ts.ShorthandPropertyAssignment, Symbol | undefined>();
+  // Shorthand value symbols differ from property symbols; batch their own native queries.
+  for (let offset = 0; offset < shorthands.length; offset += 256) {
+    const batch = shorthands.slice(offset, offset + 256);
+    const symbols = session.api.batch(
+      ...batch.map((node) => checker.getShorthandAssignmentValueSymbol.gen(node)),
+    );
+    for (const [index, node] of batch.entries()) {
+      shorthandSymbols.set(node, symbols[index]);
+    }
+  }
   session.checkpoint?.("reference-prefetch");
   // Pack immutable fallback lookups across files without retaining another full inventory.
   const accessBatch: ts.Expression[] = [];
@@ -1131,7 +1145,7 @@ export function inspectDatabaseWorkerBoundaries(
       let symbol = resolveSymbol(
         bindingMember ??
           (ts.isShorthandPropertyAssignment(node.parent)
-            ? checker.getShorthandAssignmentValueSymbol(node.parent)
+            ? shorthandSymbols.get(node.parent)
             : symbols[index]),
       );
       if (!symbol && ts.isPropertyAccessExpression(node.parent) && node.parent.name === node) {
