@@ -752,4 +752,18 @@ describe("audit command interruption", () => {
     ).resolves.toBeUndefined();
     expect(callGateway).toHaveBeenCalledTimes(1);
   });
+
+  it("keeps a legacy fallback read quiet when it is interrupted", async () => {
+    const work = new AsyncWorkScope();
+    work.beginClose();
+    // The activity query reports an unsupported method on an old Gateway, which
+    // would normally fall back to audit.list; the already-aborted signal must
+    // stop the whole read quietly without printing a late error or falling back.
+    callGateway
+      .mockRejectedValueOnce(unknownActivityMethodError())
+      .mockImplementation(heldGatewayRead());
+
+    await expect(work.run(() => auditListCommand({}, runtime))).resolves.toBeUndefined();
+    expect(callGateway).toHaveBeenCalledTimes(1);
+  });
 });

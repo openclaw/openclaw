@@ -231,11 +231,20 @@ async function queryAuditActivity(
         { cause: error },
       );
     }
-    return await callGateway<AuditListResult>({
-      method: "audit.list",
-      params: toLegacyAuditListParams(params),
-      signal,
-    });
+    try {
+      return await callGateway<AuditListResult>({
+        method: "audit.list",
+        params: toLegacyAuditListParams(params),
+        signal,
+      });
+    } catch (fallbackError) {
+      // A Ctrl+C cancels the legacy fallback read too; exit quietly instead of
+      // reporting the abort as an ordinary error.
+      if (signal?.aborted) {
+        return undefined;
+      }
+      throw formatAuditGatewayError(fallbackError);
+    }
   }
 }
 
