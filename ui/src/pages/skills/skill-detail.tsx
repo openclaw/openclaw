@@ -143,13 +143,7 @@ export function SkillDetail(props: {
         <div class="oc-dialog__rows">
           <div class="oc-dialog__row">
             <SettingsStatus
-              kind={
-                props.skill.disabled
-                  ? "muted"
-                  : isSkillAvailable(props.skill)
-                    ? "ok"
-                    : "warn"
-              }
+              kind={props.skill.disabled ? "muted" : isSkillAvailable(props.skill) ? "ok" : "warn"}
               label={t(
                 props.skill.disabled
                   ? "skillsPage.tabs.disabled"
