@@ -1,0 +1,2 @@
+# PR #196072: 26 net regression lines cover default media availability, explicit sandbox allow/deny preservation, and the missing music tool in the synthetic inventory fixture.
+26
