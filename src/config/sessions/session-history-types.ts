@@ -113,7 +113,7 @@ export type ChatHistoryPageParams = {
   messageId: string | undefined;
   pageCursor?: ChatHistoryPageCursor;
   ignoreCliSessionImports?: boolean;
-  cliHistoryHomeDir?: string;
+  cliHistoryProjectsDir?: string;
 };
 
 type SessionHistoryTranscriptMeta = {

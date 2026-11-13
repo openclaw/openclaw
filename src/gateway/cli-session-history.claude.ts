@@ -456,13 +456,14 @@ export function parseClaudeCliHistoryEntry(
 
 export async function resolveClaudeCliSessionFilePathAsync(params: {
   cliSessionId: string;
-  homeDir?: string;
+  /** Resolved by the caller when this process lacks the Gateway environment (history workers). */
+  projectsDir?: string;
 }): Promise<string | undefined> {
   const sessionId = normalizeClaudeCliSessionId(params.cliSessionId);
   if (!sessionId) {
     return undefined;
   }
-  const projectsDir = resolveClaudeCliProjectsDir(params.homeDir);
+  const projectsDir = params.projectsDir ?? resolveClaudeCliProjectsDir();
   let projectEntries: fs.Dirent[];
   try {
     projectEntries = await fs.promises.readdir(projectsDir, { withFileTypes: true });
@@ -508,7 +509,7 @@ export type ClaudeCliFallbackSeed = {
 
 export async function readClaudeCliFallbackSeed(params: {
   cliSessionId: string;
-  homeDir?: string;
+  projectsDir?: string;
 }): Promise<ClaudeCliFallbackSeed | undefined> {
   const filePath = await resolveClaudeCliSessionFilePathAsync(params);
   if (!filePath) {
