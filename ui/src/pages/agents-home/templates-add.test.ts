@@ -36,10 +36,10 @@ const chatAdd = { mode: "chat", source, agentId: "workflow-operator" };
 const sessionKey = "agent:workflow-operator:team-room";
 
 describe("Template Add", () => {
-  it.each(["resolved", "failed", "disconnected", "replaced", "disabled"] as const)(
-    "admits card Add only from the release's current detail: %s",
+  it.each(["resolved", "failed", "disconnected"] as const)(
+    "opens card chat immediately while the release identity is still loading: %s",
     async (outcome) => {
-      const { find, request, navigate, setPhase, setTemplatesEnabled, addSelector } =
+      const { find, request, navigate, context, setPhase, setTemplatesEnabled, addSelector } =
         createAddSurface("card", { templatesEnabled: false });
       const original = request.getMockImplementation()!;
       const detail = createDeferredCore<unknown>();
@@ -50,19 +50,15 @@ describe("Template Add", () => {
       await waitForSolid(() => expect(find(addSelector)).toHaveProperty("disabled", false));
       find(addSelector)!.click();
       find(addSelector)!.click();
-      await waitForSolid(() => expect(find(addSelector)).toHaveProperty("disabled", true));
-      // A card names no agent; only the release's detail does.
+      // No registry response (or asynchronous turn) is needed to open the pending chat.
+      expect(navigate).toHaveBeenCalledWith("chat", expect.anything());
+      expect(context.chatSubmissions.creation?.admitted).toBe(false);
       expect(calls(request, "templates.catalog.detail")).toHaveLength(1);
       expect(calls(request, "templates.add.apply")).toHaveLength(0);
       if (outcome === "disconnected") {
         setPhase("reconnecting");
         flush();
         setPhase("connected");
-      } else if (outcome === "replaced") {
-        find(".agents-home__template-card-link")!.click();
-      } else if (outcome === "disabled") {
-        setTemplatesEnabled(false);
-        await waitForSolid(() => expect(find("[data-templates-explore]")).toBeNull());
       }
       if (outcome === "failed") {
         detail.reject(new Error("Release unavailable"));
@@ -71,18 +67,24 @@ describe("Template Add", () => {
             "Release unavailable",
           ),
         );
-        expect(find(addSelector)).toHaveProperty("disabled", false);
+        expect(context.chatSubmissions.creating).toBe(false);
       } else {
-        detail.resolve(await original("templates.catalog.detail", {}));
+        const response = (await original("templates.catalog.detail", {})) as {
+          detail: Record<string, unknown>;
+        };
+        detail.resolve({ detail: { ...response.detail, agentId: "declared-agent" } });
         await nextTurn();
         await waitForSolid(() =>
           expect(calls(request, "templates.add.apply")).toHaveLength(
             outcome === "resolved" ? 1 : 0,
           ),
         );
-      }
-      if (outcome !== "resolved") {
-        expect(navigate).not.toHaveBeenCalledWith("chat", expect.anything());
+        if (outcome === "resolved") {
+          expect(calls(request, "templates.add.apply")[0]![1]).toEqual({
+            ...chatAdd,
+            agentId: "declared-agent",
+          });
+        }
       }
       expect(calls(request, "templates.add.plan")).toHaveLength(0);
     },
@@ -156,6 +158,7 @@ describe("Template Add", () => {
       const origin = context.router.getState().location;
       find(addSelector)!.click();
       await waitForSolid(() => expect(context.chatSubmissions.readCreate()).toBeDefined());
+      await waitForSolid(() => expect(calls(request, "templates.add.apply")).toHaveLength(1));
       // The Gateway admitted the agent and chat before it failed to fetch the Template.
       publishEvent({
         type: "event",

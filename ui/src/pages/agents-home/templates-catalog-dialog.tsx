@@ -239,25 +239,22 @@ class TemplatesCatalogModel {
     this.applying = true;
     this.addFailure = null;
     try {
-      // Only a release's detail names the Template's agent; a card has not read it yet.
-      const detail =
-        this.detail ??
-        (await readTemplateDetail(scope.client, {
-          packageName: entry.packageName,
-          ...(entry.latestVersion ? { version: entry.latestVersion } : {}),
-        }));
-      if (!isCurrent() || !this.canAdd()) {
+      const source = this.source();
+      if (!source) {
         return;
       }
-      // Navigation disposes this page. The application handoff, not the dialog,
-      // retains the request and releases pending chat at the agent-ready receipt.
+      const detail = this.detail;
+      // Navigation is synchronous. A cold card uses a presentation-only id until
+      // the application-owned lookup resolves the release's actual agent id.
+      // This keeps catalog/detail network latency out of click-to-chat time.
       void addTemplateAgent(
         this.context,
         {
           entry,
-          source: { packageName: entry.packageName, version: detail.version },
-          agentId: detail.agentId,
-          ...(detail.agentName ? { agentName: detail.agentName } : {}),
+          source,
+          agentId: detail?.agentId ?? entry.packageName.split("/").at(-1) ?? "template",
+          ...(detail?.agentName ? { agentName: detail.agentName } : {}),
+          ...(!detail ? { resolveAgent: () => readTemplateDetail(scope.client, source) } : {}),
         },
         this.riskAcknowledged,
       ).catch((error: unknown) => {

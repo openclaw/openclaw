@@ -349,6 +349,7 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
         detail: {
           ...workflowOperator,
           version: "1.2.0",
+          agentId: "workflow-operator",
           agentName: "Workflow Operator",
           contents: {
             instructions: [{ name: "AGENTS.md", source: "workspace/AGENTS.md" }],
@@ -396,6 +397,8 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       await detail.getByText("ClawHub · Version 1.2.0", { exact: true }).waitFor();
       expect(await detail.getByText("Installed", { exact: true }).count()).toBe(1);
       expect(await detail.textContent()).not.toContain("undefined");
+      expect(await detail.locator(".templates-add-review").count()).toBe(0);
+      await capture(page, `template-detail-no-review-${viewport.name}`, detail);
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
         viewport.width,
       );
@@ -543,6 +546,7 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       detail: {
         ...workflowOperator,
         version: "1.2.0",
+        agentId: "workflow-operator",
         contents: {
           instructions: [{ name: "AGENTS.md", source: "AGENTS.md" }],
           skills: [],
@@ -671,7 +675,8 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       const alert = card.getByRole("alert");
       await alert.getByText("ClawHub could not deliver this Template.", { exact: true }).waitFor();
       await capture(page, `template-add-${width}-rolled-back`, card);
-      expect(await pending.count()).toBe(0);
+      // The chat cache retains its inert pane; no pending chat is presented.
+      expect(await pending.filter({ visible: true }).count()).toBe(0);
       expect(await page.locator(".templates-add-consent").count()).toBe(0);
       // The message stays inside its card and the page does not scroll sideways.
       const [cardBox, alertBox] = await Promise.all([card.boundingBox(), alert.boundingBox()]);

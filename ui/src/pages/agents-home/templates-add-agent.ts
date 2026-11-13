@@ -71,9 +71,10 @@ export async function addTemplateAgent(
   template: {
     entry: TemplateCatalogEntry;
     source: TemplateCatalogSource;
-    /** The Template's own agent id and name, from its catalog detail. */
+    /** The declared id, or a presentation-only id while resolveAgent reads the release. */
     agentId: string;
     agentName?: string;
+    resolveAgent?: () => Promise<{ agentId: string }>;
   },
   acknowledgeClawHubRisk: boolean,
 ) {
@@ -116,6 +117,7 @@ export async function addTemplateAgent(
   let durable = false;
   // A retry continues the agent the Gateway admitted, whatever id it chose.
   let requestAgentId = agentId;
+  let resolveAgent = template.resolveAgent;
   const target = sessionNavigationTarget({
     context,
     face: "chat",
@@ -209,6 +211,7 @@ export async function addTemplateAgent(
       composer.notify();
     }
     let requestId: string | undefined;
+    let requestStarted = false;
     const unsubscribe = context.gateway.subscribeEvents((event) => {
       const payload = event.payload;
       if (
@@ -229,6 +232,33 @@ export async function addTemplateAgent(
       }
     });
     try {
+      // A cold catalog card has no declared id yet. Its pending chat is already
+      // visible; only the mutation waits for the release identity. Never submit
+      // the presentation-only id to the Gateway.
+      if (resolveAgent) {
+        let connected = context.gateway.snapshot.phase === "connected";
+        const stop = context.gateway.subscribe((snapshot) => {
+          connected &&= snapshot.phase === "connected" && isCurrent();
+        });
+        let identity: { agentId: string };
+        try {
+          identity = await resolveAgent();
+        } finally {
+          stop();
+        }
+        if (!isCurrent()) {
+          return;
+        }
+        if (!connected) {
+          throw new Error(t("templatesCatalog.addFailed"));
+        }
+        requestAgentId = selectNextTemplateAgentId(
+          identity.agentId,
+          context.agents.state.agentsList?.agents.map((agent) => agent.id) ?? [],
+        );
+        resolveAgent = undefined;
+      }
+      requestStarted = true;
       const result = await applyTemplateAdd(client, source, {
         agentId: requestAgentId,
         acknowledgeClawHubRisk,
@@ -255,7 +285,12 @@ export async function addTemplateAgent(
     } catch (error) {
       // A first request answered with an error kept nothing: the Gateway removed the
       // agent and chat it had admitted. A lost connection or a retry proves no such thing.
-      if (isCurrent() && !retry && !creation.admitted && isGatewayProtocolResponseError(error)) {
+      if (
+        isCurrent() &&
+        !retry &&
+        !creation.admitted &&
+        (!requestStarted || isGatewayProtocolResponseError(error))
+      ) {
         const foreground = ownsForeground();
         const admitted = durable;
         durable = false;
@@ -263,9 +298,10 @@ export async function addTemplateAgent(
         if (admitted) {
           void context.agents.refreshList();
         }
-        const trustWarning = acknowledgeClawHubRisk
-          ? undefined
-          : readClawHubRiskAcknowledgementRequiredError(toGatewayErrorInfo(error))?.warning;
+        const trustWarning =
+          !acknowledgeClawHubRisk && isGatewayProtocolResponseError(error)
+            ? readClawHubRiskAcknowledgementRequiredError(toGatewayErrorInfo(error))?.warning
+            : undefined;
         const failure: TemplateAddFailure = {
           entry: template.entry,
           message: formatUiError(error),
