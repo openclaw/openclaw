@@ -452,7 +452,7 @@ shows one device code as before.
 - One profile per account: linking an account already linked to another profile, or to
   a member's profile, is refused. Merging profiles in **Users** carries the link.
 - **Unlink** returns owner devices to the shared owner on their next connection.
-  Sessions they already created are not rewritten. While signed in on the Gateway machine, **Turn on remote access**
+  Sessions they already created are not rewritten. While signed in, **Turn on remote access**
   gets its link code from your account instead of asking you to paste one.
 
 ### How the tunnel reaches the Gateway
@@ -481,17 +481,23 @@ shows one device code as before.
   the supervisor's IPC channel. It strips client forwarding and identity headers
   and passes the device key it authenticated in the QUIC handshake.
 - Requests that come through this ingress are always treated as relayed, never
-  as direct loopback, even though they arrive on the local host. Linking a claw
-  and other root ceremonies are allowed only on direct loopback.
+  as direct loopback, even though they arrive on the local host. Root
+  ceremonies never run over the tunnel: linking a claw needs direct loopback or
+  an admin's personal sign-in, and moving to new keys needs direct loopback.
 
 <a id="make-a-claw-reachable" />
 
 ### Turn on remote access
 
 With the lab on, sign in with OpenClaw ID from the account menu, then choose
-**Turn on remote access**. It works only in OpenClaw on the computer that runs
-this claw (direct loopback). If setup asks for a **Link code**, get one from the
-**Add a claw** page at `https://claws.<loaderDomain>/link` and paste it into setup:
+**Turn on remote access**. It works in OpenClaw on the computer that runs this
+claw (direct loopback), or for an **admin** signed in through a personal sign-in
+(Tailscale Serve, Cloudflare Access or another trusted proxy, an enterprise
+principal), so a remote claw needs no SSH tunnel. It is refused for shared token
+or password connections over the network, members, people whose role is not an
+administrator, and anything over the OpenClaw ID tunnel. If setup asks for a
+**Link code**, get one from the **Add a claw** page at
+`https://claws.<loaderDomain>/link` and paste it into setup:
 
 1. The Gateway creates the claw id and its signing key, and reports the tunnel's
    endpoint key.
@@ -507,6 +513,18 @@ this claw (direct loopback). If setup asks for a **Link code**, get one from the
 5. With a link code, the Gateway registers the claw with
    Discovery and publishes its descriptor and membership snapshot. Without one,
    the claw is linked locally and can be published later.
+
+Through a personal sign-in, setup also links the OpenClaw ID you signed in with to
+your profile, as **Link OpenClaw ID to your profile** does, so your owner devices
+arrive as you. If that link is refused (for example, the account is already linked
+to another profile), remote access stays on and you can link from
+**Settings → Profile**. The Gateway log records who ran each step and over which
+identity (`openclaw-id: remote access …` with the route, auth method, profile and
+verified user), and emits a matching `security.event`.
+
+**Move to new keys** (`openclaw id rebind`) stays on the computer that runs the
+claw: it is a recovery path, including after remote access was misused, and it
+works with remote access off.
 
 ### Membership
 

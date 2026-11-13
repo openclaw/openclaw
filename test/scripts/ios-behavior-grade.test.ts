@@ -26,7 +26,7 @@ describe("motion", () => {
   it("ignores sub-point layout rounding and the composer", () => {
     const result = motion([
       frame(0, { "user/a": 500, composer: 700 }),
-      frame(16, { "user/a": 500.4, composer: 400 }),
+      frame(16, { "user/a": 500.4, composer: 600 }),
     ]);
     expect(result).toMatchObject({ backwardPt: 0, teleports: 0, maxDriftPt: 0.4 });
   });
@@ -43,6 +43,24 @@ describe("motion", () => {
     expect(
       motion([frame(0, { live: 300 }), frame(16, { "assistant/b": 340 })], { aliases }),
     ).toMatchObject({ backwardPt: 40, maxDriftPt: 40 });
+  });
+
+  it("reads a reply taller than the screen on its visible bottom edge", () => {
+    const tall = (t: number, top: number, bottom: number): ProbeFrame => ({
+      t,
+      f: { "assistant/a": [top, bottom], composer: [428, 540] },
+    });
+    // The off-screen top moves 700 pt as the reply finishes shorter; the reader sees no motion
+    // until the visible end drops 42 pt.
+    const result = motion([tall(0, -5000, 349), tall(16, -4300, 349), tall(33, -4300, 391)]);
+    expect(result).toMatchObject({ teleports: 0, backwardPt: 42, maxDriftPt: 42 });
+    // A jump moves the whole row, even from off screen into view.
+    expect(motion([tall(0, -5000, 349), tall(16, 216, 5565)]).teleports).toBe(1);
+    // Text filling the screen moves with the row even when both edges are off screen.
+    expect(motion([tall(0, -100, 1000), tall(16, -58, 1042)])).toMatchObject({
+      backwardPt: 42,
+      maxDriftPt: 42,
+    });
   });
 });
 

@@ -29,6 +29,7 @@ import {
 } from "../state/user-profile-list.js";
 import { errorShapeFromError } from "./error-shape.js";
 import { resolveGatewayOperatorAccessAuthority } from "./operator-access-policy.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
 import {
   captureGatewayOperatorRunAuthority,
@@ -161,7 +162,7 @@ async function prepareSessionPrincipalRunAccess(params: {
     // Without roles a profile carries no authority of its own; only the person's recorded
     // authenticated source for this session, revalidated on every use, supplies it.
     const scopes =
-      !cfg.gateway?.roles && recorded
+      !isNamedOperatorRoleEnforcementEnabled(cfg) && recorded
         ? currentRecordedScopes(recorded.authority)
         : resolveOperatorRolePolicyForAssignment(
             params.profileId,
@@ -180,7 +181,7 @@ async function prepareSessionPrincipalRunAccess(params: {
     // source-less legacy sessions remain non-durable when roles authorize them.
     if (
       params.profileId !== GATEWAY_OWNER_PROFILE_ID &&
-      (params.preserveRecordedSource || !getConfig().gateway?.roles)
+      (params.preserveRecordedSource || !isNamedOperatorRoleEnforcementEnabled(getConfig()))
     ) {
       recorded = await restoreSessionOperatorSource({
         context: params.context,

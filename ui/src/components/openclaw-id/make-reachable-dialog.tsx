@@ -154,12 +154,15 @@ const DEFAULT_CLAW_NAME = "claw";
  * claw, registration (possession proof and address reservation) and the relay
  * connection. Only signed statements reach the Gateway. Resolves true once linked.
  * When the Control UI is signed in to OpenClaw ID, the link code comes from the
- * account; otherwise (or if that fails) the owner pastes one.
+ * account; otherwise (or if that fails) the owner pastes one. With `linkProfile` (an admin
+ * on a personal sign-in), the commit also links that account to the admin's profile; if the
+ * Gateway does not, "Setting up your access" says so and the claw stays linked.
  */
 export function showMakeReachableDialog(params: {
   client: GatewayBrowserClient;
   loaderDomain: string;
   signedIn?: OpenClawIdSignedIn | null;
+  linkProfile?: boolean;
 }): Promise<boolean> {
   const ceremony = createOpenClawIdCeremony();
   // Closes when the feature turns off; the kit's secrets are dropped however it closes.
@@ -279,6 +282,7 @@ export function showMakeReachableDialog(params: {
         }
         setStep({ kind: "linking", hostname: preparation.hostname });
         let signed: Awaited<ReturnType<typeof ceremony.sign>> | undefined;
+        let profileLink: string | null = null;
         try {
           const publication = await runLinkSteps(
             {
@@ -292,14 +296,18 @@ export function showMakeReachableDialog(params: {
               },
               commit: async () => {
                 lifetime.signal?.throwIfAborted();
+                const idToken = params.linkProfile ? params.signedIn?.idToken : undefined;
                 const result = await params.client.request<{
                   publication: OpenClawIdPublication | null;
+                  profileLink?: string | null;
                 }>("openclawId.authority", {
                   action: "commit",
                   ...signed,
                   enrollmentCode: nameRequest().enrollmentCode,
+                  ...(idToken ? { idToken } : {}),
                 });
                 announceOwnerDeviceKey();
+                profileLink = result.profileLink ?? null;
                 return result.publication;
               },
               relayOnline: () => readRelayOnline(params.client),
@@ -310,6 +318,12 @@ export function showMakeReachableDialog(params: {
             },
             (id, state) => setLinkStates((current) => ({ ...current, [id]: state })),
           );
+          if (params.linkProfile && profileLink !== "linked") {
+            setLinkStates((current) => ({
+              ...current,
+              pin: { state: "warning", message: t("openclawId.stepProfileNotLinked") },
+            }));
+          }
           setStep({ kind: "done", hostname: preparation.hostname, publication });
         } catch (error) {
           ceremony.discard();
