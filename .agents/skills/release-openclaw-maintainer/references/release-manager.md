@@ -158,5 +158,5 @@ merely dispatched, waiting for approval, or awaiting an unacknowledged handoff.
 For agents fixing retrospective ledger findings, use the persistent
 [per-agent tracker](retrospective.md#track-in-flight-fixes-per-agent) in
 `openclaw/tideclaw#11`. Check existing claims before assigning work, name each
-actual repair owner, and link their comment for status and handoffs. Do not
-require ledger/repository commits to announce claims or intermediate progress.
+actual repair owner, and link their issue-body section for status and handoffs.
+Do not require ledger/repository commits to announce claims or intermediate progress.

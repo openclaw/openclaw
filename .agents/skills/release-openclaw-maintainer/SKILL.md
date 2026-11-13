@@ -39,7 +39,7 @@ Read only the references needed for the selected phase:
   [main closeout](references/stable-main-closeout.md).
 - Release retrospective and shared issue ledger (every track, and any handoff
   snapshot): [retrospective](references/retrospective.md). Agents fixing ledger
-  findings coordinate claims and progress in [the persistent tracker](https://github.com/openclaw/tideclaw/issues/11),
+  findings coordinate claims and progress in the body of [the persistent tracker](https://github.com/openclaw/tideclaw/issues/11),
   not repository status commits; follow [per-agent tracking](references/retrospective.md#track-in-flight-fixes-per-agent).
 - Release notes: `$openclaw-changelog-update`, including its separate approved post-release docs-mirror route. Initial release generation keeps its existing format; docs publication does not run automatically during release. Requested announcements: `$release-openclaw-announcement` for Discord, `$release-tweets` for X. Announcements never gate publication and require explicit posting authorization.
 - Published artifact verification: `$verify-release`. GHSA operations: `$openclaw-ghsa-maintainer` only with explicit security-workflow authorization.

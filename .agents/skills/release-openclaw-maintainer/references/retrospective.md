@@ -85,45 +85,50 @@ retrospective PR when they exist.
 
 [openclaw/tideclaw#11 — Release Retro In-Flight Fix Tracker](https://github.com/openclaw/tideclaw/issues/11)
 is the canonical coordination surface for agents fixing retrospective ledger
-findings. The ledger records durable findings and outcomes; the tracker shows
-who is working on what now. Do not commit claim reservations, WIP status, or
-heartbeat updates to either repository just to advertise work. Keep unfinished
-changes local; commit the actual fix only after its required work and validation
-are complete. This does not change the report/ledger delivery process above.
+findings. Its **issue body**, organized into per-agent sections, owns live claims
+and status. The ledger records durable findings and outcomes. Do not commit
+claim reservations, WIP status, or heartbeat updates to either repository just
+to advertise work. Keep unfinished changes local; commit the actual fix only
+after its required work and validation are complete. This does not change the
+report/ledger delivery process above.
 
-1. **Read before claiming.** Read the issue and all comments, then locate the
-   selected `RRI-NNN` entries in the current ledger and check linked fixes/PRs.
-   Reuse an existing repair or coordinate with its owner instead of duplicating
-   it. The tracker is coordination, not authority to implement, publish, merge,
-   or release anything outside the task's existing authorization.
-2. **Claim in one per-agent comment.** Create a comment headed with your agent
-   name and a stable task/session identifier. Use one row per ledger item or
-   explicitly grouped shared-cause repair. Link the ledger entries and describe
-   the repair scope so distinct work on the same item is not confused. Retain
-   the comment URL as your status record; edit it for later updates rather than
-   posting a new comment for each step. Do not put all agents in one mutable
-   issue-body table or overwrite another agent's comment.
-3. **Check for overlap.** After posting, reread the tracker for concurrent
-   claims. If scopes overlap, coordinate one implementation owner and mark the
-   other claim as handed off or released. A timestamp is not a lock, and an old
-   update alone does not mean a claim is abandoned.
-4. **Update at meaningful transitions.** Record the current status, UTC update
-   time, next action, and blockers. Add branch/PR and focused proof links when
-   available. A parent coordinating children names the actual worker per row;
-   a handoff links the successor's comment and records who owns the next step.
-   If you cannot edit the original comment, post a linked replacement and make
-   clear which record supersedes it. After an uncertain write, reread before
-   retrying to avoid duplicate comments.
+1. **Read before claiming.** Read the current issue body and relevant comments,
+   then locate the selected `RRI-NNN` entries in the current ledger and check
+   linked fixes/PRs. Reuse an existing repair or coordinate with its owner
+   instead of duplicating it. The tracker is coordination, not authority to
+   implement, publish, merge, or release outside the task's authorization.
+2. **Claim in your per-agent body section.** Use your agent name and a stable
+   task/session identifier as the heading. Use one row per ledger item or
+   explicitly grouped shared-cause repair; link entries and describe the scope.
+   Read the issue body immediately before each edit, merge only your own section
+   into that current body, and preserve the introduction and every other
+   agent's section. Never replace the body from a stale local copy.
+3. **Verify the edit and check overlap.** Reread the issue body after writing;
+   confirm your update and the other sections remain intact. Reconcile a lost
+   update or uncertain write against the current body before retrying. If claims
+   overlap, coordinate one implementation owner and mark the other claim as
+   handed off or released. A timestamp is not a lock, and an old update alone
+   does not mean a claim is abandoned. This is lightweight coordination, not a
+   locking protocol.
+4. **Update at meaningful transitions.** Record status, UTC update time, next
+   action, blockers, and branch/PR and focused proof links when available. A
+   parent coordinating children names the actual worker per row; a handoff links
+   the successor's body section and records who owns the next step. Keep live
+   status in the issue body, not parallel comment records. When migrating a live
+   comment, preserve its relevant content in your body section, verify the
+   migration, then mark the old comment historical/superseded with a link to
+   that section.
 5. **Close the claim, not the tracker.** Keep `PR open` distinct from `done`: a
    published fix awaiting review, CI, or merge is still in flight. Record the
    verified outcome and fix/merge evidence when complete, or mark `released`
    with a reason when stopping without a fix. Use `blocked` with the missing
    prerequisite and next owner when work cannot proceed. Do not close issue
-   #11 when your own work finishes; other agents continue using it. Update the
-   durable ledger outcome through its normal reviewed process, not as a stream
-   of progress commits.
+   #11 when your work finishes. Comments are optional for completed-batch
+   closeout summaries, not live claims or progress. Update durable ledger
+   outcomes through their normal reviewed process, not progress commits.
 
-Copy this into your comment, replacing placeholders and omitting unused fields:
+Merge this section into the issue body, replacing placeholders and omitting
+unused fields:
 
 ```markdown
 ## Agent: <name> — <stable task/session identifier>
@@ -134,12 +139,12 @@ Updated: <YYYY-MM-DD HH:MM UTC>
 | -------------- | --------------------------------- | ------- | --------------------- | ------------------------------- |
 | <RRI links>    | <shared cause or specific repair> | claimed | <next step>           | <PR/proof links when available> |
 
-Handoff: <none, or successor and comment link>
+Handoff: <none, or successor and body-section link>
 ```
 
 Use plain statuses: `claimed`, `in progress`, `blocked`, `PR open`, `done`,
 `handed off`, or `released`. Include only information safe for the target
 repository; never paste credentials, private runtime details, or raw logs.
-If tracker access is unavailable, report that the claim is **unconfirmed**,
-retain a local note, and ask an authorized coordinator to post it. Do not
-substitute a repository commit or claim exclusive ownership without visibility.
+If you cannot update the issue body, report the claim as **unconfirmed**, retain
+a local note, and ask an authorized coordinator to merge your section. Do not
+substitute a live comment, repository commit, or invisible exclusive claim.
