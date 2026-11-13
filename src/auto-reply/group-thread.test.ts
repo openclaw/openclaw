@@ -207,10 +207,6 @@ async function held(
   return run;
 }
 
-function hasLoneSurrogate(value: string): boolean {
-  return /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(value);
-}
-
 describe("agent group thread dispatch", () => {
   it.each([false, true])("shares settled post-hook finals (prepared: %s)", async (prepared) => {
     replyHooks.enabled = true;
@@ -313,20 +309,22 @@ describe("agent group thread dispatch", () => {
   });
 
   it("continues from delivered streamed answers without sharing supplemental blocks", async () => {
+    const answer = `Bob, the streamed answer is ready.${"a".repeat(3_965)}🥐`;
     const run = await completed({
       cfg: continuationConfig(),
       reply: (turn, index) => {
         if (index === 0) {
           turn.dispatcher.sendBlockReply({ text: "Private reasoning", isReasoning: true });
           turn.dispatcher.sendBlockReply({ text: "Working on it", isCommentary: true });
-          turn.dispatcher.sendBlockReply({ text: "Bob, the streamed answer is ready." });
+          turn.dispatcher.sendBlockReply({ text: answer });
         }
         return [];
       },
     });
     expect(run.turns).toHaveLength(4);
     const digest = run.turns[3]?.ctx.BodyForAgent;
-    expect(digest).toContain("Bob, the streamed answer is ready.");
+    expect(digest).toContain(answer.slice(0, -2));
+    expect(digest).toMatch(/a$/);
     expect(digest).not.toContain("Private reasoning");
     expect(digest).not.toContain("Working on it");
   });
@@ -522,20 +520,6 @@ describe("agent group thread dispatch", () => {
     expect(run.delivered).toEqual([
       { text: "Bob completed the review.", participant: { agentId: "bob", name: "Bob" } },
     ]);
-  });
-
-  it("keeps the next round digest well-formed when a captured reply is truncated at a surrogate boundary", async () => {
-    // A round-1 reply whose length crosses MAX_FINAL_CHARS mid-emoji: a naive
-    // UTF-16 code-unit slice would leave a dangling surrogate in the captured
-    // reply text that then leaks into the next round's digest (ctx.BodyForAgent).
-    const longReply = "x".repeat(3999) + "🥐tail";
-    const run = await completed({
-      cfg: continuationConfig(),
-      reply: (_turn, index) => (index === 0 ? [longReply] : ["A short reply."]),
-    });
-    const digest = run.turns[3]?.ctx.BodyForAgent ?? "";
-    // No lone surrogate: the emoji is kept whole or dropped whole, never split.
-    expect(hasLoneSurrogate(digest)).toBe(false);
   });
 });
 describe("group thread entry compatibility", () => {
