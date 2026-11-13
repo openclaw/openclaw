@@ -223,8 +223,10 @@ export async function handleChatSendWithStorage(
         })
       : undefined;
     const codexGoalCommitted = admission.codexGoalAdmission ? createDeferredCore() : undefined;
+    const titleInputPersisted = createDeferredCore<PersistedUserTurnMessage>();
     const userTurn = createGatewayChatUserTurnController({
       onMessagePersisted: codexGoalCommitted?.resolve,
+      onApprovedMessagePersisted: (message) => titleInputPersisted.resolve(message),
       ...setup,
       client,
       commitInitialInput,
@@ -656,6 +658,10 @@ export async function handleChatSendWithStorage(
         beginCapturedMessageInjection,
         replyContextFieldsPromise,
       },
+      titleInput:
+        commitFreshInput && approvedInput
+          ? Promise.resolve(approvedInput)
+          : titleInputPersisted.promise,
       timing: {
         chatSendAckedAtMs,
         chatSendTiming,

@@ -466,6 +466,72 @@ describe("persistUserTurnTranscript", () => {
     },
   );
 
+  it("waits for committed bytes before notifying approved-input observers", () => {
+    const legacy = vi.fn();
+    const approved = vi.fn();
+    const recorder = makeRecorder({
+      message: userMessage("unapproved input"),
+      onMessagePersisted: legacy,
+      onApprovedMessagePersisted: approved,
+    });
+    recorder.markRuntimePersisted();
+    expect(legacy).toHaveBeenCalledOnce();
+    expect(approved).not.toHaveBeenCalled();
+    recorder.markRuntimePersisted(userMessage("redacted input"));
+    expect(approved).toHaveBeenCalledOnce();
+    expect(approved).toHaveBeenCalledWith(expect.objectContaining({ content: "redacted input" }));
+    expect(legacy).toHaveBeenCalledOnce();
+  });
+
+  it.each(["unchanged", "rewritten", "mutated", "blocked"] as const)(
+    "notifies collected source observers using only approved content (%s)",
+    async (outcome) => {
+      await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+      const notifications: string[] = [];
+      const sources = ["first private task", "second private task"].map((text) =>
+        makeRecorder({
+          input: { text },
+          onApprovedMessagePersisted: (message) => {
+            notifications.push(
+              typeof message.content === "string"
+                ? message.content
+                : JSON.stringify(message.content),
+            );
+          },
+        }),
+      );
+      await Promise.all(sources.map((source) => source.resolveMessage()));
+      const aggregate = makeRecorder({
+        input: { text: "first private task\nsecond private task" },
+        pendingInputSources: sources,
+        pendingInputSourcesAreLossless: true,
+        ...(outcome === "rewritten" || outcome === "mutated"
+          ? {
+              beforeMessageWrite: ({ message }: { message: PersistedUserTurnMessage }) => {
+                if (outcome === "mutated") {
+                  message.content = "[redacted]";
+                  return message;
+                }
+                return { ...message, content: "[redacted]" };
+              },
+            }
+          : {}),
+      });
+      if (outcome === "blocked") {
+        await aggregate.persistBlocked(userMessage("Request blocked"));
+      } else {
+        await aggregate.persistApproved();
+      }
+      expect(notifications).toEqual(
+        outcome === "blocked"
+          ? []
+          : outcome === "rewritten" || outcome === "mutated"
+            ? ["[redacted]", "[redacted]"]
+            : ["first private task", "second private task"],
+      );
+    },
+  );
+
   it.each([true, false])(
     "fans committed source mentions back to their own recorders only for an annotated collection (%s)",
     async (annotated) => {

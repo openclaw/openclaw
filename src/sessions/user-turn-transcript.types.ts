@@ -213,6 +213,8 @@ export type CreateUserTurnTranscriptRecorderParams = {
   pendingInputReplaySourceSessionKeys?: readonly string[];
   /** Exact admitted source recorders consumed by this collected transcript message. */
   pendingInputSources?: readonly UserTurnTranscriptRecorder[];
+  /** Original source bytes remain represented in this collected input. */
+  pendingInputSourcesAreLossless?: true;
   sessionTurnMutation?: SessionTranscriptTurnMutation;
   input?: UserTurnInput;
   message?: PersistedUserTurnMessage;
@@ -225,6 +227,7 @@ export type CreateUserTurnTranscriptRecorderParams = {
   assertOriginalInputCommit?: SessionSourceAssertion;
   onPersistenceError?: (error: unknown) => void;
   onMessagePersisted?: (message: PersistedUserTurnMessage) => void | Promise<void>;
+  onApprovedMessagePersisted?: (message: PersistedUserTurnMessage) => void | Promise<void>;
   /** Fresh original input only, after durable append and before transcript publication. */
   onOriginalInputCommitted?: (commit: UserTurnOriginalInputCommit) => void;
   expectedSessionState?: SessionTranscriptTurnExpectedState;

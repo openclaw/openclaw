@@ -116,6 +116,7 @@ type SessionTitleParams = {
   sessionKey: string;
   storePath: string;
   currentUserMessage?: string;
+  approvedOpeningText?: string;
   messageId?: string;
   allowReassessment?: boolean;
   awaitingFirstMessage?: boolean;
@@ -547,7 +548,7 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
       : false;
   }
 
-  const finish = async (generation: Promise<string | null>, sourceText: string) => {
+  const finish = async (generation: Promise<string | null>, approvedOpeningSource?: string) => {
     const displayName = await generation;
     if (!displayName) {
       return false;
@@ -583,9 +584,8 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
                       ? { lifecycleRevision: entry.lifecycleRevision }
                       : {}),
                     remainingMessages: 6,
-                    ...(params.awaitingFirstMessage
-                      ? { awaitingFirstMessage: true }
-                      : { inputMessages: [sourceText] }),
+                    ...(approvedOpeningSource ? { inputMessages: [approvedOpeningSource] } : {}),
+                    ...(params.awaitingFirstMessage ? { awaitingFirstMessage: true } : {}),
                     ...(params.messageId ? { lastMessageId: params.messageId } : {}),
                   },
                 }
@@ -631,6 +631,11 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
     if (!sourceText) {
       return false;
     }
+    const approvedOpeningSource = params.awaitingFirstMessage
+      ? undefined
+      : (resolveSessionTitleSource(params.approvedOpeningText ?? "", skillCommands) ?? undefined);
+    const capturedOpening =
+      approvedOpeningSource === sourceText ? approvedOpeningSource : undefined;
 
     const generate = (abortSignal?: AbortSignal) =>
       generateDashboardSessionTitle({
@@ -647,7 +652,7 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
     const withSource = params.withSource;
     if (!withSource) {
       params.commitGuard?.();
-      return await finish(generate(), sourceText);
+      return await finish(generate(), capturedOpening);
     }
     return await runWithAsyncWorkResources(
       async () => {
@@ -662,7 +667,7 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
           void completion.catch(() => undefined);
           return { completion };
         });
-        return await finish(pending.completion, sourceText);
+        return await finish(pending.completion, capturedOpening);
       },
       { cancelOnError: true },
     );

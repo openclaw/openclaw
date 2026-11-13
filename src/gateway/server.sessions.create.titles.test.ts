@@ -4,12 +4,29 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
+import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
 import { readConversationLabelResetState } from "../auto-reply/reply/conversation-label-refinement.js";
-import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  admitFollowupRunLifecycle,
+  completeFollowupRunLifecycle,
+  enqueueFollowupRun,
+  type FollowupRun,
+} from "../auto-reply/reply/queue.js";
+import { createQueueTestRun } from "../auto-reply/reply/queue.test-helpers.js";
+import { bindReplySourceToFollowup } from "../auto-reply/reply/reply-source-binding.js";
+import { loadSessionEntry, patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { readPersistedMediaFacts } from "../media/media-facts.js";
+import { initializeGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import type { PluginHookBeforeMessageWriteEvent } from "../plugins/hook-types.js";
+import { createHookRunner } from "../plugins/hooks.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import { withSessionTurn } from "../sessions/session-controller.admission.js";
 import { interruptSessionControllerEffects } from "../sessions/session-controller.lifecycle.js";
+import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import * as skillCommands from "../skills/discovery/chat-commands.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
@@ -21,8 +38,10 @@ import {
 } from "./server.sessions.create.projects.test-support.js";
 import { sessionTitleRequests } from "./session-title-state.js";
 import { dispatchInboundMessageMock, testState } from "./test-helpers.js";
+import { getTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import {
   directSessionReq,
+  setSessionLifecycleHookRunnerForTest,
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
 
@@ -50,6 +69,271 @@ afterEach(async () => {
 const readEntry = (storePath: string, sessionKey: string) =>
   loadSessionEntry({ agentId: "main", sessionKey, storePath });
 const adminClient = { client: { connect: { scopes: ["operator.admin"] } } as never };
+
+test("uses hook-approved follow-up text while the agent reply is held", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const context = { dedupe: new Map() };
+  const options = { ...controlUiClient, context };
+  dispatchInboundMessageMock.mockResolvedValue({
+    queuedFinal: false,
+    counts: { block: 0, final: 0, tool: 0 },
+  });
+  titleMocks.generate.mockResolvedValue("Release planning");
+  const { key } = await request<{ key: string }>(
+    "sessions.create",
+    { agentId: "main", message: "Plan a release" },
+    options,
+  );
+  await settleWorkspaceRuns(context, storePath, key);
+  await vi.waitFor(() => expect(readEntry(storePath, key)?.displayName).toBe("Release planning"));
+  await vi.waitFor(async () =>
+    expect(
+      (await readSessionEntryReadOnlyInWorker({ agentId: "main", storePath, sessionKey: key }))
+        ?.conversationLabelRefinement?.inputMessages,
+    ).toContain("Plan a release"),
+  );
+  await patchSessionEntryCore({ agentId: "main", storePath, sessionKey: key }, (entry) => {
+    if (!entry.conversationLabelRefinement) {
+      throw new Error("Missing opening refinement state");
+    }
+    return {
+      conversationLabelRefinement: { ...entry.conversationLabelRefinement, remainingMessages: 1 },
+    };
+  });
+  const registry = getTestPluginRegistry();
+  const hook: (typeof registry.typedHooks)[number] = {
+    pluginId: "title-approved-input",
+    hookName: "before_message_write",
+    source: "test",
+    handler: ({ message }: PluginHookBeforeMessageWriteEvent) =>
+      message.role === "user" ? { message: { ...message, content: "Approved task" } } : undefined,
+  };
+  registry.typedHooks.push(hook);
+  initializeGlobalHookRunner(registry);
+  setSessionLifecycleHookRunnerForTest(createHookRunner(registry));
+  const held = createDeferredCore();
+  dispatchInboundMessageMock.mockImplementation(async (args: unknown) => {
+    const recorder = (args as Parameters<typeof dispatchInboundMessage>[0]).replyOptions
+      ?.userTurnTranscriptRecorder;
+    await recorder?.persistApproved();
+    await held.promise;
+    return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+  });
+  try {
+    await request(
+      "chat.send",
+      { sessionKey: key, message: "Original private task", idempotencyKey: "approved-title" },
+      options,
+    );
+    const readNaming = () =>
+      readSessionEntryReadOnlyInWorker({ agentId: "main", storePath, sessionKey: key });
+    await vi.waitFor(async () =>
+      expect((await readNaming())?.conversationLabelRefinement?.inputMessages).toContain(
+        "Approved task",
+      ),
+    );
+    expect((await readNaming())?.conversationLabelRefinement?.inputMessages).not.toContain(
+      "Original private task",
+    );
+    await vi.waitFor(() => expect(titleMocks.generate).toHaveBeenCalledTimes(2));
+    expect(JSON.stringify(titleMocks.generate.mock.calls)).toContain("Approved task");
+    expect(JSON.stringify(titleMocks.generate.mock.calls)).not.toContain("Original private task");
+  } finally {
+    held.resolve();
+    await settleWorkspaceRuns(context, storePath, key);
+    registry.typedHooks.splice(registry.typedHooks.indexOf(hook), 1);
+    setSessionLifecycleHookRunnerForTest(undefined);
+  }
+});
+
+test.each(["unchanged", "redacted"] as const)(
+  "uses only hook-approved caption for title with restored attachment metadata (%s)",
+  async (outcome) => {
+    const { storePath } = await createSessionStoreDir();
+    const context = { dedupe: new Map() };
+    const options = { ...controlUiClient, context };
+    dispatchInboundMessageMock.mockResolvedValue({
+      queuedFinal: false,
+      counts: { block: 0, final: 0, tool: 0 },
+    });
+    titleMocks.generate.mockResolvedValue("Release planning");
+    const { key } = await request<{ key: string }>(
+      "sessions.create",
+      { agentId: "main", message: "Plan a release" },
+      options,
+    );
+    await settleWorkspaceRuns(context, storePath, key);
+    await vi.waitFor(() => expect(readEntry(storePath, key)?.displayName).toBe("Release planning"));
+    await patchSessionEntryCore({ agentId: "main", storePath, sessionKey: key }, (entry) => ({
+      conversationLabelRefinement: {
+        sessionId: entry.sessionId,
+        ...(entry.lifecycleRevision ? { lifecycleRevision: entry.lifecycleRevision } : {}),
+        remainingMessages: 1,
+        inputMessages: ["Plan a release"],
+      },
+    }));
+    const caption = "Review the release";
+    const body = "Private attachment content that must never reach naming";
+    const approved = outcome === "redacted" ? "Approved caption" : caption;
+    const registry = getTestPluginRegistry();
+    const hook: (typeof registry.typedHooks)[number] = {
+      pluginId: "title-attachment-privacy",
+      hookName: "before_message_write",
+      source: "test",
+      handler: ({ message }: PluginHookBeforeMessageWriteEvent) =>
+        message.role === "user"
+          ? { message: { ...message, content: approved, __openclaw: {} } }
+          : undefined,
+    };
+    registry.typedHooks.push(hook);
+    initializeGlobalHookRunner(registry);
+    setSessionLifecycleHookRunnerForTest(createHookRunner(registry));
+    const held = createDeferredCore();
+    const committed = createDeferredCore();
+    let media: ReturnType<typeof readPersistedMediaFacts>;
+    dispatchInboundMessageMock.mockImplementation(async (args: unknown) => {
+      const recorder = (args as Parameters<typeof dispatchInboundMessage>[0]).replyOptions
+        ?.userTurnTranscriptRecorder;
+      const persisted = await recorder?.persistApproved();
+      if (!persisted) {
+        throw new Error("expected committed input");
+      }
+      media = readPersistedMediaFacts(persisted.message);
+      committed.resolve();
+      await held.promise;
+      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+    });
+    try {
+      await request(
+        "chat.send",
+        {
+          sessionKey: key,
+          message: caption,
+          idempotencyKey: `approved-attachment-${outcome}`,
+          attachments: [
+            {
+              type: "file",
+              mimeType: "text/plain",
+              fileName: "plan.txt",
+              content: Buffer.from(body).toString("base64"),
+            },
+          ],
+        },
+        options,
+      );
+      await committed.promise;
+      expect(media).toEqual(
+        expect.arrayContaining([expect.objectContaining({ contentType: "text/plain" })]),
+      );
+      await vi.waitFor(() => expect(titleMocks.generate).toHaveBeenCalledTimes(2));
+      const entry = await readSessionEntryReadOnlyInWorker({
+        agentId: "main",
+        storePath,
+        sessionKey: key,
+      });
+      expect(entry?.conversationLabelRefinement?.inputMessages).toContain(approved);
+      expect(JSON.stringify(entry?.conversationLabelRefinement?.inputMessages)).not.toContain(body);
+      expect(JSON.stringify(titleMocks.generate.mock.calls)).not.toContain(body);
+      if (outcome === "redacted") {
+        expect(entry?.conversationLabelRefinement?.inputMessages).not.toContain(caption);
+        expect(JSON.stringify(titleMocks.generate.mock.calls)).not.toContain(caption);
+      }
+    } finally {
+      held.resolve();
+      await settleWorkspaceRuns(context, storePath, key);
+      registry.typedHooks.splice(registry.typedHooks.indexOf(hook), 1);
+      setSessionLifecycleHookRunnerForTest(undefined);
+    }
+  },
+);
+
+test("counts a queued approved skill after the original chat dispatch finishes", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const context = { dedupe: new Map() };
+  const options = { ...controlUiClient, context };
+  dispatchInboundMessageMock.mockResolvedValue({
+    queuedFinal: false,
+    counts: { block: 0, final: 0, tool: 0 },
+  });
+  titleMocks.generate.mockResolvedValue("Release planning");
+  const { key, sessionId } = await request<{ key: string; sessionId: string }>(
+    "sessions.create",
+    { agentId: "main", message: "Plan a release" },
+    options,
+  );
+  await settleWorkspaceRuns(context, storePath, key);
+  await vi.waitFor(() => expect(readEntry(storePath, key)?.displayName).toBe("Release planning"));
+  await vi.waitFor(async () =>
+    expect(
+      (await readSessionEntryReadOnlyInWorker({ agentId: "main", storePath, sessionKey: key }))
+        ?.conversationLabelRefinement,
+    ).toMatchObject({ remainingMessages: 6, inputMessages: ["Plan a release"] }),
+  );
+  const skills = vi
+    .spyOn(skillCommands, "prepareSkillCommandsForWorkspace")
+    .mockResolvedValue([
+      { name: "release", skillName: "release", description: "Review a release" },
+    ]);
+  const queued = createDeferredCore<{ run: FollowupRun; recorder: UserTurnTranscriptRecorder }>();
+  let run: FollowupRun | undefined;
+  dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
+    const replyOptions = (args as Parameters<typeof dispatchInboundMessage>[0]).replyOptions;
+    const recorder = replyOptions?.userTurnTranscriptRecorder;
+    if (!replyOptions || !recorder) {
+      throw new Error("Missing user input recorder");
+    }
+    run = createQueueTestRun(
+      {
+        prompt: "/skill release Review rollout",
+        turnAdoptionLifecycle: replyOptions.turnAdoptionLifecycle,
+      },
+      { agentId: "main", sessionKey: key, sessionId, config: { session: { store: storePath } } },
+    );
+    expect(bindReplySourceToFollowup(replyOptions, run)).toBeDefined();
+    expect(enqueueFollowupRun(key, run, { mode: "followup" }, "none", undefined, false)).toBe(true);
+    queued.resolve({ run, recorder });
+    return {
+      deferredToActiveRun: "followup",
+      queuedFinal: false,
+      counts: { block: 0, final: 0, tool: 0 },
+    };
+  });
+  try {
+    await request(
+      "chat.send",
+      { sessionKey: key, message: "/skill release Review rollout", idempotencyKey: "queued-skill" },
+      options,
+    );
+    const pending = await queued.promise;
+    await vi.waitFor(() => expect(pending.run.controllerInput?.custody.work?.size ?? 0).toBe(0));
+    await withSessionTurn(
+      { agentId: "main", storePath, sessionKey: key, controllerInput: pending.run.controllerInput },
+      async () => {
+        await admitFollowupRunLifecycle(pending.run);
+        await pending.recorder.persistApproved();
+        await vi.waitFor(async () =>
+          expect(
+            (
+              await readSessionEntryReadOnlyInWorker({
+                agentId: "main",
+                storePath,
+                sessionKey: key,
+              })
+            )?.conversationLabelRefinement,
+          ).toMatchObject({
+            remainingMessages: 5,
+            inputMessages: ["Plan a release", "Review rollout"],
+          }),
+        );
+      },
+    );
+  } finally {
+    if (run) {
+      completeFollowupRunLifecycle(run);
+    }
+    skills.mockRestore();
+  }
+});
 
 test.each(["Release planning", "Land PR and archive"])(
   "compares the existing title once after six follow-ups (%s)",

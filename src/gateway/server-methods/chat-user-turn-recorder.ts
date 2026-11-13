@@ -85,6 +85,7 @@ export function createGatewayChatUserTurnController(params: {
   goalCommitGuard?: ReturnType<typeof createChatSendGoalCommitGuard>;
   assertOriginalInputCommit?: SessionSourceAssertion;
   onMessagePersisted?: () => void;
+  onApprovedMessagePersisted?: (message: PersistedUserTurnMessage) => void;
 }): GatewayChatUserTurnController {
   const { admission, request, session } = params;
   const recoveredInput = readQueuedChatInputAdmission(session.clientRunId);
@@ -196,6 +197,7 @@ export function createGatewayChatUserTurnController(params: {
       : undefined;
   const recorder: UserTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
     onMessagePersisted: params.onMessagePersisted,
+    onApprovedMessagePersisted: params.onApprovedMessagePersisted,
     ...(recoveredInput ? { message: recoveredInput.target.message } : {}),
     // Attribution and submitted bytes survive reconnect; generated state does not.
     pendingInputRequestFingerprint:

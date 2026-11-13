@@ -289,7 +289,6 @@ describe("maybeGenerateDashboardSessionTitle", () => {
       conversationLabelRefinement: {
         sessionId: "session-1",
         remainingMessages: 6,
-        inputMessages: ["Help me plan the release"],
       },
     });
   });
@@ -308,6 +307,51 @@ describe("maybeGenerateDashboardSessionTitle", () => {
       awaitingFirstMessage: true,
     });
   });
+
+  it.each([
+    {
+      kind: "approved opening",
+      approved: "Help me plan the release",
+      prior: undefined,
+      awaiting: false,
+      retained: true,
+    },
+    {
+      kind: "unapproved creation",
+      approved: undefined,
+      prior: undefined,
+      awaiting: true,
+      retained: false,
+    },
+    {
+      kind: "earlier transcript",
+      approved: "Help me plan the release",
+      prior: "Earlier approved task",
+      awaiting: false,
+      retained: false,
+    },
+  ])(
+    "retains only the matching committed $kind as opening context",
+    async ({ approved, prior, awaiting, retained }) => {
+      mocks.readTranscript.mockReturnValue({ firstUserMessage: prior, lastMessagePreview: null });
+      mockSessionUpdate(baseEntry);
+      await expect(
+        maybeGenerateDashboardSessionTitle({
+          ...titleParams(),
+          currentUserMessage: "Help me plan the release",
+          ...(approved ? { approvedOpeningText: approved } : {}),
+          ...(awaiting ? { awaitingFirstMessage: true } : {}),
+          messageId: "opening",
+        }),
+      ).resolves.toBe(true);
+      const state = mocks.load().conversationLabelRefinement;
+      if (retained) {
+        expect(state.inputMessages).toEqual([approved]);
+      } else {
+        expect(state.inputMessages).toBeUndefined();
+      }
+    },
+  );
 
   it("retries a historical session from the transcript's first user message", async () => {
     const entry = { ...baseEntry, systemSent: true };
