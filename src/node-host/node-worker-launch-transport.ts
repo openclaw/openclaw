@@ -38,7 +38,6 @@ import {
   type NodeWorkerContainerEngine,
 } from "./node-worker-container-engine.js";
 import type { NodeWorkerContainerLifecycle } from "./node-worker-container-lifecycle.js";
-import { prepareNodeWorkerFilesystem } from "./node-worker-filesystem.js";
 import type { NodeWorkerCleanupMode } from "./node-worker-launch-receipt.js";
 import type {
   NodeWorkerContainerIdentity,
@@ -197,7 +196,9 @@ export async function prepareNodeWorkerLaunchTransport(
         supervisor: options.supervisor,
       });
       const filesystem = options.filesystemIsolation
-        ? await prepareNodeWorkerFilesystem({
+        ? await (
+            await import("./node-worker-filesystem.js")
+          ).prepareNodeWorkerFilesystem({
             workspaceDir: options.descriptor.assignment.workspaceDir,
             bundleRoot: options.bundleRoot,
             entry,
