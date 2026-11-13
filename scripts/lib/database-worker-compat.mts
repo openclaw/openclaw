@@ -841,6 +841,10 @@ export function inspectDatabaseWorkerBoundaries(
   const bindings: ts.VariableDeclaration[] = [];
   for (const { source } of sources) {
     const visit = (node: ts.Node) => {
+      // Type-only subtrees cannot introduce runtime imports or variable bindings.
+      if (ts.isTypeNode(node) && !ts.isExpressionWithTypeArguments(node)) {
+        return;
+      }
       if (ts.isImportSpecifier(node) || ts.isExportSpecifier(node)) {
         aliases.push([node.propertyName?.text ?? node.name.text, node.name.text]);
       } else if (ts.isImportClause(node) && node.name) {

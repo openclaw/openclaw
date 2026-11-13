@@ -1038,6 +1038,10 @@ export function inspectPersonalCredentialWriters(
   const bindingNames: (ts.Identifier | ts.StringLiteral)[] = [];
   for (const { file, source } of sources) {
     const visit = (node: ts.Node) => {
+      // Heritage and instantiation expressions can still contain runtime bindings.
+      if (ts.isTypeNode(node) && !ts.isExpressionWithTypeArguments(node)) {
+        return;
+      }
       if (
         (ts.isFunctionDeclaration(node) ||
           ts.isFunctionExpression(node) ||
@@ -1234,6 +1238,9 @@ export function inspectPersonalCredentialWriters(
   };
   for (const { source } of sources) {
     const visit = (node: ts.Node) => {
+      if (ts.isTypeNode(node) && !ts.isExpressionWithTypeArguments(node)) {
+        return;
+      }
       if (ts.isVariableDeclaration(node) && node.initializer) {
         bindImports(node.initializer, node.name);
       }
