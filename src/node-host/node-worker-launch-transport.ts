@@ -74,6 +74,7 @@ type NodeWorkerLaunchTransportOptions = {
   containerEngine?: NodeWorkerContainerEngine;
   containerLifecycle?: NodeWorkerContainerLifecycle;
   containerImage?: string;
+  filesystemIsolation?: boolean;
 };
 
 type NodeWorkerLaunchTransport =
@@ -118,7 +119,7 @@ export async function prepareNodeWorkerLaunchTransport(
   if (options.descriptor.assignment.inference === "runtime-local") {
     if (options.containerEngine) {
       throw new Error(
-        'Worker-local inference requires nodeHost.workerRuns.isolation to be "none"; ' +
+        'Worker-local inference requires nodeHost.workerRuns.isolation to be "none" or "filesystem"; ' +
           "nested-container worker isolation is unsupported.",
       );
     }
@@ -186,20 +187,64 @@ export async function prepareNodeWorkerLaunchTransport(
         features.includes(WORKER_NATIVE_PROCESS_OWNER_V2_PROTOCOL_FEATURE) ||
         (process.platform === "linux" &&
           features.includes(WORKER_NATIVE_PROCESS_OWNER_PROTOCOL_FEATURE));
-      const { adapter, ready } = await createServiceChildRelayAdapter({
-        ...workerOptions,
-        ...(nativeProcessOwnerSupported ? { nativeProcessOwnerSupported: true as const } : {}),
-        cleanupBinding: await options.store.cleanupBinding({
-          launchId: options.input.launchId,
-          planHash: options.planHash,
-          supervisor: options.supervisor,
-        }),
-        command: process.execPath,
-        args,
-        oomScoreWrapperSelected: false,
+      if (options.filesystemIsolation && !nativeProcessOwnerSupported) {
+        throw new Error("Filesystem-isolated workers require the native lineage process owner");
+      }
+      const cleanupBinding = await options.store.cleanupBinding({
+        launchId: options.input.launchId,
+        planHash: options.planHash,
+        supervisor: options.supervisor,
       });
-      await ready;
-      return { kind: "started", adapter, cleanupMode: adapter.treeOwnership ?? "owned-anchor" };
+      const filesystem = options.filesystemIsolation
+        ? await (
+            await import("./node-worker-filesystem.js")
+          ).prepareNodeWorkerFilesystem({
+            workspaceDir: options.descriptor.assignment.workspaceDir,
+            bundleRoot: options.bundleRoot,
+            entry,
+            homeDir: options.homeDir,
+            env: workerOptions.env,
+            args,
+          })
+        : undefined;
+      let ownedAdapter: NodeWorkerChildAdapter | undefined;
+      try {
+        const { adapter, ready } = await createServiceChildRelayAdapter({
+          ...workerOptions,
+          ...(nativeProcessOwnerSupported ? { nativeProcessOwnerSupported: true as const } : {}),
+          cleanupBinding,
+          command: filesystem?.command ?? process.execPath,
+          args: filesystem?.args ?? args,
+          oomScoreWrapperSelected: false,
+        });
+        ownedAdapter = adapter;
+        if (filesystem) {
+          // Attach before readiness: failed startup must release scratch too,
+          // but only the existing owner may certify descendant extinction.
+          // Filesystem mode is Linux-only; this native owner resolves on extinction.
+          const cleaned = adapter.waitForExtinction().then(async () => {
+            await filesystem.cleanup();
+          });
+          void cleaned.catch(() => undefined);
+          adapter.waitForExtinction = () => cleaned;
+        }
+        await ready;
+        return { kind: "started", adapter, cleanupMode: adapter.treeOwnership ?? "owned-anchor" };
+      } catch (error) {
+        if (!filesystem) {
+          throw error;
+        }
+        if (!ownedAdapter) {
+          await filesystem.cleanup();
+        } else {
+          ownedAdapter.kill("SIGKILL");
+          await ownedAdapter.waitForExtinction?.().catch(() => undefined);
+        }
+        throw error;
+      }
+    }
+    if (options.filesystemIsolation) {
+      throw new Error("Filesystem-isolated workers require the native lineage process owner");
     }
     assertProcessGroupControl();
     const { adapter, ready } = await createChildAdapter({

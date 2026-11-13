@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import { prepareWorkspaceReconciliation } from "../gateway/worker-environments/workspace-manifest-comparison.js";
 import type {
   WorkerWorkspaceManifest,
@@ -13,6 +12,7 @@ import {
   NODE_WORKSPACE_EMPTY_MANIFEST,
   NODE_WORKSPACE_EMPTY_MANIFEST_REF,
 } from "../worker/node-workspace-transfer-protocol.js";
+import { withNodeWorkerTempWorkspace } from "./node-worker-workspace-admission.js";
 import { readWorkspaceManifest, runWorkspaceCommand } from "./node-worker-workspace-commands.js";
 
 export async function readNodeRepositoryCheckpointBase(params: {
@@ -86,7 +86,7 @@ export async function withNodeRepositoryPublication<T>(
   if (params.baseManifestRef !== NODE_WORKSPACE_EMPTY_MANIFEST_REF) {
     throw new Error("Publication transfer baseline is invalid");
   }
-  return await withTempWorkspace(
+  return await withNodeWorkerTempWorkspace(
     {
       rootDir: path.join(params.manifestHome, ".openclaw-worker", "publication"),
       prefix: "worker-publication-",
