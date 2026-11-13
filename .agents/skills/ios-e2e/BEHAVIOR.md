@@ -15,7 +15,7 @@
 
 4. `pnpm ios:behavior` pairs a fresh simulator through onboarding, runs every case three times, then deletes the simulator and prints a table. `--cases stream-turn,keyboard` and `--samples 1` narrow a run; `IOS_SIM=<udid>` reuses a simulator already paired with `ios-ux`.
 
-   Typing through a UI driver sends hardware key events, after which iOS hides the software keyboard for good. The script therefore resets `HardwareKeyboardLastSeen` in the simulator's `com.apple.keyboard.preferences` while it is shut down, and cases enter prompts by pasting (`simctl pbcopy`, long-press, Paste). Never `type-text` in a case.
+   Typing through a UI driver sends hardware key events, after which iOS hides the software keyboard for good. The script therefore resets `HardwareKeyboardLastSeen` in the simulator's `com.apple.keyboard.preferences` while it is shut down, and cases enter prompts by pasting (`simctl pbcopy`, long-press, Paste). Never `type-text` in a case: one `type-text` left every keyboard-up case unable to show the keyboard while this harness was built ([#198293](https://github.com/openclaw/openclaw/pull/198293)).
 
 **Done:** the summary table prints and the script exits 0: every `guard` case passes all gates in every sample, and every `bad` case still reproduces its bug in at least one sample. There is no majority vote: a jump in one sample is a jump users see. Probe logs and `summary.json` land in `.artifacts/ios-behavior/<time>/`.
 
