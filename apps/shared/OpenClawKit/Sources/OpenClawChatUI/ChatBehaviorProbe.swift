@@ -25,23 +25,31 @@ enum ChatBehaviorProbe {
     }
 }
 
-extension ChatTranscriptRow {
-    /// Probe key: role (or `other`) and the stable row id.
-    var behaviorProbeKey: String {
+/// A tagged view. Typed rather than string keys: string literals passed to a View helper read as
+/// user-visible copy to the native i18n inventory.
+enum ChatBehaviorProbeTarget {
+    case composer
+    case live
+    case row(ChatTranscriptRow)
+
+    /// `composer`, `live`, or the row's role (or `other`) and its stable id.
+    var key: String {
         switch self {
-        case let .message(message): "\(message.role.lowercased())/\(self.id)"
-        case .systemNotice, .historyDivider, .completedWork: "other/\(self.id)"
+        case .composer: "composer"
+        case .live: "live"
+        case let .row(.message(message)): "\(message.role.lowercased())/\(message.presentationID)"
+        case let .row(row): "other/\(row.id)"
         }
     }
 }
 
 extension View {
-    /// Records this view's on-screen frame and mounts under `key`. Release builds never evaluate `key`.
+    /// Records this view's on-screen frame and mounts. Release builds never build the key.
     @ViewBuilder
-    func chatBehaviorProbe(_ key: @autoclosure () -> String) -> some View {
+    func chatBehaviorProbe(_ target: ChatBehaviorProbeTarget) -> some View {
         #if DEBUG && os(iOS)
         if let recorder = ChatBehaviorRecorder.shared {
-            let key = key()
+            let key = target.key
             onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { recorder.update(key, $0) }
                 .onAppear { recorder.event(["e": "mount", "k": key]) }
                 .onDisappear { recorder.unmount(key) }

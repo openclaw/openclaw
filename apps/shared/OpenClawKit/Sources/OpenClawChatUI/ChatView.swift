@@ -355,7 +355,7 @@ extension OpenClawChatView {
                 .padding(.top, Layout.stackSpacing)
             if self.showsComposer {
                 self.composer
-                    .chatBehaviorProbe("composer")
+                    .chatBehaviorProbe(.composer)
                     .frame(maxWidth: self.readingColumnWidth)
                     .padding(.horizontal, self.composerHorizontalMargin)
                     .padding(.top, Layout.stackSpacing)
@@ -699,7 +699,7 @@ extension OpenClawChatView {
                 isGrouped: isGrouped,
                 answerID: answerID)
                 .id(row.id)
-                .chatBehaviorProbe(row.behaviorProbeKey)
+                .chatBehaviorProbe(.row(row))
         case let .tool(tool):
             ChatToolActivityList(items: [ChatToolActivityItem(live: tool)])
                 .padding(4)
@@ -779,7 +779,7 @@ extension OpenClawChatView {
                     isClean: self.composerChrome == .clean)
                     .equatable()
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .chatBehaviorProbe("live")
+                    .chatBehaviorProbe(.live)
             }
         }
     }
