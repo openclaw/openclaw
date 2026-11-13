@@ -740,6 +740,25 @@ describe("DiscordPresenceListener", () => {
     expect(fetchMember).toHaveBeenCalledTimes("roles" in access ? 2 : 0);
   });
 
+  it("skips the wake when the greeting channel lookup fails", async () => {
+    const client = Object.assign(presenceClient(), {
+      fetchChannel: async () => {
+        throw new Error("discord unavailable");
+      },
+    });
+    const listener = createPresenceListener({
+      guildEntries: {
+        "guild-1": {
+          channels: { greetings: { users: ["111"] } },
+          presenceEvents: { channelId: "channel-lookup-fails" },
+        },
+      },
+    });
+    await listener.transition("222", client);
+    expectWake();
+    expect(await listener.store.entries()).toEqual([]);
+  });
+
   it("caches snapshot activities even when presence events are disabled", async () => {
     const listener = createPresenceListener({ presenceEvents: { enabled: false } });
     const snapshotPresence = {

@@ -39,7 +39,7 @@ import {
 import { DiscordPresenceBaselineCache } from "./presence-transition-cache.js";
 import { isThreadArchived } from "./thread-bindings.discord-api.js";
 import { getThreadBindingManager } from "./thread-bindings.manager.js";
-import { resolveDiscordThreadLikeChannelContext } from "./thread-channel-context.js";
+import { resolveFetchedDiscordThreadLikeChannelContext } from "./thread-channel-context.js";
 import { closeDiscordThreadSessions } from "./thread-session-close.js";
 export { DiscordReactionListener, DiscordReactionRemoveListener } from "./listeners.reactions.js";
 
@@ -122,9 +122,14 @@ async function isDiscordPresenceMemberAllowed(params: {
   const { client, guildInfo } = params;
   let channelConfig = null;
   if (hasConfiguredDiscordChannels(guildInfo.channels)) {
-    const channel = await resolveDiscordThreadLikeChannelContext({
+    // Fetch directly like reactions: a failed lookup must not read as "no channel restriction".
+    const fetched = await client.fetchChannel(params.channelId);
+    if (!fetched) {
+      return false;
+    }
+    const channel = await resolveFetchedDiscordThreadLikeChannelContext({
       client,
-      channel: null,
+      channel: fetched,
       channelIdFallback: params.channelId,
     });
     channelConfig = resolveDiscordChannelConfigWithFallback({
