@@ -77,7 +77,7 @@ it("retains a replacement entry when identity changes after expiry inspection", 
   expect(await fs.readFile(path.join(f.root, "retained-original/proof"), "utf8")).toBe("proof");
 });
 
-it("skips live or queued custody and stops paced deletion when custody becomes live", async () => {
+it("skips live custody and isolates claimed cleanup from new work at the original path", async () => {
   const f = await fixture();
   f.target.isLive = () => true;
   const file = await f.file(".openclaw/tmp/proof/file");
@@ -88,11 +88,13 @@ it("skips live or queued custody and stops paced deletion when custody becomes l
     await f.file(`.openclaw/tmp/proof/${index}`);
   }
   f.pause.mockImplementation(async () => {
+    await expect(fs.stat(path.dirname(file))).rejects.toMatchObject({ code: "ENOENT" });
+    await f.file(".openclaw/tmp/proof/fresh", 1);
     f.target.isLive = () => true;
   });
-  expect(await f.run()).toMatchObject({ skippedLive: 1, filesRemoved: 128, entriesRemoved: 0 });
+  expect(await f.run()).toMatchObject({ filesRemoved: 131, entriesRemoved: 1, errors: [] });
   expect(f.pause).toHaveBeenCalledExactlyOnceWith(100);
-  expect((await fs.readdir(path.dirname(file))).length).toBe(2);
+  expect(await fs.readdir(path.dirname(file))).toEqual(["fresh"]);
 });
 
 it("joins worker cancellation at a deletion checkpoint before releasing the checkout", async () => {
@@ -111,7 +113,11 @@ it("joins worker cancellation at a deletion checkpoint before releasing the chec
       pause: async () => controller.abort(),
     }),
   ).rejects.toMatchObject({ name: "AbortError" });
-  expect(await fs.readdir(path.join(f.root, ".openclaw/tmp/proof"))).toHaveLength(2);
+  const remaining = await fs.readdir(path.join(f.root, ".openclaw/tmp"));
+  expect(remaining).toHaveLength(1);
+  expect(await fs.readdir(path.join(f.root, ".openclaw/tmp", remaining[0]!))).toHaveLength(2);
+  // Ordinary expiry rediscovers the partially drained entry without a claim journal.
+  expect(await f.run()).toMatchObject({ entriesRemoved: 1, filesRemoved: 3, errors: [] });
 });
 
 it("refuses symlink scratch roots but expires contained links without following their targets", async () => {

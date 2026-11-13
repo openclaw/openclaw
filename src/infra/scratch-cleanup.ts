@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { lstatSync } from "node:fs";
 import path from "node:path";
 import { root as openRoot, type Root } from "@openclaw/fs-safe/root";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -196,7 +198,7 @@ export async function cleanScratch(params: {
           if (refusal) {
             throw refusal.error;
           }
-          assertIdle();
+          params.assertCurrent();
         }, params.signal);
         let next: FsSafeCopyReply;
         try {
@@ -221,7 +223,6 @@ export async function cleanScratch(params: {
                 checkpoint = (async () => {
                   try {
                     await params.pause(DELETE_BATCH_DELAY_MS);
-                    await target.prepare?.();
                   } catch (error) {
                     refusal = { error };
                   }
@@ -290,6 +291,32 @@ export async function cleanScratch(params: {
           if ((newest === -Infinity ? stat.mtimeMs : newest) < cutoff) {
             await target.prepare?.();
             assertIdle();
+            if (stat.isDirectory) {
+              const original = relativePath;
+              const claimed = path.join(
+                path.dirname(relativePath),
+                `${target.kind === "coverage" ? "node-coverage" : ".reclaim"}-${randomUUID()}`,
+              );
+              // Remove the expired name from task custody before handing its tree to the worker.
+              await root.move(original, claimed, {
+                // The generated destination also permits fs-safe's portable rename path.
+                overwrite: true,
+                assertBeforeMutation: () => {
+                  assertIdle();
+                  const current = lstatSync(path.join(target.root, original), { bigint: true });
+                  const expected = stat.exactIdentity;
+                  if (
+                    expected
+                      ? current.dev !== expected.dev || current.ino !== expected.ino
+                      : Number(current.dev) !== stat.dev || Number(current.ino) !== stat.ino
+                  ) {
+                    throw new Error("scratch entry identity changed; entry retained");
+                  }
+                },
+              });
+              relativePath = claimed;
+              cursor.pending = claimed;
+            }
             await walk(relativePath, stat, true);
             result.entriesRemoved++;
           }
