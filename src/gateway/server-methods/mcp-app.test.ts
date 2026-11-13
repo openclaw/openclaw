@@ -645,8 +645,9 @@ describe("MCP App gateway bridge", () => {
       const active = runtime();
       const catalog = active.peekCatalog();
       const icons = withIcons ? [{ src: "https://example.test/excalidraw.png" }] : undefined;
-      catalog.servers.demo.title = "Excalidraw";
-      catalog.servers.demo.icons = icons;
+      const server = expectDefined(catalog.servers.demo, "demo server fixture");
+      server.title = "Excalidraw";
+      server.icons = icons;
       mocks.peekSessionMcpRuntime.mockReturnValue(active);
       const response = await invoke("mcp.app.view", {
         sessionKey: "agent:main:main",
@@ -655,7 +656,7 @@ describe("MCP App gateway bridge", () => {
       expect(response.mock.calls[0]?.[1]).toMatchObject({
         appIdentity: { label: "Excalidraw", icons: icons ?? [] },
       });
-      catalog.servers.demo.title = undefined;
+      server.title = undefined;
       const fallback = await invoke("mcp.app.view", {
         sessionKey: "agent:main:main",
         viewId: "cv_app",
