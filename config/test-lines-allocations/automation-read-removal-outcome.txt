@@ -1,0 +1,2 @@
+5
+# Observe the real history-handler refusal after source retirement without requiring a forbidden provider continuation.

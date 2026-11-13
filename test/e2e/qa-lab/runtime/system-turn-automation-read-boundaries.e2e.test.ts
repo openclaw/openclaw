@@ -209,7 +209,6 @@ it(
       finished.set(id, entry);
       return entry.promise;
     };
-    const firstNoticeDone = createDeferred();
     const closingNoticeHeld = createDeferred();
     const forgedDone = createDeferred();
     let releaseHold: () => void = () => {};
@@ -367,9 +366,7 @@ it(
                   call("automations", "runs_removed", { action: "runs", jobId: owned() });
                   break;
                 case 17:
-                  reply("Automation history inspected.");
-                  firstNoticeDone.resolve();
-                  break;
+                  throw new Error("Removed automation disclosed a result to its retired notice");
                 // The second notice turn's read is closed before disclosure.
                 case 18: {
                   expect(JSON.stringify(body.input)).toContain(
@@ -475,9 +472,13 @@ it(
         expect(await runDue(jobs.owned)).toMatchObject({ status: "error" });
         // The operator removes the automation while the notice turn's awaited history read is in flight.
         await observe(removalHeld.promise);
+        const removed = createDeferred<RunsOutcome>();
+        seams.onRunsOutcome = (outcome) => removed.resolve(outcome);
         await live.client.request("cron.remove", { id: jobs.owned.id });
         releaseHold();
-        await observe(firstNoticeDone.promise);
+        const removedOutcome = await observe(removed.promise);
+        // Removal retires the notice's restored operator source as well as the job.
+        step = 18;
 
         expect(await runDue(jobs.closing)).toMatchObject({ status: "error" });
         // The notice run closes while its awaited history read is in flight.
@@ -540,8 +541,12 @@ it(
           expect(outputs.get(id)).toContain("Other actions need the owner's authority");
         }
         expect(outputs.get("gateway")).toContain("gateway needs the owner's authority");
-        // Removed during the awaited read: the disclosure-time recheck withholds history.
-        expect(outputs.get("runs_removed")).toContain(`not found: ${jobs.owned.id}`);
+        // Removal retires the source during the read: no history reaches the model.
+        expect(removedOutcome).toEqual({
+          id: jobs.owned.id,
+          threw: expect.stringContaining("authority is no longer active"),
+        });
+        expect(outputs.has("runs_removed")).toBe(false);
         // Closed during the awaited read: the handler responds with nothing at all.
         expect(closedOutcome).toEqual({
           id: jobs.closing.id,
