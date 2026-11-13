@@ -49,7 +49,7 @@ import {
   type GatewayOwnerLease,
 } from "./gateway-owner-lease.js";
 import type { GatewayOwnerSupervisor } from "./gateway-owner-lease.types.js";
-import { createGatewayPostgresCustody } from "./gateway-postgres-owner.js";
+import { createGatewayPostgresCustody } from "./gateway-postgres-custody.js";
 import { classifyOpenClawArgv } from "./gateway-process-argv.js";
 import { captureStalledGatewayStartup } from "./gateway-startup-owner.js";
 import {
