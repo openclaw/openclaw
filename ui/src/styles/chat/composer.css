@@ -4114,7 +4114,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   background: none;
   box-shadow: none;
   color: var(--muted);
-  font-family: var(--font-body);
+  font-family: var(--font-shortcut);
   font-size: 9px;
   font-weight: 600;
   line-height: 16px;
@@ -4170,7 +4170,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 @media not ((max-width: 640px) or ((max-width: 932px) and (max-height: 500px) and (orientation: landscape))) {
   .chat-controls__model-menu {
     height: 350px;
-    flex: 0 0 350px;
+    flex: 0 1 350px;
     border-radius: inherit;
     --chat-composer-menu-row-padding: 0 12px 0 10px;
     --menu-item-radius: min(12px, var(--radius-menu-item));

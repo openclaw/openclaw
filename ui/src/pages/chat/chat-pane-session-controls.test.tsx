@@ -41,7 +41,6 @@ import { handlePageGatewayEvent } from "./chat-state-events.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { renderChatModelAccountControl } from "./components/chat-model-account-control.ts";
 import { ChatModelAccountSectionView } from "./components/chat-model-account-control.tsx";
-import { expandModelProviders } from "./components/chat-model-picker.test-support.tsx";
 import { ChatPermissionPicker } from "./components/chat-permission-picker.tsx";
 import { adoptStartedChatRun, reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 
@@ -334,8 +333,6 @@ describe("chat pane composer controls", () => {
       await waitForSolid(() =>
         expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
       );
-
-      expandModelProviders(container);
 
       expect(container.querySelectorAll(".chat-composer-model-control")).toHaveLength(1);
       expect(container.querySelector('[data-chat-provider-usage="true"]')).toBeNull();
