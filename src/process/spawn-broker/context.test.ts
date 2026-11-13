@@ -14,9 +14,12 @@ import { spawnBrokerContextEntrypoints } from "./context-runtime.test-support.js
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-it.skipIf(process.platform === "win32").each(["exit", "timeout"] as const)(
-  "logs first-start %s and keeps subsequent Gateway starts in-process",
+it
+  .skipIf(process.platform === "win32")
+  .each(["exit", "timeout", "low-memory", "small-host"] as const)(
+  "keeps Gateway child spawning in-process after %s admission",
   async (failure) => {
+    const lowMemory = failure === "low-memory" || failure === "small-host";
     const directory = tempDirs.make("openclaw-broker-startup-fallback-");
     const marker = path.join(directory, "attempts");
     const preload = path.join(directory, "exit-before-ready.mjs");
@@ -26,7 +29,7 @@ it.skipIf(process.platform === "win32").each(["exit", "timeout"] as const)(
       import {appendFileSync} from 'node:fs';
       if (/\\/spawn-broker\\/worker\\.(?:ts|js)$/.test(process.argv[1] ?? '')) {
         appendFileSync(${JSON.stringify(marker)}, 'attempt\\n');
-        ${failure === "exit" ? "process.exit(73);" : "process.on('message',()=>{}); await new Promise(()=>{});"}
+        ${failure === "timeout" ? "process.on('message',()=>{}); await new Promise(()=>{});" : "process.exit(73);"}
       }
     `,
     );
@@ -39,7 +42,7 @@ it.skipIf(process.platform === "win32").each(["exit", "timeout"] as const)(
       import {getSpawnBroker} from ${JSON.stringify(contextUrl)};
       const state = globalThis[Symbol.for(${JSON.stringify(stateKey)})];
       const parent = async () => state.parents.push(Number(
-        (await runExec(process.execPath,['-e','console.log(process.ppid)'],{logOutput:false})).stdout
+        (await runExec(process.execPath,['-e','console.log(String(process.ppid))'],{logOutput:false})).stdout
       ));
       export async function startGatewayServerCore() {
         state.brokers.push(getSpawnBroker()?.pid ?? null);
@@ -53,10 +56,13 @@ it.skipIf(process.platform === "win32").each(["exit", "timeout"] as const)(
     const source = `
       import {existsSync,readFileSync,watch} from 'node:fs';
       import {registerHooks} from 'node:module';
+      import os from 'node:os';
       import {mock} from 'node:test';
       const state = {parents:[],brokers:[],errors:[]};
       globalThis[Symbol.for(${JSON.stringify(stateKey)})] = state;
       Object.defineProperty(process,'platform',{value:'linux'});
+      Object.defineProperty(process,'constrainedMemory',{value:()=>${failure === "low-memory" ? 768 * 1024 ** 2 : failure === "small-host" ? 2 * 1024 ** 3 : 0}});
+      ${failure === "small-host" ? "mock.method(os,'totalmem',()=>1024 ** 3);" : ""}
       registerHooks({resolve(specifier,context,nextResolve) {
         if (context.parentURL === ${JSON.stringify(serverUrl.href)}) {
           const requested = specifier.startsWith('.') ? new URL(specifier, context.parentURL).href : specifier;
@@ -99,7 +105,7 @@ it.skipIf(process.platform === "win32").each(["exit", "timeout"] as const)(
           const server = await starting;
           await server.close();
         }
-        console.log(JSON.stringify({...state,hostPid:process.pid,attempts:readFileSync(${JSON.stringify(marker)},'utf8').trim().split('\\n').length}));
+        console.log(JSON.stringify({...state,hostPid:process.pid,attempts:existsSync(${JSON.stringify(marker)})?readFileSync(${JSON.stringify(marker)},'utf8').trim().split('\\n').length:0}));
       } finally {
         attemptWatcher?.close();
         mock.timers.reset();
@@ -121,10 +127,14 @@ it.skipIf(process.platform === "win32").each(["exit", "timeout"] as const)(
     expect(result.status, result.stderr).toBe(0);
     const observed = JSON.parse(result.stdout);
     expect(observed).toMatchObject({
-      attempts: 1,
+      attempts: lowMemory ? 0 : 1,
       brokers: [null, null],
       parents: Array(4).fill(observed.hostPid),
     });
+    if (lowMemory) {
+      expect(observed.errors).toEqual([]);
+      return;
+    }
     expect(observed.errors).toHaveLength(1);
     expect(observed.errors[0]).toMatch(/before readiness|before becoming ready/);
     expect(observed.errors[0]).toContain(
