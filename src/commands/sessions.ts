@@ -48,6 +48,7 @@ import {
   formatSessionAgeCell,
   formatSessionFlagsCell,
   formatSessionKeyCell,
+  formatSessionLabelCell,
   formatSessionModelCell,
   toSessionDisplayRow,
 } from "./sessions-table.js";
@@ -503,6 +504,9 @@ export async function sessionsCommand(
 
   const rich = isRich();
   const showAgentColumn = aggregateAgents || targets.length > 1;
+  // Only surface the Label column when at least one displayed session carries a
+  // non-empty label, so unlabeled listings keep their previous layout.
+  const showLabelColumn = rows.some((row) => row.label?.trim());
   runtime.log(
     renderTable({
       width: getTerminalTableWidth(),
@@ -510,6 +514,7 @@ export async function sessionsCommand(
         ...(showAgentColumn ? [{ key: "agent", header: "Agent" }] : []),
         { key: "kind", header: "Kind" },
         { key: "key", header: "Key" },
+        ...(showLabelColumn ? [{ key: "label", header: "Label" }] : []),
         { key: "age", header: "Age" },
         { key: "model", header: "Model" },
         { key: "runtime", header: "Runtime" },
@@ -522,6 +527,7 @@ export async function sessionsCommand(
         agent: colorize(rich, theme.accentBright, terminalText`${row.agentId}`),
         kind: formatKindCell(row.kind, rich),
         key: formatSessionKeyCell(row.key, rich),
+        label: formatSessionLabelCell(row, rich),
         age: formatSessionAgeCell(row.updatedAt, rich),
         model: formatSessionModelCell(row.displayModelRef.model, rich),
         runtime: colorize(rich, theme.info, terminalText`${row.runtimeLabel}`),
