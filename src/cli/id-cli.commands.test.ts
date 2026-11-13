@@ -11,6 +11,7 @@ import {
   type SignedStatement,
 } from "../../packages/openclaw-id-protocol/src/index.js";
 import { authorizeOperatorScopesForMethod } from "../gateway/method-scopes.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { ExpectedCliError } from "./expected-cli-error.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
 import { registerIdCli } from "./id-cli.js";
@@ -27,6 +28,7 @@ vi.mock(import("@openclaw/media-core/read-byte-stream-with-limit"), async (impor
 let kitText: string;
 let preparation: RebindPreparation;
 let bindingSeq: number;
+let publishedSeq: number | undefined;
 let readFailure: Error | undefined;
 let commitFailure: Error | undefined;
 let followUpError: string | undefined;
@@ -58,6 +60,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   bindingSeq = 1;
+  publishedSeq = undefined;
   readFailure = undefined;
   commitFailure = undefined;
   followUpError = undefined;
@@ -88,7 +91,7 @@ beforeEach(() => {
           link: {
             binding: {
               bindingSeq,
-              publishedBindingSeq: bindingSeq,
+              publishedBindingSeq: publishedSeq ?? bindingSeq,
               kSrv: preparation.k_srv,
               kGw: preparation.k_gw,
             },
@@ -129,6 +132,7 @@ beforeEach(() => {
 
 afterEach(() => {
   process.exitCode = originalExitCode;
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -215,6 +219,56 @@ describe("registered id commands", () => {
   it("shows a rebind option refusal as an expected CLI error", async () => {
     await expect(run("rebind", false, ["--yes"])).rejects.toBeInstanceOf(ExpectedCliError);
   });
+
+  it.each([true, false])(
+    "reports the committed move once when the publication wait is cancelled (json=%s)",
+    async (json) => {
+      // The commit lands before Discovery publishes it, so the command keeps polling.
+      publishedSeq = 1;
+      const base = vi.mocked(callGatewayFromCli).getMockImplementation();
+      if (!base) {
+        throw new Error("expected the RPC fixture to be installed");
+      }
+      let peopleReads = 0;
+      let markFirstPoll: (() => void) | undefined;
+      const firstPoll = new Promise<void>((resolve) => {
+        markFirstPoll = resolve;
+      });
+      vi.mocked(callGatewayFromCli).mockImplementation(async (method, opts, params, extra) => {
+        if (method === "openclawId.people") {
+          peopleReads += 1;
+          markFirstPoll?.();
+          markFirstPoll = undefined;
+        }
+        return await base(method, opts, params, extra);
+      });
+      vi.useFakeTimers();
+      const scope = new AsyncWorkScope();
+      const running = scope.track(() => run("rebind", json));
+      await firstPoll;
+      expect(peopleReads).toBe(1);
+      scope.beginClose(new DOMException("CLI stopping (SIGINT)", "AbortError"));
+      const readsAtCancel = peopleReads;
+      await vi.advanceTimersByTimeAsync(31_000);
+      await expect(running).resolves.toBeUndefined();
+      // The wait stops where it was cancelled: no further Discovery reads, no failure report.
+      expect(peopleReads).toBe(readsAtCancel);
+      expect(process.exitCode).toBeUndefined();
+      if (json) {
+        expect(JSON.parse(output)).toEqual({
+          moved: true,
+          bindingSeq: 2,
+          published: null,
+          cancelled: true,
+          nextStep: "openclaw id status",
+        });
+      } else {
+        expect(output).toContain("Moved to new keys (committed)");
+        expect(output).toContain("Stopped checking Discovery");
+        expect(output).not.toContain("Publication check failed");
+      }
+    },
+  );
 
   it("treats a full command rerun as a new signed rotation, not a commit replay", async () => {
     await run("rebind");

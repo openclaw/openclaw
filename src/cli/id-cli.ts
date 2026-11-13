@@ -200,15 +200,30 @@ async function runStatus(opts: IdCliOpts, signal?: AbortSignal) {
 }
 
 async function waitForPublication(opts: IdCliOpts, bindingSeq: number) {
+  const signal = getAsyncWorkSignal();
   const deadline = Date.now() + PUBLICATION_WAIT_MS;
   while (Date.now() < deadline) {
-    const link = await readPeopleLink(opts);
+    signal?.throwIfAborted();
+    const link = await readPeopleLink(opts, signal);
     if ((link?.binding?.publishedBindingSeq ?? 0) >= bindingSeq) {
       return true;
     }
-    await sleep(1_000);
+    await sleep(1_000, undefined, { signal });
   }
   return false;
+}
+
+/** The move is committed: report it once instead of keeping the wait alive after Ctrl+C. */
+function writeCancelledPublicationWait(opts: IdCliOpts, bindingSeq: number) {
+  write(
+    opts,
+    { moved: true, bindingSeq, published: null, cancelled: true, nextStep: "openclaw id status" },
+    [
+      "Moved to new keys (committed).",
+      "Stopped checking Discovery: the command was cancelled.",
+      "Run openclaw id status to check publication. Do not repeat rebind: it rotates keys again.",
+    ].join("\n"),
+  );
 }
 
 function writeCommittedWarning(
@@ -277,6 +292,10 @@ async function runRebind(opts: RebindOpts) {
   try {
     published = await waitForPublication(opts, committed.bindingSeq);
   } catch (error) {
+    if (getAsyncWorkSignal()?.aborted) {
+      writeCancelledPublicationWait(opts, committed.bindingSeq);
+      return;
+    }
     writeCommittedWarning(opts, committed.bindingSeq, error, "publication");
     return;
   }
