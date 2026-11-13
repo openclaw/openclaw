@@ -2012,7 +2012,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   user-select: none;
 }
 
-.chat-controls__model-picker > .chat-controls__model-trigger {
+.chat-controls__model-picker > summary {
   /* The summary fills its details block without a percentage width. WebKit can
      retain a stale intrinsic size when that percentage depends on the picker
      flex item whose width is itself derived from the changing model label. */

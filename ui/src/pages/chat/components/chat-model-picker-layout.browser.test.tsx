@@ -103,6 +103,7 @@ it("keeps the same saved label readable after a live-runtime round trip", async 
             path: "",
             sessions: [selectedSession],
             defaults: {
+              contextTokens: 128000,
               model: entry.id,
               modelProvider: entry.provider,
             },
