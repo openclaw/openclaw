@@ -5,9 +5,9 @@ import { expect, it } from "vitest";
 import { ensureGatewayOwnerProfile } from "../../../src/state/user-profiles.ts";
 import { createOpenClawTestInstance } from "../../../test/helpers/openclaw-test-instance.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { buildProductionControlUiE2e } from "../test-helpers/control-ui-e2e-build.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { buildProductionControlUiE2e } from "../test-helpers/control-ui-e2e.ts";
 import { connectChatGateway } from "./chat-real-gateway.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 

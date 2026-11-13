@@ -10,8 +10,8 @@ import { parseArgs } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { chromium, type Page } from "playwright";
 import { createSessionGoalFixture } from "../src/gateway/session-goal.test-support.js";
+import { buildProductionControlUiE2e } from "../ui/src/test-helpers/control-ui-e2e-build.ts";
 import {
-  buildProductionControlUiE2e,
   createControlUiMockBootstrapConfig,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,

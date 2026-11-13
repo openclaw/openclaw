@@ -6,6 +6,8 @@ import { agentVitestProjectOwners } from "../vitest/vitest.agents-paths.mjs";
 import { fixturePreloadEnv } from "./fixtures/ci-fixture-runtime.cjs";
 import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
 import {
+  compilerFixtureEnv,
+  createControlledWorkerCompiler,
   createWorkerArtifactTest,
   inWorkerArtifactFixture,
   readFixtureLines,
@@ -35,6 +37,122 @@ const windowsGitBash = "src/agents/sessions/windows-git-bash-path.test.ts";
 const unitFastConfig = "test/vitest/vitest.unit-fast.config.ts";
 const discordCapture = "test/e2e/gateway-transcripts-discord-capture.e2e.test.ts";
 const e2eConfig = "test/vitest/vitest.e2e.config.ts";
+const uiConfig = "test/vitest/vitest.ui-e2e.config.ts";
+const routeAssets = "ui/src/e2e/route-asset-requests.e2e.test.ts";
+const teamScaleColdLoad = "ui/src/e2e/team-scale-cold-load.e2e.test.ts";
+
+subprocess.for([routeAssets, teamScaleColdLoad])(
+  "prepares only the selected UI shard before suite hooks (%s)",
+  (consumer, { workerArtifacts, signal, onTestFinished }) =>
+    inWorkerArtifactFixture(
+      { workerArtifacts, signal, onTestFinished },
+      async ({ node, directory, write }) => {
+        const files = [consumer, "ui/src/e2e/avatar-initial-emoji.e2e.test.ts"].map((file) =>
+          path.join(root, file),
+        );
+        const include = write("include.json", JSON.stringify(files));
+        const observed: Array<{ file: string; prepared: boolean; compilers: number }> = [];
+        for (const shard of [1, 2]) {
+          const arm = path.join(directory, `shard-${shard}`);
+          const receipt = path.join(arm, "fixture-compilers.jsonl");
+          const observation = path.join(arm, "hook.json");
+          const controlled = createControlledWorkerCompiler(
+            arm,
+            testRunnerFixtureEnv({
+              OPENCLAW_VITEST_INCLUDE_FILE: include,
+              OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1",
+              CI: "1",
+            }),
+          );
+          const sources = Object.fromEntries(
+            files.map((file) => [
+              file,
+              `
+import fs from 'node:fs';
+import path from 'node:path';
+import {beforeAll,it} from 'vitest';
+beforeAll(async()=>{
+  const compiled=fs.existsSync(${JSON.stringify(receipt)})
+    ? JSON.parse(fs.readFileSync(${JSON.stringify(receipt)},'utf8').trim()) : undefined;
+  fs.writeFileSync(${JSON.stringify(observation)},JSON.stringify({
+    file:${JSON.stringify(file)},
+    prepared:Boolean(compiled && fs.existsSync(path.join(compiled.directory,'manifest.json'))),
+  }));
+  ${file === files[0] ? `await import(${JSON.stringify(path.join(root, "src/infra/runtime-process-entrypoints.ts"))});` : ""}
+});
+it('executes the selected synthetic leaf',()=>{});
+`,
+            ]),
+          );
+          const config = write(
+            `shard-${shard}/vitest.config.mts`,
+            `
+import {UiE2eSequencer} from ${JSON.stringify(path.join(root, "test/vitest/vitest.ui-e2e.sequencer.ts"))};
+import {compiledSubprocessesPlugin} from ${JSON.stringify(path.join(root, "test/vitest/vitest.worker-artifacts.ts"))};
+const sources=${JSON.stringify(sources)};
+export default {
+  root:${JSON.stringify(root)},
+  plugins:[compiledSubprocessesPlugin(),{name:'synthetic-ui-leaves',enforce:'pre',
+    configureVitest({defineCacheKeyGenerator}){defineCacheKeyGenerator(()=>JSON.stringify(sources));},
+    load(id){return sources[id] ?? null;}}],
+  test:{include:${JSON.stringify(files)},pool:'forks',maxWorkers:1,isolate:true,
+    sequence:{sequencer:UiE2eSequencer}},
+};`,
+          );
+          // Keep canonical outer admission and native sharding; replace only browser test bodies.
+          const preload = write(
+            `shard-${shard}/config-preload.mjs`,
+            `
+import cp from 'node:child_process';
+import path from 'node:path';
+import {syncFixtureBuiltinExports} from ${JSON.stringify(new URL("./fixtures/ci-fixture-runtime.cjs", import.meta.url).href)};
+const spawn=cp.spawn;
+cp.spawn=(bin,args,options)=>{
+  if(args.some(arg=>path.basename(arg)==='vitest.mjs')) {
+    args=[...args];
+    const index=args.indexOf('--config');
+    if(index<0 || path.resolve(args[index+1])!==${JSON.stringify(path.join(root, uiConfig))}) {
+      throw new Error('Synthetic UI shard config was not selected');
+    }
+    args[index+1]=${JSON.stringify(config)};
+  }
+  return spawn(bin,args,options);
+};
+syncFixtureBuiltinExports();`,
+          );
+          const result = await node(
+            [
+              "scripts/run-vitest.mjs",
+              "run",
+              "--config",
+              uiConfig,
+              "--configLoader",
+              "runner",
+              "--shard",
+              `${shard}/2`,
+              "--maxWorkers=1",
+            ],
+            root,
+            compilerFixtureEnv(preload, controlled.env, "node"),
+          );
+          expect(result.code, result.stdout + result.stderr).toBe(0);
+          const compilers = fs.existsSync(receipt) ? controlled.read() : [];
+          observed.push({ ...readJson(observation), compilers: compilers.length });
+          for (const compiler of compilers) {
+            expect(isProcessAlive(compiler.pid)).toBe(false);
+            expect(fs.existsSync(compiler.directory)).toBe(false);
+          }
+        }
+        expect(observed.toSorted((a, b) => a.file.localeCompare(b.file))).toEqual(
+          files.toSorted().map((file) => ({
+            file,
+            prepared: file === files[0],
+            compilers: file === files[0] ? 1 : 0,
+          })),
+        );
+      },
+    ),
+);
 
 it.for([
   ["ordinary infra", infraConfig, ["src/infra/node-sqlite.test.ts"], false],

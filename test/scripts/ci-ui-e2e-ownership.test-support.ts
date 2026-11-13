@@ -211,20 +211,24 @@ export function assertControlUiE2eOwnership(
   );
   expect(select(production)).toEqual([[], productionArtifactFiles, [], []]);
 
-  // The packaged delivery proof needs the runtime build owned by the prebuilt lane.
-  const packagedWorkboard = "ui/src/pages/workboard/workboard-distribution.e2e.test.ts";
-  expect(ordinarySelected.flat()).not.toContain(packagedWorkboard);
-  const prebuilt = createPrebuiltUiE2eVitestConfig({}, ["node", "vitest", packagedWorkboard]);
-  expect(
-    projectsOf(prebuilt)
-      .map((project) => ({ name: project.test.name, files: selectedFiles(project.test) }))
-      .filter((project) => project.files.length > 0),
-  ).toEqual([{ name: "ui-e2e-real-gateway-standalone", files: [packagedWorkboard] }]);
-  expect(
-    createUiRealGatewayTestShards(createUiTestShardGroups({ uiE2eFiles: [packagedWorkboard] }).e2e)
-      .flatMap((shard) => shard.groups.flatMap((group) => group.includePatterns))
-      .filter((file) => file === packagedWorkboard),
-  ).toEqual([packagedWorkboard]);
+  // Runtime-backed proofs retain coverage in their audited prebuilt project.
+  for (const [file, projectName] of [
+    ["ui/src/pages/workboard/workboard-distribution.e2e.test.ts", "ui-e2e-real-gateway-standalone"],
+    ["ui/src/e2e/home-readonly.real-gateway.e2e.test.ts", "ui-e2e-serial"],
+  ] as const) {
+    expect(ordinarySelected.flat()).not.toContain(file);
+    const prebuilt = createPrebuiltUiE2eVitestConfig({}, ["node", "vitest", file]);
+    expect(
+      projectsOf(prebuilt)
+        .map((project) => ({ name: project.test.name, files: selectedFiles(project.test) }))
+        .filter((project) => project.files.length > 0),
+    ).toEqual([{ name: projectName, files: [file] }]);
+    expect(
+      createUiRealGatewayTestShards(createUiTestShardGroups({ uiE2eFiles: [file] }).e2e)
+        .flatMap((shard) => shard.groups.flatMap((group) => group.includePatterns))
+        .filter((selected) => selected === file),
+    ).toEqual([file]);
+  }
 
   const bundledFile = expectDefined(ordinarySelected[0]?.[0], "bundled Control UI E2E file");
   const serialFile = expectDefined(ordinarySelected[3]?.[0], "serial Control UI E2E file");

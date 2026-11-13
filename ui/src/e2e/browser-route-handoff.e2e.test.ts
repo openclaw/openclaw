@@ -69,6 +69,7 @@ suite.define(() => {
             browserCase("/screencast", {
               __mockError: { code: "UNAVAILABLE", message: "Screencast unavailable" },
             }),
+            browserCase("/operator/input", { sent: 1, navigated: false, blockedByDialog: false }),
           ),
         });
         await page.goto(
@@ -88,6 +89,11 @@ suite.define(() => {
           },
         });
         const requests = await gateway.getRequests("browser.request");
+        expect(
+          requests
+            .filter((request) => requestPath(request) === "/operator/input")
+            .flatMap((request) => asNullableRecord(asNullableRecord(request.params)?.body)?.inputs),
+        ).toMatchObject([{ kind: "clickCoords" }, { kind: "press", key: "Enter" }]);
         for (const request of requests) {
           expect(request.params).toMatchObject({
             target: "node",

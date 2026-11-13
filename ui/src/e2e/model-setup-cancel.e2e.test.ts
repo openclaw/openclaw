@@ -53,6 +53,12 @@ async function cancelAndLeave(page: Page, gateway: Awaited<ReturnType<typeof ins
   const readReceipt = () => page.evaluate((key) => localStorage.getItem(key), receiptKey);
   await signIn.click();
   await page.getByText("Complete provider sign-in").waitFor();
+  // Startup refresh removes the busy row and moves the footer; wait before clicking Cancel.
+  await expect
+    .poll(() =>
+      button(page.locator("openclaw-modal-dialog openclaw-modal-actions"), "Submit").isEnabled(),
+    )
+    .toBe(true);
   expect(await readReceipt()).not.toBeNull();
   await gateway.deferNext(rpc.cancel);
   await button(page.locator("openclaw-modal-dialog openclaw-modal-actions"), "Cancel").click();

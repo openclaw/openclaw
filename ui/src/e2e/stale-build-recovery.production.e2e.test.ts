@@ -7,10 +7,8 @@ import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version
 import { createOpenClawTestInstance } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { normalizeControlUiBuildInfo } from "../build-info-normalizers.ts";
-import {
-  buildProductionControlUiE2e,
-  refreshProductionControlUiE2e,
-} from "../test-helpers/control-ui-e2e.ts";
+import { buildProductionControlUiE2e } from "../test-helpers/control-ui-e2e-build.ts";
+import { refreshProductionControlUiE2e } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 let obsoleteRoot: string;
