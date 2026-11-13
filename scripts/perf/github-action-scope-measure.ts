@@ -26,6 +26,7 @@ const { values } = parseArgs({
     output: { type: "string" },
     counts: { type: "boolean" },
     allocation: { type: "boolean" },
+    "cpu-profile": { type: "boolean" },
     publication: { type: "boolean" },
     lineage: { type: "boolean" },
     "large-fixture": { type: "string" },
@@ -35,7 +36,10 @@ const { values } = parseArgs({
   },
 });
 assert(values.capsule && values.output, "--capsule and --output are required");
-assert(!(values.counts && values.allocation), "Separate census and allocation runs");
+assert(
+  [values.counts, values.allocation, values["cpu-profile"]].filter(Boolean).length <= 1,
+  "Separate census, allocation and CPU profile runs",
+);
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const capsule = path.resolve(values.capsule);
 assert(capsule !== root);
@@ -206,6 +210,7 @@ if (values["large-fixture"]) {
       anchor +
         `
     await fs.mkdir(path.join(root, "agents/main/agent"), {recursive: true});
+    (await import("../infra/sqlite-wal-filesystem.js")).prepareSqliteDatabaseDirectory(path.join(root, "agents/main/agent/openclaw-agent.sqlite"));
     await fs.copyFile(${JSON.stringify(db)}, path.join(root, "agents/main/agent/openclaw-agent.sqlite"), fs.constants.COPYFILE_FICLONE_FORCE);
     await fs.cp(${JSON.stringify(path.join(fixture, "workspace"))}, path.join(root, "large-workspace"), {recursive: true, mode: fs.constants.COPYFILE_FICLONE_FORCE});`,
     ),
@@ -249,7 +254,9 @@ it("measures actions at the registered boundary with a large authority inventory
  setRuntimeConfigSnapshot(config);
  prepareGatewayConnectOperatorAccess(f.guestSource.client);
  const rows=[];
- const heap=process.env.LANE2450_ALLOC==="1" ? new Session():undefined;heap?.connect();
+ const cpuProfile=process.env.LANE2458_CPU_PROFILE==="1";
+ const heap=process.env.LANE2450_ALLOC==="1" || cpuProfile ? new Session():undefined;heap?.connect();
+ if(cpuProfile)await heap.post("Profiler.enable");
  const state = {arm:"baseline",count:undefined};
  globalThis[Symbol.for("openclaw.benchmark.githubActionScope")]=state;
  const pairs=[{kind:"warmup",arms:lineage?["baseline","baseline"]:["baseline","candidate"]},...Array.from({length:5},()=>({kind:"AA",arms:["baseline","baseline"]})),...(lineage ? [] : Array.from({length:5},(_,i)=>({kind:"AB",arms:i%2?["candidate","baseline"]:["baseline","candidate"]})))];
@@ -262,7 +269,7 @@ it("measures actions at the registered boundary with a large authority inventory
  for(let level=0;level<depth;level++) {
   const sessionKey=\`agent:main:lineage-\${depth}-\${level}\`;
   const sessionId=\`lineage-\${depth}-\${level}\`;
-  await upsertSessionEntryCore({agentId:"main",sessionKey},{sessionId,updatedAt:1,createdActor:{type:"human",source:"profile",id:f.guestProfile}});
+  await upsertSessionEntryCore({agentId:"main",sessionKey},{sessionId,updatedAt:1,sandbox:"required",createdActor:{type:"human",source:"profile",id:f.guestProfile}});
   principal=await prepareSessionPrincipalRunAuthority({context:f.guestSource.context,agentId:"main",sessionKey,sessionId,profileId:f.guestProfile,assertCurrent:parent});
   releases.push(principal.release);
   const admission=prepareSystemAgentRunAdmission(config,\`lineage-run-\${depth}-\${level}\`,"main","lineage",undefined,principal.authority);
@@ -273,6 +280,7 @@ it("measures actions at the registered boundary with a large authority inventory
  }
  const invocation=lineage ? {client:{...f.guestSource.client,internal:{...f.guestSource.client.internal,operatorRunAuthority:principal.authority}}}:undefined;
  try {
+ if(cpuProfile)await heap.post("Profiler.start");
  for(const [pair,control] of pairs.entries()) for(const [slot,arm] of control.arms.entries()) for(const action of publication ? ["publish"] : lineage ? ["assert", "edit_read", "edit"] : ["edit_read","edit","requester_runs"]) {
   // Expire the synthetic request window outside measurement; normal RPC admission still runs.
   pruneStaleControlPlaneBuckets(Date.now()+360000);
@@ -281,13 +289,19 @@ it("measures actions at the registered boundary with a large authority inventory
   const counts={};
   if(process.env.LANE2450_COUNTS==="1")state.count=(key)=>counts[key]=(counts[key]??0)+1;
   let maxSegment=0,last=performance.now();
-  const timer=setInterval(()=>{const now=performance.now();maxSegment=Math.max(maxSegment,now-last);last=now;},1);
+  const timer=action==="assert" ? undefined : setInterval(()=>{const now=performance.now();maxSegment=Math.max(maxSegment,now-last);last=now;},1);
   const allocating=process.env.LANE2450_ALLOC==="1";
   if(allocating)await heap!.post("HeapProfiler.startSampling",{samplingInterval:32768,includeObjectsCollectedByMajorGC:true,includeObjectsCollectedByMinorGC:true});
   const cpu=process.threadCpuUsage(); const started=performance.now();
-  const result=action==="assert" ? active() : publication ? await (async()=>{const admitted=await capturePublicationGuest(f);try{return await f.coordinator.requestForSessionV2(f.request(\`benchmark-\${i}\`,admitted.requester));}finally{admitted.release();}})() : action==="requester_runs" ? listSubagentRunsForRequester("agent:main:fixture:0",{requesterSessionId:"fixture-0"}) : await f.invoke("guest",{action:"edit",...f.expected,...(action==="edit"?{title:\`Fixture \${i}\`,expectedTitle:f.state.title}:{})},SESSION_KEY,invocation);
+  const iterations=action==="assert" ? Math.ceil(1024/depth) : 1;
+  let result;
+  for(let iteration=0;iteration<iterations;iteration++){
+  const callStarted=performance.now();
+  result=action==="assert" ? active() : publication ? await (async()=>{const admitted=await capturePublicationGuest(f);try{return await f.coordinator.requestForSessionV2(f.request(\`benchmark-\${i}\`,admitted.requester));}finally{admitted.release();}})() : action==="requester_runs" ? listSubagentRunsForRequester("agent:main:fixture:0",{requesterSessionId:"fixture-0"}) : await f.invoke("guest",{action:"edit",...f.expected,...(action==="edit"?{title:\`Fixture \${i}\`,expectedTitle:f.state.title}:{})},SESSION_KEY,invocation);
+  if(action==="assert")maxSegment=Math.max(maxSegment,performance.now()-callStarted);
+  }
   const wallMs=performance.now()-started;const usage=process.threadCpuUsage(cpu);
-  maxSegment=Math.max(maxSegment,performance.now()-last);clearInterval(timer);
+  if(timer){maxSegment=Math.max(maxSegment,performance.now()-last);clearInterval(timer);}
   let allocatedBytes;
   if(allocating){const {profile}=await heap!.post("HeapProfiler.stopSampling");const sum=n=>n.selfSize+n.children.reduce((s,c)=>s+sum(c),0);allocatedBytes=sum(profile.head);}
   state.count=undefined;
@@ -295,8 +309,10 @@ it("measures actions at the registered boundary with a large authority inventory
   else if(publication)expect(result.status).toBe("published");
   else if(action==="requester_runs")expect(result).toHaveLength(Math.ceil(runs/sessions));
   else expect(result.details).toHaveProperty("headCommit",f.publication.headCommit);
-  const row={i,pair,slot,depth,control:control.kind,arm,action,wallMs,cpuMs:(usage.user+usage.system)/1000,maxSegment,allocatedBytes,counts,load:loadavg()};rows.push(row);console.log(JSON.stringify(row));
+  for(const name of Object.keys(counts))counts[name]/=iterations;
+  const row={i,pair,slot,depth,iterations,control:control.kind,arm,action,wallMs:wallMs/iterations,cpuMs:(usage.user+usage.system)/1000/iterations,maxSegment,allocatedBytes:allocatedBytes===undefined?undefined:allocatedBytes/iterations,counts,load:loadavg()};rows.push(row);console.log(JSON.stringify(row));
  }
+ if(cpuProfile){const {profile}=await heap.post("Profiler.stop");await fs.writeFile(process.env.LANE2450_OUTPUT!+".depth"+depth+".cpuprofile",JSON.stringify(profile));}
  } finally {for(const release of releases.toReversed())release();}
  }
  heap?.disconnect();subagentRuns.clear();
@@ -315,6 +331,7 @@ fs.writeFileSync(
       testSha256: hash(fixtureTest),
       counts: Boolean(values.counts),
       allocation: Boolean(values.allocation),
+      cpuProfile: Boolean(values["cpu-profile"]),
       publication: Boolean(values.publication),
       lineage: Boolean(values.lineage),
       largeFixture: values["large-fixture"],
@@ -337,6 +354,7 @@ try {
       env: {
         ...process.env,
         OPENCLAW_VITEST_RUNTIME: "node",
+        LANE2458_CPU_PROFILE: values["cpu-profile"] ? "1" : "0",
         LANE2458_LINEAGE: values.lineage ? "1" : "0",
         LANE2450_SESSIONS: values.sessions,
         LANE2450_RUNS: values.runs,
