@@ -72,13 +72,7 @@ type ConfigSnapshot = {
   agents?: {
     defaults?: Pick<
       AgentConfigEntry,
-      | "workspace"
-      | "model"
-      | "decisionModel"
-      | "utilityModel"
-      | "models"
-      | "skills"
-      | "thinkingDefault"
+      "workspace" | "model" | "decisionModel" | "utilityModel" | "models" | "skills"
     >;
     entries?: Record<string, AgentConfigEntry>;
   };

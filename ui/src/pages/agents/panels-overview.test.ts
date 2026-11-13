@@ -184,7 +184,9 @@ it("keeps a saved thinking default the model no longer offers", () => {
       agentsPanel: "overview",
       agentsList: {
         ...data.agentsList!,
-        agents: [{ id: "beta", thinkingLevels, thinkingDefault: "max" }],
+        agents: [
+          { id: "beta", thinkingLevels, thinkingDefault: "max", thinkingInheritedDefault: "low" },
+        ],
       },
     }),
   });
@@ -193,6 +195,33 @@ it("keeps a saved thinking default the model no longer offers", () => {
   expect(select.value).toBe("max");
   expect(select.options[0]?.textContent).toBe("Inherit default (Low)");
   expect(select.selectedOptions[0]).toMatchObject({ textContent: "Maximum", disabled: true });
+});
+
+it("names the level clearing an override resolves to, not the global default", () => {
+  // Global Low, a per-model param of High, and an agent override of Medium: the Gateway
+  // resolves the cleared agent to High, so the inherit option must say High.
+  const container = renderAgents({
+    configForm: agentConfig({ thinkingDefault: "low" }, { thinkingDefault: "medium" }),
+    readData: () => ({
+      ...data,
+      agentsPanel: "overview",
+      agentsList: {
+        ...data.agentsList!,
+        agents: [
+          {
+            id: "beta",
+            thinkingLevels,
+            thinkingDefault: "medium",
+            thinkingInheritedDefault: "high",
+          },
+        ],
+      },
+    }),
+  });
+  const select = overviewRow(container, "Thinking default")?.querySelector("select");
+  assert(select);
+  expect(select.value).toBe("medium");
+  expect(select.options[0]?.textContent).toBe("Inherit default (High)");
 });
 
 it("edits the thinking default while the model catalog restricts model choices", () => {

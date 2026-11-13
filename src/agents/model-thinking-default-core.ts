@@ -22,6 +22,8 @@ type ThinkingDefaultParams = {
   catalog?: ModelCatalogEntry[];
   agentRuntime?: string | null;
   agentId?: string;
+  /** Resolve what the agent inherits: skip only its own thinkingDefault. */
+  withoutAgentThinkingDefault?: boolean;
   providerPolicySource?: ProviderThinkingPolicySource;
   catalogResolver?: ThinkingCatalogResolver;
 };
@@ -77,10 +79,12 @@ export function resolveConfiguredThinkingDefaultCore(params: {
   provider: string;
   model: string;
   agentId?: string;
+  withoutAgentThinkingDefault?: boolean;
 }): ThinkLevel | undefined {
-  const agentThinking = params.agentId
-    ? resolveAgentEntry(params.cfg, params.agentId)?.thinkingDefault
-    : undefined;
+  const agentThinking =
+    params.agentId && !params.withoutAgentThinkingDefault
+      ? resolveAgentEntry(params.cfg, params.agentId)?.thinkingDefault
+      : undefined;
   if (agentThinking) {
     return agentThinking;
   }

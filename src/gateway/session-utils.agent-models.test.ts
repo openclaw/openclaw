@@ -95,3 +95,25 @@ describe("listAgentsForGateway model identity", () => {
     expect(cfg).toEqual(original);
   });
 });
+
+test("reports the thinking level an agent override falls back to", async () => {
+  const cfg: OpenClawConfig = {
+    agents: {
+      defaults: {
+        model: "openai/gpt-5.5",
+        thinkingDefault: "low",
+        models: { "openai/gpt-5.5": { params: { thinking: "high" } } },
+      },
+      entries: { main: {}, coder: { thinkingDefault: "medium" } },
+    },
+  };
+  const { agents } = await listAgentsForGateway(cfg);
+  const row = (id: string) => agents.find((agent) => agent.id === id);
+  // Clearing coder's override resolves the per-model param before the global default.
+  expect(row("coder")).toMatchObject({
+    thinkingDefault: "medium",
+    thinkingInheritedDefault: "high",
+  });
+  expect(row("main")).toMatchObject({ thinkingDefault: "high" });
+  expect(row("main")).not.toHaveProperty("thinkingInheritedDefault");
+});

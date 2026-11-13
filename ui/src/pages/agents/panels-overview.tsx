@@ -182,11 +182,10 @@ export function AgentOverview(
   // Thinking is not a model choice, so a restricted model catalog does not hide it.
   const thinkingConfig = createMemo(() => resolveAgentConfig(params.configForm, params.agent.id));
   const thinkingDefault = createMemo(() => thinkingConfig().entry?.thinkingDefault);
-  // The roster's levels belong to the agent's saved model, and its thinkingDefault is
-  // the level the Gateway resolved; without an override that is the inherited level.
-  const inheritedThinking = createMemo(() =>
-    thinkingDefault() ? thinkingConfig().defaults?.thinkingDefault : params.agent.thinkingDefault,
-  );
+  // The Gateway resolves both from the saved config: thinkingDefault is the agent's level, and
+  // thinkingInheritedDefault (sent only with an override) is what clearing it resolves to.
+  const inheritedThinking = () =>
+    params.agent.thinkingInheritedDefault ?? params.agent.thinkingDefault;
   const thinkingDisabled = createMemo(
     () =>
       !params.canUpdateConfig || !params.configForm || params.configLoading || params.configSaving,

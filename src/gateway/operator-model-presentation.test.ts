@@ -183,6 +183,19 @@ const configWithPrimary = (primary: string): OpenClawConfig => ({
 // Gateway's published inventory; a metadata load there rescans plugin files.
 const inLifecycleOperation = <T>(run: () => T): T => withPluginCache(createPluginCache(), run);
 
+it("does not pass an agent's inherited thinking level through a restricted roster", () => {
+  const presentation = prepareOperatorModelPolicyPresentation({
+    cfg: {},
+    policy: { models: [], allows: () => false },
+  })!;
+  const row = presentation.forAgent("coder").agent({
+    id: "coder",
+    thinkingDefault: "medium",
+    thinkingInheritedDefault: "high",
+  });
+  expect(row).not.toHaveProperty("thinkingInheritedDefault");
+});
+
 describe("post-commit readers use the published plugin inventory", () => {
   beforeEach(() => {
     loadManifestMetadataSnapshot.mockClear();

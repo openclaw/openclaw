@@ -101,6 +101,8 @@ export const AgentSummarySchema = closedObject({
   thinkingLevels: Type.Optional(Type.Array(GatewayThinkingLevelOptionSchema)),
   thinkingOptions: Type.Optional(Type.Array(NonEmptyString)),
   thinkingDefault: Type.Optional(NonEmptyString),
+  /** Only with an agent-level thinkingDefault: the level clearing it would resolve to. */
+  thinkingInheritedDefault: Type.Optional(NonEmptyString),
   // Configured posture for display only, never an authorization decision.
   defaultPermissionMode: Type.Optional(SessionPermissionModeSchema),
   /** Explicit default for new attended sessions; existing-session Default keeps tool policy. */
