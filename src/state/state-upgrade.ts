@@ -45,6 +45,11 @@ import {
   writePlan,
   type UpgradeOp,
 } from "./state-upgrade-tree.js";
+import {
+  ChainStepError,
+  conservationMismatches,
+  validateShadow,
+} from "./state-upgrade-validate.js";
 
 export const UPGRADE_REPORT_SCOPE = "upgrade.report";
 const UPGRADE_PIN_SCOPE = "upgrade.pin";
@@ -54,55 +59,6 @@ const CHAIN_TIMEOUT_MS = 30 * 60_000;
 export const STATE_UPGRADE_FAIL_STEP_ENV = "OPENCLAW_TEST_STATE_UPGRADE_FAIL_STEP";
 /** Test seam: `SIGKILL` this process right after the named durable step (crash proof). */
 export const STATE_UPGRADE_CRASH_AFTER_ENV = "OPENCLAW_TEST_STATE_UPGRADE_CRASH_AFTER";
-
-// Tables the shipped chain retires or merges into other tables or files. Any
-// other table that loses rows is a conservation mismatch: logged and pinned.
-const CHAIN_TRANSFORMED_TABLES = new Set([
-  // State (v7-v13, v20, v29, v36, cron run log import).
-  "agent_model_catalogs",
-  "android_notification_recent_packages",
-  "auth_profile_state",
-  "auth_profile_stores",
-  "clawhub_promotions_feed_state",
-  "command_log_entries",
-  "commitments",
-  "cron_run_logs",
-  "cron_store_epochs",
-  "device_auth_tokens",
-  "device_identities",
-  "diagnostic_stability_bundles",
-  "installed_plugin_index",
-  "media_blobs",
-  "model_capability_cache",
-  "model_catalog_remote",
-  "node_host_config",
-  "node_pairing_paired",
-  "node_pairing_pending",
-  "onboarding_recommendations",
-  "sidebar_sections",
-  "skill_curator_state",
-  "skill_lifecycle",
-  "skill_workshop_collection_reviews",
-  "skill_workshop_proposal_events",
-  "skill_workshop_proposal_rollbacks",
-  "skill_workshop_proposals",
-  "state_leases",
-  "tui_last_sessions",
-  "update_check_state",
-  "voicewake_routing_config",
-  "voicewake_routing_routes",
-  "voicewake_triggers",
-  "web_push_vapid_keys",
-  // Agent (v8-v27): session tables merge into session_nodes/session_windows; a
-  // per-agent auth store that duplicates the shared one folds into shared state.
-  "auth_profile_store",
-  "cache_entries",
-  "session_entries",
-  "session_routes",
-  "session_transcript_active_events",
-  "session_transcript_generations",
-  "sessions",
-]);
 
 type DatabaseTarget = { kind: "state" | "agent"; agentId?: string; path: string; version: number };
 
@@ -125,15 +81,6 @@ export type StateUpgradeChain = (params: {
   env: NodeJS.ProcessEnv;
   logPath: string;
 }) => Promise<{ warnings: string[] }>;
-
-class ChainStepError extends Error {
-  constructor(
-    readonly step: string,
-    message: string,
-  ) {
-    super(message);
-  }
-}
 
 function readVersion(db: DatabaseSync, kind: DatabaseTarget["kind"]): number {
   const user = Number(
@@ -183,7 +130,7 @@ function discoverDatabases(stateDir: string): DatabaseTarget[] {
   return targets;
 }
 
-const expectedVersion = (target: DatabaseTarget) =>
+const expectedVersion = (target: Pick<DatabaseTarget, "kind">) =>
   target.kind === "state" ? OPENCLAW_STATE_SCHEMA_VERSION : OPENCLAW_AGENT_SCHEMA_VERSION;
 
 function readConfiguredWorkspaces(configPath: string, stateDir: string): string[] {
@@ -242,92 +189,6 @@ export const runDoctorChain: StateUpgradeChain = async ({ stateDir, configPath, 
     fs.closeSync(log);
   }
 };
-
-function countRows(db: DatabaseSync): Map<string, number> {
-  const counts = new Map<string, number>();
-  const tables = db
-    .prepare(
-      "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND sql NOT LIKE 'CREATE VIRTUAL TABLE%'",
-    )
-    .all() as Array<{ name: string }>;
-  for (const { name } of tables) {
-    if (/_fts(_|$)|_vec(_|$)/u.test(name)) {
-      continue;
-    }
-    counts.set(
-      name,
-      Number(
-        (
-          db.prepare(`SELECT count(*) AS n FROM "${name.replaceAll('"', '""')}"`).get() as {
-            n: number;
-          }
-        ).n,
-      ),
-    );
-  }
-  return counts;
-}
-
-/** Integrity, foreign keys and version of every upgraded database in the shadow. */
-function validateShadow(targets: readonly DatabaseTarget[], toShadow: (p: string) => string) {
-  for (const target of targets) {
-    const shadowPath = toShadow(target.path);
-    const db = openReadOnly(shadowPath);
-    try {
-      const version = readVersion(db, target.kind);
-      if (version !== expectedVersion(target)) {
-        throw new ChainStepError(
-          `${target.kind}-schema`,
-          `${shadowPath} is at schema ${version} after the chain, expected ${expectedVersion(target)}`,
-        );
-      }
-      const integrity = db.prepare("PRAGMA integrity_check").all() as Array<{
-        integrity_check: string;
-      }>;
-      if (integrity.length !== 1 || integrity[0]?.integrity_check !== "ok") {
-        throw new ChainStepError("integrity_check", `${shadowPath} failed integrity_check`);
-      }
-      if (db.prepare("PRAGMA foreign_key_check").all().length > 0) {
-        throw new ChainStepError("foreign_key_check", `${shadowPath} failed foreign_key_check`);
-      }
-    } finally {
-      db.close();
-    }
-  }
-}
-
-function conservationMismatches(
-  targets: readonly DatabaseTarget[],
-  toShadow: (p: string) => string,
-): string[] {
-  const mismatches: string[] = [];
-  for (const target of targets) {
-    const before = openReadOnly(target.path);
-    const after = openReadOnly(toShadow(target.path));
-    try {
-      const sourceCounts = countRows(before);
-      const resultCounts = countRows(after);
-      for (const [table, rows] of sourceCounts) {
-        // schema_meta is version metadata the stamp rewrites, not user data.
-        if (rows === 0 || table === "schema_meta" || CHAIN_TRANSFORMED_TABLES.has(table)) {
-          continue;
-        }
-        const kept = resultCounts.get(table) ?? 0;
-        // Renamed claw_* tables keep their rows under template_*.
-        const renamed = table.startsWith("claw_")
-          ? (resultCounts.get(`template_${table.slice(5)}`) ?? 0)
-          : 0;
-        if (kept + renamed < rows) {
-          mismatches.push(`${path.basename(target.path)}:${table} ${rows} -> ${kept + renamed}`);
-        }
-      }
-    } finally {
-      before.close();
-      after.close();
-    }
-  }
-  return mismatches;
-}
 
 /** Generic rebuild of every outdated database into the shadow. */
 function buildFallback(
@@ -529,6 +390,7 @@ export async function upgradeStateDirectory(params: {
     const warnings: string[] = [];
     const setAside: Array<{ report: SqliteSwapReport; rows: readonly SetAsideRow[] }> = [];
     let mismatches: string[] = [];
+    const fallbackAdds: UpgradeOp[] = [];
     try {
       const chain = await runChain({
         stateDir: shadowRoot,
@@ -541,7 +403,7 @@ export async function upgradeStateDirectory(params: {
       if (injected) {
         throw new ChainStepError(injected, `Injected failure in ${injected}`);
       }
-      validateShadow(outdated, toShadow);
+      validateShadow(outdated, toShadow, readVersion, expectedVersion);
       mismatches = conservationMismatches(outdated, toShadow);
     } catch (error) {
       if (!(error instanceof ChainStepError) && isMachineFailure(error)) {
@@ -552,16 +414,34 @@ export async function upgradeStateDirectory(params: {
       params.log.warn(
         `State upgrade chain failed at ${failedStep}: ${(error as Error).message}. Rebuilding the databases with the generic copy; the previous files are kept and pinned.`,
       );
-      // Doctor migrates the config first; keep that result so this build can read it.
-      const migratedConfig = path.join(workDir, "config.migrated");
-      if (fs.existsSync(shadowConfig)) {
-        fs.copyFileSync(shadowConfig, migratedConfig);
+      // Keep what the chain finished outside the databases it upgrades: the migrated
+      // config and new stores it moved data into (client credentials, services).
+      const kept = path.join(workDir, "kept");
+      const keep = [
+        shadowConfig,
+        ...listTreeFiles(shadowRoot).filter(
+          (file) =>
+            isSqliteFile(file) &&
+            !fs.existsSync(path.join(stateDir, path.relative(shadowRoot, file))),
+        ),
+      ].filter((file) => fs.existsSync(file));
+      for (const file of keep) {
+        const target = path.join(kept, path.relative(workDir, file));
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.renameSync(file, target);
       }
       fs.rmSync(shadowRoot, { recursive: true, force: true });
       const fallback = buildFallback(outdated, toShadow, workDir);
-      if (fs.existsSync(migratedConfig)) {
-        fs.mkdirSync(path.dirname(shadowConfig), { recursive: true });
-        fs.renameSync(migratedConfig, shadowConfig);
+      for (const file of keep) {
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.renameSync(path.join(kept, path.relative(workDir, file)), file);
+        if (file !== shadowConfig) {
+          fallbackAdds.push({
+            kind: "add",
+            live: path.join(stateDir, path.relative(shadowRoot, file)),
+            next: file,
+          });
+        }
       }
       warnings.push(...fallback.foldInFailures);
       for (const report of fallback.reports) {
@@ -612,7 +492,14 @@ export async function upgradeStateDirectory(params: {
     const ops: UpgradeOp[] =
       mode === "chain"
         ? diffTree(stateDir, shadowRoot, skip)
-        : outdated.map((t) => ({ kind: "replace" as const, live: t.path, next: toShadow(t.path) }));
+        : [
+            ...outdated.map((t) => ({
+              kind: "replace" as const,
+              live: t.path,
+              next: toShadow(t.path),
+            })),
+            ...fallbackAdds,
+          ];
     if (mode === "fallback" && configInside && fs.existsSync(shadowConfig)) {
       const original = fs.existsSync(configPath) ? fs.readFileSync(configPath) : undefined;
       if (!original?.equals(fs.readFileSync(shadowConfig))) {
