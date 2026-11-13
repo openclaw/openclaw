@@ -94,11 +94,12 @@ describe("buildMcpToolSchema", () => {
     expect(entry?.inputSchema).toEqual({ type: "object", properties: {}, required: [] });
   });
 
-  // The three conjunctive-overlap shapes below cannot flatten without weakening
-  // a constraint, so the tool is skipped with a named warning. Alternatives
-  // within a single keyword keep the keep-first-and-warn publishing contract.
-  it("skips a tool whose alternative constrains a root property differently", () => {
-    const entries = buildMcpToolSchema([
+  // A conjunctive overlap with an exact single-object projection keeps the tool
+  // and the narrowed constraint; only a genuinely unrepresentable overlap skips
+  // the tool with a named warning. Alternatives within a single keyword keep the
+  // keep-first-and-warn publishing contract.
+  it("narrows a root property with its alternatives' literals instead of skipping", () => {
+    const [entry] = buildMcpToolSchema([
       {
         name: "root_overlap",
         description: "proof",
@@ -113,14 +114,15 @@ describe("buildMcpToolSchema", () => {
       } as never,
     ]);
 
-    expect(entries).toEqual([]);
-    expect(logWarnMock).toHaveBeenCalledWith(
-      'mcp-loopback: tool "root_overlap" input schema constrains "action" differently across combined top-level schemas; skipping the tool instead of publishing a weakened constraint',
-    );
+    expect(entry?.inputSchema).toEqual({
+      type: "object",
+      properties: { action: { type: "string", enum: ["read", "write"] } },
+      required: [],
+    });
   });
 
-  it("skips a tool whose allOf branches constrain the same key differently", () => {
-    const entries = buildMcpToolSchema([
+  it("intersects overlapping allOf enums rather than widening or skipping", () => {
+    const [entry] = buildMcpToolSchema([
       {
         name: "all_of_overlap",
         description: "proof",
@@ -133,9 +135,79 @@ describe("buildMcpToolSchema", () => {
       } as never,
     ]);
 
+    expect(entry?.inputSchema).toEqual({
+      type: "object",
+      properties: { mode: { enum: ["write"] } },
+      required: [],
+    });
+  });
+
+  it("keeps an allOf branch's additionalProperties when flattening", () => {
+    const [entry] = buildMcpToolSchema([
+      {
+        name: "closed_branch",
+        description: "proof",
+        parameters: {
+          allOf: [
+            {
+              type: "object",
+              properties: { value: { type: "string" } },
+              required: ["value"],
+              additionalProperties: false,
+            },
+          ],
+        },
+      } as never,
+    ]);
+
+    expect(entry?.inputSchema).toEqual({
+      type: "object",
+      properties: { value: { type: "string" } },
+      required: ["value"],
+      additionalProperties: false,
+    });
+  });
+
+  it("skips a tool whose allOf branch carries a constraint one object cannot express", () => {
+    const entries = buildMcpToolSchema([
+      {
+        name: "nested_branch",
+        description: "proof",
+        parameters: {
+          allOf: [
+            {
+              type: "object",
+              properties: { value: { type: "string" } },
+              not: { required: ["value"] },
+            },
+          ],
+        },
+      } as never,
+    ]);
+
     expect(entries).toEqual([]);
     expect(logWarnMock).toHaveBeenCalledWith(
-      'mcp-loopback: tool "all_of_overlap" input schema constrains "mode" differently across combined top-level schemas; skipping the tool instead of publishing a weakened constraint',
+      'mcp-loopback: tool "nested_branch" has an allOf branch constraining "not", which one flattened object schema cannot express; skipping the tool instead of publishing a weakened constraint',
+    );
+  });
+
+  it("skips a tool that closes one conjunct while another contributes a key", () => {
+    const entries = buildMcpToolSchema([
+      {
+        name: "closed_root",
+        description: "proof",
+        parameters: {
+          type: "object",
+          properties: { root: { type: "string" } },
+          additionalProperties: false,
+          anyOf: [{ type: "object", properties: { branch: { type: "string" } } }],
+        },
+      } as never,
+    ]);
+
+    expect(entries).toEqual([]);
+    expect(logWarnMock).toHaveBeenCalledWith(
+      'mcp-loopback: tool "closed_root" closes the root schema to additional properties while another combined schema contributes "branch"; skipping the tool instead of publishing a weakened constraint',
     );
   });
 
