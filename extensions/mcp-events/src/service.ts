@@ -530,6 +530,8 @@ export class McpEventsService {
           next.truncated ||= result.truncated;
           next.failures = 0;
           delete next.lastError;
+          // A restart after recovery polls at once, not at the retired failure backoff.
+          next.nextAttemptAt = this.now;
         });
       }
       this.rediscoveries.delete(binding.facts.jobId);

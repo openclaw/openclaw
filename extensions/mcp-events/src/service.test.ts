@@ -742,6 +742,68 @@ describe("MCP Events callback and subscription lifecycle", () => {
     expect(diagnostics()).toMatchObject([{ bindingId: binding.bindingId, delivery: "poll" }]);
   });
 
+  it("re-polls a queued batch when its cursor write fails, without a duplicate queue row", async () => {
+    offered = ["poll"];
+    await current!.start();
+    const [binding] = diagnostics();
+    assert(binding && "bindingId" in binding, "Missing poll binding");
+    const key = "refresh:" + binding.bindingId;
+    const reply = {
+      events: [event("evt-1")],
+      cursor: "cursor-2",
+      truncated: false,
+      hasMore: false,
+      nextPollMs: 30_000,
+    };
+    pollReplies.push(reply, reply);
+    rejectedWrites = 1; // The cursor write after durable enqueue fails, as in a crash.
+    await runSchedule(key, true);
+    expect(diagnostics()).toMatchObject([{ lastError: "poll_failed" }]);
+    await runSchedule(key, true);
+    expect(polled.map((request) => request.cursor)).toEqual([null, "cursor-0", "cursor-0"]);
+    expect((await pending()).map((row) => row.payload.eventId)).toEqual(["evt-1"]);
+    expect(diagnostics()).toMatchObject([{ failures: 0, replayAvailable: true }]);
+  });
+
+  it("keeps a webhook binding stored before poll delivery and refreshes it unchanged", async () => {
+    const { delivery: _delivery, ...storedDefinition } = definition;
+    const id = "11111111-2222-4333-8444-555555555555";
+    const stored: SubscriptionBinding = {
+      version: 1,
+      bindingId: id,
+      jobId: "authored-job",
+      sourceIdentity: "generation-a",
+      serverName: "configured-server",
+      accountId: "configured-account",
+      principalId: "native-principal-1",
+      arguments: { document_id: "doc-1" },
+      definition: storedDefinition,
+      callbackUrl: "https://receiver.example.com/plugins/mcp-events/callback/" + id,
+      secret: "whsec_" + Buffer.alloc(32, 7).toString("base64"),
+      status: "active",
+      remoteId: "remote-subscription",
+      refreshBefore: now + 60_000,
+      cursor: "cursor-1",
+      cursorRevision: 1,
+      truncated: false,
+      nextAttemptAt: now + 48_000,
+      failures: 0,
+      cleanupPending: false,
+      updatedAt: now,
+    };
+    await bindings().register(id, stored);
+    await current!.start();
+    expect(subscribed).toHaveLength(0);
+    expect(diagnostics()).toMatchObject([{ bindingId: id, delivery: "webhook", status: "active" }]);
+    await runSchedule("refresh:" + id, true);
+    expect(subscribed).toEqual([
+      expect.objectContaining({
+        cursor: "cursor-1",
+        delivery: expect.objectContaining({ url: stored.callbackUrl }),
+      }),
+    ]);
+  });
+
   it("backs off failed polls and rediscovers after NotFound without unsubscribing", async () => {
     offered = ["poll"];
     await current!.start();
@@ -754,6 +816,10 @@ describe("MCP Events callback and subscription lifecycle", () => {
     await runSchedule(key, true);
     expect(diagnostics()).toMatchObject([{ lastError: "poll_failed", failures: 1 }]);
     expectBoundedRetry(key);
+    now = scheduled(key).atMs + 5_000;
+    await runSchedule(key);
+    // Recovery clears the stored backoff, so a restart now would poll at once.
+    expect(diagnostics()).toMatchObject([{ failures: 0, nextAttemptAt: now }]);
     pollReplies.push(Object.assign(new Error("Event type removed"), { code: -32023 }));
     await runSchedule(key, true);
     await runSchedule("cleanup:" + first.bindingId);

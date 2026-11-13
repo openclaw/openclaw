@@ -45,8 +45,9 @@ when it creates the subscription:
 
 An event that offers only webhook needs `callbackOrigin`. Adding or removing
 `callbackOrigin` later replaces affected subscriptions with the other mode on
-the next reconciliation; the replacement starts from now, so events between the
-two are not replayed.
+the next reconciliation. As when a source is replaced, events already queued for
+the old subscription don't run, and the replacement starts from now, so events
+between the two are not replayed.
 
 ## Receive events by poll
 
@@ -87,9 +88,9 @@ OpenClaw runs one poll loop per event automation, using the Gateway scheduler:
   retains, one automation run per event.
 - A failed poll retries with backoff capped at five minutes, including
   `Forbidden`, while the automation stays enabled. `NotFound` or `Unsupported`
-  means the event type changed: OpenClaw discards the cursor, reads `events/list`
-  again, and starts a new subscription from now, backing off if the server keeps
-  refusing. Events larger than 256 KiB or that fail envelope or `payloadSchema`
+  means the event type changed: OpenClaw discards the cursor and any events still
+  queued for the old subscription, reads `events/list` again, and starts a new
+  subscription from now, backing off if the server keeps refusing. Events larger than 256 KiB or that fail envelope or `payloadSchema`
   validation are skipped with a warning.
 - Poll keeps no server-side subscription, so pausing or removing the automation
   just stops polling. There is nothing to unsubscribe.
