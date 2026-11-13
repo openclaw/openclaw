@@ -3,6 +3,7 @@
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { withRecoveredSource } from "./state-upgrade-tree.js";
 
 export type ShadowTarget = { kind: "state" | "agent"; path: string };
 
@@ -132,10 +133,16 @@ export function conservationMismatches(
 ): string[] {
   const mismatches: string[] = [];
   for (const target of targets) {
-    const before = openReadOnly(target.path);
+    const sourceCounts = withRecoveredSource(target.path, (readable) => {
+      const before = openReadOnly(readable);
+      try {
+        return countRows(before);
+      } finally {
+        before.close();
+      }
+    });
     const after = openReadOnly(toShadow(target.path));
     try {
-      const sourceCounts = countRows(before);
       const resultCounts = countRows(after);
       for (const [table, rows] of sourceCounts) {
         // schema_meta is version metadata the stamp rewrites, not user data.
@@ -152,7 +159,6 @@ export function conservationMismatches(
         }
       }
     } finally {
-      before.close();
       after.close();
     }
   }

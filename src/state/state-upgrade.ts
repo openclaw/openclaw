@@ -310,6 +310,8 @@ export async function upgradeStateDirectory(params: {
   runChain?: StateUpgradeChain;
   /** Fault-injection seam for crash tests: called after each durable step. */
   afterStep?: (step: string) => void;
+  /** Release this process's handles on the live files before they are renamed. */
+  beforeSwap?: () => Promise<void>;
 }): Promise<StateUpgradeResult> {
   const env = params.env;
   const stateDir = path.resolve(resolveStateDir(env));
@@ -533,6 +535,7 @@ export async function upgradeStateDirectory(params: {
         fsyncPath(op.next);
       }
     }
+    await params.beforeSwap?.();
     writePlan(workDir, { appVersion: VERSION, ops });
     planWritten = true;
     step("planned");
