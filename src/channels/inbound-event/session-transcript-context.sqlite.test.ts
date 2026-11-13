@@ -258,3 +258,51 @@ it("keeps an answered recent candidate when internal rows spend the read budget"
   }
   expect(await loadTranscriptEvents(scope)).toEqual(stored);
 });
+
+it("keeps an unanswered request when a textless user turn separates it from a reply", async () => {
+  const scope = {
+    agentId: "main",
+    sessionId: "conversation",
+    sessionKey: "agent:main:main",
+    storePath: path.join(sessionDirs.make(), "sessions.json"),
+  };
+  const sessionEntry = { sessionId: scope.sessionId, chatType: "channel" as const, updatedAt: 1 };
+  await replaceSessionEntry(scope, sessionEntry);
+  const append = (...messages: unknown[]) =>
+    persistTurn(scope, { updateMode: "none", messages: messages.map((message) => ({ message })) });
+  const ask = (text: string, messageId: string) =>
+    persistUserTurnTranscript({
+      ...scope,
+      sessionEntry,
+      input: { text, timestamp: Date.now(), transport: { channel: "discord", messageId } },
+    });
+  // An unanswered request followed by an image-only turn: that turn carries no text, so
+  // its answer must not reach back past it and cover the request before it.
+  await ask("does the deploy checklist still apply", "send-old");
+  await append({
+    role: "user",
+    content: [{ type: "image", source: { type: "base64", mediaType: "image/png", data: "AAAA" } }],
+  });
+  await append({ role: "assistant", content: "here is the chart", stopReason: "stop" });
+  await append({ role: "user", content: "internal runtime input" });
+  await append({ role: "assistant", content: "NO_REPLY", stopReason: "stop" });
+  await ask("which branch should ship", "send-new");
+  await append({ role: "assistant", content: "ship the release branch", stopReason: "stop" });
+  const ctx: FinalizedMsgContext = {
+    Body: "what next?",
+    SessionKey: scope.sessionKey,
+    AgentId: scope.agentId,
+    Provider: "discord",
+    CommandAuthorized: false,
+    SessionTranscriptContext: { historyLimit: 20, historyKind: "recent" },
+    InboundHistory: [
+      { messageId: "send-old", sender: "Alice", body: "does the deploy checklist still apply" },
+      { messageId: "send-new", sender: "Alice", body: "which branch should ship" },
+    ],
+    Timestamp: Date.now() + 1_000,
+  };
+
+  await mergeSessionTranscriptContext({ ...scope, ctx });
+
+  expect(ctx.InboundHistory.map((entry) => entry.messageId)).toEqual(["send-old"]);
+});

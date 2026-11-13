@@ -97,7 +97,12 @@ function extractRecentConversationText(
     message.role === "assistant"
       ? extractAssistantPhaseText(message)
       : (upstreamUserText ?? extractFirstTextBlock(message)?.trim());
-  if (!text) {
+  // An answer covers only the request directly before it. A user turn with no text of its
+  // own (an image-only request, say) is still that boundary, so the internal turn-evidence
+  // read keeps it as an empty row; the public text projection keeps skipping it, since it
+  // has nothing to quote.
+  const textlessUserBarrier = options.includeTurnIdentity === true && message.role === "user";
+  if (!text && !textlessUserBarrier) {
     return undefined;
   }
   const provenance = asOptionalRecord(message.provenance);
@@ -105,7 +110,7 @@ function extractRecentConversationText(
   const entry: SessionRecentConversationTurn = {
     ...(typeof parsed?.id === "string" && parsed.id ? { id: parsed.id } : {}),
     role: message.role,
-    text,
+    text: text ?? "",
     ...(timestamp !== undefined ? { timestamp } : {}),
     ...(typeof provenance?.sourceChannel === "string" && provenance.sourceChannel.trim()
       ? { sourceChannel: provenance.sourceChannel.trim() }
