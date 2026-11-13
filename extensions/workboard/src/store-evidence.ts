@@ -14,7 +14,11 @@ import { definedFields } from "../record-fields.js";
 import { cardRunId } from "./store-card-helpers.js";
 import { MAX_CARD_METADATA_BYTES } from "./store-constants.js";
 import type { WorkboardUpdateCardOptions } from "./store-inputs.js";
-import { normalizeBoundedString, trimMetadataToBudget } from "./store-normalizers.js";
+import {
+  normalizeBoundedString,
+  normalizeMetadata,
+  trimMetadataToBudget,
+} from "./store-normalizers.js";
 
 // Evidence lives in automation JSON, outside the metadata trim loop, so it keeps its
 // own bounds: the newest few of each kind, then a byte cap on the whole list.
@@ -47,6 +51,25 @@ function fitsCardBudget(metadata: WorkboardMetadata): boolean {
 
 function attachEvidence(metadata: WorkboardMetadata, evidence: WorkboardResultEvidence[]) {
   return { ...metadata, automation: { ...metadata.automation, evidence } };
+}
+
+/**
+ * Ordinary metadata normalization, settlement, and trimming never see stored evidence,
+ * so none of them can evict card records to keep it; withStoredEvidence restores
+ * what fits once the card's own metadata is final.
+ */
+export function normalizeWithoutEvidence(
+  patch: unknown,
+  existing: WorkboardCard,
+  options: WorkboardUpdateCardOptions,
+): WorkboardMetadata {
+  const automation = existing.metadata?.automation;
+  if (!automation?.evidence) {
+    return normalizeMetadata(patch, existing.metadata, options);
+  }
+  const ordinary = { ...automation };
+  delete ordinary.evidence;
+  return normalizeMetadata(patch, { ...existing.metadata, automation: ordinary }, options);
 }
 
 /**

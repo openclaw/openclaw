@@ -25,7 +25,7 @@ import {
   appendEvent,
 } from "./store-card-helpers.js";
 import { MAX_CARD_COMMENTS, MAX_CARD_WORKER_LOGS, POSITION_STEP } from "./store-constants.js";
-import { withStoredEvidence } from "./store-evidence.js";
+import { normalizeWithoutEvidence, withStoredEvidence } from "./store-evidence.js";
 import type {
   WorkboardCardPatch,
   WorkboardCommentInput,
@@ -488,7 +488,7 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
           ? existing.execution
           : syncExecutionSessionKey(existing.execution, sessionKey)
         : normalizeExecution(effectivePatch.execution);
-    let metadata = normalizeMetadata(effectivePatch.metadata, existing.metadata, options);
+    let metadata = normalizeWithoutEvidence(effectivePatch.metadata, existing, options);
     if (status !== existing.status && !hasFreshLifecycleStatusSource) {
       ({ execution, metadata } = settleManualStatusTransition({
         existing,
