@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
 import net from "node:net";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { createServer as createTlsServer } from "node:tls";
 import { describe, expect, it } from "vitest";
 import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
@@ -12,8 +13,10 @@ import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
+import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { buildCatalogModel } from "../plugin-sdk/provider-catalog.test-support.js";
 import { listKnownProviderAuthEnvVarNamesCore } from "../secrets/provider-env-vars.js";
 import { extractAssistantPhaseText } from "../shared/chat-message-content.js";
@@ -882,6 +885,31 @@ describeLive("quiet steering with real caller authority", () => {
         }
         gate.release.resolve();
         await instance.stopGateway();
+        // Read only after the crashed process and its workers have stopped. Public
+        // history hides unowned queued rows, so it cannot diagnose orphan discovery.
+        const database = new DatabaseSync(
+          instance.state.statePath("agents", "main", "agent", "openclaw-agent.sqlite"),
+          { readOnly: true },
+        );
+        try {
+          const pending = executeSqliteQuerySync(
+            database,
+            getSessionKysely(database)
+              .selectFrom("session_pending_inputs as pending")
+              .leftJoin("session_nodes as node", "node.session_key", "pending.session_key")
+              .select([
+                "pending.state",
+                "pending.session_id",
+                "pending.lifecycle_generation",
+                "pending.consumed_event_id",
+                "node.current_session_id",
+              ])
+              .where("pending.run_id", "=", queued.runId),
+          ).rows;
+          console.error("[quiet-live] cold-offline-input " + JSON.stringify(pending));
+        } finally {
+          database.close();
+        }
         await instance.startGateway();
         expect(instance.child?.pid).not.toBe(oldPid);
         high = await connect(0);
