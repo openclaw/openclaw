@@ -612,6 +612,11 @@ export type PluginManifestCapabilityProviderConfigSignal = {
   overlayMapPath?: string;
   required?: string[];
   requiredAny?: string[];
+  /**
+   * Every path must strictly equal its literal value in the effective config.
+   * A missing path fails. SecretRefs are not resolved, so a ref never matches.
+   */
+  equals?: Record<string, string | number | boolean>;
   mode?: PluginManifestCapabilityProviderModeConfigSignal;
 };
 

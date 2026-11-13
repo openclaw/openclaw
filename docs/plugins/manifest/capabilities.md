@@ -245,6 +245,25 @@ model descriptor.
 
 These fields supplement the shared `configSignals` and `authSignals` fields above.
 
+To list a tool only while a feature flag is on, test the value instead of its presence. With `required`, a flag set to `false` still counts as configured:
+
+```json
+{
+  "toolMetadata": {
+    "kb_search": {
+      "configSignals": [
+        {
+          "rootPath": "plugins.entries.example.config",
+          "equals": { "knowledgeBase.enabled": true }
+        }
+      ]
+    }
+  }
+}
+```
+
+See [`configSignals`](/plugins/manifest/providers#generation-provider-metadata-reference) for the `equals` rules on missing values, overlays, and SecretRefs.
+
 If a tool has no `toolMetadata`, OpenClaw preserves the existing behavior and loads the owning plugin when the tool contract matches policy. For hot-path tools whose factory depends on auth/config, plugin authors should declare `toolMetadata` instead of making core import runtime to ask.
 
 ## activation reference

@@ -88,7 +88,11 @@ export function manifestConfigSignalPasses(params: {
     const requiredAny = params.signal.requiredAny ?? [];
     return (
       (params.signal.required ?? []).every(hasValue) &&
-      (requiredAny.length === 0 || requiredAny.some(hasValue))
+      (requiredAny.length === 0 || requiredAny.some(hasValue)) &&
+      // Raw literal comparison: a missing path fails and SecretRefs are never resolved here.
+      Object.entries(params.signal.equals ?? {}).every(
+        ([path, expected]) => readPath(effectiveConfig, path) === expected,
+      )
     );
   };
   if (!params.signal.overlayMapPath?.trim()) {

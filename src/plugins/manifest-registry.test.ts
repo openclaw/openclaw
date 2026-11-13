@@ -927,6 +927,43 @@ describe("loadPluginManifestRegistry", () => {
     expect(plugin?.toolMetadata).toEqual(tools);
   });
 
+  it("keeps scalar configSignals value tests, including false and 0", () => {
+    const rootPath = "plugins.entries.kb.config";
+    const dir = makePluginDir("kb", {
+      contracts: { tools: ["kb_search"] },
+      toolMetadata: {
+        kb_search: {
+          configSignals: [
+            {
+              rootPath,
+              equals: {
+                " knowledgeBase.enabled ": false,
+                limit: 0,
+                mode: "on",
+                bad: {},
+                list: [1],
+                "": true,
+                empty: null,
+              },
+            },
+            { rootPath, equals: { only: null } },
+          ],
+        },
+      },
+    });
+    const plugin = loadSingleCandidateRegistry("kb", dir, "bundled").plugins[0];
+    expect(plugin?.toolMetadata).toEqual({
+      kb_search: {
+        configSignals: [
+          {
+            rootPath,
+            equals: { "knowledgeBase.enabled": false, limit: 0, mode: "on" },
+          },
+        ],
+      },
+    });
+  });
+
   type CompatibilityCase = Omit<Parameters<typeof compatibilityCandidate>[0], "rootDir"> & {
     version?: string;
     recorded?: boolean;

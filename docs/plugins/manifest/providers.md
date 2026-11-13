@@ -75,7 +75,16 @@ Each `configSignals` entry supports:
 | `overlayMapPath` | No       | `string`   | Dot path inside the root config whose object values should each overlay the root object. Use this for named account maps such as `accounts`, where any configured account should qualify. |
 | `required`       | No       | `string[]` | Dot paths inside the effective config that must have configured values. Strings must be non-empty; objects and arrays must not be empty.                                                  |
 | `requiredAny`    | No       | `string[]` | Dot paths inside the effective config where at least one must have a configured value.                                                                                                    |
+| `equals`         | No       | `object`   | Map of dot path to a literal string, number, or boolean. Every path must strictly equal its value. See value tests below.                                                                 |
 | `mode`           | No       | `object`   | Optional string mode guard inside the effective config. Use this when config-only availability applies only to one mode.                                                                  |
+
+`required` and `requiredAny` test presence, so `false` and `0` count as configured. Use `equals` when the value matters, for example `"equals": { "knowledgeBase.enabled": true }` for a feature flag. All fields in one signal must pass together. Value tests follow these rules:
+
+- A missing or `null` path fails.
+- The comparison is strict: `"true"` does not equal `true`, and `"0"` does not equal `0`.
+- Paths are read from the effective config, after `overlayPath` is applied. With `overlayMapPath`, each map entry is checked on its own, so `equals` and `required` must pass on the same entry.
+- SecretRefs are never resolved. A path holding a SecretRef does not equal any literal, even when the referenced secret has that value.
+- Older hosts ignore `equals` and drop a signal that has nothing else, so availability falls back to the remaining config or auth signals, and a tool with none stays listed whatever the flag value. A plugin that relies on `equals` should set [`openclaw.install.minHostVersion`](/plugins/manifest/package-json) to a release that supports it.
 
 Config signals inspect normalized SecretRefs for provider and environment availability.
 Other nonempty objects are configured metadata; an object containing only `source`
