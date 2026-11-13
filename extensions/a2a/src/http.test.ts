@@ -312,14 +312,15 @@ describe("A2A HTTP agent discovery", () => {
     }
   });
 
-  it("derives the advertised interface origin from the request Host", async () => {
+  it("does not publish a Host header that is not this socket", async () => {
     const harness = await startHttpHarness({
       config: { agents: { entries: { main: {} } } },
     });
     const response = await harness.get("/.well-known/agent-card.json");
     const card = (await response.json()) as { supportedInterfaces: Array<{ url: string }> };
 
-    expect(card.supportedInterfaces[0]?.url).toBe(`${harness.baseUrl}/a2a/v1`);
+    expect(card.supportedInterfaces[0]?.url).toBe("http://localhost/a2a/v1");
+    expect(card.supportedInterfaces[0]?.url).not.toContain("gateway.example.test");
   });
 });
 
