@@ -129,7 +129,9 @@ export function usePrefixRandomizedJourney() {
     process.env.OPENCLAW_PROMPT_CACHE_ASSERT = assertSetting;
   });
   return async (api: Api, seed: number) => {
-    const journey = randomJourney(seed);
+    const journey = process.env.OPENCLAW_PREFIX_RANDOM_JOURNEY
+      ? (process.env.OPENCLAW_PREFIX_RANDOM_JOURNEY.split(",") as TurnKind[])
+      : randomJourney(seed);
     const fixture = await createFixture(`openclaw-prefix-random-${api}-${seed}-`, TOKEN, "1");
     // Target requests in order, each tagged with the step that sent it.
     const target: Array<{ step: number; kind: TurnKind; request: WireRequest }> = [];
