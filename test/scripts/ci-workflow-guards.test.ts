@@ -105,7 +105,7 @@ const PINNED_GIT_OWNER = {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 it("skips all pull-request CI jobs for forks before allocating runners", () => {
-  for (const file of readdirSync(".github/workflows").filter((file) => /\.ya?ml$/u.test(file))) {
+  for (const file of readdirSync(".github/workflows").filter((name) => /\.ya?ml$/u.test(name))) {
     const workflow = readWorkflow(`.github/workflows/${file}`);
     if (!Object.hasOwn(workflow.on ?? {}, "pull_request")) {
       continue;

@@ -3566,7 +3566,7 @@ describe("ci workflow guards", () => {
       expect(Number(result.outputs.hybrid_hosted_base_rows)).toBe(rows.length);
     });
 
-    it("reserves tiny hybrid controls and fork owners before admitting optional hosted rows", () => {
+    it("reserves tiny hybrid controls before admitting optional hosted rows", () => {
       const eventName = "pull_request" as const;
       const changedPaths = ["src/shared/runtime.ts"];
       const options = { eventName, changedPaths, checkFamilyScope: true };
@@ -3575,56 +3575,13 @@ describe("ci workflow guards", () => {
       const nodeRows = 1 + 40 - Number(baseline.outputs.hybrid_hosted_base_rows);
       expect(nodeRows).toBeGreaterThan(0);
       const sameRepository = manifestWithHostedNodeRows(nodeRows, options);
-      const forkProfile = runRunnerProfileFixture({
-        configuredProfile: "hybrid",
-        eventName,
-        headRepository: "contributor/openclaw",
-        targetSupportsContract: true,
-      });
-      expect(forkProfile.status, forkProfile.output).toBe(0);
-      const fork = manifestWithHostedNodeRows(nodeRows, {
-        ...options,
-        scopeEnv: {
-          OPENCLAW_CI_HEAD_REPOSITORY: "contributor/openclaw",
-          OPENCLAW_CI_RUNNER_BACKEND: expectDefined(
-            forkProfile.outputs.placement_runner_backend,
-            "fork placement backend",
-          ),
-          OPENCLAW_CI_RUNNER_PROFILE: expectDefined(
-            forkProfile.outputs.runner_profile,
-            "fork runner profile",
-          ),
-          OPENCLAW_CI_NODE_RUNNER_BACKEND: expectDefined(
-            forkProfile.outputs.node_runner_backend,
-            "fork Node backend",
-          ),
-        },
-      });
       expect(sameRepository.status, sameRepository.output).toBe(0);
-      expect(fork.status, fork.output).toBe(0);
       expect(Number(sameRepository.outputs.hybrid_hosted_base_rows)).toBe(40);
       const sameRows = emittedHostedRows(sameRepository.outputs, { eventName });
-      const forkRows = emittedHostedRows(
-        { ...fork.outputs, ...forkProfile.outputs },
-        {
-          eventName,
-          headRepository: "contributor/openclaw",
-        },
-      );
-      expect(fork.outputs).toMatchObject({
-        hybrid_hosted_base_rows: "0",
-        hybrid_hosted_total_rows: "0",
-        hybrid_hosted_offload: "false",
-        hybrid_hosted_checks: "false",
-        hybrid_hosted_main_checks: "false",
-      });
       for (const job of ["preflight", "ci-gate", "pr-failure-report", "check-plan"]) {
         expect(sameRows).toContain(job);
       }
       expect(sameRows).toHaveLength(Number(sameRepository.outputs.hybrid_hosted_total_rows));
-      for (const job of ["preflight", "ci-gate", "pr-failure-report", "check-plan"]) {
-        expect(forkRows).toContain(job);
-      }
       expect(sameRepository.outputs.hybrid_hosted_offload).toBe("true");
       expect(Number(sameRepository.outputs.hybrid_hosted_total_rows)).toBeLessThanOrEqual(45);
     });

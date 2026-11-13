@@ -969,7 +969,7 @@ describe("PR failure reporting", () => {
     }
   });
 
-  it("reports unsuccessful prerequisites with read-only grants for canonical PRs including forks", () => {
+  it("reports unsuccessful prerequisites for same-repository PRs and skips forks", () => {
     const workflow = readCiWorkflow();
     const report = workflow.jobs["pr-failure-report"];
     expect(report.needs).toEqual(
@@ -1000,7 +1000,7 @@ describe("PR failure reporting", () => {
       ["pull_request", "openclaw/openclaw", 1, "success", "skipped", false],
       ["pull_request", "openclaw/openclaw", 1, "success", "failure", true],
       ["pull_request", "openclaw/openclaw", 1, "success", "cancelled", true],
-      ["pull_request", "contributor/openclaw", 1, "success", "failure", true],
+      ["pull_request", "contributor/openclaw", 1, "success", "failure", false],
       ["pull_request", "openclaw/openclaw", 2, "success", "failure", true],
       ["pull_request", "openclaw/openclaw", 1, "failure", "skipped", true],
       ["push", "openclaw/openclaw", 1, "success", "failure", false],

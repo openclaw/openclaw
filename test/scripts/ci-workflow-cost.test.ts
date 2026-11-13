@@ -309,17 +309,13 @@ describe("bounded scheduled proof reuse", () => {
         if (id === "scope") {
           continue;
         }
-        const evaluate = (event: string, changed: string) =>
-          runInNewContext(job.if.slice(3, -2), {
-            github: {
-              event_name: event,
-              repository: "openclaw/openclaw",
-              ref: "refs/heads/main",
-              event: { pull_request: { draft: false } },
-            },
-            vars: {},
-            cancelled: () => false,
-            needs: { scope: { outputs: { changed, rust_changed: changed } } },
+        const evaluate = (
+          eventName: "schedule" | "pull_request" | "workflow_dispatch",
+          changed: string,
+        ) =>
+          evaluateWorkflow(job.if, {
+            eventName,
+            additionalNeeds: { scope: { outputs: { changed, rust_changed: changed } } },
           });
         expect(evaluate("schedule", "false")).toBe(false);
         expect(evaluate("schedule", "true")).toBe(true);
