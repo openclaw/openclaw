@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -272,6 +272,25 @@ describe("Gateway Template Add plan", () => {
     expect(plan.blockers.map((blocker) => blocker.code)).not.toContain("workspace_collision");
     expect(projected.target.workspace).toBe(`${retained}-2`);
     expect(readFileSync(path.join(retained, "USER.md"), "utf8")).toBe("retained operator note");
+  });
+
+  it("accepts its own admitted workspace when the state directory path is a symlink", async () => {
+    const realRoot = tempDirs.make("openclaw-templates-gateway-admitted-real-");
+    const linkRoot = `${tempDirs.make("openclaw-templates-gateway-admitted-link-")}/state`;
+    symlinkSync(realRoot, linkRoot, "dir");
+    vi.stubEnv("OPENCLAW_STATE_DIR", linkRoot);
+    const admittedWorkspace = path.join(linkRoot, "workspace-workflow-operator");
+    mkdirSync(admittedWorkspace);
+
+    const plan = await buildGatewayTemplateAddPlan(await readGatewayPackageFixture(), {
+      config: { agents: { entries: {} } },
+      agentId: "workflow-operator",
+      admittedWorkspace,
+      sourceMcpServers: {},
+    });
+
+    expect(plan.blockers.map((blocker) => blocker.code)).not.toContain("workspace_collision");
+    expect(plan.actions.filter((action) => action.blocked)).toEqual([]);
   });
 
   it.each([
