@@ -635,7 +635,7 @@ it("offers Try again, as a new request, when an update left the automation uncha
     sessionKey: "s-review",
     payload: { kind: "agentTurn", message: runMessage },
   };
-  const { render, ui, calls } = fixture({ sessions: reviewSession, jobs: [legacy] });
+  const { render, ui, calls, request } = fixture({ sessions: reviewSession, jobs: [legacy] });
   ui.s.scribe = "claim-consolidation";
   const sends = () => calls.filter(([method]) => method === "chat.send").map(([, p]) => p);
   await render();
@@ -645,7 +645,24 @@ it("offers Try again, as a new request, when an update left the automation uncha
   try {
     const view = await render();
     expect(sends()).toHaveLength(1);
+    // A Try again whose send fails stays late, with the error, and can be tried again.
+    const answer = request.getMockImplementation()!;
+    request.mockImplementationOnce(async (method, params) => {
+      if (method === "chat.send") {
+        throw new Error("offline");
+      }
+      return answer(method, params);
+    });
+    const failing = view.querySelector(".scribe-update")!;
     buttonNamed(view, "Try again").click();
+    await vi.waitFor(() =>
+      expect(ui.announce).toHaveBeenCalledWith(expect.stringContaining("Error: offline")),
+    );
+    expect(failing.textContent).toContain("hasn't changed");
+    expect((await render()).querySelector(".scribe-update")?.textContent).toContain(
+      "hasn't changed",
+    );
+    buttonNamed(await render(), "Try again").click();
     await vi.waitFor(() => expect(sends()).toHaveLength(2));
     // A new attempt: the Gateway must not answer it from the first request's record.
     expect(sends()[1]!.idempotencyKey).not.toBe(sends()[0]!.idempotencyKey);

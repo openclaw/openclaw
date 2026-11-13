@@ -59,7 +59,13 @@ const updatesOf = (ui: Page) => {
  * this because it is where the owner, with write access, manages scribe automations; it asks the
  * scribe's conversation, which re-declares its automation with the owner's turn authority.
  */
-export async function update(ui: Page, snapshot: ScribeSnapshot, agentId: string) {
+export async function update(
+  ui: Page,
+  snapshot: ScribeSnapshot,
+  agentId: string,
+  /** Try again reports a failed send to its button instead of announcing it. */
+  rethrow = false,
+) {
   const { job } = snapshot;
   const asked = job && `${job.id}:${job.configRevision ?? ""}`;
   // An update still landing may write the automation more than once; don't ask again meanwhile.
@@ -80,12 +86,15 @@ export async function update(ui: Page, snapshot: ScribeSnapshot, agentId: string
       (next) => !needsUpdate(next),
       async () => {
         map.delete(asked);
-        await update(ui, snapshot, agentId);
+        await update(ui, snapshot, agentId, true);
       },
     );
     ui.announce(`${snapshot.scribe.title}: updating for this version of Knowledge…`);
   } catch (error) {
     // Not sent: the next load asks again, as the same request.
+    if (rethrow) {
+      throw error;
+    }
     ui.announce(`${snapshot.scribe.title}: the update was not sent. ${ui.errorText(error)}`);
   }
 }
