@@ -671,8 +671,9 @@ The session prompt rebuilds only at these points:
 - A tool-policy configuration change.
 - A recovery that changes earlier history on purpose: one repair after the
   provider rejects replayed history (for example an invalid thinking
-  signature), context-overflow truncation of earlier tool results, or idle
-  pruning after the provider cache expired.
+  signature), a late tool result that replaces its missing-result placeholder,
+  context-overflow truncation of earlier tool results, or idle pruning after
+  the provider cache expired.
 
 These are also the operator refresh points: use `/compact` or `/new` to make the
 model see a fully re-rendered prompt.
