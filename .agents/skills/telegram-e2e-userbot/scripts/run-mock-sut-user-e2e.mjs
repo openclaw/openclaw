@@ -102,16 +102,6 @@ function removeRunnerScratch(root) {
   fs.rmSync(root, { recursive: true, force: true });
 }
 
-// An option that appeared must carry a real value: a missing, empty or
-// option-shaped token must not fall back to an empty string or a default.
-function requireValue(option, argv, i) {
-  const value = argv[i + 1];
-  if (value === undefined || value === "" || value.startsWith("--")) {
-    throw new Error(`Missing value for ${option}.`);
-  }
-  return value;
-}
-
 function parseArgs(argv) {
   const args = {
     text: "@{sut} Please answer with OPENCLAW_E2E_OK only.",
@@ -142,78 +132,64 @@ function parseArgs(argv) {
     gatewayReadyTimeoutMs: undefined,
     recorderReadyTimeoutMs: undefined,
   };
-  for (let i = 0; i < argv.length; i += 1) {
+  let i = 0;
+  // An option that appeared must carry a value: a missing, empty or option-shaped
+  // token must not silently fall back to an empty string or a default.
+  const value = (option) => {
+    const next = argv[++i];
+    if (!next || next.startsWith("--")) {
+      throw new Error(`Missing value for ${option}.`);
+    }
+    return next;
+  };
+  for (; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--text") {
-      args.text = requireValue("--text", argv, i);
-      i += 1;
+      args.text = value(arg);
       args.textProvided = true;
-    } else if (arg === "--photo") {
-      args.photos.push(requireValue("--photo", argv, i));
-      i += 1;
-    } else if (arg === "--caption") {
-      args.caption = requireValue("--caption", argv, i);
-      i += 1;
-    } else if (arg === "--expect") {
+    } else if (arg === "--photo") args.photos.push(value(arg));
+    else if (arg === "--caption") args.caption = value(arg);
+    else if (arg === "--expect") {
       args.expectPassed = true;
-      args.expect.push(requireValue("--expect", argv, i));
-      i += 1;
-    } else if (arg === "--timeout-ms") {
-      args.timeoutMs = Number(requireValue("--timeout-ms", argv, i));
-      i += 1;
-    } else if (arg === "--gateway-port") {
-      args.gatewayPort = Number(requireValue("--gateway-port", argv, i));
-      i += 1;
-    } else if (arg === "--mock-port") {
-      args.mockPort = Number(requireValue("--mock-port", argv, i));
-      i += 1;
-    } else if (arg === "--backend") {
-      const value = requireValue("--backend", argv, i).trim();
-      i += 1;
-      if (!["mock", "qa-mock", "claude-cli"].includes(value)) {
-        throw new Error(`--backend takes "mock", "qa-mock", "claude-cli", got "${value}".`);
+      args.expect.push(value(arg));
+    } else if (arg === "--timeout-ms") args.timeoutMs = Number(value(arg));
+    else if (arg === "--gateway-port") args.gatewayPort = Number(value(arg));
+    else if (arg === "--mock-port") args.mockPort = Number(value(arg));
+    else if (arg === "--backend") {
+      const backend = value(arg).trim();
+      if (!["mock", "qa-mock", "claude-cli"].includes(backend)) {
+        throw new Error(`--backend takes "mock", "qa-mock", "claude-cli", got "${backend}".`);
       }
-      args.backend = value;
+      args.backend = backend;
     } else if (arg === "--any-sut-reply") args.anySutReply = true;
-    else if (arg === "--output") {
-      args.output = requireValue("--output", argv, i);
-      i += 1;
-    }
+    else if (arg === "--output") args.output = value(arg);
     // Recording mode captures evidence for agent inspection. It does not turn
     // Telegram observations into a test verdict.
-    else if (arg === "--record") {
-      args.record = requireValue("--record", argv, i);
-      i += 1;
-    } else if (arg === "--expect-edit" || arg === "--expect-delete") {
+    else if (arg === "--record") args.record = value(arg);
+    else if (arg === "--expect-edit" || arg === "--expect-delete") {
       throw new Error(
         `${arg} was removed; record the live timeline and inspect the captured event.`,
       );
-    } else if (arg === "--chat") {
-      args.chat = requireValue("--chat", argv, i);
-      i += 1;
-    } else if (arg === "--dm") args.dm = true;
+    } else if (arg === "--chat") args.chat = value(arg);
+    else if (arg === "--dm") args.dm = true;
     else if (arg === "--create-forum") args.createForum = true;
     else if (arg === "--create-dm-topic") {
       args.createDmTopic = true;
-    } else if (arg === "--pre-send") {
-      args.preSend.push(requireValue("--pre-send", argv, i));
-      i += 1;
-    } else if (arg === "--scenario") {
-      args.scenarioPath = requireValue("--scenario", argv, i);
-      i += 1;
-    } else if (arg === "--source-gateway") args.sourceGateway = true;
+    } else if (arg === "--pre-send") args.preSend.push(value(arg));
+    else if (arg === "--scenario") args.scenarioPath = value(arg);
+    else if (arg === "--source-gateway") args.sourceGateway = true;
     else if (arg === "--gateway-ready-timeout-ms") {
-      const value = Number(argv[++i]);
-      if (!Number.isInteger(value) || value <= 0) {
+      const ms = Number(value(arg));
+      if (!Number.isInteger(ms) || ms <= 0) {
         throw new Error("--gateway-ready-timeout-ms takes a positive integer.");
       }
-      args.gatewayReadyTimeoutMs = value;
+      args.gatewayReadyTimeoutMs = ms;
     } else if (arg === "--recorder-ready-timeout-ms") {
-      const value = Number(argv[++i]);
-      if (!Number.isInteger(value) || value <= 0) {
+      const ms = Number(value(arg));
+      if (!Number.isInteger(ms) || ms <= 0) {
         throw new Error("--recorder-ready-timeout-ms takes a positive integer.");
       }
-      args.recorderReadyTimeoutMs = value;
+      args.recorderReadyTimeoutMs = ms;
     } else if (arg === "--help" || arg === "-h") {
       printHelp();
       process.exit(0);
