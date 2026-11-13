@@ -237,6 +237,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
       this.sessionPresentation === "desktop" &&
       !this.onBackToSubagents &&
       chatProps.disabledBanner?.presentation === "compact";
+    const canShowNewMessages = this.sessionPresentation !== "desktop" || conversationVisible;
     const paneChatProps: ChatProps = merge(chatProps, {
       onConversationFrameRef: (element) => this.registerDetailsElement("frame", element),
       onFooterElementRef: (element) => this.registerDetailsElement("footer", element),
@@ -245,9 +246,9 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
           ? { ...chatProps.disabledBanner, stop: subagentStop }
           : chatProps.disabledBanner,
       mobileComposer: Boolean(mobileHost),
-      showNewMessages:
-        (this.sessionPresentation !== "desktop" || conversationVisible) &&
-        chatProps.showNewMessages,
+      get showNewMessages() {
+        return canShowNewMessages && chatProps.showNewMessages;
+      },
       mobileActivities: mobileHost
         ? this.mobileChatActivities(state, selectedSession, chatProps)
         : undefined,
@@ -708,10 +709,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
       background: {
         context: this.context,
         surface: "session",
-        presented:
-          this.presented &&
-          this.visuallyPresented &&
-          isSidebarSlotVisible(sidebarLayout, "conversation"),
+        presented: this.presented && this.visuallyPresented && conversationVisible,
       },
       overlays: {
         presentation: panePresentation,

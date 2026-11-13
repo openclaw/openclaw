@@ -1412,7 +1412,7 @@ var External = [
     /(^paths$|^stagedResultRef$|^totalCount$)/u,
     /(^ok$|^key$|^sessionId$|^placement$)/u,
     /(^state$|^generation$)/u,
-    /(^key$|^agentId$|^subscriptionId$|^mode$|^includeApprovals$|^initialHistory$)/u,
+    /(^key$|^agentId$|^subscriptionId$|^mode$|^includeApprovals$|^includeLiveToolOutput$|^initialHistory$)/u,
     /(^cursor$|^knownState$|^limit$|^maxBytes$|^toolResultMaxChars$|^inputRunIds$)/u,
     /(^key$|^agentId$|^subscriptionId$)/u,
     /(^agentId$|^sessionKeys$)/u,
@@ -15788,6 +15788,9 @@ var External = [
     (value.includeApprovals === void 0 ||
       !("includeApprovals" in value) ||
       check_330(value.includeApprovals)) &&
+    (value.includeLiveToolOutput === void 0 ||
+      !("includeLiveToolOutput" in value) ||
+      check_330(value.includeLiveToolOutput)) &&
     (value.initialHistory === void 0 ||
       !("initialHistory" in value) ||
       check_2363(value.initialHistory)),
