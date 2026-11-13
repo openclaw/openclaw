@@ -221,9 +221,6 @@ function nativeRuntime(source: NativeSource): NativeRuntime {
         }
       },
       close() {
-        if (handles.size) {
-          return Promise.reject(new Error("Native worker execution owners have not joined"));
-        }
         runtime.failure ??= new Error("Native worker lifetime owner is closing");
         materializeErrorStack(runtime.failure);
         terminateOwner();
@@ -322,6 +319,9 @@ export function captureRetainedNativeWorkerSource(options?: {
           if (errors.length) {
             throw new AggregateError(errors, "Native worker execution owner cleanup failed");
           }
+          if (source.hasActiveWorkers) {
+            throw new Error("Native worker execution owners have not joined");
+          }
           source.closing = true;
           await source.runtime?.close();
           await source.brokerClose;
@@ -329,6 +329,10 @@ export function captureRetainedNativeWorkerSource(options?: {
           forgetNativeSource(source);
           owners.clear();
         } catch (error) {
+          // Refused settlement is retryable; actual native teardown remains terminal.
+          if (!source.closing) {
+            closingOwners = undefined;
+          }
           materializeErrorStack(error);
           throw error;
         }
