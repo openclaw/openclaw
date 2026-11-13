@@ -13,7 +13,10 @@ export const FAKE_TRANSPORTS = [
   "bedrock-converse-stream",
 ] as const;
 export type FakeTransport = (typeof FAKE_TRANSPORTS)[number];
-export type FakeReply = { text: string } | { tool: string; args: Record<string, unknown> };
+export type FakeReply =
+  | { text: string; thinking?: string }
+  | { tool: string; args: Record<string, unknown> }
+  | { calls: Array<{ tool: string; args: Record<string, unknown> }>; thinking?: string };
 /** Canonical JSON of the cache-relevant request parts; `text` joins them for searching. */
 export type WireRequest = { system: string; tools: string; messages: string[]; text: string };
 
@@ -136,15 +139,52 @@ function eventStreamMessage(eventType: string, payload: unknown): Buffer {
   return message;
 }
 
+/** Tool calls of a reply; `thinking` is sent as a signed thinking block where the transport has one. */
+function replyCalls(reply: FakeReply): Array<{ tool: string; args: Record<string, unknown> }> {
+  return "calls" in reply
+    ? reply.calls
+    : "tool" in reply
+      ? [{ tool: reply.tool, args: reply.args }]
+      : [];
+}
+
 export function writeReply(
   api: FakeTransport,
   response: ServerResponse,
   reply: FakeReply,
   n: number,
 ) {
-  const isText = "text" in reply;
-  const args = isText ? "" : JSON.stringify(reply.args);
+  const calls = replyCalls(reply);
+  const isText = calls.length === 0;
+  const text = "text" in reply ? reply.text : "";
+  const thinking = "thinking" in reply ? reply.thinking : undefined;
   if (api === "anthropic-messages") {
+    const blocks: Array<{ start: unknown; delta?: unknown }> = [];
+    if (thinking) {
+      blocks.push(
+        { start: { type: "thinking", thinking: "" }, delta: { type: "thinking_delta", thinking } },
+        {
+          start: { type: "thinking", thinking: "" },
+          delta: { type: "signature_delta", signature: `sig_${n}` },
+        },
+      );
+    }
+    if (isText) {
+      blocks.push({ start: { type: "text", text: "" }, delta: { type: "text_delta", text } });
+    }
+    calls.forEach((call, index) =>
+      blocks.push({
+        start: { type: "tool_use", id: `toolu_${n}_${index}`, name: call.tool, input: {} },
+        delta: { type: "input_json_delta", partial_json: JSON.stringify(call.args) },
+      }),
+    );
+    // A signed thinking block is one content block with two deltas.
+    const merged = thinking
+      ? [
+          { start: blocks[0]!.start, deltas: [blocks[0]!.delta, blocks[1]!.delta] },
+          ...blocks.slice(2).map((b) => ({ start: b.start, deltas: [b.delta] })),
+        ]
+      : blocks.map((b) => ({ start: b.start, deltas: [b.delta] }));
     const events = [
       {
         type: "message_start",
@@ -158,21 +198,11 @@ export function writeReply(
           usage: { input_tokens: 10, output_tokens: 0 },
         },
       },
-      {
-        type: "content_block_start",
-        index: 0,
-        content_block: isText
-          ? { type: "text", text: "" }
-          : { type: "tool_use", id: `toolu_${n}`, name: reply.tool, input: {} },
-      },
-      {
-        type: "content_block_delta",
-        index: 0,
-        delta: isText
-          ? { type: "text_delta", text: reply.text }
-          : { type: "input_json_delta", partial_json: args },
-      },
-      { type: "content_block_stop", index: 0 },
+      ...merged.flatMap((block, index) => [
+        { type: "content_block_start", index, content_block: block.start },
+        ...block.deltas.map((delta) => ({ type: "content_block_delta", index, delta })),
+        { type: "content_block_stop", index },
+      ]),
       {
         type: "message_delta",
         delta: { stop_reason: isText ? "end_turn" : "tool_use", stop_sequence: null },
@@ -192,39 +222,41 @@ export function writeReply(
       ...(finish ? { usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } } : {}),
     });
     const delta = isText
-      ? { role: "assistant", content: reply.text }
+      ? { role: "assistant", content: text }
       : {
           role: "assistant",
-          tool_calls: [
-            {
-              index: 0,
-              id: `call_${n}`,
-              type: "function",
-              function: { name: reply.tool, arguments: args },
-            },
-          ],
+          tool_calls: calls.map((call, index) => ({
+            index,
+            id: `call_${n}_${index}`,
+            type: "function",
+            function: { name: call.tool, arguments: JSON.stringify(call.args) },
+          })),
         };
     sse(response, [chunk(delta, null), chunk({}, isText ? "stop" : "tool_calls")], true);
   } else if (api === "openai-responses") {
-    const item = isText
-      ? {
-          type: "message",
-          id: `msg_${n}`,
-          role: "assistant",
-          status: "completed",
-          content: [{ type: "output_text", text: reply.text, annotations: [] }],
-        }
-      : {
+    const items = isText
+      ? [
+          {
+            type: "message",
+            id: `msg_${n}`,
+            role: "assistant",
+            status: "completed",
+            content: [{ type: "output_text", text, annotations: [] }],
+          },
+        ]
+      : calls.map((call, index) => ({
           type: "function_call",
-          id: `fc_${n}`,
-          call_id: `call_${n}`,
-          name: reply.tool,
-          arguments: args,
+          id: `fc_${n}_${index}`,
+          call_id: `call_${n}_${index}`,
+          name: call.tool,
+          arguments: JSON.stringify(call.args),
           status: "completed",
-        };
+        }));
     sse(response, [
-      { type: "response.output_item.added", output_index: 0, item },
-      { type: "response.output_item.done", output_index: 0, item },
+      ...items.flatMap((item, index) => [
+        { type: "response.output_item.added", output_index: index, item },
+        { type: "response.output_item.done", output_index: index, item },
+      ]),
       {
         type: "response.completed",
         response: {
@@ -232,7 +264,7 @@ export function writeReply(
           object: "response",
           status: "completed",
           model: MODEL_IDS[api],
-          output: [item],
+          output: items,
           usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
         },
       },
@@ -245,11 +277,9 @@ export function writeReply(
             index: 0,
             content: {
               role: "model",
-              parts: [
-                isText
-                  ? { text: reply.text }
-                  : { functionCall: { name: reply.tool, args: reply.args } },
-              ],
+              parts: isText
+                ? [{ text }]
+                : calls.map((call) => ({ functionCall: { name: call.tool, args: call.args } })),
             },
             finishReason: "STOP",
           },
@@ -258,19 +288,21 @@ export function writeReply(
       },
     ]);
   } else {
+    const blocks = isText
+      ? [{ start: {}, delta: { text } }]
+      : calls.map((call, index) => ({
+          start: { toolUse: { toolUseId: `tooluse_${n}_${index}`, name: call.tool } },
+          delta: { toolUse: { input: JSON.stringify(call.args) } },
+        }));
     response.writeHead(200, { "content-type": "application/vnd.amazon.eventstream" });
     response.end(
       Buffer.concat([
         eventStreamMessage("messageStart", { role: "assistant" }),
-        eventStreamMessage("contentBlockStart", {
-          contentBlockIndex: 0,
-          start: isText ? {} : { toolUse: { toolUseId: `tooluse_${n}`, name: reply.tool } },
-        }),
-        eventStreamMessage("contentBlockDelta", {
-          contentBlockIndex: 0,
-          delta: isText ? { text: reply.text } : { toolUse: { input: args } },
-        }),
-        eventStreamMessage("contentBlockStop", { contentBlockIndex: 0 }),
+        ...blocks.flatMap((block, index) => [
+          eventStreamMessage("contentBlockStart", { contentBlockIndex: index, start: block.start }),
+          eventStreamMessage("contentBlockDelta", { contentBlockIndex: index, delta: block.delta }),
+          eventStreamMessage("contentBlockStop", { contentBlockIndex: index }),
+        ]),
         eventStreamMessage("messageStop", { stopReason: isText ? "end_turn" : "tool_use" }),
         eventStreamMessage("metadata", {
           usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
