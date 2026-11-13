@@ -135,6 +135,26 @@ it.each(["legacy", "daemon-aware", "local-aware", "legacy-alias", "local-aware-a
   },
 );
 
+it("discovers absent shared state without creating a staging directory", async () => {
+  const root = await fs.realpath(dirs.make("update-missing-discovery-staging-"));
+  const stateDir = path.join(root, "source");
+  const stagingRoot = path.join(root, "staging");
+  const discovery = UpdateStateSchemaInspectionPlanSchema.parse(
+    await runWorker({
+      mode: "discover",
+      stateDir,
+      stagingRoot,
+      config: {},
+      additionalPaths: [],
+    }),
+  );
+  expect(discovery.sharedVersion).toEqual({
+    path: path.join(stateDir, "state", "openclaw.sqlite"),
+    userVersion: null,
+  });
+  await expect(fs.stat(stagingRoot)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
 it.each([true, false])(
   "2026.9.x stripped discovery plans preserve owned schema rows (discovery record: %s)",
   async (hasDiscoveryRecord) => {

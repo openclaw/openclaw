@@ -60,7 +60,6 @@ import {
   readSharedDatabaseVersion,
   readUpdateStoreSchemaVersion,
   rehydrateUpdateStateSchemaOwnership,
-  writeUpdateStateSchemaOwnership,
   type StateInput,
 } from "./update-candidate-state.shared.js";
 import {
@@ -290,31 +289,28 @@ export async function discoverUpdateStateSchemaInspectionInProcess(
     input,
     await collectStateDatabasePaths(input),
   );
-  let plan: UpdateStateSchemaInspectionPlan;
   if (!(await updateStateDatabaseExists(shared))) {
-    plan = { files: [...files], sharedVersion: { path: shared, userVersion: null } };
-  } else if (resolveDatabaseFamilyEngines(input.config).state === "postgres") {
+    return { files: [...files], sharedVersion: { path: shared, userVersion: null } };
+  }
+  if (resolveDatabaseFamilyEngines(input.config).state === "postgres") {
     const { readUpdatePostgresState } = await import("./update-candidate-state.postgres.js");
     const result = await readUpdatePostgresState(input, files);
-    plan = { files: result.files, sharedVersion: { path: shared, ...result.version } };
-  } else {
-    const read = async (location: string) => ({
-      path: shared,
-      ...(await readSharedDatabaseVersion(location, shared, files, input)),
-    });
-    const sharedVersion = input.sharedDatabaseImage
-      ? await read(input.sharedDatabaseImage)
-      : await withStateDatabaseSnapshot(
-          shared,
-          read,
-          input.stagingRoot,
-          input.onProgress,
-          input.preserveSourceArtifacts,
-        );
-    plan = { files: [...files], sharedVersion };
+    return { files: result.files, sharedVersion: { path: shared, ...result.version } };
   }
-  await writeUpdateStateSchemaOwnership(input.stagingRoot, plan.files);
-  return plan;
+  const read = async (location: string) => ({
+    path: shared,
+    ...(await readSharedDatabaseVersion(location, shared, files, input)),
+  });
+  const sharedVersion = input.sharedDatabaseImage
+    ? await read(input.sharedDatabaseImage)
+    : await withStateDatabaseSnapshot(
+        shared,
+        read,
+        input.stagingRoot,
+        input.onProgress,
+        input.preserveSourceArtifacts,
+      );
+  return { files: [...files], sharedVersion };
 }
 
 /** Missing databases stay explicit so creation is schema-checked and loss blocks rollback. */

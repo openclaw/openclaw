@@ -41,11 +41,13 @@ export async function writeUpdateStateSchemaOwnership(
       .filter(([, discovery]) => discovery.owners?.length || discovery.registeredPaths?.length)
       .map(([identity, { owners, registeredPaths }]) => [identity, { owners, registeredPaths }]),
   );
-  await fs.writeFile(
-    path.join(stagingRoot, SCHEMA_DISCOVERY_OWNERSHIP_FILENAME),
-    JSON.stringify(ownership),
-    { mode: 0o600 },
-  );
+  await fs
+    .writeFile(
+      path.join(stagingRoot, SCHEMA_DISCOVERY_OWNERSHIP_FILENAME),
+      JSON.stringify(ownership),
+      { mode: 0o600 },
+    )
+    .catch(ignoreMissingPath);
 }
 
 export async function rehydrateUpdateStateSchemaOwnership(

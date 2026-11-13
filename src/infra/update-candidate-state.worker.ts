@@ -172,11 +172,16 @@ async function inspectCandidateState(input: UpdateStateInspectionInput): Promise
         includeClientCredentialStoreVersion: input.includeClientCredentialStoreVersion === true,
         onProgress: createUpdateStateInspectionReporter(!input.streamProgress),
       });
-    case "discover":
-      return discoverUpdateStateSchemaInspectionInProcess({
+    case "discover": {
+      const plan = await discoverUpdateStateSchemaInspectionInProcess({
         ...input,
         onProgress: createUpdateStateInspectionReporter(),
       });
+      const { writeUpdateStateSchemaOwnership } =
+        await import("./update-candidate-state.shared.js");
+      await writeUpdateStateSchemaOwnership(input.stagingRoot, plan.files);
+      return plan;
+    }
     case "versions":
       return readUpdateStateSchemaVersionsInProcess({
         ...input,
