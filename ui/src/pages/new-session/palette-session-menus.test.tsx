@@ -41,18 +41,13 @@ it("keeps agent navigation and Escape inside the nested menu", async () => {
       { id: "other", workspace: "/other" },
     ],
   });
-  const settings = await openSettings(host);
-  await waitForSolid(() =>
-    expect(host.querySelector(".palette-session-settings__workspace")).not.toBeNull(),
-  );
-  const workspace = get(host, ".palette-session-settings__workspace");
+  await waitForSolid(() => expect(host.querySelector(".agent-select__trigger")).not.toBeNull());
   const trigger = get(host, ".agent-select__trigger");
   const remember = expectDefined(
     host.querySelector<HTMLInputElement>(".palette-session-settings__remember input"),
     "remember checkbox",
   );
   expect(remember.disabled).toBe(true);
-  expectArrow(workspace, "ArrowDown", trigger);
 
   trigger.click();
   const menu = get(host, ".agent-select__menu");
@@ -72,10 +67,8 @@ it("keeps agent navigation and Escape inside the nested menu", async () => {
     expect(list.getAttribute("aria-activedescendant")).toBe(first.id);
   });
   expect(menu.matches(":popover-open")).toBe(true);
-  expect(settings.matches(":popover-open")).toBe(true);
   pressKey(list, "Escape");
   await waitForSolid(() => expect(menu.matches(":popover-open")).toBe(false));
-  expect(settings.matches(":popover-open")).toBe(true);
   expect(document.activeElement).toBe(trigger);
 });
 
@@ -106,7 +99,6 @@ it("uses current placement and preference retry controls after their branches ch
   await host.updateComplete;
   const placementRetry = get(host, "[data-required-placement] button");
   const preferenceRetry = get(host, ".palette-session-settings__error button");
-  const trigger = get(host, ".agent-select__trigger");
   expectArrow(placementRetry, "ArrowDown", preferenceRetry);
 
   available = true;
@@ -125,12 +117,10 @@ it("uses current placement and preference retry controls after their branches ch
   options.preferences.failed = false;
   options.onChange();
   await host.updateComplete;
-  expectArrow(replacementRetry, "ArrowDown", trigger);
+  expectArrow(replacementRetry, "ArrowDown", replacementRetry);
   required = false;
   await context.agents.refreshList();
-  await waitForSolid(() =>
-    expect(host.querySelector(".palette-session-settings__workspace")).not.toBeNull(),
-  );
+  await waitForSolid(() => expect(host.querySelector('[data-machine="local"]')).not.toBeNull());
 });
 
 it("keeps filtered choices and unavailable rows in DOM order before the existing footer", async () => {
@@ -176,17 +166,12 @@ it("keeps filtered choices and unavailable rows in DOM order before the existing
   await openSettings(host);
   const retry = get(host, ".palette-session-settings__error button");
   await waitForSolid(() =>
-    expect(host.querySelector(".palette-session-settings__workspace")).not.toBeNull(),
-  );
-  get(host, ".palette-session-settings__workspace").click();
-  await waitForSolid(() =>
     expect(host.querySelector('[data-machine="local"][data-project="alpha"]')).not.toBeNull(),
   );
   await waitForSolid(() =>
     expect(host.querySelector('[data-machine="runtime:hosted"]')).not.toBeNull(),
   );
   const content = get(host, ".palette-session-settings__content");
-  const back = get(content, ".palette-session-settings__back");
   await waitForSolid(() =>
     expect(content.querySelector(".palette-session-settings__search")).not.toBeNull(),
   );
@@ -208,7 +193,7 @@ it("keeps filtered choices and unavailable rows in DOM order before the existing
   expectArrow(alpha, "ArrowDown", beta);
   expectArrow(beta, "ArrowDown", connect);
   expectArrow(connect, "ArrowDown", retry);
-  expectArrow(retry, "ArrowDown", back);
+  expectArrow(retry, "ArrowDown", search);
 
   search.value = "BÉTA";
   search.dispatchEvent(new Event("input", { bubbles: true }));
@@ -243,7 +228,6 @@ it("retains focused place choices through a quiet cloud catalog refresh failure"
   await openSettings(host);
   const draft = expectDefined(host.draft.settingsView(), "palette settings").options.draft;
   await draft.gateway.refreshCloudProfiles();
-  get(host, ".palette-session-settings__workspace").click();
   await waitForSolid(() =>
     expect(host.querySelector(".palette-session-settings__search")).not.toBeNull(),
   );

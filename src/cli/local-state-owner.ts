@@ -72,6 +72,8 @@ export async function runWithLocalStateOwner<T>(params: {
   timeoutMs?: number;
   expectFinal?: boolean;
   requireLocalBackendSharedAuth?: boolean;
+  /** Agent runs keep custody until process exit when their runtime cleanup did not settle. */
+  retainAfterUncertainCleanup?: true;
   onGatewayResponse?: (request: GatewayRequestFunction, signal: AbortSignal) => Promise<void>;
   onGatewaySignalAbort?: (request: GatewayRequestFunction) => Promise<void>;
   /** Local inspection must stay read-only and must not load mutation-capable runtime config. */
@@ -377,6 +379,15 @@ export async function runWithLocalStateOwner<T>(params: {
       throw error;
     }
     const runOwned = async () => {
+      if (params.databaseAccess !== "none") {
+        try {
+          // The configured engine may only now be in scope; take its PostgreSQL custody first.
+          await lock.acquireConfiguredPostgresOwner?.();
+        } catch (error) {
+          await lock.release();
+          refuse(error);
+        }
+      }
       const resources =
         params.databasePortMaintenance || params.databaseAccess === "none"
           ? undefined
@@ -384,13 +395,17 @@ export async function runWithLocalStateOwner<T>(params: {
               assertOwnerCurrent: () => lock.assertCurrent(),
               assertDatabaseAccess: lock.assertDatabaseAccess,
             });
+      const { createAgentCleanupScope } = await import("../agents/run-cleanup-timeout.js");
+      const cleanup = createAgentCleanupScope();
       let uncertainCleanup = false;
       try {
-        return await (resources ?? lock).run(() => runLocal(lock.assertCurrent));
+        return await (resources ?? lock).run(() => cleanup.run(() => runLocal(lock.assertCurrent)));
       } catch (error) {
         uncertainCleanup = hasCommandProcessCleanupError(error);
         throw error;
       } finally {
+        uncertainCleanup ||=
+          params.retainAfterUncertainCleanup === true && cleanup.outcome === "uncertain";
         // Failed cleanup keeps physical custody; release cannot race accepted worker/native work.
         await resources?.close();
         // Stop lending this owner, but keep physical custody until uncertain children exit.

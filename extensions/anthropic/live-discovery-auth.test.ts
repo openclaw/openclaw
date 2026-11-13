@@ -90,6 +90,10 @@ it("retains shipped models and their compat while projecting discovered capabili
       capabilities: capabilities(),
     }),
     discoveryRow("claude-unshaped-9"),
+    discoveryRow("claude-audio-only", {
+      capabilities: capabilities(),
+      modalities: { output: ["audio"] },
+    }),
     discoveryRow("claude-sonnet-4-6", { capabilities: capabilities(false) }),
   ];
   const result = await discover("sk-ant-oat01-test-token");
@@ -118,6 +122,8 @@ it("retains shipped models and their compat while projecting discovered capabili
     },
   });
   expect(models.has("claude-unshaped-9")).toBe(false);
+  expect(models.get("claude-brand-new-9")?.inference?.chat).not.toBe(false);
+  expect(models.get("claude-audio-only")?.inference?.chat).toBe(false);
   // Tool surface (Code Mode) comes from the shipped Sonnet row; effort comes from the listing.
   expect(models.get("claude-sonnet-4-6")).toMatchObject({
     compat: { codeMode: "preferred" },

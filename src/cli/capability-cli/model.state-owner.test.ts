@@ -67,3 +67,17 @@ it("refuses an explicit --local run while the Gateway owns the shared credential
   expect(local.admitted).not.toHaveBeenCalled();
   expect(fixture.transport.request).not.toHaveBeenCalled();
 });
+
+it("refuses infer model auth logout while the Gateway owns the shared credentials", async () => {
+  const command = new Command();
+  registerModelCapabilityCommands(command);
+  await expect(
+    command.parseAsync(["model", "auth", "logout", "--provider", "fixture", "--json"], {
+      from: "user",
+    }),
+  ).rejects.toMatchObject({
+    code: "OWNER_UNAVAILABLE",
+    message: expect.stringContaining("This command is offline-only."),
+  });
+  expect(fixture.transport.request).not.toHaveBeenCalled();
+});
