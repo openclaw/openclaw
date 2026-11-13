@@ -490,6 +490,7 @@ function createParams(overrides: Partial<OpenClawConfig> = {}) {
       ...overrides,
     } as OpenClawConfig,
     deps: {} as CliDeps,
+    env: { OPENCLAW_SKIP_CRON: "0" },
     broadcast: vi.fn(),
   };
 }

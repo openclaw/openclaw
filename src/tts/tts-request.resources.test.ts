@@ -390,9 +390,9 @@ describe.each([
       override.cleanup();
     }
   });
-  it.each([true, false])(
-    "refreshes only runtime-owned fallback config without a source snapshot (runtimeOwned=%s)",
-    async (runtimeOwned) => {
+  it.each(["identity", "equivalent-copy", "scoped"] as const)(
+    "refreshes matching runtime fallback config without a source snapshot (binding=%s)",
+    async (binding) => {
       const primary = createFixture("refresh-primary", true);
       const fallback = createFixture("refresh-fallback");
       primary.state.prepareResume.resolve();
@@ -409,7 +409,21 @@ describe.each([
             },
             tts: { ...base.tts, providers: { [primary.id]: {}, [fallback.id]: {} } },
           };
-          setRuntimeConfigSnapshot(runtimeOwned ? cfg : { ...cfg });
+          setRuntimeConfigSnapshot(
+            binding === "identity"
+              ? cfg
+              : binding === "equivalent-copy"
+                ? { ...cfg }
+                : {
+                    ...cfg,
+                    plugins: {
+                      ...cfg.plugins,
+                      entries: {
+                        [fallback.id]: { config: { voiceId: "unrelated-runtime" } },
+                      },
+                    },
+                  },
+          );
           const pending = settle(
             synthesize({
               text: "refresh during fallback",
@@ -432,7 +446,7 @@ describe.each([
             expect(result.value?.success).toBe(true);
             expect(result.value?.attemptedProviders).toEqual([primary.id, fallback.id]);
             expect(result.value?.providerVoice).toBe(
-              runtimeOwned ? "after-refresh" : "before-refresh",
+              binding === "scoped" ? "before-refresh" : "after-refresh",
             );
             expect(result.value?.audioBuffer).toEqual(pcm);
             for (const entry of [...primary.state.connections, ...fallback.state.connections]) {

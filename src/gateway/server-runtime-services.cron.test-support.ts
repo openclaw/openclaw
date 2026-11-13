@@ -85,7 +85,9 @@ export function registerGatewayCronStartupTests(
     });
 
     await waitForFast(() =>
-      expect(logCron.error).toHaveBeenCalledWith("failed to start: Error: store unavailable"),
+      expect(logCron.error).toHaveBeenCalledWith(
+        "failed to start; automatic session archiving is deferred until cron loads: Error: store unavailable",
+      ),
     );
     expect(onStartError).toHaveBeenCalledOnce();
     expect(cronReconciliation.complete).not.toHaveBeenCalled();
@@ -108,7 +110,9 @@ export function registerGatewayCronStartupTests(
     });
 
     await waitForFast(() =>
-      expect(logCron.error).toHaveBeenCalledWith("failed to start: Error: watcher unavailable"),
+      expect(logCron.error).toHaveBeenCalledWith(
+        "failed to start; automatic session archiving is deferred until cron loads: Error: watcher unavailable",
+      ),
     );
     expect(cronReconciliation.complete).not.toHaveBeenCalled();
     expect(getActiveGatewayRootWorkCount()).toBe(0);

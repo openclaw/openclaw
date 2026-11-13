@@ -460,13 +460,17 @@ describe("gateway cron stop-and-drain automation ownership", () => {
     "publishes a one-shot binding removal after completion (delete=%s)",
     async (deleteAfterRun) => {
       stopAllMock.mockResolvedValue(undefined);
-      const original = await startGatewayCron(`one-shot-${deleteAfterRun}`, false);
+      const original = await startGatewayCron(`one-shot-${deleteAfterRun}`);
+      original.state.cron.pauseScheduling();
       const changed = vi.fn();
+      const factsChanged = vi.fn();
       let stop = () => {};
+      let stopFacts = () => {};
       try {
         const job = await original.state.cron.add({
           name: "one-shot binding",
           enabled: true,
+          // Pause automatic dispatch so the forced run consumes this due occurrence.
           schedule: { kind: "at", at: new Date(original.clock.clock.now() - 1_000).toISOString() },
           payload: { kind: "command", argv: [process.execPath, "-e", "process.exit(0)"] },
           sessionTarget: "isolated",
@@ -477,6 +481,7 @@ describe("gateway cron stop-and-drain automation ownership", () => {
         const key = `agent:main:cron:${job.id}`;
         expect(sessionHasAutomation(key, original.cfg)).toBe(true);
         stop = sessionChanges.subscribe(changed);
+        stopFacts = sessionChanges.subscribeFacts(factsChanged);
         expect(await original.state.cron.run(job.id, "force")).toMatchObject({
           ok: true,
           ran: true,
@@ -487,11 +492,17 @@ describe("gateway cron stop-and-drain automation ownership", () => {
           .map(([change]) => change)
           .filter((change) => change.scope === "automation");
         expect(automation).toEqual([{ sessionKey: key, scope: "automation" }]);
+        expect(
+          factsChanged.mock.calls
+            .map(([change]) => change)
+            .filter((change) => change.scope === "automation"),
+        ).toEqual([{ sessionKey: key, scope: "automation", facts: { kind: "unchanged" } }]);
         expect(original.state.cron.getJob(job.id)?.enabled).toBe(
           deleteAfterRun ? undefined : false,
         );
       } finally {
         stop();
+        stopFacts();
         await cleanGatewayCron(original);
       }
     },

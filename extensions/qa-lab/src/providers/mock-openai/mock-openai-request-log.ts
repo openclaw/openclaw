@@ -36,10 +36,7 @@ export function createMockOpenAiRequestLog() {
         writeJson(res, 200, requests.at(-1) ?? { ok: false, error: "no request recorded" });
       } else if (url.pathname === "/debug/request-cursor") {
         writeJson(res, 200, { cursor: nextCursor - 1 });
-      } else if (
-        url.pathname === "/debug/requests" ||
-        url.pathname === "/debug/request-plans"
-      ) {
+      } else if (url.pathname === "/debug/requests" || url.pathname === "/debug/request-plans") {
         const afterText = url.searchParams.get("after");
         const after =
           afterText === null

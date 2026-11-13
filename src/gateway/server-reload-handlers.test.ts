@@ -2184,7 +2184,7 @@ describe("gateway hot reload model state", () => {
       rejectFirstStart?.(new Error("superseded start failed"));
       await waitForFast(() =>
         expect(logCron.error).toHaveBeenCalledWith(
-          "failed to start: Error: superseded start failed",
+          "failed to start; automatic session archiving is deferred until cron loads: Error: superseded start failed",
         ),
       );
       expect(signalSpy).not.toHaveBeenCalled();
