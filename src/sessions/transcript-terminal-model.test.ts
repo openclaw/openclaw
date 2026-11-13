@@ -37,20 +37,3 @@ it("rebuilds cached terminal facts that attributed a command to an inference mod
     }),
   ).toBeUndefined();
 });
-
-it("preserves legacy preview text without a formatting revision", () => {
-  const fields = {
-    lastMessagePreview: "Literal **value** | kept",
-    lastAssistantMessage: { text: "Literal **value** | kept", timestamp: 200 },
-    terminalModel: null,
-    indexedSeq: 2,
-  };
-  expect(
-    readStoredSessionRowTranscriptProjection({
-      json: JSON.stringify(fields),
-      updatedAt: 2,
-      transcriptUpdatedAt: 2,
-      indexedSeq: 2,
-    }),
-  ).toEqual(fields);
-});

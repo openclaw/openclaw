@@ -1,2 +1,2 @@
-# Table normalization and preservation of legacy preview caches.
-37
+# Table normalization and archived preview preservation at the database boundary.
+76

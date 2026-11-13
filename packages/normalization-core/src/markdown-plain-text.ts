@@ -35,7 +35,11 @@ function stripCompletedLongOrTildeFences(text: string): string {
 }
 
 function splitTableRow(line: string): string[] | undefined {
-  if (!line.includes("|") || /^(?: {4}| {0,3}\t)/.test(line)) {
+  if (
+    !line.includes("|") ||
+    /^(?: {4}| {0,3}\t)/.test(line) ||
+    /^ {0,3}(?:>|#{1,6}(?:\s|$)|(?:[-+*]|\d+[.)])\s)/.test(line)
+  ) {
     return undefined;
   }
   const cells: string[] = [];
@@ -109,11 +113,11 @@ export function flattenMarkdownToPlainText(text: string): string {
       literal === undefined ? "\0\0" : `\0${code.push(literal) - 1}\0`,
   );
   // Quote markers may nest with horizontal whitespace, but must not consume another line.
-  let flattened = withoutCode.replace(
+  // Recognize tables before removing block markers: a following heading or list is not a row.
+  let flattened = stripTables(withoutCode).replace(
     /^[\t ]{0,3}(?:(?:>[\t ]*)+|(?:#{1,6}|[-+*]|\d+[.)])\s+)/gm,
     "",
   );
-  flattened = stripTables(flattened);
   for (const marker of ["*", "_", "~"] as const) {
     flattened = stripEmphasis(flattened, marker);
   }

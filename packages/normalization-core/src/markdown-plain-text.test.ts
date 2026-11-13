@@ -89,6 +89,16 @@ describe("flattenMarkdownToPlainText", () => {
       "Keep a | b\n\nA | B\n--- | --- | ---",
       "Keep a | b A | B --- | --- | ---",
     ],
+    [
+      "block boundaries after a table",
+      "| A | B |\n| --- | --- |\n| x | y |\n# Choose a | b\n- Keep c | d\n1. Keep e | f\n> Quote g | h",
+      "A B x y Choose a | b Keep c | d Keep e | f Quote g | h",
+    ],
+    [
+      "block markers do not establish table headers",
+      "# Choose a | b\n--- | ---\n- Keep c | d\n--- | ---",
+      "Choose a | b --- | --- Keep c | d --- | ---",
+    ],
     ["indented table-shaped code", "    A | B\n    --- | ---\n    a | b", "A | B --- | --- a | b"],
     ["emphasis", "**bold** _italic_ ~~struck~~", "bold italic struck"],
     ["wider opener preference", "__a_ _b__", "a_ _b"],
