@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { markerPrefix, parseAttrs, parseDocsDocument } from "../../scripts/lib/docs-markdown.mjs";
@@ -76,6 +77,56 @@ describe("docs component attribute boundaries", () => {
         mapLink: (href: string, line: number | undefined) => ({ href, line }),
       }).links,
     ).toEqual([{ href: "/cli/config#root-options", line: 1 }]);
+  });
+
+  it("keeps link lines through unchanged text, component rewrites and CRLF", () => {
+    const source = [
+      "---",
+      'title: "😀"',
+      "---",
+      "",
+      "[First](/first)",
+      "",
+      "<Steps>",
+      '  <Step title="Guide">',
+      "    [Second](/second)",
+      "  </Step>",
+      "</Steps>",
+      "",
+      "{/* hidden */}",
+      "",
+      "[Third](/third)",
+    ].join("\r\n");
+    const document = parseDocsDocument(source, undefined, {
+      mapLink: (href: string, line: number | undefined) => ({ href, line }),
+    });
+    expect(document.links).toEqual([
+      { href: "/first", line: 5 },
+      { href: "/second", line: 9 },
+      { href: "/third", line: 15 },
+    ]);
+  });
+
+  it("does not attribute snippet links to the including document", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "docs-link-lines-"));
+    try {
+      fs.writeFileSync(path.join(root, "fragment.md"), "[Snippet](/snippet)\n");
+      const document = parseDocsDocument(
+        '<Snippet file="fragment.md" />\n\n[After](/after)',
+        undefined,
+        {
+          sourceFile: path.join(root, "index.md"),
+          root,
+          mapLink: (href: string, line: number | undefined) => ({ href, line }),
+        },
+      );
+      expect(document.links).toEqual([
+        { href: "/snippet", line: undefined },
+        { href: "/after", line: 3 },
+      ]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("keeps indented content and component anchors after a quoted closing angle bracket", () => {

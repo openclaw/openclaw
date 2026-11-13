@@ -1,0 +1,2 @@
+51
+# Preserve mapped link locations across component rewrites, CRLF, and snippet expansion.

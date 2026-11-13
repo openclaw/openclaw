@@ -86,13 +86,21 @@ class DocsSource {
       this.text = this.text.replace(pattern, replacement);
       return this;
     }
-    const origins = [];
+    let origins;
     let end = 0;
     this.text = this.text.replace(pattern, (...args) => {
       const offset = args.at(-2);
       const value = typeof replacement === "function" ? replacement(...args) : replacement;
-      for (let i = end; i < offset; i++) {
-        origins.push(this.origins[i]);
+      if (!origins && value === args[0]) {
+        end = offset + args[0].length;
+        return value;
+      }
+      if (!origins) {
+        origins = this.origins.slice(0, offset);
+      } else {
+        for (let i = end; i < offset; i++) {
+          origins.push(this.origins[i]);
+        }
       }
       for (let i = 0; i < value.length; i++) {
         origins.push(
@@ -102,10 +110,12 @@ class DocsSource {
       end = offset + args[0].length;
       return value;
     });
-    for (let i = end; i < this.origins.length; i++) {
-      origins.push(this.origins[i]);
+    if (origins) {
+      for (let i = end; i < this.origins.length; i++) {
+        origins.push(this.origins[i]);
+      }
+      this.origins = origins;
     }
-    this.origins = origins;
     return this;
   }
 
