@@ -190,7 +190,10 @@ async function clearSlot(
   command: RuntimeSlotCommand,
   env: NodeJS.ProcessEnv,
 ) {
-  await fs.rm(slot, { recursive: true, force: true });
+  // A kill -9 of an earlier update can leave its npm/pnpm child writing into this
+  // slot. Retry the removal (ENOTEMPTY) for up to about one minute; the --version
+  // smoke check rejects a slot that the orphan still corrupts after that.
+  await fs.rm(slot, { recursive: true, force: true, maxRetries: 15, retryDelay: 500 });
   if (source.kind === "git") {
     await command(["git", "-C", source.repo, "worktree", "prune"], {
       cwd: source.repo,
