@@ -9,7 +9,12 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { listDirectoryTreeStrictSync } from "../src/infra/directory-walk.js";
 import { UPGRADE_SET_ASIDE_SCOPE } from "../src/state/sqlite-copy-swap.js";
-import { STATE_UPGRADE_FAIL_STEP_ENV, UPGRADE_REPORT_SCOPE } from "../src/state/state-upgrade.js";
+import { ChainStepError } from "../src/state/state-upgrade-validate.js";
+import {
+  createDoctorChain,
+  UPGRADE_REPORT_SCOPE,
+  upgradeStateDirectory,
+} from "../src/state/state-upgrade.js";
 import { VERSION } from "../src/version.js";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
 
@@ -116,7 +121,6 @@ describe("Gateway start upgrades prior-release state by copy and swap", () => {
     async ({ release, failStep }) => {
       const instance = await createOpenClawTestInstance({
         name: `upgrade-${release}`,
-        env: failStep ? { [STATE_UPGRADE_FAIL_STEP_ENV]: failStep } : {},
         startTimeoutMs: 300_000,
       });
       try {
@@ -142,6 +146,20 @@ describe("Gateway start upgrades prior-release state by copy and swap", () => {
         );
         const before = new Map(sqliteFiles(instance.stateDir).map((file) => [file, sha256(file)]));
 
+        if (failStep) {
+          // Run this build's Doctor on the private copy, then fail, so the generic
+          // fallback rebuilds the databases; the Gateway then starts on the result.
+          const [entry] = await instance.entrypoint();
+          const doctor = createDoctorChain(path.resolve(entry ?? ""), []);
+          await upgradeStateDirectory({
+            env: instance.env,
+            log: { info: () => {}, warn: () => {} },
+            runChain: async (chain) => {
+              await doctor(chain);
+              throw new ChainStepError(failStep, `Injected failure in ${failStep}`);
+            },
+          });
+        }
         await instance.startGateway();
         await instance.stopGateway();
 

@@ -7,8 +7,14 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync, SQLInputValue, SQLOutputValue } from "node:sqlite";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { castValue, jsonRow } from "./sqlite-copy-swap-values.js";
-import { vacuumSqliteInto, fsyncPath, normalizeSqliteText } from "./state-upgrade-tree.js";
+import {
+  fsyncPath,
+  normalizeSqliteText,
+  readSqliteRows,
+  vacuumSqliteInto,
+} from "./state-upgrade-tree.js";
 
 /** Meaning changes that a name-matched copy cannot express. Keep it small. */
 export type SqliteSwapMap = {
@@ -101,6 +107,7 @@ const quote = (name: string) => `"${name.replaceAll('"', '""')}"`;
 
 function readTables(db: DatabaseSync): Map<string, TableInfo> {
   const tables = new Map<string, TableInfo>();
+  // SAFETY: the statement fixes the column names and types of each row.
   const rows = db.prepare("PRAGMA main.table_list").all() as Array<{
     name: string;
     type: TableInfo["type"];
@@ -114,16 +121,14 @@ function readTables(db: DatabaseSync): Map<string, TableInfo> {
     const columns =
       row.type === "shadow"
         ? []
-        : (
-            db.prepare(`PRAGMA main.table_xinfo(${quote(row.name)})`).all() as Array<{
-              name: string;
-              type: string;
-              notnull: number;
-              dflt_value: string | null;
-              pk: number;
-              hidden: number;
-            }>
-          )
+        : readSqliteRows<{
+            name: string;
+            type: string;
+            notnull: number;
+            dflt_value: string | null;
+            pk: number;
+            hidden: number;
+          }>(db, `PRAGMA main.table_xinfo(${quote(row.name)})`)
             // Generated and virtual-table hidden columns are not stored values.
             .filter((column) => column.hidden === 0)
             .map((column) => ({
@@ -145,7 +150,7 @@ function readTables(db: DatabaseSync): Map<string, TableInfo> {
 }
 
 function readUserVersion(db: DatabaseSync): number {
-  return Number((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version);
+  return readSqliteUserVersion(db);
 }
 
 type Source = { db: DatabaseSync; close: () => void };
@@ -187,6 +192,7 @@ function readUniqueKeys(db: DatabaseSync, table: TableInfo): UniqueKey[] {
   if (pk.length > 0) {
     keys.push(pk);
   }
+  // SAFETY: the statement fixes the column names and types of each row.
   const indexes = db.prepare(`PRAGMA main.index_list(${quote(table.name)})`).all() as Array<{
     name: string;
     unique: number;
@@ -196,10 +202,9 @@ function readUniqueKeys(db: DatabaseSync, table: TableInfo): UniqueKey[] {
     if (index.unique !== 1 || index.partial === 1) {
       continue;
     }
-    const columns = (
-      db.prepare(`PRAGMA main.index_info(${quote(index.name)})`).all() as Array<{
-        name: string | null;
-      }>
+    const columns = readSqliteRows<{ name: string | null }>(
+      db,
+      `PRAGMA main.index_info(${quote(index.name)})`,
     ).map((column) => column.name);
     // Expression indexes cannot be matched by column values.
     if (columns.every((name): name is string => name !== null)) {
@@ -307,6 +312,7 @@ function copyTable(
     context.setAside.push({ table: sourceTable.name, reason, row: jsonRow(row) });
     setAside += 1;
   };
+  // SAFETY: the statement fixes the column names and types of each row.
   for (const row of select.iterate() as IterableIterator<Record<string, SQLOutputValue>>) {
     sourceCount += 1;
     const values: SQLInputValue[] = keepRowid ? [row.swaprowid ?? null] : [];
@@ -419,6 +425,7 @@ function findCollision(
       `SELECT ${rowidSelect}* FROM ${quote(table.name)} WHERE ${key.map((c) => `${quote(c)} IS ?`).join(" AND ")} LIMIT 1`,
     );
     statement.setReadBigInts(true);
+    // SAFETY: SELECT * returns one value per column of this table.
     const row = statement.get(...key.map((column) => incoming.get(column) ?? null)) as
       | Record<string, SQLOutputValue>
       | undefined;
@@ -437,6 +444,7 @@ function setAsideForeignKeyViolations(
   setAside: SetAsideRow[],
 ): void {
   for (let pass = 0; pass < MAX_FK_PASSES; pass += 1) {
+    // SAFETY: the statement fixes the column names and types of each row.
     const violations = db.prepare("PRAGMA main.foreign_key_check").all() as Array<{
       table: string;
       rowid: number | bigint | null;
@@ -452,6 +460,7 @@ function setAsideForeignKeyViolations(
       }
       const statement = db.prepare(`SELECT * FROM ${quote(violation.table)} WHERE rowid = ?`);
       statement.setReadBigInts(true);
+      // SAFETY: the statement fixes the column names and types of each row.
       const row = statement.get(violation.rowid) as Record<string, SQLOutputValue> | undefined;
       if (!row) {
         continue;
@@ -483,7 +492,9 @@ export function insertSetAsideRows(
   now = Date.now(),
 ): void {
   const insert = db.prepare(
-    "INSERT OR REPLACE INTO diagnostic_events (scope, event_key, payload_json, created_at, sequence) VALUES (?, ?, ?, ?, ?)",
+    `INSERT INTO diagnostic_events (scope, event_key, payload_json, created_at, sequence) VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT (scope, event_key) DO UPDATE SET payload_json = excluded.payload_json,
+         created_at = excluded.created_at, sequence = excluded.sequence`,
   );
   rows.forEach((row, index) => {
     insert.run(
@@ -534,6 +545,7 @@ export function buildSqliteByCopy(
     // Triggers would rewrite derived rows during the copy; reinstall them after.
     const triggers = built
       .prepare("SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND sql IS NOT NULL")
+      // SAFETY: the statement fixes the column names and types of each row.
       .all() as Array<{ name: string; sql: string }>;
     for (const trigger of triggers) {
       built.exec(`DROP TRIGGER ${quote(trigger.name)}`);
@@ -601,6 +613,7 @@ export function buildSqliteByCopy(
       const sharedTarget =
         report.tables.filter((other) => other.target === entry.target).length > 1;
       const actual = Number(
+        // SAFETY: the statement fixes the column names and types of each row.
         (built.prepare(`SELECT count(*) AS n FROM ${quote(entry.target)}`).get() as { n: number })
           .n,
       );
@@ -608,6 +621,7 @@ export function buildSqliteByCopy(
         report.conservationMismatches.push(entry.table);
       }
     }
+    // SAFETY: the statement fixes the column names and types of each row.
     const integrity = built.prepare("PRAGMA quick_check").get() as { quick_check: string };
     if (integrity.quick_check !== "ok") {
       throw new Error(`New ${target.label} database failed quick_check: ${integrity.quick_check}`);
@@ -626,6 +640,7 @@ function setAsideTable(context: CopyContext, table: TableInfo): SqliteSwapTableR
   const select = context.source.prepare(`SELECT * FROM ${quote(table.name)}`);
   select.setReadBigInts(true);
   let count = 0;
+  // SAFETY: the statement fixes the column names and types of each row.
   for (const row of select.iterate() as IterableIterator<Record<string, SQLOutputValue>>) {
     count += 1;
     context.setAside.push({ table: table.name, reason: "table removed", row: jsonRow(row) });
@@ -665,6 +680,7 @@ export function buildSqliteWithFoldIns(
           db.exec("RELEASE fold_in");
         } catch (error) {
           db.exec("ROLLBACK TO fold_in; RELEASE fold_in");
+          // SAFETY: node:fs and node:sqlite throw Error instances; only optional fields are read.
           foldInFailures.push(`${step.id}: ${(error as Error).message}`);
         }
       }

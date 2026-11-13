@@ -15,6 +15,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { VERSION } from "../version.js";
 import { buildAgentDatabaseByCopy } from "./openclaw-agent-db-swap.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
@@ -56,10 +57,6 @@ export const UPGRADE_REPORT_SCOPE = "upgrade.report";
 const UPGRADE_PIN_SCOPE = "upgrade.pin";
 const WORK_PREFIX = ".upgrade-";
 const CHAIN_TIMEOUT_MS = 30 * 60_000;
-/** Test seam: names a chain step to fail so the fallback path can be proven end to end. */
-export const STATE_UPGRADE_FAIL_STEP_ENV = "OPENCLAW_TEST_STATE_UPGRADE_FAIL_STEP";
-/** Test seam: `SIGKILL` this process right after the named durable step (crash proof). */
-export const STATE_UPGRADE_CRASH_AFTER_ENV = "OPENCLAW_TEST_STATE_UPGRADE_CRASH_AFTER";
 
 type DatabaseTarget = { kind: "state" | "agent"; agentId?: string; path: string; version: number };
 
@@ -84,15 +81,14 @@ export type StateUpgradeChain = (params: {
 }) => Promise<{ warnings: string[] }>;
 
 function readVersion(db: DatabaseSync, kind: DatabaseTarget["kind"]): number {
-  const user = Number(
-    (db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version,
-  );
+  const user = readSqliteUserVersion(db);
   if (kind !== "state") {
     return user;
   }
   try {
     const row = db
       .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
+      // SAFETY: the statement fixes the column names and types of each row.
       .get(CONTENT_VERSION_KEY) as { value_json?: string } | undefined;
     return Math.max(user, Number(row?.value_json ?? 0) || 0);
   } catch {
@@ -147,6 +143,7 @@ const expectedVersion = (target: Pick<DatabaseTarget, "kind">) =>
 
 function readConfiguredWorkspaces(configPath: string, stateDir: string): string[] {
   try {
+    // SAFETY: only optional fields are read, and each is type-checked before use.
     const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as {
       agents?: { defaults?: { workspace?: unknown }; list?: Array<{ workspace?: unknown }> };
     };
@@ -161,46 +158,49 @@ function readConfiguredWorkspaces(configPath: string, stateDir: string): string[
   }
 }
 
-/** This build's Doctor, run against the shadow only. */
-export const runDoctorChain: StateUpgradeChain = async ({ stateDir, configPath, env, logPath }) => {
-  const entry = process.argv[1];
-  if (!entry) {
-    throw new ChainStepError("doctor", "Cannot locate the OpenClaw entry point for Doctor.");
-  }
-  const childEnv: NodeJS.ProcessEnv = {};
-  for (const [key, value] of Object.entries(env)) {
-    // Service identity and tokens belong to the live Gateway, not the shadow run.
-    if (!/^OPENCLAW_(LAUNCHD_LABEL|PROFILE|SERVICE_|GATEWAY_TOKEN|GATEWAY_PASSWORD)/u.test(key)) {
-      childEnv[key] = value;
+/** This build's Doctor, run against the shadow only, from the given CLI entry. */
+export const createDoctorChain =
+  (entry = process.argv[1], execArgv = process.execArgv): StateUpgradeChain =>
+  async ({ stateDir, configPath, env, logPath }) => {
+    if (!entry) {
+      throw new ChainStepError("doctor", "Cannot locate the OpenClaw entry point for Doctor.");
     }
-  }
-  Object.assign(childEnv, {
-    OPENCLAW_STATE_DIR: stateDir,
-    OPENCLAW_CONFIG_PATH: configPath,
-    OPENCLAW_SERVICE_REPAIR_POLICY: "external",
-    OPENCLAW_NO_RESPAWN: "1",
-  });
-  const log = fs.openSync(logPath, "a", 0o600);
-  try {
-    const code = await new Promise<number | null>((resolve, reject) => {
-      const child = spawn(
-        process.execPath,
-        [...process.execArgv, entry, "doctor", "--fix", "--non-interactive"],
-        { env: childEnv, stdio: ["ignore", log, log] },
-      );
-      const timer = setTimeout(() => child.kill("SIGKILL"), CHAIN_TIMEOUT_MS);
-      child.on("error", reject);
-      child.on("exit", (exitCode) => {
-        clearTimeout(timer);
-        resolve(exitCode);
-      });
+    const childEnv: NodeJS.ProcessEnv = {};
+    for (const [key, value] of Object.entries(env)) {
+      // Service identity and tokens belong to the live Gateway, not the shadow run.
+      if (!/^OPENCLAW_(LAUNCHD_LABEL|PROFILE|SERVICE_|GATEWAY_TOKEN|GATEWAY_PASSWORD)/u.test(key)) {
+        childEnv[key] = value;
+      }
+    }
+    Object.assign(childEnv, {
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_SERVICE_REPAIR_POLICY: "external",
+      OPENCLAW_NO_RESPAWN: "1",
     });
-    // Doctor also reports unrelated repairs; the schema check below decides success.
-    return { warnings: code === 0 ? [] : [`Doctor exited ${code ?? "by signal"}; see ${logPath}`] };
-  } finally {
-    fs.closeSync(log);
-  }
-};
+    const log = fs.openSync(logPath, "a", 0o600);
+    try {
+      const code = await new Promise<number | null>((resolve, reject) => {
+        const child = spawn(
+          process.execPath,
+          [...execArgv, entry, "doctor", "--fix", "--non-interactive"],
+          { env: childEnv, stdio: ["ignore", log, log] },
+        );
+        const timer = setTimeout(() => child.kill("SIGKILL"), CHAIN_TIMEOUT_MS);
+        child.on("error", reject);
+        child.on("exit", (exitCode) => {
+          clearTimeout(timer);
+          resolve(exitCode);
+        });
+      });
+      // Doctor also reports unrelated repairs; the schema check below decides success.
+      return {
+        warnings: code === 0 ? [] : [`Doctor exited ${code ?? "by signal"}; see ${logPath}`],
+      };
+    } finally {
+      fs.closeSync(log);
+    }
+  };
 
 /** Generic rebuild of every outdated database into the shadow. */
 function buildFallback(
@@ -255,7 +255,9 @@ function recordDiagnostics(
   try {
     const now = Date.now();
     const insert = db.prepare(
-      "INSERT OR REPLACE INTO diagnostic_events (scope, event_key, payload_json, created_at, sequence) VALUES (?, ?, ?, ?, ?)",
+      `INSERT INTO diagnostic_events (scope, event_key, payload_json, created_at, sequence) VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT (scope, event_key) DO UPDATE SET payload_json = excluded.payload_json,
+         created_at = excluded.created_at, sequence = excluded.sequence`,
     );
     insert.run(UPGRADE_REPORT_SCOPE, `${VERSION}:${now}`, JSON.stringify(report), now, now);
     if (pinned) {
@@ -277,6 +279,7 @@ function readPinnedVersions(statePath: string): Set<string> {
         (
           db
             .prepare("SELECT event_key FROM diagnostic_events WHERE scope = ?")
+            // SAFETY: the statement fixes the column names and types of each row.
             .all(UPGRADE_PIN_SCOPE) as Array<{ event_key: string }>
         ).map((row) => row.event_key),
       );
@@ -308,21 +311,12 @@ export async function upgradeStateDirectory(params: {
   env: NodeJS.ProcessEnv;
   log: { info: (message: string) => void; warn: (message: string) => void };
   runChain?: StateUpgradeChain;
-  /** Fault-injection seam for crash tests: called after each durable step. */
-  afterStep?: (step: string) => void;
   /** Release this process's handles on the live files before they are renamed. */
   beforeSwap?: () => Promise<void>;
 }): Promise<StateUpgradeResult> {
   const env = params.env;
   const stateDir = path.resolve(resolveStateDir(env));
   const configPath = path.resolve(resolveConfigPath(env, stateDir));
-  const crashAfter = env[STATE_UPGRADE_CRASH_AFTER_ENV]?.trim();
-  const step = (name: string) => {
-    params.afterStep?.(name);
-    if (crashAfter === name) {
-      process.kill(process.pid, "SIGKILL");
-    }
-  };
   if (!fs.existsSync(stateDir)) {
     return { status: "current" };
   }
@@ -369,7 +363,7 @@ export async function upgradeStateDirectory(params: {
     ? path.join(shadowRoot, path.relative(stateDir, configPath))
     : path.join(workDir, "config", path.basename(configPath));
   const toShadow = (live: string) => path.join(shadowRoot, path.relative(stateDir, live));
-  const runChain = params.runChain ?? runDoctorChain;
+  const runChain = params.runChain ?? createDoctorChain();
   const chainLog = path.join(workDir, "chain.log");
   let planWritten = false;
   try {
@@ -394,7 +388,6 @@ export async function upgradeStateDirectory(params: {
     if (fs.existsSync(shadowConfig)) {
       rewriteFilePrefix(shadowConfig, stateDir, shadowRoot);
     }
-    step("copied");
     let mode: "chain" | "fallback" = "chain";
     let failedStep: string | undefined;
     const warnings: string[] = [];
@@ -409,10 +402,6 @@ export async function upgradeStateDirectory(params: {
         logPath: chainLog,
       });
       warnings.push(...chain.warnings);
-      const injected = env[STATE_UPGRADE_FAIL_STEP_ENV]?.trim();
-      if (injected) {
-        throw new ChainStepError(injected, `Injected failure in ${injected}`);
-      }
       validateShadow(outdated, toShadow, readVersion, expectedVersion);
       mismatches = conservationMismatches(outdated, toShadow);
     } catch (error) {
@@ -422,6 +411,7 @@ export async function upgradeStateDirectory(params: {
       mode = "fallback";
       failedStep = error instanceof ChainStepError ? error.step : "chain";
       params.log.warn(
+        // SAFETY: node:fs and node:sqlite throw Error instances; only optional fields are read.
         `State upgrade chain failed at ${failedStep}: ${(error as Error).message}. Rebuilding the databases with the generic copy; the previous files are kept and pinned.`,
       );
       // Keep what the chain finished outside the databases it upgrades: the migrated
@@ -467,7 +457,6 @@ export async function upgradeStateDirectory(params: {
         mismatches.push(...report.conservationMismatches.map((t) => `${report.label}:${t}`));
       }
     }
-    step("built");
     // Paths the run wrote into the shadow point at the live tree again.
     for (const file of listTreeFiles(shadowRoot)) {
       if (isSqliteFile(file)) {
@@ -538,9 +527,7 @@ export async function upgradeStateDirectory(params: {
     await params.beforeSwap?.();
     writePlan(workDir, { appVersion: VERSION, ops });
     planWritten = true;
-    step("planned");
-    applyPlan({ appVersion: VERSION, ops }, (index) => step(`applied-${index}`));
-    step("applied");
+    applyPlan({ appVersion: VERSION, ops });
     if (fs.existsSync(chainLog)) {
       // The chain's own output stays next to the other logs for diagnosis.
       fs.mkdirSync(path.join(stateDir, "logs"), { recursive: true });
@@ -570,6 +557,7 @@ export async function upgradeStateDirectory(params: {
       fs.rmSync(workDir, { recursive: true, force: true });
       if (isMachineFailure(error)) {
         throw new Error(
+          // SAFETY: node:fs and node:sqlite throw Error instances; only optional fields are read.
           `State upgrade to ${VERSION} stopped: ${(error as Error).message}. Nothing in ${stateDir} was changed. Free disk space (about the size of the state directory) and start the Gateway again.`,
           { cause: error },
         );
@@ -580,12 +568,14 @@ export async function upgradeStateDirectory(params: {
 }
 
 function isMachineFailure(error: unknown): boolean {
+  // SAFETY: node:fs and node:sqlite throw Error instances; only optional fields are read.
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
   return (
     code === "ENOSPC" ||
     code === "EIO" ||
     code === "EDQUOT" ||
     code === "EROFS" ||
+    // SAFETY: node:fs and node:sqlite throw Error instances; only optional fields are read.
     /SQLITE_FULL|database or disk is full|disk I\/O error/iu.test(String((error as Error)?.message))
   );
 }

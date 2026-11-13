@@ -3,7 +3,7 @@
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { withRecoveredSource } from "./state-upgrade-tree.js";
+import { readSqliteRows, withRecoveredSource } from "./state-upgrade-tree.js";
 
 export type ShadowTarget = { kind: "state" | "agent"; path: string };
 
@@ -75,6 +75,7 @@ function countRows(db: DatabaseSync): Map<string, number> {
     .prepare(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND sql NOT LIKE 'CREATE VIRTUAL TABLE%'",
     )
+    // SAFETY: the statement fixes the column names and types of each row.
     .all() as Array<{ name: string }>;
   for (const { name } of tables) {
     if (/_fts(_|$)|_vec(_|$)/u.test(name)) {
@@ -83,11 +84,10 @@ function countRows(db: DatabaseSync): Map<string, number> {
     counts.set(
       name,
       Number(
-        (
-          db.prepare(`SELECT count(*) AS n FROM "${name.replaceAll('"', '""')}"`).get() as {
-            n: number;
-          }
-        ).n,
+        readSqliteRows<{ n: number }>(
+          db,
+          `SELECT count(*) AS n FROM "${name.replaceAll('"', '""')}"`,
+        )[0]?.n ?? 0,
       ),
     );
   }
@@ -112,6 +112,7 @@ export function validateShadow(
           `${shadowPath} is at schema ${version} after the chain, expected ${expectedVersion(target)}`,
         );
       }
+      // SAFETY: the statement fixes the column names and types of each row.
       const integrity = db.prepare("PRAGMA integrity_check").all() as Array<{
         integrity_check: string;
       }>;
