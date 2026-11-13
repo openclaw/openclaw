@@ -1,3 +1,4 @@
+import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ChatType } from "../../channels/chat-type.js";
 import { parseSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
@@ -7,6 +8,7 @@ import { readSessionEntrySummariesInWorker } from "../../config/sessions/session
 import { prepareSessionTranscriptHydration } from "../../config/sessions/session-transcript-hydration.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Context, Model } from "../../llm/types.js";
+import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import {
   attachRuntimePromptMediaFacts,
   readRuntimePromptMediaFacts,
@@ -16,13 +18,17 @@ import { createPreparedEmbeddedAgentSettingsManager } from "../agent-project-set
 import { resolveBootstrapFilesForPreparation } from "../bootstrap-files.js";
 import { resolveUserTimezone } from "../date-time.js";
 import { buildBootstrapContextForFiles } from "../embedded-agent-helpers/bootstrap.js";
+import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import { convertToLlm, convertToLlmWithBlockImages } from "../sessions/messages.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { buildConfiguredAgentSystemPrompt } from "../system-prompt-config.js";
+import { resolveEffectiveToolFsWorkspaceOnly } from "../tool-fs-policy.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js";
 import { isCurrentEmbeddedRunAttachment } from "./run-state.js";
 import { normalizeMessagesForLlmBoundary } from "./run/attempt-llm-boundary.js";
+import { hydratePromptMediaMessages } from "./run/images.js";
+import { promptImageSessionKey } from "./run/prompt-image-decisions.js";
 import { applyRuntimeContextCarrierRetention } from "./run/runtime-context-prompt.js";
 import { resolveSessionBoundaryPromptCacheKey } from "./run/session-boundary-prompt-cache-key.js";
 import { resolveActiveEmbeddedRunBySessionFile } from "./runs.js";
@@ -94,13 +100,37 @@ export async function prepareEmbeddedSessionForkContext(params: {
       ? attachment.handle.readSessionForkContext?.()
       : undefined;
   if (live && sameModelRoute(live.model, params.model)) {
-    const messages = normalizeMessagesForLlmBoundary(
+    // The session hydrates earlier images per request (its context transform) from its own pinned
+    // decisions; the borrowed messages are not hydrated, so the fork applies the same step.
+    const workspaceOnly = resolveEffectiveToolFsWorkspaceOnly({
+      cfg: params.config,
+      agentId: params.agentId,
+    });
+    const hydrated = await hydratePromptMediaMessages(
       live.projectMessages?.(live.messages) ?? live.messages,
       {
-        ...live.boundary,
-        sessionVersion: live.sessionVersion,
+        workspaceDir: params.workspaceDir,
+        model: params.model,
+        maxBytes: MAX_IMAGE_BYTES,
+        maxDimensionPx: resolveImageSanitizationLimits(params.config).maxDimensionPx,
+        workspaceOnly,
+        localRoots: workspaceOnly
+          ? undefined
+          : getAgentScopedMediaLocalRoots(params.config ?? {}, params.agentId),
+        signal: params.signal,
+        imageSessionKey: promptImageSessionKey({
+          sessionId: params.target.sessionId,
+          agentId: params.agentId,
+          sessionTarget: { storePath: params.target.storePath, agentId: params.agentId },
+          workspaceDir: params.workspaceDir,
+        }),
       },
     );
+    assertCurrent();
+    const messages = normalizeMessagesForLlmBoundary(hydrated, {
+      ...live.boundary,
+      sessionVersion: live.sessionVersion,
+    });
     const cloned = structuredClone({
       systemPrompt: live.systemPrompt,
       // Schema-only definitions; executors never leave the attempt.
