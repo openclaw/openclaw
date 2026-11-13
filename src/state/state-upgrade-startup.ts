@@ -24,10 +24,11 @@ export async function upgradeStateOnGatewayStart(
   const parsed = raw === undefined ? undefined : parseConfigJson5(raw);
   // Accepted edge case: gateway.mode set only through $include reads as missing here,
   // so that start keeps the previous path (Doctor) instead of upgrading.
-  const gateway = parsed?.ok
-    ? (parsed.parsed as { gateway?: { mode?: unknown } })?.gateway
-    : undefined;
-  const mode = typeof gateway?.mode === "string" ? gateway.mode : undefined;
+  const root: unknown = parsed?.ok ? parsed.parsed : undefined;
+  const gateway = root && typeof root === "object" && "gateway" in root ? root.gateway : undefined;
+  const modeValue =
+    gateway && typeof gateway === "object" && "mode" in gateway ? gateway.mode : undefined;
+  const mode = typeof modeValue === "string" ? modeValue : undefined;
   if (!admits({ configExists: raw !== undefined, mode })) {
     return;
   }

@@ -32,6 +32,7 @@ export function fsyncPath(pathname: string, directory = false): void {
     fs.fsyncSync(fd);
   } catch (error) {
     // Windows cannot open directories for fsync; the rename is still durable there.
+    // SAFETY: node:fs and node:sqlite throw Error instances; only optional fields are read.
     const code = (error as NodeJS.ErrnoException).code;
     if (!(directory && (code === "EISDIR" || code === "EPERM" || code === "EACCES"))) {
       throw error;
@@ -65,6 +66,12 @@ export function isSqliteFile(pathname: string): boolean {
 }
 
 /** A consistent private copy that includes committed WAL frames; the source stays unwritten. */
+/** Rows of a catalog or PRAGMA statement whose column list fixes the shape `T`. */
+export function readSqliteRows<T>(db: DatabaseSync, sql: string): T[] {
+  // SAFETY: callers pass a statement whose result columns match T.
+  return db.prepare(sql).all() as T[];
+}
+
 export function vacuumSqliteInto(source: string, target: string): void {
   withRecoveredSource(source, (readable) => {
     fs.rmSync(target, { force: true });
@@ -271,6 +278,7 @@ export function writePlan(workDir: string, plan: UpgradePlan): void {
 
 export function readPlan(workDir: string): UpgradePlan | undefined {
   try {
+    // SAFETY: writePlan in this module is the only writer of the plan file.
     return JSON.parse(fs.readFileSync(path.join(workDir, PLAN_FILE), "utf8")) as UpgradePlan;
   } catch {
     return undefined;
@@ -307,14 +315,14 @@ function preserve(live: string, preserved: string): void {
  * Apply a durable plan. Every step is idempotent, so a crash at any point is
  * finished by running this again with the same plan.
  */
-export function applyPlan(plan: UpgradePlan, afterOp?: (index: number) => void): void {
+export function applyPlan(plan: UpgradePlan): void {
   const directories = new Set<string>();
   // Retire old companions before any database name changes owner.
   const ordered = [
     ...plan.ops.filter((op) => op.kind === "remove"),
     ...plan.ops.filter((op) => op.kind !== "remove"),
   ];
-  ordered.forEach((op, index) => {
+  for (const op of ordered) {
     directories.add(path.dirname(op.live));
     // Shared-memory and seal files are rebuilt on open; they carry no data.
     if (op.kind !== "add" && !/-shm$|\.seal$/u.test(op.live)) {
@@ -326,8 +334,7 @@ export function applyPlan(plan: UpgradePlan, afterOp?: (index: number) => void):
       fs.mkdirSync(path.dirname(op.live), { recursive: true });
       fs.renameSync(op.next, op.live);
     }
-    afterOp?.(index);
-  });
+  }
   for (const directory of directories) {
     fsyncPath(directory, true);
   }
@@ -378,15 +385,13 @@ function textColumns(db: DatabaseSync): Array<{ table: string; column: string }>
     .prepare(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND sql NOT LIKE 'CREATE VIRTUAL TABLE%'",
     )
+    // SAFETY: the statement fixes the column names and types of each row.
     .all() as Array<{ name: string }>;
   const quote = (name: string) => `"${name.replaceAll('"', '""')}"`;
   return tables.flatMap(({ name }) =>
-    (
-      db.prepare(`PRAGMA table_xinfo(${quote(name)})`).all() as Array<{
-        name: string;
-        type: string;
-        hidden: number;
-      }>
+    readSqliteRows<{ name: string; type: string; hidden: number }>(
+      db,
+      `PRAGMA table_xinfo(${quote(name)})`,
     )
       .filter((column) => column.hidden === 0 && !/INT|REAL|BLOB/iu.test(column.type))
       .map((column) => ({ table: quote(name), column: quote(column.name) })),
@@ -405,13 +410,13 @@ export function normalizeSqliteText(db: DatabaseSync): void {
     .prepare(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND sql NOT LIKE 'CREATE VIRTUAL TABLE%'",
     )
+    // SAFETY: the statement fixes the column names and types of each row.
     .all() as Array<{ name: string }>;
   for (const { name } of tables) {
-    const columns = db.prepare(`PRAGMA table_xinfo(${quote(name)})`).all() as Array<{
-      name: string;
-      type: string;
-      hidden: number;
-    }>;
+    const columns = readSqliteRows<{ name: string; type: string; hidden: number }>(
+      db,
+      `PRAGMA table_xinfo(${quote(name)})`,
+    );
     for (const column of columns) {
       // Declared BLOB and typeless columns may hold real bytes.
       if (column.hidden !== 0 || column.type === "" || /BLOB/iu.test(column.type)) {
@@ -452,6 +457,7 @@ export function countSqlitePrefix(db: DatabaseSync, needle: string): number {
           .prepare(
             `SELECT count(*) AS n FROM ${table} WHERE typeof(${column}) = 'text' AND instr(${column}, ?) > 0`,
           )
+          // SAFETY: the statement fixes the column names and types of each row.
           .get(needle) as { n: number }
       ).n,
     );
