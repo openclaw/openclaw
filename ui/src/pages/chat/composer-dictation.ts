@@ -276,7 +276,9 @@ export class ComposerDictationOwner extends EventTarget {
     ) {
       return;
     }
-    this.cancel();
+    // Stop capture on focus loss without discarding the dictated draft.
+    this.clearClickSuppression();
+    void this.finishActive();
   };
 
   private canHold(): boolean {
