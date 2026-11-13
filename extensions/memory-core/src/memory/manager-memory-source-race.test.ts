@@ -10,6 +10,7 @@ import {
   recordShortTermRecalls,
 } from "../short-term-promotion-record.js";
 import * as recallStore from "../short-term-promotion-store.js";
+import { keepPublishedCacheDuplicates } from "./manager-cache-retention.test-support.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 import type { MemoryIndexManager } from "./manager.js";
@@ -58,6 +59,7 @@ describe("memory source changes during indexing", () => {
   ])(
     "keeps $mutation local during $provider indexing (force=$force, maintenance=$maintenance)",
     async ({ provider, force, mutation, maintenance }) => {
+      keepPublishedCacheDuplicates();
       const changingFile = path.join(fixture.paths.memory, "changing.md");
       const siblingFile = path.join(fixture.paths.memory, "sibling.md");
       const obsoleteContent = "Obsolete alpha source awaiting embeddings.";

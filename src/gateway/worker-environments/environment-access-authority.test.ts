@@ -8,6 +8,62 @@ import { measureLaunchTurn, readLaunchToolNames } from "./worker-turn-launcher.t
 support.setupWorkerEnvironmentServiceSuite();
 afterEach(() => vi.restoreAllMocks());
 
+it("rechecks queued desktop launch authority and lets started launches finish", async () => {
+  const record = await support.seedReadyDesktop("worker-desktop-authority");
+  const inspecting = createDeferred();
+  const releaseInspection = createDeferred();
+  const launching = createDeferred();
+  const releaseLaunch = createDeferred();
+  let holdLaunch = false;
+  const launchApp = vi.fn(async () => {
+    launching.resolve();
+    if (holdLaunch) {
+      await releaseLaunch.promise;
+    }
+  });
+  const provider = support.createProvider({
+    inspect: async () => {
+      inspecting.resolve();
+      await releaseInspection.promise;
+      return { status: "active" };
+    },
+  });
+  const service = support.createService(provider, {
+    tunnelManager: createStoppedTunnelManager({ launchApp }),
+  });
+  const reconciliation = service.reconcileOnce();
+  const controller = new AbortController();
+  const authorize = () => controller.signal.throwIfAborted();
+  const request = { environmentId: record.environmentId, app: "browser" as const };
+  const revoked = new Error("Desktop requester removed");
+  try {
+    await inspecting.promise;
+    const queued = service.launchDesktopApp(request, authorize);
+    const rejected = expect(queued).rejects.toBe(revoked);
+    controller.abort(revoked);
+    expect(launchApp).not.toHaveBeenCalled();
+    releaseInspection.resolve();
+    await reconciliation;
+    await rejected;
+    expect(launchApp).not.toHaveBeenCalled();
+
+    holdLaunch = true;
+    const startedController = new AbortController();
+    const started = service.launchDesktopApp(request, () =>
+      startedController.signal.throwIfAborted(),
+    );
+    await launching.promise;
+    startedController.abort(revoked);
+    releaseLaunch.resolve();
+    await expect(started).resolves.toEqual({ app: "browser", status: "ready" });
+    expect(launchApp).toHaveBeenCalledOnce();
+  } finally {
+    releaseInspection.resolve();
+    releaseLaunch.resolve();
+    await reconciliation;
+  }
+});
+
 it.each([
   ["ssh", "dispatch"],
   ["worker-turn", "current"],

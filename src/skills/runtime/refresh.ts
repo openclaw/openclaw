@@ -27,7 +27,7 @@ import type {
   WorkspaceSkillSourceRequest,
   WorkspaceSkillSources,
 } from "../loading/workspace-skill-sources.types.js";
-import type { SkillSnapshot } from "../types.js";
+import { SKILLS_DISCOVERY_KEY, type SkillSnapshot } from "../types.js";
 import { createSkillsFilesystemOperations } from "./discovery-filesystem.js";
 import {
   captureSkillsDiscoveryEnvironment,
@@ -84,7 +84,7 @@ type DiscoveryState = {
 };
 
 const state = resolveGlobalSingleton<DiscoveryState>(
-  Symbol.for("openclaw.skillsDiscovery"),
+  SKILLS_DISCOVERY_KEY,
   () => ({ sources: new Map(), plans: new Map(), catalog: new Map() }),
   () => closeSkillsWatchers(),
 );

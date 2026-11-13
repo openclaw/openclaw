@@ -31,6 +31,10 @@ vi.mock("../../plugins/plugin-metadata-snapshot.js", () => {
 vi.mock("../loading/plugin-skill-bundle.js", () => {
   throw new Error("Skill discovery must not load plugin skill preview readers");
 });
+// mock-isolation: Ordinary skill scans do not need status cards or registry links.
+vi.mock("../discovery/status-files.js", () => {
+  throw new Error("Skill scans must not load status readers");
+});
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.unstubAllEnvs());
@@ -97,7 +101,7 @@ it("scans workspace and prepared plugin skills without loading metadata discover
     ],
   });
 
-  const plan = worker.read({
+  const plan = await worker.read({
     kind: "plan",
     input: {
       workspaceDir,

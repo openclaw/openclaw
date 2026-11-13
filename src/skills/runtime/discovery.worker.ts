@@ -18,7 +18,6 @@ import {
   type PluginCache,
 } from "../../plugins/plugin-cache.js";
 import { pinConfigDir } from "../../utils.js";
-import { readWorkspaceSkillStatusFacts } from "../discovery/status-files.js";
 import {
   resolvePluginSkillRoots,
   resolvePluginSkillRootsFromContributions,
@@ -239,7 +238,10 @@ const runTask: WorkerTaskHandler<SkillsDiscoveryOutput, SkillsDiscoveryInput> = 
   }
   if (request.kind === "status") {
     applyEnvironment(request.environment);
-    return { kind: "status", facts: readWorkspaceSkillStatusFacts(request.input) };
+    return (async () => {
+      const { readWorkspaceSkillStatusFacts } = await import("../discovery/status-files.js");
+      return { kind: "status" as const, facts: readWorkspaceSkillStatusFacts(request.input) };
+    })();
   }
   if (request.path === undefined) {
     delete process.env.PATH;
@@ -258,6 +260,7 @@ const runTask: WorkerTaskHandler<SkillsDiscoveryOutput, SkillsDiscoveryInput> = 
   };
   return (async () => {
     const results: SkillsDiscoveryResult[] = [];
+    // Each read must finish before the next workspace replaces process.env.
     for (const { key, environment, selection } of request.requests) {
       applyEnvironment(environment);
       const resolvedPlan =
@@ -279,7 +282,7 @@ const runTask: WorkerTaskHandler<SkillsDiscoveryOutput, SkillsDiscoveryInput> = 
         batch = new Map();
         sourceReads.set(environmentKey, batch);
       }
-      const sources = readWorkspaceSkillSources(sourceRequest, batch);
+      const sources = await readWorkspaceSkillSources(sourceRequest, batch);
       await Promise.all(
         [...sources.entries, ...sources.executionEntries].map(async ({ skill }) => {
           skill.resourceRootIdentity = await prepareResourceRootIdentity(skill);
