@@ -450,6 +450,11 @@ export async function resolveUpdateCommandTarget(
               await refuseUpdate(destination.reason, destination.message, destination.failureFacts);
               return undefined;
             }
+            if (destination.kind === "owned" && destination.restoredLink) {
+              warn(
+                `Restored the npm package link an interrupted update left at ${destination.restoredLink}.`,
+              );
+            }
           }
           const diskWarning = createLowDiskSpaceWarning({
             targetPath: packageInstallTarget.packageRoot
