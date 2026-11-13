@@ -20,10 +20,13 @@ for runs already deferred by older workflow revisions.
 
 The protected dependency publisher rebuilds a new hosted Linux pnpm store before
 saving it, preserving authenticated bootstrap archives and the full dependency
-inventory. Existing exact cache hits, Blacksmith, macOS, and independent code
-warming keep their current behavior. This prevents old packages from accumulating
-through prefix restores; immutable existing entries remain until the next missing
-store key. A five-pair hosted compute replay reduced the archive from 2.24 GB to
+inventory. Blacksmith, macOS, and independent code warming keep their current
+behavior. This prevents old packages from accumulating
+through prefix restores. Hosted Linux exact keys carry a `-fresh` suffix so the
+publisher replaces the old generation without waiting for a lockfile change.
+The unchanged restore prefix keeps old entries available during rollout and
+includes compact generations in later fallback restores. A five-pair hosted
+compute replay reduced the archive from 2.24 GB to
 957 MB and median extraction plus offline installation from 31.5 to 12.2 seconds.
 This does not measure WAN transfer, PR completion time, or billed savings.
 
