@@ -173,7 +173,7 @@ try {
     const observation = countFileSystemCalls();
     const cpuStart = process.cpuUsage();
     const start = performance.now();
-    const source = readWorkspaceSkillSources({
+    const source = await readWorkspaceSkillSources({
       sourcePlan: plan,
       executionWorkspaceDir: project,
       limits: resolveSkillDiscoveryLimits(),

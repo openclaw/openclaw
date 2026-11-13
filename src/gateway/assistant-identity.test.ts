@@ -94,8 +94,7 @@ it("does not leave a lone surrogate when truncating an overlong name", async () 
     const resolveName = async (name: string) =>
       (await resolver({ cfg: configured({ name }), workspaceDir: "" })).name;
     const prefix = "x".repeat(49);
-    const name = await resolveName(`${prefix}🚀suffix`);
-    expect(name).toBe(prefix);
+    expect(await resolveName(`${prefix}🚀suffix`)).toBe(prefix);
     expect(await resolveName(`${"x".repeat(48)}🚀suffix`)).toBe(`${"x".repeat(48)}🚀`);
   }
 });
@@ -103,22 +102,23 @@ it("does not leave a lone surrogate when truncating an overlong name", async () 
 it("refreshes prepared identities after workspace replacement and config changes", async () => {
   await withTestDir({ prefix: "openclaw-assistant-prepared-" }, async (workspace) => {
     const file = path.join(workspace, "IDENTITY.md");
-    await fs.writeFile(file, "- Name: First\n");
     const identity: NonNullable<AgentConfig["identity"]> = { emoji: "🦞" };
-    const cfg: OpenClawConfig = { agents: { entries: { main: { workspace, identity } } } };
-    const params = { cfg, agentId: "main" };
+    const main = { workspace, identity, name: "Display" };
+    const params = { cfg: { agents: { entries: { main } } }, agentId: "main" };
     const read = () => resolveAssistantIdentity(params);
     const expectName = async (name: string) => {
       expect(await resolveAssistantIdentityName(params)).toEqual({ agentId: "main", name });
     };
+    expect(await read()).toMatchObject({ name: "Display", nameSource: "agent" });
+    main.name = "Renamed";
+    await expectName("Renamed");
+    await fs.writeFile(file, "- Name: First\n");
     const first = await read();
     expect(first).toMatchObject({ name: "First", nameSource: "workspace" });
-    await expectName("First");
     expect(await read()).toBe(first);
     await fs.writeFile(`${file}.replacement`, "- Name: Other\n");
     await fs.rename(`${file}.replacement`, file);
     expect(await read()).toMatchObject({ name: "Other" });
-    expect(await read()).not.toBe(first);
     await expectName("Other");
     identity.name = "Configured";
     expect(await read()).toMatchObject({ name: "Configured", nameSource: "agent" });

@@ -255,9 +255,11 @@ struct DashboardExperienceTests {
             forName: NSApplication.didResignActiveNotification, object: NSApp, queue: .main)
         { _ in activationChanges.notify() }
         defer { NotificationCenter.default.removeObserver(observer) }
-        let finder = try #require(NSRunningApplication.runningApplications(
-            withBundleIdentifier: "com.apple.finder").first)
-        try #require(finder.activate(options: []))
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        _ = try await NSWorkspace.shared.openApplication(
+            at: URL(fileURLWithPath: "/System/Library/CoreServices/Finder.app"),
+            configuration: configuration)
         try await activationChanges.wait("Dashboard app backgrounded") { !NSApp.isActive }
         manager.presentDashboard()
         try await manager.show()

@@ -725,6 +725,7 @@ function DetailPanel(props: ChatDetailPanelProps, host: ChatDetailPanelElement) 
       });
     },
   );
+  onSettled(() => props.registerPanelHost?.(host));
   onSettled(() => () => {
     unregisterRetirement();
     disposed = true;

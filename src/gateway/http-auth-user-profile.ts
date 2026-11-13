@@ -16,6 +16,7 @@ import {
 import {
   ensureCanonicalGatewayOwnerProfile,
   ensureCanonicalUserProfileForEmail,
+  ensureCanonicalDelegatedUserProfile,
   ensureCanonicalUserProfileForOpenClawIdIdentity,
   ensureCanonicalUserProfileForTailscaleIdentity,
 } from "../state/user-profile-writes.js";
@@ -40,6 +41,8 @@ import type { GatewayOperatorAccessAuthority } from "./operator-access-policy.ty
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
 import { resolveBrowserOriginPolicy } from "./origin-check.js";
 import type { GatewayClient, GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
+import { isGatewayDelegationCurrent } from "./trusted-proxy-delegation.js";
+import { syncTrustedProxyGitCoauthor } from "./trusted-proxy-git-coauthor.js";
 import { formatForLog } from "./ws-log.js";
 
 const profileLog = createSubsystemLogger("gateway/user-profiles");
@@ -183,6 +186,11 @@ export async function resolveAuthenticatedHttpUserProfile(params: {
   const admissionPolicy = structuredClone(readAdmissionPolicy(params.cfg));
   const assertCurrent = () => {
     if (
+      (params.authResult.delegation &&
+        !isGatewayDelegationCurrent(
+          params.authResult.delegation,
+          params.getRuntimeConfig?.() ?? getRuntimeConfig(),
+        )) ||
       params.req.aborted ||
       params.req.socket?.destroyed ||
       params.res?.destroyed ||
@@ -239,31 +247,51 @@ export async function resolveAuthenticatedHttpUserProfile(params: {
       params.authResult.openclawId?.kind === "member"
         ? params.authResult.openclawId
         : undefined;
-    const profile = member
-      ? await ensureCanonicalUserProfileForOpenClawIdIdentity(
-          { accountId: member.accountId },
-          options,
-        )
-      : syncGitHubIdentity
-        ? await syncGitHubIdentity()
-        : params.authResult.tailscaleIdentity
-          ? await ensureCanonicalUserProfileForTailscaleIdentity(
-              params.authResult.tailscaleIdentity,
-              options,
-            )
-          : await ensureCanonicalUserProfileForEmail(authenticatedUserId, options);
+    const profile = params.authResult.delegation
+      ? await ensureCanonicalDelegatedUserProfile(params.authResult.delegation.identity, options)
+      : member
+        ? await ensureCanonicalUserProfileForOpenClawIdIdentity(
+            { accountId: member.accountId },
+            options,
+          )
+        : syncGitHubIdentity
+          ? await syncGitHubIdentity()
+          : params.authResult.tailscaleIdentity
+            ? await ensureCanonicalUserProfileForTailscaleIdentity(
+                params.authResult.tailscaleIdentity,
+                options,
+              )
+            : await ensureCanonicalUserProfileForEmail(authenticatedUserId, options);
     const profileId = "profileId" in profile ? profile.profileId : profile.id;
-    return await prepareHttpProfile(
+    await syncTrustedProxyGitCoauthor({
+      authConfig: params.cfg.gateway?.auth,
+      authResult: params.authResult,
+      headers: params.req.headers,
+      profileId,
+      assertCurrent,
+    });
+    const prepared = await prepareHttpProfile(
       profileId,
       profile.updatedAt,
       assertCurrent,
       usesSharedSecretGatewayMethod(params.authResult.method) ? undefined : params.cfg,
     );
+    const delegation = params.authResult.delegation;
+    if (delegation) {
+      const profileCurrent = prepared.hasCurrentProfileAuthority;
+      return {
+        ...prepared,
+        hasCurrentProfileAuthority: () =>
+          profileCurrent?.() !== false &&
+          isGatewayDelegationCurrent(delegation, params.getRuntimeConfig?.() ?? getRuntimeConfig()),
+      };
+    }
+    return prepared;
   } catch (error) {
     assertCurrent();
     // Attribution enriches authenticated requests; configured role/access policies
     // make durable profile resolution a prerequisite for authorization.
-    if (rolesConfigured || accessPoliciesConfigured) {
+    if (params.authResult.delegation || rolesConfigured || accessPoliciesConfigured) {
       throw error;
     }
     return {};

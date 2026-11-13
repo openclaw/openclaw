@@ -2,8 +2,7 @@ import { onCleanup } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
 import {
   MCP_APP_OPEN_EVENT,
-  MCP_APP_DISPLAY_MODE_EVENT,
-  type McpAppDisplayModeDetail,
+  type McpAppOpenEventDetail,
   type McpAppOpenDetail,
 } from "../../components/mcp-app-launch.ts";
 import {
@@ -56,8 +55,7 @@ declare global {
     [MCP_APP_MESSAGE_EVENT]: CustomEvent<McpAppMessageEventDetail>;
     [MCP_APP_FILE_OPEN_EVENT]: CustomEvent<McpAppFileOpenEventDetail>;
     [MCP_APP_CONTEXT_EVENT]: CustomEvent<McpAppContextEventDetail>;
-    [MCP_APP_OPEN_EVENT]: CustomEvent<McpAppOpenDetail>;
-    [MCP_APP_DISPLAY_MODE_EVENT]: CustomEvent<McpAppDisplayModeDetail>;
+    [MCP_APP_OPEN_EVENT]: CustomEvent<McpAppOpenEventDetail>;
   }
 }
 
@@ -307,25 +305,22 @@ export function createChatPaneMcpApps(options: {
     });
   }
 
-  function receiveOpen(event: CustomEvent<McpAppOpenDetail>): void {
+  function receiveOpen(event: CustomEvent<McpAppOpenEventDetail>): void {
     const owner = presentedEventOwner(event);
     const detail = event.detail;
-    if (!owner || detail.owner !== owner.context.gateway.snapshot.client) {
-      return;
-    }
-    event.preventDefault();
-    openLaunch(owner, detail, `:${detail.filePath ?? ""}`);
-  }
-
-  // Pane-local listeners keep split-view prompts with their iframe.
-  function receiveDisplayMode(event: CustomEvent<McpAppDisplayModeDetail>): void {
-    const owner = presentedEventOwner(event);
     if (!owner) {
       return;
     }
-    event.preventDefault();
-    event.detail.present(owner);
+    if ("present" in detail) {
+      event.preventDefault();
+      detail.present(owner);
+    } else if (detail.owner === owner.context.gateway.snapshot.client) {
+      event.preventDefault();
+      openLaunch(owner, detail, `:${detail.filePath ?? ""}`);
+    }
   }
+
+  // Pane-local listeners keep split-view prompts with their iframe.
 
   const element = options.element;
   const stopEvents = [
@@ -334,7 +329,6 @@ export function createChatPaneMcpApps(options: {
     listen(element, MCP_APP_FILE_OPEN_EVENT, { handleEvent: receiveFile }),
     listen(element, MCP_APP_CONTEXT_EVENT, { handleEvent: receiveContext }),
     listen(element, MCP_APP_OPEN_EVENT, { handleEvent: receiveOpen }),
-    listen(element, MCP_APP_DISPLAY_MODE_EVENT, { handleEvent: receiveDisplayMode }),
     listen(element, WIDGET_PROMPT_EVENT, { handleEvent: receiveWidgetPrompt }),
   ];
   onCleanup(() => {

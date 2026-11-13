@@ -1,5 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -112,8 +113,8 @@ type ShellConfig = ReturnType<typeof getBashShellConfig>;
 
 describe("getShellConfig", () => {
   if (isWin) {
-    it("uses PowerShell on Windows", () => {
-      expect(getShellConfig()).toMatchObject({
+    it("uses PowerShell on Windows", async () => {
+      expect(await getShellConfig()).toMatchObject({
         shell: expect.stringMatching(/powershell|pwsh/i),
         args: ["-NoProfile", "-NonInteractive", "-Command"],
       });
@@ -131,7 +132,7 @@ describe("getShellConfig", () => {
     { envShell: "/usr/bin/false", binary: "sh", args: ["-c"] },
     { envShell: "/usr/bin/false", binary: "bash", args: ["--noprofile", "--norc", "-c"] },
     { envShell: "/usr/bin/false", binary: "", args: ["-c"] },
-  ])("resolves SHELL=$envShell with PATH binary '$binary'", ({ envShell, binary, args }) => {
+  ])("resolves SHELL=$envShell with PATH binary '$binary'", async ({ envShell, binary, args }) => {
     if (envShell === undefined) {
       delete process.env.SHELL;
     } else {
@@ -139,7 +140,7 @@ describe("getShellConfig", () => {
     }
     const binDir = binary ? createTempCommandDir(binary) : "";
     process.env.PATH = binDir;
-    expect(getShellConfig()).toEqual({
+    expect(await getShellConfig()).toEqual({
       shell: binary
         ? path.join(binDir, binary)
         : envShell && envShell !== "/usr/bin/false"
@@ -370,7 +371,7 @@ it.each([
     expected: ps51,
     inaccessibleAlias: true,
   },
-])("getShellConfig on Windows selects $name", ({ files, expected, inaccessibleAlias }) => {
+])("getShellConfig on Windows selects $name", async ({ files, expected, inaccessibleAlias }) => {
   vi.spyOn(process, "platform", "get").mockReturnValue("win32");
   const root = tempDirs.make("openclaw-powershell-");
   for (const file of files) {
@@ -381,12 +382,12 @@ it.each([
     // Windows AppExecLinks pass access(X_OK), but stat fails with EACCES and
     // activating the alias from S4U can fail while its app runs in another session.
     fs.accessSync(alias, fs.constants.X_OK);
-    const statSync = fs.statSync;
-    vi.spyOn(fs, "statSync").mockImplementation((candidate, options) => {
+    const stat = fsp.stat;
+    vi.spyOn(fsp, "stat").mockImplementation(async (candidate, options) => {
       if (String(candidate) === alias) {
         throw Object.assign(new Error("permission denied"), { code: "EACCES" });
       }
-      return statSync(candidate, options);
+      return await stat(candidate, options);
     });
   }
   process.env.ProgramFiles = path.join(root, "pfiles");
@@ -396,5 +397,11 @@ it.each([
   process.env.PATH = ["aliases", "shims", "bin"]
     .map((dir) => path.join(root, dir))
     .join(path.delimiter);
-  expect(getShellConfig().shell).toBe(path.join(root, expected));
+  const statSync = vi.spyOn(fs, "statSync");
+  const accessSync = vi.spyOn(fs, "accessSync");
+  const existsSync = vi.spyOn(fs, "existsSync");
+  expect((await getShellConfig()).shell).toBe(path.join(root, expected));
+  expect(statSync).not.toHaveBeenCalled();
+  expect(accessSync).not.toHaveBeenCalled();
+  expect(existsSync).not.toHaveBeenCalled();
 });

@@ -6,6 +6,10 @@
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
   line-height: 1.4;
+  /* Reasoning is reading text like .chat-text: keep macOS stem darkening so the
+     small muted prose does not render thin. App chrome keeps body antialiased. */
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
 }
 
 .chat-message-disclosure {
@@ -37,7 +41,7 @@
   );
 
   /* Expand a human message before scrolling code outside its readable preview. */
-  .chat-group.user & :where(pre) {
+  .chat-group.user & :where(pre, .code-block-viewport) {
     overflow: clip;
   }
 }
@@ -164,7 +168,7 @@
   max-width: 100%;
   background: color-mix(in srgb, var(--accent) 2%, var(--bg-elevated));
   box-shadow: 0 6px 20px color-mix(in srgb, var(--accent) 4%, transparent);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   display: block;
   overflow-x: auto;
 }
@@ -232,7 +236,7 @@
   gap: 6px;
   width: auto;
   font: inherit;
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
 }
 
 .markdown-table__actions button:hover,
@@ -415,8 +419,14 @@
   box-shadow: 0 1px var(--border-strong);
 }
 
-/* The transcript, excluding reserved Details space, owns spare width.
-   Only top-level assistant tables borrow it; prose and nested tables stay put. */
+/* Resolve transcript-relative lengths before inheriting into message containers. */
+@property --chat-table-outset {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
+}
+
+/* Only top-level assistant tables borrow spare width; prose and nested tables stay put. */
 @container chat-transcript (min-width: 900px) {
   .chat-group.assistant:has(> :is(.chat-avatar, .chat-avatar-slot)) {
     --chat-leading-table-clearance: var(--chat-avatar-column);
@@ -440,19 +450,22 @@
   }
 
   .chat-virtual-row {
-    --chat-table-outset: max(
+    --chat-table-outset: clamp(
       0px,
-      min(
-        12rem,
-        calc(
-          (
-              100cqw - var(--chat-table-reserved-space, 0px) -
-                var(--chat-transcript-column-width, 100cqw) - 2 * var(--chat-thread-inline-inset)
-            ) /
-            2
-        )
-      )
+      calc(
+        (
+            100cqw - var(--chat-table-reserved-space, 0px) -
+              var(--chat-transcript-column-width, 100cqw) - 2 * var(--chat-thread-inline-inset)
+          ) /
+          2
+      ),
+      12rem
     );
+  }
+
+  /* Bubble surfaces own their width; wide tables scroll inside that surface. */
+  .chat--bubbles .chat-virtual-row {
+    --chat-table-outset: 0px;
   }
 
   .chat-virtual-row:has(.chat-group.assistant .chat-bubble > .chat-text > .markdown-table) {
@@ -461,9 +474,9 @@
   }
 
   .chat-group.assistant .chat-bubble > .chat-text > .markdown-table {
-    width: calc(100% + 2 * var(--chat-table-outset, 0px));
+    width: calc(100% + 2 * var(--chat-table-outset));
     max-width: none;
-    margin-inline: calc(-1 * var(--chat-table-outset, 0px));
+    margin-inline: calc(-1 * var(--chat-table-outset));
   }
 
   /* Keep the existing phone-landscape layout, including its touch controls. */
@@ -471,7 +484,7 @@
     .chat-group.assistant .chat-bubble > .chat-text > .markdown-table {
       width: max-content;
       min-width: 100%;
-      max-width: calc(100% + 2 * var(--chat-table-outset, 0px));
+      max-width: calc(100% + 2 * var(--chat-table-outset));
       margin-inline: 0;
       margin-bottom: 24px;
       left: 50%;
@@ -1184,6 +1197,40 @@
   background: transparent;
 }
 
+/* Human fences keep the passive block's box; their one control sits in the
+   corner of the first row instead of taking a toolbar row. */
+.code-block-wrapper.code-block-wrapper--wrap-only {
+  border-color: var(--border-strong);
+  background: var(--user-code-bg);
+}
+
+.chat-group.user .code-block-wrapper--wrap-only pre {
+  margin: 0;
+  padding: 10px 12px;
+}
+
+.code-block-wrapper--wrap-only > .code-block-wrap {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  z-index: 1;
+  width: 24px;
+  height: 24px;
+}
+
+.code-block-wrapper--wrap-only .code-block-wrap__icon {
+  width: 14px;
+  height: 14px;
+}
+
+/* Keep the first wrapped row clear of the control. */
+.code-block-wrapper--wrap-only.is-wrapped code::before {
+  float: right;
+  width: 26px;
+  height: 1lh;
+  content: "";
+}
+
 .chat-group.assistant .chat-bubble:has(.code-block-wrapper),
 .chat-group.assistant .chat-text:has(.code-block-wrapper) {
   width: 100%;
@@ -1195,7 +1242,7 @@
   /* CODE_PREVIEW_LINE_COUNT in components/markdown-code-blocks.ts decides how many
      lines the renderer reports as hidden; the clip below must show the same count. */
   --code-block-preview-lines: 7;
-  --code-block-line-height: calc(18px * var(--control-ui-text-scale));
+  --code-block-line-height: 18px;
 
   min-width: 0;
   max-width: 100%;
@@ -1240,7 +1287,7 @@
   background: transparent;
   color: var(--muted);
   font-family: var(--mono);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   cursor: var(--cursor-action);
 }
 
@@ -1299,6 +1346,39 @@
   mask-image: linear-gradient(to right, black calc(100% - 28px), transparent);
 }
 
+/* Human fences wrap by default, so the toggle appears only while it changes the
+   layout, and unwrapping must outrank the human-fence wrap rule above. */
+.code-block-wrapper--wrap-only:not(.has-horizontal-overflow) .code-block-wrap {
+  visibility: hidden;
+}
+
+.code-block-wrapper--wrap-only:not(.is-wrapped) .code-block-viewport :where(pre code) {
+  width: max-content;
+  min-width: 100%;
+  overflow-wrap: normal;
+  white-space: pre;
+}
+
+/* Include the end padding in the scrollable width so every line can clear the fade. */
+.chat-group.user .code-block-wrapper--wrap-only:not(.is-wrapped) pre {
+  width: max-content;
+  min-width: 100%;
+  padding-right: 48px;
+}
+
+.code-block-wrapper--wrap-only.has-horizontal-overflow:not(.is-wrapped) .code-block-viewport {
+  --code-block-first-row: calc(10px + var(--code-block-line-height));
+
+  mask-image:
+    linear-gradient(to right, black calc(100% - 48px), transparent calc(100% - 34px)),
+    linear-gradient(to right, black calc(100% - 28px), transparent);
+  mask-position: top, bottom;
+  mask-size:
+    100% var(--code-block-first-row),
+    100% calc(100% - var(--code-block-first-row));
+  mask-repeat: no-repeat;
+}
+
 .code-block-wrap:hover {
   background: color-mix(in srgb, currentColor 10%, transparent);
   color: var(--text);
@@ -1324,7 +1404,7 @@
 .chat-text :where(pre code) {
   background: none;
   padding: 0;
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   white-space: pre;
 }
 
@@ -1384,7 +1464,7 @@
 
 @media (max-width: 640px) {
   .chat-text :where(pre) {
-    font-size: var(--control-ui-text-sm);
+    font-size: 12px;
   }
 
   .chat-text :where(.markdown-inline-image) {

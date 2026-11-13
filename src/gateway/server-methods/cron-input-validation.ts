@@ -5,7 +5,7 @@ import {
   readStringField,
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentDir, tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope.js";
 import type { AuthProfileAuthorization } from "../../agents/auth-profiles/authorization-contract.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { captureScheduledOperatorSource } from "../../agents/operator-run-recovery-source.js";
@@ -13,7 +13,10 @@ import { resolveSimpleCompletionSelectionForAgent } from "../../agents/simple-co
 import { attributeDelegatedSessionCreator } from "../../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { tryResolveCronJobEffectiveAgentId } from "../../cron/agent-id.js";
+import {
+  resolveCronJobEffectiveAgentId,
+  tryResolveCronJobEffectiveAgentId,
+} from "../../cron/agent-id.js";
 import {
   assertValidCronAnnounceDelivery,
   assertValidCronFailureAlert,
@@ -63,7 +66,10 @@ import { preparePersonalModelAccountSelection } from "./users-model-account-acce
 type InferenceCaller = Pick<
   GatewayRequestHandlerOptions,
   "client" | "context" | "signal" | "hasCurrentClientAuthority"
->;
+> & {
+  /** Native workflows may retain their authenticated requester without a creating conversation. */
+  captureIndependentOperatorSource?: true;
+};
 
 /**
  * The entry a job's cron session takes its runtime override from: the target row of a
@@ -373,7 +379,10 @@ export async function captureCronCreatorSession(
       ? await captureCronInferenceForCaller(
           {
             cfg,
-            agentId: agentId ?? resolveDefaultAgentId(cfg),
+            agentId: resolveCronJobEffectiveAgentId(
+              { ...job, agentId },
+              tryResolveAmbientOwnerAgentId(cfg),
+            ),
             model: job.payload.model,
             isGmailHook:
               (job.payload.externalContentSource ??
@@ -388,6 +397,7 @@ export async function captureCronCreatorSession(
         )
       : undefined;
   const independent = Boolean(
+    caller.captureIndependentOperatorSource ||
     inheritedAuthority?.openclawIdPrincipal ||
     caller.client?.internal?.openclawIdPrincipal ||
     job.operatorSource?.source.kind === "gateway" ||
@@ -438,7 +448,11 @@ export async function captureCronCreatorSession(
                   }
                   return selected;
                 })()
-              : (loaded?.agentId ?? agentId ?? resolveDefaultAgentId(cfg)),
+              : (loaded?.agentId ??
+                resolveCronJobEffectiveAgentId(
+                  { ...job, agentId },
+                  tryResolveAmbientOwnerAgentId(cfg),
+                )),
             sessionKey: loaded?.canonicalKey,
             sourceRunId:
               caller.client?.internal?.agentRuntimeIdentity?.operationalRunInstance.runId ??
@@ -483,7 +497,9 @@ export async function captureCronUpdatedInferenceBinding(
     return undefined;
   }
   const model = patch.payload && "model" in patch.payload ? patch.payload.model : undefined;
-  const agentId = nextJob.agentId ?? resolveDefaultAgentId(cfg);
+  // The owner the job runs as. Cron's default is the ambient owner (configured system agent),
+  // read from config because the lazy cron service has no default before it loads.
+  const agentId = resolveCronJobEffectiveAgentId(nextJob, tryResolveAmbientOwnerAgentId(cfg));
   const selection = model
     ? resolveSimpleCompletionSelectionForAgent({ cfg, agentId, modelRef: model })
     : null;

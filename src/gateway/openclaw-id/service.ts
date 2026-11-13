@@ -30,28 +30,20 @@ import { createOwnerExpiryTimer } from "./owner-expiry.js";
 import { armLocalExpiry, createPeopleExpiry, ownerLifecycleEvents } from "./owner-lifecycle.js";
 import { createPublicationRetry } from "./publication-retry.js";
 import type { PublishOutcome } from "./publisher.js";
+import { createRebindPublication } from "./rebind-publication.js";
 import { signOutTunnelPeer } from "./remote-signout.js";
 import { createServiceGatewayKey } from "./service-gateway-key.js";
+import { createServiceRebindOwner } from "./service-rebind-owner.js";
 import { appliedConfigKey, resolveSettings, sameSettings } from "./service-settings.js";
+import type { OpenClawIdStatus } from "./service-status.js";
 import { createTokenBindingPublisher } from "./service-token-bindings.js";
 import { createTunnelPrincipalPublisher } from "./service-tunnel-principals.js";
-import type { BoundKeyRefusal } from "./tunnel-child/keyfile.js";
-import { notifyOpenClawIdTunnelPrincipalsChanged } from "./tunnel-principal.js";
+import {
+  isOpenClawIdTunnelPrincipalAdmitted,
+  notifyOpenClawIdTunnelPrincipalsChanged,
+} from "./tunnel-principal.js";
 import type { TunnelRuntime } from "./tunnel-runtime.js";
 import type { TunnelSupervisorStatus } from "./tunnel-supervisor.js";
-
-/** What the Control UI and `openclaw status` show for OpenClaw ID. */
-export type OpenClawIdStatus =
-  | { state: "off" }
-  | { state: "unconfigured"; missing: Array<keyof GatewayOpenClawIdConfig> }
-  | { state: "on"; tunnel: TunnelSupervisorStatus }
-  /**
-   * The claw is linked but no key file holds a key its binding names (the endpoint key
-   * K_srv or the Gateway key K_gw). Remote access is off and nothing is created or
-   * signed with another key; the Gateway keeps running for local use.
-   */
-  | { state: "keys_refused"; key: "endpoint" | "gateway"; reason: BoundKeyRefusal }
-  | { state: "failed"; reason: string };
 
 /** Side effects of membership changes that other Gateway owners perform. */
 export type OpenClawIdEffects = {
@@ -118,6 +110,7 @@ export function createOpenClawIdService(params: {
   // K_srv selected by linking or seen in a binding. Keep it when uncertain storage
   // withdraws authority, so a child restart cannot create another endpoint identity.
   let lastBoundEndpointKey: string | undefined;
+  const rebindPublication = createRebindPublication();
   let loadEffects: (() => Promise<OpenClawIdEffects>) | undefined;
   let effectsPromise: Promise<OpenClawIdEffects> | undefined;
   let mailbox: { stop(): void } | undefined;
@@ -342,9 +335,11 @@ export function createOpenClawIdService(params: {
       // Nothing is published under another key; the request stays pending.
       const { reason: code, message } = key.refused;
       lastPublish = { state: "failed", code, message, retryable: false };
+      peopleChanged();
       return lastPublish;
     }
     const { signer } = key;
+    const code = rebindPublication.code(enrollmentCode);
     if (signal.aborted || !isOpenClawIdEnabled(params.getConfig())) {
       return undefined;
     }
@@ -360,13 +355,17 @@ export function createOpenClawIdService(params: {
         relayUrl: config.relayUrl,
         client,
         signer,
-        ...(enrollmentCode ? { enrollmentCode } : {}),
+        enrollmentCode: code,
       }));
     lastPublish = outcome;
+    peopleChanged();
     if (outcome.state === "published") {
-      await (
-        await getAuthority()
-      ).recordDiscovery({
+      const bindingSeq = record.binding?.body.binding_seq ?? 0;
+      if (rebindPublication.published(bindingSeq, record.discovery.published_binding_seq)) {
+        const event = { type: "notify_owners", event: "rebind", ref: `${bindingSeq}` } as const;
+        void notifyOwners([event]).catch((error: unknown) => params.log.warn(String(error)));
+      }
+      await owner.recordDiscovery({
         owner_account_id: outcome.ownerAccountId,
         published_binding_seq: record.binding?.body.binding_seq ?? 0,
         published_snapshot_seq: outcome.snapshotSeq,
@@ -510,6 +509,7 @@ export function createOpenClawIdService(params: {
 
   // Only disabling the feature or closing this Gateway ends its local membership source.
   const stopLocalAuthority = () => {
+    rebindOwner.stop();
     ownerExpiry.stop();
     peopleExpiry.stop();
     stopAuthorityChanges?.();
@@ -590,6 +590,7 @@ export function createOpenClawIdService(params: {
     const { handleTunnelApiRequest } = await import("./tunnel-api.js");
     const owner = await getAuthority();
     await handleTunnelApiRequest(req, res, peerKey, {
+      isAdmitted: async (key) => isOpenClawIdTunnelPrincipalAdmitted(await owner.resolvePeer(key)),
       membership: (key) => owner.ownerView(key),
       prepareOwnerCheck: (key) => owner.prepareOwnerPeerCheck(key),
       submit: async (statement) => applyResult(await owner.submit(statement, "tunnel")),
@@ -645,6 +646,17 @@ export function createOpenClawIdService(params: {
   const connectionAccess = createOpenClawIdConnectionAccess({
     enabled: () => isOpenClawIdEnabled(params.getConfig()),
     getAuthority,
+  });
+
+  const restartForRebind = () => stopRuntime().then(reconcile);
+  const rebindOwner = createServiceRebindOwner({
+    ...params,
+    getAuthority,
+    gatewayKey,
+    enabled: () => !closed && isOpenClawIdEnabled(params.getConfig()),
+    holdCode: rebindPublication.hold,
+    restartRemoteAccess: () =>
+      (queue = queue.then(restartForRebind, restartForRebind)).then(() => status),
   });
 
   localPrincipals.publish();
@@ -769,9 +781,11 @@ export function createOpenClawIdService(params: {
       return { ...result, ...(publication ? { publication } : {}) };
     },
 
-    /** Retries publication, for example with an enrollment code obtained after linking. */
+    rebind: rebindOwner.run,
+
+    /** Retries publication with a code (after linking, or `needs_link_code`) held until success. */
     async publish(enrollmentCode?: string): Promise<PublishOutcome | undefined> {
-      return await publicationRetry.publishDirect(() => publish(enrollmentCode));
+      return await publicationRetry.publishAdopted(() => publish(enrollmentCode));
     },
 
     /** Applies an owner-signed statement sent directly by a client (never the mailbox). */

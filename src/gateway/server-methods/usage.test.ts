@@ -3,6 +3,11 @@ import fs from "node:fs/promises";
 import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  AsyncWorkScope,
+  getAsyncWorkSignal,
+  trackAsyncWork,
+} from "../../shared/async-work-scope.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { withEnv } from "../../test-utils/env.js";
 
@@ -196,6 +201,76 @@ it.each(["main", "all"])("does not cache refreshing usage.cost as fresh for %s",
   });
   expectUsage(await request(params, config), { cacheStatus: { status: "fresh" } });
   expect(loadCost).toHaveBeenCalledTimes(2);
+});
+
+it.each(["reply", "disconnect", "deadline"] as const)(
+  "stops request-owned cost work at %s",
+  async (cause) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const scope = new AsyncWorkScope();
+    const controller = new AbortController();
+    const started = createDeferred<AbortSignal | undefined>();
+    const release = createDeferred();
+    const respond = vi.fn();
+    loadCost.mockImplementationOnce(async () => {
+      const signal = getAsyncWorkSignal();
+      started.resolve(signal);
+      if (cause === "reply") {
+        void trackAsyncWork(() => release.promise);
+      } else {
+        await release.promise;
+      }
+      return costSummary(7, 1);
+    });
+    const pending = scope
+      .track(() => invokeUsage("usage.cost", dates, {}, { signal: controller.signal, respond }))
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+    try {
+      const signal = await started.promise;
+      expect(signal).toBeDefined();
+      if (cause === "reply") {
+        await pending;
+        expectUsage(usageReply(respond), { totals: { totalTokens: 7 } });
+      } else if (cause === "disconnect") {
+        controller.abort(new Error("cost client disconnected"));
+      } else {
+        await vi.advanceTimersByTimeAsync(15_000);
+      }
+      expect(signal!.aborted).toBe(true);
+      if (cause === "deadline") {
+        await pending;
+        expect(usageReply(respond)).toEqual([
+          false,
+          undefined,
+          { code: "UNAVAILABLE", message: expect.stringContaining("15-second budget") },
+        ]);
+      } else if (cause === "disconnect") {
+        expect(await pending).toBe(controller.signal.reason);
+        expect(respond).not.toHaveBeenCalled();
+      }
+    } finally {
+      release.resolve();
+      await pending;
+      await scope.drain();
+      vi.useRealTimers();
+    }
+  },
+);
+
+it("reuses current cost facts after the former freshness timeout", async () => {
+  const config = {};
+  const clock = vi.spyOn(performance, "now").mockReturnValue(0);
+  try {
+    await request(dates, config);
+    clock.mockReturnValue(60_000);
+    await request(dates, config);
+    expect(loadCost).toHaveBeenCalledTimes(1);
+  } finally {
+    clock.mockRestore();
+  }
 });
 
 it("bounds all-agent cache loads", async () => {

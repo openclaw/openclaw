@@ -107,6 +107,13 @@
   margin-block-start: calc(var(--chat-run-block-gap) - 2px);
 }
 
+/* A collapsed work summary leads into its answer, not another activity block. */
+:is(.chat-group > .chat-group-messages, .chat-agent-run-body)
+  > .chat-work-group:not(.is-open)
+  + .chat-bubble {
+  margin-block-start: 0;
+}
+
 .chat-group.tool {
   --chat-message-column-max: var(--chat-message-max-width, min(980px, 100%));
   display: block;
@@ -246,107 +253,81 @@
   pointer-events: var(--chat-footer-disclosure-pointer-events, none);
 }
 
-.chat-message-reactions {
+/* Reactions hang off the bubble's outer bottom corner, across from the sender
+   row, so a reaction never moves the name or adds a row. The wrapper is only an
+   anchor: it takes no input and no space. */
+.chat-bubble > .chat-message-reactions {
+  position: absolute;
+  z-index: 1;
+  bottom: 0;
+  inset-inline-start: calc(100% - 14px);
+  /* The overhang stays above the sender line, which starts just under the bubble. */
+  translate: 0 35%;
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px;
-  margin-top: 6px;
-  pointer-events: auto;
+  pointer-events: none;
 }
 
-:is(.chat-group-footer, .chat-message-actions-row) > .chat-message-reactions {
-  min-width: 0;
-  margin-top: 0;
+.chat-group.user:not(.chat-group--peer) .chat-bubble > .chat-message-reactions {
+  inset-inline-start: auto;
+  inset-inline-end: calc(100% - 14px);
 }
 
-/* One chip and its add button stay together while metadata yields width.
-   Longer reaction inventories retain their wrapping layout. */
-:is(.chat-group-footer, .chat-message-actions-row) > .chat-message-reactions--single {
-  flex-shrink: 0;
-  max-width: 100%;
+/* A caption under images is narrower than its bubble: hang from the caption. */
+.chat-bubble--with-images > .chat-message-avatar-anchor {
+  anchor-name: --chat-reaction-edge;
 }
 
-/* Reactions share the reserved footer row without inheriting its hover fade.
-   Metadata and actions retain their own disclosure and keyboard access. */
-.chat-group-footer:has(> .chat-message-reactions) {
-  opacity: 1;
-  pointer-events: auto;
+.chat-bubble--with-images > .chat-message-reactions {
+  inset-inline-start: calc(anchor(--chat-reaction-edge end, 100%) - 14px);
 }
 
-.chat-group-footer:has(> .chat-message-reactions) > .chat-group-footer__meta,
-.chat-group-footer:has(> .chat-message-reactions) > .chat-group-footer-actions {
-  opacity: var(--chat-footer-disclosure-opacity, 0);
-  pointer-events: var(--chat-footer-disclosure-pointer-events, none);
-  transition: opacity 120ms ease-out;
+.chat-group.user:not(.chat-group--peer) .chat-bubble--with-images > .chat-message-reactions {
+  inset-inline-start: auto;
+  inset-inline-end: calc(anchor(--chat-reaction-edge start, 100%) - 14px);
 }
 
-.chat-group-footer--persistent-identity:has(> .chat-message-reactions) > .chat-group-footer__meta {
-  opacity: var(--chat-persistent-footer-opacity, 1);
+.chat:not(.chat--bubbles) .chat-group.assistant:not(.chat-group--forwarded) > .chat-group-messages {
+  container-type: inline-size;
 }
 
-.chat-group.user:not(.chat-group--peer) .chat-message-reactions {
-  justify-content: flex-end;
-}
-
-.chat-group.user:not(.chat-group--peer)
-  :is(.chat-group-footer, .chat-message-actions-row)
+/* Flat assistant text has no edge to hang from: its tab shares the row of the
+   hover-only footer under the text, at the end of the text. Under a short reply
+   it starts past the footer's usual contents (sender, time, actions) instead.
+   Accepted edge: a footer wider than this clearance meets the tab on hover. */
+.chat:not(.chat--bubbles)
+  .chat-group.assistant:not(.chat-group--forwarded)
+  .chat-bubble
   > .chat-message-reactions {
-  order: 1;
+  top: calc(100% + var(--chat-reaction-row-gap, var(--chat-footer-offset)) + 1px);
+  bottom: auto;
+  inset-inline-start: 0;
+  box-sizing: border-box;
+  justify-content: flex-end;
+  inline-size: 100%;
+  min-inline-size: max-content;
+  padding-inline-start: min(240px, 50cqi);
+  translate: none;
 }
 
-.chat-reaction-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 24px;
-  padding: 0 8px 0 6px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
-  background: var(--bg-elevated);
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-  font-variant-numeric: tabular-nums;
-  line-height: 1;
-  cursor: default;
-  transition:
-    border-color 120ms ease,
-    background-color 120ms ease,
-    color 120ms ease;
+/* An earlier message's own action row sits one message gap under its bubble. */
+.chat-group.assistant .chat-bubble:not(:last-child) > .chat-message-reactions {
+  --chat-reaction-row-gap: var(--chat-message-gap);
 }
 
-.chat-reaction-chip__emoji {
-  font-size: 14px;
-  line-height: 1;
-}
+/* Narrow panes leave little room beside a bubble: pin a fixed overhang at the
+   outer edge so a wide summary grows inward along the bottom edge instead. */
+@media (max-width: 768px) {
+  .chat-group.user.chat-group--peer .chat-bubble > .chat-message-reactions,
+  .chat-group--forwarded .chat-bubble > .chat-message-reactions,
+  .chat--bubbles .chat-group.assistant .chat-bubble > .chat-message-reactions {
+    inset-inline-start: auto;
+    inset-inline-end: -24px;
+  }
 
-.chat-reaction-chip[aria-pressed="true"],
-.chat-reaction-chip[aria-pressed="true"]:enabled:hover {
-  border-color: var(--accent);
-  background: var(--accent-subtle);
-  color: var(--accent);
-}
-
-.chat-reaction-chip:enabled:hover {
-  border-color: color-mix(in srgb, var(--muted) 45%, var(--border));
-  background: var(--bg-hover);
-  color: var(--text);
-}
-
-.chat-reaction-chip:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
-/* The add chip is the picker's own trigger; the chip box belongs to that trigger. */
-.chat-reaction-chip--add {
-  height: auto;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  opacity: var(--chat-message-action-opacity, 0);
-  pointer-events: var(--chat-message-action-pointer-events, none);
-  transition: opacity 120ms ease;
+  .chat-group.user:not(.chat-group--peer) .chat-bubble > .chat-message-reactions {
+    inset-inline-end: auto;
+    inset-inline-start: -24px;
+  }
 }
 
 .chat-group .chat-reaction-action:hover {
@@ -361,7 +342,7 @@
    their reachable wrapped layout in narrow panes. */
 .chat-sender-name {
   font-weight: 500;
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   color: var(--chat-sender-name-color, var(--muted));
   min-width: 0;
   white-space: nowrap;
@@ -391,7 +372,7 @@
 
 .chat-message-source {
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   min-width: 0;
   overflow-wrap: anywhere;
 }
@@ -408,7 +389,7 @@
   gap: 0.5em;
   min-width: 0;
   color: var(--text);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   line-height: 1.2;
   white-space: normal;
   overflow-wrap: anywhere;
@@ -469,7 +450,7 @@
 }
 
 .chat-group-timestamp {
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   /* Keep full-opacity --muted: opacity < 1 composites below WCAG AA on dark surfaces. */
   color: var(--muted);
   line-height: 1.2;
@@ -609,8 +590,7 @@
 }
 
 .chat-group-footer:hover,
-.chat-session-activity__message:hover,
-.chat-message-reactions:hover {
+.chat-session-activity__message:hover {
   --chat-footer-detail-position: static;
   --chat-message-action-opacity: 0.6;
   --chat-message-action-pointer-events: auto;
@@ -619,8 +599,7 @@
 }
 
 .chat-group-footer:is(:focus-within, :has([data-copy-state="error"])),
-.chat-session-activity__message:focus-within,
-.chat-message-reactions:focus-within {
+.chat-session-activity__message:focus-within {
   --chat-footer-detail-position: static;
   --chat-message-action-opacity: 0.6;
   --chat-message-action-pointer-events: auto;
@@ -715,7 +694,7 @@
   gap: 7px;
   margin: var(--space-7) 8px;
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   letter-spacing: 0;
   user-select: none;
 }
@@ -799,7 +778,7 @@
 .chat-divider__description {
   max-width: min(620px, 100%);
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   line-height: 1.4;
 }
 
@@ -810,7 +789,7 @@
     calc(14px + var(--chat-footer-offset) + var(--chat-footer-row) + var(--chat-turn-gap));
   padding: 0 16px;
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   line-height: 1.4;
   text-align: center;
 }
@@ -1176,10 +1155,10 @@ img.chat-avatar {
   gap: 6px;
   min-width: 0;
   width: 100%;
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   font-weight: 400;
   /* A whole-pixel line box keeps the 16px avatar on integer offsets. */
-  line-height: calc(20px * var(--control-ui-text-scale));
+  line-height: 20px;
   white-space: nowrap;
 }
 
@@ -1558,7 +1537,7 @@ button.chat-reply-attribution__target:disabled {
 .agent-chat__typing-state {
   flex-shrink: 0;
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   white-space: nowrap;
 }
 
@@ -1571,8 +1550,8 @@ button.chat-reply-attribution__target:disabled {
   min-height: 28px;
   padding: 4px 0 12px;
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-  line-height: calc(20px * var(--control-ui-text-scale));
+  font-size: 12px;
+  line-height: 20px;
 }
 
 /* The stack starts at the shared avatar edge and takes only its intrinsic width. */
@@ -1807,6 +1786,7 @@ button.chat-reply-attribution__target:disabled {
 }
 
 .msg-meta__time,
+.msg-meta__duration,
 .msg-meta__tokens,
 .msg-meta__cache,
 .msg-meta__cost,
@@ -1859,7 +1839,7 @@ button.chat-reply-attribution__target:disabled {
 
 .chat-confirm-popover__text {
   margin: 0 0 8px;
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   font-weight: 500;
   color: var(--text);
 }
@@ -1868,7 +1848,7 @@ button.chat-reply-attribution__target:disabled {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   color: var(--muted);
   margin-bottom: 10px;
   user-select: none;
@@ -1885,7 +1865,7 @@ button.chat-reply-attribution__target:disabled {
   border: none;
   border-radius: var(--radius-sm, 4px);
   padding: 4px 12px;
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   font-weight: 500;
   transition: background 120ms ease-out;
 }
@@ -1955,9 +1935,6 @@ button.chat-reply-attribution__target:disabled {
     --chat-message-action-opacity: var(--chat-footer-action-opacity);
     --chat-message-action-pointer-events: var(--chat-footer-disclosure-pointer-events);
     pointer-events: var(--chat-footer-disclosure-pointer-events);
-  }
-
-  .chat-group.user.chat-group--peer .chat-message-footer:not(:has(> .chat-message-reactions)) {
     opacity: var(--chat-footer-disclosure-opacity);
   }
 
@@ -2155,7 +2132,7 @@ button.chat-reply-attribution__target:disabled {
   min-height: 28px;
   padding: 4px 0;
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
 }
 
 .chat-activity-group--bubble > .chat-activity-group__summary {
@@ -2240,7 +2217,7 @@ button.chat-reply-attribution__target:disabled {
   min-width: 0;
   margin: 4px 8px 16px;
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
 }
 
 .chat-system-events__summary {

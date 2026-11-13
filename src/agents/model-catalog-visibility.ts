@@ -115,18 +115,21 @@ export async function prepareLogicalVisibleModelCatalog(
       agentId: params.agentId,
       ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
     });
+  // Typed-only rows (chat:false, such as Decision models) are never chat choices; the policy
+  // above still sees them so authored refs to them do not become placeholder chat rows.
+  const chatCatalog = params.catalog.filter((entry) => entry.inference?.chat !== false);
   const keyOf = createModelCatalogIdentityKeyResolver();
   const catalogView = createModelCatalogView({
     cfg: params.cfg,
-    catalog: params.catalog,
-    routeVariants: params.routeVariants?.length ? params.routeVariants : params.catalog,
+    catalog: chatCatalog,
+    routeVariants: params.routeVariants?.length ? params.routeVariants : chatCatalog,
     keyOf,
   });
   const { configuredKeys, retainedKeys } = policy;
   const retainedKey = params.retainedModel
     ? keyOf({ provider: params.retainedModel.provider, id: params.retainedModel.model })
     : undefined;
-  const retained = params.catalog.filter(
+  const retained = chatCatalog.filter(
     (entry) => retainedKeys.has(keyOf(entry)) || keyOf(entry) === retainedKey,
   );
   const wildcard = policy.allowAny || policy.hasProviderWildcards;
@@ -135,9 +138,9 @@ export async function prepareLogicalVisibleModelCatalog(
     : [];
   const candidates =
     params.view === "all"
-      ? params.catalog
+      ? chatCatalog
       : [
-          ...(wildcard ? params.catalog : []),
+          ...(wildcard ? chatCatalog : []),
           ...configuredCatalog,
           ...policy.allowedCatalog,
           ...retained,
@@ -160,7 +163,7 @@ export async function prepareLogicalVisibleModelCatalog(
     workspaceDir: params.workspaceDir,
     metadataSnapshot: params.metadataSnapshot,
   });
-  const catalogKeys = new Set(params.catalog.map(createModelCatalogIdentityKeyResolver()));
+  const catalogKeys = new Set(chatCatalog.map(createModelCatalogIdentityKeyResolver()));
   let previousStates: Map<string, LogicalModelCatalogEntryState> | undefined;
   let previousCatalog: ModelCatalogEntry[] | undefined;
   return () => {
@@ -232,13 +235,13 @@ export async function prepareLogicalVisibleModelCatalog(
       );
     };
     if (params.view === "all") {
-      return publish(projectEntries(params.catalog));
+      return publish(projectEntries(chatCatalog));
     }
     // Authored refs stay listed, unavailable, until their login or key returns.
     const defaultVisibleCatalog = wildcard
       ? dedupeModelCatalogEntries([
           ...configuredCatalog,
-          ...params.catalog.filter(
+          ...chatCatalog.filter(
             (entry) =>
               configuredKeys.has(publicationKeyOf(entry)) || getEntryState(entry).authBacked,
           ),
@@ -246,7 +249,7 @@ export async function prepareLogicalVisibleModelCatalog(
       : [];
     const visible = dedupeModelCatalogEntries(
       policy.visibleCatalog({
-        catalog: params.catalog,
+        catalog: chatCatalog,
         defaultVisibleCatalog,
         view: params.view,
       }),
@@ -259,7 +262,7 @@ export async function prepareLogicalVisibleModelCatalog(
     const preferredKeys = new Set([...visible, ...retained].map(publicationKeyOf));
     const preferred: ModelCatalogEntry[] = [];
     const routeBacked = new Set<ModelCatalogEntry>();
-    for (const entry of params.catalog) {
+    for (const entry of chatCatalog) {
       const key = publicationKeyOf(entry);
       const preferredKey = preferredKeys.has(key);
       const wildcardRoute =

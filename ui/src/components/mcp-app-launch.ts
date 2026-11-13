@@ -4,7 +4,6 @@ import type {
 } from "../../../src/shared/mcp-app-extensions.js";
 import type { ApplicationGateway } from "../app/gateway.ts";
 
-export const MCP_APP_DISPLAY_MODE_EVENT = "openclaw-mcp-app-display-mode";
 export type McpAppDisplayModeDetail = {
   sessionKey: string;
   /** Host-created presentation command; the receiver selects its live conversation owner. */
@@ -29,6 +28,8 @@ export type McpAppOpenDetail = McpAppExtensionTarget & {
   settings?: boolean;
   quickAction?: boolean;
 };
+
+export type McpAppOpenEventDetail = McpAppOpenDetail | McpAppDisplayModeDetail;
 
 /** The containing conversation accepts synchronously before any remote tool runs. */
 export function requestMcpAppOpen(element: HTMLElement, detail: McpAppOpenDetail): boolean {

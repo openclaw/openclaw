@@ -2,7 +2,7 @@ import type { McpAppIdentity } from "../../../src/shared/mcp-app-extensions.js";
 import { t } from "../i18n/index.ts";
 import { observeResize } from "../lib/reactive/observers.ts";
 import { generateUUID } from "../lib/uuid.ts";
-import { MCP_APP_DISPLAY_MODE_EVENT, type McpAppDisplayModeDetail } from "./mcp-app-launch.ts";
+import { MCP_APP_OPEN_EVENT, type McpAppDisplayModeDetail } from "./mcp-app-launch.ts";
 import type { McpAppViewElement } from "./mcp-app-view-types.ts";
 
 export function presentMcpAppInSidebar(host: McpAppViewElement, target: HTMLElement) {
@@ -61,7 +61,7 @@ export function requestMcpAppDisplayMode(
   const claimed =
     view.surface === "conversation" &&
     !view.dispatchEvent(
-      new CustomEvent<McpAppDisplayModeDetail>(MCP_APP_DISPLAY_MODE_EVENT, {
+      new CustomEvent<McpAppDisplayModeDetail>(MCP_APP_OPEN_EVENT, {
         bubbles: true,
         composed: true,
         cancelable: true,

@@ -30,7 +30,7 @@ afterEach(() => {
 // Serves the tunnel API the way the ingress listener does; the test names the
 // authenticated peer key in a header the real listener would take from QUIC.
 async function tunnelApi(claw: LinkedClaw) {
-  const { service, log } = serviceFor(claw.authority);
+  const { service, log, effects } = serviceFor(claw.authority);
   server = http.createServer((req, res) => {
     void service.serveTunnelApi(req, res, String(req.headers["x-test-peer"]));
   });
@@ -46,7 +46,7 @@ async function tunnelApi(claw: LinkedClaw) {
     });
     return { status: response.status, body: (await response.json()) as Record<string, any> };
   };
-  return { call, service, log };
+  return { call, service, log, effects };
 }
 
 // What an approving owner device E does in SAS step 7: certify N with D_E
@@ -89,10 +89,65 @@ describe("OpenClaw ID tunnel API", () => {
     const claw = await linkedClaw();
     const { call } = await tunnelApi(claw);
     const member = formatIrohEndpointKey(randomBytes(32));
+    expect(
+      await claw.authority.submit(
+        await claw.sign({
+          op: "add",
+          account_id: "acct-viewer",
+          role: "viewer",
+          peer_keys: [member],
+          invite_id: null,
+        }),
+        "tunnel",
+      ),
+    ).toMatchObject({ ok: true });
     expect(await call(member, "GET", "membership")).toMatchObject({
       status: 403,
       body: { error: { code: "not_owner_device" } },
     });
+  });
+
+  it("refuses unknown-role and unlisted peers on every route before disclosing or mutating", async () => {
+    const claw = await linkedClaw();
+    const peer = formatIrohEndpointKey(randomBytes(32));
+    expect(
+      await claw.authority.submit(
+        await claw.sign({
+          op: "add",
+          account_id: "acct-guest",
+          role: "guest",
+          peer_keys: [peer],
+          invite_id: null,
+        }),
+        "tunnel",
+      ),
+    ).toMatchObject({ ok: true });
+    const { call, service, effects } = await tunnelApi(claw);
+    const { change } = await sasApproval(claw);
+    const invite = await ownerInvite(claw, { email: "bob@example.com", role: "viewer" });
+    const inviteBody = { cap: invite.cap, proof_key: bytesToBase64url(invite.proofKey) };
+    const before = await claw.authority.ownerView(claw.w1);
+    try {
+      for (const caller of [peer, formatIrohEndpointKey(randomBytes(32))]) {
+        for (const [method, route, body] of [
+          ["GET", "membership", undefined],
+          ["POST", "statements", { statement: change }],
+          ["POST", "invites", inviteBody],
+          ["POST", "node-invites", inviteBody],
+          ["POST", "signout", undefined],
+        ] as const) {
+          expect.soft(await call(caller, method, route, body), `${caller} ${route}`).toMatchObject({
+            status: 403,
+            body: { error: { code: "not_admitted" } },
+          });
+        }
+      }
+      expect(effects.captureConnections).not.toHaveBeenCalled();
+      expect(effects.closeConnections).not.toHaveBeenCalled();
+      expect(await claw.authority.ownerView(claw.w1)).toEqual(before);
+    } finally {
+      await service.stop();
+    }
   });
 
   // Spec 6.1 step 7 ("admit first"): E admits N directly before sealing the hand-off.

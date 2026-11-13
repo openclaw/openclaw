@@ -78,7 +78,7 @@
   align-items: center;
   justify-content: space-between;
   padding: 10px 16px;
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   font-weight: 600;
   color: var(--text-strong);
   list-style: none;
@@ -113,7 +113,7 @@
   display: flex;
   align-items: baseline;
   gap: 12px;
-  font-size: calc(11.5px * var(--control-ui-text-scale));
+  font-size: 11.5px;
   font-family: var(--mono);
 }
 
@@ -318,8 +318,8 @@
 
 /* Real-palette previews. Colors mirror the :root[data-theme] blocks in base.css
    (claw = the default :root palette); keep both in sync when retuning a theme.
-   The custom card reads the live variables instead: it is only rendered with a
-   palette while the imported theme is active. */
+   Catalog cards supply their own mode-aware variables. The browser import card
+   reads the live palette only while that imported theme is active. */
 .settings-theme-card__palette {
   display: grid;
   align-content: space-between;
@@ -710,7 +710,7 @@
 .config-raw-field textarea {
   min-height: 500px;
   font-family: var(--mono);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   line-height: 1.55;
 }
 
@@ -1038,4 +1038,9 @@
 
 .config-accordion-nav .config-accordion-group__item--active .settings-row__title {
   color: var(--text-strong);
+}
+
+/* Inherited values stay editable while remaining distinct from authored overrides. */
+.cfg-default-control {
+  opacity: 0.55;
 }

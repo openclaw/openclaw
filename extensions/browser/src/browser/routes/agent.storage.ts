@@ -109,14 +109,13 @@ export function registerBrowserAgentStorageRoutes(
 ) {
   const register = createPlaywrightRouteRegistrar(app, ctx, "state");
 
-  register(
-    "get",
-    "/cookies",
-    "cookies",
-    () =>
-      (pw, { cdpUrl, targetId }) =>
-        pw.cookiesGetViaPlaywright({ cdpUrl, targetId }),
-  );
+  register("get", "/cookies", "cookies", (input) => {
+    if (input.partition !== undefined && input.partition !== "unpartitioned") {
+      throw new Error("partition must be unpartitioned when specified");
+    }
+    const partition = input.partition;
+    return (pw, target, signal) => pw.cookiesGetViaPlaywright({ ...target, partition, signal });
+  });
 
   register("post", "/cookies/set", "cookies set", (body) => {
     const cookie = asNullableRecord(body.cookie);

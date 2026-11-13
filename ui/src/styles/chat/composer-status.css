@@ -3,7 +3,7 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   line-height: 1.2;
   padding: 6px 14px;
   margin-bottom: 8px;
@@ -23,7 +23,7 @@
 .chat-compaction .chat-divider__label {
   gap: 10px;
   font-weight: 400;
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   letter-spacing: 0;
   text-transform: none;
 }

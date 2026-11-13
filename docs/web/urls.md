@@ -326,9 +326,9 @@ roster, send messages, invoke tools, or open private dashboards. It shows every 
 The latest public view checks for updates approximately every 15 seconds while
 visible and catches up when the tab returns or the connection comes back online.
 Updates follow the conversation when you are at its latest message, but preserve
-your place and expanded tool steps when you scroll back. **Top** and **Latest**
-let you jump without reloading; **Refresh now** checks in place and shows retry
-status if the connection fails. **Older messages** opens earlier pages without
+your place and expanded tool steps when you scroll back. The circular down-arrow
+button jumps to the end of the displayed conversation without reloading.
+**Refresh now** appears when updates are delayed or fail and retries in place. **Older messages** opens earlier pages without
 automatic refresh; **Back to latest** returns to the live view. Pages contain approximately 50 visible messages and tool-step groups, newest pages first and chronological within each page. Read and message size limits still apply, with visible omission notices. The initial conversation and social metadata
 work without JavaScript.
 

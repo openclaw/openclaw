@@ -85,6 +85,7 @@ extension OpenClawChatViewModel {
             switch evt {
             case .routeChanged, .reconnected:
                 self.questionAttentionOwnerID = UUID()
+                self.outboxRestoreEvidence.connectionHistoryFloor = self.lastIssuedHistoryRequestID
                 self.applyProgressCard(nil)
             default: break
             }

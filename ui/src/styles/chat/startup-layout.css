@@ -208,13 +208,12 @@ div.chat-thread:where(.chat-thread--annotations) {
   color: var(--chat-text);
   overflow-wrap: anywhere;
   word-break: break-word;
-  /* Serif chat faces need macOS stem darkening to stay crisp at chat size:
-     the app-wide `antialiased` (base.css body) thins their hairlines into
-     gray smear. applyChatFontSmoothing (app/typography.ts) sets `auto` when
-     the resolved chat typeface is a serif; unset falls back to the inherited
-     app-wide smoothing. */
-  -webkit-font-smoothing: var(--chat-font-smoothing, inherit);
-  -moz-osx-font-smoothing: var(--chat-font-smoothing, inherit);
+  /* Chat prose keeps macOS stem darkening for every typeface: the app-wide
+     `antialiased` (base.css body) thins serif hairlines into gray smear and
+     makes light sans faces such as Instrument Sans read thin and harsh at
+     chat size. Chrome and labels keep the app-wide smoothing. */
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
 }
 
 /* Notices reserve the same trailing space as message groups, including their footer. */
@@ -394,8 +393,8 @@ div.chat-thread:where(.chat-thread--annotations) {
   -webkit-user-select: none;
 }
 
-/* Desktop chat and panel chrome reveal one continuous shell canvas. Mobile
-   keeps its own reading surface. */
+/* The desktop chat header reveals the shell canvas. Side-panel headers and
+   mobile chat keep their own reading surfaces. */
 .sidebar-region--desktop .chat-pane__header {
   background: transparent;
 }
@@ -556,20 +555,6 @@ div.chat-thread:where(.chat-thread--annotations) {
     gap: 0;
   }
 
-  /* Align visible lettering with the glyph centerline without moving hit areas. */
-  &
-    :is(
-      .chat-pane__workspace-chip > .oc-menu-item__label > span,
-      .chat-pane__session-title-text,
-      .chat-pane__parent-session-text
-    ) {
-    transform: translateY(calc(-1px * var(--control-ui-text-scale)));
-  }
-
-  & .chat-pane__session-title-input {
-    padding-block-end: calc(2px * var(--control-ui-text-scale));
-  }
-
   & .chat-pane__crumbs {
     transform: none;
     gap: 4px;
@@ -601,7 +586,7 @@ div.chat-thread:where(.chat-thread--annotations) {
     border-radius: var(--radius-sm);
     background: color-mix(in srgb, var(--warn) 10%, transparent);
     color: var(--warn);
-    font-size: var(--control-ui-text-sm);
+    font-size: 12px;
     white-space: nowrap;
   }
 
@@ -635,7 +620,7 @@ div.chat-thread:where(.chat-thread--annotations) {
     background: color-mix(in srgb, var(--warn) 12%, var(--popover));
     color: var(--warn);
     transform: translateX(-50%);
-    font-size: var(--control-ui-text-sm);
+    font-size: 12px;
     white-space: nowrap;
   }
 
@@ -661,7 +646,7 @@ div.chat-thread:where(.chat-thread--annotations) {
     color: var(--muted);
     font: inherit;
     font-weight: 400;
-    line-height: var(--control-ui-text-lg);
+    line-height: 16px;
     cursor: var(--cursor-action);
   }
 
@@ -710,7 +695,14 @@ div.chat-thread:where(.chat-thread--annotations) {
   grid-column: 1 / -1;
 }
 
-/* One settings target, with the name chip beneath the avatar. */
+/* Desktop identity fits the same header row as the adjacent panel controls. */
+.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__agent-avatar {
+  width: 20px;
+  height: 20px;
+  flex-basis: 20px;
+}
+
+/* One settings target, with the name chip beneath the avatar on mobile. */
 .chat-pane__agent-identity {
   display: inline-flex;
   flex-direction: column;
@@ -739,9 +731,9 @@ div.chat-thread:where(.chat-thread--annotations) {
   overflow: hidden;
   border-radius: var(--radius-full);
   background: var(--secondary);
-  font-size: calc(10px * var(--control-ui-text-scale));
+  font-size: 10px;
   font-weight: 600;
-  line-height: var(--control-ui-text-md);
+  line-height: 14px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -858,7 +850,7 @@ div.chat-thread:where(.chat-thread--annotations) {
   min-width: 0;
   overflow: hidden;
   color: var(--text);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
 }
 
 /* A breadcrumb segment, not a badge: flat and inline, sharing the title's type
@@ -879,7 +871,7 @@ div.chat-thread:where(.chat-thread--annotations) {
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--icon-interactive);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   cursor: var(--cursor-action);
 }
 
@@ -923,7 +915,7 @@ div.chat-thread:where(.chat-thread--annotations) {
   .sidebar-region__header .chat-pane__header .chat-pane__workspace-chip,
   .sidebar-region__header .chat-pane__header .chat-pane__session-title,
   .sidebar-region__header .chat-pane__header .chat-pane__parent-session {
-    line-height: calc(18px * var(--control-ui-text-scale));
+    line-height: 18px;
   }
 
   .sidebar-region__header .chat-pane__header .chat-pane__workspace-chip > svg {
@@ -942,7 +934,7 @@ div.chat-thread:where(.chat-thread--annotations) {
   }
 
   .sidebar-region__header .chat-pane__header .chat-pane__session-title {
-    font-size: calc(13px * var(--control-ui-text-scale));
+    font-size: 13px;
     font-weight: 500;
   }
 
@@ -1130,12 +1122,12 @@ openclaw-chat-sidebar-region,
   --resize-handle-line-size: var(--shell-divider-size);
   --resize-handle-active-line-size: calc(var(--shell-divider-size) * 2);
 
-  z-index: 2;
   grid-area: divider;
 }
 
 /* Paint the complete line inside the gutter, clear of the overlapping panel. */
 .sidebar-column__divider::after {
+  z-index: 2;
   inset-inline-start: auto;
   inset-inline-end: 0;
   transform: none;
@@ -1144,6 +1136,18 @@ openclaw-chat-sidebar-region,
 .sidebar-column__divider[orientation="horizontal"]::after {
   top: auto;
   bottom: 0;
+}
+
+/* The line ends the gutter, so the pointer target reaches as far past the line
+   as the gutter leads up to it. Only the target rises above the desktop side
+   panel: the line stays below, hidden while the gutter animates in behind it. */
+.sidebar-column__divider::before {
+  z-index: 4;
+  inset-inline: 0 calc(var(--shell-divider-size) - var(--resize-handle-size, 6px));
+}
+
+.sidebar-column__divider[orientation="horizontal"]::before {
+  inset-block: 0 calc(var(--shell-divider-size) - var(--resize-handle-size, 6px));
 }
 
 .sidebar-region--narrow.sidebar-region--open:not(.sidebar-region--expanded) {
@@ -1161,7 +1165,8 @@ openclaw-chat-sidebar-region,
   display: contents;
 }
 
-.side-panel__panel {
+.side-panel__panel,
+.side-panel__empty-body {
   background: var(--bg);
 }
 
@@ -1223,14 +1228,17 @@ openclaw-chat-sidebar-region,
 
 .sidebar-region--desktop .chat-thread {
   --chat-table-reserved-space: var(--chat-details-space, 0px);
-
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) var(--chat-details-space, 0px);
-  align-content: start;
 }
 
-.sidebar-region--desktop .chat-thread-inner {
-  grid-column: 1;
+.chat-thread-content {
+  width: 100%;
+}
+
+.sidebar-region--desktop .chat-thread-content {
+  /* Firefox omits trailing grid padding from its scroll range. Keep the
+     scrollport in block flow and reserve Details in a separate containing
+     block so percentage and intrinsic reading-width caps retain their meaning. */
+  width: calc(100% - var(--chat-details-space, 0px));
 }
 
 .sidebar-region--desktop .chat-main__conversation-frame[data-details-instant],
@@ -1599,4 +1607,54 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop)
   > :not(openclaw-chat-details):not(.chat-details-toggle) * {
     visibility: hidden;
   }
+}
+
+html.openclaw-native-macos.openclaw-native-web-chrome
+  .shell:not(.shell--mobile-nav, .shell--embed)
+  .chat-split-view__column
+  > .chat-split-view__cell:first-child
+  .sidebar-region {
+  > .sidebar-region__header,
+  &:not(.sidebar-region--bottom, .sidebar-region--narrow) [data-region-header="side"] {
+    background: var(--sidebar-rail-surface);
+  }
+}
+
+/* The divider keeps its hit target; only its titlebar segment joins the chrome. */
+html.openclaw-native-macos.openclaw-native-web-chrome
+  .shell:not(.shell--mobile-nav, .shell--embed)
+  .chat-split-view__column
+  > .chat-split-view__cell:first-child
+  .sidebar-region--desktop.sidebar-region--open:not(
+    .sidebar-region--bottom,
+    .sidebar-region--narrow,
+    .sidebar-region--expanded-side
+  )
+  .sidebar-column__divider {
+  background-image: linear-gradient(
+    var(--sidebar-rail-surface) var(--desktop-header-height),
+    transparent var(--desktop-header-height)
+  );
+}
+
+/* The separator belongs to the visible panel header, not the hidden resize gutter. */
+.sidebar-region--desktop.sidebar-region--open:not(
+    .sidebar-region--bottom,
+    .sidebar-region--narrow,
+    .sidebar-region--expanded-side
+  )
+  [data-region-header="side"]::before {
+  content: "";
+  position: absolute;
+  top: calc((var(--desktop-header-height) - 18px) / 2);
+  inset-inline-start: 0;
+  width: 1px;
+  height: 18px;
+  background: var(--rail-divider-color);
+  pointer-events: none;
+}
+
+.sidebar-region--desktop.sidebar-region--left [data-region-header="side"]::before {
+  inset-inline-start: auto;
+  inset-inline-end: 0;
 }

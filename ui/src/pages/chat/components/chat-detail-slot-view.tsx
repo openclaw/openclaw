@@ -1,6 +1,5 @@
 import { createMemo, lazy } from "solid-js";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
-import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { ChatDetailSlotProps } from "../chat-pane-embedded-types.ts";
 import { selectedChatSessionRow } from "../chat-state-route.ts";
@@ -104,7 +103,7 @@ export function ChatDetailSlot(props: ChatDetailSlotProps) {
           fallback={<PanelLoadingSkeleton variant="review" label={t("common.loading")} />}
         >
           <ChatDetailPanel
-            ref={[elementRef(props.registerPanelHost)]}
+            registerPanelHost={props.registerPanelHost}
             class="chat-sidebar"
             content={content()}
             attachmentChat={props.chat}

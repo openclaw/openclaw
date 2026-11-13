@@ -25,6 +25,10 @@ it.each([true, false])(
     };
     fixture.state.sidebarLayout = openSlot({ columns: [] }, "detail");
     await fixture.renderPanels();
+    const region = fixture.mount.querySelector("openclaw-chat-sidebar-region");
+    expect(region?.readPanelHost("detail")).toBe(
+      fixture.mount.querySelector("openclaw-chat-detail-panel"),
+    );
     const tab = () => fixture.mount.querySelector('.side-panel__header [role="tab"]');
     await waitForSolid(() => expect(tab()?.textContent).toContain("Excalidraw"));
     await waitForSolid(() =>
@@ -44,6 +48,9 @@ it.each([true, false])(
     fixture.state.sidebarContent = { kind: "markdown", content: "Ordinary Review content" };
     await fixture.renderPanels();
     await waitForSolid(() => expect(tab()?.textContent).toContain("Review"));
+    fixture.state.sidebarContent = { kind: "loading" };
+    await fixture.renderPanels();
+    await waitForSolid(() => expect(region?.readPanelHost("detail")).toBeNull());
   },
 );
 

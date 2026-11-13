@@ -1,6 +1,7 @@
 ---
 summary: "Tool Search: compact large OpenClaw tool catalogs behind search, describe, and call"
 title: "Tool Search"
+doc-schema-version: 1
 read_when:
   - You want OpenClaw agents to use a large tool catalog without adding every tool schema to the prompt
   - You want OpenClaw tools, MCP tools, and client tools exposed through one compact runtime surface
@@ -51,6 +52,13 @@ the target tool executes.
 If a call mistakes an admitted skill name for a tool ID, the error points back
 to the skill’s complete instructions instead of sending the model through tool search.
 
+The optional [usage-ranked tool index](/concepts/experimental-features#usage-ranked-tool-index)
+can prioritize frequently and recently used tools in the embedded runtime’s
+deferred-schema directory. It is off by default and keeps the existing budget,
+reserves room for newcomers, and freezes the selection preference for the prompt
+series. It does not rank search results, change permissions, or affect the MCP
+directory or Codex-native surfaces.
+
 The deferred directory omits tools already exposed directly. They remain searchable,
 so discovery can still return their complete schemas without duplicating native guidance.
 
@@ -88,8 +96,9 @@ run:
 5. Apply optional include/exclude selectors to the eligible catalog. Keep
    unselected and excluded tools, core coding primitives, and direct-only tools
    model-visible; index compact descriptors for selected eligible tools.
-6. Add a size-limited capability directory selected by fixed rules and filtered by policy to the
-   cache-stable system-prompt prefix.
+6. Add a size-limited capability directory filtered by policy to the cache-stable
+   system-prompt prefix. Selection uses fixed rules unless the usage-ranked
+   tool index lab is enabled.
 7. In `tools` mode, add a bounded directory of the deferred MCP tools to the
    `tool_search` description.
 8. Expose the structured search, describe, and call tools or the compact
@@ -346,8 +355,18 @@ or otherwise partial output schemas omit the hint and remain available through
 ### Describe
 
 `tool_describe` accepts the `id` of a search result and loads its full metadata,
-including the exact input schema and the trusted full `outputSchema` when the
-tool declares one.
+including the exact input schema and complete MCP server instructions.
+
+By default the model-facing result omits the tool's `outputSchema`. Output
+schemas can run to tens of thousands of characters, and the model learns a
+result's shape by reading the result. Choosing arguments needs only the
+description and input schema. The optional
+`includeRarelyNeededOutputSchema: true` input adds the trusted full
+`outputSchema` for the rare case where the model must know the result shape
+before calling, for example to plan code over the result. The parameter's own
+description carries that guidance; search results and the directory prompt do
+not mention it. The control result's structured `details` keep the full
+description, including `outputSchema`, for runtime consumers.
 
 ```json
 { "id": "mcp:calendar:calendar__create_event" }

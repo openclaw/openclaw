@@ -1,3 +1,11 @@
+import {
+  composerInputElement,
+  composerInputHasFocus,
+  readComposerEditor,
+  focusComposerInput,
+  selectComposerInput,
+  syncComposerInput,
+} from "../../../lib/composer-input.ts";
 import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { observeResize } from "../../../lib/reactive/observers.ts";
@@ -157,7 +165,7 @@ function scheduleNativeTextareaOverflow(el: HTMLTextAreaElement) {
     state.overflowFrame = null;
     if (
       el.isConnected &&
-      !el.closest("[inert], [hidden]") &&
+      !composerInputElement(el).closest("[inert], [hidden]") &&
       composerTextareaResizeObservers.get(el) === state
     ) {
       updateTextareaOverflow(el, false);
@@ -222,6 +230,24 @@ function updateTextareaOverflow(
   measured?: { scrollHeight: number; clientHeight: number },
 ) {
   const state = composerTextareaResizeObservers.get(el);
+  const editor = readComposerEditor(el);
+  if (editor) {
+    const port = editor.scrollElement;
+    const scrollable = port.scrollHeight > port.clientHeight + 1;
+    for (const target of [el, editor.element]) {
+      target.toggleAttribute("data-composer-overflow", scrollable);
+    }
+    if (state) {
+      const height = editor.element.clientHeight;
+      const changed = state.height !== height;
+      state.height = height;
+      const thread = state.getTranscriptElement();
+      if (thread) {
+        publishTranscriptScroll(thread, { type: "composer-layout", changed });
+      }
+    }
+    return;
+  }
   if (
     deferNativeEditing &&
     state?.editing &&
@@ -250,7 +276,7 @@ function updateTextareaOverflow(
   // visible bottom edge in place unless that would hide the caret line.
   if (state && clientHeight < state.height && scrollHeight > clientHeight) {
     let scrollTop = el.scrollTop + state.height - clientHeight;
-    if (document.activeElement === el) {
+    if (composerInputHasFocus(el)) {
       // Textareas expose no caret rectangle; measure the text before it in an
       // out-of-flow copy with the same wrapping and typography.
       const style = getComputedStyle(el);
@@ -312,6 +338,13 @@ export function adjustTextareaHeight(
   if (state && el.isConnected) {
     // Refs bind before attachment; the first connected measurement sees the pane.
     state.stopPaneLayout ??= observeComposerPane(el, state);
+  }
+  const editor = readComposerEditor(el);
+  if (editor) {
+    state?.observer?.observe(editor.element);
+    syncComposerInput(el);
+    updateTextareaOverflow(el);
+    return;
   }
   if (resetSingleLineTextarea(el)) {
     return;
@@ -442,7 +475,11 @@ function observeComposerPane(el: HTMLTextAreaElement, state: ComposerTextareaRes
       // scrollport hides. New Session's shell is never capped or scrolled.
       const limit = `${Math.max(
         36,
-        space - shell.scrollHeight + el.offsetHeight - kept.scrollHeight + kept.clientHeight,
+        space -
+          shell.scrollHeight +
+          composerInputElement(el).offsetHeight -
+          kept.scrollHeight +
+          kept.clientHeight,
       )}px`;
       return space > 0 &&
         el.isConnected &&
@@ -509,7 +546,7 @@ export function observeTextareaOverflow(
     updateTextareaOverflow(el, false);
   });
   composerTextareaResizeObservers.set(el, state);
-  state.observer?.observe(el);
+  state.observer?.observe(composerInputElement(el));
   updateTextareaOverflow(el);
 }
 
@@ -535,6 +572,10 @@ export function handleTextareaOverflowInteraction(event: TextareaEvent) {
     // Retain the transcript owner's committed end intent before native caret
     // scrolling can move an ancestor. This signal performs no layout reads.
     invalidateNativeTextareaLayout(el, state);
+  }
+  // Rich geometry still describes the old draft; input and resize publish the edit.
+  if (event.type === "beforeinput" && readComposerEditor(el)) {
+    return;
   }
   // Navigation can blur the field while hiding its retained route. Its fades
   // need no synchronous layout; a reveal's resize observation restores them.
@@ -609,19 +650,18 @@ export function focusComposerFromChrome(
     return;
   }
   if (connected && !interactive) {
-    textarea?.focus({ preventScroll: true });
+    focusComposerInput(textarea, { preventScroll: true });
   }
 }
 
 export function restoreHistoryCaret(target: HTMLTextAreaElement, direction: "up" | "down") {
   requestAnimationFrame(() => {
-    if (document.activeElement !== target) {
+    if (!composerInputHasFocus(target)) {
       return;
     }
     adjustTextareaHeight(target);
     const caret = direction === "up" ? 0 : target.value.length;
-    target.selectionStart = caret;
-    target.selectionEnd = caret;
+    selectComposerInput(target, caret, caret);
   });
 }
 

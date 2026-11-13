@@ -26,6 +26,11 @@ import {
 } from "./skill-library-authoring.js";
 import { createWorkerConnectionIdentity } from "./worker-environments/connection-identity.test-support.js";
 
+// mock-isolation: ordinary authoring must not load archive or ClawHub import machinery.
+vi.mock("../skills/library/import.js", () => {
+  throw new Error("ordinary skill authoring must not load archive import runtime");
+});
+
 const catalogReleases: Array<() => void> = [];
 const temps = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {

@@ -130,6 +130,9 @@ actor OutboxTransportState {
     var sessionListGate: DeleteGate?
     let sessionListStarted = DeleteGate()
     var staleHistoryRows: [AnyCodable]?
+    /// With `staleHistoryRows`, full pages carry this cursor and cursor reads
+    /// answer with an empty delta at the same tip.
+    var historyDeltaCursor: String?
     private var stateWaiters: [(
         condition: @Sendable (isolated OutboxTransportState) -> Bool,
         continuation: CheckedContinuation<Void, Never>)] = []
@@ -268,6 +271,20 @@ final class OutboxTestTransport: @unchecked Sendable, OpenClawChatTransport {
         try await self.requestHistory(sessionKey: sessionKey, agentID: nil, expectedRoute: nil)
     }
 
+    func requestHistory(sessionKey: String, cursor: String) async throws -> OpenClawChatHistoryPayload {
+        guard await self.state.historyDeltaCursor == cursor else {
+            return try await self.requestHistory(sessionKey: sessionKey)
+        }
+        guard await self.state.healthy, await !self.state.historyFails else { throw OutboxSendError() }
+        return OpenClawChatHistoryPayload(
+            sessionKey: sessionKey,
+            sessionId: "sess-live",
+            messages: [],
+            thinkingLevel: "off",
+            kind: "delta",
+            deltaCursor: cursor)
+    }
+
     func gatewayAdvertisesMethod(_ method: String) async -> Bool? {
         let advertisedMethods = await state.advertisedMethods
         return advertisedMethods.map { $0.contains(method) }
@@ -353,11 +370,12 @@ final class OutboxTestTransport: @unchecked Sendable, OpenClawChatTransport {
         guard await self.state.healthy, await !self.state.historyFails else { throw OutboxSendError() }
         if let stale = await state.staleHistoryRows {
             // Gateway lag: the snapshot predates the just-acked send.
-            return OpenClawChatHistoryPayload(
+            return await OpenClawChatHistoryPayload(
                 sessionKey: sessionKey,
                 sessionId: "sess-live",
                 messages: stale,
-                thinkingLevel: "off")
+                thinkingLevel: "off",
+                deltaCursor: self.state.historyDeltaCursor)
         }
         let keys = await state.sentIdempotencyKeys
         let texts = await state.sentMessages
