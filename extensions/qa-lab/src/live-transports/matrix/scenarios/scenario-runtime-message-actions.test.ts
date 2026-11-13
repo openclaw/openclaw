@@ -2,12 +2,9 @@ import { expect, it, vi } from "vitest";
 import { createMatrixQaE2eeTestContext } from "./scenario-runtime-e2ee.test-helpers.js";
 import { runPublicMessageActionsScenario } from "./scenario-runtime-message-actions.js";
 
-const mocks = vi.hoisted(() => ({ request: vi.fn(), prime: vi.fn() }));
+const mocks = vi.hoisted(() => ({ request: vi.fn() }));
 // mock-isolation: Only room-state inspection is exercised; no live homeserver or Gateway is used.
 vi.mock("../substrate/request.js", () => ({ requestMatrixJson: mocks.request }));
-vi.mock("../substrate/sync.js", () => ({
-  createMatrixQaRoomObserver: () => ({ prime: mocks.prime }),
-}));
 
 it.each([
   { version: "12", creator: "@sut:matrix-qa.test", power: 0, allowed: true },
@@ -38,9 +35,10 @@ it.each([
               content: { room_version: version },
             },
           ]
-        : { users: power === 0 ? {} : { [context.sutUserId]: power }, state_default: 50 },
+        : endpoint.endsWith("/sync")
+          ? { next_batch: "test-sync-cursor" }
+          : { users: power === 0 ? {} : { [context.sutUserId]: power }, state_default: 50 },
     }));
-    mocks.prime.mockResolvedValue(true);
     const stopped = new Error("permission checked; stop before live action");
     const gateway = vi.fn(async () => {
       throw stopped;
