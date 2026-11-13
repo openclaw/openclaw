@@ -117,9 +117,11 @@ function resolveRequestOrigin(request: IncomingMessage): string {
 }
 
 const a2aGatewayRoutePaths = [
-  "/.well-known/agent-card.json",
-  "/.well-known/agent.json",
-  "/a2a/v1",
+  { path: "/.well-known/agent-card.json", match: "exact" },
+  { path: "/.well-known/agent.json", match: "exact" },
+  // The handler answers unknown paths under this prefix itself. Registering the prefix keeps
+  // `/a2a/v1/anything` out of the Control-UI SPA fallback, so API clients get a JSON 404.
+  { path: "/a2a/v1", match: "prefix" },
 ] as const;
 
 const A2A_ACCOUNT_STATUS_FIELDS = ["unresolvedPeers", "unresolvedOutboundPeers"] as const;
@@ -561,15 +563,15 @@ export const a2aChannelPlugin: ChannelPlugin<ResolvedA2aChannelAccount> = create
             return true;
           };
 
-          for (const routePath of a2aGatewayRoutePaths) {
+          for (const route of a2aGatewayRoutePaths) {
             unregisterRoutes.push(
               // A2A owns fixed global paths on a single account, so a duplicate
               // registration means a stale or conflicting owner. Fail loudly instead
               // of replacing a live handler (GHSA-RQP8-Q22P-5J9Q).
               registerPluginHttpRoute({
-                path: routePath,
+                path: route.path,
                 auth: "plugin",
-                match: "exact",
+                match: route.match,
                 pluginId: "a2a",
                 source: "a2a-gateway",
                 accountId: account.accountId,
