@@ -4,7 +4,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
 import type { PluginLogger, PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import {
-  assertRealtimeVoiceAgentConsultModelSelectionUnlocked,
+  assertRealtimeVoiceAgentConsultModelSelectionUnlockedAsync,
   consultRealtimeVoiceAgent,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   resolveRealtimeVoiceAgentConsultToolsAllow,
@@ -304,6 +304,12 @@ export async function createVoiceCallRuntime(params: {
             typeof call.metadata?.requesterSessionKey === "string"
               ? call.metadata.requesterSessionKey
               : undefined;
+          const assertCallCurrent = () => {
+            handlerContext.abortSignal?.throwIfAborted();
+            if (manager.getCall(callId) !== call || TerminalStates.has(call.state)) {
+              throw new Error(`Call "${callId}" is no longer active`);
+            }
+          };
           const modelLockParams = {
             cfg,
             agentRuntime,
@@ -311,7 +317,8 @@ export async function createVoiceCallRuntime(params: {
             sessionKey,
             spawnedBy: requesterSessionKey,
           };
-          assertRealtimeVoiceAgentConsultModelSelectionUnlocked(modelLockParams);
+          await assertRealtimeVoiceAgentConsultModelSelectionUnlockedAsync(modelLockParams);
+          assertCallCurrent();
           const fastContext = await resolveRealtimeVoiceFastContextConsult({
             cfg,
             agentId,
@@ -326,16 +333,13 @@ export async function createVoiceCallRuntime(params: {
             // Memory reads for this caller stay bound to the consult and its live call.
             liveness: {
               signal: handlerContext.abortSignal,
-              assertCurrent() {
-                if (manager.getCall(callId) !== call || TerminalStates.has(call.state)) {
-                  throw new Error(`Call "${callId}" is no longer active`);
-                }
-              },
+              assertCurrent: assertCallCurrent,
             },
           });
-          handlerContext.abortSignal?.throwIfAborted();
+          assertCallCurrent();
           if (fastContext.handled) {
-            assertRealtimeVoiceAgentConsultModelSelectionUnlocked(modelLockParams);
+            await assertRealtimeVoiceAgentConsultModelSelectionUnlockedAsync(modelLockParams);
+            assertCallCurrent();
             return fastContext.result;
           }
           const { provider: agentProvider, model } = resolveVoiceResponseModel({

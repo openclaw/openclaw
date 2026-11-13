@@ -160,14 +160,15 @@ defineDiscordVoiceTests(
 
       await vi.waitFor(() =>
         expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledWith({
-          getToolAuthorityOverlay: expect.any(Function),
+          assertCurrent: expect.any(Function),
+          getToolAuthorityOverlayAsync: expect.any(Function),
           sessionKey: "discord:g1:c1",
           text: "revísalo en WebUI",
           mode: "steer",
         }),
       );
       expect(
-        controlRealtimeVoiceAgentRunMock.mock.calls[0]?.[0].getToolAuthorityOverlay?.(),
+        await controlRealtimeVoiceAgentRunMock.mock.calls[0]?.[0].getToolAuthorityOverlayAsync?.(),
       ).toMatchObject({
         originatingChannel: "discord",
         messageProvider: "discord-voice",
@@ -216,7 +217,7 @@ defineDiscordVoiceTests(
         const effect = vi.fn();
         controlRealtimeVoiceAgentRunMock.mockImplementationOnce(async (params) => {
           await resume.promise;
-          params.getToolAuthorityOverlay?.();
+          await params.getToolAuthorityOverlayAsync?.();
           effect();
           return {
             ok: true,

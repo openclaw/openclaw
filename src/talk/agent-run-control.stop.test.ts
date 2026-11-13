@@ -1,10 +1,11 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import {
   detachActiveEmbeddedRun as detachEmbeddedRun,
   attachActiveEmbeddedRun as attachEmbeddedRun,
 } from "../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../agents/embedded-agent-runner/runs.test-support.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { registerChatAbortController } from "../gateway/chat-abort.js";
 import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
 import { withSessionTurn } from "../sessions/session-controller.admission.js";
@@ -40,6 +41,10 @@ function withVoiceTurn(run: (op: ReplyOperation) => Promise<void>, storePath = t
     await run(op);
   });
 }
+
+beforeEach(() => {
+  setRuntimeConfigSnapshot({});
+});
 
 afterEach(() => {
   replyTesting.resetSessionControllerForTest();
@@ -256,3 +261,108 @@ it.each(["controller signal", "native run"] as const)(
     }
   },
 );
+
+it.each(["key", "exact"] as const)(
+  "prepares async caller policy and retains final caller authority for %s-selected controls",
+  async (selector) => {
+    for (const scenario of [
+      "allowed",
+      "wrong-caller",
+      "read-revoked",
+      "projection-revoked",
+    ] as const) {
+      await withVoiceTurn(async (op) => {
+        let current = true;
+        let reads = 0;
+        const messages: string[] = [];
+        await op.bindToolAuthoritySnapshotAsync({
+          fingerprint: () => "voice-policy",
+          fingerprintAsync: async () => "voice-policy",
+          project: (overlay) => (overlay.senderIsOwner ? "voice-policy" : "guest-policy"),
+          projectAsync: async (overlay) => {
+            if (scenario === "projection-revoked") {
+              current = false;
+            }
+            return overlay.senderIsOwner ? "voice-policy" : "guest-policy";
+          },
+        });
+        await op.bindToolAuthorityRouteAsync({ provider: "synthetic", model: "test" });
+        const handle = {
+          ...createEmbeddedRunHandle({
+            runId: "async-voice",
+            guarded: true,
+            queueMessage: async (text) => {
+              messages.push(text);
+            },
+          }),
+          kind: "embedded" as const,
+          cancel: () => {},
+        };
+        const detach = attachRun(op, handle);
+        op.setPhase("running");
+        try {
+          const result = await control({
+            ...(selector === "exact" ? { runTarget: target("async-voice", op.abortSignal) } : {}),
+            text: "Use the release branch",
+            mode: "steer",
+            assertCurrent: () => {
+              if (!current) {
+                throw new Error("Voice speaker authority was revoked");
+              }
+            },
+            getToolAuthorityOverlayAsync: async () => {
+              reads += 1;
+              if (reads > 1 && scenario === "read-revoked") {
+                current = false;
+              }
+              return {
+                senderIsOwner: scenario !== "wrong-caller",
+                disableTools: false,
+                traceAuthorized: false,
+              };
+            },
+          });
+          expect(messages).toEqual(scenario === "allowed" ? ["Use the release branch"] : []);
+          expect(result.ok).toBe(scenario === "allowed");
+        } finally {
+          detach();
+        }
+      });
+    }
+  },
+);
+
+it("keeps key-selected cancellation fenced after awaited caller preparation", () =>
+  withVoiceTurn(async (op) => {
+    const cancel = vi.fn();
+    const detach = attachRun(op, {
+      ...createEmbeddedRunHandle({ runId: "cancel-async" }),
+      kind: "embedded" as const,
+      cancel,
+    });
+    let current = true;
+    try {
+      await expect(
+        control({
+          text: "cancel",
+          getToolAuthorityOverlayAsync: async () => ({
+            senderIsOwner: true,
+            disableTools: false,
+            traceAuthorized: false,
+          }),
+          prepareToolAuthorityOverlay: async () => {
+            current = false;
+          },
+          assertCurrent: () => {
+            if (!current) {
+              throw new Error("Voice caller revoked");
+            }
+          },
+        }),
+      ).rejects.toThrow("Voice caller revoked");
+      expect(cancel).not.toHaveBeenCalled();
+      expect(op.abortSignal.aborted).toBe(false);
+    } finally {
+      detach();
+    }
+  }));
