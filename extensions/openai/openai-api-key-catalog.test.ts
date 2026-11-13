@@ -70,7 +70,7 @@ it("lists configured API-key models without loading profile auth runtimes", asyn
   ).split(" ");
   const data = [
     ...modelRows(["gpt-5.5", ...unadmittedIds]),
-    ...modelRows(admittedIds).map((row) => ({ ...row, capabilities: { chat: true } })),
+    ...admittedIds.map((id) => ({ id, object: "model", capabilities: { chat: true } })),
     // OpenAI keeps retired models listed with a past shutdown date; requests to them 404.
     { id: "gpt-5.2-chat-latest", object: "model", shutdown_date: "2026-01-01" },
   ];
