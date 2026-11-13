@@ -336,6 +336,7 @@ const runCampaign = async () => {
   const campaignStart = performance.now();
   const worktrees: ManagedWorktreeRecord[] = [];
   const sessions: Array<{ sessionKey: string; sessionId: string }> = [];
+  const verifications: Array<() => Promise<void>> = [];
   const request = (label: string, commit: string, guest = true, discover = false) =>
     measureWork("session", commit, () => performRequest(label, commit, guest, discover));
   async function performRequest(label: string, commit: string, guest: boolean, discover: boolean) {
@@ -412,22 +413,29 @@ const runCampaign = async () => {
       phases,
       load: loadavg(),
     });
-    assert.equal(command(destination, "rev-parse", "HEAD"), commit);
-    assert.equal(command(destination, "status", "--porcelain"), "");
-    const source = await fs.readFile(path.join(destination, "source.txt"), "utf8");
-    assert.equal(source, `${command(repo, "show", `${commit}:source.txt`)}\n`);
-    if (guest) {
-      assert.equal(
-        await fs.readFile(path.join(destination, "node_modules/source-derived.txt"), "utf8"),
-        source,
-      );
-      assert.equal(
-        await fs.readFile(
-          path.join(destination, "node_modules/fixture-dependency/index.js"),
-          "utf8",
-        ),
-        `${command(repo, "show", `${commit}:vendor/dependency/index.js`)}\n`,
-      );
+    const verify = async () => {
+      assert.equal(command(destination, "rev-parse", "HEAD"), commit);
+      assert.equal(command(destination, "status", "--porcelain"), "");
+      const source = await fs.readFile(path.join(destination, "source.txt"), "utf8");
+      assert.equal(source, `${command(repo, "show", `${commit}:source.txt`)}\n`);
+      if (guest) {
+        assert.equal(
+          await fs.readFile(path.join(destination, "node_modules/source-derived.txt"), "utf8"),
+          source,
+        );
+        assert.equal(
+          await fs.readFile(
+            path.join(destination, "node_modules/fixture-dependency/index.js"),
+            "utf8",
+          ),
+          `${command(repo, "show", `${commit}:vendor/dependency/index.js`)}\n`,
+        );
+      }
+    };
+    if (recording) {
+      verifications.push(verify);
+    } else {
+      await verify();
     }
     console.log(
       JSON.stringify({ completed: label, actualAtMs: performance.now() - campaignStart }),
@@ -482,6 +490,9 @@ const runCampaign = async () => {
     });
     const { profile } = await profiler.post("Profiler.stop");
     await fs.writeFile(path.join(output, "campaign.cpuprofile"), JSON.stringify(profile));
+    for (const verify of verifications) {
+      await verify();
+    }
     // Inspect retention before stop can cancel pending maintenance.
     templates = await listTemplatesAsync(process.env);
   } finally {
