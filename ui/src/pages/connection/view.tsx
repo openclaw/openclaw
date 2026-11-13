@@ -79,8 +79,6 @@ function SecretRow(props: ConnectionProps & { authMode: GatewayAuthMode | undefi
             value={props.secret}
             placeholder={t("connection.access.secretPlaceholder")}
             visible={props.showGatewaySecret}
-            showLabel={t("connection.access.showSecret")}
-            hideLabel={t("connection.access.hideSecret")}
             toggleLabel={t("connection.access.toggleSecretVisibility")}
             onInput={(next) => props.onSecretChange(next)}
             onToggle={() => props.onToggleGatewaySecretVisibility()}

@@ -29,6 +29,7 @@ const enBrowser = {
     forward: "Forward",
     reload: "Reload",
     openExternal: "Open in your browser",
+    openExternalTooltip: "Open in browser",
     urlPlaceholder: "Search or enter a URL",
     dockBottom: "Dock to bottom",
     dockRight: "Dock to right",

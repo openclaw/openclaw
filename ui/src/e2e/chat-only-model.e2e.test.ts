@@ -82,7 +82,7 @@ suite.define(() => {
     const openAiOption = composer.locator('[data-chat-model-option="openai/gpt-5.5"]');
     await revealChatModelOption(composer, "openai/gpt-5.5");
     await pollText(localOption.locator(".chat-controls__model-option-meta")).toBe("33k");
-    await pollAttribute(localOption, "aria-label").toContain("can’t read files");
+    await pollAttribute(localOption, "aria-label").toContain("No file, command, or browser access");
     await revealChatModelOption(composer, "lmstudio/qwen3-8b");
     const infoIcon = localOption.locator(".chat-controls__model-chat-only-info");
     await pollCount(infoIcon.locator("svg")).toBe(1);
