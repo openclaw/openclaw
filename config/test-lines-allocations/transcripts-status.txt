@@ -1,0 +1,4 @@
+# Net test-line growth from the `transcripts status` CLI surface: new
+# transcripts-status.test.ts plus register.transcripts.test.ts additions,
+# including the mock-isolation rationale above the gateway transport mock.
+180
