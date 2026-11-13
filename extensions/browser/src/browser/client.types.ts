@@ -130,6 +130,8 @@ export type BrowserTab = {
   tabId?: string;
   /** Runtime-scoped native Chrome tab id exposed only by the browser-extension driver. */
   webExtensionTabId?: number;
+  /** Chrome refused debugger access; the shared tab still exists. */
+  automationBlockedReason?: string;
   /** Optional user-assigned tab label. */
   label?: string;
   title: string;

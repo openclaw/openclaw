@@ -636,9 +636,19 @@ it.each([
   await dispatch(cdp, 1, "Target.getTargets");
   const unavailable = { error: { message: "Target identities are unavailable" } };
   expect(response(client, 1)).toMatchObject(permanent ? targetInfos("target-1") : unavailable);
+  expect(bridge.devtoolsTargetDescriptors().find((entry) => entry.tabId === 2)).toMatchObject(
+    permanent ? { automationBlockedReason: refusal } : { id: "tab-2" },
+  );
+  await dispatch(cdp, 3, "Target.setAutoAttach", { autoAttach: true });
+  expect(bridge.devtoolsTargetDescriptors().find((entry) => entry.tabId === 2)).toMatchObject(
+    permanent ? { automationBlockedReason: refusal } : { id: "tab-2" },
+  );
   refused = false;
   await dispatch(cdp, 2, "Target.getTargets");
   expect(response(client, 2)).toMatchObject(targetInfos("target-1", "target-2"));
+  expect(bridge.devtoolsTargetDescriptors().find((entry) => entry.tabId === 2)).not.toHaveProperty(
+    "automationBlockedReason",
+  );
 });
 it.each(["attach", "createTab"])(
   "waits for %s and native detach before closing",

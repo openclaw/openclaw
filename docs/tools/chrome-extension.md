@@ -560,12 +560,16 @@ invalidate another client's snapshot refs. This is not an isolated browser per
 client or complete isolation of every CDP domain and competing client policy.
 A complete tab-list request returns an error when native targets cannot yet be
 matched to Playwright pages, rather than reporting a partial list as complete.
-Pages that Chrome permanently refuses to debug, such as the Chrome Web Store
-or tabs Chrome reports as "Cannot attach to this target.", are excluded from
-this list. The Gateway logs a warning naming the skipped tab
-and Chrome's refusal; ordinary tabs remain available. Transient attachment
-failures still fail the complete request. This handling is Gateway-side and
-does not require a new Chrome extension release.
+Pages that Chrome refuses to debug stay out of the attachable CDP target list.
+The user-facing browser tab list retains eligible shared pages with an
+`automationBlockedReason`, including when a protected extension frame blocks
+access to an ordinary web page. These tabs are still shared, not disconnected.
+Trying to control one reports Chrome's refusal instead of "tab not found".
+Dismiss the interfering extension UI or restriction, then request a fresh
+snapshot; an interrupted action is not replayed automatically. A successful
+reattachment clears the blocked observation. Transient attachment failures still
+fail the complete request. This handling is Gateway-side and does not require
+a new Chrome extension release.
 
 If the extension connection drops, its debugger attachments retire before the
 replacement connection reattaches. An uncertain native Fetch operation also

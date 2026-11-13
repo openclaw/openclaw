@@ -341,74 +341,76 @@ describe("pw-session page enumeration", () => {
     },
   );
 
-  it.each(["rejected-metadata", "blocked-target", "unresolved-blocked-page"] as const)(
-    "enforces enumeration completeness: %s",
-    async (mode) => {
-      vi.useFakeTimers();
-      const blockedPage = mode === "unresolved-blocked-page";
-      const fixture = makePageEnumerationBrowser(
-        ["A", "B"].map((targetId) => ({
+  it.each([
+    "rejected-metadata",
+    "blocked-target",
+    "unresolved-blocked-page",
+    "retired-target",
+  ] as const)("enforces enumeration completeness: %s", async (mode) => {
+    vi.useFakeTimers();
+    const blockedPage = mode === "unresolved-blocked-page";
+    const fixture = makePageEnumerationBrowser(
+      ["A", "B"].map((targetId) => ({
+        targetId,
+        title: `projected:${targetId}`,
+        url: "https://same.example/",
+        readTargetInfo: async () => {
+          if (targetId === "B" && (mode === "rejected-metadata" || mode === "retired-target")) {
+            throw new Error("Target metadata unavailable");
+          }
+          return {
+            targetInfo: {
+              targetId: targetId === "B" && blockedPage ? "" : targetId,
+              title: `projected:${targetId}`,
+            },
+          };
+        },
+      })),
+    );
+    const inventoryRead = vi.fn(async () => ({
+      targetInfos: [
+        ...(mode === "retired-target" ? ["A"] : ["A", "B"]).map((targetId) => ({
           targetId,
-          title: `projected:${targetId}`,
-          url: "https://same.example/",
-          readTargetInfo: async () => {
-            if (targetId === "B" && mode === "rejected-metadata") {
-              throw new Error("Target metadata unavailable");
-            }
-            return {
-              targetInfo: {
-                targetId: targetId === "B" && blockedPage ? "" : targetId,
-                title: `projected:${targetId}`,
-              },
-            };
-          },
+          type: "page",
+          title: "native title",
+          url: "https://native.example/",
         })),
+        { targetId: "WORKER", type: "service_worker" },
+      ],
+    }));
+    const detach = installInventory(fixture, inventoryRead);
+    connectOverCdpSpy.mockResolvedValue(fixture.browser);
+    if (mode === "blocked-target") {
+      markTargetBlocked(cdpUrl, "B");
+    }
+    if (blockedPage) {
+      markPageRefBlocked(cdpUrl, fixture.pages[1]!);
+    }
+    const listing = listPagesViaPlaywright({
+      cdpUrl,
+      requireCompleteTargetList: true,
+      timeoutMs: 100,
+    });
+    if (mode === "blocked-target" || mode === "retired-target") {
+      await expect(listing).resolves.toEqual([
+        { targetId: "A", title: "projected:A", url: "https://same.example/", type: "page" },
+      ]);
+    } else {
+      const rejected = expect(listing).rejects.toThrow(
+        blockedPage
+          ? "Playwright page enumeration timed out after 100ms"
+          : /target identities.*unavailable/i,
       );
-      const inventoryRead = vi.fn(async () => ({
-        targetInfos: [
-          ...["A", "B"].map((targetId) => ({
-            targetId,
-            type: "page",
-            title: "native title",
-            url: "https://native.example/",
-          })),
-          { targetId: "WORKER", type: "service_worker" },
-        ],
-      }));
-      const detach = installInventory(fixture, inventoryRead);
-      connectOverCdpSpy.mockResolvedValue(fixture.browser);
-      if (mode === "blocked-target") {
-        markTargetBlocked(cdpUrl, "B");
-      }
-      if (blockedPage) {
-        markPageRefBlocked(cdpUrl, fixture.pages[1]!);
-      }
-      const listing = listPagesViaPlaywright({
-        cdpUrl,
-        requireCompleteTargetList: true,
-        timeoutMs: 100,
-      });
-      if (mode === "blocked-target") {
-        await expect(listing).resolves.toEqual([
-          { targetId: "A", title: "projected:A", url: "https://same.example/", type: "page" },
-        ]);
-      } else {
-        const rejected = expect(listing).rejects.toThrow(
-          blockedPage
-            ? "Playwright page enumeration timed out after 100ms"
-            : /target identities.*unavailable/i,
-        );
-        await vi.advanceTimersByTimeAsync(100);
-        await rejected;
-      }
-      expect(inventoryRead).toHaveBeenCalledOnce();
-      expect(detach).toHaveBeenCalledOnce();
-      expectObservedConnection(fixture);
-      if (blockedPage) {
-        expect(fixture.newCDPSession).not.toHaveBeenCalledWith(fixture.pages[1]);
-      }
-    },
-  );
+      await vi.advanceTimersByTimeAsync(100);
+      await rejected;
+    }
+    expect(inventoryRead).toHaveBeenCalledOnce();
+    expect(detach).toHaveBeenCalledOnce();
+    expectObservedConnection(fixture);
+    if (blockedPage) {
+      expect(fixture.newCDPSession).not.toHaveBeenCalledWith(fixture.pages[1]);
+    }
+  });
 
   it.each(["abort", "disconnect"] as const)("releases a publication wait on %s", async (stop) => {
     const specs = [tab("A", "A", "https://a.example/")];
