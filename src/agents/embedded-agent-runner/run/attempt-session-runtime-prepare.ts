@@ -282,7 +282,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   let freshSystemPrompt = systemPromptText;
   let projectedSystemPrompt: string | undefined;
   // Assigned once the session exists; earlier prompt preparations keep their ranking.
-  let refreshSessionTools: (() => void) | undefined;
+  const sessionTools: { refresh?: () => void } = {};
   const prepareSystemPromptUpdate: SystemPromptUpdatePreparation | undefined =
     usesSystemPromptSeries
       ? async (nextPrompt: string, freshlyRendered = false) => {
@@ -293,7 +293,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
           if (usageRanking !== previousRanking) {
             // A refreshed snapshot starts a new series: re-pin the tool definitions, including
             // the ranked MCP directory, before the first request that uses it.
-            refreshSessionTools?.();
+            sessionTools.refresh?.();
           }
           if (usageRanking !== previousRanking && systemPrompt.prepareToolPrompt) {
             const refresh = await systemPrompt.prepareToolPrompt(
@@ -412,7 +412,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
       ),
   );
   const { activeSession, setActiveSessionSystemPrompt, settingsManager } = preparedAgentSession;
-  refreshSessionTools = preparedAgentSession.refreshTools;
+  sessionTools.refresh = preparedAgentSession.refreshTools;
   const recordCurrentTurnImageFailure = (count: number) => {
     state.currentTurnImageFailureCount = Math.max(state.currentTurnImageFailureCount, count);
   };
