@@ -10,6 +10,11 @@ const configIO = paths("src/config/", "io io.runtime");
 const aiTransports = "packages/ai/src/transports.ts";
 
 it.each([
+  [
+    "canonical entry parsing",
+    sessions("entry-json"),
+    ["src/channels/bundled-channel-catalog-read.ts"],
+  ],
   ["transport", sessions("transcript-worker-runtime"), configIO],
   [
     "title and topology",

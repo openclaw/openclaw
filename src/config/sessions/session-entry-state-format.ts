@@ -1,5 +1,21 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { isCanonicalSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import type { SessionDeliveryState } from "./types.js";
+
+export function isCanonicalSessionDeliveryState(value: unknown): value is SessionDeliveryState {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  if (candidate.kind === "none" || candidate.kind === "internal") {
+    return true;
+  }
+  return (
+    candidate.kind === "external" &&
+    Boolean(candidate.route && typeof candidate.route === "object") &&
+    Boolean(candidate.context && typeof candidate.context === "object") &&
+    Boolean(candidate.origin && typeof candidate.origin === "object")
+  );
+}
 
 export const LEGACY_SESSION_PROVIDER_FIELDS = [
   ["provider", "channel"],
