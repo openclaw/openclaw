@@ -159,33 +159,27 @@ export function writeReply(
   const text = "text" in reply ? reply.text : "";
   const thinking = "thinking" in reply ? reply.thinking : undefined;
   if (api === "anthropic-messages") {
-    const blocks: Array<{ start: unknown; delta?: unknown }> = [];
+    // Each content block: its start event and its deltas (signed thinking has two).
+    const blocks: Array<{ start: unknown; deltas: unknown[] }> = [];
     if (thinking) {
-      blocks.push(
-        { start: { type: "thinking", thinking: "" }, delta: { type: "thinking_delta", thinking } },
-        {
-          start: { type: "thinking", thinking: "" },
-          delta: { type: "signature_delta", signature: `sig_${n}` },
-        },
-      );
+      blocks.push({
+        start: { type: "thinking", thinking: "" },
+        deltas: [
+          { type: "thinking_delta", thinking },
+          { type: "signature_delta", signature: `sig_${n}` },
+        ],
+      });
     }
     if (isText) {
-      blocks.push({ start: { type: "text", text: "" }, delta: { type: "text_delta", text } });
+      blocks.push({ start: { type: "text", text: "" }, deltas: [{ type: "text_delta", text }] });
     }
     calls.forEach((call, index) =>
       blocks.push({
         start: { type: "tool_use", id: `toolu_${n}_${index}`, name: call.tool, input: {} },
-        delta: { type: "input_json_delta", partial_json: JSON.stringify(call.args) },
+        deltas: [{ type: "input_json_delta", partial_json: JSON.stringify(call.args) }],
       }),
     );
-    // A signed thinking block is one content block with two deltas.
-    const merged = thinking
-      ? [
-          { start: blocks[0]!.start, deltas: [blocks[0]!.delta, blocks[1]!.delta] },
-          ...blocks.slice(2).map((b) => ({ start: b.start, deltas: [b.delta] })),
-        ]
-      : blocks.map((b) => ({ start: b.start, deltas: [b.delta] }));
-    const events = [
+    const events: Array<{ type: string } & Record<string, unknown>> = [
       {
         type: "message_start",
         message: {
@@ -198,18 +192,22 @@ export function writeReply(
           usage: { input_tokens: 10, output_tokens: 0 },
         },
       },
-      ...merged.flatMap((block, index) => [
-        { type: "content_block_start", index, content_block: block.start },
-        ...block.deltas.map((delta) => ({ type: "content_block_delta", index, delta })),
-        { type: "content_block_stop", index },
-      ]),
+    ];
+    blocks.forEach((block, index) => {
+      events.push({ type: "content_block_start", index, content_block: block.start });
+      for (const delta of block.deltas) {
+        events.push({ type: "content_block_delta", index, delta });
+      }
+      events.push({ type: "content_block_stop", index });
+    });
+    events.push(
       {
         type: "message_delta",
         delta: { stop_reason: isText ? "end_turn" : "tool_use", stop_sequence: null },
         usage: { output_tokens: 5 },
       },
       { type: "message_stop" },
-    ];
+    );
     response.writeHead(200, { "content-type": "text/event-stream; charset=utf-8" });
     response.end(events.map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join(""));
   } else if (api === "openai-completions") {

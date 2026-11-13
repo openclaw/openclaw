@@ -78,8 +78,6 @@ export function randomJourney(seed: number, length = TURN_KINDS.length + 6): Tur
   return ["user", ...kinds, "user"];
 }
 
-type Lineage = { requests: WireRequest[] };
-
 /** First change of `current` against `previous`, or undefined when it extends it. */
 function prefixChange(previous: WireRequest, current: WireRequest): string | undefined {
   if (previous.system !== current.system) {
