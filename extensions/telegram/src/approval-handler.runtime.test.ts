@@ -446,7 +446,7 @@ it.each([
   ],
   ["expired", null, undefined, undefined, "⏱️ OpenClaw change expired. No change was made."],
 ] as const)(
-  "returns the %s terminal result from a root approval card to the originating topic",
+  "keeps the %s terminal result on the originating private topic",
   async (name, decision, applicationStatus, terminalStatus, text) => {
     sendTyping.mockResolvedValue(undefined);
     sendMessage.mockResolvedValue({ chatId: "1234", messageId: "m1" });
@@ -474,11 +474,17 @@ it.each([
     const request = systemRequest(`system-agent:terminal-${name}`, {
       turnSourceChannel: "telegram",
       turnSourceTo: "1234",
+      turnSourceAccountId: "default",
       turnSourceThreadId: 42,
     });
     try {
       await handler.handleRequested(request);
       expect(sendMessage).toHaveBeenCalledOnce();
+      expect(sendMessage).toHaveBeenCalledWith(
+        "1234",
+        expect.any(String),
+        expect.objectContaining({ messageThreadId: 42 }),
+      );
       sendMessage.mockClear();
       if (decision === null) {
         await handler.handleExpired(request.id);
@@ -491,14 +497,13 @@ it.each([
           ts: 1,
         });
       }
-      expect(editMessage).toHaveBeenCalledOnce();
-      expect(sendMessage).toHaveBeenCalledExactlyOnceWith("1234", text, {
-        cfg: expect.any(Object),
-        token: "tg-token",
-        accountId: "default",
-        textMode: "html",
-        messageThreadId: 42,
-      });
+      expect(editMessage).toHaveBeenCalledExactlyOnceWith(
+        "1234",
+        "m1",
+        text,
+        expect.objectContaining({ buttons: [] }),
+      );
+      expect(sendMessage).not.toHaveBeenCalled();
     } finally {
       await handler.stop();
     }
