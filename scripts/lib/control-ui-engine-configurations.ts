@@ -14,6 +14,7 @@ export type EngineConfiguration = {
   colorScheme: "light" | "dark";
   reducedMotion: "no-preference" | "reduce";
   forcedColors: "none" | "active";
+  accessibility: "default" | "on" | "off";
 };
 
 const defaults: Omit<EngineConfiguration, "name"> = {
@@ -24,6 +25,7 @@ const defaults: Omit<EngineConfiguration, "name"> = {
   colorScheme: "light",
   reducedMotion: "no-preference",
   forcedColors: "none",
+  accessibility: "default",
 };
 
 function resolveConfiguration(name: string): EngineConfiguration {
@@ -36,6 +38,12 @@ function resolveConfiguration(name: string): EngineConfiguration {
   }
   if (name === "forced-colors") {
     return { ...configuration, forcedColors: "active" };
+  }
+  if (name === "accessibility" || name === "accessibility-control") {
+    return { ...configuration, accessibility: "on" };
+  }
+  if (name === "accessibility-off" || name === "accessibility-off-control") {
+    return { ...configuration, accessibility: "off" };
   }
   const parts = name.split(":");
   const [axis, value, mode] = parts;

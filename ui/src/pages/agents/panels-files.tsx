@@ -443,7 +443,7 @@ export function AgentFiles(
                                     <button
                                       type="button"
                                       class={[
-                                        "oc-dialog__close md-preview-expand-btn",
+                                        "oc-icon-button oc-icon-button--28 oc-dialog__close md-preview-expand-btn",
                                         { "is-fullscreen": fullscreen() },
                                       ]}
                                       aria-label={fullscreenLabel()}
@@ -461,7 +461,7 @@ export function AgentFiles(
                                   <openclaw-tooltip prop:content={t("agents.files.closePreview")}>
                                     <button
                                       type="button"
-                                      class="oc-dialog__close"
+                                      class="oc-icon-button oc-icon-button--28 oc-dialog__close"
                                       aria-label={t("agents.files.closePreview")}
                                       onClick={() => closePreview()}
                                     >

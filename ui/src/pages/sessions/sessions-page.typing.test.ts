@@ -16,7 +16,6 @@ import {
 } from "../../lib/sessions/session-capability.test-support.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
 import {
   createLiveSessionContext,
   createContext,
@@ -87,14 +86,8 @@ function editInput(input: HTMLInputElement, value: string, event = "input") {
   input.dispatchEvent(new Event(event, { bubbles: true }));
 }
 
-const searchInput = (page: ParentNode) => {
-  const find = () => page.querySelector<HTMLInputElement>(".sessions-filter-popover__search input");
-  if (!find()) {
-    page.querySelector<HTMLButtonElement>(".sessions-filter-popover__search button")?.click();
-    flush();
-  }
-  return find()!;
-};
+const searchInput = (page: ParentNode) =>
+  page.querySelector<HTMLInputElement>(".sessions-filter-popover__search input")!;
 
 async function mountTypingPage(
   initialResult = result("agent:main:initial"),
@@ -287,8 +280,9 @@ describe("Sessions page typing and detail ownership", () => {
         escape(input());
       }
       await page.updateComplete;
-      expect(document.activeElement).toBe(clear);
-      expect(page.querySelector(".sessions-filter-popover__search input")).toBeNull();
+      // Clearing keeps the field and returns focus to it, ready for the next search.
+      expect(document.activeElement).toBe(input());
+      expect(page.querySelector('button[aria-label="Clear search"]')).toBeNull();
       expect([input().value, page.selectedSessions.size, page.result]).toEqual(["", 0, null]);
       const count = requests.length;
       await advance(200);
@@ -308,8 +302,6 @@ describe("Sessions page typing and detail ownership", () => {
         true,
       ]);
       escape(input());
-      flush();
-      escape(clear);
       expect(page.querySelector(".sessions-filter-popover")?.matches(":popover-open")).toBe(false);
       expect(requests).toHaveLength(count + 1);
     },

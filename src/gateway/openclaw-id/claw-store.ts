@@ -189,6 +189,9 @@ export async function readStoredClaw(): Promise<StoredClaw | undefined> {
 }
 
 /** Replaces all claw sections in the existing state worker's single write transaction. */
-export async function writeStoredClaw(record: StoredClaw): Promise<void> {
-  await openStore().replace(new Map(Object.entries(clawStoreRows(record))));
+export async function writeStoredClaw(
+  record: StoredClaw,
+  assertCurrent?: () => void,
+): Promise<void> {
+  await openStore().replace(new Map(Object.entries(clawStoreRows(record))), assertCurrent);
 }

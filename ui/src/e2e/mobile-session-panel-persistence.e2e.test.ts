@@ -70,6 +70,7 @@ suite.define(() => {
             }
           : { viewport },
         async ({ page }) => {
+          const active = page.locator(".chat-pane-cache__pane--active");
           await page.addInitScript(
             ({ key, settings }) => localStorage.setItem(key, JSON.stringify(settings)),
             {
@@ -91,7 +92,7 @@ suite.define(() => {
             historyMessages: [{ role: "assistant", content: [{ type: "text", text: transcript }] }],
           });
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, firstSession));
-          await page.getByText(transcript).first().waitFor();
+          await active.getByText(transcript).waitFor();
           await expectFilesSettled(page, mobile, restored);
 
           if (mobile) {
@@ -101,11 +102,11 @@ suite.define(() => {
             await expectFilesSettled(page, mobile, true);
           }
           await navigateToControlUiSession(page, secondSession);
-          await page.getByText(transcript).first().waitFor();
+          await active.getByText(transcript).waitFor();
           await expectFilesSettled(page, mobile, restored);
           // Returning reuses the first session's retained pane.
           await navigateToControlUiSession(page, firstSession);
-          await page.getByText(transcript).first().waitFor();
+          await active.getByText(transcript).waitFor();
           await expectFilesSettled(page, mobile, restored);
         },
       );

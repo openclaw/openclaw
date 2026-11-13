@@ -127,12 +127,15 @@ it("uses fresh prepared caller, alias, role, and membership facts without queryi
       [new Set([owner.id]), "invited", false, "viewer", false],
       [new Set([owner.id]), "invited", true, "member", true],
     ] as const) {
+      const membership = vi.fn(() => member);
       const sharing = prepareSessionSharing(
         { cfg, client },
-        { aliases, sessionCap, isMember: () => member },
+        { aliases, sessionCap, isMember: membership },
       );
       expect(sharing.roleForTarget(target)).toBe(expectedRole);
+      membership.mockClear();
       expect(sharing.canReadTarget(target)).toBe(visible);
+      expect(membership).toHaveBeenCalledTimes(sessionCap === "invited" ? 1 : 0);
       expect(sharing.authorizeTarget(target) === null).toBe(visible);
     }
     client.authenticatedUserProfile!.profileId = oldOwner.id;

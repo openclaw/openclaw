@@ -12,8 +12,10 @@ import {
   canSubmitBeforeChatHistory,
   isChatControlCommand,
   isModelIndependentChatCommand,
+  parseSlashCommand,
 } from "../../../lib/chat/commands.ts";
 import { updateHumanMentions } from "../../../lib/chat/human-mentions.ts";
+import * as composerInput from "../../../lib/composer-input.ts";
 import { clearCompositionEnd, recordCompositionEnd } from "../../../lib/ime.ts";
 import { isSessionRunVisuallyActive } from "../../../lib/session-run-state.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
@@ -66,6 +68,8 @@ type ComposerInteraction = {
   setError: (error: string | null) => void;
 };
 
+const NO_SCROLL = { preventScroll: true };
+
 export function createChatComposerContext(
   props: ChatComposerProps,
   interaction: ComposerInteraction,
@@ -103,7 +107,7 @@ export function createChatComposerContext(
   const draftKey = composerDraftKey(props);
   if (state.composerDraftScope !== null && state.composerDraftScope.key !== draftKey) {
     // A new draft owns a new input; late IME events from the retired node cannot commit into it.
-    state.restoreComposerFocus ||= state.composerTextarea === document.activeElement;
+    state.restoreComposerFocus ||= composerInput.composerInputHasFocus(state.composerTextarea);
     state.textareaRef?.();
     state.composerComposing = false;
     state.dictationSelection = null;
@@ -136,7 +140,7 @@ export function createChatComposerContext(
       scheduleTextareaHeightAdjustment(nextTextarea);
       if (state.restoreComposerFocus) {
         state.restoreComposerFocus = false;
-        queueMicrotask(() => state.composerTextarea?.focus({ preventScroll: true }));
+        queueMicrotask(() => composerInput.focusComposerInput(state.composerTextarea, NO_SCROLL));
       }
     }
   };
@@ -211,6 +215,15 @@ export function createChatComposerContext(
     runInlineCommand: props.connected ? props.onSlashCommand : undefined,
     activateComposerMode: goalComposer.activateCommand,
   };
+  const slashCommand = parseSlashCommand(visibleDraft)?.command;
+  const slashArgsHint =
+    !goalComposer.active &&
+    slashCommand?.args &&
+    !slashCommand.argOptions?.length &&
+    slashMenuHost.resolveArgOptions(slashCommand).length === 0 &&
+    visibleDraft === `/${slashCommand.name} `
+      ? slashCommand.args
+      : undefined;
   const mentionMenuHost: HumanMentionMenuHost = {
     paneId: props.paneId,
     getDraft: skillMenuHost.getDraft,
@@ -350,17 +363,16 @@ export function createChatComposerContext(
     adjustTextareaHeight(target, { nativeInput: true });
     target.dir = detectTextDirection(target.value);
     const mentions = getMentions();
+    const nextMentions = updateHumanMentions(
+      props.getDraft?.() ?? props.draft,
+      target.value,
+      mentions,
+      state.mentionInput,
+    );
     commitComposerDraft(
       props,
       target.value,
-      mentions.length
-        ? updateHumanMentions(
-            props.getDraft?.() ?? props.draft,
-            target.value,
-            mentions,
-            state.mentionInput,
-          )
-        : undefined,
+      mentions.length || nextMentions.length ? nextMentions : undefined,
     );
     state.mentionInput = undefined;
     const activatedGoal = goalComposer.activateDraft(target.value);
@@ -425,7 +437,7 @@ export function createChatComposerContext(
     // SAFETY: Selection and keyup listeners are attached only to the composer textarea.
     const target = event.target as HTMLTextAreaElement;
     if (
-      target === document.activeElement &&
+      composerInput.composerInputHasFocus(target) &&
       target.value.trim() &&
       !state.composerComposing &&
       !target.readOnly
@@ -600,7 +612,7 @@ export function createChatComposerContext(
     onDictationPointerDown: handleDictationStart,
     onDirectDictationStart: handleDictationStart,
     onPrimaryActionPointerDown: (event: PointerEvent) => {
-      if (state.composerTextarea?.matches(":focus")) {
+      if (composerInput.composerInputHasFocus(state.composerTextarea)) {
         event.preventDefault();
       }
     },
@@ -636,6 +648,7 @@ export function createChatComposerContext(
     canCompose,
     showAbortableUi,
     visibleDraft,
+    slashArgsHint,
     submitQueued: queuedSubmit.submitQueued,
     queuedSubmitDue: queuedSubmit.queuedSubmitDue,
     flushQueuedSubmit: queuedSubmit.flushQueuedSubmit,

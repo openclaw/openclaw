@@ -1,2 +1,0 @@
-# Proves annotation recovery, paginated UI paths, and full-log fallback safety.
-132

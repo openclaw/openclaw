@@ -18,6 +18,7 @@ import type { BackupManifestPostgresAnchor } from "../commands/backup-verify-man
 import { resolveGatewayLockDir } from "../config/paths.js";
 import { embedSessionColdArchivesInSnapshot } from "../config/sessions/session-cold-storage-backup.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveDaemonRuntimePinStorePath } from "../daemon/runtime-pin-store.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { getOrCreateWeakOwnerMap } from "../shared/weak-owner-map.js";
@@ -563,6 +564,12 @@ export async function createBackupSqliteSnapshotPlan(params: {
     {
       role: "client",
       sourcePath: resolveClientCredentialStorePath({
+        OPENCLAW_STATE_DIR: params.resources.stateDir,
+      }),
+    },
+    {
+      role: "services",
+      sourcePath: resolveDaemonRuntimePinStorePath({
         OPENCLAW_STATE_DIR: params.resources.stateDir,
       }),
     },

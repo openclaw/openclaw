@@ -882,7 +882,9 @@ it.each([
             // Start disposal before remote completion; do not wait on its in-flight consumer.
             const instance = getPluginInstance(google);
             assert.ok(instance);
-            const disposing = instance.dispose();
+            const disposing = instance.dispose(async () => {
+              await services?.stop({ pluginIds: new Set([google.id]), strict: true });
+            });
             release.resolve();
             await disposing;
           } else {

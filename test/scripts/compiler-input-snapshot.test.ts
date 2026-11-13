@@ -28,6 +28,8 @@ function fixture(root = roots.make("compiler-input-snapshot-")) {
   put("packages/local/src/index.ts", "export const dependency = 1;\n");
   put("packages/local/dist/index.js", "export const built = 1;\n");
   put(".cache/vitest/ignored.json", "{}");
+  put(".cache/openclaw-vitest-fs-cache/slots/project/0/_metadata.json", "{}");
+  put(".cache/openclaw-node-compile-cache/runtime/compiled", "compiled bytes");
   fs.mkdirSync(path.join(root, "node_modules"));
   const link = (target: string, name: string) =>
     fs.symlinkSync(path.join(root, target), path.join(root, name), linkType);
@@ -107,6 +109,18 @@ it("ignores checkout scratch packages that disappear during preparation", async 
     reader.mockRestore();
   }
 });
+
+it.each(["openclaw-vitest-fs-cache", "openclaw-node-compile-cache"])(
+  "still hashes explicitly captured inputs under %s",
+  (directory) => {
+    const f = fixture();
+    const file = `.cache/${directory}/captured.js`;
+    f.write(file, "export const value = 1;\n");
+    const before = f.snapshot().signature("tsconfig.json", [], [file]);
+    f.write(file, "export const value = 2;\n");
+    expect(f.snapshot().signature("tsconfig.json", [], [file])).not.toBe(before);
+  },
+);
 
 it("preserves signatures across checkout depths with one shared external dependency", async () => {
   const directory = roots.make("compiler-input-snapshot-portability-");
@@ -282,6 +296,8 @@ it("preloads sibling subtrees while the ordered visitor waits on a deeper direct
   expect(active).toBe(0);
   expect(observed.has(path.join(f.root, ".artifacts"))).toBe(false);
   expect(observed.has(path.join(f.root, ".cache/vitest"))).toBe(false);
+  expect(observed.has(path.join(f.root, ".cache/openclaw-vitest-fs-cache"))).toBe(false);
+  expect(observed.has(path.join(f.root, ".cache/openclaw-node-compile-cache"))).toBe(false);
   const synchronous = f.snapshot();
   for (const outputRoot of [undefined, path.join(f.root, "packages/local/dist")]) {
     expect(f.signature(snapshot, outputRoot)).toBe(f.signature(synchronous, outputRoot));

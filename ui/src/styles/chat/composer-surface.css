@@ -65,6 +65,8 @@
   gap: 6px;
   min-width: 0;
   min-height: 0;
+  /* Keep the first attached card clear of status text in the transcript overlap. */
+  padding-block-start: 8px;
   overflow-y: auto;
 }
 
@@ -93,14 +95,9 @@
   flex-shrink: 0;
 }
 
-.chat-footer
-  .chat-footer__context
-  :is(
-    .session-progress-card__body,
-    .chat-queue__scroll,
-    .agent-chat__goal-detail-objective,
-    .chat-error__diagnostic
-  ) {
+.chat-footer .chat-footer__context .session-progress-card__body,
+.chat-footer .chat-footer__context .chat-queue__scroll,
+.chat-footer .chat-footer__context .agent-chat__goal-detail-objective {
   overscroll-behavior: auto;
 }
 
@@ -181,8 +178,11 @@
      chip restating its own. They are peers describing the next turn, and a
      reader should not be able to tell which feature shipped which one. Consumers
      outside the composer keep the same values as fallbacks; the mobile block
-     raises the whole family to touch size by rewriting these four. */
-  --chat-composer-chip-height: 30px;
+     raises the whole family to touch size by rewriting these four.
+     The chip box is the icon buttons' box, so every control in the action row
+     shares one height and one centre line; the trigger rule paints the pill
+     one step inside it, on the primary action's 30px painted tier. */
+  --chat-composer-chip-height: var(--chat-composer-send-size);
   --chat-composer-chip-gap: 4px;
   --chat-composer-chip-padding-inline: 8px;
   --chat-composer-chip-text: calc(13px * var(--control-ui-text-scale));
@@ -272,13 +272,12 @@
 /* Focus is a neutral state, not an accent/status signal. Keep it within one
    subtle luminance step of the resting hairline; a second ring or outer spread
    would make the composer look thicker as soon as the operator starts typing. */
-.agent-chat__input:has(.agent-chat__composer-combobox > :is(textarea, input):focus) {
+.agent-chat__input:has(.agent-chat__composer-combobox:focus-within) {
   border-color: color-mix(in srgb, var(--chat-composer-hairline) 94%, var(--text-strong));
   box-shadow: 0 4px 16px rgb(0 0 0 / 5%);
 }
 
-:root[data-theme-mode="light"]
-  .agent-chat__input:has(.agent-chat__composer-combobox > :is(textarea, input):focus) {
+:root[data-theme-mode="light"] .agent-chat__input:has(.agent-chat__composer-combobox:focus-within) {
   border-color: transparent;
   box-shadow:
     0 0 0 1px rgb(0 0 0 / 8%),
@@ -301,10 +300,7 @@
    state; this block stays after the dictation rules so it wins their ties. */
 :root .agent-chat__input[data-incognito="true"],
 :root .agent-chat__input--dictating[data-incognito="true"]:focus-within,
-:root
-  .agent-chat__input[data-incognito="true"]:has(
-    .agent-chat__composer-combobox > :is(textarea, input):focus
-  ) {
+:root .agent-chat__input[data-incognito="true"]:has(.agent-chat__composer-combobox:focus-within) {
   border-style: dashed;
   /* Same edge as the /new Incognito composer, so sending keeps the frame. */
   border-color: color-mix(in srgb, var(--text-strong) 22%, transparent);
@@ -359,7 +355,7 @@
 
 @media (forced-colors: active) {
   /* Forced colors drop the box shadows and border shift that mark focus above. */
-  .agent-chat__input:has(.agent-chat__composer-combobox > :is(textarea, input):focus-visible) {
+  .agent-chat__input:has(.agent-chat__composer-combobox :focus-visible) {
     outline: 2px solid Highlight;
     outline-offset: 2px;
   }
@@ -411,6 +407,18 @@
   font-size: var(--chat-composer-editor-size);
   line-height: var(--chat-composer-editor-line);
   outline: none;
+}
+
+/* The draft is reading text, not chrome: keep macOS stem darkening so it
+   matches the sent message (`.chat-text`). The app-wide `antialiased`
+   (base.css body) thins light faces; buttons and labels keep it. The hint and
+   prediction overlays sit on the same line, so they match the draft. */
+.agent-chat__composer-combobox > textarea,
+.agent-chat__composer-combobox > input,
+.agent-chat__composer-placeholder,
+.agent-chat__composer-prediction {
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
 }
 
 /* Enter before the session is ready keeps the draft, dimmed, until it sends. */
@@ -501,7 +509,9 @@
   pointer-events: none;
 }
 
-.agent-chat__composer-combobox > :placeholder-shown ~ .agent-chat__composer-placeholder {
+.agent-chat__composer-combobox
+  > :placeholder-shown:not([hidden])
+  ~ .agent-chat__composer-placeholder {
   display: block;
 }
 
@@ -795,14 +805,6 @@
   );
 }
 
-.agent-chat__input .agent-chat__attach-menu .agent-chat__input-btn.agent-chat__input-btn--attach {
-  width: var(--chat-composer-send-size);
-  min-width: var(--chat-composer-send-size);
-  height: var(--chat-composer-send-size);
-  padding: calc((var(--chat-composer-send-size) - var(--chat-composer-primary-surface-size)) / 2);
-  background-clip: content-box;
-}
-
 /* Icon-only triggers center the glyph, not the generic flex-growing text label. */
 .agent-chat__input-btn--attach > .oc-menu-item__label,
 .chat-talk-input-picker__trigger > .oc-menu-item__label {
@@ -1060,6 +1062,7 @@
 }
 
 /* Keep the painted primary surface independent of the target, including hover. */
+.agent-chat__input .agent-chat__attach-menu .agent-chat__input-btn.agent-chat__input-btn--attach,
 .agent-chat__input.agent-chat__input--chat
   :is(.chat-mobile-primary-action, .chat-desktop-primary-action)
   .chat-send-btn,
@@ -1172,7 +1175,9 @@
     align-self: stretch;
   }
 
-  .agent-chat__composer-combobox > :is(textarea, input, .agent-chat__composer-placeholder) {
+  /* .cm-editor is the rich mention editor, mounted beside its hidden textarea. */
+  .agent-chat__composer-combobox
+    > :is(textarea, input, .agent-chat__composer-placeholder, .cm-editor) {
     flex: 1 1 auto;
     padding-top: 10px;
     padding-bottom: 10px;
@@ -1223,7 +1228,7 @@
     background: var(--chat-composer-surface);
   }
 
-  .agent-chat__composer-combobox > :is(textarea, input) {
+  .agent-chat__composer-combobox > :is(textarea, input, .cm-editor) {
     min-height: 48px;
     max-height: 56px;
     overflow-y: auto;
@@ -1404,7 +1409,7 @@
 
   .agent-chat__input--mobile-toolbar
     .agent-chat__composer-combobox
-    > :is(textarea, input, .agent-chat__composer-placeholder) {
+    > :is(textarea, input, .agent-chat__composer-placeholder, .cm-editor) {
     padding-block: var(--chat-composer-editor-inset-block);
   }
 
@@ -1525,7 +1530,7 @@
 
   .agent-chat__input
     .agent-chat__composer-combobox
-    > :is(textarea, input, .agent-chat__composer-placeholder) {
+    > :is(textarea, input, .agent-chat__composer-placeholder, .cm-editor) {
     min-height: calc(var(--chat-composer-editor-line) + 4px);
     max-height: calc(var(--chat-composer-editor-line) + 4px);
     padding-block: 2px;

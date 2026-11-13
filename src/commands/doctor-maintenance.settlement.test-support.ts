@@ -9,6 +9,7 @@ import type {
   revalidateManagedGatewayServiceAfterUpdate,
 } from "../cli/update-cli/update-command-service-maintenance.js";
 import type { GatewayService, readGatewayServiceState } from "../daemon/service.js";
+import * as bootReader from "../infra/update-managed-service-handoff-boot.js";
 import type { recordUpdateRunStep, finishUpdateRun } from "../infra/update-run-ledger.js";
 import { resolveCommandProcessSignal, retainCommandProcessCleanup } from "../process/exec-spawn.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -100,6 +101,13 @@ vi.mock("../infra/update-run-ledger.js", () => ({
 vi.mock("../infra/update-run-activity.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/update-run-activity.js")>()),
   inspectUpdateRepairDriverAdmission: boundary.admission,
+}));
+vi.mock("../infra/update-managed-service-handoff-boot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/update-managed-service-handoff-boot.js")>()),
+  createManagedHandoffBootIdentityReader: () => () => ({
+    platform: "darwin",
+    identity: "01234567-89ab-cdef-0123-456789abcdef",
+  }),
 }));
 vi.mock("../utils/sleep.js", () => ({ sleep: boundary.sleep }));
 vi.mock("node:timers/promises", async (importOriginal) => ({
@@ -207,6 +215,10 @@ const nativeFunctions = [
 let stopped: PreManagedServiceStop;
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.spyOn(bootReader, "createManagedHandoffBootIdentityReader").mockReturnValue(() => ({
+    platform: "linux",
+    identity: "01234567-89ab-cdef-0123-456789abcdef",
+  }));
   for (const native of nativeFunctions) {
     vi.mocked(native).mockImplementation(boundary.native);
   }

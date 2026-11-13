@@ -36,10 +36,10 @@ type EnglishCatalog = TranslationMap & {
   pluginsPage: TranslationMap & Record<"installed" | "official" | "install", string>;
   mcpApp: TranslationMap;
   linkReader: TranslationMap;
+  openclawId: TranslationMap;
   agentTools: TranslationMap;
   githubPublication: TranslationMap & Record<"newAction" | "capacity", string>;
-  githubConnections: TranslationMap &
-    Record<"title" | "mine" | "system" | "forMe" | "forSystem", string>;
+  githubConnections: TranslationMap & Record<"title" | "mine" | "system", string>;
   board: TranslationMap & { announcement: TranslationMap; widget: TranslationMap };
   browser: TranslationMap & { errors: TranslationMap; annotatePrompt: TranslationMap };
   pluginUi: TranslationMap & { surface: TranslationMap };
@@ -377,6 +377,8 @@ const startupEnglish = {
     dashboard: "Dashboard",
   },
   common: {
+    reportBug: "Report a bug",
+    suggestFeature: "Suggest a feature",
     showDetails: "Show details",
     uploadsDisabled: "File and image uploads are disabled.",
     ok: "OK",
@@ -465,6 +467,7 @@ const startupEnglish = {
     colorMode: "Color mode",
     colorModeOption: "Color mode: {mode}",
     search: "Search",
+    clearSearch: "Clear search",
     pickerNoMatches: "No matches",
     save: "Save",
     saving: "Saving…",
@@ -949,20 +952,14 @@ const startupEnglish = {
     stop: {},
     profile: {},
     title: "Browser",
-    open: "Open",
-    openPanel: "Open browser panel",
     moreActions: "More actions",
     copyUrl: "Copy URL",
-    openNewTab: "Open in new tab",
-    openWithinOpenClaw: "Open in OpenClaw",
     toggle: "Toggle browser panel",
     close: {},
     resize: {},
     newTab: "New tab",
     closeTab: "Close tab",
     untitledTab: {},
-    tweetPost: "Post on X",
-    openPost: "Open post",
     back: {},
     forward: {},
     reload: {},
@@ -1161,12 +1158,14 @@ const startupEnglish = {
     saveErrorTitle: "Couldn’t save this setting. Try again.",
     saveFailed: "The feature setting could not be saved.",
     decisionAssistance: {},
+    usageRankedToolIndex: {},
     codeMode: {},
 
     swarm: {},
     toolSearch: {},
 
     hostDesktop: {},
+    openclawId: {},
     workerDesktop: {},
   },
   aboutPage: {
@@ -1250,9 +1249,7 @@ const startupEnglish = {
   githubConnections: {
     title: "GitHub accounts",
     mine: "My GitHub",
-    system: "System GitHub",
-    forMe: "For me",
-    forSystem: "For the system",
+    system: "Shared agent account",
   },
   profilePage: {
     personalInstructions: {
@@ -1329,6 +1326,47 @@ const startupEnglish = {
     suspending: "Suspending…",
     suspended: "Suspended",
     retryNow: "Retry now",
+    workspace: {
+      header: "OpenClaw",
+      tryAgain: "Try again",
+      reloadAction: "Reload",
+      connecting: {
+        title: "Connecting to OpenClaw",
+        description: "Your workspace opens as soon as the Gateway answers.",
+      },
+      starting: {
+        title: "OpenClaw is starting",
+        description: "Hang on while the Gateway gets ready.",
+      },
+      restarting: {
+        title: "OpenClaw is restarting",
+        description: "Back in a moment. Your drafts are safe.",
+      },
+      reconnecting: {
+        title: "Still connecting",
+        description: "No answer from the Gateway yet. We’ll keep trying.",
+      },
+      pausing: {
+        title: "OpenClaw is pausing",
+        description: "Finishing what it was doing first.",
+      },
+      paused: {
+        title: "OpenClaw is paused",
+        description: "Your workspace opens when it resumes.",
+      },
+      restoring: {
+        title: "Welcome back",
+        description: "Loading your conversations.",
+      },
+      offline: {
+        title: "Couldn’t reach the Gateway",
+        description: "Check that it’s running, then try again.",
+      },
+      reload: {
+        title: "OpenClaw was updated",
+        description: "Reload to get the latest version.",
+      },
+    },
     queued: "{count} queued",
     offlineChangesDiscarded: "Offline changes discarded: {count}",
     offlineChangesReloadBlocked:
@@ -1508,7 +1546,6 @@ const startupEnglish = {
       billingProblem: "{provider} reports a billing problem",
       openModels: "Open Models",
       failedRepeatCount: "{count} times",
-      failedHelp: "Automatic recovery has stopped. Check any completed work before trying again.",
       tryAgain: "Try again",
       continuePrompt:
         "Continue from where you stopped. Check which actions already completed before retrying anything.",
@@ -1645,7 +1682,7 @@ const startupEnglish = {
     codeBlock: {},
     workspaceConflict: {},
     compaction: {
-      savedTokens: "saved {count} tokens",
+      savedTokensWithPercent: "saved {count} tokens ({percent}%)",
     },
     sessionReset: {
       label: "Session reset",
@@ -1884,6 +1921,7 @@ const startupEnglish = {
     },
     permissions: {},
     toolCards: {
+      tool: "Tool",
       activity: {},
       review: {},
       verbs: {},
@@ -1935,6 +1973,8 @@ const startupEnglish = {
     title: "Link reader",
     urlPlaceholder: "Supported link URL",
   },
+
+  openclawId: {},
 } satisfies TranslationMap;
 
 export const en: typeof startupEnglish & EnglishCatalog = startupEnglish;

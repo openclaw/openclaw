@@ -777,7 +777,7 @@
   padding-block-start: var(--overlay-modal-padding);
 }
 
-.plugins-consent__header > .oc-dialog__close {
+.plugins-consent__header .oc-dialog__close {
   align-self: start;
   margin-block-start: calc(12px - var(--overlay-modal-padding));
 }

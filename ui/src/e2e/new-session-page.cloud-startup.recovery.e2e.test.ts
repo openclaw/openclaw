@@ -118,7 +118,7 @@ suite.define(() => {
       const alert = page.getByRole("alert").filter({ hasText: "Couldn’t start this session" });
       await alert.waitFor({ state: "visible" });
       await alert.locator("summary").click();
-      const details = alert.locator(".chat-error__diagnostic");
+      const details = alert.locator(".lazy-view-error__detail");
       await details.waitFor({ state: "visible" });
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await pollDisabled(composer).toBe(false);

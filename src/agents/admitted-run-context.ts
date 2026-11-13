@@ -183,7 +183,7 @@ export function assertOperatorAccessProgramAllowed(
   }
   assertAdmittedRunOperatorAuthority(authority);
   authority.assertCurrent();
-  if (!isOperatorAccessProgramAllowed(authority.rolePolicy, program)) {
+  if (!isOperatorAccessProgramAllowed(authority, program)) {
     throw new Error(
       "Your operator role cannot use this Access level. Choose Standard or ask a gateway administrator to grant this Access level to your role.",
     );

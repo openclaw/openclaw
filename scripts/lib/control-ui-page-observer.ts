@@ -17,7 +17,14 @@ export type ControlUiPageObservation = {
     at: number;
     value: number;
     hadRecentInput: boolean;
-    nodes: Array<{ tag: string; classes: string; before: number[]; after: number[] }>;
+    nodes: Array<{
+      tag: string;
+      classes: string;
+      rowKey: string | null;
+      ancestors: string[];
+      before: number[];
+      after: number[];
+    }>;
   }>;
   elementsBefore: number;
   elementsAfter: number;
@@ -73,13 +80,46 @@ function installPageObserverInBrowser() {
   const longTasksSupported = supported.includes("longtask");
   const layoutShiftsSupported = supported.includes("layout-shift");
   const tasks: PerformanceEntry[] = [];
-  const shifts: Shift[] = [];
+  const shifts: Array<{
+    startTime: number;
+    value: number;
+    hadRecentInput: boolean;
+    nodes: ControlUiPageObservation["layoutShiftSources"][number]["nodes"];
+  }> = [];
   const taskObserver = longTasksSupported
     ? new PerformanceObserver((list) => tasks.push(...list.getEntries()))
     : undefined;
   const collectShifts = (entries: PerformanceEntry[]) => {
     // The Layout Instability entry contract supplies value and hadRecentInput.
-    shifts.push(...(entries as Shift[]));
+    // Capture identity at delivery: virtual rows may retire before the report is read.
+    for (const shift of entries as Shift[]) {
+      shifts.push({
+        startTime: shift.startTime,
+        value: shift.value,
+        hadRecentInput: shift.hadRecentInput,
+        nodes: shift.sources.map(({ node, previousRect: before, currentRect: after }) => {
+          const element = node instanceof Element ? node : node?.parentElement;
+          const ancestors: string[] = [];
+          for (
+            let parent = element;
+            parent && ancestors.length < 6;
+            parent = parent.parentElement
+          ) {
+            ancestors.push(`${parent.localName}.${[...parent.classList].join(".")}`);
+          }
+          return {
+            tag: node?.nodeName ?? "removed",
+            classes: node instanceof Element ? (node.getAttribute("class") ?? "") : "",
+            rowKey:
+              element?.closest("[data-virtual-row-key]")?.getAttribute("data-virtual-row-key") ??
+              null,
+            ancestors,
+            before: [before.x, before.y, before.width, before.height],
+            after: [after.x, after.y, after.width, after.height],
+          };
+        }),
+      });
+    }
   };
   const shiftObserver = layoutShiftsSupported
     ? new PerformanceObserver((list) => collectShifts(list.getEntries()))
@@ -112,7 +152,7 @@ function installPageObserverInBrowser() {
       const end = endedAt ?? performance.now();
       tasks.push(...(taskObserver?.takeRecords() ?? []));
       collectShifts(shiftObserver?.takeRecords() ?? []);
-      const inInterval = (entry: PerformanceEntry) =>
+      const inInterval = (entry: { startTime: number }) =>
         entry.startTime >= start && entry.startTime < end;
       const observedTasks = tasks.filter(inInterval);
       const observedShifts = shifts.filter(inInterval);
@@ -183,12 +223,7 @@ function installPageObserverInBrowser() {
           at: shift.startTime - start,
           value: shift.value,
           hadRecentInput: shift.hadRecentInput,
-          nodes: shift.sources.map(({ node, previousRect: before, currentRect: after }) => ({
-            tag: node?.nodeName ?? "removed",
-            classes: node instanceof Element ? (node.getAttribute("class") ?? "") : "",
-            before: [before.x, before.y, before.width, before.height],
-            after: [after.x, after.y, after.width, after.height],
-          })),
+          nodes: shift.nodes,
         })),
         elementsBefore,
         elementsAfter: document.querySelectorAll("*").length,

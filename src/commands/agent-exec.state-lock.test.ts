@@ -47,9 +47,7 @@ const success = () => ({ payloads: [{ text: "done" }], meta: { durationMs: 1 } }
 function stateFixture() {
   const stateDir = tempDirs.make("openclaw-agent-exec-lock-");
   const lockDir = path.join(stateDir, "gateway-locks");
-  vi.spyOn(gatewayLockProcessModule, "readGatewayLockProcessStartTime").mockImplementation(
-    () => 123_456,
-  );
+  vi.spyOn(gatewayLockProcessModule, "readGatewayLockProcessStartTime").mockReturnValue(123_456);
   const lockOptions = {
     allowInTests: true,
     env: {
@@ -262,7 +260,6 @@ it("closes temporary databases before removal and preserves independent handles"
     expect(result.exitCode).toBe(0);
     expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("cleanup failed"));
     expect(process.env.OPENCLAW_STATE_DIR).toBe(previousStateDir);
-    expect(runStateDir).toBeDefined();
     await expect(fs.stat(runStateDir!)).rejects.toMatchObject({ code: "ENOENT" });
     expect(independent.db.prepare("SELECT 1 AS value").get()).toEqual({ value: 1 });
   } finally {

@@ -182,6 +182,8 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
     "Experimental agent-default flags. Keep these off unless you are intentionally testing a preview surface.",
   "agents.defaults.experimental.decisionAssistance":
     "Global opt-in for experimental assistance from the owning agent’s configured Decision model (default: false; requires explicit true). The effective decisionModel can be inherited from global defaults or selected per agent; an empty per-agent value disables assistance. Supported uses may send selected data to that provider and incur provider charges. See the Decision assistance documentation for supported uses, setup, and data handling. This setting does not gate explicit decision_evaluate calls, select providers, or grant actions.",
+  "agents.defaults.experimental.usageRankedToolIndex":
+    "Opt in to usage-ranked Code Mode and Tool Search prompt indexes in the embedded OpenClaw runtime (default: false). Stores only tool IDs, decayed scores, and timestamps in operator-owned agent storage for 90 days; excludes incognito sessions. Rankings stay frozen until a prompt-prefix boundary. Does not change tool permissions, MCP directories, or Codex. Inspect, import past usage, or reset with openclaw tools usage.",
   "agents.defaults.experimental.localModelLean":
     "Advanced troubleshooting override that restricts optional tools such as browser, automations, and message. Off by default; supported local runtimes use automatic Tool Search without this restriction. Explicit tool allows and required delivery tools are preserved.",
   "agents.defaults.startupContext":

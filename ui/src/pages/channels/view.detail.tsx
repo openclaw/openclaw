@@ -2,7 +2,7 @@ import { asNullableRecord, readStringField } from "@openclaw/normalization-core/
 import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import { ChannelIcon } from "../../components/solid/channel-icon.tsx";
-import { Icon } from "../../components/solid/icon.tsx";
+import { IconButton } from "../../components/solid/icon-button.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
 import { channelSnapshotEntryIsActive, resolveChannelAccounts } from "../../lib/channels/index.ts";
@@ -287,14 +287,14 @@ export function renderChannelDetail(params: {
             />
             {params.label}
           </h2>
-          <button
-            type="button"
+          <IconButton
+            size={28}
             class="oc-dialog__close"
-            aria-label={t("common.close")}
+            icon="x"
+            label={t("common.close")}
+            tooltip={false}
             onClick={() => params.onClose()}
-          >
-            <Icon name="x" />
-          </button>
+          />
           <ChannelDetailStatus channelId={params.channelId} props={params.props} />
         </div>
         <div class="oc-dialog__body channels-detail__body">
@@ -316,7 +316,7 @@ export function renderChannelDetail(params: {
           </Show>
         </div>
         <ChannelConfigFeedback channelId={params.channelId} props={params.props} />
-        <openclaw-modal-actions class="channels-detail__footer">
+        <openclaw-modal-actions class="oc-dialog__footer channels-detail__footer">
           <ChannelConfigStatus channelId={params.channelId} props={params.props} />
           <a
             class="btn btn--sm"

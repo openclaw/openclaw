@@ -30,9 +30,8 @@ export function createSqliteSchemaAssetsPlugin(
       ) {
         return undefined;
       }
-      const reference = options.workerChunks
-        ? /readFileSync\(\s*new URL\(\s*["']\.\/(sqlite-[\w-]+-catalogs\.json)["']\s*,\s*import\.meta\.url\s*\)\s*,\s*["']utf8["']\s*\)/gu
-        : /new URL\(\s*["']\.\/(sqlite-[\w-]+-catalogs\.json)["']\s*,\s*import\.meta\.url\s*\)/gu;
+      const reference =
+        /createRequire\(\s*import\.meta\.url\s*\)\(\s*["']\.\/(sqlite-[\w-]+-catalogs\.json)["']\s*\)/gu;
       const transformed = code.replace(reference, (_reference, name: string) => {
         const source = path.join(directory, name);
         recordInput?.(source);
@@ -45,15 +44,13 @@ export function createSqliteSchemaAssetsPlugin(
             : `assets/sqlite-schema/${name}`,
           source: options.workerChunks ? `export default ${JSON.stringify(json)};\n` : json,
         });
-        if (options.workerChunks) {
-          return `createSqliteCatalogRequire(import.meta.url)(sqliteCatalogFileURLToPath(import.meta.ROLLUP_FILE_URL_${asset})).default`;
-        }
-        return `new URL(import.meta.ROLLUP_FILE_URL_${asset})`;
+        const load = `createRequire(import.meta.url)(sqliteCatalogFileURLToPath(import.meta.ROLLUP_FILE_URL_${asset}))`;
+        return options.workerChunks ? `JSON.parse(${load}.default)` : load;
       });
       return {
         code:
-          options.workerChunks && transformed !== code
-            ? `import { createRequire as createSqliteCatalogRequire } from "node:module";\nimport { fileURLToPath as sqliteCatalogFileURLToPath } from "node:url";\n${transformed}`
+          transformed !== code
+            ? `import { fileURLToPath as sqliteCatalogFileURLToPath } from "node:url";\n${transformed}`
             : transformed,
         map: null,
       };

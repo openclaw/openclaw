@@ -150,6 +150,20 @@ export function applyCommonResponsesParams<TApi extends Api>(
   }
 }
 
+type ResponsesClient = {
+  responses: {
+    create(
+      params: ResponseCreateParamsStreaming,
+      options: ResponsesRequestOptions,
+    ): {
+      withResponse(): Promise<{
+        data: AsyncIterable<ResponseStreamEvent>;
+        response: Response;
+      }>;
+    };
+  };
+};
+
 export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
   stream: AssistantMessageEventStream;
   model: Model<TApi>;
@@ -165,19 +179,7 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
     > &
     FirstStreamEventInternalOptions;
   resolveRequestModel?: (model: Model<TApi>) => Model<TApi>;
-  createClient: (model: Model<TApi>) => {
-    responses: {
-      create(
-        params: ResponseCreateParamsStreaming,
-        options: ResponsesRequestOptions,
-      ): {
-        withResponse(): Promise<{
-          data: AsyncIterable<ResponseStreamEvent>;
-          response: Response;
-        }>;
-      };
-    };
-  };
+  createClient: (model: Model<TApi>) => ResponsesClient | Promise<ResponsesClient>;
   buildParams: (
     model: Model<TApi>,
     replayMode: OpenAIResponsesReplayMode,
@@ -189,7 +191,7 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
   let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
   try {
     const model = params.resolveRequestModel?.(params.model) ?? params.model;
-    const client = params.createClient(model);
+    const client = await params.createClient(model);
     const encodeBody = prepareModelRequestBody(options);
     const buildRequest = async (replayMode: OpenAIResponsesReplayMode) => {
       let request = params.buildParams(model, replayMode);

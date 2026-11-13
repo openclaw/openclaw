@@ -19,13 +19,18 @@ const controlUiBootModules = JSON.parse(
   entries: Record<"shared" | "new" | "chat", string[]>;
 };
 
-const chatVisibleModules = new Set([
+const chatPresentationModules = new Set([
+  "ui/src/pages/chat/components/chat-thread-view.tsx",
+  "ui/src/pages/chat/components/chat-transcript-layout-solid.tsx",
+  "ui/src/pages/chat/components/chat-message-group-view.tsx",
+  "ui/src/pages/chat/components/chat-divider.tsx",
+  "ui/src/pages/chat/components/chat-composer-dom.ts",
+  "ui/src/components/markdown-blocks-owner.ts",
+  "ui/src/lib/chat/message-visibility.ts",
   "ui/src/pages/chat/components/chat-tool-card-chrome.tsx",
   "ui/src/pages/chat/components/chat-tool-outcome-summary.solid.tsx",
   "ui/src/pages/chat/components/chat-tool-render-model.ts",
   "ui/src/pages/chat/components/chat-message-bubble-tools.tsx",
-  "ui/src/pages/chat/components/chat-permission-card.tsx",
-  "ui/src/pages/chat/components/chat-tool-content.solid.tsx",
   "ui/src/pages/chat/components/chat-tool-cards.solid.tsx",
   "ui/src/pages/chat/components/chat-message-activity-operation.tsx",
   "ui/src/pages/chat/components/chat-diff-stat.solid.tsx",
@@ -34,7 +39,6 @@ const chatVisibleModules = new Set([
   "ui/src/lib/chat/tool-call-input.ts",
   "src/agents/tool-display-name.ts",
   "ui/src/i18n/locales/en-chat-details.ts",
-  "ui/src/i18n/locales/en-chat-permissions.ts",
   "ui/src/pages/chat/components/chat-details-process-row.tsx",
   "ui/src/pages/chat/components/chat-environment-content.tsx",
 ]);
@@ -88,6 +92,10 @@ export function controlUiStableChunkName(id: string): string | undefined {
   }
 
   switch (controlUiBootManifestKey(id)) {
+    case "ui/src/pages/plugins/catalog-grid.tsx":
+    case "ui/src/pages/plugins/plugin-card.tsx":
+      // Catalogs already load both; a lazy skill reader must not split their first visit.
+      return "plugin-catalog-runtime";
     case "ui/src/components/sandbox-host.ts":
     case "ui/src/lib/widget-sandbox-host.ts":
     case "ui/src/lib/reactive/window-message.ts":
@@ -156,6 +164,12 @@ export function controlUiStableChunkName(id: string): string | undefined {
       // Config search shares this helper without loading optional session UI.
       return "control-ui-boot-shared";
     case "ui/src/lib/text-diff.ts":
+    case "ui/src/pages/chat/components/chat-message-media.ts":
+    case "ui/src/pages/chat/components/chat-message-deferred.tsx":
+    case "ui/src/pages/chat/components/widget-preview-layout.ts":
+    case "ui/src/lib/chat/youtube-video.ts":
+    case "ui/src/lib/gateway-client-kind.ts":
+    // Activity uses media custody, deferred facades, and client labels, not Chat presentation.
     case "ui/src/components/session-git-diff.tsx":
     case "ui/src/lib/sessions/usage.ts":
     case "src/shared/weak-owner-map.ts":
@@ -191,11 +205,17 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/desktop/desktop-source.ts":
     case "ui/src/components/solid/panel-loading-skeleton.tsx":
     case "ui/src/components/solid/sanitized-html.tsx":
+    case "ui/src/components/solid/checkbox.tsx":
     case "ui/src/lib/session-progress-cards.ts":
     case "ui/src/pages/templates/creator-publication.ts":
+    case "src/shared/plugin-inline-view.ts":
     case "src/agents/core-tool-facts.ts":
     case "src/agents/tools/automations-tool-name.ts":
-      // These shared helpers load together in Chat without retaining its renderers.
+    case "ui/src/components/terminal/terminal-controller-lifecycle.ts":
+    case "ui/src/components/terminal/terminal-pending-actions.ts":
+    case "ui/src/components/terminal/terminal-session-storage.ts":
+    case "ui/src/components/terminal/terminal-tab-readiness.ts":
+      // Shared owners load together without retaining Chat's renderers on other routes.
       return "deferred-ui-support";
     case "ui/src/styles/panel-loading-skeleton.css":
       // Keep the inline string with its renderer so recursive Chat grouping cannot capture it.
@@ -231,7 +251,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/agent-select.tsx":
     case "ui/src/components/agent-select-registration.ts":
     case "ui/src/lib/sessions/session-placement-recovery.ts":
-    case "ui/src/components/solid/connect-command.tsx":
     case "ui/src/components/cloud-profile-icon-data.ts":
     case "ui/src/components/solid/cloud-profile-icon.tsx":
       // Creation fetches these together; keep their compression without a whole route.
@@ -253,6 +272,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/solid/menu-trigger.tsx":
     case "ui/src/components/menu-shortcut-activation.ts":
     case "ui/src/components/solid/refresh-button.tsx":
+    case "ui/src/components/solid/radio-navigation.ts":
       // Share small navigation helpers without coupling their callers to page renderers.
       return "navigation-helpers";
     case "ui/src/components/config-form.analyze.ts":
@@ -266,10 +286,11 @@ export function controlUiStableChunkName(id: string): string | undefined {
       // Lightweight shape readers must not acquire analysis, validation, or Settings copy.
       return "config-form-utils-runtime";
     case "ui/src/components/solid/settings-ui.tsx":
+    case "ui/src/components/solid/switch.tsx":
     case "ui/src/pages/config/settings-section-header.tsx":
     case "ui/src/lib/reactive/live-checked.ts":
     case "ui/src/lib/reactive/observe-state.ts":
-      // Shared controls stay independent of route chrome and optional settings editors.
+      // Keep the switch with its settings consumers and live binding: no cyclic request.
       return "settings-controls-runtime";
     case "ui/src/lib/gateway-page-binding.ts":
     case "ui/src/lib/reactive/gateway-page.ts":
@@ -379,6 +400,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/pages/chat/components/chat-composer-skill-menu.tsx":
     case "ui/src/pages/chat/components/chat-composer-slash-menu-options.tsx":
     case "ui/src/pages/chat/components/chat-composer-slash-menu-dom.tsx":
+    case "ui/src/pages/chat/components/chat-composer-slash-menu-values.ts":
     case "ui/src/pages/chat/components/chat-composer-slash-menu.tsx":
       // Share interaction-only rows without four separate preload-map entries.
       return "composer-invocation-menus";
@@ -479,6 +501,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/markdown-tables.ts":
     case "ui/src/components/markdown-text-replacements.ts":
     case "ui/src/components/markdown-text.ts":
+    case "ui/src/components/markdown-windows-paths.ts":
     case "ui/src/lib/markdown-content.ts":
     case "ui/src/i18n/locales/en-chat-media.ts":
     case "ui/src/i18n/locales/en-code-blocks.ts":
@@ -491,7 +514,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/markdown-tokens.ts":
       return "markdown-streaming-runtime";
     case "ui/src/styles/session-panel-rail.css":
-      // Keep normal rail CSS in Chat; other panels import its neutral inline text.
+      // Inline consumers keep their text; the raw sheet shares the cross-route style group.
       return /[?&]inline(?:[=&]|$)/u.test(id) ? "session-panel-rail-inline" : undefined;
     case "ui/src/pages/chat/session-snapshot-database.ts":
       // Warm boot reads while the Gateway connects; the chat boot group made it wait for the whole route.
@@ -597,9 +620,6 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
             ...(["shared", "new", "chat"] as const).map((route, index) => {
               const modules = new Set(controlUiBootModules[route]);
               if (route === "shared") {
-                // Plugin activation validates versions on every route without
-                // evaluating Chat or adding a separate contract request.
-                modules.add("src/shared/plugin-inline-view.ts");
                 // Plugin contributions can initialize after the New Session boot capture.
                 modules.add("ui/src/plugins/control-ui-actions.ts");
                 // Both routes read deferred resources; share their existing boot partition.
@@ -613,11 +633,20 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 modules.add("ui/src/pages/new-session/preferences.ts");
                 // Opened person cards share labels with New Session, not its composer chunk.
                 modules.add("ui/src/lib/platform-label.ts");
+                // Keep existing cross-route config writers in their shared boot chunk.
+                modules.add("ui/src/lib/config/config-mutation-runner.ts");
+                modules.add("ui/src/lib/plugins/index.ts");
+                // Shared roster and dialog controls copy without loading Chat.
+                modules.add("ui/src/lib/clipboard.ts");
+                modules.add("ui/src/components/copy-button-state.ts");
+                modules.add("ui/src/components/solid/copy-button.tsx");
                 // Cross-route labels must not pull the New Session or Chat renderers.
                 modules.add("ui/src/i18n/locales/en-chat-welcome.ts");
                 modules.add("ui/src/i18n/locales/en-session-people.ts");
                 // Placement and delivery share retries without importing either route's bundle.
                 modules.add("ui/src/pages/chat/chat-outbox-retry.ts");
+                // Chat sends and New Session creation quote selections identically.
+                modules.add("ui/src/lib/chat/chat-selection-quote.ts");
                 // Creation still uses the catalog; Chat constructs its capability owner on demand.
                 modules.add("ui/src/pages/chat/composer-capability-catalog.ts");
                 modules.add("ui/src/lib/config/mcp-servers.ts");
@@ -630,7 +659,7 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 test: (id: string) => modules.has(controlUiBootManifestKey(id)),
                 // Shared dependencies must be assigned first, or a route group pulls
                 // them (and therefore other routes) into its eagerly imported chunk.
-                priority: 8 - index,
+                priority: route === "chat" ? 5 : 8 - index,
                 includeDependenciesRecursively: true,
                 // Keep each measured boot partition together instead of queueing
                 // several fragments over HTTP/1.1. Shared and route-only code
@@ -645,14 +674,20 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
               );
               if (route === "shared") {
                 styles.add("ui/src/components/solid/text-overflow.css");
+                // Copy controls also serve dialogs outside the Chat route.
+                styles.add("ui/src/styles/copy-button.css");
                 // Document styles also serve Agents without loading Chat's visible renderers.
                 styles.add("ui/src/styles/sidebar-markdown.css");
                 styles.add("ui/src/styles/mcp-app-extensions.css");
+                // Terminal renders this rail immediately without needing Chat's stylesheet.
+                styles.add("ui/src/styles/session-panel-rail.css");
               }
               if (route === "chat") {
                 styles.delete("ui/src/components/solid/text-overflow.css");
+                styles.delete("ui/src/styles/copy-button.css");
                 styles.delete("ui/src/styles/sidebar-markdown.css");
                 styles.delete("ui/src/styles/mcp-app-extensions.css");
+                styles.delete("ui/src/styles/session-panel-rail.css");
                 // These optional views share the route's preloaded stylesheet.
                 styles.add("ui/src/pages/chat/components/chat-pane-mobile-header.css");
                 styles.add("ui/src/pages/chat/components/chat-pane-mobile-composition.css");
@@ -665,12 +700,16 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 test: (id: string) =>
                   !/[?&]inline(?:[=&]|$)/u.test(id) &&
                   (styles.has(controlUiBootManifestKey(id)) ||
-                    (route === "chat" && chatVisibleModules.has(controlUiBootManifestKey(id))) ||
+                    (route === "chat" &&
+                      chatPresentationModules.has(controlUiBootManifestKey(id))) ||
                     (route === "shared" &&
                       controlUiBootManifestKey(id) === "ui/src/components/solid/text-overflow.ts")),
                 // One stylesheet per measured route set, without per-page JS facades.
                 // Keep it separate from core CSS to preserve its existing size ceiling.
-                priority: 9,
+                // Custodian shares presentation, not Chat's pane and composer.
+                // Integer priorities keep shared/New Session owners ahead of it.
+                priority: route === "chat" ? 6 : 9,
+                includeDependenciesRecursively: route === "chat",
               };
             }),
           ]),

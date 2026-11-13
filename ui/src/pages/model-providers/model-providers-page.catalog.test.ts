@@ -113,14 +113,14 @@ describe("Models page catalog publication", () => {
     const page = appendPage(context);
     await waitForProviders(page, config);
     const row = () => page.querySelector('[data-provider-id="workstation"]');
-    await waitForSolid(() => {
-      expect(row()?.textContent).toContain("Research Lab");
-      expect(row()?.querySelector(".provider-brand-icon svg")).not.toBeNull();
-    });
+    await waitForSolid(() => expect(row()?.textContent).toContain("Research Lab"));
+    await vi.dynamicImportSettled();
+    await waitForSolid(() =>
+      expect(row()?.querySelector(".provider-brand-icon svg")).not.toBeNull(),
+    );
     expect(displayedCatalog(page)?.models).toEqual([]);
     expect(row()?.textContent).not.toContain("Raw config");
     const initialGeometry = row()?.querySelector(".provider-brand-icon svg")?.innerHTML;
-
     providerName = "Studio";
     iconName = "cloud";
     publishEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
@@ -418,6 +418,55 @@ describe("Models page catalog publication", () => {
     expect(page.view.props.catalogDiscoveryError).toBeNull();
   });
 
+  it("clears a prior catalog warning when background publication succeeds", async () => {
+    const { context, request, discover, readPublished, publishEvent, catalogRequest } =
+      createCatalogHarness(preparedCatalog);
+    const failed = { ...preparedCatalog, refreshFailed: true };
+    readPublished.mockReturnValue(failed);
+    discover.mockResolvedValue(failed);
+    const page = appendPage(context);
+    await waitForProviders(page, savedModelConfig);
+    await retryCatalog(page);
+    const warning = () => page.querySelector('.model-providers__catalog-progress[role="alert"]');
+    await waitForSolid(() => expect(warning()).not.toBeNull());
+
+    const publication = deferred<ModelCatalogResult>();
+    let publicationStarted = false;
+    request.mockImplementation((method: string, params?: { refresh?: boolean }) => {
+      if (method === "models.list" && !params?.refresh) {
+        publicationStarted = true;
+        return publication.promise;
+      }
+      return catalogRequest(method, params);
+    });
+    publishEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
+    await waitForSolid(() => expect(publicationStarted).toBe(true));
+    await drainPageUpdates(page);
+    expect(warning()).not.toBeNull();
+
+    publication.resolve(preparedCatalog);
+    await waitForSolid(() => expect(warning()).toBeNull());
+    expect(page.view.props.catalogDiscoveryError).toBeNull();
+    expect(displayedCatalog(page)?.models).toEqual(preparedCatalog.models);
+    expect(discover).toHaveBeenCalledOnce();
+  });
+
+  it("reports a saved default as done while discovery continues in the background", async () => {
+    const { context, readPublished, runtimeConfig } = createCatalogHarness();
+    readPublished.mockReturnValue({ ...preparedCatalog, pendingProviders: ["openai"] });
+    const page = appendPage(context);
+    await waitForProviders(page, savedModelConfig);
+    const progress = () =>
+      page.querySelector('.model-providers__catalog-progress[role="status"]')?.textContent;
+    await waitForSolid(() => expect(progress()).toBe("Looking for more models in the background…"));
+
+    page.view.props.onPrimaryChange("openai/prepared-utility");
+    await waitForSolid(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+    await drainPageUpdates(page);
+
+    expect(progress()).toBe("Saved. Looking for more models in the background…");
+  });
+
   it.each(["utility"] as const)(
     "Models page %s picker opens without a request and preserves saved choices as publication completes",
     async (role) => {
@@ -509,7 +558,6 @@ describe("Models page catalog publication", () => {
         page.querySelector('[role="option"][data-value="openai/published-later"]'),
       ).not.toBeNull();
       const utility = modelPicker(page, "utility");
-      utility.querySelector<HTMLButtonElement>(".header-search__toggle")!.click();
       await utility.updateComplete;
       const search = utility.querySelector<HTMLInputElement>('input[type="search"]');
       expect(search).not.toBeNull();

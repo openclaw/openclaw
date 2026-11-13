@@ -91,7 +91,9 @@ export function createAgentSchemaInspectionWorker() {
     const closed = createDeferredCore();
     const started: ReaderProcess = {
       child,
-      closed: closed.promise,
+      closed: closed.promise.then(async () => {
+        started.runtimeFailure = await runtimeFailure().catch(toStringifiedError);
+      }),
       retired: false,
       closeBudgetMs: timeoutMs,
     };
@@ -100,7 +102,6 @@ export function createAgentSchemaInspectionWorker() {
       retireReader(started);
     });
     child.once("close", () => {
-      started.runtimeFailure = runtimeFailure();
       started.retired = true;
       closed.resolve();
     });
@@ -337,7 +338,9 @@ export function createAgentSchemaInspectionWorker() {
             );
           }
         };
-        const onClose = (code: number | null, exitSignal: NodeJS.Signals | null) => {
+        const finishClose = async (code: number | null, exitSignal: NodeJS.Signals | null) => {
+          clearTimeout(timeout);
+          await active.closed;
           response.reject(
             signal?.aborted
               ? toStringifiedError(signal.reason)
@@ -355,6 +358,9 @@ export function createAgentSchemaInspectionWorker() {
                         `Agent schema inspection exited ${code} without a completed result`,
                       ))),
           );
+        };
+        const onClose = (code: number | null, exitSignal: NodeJS.Signals | null) => {
+          void finishClose(code, exitSignal);
         };
         const timeout = isSqliteInspectionDeadlineOwnedByCaller()
           ? undefined

@@ -14,13 +14,13 @@ import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { admitOpenClawMaintenanceLiveAuthorityReads } from "../state/openclaw-state-maintenance-context.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import * as physicalStore from "./database-engine/physical-store.js";
 import * as durability from "./directory-durability.js";
 import { listDirectoryTreeStrict } from "./directory-walk.js";
 import * as diskSpace from "./disk-space.js";
 import * as fileDescriptor from "./file-descriptor.js";
 import * as sqliteIntegrity from "./sqlite-integrity.js";
 import * as readOnlyLocation from "./sqlite-readonly-location.js";
-import * as sqliteSource from "./sqlite-snapshot-source.js";
 import * as sqliteSnapshot from "./sqlite-snapshot.js";
 import * as inspection from "./update-candidate-state.inspection.js";
 import { discoverUpdateStateSchemaInspectionInProcess } from "./update-candidate-state.js";
@@ -232,13 +232,11 @@ it.each(["auto", "off"] as const)(
     const previous = getFsSafeNativeConfig();
     const audit = vi.spyOn(sqliteIntegrity, "assertSqliteIntegrity");
     const generations = vi.spyOn(generationReads, "readUpdateDatabaseGeneration");
-    const engineImages = vi.spyOn(sqliteSource, "prepareSqliteReadOnlyLocationSync");
     try {
       configureFsSafeNative({ mode });
       const backup = await f.capture({ stopped: true });
       expect(audit).not.toHaveBeenCalled();
       expect(generations).not.toHaveBeenCalled();
-      expect(engineImages).not.toHaveBeenCalled();
       expect(backup.databases).toHaveLength(3);
       for (const entry of backup.databases) {
         const bytes = await fs.readFile(entry.snapshotPath);
@@ -288,7 +286,6 @@ it.each([
       }
     }
     const reader = activity.startsWith("reader");
-    const engineImages = vi.spyOn(sqliteSource, "prepareSqliteReadOnlyLocationSync");
     const capture = f.capture({
       stopped: true,
       onProgress: ({ phase, path: source }) => {
@@ -309,7 +306,6 @@ it.each([
       return;
     }
     const backup = await capture;
-    expect(engineImages).toHaveBeenCalledTimes(activity === "reader-empty-wal" ? 0 : 1);
     expect(await Promise.all(files.slice(0, 2).map((file) => fs.readFile(file)))).toEqual(
       before.slice(0, 2),
     );
@@ -337,7 +333,6 @@ it.each(["original-custody", "rollback", "ordinary", "maintenance"] as const)(
       f.shared,
       "INSERT INTO payload VALUES ('checkpoint pending');",
     );
-    const parentImages = vi.spyOn(sqliteSource, "prepareSqliteReadOnlyLocationSync");
     const generations = vi.spyOn(generationReads, "readUpdateDatabaseGeneration");
     await using scope =
       mode === "ordinary" || mode === "maintenance" ? maintenanceScope() : undefined;
@@ -355,17 +350,9 @@ it.each(["original-custody", "rollback", "ordinary", "maintenance"] as const)(
           originalCaptureSourcePaths: mode === "original-custody" ? [f.shared] : undefined,
         });
     if (scope) {
-      // Parent SQLite opens require maintenance custody: even read-only opens can release locks.
-      expect(parentImages.mock.calls.map(([file]) => file)).toEqual(
-        mode === "maintenance" ? [f.shared] : [],
-      );
       expect(backup.originalCaptureSourcePaths).toBeUndefined();
     } else {
-      // Automatic capture classifies its generation image; manual originals acquire
-      // only the engine image and never perform generation work.
-      expect(parentImages.mock.calls.map(([file]) => file)).toEqual(
-        mode === "original-custody" ? [f.shared] : [],
-      );
+      // Manual originals retain bytes without promising automatic generation attribution.
       expect(generations.mock.calls.map(([file]) => file)).toEqual(
         mode === "original-custody" ? [] : [f.shared],
       );
@@ -383,6 +370,31 @@ it.each(["original-custody", "rollback", "ordinary", "maintenance"] as const)(
     }
   },
 );
+
+it("classifies maintenance-owned sources once for the backup worker", async () => {
+  const f = await fixture(true);
+  const worker = vi.spyOn(inspection, "runUpdateStateInspectionWorker");
+  await using scope = maintenanceScope();
+  await scope.run(() =>
+    createUpdateDatabaseBackup({
+      ...f.input,
+      backupRoot: path.join(f.root, "maintenance-owned"),
+      acquisition: { mode: "maintenance-owner" },
+    }),
+  );
+  const [engines] = worker.mock.calls.flatMap(([{ input }]) =>
+    input.mode === "database-backup" ? [input.sourceEngines] : [],
+  );
+  const classified = Object.keys(engines ?? {});
+  const sqlite = { engine: "sqlite" } as const;
+  const sourceEngines = Object.fromEntries(classified.map((file) => [file, sqlite]));
+  expect(engines).toEqual(sourceEngines);
+
+  // Each engine probe copies the whole source; the worker must not repeat the parent's.
+  const probes = vi.spyOn(physicalStore, "readBackupEngine");
+  await f.capture({ originalCaptureSourcePaths: classified, sourceEngines });
+  expect(probes.mock.calls.filter(([file]) => classified.includes(file))).toEqual([]);
+});
 
 it("keeps the verified digest when a snapshot is replaced before backup metadata is recorded", async () => {
   const f = await fixture();

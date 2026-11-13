@@ -227,8 +227,8 @@ describe("collectCodexRouteWarnings", () => {
       "Custom Codex app-server command bypasses OpenClaw's managed exact-version binary.",
     );
     expect(repaired.warnings.join("\n")).toContain("includes inline arguments");
-    expect(repaired.warnings.join("\n")).toContain("agents.defaults.params.temperature");
-    expect(repaired.warnings.join("\n")).toContain(
+    expect(repaired.advisories.join("\n")).toContain("agents.defaults.params.temperature");
+    expect(repaired.advisories.join("\n")).toContain(
       "agents.defaults.models.openai/gpt-5.6-sol.params.temperature",
     );
     expect(original.agents?.defaults?.models?.["openai/gpt-5.6-sol"]?.params).toHaveProperty(

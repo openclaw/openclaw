@@ -145,6 +145,7 @@ export type SelectionChange =
       id: string;
       key: string;
       agentId: string;
+      storePath: string;
       row: SelectionRow | undefined;
       /** Synchronous internal publication scope; deferred refreshes have no causal label. */
       scope?: string;

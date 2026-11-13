@@ -85,10 +85,10 @@ function ensureChatInputHistorySnapshot(state: ChatInputHistoryState): string[] 
   // Snapshot once per navigation round so incoming chat events don't shift arrow-key traversal order.
   const messages = state.chatMessages;
   const localEntries = state.chatLocalInputHistoryBySession[state.sessionKey] ?? [];
-  // Bound input recall independently from the transcript's loaded rendering depth.
-  const start = Math.max(0, messages.length - CHAT_INPUT_HISTORY_LIMIT);
+  // Assistant/tool activity must not evict the user inputs it answered.
   const candidates: Array<{ text: string; ts: number }> = [...localEntries];
-  for (let i = messages.length - 1; i >= start; i--) {
+  let transcriptInputs = 0;
+  for (let i = messages.length - 1; i >= 0 && transcriptInputs < CHAT_INPUT_HISTORY_LIMIT; i--) {
     const message = messages[i];
     if (!message || typeof message !== "object") {
       continue;
@@ -103,6 +103,7 @@ function ensureChatInputHistorySnapshot(state: ChatInputHistoryState): string[] 
       continue;
     }
     candidates.push({ text, ts: typeof entry.timestamp === "number" ? entry.timestamp : 0 });
+    transcriptInputs += 1;
   }
 
   candidates.sort((a, b) => b.ts - a.ts);

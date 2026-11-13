@@ -5,7 +5,10 @@ import { isStateDatabaseMaintenanceContention } from "../../infra/gateway-state-
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import type { PluginCohortRecoveryPair } from "../../infra/update-plugin-cohort-schema.js";
 import { UpdatePreMutationError } from "../../infra/update-pre-mutation-error.js";
-import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
+import {
+  UpdateInterruptedError,
+  UpdateRequesterRevokedError,
+} from "../../infra/update-requester-authority.js";
 import type { UpdateRunPhasePatch } from "../../infra/update-run-mutation.types.js";
 import type { UpdateRunPhase, UpdateRunStep } from "../../infra/update-run-record.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
@@ -85,7 +88,7 @@ export function createUpdateCommandExecutionGuards(
     run?.deadline?.remainingMs();
     run?.deadline?.signal.throwIfAborted();
     if (run?.interrupted) {
-      throw new UpdateRequesterRevokedError();
+      throw new UpdateInterruptedError();
     }
   };
   const assertCurrent = (phase?: "restore") => {
@@ -149,7 +152,7 @@ export function createUpdateCommandExecutionGuards(
         run?.interrupted &&
         !isMutableUpdateRecovering(run)
       ) {
-        throw new UpdateRequesterRevokedError();
+        throw new UpdateInterruptedError();
       }
     };
     assertAccepting();
