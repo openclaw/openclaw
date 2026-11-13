@@ -4,6 +4,8 @@
  * Append `team` to seed arguments for seven-agent scale (35 GiB largest agent,
  * 11.5 GiB shared state, 256 MiB other agents, 62,000 workspace files):
  * ... seed .local/crossing-team 7 1 1429 team
+ * SCHEMA_CROSSING_TEAM_SCALE scales only database padding when disk is limited;
+ * workspace files and session counts retain the same production shape.
  * Team mode recreates the additive 39→40 crossing on synthetic current schemas.
  * Set SCHEMA_CROSSING_TEMP_ROOT to a task-owned secure staging volume when the
  * fixture volume has shared ancestors; recovery backups stay beside the fixture.
@@ -163,6 +165,8 @@ if (mode === "seed") {
   }
   await closeOpenClawStateDatabaseAsync();
   if (shape === "team") {
+    const databaseScale = Number(process.env.SCHEMA_CROSSING_TEAM_SCALE ?? 1);
+    assert.ok(databaseScale > 0 && databaseScale <= 1);
     const shared = openOpenClawStateDatabase({ env: process.env });
     const sharedPath = shared.path;
     await closeOpenClawStateDatabaseAsync();
@@ -176,7 +180,9 @@ if (mode === "seed") {
         "PRAGMA auto_vacuum=INCREMENTAL; VACUUM; CREATE TABLE synthetic_payload (payload BLOB NOT NULL)",
       );
       const insert = db.prepare("INSERT INTO synthetic_payload VALUES(zeroblob(1048576))");
-      const targetMiB = index === 0 ? 11776 : index === 1 ? 35840 : 256;
+      const targetMiB = Math.ceil(
+        (index === 0 ? 11776 : index === 1 ? 35840 : 256) * databaseScale,
+      );
       db.exec("BEGIN IMMEDIATE");
       for (let row = 0; row < targetMiB; row++) {
         insert.run();
@@ -199,6 +205,7 @@ if (mode === "seed") {
       sessions: agents * sessions,
       archiveMiBPerAgent: archiveMiB,
       databaseBytes: paths.map((pathname) => fs.statSync(pathname).size),
+      databaseScale,
       sourceAgentSchema: 39,
       canonicalSessionDelivery: true,
       workspaceFiles: 62000,
@@ -346,6 +353,7 @@ if (mode === "seed") {
   const summary = {
     hostIo: attribution.events,
     integrityRequests: attribution.integrityRequests,
+    snapshotRequests: attribution.snapshotRequests,
     mode: forceGc ? "memory" : sampling ? "allocation" : "timing",
     elapsedMs,
     migrationMs,

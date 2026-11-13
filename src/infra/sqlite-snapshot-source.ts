@@ -142,7 +142,8 @@ export async function prepareArtifactPreservingSqliteRead(
     !scope ||
     getDatabaseEngineInput("agent") ||
     !isArtifactPreservingStateRead("agent", pathname) ||
-    isUpdateRehearsalPrivateDatabase(pathname, process.env)
+    isUpdateRehearsalPrivateDatabase(pathname, process.env) ||
+    readCustodiedDrainedSqliteSource(pathname)
   ) {
     return;
   }

@@ -69,6 +69,15 @@ async function fixture() {
   };
 }
 
+it("reads stopped backup inventory from its captured image without another snapshot", async () => {
+  const f = await fixture();
+  const backup = await f.capture({ stopped: true });
+  expect(f.generationImages).not.toHaveBeenCalled();
+  expect(backup.databases).toHaveLength(1);
+  using db = new DatabaseSync(backup.databases[0]!.snapshotPath, { readOnly: true });
+  expect(db.prepare("SELECT value FROM payload").get()?.value).toBe("retained");
+});
+
 it.each(["auto", "off"] as const)(
   "does not recapture verified generation bytes with native copying %s",
   async (mode) => {

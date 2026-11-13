@@ -53,6 +53,14 @@ backup.
 
 ## Update implementation contract
 
+Offline Doctor prepares no extra inspection image when its existing maintenance
+owner proves custody and the SQLite family is drained. It uses the same immutable
+read-only source reader; nonempty WALs, journals, and unowned sources retain private
+snapshots. Stopped-update backup inventory verification reads registrations from
+the completed backup image while retaining filesystem inventory and source-change
+checks. The candidate must contain these changes; backup publication, integrity
+checks, migrations, and rollback rules are unchanged.
+
 Lazy SQLite schema catalogs load through the retained updater's module loader.
 An updater that first needs a catalog after Git activation therefore reads its
 own generation, not the candidate's replacement JSON. This fix must be present

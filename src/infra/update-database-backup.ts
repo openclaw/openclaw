@@ -1,4 +1,3 @@
-import type { BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
@@ -26,7 +25,6 @@ import {
 } from "./directory-durability.js";
 import { ignoreMissingPath } from "./errno.js";
 import { formatErrorMessageWithCode } from "./errors.js";
-import { sameFileMutationFingerprint } from "./file-descriptor.js";
 import { isSqliteSnapshotFile } from "./sqlite-file-header.js";
 import { resolveSqliteDatabaseFilePaths } from "./sqlite-files.js";
 import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
@@ -48,6 +46,7 @@ import {
   readUpdateStateDatabaseSizes,
   readUpdateStateDatabaseSizesInProcess,
 } from "./update-candidate-state.sizes.js";
+import { inspectRestorableDatabaseFiles } from "./update-database-backup-source.js";
 import { checkUpdateDatabaseBackupSpace } from "./update-database-backup-space.js";
 import type { SqliteDatabaseGenerationReceipt } from "./update-database-generations.js";
 import {
@@ -137,52 +136,6 @@ let backupRuntime: ReturnType<typeof loadUpdateDatabaseBackupRuntime> | undefine
 /** Resolve the backup's lazy modules before an updater replaces its own dist tree. */
 export function prepareUpdateDatabaseBackupRuntime() {
   return (backupRuntime ??= loadUpdateDatabaseBackupRuntime());
-}
-
-async function inspectRestorableDatabaseFiles(
-  databases: readonly string[],
-  previous?: ReadonlyMap<string, BigIntStats>,
-  stopped = false,
-) {
-  const identities = new Map<string, BigIntStats>();
-  for (const database of databases) {
-    // Readers mutate/recreate the transient WAL index; only durable files fence capture.
-    for (const suffix of ["", "-wal", "-journal"]) {
-      const file = `${database}${suffix}`;
-      // Only sidecars may be absent; without a handler a missing main file still rejects.
-      const info = await fs
-        .lstat(file, { bigint: true })
-        .catch(suffix ? ignoreMissingPath : undefined);
-      if (!info) {
-        continue;
-      }
-      if (!info.isFile() || info.nlink !== 1n) {
-        throw new Error(
-          `Update database rollback requires a regular file with one link: ${file}. Resolve database aliases before retrying; the databases have not been migrated.`,
-        );
-      }
-      const before = previous?.get(file);
-      if (
-        before &&
-        !(stopped ? sameFileMutationFingerprint(before, info) : sameFileIdentity(before, info))
-      ) {
-        throw new Error(`Update database file changed during backup: ${file}.`);
-      }
-      // Readers can create an empty WAL beside a checkpointed database.
-      if (suffix !== "-wal" || info.size !== 0n) {
-        identities.set(file, info);
-      }
-    }
-  }
-  if (stopped && previous) {
-    const changed = [...previous.keys(), ...identities.keys()].find(
-      (file) => previous.has(file) !== identities.has(file),
-    );
-    if (changed) {
-      throw new Error(`Update database journal state changed during stopped backup: ${changed}.`);
-    }
-  }
-  return identities;
 }
 
 async function canonicalDatabaseInventory(
@@ -494,7 +447,16 @@ export async function createUpdateDatabaseBackupInProcess(
           });
         }
         const current = await inventoryFor(
-          await discoverUpdateStateSchemaInspectionInProcess({ ...input, preserveSourceArtifacts }),
+          await discoverUpdateStateSchemaInspectionInProcess({
+            ...input,
+            preserveSourceArtifacts,
+            sharedDatabaseImage: input.stopped
+              ? databases.find(
+                  (database) =>
+                    database.path === path.resolve(input.stateDir, "state", "openclaw.sqlite"),
+                )?.snapshotPath
+              : undefined,
+          }),
         );
         if (JSON.stringify(current) !== JSON.stringify(inventory)) {
           throw new Error(
