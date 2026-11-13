@@ -387,7 +387,7 @@ function createPreparedRestartRecovery(
 
 /** Recover markers and unfinished predecessor runs without reviving older orphans. */
 export async function resumeMarkedSessions(
-  params: RestartResumeParams & { onPrepared?: () => void },
+  params: RestartResumeParams & { onPrepared?: () => void | Promise<void> },
 ): Promise<void> {
   const owner = params.context.agentDatabaseStartup;
   const recovery = getRestartRecovery(params.context);
@@ -429,14 +429,14 @@ export async function resumeMarkedSessions(
   });
   // Discovery installs per-session waits before reconnecting turns can reach admission.
   if (owner) {
-    params.onPrepared?.();
+    await params.onPrepared?.();
   }
   throwIfSettledRejected(
     await Promise.allSettled(pending.map((run) => run())),
     "Restart recovery failed",
   );
   if (!owner) {
-    params.onPrepared?.();
+    await params.onPrepared?.();
   }
   for (const agentId of byAgent.keys()) {
     await owner?.waitForAgentPreparation(agentId, { signal: params.signal, forInput: true });

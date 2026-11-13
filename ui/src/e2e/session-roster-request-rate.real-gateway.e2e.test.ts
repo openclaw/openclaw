@@ -203,14 +203,23 @@ suite.define(() => {
           });
         await chooseSidebarOwner(page, "owner:" + viewerId);
         await expect
-          .poll(() =>
-            readStatus(
+          .poll(() => ({
+            owner: readStatus(
               lists.find(
                 ({ params }) => params.source === "sidebar" && params.ownerId === viewerId,
               ),
             ),
-          )
-          .toEqual({ present: true, acknowledged: true });
+            children: readStatus(
+              lists.find(
+                ({ params }) =>
+                  params.source === "sidebar" && params.spawnedBy === "agent:main:main",
+              ),
+            ),
+          }))
+          .toEqual({
+            owner: { present: true, acknowledged: true },
+            children: { present: true, acknowledged: true },
+          });
         await selected.waitFor();
         await expect.poll(() => lists.every((request) => responses.has(request.id))).toBe(true);
         expect(

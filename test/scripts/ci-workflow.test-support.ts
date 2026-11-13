@@ -148,6 +148,8 @@ type WorkflowContext = Strings<"action" | "actor" | "authorAssociation" | "maint
     ciShape?: "default" | "main";
     inputs?: Record<string, unknown>;
     runnerEnvironment?: "" | "github-hosted" | "self-hosted";
+    runnerOs?: "" | "Linux" | "macOS" | "Windows";
+    runnerArch?: "X64" | "ARM64";
     runnerProfile?: "blacksmith" | "github" | "hybrid";
     runAttempt: number;
     runId?: number;
@@ -258,7 +260,12 @@ export function evaluateWorkflowExpression(
     env: context.env ?? {},
     secrets: context.secrets ?? {},
     matrix: context.matrix ?? {},
-    runner: { environment: context.runnerEnvironment ?? "", temp: context.runnerTemp ?? "" },
+    runner: {
+      os: context.runnerOs ?? "",
+      arch: context.runnerArch ?? "",
+      environment: context.runnerEnvironment ?? "",
+      temp: context.runnerTemp ?? "",
+    },
     steps: {
       runner_profile: { outputs: { node_runner_backend: "" } },
       qualification_dispatch: { outputs: { eligible: "false" } },

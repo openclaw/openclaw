@@ -41,11 +41,7 @@ export function deferWorktreeCleanupInWorker(
         }
         const current = getRegistryWorktreeInDatabase(db, observed.id);
         const revision = worktreeGcRevision(observed);
-        if (
-          !current ||
-          current.removedAt !== undefined ||
-          worktreeGcRevision(current) !== revision
-        ) {
+        if (!current || worktreeGcRevision(current) !== revision) {
           return false;
         }
         const rows = executeSqliteQuerySync(

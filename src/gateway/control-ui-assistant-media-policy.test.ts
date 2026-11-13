@@ -26,7 +26,7 @@ import { mergeProfiles, setUserProfileRole } from "../state/user-profile-writes.
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
-import { handleControlUiAssistantMediaRequest } from "./control-ui.js";
+import { handleControlUiAssistantMediaRequest } from "./control-ui-assistant-media-http.js";
 import { resolveHttpProfile } from "./http-auth-user-profile.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
@@ -53,7 +53,10 @@ vi.mock("../config/io.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/io.js")>()),
   getRuntimeConfig: () => state.config ?? {},
 }));
-vi.mock("./http-utils.js", () => ({ authorizeControlUiReadRequestOrReply: state.auth }));
+vi.mock("./http-auth-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./http-auth-utils.js")>()),
+  authorizeControlUiReadRequestOrReply: state.auth,
+}));
 vi.mock("./session-worker-placement-context.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-worker-placement-context.js")>()),
   resolveSessionWorkerPlacementContext: () => ({

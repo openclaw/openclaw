@@ -41,11 +41,36 @@ import { handleCopyButton } from "../copy-button-state.ts";
 import { withPromiseModalHost } from "../promise-modal-host.ts";
 import { DialogHeader } from "../solid/dialog-header.tsx";
 import { Icon } from "../solid/icon.tsx";
+import { Tooltip } from "../solid/tooltip.tsx";
 import { clawNameFromHostname } from "./claw-name.ts";
 import { OpenClawIdErrorMessage } from "./error-message.tsx";
 import { RecoveryKitForm } from "./recovery-kit-form.tsx";
 import { RecoveryKitPanel } from "./recovery-kit-panel.tsx";
 import { createSetupMotion } from "./setup-motion.ts";
+
+function StepTooltip(props: { error: OpenClawIdUiError; failed: boolean }) {
+  return (
+    <Tooltip class="openclaw-id-steps__tooltip" placement="top-end" openOnClick>
+      <button
+        type="button"
+        class="openclaw-id-steps__info"
+        aria-label={props.failed ? t("openclawId.technicalDetails") : props.error.message}
+      >
+        <Icon name={props.failed ? "circleAlert" : "info"} />
+      </button>
+      <span slot="content" class="openclaw-id-steps__tip">
+        <Show when={!props.failed}>
+          <span>{props.error.message}</span>
+        </Show>
+        <Show when={props.error.detail}>
+          <code tabindex={props.error.detail.length > 160 ? 0 : undefined}>
+            {props.error.detail}
+          </code>
+        </Show>
+      </span>
+    </Tooltip>
+  );
+}
 
 registerEnglishCatalog(registerOpenClawIdDialogsEnglish);
 registerEnglishCatalog(registerOpenClawIdEnglish);
@@ -129,12 +154,15 @@ const DEFAULT_CLAW_NAME = "claw";
  * claw, registration (possession proof and address reservation) and the relay
  * connection. Only signed statements reach the Gateway. Resolves true once linked.
  * When the Control UI is signed in to OpenClaw ID, the link code comes from the
- * account; otherwise (or if that fails) the owner pastes one.
+ * account; otherwise (or if that fails) the owner pastes one. With `linkProfile` (an admin
+ * on a personal sign-in), the commit also links that account to the admin's profile; if the
+ * Gateway does not, "Setting up your access" says so and the claw stays linked.
  */
 export function showMakeReachableDialog(params: {
   client: GatewayBrowserClient;
   loaderDomain: string;
   signedIn?: OpenClawIdSignedIn | null;
+  linkProfile?: boolean;
 }): Promise<boolean> {
   const ceremony = createOpenClawIdCeremony();
   // Closes when the feature turns off; the kit's secrets are dropped however it closes.
@@ -254,6 +282,7 @@ export function showMakeReachableDialog(params: {
         }
         setStep({ kind: "linking", hostname: preparation.hostname });
         let signed: Awaited<ReturnType<typeof ceremony.sign>> | undefined;
+        let profileLink: string | null = null;
         try {
           const publication = await runLinkSteps(
             {
@@ -267,14 +296,18 @@ export function showMakeReachableDialog(params: {
               },
               commit: async () => {
                 lifetime.signal?.throwIfAborted();
+                const idToken = params.linkProfile ? params.signedIn?.idToken : undefined;
                 const result = await params.client.request<{
                   publication: OpenClawIdPublication | null;
+                  profileLink?: string | null;
                 }>("openclawId.authority", {
                   action: "commit",
                   ...signed,
                   enrollmentCode: nameRequest().enrollmentCode,
+                  ...(idToken ? { idToken } : {}),
                 });
                 announceOwnerDeviceKey();
+                profileLink = result.profileLink ?? null;
                 return result.publication;
               },
               relayOnline: () => readRelayOnline(params.client),
@@ -285,6 +318,12 @@ export function showMakeReachableDialog(params: {
             },
             (id, state) => setLinkStates((current) => ({ ...current, [id]: state })),
           );
+          if (params.linkProfile && profileLink !== "linked") {
+            setLinkStates((current) => ({
+              ...current,
+              pin: { state: "warning", message: t("openclawId.stepProfileNotLinked") },
+            }));
+          }
           setStep({ kind: "done", hostname: preparation.hostname, publication });
         } catch (error) {
           ceremony.discard();
@@ -316,6 +355,8 @@ export function showMakeReachableDialog(params: {
         }
         return "message" in state ? { message: state.message, detail: "" } : null;
       };
+      const needsAttention = () =>
+        LINK_STEPS.some((id) => ["warning", "failed"].includes(linkStates()[id].state));
       const requestClose = async () => {
         if (step().kind === "linking" || modal.settled) {
           return;
@@ -551,65 +592,85 @@ export function showMakeReachableDialog(params: {
                   {(current) => (
                     <>
                       <div role="status" aria-live="polite">
-                        <p class="openclaw-id-linking__title">
+                        <p
+                          class={[
+                            "openclaw-id-linking__title",
+                            { "is-error": current().kind === "failed" },
+                          ]}
+                        >
                           <Show
-                            when={current().kind === "done"}
-                            fallback={t("openclawId.linkingTitle", {
-                              name: clawNameFromHostname(current().hostname),
-                            })}
+                            when={stepOfKind(current(), "failed")}
+                            fallback={
+                              <Show
+                                when={current().kind === "done"}
+                                fallback={t("openclawId.linkingTitle", {
+                                  name: clawNameFromHostname(current().hostname),
+                                })}
+                              >
+                                <AddressMessage
+                                  message={t("openclawId.doneBody", { host: current().hostname })}
+                                  hostname={current().hostname}
+                                />
+                              </Show>
+                            }
                           >
-                            <AddressMessage
-                              message={t("openclawId.doneBody", { host: current().hostname })}
-                              hostname={current().hostname}
-                            />
+                            {(failed) => failed().message.message}
                           </Show>
                         </p>
                         <ol class="openclaw-id-steps">
                           <For each={LINK_STEPS}>
-                            {(id) => (
-                              <li
-                                class="openclaw-id-steps__item"
-                                data-state={linkStates()[id].state}
-                              >
-                                <span
-                                  class="openclaw-id-steps__mark"
-                                  ref={motion.mark}
-                                  aria-hidden="true"
-                                >
-                                  <Icon
-                                    name={
-                                      linkStates()[id].state === "done"
-                                        ? "check"
-                                        : linkStates()[id].state === "running"
-                                          ? "loaderCircle"
-                                          : linkStates()[id].state === "waiting"
-                                            ? "circleDashed"
-                                            : linkStates()[id].state === "failed"
-                                              ? "circleAlert"
-                                              : "alertTriangle"
-                                    }
-                                    class={
-                                      linkStates()[id].state === "running"
-                                        ? "openclaw-id-setup__spinner"
-                                        : undefined
-                                    }
-                                  />
-                                </span>
-                                <div>
-                                  {t(`openclawId.step_${id}`, {
-                                    name: clawNameFromHostname(current().hostname),
-                                    host: current().hostname,
-                                  })}
-                                  <Show when={stepError(id)}>
-                                    {(error) => (
-                                      <div class="openclaw-id-steps__message" ref={motion.message}>
-                                        <OpenClawIdErrorMessage error={error()} />
-                                      </div>
-                                    )}
-                                  </Show>
-                                </div>
-                              </li>
-                            )}
+                            {(id) => {
+                              const state = () => linkStates()[id].state;
+                              const error = createMemo(() => stepError(id));
+                              const tooltip = () => {
+                                const value = error();
+                                return value && (state() === "warning" || value.detail)
+                                  ? value
+                                  : null;
+                              };
+                              return (
+                                <li class="openclaw-id-steps__item" data-state={state()}>
+                                  <span class="openclaw-id-steps__label">
+                                    {t(`openclawId.step_${id}`, {
+                                      name: clawNameFromHostname(current().hostname),
+                                      host: current().hostname,
+                                    })}
+                                  </span>
+                                  <span class="openclaw-id-steps__mark" ref={motion.mark}>
+                                    <Show
+                                      when={tooltip()}
+                                      fallback={
+                                        <Icon
+                                          name={
+                                            state() === "done"
+                                              ? "check"
+                                              : state() === "running"
+                                                ? "loaderCircle"
+                                                : state() === "waiting"
+                                                  ? "circleDashed"
+                                                  : state() === "failed"
+                                                    ? "circleAlert"
+                                                    : "info"
+                                          }
+                                          class={
+                                            state() === "running"
+                                              ? "openclaw-id-setup__spinner"
+                                              : undefined
+                                          }
+                                        />
+                                      }
+                                    >
+                                      {(value) => (
+                                        <StepTooltip
+                                          error={value()}
+                                          failed={state() === "failed"}
+                                        />
+                                      )}
+                                    </Show>
+                                  </span>
+                                </li>
+                              );
+                            }}
                           </For>
                         </ol>
                       </div>
@@ -639,11 +700,11 @@ export function showMakeReachableDialog(params: {
                         </Show>
                         <button
                           type="button"
-                          class={["btn", { primary: current().kind !== "failed" }]}
+                          class={["btn", { primary: !needsAttention() }]}
                           disabled={current().kind === "linking"}
                           onClick={() => void requestClose()}
                         >
-                          {t(current().kind === "failed" ? "common.close" : "openclawId.done")}
+                          {t(needsAttention() ? "common.close" : "openclawId.done")}
                         </button>
                       </openclaw-modal-actions>
                     </>

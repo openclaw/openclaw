@@ -310,13 +310,17 @@ export function applyJobResult(
       if (!opts.replay) {
         // The gone conversation cannot accept the notice; its owning agent gets it instead.
         const notice = cronNotificationJob(job);
-        const { agentId } = resolveCronNotificationQueueOwner(notice, "auto-disabled");
-        const { sessionKey, ...ownerNotice } = notice;
+        const { agentId, sessionKey } = resolveCronNotificationQueueOwner(notice, "auto-disabled");
         opts.deferredNotifications.push({
           kind: "auto-disabled",
           job:
             sessionKey === result.parentUnavailable.parentSessionKey
-              ? { ...ownerNotice, ...(agentId ? { agentId } : {}) }
+              ? {
+                  ...notice,
+                  owner: undefined,
+                  sessionKey: undefined,
+                  ...(agentId ? { agentId } : {}),
+                }
               : notice,
           text: result.error ?? "Automation paused: its parent conversation is unavailable.",
         });

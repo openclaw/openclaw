@@ -436,6 +436,7 @@ function BoardDocumentContent(
           class="board-document__close"
           icon="x"
           label={t("dashboardDocument.close")}
+          tooltip={false}
           onClick={() => props.onDocumentClose?.()}
         />
       ) : null}

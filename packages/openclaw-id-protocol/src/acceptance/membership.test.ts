@@ -278,6 +278,60 @@ describe(acceptanceTitle(11), () => {
     expect(direct.state.invites[FIXTURE_INVITE_ID]?.status).toBe("consumed");
   });
 
+  it.each([
+    ["operator", "viewer"],
+    ["viewer", "operator"],
+    ["guest", "operator"],
+    ["operator", "guest"],
+  ])("requires an exact invite role: %s cannot approve %s", async (invitedRole, approvedRole) => {
+    const { world, state, redemption, identity } = await inviteFixture(invitedRole);
+    const pending = await submitRedemption(state, redemption, identity, WORLD_NOW);
+    expect(pending.ok).toBe(true);
+    const approval = await signChange(pending.state, world.device1.signer, {
+      op: "add",
+      account_id: "acct_bob",
+      role: approvedRole,
+      peer_keys: [world.invitee.peer],
+      invite_id: FIXTURE_INVITE_ID,
+    });
+    const result = await submitStatement(pending.state, approval, tunnel);
+    expect(result).toMatchObject({
+      ok: false,
+      code: "target_mismatch",
+      detail: "approval's role differs from the invite's",
+    });
+    expect(result.state).toBe(pending.state);
+  });
+
+  it("approves an opaque invite role exactly and carries later role changes into snapshots", async () => {
+    const { world, state, redemption, identity } = await inviteFixture("guest");
+    const pending = await submitRedemption(state, redemption, identity, WORLD_NOW);
+    const approved = await submitStatement(
+      pending.state,
+      await signChange(pending.state, world.device1.signer, {
+        op: "add",
+        account_id: "acct_bob",
+        role: "guest",
+        peer_keys: [world.invitee.peer],
+        invite_id: FIXTURE_INVITE_ID,
+      }),
+      tunnel,
+    );
+    expect(approved.ok).toBe(true);
+    expect(snapshotBody(approved.state, 1, WORLD_NOW).members[0]?.role).toBe("guest");
+    const changed = await submitStatement(
+      approved.state,
+      await signChange(approved.state, world.device1.signer, {
+        op: "set_role",
+        account_id: "acct_bob",
+        role: "support_team-2",
+      }),
+      tunnel,
+    );
+    expect(changed.ok).toBe(true);
+    expect(snapshotBody(changed.state, 1, WORLD_NOW).members[0]?.role).toBe("support_team-2");
+  });
+
   it("refuses an approval that does not match the pending request, and a wrong audience", async () => {
     const { world, state, redemption, identity } = await inviteFixture();
     await expect(

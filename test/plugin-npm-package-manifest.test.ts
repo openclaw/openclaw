@@ -1147,6 +1147,11 @@ it.each([
     );
     writeJsonFile(join(packageDir, "package.json"), sourceManifest);
   }
+  if (bundling === "isolated") {
+    // pnpm's content-addressed hardlink store deduplicates identical declarations.
+    writeFileText(join(installedDir, "index.d.ts"), "declare const value: 2; export = value;\n");
+    fs.linkSync(join(installedDir, "index.d.ts"), join(installedDir, "index.d.mts"));
+  }
   const optOut = bundling.startsWith("opt-out-");
   const consumerDir = join(repoDir, "consumer");
   mkdirSync(consumerDir);
@@ -1276,6 +1281,16 @@ console.log(JSON.stringify({ path: path.join(destination, packed.filename) }));
     );
     expect(packResult.files.some(({ path }) => path.endsWith(".tgz"))).toBe(false);
     expect(readText(installedDir, "index.js")).toBe(installedSource);
+    if (bundling === "isolated") {
+      for (const file of ["index.d.ts", "index.d.mts"]) {
+        expect(readText(join(consumerPackage, "node_modules/local-runtime-dep"), file)).toBe(
+          "declare const value: 2; export = value;\n",
+        );
+      }
+      expect(fs.statSync(join(installedDir, "index.d.ts")).ino).toBe(
+        fs.statSync(join(installedDir, "index.d.mts")).ino,
+      );
+    }
     expect(readText(packageDir, "package.json")).toBe(originalManifest);
     expect(existsSync(join(packageDir, "package-lock.json"))).toBe(false);
   });

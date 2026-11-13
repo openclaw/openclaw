@@ -6,6 +6,11 @@ plugin's tools ([source acquisition](source-acquisition.md)).
 
 ## Learn from Granola
 
+The pending, checkpoint and completion rules below address the November 12, 2026
+live run that stopped after digesting a meeting instead of finishing ingestion:
+[#197890](https://github.com/openclaw/openclaw/pull/197890) and
+[#197391](https://github.com/openclaw/openclaw/pull/197391).
+
 The prompt names which meetings (the owner's, or every meeting the account can
 read) and how far back to start (today, or the last 7 or 30 days, in the owner's
 time zone).
@@ -18,9 +23,10 @@ time zone).
    `Start: YYYY-MM-DD`, the start date the prompt set when the page was
    created. Then one line per Granola meeting: meeting date, UUID,
    `updated_at` and a state: `done` (with the meeting page title), `no
-   transcript`, or `pending` (with why: still recording, transcript pending,
-   or verification failed). Create the page with `knowledge_save_page` (type
-   `note`) on the first run, writing the prompt's start date.
+   transcript`, or `pending` (with why). Lines record outcomes only: never
+   write resume notes, plans or instructions for a later run on the page.
+   Create the page with `knowledge_save_page` (type `note`) on the first run,
+   writing the prompt's start date.
 3. **List.** `list_meetings` from the later of `Start` and 7 days before the
    newest `done` meeting date, through today; never earlier than `Start`. For
    the owner's meetings pass
@@ -37,11 +43,15 @@ time zone).
    reconcile into that page ([speakers](speakers.md)) and finish
    steps 3–5 for it; never create a second page.
 5. **Ingest.** Oldest first, one meeting at a time, run steps 1–5 of this skill
-   in full. Record a meeting still being recorded, with a pending transcript,
-   or failing verification as `pending`; record `no transcript` for one that
-   has none. Record `done` only after verification passes. Write each line
-   with `knowledge_edit_body` as soon as the meeting's outcome is known, so an
-   interrupted run resumes instead of redoing or losing it. If context runs
-   short, stop after the current meeting and leave the rest.
+   in full. A meeting you start, you finish: acquiring or digesting a meeting
+   is not a stopping point. `pending` is only for reasons outside the run: the
+   meeting is still being recorded, its transcript is not ready yet, or
+   verification still fails after you tried to fix it. Record `no transcript`
+   for one that has none. Record `done` only after verification passes. Write
+   each line with `knowledge_edit_body` as soon as the meeting's outcome is
+   known, so an interrupted run resumes instead of redoing or losing it.
 6. Count meetings ingested, already in Knowledge, left pending and without a
-   transcript, and pages and claims written.
+   transcript, and pages and claims written. If meetings are left pending, none
+   was ingested and nothing outside the run held them back, the run did not do
+   its work: end with `Scribe status: needs attention — <why>` instead of
+   `on`.

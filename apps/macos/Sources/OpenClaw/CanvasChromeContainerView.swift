@@ -142,7 +142,6 @@ final class HoverChromeContainerView: NSView {
             btn.bezelStyle = .regularSquare
             btn.imageScaling = .scaleProportionallyDown
             btn.contentTintColor = NSColor.white.withAlphaComponent(0.92)
-            btn.toolTip = "Close"
             return btn
         }()
 

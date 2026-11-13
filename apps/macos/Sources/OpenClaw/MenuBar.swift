@@ -551,9 +551,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // startup completion must not reacquire custody during shutdown.
             await credentialStartup?.value
             async let hostedGatewayCleanup: Void = GatewayProcessManager.shared.shutdownAppHostedGateway()
+            async let composerDraftSave: Void = WebChatManager.shared.persistComposerDrafts()
             async let processCleanupResult: Void = Self.cleanUpProcesses()
             async let bridgeCleanupResult: Void = PeekabooBridgeHostCoordinator.shared.shutdown()
-            _ = await (hostedGatewayCleanup, processCleanupResult, bridgeCleanupResult)
+            _ = await (hostedGatewayCleanup, processCleanupResult, bridgeCleanupResult, composerDraftSave)
             self?.finishTerminationCleanup(for: sender)
         }
         self.terminationDeadlineTask = Task { @MainActor [weak self] in

@@ -7,6 +7,7 @@ import type { MessagingToolSend } from "../agents/embedded-agent-messaging.types
 import type { ReplyCompletion, ReplyExpectation } from "../agents/reply-completion.types.js";
 import type { RequesterOrigin } from "../agents/requester-origin.js";
 import type { resolveAgentTurnExecutionStatus } from "../auto-reply/reply/agent-runner-execution-status.js";
+import type { ReplyMessageInjectionOutcome } from "../auto-reply/reply/message-injection-authority.js";
 import type { FollowupQueueDisposition } from "../auto-reply/reply/queue-policy.js";
 import type { FollowupRunPayload } from "../auto-reply/reply/queue/followup-run-payload.types.js";
 import type { QueueSettings } from "../auto-reply/reply/queue/queue-settings.types.js";
@@ -31,7 +32,6 @@ import type { AgentWorkAdmissionIdentity } from "./session-agent-work-admission.
 import type {
   ReplyBackendQueueMessageOptions,
   ReplyMessageInjectionResolution,
-  ReplyMessageInjectionRejectionReason,
   ReplyToolAuthorityRoute,
   ReplyToolAuthorityOverlay,
   ReplyToolAuthorityRequester,
@@ -52,6 +52,8 @@ import type {
   SessionControllerWatchdog,
 } from "./session-controller.watchdog.js";
 import type { SessionForkContextSnapshot } from "./session-fork-context.types.js";
+
+export type { ReplyMessageInjectionOutcome } from "../auto-reply/reply/message-injection-authority.js";
 
 export type {
   ReplyBackendCancelReason,
@@ -126,13 +128,6 @@ export type ReplyRunInterruptTarget = {
   readonly [replyRunInterruptTargetOperation]: ReplyOperation;
 };
 
-export type ReplyMessageInjectionOutcome =
-  | { status: "indeterminate"; errorMessage: string }
-  | { status: "accepted" }
-  /** Terminal authority failure; the separately recorded acceptance stays unchanged. */
-  | { status: "failed"; error: Error }
-  | { status: "rejected"; reason: ReplyMessageInjectionRejectionReason; errorMessage?: string };
-
 export type ReplyMessageInjectionAttempt = {
   /** Native run identity captured with the opaque execution owner. */
   targetRunId: string | undefined;
@@ -198,6 +193,16 @@ export type ReplyOperation = {
   readonly terminalProducerBlocked: boolean;
   /** Set when a stale-watchdog expiry forced this operation's run_stalled result. */
   readonly staleExpiryReason?: ReplyOperationStaleReason;
+  /**
+   * Semantic cause a stuck-session recovery acted on when it aborted the embedded
+   * run (e.g. `blocked_tool_call`). Recorded by the controller's authoritative
+   * stall-stop path (expireOwner -> abortForStall) before the abort commits, so
+   * both the watchdog-timer-driven and diagnostics-triggered stops carry it into
+   * cron finalization; diagnostics supplies the precise cause when available, and
+   * the controller falls back to the watchdog decision reason otherwise. Absent
+   * when recovery did not abort the run or supplied no classification.
+   */
+  recoveryClassification?: string;
   readonly startedAtMs: number;
   readonly lastActivityAtMs: number;
   /** True when this operation has owned the supplied session ID. */

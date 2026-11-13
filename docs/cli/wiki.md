@@ -81,13 +81,13 @@ digests already carry the active runtime agent context.
 
 Show vault mode and scope, resolved agent, health, and Obsidian CLI availability. Use this first to check whether the intended vault is initialized, bridge mode is healthy, or Obsidian integration is available.
 
-When bridge mode is active and configured to read memory artifacts, this command queries the running Gateway so it sees the same active memory plugin context as agent/runtime memory.
+When bridge mode is active and configured to read memory artifacts, this command queries the running Gateway so it sees the same active memory plugin context as agent/runtime memory. Ctrl-C or SIGTERM stops a pending Gateway read without printing a late result; the CLI exits with status 130 or 143.
 
 ### `wiki doctor`
 
 Run wiki health checks and report actionable fixes. Exits non-zero when unhealthy.
 
-When bridge mode is active and configured to read memory artifacts, this command queries the running Gateway before building the report. Disabled bridge imports and bridge configs that do not read memory artifacts stay local/offline.
+When bridge mode is active and configured to read memory artifacts, this command queries the running Gateway before building the report. Disabled bridge imports and bridge configs that do not read memory artifacts stay local/offline. Ctrl-C or SIGTERM stops a pending Gateway read without printing a late result; the CLI exits with status 130 or 143.
 
 Typical issues:
 

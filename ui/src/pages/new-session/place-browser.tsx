@@ -54,7 +54,6 @@ export function PlaceBrowser(props: {
         <button
           type="button"
           class="new-session-page__browser-nav"
-          title={t("newSession.browserUp")}
           aria-label={t("newSession.browserUp")}
           ref={nativeListener("click", () => {
             if (props.params.browser.listing?.parent) {
@@ -115,7 +114,6 @@ export function PlaceBrowser(props: {
         <button
           type="button"
           class="new-session-page__browser-nav"
-          title={t("common.close")}
           aria-label={t("common.close")}
           ref={nativeListener("click", () => props.params.onClose())}
         >

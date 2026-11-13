@@ -10,6 +10,7 @@ import {
   collectSourceCheckoutPluginBuildEntries,
   createBundledPluginBuildInventory,
 } from "./scripts/lib/bundled-plugin-build-entries.mjs";
+import { createCompactModuleLabelsPlugin } from "./scripts/lib/compact-module-labels.mts";
 import { createFsSafeWindowsHelperAssetPlugin } from "./scripts/lib/fs-safe-windows-helper-asset.mts";
 import { createGatewayRunChunkMetadataPlugin } from "./scripts/lib/gateway-run-chunk-metadata.mts";
 import { createManagedHandoffBuildConfigs } from "./scripts/lib/managed-handoff-build-config.mts";
@@ -289,13 +290,16 @@ function nodeBuildConfig(
     minify:
       typeof declarations === "object" && declarations.emitDtsOnly
         ? undefined
-        : { codegen: false, compress: false, mangle: { toplevel: false, keepNames: true } },
+        : { codegen: true, compress: false, mangle: { toplevel: false, keepNames: true } },
     ...config,
     // Recovery diagnostics must parse on Node 22; runtime admission still guards live writers.
     target: "node22",
     dts: declarations,
     hooks: createDeclarationBoundaryHooks(config.hooks),
     plugins: [
+      !(typeof declarations === "object" && declarations.emitDtsOnly) && config.minify === undefined
+        ? createCompactModuleLabelsPlugin()
+        : undefined,
       typeof declarations === "object" && declarations.emitDtsOnly
         ? undefined
         : createBashParserAssetsPlugin(),
