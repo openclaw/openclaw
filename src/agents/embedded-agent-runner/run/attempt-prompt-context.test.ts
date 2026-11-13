@@ -552,21 +552,30 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
   });
 
   it("rebases prePromptMessageCount and updates session messages when replay normalization shrinks history", async () => {
+    // A silent reply is dropped from replay only when another assistant turn follows it.
     const rawHistory: AgentMessage[] = [
       { role: "user", content: [{ type: "text", text: "Historic question" }], timestamp: 10 },
       makeAgentAssistantMessage({
         content: [{ type: "text", text: "NO_REPLY" }],
         timestamp: 11,
       }),
-      { role: "user", content: [{ type: "text", text: "Follow-up" }], timestamp: 12 },
+      makeAgentAssistantMessage({
+        content: [{ type: "text", text: "Answer" }],
+        timestamp: 12,
+      }),
+      { role: "user", content: [{ type: "text", text: "Follow-up" }], timestamp: 13 },
     ];
     const fixture = createInput({ messages: rawHistory });
 
     const result = await prepareContext(fixture.input);
 
-    expect(rawHistory.length).toBe(3);
-    expect(result.prePromptMessageCount).toBe(2);
-    expect(fixture.replaceSessionMessages).toHaveBeenCalledWith([rawHistory[0], rawHistory[2]]);
+    expect(rawHistory.length).toBe(4);
+    expect(result.prePromptMessageCount).toBe(3);
+    expect(fixture.replaceSessionMessages).toHaveBeenCalledWith([
+      rawHistory[0],
+      rawHistory[2],
+      rawHistory[3],
+    ]);
   });
 
   it("preserves ordinary reply text containing a trailing silence token without rewriting history", async () => {

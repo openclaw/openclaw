@@ -9,6 +9,7 @@ import {
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
 import { createPromptCacheRequestObserver } from "../prompt-cache-request-observer.js";
+import { requestSessionPrefixRebuild } from "../session-prefix-owner.js";
 import { clearEmbeddedSessionPromptStates } from "../session-prompt-state.js";
 import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
 import { createBaseInput, createSession, sessionId } from "./attempt-prompt-submit.test-support.js";
@@ -80,6 +81,11 @@ it("observes canonical request prefixes before managed cache consumption and ski
       const request = async (context: Parameters<StreamFn>[1]) =>
         (await activeSession.agent.streamFn(testModel, context)).result();
       for (const [index, [cacheRead, broke, changes]] of cases.entries()) {
+        if (index === 2) {
+          // The session prefix owner holds a series' tools; a changed tool reaches the wire only at
+          // a declared rebuild, and the observer must still name it.
+          requestSessionPrefixRebuild(sessionId);
+        }
         await request({
           systemPrompt,
           messages: [],
