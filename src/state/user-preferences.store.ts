@@ -7,6 +7,10 @@ import {
   USER_BACKGROUND_PREFERENCE_KEY,
 } from "../../packages/gateway-protocol/src/schema/background-preferences.js";
 import {
+  normalizeGitCoauthorOrganizationIdentity,
+  GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
+} from "../../packages/gateway-protocol/src/schema/git-coauthor-identity.js";
+import {
   parseSidebarSessionReference,
   UI_PERSONAL_SESSION_GROUPS_PREFERENCE_KEY,
   UI_RAIL_SHORTCUTS_PREFERENCE_KEY,
@@ -47,9 +51,10 @@ export const ensureUserPreferencesSchema = createOpenClawStateSchemaEnsurer({
 });
 
 export function updatesGitCoauthorPreference(update: PreparedUserPreferenceUpdate): boolean {
+  const keys = new Set([GIT_COAUTHOR_PREFERENCE_KEY, GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY]);
   return (
-    update.serialized.some(({ prefKey }) => prefKey === GIT_COAUTHOR_PREFERENCE_KEY) ||
-    update.deletionKeys.includes(GIT_COAUTHOR_PREFERENCE_KEY)
+    update.serialized.some(({ prefKey }) => keys.has(prefKey)) ||
+    update.deletionKeys.some((key) => keys.has(key))
   );
 }
 
@@ -156,6 +161,11 @@ function readPreferenceKeys(database: EngineConnection, profileId: string): Set<
   );
 }
 
+function userPreferenceKeyCount(keys: ReadonlySet<string>): number {
+  // One protected, bounded proxy-metadata pair cannot consume a user's preference allowance.
+  return keys.size - Number(keys.has(GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY));
+}
+
 /** Moves one retired profile's preferences without overwriting the merge target's choices. */
 export function mergeUserPreferences(
   database: EngineConnection,
@@ -180,8 +190,11 @@ export function mergeUserPreferences(
     if (targetKeys.has(row.pref_key)) {
       continue;
     }
-    if (targetKeys.size >= USER_PREFS_PROFILE_KEY_LIMIT) {
-      break;
+    if (
+      row.pref_key !== GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY &&
+      userPreferenceKeyCount(targetKeys) >= USER_PREFS_PROFILE_KEY_LIMIT
+    ) {
+      continue;
     }
     // A discarded source upload must not leave its custom selection dangling on the target.
     const background =
@@ -238,7 +251,8 @@ export function writeUserPreferences(
   profileId: string,
   update: PreparedUserPreferenceUpdate,
 ): Result<void, UserPreferenceError> {
-  const { serialized, deletionKeys, expected } = update;
+  const { expected } = update;
+  let { serialized, deletionKeys } = update;
   if (updatesPersonalSessionPins(update)) {
     assertUserPreferenceWriteNotHeld(sqlite);
   }
@@ -260,6 +274,23 @@ export function writeUserPreferences(
       profileId,
       expected.map(({ prefKey }) => prefKey),
     );
+    if (update.organizationPolicy !== undefined) {
+      const organization = normalizeGitCoauthorOrganizationIdentity(
+        current[GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY],
+      );
+      if (!organization || organization.policy !== update.organizationPolicy) {
+        // Match the policy-filtered read. Enabling GitHub fallback must not revive dormant credit.
+        delete current[GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY];
+        if (
+          serialized.some(
+            ({ prefKey, valueJson }) =>
+              prefKey === GIT_COAUTHOR_PREFERENCE_KEY && valueJson === "true",
+          )
+        ) {
+          deletionKeys = [...deletionKeys, GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY];
+        }
+      }
+    }
     for (const { prefKey, valueJson } of expected) {
       if (
         valueJson === null
@@ -271,17 +302,38 @@ export function writeUserPreferences(
       }
     }
   }
+  const suppliedCredit = serialized.find(
+    ({ prefKey }) => prefKey === GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
+  );
+  const choosesConsent =
+    serialized.some(({ prefKey }) => prefKey === GIT_COAUTHOR_PREFERENCE_KEY) ||
+    deletionKeys.includes(GIT_COAUTHOR_PREFERENCE_KEY);
+  if (suppliedCredit && !choosesConsent) {
+    const previous = readUserPreferences(sqlite, profileId, [
+      GIT_COAUTHOR_PREFERENCE_KEY,
+      GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
+    ]);
+    if (
+      previous[GIT_COAUTHOR_PREFERENCE_KEY] === true &&
+      normalizeGitCoauthorOrganizationIdentity(previous[GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY])
+        ?.policy !==
+        normalizeGitCoauthorOrganizationIdentity(JSON.parse(suppliedCredit.valueJson))?.policy
+    ) {
+      // An old or absent proxy mapping cannot authorize disclosure under a replacement policy.
+      serialized = [...serialized, { prefKey: GIT_COAUTHOR_PREFERENCE_KEY, valueJson: "false" }];
+    }
+  }
   const db = getNodeSqliteKysely<UserPreferencesDatabase>(sqlite);
   if (serialized.length > 0) {
     const currentKeys = readPreferenceKeys(sqlite, profileId);
     const nextKeys = new Set(currentKeys);
     deletionKeys.forEach((key) => nextKeys.delete(key));
     serialized.forEach((entry) => nextKeys.add(entry.prefKey));
-    if (nextKeys.size > USER_PREFS_PROFILE_KEY_LIMIT) {
+    if (userPreferenceKeyCount(nextKeys) > USER_PREFS_PROFILE_KEY_LIMIT) {
       return err({
         code: "profile-key-limit",
         limit: USER_PREFS_PROFILE_KEY_LIMIT,
-        currentCount: currentKeys.size,
+        currentCount: userPreferenceKeyCount(currentKeys),
       });
     }
   }

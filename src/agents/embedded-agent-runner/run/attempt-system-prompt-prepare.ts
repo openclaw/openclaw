@@ -38,6 +38,7 @@ import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { toolPolicyRestrictsTools } from "../../tool-policy.js";
 import type { ToolSearchCatalogRef } from "../../tool-search.js";
 import { buildRunGrantedToolDirectory, buildToolSchemaDirectoryPrompt } from "../../tool-search.js";
+import type { ToolUsageRankingSnapshot } from "../../tool-usage-ranking.js";
 import {
   buildWatchedSessionsPromptLines,
   prepareWatchedSessionsPromptAsync,
@@ -95,6 +96,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   modelToolsEnabled: boolean;
   skillsPrompt: string;
   codeModeActive?: boolean;
+  getUsageRanking?: () => ToolUsageRankingSnapshot | undefined;
   webSearchUnconfigured?: () => boolean;
   toolSearchCatalogRef?: ToolSearchCatalogRef;
   toolSearchDirectoryEnabled: boolean;
@@ -179,6 +181,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
             sessionKey: params.setup.sandboxSessionKey,
           },
           params.toolSearchCatalogRef?.current?.entries ?? [],
+          params.getUsageRanking?.(),
         )
       : params.toolSearchDirectoryEnabled && params.toolSearchCatalogRef?.current?.entries.length
         ? buildToolSchemaDirectoryPrompt(
@@ -191,7 +194,10 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
               runId: attempt.runId,
               catalogRef: params.toolSearchCatalogRef,
             },
-            { contextTokenBudget: attempt.contextTokenBudget },
+            {
+              contextTokenBudget: attempt.contextTokenBudget,
+              usageRanking: params.getUsageRanking?.(),
+            },
           )
         : undefined);
 
@@ -506,6 +512,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     capabilities: [...params.capabilityToolNames].sort(),
     catalogEntries: params.toolSearchCatalogRef?.current?.entries,
     permissionChanged,
+    usageRanking: params.getUsageRanking?.(),
   });
   let toolPromptPreparation = {
     ...readToolPromptInputs([...params.effectiveTools]),
@@ -552,6 +559,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       const inputs = readToolPromptInputs(effectiveTools, permissionChanged);
       const { mode, capabilities, catalogEntries } = inputs;
       if (
+        toolPromptPreparation.usageRanking === inputs.usageRanking &&
         toolPromptPreparation.mode === mode &&
         toolPromptPreparation.permissionChanged === permissionChanged &&
         toolPromptPreparation.catalogEntries === catalogEntries &&

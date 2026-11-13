@@ -166,8 +166,13 @@ async function restoreGatewayOperatorSnapshot(params: {
     assertCurrent();
     const generationOwner = context.sharedGatewaySessionGenerationState;
     if (snapshot.sharedGeneration !== undefined) {
-      if (!generationOwner || generationOwner.requiredGeneration !== snapshot.sharedGeneration) {
-        throw new Error("Restart recovery authentication owner changed; start a new user turn.");
+      if (!generationOwner) {
+        throw new Error("Restart recovery authentication owner is unavailable.");
+      }
+      if (generationOwner.requiredGeneration !== snapshot.sharedGeneration) {
+        throw new GatewayOperatorRecoveryAuthorizationError(
+          "Restart recovery authentication owner changed; start a new user turn.",
+        );
       }
       subscriptions.push(
         generationOwner.onInvalidated(
@@ -203,7 +208,9 @@ async function restoreGatewayOperatorSnapshot(params: {
         (snapshot.sharedGeneration !== undefined &&
           context.sharedGatewaySessionGenerationState !== generationOwner)
       ) {
-        throw new Error("Restart recovery operator source policy changed.");
+        throw new GatewayOperatorRecoveryAuthorizationError(
+          "Restart recovery operator source policy changed.",
+        );
       }
       if (
         ((cfg !== sourceConfig ||
@@ -500,11 +507,20 @@ export async function restoreGatewayQueuedOperatorRecovery(params: {
   }
   const snapshot = source.snapshot;
   const getConfig = params.context.getCommittedRuntimeConfig ?? params.context.getRuntimeConfig;
-  const prepared = await prepareChannelOperatorAuthority(getConfig(), snapshot.reference);
+  const prepared = await prepareChannelOperatorAuthority(getConfig(), snapshot.reference).catch(
+    (cause: unknown) => {
+      if (cause instanceof GatewayOperatorAccessDeniedError) {
+        throw new GatewayOperatorRecoveryAuthorizationError(undefined, { cause });
+      }
+      throw cause;
+    },
+  );
   params.assertCurrent();
   const profile = prepared?.operatorProfile;
   if (!profile || profile.profileId !== snapshot.profileId || !prepared?.isCurrent(getConfig())) {
-    throw new Error("Queued channel operator authority changed; submit a new request.");
+    throw new GatewayOperatorRecoveryAuthorizationError(
+      "Queued channel operator authority changed; submit a new request.",
+    );
   }
   let references = 1;
   const assertCurrent = () => {
@@ -513,7 +529,9 @@ export async function restoreGatewayQueuedOperatorRecovery(params: {
     }
     params.assertCurrent();
     if (!prepared.isCurrent(getConfig())) {
-      throw new Error("Queued channel operator authority changed; submit a new request.");
+      throw new GatewayOperatorRecoveryAuthorizationError(
+        "Queued channel operator authority changed; submit a new request.",
+      );
     }
   };
   const live = captureChannelOperatorRunAuthority({

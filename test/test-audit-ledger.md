@@ -623,9 +623,90 @@ agents-root test typecheck, typed lint, formatting and diff checks passed.
 Full dead-code scans and hosted/landing outcomes are tracked in
 [PR #197771](https://github.com/openclaw/openclaw/pull/197771).
 
+### CLI patch fixture cleanup on write failure
+
+At `9cfa4b5ff744da4e7133c53dfea287abdba1c223`, `readPatch` allocated its
+temporary directory and wrote the fixture before entering its cleanup block.
+An injected `ENOSPC` write failure preserved the original error but left the
+directory behind. Moving the write into the existing `try` gives allocation
+one cleanup owner even when fixture setup fails. No production code, test
+declarations, inputs or assertions change; all eight declarations and 13
+expanded cases remain.
+
+The repaired helper removes the directory under the same injected write
+failure and preserves the exact error. Baseline and repaired CLI suites pass
+all 13 cases (67.87 and 13.25 seconds respectively; different compiler cache
+states, not a measured speedup). Scoped CLI test typecheck, typed lint,
+formatting and diff checks pass. Independent preservation review found no
+coverage loss. Full local review and hosted outcomes are tracked in
+[PR #198020](https://github.com/openclaw/openclaw/pull/198020).
+
+### Plugin install fixture setup cleanup
+
+At `ee854a1d757943482bb6361c7ccd4f560c8fc92e`, four temporary roots in
+`plugins-install-config.test.ts` perform fallible setup before entering their
+cleanup blocks. They now register with the existing per-test temp directory
+tracker before setup. The cwd spy keeps its own restoration. All 20
+declarations, 23 expanded cases, inputs and assertions remain; test code shrinks
+by 11 lines, with no production or support changes.
+
+The normal suite passes all 23 cases before and after the repair. Under four
+injected fixture-write failures, both revisions report the same four errors
+and preserve the other 19 cases. An `onTestFinished` observation finds all four
+roots still present on the base and none after the repair. The runner already
+reclaims its entire namespace at process exit; this repairs per-case retention,
+not a permanent host leak. Temporary instrumentation was restored byte for
+byte. Independent preservation review found no lost coverage. Focused checks,
+full local review and hosted outcomes are tracked in
+[PR #198138](https://github.com/openclaw/openclaw/pull/198138).
+
+Adjacent source review retains the existing custody in `dns-cli.test.ts`,
+`node-cli/identity.test.ts`, `plugins-control-ui-build.test.ts` and
+`secrets-store-input.test.ts`. Their roots are registered before setup, or their
+database/FIFO owners settle before removal; no runtime claim is made for them.
+
+### Filesystem capability probe error reporting
+
+At `3ead3dcb1b3a3755197cc7aaaa2fc248b6f0298f`, the install-path symlink
+probe suppresses every setup error, and the two safe-bin case-sensitivity
+probes return successfully on unexpected filesystem errors. The repair limits
+capability exclusions to the relevant operation and expected error codes. Setup
+and cleanup errors propagate; case-sensitivity exclusions become explicit skips.
+All 24 declarations, 32 expanded cases and boundary assertions remain. No
+production or shared support changes; test code grows by 16 lines.
+
+The original suite reports 32 passes. With the repair it reports 31 passes and
+one explicit filesystem exclusion previously counted as a pass. The original
+stays green under injected allocation, symlink, cleanup and both case-probe
+errors; the repair fails on each. Expected unsupported-symlink and
+case-sensitivity controls still pass with explicit skips. All temporary
+instrumentation was restored byte for byte. Independent preservation review
+found no coverage loss. Focused checks, full local review and hosted outcomes
+are tracked in [PR #198154](https://github.com/openclaw/openclaw/pull/198154).
+
+### Binary discovery oracle errors
+
+At `da0e0ba8cae139938cba66ff96e1f794c48acf12`, two binary-discovery tests
+interpret every `which` error as a missing executable. The repair preserves
+real resolver parity while accepting only the expected exit status 1 without a
+signal. Fixed fixture outcomes are asserted independently, so two broken
+lookups cannot agree on a false negative. All 11 declarations and 19 expanded
+cases remain; test code grows by four lines, with no production or support
+changes.
+
+Normal baseline and repaired runs pass all 19 cases. Replacing negative lookup
+results with real child-process launch errors, exit status 2 or signal
+termination leaves the original green; each repaired control fails the two
+affected cases. A paired false-negative mutation of `which` and `detectBinary`
+also passes the original but fails both repaired positive controls. Temporary
+test and production instrumentation was restored byte for byte. Independent
+preservation review found no lost coverage. Focused checks, full local review
+and hosted outcomes are tracked in
+[PR #198168](https://github.com/openclaw/openclaw/pull/198168).
+
 ## Pending qualification and proof repairs
 
-- Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Pending: Twitch settled flag; it needs current-source and runtime keeper qualification.
+- Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Retain Twitch's pre-abort pending check: it protects the passive account lifecycle. Its post-await settled check remains a separate live-test cleanup candidate.
 - Transfer rows before consolidating Android loading/blank-auth, persisted outbox keys/epochs, terminal initial projection, and native PCM/decoder/reader cases. Keep typed host-error precedence and active-run settlement.
 - Retain the CodeMode worker-leg deadline case: its real warmed worker and interruption path are distinct from the cancellation table's typed host-error precedence. Both suites keep their active-run settlement checks; this is a source-only retention decision.
 - Repair Android runtime/model fixture custody through existing guaranteed closers; no measured leak is claimed. Retarget misleading coroutine/authority/streaming assertions. Qualify Android dropdown arithmetic, IPv6 URL, empty SMS defaults and component-state mapping against their stronger keepers.

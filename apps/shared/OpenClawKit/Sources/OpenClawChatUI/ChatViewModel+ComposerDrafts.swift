@@ -170,8 +170,106 @@ extension OpenClawChatViewModel {
             .filter { !consumed.contains($0.value) }
     }
 
+    /// Edit and restore: moves an outbox row into the draft for `key`, inside
+    /// the draft write chain. The typed draft is saved first, so the store
+    /// appends below what the composer shows. `isStillAllowed` runs right
+    /// before the composer changes. The composer shows the merged draft before
+    /// the store write, so any save queued meanwhile keeps the moved text; a
+    /// refusal takes it back out. Accepted: a refusal racing a keystroke or
+    /// session switch in that window, or a kill after a background flush saved
+    /// the merged text but before the rollback save, leaves the text in the
+    /// draft beside its row. Another composer bound to the same key (a second
+    /// macOS window) keeps last-writer-wins.
+    func moveOutboxCommandToComposerDraft(
+        _ command: OpenClawChatOutboxCommand,
+        key: String,
+        restoring failure: OpenClawChatOutboxRetryExpectation?,
+        notice: String?,
+        isStillAllowed: @escaping @MainActor () -> Bool) async -> OpenClawChatOutboxMoveResult
+    {
+        guard let store = self.composerDraftStore else { return .unavailable }
+        self.flushComposerDraftText()
+        return await withCheckedContinuation { continuation in
+            self.chainComposerDraftWrite { [weak self] in
+                guard let self, self.composerDraftKey == key, !self.isTransportDetached, isStillAllowed() else {
+                    continuation.resume(returning: .unavailable)
+                    return
+                }
+                // The save above landed and nothing was typed since: the stored draft matches the composer.
+                let isSaved = self.composerDraftSync.savedRevision == self.composerRevisionsBySession[key, default: 0]
+                var history = self.inputHistoriesBySession[key] ?? ChatInputHistory()
+                let base = history.draftForSessionSwitch(currentDraft: self.input)
+                history.resetNavigation()
+                self.inputHistoriesBySession[key] = history
+                let merged = OpenClawChatComposerDraft.appending(command.text, to: base)
+                let moved = command.attachments.map(Self.pendingAttachment)
+                let movedIDs = Set(moved.map(\.id))
+                // The store inserts these rows; a flush meanwhile must not insert them again.
+                self.composerDraftSync.insertingAttachmentIDs.formUnion(movedIDs)
+                self.applyComposerDraft(text: merged, attachments: self.attachments + moved)
+                let revision = self.composerRevisionsBySession[key, default: 0] &+ 1
+                self.composerRevisionsBySession[key] = revision
+                let result = await store.cancelCommand(
+                    id: command.id,
+                    moveToDraftKey: key,
+                    revision: revision,
+                    restoring: failure)
+                if case .moved = result {
+                    // Edit retires an older restore notice; set before a switch can return early.
+                    self.composerNoticesBySession[key] = notice
+                }
+                // After a switch the stored draft already has the move; the
+                // unbind save carried the merged composer.
+                guard self.composerDraftKey == key else {
+                    continuation.resume(returning: result)
+                    return
+                }
+                self.composerDraftSync.insertingAttachmentIDs.subtract(movedIDs)
+                if case let .moved(stored) = result {
+                    for (attachment, row) in zip(moved, stored) {
+                        if self.attachments.contains(where: { $0.id == attachment.id }) {
+                            self.composerDraftAttachmentPositions[attachment.id] = row.position
+                        } else {
+                            await store.deleteComposerDraftAttachment(key: key, position: row.position)
+                        }
+                    }
+                    if isSaved, self.composerRevisionsBySession[key] == revision {
+                        self.composerDraftSync.savedRevision = revision
+                    } else {
+                        self.composerRevisionsBySession[key, default: 0] &+= 1
+                        self.flushComposerDraftText()
+                    }
+                } else {
+                    let text = self.input == merged ? base : self.input
+                    self.applyComposerDraft(
+                        text: text,
+                        attachments: self.attachments.filter { !movedIDs.contains($0.id) })
+                    self.composerRevisionsBySession[key, default: 0] &+= 1
+                    self.flushComposerDraftText()
+                }
+                // Positions are set or the attachments are gone, so a deferred switch can apply.
+                self.applyDeferredExternalStateIfReady()
+                continuation.resume(returning: result)
+            }
+        }
+    }
+
+    /// Why a restored message is back in this session's composer; cleared by the next edit or send.
+    public var composerNotice: String? {
+        self.composerNoticesBySession[self.visibleComposerKey]
+    }
+
+    func clearComposerNotice() {
+        let key = self.visibleComposerKey
+        if self.composerNoticesBySession[key] != nil {
+            self.composerNoticesBySession.removeValue(forKey: key)
+        }
+    }
+
     func composerAttachmentsChanged(from previous: [OpenClawPendingAttachment]) {
-        guard let store = self.composerDraftStore, !self.composerDraftSync.isApplying, !self.isTransportDetached,
+        guard !self.composerDraftSync.isApplying else { return }
+        self.clearComposerNotice()
+        guard let store = self.composerDraftStore, !self.isTransportDetached,
               let key = self.composerDraftKey
         else { return }
         let currentIDs = Set(self.attachments.map(\.id))
@@ -273,15 +371,7 @@ extension OpenClawChatViewModel {
         self.composerDraftSync.savedRevision = draft.revision
         var positions: [OpenClawPendingAttachment.ID: Int] = [:]
         let loaded = draft.attachments.map { stored in
-            let attachment = OpenClawPendingAttachment(
-                url: nil,
-                data: stored.attachment.data,
-                fileName: stored.attachment.fileName,
-                mimeType: stored.attachment.mimeType,
-                type: stored.attachment.type,
-                preview: stored.attachment.mimeType.hasPrefix("image/")
-                    ? OpenClawPlatformImage(data: stored.attachment.data) : nil,
-                durationSeconds: stored.attachment.durationSeconds)
+            let attachment = Self.pendingAttachment(stored.attachment)
             positions[attachment.id] = stored.position
             return attachment
         }
@@ -302,6 +392,19 @@ extension OpenClawChatViewModel {
             self.flushComposerDraftText()
         }
         self.applyDeferredExternalStateIfReady()
+        // A page may have proved a rejected row before this draft bound.
+        self.restoreRejectedOutboxMessageIfProven()
+    }
+
+    private static func pendingAttachment(_ stored: OpenClawChatOutboxAttachment) -> OpenClawPendingAttachment {
+        OpenClawPendingAttachment(
+            url: nil,
+            data: stored.data,
+            fileName: stored.fileName,
+            mimeType: stored.mimeType,
+            type: stored.type,
+            preview: stored.mimeType.hasPrefix("image/") ? OpenClawPlatformImage(data: stored.data) : nil,
+            durationSeconds: stored.durationSeconds)
     }
 
     private func applyComposerDraft(text: String, attachments: [OpenClawPendingAttachment]) {

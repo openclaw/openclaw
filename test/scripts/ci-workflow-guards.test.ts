@@ -1661,18 +1661,17 @@ AFTER_CD
         JSON.stringify(context),
       ).toBe(96);
     }
-    // Fork first attempts keep hosted check stripes but plan Node shards with the
-    // configured backend, so they get the same Node parallelism.
+    // Forks retain hosted concurrency even when the repository backend differs.
     expect(
       evaluateWorkflowExpression(nodeParallel, {
         ...canonicalNodePr,
         runnerBackend: "hybrid",
         headRepository: "contributor/openclaw",
         runnerProfile: "github",
-        preflightOutputs: { node_runner_backend: "hybrid" },
+        preflightOutputs: { node_runner_backend: "github" },
       }),
       "fork first attempt",
-    ).toBe(130);
+    ).toBe(96);
     // Author association no longer limits capacity.
     for (const authorAssociation of [
       "FIRST_TIME_CONTRIBUTOR",
@@ -2533,7 +2532,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     },
   );
 
-  it("keeps tiny hybrid controls hosted without moving security or fork first attempts", () => {
+  it("keeps tiny hybrid controls hosted and preserves same-repository security placement", () => {
     const context = {
       eventName: "pull_request",
       repository: "openclaw/openclaw",
@@ -2552,9 +2551,13 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
         runner({
           authorAssociation: "NONE",
           headRepository: "contributor/openclaw",
+          preflightOutputs: {
+            effective_runner_backend: "github",
+            placement_runner_backend: "github",
+          },
         }),
         `${jobName}: untrusted fork first attempt`,
-      ).toBe("blacksmith-2vcpu-ubuntu-2404");
+      ).toBe("ubuntu-24.04");
       for (const override of [
         { runAttempt: 0 },
         { runAttempt: 2 },
@@ -2610,7 +2613,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
             }),
             `${runnerBackend}: ${authorAssociation}: ${headRepository}`,
           ).toBe(
-            runnerBackend === "hybrid" && headRepository === "openclaw/openclaw"
+            runnerBackend === "hybrid" || headRepository !== "openclaw/openclaw"
               ? "ubuntu-24.04"
               : "blacksmith-2vcpu-ubuntu-2404",
           );
@@ -3820,6 +3823,128 @@ server.listen(0, "127.0.0.1", () => {
           ? "${{ steps.setup-node-env.outputs.vitest-worker-cache-key }}"
           : `\${{ steps.setup-node-env.outputs.vitest-worker-cache-prefix }}-${preset}-\${{ github.run_id }}-\${{ github.run_attempt }}`,
       );
+    }
+  });
+
+  it("activates compact hosted Linux stores while retaining legacy fallback keys", () => {
+    const setup = readWorkflow(".github/actions/setup-pnpm-store-cache/action.yml");
+    const steps = setup.runs.steps as WorkflowStep[];
+    const restore = requiredWorkflowStep(steps, "Restore pnpm store cache");
+    for (const runnerOs of ["Linux", "macOS", "Windows"] as const) {
+      for (const runnerEnvironment of ["github-hosted", "self-hosted"] as const) {
+        const context = {
+          eventName: "schedule" as const,
+          repository: "openclaw/openclaw",
+          runnerOs,
+          runnerArch: "X64" as const,
+          runnerEnvironment,
+          runAttempt: 1,
+          inputs: { "node-version": "24.x", "lockfile-path": "pnpm-lock.yaml" },
+          fileHashes: { "pnpm-lock.yaml": "lock-hash" },
+          steps: { "setup-pnpm": { outputs: { "package-manager": "pnpm@12.15.0" } } },
+        };
+        const render = (template: unknown) =>
+          String(template).replace(/\$\{\{[\s\S]*?\}\}/gu, (expression) =>
+            String(evaluateWorkflowExpression(expression, context)),
+          );
+        const legacy = `pnpm-store-v2-${runnerOs}-X64-24.x-pnpm@12.15.0-lock-hash`;
+        const key = render(restore.with?.key);
+        expect(key).toBe(
+          runnerOs === "Linux" && runnerEnvironment === "github-hosted"
+            ? `${legacy}-fresh`
+            : legacy,
+        );
+        const prefixes = render(restore.with?.["restore-keys"]).trim().split("\n").filter(Boolean);
+        expect(prefixes.some((prefix) => legacy.startsWith(prefix))).toBe(true);
+        expect(prefixes.some((prefix) => key.startsWith(prefix))).toBe(true);
+      }
+    }
+  });
+
+  it("rebuilds only new hosted Linux pnpm store generations without losing bootstrap assets", () => {
+    const warmer = readWorkflow(".github/workflows/vitest-cache-warm.yml");
+    const steps = warmer.jobs.dependencies.steps as WorkflowStep[];
+    const fresh = requiredWorkflowStep(steps, "Populate fresh hosted Linux dependency store");
+    const outputs = {
+      "cache-mode": "read-write",
+      "pnpm-store-cache-key": "new-dependency-generation",
+      "pnpm-store-cache-hit": "false",
+    };
+    const context = {
+      eventName: "schedule" as const,
+      repository: "openclaw/openclaw",
+      runnerOs: "Linux" as const,
+      runnerEnvironment: "github-hosted" as const,
+      runAttempt: 1,
+      steps: { "setup-node-env": { outputs } },
+    };
+    for (const runnerOs of ["Linux", "macOS", "Windows"] as const) {
+      for (const runnerEnvironment of ["github-hosted", "self-hosted"] as const) {
+        for (const hit of ["false", "true"]) {
+          expect(
+            evaluateWorkflowCondition(expectDefined(fresh.if, "fresh store condition"), {
+              ...context,
+              runnerOs,
+              runnerEnvironment,
+              steps: { "setup-node-env": { outputs: { ...outputs, "pnpm-store-cache-hit": hit } } },
+            }),
+          ).toBe(runnerOs === "Linux" && runnerEnvironment === "github-hosted" && hit === "false");
+        }
+      }
+    }
+    for (const rejected of [{ "cache-mode": "restore" }, { "pnpm-store-cache-key": "" }]) {
+      expect(
+        evaluateWorkflowCondition(expectDefined(fresh.if, "fresh store condition"), {
+          ...context,
+          steps: { "setup-node-env": { outputs: { ...outputs, ...rejected } } },
+        }),
+      ).toBe(false);
+    }
+    expect(steps.indexOf(fresh)).toBeLessThan(
+      steps.indexOf(requiredWorkflowStep(steps, "Save exact dependency cache")),
+    );
+
+    const root = tempDirs.make("openclaw-fresh-store-");
+    const store = path.join(root, ".cache", "openclaw-pnpm-store");
+    const modules = [
+      "node_modules",
+      "ui/node_modules",
+      "packages/p/node_modules",
+      "extensions/p/node_modules",
+      "examples/p/node_modules",
+    ];
+    for (const directory of [
+      ...modules,
+      ".cache/openclaw-pnpm-store/toolchain",
+      ".github/actions/setup-node-env",
+      "tmp",
+    ]) {
+      mkdirSync(path.join(root, directory), { recursive: true });
+    }
+    writeFileSync(path.join(store, "stale-package"), "old snapshot");
+    writeFileSync(path.join(store, "toolchain", "pnpm.tgz"), "authenticated bootstrap bytes");
+    writeFileSync(
+      path.join(root, ".github/actions/setup-node-env/install-dependencies.sh"),
+      'test "$DEPENDENCY_CACHE_HIT" = false && test "$FROZEN_LOCKFILE" = true && touch installed\n',
+    );
+    const result = runWorkflowShellScript(expectDefined(fresh.run, "fresh store script"), {
+      cwd: root,
+      env: {
+        ...process.env,
+        ...fresh.env,
+        GITHUB_WORKSPACE: root,
+        PNPM_CONFIG_STORE_DIR: store,
+        RUNNER_TEMP: path.join(root, "tmp"),
+      },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(existsSync(path.join(root, "installed"))).toBe(true);
+    expect(readFileSync(path.join(store, "toolchain", "pnpm.tgz"), "utf8")).toBe(
+      "authenticated bootstrap bytes",
+    );
+    expect(existsSync(path.join(store, "stale-package"))).toBe(false);
+    for (const directory of modules) {
+      expect(existsSync(path.join(root, directory))).toBe(false);
     }
   });
 
@@ -5081,12 +5206,21 @@ ${buildScript}`,
     expect(currentTargetBranch).not.toContain("--no-parallel");
     expect(testStep.run).toContain("swift_test_args+=(--no-parallel)");
 
-    for (const buildExitCode of [0, 23]) {
-      const root = tempDirs.make(`openclaw-swift-test-${buildExitCode}-`);
+    for (const [buildExitCode, historicalTarget] of [
+      [0, false],
+      [23, false],
+      [0, true],
+    ] as const) {
+      const root = tempDirs.make(`openclaw-swift-test-${buildExitCode}-${historicalTarget}-`);
       const binDir = path.join(root, "bin");
       const callsPath = path.join(root, "swift-calls");
       const outputPath = path.join(root, "github-output");
       mkdirSync(binDir, { recursive: true });
+      if (historicalTarget) {
+        const suites = path.join(root, "apps/macos/Tests/OpenClawIPCTests");
+        mkdirSync(suites, { recursive: true });
+        writeFileSync(path.join(suites, "QuickChatCatalogPresentationTests.swift"), "");
+      }
       symlinkSync(path.resolve("scripts"), path.join(root, "scripts"), "dir");
       mkdirSync(path.join(root, ".ci-harness/scripts"), { recursive: true });
       symlinkSync(path.resolve("scripts/lib"), path.join(root, ".ci-harness/scripts/lib"), "dir");
@@ -5143,7 +5277,7 @@ if (args[0] === 'delete-keychain') fs.unlinkSync(args.at(-1));
           GITHUB_OUTPUT: outputPath,
           PATH: `${binDir}:${process.env.PATH ?? ""}`,
           SWIFT_TEST_EXECUTION: "serial",
-          HISTORICAL_TARGET: "false",
+          HISTORICAL_TARGET: String(historicalTarget),
         },
       });
       const calls = readFileSync(callsPath, "utf8").trim().split("\n");
@@ -5153,8 +5287,15 @@ if (args[0] === 'delete-keychain') fs.unlinkSync(args.at(-1));
         ...(buildExitCode === 0
           ? [
               expect.stringMatching(
-                /^test --package-path apps\/macos --build-system native --enable-code-coverage --disable-index-store -Xswiftc -gline-tables-only --skip-build --experimental-maximum-parallelization-width 4 --skip AppStateIsolationTests\|ProfileChatPreferencesTests\|QuickChatCatalogPresentationTests --event-stream-output-path \S+\/swift-testing-events\.jsonl --event-stream-version 6\.3$/,
+                /^test --package-path apps\/macos --build-system native --enable-code-coverage --disable-index-store -Xswiftc -gline-tables-only --skip-build --experimental-maximum-parallelization-width 4 --skip AppStateIsolationTests\|ProfileChatPreferencesTests\|QuickChatCatalogPresentationTests\|DashboardExperienceTests --event-stream-output-path \S+\/swift-testing-events\.jsonl --event-stream-version 6\.3$/,
               ),
+              ...(historicalTarget
+                ? []
+                : [
+                    expect.stringMatching(
+                      /^test --package-path apps\/macos --build-system native --enable-code-coverage --disable-index-store -Xswiftc -gline-tables-only --skip-build --experimental-maximum-parallelization-width 4 --filter DashboardExperienceTests --event-stream-output-path \S+\/swift-testing-events\.jsonl --event-stream-version 6\.3$/,
+                    ),
+                  ]),
               expect.stringMatching(
                 /^test --package-path apps\/macos --build-system native --enable-code-coverage --disable-index-store -Xswiftc -gline-tables-only --skip-build --experimental-maximum-parallelization-width 4 --filter QuickChatCatalogPresentationTests --event-stream-output-path \S+\/swift-testing-events\.jsonl --event-stream-version 6\.3$/,
               ),
@@ -5167,16 +5308,15 @@ if (args[0] === 'delete-keychain') fs.unlinkSync(args.at(-1));
       const output = existsSync(outputPath) ? readFileSync(outputPath, "utf8").trim() : "";
       const outputLines = output.split("\n");
       if (buildExitCode === 0) {
-        expect(outputLines).toHaveLength(4);
+        expect(outputLines).toHaveLength(historicalTarget ? 4 : 5);
         expect(outputLines[0]).toBe("debug-tests-built=true");
+        for (const outputLine of outputLines.slice(1, -1)) {
+          expect(
+            outputLine.startsWith(`menu-default-artifact-path=${root}/openclaw-menu-default-`),
+          ).toBe(true);
+        }
         expect(
-          outputLines[1]?.startsWith(`menu-default-artifact-path=${root}/openclaw-menu-default-`),
-        ).toBe(true);
-        expect(
-          outputLines[2]?.startsWith(`menu-default-artifact-path=${root}/openclaw-menu-default-`),
-        ).toBe(true);
-        expect(
-          outputLines[3]?.startsWith(`menu-named-artifact-path=${root}/openclaw-menu-named-`),
+          outputLines.at(-1)?.startsWith(`menu-named-artifact-path=${root}/openclaw-menu-named-`),
         ).toBe(true);
       } else {
         expect(output).toBe("");

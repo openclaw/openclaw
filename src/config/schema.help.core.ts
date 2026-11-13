@@ -169,6 +169,14 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Absolute path to a private file containing the revision's 32-byte credential as 64 lowercase hexadecimal characters. File replacement or removal invalidates existing grants.",
   "gateway.auth.trustedProxy.cloudflareAccessOidc":
     "Optional verified GitHub identity from a selected Cloudflare Access OIDC provider. Requires the standard Access email and assertion headers. Missing claims keep email-only profiles; existing profile roles and co-author preferences are preserved.",
+  "gateway.auth.trustedProxy.gitCoauthor":
+    "Optional organization co-author defaults from authenticated proxy headers. The proxy must overwrite these fields. They do not verify GitHub identity or grant permissions; supplied email addresses require saved consent before appearing in commit history.",
+  "gateway.auth.trustedProxy.gitCoauthor.nameHeader":
+    "Header containing the organization's co-author name for the authenticated principal.",
+  "gateway.auth.trustedProxy.gitCoauthor.emailHeader":
+    "Header containing the organization's commit credit email for the authenticated principal.",
+  "gateway.auth.trustedProxy.gitCoauthor.emailVerifiedHeader":
+    "Optional header that must equal true before organization defaults are imported. Omit only when the proxy's email assertion is sufficient for your policy.",
   "gateway.auth.trustedProxy.cloudflareAccessOidc.issuer":
     "Exact HTTPS origin of the trusted Cloudflare Access team, such as https://example.cloudflareaccess.com, without a trailing slash. Claims from other issuers do not supply GitHub identity.",
   "gateway.auth.trustedProxy.cloudflareAccessOidc.providerId":

@@ -210,7 +210,7 @@ record. A representative event has this shape:
   it is not provider-reported billing. Trace context can also include
   `parentSpanId`.
 
-The Gateway's `/tmp/openclaw/openclaw-YYYY-MM-DD.log` JSONL file and
+The Gateway's `<stateDir>/logs/openclaw-YYYY-MM-DD.log` JSONL file and
 `diagnostics.otel.logsExporter: "stdout"` contain ordinary log records, not raw
 `model.usage` events. Public diagnostic subscriptions and
 `diagnostics.stability` do not expose trusted core usage events. The

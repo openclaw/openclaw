@@ -1,0 +1,4 @@
+# Remote access setup: hover/click detail access, native keyboard entry/exit,
+# nested Escape and accessible error descriptions through the real dialog.
+# Extends the existing browser flow and publication table; no new test cases.
+29

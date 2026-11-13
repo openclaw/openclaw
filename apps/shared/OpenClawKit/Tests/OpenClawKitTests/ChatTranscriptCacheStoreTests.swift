@@ -103,14 +103,15 @@ private final class OutboxReadCounter: @unchecked Sendable {
     }
 }
 
-private func outboxCommand(
+func outboxCommand(
     id: String = UUID().uuidString,
     sessionKey: String = "main",
     text: String,
     attachments: [OpenClawChatOutboxAttachment] = [],
     thinking: String = "off",
     createdAt: Double = Date().timeIntervalSince1970,
-    status: OpenClawChatOutboxCommand.Status = .queued) -> OpenClawChatOutboxCommand
+    status: OpenClawChatOutboxCommand.Status = .queued,
+    lastError: String? = nil) -> OpenClawChatOutboxCommand
 {
     OpenClawChatOutboxCommand(
         id: id,
@@ -124,7 +125,7 @@ private func outboxCommand(
         createdAt: createdAt,
         status: status,
         retryCount: 0,
-        lastError: nil)
+        lastError: lastError)
 }
 
 private func withRawDatabase(at url: URL, _ body: (OpaquePointer) throws -> Void) throws {

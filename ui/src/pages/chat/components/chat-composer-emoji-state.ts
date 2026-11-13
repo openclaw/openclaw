@@ -1,6 +1,7 @@
 import { createStore } from "solid-js";
 import type { Overlay } from "../../../components/overlay-lifecycle.ts";
 import type { EmojiTarget } from "../../../lib/chat/emoji.ts";
+import { composerInputHasFocus } from "../../../lib/composer-input.ts";
 import { createIdleImport } from "../../../lib/idle-import.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
 
@@ -79,7 +80,7 @@ export function createComposerEmojiMenu() {
       if (
         enabled &&
         target.isConnected &&
-        target.ownerDocument.activeElement === target &&
+        composerInputHasFocus(target) &&
         !target.disabled &&
         !target.readOnly &&
         target.selectionStart === target.selectionEnd &&

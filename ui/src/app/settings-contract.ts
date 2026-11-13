@@ -201,6 +201,8 @@ export type UiSettings = {
   background?: BackgroundPreference;
   chatShowThinking: boolean;
   chatShowToolCalls: boolean;
+  // Browser-local opt-in; grouped command activity remains the default.
+  chatInlineCommands?: boolean;
   chatPersistCommentary?: boolean;
   // Browser-local composer visibility; saved progress and other placements are unchanged.
   chatShowTaskProgress?: boolean;

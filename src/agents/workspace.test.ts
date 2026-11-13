@@ -143,10 +143,7 @@ it.each([
 
 it("rejects invalid environment-only profile names", () => {
   expect(() =>
-    resolveDefaultAgentWorkspaceDir({
-      OPENCLAW_PROFILE: "../escape",
-      HOME: "/home/peter",
-    }),
+    resolveDefaultAgentWorkspaceDir({ OPENCLAW_PROFILE: "../escape", HOME: "/home/peter" }),
   ).toThrow('Invalid profile name: "../escape"');
 });
 
@@ -400,21 +397,19 @@ it.each([
   async (content, _kind, hash) => {
     await ensureWorkspace();
     await fs.rm(workspacePath(BOOTSTRAP));
-    const customInstructions = "custom instructions\n";
     if (content === "customized") {
-      await fs.writeFile(workspacePath(AGENTS), customInstructions);
+      await writeWorkspaceFile(AGENTS, "custom instructions\n");
     }
     const snapshot = await readWorkspaceStateSnapshot(tempDir);
     const generatedHashes = new Map(snapshot.attestation!.generatedHashes);
-    if (hash === undefined) {
-      generatedHashes.delete(AGENTS);
-    } else {
+    generatedHashes.delete(AGENTS);
+    if (hash) {
       generatedHashes.set(AGENTS, hash);
     }
     await attest(generatedHashes);
     if (content === "customized") {
       await expect(ensureWorkspace()).resolves.toMatchObject({ dir: tempDir });
-      await expect(fs.readFile(workspacePath(AGENTS), "utf8")).resolves.toBe(customInstructions);
+      expect(await readWorkspaceFile(AGENTS)).toBe("custom instructions\n");
     } else {
       await expectWorkspaceVanished(ensureWorkspace());
     }
@@ -423,12 +418,9 @@ it.each([
 
 it("creates only the directory for runtime-managed-implicit provisioning (#92015)", async () => {
   const targetDir = testState!.path("implicit-parent/implicit-acp-workspace");
-  const result = await ensureAgentWorkspace({
-    dir: targetDir,
-    ensureBootstrapFiles: true,
-    provisioning: "runtime-managed-implicit",
-  });
-  expect(result).toMatchObject({ dir: targetDir, bootstrapPending: false });
+  await expect(
+    ensureWorkspace(true, { dir: targetDir, provisioning: "runtime-managed-implicit" }),
+  ).resolves.toMatchObject({ dir: targetDir, bootstrapPending: false });
   await fs.access(targetDir);
   for (const name of [AGENTS, BOOTSTRAP, ".git"]) {
     await expectPathMissing(path.join(targetDir, name));
@@ -592,18 +584,21 @@ describe.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
       await fs.chmod(tempDir, 0o700);
     });
 
-    it.each([0o300, 0o000])(
-      "retains optional bootstrap entries when root mode is %s",
-      async (mode) => {
-        const names = [AGENTS, MEMORY, USER] as const;
-        for (const name of names) {
+    it.each([
+      [0o300, [AGENTS, MEMORY, USER]],
+      [0o000, [AGENTS, MEMORY, USER]],
+      [0o300, [AGENTS]],
+    ] as const)(
+      "retains present optional bootstrap entries when root mode is %s: %j",
+      async (mode, present) => {
+        for (const name of present) {
           await fs.writeFile(path.join(tempDir, name), `content:${name}`);
         }
         await fs.chmod(tempDir, mode);
         await expect(fs.readdir(tempDir)).rejects.toMatchObject({ code: "EACCES" });
-        const files = await loadWorkspaceBootstrapFiles(tempDir, names);
+        const files = await loadWorkspaceBootstrapFiles(tempDir, [AGENTS, MEMORY, USER]);
         expect(files.toSorted((a, b) => a.name.localeCompare(b.name))).toMatchObject(
-          [...names].toSorted().map((name) => ({
+          [...present].toSorted().map((name) => ({
             name,
             missing: false,
             content: mode === 0o300 ? `content:${name}` : expect.stringContaining("[UNREADABLE:"),
@@ -611,14 +606,6 @@ describe.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
         );
       },
     );
-
-    it("omits absent optional bootstrap files when the root cannot be listed", async () => {
-      await fs.writeFile(path.join(tempDir, AGENTS), "instructions");
-      await fs.chmod(tempDir, 0o300);
-      await expect(fs.readdir(tempDir)).rejects.toMatchObject({ code: "EACCES" });
-      const files = await loadWorkspaceBootstrapFiles(tempDir, [AGENTS, MEMORY, USER]);
-      expect(files).toMatchObject([{ name: AGENTS, content: "instructions" }]);
-    });
 
     it.each(["skip-bootstrap", "onboarding", "surviving skills"] as const)(
       "rejects unlistable %s setup without changing content or state",

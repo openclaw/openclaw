@@ -321,6 +321,7 @@ extension OpenClawChatViewModel {
         guard !self.isApplyingRecalledInput else { return }
         let key = self.visibleComposerKey
         self.composerRevisionsBySession[key, default: 0] &+= 1
+        self.clearComposerNotice()
         self.inputHistoriesBySession[key, default: ChatInputHistory()].draftChanged(to: self.input)
         self.scheduleComposerDraftSave()
     }

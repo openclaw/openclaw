@@ -591,6 +591,7 @@ describe("prepareEmbeddedAttemptStream", () => {
             execute: async () => ({ content: [{ type: "text", text: "clean" }] }),
           } as never,
           toolName: "exec",
+          toolId: "openclaw:core:exec",
           source: "openclaw",
           toolCallId: "progress-detail-exec",
           input: { command: "git status" },
