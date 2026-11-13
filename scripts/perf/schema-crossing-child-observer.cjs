@@ -3,7 +3,6 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { Session } = require("node:inspector");
 const { syncBuiltinESMExports } = require("node:module");
-const { DatabaseSync } = require("node:sqlite");
 const { deserialize } = require("node:v8");
 const { threadId } = require("node:worker_threads");
 const directory = process.env.SCHEMA_CROSSING_CHILD_OBSERVATIONS;
@@ -21,39 +20,6 @@ if (directory) {
     readBytes += bytes;
     return bytes;
   };
-  const sql = new Map();
-  if (process.env.SCHEMA_CROSSING_SQL_TIMINGS === "1") {
-    // Forward each database receiver explicitly below.
-    // oxlint-disable-next-line typescript/unbound-method
-    const prepare = DatabaseSync.prototype.prepare;
-    DatabaseSync.prototype.prepare = function (query) {
-      const statement = prepare.call(this, query);
-      const measure = (original) =>
-        new Proxy(original, {
-          apply(target, receiver, args) {
-            const start = performance.now();
-            try {
-              return Reflect.apply(target, receiver, args);
-            } finally {
-              const row = sql.get(query) ?? { calls: 0, ms: 0 };
-              row.calls++;
-              row.ms += performance.now() - start;
-              sql.set(query, row);
-            }
-          },
-        });
-      statement.get = measure(statement.get.bind(statement));
-      statement.all = measure(statement.all.bind(statement));
-      statement.run = measure(statement.run.bind(statement));
-      const iterate = statement.iterate.bind(statement);
-      statement.iterate = (...args) => {
-        const iterator = iterate(...args);
-        iterator.next = measure(iterator.next.bind(iterator));
-        return iterator;
-      };
-      return statement;
-    };
-  }
   let active;
   process.on("message", (message) => {
     if (!message || !Array.isArray(message.args)) {
@@ -125,7 +91,6 @@ if (directory) {
       cpu: process.cpuUsage(),
       readBytes,
       allocatedBytes,
-      sql: [...sql].toSorted((a, b) => b[1].ms - a[1].ms).slice(0, 30),
     });
   });
 }

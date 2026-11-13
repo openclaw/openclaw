@@ -330,8 +330,8 @@ export function runSqliteReadOnlyWorker(
     (inputOptions.mode === "auth-profile-rows" || inputOptions.mode === "operation") &&
     inputOptions.source === "canonical" &&
     isArtifactPreservingStateRead("agent", pathname)
-      ? readCustodiedDrainedSqliteSource(pathname)
-        ? { ...inputOptions, source: "custodied", artifactPreserving: undefined }
+      ? inputOptions.mode === "auth-profile-rows" && readCustodiedDrainedSqliteSource(pathname)
+        ? { ...inputOptions, artifactPreserving: true, immutable: true }
         : { ...inputOptions, artifactPreserving: true }
       : inputOptions;
   return runScopedSqliteInspection(options.signal, (signal) => {

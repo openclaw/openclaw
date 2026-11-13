@@ -277,13 +277,35 @@ function read(
   });
 }
 
-it.each([false, true])(
+it.each(["delete", "drained-wal", "journal"])(
   "reads custodied auth rows without bypassing journal recovery (%s)",
-  async (journal) => {
+  async (kind) => {
     const { source, rows } = createAuthDatabase();
+    const journal = kind === "journal";
+    if (kind === "drained-wal") {
+      const database = openNodeSqliteDatabase(source);
+      database.exec(
+        `PRAGMA journal_mode=WAL; PRAGMA user_version=${OPENCLAW_AGENT_SCHEMA_VERSION}; PRAGMA wal_checkpoint(TRUNCATE)`,
+      );
+      const sidecars = ["-wal", "-shm"].map((suffix) => ({
+        file: source + suffix,
+        bytes: fs.readFileSync(source + suffix),
+      }));
+      database.close();
+      for (const { file, bytes } of sidecars) {
+        fs.writeFileSync(file, bytes);
+      }
+    }
     if (journal) {
       fs.writeFileSync(`${source}-journal`, Buffer.alloc(512));
     }
+    const family = ["", "-wal", "-shm", "-journal"].map((suffix) => ({
+      file: source + suffix,
+      bytes: fs.existsSync(source + suffix) ? fs.readFileSync(source + suffix) : undefined,
+      mtimeNs: fs.existsSync(source + suffix)
+        ? fs.statSync(source + suffix, { bigint: true }).mtimeNs
+        : undefined,
+    }));
     const requests: unknown[] = [];
     const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
     vi.mocked(spawn).mockImplementation((...args) => {
@@ -312,7 +334,7 @@ it.each([false, true])(
                 agentDatabases: true,
               }),
             ),
-          ).toEqual({ ...rows, cacheable: !journal });
+          ).toEqual({ ...rows, cacheable: false });
         } finally {
           await scope.close();
         }
@@ -321,11 +343,19 @@ it.each([false, true])(
     expect(requests).toContainEqual(
       expect.objectContaining({
         auth: expect.objectContaining({
-          artifactPreserving: journal ? true : undefined,
+          artifactPreserving: true,
+          immutable: journal ? undefined : true,
           retainReader: false,
         }),
       }),
     );
+    for (const { file, bytes, mtimeNs } of family) {
+      expect(fs.existsSync(file)).toBe(bytes !== undefined);
+      if (bytes) {
+        expect(fs.readFileSync(file)).toEqual(bytes);
+        expect(fs.statSync(file, { bigint: true }).mtimeNs).toBe(mtimeNs);
+      }
+    }
   },
 );
 
