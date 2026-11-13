@@ -1525,12 +1525,14 @@ src/logging/json-console-line.ts
 src/logging/levels.ts
 src/logging/log-file-path.ts
 src/logging/log-file-shared.ts
+src/logging/log-tail.ts
 src/logging/logger-file-message.ts
 src/logging/logger-file-transport.ts
 src/logging/logger-file-io.ts
 src/logging/logger-file-worker.ts
 src/logging/logger-file.worker.ts
 src/logging/logger.ts
+src/logging/parse-log-line.ts
 src/logging/redact-bounded.ts
 src/logging/redact-edit-composition.ts
 src/logging/redact-json-tokens.ts
