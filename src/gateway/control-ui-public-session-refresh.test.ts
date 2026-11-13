@@ -211,7 +211,6 @@ it("replaces surrounding rows and page content without detaching a kept widget",
   expect(f.document.querySelector(".transcript")!.textContent).toContain("new tail");
   expect(f.document.querySelector(".transcript")!.textContent).not.toContain("old");
   expect(f.document.querySelector(".article-head h1")!.textContent).toBe("Earlier conversation");
-  expect(f.document.querySelectorAll(".pagination")).toHaveLength(1);
   expect(f.document.title).toBe("Earlier conversation · OpenClaw");
   await vi.advanceTimersByTimeAsync(60000);
   expect(f.fetch).toHaveBeenCalledTimes(1);

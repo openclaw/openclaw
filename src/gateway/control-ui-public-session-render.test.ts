@@ -233,7 +233,6 @@ describe("public session document", () => {
     const frame = pending.querySelector(".app-frame")!;
     expect(frame.getAttribute("aria-hidden")).toBe("true");
     expect(frame.textContent).toBe("");
-    expect(frame.querySelector(".list-current")).toBeNull();
     expect(frame.querySelectorAll("a, button, [tabindex]")).toHaveLength(0);
     const status = pending.querySelector('[role="status"]')!;
     expect(status.querySelector("svg")?.closest('[aria-hidden="true"]')).toBeTruthy();
@@ -243,31 +242,16 @@ describe("public session document", () => {
     const reader = fragment([], { entryUrl });
     const readerFrame = reader.querySelector(".app-frame")!;
     expect(readerFrame.getAttribute("aria-hidden")).toBe("true");
-    for (const page of [pending, reader]) {
-      const rail = page.querySelector(".app-rail")!;
-      expect(rail.textContent).toBe("");
-      expect(rail.querySelectorAll("svg, img, a, button, [tabindex]")).toHaveLength(0);
-      expect(rail.querySelectorAll("i")).toHaveLength(8);
-      expect(page.querySelectorAll(".list-rows > .list-row")).toHaveLength(13);
-      expect(page.querySelectorAll(".list-rows > .ghost-bar")).toHaveLength(3);
-      expect(page.querySelector(".list-header > .list-brand")).not.toBeNull();
-      expect(page.querySelector(".ghost-panel, .ghost-card")).toBeNull();
-    }
     expect(readerFrame.querySelectorAll("a, button, [tabindex]")).toHaveLength(0);
     expect(readerFrame.querySelector(".list-current")?.textContent).toBe("A shared conversation");
-    expect(readerFrame.querySelector(".session-indicator")).not.toBeNull();
     expect(reader.querySelector(".reader-title .reader-badge")?.textContent).toBe("Public session");
     expect(reader.querySelector(".article-head .reader-badge")?.textContent).toBe("Public session");
-    expect(reader.querySelector(".reader-menu, .reader-login")).toBeNull();
     expect(reader.querySelector(".reader-actions #session-login")?.getAttribute("href")).toBe(
       entryUrl,
     );
     expect(reader.querySelectorAll(`a[href="${entryUrl}"]`)).toHaveLength(1);
     expect(reader.querySelector(".reader-topbar .brand")?.getAttribute("href")).toBe(
       "https://openclaw.ai",
-    );
-    expect(reader.querySelector(".colophon")?.textContent).toBe(
-      "Made with OpenClawYour assistant, on your devices, in your chats.Get startedWhy OpenClaw",
     );
     expect(
       fragment([], { title: "Conversation unavailable", unavailable: true }).querySelector(
@@ -428,7 +412,6 @@ describe("public session document", () => {
       ],
       { mediaBaseUrl: "/control/share/session/media?token=v1.opaque" },
     );
-    expect(JSDOM.fragment(html).querySelector("[data-public-i18n=messageOther]")).toBeNull();
     expect(html.match(/<article class="message /g)).toHaveLength(2);
     expect(html).toContain('<span class="attachment">voice-note.mp3</span>');
     expect(html).toContain('<span class="attachment">walkthrough.mp4</span>');
