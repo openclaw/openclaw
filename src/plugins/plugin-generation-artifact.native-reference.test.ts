@@ -180,8 +180,7 @@ it.each(["hardlink", "copy"] as const)("validates %s placements through recovery
       expect.soft(walks(successor.rootDir)).toBe(1);
       paths.mockClear();
       recovery = first.captureRecoverySource();
-      // Detached copies use ordinary recovery capture, rather than retaining an inode reference.
-      expect.soft(walks(recovery.rootDir)).toBe(kind === "hardlink" ? 1 : 0);
+      expect.soft(walks(recovery.rootDir)).toBe(1);
       expect(readText(path.join(recovery.rootDir, "helper.dat"))).toBe("original companion");
 
       writeTree(root, { "helper.dat": "replacement companion" });
@@ -192,6 +191,9 @@ it.each(["hardlink", "copy"] as const)("validates %s placements through recovery
       expect(readText(path.join(replacement.rootDir, "helper.dat"))).toBe("replacement companion");
       expect(readText(path.join(first.rootDir, "helper.dat"))).toBe("original companion");
       writeTree(replacement.rootDir, { "helper.dat": "damaged capture" });
+      expect(() => resources.keep(replacement.captureRecoverySource())).toThrow(
+        "Native plugin companions cannot be preserved",
+      );
       expect(() => replacement.linkHost(hosts[0]!)).toThrow(
         "Native plugin companions cannot be preserved",
       );
