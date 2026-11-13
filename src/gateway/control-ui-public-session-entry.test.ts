@@ -150,6 +150,10 @@ describe("public reader operator handoff", () => {
     expect(f.document.querySelector(".entry-status")?.textContent).toContain("reload or log in");
     expect(f.document.title).not.toContain("unavailable");
     expect(f.loginVisibility()).toBe("visible");
+    expect(f.document.querySelector(".topbar .brand")?.getAttribute("href")).toBe(
+      "https://openclaw.ai",
+    );
+    expect(f.document.querySelector(".app-frame, .ghost-panel")).toBeNull();
     expect(f.replace).not.toHaveBeenCalled();
   });
 
