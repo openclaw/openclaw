@@ -117,6 +117,7 @@ export async function recoverNoticeAcknowledgementCrash({
   expect(JSON.parse(checkpoint[0]!.entry_json)).toMatchObject({
     recoveryState: "settlement_pending",
     // Queue custody crosses JSON, which omits optional undefined fields.
+    // oxlint-disable-next-line unicorn/prefer-structured-clone
     deliveryCompletion: JSON.parse(JSON.stringify(completion)),
   });
   const entry = await readEntry();
