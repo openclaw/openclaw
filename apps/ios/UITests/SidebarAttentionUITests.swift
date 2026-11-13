@@ -52,11 +52,13 @@ final class SidebarAttentionUITests: XCTestCase {
         self.capture(app, named: "family-expanded")
         let collapse = app.buttons["Hide Sub-sessions"].firstMatch
         XCTAssertTrue(collapse.waitForExistence(timeout: 10))
-        collapse.tap()
+        app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: collapse.frame.midX, dy: parent.frame.midY)).tap()
         XCTAssertTrue(review.waitForNonExistence(timeout: 5))
         XCTAssertTrue(grandchild.waitForNonExistence(timeout: 5))
         self.capture(app, named: "family-collapsed")
-        app.buttons["Show Sub-sessions"].firstMatch.tap()
+        let expand = app.buttons["Show Sub-sessions"].firstMatch
+        XCTAssertTrue(expand.waitForExistence(timeout: 5))
+        app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: expand.frame.midX, dy: parent.frame.midY)).tap()
         XCTAssertTrue(review.waitForExistence(timeout: 5))
         XCTAssertTrue(grandchild.waitForExistence(timeout: 5))
         XCTAssertEqual(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Pending review")).count, 1)
