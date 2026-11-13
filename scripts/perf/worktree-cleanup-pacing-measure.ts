@@ -606,6 +606,7 @@ try {
     "src/agents/worktrees/registry-retirement.ts",
     "src/gateway/worktree-maintenance.ts",
     "src/gateway/scratch-maintenance-custody.ts",
+    "src/sessions/session-controller.queries.ts",
     "src/infra/host-io-pressure.ts",
     "src/infra/scratch-cleanup.ts",
     "src/infra/scratch-cleanup-tree.ts",
