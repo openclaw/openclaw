@@ -172,6 +172,8 @@ it("keeps a deliberate provider switch when leaving a personal account for a cac
   const f = retainedAccountDraft("provider-switch");
   await f.connect();
   const reads = f.request.mock.calls.filter(([method]) => method === "models.list").length;
+  f.find("model-provider-toggle", "openai")!.click();
+  flush();
   f.find("model-option", "openai/other")!.click();
   expect(f.model()).toBe("openai/other");
   expect(f.savePreference).toHaveBeenLastCalledWith(

@@ -185,7 +185,6 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
           aria-busy={params.triggerLoading ? "true" : "false"}
           aria-disabled={params.disabled ? "true" : "false"}
           aria-description={params.disabledReason}
-          title={params.disabledReason?.trim() || undefined}
         >
           {!params.triggerLoading &&
           !params.triggerStatusLabel &&

@@ -8,7 +8,7 @@ import { makeChatHost, requestCalls } from "./chat-host.test-support.ts";
 import { switchChatModel } from "./chat-session.ts";
 import { renderChatModelControls } from "./chat-view.test-helpers.ts";
 import type { ChatModelControls } from "./components/chat-model-controls.tsx";
-import { expandModelProviders } from "./components/chat-model-picker.test-support.tsx";
+import { selectModelProvider } from "./components/chat-model-picker.test-support.tsx";
 
 const codexChoice = {
   agentRuntime: { id: "codex", source: "model" },
@@ -59,7 +59,7 @@ async function renderControls(
     container,
   );
   flush();
-  expandModelProviders(container);
+
   return container;
 }
 
@@ -282,6 +282,7 @@ describe("chat model runtime choices", () => {
     const opus = { ...model, id: "claude-opus-5-5", provider: "anthropic" };
     const claudeCli = { id: "claude-cli", source: "model" } as const;
     const container = await renderRuntimeModel({ ...opus, agentRuntime: claudeCli }, "codex");
+    selectModelProvider(container, "claude-cli");
     const row = container.querySelector('[data-chat-model-default="true"]');
     expect(row?.closest("section")?.dataset.chatModelProviderGroup).toBe("claude-cli");
   });
@@ -314,7 +315,9 @@ describe("chat model runtime choices", () => {
         expect(row && optionName(row)).toBe("GPT-5.6 Sol codex");
         expect(row?.disabled).toBe(guard === "unsupported-runtime");
         if (guard === "unsupported-runtime") {
-          expect(row?.title).toBe("This harness is unavailable for this model.");
+          expect(row?.getAttribute("aria-label")).toContain(
+            "This harness is unavailable for this model.",
+          );
         }
         row?.click();
       }

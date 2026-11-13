@@ -1358,7 +1358,8 @@ select.settings-select:not([multiple]) {
 }
 
 /* At the end of a row, the glyph's ink lines up with the edge of the card below. */
-openclaw-tooltip:last-child > .refresh-button {
+openclaw-tooltip:last-child > .refresh-button,
+:not(openclaw-tooltip) > .refresh-button:last-child {
   margin-inline-end: -10px;
 }
 
@@ -1375,20 +1376,23 @@ openclaw-tooltip:last-child > .refresh-button {
   }
 
   /* Touch paints no hover box, so the glyph moves inside it and nothing overflows the gutter. */
-  openclaw-tooltip:last-child > .refresh-button {
+  openclaw-tooltip:last-child > .refresh-button,
+  :not(openclaw-tooltip) > .refresh-button:last-child {
     justify-items: end;
     margin-inline-end: 0;
   }
 
   /* Beside a neighbor the box starts at that neighbor and reaches into the gutter, so the large
      touch box keeps the glyph at its desktop distance. */
-  * + openclaw-tooltip:last-child > .refresh-button {
+  * + openclaw-tooltip:last-child > .refresh-button,
+  * + .refresh-button:last-child {
     justify-items: start;
     margin-inline: -8px -4px;
     padding-inline-start: 15px;
   }
 
-  .settings-section__actions > * + openclaw-tooltip:last-child > .refresh-button {
+  .settings-section__actions > * + openclaw-tooltip:last-child > .refresh-button,
+  .settings-section__actions > * + .refresh-button:last-child {
     margin-inline-end: -12px;
   }
 }

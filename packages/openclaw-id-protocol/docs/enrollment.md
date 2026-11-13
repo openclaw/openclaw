@@ -292,10 +292,37 @@ polling/reconnect. This is routing configuration, not authority: the link's claw
 and root fingerprint must still verify the descriptor, binding and snapshot before dialing.
 Never send the invite secret or proof key to the configured Discovery origin.
 
+### Owner device node
+
+A native app (the macOS app first) signs in with OpenClaw ID and becomes an **owner device**, not
+a node-invite node. Its node is an implementation detail bound to that same approval:
+
+- The app holds D and an owner peer key W in its own process, and a separate node key W_node
+  that is the only key its node worker sees. W_node never holds human authority.
+- **SAS approval.** `start` gains an optional `node { peer_key: W_node, description }`. The
+  commitment and transcript cover it, so the six compared digits bind D, W and W_node and the
+  surface the approver shows ("will also be able to run tools"). A browser's `start` has no
+  `node` and commits exactly as before. Discovery relays `start` unparsed.
+- **Kit enrollment.** The app derives R in-process and signs the cert and the change with the
+  same `node`; it arrives over the mailbox as a `root_statement` (owners get `kit_used`).
+- `add_owner_device { cert, node }` lists the device, then binds the node:
+  `NodeRecord { owner_device: fp(D), added_by, description, … }` with no `invite_id`. The key
+  must not be a human key (R, any D, any owner/member peer key, including the new device's) or
+  another node's key; a device has at most one node, and binding a new key replaces the old one.
+  A change without `node` leaves a listed device's node as it is.
+- The node is listed in `node_peer_keys`, so tunnel and relay admission work unchanged, and its
+  auto-pairing is bounded by the approved `description`, as for invited nodes.
+- **Stop using for tools:** `remove_node { peer_key }` removes only the node; the device stays.
+  The device (or anyone who may re-add it) turns it back on with a re-add carrying `node`.
+- **Removing the device removes its node:** a Revocation of the device (directly or through the
+  device that approved it) and an inactivity drop of the device remove the bound node with the
+  usual node-removal events. A node from an invite is never bound to its approver.
+
 ### Node authority and lifecycle
 
 `AuthorityState.nodes` is keyed by W. `NodeRecord` holds `label`, `listed_seq`, `added_by`
-(root or approving owner fingerprint), `last_seen`, `invite_id` and `description`. `node_invites` is a
+(root or approving owner fingerprint), `last_seen`, `description`, and either `invite_id` (from a
+node invite) or `owner_device` (bound to an owner device, above). `node_invites` is a
 separate map of `NodeInviteRecord`. Both invite maps share an ID namespace and a total
 `MAX_INVITES` cap (100) and spent-record cleanup. Node links have the stricter one-hour
 registration limit above; the member-invite lifetime is unchanged.

@@ -87,7 +87,7 @@ import {
 import type { ChatProps } from "./chat-view.tsx";
 import * as chatMessageConfirmation from "./components/chat-message-confirmation-view.tsx";
 import { renderChatModelAccountControl } from "./components/chat-model-account-control.ts";
-import { expandModelProviders } from "./components/chat-model-picker.test-support.tsx";
+import { selectModelProvider } from "./components/chat-model-picker.test-support.tsx";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 import { resetThreadPresentation } from "./components/chat-thread-interactions.ts";
 import {
@@ -2385,7 +2385,7 @@ describe("chat model controls", () => {
     },
     {
       selected: "google:key",
-      expected: "API",
+      expected: "API key",
       model: { id: "gemini", name: "Gemini", provider: "google" },
       providers: googleAuthProviders,
     },
@@ -2442,7 +2442,7 @@ describe("chat model controls", () => {
         ],
       },
     });
-    expandModelProviders(container);
+
     expect(
       container
         .querySelector('[data-chat-model-provider="openai"]')
@@ -2572,11 +2572,14 @@ describe("chat model controls", () => {
       ],
     });
     const container = await renderModelControls(state);
-    expandModelProviders(container);
-    expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(3);
+
+    expect(container.querySelectorAll("[data-chat-model-provider-toggle]")).toHaveLength(2);
+    expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(1);
     const shared = container.querySelector('[data-chat-model-option="example/shared"]');
     expect(shared?.textContent).toContain("Last label");
     expect(shared?.textContent).toContain("111k");
+    selectModelProvider(container, "openai");
+    expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(2);
     for (const provider of ["codex", "openai"]) {
       const row = container.querySelector(`[data-chat-model-option="${provider}/gpt-5.5"]`);
       expect(row?.textContent).toContain("Canonical label");
@@ -2946,18 +2949,17 @@ describe("chat model controls", () => {
     const container = await renderModelControls(state);
 
     const providerButtons = Array.from(
-      container.querySelectorAll<HTMLButtonElement>("[data-chat-model-provider]"),
+      container.querySelectorAll<HTMLButtonElement>("[data-chat-model-provider-toggle]"),
     );
-    expect(
-      providerButtons.map((button) =>
-        button.querySelector(".chat-controls__provider-label")?.textContent?.trim(),
-      ),
-    ).toEqual(["OpenRouter", "Google"]);
-    expandModelProviders(container);
+    expect(providerButtons.map((button) => button.getAttribute("aria-label"))).toEqual(
+      expect.arrayContaining(["Google", "OpenRouter"]),
+    );
+    selectModelProvider(container, "google");
     expect(
       container.querySelector<HTMLElement>('[data-chat-model-provider-group="google"]')
         ?.textContent,
     ).toContain("Gemma 4");
+    selectModelProvider(container, "openrouter");
     expect(
       container.querySelector<HTMLElement>('[data-chat-model-provider-group="openrouter"]')
         ?.textContent,

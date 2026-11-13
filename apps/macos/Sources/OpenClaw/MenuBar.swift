@@ -582,12 +582,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             connectionMode: AppStateStore.shared.connectionMode,
             onboardingSeen: AppStateStore.shared.onboardingSeen,
             onboardingVersion: AppDefaults.standard.integer(forKey: onboardingVersionKey),
+            joinedClaw: MacOpenClawIDJoinCompletion.primaryIsJoinedClaw(
+                mode: AppStateStore.shared.connectionMode,
+                remoteUrl: AppStateStore.shared.remoteUrl),
             markComplete: { OnboardingController.markComplete() },
             show: {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
                     guard !AppStateStore.shared.onboardingSeen else { return }
                     OnboardingController.shared.show()
                 }
-            })
+            },
+            openDashboard: { AppNavigationActions.openDashboard() })
     }
 }

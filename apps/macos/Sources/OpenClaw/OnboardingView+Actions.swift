@@ -104,7 +104,8 @@ extension OnboardingView {
         // Fresh activation hands off to the dashboard's custodian onboarding, which
         // owns the remaining first-run steps (memory import, channels, permissions,
         // hatch). A live-verified pre-existing setup reopens the normal dashboard.
-        dashboardHandoffOpener(aiSetup.verifiedExistingInference ? .dashboard : .custodianOnboarding)
+        dashboardHandoffOpener(
+            aiSetup.verifiedExistingInference || primaryIsJoinedClaw ? .dashboard : .custodianOnboarding)
         return true
     }
 }

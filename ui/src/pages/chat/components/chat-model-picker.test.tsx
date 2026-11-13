@@ -67,7 +67,7 @@ it("forgets disclosure for removed providers", async () => {
   await waitForMenu(container);
   const group = () =>
     container.querySelector<HTMLElement>('[data-chat-model-provider-group="other"]')!;
-  const toggle = () => control(group(), "provider-toggle")!;
+  const toggle = () => control(container, "provider-toggle", "other")!;
   const rest = () => control(group(), "option", "other/rest")!;
   toggle().click();
   flush();
@@ -81,7 +81,7 @@ it("forgets disclosure for removed providers", async () => {
   });
   expect(group()).toBeNull();
   update(params);
-  expect(toggle().getAttribute("aria-expanded")).toBe("false");
+  expect(toggle().getAttribute("aria-selected")).toBe("false");
   toggle().click();
   flush();
   expect(rest()).toBeNull();
@@ -140,6 +140,7 @@ it.each([false, true])(
       modelOptions: [
         option("fixture", "lead", { recommended: true }),
         option("fixture", "rest", { disabled: restDisabled }),
+        option("other", "model"),
       ],
       selectedModelValue: "fixture/lead",
       triggerModelLabel: "lead",
@@ -160,7 +161,7 @@ it.each([false, true])(
     // Keyboard focus lands on the first selectable revealed model, else back on search.
     expect(document.activeElement).toBe(restDisabled ? control(container, "search") : rest());
 
-    group.click();
+    control(container, "provider-toggle", "other")!.click();
     flush();
     group.click();
     flush();
@@ -185,25 +186,21 @@ it("groups Anthropic refs pinned to Claude CLI under Claude CLI", async () => {
     ]),
   });
   await waitForMenu(container);
-  container
-    .querySelector<HTMLButtonElement>(
-      '[data-chat-model-provider-group="anthropic"] [data-chat-model-provider-toggle]',
-    )!
-    .click();
-  flush();
   const provider = (value: string) =>
     control(container, "option", value)?.closest("section")?.dataset.chatModelProviderGroup;
-  expect([
-    provider("anthropic/claude-opus-4-8"),
-    provider("claude-cli/claude-haiku-5-5"),
-    provider("anthropic/claude-sonnet-5-5"),
-  ]).toEqual(["claude-cli", "claude-cli", "anthropic"]);
+  expect([provider("anthropic/claude-opus-4-8"), provider("claude-cli/claude-haiku-5-5")]).toEqual([
+    "claude-cli",
+    "claude-cli",
+  ]);
   // Runtime grouping preserves the native account rather than borrowing the API sibling.
   expect(
     container.querySelector(
       '[data-chat-model-provider-group="claude-cli"] .chat-controls__auth-meta-label',
     )?.textContent,
   ).toBe("Claude Max");
+  control(container, "provider-toggle", "anthropic")!.click();
+  flush();
+  expect(provider("anthropic/claude-sonnet-5-5")).toBe("anthropic");
 });
 
 it("keeps search live while targets load, then ranks model, target, and account choices", async () => {
@@ -233,6 +230,10 @@ it("keeps search live while targets load, then ranks model, target, and account 
   const { container, update } = mountPicker(params);
   await waitForMenu(container);
   const search = container.querySelector<HTMLInputElement>(modelControlSelector("search"))!;
+  container.querySelector<HTMLButtonElement>('[data-tab-value="target:target"]')!.click();
+  flush();
+  container.querySelector<HTMLButtonElement>('[data-tab-value="target:cli"]')?.click();
+  flush();
   expect(
     container.querySelector(
       '[data-chat-model-target-group] [data-chat-model-catalog-state="loading"]',
@@ -290,6 +291,35 @@ it("keeps search live while targets load, then ranks model, target, and account 
   keydown(search, "Enter");
   expect(selectTarget).toHaveBeenCalledWith("target", "remote");
   expect(selectAccount).not.toHaveBeenCalled();
+});
+
+it("persists keyboard rail order without moving the selected provider", async () => {
+  localStorage.clear();
+  const params = pickerProps({
+    open: true,
+    modelOptions: [option("first", "a"), option("second", "b")],
+    selectedModelValue: "second/b",
+  });
+  const view = mountPicker(params);
+  await waitForMenu(view.container);
+  const rail = () => [
+    ...view.container.querySelectorAll<HTMLButtonElement>("[data-chat-model-provider-toggle]"),
+  ];
+  expect(rail().map((tab) => tab.dataset.chatModelProviderToggle)).toEqual(["first", "second"]);
+  expect(rail()[1]!.ariaSelected).toBe("true");
+  rail()[1]!.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "ArrowUp", altKey: true, bubbles: true }),
+  );
+  flush();
+  expect(rail().map((tab) => tab.dataset.chatModelProviderToggle)).toEqual(["second", "first"]);
+  view.unmount();
+  const reopened = mountPicker(params);
+  await waitForMenu(reopened.container);
+  expect(
+    reopened.container.querySelector<HTMLButtonElement>("[data-chat-model-provider-toggle]")!
+      .dataset.chatModelProviderToggle,
+  ).toBe("second");
+  localStorage.clear();
 });
 
 it("keeps unconfigured unknown provider trigger icons unchanged", () => {

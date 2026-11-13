@@ -463,7 +463,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
         : key === "activity"
           ? ["viewMode", "diff", "raw"]
           : key === "openFile"
-            ? ["openDetails"]
+            ? ["openDetails", "openDetailsTooltip"]
             : key === "exitCode"
               ? ["noOutputFailed"]
               : [];

@@ -722,7 +722,7 @@ function renderModelBoundPromptLayers(params: {
   return [
     "## Reconstructed Model-Bound Prompt Layers",
     "",
-    "This is the deterministic model-bound layer stack OpenClaw can snapshot for the Codex happy path. It uses OpenClaw's thread/start base instructions in place of Codex's model prompt, appends the current parent-local context to the model request instructions, then adds the Codex permission developer text, Codex thread config instructions when present, OpenClaw developer instructions, native collaboration-mode instructions, supplied additional context with its native role, turn input with OpenClaw runtime context, and the OpenClaw dynamic tool catalog. Codex can still add runtime-owned context such as native workspace `AGENTS.md`, environment context, memories, app/plugin instructions, and built-in collaboration-mode instructions inside the Codex runtime.",
+    "This is the deterministic model-bound layer stack OpenClaw can snapshot for the Codex happy path. It uses OpenClaw's thread/start base instructions in place of Codex's model prompt, appends the current parent-local context to the model request instructions, then adds the Codex permission developer text, Codex thread config instructions when present, OpenClaw developer instructions including managed collaboration policy, any supplied per-turn collaboration text, supplied additional context with its native role, turn input with OpenClaw runtime context, and the OpenClaw dynamic tool catalog. Codex can still add runtime-owned context such as native workspace `AGENTS.md`, environment context, memories, app/plugin instructions, and built-in collaboration-mode instructions inside the Codex runtime.",
     "",
     "### Layer Metadata",
     "",
@@ -751,7 +751,7 @@ function renderModelBoundPromptLayers(params: {
         limitations: [
           "This is a reconstructed prompt-layer snapshot, not a byte-for-byte raw OpenAI request captured from Codex core.",
           "Additional context shows this turn's supplied values; native truncation, deduplication and retained history are not simulated.",
-          "Codex-owned workspace AGENTS.md, environment context, memories, app/plugin instructions, built-in Default collaboration-mode instructions, and provider tool serialization are still runtime-owned gaps until Codex exposes a rendered-prompt inspection API.",
+          "Codex-owned workspace AGENTS.md, environment context, memories, app/plugin instructions, and provider tool serialization are still runtime-owned gaps until Codex exposes a rendered-prompt inspection API. Ordinary managed sessions suppress the native Default collaboration block; their collaboration policy is included in OpenClaw developer instructions above.",
         ],
       }),
     ),
@@ -801,7 +801,7 @@ function renderModelBoundPromptLayers(params: {
     "",
     codexCollaborationModeInstructions
       ? markdownFence("text", codexCollaborationModeInstructions)
-      : "This turn asks Codex app-server to resolve its built-in Default collaboration-mode instructions at runtime.",
+      : "No per-turn collaboration text is supplied. Ordinary managed sessions suppress native Default-mode rendering and carry collaboration policy in the OpenClaw developer instructions above.",
     "",
     ...additionalContextLayers.flatMap(({ heading, text }) => [
       heading,
@@ -986,7 +986,7 @@ function renderReadme(scenarios: PromptScenario[]): string {
     "",
     "Use `telegram-direct` to inspect the complete base catalog.",
     "",
-    "These snapshots are still not a byte-for-byte raw OpenAI request capture. Codex-owned native `AGENTS.md`, environment context, memories, app/plugin instructions, and built-in collaboration-mode instructions can be added inside the Codex runtime after OpenClaw sends thread and turn params.",
+    "These snapshots are still not a byte-for-byte raw OpenAI request capture. Codex-owned native `AGENTS.md`, environment context, memories, and app/plugin instructions can be added inside the Codex runtime after OpenClaw sends thread and turn params. Ordinary managed sessions suppress native Default-mode rendering; the snapshots include the managed collaboration policy in OpenClaw developer instructions.",
     "",
     "Regenerate with:",
     "",
