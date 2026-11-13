@@ -67,41 +67,12 @@ export async function callGoogleMeetRuntime<Result>(
   payload: Record<string, unknown>,
   local: (runtime: GoogleMeetRuntime) => Promise<Result>,
   timeoutMs?: number,
-): Promise<Result>;
-export async function callGoogleMeetRuntime<Result>(
-  context: GoogleMeetCliCommandContext,
-  method: Parameters<typeof callGoogleMeetGateway>[0]["method"],
-  payload: Record<string, unknown>,
-  local: (runtime: GoogleMeetRuntime) => Promise<Result>,
-  timeoutMs?: number,
-  signal?: AbortSignal,
-): Promise<Result | undefined>;
-export async function callGoogleMeetRuntime<Result>(
-  context: GoogleMeetCliCommandContext,
-  method: Parameters<typeof callGoogleMeetGateway>[0]["method"],
-  payload: Record<string, unknown>,
-  local: (runtime: GoogleMeetRuntime) => Promise<Result>,
-  timeoutMs?: number,
-  signal?: AbortSignal,
-): Promise<Result | undefined> {
-  try {
-    const delegated = await callGoogleMeetGateway({
-      method,
-      payload,
-      timeoutMs,
-      signal,
-    });
-    if (delegated.ok) {
-      // A reply that settles after Ctrl+C or SIGTERM is dropped, not printed.
-      signal?.throwIfAborted();
-      return delegated.payload as Result;
-    }
-    return local(await context.ensureRuntime());
-  } catch (error) {
-    // Ctrl+C owns the exit; an interrupted read prints nothing and never starts a local runtime.
-    if (signal?.aborted) {
-      return undefined;
-    }
-    throw error;
-  }
+): Promise<Result> {
+  const delegated = await callGoogleMeetGateway({
+    method,
+    payload,
+    timeoutMs,
+  });
+  // SAFETY: Each method's gateway handler returns the same Result as the paired local runtime call.
+  return delegated.ok ? (delegated.payload as Result) : local(await context.ensureRuntime());
 }

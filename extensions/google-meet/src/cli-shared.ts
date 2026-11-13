@@ -2,6 +2,7 @@ import { stat } from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { format } from "node:util";
+import { getAsyncWorkSignal } from "openclaw/plugin-sdk/concurrency-runtime";
 import {
   callGatewayFromCli,
   isGatewayClientRequestError,
@@ -302,24 +303,24 @@ export async function callGoogleMeetGateway(params: {
   method: GoogleMeetGatewayMethod;
   payload?: Record<string, unknown>;
   timeoutMs?: number;
-  signal?: AbortSignal;
 }): Promise<GoogleMeetGatewayCallResult> {
+  // Ctrl+C or SIGTERM cancels reads only; an interrupted read never falls back or prints.
+  const signal =
+    params.method === "googlemeet.status" || params.method === "googlemeet.transcript"
+      ? getAsyncWorkSignal()
+      : undefined;
   try {
     const timeoutMs = resolveGoogleMeetGatewayTimeoutMs(params.timeoutMs);
     const payload = await callGatewayFromCli(
       params.method,
       { json: true, timeout: String(timeoutMs) },
       params.payload,
-      { progress: false, signal: params.signal },
+      { progress: false, ...(signal ? { signal } : {}) },
     );
-    // A reply that settles after Ctrl+C or SIGTERM is dropped, not printed.
-    params.signal?.throwIfAborted();
+    signal?.throwIfAborted();
     return { ok: true, payload };
   } catch (err) {
-    if (params.signal?.aborted) {
-      // Ctrl+C owns the exit; never fall back to a local runtime or print a late result.
-      throw err;
-    }
+    signal?.throwIfAborted();
     if (isGatewayUnavailableForLocalFallback(err, params.method)) {
       return { ok: false };
     }

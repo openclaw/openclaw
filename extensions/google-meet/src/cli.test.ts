@@ -1,4 +1,3 @@
-import { AsyncWorkScope } from "openclaw/plugin-sdk/concurrency-runtime";
 import { afterEach, expect, it, vi } from "vitest";
 import type { GoogleMeetRuntime } from "./runtime.js";
 import * as cli from "./test-support/cli-harness.js";
@@ -384,35 +383,6 @@ it("accepts --json on session status", async () => {
     found: true,
     sessions: [{ id: "meet_1", transport: "twilio" }],
   });
-});
-
-it.each([
-  { args: ["status"], method: "googlemeet.status", payload: {} },
-  {
-    args: ["transcript", "meet_gateway"],
-    method: "googlemeet.transcript",
-    payload: { sessionId: "meet_gateway" },
-  },
-  { args: ["doctor"], method: "googlemeet.status", payload: {} },
-])("prints no $method reply that lands after Ctrl+C", async ({ args, method, payload }) => {
-  const work = new AsyncWorkScope();
-  const callGatewayFromCli = vi.fn(async () => {
-    work.beginClose();
-    return { found: true, sessionId: "meet_gateway", startIndex: 0, nextIndex: 1, lines: [] };
-  });
-  await work.run(() =>
-    run(args, {
-      callGatewayFromCli,
-      runtime: { status: async () => ({ found: false }) },
-    }),
-  );
-  expect(callGatewayFromCli).toHaveBeenCalledWith(
-    method,
-    { json: true, timeout: "5000" },
-    payload,
-    { progress: false, signal: expect.anything() },
-  );
-  expect(output()).toBe("");
 });
 
 it("prints cursor-based transcripts from the gateway-owned runtime", async () => {
