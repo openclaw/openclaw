@@ -84,6 +84,21 @@ export function applySessionMessagePayload(
   // Client correlation keys cannot establish ownership, nor override a conflict.
   const explicitRunId = normalizeSessionProjectionRunId(event.runId ?? sourceMetadata.runId);
   const producerRunId = incoming.runId === explicitRunId ? incoming.runId : null;
+  const deliveryMirror = asNonArrayRecord(sourceRecord.openclawDeliveryMirror);
+  // Server-started setup can publish explicit replies before chat.delta adopts
+  // a local run. Their durable identity owns display without claiming that run
+  // or treating the intermediate reply as its terminal assistant stream.
+  const isUnadoptedSourceReply = Boolean(
+    source.kind === "live" &&
+    !source.activeRunId &&
+    incoming.role === "assistant" &&
+    incoming.id &&
+    incoming.sequence !== null &&
+    !incoming.isImported &&
+    producerRunId &&
+    deliveryMirror.kind === "message-tool-source-reply" &&
+    deliveryMirror.final === false,
+  );
   const assistantOwnerRunId =
     incoming.role === "assistant" &&
     incoming.id &&
@@ -110,6 +125,7 @@ export function applySessionMessagePayload(
     source.kind === "live" &&
     incoming.role !== "user" &&
     !isPreviousRunAssistant &&
+    !isUnadoptedSourceReply &&
     !assistantOwnerRunId &&
     !toolImageOwnerRunId
   ) {
