@@ -1,6 +1,7 @@
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import * as z from "zod";
 import { definedFields } from "../../../record-fields.js";
+import { t } from "../../i18n/index.ts";
 import {
   WORKBOARD_ATTEMPT_STATUSES,
   WORKBOARD_DIAGNOSTIC_KINDS,
@@ -259,7 +260,7 @@ const staleSchema = z
     ...(value.lastSessionUpdatedAt !== undefined
       ? { lastSessionUpdatedAt: value.lastSessionUpdatedAt }
       : {}),
-    reason: value.reason ?? "Session has not reported recent activity.",
+    reason: value.reason ?? t("workboard.staleSessionReason"),
   }))
   .optional()
   .catch(undefined);
@@ -422,7 +423,7 @@ export function normalizeCardsPayload(payload: unknown): {
 export function normalizeCardPayload(payload: unknown): WorkboardCard {
   const card = isRecord(payload) ? normalizeCard(payload.card) : null;
   if (!card) {
-    throw new Error("workboard response did not include a card");
+    throw new Error(t("workboard.cardResponseMissing"));
   }
   return card;
 }

@@ -1,4 +1,5 @@
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { t } from "../../i18n/index.ts";
 import { setWorkboardCards } from "./card-state.ts";
 import { normalizeWorkboardChange } from "./change-payload.ts";
 import { formatError } from "./normalization-utils.ts";
@@ -161,7 +162,7 @@ export async function refreshWorkboard(
   state.lastRefreshError = null;
   notifyWorkboard(params.host);
   if (!params.client) {
-    state.lastRefreshError = "Gateway client unavailable";
+    state.lastRefreshError = t("workboard.gatewayUnavailable");
     notifyWorkboard(params.host);
     return false;
   }

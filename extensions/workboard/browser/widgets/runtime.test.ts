@@ -126,7 +126,7 @@ it("discloses incomplete widget data and loads an absent card on demand for read
   const [card, , board] = widgets;
   await settle(() => {
     expectText(widgets, "Counts and results include loaded cards only");
-    expect(text(card)).toContain("This card is not loaded yet");
+    expect(text(card)).toContain("This card isn’t loaded yet");
   });
   query(card, "button")!.click();
   await settle(() => {
