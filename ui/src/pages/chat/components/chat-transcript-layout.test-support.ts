@@ -38,9 +38,10 @@ export function scheduledCallbacks(idle: boolean) {
 
 export function footprintLayout() {
   const writeRows = vi.fn<(heights: Record<string, number>) => void>();
+  const heights = new Proxy<Record<string, number>>({}, { get: () => 300 });
   const rowLayout: ChatWidgetLayout = {
-    read: () => 300,
-    readRows: () => undefined,
+    read: (key) => heights[key],
+    readRows: () => heights,
     write: () => undefined,
     writeRows,
     invalidateRow: () => {},

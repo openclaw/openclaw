@@ -20,6 +20,7 @@ import {
   sampleHistoryAnchor,
 } from "./chat-history-pagination-probe.test-support.ts";
 import { layoutBox, twoFrames } from "./chat-presentation.test-support.ts";
+import { captureTopVisibleVirtualRow } from "./virtual-row-anchor.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
@@ -33,7 +34,7 @@ suite.define(() => {
     const prompts: Record<number, string> = {
       1: "Earlier prompt",
       3: "Recent prompt",
-      81: "Latest prompt",
+      203: "Latest prompt",
     };
     const message = (seq: number) => ({
       __openclaw: { id: `recall-${seq}`, seq },
@@ -48,17 +49,17 @@ suite.define(() => {
       sessions: [{ key: "agent:main:main", sessionId: "recall-session" }],
       methodResponses: {
         "chat.startup": {
-          messages: Array.from({ length: 80 }, (_, index) => message(index + 3)),
+          messages: Array.from({ length: 80 }, (_, index) => message(index + 203)),
           hasMore: true,
           nextOffset: 80,
           olderCursor: "older-recall",
-          totalMessages: 82,
+          totalMessages: 282,
           sessionId: "recall-session",
         },
         "chat.history": {
-          messages: [message(1), message(2)],
+          messages: Array.from({ length: 202 }, (_, index) => message(index + 1)),
           hasMore: false,
-          totalMessages: 82,
+          totalMessages: 282,
           sessionId: "recall-session",
         },
       },
@@ -67,13 +68,25 @@ suite.define(() => {
     const pane = page.locator(".chat-pane-cache__pane--active");
     const thread = pane.locator(".chat-thread");
     const textarea = pane.locator(".agent-chat__composer-combobox textarea");
-    await thread.getByText(/^History entry 82\./).waitFor();
+    const recallPrompt = async (key: "ArrowUp" | "ArrowDown", text: string) => {
+      await textarea.press(key);
+      const caret = key === "ArrowUp" ? 0 : text.length;
+      // The recalled text commits before its next-frame caret restoration.
+      await expect
+        .poll(() =>
+          textarea.evaluate((input: HTMLTextAreaElement) => [
+            input.value,
+            input.selectionStart,
+            input.selectionEnd,
+          ]),
+        )
+        .toEqual([text, caret, caret]);
+    };
+    await thread.getByText(/^History entry 282\./).waitFor();
     await waitForChatScrollIdle(page);
     expect(await gateway.getRequests("chat.history")).toHaveLength(0);
-    await textarea.press("ArrowUp");
-    await expect.poll(() => textarea.inputValue()).toBe("Latest prompt");
-    await textarea.press("ArrowDown");
-    await expect.poll(() => textarea.inputValue()).toBe("");
+    await recallPrompt("ArrowUp", "Latest prompt");
+    await recallPrompt("ArrowDown", "");
 
     await gateway.deferNext("chat.history");
     await thread.hover();
@@ -87,18 +100,12 @@ suite.define(() => {
     const requests = await gateway.getRequests("chat.history");
     expect(requests).toHaveLength(1);
     expect(requests[0]?.params).toMatchObject({ cursor: "older-recall" });
-    await textarea.press("ArrowUp");
-    await expect.poll(() => textarea.inputValue()).toBe("Latest prompt");
-    await textarea.press("ArrowUp");
-    await expect.poll(() => textarea.inputValue()).toBe("Recent prompt");
-    await textarea.press("ArrowUp");
-    await expect.poll(() => textarea.inputValue()).toBe("Earlier prompt");
-    await textarea.press("ArrowDown");
-    await expect.poll(() => textarea.inputValue()).toBe("Recent prompt");
-    await textarea.press("ArrowDown");
-    await expect.poll(() => textarea.inputValue()).toBe("Latest prompt");
-    await textarea.press("ArrowDown");
-    await expect.poll(() => textarea.inputValue()).toBe("");
+    await recallPrompt("ArrowUp", "Latest prompt");
+    await recallPrompt("ArrowUp", "Recent prompt");
+    await recallPrompt("ArrowUp", "Earlier prompt");
+    await recallPrompt("ArrowDown", "Recent prompt");
+    await recallPrompt("ArrowDown", "Latest prompt");
+    await recallPrompt("ArrowDown", "");
   });
 
   {
@@ -419,12 +426,27 @@ suite.define(() => {
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
           const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
           await thread.getByText("Initial streamed output.", { exact: false }).waitFor();
-          // The long live tail leaves earlier rows unmounted until reader navigation.
+          // Bring earlier history into the viewport beside the long live tail.
+          const tailHeight = await thread
+            .locator(".chat-virtual-row:not([data-prepared-row])")
+            .last()
+            .evaluate((element) => element.getBoundingClientRect().height);
           await thread.hover();
-          await page.mouse.wheel(0, -120);
+          await page.mouse.wheel(0, -tailHeight);
           await page.getByText("Synthetic message 72.", { exact: true }).waitFor();
-          await page.getByRole("button", { name: "Scroll to latest", exact: true }).click();
           await waitForChatScrollIdle(page);
+          // A large end jump mounts only the arriving viewport. Return through
+          // ordinary reader scrolling so the real above-fold overscan row is
+          // measured before its delayed media contraction below.
+          const returnStep = await thread.evaluate((element) => element.clientHeight / 2);
+          for (
+            let remaining = (await position()).distance;
+            remaining > 0;
+            remaining -= returnStep
+          ) {
+            await page.mouse.wheel(0, returnStep);
+            await waitForChatScrollIdle(page);
+          }
           await expect.poll(async () => (await position()).distance).toBeLessThanOrEqual(8);
 
           // Force a delayed media measurement in an overscan row above the viewport.
@@ -498,11 +520,13 @@ suite.define(() => {
           await page.mouse.wheel(0, -600);
           await expect.poll(async () => (await position()).reading).toBe(true);
           await waitForChatScrollIdle(page);
-          const reader = await position();
+          const reader = await captureTopVisibleVirtualRow(thread);
           await roundTrip();
           const restored = await position();
           expect(restored).toMatchObject({ locked: true, reading: true });
-          expect(Math.abs(restored.top - reader.top)).toBeLessThanOrEqual(2);
+          const restoredReader = await captureTopVisibleVirtualRow(thread);
+          expect(restoredReader.key).toBe(reader.key);
+          expect(Math.abs(restoredReader.viewportTop - reader.viewportTop)).toBeLessThanOrEqual(2);
           await page.getByRole("button", { name: "Scroll to latest", exact: true }).click();
           await expect.poll(async () => (await position()).distance).toBeLessThanOrEqual(8);
           expect(await position()).toMatchObject({ locked: false, reading: false });

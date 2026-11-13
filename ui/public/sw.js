@@ -354,19 +354,36 @@ async function precacheOfflineShell(signal) {
   // A deep chat URL must resolve the portable bundle against the registered app
   // root. No fetched document, credential, or route-specific metadata is retained.
   const escapedPath = SCOPE_PATH.replaceAll("&", "&amp;").replaceAll('"', "&quot;");
-  const html = OFFLINE_BOOT.html
+  let html = OFFLINE_BOOT.html
     .replaceAll('src="./', () => `src="${escapedPath}`)
     .replaceAll('href="./', () => `href="${escapedPath}`)
     .replace(
       "<html",
       () => `<html data-openclaw-control-ui-base-path="${escapedPath.slice(0, -1)}"`,
     );
+  let csp = OFFLINE_BOOT.csp;
+  const importMap = /(<script\b[^>]*\btype="importmap"[^>]*>)([\s\S]*?)(<\/script>)/u.exec(html);
+  if (importMap) {
+    // Map URLs, like module URLs, belong to the worker scope even on deep links.
+    const rooted = importMap[2].replaceAll(
+      '"./assets/',
+      JSON.stringify(`${SCOPE_PATH}assets/`).slice(0, -1),
+    );
+    const [previousHash, rootedHash] = await Promise.all(
+      [importMap[2], rooted].map(async (source) => {
+        const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(source));
+        return `'sha256-${btoa(String.fromCharCode(...new Uint8Array(digest)))}'`;
+      }),
+    );
+    html = html.replace(importMap[0], () => importMap[1] + rooted + importMap[3]);
+    csp = csp.replace(previousHash, rootedHash);
+  }
   await cache.put(
     OFFLINE_SHELL_URL,
     new Response(html, {
       headers: {
         "Content-Type": "text/html; charset=utf-8",
-        "Content-Security-Policy": OFFLINE_BOOT.csp,
+        "Content-Security-Policy": csp,
         "Referrer-Policy": "no-referrer",
         "X-Content-Type-Options": "nosniff",
       },
@@ -583,19 +600,18 @@ self.addEventListener("fetch", (event) => {
   // Public asset membership comes from the same build inventory as their version.
   const hashedAsset =
     /^\/assets\/[^/]+-[\w-]{8,}\.(?:js|css|webp|png|svg|woff2)$/u.test(pathname) && !url.search;
+  // Prior documents retain versioned fonts/themes too. New network writes
+  // still require the current version; private reads never need cache policy.
+  const publicAsset =
+    OFFLINE_BOOT?.publicAssets.includes(pathname.slice(1)) && /^\?v=[^&]+$/u.test(url.search);
   const permitsCache =
-    event.request.cache !== "no-store" && !event.request.headers.has("Authorization");
+    (hashedAsset || publicAsset) &&
+    !event.request.headers.has("Authorization") &&
+    event.request.cache !== "no-store";
 
   respondToControlUiRequest(event, async () => {
     const cacheable = permitsCache && (hashedAsset || isVersionedPublicAsset(url, pathname));
-    // Prior documents retain versioned fonts/themes too. Only exact cached
-    // URLs are reusable; new network writes still require the current version.
-    const publicAsset =
-      OFFLINE_BOOT?.publicAssets.includes(pathname.slice(1)) && /^\?v=[^&]+$/u.test(url.search);
-    const cached =
-      permitsCache && (hashedAsset || publicAsset)
-        ? await matchControlUiAsset(event.request, cacheable)
-        : undefined;
+    const cached = permitsCache ? await matchControlUiAsset(event.request, cacheable) : undefined;
     return cached || fetchControlUiRequest(event, cacheable);
   });
 });

@@ -8,7 +8,12 @@ type ClaudeModelRef = {
  * `params.claudeCapabilities`. Each listed flag overrides the model-id rules
  * below; rows without the record (or without one flag) keep the id rules.
  */
-type ClaudeListedCapability = "adaptiveThinking" | "disabledThinking" | "xhighEffort" | "maxEffort";
+type ClaudeListedCapability =
+  | "adaptiveThinking"
+  | "disabledThinking"
+  | "xhighEffort"
+  | "maxEffort"
+  | "serverCompaction";
 
 function readListedClaudeCapability(
   ref: ClaudeModelRef,
@@ -111,16 +116,100 @@ export function resolveClaudeMythos5ModelIdentity(ref: ClaudeModelRef): string |
 }
 
 /**
- * Opus 5.5, Sonnet 5.5, Haiku 5.5, and Fable 5.1 require append-only runtime context.
- * Extend only with live replay proof (Mythos 5.1 remains unproven).
+ * Canonical Claude id for contract checks, with bare family aliases expanded.
+ * Undefined for ids that do not name a Claude model.
+ */
+function resolveClaudeContractId(ref: ClaudeModelRef): string | undefined {
+  const identity = resolveClaudeModelIdentity(ref);
+  if (identity.startsWith("claude-")) {
+    return identity;
+  }
+  return (
+    resolveClaudeOpus5ModelIdentity(ref) ??
+    resolveClaudeSonnet5ModelIdentity(ref) ??
+    resolveClaudeHaiku55ModelIdentity(ref)
+  );
+}
+
+// Closed lists of released Claude generations that relax one strict default.
+// They only ever shrink: a model Anthropic ships later is never added here, so
+// it gets the strict contract until its /v1/models row says otherwise.
+// `release("claude-opus-5")` matches claude-opus-5, its dated and cloud ids,
+// but not a later minor version such as claude-opus-5-5.
+function release(...ids: string[]): string {
+  return String.raw`(?:${ids.join("|")})(?!-\d(?!\d))`;
+}
+function releases(...patterns: string[]): RegExp {
+  return new RegExp(String.raw`(?:^|-)(?:${patterns.join("|")})(?=$|[^a-z0-9])`);
+}
+const PRE_CLAUDE_5 = String.raw`claude-(?:3|(?:opus|sonnet|haiku)-4)`;
+
+/** Generations whose thinking survives edits to earlier turns (no prefix check). */
+const CLAUDE_UNBOUND_THINKING = releases(
+  PRE_CLAUDE_5,
+  release("claude-opus-5", "claude-sonnet-5", "claude-fable-5", "claude-mythos-5"),
+  release("claude-mythos-preview"),
+);
+
+/** Generations that can run with thinking off (disabled or between-tools). */
+const CLAUDE_OPTIONAL_THINKING = releases(
+  PRE_CLAUDE_5,
+  release("claude-opus-5", "claude-sonnet-5", "claude-sonnet-5-5", "claude-haiku-5-5"),
+);
+
+/** Generations that predate adaptive thinking. */
+const CLAUDE_WITHOUT_ADAPTIVE_THINKING = releases(
+  String.raw`claude-(?:3|(?:opus|sonnet|haiku)-4(?:-[0-5](?!\d))?(?!-\d(?!\d)))`,
+);
+
+/** Generations that predate the Claude 5 request contract (refusal stop reasons, adaptive default). */
+const CLAUDE_BEFORE_5_CONTRACT = releases(PRE_CLAUDE_5, release("claude-mythos-preview"));
+
+/** Generations whose requests keep a trailing assistant prefill. */
+const CLAUDE_ASSISTANT_PREFILL = releases(
+  PRE_CLAUDE_5,
+  release("claude-mythos-preview", "claude-fable-5", "claude-fable-5-1"),
+  release("claude-mythos-5", "claude-mythos-5-1"),
+);
+
+/**
+ * Released generations without native fast mode (`speed: "fast"`), verified live on
+ * 2026-11-10: the API answers "does not support the `speed` parameter". Opus 4.6 accepts
+ * the field but serves standard speed. Later models are offered fast mode; a rejection
+ * falls back to standard speed and is remembered (see readUnsupportedClaudeFastModeModel).
+ */
+const CLAUDE_WITHOUT_FAST_MODE = releases(
+  String.raw`claude-(?:3|haiku-4|sonnet-4|opus-4(?!-8(?!\d)))`,
+  release("claude-sonnet-5", "claude-sonnet-5-5", "claude-haiku-5-5"),
+  release("claude-fable-5", "claude-fable-5-1"),
+  release("claude-mythos-5", "claude-mythos-5-1", "claude-mythos-preview"),
+);
+
+/** Generations that still accept caller-selected temperature, top_p, and top_k. */
+const CLAUDE_SAMPLING_PARAMETERS = releases(
+  String.raw`claude-(?:3|haiku-4|sonnet-4|opus-4(?!-[78](?!\d)))`,
+);
+
+/**
+ * Whether thinking blocks are valid only after the exact request prefix that
+ * produced them, so runtime context must be appended instead of re-rendered.
+ * Every Claude model is prefix-bound except the closed list of older generations.
  */
 export function bindsClaudeThinkingPrefix(ref: ClaudeModelRef): boolean {
-  return (
-    resolveClaudeHaiku55ModelIdentity(ref) !== undefined ||
-    resolveClaudeOpus55ModelIdentity(ref) !== undefined ||
-    resolveClaudeSonnet55ModelIdentity(ref) !== undefined ||
-    /^claude-fable-5-1(?=$|[^a-z0-9])/.test(resolveClaudeModelIdentity(ref))
-  );
+  const id = resolveClaudeContractId(ref);
+  return id !== undefined && !CLAUDE_UNBOUND_THINKING.test(id);
+}
+
+/** Whether a Claude model follows the Claude 5 request contract (streamed refusals, adaptive by default). */
+export function usesClaude5RequestContract(ref: ClaudeModelRef): boolean {
+  const id = resolveClaudeContractId(ref);
+  return id !== undefined && !CLAUDE_BEFORE_5_CONTRACT.test(id);
+}
+
+/** Whether a Claude model rejects a trailing assistant prefill. */
+export function rejectsClaudeAssistantPrefill(ref: ClaudeModelRef): boolean {
+  const id = resolveClaudeContractId(ref);
+  return id !== undefined && !CLAUDE_ASSISTANT_PREFILL.test(id);
 }
 
 /** Return whether Claude accepts operator instructions within conversation history. */
@@ -146,13 +235,8 @@ export function requiresClaudeMandatoryAdaptiveThinking(ref: ClaudeModelRef): bo
       supportsClaudeAdaptiveThinking(ref)
     );
   }
-  const modelId = resolveClaudeModelIdentity(ref);
-  return (
-    resolveClaudeOpus55ModelIdentity(ref) !== undefined ||
-    resolveClaudeFable5ModelIdentity(ref) !== undefined ||
-    resolveClaudeMythos5ModelIdentity(ref) !== undefined ||
-    /(?:^|-)claude-mythos-preview(?=$|[^a-z0-9])/.test(modelId)
-  );
+  const id = resolveClaudeContractId(ref);
+  return id !== undefined && !CLAUDE_OPTIONAL_THINKING.test(id);
 }
 
 /** Resolve Claude Sonnet 5 through aliases, direct ids, cloud ids, or deployment metadata. */
@@ -204,7 +288,12 @@ export function resolveClaudeOpus55ModelIdentity(ref: ClaudeModelRef): string | 
   return /^claude-opus-5-5(?=$|[^a-z0-9])/.test(normalized) ? normalized : undefined;
 }
 
-function supportsClaudeAdaptiveThinkingById(ref: ClaudeModelRef): boolean {
+/**
+ * Whether the id names a released Claude generation with adaptive thinking.
+ * Unlike {@link supportsClaudeAdaptiveThinking}, unknown Claude ids answer false,
+ * so providers can tell a released model from one they must map onto a template.
+ */
+export function isReleasedAdaptiveClaudeGeneration(ref: ClaudeModelRef): boolean {
   const modelId = resolveClaudeModelIdentity(ref);
   return (
     resolveClaudeHaiku55ModelIdentity(ref) !== undefined ||
@@ -218,31 +307,33 @@ function supportsClaudeAdaptiveThinkingById(ref: ClaudeModelRef): boolean {
 
 /** Return whether a Claude model supports adaptive thinking. */
 export function supportsClaudeAdaptiveThinking(ref: ClaudeModelRef): boolean {
-  return (
-    readListedClaudeCapability(ref, "adaptiveThinking") ?? supportsClaudeAdaptiveThinkingById(ref)
-  );
+  const listed = readListedClaudeCapability(ref, "adaptiveThinking");
+  if (listed !== undefined) {
+    return listed;
+  }
+  const id = resolveClaudeContractId(ref);
+  return id !== undefined && !CLAUDE_WITHOUT_ADAPTIVE_THINKING.test(id);
 }
 
 /** Return whether a Claude model has a native 1M-token context window. */
 export function supportsClaude1MContext(ref: ClaudeModelRef): boolean {
   // The id families currently coincide; listed thinking capabilities say nothing about context.
-  return supportsClaudeAdaptiveThinkingById(ref);
+  return isReleasedAdaptiveClaudeGeneration(ref);
 }
 
 /** Return whether Anthropic documents threshold compaction (`compact_20260112`) for a Claude model. */
 export function supportsClaudeServerCompaction(ref: ClaudeModelRef): boolean {
-  // The documented compaction list currently coincides with these id families;
-  // listed thinking capabilities say nothing about compaction.
-  return supportsClaudeAdaptiveThinkingById(ref);
+  // /v1/models lists context_management.compact_20260112 per model; unlisted
+  // rows fall back to the released families that document it.
+  return (
+    readListedClaudeCapability(ref, "serverCompaction") ?? isReleasedAdaptiveClaudeGeneration(ref)
+  );
 }
 
 /** Return whether a Claude model supports Anthropic's native fast mode. */
 export function supportsClaudeFastMode(ref: ClaudeModelRef): boolean {
-  const modelId = resolveClaudeModelIdentity(ref);
-  return (
-    resolveClaudeOpus5ModelIdentity(ref) !== undefined ||
-    /(?:^|-)claude-opus-4-8(?=$|[^a-z0-9])/.test(modelId)
-  );
+  const id = resolveClaudeContractId(ref);
+  return id !== undefined && !CLAUDE_WITHOUT_FAST_MODE.test(id);
 }
 
 /** Return whether a Claude model supports native max effort. */
@@ -277,11 +368,8 @@ export function supportsClaudeNativeXhighEffort(ref: ClaudeModelRef): boolean {
 
 /** Return whether a Claude model rejects caller-selected sampling parameters. */
 export function requiresClaudeDefaultSampling(ref: ClaudeModelRef): boolean {
-  const modelId = resolveClaudeModelIdentity(ref);
-  return (
-    supportsClaudeNativeXhighEffort(ref) ||
-    /(?:^|-)claude-mythos-preview(?=$|[^a-z0-9])/.test(modelId)
-  );
+  const id = resolveClaudeContractId(ref);
+  return id !== undefined && !CLAUDE_SAMPLING_PARAMETERS.test(id);
 }
 
 /**

@@ -12,10 +12,8 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
-import {
-  readTranscriptExportSnapshotReadOnlySync,
-  readTranscriptStatsSync,
-} from "./session-accessor.sqlite-read.js";
+import { readTranscriptExportSnapshotReadOnlySync } from "./session-accessor.sqlite-export-read.js";
+import { readTranscriptStatsSync } from "./session-accessor.sqlite-read.js";
 import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,

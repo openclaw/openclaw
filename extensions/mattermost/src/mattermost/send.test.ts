@@ -1,12 +1,16 @@
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import {
+  chunkMarkdownTextWithMode,
+  resolveChunkMode,
+  resolveTextChunkLimit,
+} from "openclaw/plugin-sdk/reply-chunking";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { setMattermostRuntime } from "../runtime.js";
 import type * as Client from "./client.js";
+import type { MattermostSendResult } from "./send.js";
 
 let sendMessageMattermost: typeof import("./send.js").sendMessageMattermost;
-let parseMattermostTarget: typeof import("./target-resolution.js").parseMattermostTarget;
-
 const TEST_CFG = {};
 
 const mockState = vi.hoisted(() => ({
@@ -23,11 +27,6 @@ const mockState = vi.hoisted(() => ({
   fetchMattermostUser: vi.fn(),
   fetchMattermostUserTeams: vi.fn(),
   fetchMattermostUserByUsername: vi.fn(),
-  normalizeMattermostBaseUrl: vi.fn((input: string | undefined) => input?.trim() ?? ""),
-  resolveMarkdownTableMode: vi.fn(
-    (params: { cfg?: { channels?: { mattermost?: { markdown?: { tables?: string } } } } }) =>
-      params.cfg?.channels?.mattermost?.markdown?.tables ?? "off",
-  ),
   uploadMattermostFile: vi.fn<typeof Client.uploadMattermostFile>(),
 }));
 
@@ -43,18 +42,13 @@ vi.mock("./runtime-api.js", () => ({
   loadOutboundMediaFromUrl: mockState.loadOutboundMediaFromUrl,
 }));
 
-vi.mock("openclaw/plugin-sdk/markdown-table-runtime", () => ({
-  resolveMarkdownTableMode: mockState.resolveMarkdownTableMode,
-}));
-
 vi.mock("./accounts.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./accounts.js")>()),
   resolveMattermostAccount: mockState.resolveMattermostAccount,
 }));
 
-vi.mock("./client.js", async () => ({
-  parseMattermostApiStatus: (await vi.importActual<typeof import("./client.js")>("./client.js"))
-    .parseMattermostApiStatus,
+vi.mock("./client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./client.js")>()),
   createMattermostClient: mockState.createMattermostClient,
   createMattermostDirectChannelWithRetry: mockState.createMattermostDirectChannelWithRetry,
   createMattermostPost: mockState.createMattermostPost,
@@ -63,17 +57,11 @@ vi.mock("./client.js", async () => ({
   fetchMattermostUser: mockState.fetchMattermostUser,
   fetchMattermostUserTeams: mockState.fetchMattermostUserTeams,
   fetchMattermostUserByUsername: mockState.fetchMattermostUserByUsername,
-  normalizeMattermostBaseUrl: mockState.normalizeMattermostBaseUrl,
   uploadMattermostFile: mockState.uploadMattermostFile,
 }));
 
-beforeAll(async () => {
-  ({ sendMessageMattermost } = await import("./send.js"));
-  ({ parseMattermostTarget } = await import("./target-resolution.js"));
-});
+beforeAll(async () => ({ sendMessageMattermost } = await import("./send.js")));
 
-const normalizeBaseUrl = mockState.normalizeMattermostBaseUrl.getMockImplementation()!;
-const resolveTableMode = mockState.resolveMarkdownTableMode.getMockImplementation()!;
 let defaultAccountSequence = 0;
 
 beforeEach(() => {
@@ -81,11 +69,12 @@ beforeEach(() => {
   setMattermostRuntime(
     createPluginRuntimeMock({
       config: { current: mockState.currentConfig },
-      channel: { activity: { record: mockState.recordActivity } },
+      channel: {
+        activity: { record: mockState.recordActivity },
+        text: { chunkMarkdownTextWithMode, resolveChunkMode, resolveTextChunkLimit },
+      },
     }),
   );
-  mockState.normalizeMattermostBaseUrl.mockImplementation(normalizeBaseUrl);
-  mockState.resolveMarkdownTableMode.mockImplementation(resolveTableMode);
   mockState.currentConfig.mockReturnValue({});
   mockState.resolveMattermostAccount.mockReturnValue(
     makeAccount("mattermost-cache-" + defaultAccountSequence++),
@@ -100,6 +89,9 @@ beforeEach(() => {
   mockState.fetchMattermostUserTeams.mockResolvedValue([{ id: "team-1" }]);
   mockState.fetchMattermostChannelByName.mockResolvedValue({ id: "town-square" });
   mockState.uploadMattermostFile.mockResolvedValue({ id: "file-1" });
+  mockState.loadOutboundMediaFromUrl.mockResolvedValue({
+    buffer: Buffer.from("file"),
+  });
 });
 
 describe("sendMessageMattermost", () => {
@@ -133,40 +125,54 @@ describe("sendMessageMattermost", () => {
     expect(mockState.resolveMattermostAccount).not.toHaveBeenCalled();
   });
 
-  it("preserves the provider post when outbound bookkeeping fails afterward", async () => {
+  it.each(["post", "activity"])("preserves media delivery before %s fails", async (stage) => {
     const events: string[] = [];
-    const onDeliveryResult = vi.fn(() => {
-      events.push("delivery");
-    });
-    mockState.createMattermostPost.mockResolvedValueOnce({
-      id: "post-final",
-      message: "provider-final",
-    });
-    mockState.recordActivity.mockImplementationOnce(() => {
+    const failure = new Error("delivery failed");
+    const onDeliveryResult = vi.fn(
+      (sent: MattermostSendResult) => void events.push(sent.messageId),
+    );
+    mockState.recordActivity.mockImplementation(() => {
       events.push("activity");
-      throw new Error("activity store unavailable");
+      if (stage === "activity") {
+        throw failure;
+      }
     });
-
-    const caught: unknown = await sendMessageMattermost("channel:town-square", "requested text", {
-      cfg: TEST_CFG,
+    let posted = 0;
+    mockState.createMattermostPost.mockImplementation(async () => {
+      if (stage === "post" && posted === 1) {
+        throw failure;
+      }
+      return { id: `post-${++posted}`, message: "provider-final" };
+    });
+    const caption = "first part\nsecond part\nthird part";
+    const result: unknown = await sendMessageMattermost("channel:town-square", caption, {
+      cfg: { channels: { mattermost: { textChunkLimit: 12 } } },
+      mediaUrl: "https://example.com/report.pdf",
+      replyToId: "root-post",
       onDeliveryResult,
     }).catch((error: unknown) => error);
-    if (!isChannelPartialDeliveryError(caught)) {
-      throw new Error("expected a partial Mattermost delivery error");
+    if (!isChannelPartialDeliveryError(result)) {
+      throw new Error("expected partial delivery");
     }
-    expect(caught.deliveryResult).toMatchObject({
-      messageIds: ["post-final"],
+    const ids = stage === "post" ? ["post-1"] : ["post-1", "post-2", "post-3"];
+    expect(result.cause).toBe(failure);
+    expect(result.deliveryResult).toMatchObject({
+      messageIds: ids,
       visibleReplySent: true,
-      content: "provider-final",
+      content: ids.map(() => "provider-final").join("\n"),
     });
-    expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        messageId: "post-final",
-        channelId: "town-square",
-        content: "provider-final",
-      }),
+    expect(events).toEqual(stage === "post" ? ids : [...ids, "activity"]);
+    expect(onDeliveryResult.mock.calls.map(([sent]) => sent.receipt.platformMessageIds)).toEqual(
+      ids.map((id) => [id]),
     );
-    expect(events).toStrictEqual(["delivery", "activity"]);
+    const calls = mockState.createMattermostPost.mock.calls.map(([, post]) => post);
+    expect(calls.map((post) => post.message)).toEqual(
+      caption.split("\n").slice(0, stage === "post" ? 2 : 3),
+    );
+    expect(calls.map((post) => post.rootId)).toEqual(calls.map(() => "root-post"));
+    expect(calls.map((post) => post.fileIds)).toEqual(
+      calls.map((_, i) => (i === 0 ? ["file-1"] : undefined)),
+    );
   });
 
   it("builds interactive button props when buttons are provided", async () => {
@@ -197,16 +203,6 @@ describe("sendMessageMattermost", () => {
       ],
     });
     expect(mockState.resolveMattermostAccount).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("parseMattermostTarget", () => {
-  it.each<[string, string]>([
-    ["", "Recipient is required"],
-    ["#", "Channel name is required"],
-    ["@", "Username is required"],
-  ])("rejects empty target %j", (target, error) => {
-    expect(() => parseMattermostTarget(target)).toThrow(error);
   });
 });
 

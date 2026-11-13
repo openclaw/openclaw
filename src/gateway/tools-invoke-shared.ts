@@ -13,6 +13,7 @@ import { runBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js
 import { getChannelAgentToolMeta } from "../agents/channel-tool-metadata.js";
 import { readEmbeddedMessageDeliveryFact } from "../agents/embedded-agent-message-delivery.js";
 import { createGatewayToolPolicyAssertion } from "../agents/gateway-tool-policy.js";
+import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../agents/spawned-context.js";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
 import { resolveStoredSessionPermissionPolicy } from "../agents/tool-fs-policy.js";
@@ -222,6 +223,8 @@ type InvokeGatewayToolParams = {
   authenticatedUserProfile?: GatewayClient["authenticatedUserProfile"];
   /** Host-minted authority from the calling connection; never derived from wire params. */
   operatorRoleActor?: NonNullable<GatewayClient["internal"]>["operatorRoleActor"];
+  /** Original authenticated HTTP principal or the enclosing RPC scope's principal. */
+  openclawIdPrincipal?: NonNullable<GatewayClient["internal"]>["openclawIdPrincipal"];
   operatorScopes?: readonly string[];
   approvalReviewerDeviceId?: string;
   senderIsOwner?: boolean;
@@ -331,6 +334,7 @@ async function invokeGatewayToolWithSignal(
   const client = createSyntheticPluginRuntimeClient({
     ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
     operatorRoleActor: params.operatorRoleActor,
+    openclawIdPrincipal: params.openclawIdPrincipal ?? sourceClient?.internal?.openclawIdPrincipal,
     scopes: params.senderIsOwner ? [ADMIN_SCOPE] : [...(params.operatorScopes ?? [])],
   });
   const sessionEntry = params.preparedSession
@@ -497,7 +501,6 @@ async function invokeGatewayToolWithSignal(
     sessionEntry,
     sessionWorkspace,
   );
-  // Gateway tools resolve first; a configured MCP server connects only for a name none holds.
   const { resolved, mcpUnavailable } = await resolveToolsWithInvocationMcp({
     toolName,
     knownCoreTool,
@@ -509,6 +512,10 @@ async function invokeGatewayToolWithSignal(
         sessionPermissionPolicy,
         preparedSessionWorkspaceDir: sessionWorkspace,
         agentId: selectedAgentId,
+        webSearchModelSelection: {
+          ...resolveSessionModelRef(params.cfg, sessionEntry, selectedAgentId),
+          authProfileId: sessionEntry?.authProfileOverride,
+        },
         messageProvider: params.messageChannel,
         accountId: params.accountId,
         agentTo: params.agentTo,

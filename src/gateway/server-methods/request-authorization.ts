@@ -352,10 +352,9 @@ export async function authorizeGatewayRequestPreDispatch(params: {
       );
       const cfg = params.context.getRuntimeConfig();
       let agents = startupWriteAgents(params, cfg);
-      let inputAgents = agents;
       let refusal = startupWriteRefusal(agents);
       if (!refusal && cfg.session?.store) {
-        inputAgents = await prepareStartupStoreAgents(agents, cfg, waitSignal);
+        const inputAgents = await prepareStartupStoreAgents(agents, cfg, waitSignal);
         agents = [...new Set([...agents, ...inputAgents])];
         if (params.context.getRuntimeConfig() !== cfg) {
           continue;
@@ -370,19 +369,6 @@ export async function authorizeGatewayRequestPreDispatch(params: {
           error.details = { ...gatewayStartupUnavailableDetails(), method: params.method };
         }
         return { error };
-      }
-      if (
-        inputAgents.some((agentId) =>
-          params.context.agentDatabaseStartup?.isAgentInputRecoveryPending(agentId),
-        )
-      ) {
-        const error = startupError(true);
-        if (error) {
-          if (params.consumeSessionTurn && error.retryable) {
-            delete error.details;
-          }
-          return { error };
-        }
       }
     }
     const startup =

@@ -1,8 +1,9 @@
 /* @vitest-environment jsdom */
 
 import { createSignal } from "solid-js";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ProviderUsageCostDaily } from "../../../../src/infra/provider-usage.types.js";
+import { i18n } from "../../i18n/index.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import {
@@ -160,7 +161,7 @@ describe("ProviderUsagePanel", () => {
     });
     expect(providerUsageAttention({ windows: [], error: "Rate limited" })).toEqual({
       kind: "warn",
-      label: "Check failed",
+      label: "Couldn’t check usage",
     });
   });
 
@@ -286,4 +287,49 @@ describe("ProviderUsagePanel", () => {
       vi.useRealTimers();
     }
   });
+});
+
+it("uses UI locale for amounts, request counts, and reset dates", () => {
+  const locale = vi.spyOn(i18n, "getLocale").mockReturnValue("de");
+  onTestFinished(() => locale.mockRestore());
+  const resetAt = Date.now() + 86400000;
+  const view = mountSolid(() => (
+    <ProviderUsagePanel
+      usage={{
+        windows: [{ label: "5h", usedPercent: 20, resetAt }],
+        billing: [
+          { type: "balance", unit: "credits", amount: 1234.5 },
+          { type: "balance", unit: "USD", amount: 1234.5 },
+        ],
+        costHistory: {
+          unit: "USD",
+          periodDays: 30,
+          daily: [dailyUsage("2026-01-01", 1234.5, { requests: 12345 })],
+          models: [],
+          categories: [],
+        },
+      }}
+    />
+  ));
+  onTestFinished(view.unmount);
+  const text = view.container.textContent;
+  expect(text).toContain(
+    new Intl.NumberFormat("de", { maximumFractionDigits: 2 }).format(1234.5) + " credits",
+  );
+  expect(text).toContain(
+    new Intl.NumberFormat("de", {
+      style: "currency",
+      currency: "USD",
+      maximumFractionDigits: 2,
+    }).format(1234.5),
+  );
+  expect(text).toContain(new Intl.NumberFormat("de").format(12345));
+  expect(text).toContain(
+    new Intl.DateTimeFormat("de", {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(resetAt),
+  );
 });

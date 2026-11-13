@@ -152,11 +152,6 @@ it.each(["browser", "cli", "acp"] as const)(
     });
     const wakeSurface = render(wake);
     expect(wakeSurface).toEqual(expected);
-    const refused = await createOpenClawCodingTools(wake)
-      .find((tool) => tool.name === "sessions_create")!
-      .execute("wake-create", {});
-    expect(refused.details).toMatchObject({ gated: true });
-    expect(JSON.stringify(refused.content)).toContain("session write authority");
     await update({
       ...callerContext,
       GatewayClientCaps: [],

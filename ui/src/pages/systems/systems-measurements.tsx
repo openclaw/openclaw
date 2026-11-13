@@ -120,7 +120,19 @@ export function SystemMeasurements(props: {
     />
   );
   return (
-    <Show when={stats()} fallback={<p class="systems-no-telemetry">{t("systems.noTelemetry")}</p>}>
+    <Show
+      when={stats()}
+      fallback={
+        <p class="systems-no-telemetry">
+          {(gatewayHost()
+            ? controller().state.inventory?.errors.systemInfo
+            : row().environment.type === "node"
+              ? controller().state.inventory?.errors.nodes
+              : undefined) ??
+            (controller().telemetryLoading(row()) ? t("common.loading") : t("systems.noTelemetry"))}
+        </p>
+      }
+    >
       <Show when={row().environment.id} keyed>
         {(_environmentId) => (
           <div class="systems-metrics" data-stale={String(lastKnown())}>

@@ -368,13 +368,13 @@ export function resolveRunnerMatrix(params: {
     {
       os_id: "ubuntu",
       display_name: "Linux",
-      runner: pick(params.ubuntuRunner, params.varUbuntuRunner, "blacksmith-8vcpu-ubuntu-2404"),
+      runner: pick(params.ubuntuRunner, params.varUbuntuRunner, "blacksmith-2vcpu-ubuntu-2404"),
       artifact_name: "linux",
     },
     {
       os_id: "windows",
       display_name: "Windows",
-      runner: pick(params.windowsRunner, params.varWindowsRunner, "blacksmith-32vcpu-windows-2025"),
+      runner: pick(params.windowsRunner, params.varWindowsRunner, "windows-2025"),
       artifact_name: "windows",
     },
     {

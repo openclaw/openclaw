@@ -234,7 +234,7 @@ suite.define(() => {
       await pollCount(working).toBe(0);
       expect(await alert.locator("summary").count()).toBe(1);
       await alert.locator("summary").click();
-      const text = alert.locator("pre");
+      const text = alert.locator(".lazy-view-error__detail");
       await text.waitFor({ state: "visible" });
       expect(await text.textContent()).toContain(diagnostic);
       await alert.getByRole("button", { name: "Copy error", exact: true }).click();
@@ -264,7 +264,7 @@ suite.define(() => {
         await outbox.getByText("Waiting for reconnect", { exact: true }).waitFor();
         expect(await outbox.count()).toBe(1);
         await pollLocatorText(pane.locator(".agent-chat__composer-status-band")).toContain(
-          "The initial message is unresolved.",
+          "The first message is unresolved.",
         );
         await pollLocatorText(failedGroup.locator(".chat-send-status")).toContain(
           "Waiting for reconnect",
@@ -305,7 +305,7 @@ suite.define(() => {
           expect(await pane.locator(".agent-chat__composer-combobox textarea").inputValue()).toBe(
             "later ordinary turn",
           );
-          await pane.getByRole("status", { name: "Loading chat", exact: true }).waitFor();
+          await pane.getByRole("status", { name: "Loading conversation…", exact: true }).waitFor();
           expect(await pane.locator(".agent-chat__welcome, .agent-chat__empty").count()).toBe(0);
           expect(await pane.locator(".chat-topbar-notices .chat-error").count()).toBe(0);
 

@@ -5,7 +5,7 @@ import type {
   RuntimeParityCell,
   RuntimeParityResult,
   RuntimeParityToolCall,
-} from "./runtime-parity.js";
+} from "./runtime-parity.types.js";
 import {
   buildTokenEfficiencyReport,
   renderTokenEfficiencyMarkdownReport,

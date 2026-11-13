@@ -228,14 +228,21 @@ describe("fact-carried image references", () => {
     expect(result.images).toEqual([image()]);
   });
 
-  it("hydrates sandbox-staged inbound media URIs", async () => {
+  it("hydrates sandbox-staged paths while retaining the inbound media identity", async () => {
     const sandboxRoot = tempDirs.make("openclaw-native-image-sbx-uri-");
     const mediaId = "telegram-photo.png";
     await writeImage(sandboxRoot, `media/inbound/${mediaId}`);
 
     const result = await loadImages({
       prompt: "",
-      media: [{ url: `media://inbound/${mediaId}`, contentType: "image/png" }],
+      media: [
+        {
+          path: `media/inbound/${mediaId}`,
+          url: `media://inbound/${mediaId}`,
+          staged: true,
+          contentType: "image/png",
+        },
+      ],
       workspaceDir: sandboxRoot,
       workspaceOnly: true,
       sandbox: sandboxAt(sandboxRoot),
@@ -243,15 +250,19 @@ describe("fact-carried image references", () => {
     expect(result.images[0]).toMatchObject(image());
   });
 
-  it("rejects encoded traversal claim-check facts", async () => {
-    const result = await loadImages({
-      prompt: "legacy ticket is carried structurally",
-      media: [{ url: "media://inbound/%2e%2e%2fsecret.png", contentType: "image/png" }],
-      workspaceDir: "/tmp",
-    });
+  it.each([false, true])(
+    "rejects encoded traversal claim-check facts (sandbox=%s)",
+    async (sandboxed) => {
+      const result = await loadImages({
+        prompt: "legacy ticket is carried structurally",
+        media: [{ url: "media://inbound/%2e%2e%2fsecret.png", contentType: "image/png" }],
+        workspaceDir: "/tmp",
+        sandbox: sandboxed ? sandboxAt("/tmp") : undefined,
+      });
 
-    expect(result).toMatchObject({ loadedCount: 0, skippedCount: 1, images: [] });
-  });
+      expect(result).toMatchObject({ loadedCount: 0, skippedCount: 1, images: [] });
+    },
+  );
 
   it("allows sandbox-validated host paths outside default media roots", async () => {
     const homeDir = os.homedir();

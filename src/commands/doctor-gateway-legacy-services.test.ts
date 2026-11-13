@@ -71,6 +71,7 @@ function mockPlistFs() {
     mkdir: vi.spyOn(fs, "mkdir").mockResolvedValue(undefined),
     access: vi.spyOn(fs, "access").mockResolvedValue(undefined),
     rename: vi.spyOn(fs, "rename").mockResolvedValue(undefined),
+    unlink: vi.spyOn(fs, "unlink").mockResolvedValue(undefined),
   };
 }
 function expectNoInstall(runtime: ReturnType<typeof makeDoctorIo>) {
@@ -284,13 +285,14 @@ const reasons = {
   move: "could not move plist",
   unload: "launchctl could not confirm unload",
 };
-it.each<[string, LaunchctlResult[], ("absent" | keyof typeof reasons)?]>([
+it.each<[string, LaunchctlResult[], ("absent" | "trash-denied" | keyof typeof reasons)?]>([
   ["missing service", sequence(absent)],
   ["missing process", sequence(launchctlResult({ code: 113, stderr: "No such process" }))],
   ["registered stopped label", sequence(stopped, absent)],
   ["absent plist", sequence(absent), "absent"],
   ["uninspectable plist", sequence(absent), "inspect"],
   ["unmovable plist", sequence(absent), "move"],
+  ["Trash-denied plist", sequence(absent), "trash-denied"],
   ["timeouts", [timeout, timeout, timeout], "unload"],
   ["unknown failures", [denied, denied, denied], "unload"],
   ["loaded probe after successful unload", [timeout, launchctlResult(), stopped, denied], "unload"],
@@ -299,13 +301,16 @@ it.each<[string, LaunchctlResult[], ("absent" | keyof typeof reasons)?]>([
   for (const result of outcomes) {
     mocks.execLaunchctl.mockResolvedValueOnce(result);
   }
-  const { mkdir, access, rename } = mockPlistFs();
+  const { mkdir, access, rename, unlink } = mockPlistFs();
   if (failure === "absent" || failure === "inspect") {
     const code = failure === "absent" ? "ENOENT" : "EACCES";
     access.mockRejectedValue(Object.assign(new Error(code), { code }));
   }
   if (failure === "move") {
     rename.mockRejectedValue(new Error("permission denied"));
+  }
+  if (failure === "trash-denied") {
+    rename.mockRejectedValue(Object.assign(new Error("EPERM"), { code: "EPERM" }));
   }
   const runtime = makeDoctorIo();
   await scan(false, runtime);
@@ -320,9 +325,10 @@ it.each<[string, LaunchctlResult[], ("absent" | keyof typeof reasons)?]>([
     );
   } else {
     expect(rename).toHaveBeenCalledTimes(failure === "absent" || failure === "inspect" ? 0 : 1);
+    expect(unlink).toHaveBeenCalledTimes(failure === "trash-denied" ? 1 : 0);
     expectNoInstall(runtime);
   }
-  if (failure && failure !== "absent") {
+  if (failure && failure !== "absent" && failure !== "trash-denied") {
     expectNoteContaining(
       `${LEGACY_MAC_LABEL} (${reasons[failure]})`,
       "Legacy gateway cleanup skipped",
@@ -331,6 +337,9 @@ it.each<[string, LaunchctlResult[], ("absent" | keyof typeof reasons)?]>([
   } else {
     expectNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway removed");
     expectNoNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway cleanup skipped");
+    if (failure === "trash-denied") {
+      expectNoNoteContaining(".Trash", "Legacy gateway removed");
+    }
   }
 });
 

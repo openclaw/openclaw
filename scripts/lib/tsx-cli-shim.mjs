@@ -125,6 +125,9 @@ async function runCliShimProcess(moduleUrl, options, nodeArgs, onReady) {
       ? [
           path.join(SHIM_CHECKOUT_ROOT, "scripts/lib/vitest-worker-bootstrap.mts"),
           options.workerRun.descriptor.directory,
+          ...(options.workerRun.descriptor.preset && options.workerRun.descriptor.preset !== "full"
+            ? [`--worker-preset=${options.workerRun.descriptor.preset}`]
+            : []),
         ]
       : []),
     fileURLToPath(new URL(options.implementation, moduleUrl)),

@@ -48,26 +48,25 @@ it("keeps one usage operation's prices and fingerprint when pricing is republish
         }),
       }),
     });
-    await modelPricing.prepareModelPricingContext(config);
-    return modelPricing.resolveModelPricingContext(config);
+    return await modelPricing.prepareModelPricingContext(config);
   };
   const config: OpenClawConfig = {};
   const original = await prepareContext(config, 1);
   const next = await prepareContext({}, 10);
   const publication = vi
-    .spyOn(modelPricing, "resolveModelPricingContext")
-    .mockReturnValue(original);
+    .spyOn(modelPricing, "prepareModelPricingContext")
+    .mockResolvedValue(original);
   const operation = await prepareUsageCostPricing(config, agentDir);
   const fingerprint = operation.fingerprint();
-  const resolveCost = createUsageCostResolver({ config, agentDir }, operation);
+  const resolveCost = await createUsageCostResolver({ config, agentDir }, operation);
   expect(resolveCost({ provider: "openai", model: "first" })?.input).toBe(2.5);
 
-  publication.mockReturnValue(next);
+  publication.mockResolvedValue(next);
   // This model has not been looked up or memoized by the original operation.
   expect(resolveCost({ provider: "openai", model: "second" })?.input).toBe(4);
   expect(operation.fingerprint()).toBe(fingerprint);
   const nextOperation = await prepareUsageCostPricing(config, agentDir);
-  const nextResolveCost = createUsageCostResolver({ config, agentDir }, nextOperation);
+  const nextResolveCost = await createUsageCostResolver({ config, agentDir }, nextOperation);
   expect(nextResolveCost({ provider: "openai", model: "first" })?.input).toBe(25);
   expect(nextResolveCost({ provider: "openai", model: "second" })?.input).toBe(40);
   expect(nextOperation.fingerprint()).not.toBe(fingerprint);

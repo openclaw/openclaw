@@ -4,9 +4,16 @@ import { StringDecoder } from "node:string_decoder";
 import { resolveStateDir } from "../config/paths.js";
 import { hasErrnoCode } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
+import { readCgroupMemoryUsage, watchHostExecMemory } from "../process/child-memory.js";
 import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
-import type { ManagedRun, RunExit, SpawnInput } from "../process/supervisor/types.js";
+import type {
+  ManagedRun,
+  RunExit,
+  SpawnInput,
+  TerminationReason,
+} from "../process/supervisor/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import {
   createDurableProcessStore,
   type DurableProcessRecord,
@@ -187,7 +194,6 @@ export async function startDurableExecProcess(
       env,
       logPath,
       timeoutMs: input.timeoutMs,
-      memoryLimitBytes: input.memoryLimitBytes,
       assertCurrent,
       initiateSpawn: input.initiateSpawn,
     });
@@ -215,7 +221,8 @@ function bind(
   let pending = Promise.resolve(),
     offset = 0,
     terminal = false,
-    stopConfirmed = false;
+    stopReason: TerminationReason | undefined;
+  let cgroupDirectory: string | undefined;
   const decoder = new StringDecoder("utf8"),
     sanitize = createStreamingBinaryOutputSanitizer();
   // Observation timers detach request context; retain only the process transport owner.
@@ -250,9 +257,10 @@ function bind(
     if (!record.result) {
       if (observed.state === "running") {
         session.pid = observed.pid;
+        cgroupDirectory = observed.cgroupDirectory;
         return;
       }
-      if (observed.state === "missing" && !stopConfirmed) {
+      if (observed.state === "missing" && !stopReason) {
         appendOutput(
           session,
           "stderr",
@@ -260,11 +268,8 @@ function bind(
         );
       }
       const result = {
-        reason: stopConfirmed
-          ? ("manual-cancel" as const)
-          : observed.state === "exited"
-            ? observed.reason
-            : ("spawn-error" as const),
+        reason:
+          stopReason ?? (observed.state === "exited" ? observed.reason : ("spawn-error" as const)),
         exitCode: observed.state === "exited" ? observed.exitCode : null,
         exitSignal: observed.state === "exited" ? observed.exitSignal : null,
         durationMs: Date.now() - record.startedAt,
@@ -279,6 +284,7 @@ function bind(
     session.endedAt = record.endedAt;
     appendOutput(session, "stdout", sanitize(decoder.end()));
     terminal = true;
+    stopMemoryWatch();
     exit.resolve({
       ...record.result,
       stdout: "",
@@ -287,20 +293,58 @@ function bind(
       noOutputTimedOut: false,
     });
   };
+  const cancel = (reason: TerminationReason, assertSource?: () => void) => {
+    const assertCurrent = () => {
+      persistence.assertCurrent();
+      assertSource?.();
+    };
+    return enqueue(async () => {
+      if (terminal) {
+        return;
+      }
+      if (reason === "manual-cancel") {
+        record.cancellationRequested = true;
+      }
+      await persistence.upsert(record, assertCurrent);
+      await stopDurableProcess(record.unitName, { assertCurrent });
+      stopReason ??= reason;
+      await observeUnit();
+    });
+  };
+  const stopMemoryWatch = runInDetachedAsyncContext(() =>
+    watchHostExecMemory({
+      readUsage: async () => {
+        if (!cgroupDirectory && !terminal) {
+          await enqueue(observeUnit);
+        }
+        if (terminal) {
+          return { memoryBytes: 0, swapBytes: 0 };
+        }
+        if (!cgroupDirectory) {
+          throw new Error("Durable process cgroup usage is unavailable");
+        }
+        try {
+          return await readCgroupMemoryUsage(cgroupDirectory);
+        } catch (error) {
+          if (!hasErrnoCode(error, "ENOENT")) {
+            throw error;
+          }
+          // The retained unit may have finished between the observation and sample.
+          await enqueue(observeUnit);
+          if (terminal) {
+            return { memoryBytes: 0, swapBytes: 0 };
+          }
+          throw error;
+        }
+      },
+      onLimit: () => cancel("memory-limit"),
+      onDiagnostic: (text) => appendOutput(session, "stderr", text),
+    }),
+  );
   session.durable = {
     observe: () => enqueue(observeUnit),
     cancel: (assertSource) => {
-      const assertCurrent = () => {
-        persistence.assertCurrent();
-        assertSource?.();
-      };
-      void enqueue(async () => {
-        record.cancellationRequested = true;
-        await persistence.upsert(record, assertCurrent);
-        await stopDurableProcess(record.unitName, { assertCurrent });
-        stopConfirmed = true;
-        await observeUnit();
-      }).catch(warn);
+      void cancel("manual-cancel", assertSource).catch(warn);
     },
     remove: () => {
       void enqueue(async () => {
@@ -313,7 +357,10 @@ function bind(
         record.notificationSettled = true;
         await persistence.upsert(record);
       }),
-    drain: () => pending,
+    drain: () => {
+      stopMemoryWatch();
+      return pending;
+    },
   };
   const activity = {
     get resultSettled() {
@@ -327,6 +374,8 @@ function bind(
     startedAtMs: record.startedAt,
     activity,
     wait: () => exit.promise,
-    cancel: () => session.durable!.cancel(),
+    cancel: (reason = "manual-cancel") => {
+      void cancel(reason).catch(warn);
+    },
   };
 }

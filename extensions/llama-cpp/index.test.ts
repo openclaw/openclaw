@@ -245,6 +245,7 @@ describe("llama.cpp provider plugin", () => {
         provider: "local",
         model: modelPath ?? DEFAULT_MODEL,
       });
+      expect(result.runtime?.inlineIndexConcurrency).toBe(1);
       expectCall(mocks.ensureModel, { source: modelPath ?? DEFAULT_MODEL, download: true });
       const provider = expectDefined(result.provider, "local embedding provider");
       expect(provider.maxInputTokens).toBe(2044);

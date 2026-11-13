@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, assert, expect, it, vi } from "vitest";
 import {
   closeVisitorFixtures,
   NOW,
@@ -134,9 +134,9 @@ it.each([
       );
       expect(visitor.mutations()).toEqual([]);
       if (committing) {
-        expect(() =>
-          visitor.service.authorize(emails, githubAccountIds).assertCurrent(),
-        ).not.toThrow();
+        const authority = visitor.service.authorize(emails, githubAccountIds);
+        assert(authority, "Expected the unchanged visitor grant to remain active");
+        expect(() => authority.assertCurrent()).not.toThrow();
       }
       await expect(revoke(replacement.id)).resolves.toMatchObject({
         details: {

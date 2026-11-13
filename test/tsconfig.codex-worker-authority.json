@@ -1,0 +1,17 @@
+{
+  "extends": "../tsconfig.extensions.json",
+  "compilerOptions": {
+    "incremental": false,
+    "declaration": false,
+    "rootDir": ".."
+  },
+  "include": [
+    "../src/**/*.d.ts",
+    "./types/**/*.d.ts",
+    "../extensions/codex/src/app-server/run-attempt-connection.environment.test.ts",
+    "./codex-worker-authority.proof.ts",
+    "./codex-worker-authority.test-support.ts",
+    "./vitest.codex-worker-authority.config.ts"
+  ],
+  "exclude": []
+}

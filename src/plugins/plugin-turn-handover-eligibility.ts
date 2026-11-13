@@ -1,4 +1,4 @@
-import type { PluginRegistry } from "./registry-types.js";
+import type { PluginRecord } from "./registry-types.js";
 
 /**
  * Whether a reload hands this generation's running turns for a plugin to the next
@@ -7,13 +7,7 @@ import type { PluginRegistry } from "./registry-types.js";
  * callable authority until the turn finishes, even when replacement is serialized.
  */
 export function pluginHandsOverTurns(
-  registries: readonly PluginRegistry[],
-  pluginId: string,
+  record: Pick<PluginRecord, "turnHandover" | "generationOverlap"> | undefined,
 ): boolean {
-  return registries.some((registry) =>
-    registry.plugins.some(
-      (record) =>
-        record.id === pluginId && record.turnHandover === true && record.generationOverlap !== true,
-    ),
-  );
+  return record?.turnHandover === true && record.generationOverlap !== true;
 }

@@ -85,7 +85,7 @@ it("finishes replacement notes while a cancelled summary request remains unresol
 });
 
 it.each([
-  ["read-only", "No summary is available yet."],
+  ["read-only", "No summary yet."],
   ["silent", "No speech captured"],
   ["saved", "Reader layout discussed."],
 ])("does not generate notes for a %s reader", async (kind, expected) => {

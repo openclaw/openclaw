@@ -3,17 +3,54 @@ import {
   type AgentToolResultMiddlewareEvent,
 } from "openclaw/plugin-sdk/agent-harness";
 import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { clearRuleCache, loadRules } from "tokenjuice";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
+import { createTokenjuiceAgentToolResultMiddleware } from "./tool-result-middleware.js";
 
 beforeAll(() => {
   vi.stubEnv("TOKENJUICE_STATS", "0");
   vi.stubEnv("TOKENJUICE_NO_OMISSION", "1");
 });
-afterAll(() => vi.unstubAllEnvs());
+afterAll(() => {
+  clearRuleCache();
+  vi.unstubAllEnvs();
+});
 
-it("runs the packaged reducer while preserving exact file-read output", async () => {
+it("bounds compiled rules across worktree churn without clearing every result", async () => {
+  const middleware = createTokenjuiceAgentToolResultMiddleware();
+  const event = (worktree: number, context = 0): AgentToolResultMiddlewareEvent => ({
+    toolCallId: `rule-cache-${worktree}`,
+    toolName: "exec",
+    cwd: `/synthetic-tokenjuice/session-${context}`,
+    args: { command: "git status", workdir: `/synthetic-tokenjuice/worktree-${worktree}` },
+    result: {
+      content: [
+        {
+          type: "text",
+          text: "On branch main\n\nChanges not staged for commit:\n\tmodified:   src/a.ts\n",
+        },
+      ],
+      details: { status: "completed", exitCode: 0, cwd: `/synthetic/${context}` },
+    },
+  });
+  const first = await middleware(event(0), { runtime: "openclaw" });
+  const options = { cwd: "/synthetic-tokenjuice/worktree-0" };
+  const rules = await loadRules(options);
+  for (let turn = 0; turn < 256; turn++) {
+    await middleware(event(turn % 2, turn), { runtime: "openclaw" });
+  }
+  expect(await loadRules(options)).toBe(rules);
+  for (let worktree = 1; worktree < 128; worktree++) {
+    expect(await middleware(event(worktree), { runtime: "openclaw" })).toEqual(first);
+  }
+  const reloaded = await loadRules(options);
+  expect(reloaded).not.toBe(rules);
+  expect(reloaded).toEqual(rules);
+});
+
+it("runs the packaged reducer while preserving exact reads and Code Mode results", async () => {
   const captured = capturePluginRegistration({
     id: "tokenjuice",
     contracts: manifest.contracts,
@@ -52,4 +89,19 @@ it("runs the packaged reducer while preserving exact file-read output", async ()
   ]);
   const preserved = await runner.applyToolResultMiddleware(event("cat README.md"));
   expect(preserved.content).toEqual([{ type: "text", text: raw }]);
+
+  const code = 'return { records: await catalog.search("schema") };';
+  const codeMode = event(code);
+  codeMode.args.code = code;
+  const text = JSON.stringify(
+    { records: Array.from({ length: 250 }, (_, id) => ({ id, value: `record-${id}` })) },
+    null,
+    2,
+  );
+  codeMode.result = {
+    content: [{ type: "text", text }],
+    details: { status: "completed", exitCode: 0, aggregated: text },
+  };
+  const expected = structuredClone(codeMode.result);
+  expect(await runner.applyToolResultMiddleware(codeMode)).toEqual(expected);
 });

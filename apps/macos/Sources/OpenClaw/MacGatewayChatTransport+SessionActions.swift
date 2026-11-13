@@ -19,6 +19,26 @@ extension MacGatewayChatTransport {
             onUpdate: onUpdate)
     }
 
+    func createSession(
+        key: String,
+        label: String?,
+        agentID: String?,
+        parentSessionKey: String?,
+        worktree: Bool?,
+        worktreeBaseRef: String?) async throws -> OpenClawChatCreateSessionResponse
+    {
+        guard let lease = await self.acquireNewSessionRouteLease() else {
+            throw OpenClawChatTransportSendError.notDispatched
+        }
+        return try await lease.createSession(
+            key: key,
+            label: label,
+            agentID: agentID,
+            parentSessionKey: parentSessionKey,
+            worktree: worktree,
+            worktreeBaseRef: worktreeBaseRef)
+    }
+
     func acquireNewSessionRouteLease() async -> OpenClawChatNewSessionRouteLease? {
         guard let serverLease = await self.connection.captureServerLease() else { return nil }
         guard await self.currentOutboxGatewayMatchesConnection() else { return nil }

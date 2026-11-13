@@ -12,11 +12,12 @@ import {
   captureWorkspaceSnapshot,
   prepareWorkspaceStageInput,
 } from "./workspace-manifest-worker.js";
+import type { WorkerWorkspaceManifestEntry } from "./workspace-manifest.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { workspaceResultGitCommand } from "./workspace-result-git.js";
 import { buildWorkspaceStageInput } from "./workspace-result-preparation.runtime.js";
 import {
-  readStagedWorkerWorkspaceResult,
+  withStagedWorkerWorkspaceManifest,
   workerWorkspaceResultStaging,
 } from "./workspace-result-staging.js";
 
@@ -154,14 +155,14 @@ async function gitRaw(root: string, args: string[]) {
   return result.stdout;
 }
 
-async function stagedContents(
-  snapshot: Awaited<ReturnType<typeof readStagedWorkerWorkspaceResult>>,
-) {
+async function stagedContents(snapshot: {
+  stagingRoot: string;
+  changedEntries: WorkerWorkspaceManifestEntry[];
+}) {
   const contents = new Map<string, Buffer>();
-  for await (const { entry, content } of snapshot.readEntries()) {
+  for (const entry of snapshot.changedEntries) {
     expect(entry).toMatchObject({ type: "file", mode: 0o644 });
-    expect(content).toBeDefined();
-    contents.set(entry.path, Buffer.from(content!));
+    contents.set(entry.path, await fs.readFile(path.join(snapshot.stagingRoot, entry.path)));
   }
   return contents;
 }
@@ -219,17 +220,21 @@ it.each(["metadata-only", "mixed"] as const)(
         });
       }
     }
-    const newResult = await readStagedWorkerWorkspaceResult(root, newRef);
-    const { stagingRoot: _stagingRoot, ...manifests } = legacy;
-    expect(newResult).toMatchObject({ ...manifests, current: { directories: ["blobs"] } });
-    expect(newResult.base).toEqual({
-      version: 1,
-      baseCommit: null,
-      directories: [],
-      entries: [],
-    });
-    // The reader verifies tree modes against these manifest entries before exposing bytes.
-    expect(await stagedContents(newResult)).toEqual(f.contents);
+    await withStagedWorkerWorkspaceManifest(
+      { root, stagedResultRef: newRef },
+      async (newResult) => {
+        const { stagingRoot: _stagingRoot, ...manifests } = legacy;
+        expect(newResult).toMatchObject({ ...manifests, current: { directories: ["blobs"] } });
+        expect(newResult.base).toEqual({
+          version: 1,
+          baseCommit: null,
+          directories: [],
+          entries: [],
+        });
+        // The reader verifies tree modes against these manifest entries before exposing bytes.
+        expect(await stagedContents(newResult)).toEqual(f.contents);
+      },
+    );
     const commit = await gitRaw(root, ["cat-file", "commit", newRef]);
     const separator = commit.indexOf("\n\n");
     expect(commit.slice(0, separator)).toMatch(

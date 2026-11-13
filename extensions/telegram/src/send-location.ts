@@ -11,7 +11,11 @@ import {
   type TelegramApiContext,
 } from "./send-context.js";
 import type { TelegramLocationSendOpts, TelegramSendResult } from "./send-message-types.js";
-import { finalizeTelegramOutbound, prepareTelegramOutbound } from "./send-outbound.js";
+import {
+  finalizeTelegramOutbound,
+  prepareTelegramOutbound,
+  resolveTelegramMessageEffectParams,
+} from "./send-outbound.js";
 import { resolveTelegramBotUserIdFromToken } from "./token-fingerprint.js";
 
 type TelegramSendLocationParams = Parameters<TelegramApiContext["api"]["sendLocation"]>[3];
@@ -49,6 +53,7 @@ export async function sendLocationTelegram(
     const replyMarkup = buildInlineKeyboard(opts.buttons);
     const commonParams = {
       ...prepared.threadParams,
+      ...resolveTelegramMessageEffectParams(prepared.chatId, opts.messageEffectId),
       ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
       ...(opts.silent === true ? { disable_notification: true } : {}),
     };

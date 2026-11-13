@@ -33,11 +33,11 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("applies a valid env override to both file and console levels", () => {
+it("applies a valid env override to both file and console levels", async () => {
   configure({ consoleStyle: "json" });
   process.env.OPENCLAW_LOG_LEVEL = "debug";
 
-  expect(getResolvedLoggerSettings()).toEqual({
+  expect(await getResolvedLoggerSettings()).toEqual({
     level: "debug",
     file: testLogPath,
     maxFileBytes: defaultMaxFileBytes,
@@ -50,13 +50,16 @@ it.each([
   ["json", "silent", "info"],
 ] as const)(
   "warns once and ignores invalid env values (%s)",
-  (consoleStyle, level, consoleLevel) => {
+  async (consoleStyle, level, consoleLevel) => {
     configure({ consoleStyle, level, consoleLevel });
     process.env.OPENCLAW_LOG_LEVEL = "nope";
     const stderrSpy = captureStderr();
     expect(getConsoleSettings().level).toBe(consoleLevel);
-    expect(getResolvedLoggerSettings()).toMatchObject({ level, maxFileBytes: defaultMaxFileBytes });
-    expect(getResolvedLoggerSettings().level).toBe(level);
+    expect(await getResolvedLoggerSettings()).toMatchObject({
+      level,
+      maxFileBytes: defaultMaxFileBytes,
+    });
+    expect((await getResolvedLoggerSettings()).level).toBe(level);
     const warnings = envWarnings(stderrSpy);
     expect(warnings).toHaveLength(1);
     if (consoleStyle === "json") {
@@ -70,13 +73,13 @@ it.each([
   },
 );
 
-it.each(["compact", "json"] as const)("redacts %s env warnings", (consoleStyle) => {
+it.each(["compact", "json"] as const)("redacts %s env warnings", async (consoleStyle) => {
   const secret = "ghp_abcdefghijklmnopqrstuvwxyz123456"; // pragma: allowlist secret
   setLoggerOverride({ level: "silent", consoleStyle, file: testLogPath });
   process.env.OPENCLAW_LOG_LEVEL = secret;
   const stderrSpy = captureStderr();
 
-  getResolvedLoggerSettings();
+  await getResolvedLoggerSettings();
 
   expect(stderrSpy).toHaveBeenCalledOnce();
   const warning = String(stderrSpy.mock.calls[0]?.[0]);

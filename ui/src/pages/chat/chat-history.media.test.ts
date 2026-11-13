@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import { buildChatItems } from "./chat-thread-build.ts";
 import { createProps } from "./chat-thread.test-support.ts";
-import { projectMessageMedia } from "./components/chat-message-media.ts";
+import { projectMessageMedia } from "./components/chat-message-media-projection.ts";
 
 const UUID = "43007e90-2ade-43f2-a781-42b843e9eca3";
 const userMedia = (media: unknown[]) => ({ role: "user", content: "", __openclaw: { media } });

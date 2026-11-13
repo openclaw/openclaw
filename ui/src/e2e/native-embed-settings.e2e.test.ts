@@ -3,6 +3,7 @@ import { assert, expect, it } from "vitest";
 import { pathForRoute, type RouteId } from "../app-route-paths.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { captureControlUiE2eFailureDiagnostics } from "../test-helpers/control-ui-e2e-diagnostics.ts";
+import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { installControlUiE2eRendererStallProbe } from "../test-helpers/control-ui-e2e-renderer-stall.ts";
 import {
   defaultControlUiFeatureMethods,
@@ -114,7 +115,7 @@ async function getLayoutPage(viewport: (typeof viewports)[number], colorScheme: 
 
 suite.define(() => {
   for (const destination of [
-    { from: "memory", route: "memory-import", title: "Import Memory", tab: "Settings" },
+    { from: "memory", route: "memory-import", title: "Import memory", tab: "Settings" },
     { from: "skills", route: "plugins", title: "Plugins", tab: "Plugins" },
     { from: "skills", route: "skill-workshop", title: "Skill workshop", tab: "Skill workshop" },
   ] as const) {
@@ -245,6 +246,7 @@ suite.define(() => {
         await installMockGateway(page, { operatorScopes: ["operator.read"] });
         await page.goto(new URL("settings", suite.server.baseUrl).toString());
         await waitForControlUiRoute(page, { routeId: "settings" });
+        await waitForControlUiGatewayReady(page);
         const list = page.locator(".settings-embed-list");
         await list.locator('a[href="/settings/device"]').waitFor();
         expect(await list.locator('a[href="/settings/security"]').count()).toBe(0);
@@ -368,7 +370,7 @@ suite.define(() => {
                 ).toBe(true);
               }
             } else if (route === "profile" && viewport.width <= 400) {
-              const name = "Help for Connected accounts";
+              const name = "Help for Saved accounts";
               const help = page.getByRole("button", { name, exact: true });
               await help.scrollIntoViewIfNeeded();
               const target = await help.boundingBox();

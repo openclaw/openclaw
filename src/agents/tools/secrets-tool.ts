@@ -371,7 +371,7 @@ export function createSecretsTool(params: {
             status === "cancelled"
               ? "The credential request was cancelled; proceed with best judgment."
               : "No credential arrived; proceed with best judgment.";
-          return textResult(`${note}\n\n${JSON.stringify(details, null, 2)}`, details);
+          return textResult(`${note}\n\n${JSON.stringify(details)}`, details);
         }
         throw new Error("question.waitAnswer returned an invalid status");
       } catch (error) {

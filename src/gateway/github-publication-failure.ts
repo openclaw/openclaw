@@ -1,8 +1,10 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   GatewayErrorDetailCodes,
   type GitHubPublicationSelectionRejectedErrorDetails,
 } from "../../packages/gateway-protocol/src/gateway-error-details.js";
 import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
+import { WORKSPACE_RESULT_LIMIT_ERROR_CODE } from "./worker-environments/workspace-inventory-limits.js";
 
 type PublicationFailure = Pick<
   Extract<SessionGitHubPublicationResult, { status: "failed" }>,
@@ -14,7 +16,7 @@ export type GitHubPublicationPreparation = {
   hasRequest: () => boolean;
 };
 const identityNextAction =
-  "Reconnect My GitHub or System GitHub in Settings → Profile → GitHub connections (agent overrides: Agents → Tools), then request publication again.";
+  "Reconnect My GitHub, the shared agent account, or the agent’s own account in Settings → Profile → GitHub accounts, then request publication again.";
 
 /** An owner observed a definitive outcome; an unavailable probe is not this failure. */
 export class GitHubPublicationKnownFailure extends Error {
@@ -157,6 +159,9 @@ export function resolveGitHubPublicationFailure(error: unknown): PublicationFail
     return { code: error.failure.code, nextAction: `${reason} ${error.failure.nextAction}` };
   }
   const message = error instanceof Error ? error.message : "";
+  if (message && asOptionalRecord(error)?.code === WORKSPACE_RESULT_LIMIT_ERROR_CODE) {
+    return { code: "workspace_changed", nextAction: message };
+  }
   if (message.includes("publication workspace base")) {
     return {
       code: "unavailable",

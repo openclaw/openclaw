@@ -94,6 +94,8 @@ export type ChatHistoryPage = {
 };
 
 export type ChatHistoryPageParams = {
+  /** Keep scoped channel user rows plain until the Gateway's viewer display pass. */
+  deferChannelUserDisplay?: boolean;
   encodeResponse?: boolean;
   deflateResponse?: boolean;
   includePluginSteering?: boolean;
@@ -113,7 +115,7 @@ export type ChatHistoryPageParams = {
   messageId: string | undefined;
   pageCursor?: ChatHistoryPageCursor;
   ignoreCliSessionImports?: boolean;
-  cliHistoryHomeDir?: string;
+  cliHistoryProjectsDir?: string;
 };
 
 type SessionHistoryTranscriptMeta = {

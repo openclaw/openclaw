@@ -159,7 +159,7 @@ async function deleteGatewaySessionInScope(
                       "agentHarnessId",
                     ] as const
                   ).every((field) => isDeepStrictEqual(before?.[field], after?.[field])) &&
-                  (p.archivedOnly !== true || after?.archivedAt !== undefined),
+                  (p.archivedOnly !== true || !after || after.archivedAt !== undefined),
               });
             },
             assertActive: () => {
@@ -218,7 +218,7 @@ async function deleteGatewaySessionInScope(
       }
       // archivedOnly is the write-scope archive-then-delete contract, rechecked
       // under the fence so a racing unarchive cannot authorize active deletion.
-      if (p.archivedOnly === true && entry?.archivedAt === undefined) {
+      if (p.archivedOnly === true && entry && entry.archivedAt === undefined) {
         return errorShape(
           ErrorCodes.INVALID_REQUEST,
           `Session ${key} is not archived. Archive it first, then delete it.`,

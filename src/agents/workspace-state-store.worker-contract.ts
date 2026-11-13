@@ -45,6 +45,10 @@ export type WorkspaceStateWorkerOperations = {
     };
     output: WorkspaceSetupState;
   };
+  "workspace.rollbackBootstrapSeed": {
+    input: WorkspaceStateInput & { bootstrapSeededAt: string };
+    output: void;
+  };
   "workspace.expire": { input: WorkspaceStateInput & { nowMs: number }; output: string | false };
   "workspace.replaceAttestation": {
     input: WorkspaceStateInput & WorkspaceAttestationInput;
