@@ -12,10 +12,11 @@ function readHistoryId(entries: SessionEntry[]): string | null {
         isRecord(e.data) &&
         "historyId" in e.data),
   );
-  return entry?.type === "custom"
-    ? // SAFETY: session-prompt-state alone writes openclaw.system-prompt checkpoints; historyId is string | null.
-      ((entry.data as { historyId?: string | null }).historyId ?? null)
-    : (entry?.id ?? null);
+  if (entry?.type !== "custom") {
+    return entry?.id ?? null;
+  }
+  const historyId = isRecord(entry.data) ? entry.data.historyId : null;
+  return typeof historyId === "string" ? historyId : null;
 }
 
 export function resolvePromptHistoryId(params: {

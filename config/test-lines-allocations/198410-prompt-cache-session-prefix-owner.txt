@@ -1,0 +1,3 @@
+# Seeded randomized session-prefix journeys over 15 turn kinds on all five model transports, plus
+# fake servers for each wire format: the invariant gate that per-scenario prompt-cache tests missed.
+200
