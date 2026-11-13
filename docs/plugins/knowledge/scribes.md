@@ -187,9 +187,9 @@ that carries no replaced wording shows nothing.
 
 After an update, **Replace with new…** or **Repair** sends its turn, the scribe
 shows **Updating…** and the tab refreshes when the automation changes. If it
-hasn't changed after 3 minutes, the tab says so; open the conversation to see
-what the turn did. The page asks for an update once per automation revision while it is open;
-reopen the Scribes tab to ask again. A
+hasn't changed after 3 minutes, the tab says so and offers **Try again**, which
+sends the turn again as a new request; open the conversation to see what the
+turn did. The page asks for an update once per automation revision. A
 scribe that is running or whose conversation is not found is updated on a later
 load. Until the Scribes tab loads, a scribe keeps running its earlier message,
 which still works.

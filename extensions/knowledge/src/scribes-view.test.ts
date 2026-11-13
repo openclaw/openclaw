@@ -507,7 +507,9 @@ it("asks an earlier scribe's conversation to update it once and offers an edited
   expect(sent).toHaveLength(1);
   expect(sent[0]![1]).toMatchObject({
     sessionKey: "s-review",
-    idempotencyKey: "knowledge:scribe:claim-consolidation:update:job-review:rev-7",
+    idempotencyKey: expect.stringMatching(
+      /^knowledge:scribe:claim-consolidation:update:job-review:rev-7:[0-9a-f-]{36}$/,
+    ),
   });
   const prompt = String(sent[0]![1]!.message);
   expect(prompt).toMatch(/^Update the Knowledge scribe "Knowledge Consolidation"/);
@@ -605,27 +607,29 @@ it("says so when an update leaves the automation unchanged past the wait", async
   }
 });
 
-it("asks again after reopening when an update left the automation unchanged", async () => {
+it("offers Try again, as a new request, when an update left the automation unchanged", async () => {
   const runMessage = setupPrompt(reviewSetup).match(/```text\n([\s\S]+)\n```$/)![1]!;
   const legacy = {
     ...reviewJob,
-    id: "job-reopen",
+    id: "job-retry",
     sessionKey: "s-review",
     payload: { kind: "agentTurn", message: runMessage },
   };
   const { render, ui, calls } = fixture({ sessions: reviewSession, jobs: [legacy] });
-  const sends = () => calls.filter(([method]) => method === "chat.send").length;
+  ui.s.scribe = "claim-consolidation";
+  const sends = () => calls.filter(([method]) => method === "chat.send").map(([, p]) => p);
   await render();
   await render();
-  expect(sends()).toBe(1);
+  expect(sends()).toHaveLength(1);
   vi.spyOn(Date, "now").mockReturnValue(Date.now() + 4 * 60_000);
   try {
-    await render();
-    expect(sends()).toBe(1);
-    // A reopened page asks once more.
-    ui.s = { ...ui.s };
-    await render();
-    expect(sends()).toBe(2);
+    const view = await render();
+    expect(sends()).toHaveLength(1);
+    buttonNamed(view, "Try again").click();
+    await vi.waitFor(() => expect(sends()).toHaveLength(2));
+    // A new attempt: the Gateway must not answer it from the first request's record.
+    expect(sends()[1]!.idempotencyKey).not.toBe(sends()[0]!.idempotencyKey);
+    expect((await render()).querySelector(".scribe-update")?.textContent).toMatch(/^Updating/);
   } finally {
     vi.restoreAllMocks();
   }

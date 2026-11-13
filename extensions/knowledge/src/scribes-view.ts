@@ -527,7 +527,13 @@ function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[], detection
           await repairScribe(host, snapshot, job, agentId);
           // Restoring an archived conversation needs no turn; every other repair is one.
           if (!(status === "missing" && session?.archived)) {
-            markUpdating(ui, job, agentId);
+            markUpdating(
+              ui,
+              job,
+              agentId,
+              () => true,
+              () => repairScribe(host, snapshot, job, agentId),
+            );
           }
         },
         status === "missing" && session?.archived
@@ -701,7 +707,7 @@ function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[], detection
   root.append(crumb, head, feedback);
   const state = updateState(ui, job);
   if (state) {
-    root.append(updatingNotice(scribe, state));
+    root.append(updatingNotice(ui, snapshot, state));
   } else if (job && snapshot.runMessage?.state === "differs") {
     root.append(updateNotice(ui, snapshot, job, agentId, snapshot.runMessage.current));
   }

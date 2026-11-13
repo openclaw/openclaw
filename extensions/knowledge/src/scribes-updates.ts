@@ -6,19 +6,21 @@ import { needsUpdate, updateScribe } from "./scribes-actions.js";
 import type { ScribeJob, ScribeSnapshot } from "./scribes-state.js";
 
 /**
- * Automation revisions this page already asked to update, per open page. The update is a turn in
- * the scribe's conversation, so the revision stays until that turn re-declares the automation;
- * this keeps reloads in that gap from asking again. A turn that left it unchanged is asked again
- * once the page is reopened.
+ * Per Gateway connection: update attempts by automation revision. An attempt keeps its identity
+ * until its turn is sent, so a transport retry after a failed send is the same request. A sent
+ * attempt is not repeated on reloads, since the revision stays until the turn re-declares the
+ * automation; Try again after it stayed unchanged starts a new attempt.
  */
-const updatesAsked = new WeakMap<object, Set<string>>();
-const askedOf = (ui: Page) => {
-  let asked = updatesAsked.get(ui.s);
-  if (!asked) {
-    asked = new Set();
-    updatesAsked.set(ui.s, asked);
+type Attempt = { id: string; sent: boolean };
+const attempts = new WeakMap<object, Map<string, Attempt>>();
+const attemptsOf = (ui: Page) => {
+  const host = ui.s.context.host;
+  let map = attempts.get(host);
+  if (!map) {
+    map = new Map();
+    attempts.set(host, map);
   }
-  return asked;
+  return map;
 };
 /**
  * Per Gateway connection: automations a turn was just asked to change (an update, Replace with
@@ -32,6 +34,8 @@ type UpdateEntry = {
   since: number;
   /** Whether a read shows the change landed; a turn can write more than once. */
   applied: (snapshot: ScribeSnapshot) => boolean;
+  /** Sends the same change again as a new attempt, for Try again once it is late. */
+  retry: () => Promise<unknown>;
   late?: boolean;
 };
 const updates = new WeakMap<
@@ -60,23 +64,28 @@ export async function update(ui: Page, snapshot: ScribeSnapshot, agentId: string
   const asked = job && `${job.id}:${job.configRevision ?? ""}`;
   // An update still landing may write the automation more than once; don't ask again meanwhile.
   const landing = job && updatesOf(ui).pending.get(job.id);
-  if (
-    !job ||
-    !asked ||
-    askedOf(ui).has(asked) ||
-    (landing && !landing.late) ||
-    !needsUpdate(snapshot)
-  ) {
+  const map = attemptsOf(ui);
+  if (!job || !asked || map.get(asked)?.sent || landing || !needsUpdate(snapshot)) {
     return;
   }
-  askedOf(ui).add(asked);
+  const attempt = map.get(asked) ?? { id: crypto.randomUUID(), sent: false };
+  map.set(asked, attempt);
   try {
-    await updateScribe(ui.s.context.host, snapshot, job, agentId);
-    markUpdating(ui, job, agentId, (next) => !needsUpdate(next));
+    await updateScribe(ui.s.context.host, snapshot, job, agentId, undefined, attempt.id);
+    attempt.sent = true;
+    markUpdating(
+      ui,
+      job,
+      agentId,
+      (next) => !needsUpdate(next),
+      async () => {
+        map.delete(asked);
+        await update(ui, snapshot, agentId);
+      },
+    );
     ui.announce(`${snapshot.scribe.title}: updating for this version of Knowledge…`);
   } catch (error) {
-    // Not sent: forget it so a later load asks again.
-    askedOf(ui).delete(asked);
+    // Not sent: the next load asks again, as the same request.
     ui.announce(`${snapshot.scribe.title}: the update was not sent. ${ui.errorText(error)}`);
   }
 }
@@ -89,13 +98,15 @@ export function markUpdating(
   ui: Page,
   job: ScribeJob,
   agentId: string,
-  applied: UpdateEntry["applied"] = () => true,
+  applied: UpdateEntry["applied"],
+  retry: UpdateEntry["retry"],
 ) {
   updatesOf(ui).pending.set(job.id, {
     agentId,
     revision: job.configRevision,
     since: Date.now(),
     applied,
+    retry,
   });
   watchUpdates(ui);
 }
@@ -127,7 +138,7 @@ export function settleUpdates(ui: Page, agentId: string, snapshots: ScribeSnapsh
   }
 }
 const LATE_TEXT =
-  "its automation hasn't changed after 3 minutes. Open the conversation to see what happened.";
+  "its automation hasn't changed after 3 minutes. Open the conversation to see what happened, or try again.";
 
 /**
  * While an automation is updating, reload the Scribes tab when automations change, and every 10
@@ -212,8 +223,10 @@ export function updateNotice(
         `Later runs of ${scribe.title} follow the new run message. These lines change; the saved message is not kept.`,
         "Replace with new",
         async () => {
-          await updateScribe(ui.s.context.host, snapshot, job, agentId, next);
-          markUpdating(ui, job, agentId, (read) => read.job?.payload?.message === next);
+          const send = () =>
+            updateScribe(ui.s.context.host, snapshot, job, agentId, next, crypto.randomUUID());
+          await send();
+          markUpdating(ui, job, agentId, (read) => read.job?.payload?.message === next, send);
           ui.announce(`${scribe.title}: replacing the run message…`);
           void ui.load();
         },
@@ -226,13 +239,44 @@ export function updateNotice(
   return notice;
 }
 
-// The notice while a turn changes the automation, or after it took too long.
-export function updatingNotice(scribe: ScribeSnapshot["scribe"], state: "updating" | "late") {
-  return el(
-    "p",
-    state === "updating"
-      ? `Updating ${scribe.title}… This page refreshes when its automation changes.`
-      : `${scribe.title}: ${LATE_TEXT}`,
-    "knowledge-notice scribe-update",
+// The notice while a turn changes the automation, or after it took too long, with Try again.
+export function updatingNotice(ui: Page, snapshot: ScribeSnapshot, state: "updating" | "late") {
+  const { scribe, job } = snapshot;
+  const notice = el("div", undefined, "knowledge-notice scribe-update");
+  notice.append(
+    el(
+      "span",
+      state === "updating"
+        ? `Updating ${scribe.title}… This page refreshes when its automation changes.`
+        : `${scribe.title}: ${LATE_TEXT}`,
+    ),
   );
+  const entry = job && updatesOf(ui).pending.get(job.id);
+  if (state === "late" && entry) {
+    const again = button(
+      "Try again",
+      () => {
+        again.disabled = true;
+        updatesOf(ui).pending.delete(job.id);
+        entry.retry().then(
+          () => {
+            // A retry that went through `update` marks itself; any other is marked here.
+            if (!updatesOf(ui).pending.has(job.id)) {
+              markUpdating(ui, job, entry.agentId, entry.applied, entry.retry);
+            }
+            void ui.load();
+          },
+          (error: unknown) => {
+            updatesOf(ui).pending.set(job.id, entry);
+            again.disabled = false;
+            ui.announce(`${scribe.title}: the update was not sent. ${ui.errorText(error)}`);
+          },
+        );
+      },
+      "knowledge-button knowledge-small",
+    );
+    again.disabled = !ui.s.context.host.connection.canWrite;
+    notice.append(again);
+  }
+  return notice;
 }

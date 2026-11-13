@@ -186,6 +186,7 @@ export async function updateScribe(
   job: ScribeJob,
   agentId: string,
   runMessage = job.payload?.message,
+  attempt = "1",
 ) {
   const { scribe } = snapshot;
   const sessionKey = await conversation(host, snapshot, agentId);
@@ -198,7 +199,7 @@ export async function updateScribe(
     sessionKey,
     agentId,
     message: prompt,
-    idempotencyKey: `knowledge:scribe:${scribe.id}:${runMessage === job.payload?.message ? "update" : "reset"}:${job.id}:${job.configRevision ?? ""}`,
+    idempotencyKey: `knowledge:scribe:${scribe.id}:${runMessage === job.payload?.message ? "update" : "reset"}:${job.id}:${job.configRevision ?? ""}:${attempt}`,
   });
   return sessionKey;
 }
