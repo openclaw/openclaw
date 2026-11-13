@@ -219,8 +219,7 @@ if (values["large-fixture"]) {
         `
     await fs.mkdir(path.join(root, "agents/main/agent"), {recursive: true});
     (await import("../infra/sqlite-wal-filesystem.js")).prepareSqliteDatabaseDirectory(path.join(root, "agents/main/agent/openclaw-agent.sqlite"));
-    await fs.copyFile(${JSON.stringify(db)}, path.join(root, "agents/main/agent/openclaw-agent.sqlite"), fs.constants.COPYFILE_FICLONE_FORCE);
-    await fs.cp(${JSON.stringify(path.join(fixture, "workspace"))}, path.join(root, "large-workspace"), {recursive: true, mode: fs.constants.COPYFILE_FICLONE_FORCE});`,
+    await fs.copyFile(${JSON.stringify(db)}, path.join(root, "agents/main/agent/openclaw-agent.sqlite"), fs.constants.COPYFILE_FICLONE_FORCE);`,
     ),
   );
 }
@@ -250,6 +249,7 @@ it("measures actions at the registered boundary with a large authority inventory
  const publication=process.env.LANE2450_PUBLICATION==="1";
  const lineage=process.env.LANE2458_LINEAGE==="1";
  const f = publication ? await createRequesterPublicationFixture(publicationCheckpoint,"local") : await createPublicationActionFixture();
+ ${values["large-fixture"] ? `await fs.cp(${JSON.stringify(path.join(path.resolve(values["large-fixture"]), "workspace"))},f.local.cwd+"/large-fixture",{recursive:true,mode:fs.constants.COPYFILE_FICLONE_FORCE});` : ""}
  await syncCanonicalGitHubIdentity({identity:{accountId:101,login:"contributor"},authenticationAlias:{kind:"email",email:"publication-guest@example.test"}});
  const sessions=Number(process.env.LANE2450_SESSIONS ?? 2000);
  const runs=Number(process.env.LANE2450_RUNS ?? 20000);
