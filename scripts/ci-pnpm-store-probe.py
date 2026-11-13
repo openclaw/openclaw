@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure a private CI store; never publish or modify shared caches."""
+"""Compare inherited and fresh private CI stores without publishing caches."""
 
 import hashlib
 import json
@@ -20,7 +20,7 @@ assert os.environ.get("GITHUB_ACTIONS") == "true"
 scratch = Path(tempfile.mkdtemp(prefix="pnpm-store-probe-", dir=os.environ["RUNNER_TEMP"]))
 pnpm = shutil.which("pnpm")
 assert pnpm
-# Keep the production installer, but reject its online repair before pnpm runs.
+# Timed consumers use the production installer with online repair rejected.
 # COREPACK_ENABLE_NETWORK alone does not prevent pnpm registry requests.
 offline_bin = scratch / "bin"
 offline_bin.mkdir()
@@ -75,24 +75,33 @@ toolchain = {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
              for p in (store / "toolchain").iterdir() if p.is_file()}
 try:
     baseline = archive("baseline")
+    # A fresh publisher avoids inherited packages without prune's snapshot loss.
+    saved_toolchain = scratch / "toolchain"
+    shutil.copytree(store / "toolchain", saved_toolchain)
+    clear_modules()
+    shutil.rmtree(store)
+    shutil.copytree(saved_toolchain, store / "toolchain")
     started = time.monotonic()
-    command(["pnpm", "--store-dir", str(store),
-             "--config.cache-dir=" + str(store / "cache"), "store", "prune"])
-    prune_seconds = time.monotonic() - started
+    command(["/bin/bash", ".github/actions/setup-node-env/install-dependencies.sh"],
+            env={**os.environ, "DEPENDENCY_CACHE": "false", "DEPENDENCY_CACHE_HIT": "false",
+                 "FROZEN_LOCKFILE": "true"})
+    fresh_install_seconds = time.monotonic() - started
+    if inventory() != expected:
+        raise RuntimeError("Fresh publisher changed the complete package inventory")
     if toolchain != {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
                      for p in (store / "toolchain").iterdir() if p.is_file()}:
-        raise RuntimeError("Pruning changed the authenticated bootstrap archives")
-    candidate = archive("pruned")
+        raise RuntimeError("Fresh publisher changed the authenticated bootstrap archives")
+    candidate = archive("fresh")
     summary = {"baseline_bytes": baseline["bytes"], "candidate_bytes": candidate["bytes"],
-               "prune_seconds": prune_seconds, "package_count": len(expected["packages"])}
+               "fresh_install_seconds": fresh_install_seconds, "package_count": len(expected["packages"])}
     print("[store-probe] " + json.dumps(summary), flush=True)
     # Stop before repeated installs unless there is material payload waste.
     if candidate["bytes"] > baseline["bytes"] * 0.8:
         print("[store-probe] " + json.dumps({"verdict": "rejected_payload_screen"}), flush=True)
     else:
-        samples = {"baseline": [], "pruned": []}
+        samples = {"baseline": [], "fresh": []}
         for pair in range(6):
-            for name, packed in (("baseline", baseline), ("pruned", candidate)):
+            for name, packed in (("baseline", baseline), ("fresh", candidate)):
                 clear_modules()
                 shutil.rmtree(store)
                 usage_path = scratch / "time.txt"
@@ -131,7 +140,7 @@ try:
                 if pair:
                     samples[name].append(row)
             if pair:
-                before, after = samples["baseline"][-1], samples["pruned"][-1]
+                before, after = samples["baseline"][-1], samples["fresh"][-1]
                 if any(after[key] >= before[key] * 1.2
                        for key in ("wall", "cpu", "max_child_rss_kib")) or \
                    (pair == 1 and after["wall"] > before["wall"] * 0.95):
