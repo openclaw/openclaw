@@ -741,7 +741,7 @@ OpenClaw applies these cleanup rules:
 - Snapshot records remain restorable for 30 days. Cleanup then deletes the snapshot ref and registry row.
 - Live owner leases protect active runs from eviction. Ordinary idle cleanup also preserves foreign or unrecognized Git worktree locks.
 
-Maintenance works in small batches with a time budget, yields between batches, and resumes from its previous position until the sweep finishes; the batch size is not an hourly removal limit. Filesystem scans, lossless checks, and nested-repository inspection run in the Git worker. The Gateway request starts or observes the same background job instead of waiting for the entire fleet to be inspected; `openclaw worktrees gc` reports that owner's progress. Health summaries include each eviction reason and any live-owner refusal.
+Maintenance works in small batches with a time budget, yields between batches, and resumes from its previous position until the sweep finishes; the batch size is not an hourly removal limit. Filesystem scans, lossless checks, and nested-repository inspection run in the Git worker. The Gateway request starts or observes the same background job instead of waiting for the entire fleet to be inspected; `openclaw worktrees gc` reports that owner's progress. Health summaries include each eviction reason and any live-owner refusal. Scratch deferral reasons are logged when the scratch phase ends, before the worktree-removal backlog.
 
 The first cleanup pass starts with post-ready maintenance, after deferred startup
 settles and its grace period expires; later passes remain hourly. Restarting drops
