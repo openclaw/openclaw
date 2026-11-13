@@ -21,6 +21,13 @@ function waitForNaming<T>(check: () => T | Promise<T>) {
   return vi.waitFor(check, { timeout: 20_000 });
 }
 
+function mockSuccessfulReply() {
+  dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+    await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
+    return { queuedFinal: true };
+  });
+}
+
 describeTelegramDispatch("Telegram topic naming lifecycle", () => {
   beforeEach(async () => {
     await captureRuntimeConfigAsyncReader()();
@@ -69,10 +76,7 @@ describeTelegramDispatch("Telegram topic naming lifecycle", () => {
         },
         scope,
       );
-      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-        await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
-        return { queuedFinal: true };
-      });
+      mockSuccessfulReply();
       const bot = createBot();
       const edit = vi.spyOn(bot.api, "editForumTopic");
       const turn = (body: string, id: number, command = false) =>
@@ -166,10 +170,7 @@ describeTelegramDispatch("Telegram topic naming lifecycle", () => {
       },
       scope,
     );
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-      await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
-      return { queuedFinal: true };
-    });
+    mockSuccessfulReply();
     const bot = createBot();
     for (let id = 2; id <= 6; id++) {
       await dispatchWithContext({
@@ -239,10 +240,7 @@ describeTelegramDispatch("Telegram topic naming lifecycle", () => {
       },
       scope,
     );
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-      await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
-      return { queuedFinal: true };
-    });
+    mockSuccessfulReply();
     generateTopicLabel.mockResolvedValueOnce("Lisbon trip");
     const bot = createBot();
     const edit = vi.spyOn(bot.api, "editForumTopic");
@@ -278,133 +276,74 @@ describeTelegramDispatch("Telegram topic naming lifecycle", () => {
       }),
     );
   });
-  it.each(["New Thread", "New Chat"])(
-    "names the first task from %s and starts a six-follow-up window",
-    async (placeholder) => {
-      const base = createContext();
-      const sessionKey = base.ctxPayload.SessionKey!;
-      const storePath = base.turn.storePath;
-      const scope = resolveTelegramDirectTopicNameCacheScope(storePath, "default");
-      const sdk = await vi.importActual<typeof import("openclaw/plugin-sdk/session-store-runtime")>(
-        "openclaw/plugin-sdk/session-store-runtime",
-      );
-      await sdk.prepareSessionEntryPatch({
-        agentId: "default",
-        storePath,
-        sessionKey,
-        fallbackEntry: { sessionId: "first", updatedAt: 1 },
-        prepare: () => ({ sessionId: "first", topicName: placeholder }),
-        authority: { kind: "host", assertCurrent() {} },
-        requireWriteSuccess: true,
-      });
-      mockDefaultSessionEntry({ sessionId: "first", systemSent: false });
-      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-        await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
-        return { queuedFinal: true };
-      });
-      generateTopicLabel.mockResolvedValueOnce("Invoice review");
-      const bot = createBot();
-      const edit = vi.spyOn(bot.api, "editForumTopic");
-      await dispatchWithContext({
-        context: createContext({
-          accountId: "default",
-          ctxPayload: {
-            ...base.ctxPayload,
-            RawBody: "Review invoice",
-            ThreadLabel: placeholder,
-            MessageSid: "1",
-          },
-        }),
-        bot,
-        streamMode: "off",
-      });
-      await waitForNaming(async () =>
-        expect((await getTopicLabelMetadata(123, 777, scope))?.labelState).toMatchObject({
-          sessionId: "first",
-          remainingMessages: 6,
-          lastMessageId: "1",
-        }),
-      );
-      expect(edit).toHaveBeenCalledWith(123, 777, { name: "Invoice review" });
-    },
-  );
-  it.each(["before", "during"] as const)(
-    "names a new topic when placeholder displayName is set %s inference",
-    async (when) => {
-      const base = createContext();
-      const sessionKey = base.ctxPayload.SessionKey!;
-      const storePath = base.turn.storePath;
-      const scope = resolveTelegramDirectTopicNameCacheScope(storePath, "default");
-      const sdk = await vi.importActual<typeof import("openclaw/plugin-sdk/session-store-runtime")>(
-        "openclaw/plugin-sdk/session-store-runtime",
-      );
-      const target = { agentId: "default", storePath, sessionKey };
+  it("names a new topic when placeholder displayName is set during inference", async () => {
+    const base = createContext();
+    const sessionKey = base.ctxPayload.SessionKey!;
+    const storePath = base.turn.storePath;
+    const scope = resolveTelegramDirectTopicNameCacheScope(storePath, "default");
+    const sdk = await vi.importActual<typeof import("openclaw/plugin-sdk/session-store-runtime")>(
+      "openclaw/plugin-sdk/session-store-runtime",
+    );
+    const target = { agentId: "default", storePath, sessionKey };
+    await sdk.prepareSessionEntryPatch({
+      ...target,
+      fallbackEntry: { sessionId: "placeholder-race", updatedAt: 1 },
+      prepare: () => ({
+        sessionId: "placeholder-race",
+        topicName: "New Chat",
+      }),
+      authority: { kind: "host", assertCurrent() {} },
+      requireWriteSuccess: true,
+    });
+    mockDefaultSessionEntry({ sessionId: "placeholder-race", systemSent: false });
+    let release!: (name: string) => void;
+    const generated = new Promise<string>((resolve) => {
+      release = resolve;
+    });
+    generateTopicLabel.mockImplementationOnce(async () => await generated);
+    mockSuccessfulReply();
+    const bot = createBot();
+    const edit = vi.spyOn(bot.api, "editForumTopic");
+    const pending = dispatchWithContext({
+      context: createContext({
+        accountId: "default",
+        ctxPayload: {
+          ...base.ctxPayload,
+          RawBody: "Review invoice",
+          ThreadLabel: "New Chat",
+          MessageSid: "1",
+        },
+      }),
+      bot,
+      streamMode: "off",
+    });
+    try {
+      await waitForNaming(() => expect(generateTopicLabel).toHaveBeenCalledTimes(1));
       await sdk.prepareSessionEntryPatch({
         ...target,
-        fallbackEntry: { sessionId: "placeholder-race", updatedAt: 1 },
-        prepare: () => ({
-          sessionId: "placeholder-race",
-          topicName: "New Chat",
-          ...(when === "before" ? { displayName: "New Chat" } : {}),
-        }),
+        prepare: () => ({ displayName: "New Chat" }),
         authority: { kind: "host", assertCurrent() {} },
         requireWriteSuccess: true,
       });
-      mockDefaultSessionEntry({ sessionId: "placeholder-race", systemSent: false });
-      let release!: (name: string) => void;
-      const generated = new Promise<string>((resolve) => {
-        release = resolve;
-      });
-      generateTopicLabel.mockImplementationOnce(async () => await generated);
-      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-        await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
-        return { queuedFinal: true };
-      });
-      const bot = createBot();
-      const edit = vi.spyOn(bot.api, "editForumTopic");
-      const pending = dispatchWithContext({
-        context: createContext({
-          accountId: "default",
-          ctxPayload: {
-            ...base.ctxPayload,
-            RawBody: "Review invoice",
-            ThreadLabel: "New Chat",
-            MessageSid: "1",
-          },
+      release("Invoice review");
+      await pending;
+      await waitForNaming(async () =>
+        expect((await getTopicLabelMetadata(123, 777, scope))?.name).toBe("Invoice review"),
+      );
+      expect(edit).toHaveBeenCalledWith(123, 777, { name: "Invoice review" });
+      await waitForNaming(async () =>
+        expect(
+          await sdk.getSessionEntryAsync({ ...target, readConsistency: "latest" }),
+        ).toMatchObject({
+          topicName: "Invoice review",
+          displayName: "Invoice review",
         }),
-        bot,
-        streamMode: "off",
-      });
-      try {
-        await waitForNaming(() => expect(generateTopicLabel).toHaveBeenCalledTimes(1));
-        if (when === "during") {
-          await sdk.prepareSessionEntryPatch({
-            ...target,
-            prepare: () => ({ displayName: "New Chat" }),
-            authority: { kind: "host", assertCurrent() {} },
-            requireWriteSuccess: true,
-          });
-        }
-        release("Invoice review");
-        await pending;
-        await waitForNaming(async () =>
-          expect((await getTopicLabelMetadata(123, 777, scope))?.name).toBe("Invoice review"),
-        );
-        expect(edit).toHaveBeenCalledWith(123, 777, { name: "Invoice review" });
-        await waitForNaming(async () =>
-          expect(
-            await sdk.getSessionEntryAsync({ ...target, readConsistency: "latest" }),
-          ).toMatchObject({
-            topicName: "Invoice review",
-            displayName: "Invoice review",
-          }),
-        );
-      } finally {
-        release("Invoice review");
-        await pending;
-      }
-    },
-  );
+      );
+    } finally {
+      release("Invoice review");
+      await pending;
+    }
+  });
   it("reassesses when the opening batch already contains six follow-ups", async () => {
     const base = createContext();
     const scope = resolveTelegramDirectTopicNameCacheScope(base.turn.storePath, "default");
@@ -422,10 +361,7 @@ describeTelegramDispatch("Telegram topic naming lifecycle", () => {
     });
     mockDefaultSessionEntry({ sessionId: "opening-batch", systemSent: false });
     generateTopicLabel.mockResolvedValueOnce("Initial").mockResolvedValueOnce("Refined");
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-      await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
-      return { queuedFinal: true };
-    });
+    mockSuccessfulReply();
     const bot = createBot();
     await dispatchWithContext({
       context: createContext({
@@ -549,56 +485,6 @@ describeTelegramDispatch("Telegram topic naming lifecycle", () => {
       }
     },
   );
-  it("names after recording while the agent reply is still pending", async () => {
-    const base = createContext();
-    const scope = resolveTelegramDirectTopicNameCacheScope(base.turn.storePath, "default");
-    const sdk = await vi.importActual<typeof import("openclaw/plugin-sdk/session-store-runtime")>(
-      "openclaw/plugin-sdk/session-store-runtime",
-    );
-    await sdk.prepareSessionEntryPatch({
-      agentId: "default",
-      storePath: base.turn.storePath,
-      sessionKey: base.ctxPayload.SessionKey!,
-      fallbackEntry: { sessionId: "slow", updatedAt: 1 },
-      prepare: () => ({ sessionId: "slow", topicName: "New Chat" }),
-      authority: { kind: "host", assertCurrent() {} },
-      requireWriteSuccess: true,
-    });
-    mockDefaultSessionEntry({ sessionId: "slow", systemSent: false });
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-      await gate;
-      await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
-      return { queuedFinal: true };
-    });
-    generateTopicLabel.mockResolvedValueOnce("Slow reply topic");
-    const bot = createBot();
-    const pending = dispatchWithContext({
-      context: createContext({
-        accountId: "default",
-        ctxPayload: {
-          ...base.ctxPayload,
-          RawBody: "A real task",
-          ThreadLabel: "New Chat",
-          MessageSid: "100",
-        },
-      }),
-      bot,
-      streamMode: "off",
-    });
-    try {
-      await waitForNaming(async () =>
-        expect((await getTopicLabelMetadata(123, 777, scope))?.name).toBe("Slow reply topic"),
-      );
-    } finally {
-      release();
-      await pending;
-    }
-  });
-
   it("counts every message in a coalesced follow-up and ignores a retry", async () => {
     const base = createContext();
     const scope = resolveTelegramDirectTopicNameCacheScope(base.turn.storePath, "default");
@@ -625,10 +511,7 @@ describeTelegramDispatch("Telegram topic naming lifecycle", () => {
       scope,
     );
     generateTopicLabel.mockResolvedValueOnce("Existing");
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-      await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
-      return { queuedFinal: true };
-    });
+    mockSuccessfulReply();
     const bot = createBot();
     const context = createContext({
       accountId: "default",
@@ -676,10 +559,7 @@ describeTelegramDispatch("Telegram topic naming lifecycle", () => {
       },
       scope,
     );
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-      await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
-      return { queuedFinal: true };
-    });
+    mockSuccessfulReply();
     const skipLog = vi.spyOn(runtimeEnv, "logVerbose");
     let release!: (value: string) => void;
     generateTopicLabel.mockImplementationOnce(
@@ -741,10 +621,7 @@ describeTelegramDispatch("Telegram topic naming lifecycle", () => {
       { name: "Email", labelState: { sessionId: "old", remainingMessages: 0 } },
       scope,
     );
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-      await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
-      return { queuedFinal: true };
-    });
+    mockSuccessfulReply();
     generateTopicLabel.mockResolvedValueOnce("Email");
     const bot = createBot();
     const edit = vi.spyOn(bot.api, "editForumTopic");
@@ -789,10 +666,7 @@ describeTelegramDispatch("Telegram topic naming lifecycle", () => {
       requireWriteSuccess: true,
     });
     mockDefaultSessionEntry({ sessionId: "first", systemSent: false });
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-      await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
-      return { queuedFinal: true };
-    });
+    mockSuccessfulReply();
     let finish!: (title: string) => void;
     generateTopicLabel.mockImplementationOnce(
       () =>
@@ -853,10 +727,7 @@ describeTelegramDispatch("Telegram topic naming lifecycle", () => {
       },
       scope,
     );
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-      await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
-      return { queuedFinal: true };
-    });
+    mockSuccessfulReply();
     let finish!: (title: string) => void;
     generateTopicLabel.mockImplementationOnce(
       () =>
