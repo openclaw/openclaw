@@ -98,8 +98,7 @@ type EnglishCatalog = TranslationMap & {
           | "automationRecovery"
           | "gatewayRestarted"
           | "cliHarnessContext"
-          | "claudeCliTaskNotification"
-          | "pluginSteering",
+          | "claudeCliTaskNotification",
           TranslationMap
         >;
       mermaid: TranslationMap;
@@ -253,6 +252,11 @@ type EnglishCatalog = TranslationMap & {
   palette: TranslationMap & {
     placeholder: string;
     attachmentPrompt: string;
+    searchPlaceholder: string;
+    composePlaceholder: string;
+    modeLabel: string;
+    modes: { search: string; compose: string };
+    modeSwitch: { search: string; compose: string };
     categories: TranslationMap & { navigation: string };
   };
   sessionsView: TranslationMap &
@@ -1221,15 +1225,11 @@ const startupEnglish = {
       loadFailed: "Could not open details. Try again, or open this person’s Activity page.",
       ariaLabel: "Activity for {name}",
       person: "Person",
-      onlineFor: "Online for",
-      where: "Where",
-      reportedTimeZone: "Reported time zone: {zone}",
-      lastActivity: "Last interaction",
-      notObserved: "Activity unavailable",
+      idleFor: "Idle for",
+      localTime: "{time} local time",
       viewingNow: "Viewing now",
       recentSessions: "Recent sessions",
       noRecentSessions: "No recent visible sessions.",
-      ago: "ago",
       viewActivity: "View activity",
       web: "Web app",
       cli: "Command line",
@@ -1402,6 +1402,12 @@ const startupEnglish = {
   commandPalette: {},
   palette: {
     placeholder: "Search or start a task…",
+    modeLabel: "Command palette mode",
+    modes: { search: "Search", compose: "Compose" },
+    // Footer key hint: "Tab compose" switches to the other mode.
+    modeSwitch: { search: "search", compose: "compose" },
+    searchPlaceholder: "Search…",
+    composePlaceholder: "Write a message…",
     attachmentPrompt: "What would you like to do with these files?",
     categories: { navigation: "Navigation" },
   },
@@ -1726,7 +1732,6 @@ const startupEnglish = {
       gatewayRestarted: {},
       cliHarnessContext: {},
       claudeCliTaskNotification: {},
-      pluginSteering: {},
     },
     skillLearned: {},
     progressLabels: {},

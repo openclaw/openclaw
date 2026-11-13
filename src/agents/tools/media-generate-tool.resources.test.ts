@@ -371,7 +371,7 @@ describe.each(["image", "music", "video"] as const)(
         }
       });
     });
-    it.each(["request lookup", "duplicate lookup", "reference loading"] as const)(
+    it.each(["auto-selected duplicate lookup", "duplicate lookup", "reference loading"] as const)(
       "refuses generation when the prepared owner releases during %s",
       async (pause) => {
         const fixture = createNativeFixture(kind, true);
@@ -409,10 +409,7 @@ describe.each(["image", "music", "video"] as const)(
           let lookups = 0;
           vi.spyOn(taskRuntime, lookup[kind]).mockImplementation(async (ownerKey, options) => {
             const tasks = await readTasks(ownerKey, options);
-            if (
-              pause !== "reference loading" &&
-              ++lookups === (pause === "request lookup" ? 1 : 2)
-            ) {
+            if (pause !== "reference loading" && ++lookups === 1) {
               preflightPaused.resolve();
               await resumePreflight.promise;
             }
@@ -421,7 +418,8 @@ describe.each(["image", "music", "video"] as const)(
           const tool = createTool({
             config: {
               ...fixture.config,
-              agents: pause === "request lookup" ? undefined : fixture.config.agents,
+              agents:
+                pause === "auto-selected duplicate lookup" ? undefined : fixture.config.agents,
             },
             agentDir: snapshot.agentDir,
             workspaceDir: fixture.dir,
@@ -450,10 +448,12 @@ describe.each(["image", "music", "video"] as const)(
             expect(result.error).toBeInstanceOf(Error);
             expect(result.value).toBeUndefined();
             if (pause !== "reference loading") {
-              expect(reference).not.toHaveBeenCalled();
+              if (kind === "image") {
+                expect(reference).toHaveBeenCalledOnce();
+              } else {
+                expect(reference).not.toHaveBeenCalled();
+              }
               expect(createTask).not.toHaveBeenCalled();
-            }
-            if (pause === "request lookup") {
               expect(lookups).toBe(1);
             }
             expect(fixture.connections[0]!.generated).toBe(0);
