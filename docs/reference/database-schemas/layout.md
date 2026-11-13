@@ -830,3 +830,24 @@ written. Subsequent preparation, activation, and recovery reject unsupported
 generations before drain. Status and preview do not adopt the policy or migrate
 the control database. The inventory does not enable collection, disk-space
 reclamation, or host-maintenance deletion.
+
+### Usage-ranked tool index
+
+Agent schema 42 adds `agent_tool_usage(tool_id, score, updated_at)` in the
+executing agent's database. It stores only aggregate successful-call scores and
+last-success timestamps. The existing `cache_entries` owner holds import coverage
+boundaries and a reset generation; it does not retain per-call IDs or payloads.
+
+The opt-in Labs feature reads at prompt boundaries. Run admission and accumulated
+counts share the existing transcript actor's transaction and authority grant when
+the transcript uses the executing agent's canonical database. Other transcript
+stores and late completions use the existing run-settlement writer. Tool-only
+mutations declare an empty session write scope, preserving unrelated session
+facts. Inactive rows expire after 90 days; reads exclude them
+and usage writes prune them. Reset fences pending batches, and agent retirement
+removes the counters. Incognito sessions never record usage. Schema migration
+creates an empty table, with SQLite scoped backup/rollback and PostgreSQL parity;
+it does not automatically scan or import existing transcripts.
+
+See [usage-ranked tool index](/concepts/experimental-features#usage-ranked-tool-index)
+for authenticated inspection, explicit transcript import, reset, and privacy.

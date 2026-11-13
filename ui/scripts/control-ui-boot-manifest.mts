@@ -238,6 +238,9 @@ async function main(): Promise<void> {
     };
     await build({
       ...config,
+      // This fixture is root-mounted. Root import-map keys and targets as well
+      // as entry links so canonical /chat/main reloads use the same asset URLs.
+      base: "/",
       configFile: false,
       root: path.join(repoRoot, "ui"),
       plugins: [

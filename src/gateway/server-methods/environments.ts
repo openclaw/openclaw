@@ -623,22 +623,27 @@ export const environmentsHandlers: GatewayRequestHandlers = {
   "environments.destroy": defineEnvironmentMutation(
     "destroy",
     validateEnvironmentsDestroyParams,
-    async ({ params, context }, service) => {
+    async (options, service) => {
+      const { params, context } = options;
+      const { assertCurrent } = readGatewayRequestMutationAuthority(options);
       const placementService = context.workerPlacementDispatchService;
       if (params.force && !placementService?.forceDestroyEnvironment) {
         throw new Error("cloud worker placement control is unavailable");
       }
       const destroyed = params.force
-        ? await placementService!.forceDestroyEnvironment!(params.environmentId, (error) => {
-            context.logGateway.warn(
-              `worker environment forced teardown cleanup failed: ${formatForLog(error)}`,
-            );
-          })
-        : await service.destroyUnattached(params.environmentId);
+        ? await placementService!.forceDestroyEnvironment!(
+            params.environmentId,
+            (error) =>
+              context.logGateway.warn(
+                `worker environment forced teardown cleanup failed: ${formatForLog(error)}`,
+              ),
+            assertCurrent,
+          )
+        : await service.destroyUnattached(params.environmentId, assertCurrent);
       // Destruction is authoritative. Project the dead worker into its owning
       // placement before returning, or immediate session deletion stays fenced.
       try {
-        await context.workerPlacementDispatchService?.reconcileActive?.(params.environmentId);
+        await placementService?.reconcileActive?.(params.environmentId);
       } catch (error) {
         // The provider mutation has committed. Keep its success authoritative;
         // the periodic recovery sweep will retry this projection.

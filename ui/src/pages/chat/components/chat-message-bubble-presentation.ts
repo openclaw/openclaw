@@ -420,7 +420,8 @@ export function prepareGroupedMessage(
     !normalizedMessage.replyTarget;
 
   const toolMessageDisclosureId = `toolmsg:${messageKey}`;
-  const toolMessageExpanded = opts.isToolMessageExpanded?.(toolMessageDisclosureId) ?? false;
+  const toolMessageExpanded =
+    opts.isToolMessageExpanded?.(toolMessageDisclosureId, toolCards[0]) ?? false;
   const singleToolCard = toolCards.length === 1 ? toolCards[0] : null;
   const standaloneToolPayload =
     isStandaloneToolMessage &&
