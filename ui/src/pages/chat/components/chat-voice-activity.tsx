@@ -225,7 +225,10 @@ export function ComposerDictationStatus(props: {
             <span
               class={[
                 "agent-chat__dictation-phase",
-                { "agent-chat__dictation-phase--listening text-shimmer": current === "listening" },
+                {
+                  "agent-chat__dictation-phase--listening text-shimmer": current === "listening",
+                  "agent-chat__dictation-phase--starting": current === "connecting",
+                },
               ]}
             >
               {current === "connecting" ? (

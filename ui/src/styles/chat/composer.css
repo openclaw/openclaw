@@ -687,6 +687,12 @@
   white-space: nowrap;
 }
 
+/* The startup label can become the microphone permission hint; keep that recovery text whole. */
+.agent-chat__dictation-phase--starting {
+  overflow: visible;
+  white-space: normal;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .agent-chat__voice-activity-bar {
     animation: none !important;
