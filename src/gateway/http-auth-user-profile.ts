@@ -5,6 +5,7 @@ import { getRuntimeConfig } from "../config/io.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveHostAccountName } from "../infra/host-account-name.js";
+import { isOperatorAuthorityUnavailable } from "../infra/operator-authority-error.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import { prepareUserProfileRoleAuthority } from "../state/user-channel-identity-operations.js";
@@ -67,8 +68,9 @@ function failedHttpProfileAuthentication(error?: unknown): HttpUserProfileAuthRe
     ok: false,
     authResult: {
       ok: false,
-      reason:
-        error instanceof GatewayOperatorAccessDeniedError
+      reason: isOperatorAuthorityUnavailable(error)
+        ? "operator_access_unavailable"
+        : error instanceof GatewayOperatorAccessDeniedError
           ? "operator_access_denied"
           : "user_profile_unavailable",
     },

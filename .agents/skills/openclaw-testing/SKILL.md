@@ -64,7 +64,7 @@ description: Choose proportional OpenClaw tests/checks, diagnose failures, route
   [release CI](../release-openclaw-ci/SKILL.md),
   [plugin release matrix](../release-openclaw-plugin-testing/SKILL.md),
   [Docker authoring](../openclaw-docker-e2e-authoring/SKILL.md), channel skill/
-  [Control UI E2E](../control-ui-e2e/SKILL.md).
+  [Control UI E2E](../control-ui-e2e/SKILL.md)/[iOS E2E](../ios-e2e/SKILL.md).
 - An isolated mock-Gateway harness is valid channel boundary proof; state live
   gaps. Prove user-visible behavior through the real flow when feasible;
   external APIs require live contract proof. Read the scoped channel/platform

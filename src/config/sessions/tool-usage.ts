@@ -4,6 +4,9 @@ import {
   type ToolUsageCatalogEntry,
   type ToolUsageRow,
 } from "../../agents/tool-usage.js";
+import { createRetainedAgentDatabaseMatcherFromSnapshot } from "../../state/agent-deletion-discovery.js";
+import { prepareAgentDatabaseDeletionSnapshotRead } from "../../state/agent-deletion-journal.read.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { AgentDatabaseOperations } from "../../state/openclaw-agent-execution-contract.js";
@@ -195,13 +198,28 @@ export async function pruneRegisteredAgentToolUsage(input: {
   now: number;
   assertCurrent: () => void;
 }) {
-  const { listOpenClawRegisteredAgentDatabasesAsync } =
-    await import("../../state/openclaw-agent-db-registry-listing.js");
   const env = cloneEnvWithPlatformSemantics(input.env ?? process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
-  const entries = await listOpenClawRegisteredAgentDatabasesAsync({ env });
+  const { snapshot } = await prepareAgentDatabaseDeletionSnapshotRead(
+    { env },
+    "runtime-discovery",
+  ).read();
+  const retained = createRetainedAgentDatabaseMatcherFromSnapshot(
+    env,
+    () => [],
+    snapshot,
+    "database",
+    "runtime-discovery",
+  );
+  const entries = snapshot?.registeredAgentDatabases ?? [];
   for (const entry of entries) {
     input.assertCurrent();
+    if (
+      entry.schemaVersion !== OPENCLAW_AGENT_SCHEMA_VERSION ||
+      retained(entry.path, entry.agentId)
+    ) {
+      continue;
+    }
     await write(
       { agentId: entry.agentId, path: entry.path, env },
       input.assertCurrent,

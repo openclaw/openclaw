@@ -206,7 +206,10 @@ export type WorkerEnvironmentServiceContract = {
     control: boolean;
     requester?: DesktopObserveRequester;
   }): Promise<WorkerDesktopObserveResult>;
-  launchDesktopApp(request: WorkerDesktopLaunchParams): Promise<WorkerDesktopLaunchResult>;
+  launchDesktopApp(
+    request: WorkerDesktopLaunchParams,
+    authorize?: () => void,
+  ): Promise<WorkerDesktopLaunchResult>;
   ensureRetainedRunning(
     request: import("./provider-retained-lifecycle.js").WorkerRetainedRequest,
   ): Promise<void>;

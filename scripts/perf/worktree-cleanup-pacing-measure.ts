@@ -41,6 +41,15 @@
  * Baseline overlays the custody owner. --reuse-scratch-order reuses only a completed
  * synthetic fixture between serial arms, rebuilding removed clones outside timing.
  * Acceptance: 0 -> 6 clone removals, 256 total entries, fresh scratch unchanged.
+ * Binding-starvation mode: --scratch-binding missing|stale with --scratch-order.
+ * Keep one real execution live without a session key, or continuously publish
+ * binding invalidations for the newest (fresh) checkout. Acceptance: the parent
+ * reclaims zero, the candidate completes its 256-entry scratch budget while
+ * preserving the live/fresh checkout. Report CPU/allocation and loop tails for
+ * the complete phase; zero-work failures are not per-removal performance controls.
+ * Worker offload comparisons include worker startup in the whole-pass measurements.
+ * Overlay scratch-cleanup.ts for the baseline: both arms must remove all six
+ * clones, and main CPU/allocation must fall without worsening loop tails.
  * Reuse the prior physical pressure qualification; do not interpret accelerated
  * scheduler time or these clone-shaped trees as Git or btrfs throughput evidence.
  * Seed a large isolated DB with generateTeamShapeFixture from team-shape-fixture.ts,
@@ -79,6 +88,7 @@ const { values } = parseArgs({
     profile: { type: "boolean", default: false },
     "scratch-clones": { type: "string", default: "0" },
     "scratch-order": { type: "boolean", default: false },
+    "scratch-binding": { type: "string" },
     "reuse-scratch-order": { type: "boolean", default: false },
     "observe-ms": { type: "string", default: "0" },
     "psi-trace": { type: "boolean", default: false },
@@ -137,6 +147,8 @@ const observeMs = Number(values["observe-ms"]);
 assert(Number.isSafeInteger(worktrees) && worktrees >= 2);
 assert(Number.isSafeInteger(scratchClones) && scratchClones >= 0);
 assert(Number.isSafeInteger(observeMs) && observeMs >= 0);
+const scratchBinding = values["scratch-binding"];
+assert(!scratchBinding || (scratchOrder && ["missing", "stale"].includes(scratchBinding)));
 const reused = values["reuse-scratch-order"]
   ? JSON.parse(fs.readFileSync(path.join(output, "report.json"), "utf8"))
   : undefined;
@@ -145,7 +157,8 @@ if (reused) {
   assert.equal(reused.scratchClones, scratchClones);
   assert(
     reused.scratchRemaining === 0 ||
-      (reused.scratchRemaining === scratchClones && reused.result.scratch.filesRemoved === 0),
+      (reused.scratchRemaining === scratchClones &&
+        (reused.result.scratch?.filesRemoved ?? 0) === 0),
   );
 }
 fs.mkdirSync(output, { recursive: Boolean(reused) });
@@ -192,6 +205,9 @@ const { startWorktreeMaintenance } = await import("../../src/gateway/worktree-ma
 const { getSpawnBroker, runWithSpawnBroker } =
   await import("../../src/process/spawn-broker/context.js");
 const { createSpawnBrokerHost } = await import("../../src/process/spawn-broker/host.js");
+const { claimAgentRunContext, releaseAgentRunContext } =
+  await import("../../src/infra/agent-run-registry.js");
+const { sessionChanges } = await import("../../src/sessions/session-row-changes.js");
 const { drainGlobalSingletonLifecycleState } = await import("../../src/shared/global-singleton.js");
 const fixture = JSON.parse(fs.readFileSync(fixturePath, "utf8")) as {
   files: number;
@@ -447,6 +463,19 @@ const loop = monitorEventLoopDelay({ resolution: 10 });
 let owner: ReturnType<typeof startWorktreeMaintenance> | undefined;
 let observationTimer: ReturnType<typeof setTimeout> | undefined;
 const broker = process.platform === "linux" ? createSpawnBrokerHost() : undefined;
+let bindingTimer: ReturnType<typeof setInterval> | undefined;
+let bindingPublications = 0;
+const bindingKey = records.at(-1)!.ownerId!;
+const bindingClaim = scratchBinding
+  ? claimAgentRunContext(
+      "synthetic-scratch-binding",
+      {
+        registeredAt: Date.now(),
+        ...(scratchBinding === "stale" ? { sessionKey: bindingKey } : {}),
+      },
+      { trackOwner: true },
+    )
+  : undefined;
 try {
   await broker?.ready();
   const runtimeImportStarted = performance.now();
@@ -460,6 +489,11 @@ try {
     inspector.connect();
     await inspector.post("Profiler.enable");
     await inspector.post("Profiler.start");
+    await inspector.post("HeapProfiler.startSampling", {
+      samplingInterval: 4096,
+      includeObjectsCollectedByMajorGC: true,
+      includeObjectsCollectedByMinorGC: true,
+    });
   }
   sampleKernel();
   kernelTimer = setInterval(sampleKernel, 1_000);
@@ -470,6 +504,12 @@ try {
   const cpuBefore = process.cpuUsage();
   const mainCpuBefore = process.threadCpuUsage();
   const started = performance.now();
+  if (scratchBinding === "stale") {
+    bindingTimer = setInterval(() => {
+      bindingPublications++;
+      sessionChanges.emit({ sessionKey: bindingKey, scope: "session-entry" });
+    }, 1);
+  }
   const result = await runWithSpawnBroker(
     broker,
     () =>
@@ -484,7 +524,13 @@ try {
           },
           onError: (message) => {
             maintenanceErrors.push(message);
-            if (!observeMs) {
+            if (
+              !observeMs &&
+              !(
+                scratchBinding === "missing" &&
+                message.includes("a live run has no checkout binding yet")
+              )
+            ) {
               reject(new Error(message));
             }
           },
@@ -502,6 +548,7 @@ try {
       }),
   );
   const wallMs = performance.now() - started;
+  clearInterval(bindingTimer);
   const processCpu = process.cpuUsage(cpuBefore);
   const mainCpu = process.threadCpuUsage(mainCpuBefore);
   const allocatedBytes = getHeapStatistics().total_allocated_bytes - allocationBefore;
@@ -511,6 +558,10 @@ try {
     fs.writeFileSync(
       path.join(output, "cpu.cpuprofile"),
       JSON.stringify((await inspector.post("Profiler.stop")).profile),
+    );
+    fs.writeFileSync(
+      path.join(output, "allocation.heapprofile"),
+      JSON.stringify((await inspector.post("HeapProfiler.stopSampling")).profile),
     );
     inspector.disconnect();
   }
@@ -555,7 +606,11 @@ try {
     "src/agents/worktrees/registry-retirement.ts",
     "src/gateway/worktree-maintenance.ts",
     "src/gateway/scratch-maintenance-custody.ts",
+    "src/sessions/session-controller.queries.ts",
     "src/infra/host-io-pressure.ts",
+    "src/infra/scratch-cleanup.ts",
+    "src/infra/scratch-cleanup-tree.ts",
+    "src/infra/fs-safe-copy.worker.ts",
   ]) {
     const original = baseline && path.join(baseline, relative);
     digest.update(
@@ -581,13 +636,17 @@ try {
     agentDatabasePath: agentDatabase.path,
     scratchClones,
     scratchOrder,
+    scratchBinding,
+    bindingPublications,
     scratchFilesPerClone: scratchOrder ? fixture.files : fixture.files / scratchClones,
     freshScratchRemaining: scratchOrder
       ? fs.readdirSync(path.join(records.at(-1)!.path, ".openclaw/tmp")).length
       : undefined,
     scratchRemaining:
       scratchClones && fs.existsSync(scratchRoot)
-        ? fs.readdirSync(scratchRoot).filter((name) => name.startsWith("clone-")).length
+        ? fs
+            .readdirSync(scratchRoot, { withFileTypes: true })
+            .filter((entry) => entry.isDirectory()).length
         : 0,
     injectedPsiTrace: values["psi-trace"],
     pressureProbeReads,
@@ -615,6 +674,8 @@ try {
   fs.writeFileSync(path.join(output, "report.json"), JSON.stringify(report, null, 2));
   console.log(JSON.stringify(report));
 } finally {
+  clearInterval(bindingTimer);
+  releaseAgentRunContext("synthetic-scratch-binding", bindingClaim);
   clearTimeout(observationTimer);
   clearInterval(kernelTimer);
   loop.disable();
