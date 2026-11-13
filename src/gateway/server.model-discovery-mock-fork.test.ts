@@ -11,12 +11,27 @@ import { agentDiscoveryMock } from "./test-helpers.js";
 
 const agentDir = path.join(os.tmpdir(), "openclaw-model-discovery-mock-fork");
 
+// Observable stand-in identity: only the harness answers getAll() from
+// agentDiscoveryMock.models, so this pins discovery routing rather than the private
+// class name the stand-in is free to rename.
+function expectHarnessRouted(registry: { getAll: () => unknown }) {
+  const probe = { id: "harness-probe", name: "Harness Probe", provider: "harness-provider" };
+  agentDiscoveryMock.enabled = true;
+  agentDiscoveryMock.models = [probe];
+  try {
+    expect(registry.getAll()).toEqual([probe]);
+  } finally {
+    agentDiscoveryMock.enabled = false;
+    agentDiscoveryMock.models = [];
+  }
+}
+
 // The stand-in replaces the module, so resolve it after this file's mock wiring loads.
 async function createStandInRegistry() {
   const { discoverModelsAsync } = await import("../agents/agent-model-discovery.js");
   const { AuthStorage } = await import("../agents/sessions/auth-storage.js");
   const registry = await discoverModelsAsync(AuthStorage.inMemory(), agentDir);
-  expect(Object.getPrototypeOf(registry)?.constructor?.name).toBe("MockModelRegistry");
+  expectHarnessRouted(registry);
   return { registry, AuthStorage };
 }
 
@@ -24,7 +39,7 @@ test("gateway model discovery stand-in forks a registry the prepared runtime can
   const { registry, AuthStorage } = await createStandInRegistry();
   const forked = registry.fork(AuthStorage.inMemory());
 
-  expect(Object.getPrototypeOf(forked)?.constructor?.name).toBe("MockModelRegistry");
+  expectHarnessRouted(forked);
   expect(forked.getAll()).toEqual([]);
   expect(() => forked.getProviderMetadataOwners()).not.toThrow();
 });
@@ -69,9 +84,8 @@ test("gateway model discovery stand-in resolves a model through the real prepare
 
     expect(resolved.error).toBeUndefined();
     expect(resolved.model).toMatchObject({ provider: "forked-provider", id: "forked-only" });
-    expect(Object.getPrototypeOf(resolved.modelRegistry)?.constructor?.name).toBe(
-      "MockModelRegistry",
-    );
+    // The resolved registry is the harness-routed fork, not the on-disk catalog.
+    expect(resolved.modelRegistry?.getAll()).toEqual([model]);
   } finally {
     agentDiscoveryMock.enabled = false;
     agentDiscoveryMock.models = [];
