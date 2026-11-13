@@ -251,10 +251,11 @@ describe("public session document", () => {
       expect(page.querySelectorAll(".list-rows > .list-row")).toHaveLength(13);
       expect(page.querySelectorAll(".list-rows > .ghost-bar")).toHaveLength(3);
       expect(page.querySelector(".list-header > .list-brand")).not.toBeNull();
+      expect(page.querySelector(".ghost-panel, .ghost-card")).toBeNull();
     }
     expect(readerFrame.querySelectorAll("a, button, [tabindex]")).toHaveLength(0);
     expect(readerFrame.querySelector(".list-current")?.textContent).toBe("A shared conversation");
-    expect(reader.querySelector(".ghost-panel")?.getAttribute("aria-hidden")).toBe("true");
+    expect(readerFrame.querySelector(".session-indicator")).not.toBeNull();
     expect(reader.querySelector(".reader-title .reader-badge")?.textContent).toBe("Public session");
     expect(reader.querySelector(".article-head .reader-badge")?.textContent).toBe("Public session");
     expect(reader.querySelector(".reader-login")?.getAttribute("href")).toBe(entryUrl);

@@ -136,6 +136,8 @@ describe("public reader operator handoff", () => {
   it.each(["network", "server"])("does not present %s failures as denied access", async (kind) => {
     const probe = createDeferred<{ status: number }>();
     const f = openReader({ probe: probe.promise });
+    const frame = f.document.querySelector(".app-frame");
+    expect(frame).not.toBeNull();
     if (kind === "server") {
       probe.resolve({ status: 503 });
     } else {
@@ -143,6 +145,7 @@ describe("public reader operator handoff", () => {
     }
     await probe.promise.catch(() => {});
     await Promise.resolve();
+    expect(f.document.querySelector(".app-frame")).toBe(frame);
     expect(f.document.querySelector("main")!.hasAttribute("data-entry-pending")).toBe(true);
     expect(f.document.querySelector(".entry-status")?.textContent).toContain(
       "Could not check access",
