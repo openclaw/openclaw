@@ -1,5 +1,6 @@
 // One Gateway session through every mid-session trigger: each provider request must extend the
-// previous one byte for byte, except at the explicit compaction.
+// previous one byte for byte, except at the explicit compaction. Its hidden subagent, which later
+// receives a parent turn, must stay append-only too.
 import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
@@ -192,6 +193,9 @@ export function usePrefixStabilityJourney() {
   return async (api: Api) => {
     const fixture = await createFixture(`openclaw-prefix-stability-${api}-`, TOKEN, "1");
     const targetRequests: WireRequest[] = [];
+    // The hidden subagent: its spawn task turn has no inter-session provenance, later turns do.
+    const childRequests: WireRequest[] = [];
+    let childKey: string | undefined;
     const seen: string[] = [];
     let ordinal = 0;
     const script = (request: WireRequest): Reply => {
@@ -208,12 +212,26 @@ export function usePrefixStabilityJourney() {
               args: { sessionKey: TARGET, message: "INTER-SESSION ping", timeoutSeconds: 0 },
             };
       }
+      const child = /session=(agent:main:subagent:\S+)/.exec(request.text)?.[1];
+      if (child) {
+        childKey ??= child;
+        if (child === childKey) {
+          childRequests.push(request);
+        }
+        return { text: "child-done" };
+      }
       if (!request.text.includes(`session=${TARGET}`)) {
         return { text: "child-done" };
       }
       targetRequests.push(request);
       if (hasToolResult) {
         return { text: "acknowledged" };
+      }
+      if (latest.includes("STEP-CHILD-FOLLOWUP") && childKey) {
+        return {
+          tool: "sessions_send",
+          args: { sessionKey: childKey, message: "CHILD-FOLLOWUP ping", timeoutSeconds: 0 },
+        };
       }
       if (latest.includes("STEP-EXEC")) {
         return {
@@ -320,6 +338,9 @@ export function usePrefixStabilityJourney() {
         // A subagent settles back into the session.
         await send(TARGET, "STEP-SPAWN start a child");
         await until(() => targetRequests.some((r) => lastMessage(r).includes("child-done")));
+        // The parent sends a later turn into its hidden subagent.
+        await send(TARGET, "STEP-CHILD-FOLLOWUP ping the child");
+        await until(() => childRequests.some((r) => lastMessage(r).includes("CHILD-FOLLOWUP")));
         // Inter-session input from another session.
         await send(SENDER, "forward a ping to the target");
         await until(() => targetRequests.some((r) => lastMessage(r).includes("INTER-SESSION")));
@@ -344,6 +365,9 @@ export function usePrefixStabilityJourney() {
           breaks.map(({ at }) => at),
           JSON.stringify(breaks, null, 2),
         ).toEqual([compactionAt]);
+        expect(childRequests.length).toBeGreaterThan(1);
+        const childBreaks = prefixBreaks(childRequests);
+        expect(childBreaks, JSON.stringify(childBreaks, null, 2)).toEqual([]);
       } catch (error) {
         throw new Error(`${String(error)}\n${seen.join("\n")}`, { cause: error });
       }

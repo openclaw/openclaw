@@ -656,7 +656,9 @@ The session prompt rebuilds only at these points:
 - An explicit compaction (`/compact` or automatic compaction).
 - A model or provider switch, including a change of API, base URL, agent
   harness, tool surface (direct tools, tool search, or Code Mode), or the
-  session's selected personal profile.
+  session's selected personal profile. The selection is a session fact (its
+  assigned owner or authenticated creator); the current turn's sender or input
+  origin never changes it.
 
 These are also the operator refresh points: use `/compact` or `/new` to make the
 model see a fully re-rendered prompt.

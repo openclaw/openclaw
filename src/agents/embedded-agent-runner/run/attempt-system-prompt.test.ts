@@ -105,8 +105,10 @@ async function preparePermissionPrompt({
   toolSearchCatalogRef,
   suppliedTools,
   additionalToolNames = [],
+  contextFiles = [],
 }: {
   additionalToolNames?: string[];
+  contextFiles?: ReturnType<typeof createEmptyPromptBootstrap>["contextFiles"];
   codeModeActive?: boolean;
   isRawModelRun?: boolean;
   requireExplicitMessageTarget?: boolean;
@@ -184,7 +186,7 @@ async function preparePermissionPrompt({
   const prepared = await prepareEmbeddedAttemptSystemPrompt({
     attempt,
     activeContextEngine: undefined,
-    bootstrap: createEmptyPromptBootstrap(),
+    bootstrap: { ...createEmptyPromptBootstrap(), contextFiles },
     capabilityToolNames,
     effectiveTools,
     setup: createAttemptSetupFixture({
@@ -598,6 +600,32 @@ describe("buildAttemptSystemPrompt", () => {
       expect(prepared.systemPromptReport?.skills.entries).toEqual([]);
     },
   );
+
+  it("keeps the session's personal USER.md in the prompt and gates an unverified sender per turn", async () => {
+    const contextFiles = [
+      {
+        path: "/tmp/openclaw/users/alice/USER.md",
+        content: "Alice prefers terse replies.",
+        personalUser: true as const,
+      },
+    ];
+    const verified = await preparePermissionPrompt({
+      contextFiles,
+      attemptOverrides: { bootstrapUserProfileId: "alice", sessionUserProfileId: "alice" },
+    });
+    const unverified = await preparePermissionPrompt({
+      contextFiles,
+      attemptOverrides: { sessionUserProfileId: "alice" },
+    });
+    const gate = (prepared: typeof verified.prepared) =>
+      prepared.runtimeContextFragments.filter(({ text }) =>
+        text.includes("not from a verified Gateway person"),
+      );
+    expect(verified.prepared.systemPromptText).toContain("Alice prefers terse replies.");
+    expect(unverified.prepared.systemPromptText).toBe(verified.prepared.systemPromptText);
+    expect(gate(verified.prepared)).toEqual([]);
+    expect(gate(unverified.prepared)).toHaveLength(1);
+  });
 
   it("keeps the system prompt identical when execution-owned processes change", async () => {
     const owned = createProcessSessionFixture({ id: "execution-owned", backgrounded: true });

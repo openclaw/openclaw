@@ -1,5 +1,7 @@
-import { sessionPersonalProfileId } from "../../config/sessions/session-entry-provenance.js";
-import { isSessionPersonalBootstrapTurn } from "../../sessions/session-participant-input.js";
+import {
+  isSessionPersonalBootstrapTurn,
+  resolveTurnPersonalProfiles,
+} from "../../sessions/session-participant-input.js";
 import type { RunEmbeddedAgentInternalParams } from "../embedded-agent-runner/run/internal-params.js";
 import { resolveCommandReplyExpectation } from "../reply-completion.js";
 import { emitAgentAttemptRuntimeStart } from "./attempt-callbacks.js";
@@ -50,12 +52,14 @@ export function buildCommonCommandRunParams(
     sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,
     taskSuggestionDeliveryMode: params.opts.taskSuggestionDeliveryMode,
     clientCaps: params.opts.clientCaps,
-    bootstrapUserProfileId: isSessionPersonalBootstrapTurn({
-      SessionKey: params.sessionKey,
-      InputProvenance: params.opts.inputProvenance,
-    })
-      ? sessionPersonalProfileId(params.sessionEntry)
-      : undefined,
+    ...resolveTurnPersonalProfiles(
+      params.sessionKey,
+      params.sessionEntry,
+      isSessionPersonalBootstrapTurn({
+        SessionKey: params.sessionKey,
+        InputProvenance: params.opts.inputProvenance,
+      }),
+    ),
     gatewayUiCommandTarget: params.opts.gatewayUiCommandTarget,
     media: params.opts.media,
     skillsSnapshot: params.skillsSnapshot,

@@ -1,4 +1,5 @@
 import type { MsgContext } from "../auto-reply/templating.js";
+import { sessionPersonalProfileId } from "../config/sessions/session-entry-provenance.js";
 import type { SessionParticipantIdentity } from "../config/sessions/session-participant-identity.js";
 import { isCronSessionKey } from "./session-key-utils.js";
 
@@ -37,11 +38,29 @@ export function isSessionPersonalBootstrapTurn(ctx: SessionParticipantInputConte
     // Isolated cron sessions keep shared defaults; wakes in other sessions keep their selection.
     return !isCronSessionKey(ctx.SessionKey);
   }
-  // Unqualified external turns must still omit the overlay and restart the prompt series.
+  // Unqualified external turns are told to withhold the session's personal instructions.
   return (
     (!ctx.InputProvenance || ctx.InputProvenance.kind === "external_user") &&
     Boolean(ctx[sessionParticipantInput]?.length)
   );
+}
+
+/**
+ * Personal profiles for one turn. sessionUserProfileId is the session's selected human, a
+ * session fact that keys its prompt series; isolated cron sessions keep shared defaults.
+ * bootstrapUserProfileId repeats the selection only when this turn's sender qualifies.
+ */
+export function resolveTurnPersonalProfiles(
+  sessionKey: string | undefined,
+  entry: Parameters<typeof sessionPersonalProfileId>[0],
+  senderQualifies: boolean,
+): { bootstrapUserProfileId?: string; sessionUserProfileId?: string } {
+  return {
+    bootstrapUserProfileId: senderQualifies ? sessionPersonalProfileId(entry) : undefined,
+    sessionUserProfileId: isCronSessionKey(sessionKey)
+      ? undefined
+      : sessionPersonalProfileId(entry),
+  };
 }
 
 /** An unqualified transport sender remains an observation, never a Gateway profile. */

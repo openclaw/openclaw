@@ -66,8 +66,8 @@ worktree. Shared bootstrap files still come from the session's selected workspac
 
 Each session selects **one personal `USER.md`**: the assigned human owner's file
 first, otherwise the authenticated human creator's file. An agent or system
-assignment does not prevent that creator fallback. For eligible external chat
-turns, OpenClaw loads the shared file first and the selected personal file second.
+assignment does not prevent that creator fallback. OpenClaw loads the shared file
+first and the selected personal file second.
 The personal file supplements, rather than replaces, the shared file, overriding
 conflicting shared user preferences, not project rules or security policy. The
 workspace-root `USER.md` remains shared regardless of the workspace directory's name.
@@ -91,7 +91,14 @@ select a personal file. Internal turns continuing the same session use that
 session's selection, including subagent completions, `sessions_send`, goal
 continuation, and cron and restart wakes in that session. Isolated cron sessions
 keep shared defaults only. Subagent sessions still load only their allowed project
-instructions, so delegated tasks never receive a personal `USER.md` file. The shared
+instructions, so delegated tasks never receive a personal `USER.md` file.
+
+In embedded Gateway sessions, the selection is part of the session's pinned system
+prompt for every turn, so the prompt cache survives a change of sender. A turn whose
+sender is not a verified Gateway person (no authenticated profile, channel identity,
+or internal session origin) gets a turn note that tells the agent not to quote,
+summarize, or reveal the personal instructions. Other agent harnesses still omit the
+personal file on those turns. The shared
 local owner profile represents all connections using that identity, not separate
 people; use per-person sign-in on a team Gateway.
 
