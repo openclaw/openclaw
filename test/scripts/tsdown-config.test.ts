@@ -297,6 +297,46 @@ if (loaded.length) assert(loaded[0].startsWith(path.dirname(rootDir) + path.sep)
 `;
 
 describe("tsdown config", () => {
+  it("emits compact JavaScript alongside TypeScript declarations", async () => {
+    const selected = configs.find((config) => config.name === TSDOWN_PACKAGE_CONFIG_GROUP)!;
+    const root = fs.realpathSync(createTempDir("openclaw-tsdown-mixed-"));
+    materializeNativeCompiler(root);
+    fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
+    fs.writeFileSync(
+      path.join(root, "entry.ts"),
+      'export type Value = { value: string };\nexport const value: Value = { value: "ok" };',
+    );
+    const tsconfig = path.join(root, "tsconfig.json");
+    fs.writeFileSync(
+      tsconfig,
+      JSON.stringify({
+        compilerOptions: { module: "NodeNext", target: "ES2023", types: [], skipLibCheck: true },
+        files: ["entry.ts"],
+      }),
+    );
+    const { bundles } = await build({
+      ...selected,
+      config: false,
+      cwd: root,
+      entry: { entry: "entry.ts" },
+      outDir: path.join(root, "dist"),
+      tsconfig,
+      dts: { tsconfig },
+      logLevel: "silent",
+    });
+    try {
+      expect(fs.readFileSync(path.join(root, "dist/entry.d.ts"), "utf8")).toMatch(
+        /type Value\s*=/u,
+      );
+      const runtime = await import(pathToFileURL(path.join(root, "dist/entry.js")).href);
+      expect(runtime.value).toEqual({ value: "ok" });
+    } finally {
+      for (const bundle of bundles) {
+        await bundle[Symbol.asyncDispose]();
+      }
+    }
+  });
+
   it("preserves source positions and ignores module-like text inside strings and functions", () => {
     const source = `// src/owner.ts
 const script = \`
@@ -308,7 +348,9 @@ return script;
 }
 // src/next.ts
 export { run };`;
-    const output = createCompactModuleLabelsPlugin().renderChunk(source);
+    const output = createCompactModuleLabelsPlugin().renderChunk(source, {
+      fileName: "fixture.js",
+    });
     expect(output?.code).toBe(
       source
         .replace("// src/owner.ts", "//!src/owner.ts")

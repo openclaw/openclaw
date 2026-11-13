@@ -5,7 +5,10 @@ import { bundledModuleRegions } from "./bundled-module-regions.mjs";
 export function createCompactModuleLabelsPlugin() {
   return {
     name: "openclaw:compact-module-labels",
-    renderChunk(code: string) {
+    renderChunk(code: string, chunk: { fileName: string }) {
+      if (/\.d\.[cm]?ts$/u.test(chunk.fileName)) {
+        return null;
+      }
       const { comments, program } = parse(code, { sourceType: "module", attachComment: false });
       const parts: string[] = [];
       let cursor = 0;
