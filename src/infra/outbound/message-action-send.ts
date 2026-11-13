@@ -739,6 +739,8 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
         toolCallId: input.sourceReplyToolCallId,
         deliveredPayload: send.payload,
         deliveredPayloads: send.deliveredPayloads,
+        mediaAccess,
+        abortSignal: ctx.abortSignal,
         replyToIsExplicit: reply?.source === "explicit",
         runId: input.runId,
       });
