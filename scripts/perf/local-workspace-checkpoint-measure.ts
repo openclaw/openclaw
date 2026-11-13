@@ -1427,6 +1427,10 @@ measurement: try {
     if (transcriptMiB) {
       const { seedTeamShapeSessions } = await import("./team-shape-sessions.ts");
       const database = agent.openOpenClawAgentDatabase({ agentId: "main" });
+      const sharedState = state.openOpenClawStateDatabase();
+      const { retainOpenClawStateDatabaseForIdle } =
+        await import("../../src/state/openclaw-state-db-cache.js");
+      const releaseState = retainOpenClawStateDatabaseForIdle(sharedState);
       const progress = setInterval(() => {
         // Offline fixture writes use the existing owner to bound WAL growth, outside timing.
         database.walMaintenance.checkpoint();
@@ -1435,6 +1439,9 @@ measurement: try {
         );
       }, 30_000);
       try {
+        // The offline writer owns checkpoints; join periodic inspection before bulk loading.
+        await database.walMaintenance.stop();
+        await sharedState.walMaintenance.stop();
         await seedTeamShapeSessions({
           stateDir: process.env.OPENCLAW_STATE_DIR!,
           sessions: 10_000,
@@ -1445,6 +1452,7 @@ measurement: try {
         });
       } finally {
         clearInterval(progress);
+        releaseState();
       }
     }
     const db = agent.openOpenClawAgentDatabase({ agentId: "main" });
