@@ -514,4 +514,61 @@ export function registerStatusHealthSessionsCommands(program: Command) {
         );
       });
     });
+
+  addSessionsGatewayOptions(sessionsCmd.command("branches <key>"))
+    .description("List the transcript DAG tips (rewind/switch branch points) for one session")
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          [
+            'openclaw sessions branches "agent:main:main"',
+            "List the branch points available for switching or rewinding.",
+          ],
+          [
+            'openclaw sessions branches "agent:work:main" --agent work --json',
+            "Target one agent's session and emit JSON.",
+          ],
+        ])}\n\n${theme.muted(
+          "Backed by the sessions.branches.list gateway RPC; sessions without a forked transcript report an empty list.",
+        )}`,
+    )
+    .action(async (key: string, opts, command) => {
+      // Preserve parent agent/JSON options, but reject selectors the Gateway cannot honor.
+      // SAFETY: commander parent opts() returns an untyped record narrowed to the sessions parent option shape.
+      const parentOpts = command.parent?.opts() as SessionsListCliOptions | undefined;
+      rejectUnsupportedSessionsParentOptions(
+        "branches",
+        parentOpts,
+        ["store", "allAgents", "active", "limit", "verbose"],
+        "the gateway resolves the target store from <key> and --agent",
+      );
+      const timeoutMs = parseStrictPositiveInteger(opts.timeout);
+      if (opts.timeout !== undefined && timeoutMs === undefined) {
+        throwExpectedCliError("--timeout must be a positive integer (milliseconds).");
+      }
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { sessionsBranchesCommand } = await import("../../commands/sessions-branches.js");
+        // SAFETY: commander action opts are untyped; the sessions parent declares the shared string options below.
+        const agent = (opts.agent as string | undefined) ?? parentOpts?.agent;
+        // SAFETY: --url is the string option addSessionsGatewayOptions declares.
+        const url = opts.url as string | undefined;
+        // SAFETY: --token is the string option addSessionsGatewayOptions declares.
+        const token = opts.token as string | undefined;
+        // SAFETY: --password is the string option addSessionsGatewayOptions declares.
+        const password = opts.password as string | undefined;
+        await sessionsBranchesCommand(
+          {
+            key,
+            agent,
+            timeout: timeoutMs !== undefined ? String(timeoutMs) : undefined,
+            url,
+            token,
+            password,
+            json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
 }
