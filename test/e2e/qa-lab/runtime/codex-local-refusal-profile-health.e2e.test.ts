@@ -140,7 +140,7 @@ it(
 
       expect(refused.terminal.status, refusalDiagnosis).toBe("error");
       const failureNotices = (history.messages ?? [])
-        .map(readRunFailureNotice)
+        .map((message) => readRunFailureNotice(message))
         .filter(Boolean) as Array<{ summary?: string }>;
       expect(failureNotices, refusalDiagnosis).toHaveLength(1);
       expect(failureNotices[0]?.summary, refusalDiagnosis).toContain(LOCAL_REFUSAL_USER_COPY);
