@@ -9,6 +9,7 @@ import {
   resolveRuntimeWorkerUrl,
 } from "../../infra/runtime-worker-url.js";
 import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
+import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { processProbeEntrypoints } from "../process-probes-runtime.test-support.js";
 import {
   brokerSpawnPreload,
@@ -74,12 +75,13 @@ it.runIf(process.platform === "linux" && ["x64", "arm64"].includes(process.arch)
   "closes a broker and stops its children when the kernel denies group signals",
   async () => {
     const fixture = resolveRuntimeWorkerUrl(processProbeEntrypoints.groupCustodyDenied);
-    // The scenario runs in its own process under the real filter; vitest itself cannot.
-    const { stdout } = await promisify(execFile)(
-      process.execPath,
-      resolveRuntimeWorkerArgv(fixture),
-      { cwd: process.cwd(), encoding: "utf8", timeout: 20_000 },
-    );
+    // The scenario needs Node command pipes and runs under the real filter; vitest itself cannot.
+    const node = resolveTestNodeExecPath();
+    const { stdout } = await promisify(execFile)(node, resolveRuntimeWorkerArgv(fixture, node), {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      timeout: 20_000,
+    });
     expect(JSON.parse(stdout)).toEqual({
       closed: "closed",
       attachedDead: true,
