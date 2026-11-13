@@ -163,10 +163,17 @@ function freezeProjectedMessages(items: ReturnType<typeof buildChatItems>): void
   }
 }
 
-it("does not rebuild settled history when background loading changes", () => {
+it.each([
+  {},
+  { runWorking: true },
+  { subagentWait: { runId: "child", startedAt: 1 } },
+  { runWorking: true, searchOpen: true, searchQuery: "unmatched" },
+  { subagentWait: { runId: "child", startedAt: 1 }, searchOpen: true, searchQuery: "unmatched" },
+])("does not rebuild populated history when background loading changes for %j", (progress) => {
   resetChatThreadState();
   try {
     const props = createProps({
+      ...progress,
       messages: [
         message("request", "user", 1, "Request"),
         message("reply", "assistant", 2, "Reply"),
@@ -185,22 +192,38 @@ it("does not rebuild settled history when background loading changes", () => {
   }
 });
 
-it.each([{ runWorking: true }, { subagentWait: { runId: "child", startedAt: 1 } }])(
-  "preserves initial loading progress transitions for %j",
-  (progress) => {
+it.each([
+  { progress: { runWorking: true }, kinds: [] },
+  { progress: { subagentWait: { runId: "child", startedAt: 1 } }, kinds: [] },
+  {
+    progress: {
+      runWorking: true,
+      reasoning: {
+        runId: "thinking-run",
+        items: [{ itemId: "thinking", text: "Still thinking", startedAt: 1 }],
+      },
+    },
+    kinds: ["stream"],
+  },
+])("preserves initial loading progress transitions for %j", ({ progress, kinds }) => {
+  for (const messages of [
+    [],
+    [message("heartbeat", "assistant", 1, "HEARTBEAT_OK")],
+    [message("hidden-tool", "toolResult", 1, "Hidden tool output")],
+  ]) {
     resetChatThreadState();
     try {
-      const props = createProps({ ...progress, messages: [], loading: true });
-      expect(buildCachedChatItems(props)).toEqual([]);
+      const props = createProps({ ...progress, messages, showToolCalls: false, loading: true });
+      expect(buildCachedChatItems(props).map((item) => item.kind)).toEqual(kinds);
       expect(buildCachedChatItems({ ...props, loading: false })).toContainEqual(
         expect.objectContaining({ kind: "reading-indicator" }),
       );
-      expect(buildCachedChatItems(props)).toEqual([]);
+      expect(buildCachedChatItems(props).map((item) => item.kind)).toEqual(kinds);
     } finally {
       resetChatThreadState();
     }
-  },
-);
+  }
+});
 
 describe("incremental history build equivalence", () => {
   it("searches each source once per query across canvas lookahead and visible rows", () => {

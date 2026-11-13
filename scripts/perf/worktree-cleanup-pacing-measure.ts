@@ -33,6 +33,16 @@
  * timing. Report both flush durations; bulk fixture writeback is not cleanup IO.
  * Warm the removal runtime's imports before timing so source-mode compilation is not
  * mistaken for steady-state Gateway latency. Cold-process figures remain separate.
+ * Restart-order mode: --scratch-order --scratch-clones 6. Each old clone contains
+ * the full source file count, alongside 250 old scratch files; the newest checkout
+ * contains 256 fresh entries. Measures through scratch completion at GC entry with
+ * virtualized pacing and hardlinked immutable fixture files, not storage throughput.
+ * Recurring minute-scale maintenance is parked in this scratch-only measurement.
+ * Baseline overlays the custody owner. --reuse-scratch-order reuses only a completed
+ * synthetic fixture between serial arms, rebuilding removed clones outside timing.
+ * Acceptance: 0 -> 6 clone removals, 256 total entries, fresh scratch unchanged.
+ * Reuse the prior physical pressure qualification; do not interpret accelerated
+ * scheduler time or these clone-shaped trees as Git or btrfs throughput evidence.
  * Seed a large isolated DB with generateTeamShapeFixture from team-shape-fixture.ts,
  * using session keys agent:main:synthetic-0 through agent:main:synthetic-4999, then
  * reuse its closed agent database with --agent-db-fixture for every measured arm.
@@ -68,6 +78,8 @@ const { values } = parseArgs({
     worktrees: { type: "string", default: "3" },
     profile: { type: "boolean", default: false },
     "scratch-clones": { type: "string", default: "0" },
+    "scratch-order": { type: "boolean", default: false },
+    "reuse-scratch-order": { type: "boolean", default: false },
     "observe-ms": { type: "string", default: "0" },
     "psi-trace": { type: "boolean", default: false },
     "agent-db-fixture": { type: "string" },
@@ -120,13 +132,25 @@ assert(values.output && global.gc, "--output and --expose-gc are required");
 const output = path.resolve(values.output);
 const worktrees = Number(values.worktrees);
 const scratchClones = Number(values["scratch-clones"]);
+const scratchOrder = values["scratch-order"];
 const observeMs = Number(values["observe-ms"]);
 assert(Number.isSafeInteger(worktrees) && worktrees >= 2);
 assert(Number.isSafeInteger(scratchClones) && scratchClones >= 0);
 assert(Number.isSafeInteger(observeMs) && observeMs >= 0);
-fs.mkdirSync(output);
+const reused = values["reuse-scratch-order"]
+  ? JSON.parse(fs.readFileSync(path.join(output, "report.json"), "utf8"))
+  : undefined;
+if (reused) {
+  assert(scratchOrder && reused.scratchOrder && reused.worktrees === worktrees);
+  assert.equal(reused.scratchClones, scratchClones);
+  assert(
+    reused.scratchRemaining === 0 ||
+      (reused.scratchRemaining === scratchClones && reused.result.scratch.filesRemoved === 0),
+  );
+}
+fs.mkdirSync(output, { recursive: Boolean(reused) });
 for (const directory of ["home", "tmp", "state"]) {
-  fs.mkdirSync(path.join(output, directory));
+  fs.mkdirSync(path.join(output, directory), { recursive: Boolean(reused) });
 }
 const baseline = process.env.OPENCLAW_BENCH_BASELINE_DIR;
 if (baseline) {
@@ -176,11 +200,21 @@ const fixture = JSON.parse(fs.readFileSync(fixturePath, "utf8")) as {
   paths: string[];
 };
 const repo = path.join(output, "repo");
-git(output, "clone", "--quiet", "--shared", "--no-checkout", source, repo);
+if (!reused) {
+  git(output, "clone", "--quiet", "--shared", "--no-checkout", source, repo);
+}
 git(repo, "config", "maintenance.auto", "false");
 const { fingerprint } = await managedWorktrees.resolveRepositoryIdentity(repo);
-const records: ManagedWorktreeRecord[] = [];
-for (let index = 0; index < worktrees; index++) {
+const records: ManagedWorktreeRecord[] = reused
+  ? (await managedWorktrees.listRegistryRecords()).toSorted((a, b) => a.createdAt - b.createdAt)
+  : [];
+if (reused) {
+  assert.equal(reused.filesPerWorktree, fixture.files);
+  assert.equal(reused.bytesPerWorktree, fixture.files * fixture.fileBytes);
+  assert.equal(records.length, worktrees);
+  assert(records.every((record) => record.removedAt === undefined));
+}
+for (let index = records.length; index < worktrees; index++) {
   const id = `21882188-2188-4188-8188-${String(index).padStart(12, "0")}`;
   const checkout = path.join(output, "state", "worktrees", fingerprint, id);
   const branch = `openclaw/synthetic-${index}`;
@@ -219,7 +253,7 @@ for (let index = 0; index < worktrees; index++) {
     baseRef: "main",
     ownerKind: "session",
     ownerId: `agent:main:synthetic-${index}`,
-    createdAt: 1,
+    createdAt: scratchOrder ? index + 1 : 1,
     lastActiveAt: 1,
   };
   await insertRegistryWorktree(process.env, record, { provisionedPaths: [] });
@@ -227,22 +261,55 @@ for (let index = 0; index < worktrees; index++) {
   console.error(JSON.stringify({ prepared: records.length, worktrees, files: fixture.files }));
 }
 // Put scratch last so the old owner must traverse the ordinary removal backlog first.
-const scratchRoot = path.join(records.at(-1)!.path, ".openclaw/tmp");
+const scratchRoot = path.join(
+  records[scratchOrder ? 0 : records.length - 1]!.path,
+  ".openclaw/tmp",
+);
 const expired = new Date(Date.now() - 25 * 60 * 60_000);
 for (let index = 0; index < scratchClones; index++) {
   const clone = path.join(scratchRoot, `clone-${index}`);
+  if (reused?.scratchRemaining === scratchClones) {
+    continue;
+  }
   fs.mkdirSync(path.join(clone, ".git/objects"), { recursive: true });
   fs.writeFileSync(path.join(clone, ".git/HEAD"), "ref: refs/heads/main\n");
   fs.utimesSync(path.join(clone, ".git/HEAD"), expired, expired);
-  for (let entry = index; entry < fixture.paths.length; entry += scratchClones) {
+  for (
+    let entry = scratchOrder ? 0 : index;
+    entry < fixture.paths.length;
+    entry += scratchOrder ? 1 : scratchClones
+  ) {
     const file = path.join(clone, `${entry}.ts`);
-    fs.copyFileSync(path.join(source, fixture.paths[entry]!), file, fs.constants.COPYFILE_FICLONE);
-    fs.utimesSync(file, expired, expired);
+    if (scratchOrder) {
+      fs.linkSync(path.join(source, fixture.paths[entry]!), file);
+    } else {
+      fs.copyFileSync(
+        path.join(source, fixture.paths[entry]!),
+        file,
+        fs.constants.COPYFILE_FICLONE,
+      );
+    }
+    if (!scratchOrder || index === 0) {
+      fs.utimesSync(file, expired, expired);
+    }
   }
   fs.utimesSync(path.join(clone, ".git/objects"), expired, expired);
 }
+if (scratchOrder) {
+  assert(scratchClones > 0 && scratchClones < 256 && !observeMs);
+  const freshRoot = path.join(records.at(-1)!.path, ".openclaw/tmp");
+  fs.mkdirSync(freshRoot, { recursive: true });
+  for (let index = 0; index < 256; index++) {
+    fs.writeFileSync(path.join(freshRoot, `fresh-${index}`), "fresh scratch");
+    if (index < 256 - scratchClones) {
+      const file = path.join(scratchRoot, `expired-${index}`);
+      fs.writeFileSync(file, "expired scratch");
+      fs.utimesSync(file, expired, expired);
+    }
+  }
+}
 const sessions = 5_000;
-if (values["agent-db-fixture"]) {
+if (values["agent-db-fixture"] && !reused) {
   const destination = resolveOpenClawAgentSqlitePath({ agentId: "main" });
   fs.mkdirSync(path.dirname(destination), { recursive: true });
   fs.copyFileSync(
@@ -309,7 +376,7 @@ const scheduler = new GatewayScheduler({
         return () => clearTimeout(timer);
       }
       // Park the unrelated hourly recurrence; only cleanup continuation timers advance.
-      if (delayMs > 10 * 60_000) {
+      if (delayMs > 10 * 60_000 || (scratchOrder && delayMs >= 60_000)) {
         return () => {};
       }
       const timer = setTimeout(() => {
@@ -322,8 +389,10 @@ const scheduler = new GatewayScheduler({
 });
 const removals: Array<{ id: string; atMs: number; wallMs: number }> = [];
 const admissions: number[] = [];
+let scratchCompleted: (() => void) | undefined;
 const gc = managedWorktrees.gc.bind(managedWorktrees);
 managedWorktrees.gc = async (params) => {
+  scratchCompleted?.();
   assert.equal(getSpawnBroker(), broker, "Maintenance must retain the Gateway spawn broker");
   if (params?.beforeRemoval) {
     const beforeRemoval = params.beforeRemoval;
@@ -421,6 +490,9 @@ try {
           },
         });
         const receipt = owner.request();
+        if (scratchOrder) {
+          scratchCompleted = () => resolve(owner!.request({ jobId: receipt.jobId }));
+        }
         if (observeMs) {
           observationTimer = setTimeout(
             () => resolve(owner!.request({ jobId: receipt.jobId })),
@@ -442,14 +514,22 @@ try {
     );
     inspector.disconnect();
   }
-  if (!observeMs) {
+  if (!observeMs && !scratchOrder) {
     assert.equal(removals.length, worktrees);
+  }
+  if (scratchOrder) {
+    await owner?.stop();
+    const freshRoot = path.join(records.at(-1)!.path, ".openclaw/tmp");
+    assert.equal(fs.readdirSync(freshRoot).length, 256);
+    for (const name of fs.readdirSync(freshRoot)) {
+      assert.equal(fs.readFileSync(path.join(freshRoot, name), "utf8"), "fresh scratch");
+    }
   }
   const archived = new Map(
     (await managedWorktrees.listRegistryRecords()).map((record) => [record.id, record]),
   );
   const trees: string[] = [];
-  for (const record of observeMs ? [] : records) {
+  for (const record of observeMs || scratchOrder ? [] : records) {
     const current = archived.get(record.id);
     assert(current?.removedAt !== undefined && current.snapshotRef);
     assert(!fs.existsSync(record.path));
@@ -463,7 +543,7 @@ try {
     );
     trees.push(git(repo, "rev-parse", `${current.snapshotRef}^{tree}`));
   }
-  if (!observeMs) {
+  if (!observeMs && !scratchOrder) {
     assert.equal(new Set(trees).size, 1);
   }
   const sourceRoot = fileURLToPath(new URL("../../", import.meta.url));
@@ -474,6 +554,7 @@ try {
     "src/agents/worktrees/registry-read.kernel.ts",
     "src/agents/worktrees/registry-retirement.ts",
     "src/gateway/worktree-maintenance.ts",
+    "src/gateway/scratch-maintenance-custody.ts",
     "src/infra/host-io-pressure.ts",
   ]) {
     const original = baseline && path.join(baseline, relative);
@@ -499,8 +580,15 @@ try {
     preparationFlushMs,
     agentDatabasePath: agentDatabase.path,
     scratchClones,
+    scratchOrder,
+    scratchFilesPerClone: scratchOrder ? fixture.files : fixture.files / scratchClones,
+    freshScratchRemaining: scratchOrder
+      ? fs.readdirSync(path.join(records.at(-1)!.path, ".openclaw/tmp")).length
+      : undefined,
     scratchRemaining:
-      scratchClones && fs.existsSync(scratchRoot) ? fs.readdirSync(scratchRoot).length : 0,
+      scratchClones && fs.existsSync(scratchRoot)
+        ? fs.readdirSync(scratchRoot).filter((name) => name.startsWith("clone-")).length
+        : 0,
     injectedPsiTrace: values["psi-trace"],
     pressureProbeReads,
     maintenanceErrors,

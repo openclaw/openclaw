@@ -254,6 +254,7 @@ export async function attachAuthenticatedGatewayConnect(
         ownerProfileExpected,
         linkedOwnerProfile,
         authenticatedUserId,
+        requestHeaders: context.handler.upgradeReq.headers,
         resolveAuthenticatedGitHubIdentity,
         assertCurrent: profileLifecycle.assertCurrent,
       });

@@ -12,16 +12,26 @@ import { canReuseMarkdownOwnership, findCodeOwnership } from "./code-regions.js"
 import { expectPrefixParity, regexWork, streamChunks } from "./streaming.test-support.js";
 import { createTextProjection } from "./text-projection.js";
 
+const settledProse =
+  "The guard rejects the call when values differ.\nIt keeps the settled prefix.\n".repeat(128);
+
+// `regexBudget` is the per-character bound on `regexWork`, which grows with the number of
+// checkpoint stages that scan each settled line. Bracket rows keep one more active stage
+// than the JSON/prose rows, so their bound is looser than the default.
 it.each([
-  ["pretty-printed JSON", `{\n${'  {"id":0,"label":"ordinary value"},\n'.repeat(128)}}`],
-  ["brace-heavy prose", 'Configure {"mode":"fast"} and continue. '.repeat(128)],
-])("bounds ordinary %s streaming work", (_shape, input) => {
+  ["pretty-printed JSON", `{\n${'  {"id":0,"label":"ordinary value"},\n'.repeat(128)}}`, 128],
+  ["brace-heavy prose", 'Configure {"mode":"fast"} and continue. '.repeat(128), 128],
+  // A closed legacy bracket block must let the preceding prefix settle instead of pinning the
+  // whole reply; the looser `regexBudget` reflects the extra active checkpoint stage.
+  ["legacy bracket block", "[TOOL_CALL]{}\n[/TOOL_CALL]\n" + settledProse, 512],
+])("bounds ordinary %s streaming work", (_shape, input, regexBudget = 128) => {
   const source = input.slice(0, 4096);
   const stream = createAssistantVisibleStreamText("final_answer");
   const before = markdownOwnershipWork.scannedCharacters;
   const scanned = regexWork(() => streamChunks(source, 4, stream));
   expect(stream.text).toBe(source.trimEnd());
-  expect(scanned).toBeLessThan(source.length * 128);
+  expect(stream.settledLength).toBeGreaterThan(source.length * 0.9);
+  expect(scanned).toBeLessThan(source.length * regexBudget);
   expect(markdownOwnershipWork.scannedCharacters - before).toBeLessThan(source.length * 16);
 });
 

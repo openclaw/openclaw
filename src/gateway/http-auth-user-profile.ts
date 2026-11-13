@@ -42,6 +42,7 @@ import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.j
 import { resolveBrowserOriginPolicy } from "./origin-check.js";
 import type { GatewayClient, GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 import { isGatewayDelegationCurrent } from "./trusted-proxy-delegation.js";
+import { syncTrustedProxyGitCoauthor } from "./trusted-proxy-git-coauthor.js";
 import { formatForLog } from "./ws-log.js";
 
 const profileLog = createSubsystemLogger("gateway/user-profiles");
@@ -262,6 +263,13 @@ export async function resolveAuthenticatedHttpUserProfile(params: {
               )
             : await ensureCanonicalUserProfileForEmail(authenticatedUserId, options);
     const profileId = "profileId" in profile ? profile.profileId : profile.id;
+    await syncTrustedProxyGitCoauthor({
+      authConfig: params.cfg.gateway?.auth,
+      authResult: params.authResult,
+      headers: params.req.headers,
+      profileId,
+      assertCurrent,
+    });
     const prepared = await prepareHttpProfile(
       profileId,
       profile.updatedAt,

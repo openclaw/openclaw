@@ -174,13 +174,43 @@ An administrator can explicitly link profiles belonging to the same person throu
 
 The primary account uses a nullable field in the existing profile table without advancing the database schema version. **Downgrade risk:** no schema-version bump blocks older builds from using this state. Their single-account writers can discard secondary account links or split the person again. Re-upgrading does not reconstruct discarded links; an administrator must explicitly relink the profiles. Keep a backup before downgrading.
 
+**Linked emails** are used for sign-in and profile linking, not as the source of Git co-author credit. The **Git co-author credit** control shows the selected organization-provided pair or verified public-GitHub noreply identity inline. Enterprise commit addresses remain undisclosed in Profile.
+
 Public commit metadata is a separate choice. **Git co-author credit** is one profile-wide preference, editable even when no single GitHub account is available to display. It defaults on for verified accounts. It adds the verified account's public GitHub noreply address to commits created from shared sessions. OpenClaw never requests or stores a private GitHub email for this feature. An unrelated, unlinked GitHub account uses its own profile and credit preference, so reusing a sign-in email or username does not inherit another person's choice. Signing in through a linked secondary account preserves the primary profile's primary account and credit preference.
+
+A shared Gateway behind Keycloak can identify separate users without establishing
+a verified GitHub identity for any of them. Existing GitHub credit cannot infer
+commit details from that sign-in alone.
+
+An administrator can import a complete co-author name/email pair through
+[trusted-proxy credit headers](/gateway/trusted-proxy-auth#organization-co-author-defaults).
+For example, a Keycloak authentication proxy can supply the authenticated user's
+name, email, and email-verification claim while keeping the existing immutable
+subject as the sign-in principal. These are commit details, not a verified GitHub
+account or an authorization input.
+
+Profile displays the imported pair read-only and labels it as organization-supplied.
+Enable **Git co-author credit** explicitly before the email becomes public in
+commit history. There are no editable co-author name/email fields or per-user
+identity overrides. While configured proxy details are selected, the default-on
+preference for verified GitHub accounts alone does not publish them. The first
+import resets an older saved-on choice; an earlier GitHub-only or ineffective
+toggle does not authorize a new supplied address.
+
+Later sign-ins refresh the imported pair. Missing or invalid configured claims
+clear it at the next successful profile sign-in. Removing the mapping stops using
+stored organization details, leaving the existing host-specific GitHub fallback.
+
+Profile merges preserve the consent belonging to the selected supplied details,
+while retaining an explicit target opt-out. Another profile's consent cannot
+enable unconsented target details, and a previously ineffective target choice
+does not enable unconsented details transferred from the source.
 
 For Enterprise GitHub sessions, credit instead uses the commit address already verified by the sign-in broker, only for the configured enterprise GitHub host and while the existing credit preference permits it. The Profile page explains both public noreply and enterprise address credit because a merged profile's displayed primary account can differ from the account selected for publication. When a profile has current accounts on multiple enterprise hosts and no public primary, the read-only account row has no single identity to display; OpenClaw does not pick one arbitrarily. The co-author toggle still reads and updates the same saved preference for every host. The enterprise address is visible in commit history. No enterprise noreply address is synthesized, and a missing verified address withholds credit without changing the preference. The address stays out of profile responses and does not become a sign-in alias. Moving the principal alias invalidates its recorded identity until authenticated sign-in refreshes it. Explicit profile merges preserve a source enterprise account's saved credit preference when the survivor has no saved choice. Gateway publication selects contributors from its selected GitHub account's host; public-GitHub publication continues using public-GitHub contributors.
 
-When your authenticated profile has prompted a session before an agent run, commits created from that run receive your exact `Co-authored-by` trailer. Commits and pull requests then visibly credit who worked on the session. Profile participants with verified GitHub identity and Git co-author credit enabled are eligible. Remote identities, agents, bots, and the configured primary Git author are excluded. Contributors appear by recorded contribution aggregate, highest first. Ties use the earliest known profile input, with unknown historical times after known times, then immutable GitHub account id. These best-effort aggregates are not exact lifetime prompt counts. Contributions from merged profiles remain attached to their surviving verified account. New participant admission and model-facing credit output are each capped at 32. Repair can retain larger histories.
+When your authenticated profile has prompted a session before an agent run, commits created from that run receive your exact `Co-authored-by` trailer. Commits and pull requests then visibly credit who worked on the session. Profile participants with an eligible organization or verified GitHub credit identity and Git co-author credit enabled are eligible. Remote identities, agents, bots, and the configured primary Git author are excluded. Contributors appear by recorded contribution aggregate, highest first. Ties use the earliest known profile input, with unknown historical times after known times, then immutable GitHub account id when available and normalized credit email. These best-effort aggregates are not exact lifetime prompt counts. Contributions from merged profiles remain attached to their surviving verified account. New participant admission and model-facing credit output are each capped at 32. Repair can retain larger histories.
 
-Delegated tasks retain a separate snapshot of the originating session's human contributor profile IDs before the child starts. Nested delegations carry that snapshot forward, up to 32 unique profiles, retaining inherited contributors before adding direct source participants. This does not create child participation, increase prompt counts, or grant access. People who join the source later are not added to an existing child's snapshot. At use time, OpenClaw combines inherited credit with direct child contributions and checks current verified GitHub identities and credit preferences. Each GitHub account is credited once; direct contributors retain their usual ordering, followed by inherited contributors in snapshot order. Ordinary sidebar parent links do not transfer credit.
+Delegated tasks retain a separate snapshot of the originating session's human contributor profile IDs before the child starts. Nested delegations carry that snapshot forward, up to 32 unique profiles, retaining inherited contributors before adding direct source participants. This does not create child participation, increase prompt counts, or grant access. People who join the source later are not added to an existing child's snapshot. At use time, OpenClaw combines inherited credit with direct child contributions and checks current eligible credit identities and credit preferences. Each normalized credit email is credited once; direct contributors retain their usual ordering, followed by inherited contributors in snapshot order. Ordinary sidebar parent links do not transfer credit.
 
 Credit follows session participation, including earlier work in the same task conversation. The canonical main session is an exception: it can route unrelated DMs, groups, and threads, so its lifetime participant roster is not a task contributor set. Main-session requests use only the current host-verified requester for automatic credit and child snapshots. A linked channel requester does not need an administrative role to receive credit. If no verified requester is available, OpenClaw withholds inferred main-roster credit rather than attributing unrelated people. Ordinary collaborative task sessions and nested delegations retain their existing contributor snapshots. Use a separate task session to accumulate a distinct collaborative contributor set.
 

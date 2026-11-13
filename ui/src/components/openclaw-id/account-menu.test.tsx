@@ -445,9 +445,13 @@ describe("approved OpenClaw ID account menu", () => {
     expect(menu(current).rows[0]?.details).toBeUndefined();
   });
 
-  it.each(["viewer", "operator"] as const)(
+  it.each([
+    ["viewer", "Viewer"],
+    ["operator", "Operator"],
+    ["guest", "guest"],
+  ] as const)(
     "remote %s shows own email, role and known inviter with no owner items",
-    (role) => {
+    (role, label) => {
       const current = status({
         channel: "tunnel",
         owner: false,
@@ -463,7 +467,7 @@ describe("approved OpenClaw ID account menu", () => {
       });
       expect(openClawIdMenuIdentity(current)).toEqual({
         name: "member@example.test",
-        detail: `${role === "viewer" ? "Viewer" : "Operator"} on studio`,
+        detail: `${label} on studio`,
       });
       expect(menu(current).labels).toEqual([]);
       expect(menu(current).text).toContain("Invited by Owner");
