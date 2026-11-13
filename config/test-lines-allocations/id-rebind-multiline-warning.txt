@@ -1,0 +1,2 @@
+# A failed id rebind keeps its multi-line transport warning readable.
+12
