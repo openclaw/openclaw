@@ -187,7 +187,7 @@ describe("createSlackBoltApp", () => {
     }
   });
 
-  it("reports SDK reconnect and refresh start failures to the disconnect waiter", async () => {
+  it("reports SDK reconnect and refresh start failures and stops on disconnect", async () => {
     const { receiver } = createFakeApp();
     if (!(receiver instanceof FakeSocketModeReceiver)) {
       throw new Error("expected Socket Mode receiver");
@@ -204,11 +204,18 @@ describe("createSlackBoltApp", () => {
     await expect(
       client.delayReconnectAttempt(() => Promise.reject(new Error("transient")), signal),
     ).rejects.toThrow("transient");
+    vi.useFakeTimers();
+    const stopped = client.delayReconnectAttempt(() => client.start(), signal);
+    client.emit("disconnecting");
+    await vi.runAllTimersAsync();
+    vi.useRealTimers();
+    await expect(stopped).resolves.toBeUndefined();
     expect(emit.mock.calls).toEqual([
       ["reconnecting"],
       ["unable_to_socket_mode_start", new Error("fetch failed")],
       ["unable_to_socket_mode_start", new Error("fetch failed")],
       ["reconnecting"],
+      ["disconnecting"],
     ]);
   });
 

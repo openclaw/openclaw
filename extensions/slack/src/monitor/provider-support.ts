@@ -108,7 +108,9 @@ function installSlackNativeReconnectFailureObserver(
           : OPENCLAW_SLACK_CLIENT_PING_TIMEOUT_MS) * nextFailureCount;
       return new Promise((resolve, reject) => {
         const cancel = () => {
-          // SDK 3.2 passes its lifecycle signal; its start stops on that signal itself.
+          // SDK 3.1's disconnect() clears this timer; 3.2's does not, and its start()
+          // would open a fresh lifecycle. 3.2 passes its signal and aborts its own start.
+          clearTimeout(Reflect.get(this, "reconnectionTimer"));
           if (signal || callback === Reflect.get(this, "start")) {
             resolve(undefined);
           } else {
@@ -119,8 +121,7 @@ function installSlackNativeReconnectFailureObserver(
           cancel();
           return;
         }
-        // disconnect() clears the SDK timer before emitting disconnecting.
-        // Settle its waiter too, or startup retains the channel's plugin custody.
+        // Settle on disconnect() too, or startup retains the channel's plugin custody.
         this.once("disconnecting", cancel);
         const reconnectTimer = setTimeout(() => {
           this.off("disconnecting", cancel);
