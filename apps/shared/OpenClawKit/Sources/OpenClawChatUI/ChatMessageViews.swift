@@ -1185,7 +1185,7 @@ struct ChatDeferredContent<Content: View>: View {
     }
 }
 
-struct ChatStreamingAssistantText {
+struct ChatStreamingAssistantText: Equatable {
     let sourceText: String
     let includesThinking: Bool
     let segments: [AssistantTextSegment]
@@ -1194,6 +1194,11 @@ struct ChatStreamingAssistantText {
         self.sourceText = sourceText
         self.includesThinking = includesThinking
         self.segments = AssistantTextParser.segments(from: sourceText, includeThinking: includesThinking)
+    }
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.sourceText == rhs.sourceText && lhs.includesThinking == rhs.includesThinking &&
+            lhs.segments.elementsEqual(rhs.segments) { $0.kind == $1.kind && $0.text == $1.text }
     }
 
     /// Item source is already inside a parsed assistant segment; do not interpret
@@ -1302,38 +1307,29 @@ private struct ChatAssistantTextBody: View {
 
 @MainActor
 struct ChatStreamingAssistantTextBody: View {
-    private let inputSnapshot: Snapshot
+    private let text: ChatStreamingAssistantText
+    private let defaultDisclosureSummary = String(localized: "Details")
     let markdownVariant: ChatMarkdownVariant
     let textColor: Color
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var snapshot: Snapshot
-    @State private var revealState: ChatStreamingRevealState
-    @State private var revealLocation: Snapshot.ProseLocation?
-    @State private var pendingUntil: TimeInterval?
+    @StateObject private var preparation: Preparation
 
     init(text: ChatStreamingAssistantText, markdownVariant: ChatMarkdownVariant, textColor: Color) {
+        self.text = text
         self.markdownVariant = markdownVariant
         self.textColor = textColor
-
-        let now = Date.timeIntervalSinceReferenceDate
-        let snapshot = Snapshot(text: text)
-        // State retains its old value across updates. Reuse this prepared input
-        // when applying the delta instead of parsing the same Markdown again.
-        self.inputSnapshot = snapshot
-        let location = snapshot.lastProseLocation
-        let revealState = location.map {
-            step(state: ChatStreamingRevealState(), newText: snapshot.prose(at: $0).plainText, now: now)
-        } ?? ChatStreamingRevealState()
-        self._snapshot = State(initialValue: snapshot)
-        self._revealState = State(initialValue: revealState)
-        self._revealLocation = State(initialValue: location)
-        self._pendingUntil = State(initialValue: revealState.latestDeadline)
+        // StateObject's deferred construction prepares the first frame once per
+        // mounted body, including list-item bodies; view value updates stay cheap.
+        let defaultDisclosureSummary = self.defaultDisclosureSummary
+        self._preparation = StateObject(wrappedValue: Preparation(
+            text: text,
+            defaultDisclosureSummary: defaultDisclosureSummary))
     }
 
     var body: some View {
         Group {
-            if self.reduceMotion || self.pendingUntil == nil {
+            if self.reduceMotion || self.preparation.pendingUntil == nil {
                 self.render(now: nil)
             } else {
                 TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
@@ -1341,36 +1337,32 @@ struct ChatStreamingAssistantTextBody: View {
                 }
             }
         }
-        .onChange(of: self.inputSnapshot.sourceText) { _, _ in
+        .onChange(of: self.text) { _, _ in
             self.updateSnapshot()
         }
-        .onChange(of: self.inputSnapshot.includesThinking) { _, _ in
+        .onChange(of: self.defaultDisclosureSummary) { _, _ in
             self.updateSnapshot()
         }
         .onChange(of: self.reduceMotion) { _, reduceMotion in
-            self.pendingUntil = reduceMotion ? nil : self.futureDeadline()
+            self.preparation.pendingUntil = reduceMotion ? nil : self.preparation.futureDeadline()
         }
         .onAppear {
-            if self.snapshot.sourceText != self.inputSnapshot.sourceText ||
-                self.snapshot.includesThinking != self.inputSnapshot.includesThinking
-            {
-                self.updateSnapshot()
-            }
+            self.updateSnapshot()
         }
-        .task(id: self.pendingUntil) {
-            guard let pendingUntil = self.pendingUntil else { return }
+        .task(id: self.preparation.pendingUntil) {
+            guard let pendingUntil = self.preparation.pendingUntil else { return }
             let delay = max(0, pendingUntil - Date.timeIntervalSinceReferenceDate)
             if delay > 0 {
                 try? await Task.sleep(for: .seconds(delay))
             }
-            guard !Task.isCancelled, self.pendingUntil == pendingUntil else { return }
-            self.pendingUntil = nil
+            guard !Task.isCancelled, self.preparation.pendingUntil == pendingUntil else { return }
+            self.preparation.pendingUntil = nil
         }
     }
 
     private func render(now: TimeInterval?) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            ForEach(Array(self.snapshot.segments.enumerated()), id: \.offset) { entry in
+            ForEach(Array(self.preparation.snapshot.segments.enumerated()), id: \.offset) { entry in
                 let segment = entry.element
                 let reveal = self.reveal(
                     segmentIndex: entry.offset,
@@ -1388,44 +1380,79 @@ struct ChatStreamingAssistantTextBody: View {
 
     private func reveal(segmentIndex: Int, now: TimeInterval?) -> ChatMarkdownProseReveal? {
         guard let now,
-              let location = self.revealLocation,
+              let location = self.preparation.revealLocation,
               location.segmentIndex == segmentIndex
         else { return nil }
         return ChatMarkdownProseReveal(
             blockIndex: location.blockIndex,
-            state: self.revealState,
+            state: self.preparation.revealState,
             now: now)
     }
 
     private func updateSnapshot() {
-        let now = Date.timeIntervalSinceReferenceDate
-        let nextSnapshot = self.inputSnapshot
-        let nextLocation = nextSnapshot.lastProseLocation
-        let nextRevealState = nextLocation.map { location in
-            step(
-                state: location == self.revealLocation ? self.revealState : ChatStreamingRevealState(),
-                newText: nextSnapshot.prose(at: location).plainText,
-                now: now)
-        } ?? ChatStreamingRevealState()
-
-        self.snapshot = nextSnapshot
-        self.revealLocation = nextLocation
-        self.revealState = nextRevealState
-        self.pendingUntil = self.reduceMotion ? nil : self.futureDeadline(now: now, state: nextRevealState)
-    }
-
-    private func futureDeadline(
-        now: TimeInterval = Date.timeIntervalSinceReferenceDate,
-        state: ChatStreamingRevealState? = nil) -> TimeInterval?
-    {
-        guard let deadline = (state ?? self.revealState).latestDeadline, deadline > now else {
-            return nil
-        }
-        return deadline
+        self.preparation.update(
+            text: self.text,
+            defaultDisclosureSummary: self.defaultDisclosureSummary,
+            reduceMotion: self.reduceMotion)
     }
 
     @MainActor
-    private struct Snapshot {
+    final class Preparation: ObservableObject {
+        @Published private(set) var snapshot: Snapshot
+        private(set) var revealState: ChatStreamingRevealState
+        private(set) var revealLocation: Snapshot.ProseLocation?
+        @Published var pendingUntil: TimeInterval?
+
+        init(
+            text: ChatStreamingAssistantText,
+            defaultDisclosureSummary: String,
+            now: TimeInterval = Date.timeIntervalSinceReferenceDate)
+        {
+            let snapshot = Snapshot(text: text, defaultDisclosureSummary: defaultDisclosureSummary)
+            let location = snapshot.lastProseLocation
+            let revealState = location.map {
+                step(state: ChatStreamingRevealState(), newText: snapshot.prose(at: $0).plainText, now: now)
+            } ?? ChatStreamingRevealState()
+            self.snapshot = snapshot
+            self.revealState = revealState
+            self.revealLocation = location
+            self.pendingUntil = revealState.latestDeadline
+        }
+
+        func update(
+            text: ChatStreamingAssistantText,
+            defaultDisclosureSummary: String,
+            reduceMotion: Bool,
+            now: TimeInterval = Date.timeIntervalSinceReferenceDate)
+        {
+            guard self.snapshot.text != text ||
+                self.snapshot.defaultDisclosureSummary != defaultDisclosureSummary
+            else { return }
+            let nextSnapshot = Snapshot(
+                text: text,
+                defaultDisclosureSummary: defaultDisclosureSummary,
+                reusing: self.snapshot)
+            let nextLocation = nextSnapshot.lastProseLocation
+            let nextRevealState = nextLocation.map { location in
+                step(
+                    state: location == self.revealLocation ? self.revealState : ChatStreamingRevealState(),
+                    newText: nextSnapshot.prose(at: location).plainText,
+                    now: now)
+            } ?? ChatStreamingRevealState()
+            self.revealLocation = nextLocation
+            self.revealState = nextRevealState
+            self.snapshot = nextSnapshot
+            self.pendingUntil = reduceMotion ? nil : self.futureDeadline(now: now)
+        }
+
+        func futureDeadline(now: TimeInterval = Date.timeIntervalSinceReferenceDate) -> TimeInterval? {
+            guard let deadline = self.revealState.latestDeadline, deadline > now else { return nil }
+            return deadline
+        }
+    }
+
+    @MainActor
+    struct Snapshot {
         struct Segment {
             let kind: AssistantTextSegment.Kind
             let markdown: ChatMarkdownRenderSnapshot
@@ -1438,21 +1465,35 @@ struct ChatStreamingAssistantTextBody: View {
 
         let segments: [Segment]
         let lastProseLocation: ProseLocation?
-        let sourceText: String
-        let includesThinking: Bool
+        let text: ChatStreamingAssistantText
+        let defaultDisclosureSummary: String
 
-        init(text: ChatStreamingAssistantText) {
-            let segments = text.segments.map {
-                Segment(
-                    kind: $0.kind,
+        init(
+            text: ChatStreamingAssistantText,
+            defaultDisclosureSummary: String,
+            reusing previous: Snapshot? = nil)
+        {
+            let segments = text.segments.enumerated().map { index, segment in
+                let old = previous.flatMap { $0.segments.indices.contains(index) ? $0.segments[index] : nil }
+                if let previous, let old,
+                   previous.defaultDisclosureSummary == defaultDisclosureSummary,
+                   old.kind == segment.kind,
+                   previous.text.segments[index].text == segment.text
+                {
+                    return old
+                }
+                return Segment(
+                    kind: segment.kind,
                     markdown: ChatMarkdownRenderSnapshot(
-                        text: $0.text,
+                        text: segment.text,
                         isComplete: false,
-                        preparesReveal: true))
+                        preparesReveal: true,
+                        defaultDisclosureSummary: defaultDisclosureSummary,
+                        reusing: old?.markdown))
             }
             self.segments = segments
-            self.sourceText = text.sourceText
-            self.includesThinking = text.includesThinking
+            self.text = text
+            self.defaultDisclosureSummary = defaultDisclosureSummary
             self.lastProseLocation = segments.indices.reversed().compactMap { segmentIndex in
                 segments[segmentIndex].markdown.lastProseIndex.map {
                     ProseLocation(segmentIndex: segmentIndex, blockIndex: $0)
