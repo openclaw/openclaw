@@ -823,6 +823,11 @@ extension DashboardWindowController {
             preservingPendingCommands: preservingPendingCommands)
     }
 
+    func showRemoval(_ removal: MacOpenClawIDRemoval, present: Bool = true) {
+        self.signedOut = nil
+        self.showFailureHTML(DashboardFailurePage.html(removal: removal), present: present)
+    }
+
     func showSignedOut(_ page: DashboardFailurePage.SignedOut, present: Bool, autoStart: Bool) {
         self.signedOut = page
         self.signedOutNeedsRefresh = false

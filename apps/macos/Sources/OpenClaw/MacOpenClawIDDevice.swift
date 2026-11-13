@@ -24,7 +24,9 @@ final class MacOpenClawIDDeviceStore {
         defaults: AppDefaults.standard,
         databaseURL: MacNodeOpenClawIDSelectionStore.shared.databaseURL)
 
+    private var localRemoval: UUID?
     private let defaults: UserDefaults
+    private let removalKey = "openclaw.mac.openClawID.lastRemoval"
     private let key = "openclaw.mac.openClawID.device"
     let databaseURL: URL
 
@@ -63,6 +65,61 @@ final class MacOpenClawIDDeviceStore {
         ]
         fields["nodeEnrollmentID"] = device.nodeEnrollmentID?.uuidString
         self.defaults.set(fields, forKey: self.key)
+        self.clearRemoval()
+    }
+
+    func lastRemoval() -> MacOpenClawIDRemoval? {
+        guard let fields = self.defaults.dictionary(forKey: self.removalKey),
+              let hostname = fields["hostname"] as? String,
+              let timestamp = fields["timestamp"] as? Double,
+              let origin = (fields["origin"] as? String).flatMap(MacOpenClawIDRemoval.Origin.init(rawValue:))
+        else { return nil }
+        return .init(hostname: hostname, date: Date(timeIntervalSince1970: timestamp), origin: origin)
+    }
+
+    func clearRemoval() {
+        self.defaults.removeObject(forKey: self.removalKey)
+    }
+
+    /// Retain the local intent while the signed revocation and its lost-response verification run.
+    func beginLocalRemoval(_ device: MacOpenClawIDDevice) {
+        self.localRemoval = device.deviceEnrollmentID
+    }
+
+    func endLocalRemoval(_ device: MacOpenClawIDDevice) {
+        if self.localRemoval == device.deviceEnrollmentID { self.localRemoval = nil }
+    }
+
+    /// Both local removal and a verified remote removal retire the same device-local state.
+    func remove(
+        _ device: MacOpenClawIDDevice,
+        origin: MacOpenClawIDRemoval.Origin,
+        now: Date = Date(),
+        stopRoute: () -> Void = { MacOpenClawIDOperatorRoute.shared.stop() },
+        deselectNode: () -> Void = { MacNodeModeCoordinator.shared.selectOpenClawIDTarget(nil) },
+        forgetKeys: ((MacOpenClawIDDevice) async -> Void)? = nil,
+        clearPrimary: () -> Void = { try? AppStateStore.shared.setPrimaryGateway(.clear) }) async
+    {
+        guard let current = self.load(), current.deviceEnrollmentID == device.deviceEnrollmentID else { return }
+        let device = current
+        let removal = MacOpenClawIDRemoval(
+            hostname: device.hostname,
+            date: now,
+            origin: self.localRemoval == device.deviceEnrollmentID ? .here : origin)
+        self.defaults.set([
+            "hostname": removal.hostname, "shortName": removal.shortName,
+            "timestamp": removal.date.timeIntervalSince1970, "origin": removal.origin.rawValue,
+        ], forKey: self.removalKey)
+        stopRoute()
+        deselectNode()
+        self.save(nil)
+        if forgetKeys == nil { self.saveSession(nil) }
+        clearPrimary()
+        if let forgetKeys {
+            await forgetKeys(device)
+        } else {
+            await self.forgetKeys(device)
+        }
     }
 
     /// The node coordinator's selection for this device's W_node, if it runs tools.
@@ -95,15 +152,20 @@ final class MacOpenClawIDDeviceStore {
                         try await OpenClawIDNodeIdentity.loadOrCreate(
                             store: OpenClawIDNodeIdentityKeychainStore(enrollmentID: $0, purpose: .node))
                     }
-                    let target = try await OpenClawIDDeviceRoute.refresh(
-                        hostname: device.hostname,
-                        discoveryOrigin: device.discoveryOrigin,
-                        peer: peer,
-                        admission: .owner,
-                        node: node,
-                        session: session,
-                        store: store)
-                    return (target.serverKey, target.relayURL)
+                    do {
+                        let target = try await OpenClawIDDeviceRoute.refresh(
+                            hostname: device.hostname,
+                            discoveryOrigin: device.discoveryOrigin,
+                            peer: peer,
+                            admission: .owner,
+                            node: node,
+                            session: session,
+                            store: store)
+                        return (target.serverKey, target.relayURL)
+                    } catch OpenClawIDNodeEnrollmentError.notAdmitted {
+                        await self.remove(device, origin: .elsewhere)
+                        throw OpenClawIDNodeEnrollmentError.notAdmitted
+                    }
                 },
                 close: { await store.close() })
         }
@@ -115,10 +177,8 @@ final class MacOpenClawIDDeviceStore {
             enrollmentID: device.deviceEnrollmentID, purpose: .device))
     }
 
-    /// Forgets the device: preferences, its Discovery session and every key it held.
-    func forget(_ device: MacOpenClawIDDevice) async {
-        self.save(nil)
-        self.saveSession(nil)
+    /// Deletes only the retired enrollment's keys, not a newly joined device's preferences.
+    private func forgetKeys(_ device: MacOpenClawIDDevice) async {
         var stores = [
             OpenClawIDNodeIdentityKeychainStore(enrollmentID: device.deviceEnrollmentID, purpose: .device),
             OpenClawIDNodeIdentityKeychainStore(enrollmentID: device.deviceEnrollmentID, purpose: .devicePeer),
