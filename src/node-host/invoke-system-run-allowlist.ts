@@ -35,9 +35,11 @@ export async function evaluateSystemRunAllowlist(params: {
   argv: string[];
   approvals: ExecApprovalsResolved;
   security: ExecSecurity;
-  safeBins: ReturnType<typeof resolveExecSafeBinRuntimePolicy>["safeBins"];
-  safeBinProfiles: ReturnType<typeof resolveExecSafeBinRuntimePolicy>["safeBinProfiles"];
-  trustedSafeBinDirs: ReturnType<typeof resolveExecSafeBinRuntimePolicy>["trustedSafeBinDirs"];
+  safeBins: Awaited<ReturnType<typeof resolveExecSafeBinRuntimePolicy>>["safeBins"];
+  safeBinProfiles: Awaited<ReturnType<typeof resolveExecSafeBinRuntimePolicy>>["safeBinProfiles"];
+  trustedSafeBinDirs: Awaited<
+    ReturnType<typeof resolveExecSafeBinRuntimePolicy>
+  >["trustedSafeBinDirs"];
   cwd: string | undefined;
   env: Record<string, string> | undefined;
   skillBins: SkillBinTrustEntry[];
@@ -61,9 +63,13 @@ export async function evaluateSystemRunAllowlist(params: {
       platform: process.platform,
     });
   } else {
-    const analysis = analyzeArgvCommand({ argv: params.argv, cwd: params.cwd, env: params.env });
+    const analysis = await analyzeArgvCommand({
+      argv: params.argv,
+      cwd: params.cwd,
+      env: params.env,
+    });
     evaluation = {
-      ...evaluateExecAllowlist({ ...context, analysis }),
+      ...(await evaluateExecAllowlist({ ...context, analysis })),
       analysisOk: analysis.ok,
       segments: analysis.segments,
     };

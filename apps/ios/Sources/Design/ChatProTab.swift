@@ -584,11 +584,9 @@ struct ChatProTab: View {
         }
     }
 
+    /// Chat follows the operator session; buildChat reports connected only when it can serve chat.
     private var gatewayConnected: Bool {
-        guard self.gatewayDisplayState == .connected else {
-            return false
-        }
-        return self.appModel.isLocalChatFixtureEnabled || self.appModel.isOperatorGatewayConnected
+        self.gatewayDisplayState == .connected
     }
 
     private var gatewayDisplayState: GatewayDisplayState {

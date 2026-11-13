@@ -10,7 +10,10 @@ export type CanonicalSqliteSource = {
   archiveSourcePath: string;
   identity: BigIntStats;
   sourcePath: string;
-} & ({ role: "global" | "quarantine" | "client" } | { role: "agent"; agentId: string });
+} & (
+  | { role: "global" | "quarantine" | "client" | "services" }
+  | { role: "agent"; agentId: string }
+);
 
 export async function planBackupSqliteSources(
   inventory: BackupResourceInventory,

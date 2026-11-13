@@ -1,3 +1,0 @@
-# Pending-final receipt survives a real committed queue ACK reply loss and cold reopen.
-# Reuse existing engine, delivery and worker fixtures and canonical CI discovery.
-132

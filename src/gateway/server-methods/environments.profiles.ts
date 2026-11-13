@@ -57,3 +57,14 @@ export async function listWorkerProfilesWithMachines(context: GatewayRequestCont
     }),
   );
 }
+
+export async function requireActiveCloudProfile(context: GatewayRequestContext) {
+  const summaries = await listWorkerProfilesWithMachines(context);
+  const profile = summaries.find((summary) => summary.id === "cloud");
+  if (!profile) {
+    throw new Error(
+      "The cloud worker profile is saved but is not active on this Gateway. Wait for the Gateway to restart, then retry; if it does not restart, restart it manually.",
+    );
+  }
+  return profile;
+}

@@ -68,12 +68,12 @@ type LaunchAgentBootstrapDoctorOutcome =
   | { status: "system-launchdaemon-blocked"; detail: string }
   | { status: "gui-session-unavailable"; detail: string };
 
-function noteGatewayRuntime(
+async function noteGatewayRuntime(
   serviceRuntime: GatewayServiceRuntime | undefined,
   env: Record<string, string | undefined>,
-): void {
+): Promise<void> {
   const summary = formatRuntimeStatus(serviceRuntime);
-  const hints = buildGatewayRuntimeHints(serviceRuntime, { platform: process.platform, env });
+  const hints = await buildGatewayRuntimeHints(serviceRuntime, { platform: process.platform, env });
   const lines = summary ? [`Runtime: ${summary}`, ...hints] : hints;
   if (lines.length > 0) {
     note(lines.join("\n"), "Gateway");
@@ -355,7 +355,7 @@ export async function maybeRepairGatewayDaemon(params: {
   }
 
   if (isLocalDarwinGateway && serviceRuntime?.systemLaunchDaemon) {
-    noteGatewayRuntime(serviceRuntime, process.env);
+    await noteGatewayRuntime(serviceRuntime, process.env);
     return;
   }
 
@@ -374,7 +374,7 @@ export async function maybeRepairGatewayDaemon(params: {
         serviceRuntime?.cachedLabel ||
         serviceRuntime?.systemLaunchDaemon)
     ) {
-      noteGatewayRuntime(serviceRuntime, process.env);
+      await noteGatewayRuntime(serviceRuntime, process.env);
       return;
     }
     note("Gateway service not installed.", "Gateway");
@@ -454,7 +454,7 @@ export async function maybeRepairGatewayDaemon(params: {
     return;
   }
 
-  noteGatewayRuntime(serviceRuntime, serviceEnv);
+  await noteGatewayRuntime(serviceRuntime, serviceEnv);
 
   if (serviceRuntime?.status !== "running") {
     if (params.healthSkipped && serviceRuntime?.status !== "stopped") {

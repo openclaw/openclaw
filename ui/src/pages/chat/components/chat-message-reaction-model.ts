@@ -21,12 +21,12 @@ export type MessageReactionOptions = {
   reactionPlacement?: MessageReactionPlacement;
 };
 
-/** Once a message has reactions, its chip row owns the add-reaction picker. */
+/** The message toolbar keeps its picker before and after the first reaction. */
 export function hasActionRowReactionPicker(
   messageId: string | undefined,
   opts: MessageReactionOptions,
 ): messageId is string {
-  return Boolean(messageId && opts.onReact && !opts.messageReactions?.get(messageId)?.length);
+  return Boolean(messageId && opts.onReact);
 }
 
 /** Pickers under a person's own right-aligned prompt open toward the left. */
