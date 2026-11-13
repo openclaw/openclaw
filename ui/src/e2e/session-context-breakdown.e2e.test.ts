@@ -16,13 +16,13 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Sidebar context breakdown" });
 const sessionKey = "agent:main:context-breakdown";
 const workspaceFile = (
-  path: string,
+  filePath: string,
   rootPath: string,
   kind: "agent-workspace" | "execution-project",
   chars: number,
 ) => ({
-  name: path.split("/").at(-1)!,
-  path,
+  name: filePath.split("/").at(-1)!,
+  path: filePath,
   origin: { kind, rootPath },
   missing: false,
   rawChars: chars,
