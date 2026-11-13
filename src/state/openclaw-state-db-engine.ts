@@ -47,7 +47,8 @@ import {
 import { withLegacyWorkerResourceReceipts } from "./openclaw-state-db-schema-v37-resource-receipts.js";
 import { withLegacyRepositoryDiskAuthority } from "./openclaw-state-db-schema-v38-repository-disk.js";
 import { withLegacyWorkerRetention } from "./openclaw-state-db-schema-v39-worker-retention.js";
-import { withLegacyPersonalOperator } from "./openclaw-state-db-schema-v40-personal-operator.js";
+import { withLegacyWorkerProvisionSource } from "./openclaw-state-db-schema-v40-worker-provision-source.js";
+import { withLegacyPersonalOperator } from "./openclaw-state-db-schema-v41-personal-operator.js";
 import {
   admitStateSchemaFacts,
   PostgresSchemaAdmissionUnavailableError,
@@ -175,9 +176,13 @@ function statePostgresVersionSql(version: number): string {
 }
 
 function createStatePostgresMigrations(): StoreSchema["postgresMigrations"] {
-  const statePostgresSchemaV39 = {
+  const statePostgresSchemaV40 = {
     ...statePostgresSchema,
     postgres: withLegacyPersonalOperator(statePostgresSchema.postgres),
+  };
+  const statePostgresSchemaV39 = {
+    ...statePostgresSchemaV40,
+    postgres: withLegacyWorkerProvisionSource(statePostgresSchemaV40.postgres),
   };
   const statePostgresSchemaV38 = {
     ...statePostgresSchemaV39,
@@ -399,9 +404,21 @@ function createStatePostgresMigrations(): StoreSchema["postgresMigrations"] {
     {
       version: 40,
       fromSchema: statePostgresSchemaV39,
+      schema: statePostgresSchemaV40,
+      sql: `ALTER TABLE worker_environments ADD COLUMN provision_source_json text COLLATE "C";
+        UPDATE worker_environments
+        SET provision_source_json = '{"kind":"unavailable"}'
+        WHERE (state IN ('requested', 'provisioning') AND lease_id IS NULL
+          OR state = 'bootstrapping' AND owner_epoch = 0)
+          AND provision_source_json IS NULL;
+        ${statePostgresVersionSql(40)}`,
+    },
+    {
+      version: 41,
+      fromSchema: statePostgresSchemaV40,
       schema: statePostgresSchema,
       sql: `ALTER TABLE device_pairing_paired ADD COLUMN operator_profile_id text COLLATE "C";
-        ${statePostgresVersionSql(40)}`,
+        ${statePostgresVersionSql(41)}`,
     },
   ];
 }

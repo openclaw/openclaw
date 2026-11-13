@@ -63,6 +63,9 @@ export function captureCronStreamSandboxTarget(params: {
       ...(authority.openclawIdPrincipal
         ? { openclawIdPrincipal: authority.openclawIdPrincipal }
         : {}),
+      ...(authority.operatorProfileEnrollment
+        ? { operatorProfileEnrollment: authority.operatorProfileEnrollment }
+        : {}),
       scopes: [...authority.scopes],
       assignedRole: roleFacts.assignedRole,
       githubLogin: roleFacts.githubLogin ?? null,

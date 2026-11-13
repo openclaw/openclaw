@@ -51,7 +51,7 @@ import {
   setActiveMcpLoopbackRuntime,
   updateMcpLoopbackToolCallCapture,
 } from "./mcp-http.loopback-runtime.js";
-import { jsonRpcError, type JsonRpcRequest } from "./mcp-http.protocol.js";
+import { jsonRpcError, jsonRpcResult, type JsonRpcRequest } from "./mcp-http.protocol.js";
 import {
   logMcpLoopbackTraffic,
   resolveMcpCliCaptureKey,
@@ -431,6 +431,17 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
               }
               continue;
             }
+            if (message.method === "tools/call" && requestContext.toolCallsRefused) {
+              if (shouldSendJsonRpcResponse(message)) {
+                responses.push(
+                  jsonRpcResult(readJsonRpcRequestId(message), {
+                    content: [{ type: "text", text: "Tools are not callable during compaction." }],
+                    isError: true,
+                  }),
+                );
+              }
+              continue;
+            }
             const cliCaptureHandle = cliCaptureHandles[messageIndex];
             let response: object | null;
             try {
@@ -448,6 +459,7 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
                     sessionId: requestContext.sessionId,
                     runId: requestContext.runId,
                     ...(requestContext.requester ? { requester: requestContext.requester } : {}),
+                    ...(requestContext.trigger ? { trigger: requestContext.trigger } : {}),
                     approvalReviewerDeviceId: requestContext.approvalReviewerDeviceId,
                     channelId: requestContext.currentChannelId,
                     turnSourceChannel: requestContext.messageProvider,

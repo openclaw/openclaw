@@ -1,4 +1,5 @@
 import { ServerResponse } from "node:http";
+import { expectDefined } from "@openclaw/normalization-core";
 import { Value } from "typebox/value";
 import { expect, test } from "vitest";
 import {
@@ -26,6 +27,7 @@ import {
   installGatewayTestHooks,
   startServerWithClient,
   connectReq,
+  connectOk,
   rpcReq,
   testState,
 } from "./test-helpers.js";
@@ -85,27 +87,19 @@ test("enrolled operator identity survives reconnect and bounds both WS and HTTP 
   let browser: Awaited<ReturnType<typeof openTrackedWs>> | undefined;
   let personal: Awaited<ReturnType<typeof openTrackedWs>> | undefined;
   try {
-    expect(
-      (
-        await connectReq(started.ws, {
-          client: BACKEND_CLIENT,
-          token: auth.token,
-          device: null,
-          scopes: ["operator.admin"],
-        })
-      ).ok,
-    ).toBe(true);
+    await connectOk(started.ws, {
+      client: BACKEND_CLIENT,
+      token: auth.token,
+      device: null,
+      scopes: ["operator.admin"],
+    });
     browser = await openTrackedWs(started.port, { origin });
-    expect(
-      (
-        await connectReq(browser, {
-          token: auth.token,
-          client: CONTROL_UI_CLIENT,
-          scopes: ["operator.admin"],
-          deviceIdentityPath: identity.identityPath,
-        })
-      ).ok,
-    ).toBe(true);
+    await connectOk(browser, {
+      token: auth.token,
+      client: CONTROL_UI_CLIENT,
+      scopes: ["operator.admin"],
+      deviceIdentityPath: identity.identityPath,
+    });
     const enrolled = await rpcReq<{
       deviceId: string;
       profileId: string;
@@ -249,35 +243,27 @@ test("enrolled operator identity survives reconnect and bounds both WS and HTTP 
       );
       const human = await openTrackedWs(started.port);
       handoffSockets.push(human);
-      expect(
-        (
-          await connectReq(human, {
-            skipDefaultAuth: true,
-            deviceToken: operator.deviceToken,
-            role: "operator",
-            scopes: operator.scopes,
-            client: { ...client, mode: "ui" },
-            deviceIdentityPath: mobile.identityPath,
-          })
-        ).ok,
-      ).toBe(true);
+      await connectOk(human, {
+        skipDefaultAuth: true,
+        deviceToken: operator.deviceToken,
+        role: "operator",
+        scopes: operator.scopes,
+        client: { ...client, mode: "ui" },
+        deviceIdentityPath: mobile.identityPath,
+      });
       expect((await rpcReq<UsersSelfResult>(human, "users.self", {})).payload?.profile?.id).toBe(
         record.profileId,
       );
       const reconnect = await openTrackedWs(started.port);
       handoffSockets.push(reconnect);
-      expect(
-        (
-          await connectReq(reconnect, {
-            skipDefaultAuth: true,
-            deviceToken: receipt.deviceToken,
-            role: "node",
-            scopes: [],
-            client,
-            deviceIdentityPath: mobile.identityPath,
-          })
-        ).ok,
-      ).toBe(true);
+      await connectOk(reconnect, {
+        skipDefaultAuth: true,
+        deviceToken: receipt.deviceToken,
+        role: "node",
+        scopes: [],
+        client,
+        deviceIdentityPath: mobile.identityPath,
+      });
       expect((await getPairedDevice(mobile.identity.deviceId))?.tokens?.node?.token).toBe(
         receipt.deviceToken,
       );
@@ -288,10 +274,7 @@ test("enrolled operator identity survives reconnect and bounds both WS and HTTP 
       authorization: "Bearer " + record.operatorToken.token,
     });
     const res = new ServerResponse(req);
-    const cfg = getRuntimeConfigSnapshot();
-    if (!cfg) {
-      throw new Error("Expected the running Gateway policy");
-    }
+    const cfg = expectDefined(getRuntimeConfigSnapshot(), "Gateway policy");
     try {
       const admitted = await authorizeControlUiReadRequestOrReply({
         req,

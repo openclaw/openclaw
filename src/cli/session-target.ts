@@ -39,6 +39,7 @@ export async function callSessionTargetGateway<T>(params: {
   request?: unknown;
   requiredScope: "operator.read" | "operator.write" | "operator.admin";
   timeoutMs?: number;
+  signal?: AbortSignal;
   shortRef?: boolean;
 }): Promise<T> {
   const explicitUrl = params.gateway.url?.trim() || undefined;
@@ -52,6 +53,7 @@ export async function callSessionTargetGateway<T>(params: {
       method: params.method,
       params: params.request,
       timeoutMs: params.timeoutMs,
+      signal: params.signal,
       mode: GATEWAY_CLIENT_MODES.CLI,
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       ...(explicitUrl || params.gateway.useStoredDeviceAuth

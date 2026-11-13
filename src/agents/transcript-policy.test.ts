@@ -195,13 +195,15 @@ describe("resolveTranscriptPolicy", () => {
       api: "anthropic-messages",
       baseUrl: "https://api.anthropic.com",
     });
-    for (const [directApiKey, provider, api, baseUrl, expected] of [
-      [false, "anthropic", "anthropic-messages", model.baseUrl, false],
-      [true, "anthropic", "anthropic-messages", model.baseUrl, true],
-      [true, "anthropic", "anthropic-messages", "https://proxy.example.test", false],
-      [true, "amazon-bedrock", "bedrock-converse-stream", model.baseUrl, false],
-      [true, "google-vertex", "anthropic-messages", model.baseUrl, false],
-      [true, "microsoft-foundry", "anthropic-messages", model.baseUrl, false],
+    // Every Anthropic Messages route pins the session prompt; only direct API-key routes
+    // can carry its updates as in-history system messages.
+    for (const [directApiKey, provider, api, baseUrl, expected, pinned] of [
+      [false, "anthropic", "anthropic-messages", model.baseUrl, false, true],
+      [true, "anthropic", "anthropic-messages", model.baseUrl, true, true],
+      [true, "anthropic", "anthropic-messages", "https://proxy.example.test", false, true],
+      [true, "amazon-bedrock", "bedrock-converse-stream", model.baseUrl, false, false],
+      [true, "google-vertex", "anthropic-messages", model.baseUrl, false, true],
+      [true, "microsoft-foundry", "anthropic-messages", model.baseUrl, false, true],
     ] as const) {
       const policy = resolveTranscriptPolicy({
         config: {},
@@ -213,6 +215,7 @@ describe("resolveTranscriptPolicy", () => {
       });
       expect(policy.inHistorySystemUpdates).toBe(expected);
       expect(policy.appendOnlyRuntimeContext).toBe(expected);
+      expect(policy.pinnedSystemPrompt).toBe(pinned);
     }
   });
 
@@ -305,7 +308,7 @@ describe("resolveTranscriptPolicy", () => {
 
   it.each([
     ["claude-fable-5-1", true],
-    ["claude-mythos-5-1", false],
+    ["claude-mythos-5-1", true],
     ["claude-fable-5", false],
   ])("scopes persisted context and consecutive-turn merging for %s", (modelId, appendOnly) => {
     const messages: AgentMessage[] = [
@@ -346,7 +349,7 @@ describe("resolveTranscriptPolicy", () => {
         modelId: "deployment",
         model: makeOpenAiCompatibleReasoningModel({ params: { canonicalModelId } }),
       });
-      expect(policy.appendOnlyRuntimeContext).toBe(canonicalModelId === "claude-fable-5-1");
+      expect(policy.appendOnlyRuntimeContext).toBe(true);
     },
   );
 

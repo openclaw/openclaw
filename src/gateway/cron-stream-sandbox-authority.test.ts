@@ -1,5 +1,8 @@
 import { afterEach, expect, it, vi } from "vitest";
-import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import {
+  createAdmittedRunOperatorAuthority,
+  type AdmittedRunOperatorAuthority,
+} from "../agents/admitted-run-context.js";
 import type { SandboxBackendHandle } from "../agents/sandbox/backend-handle.types.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { bindSandboxPersistentExecCapability } from "../agents/sandbox/persistent-exec.types.js";
@@ -36,7 +39,9 @@ import {
   setOpenClawIdTunnelPrincipalLookup,
   type OpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
+import { readOperatorProfileEnrollment } from "./operator-device-profile.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
+import { pairedOperator, persistDevices } from "./operator-run-recovery.test-support.js";
 import { prepareSessionMutationFacts } from "./session-sharing-preparation.js";
 
 const mocks = vi.hoisted(() => ({
@@ -155,6 +160,7 @@ async function withAuthorityFixture(
     job: CronStoredJob;
     config: OpenClawConfig;
     profileId: string;
+    stateDir: string;
     grant: AbortController;
     resume: ReturnType<typeof vi.fn>;
     target: ReturnType<typeof makeCronStreamSandboxTarget>;
@@ -221,6 +227,7 @@ async function withAuthorityFixture(
         job,
         config,
         profileId: profile.id,
+        stateDir: state.stateDir,
         grant,
         resume,
         target,
@@ -572,9 +579,11 @@ it.each(["grant revocation", "target replacement"] as const)(
   },
 );
 
-it.each(["member", "owner"] as const)(
+it.each(["member", "owner", "enrolled member", "enrolled owner"] as const)(
   "restores a serialized OCID %s sandbox stream with its original peer dependency",
-  async (kind) => {
+  async (source) => {
+    const enrolled = source.startsWith("enrolled");
+    const kind = source.endsWith("member") ? "member" : "owner";
     await withAuthorityFixture(async (fixture) => {
       let principal: OpenClawIdTunnelPrincipal | undefined = {
         ...(kind === "member"
@@ -589,28 +598,32 @@ it.each(["member", "owner"] as const)(
         },
       };
       fixture.target.operator!.openclawIdPrincipal = principal;
-      if (kind === "member") {
+      if (kind === "member" || enrolled) {
         fixture.config.gateway = {
           roles: {
             default: "reader",
             definitions: {
-              reader: { sessions: { others: "view" }, agents: "*", scopes: ["operator.read"] },
+              reader: {
+                sessions: { others: "view" },
+                agents: ["main"],
+                scopes: enrolled ? ["operator.write"] : ["operator.read"],
+              },
             },
           },
         };
       }
-      const savedTarget = JSON.stringify(fixture.target);
-      const serialized = JSON.parse(savedTarget);
-      expect(parseCronStreamSandboxTarget(serialized)).toEqual(fixture.target);
-      fixture.job.streamSandbox = serialized;
-      setOpenClawIdTunnelPrincipalLookup(() => principal);
-      try {
-        const retained = await fixture.prepare();
-        retained.assertCurrent();
-        const authority = mocks.sandbox.mock.lastCall?.[1];
-        expect(authority?.openclawIdPrincipal).toEqual(principal);
-        const captured = captureCronStreamSandboxTarget({
-          sandbox: retained.sandbox,
+      const device = { ...pairedOperator(), operatorProfileId: fixture.profileId };
+      persistDevices(fixture.stateDir, [device], "paired");
+      const enrollment = enrolled
+        ? readOperatorProfileEnrollment(device, {
+            role: "operator",
+            deviceId: device.deviceId,
+            publicKey: device.publicKey,
+          })
+        : undefined;
+      const capture = (sandbox: SandboxContext) =>
+        captureCronStreamSandboxTarget({
+          sandbox,
           agentId: fixture.target.agentId,
           sessionKey: fixture.target.sessionKey,
           entry: {
@@ -619,7 +632,39 @@ it.each(["member", "owner"] as const)(
             lifecycleRevision: fixture.target.lifecycleRevision,
           },
         });
-        expect(captured.operator?.openclawIdPrincipal).toEqual(principal);
+      const operator = fixture.target.operator!;
+      const captured = capture(
+        sandboxFixture(
+          fixture.target,
+          fixture.config,
+          createAdmittedRunOperatorAuthority({
+            ...operator,
+            operatorProfileEnrollment: enrollment,
+            assertCurrent() {},
+            readCurrentRoleFacts: () => operator,
+          }),
+        ),
+      );
+      expect(captured.operator).toMatchObject(
+        enrolled ? { operatorProfileEnrollment: enrollment } : {},
+      );
+      Object.assign(fixture.target, captured);
+      const savedTarget = JSON.stringify(captured);
+      const serialized = JSON.parse(savedTarget);
+      expect(parseCronStreamSandboxTarget(serialized)).toEqual(fixture.target);
+      fixture.job.streamSandbox = serialized;
+      setOpenClawIdTunnelPrincipalLookup(() => principal);
+      try {
+        const retained = await fixture.prepare();
+        retained.assertCurrent();
+        const authority = mocks.sandbox.mock.lastCall?.[1];
+        expect(capture(retained.sandbox)).toEqual(captured);
+        if (enrolled) {
+          expect(authority?.rolePolicy).toMatchObject({
+            agents: ["main"],
+            sessionAccessCap: "view",
+          });
+        }
         const original = structuredClone(principal);
         principal = undefined;
         setOpenClawIdTunnelPrincipalLookup(() => principal);
@@ -634,6 +679,22 @@ it.each(["member", "owner"] as const)(
         const recovered = await fixture.prepare();
         recovered.assertCurrent();
         expect(retained.assertCurrent).toThrow();
+        if (enrolled) {
+          await setCanonicalUserProfileRole(fixture.profileId, "changed");
+          invalidateOperatorRolePolicy(fixture.profileId, { roleOnly: true });
+          expect(recovered.assertCurrent).toThrow();
+          await setCanonicalUserProfileRole(fixture.profileId, null);
+          const current = await fixture.prepare();
+          for (const devices of [
+            [{ ...device, createdAtMs: 2 }],
+            [{ ...device, operatorProfileId: "another-person" }],
+            [],
+          ]) {
+            persistDevices(fixture.stateDir, devices, "paired");
+            expect(current.assertCurrent).toThrow();
+            await expect(fixture.prepare()).rejects.toThrow();
+          }
+        }
       } finally {
         setOpenClawIdTunnelPrincipalLookup(undefined);
       }

@@ -31,6 +31,8 @@ import {
   applyHttpOperatorRoleScopeCeiling,
   checkAuthenticatedHttpUserProfile,
   type AuthenticatedHttpUserProfile,
+  type AuthorizedGatewayHttpRequest,
+  type GatewayHttpRequestAuthCheckResult,
   usesSharedSecretGatewayMethod,
 } from "./http-auth-user-profile.js";
 import {
@@ -53,7 +55,6 @@ import {
   captureHttpRequestAuthority,
   GatewayHttpRequestAuthorityError,
   type GatewayHttpRequestAuthOptions,
-  type GatewayHttpRequestAuthority,
   type GatewayHttpResponseAuthority,
 } from "./http-request-authority.js";
 import {
@@ -73,28 +74,16 @@ import { withSerializedCredentialFallbackAttempt } from "./rate-limit-attempt-se
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { prepareSessionCreatorProfile } from "./session-creator.js";
 import { createProfileSessionEntryFilter } from "./session-sharing-read.js";
+import {
+  GATEWAY_DELEGATION_DENIED,
+  hasGatewayDelegationClaim,
+} from "./trusted-proxy-delegation.js";
 
 export { getBearerToken, getHeader } from "./http-header-value.js";
-
-export type AuthorizedGatewayHttpRequest = AuthenticatedHttpUserProfile & {
-  authMethod?: GatewayAuthResult["method"];
-  user?: string;
-  trustDeclaredOperatorScopes: boolean;
-  deviceOperatorScopes?: string[];
-  revalidate?: () => Promise<void>;
-  hasCurrentClientAuthority?: () => boolean;
-  controlUiPluginGrants?: ControlUiPluginTabAuthGrant[];
-  controlUiPluginGrant?: ControlUiPluginTabAuthGrant;
-};
-export type GatewayHttpRequestAuthCheckResult =
-  | {
-      ok: true;
-      requestAuth: AuthorizedGatewayHttpRequest & GatewayHttpRequestAuthority;
-    }
-  | {
-      ok: false;
-      authResult: GatewayAuthResult;
-    };
+export type {
+  AuthorizedGatewayHttpRequest,
+  GatewayHttpRequestAuthCheckResult,
+} from "./http-auth-user-profile.js";
 
 type GatewayHttpRequestAuthParams = GatewayHttpRequestAuthOptions & {
   req: IncomingMessage;
@@ -182,6 +171,10 @@ async function checkHttpOperatorCredentials(
 ): Promise<HttpOperatorCredentialResult> {
   const { auth, token } = params;
   const remoteIngress = getRemoteControlUiIngressContext(params.req);
+  const delegationClaim = hasGatewayDelegationClaim(params.req, auth.trustedProxy?.userHeader);
+  if (delegationClaim && (remoteIngress || auth.mode !== "trusted-proxy")) {
+    return { authResult: { ok: false, reason: GATEWAY_DELEGATION_DENIED } };
+  }
   if (remoteIngress) {
     assertRemoteControlUiIngressCurrent(remoteIngress);
     return {
@@ -226,6 +219,7 @@ async function checkHttpOperatorCredentials(
     if (
       !authResult.ok &&
       authResult.reason !== PROXY_ATTRIBUTION_REQUIRED_REASON &&
+      !delegationClaim &&
       canUseDeviceTokenFallback &&
       token
     ) {
@@ -500,6 +494,10 @@ export function setControlUiPluginAuthCookieForRequest(
   authenticatedProfileId?: string,
   deviceIdentity?: PairedDeviceTokenIdentity,
 ): ControlUiPluginTabAuthGrant[] {
+  if (hasGatewayDelegationClaim(req, cfg.gateway?.auth?.trustedProxy?.userHeader)) {
+    // OCE must authorize every request; do not export an ambient native grant.
+    return [];
+  }
   const grants = listControlUiPluginTabAuthGrants(authenticatedScopes);
   if (grants.length > 0) {
     return setControlUiPluginAuthCookie(res, grants, {

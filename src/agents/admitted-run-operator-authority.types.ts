@@ -7,6 +7,10 @@ export type AdmittedRunOperatorAuthority = Readonly<{
   profileId: string;
   /** Original OCID device and listing; profile attribution never replaces this source. */
   openclawIdPrincipal?: import("../gateway/openclaw-id/tunnel-principal.js").OpenClawIdTunnelPrincipal;
+  /** Live personal enrollment remains authoritative even when recovery cannot be serialized. */
+  operatorProfileEnrollment?: Readonly<
+    import("../gateway/operator-device-profile.types.js").OperatorProfileEnrollment
+  >;
   /** Host-captured original input; claim/occurrence owners revalidate it for continuations. */
   recoverySnapshot?: import("../gateway/operator-run-recovery-source.codec.js").OperatorRunRecoverySnapshot;
   /** Existing immutable policy and link; accepted-input owners may retain them for recovery. */

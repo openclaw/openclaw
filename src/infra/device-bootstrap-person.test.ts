@@ -54,6 +54,18 @@ afterEach(() => {
   clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
 });
+const applyReaderConfig = () =>
+  setRuntimeConfigSnapshot({
+    gateway: {
+      roles: {
+        default: "reader",
+        definitions: {
+          reader: { scopes: ["operator.read"], agents: "*", sessions: { others: "none" } },
+        },
+      },
+    },
+  });
+
 const local = () => ensureCanonicalLocalUserProfile({ enrollmentId: randomUUID() }, options);
 async function issuedPerson(profileId?: string) {
   const issued = await issueDevicePairSetupBootstrapToken({
@@ -86,16 +98,7 @@ async function issuedPerson(profileId?: string) {
 }
 
 it("retains the exact person and named-role scope ceiling for node-first operator grants", async () => {
-  setRuntimeConfigSnapshot({
-    gateway: {
-      roles: {
-        default: "reader",
-        definitions: {
-          reader: { scopes: ["operator.read"], agents: "*", sessions: { others: "none" } },
-        },
-      },
-    },
-  });
+  applyReaderConfig();
   const person = await local();
   const handoff = await issuedPerson(person.id);
   expect(handoff.profile).toMatchObject({
@@ -143,16 +146,7 @@ it("narrows only the operator sibling when a new person-bound handoff has a redu
     baseDir,
   );
   const before = await getPairedDevice("mobile-device", baseDir);
-  setRuntimeConfigSnapshot({
-    gateway: {
-      roles: {
-        default: "reader",
-        definitions: {
-          reader: { scopes: ["operator.read"], agents: "*", sessions: { others: "none" } },
-        },
-      },
-    },
-  });
+  applyReaderConfig();
   const narrowed = await issuedPerson(person.id);
   const state: AuthenticatedGatewayConnect = {
     authPolicy: { generation: "synthetic-policy", grantGeneration: "synthetic-grant" },
@@ -215,16 +209,7 @@ it("narrows only the operator sibling when a new person-bound handoff has a redu
 });
 
 it("binds an explicitly selected dashboard person without granting the owner-purpose admin scopes", async () => {
-  setRuntimeConfigSnapshot({
-    gateway: {
-      roles: {
-        default: "reader",
-        definitions: {
-          reader: { scopes: ["operator.read"], agents: "*", sessions: { others: "none" } },
-        },
-      },
-    },
-  });
+  applyReaderConfig();
   const person = await local();
   const handoff = await issueControlUiBrowserHandoff(
     { httpUrl: "http://127.0.0.1:18789", wsUrl: "ws://127.0.0.1:18789" },
@@ -370,16 +355,7 @@ it("checks current role and requester at worker commit, rolling back the operato
   } finally {
     observer.mockRestore();
   }
-  setRuntimeConfigSnapshot({
-    gateway: {
-      roles: {
-        default: "reader",
-        definitions: {
-          reader: { scopes: ["operator.read"], agents: "*", sessions: { others: "none" } },
-        },
-      },
-    },
-  });
+  applyReaderConfig();
   await setCanonicalUserProfileRole(person.id, "reader", options);
   await expect(
     approveBootstrapDevicePairing(

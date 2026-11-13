@@ -2,19 +2,24 @@
 // Owns the iroh endpoint key; the Gateway never reads it. Talks to the
 // Gateway over IPC for control and over the ingress socket for data. Logs
 // carry `fp:` labels only, never key material.
+import fs from "node:fs";
 import {
   TUNNEL_EXIT_KEY_MISMATCH,
   TUNNEL_EXIT_KEY_MISSING,
   TUNNEL_EXIT_KEY_REFUSED,
   TUNNEL_EXIT_UNAVAILABLE,
+  TUNNEL_STAGE_ARG,
   type GatewayToTunnelMessage,
+  type TunnelStageMessage,
   type TunnelStartMessage,
   type TunnelToGatewayMessage,
 } from "../tunnel-ipc.js";
 import { loadIrohBinding, type IrohBinding, type IrohEndpoint } from "./addon.js";
 import {
+  ed25519PublicKeyHex,
   KeyFileRefusedError,
   loadBoundKey,
+  loadKeyFile,
   loadOrCreateEndpointKey,
   logFingerprint,
 } from "./keyfile.js";
@@ -173,7 +178,38 @@ function followHomeRelay(endpoint: IrohEndpoint, onChange: (state: RelayState) =
   });
 }
 
+// One-shot staging for a re-bind: creates the next endpoint key (or reuses the staged one)
+// and reports its K_srv, or discards a staged key the binding does not name. Needs no iroh
+// binding and opens nothing.
+function stage(): void {
+  process.once("message", (message: TunnelStageMessage) => {
+    try {
+      if (message.type === "discard") {
+        const key = loadKeyFile(message.keyPath);
+        const held = key ? `iroh:${ed25519PublicKeyHex(key)}` : null;
+        key?.fill(0);
+        if (held && held !== message.keep) {
+          fs.rmSync(message.keyPath, { force: true });
+        }
+        send({ type: "staged", endpointKey: held === message.keep ? held : null });
+      } else {
+        const { key } = loadOrCreateEndpointKey(message.keyPath);
+        send({ type: "staged", endpointKey: `iroh:${ed25519PublicKeyHex(key)}` });
+        key.fill(0);
+      }
+    } catch (error) {
+      log(`stage refused: ${error instanceof Error ? error.message : String(error)}`);
+      process.exitCode = error instanceof KeyFileRefusedError ? TUNNEL_EXIT_KEY_REFUSED : 1;
+    }
+    process.disconnect?.();
+  });
+}
+
 function main(): void {
+  if (process.argv.includes(TUNNEL_STAGE_ARG)) {
+    stage();
+    return;
+  }
   let binding: IrohBinding;
   try {
     binding = loadIrohBinding();

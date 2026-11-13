@@ -61,15 +61,16 @@ Doctor completes recognized schema-1 databases that predate the audit ledger bef
 | 37      | Immutable provider resource receipts retained with worker environments through terminal cleanup                                                                                                                                                                                                                                                | Unreleased          |
 | 38      | Repository disk authority and the original authority of pending workspace results                                                                                                                                                                                                                                                              | Unreleased          |
 | 39      | Immutable retained-worker acquisition policy, pending pause/resume operations, and provider observations                                                                                                                                                                                                                                       | Unreleased          |
-| 40      | Explicit personal operator profile association on paired installations; no legacy profile assignment                                                                                                                                                                                                                                           | Unreleased          |
+| 40      | Original requesting authority retained with pending worker provisioning                                                                                                                                                                                                                                                                        | Unreleased          |
+| 41      | Explicit personal operator profile association on paired installations; no legacy profile assignment                                                                                                                                                                                                                                           | Unreleased          |
 
 Earlier beta releases first included schema 1 in `v2026.5.30-beta.1`, schema 2
 in `v2026.7.2-beta.1`, schema 3 in `v2026.7.2-beta.2`, schema 5 in
 `v2026.7.2-beta.4`, and schema 6 in `v2026.7.2-beta.5`.
 
-### State schema 40
+### State schema 41
 
-Schema 40 adds nullable `device_pairing_paired.operator_profile_id` to the
+Schema 41 adds nullable `device_pairing_paired.operator_profile_id` to the
 existing pairing owner. It stores only the explicitly enrolled personal operator
 profile reference. Legacy devices remain `NULL`; migration does not infer an
 identity from shared Gateway access or backfill profiles. Enrollment and personal
@@ -92,7 +93,7 @@ Both engines add one nullable text column with no row rewrite, backfill, index
 build, or DDL row scan. SQLite uses `ALTER TABLE device_pairing_paired ADD COLUMN
 operator_profile_id TEXT`; PostgreSQL uses the corresponding C-collated text
 column. Schema publication also updates `schema_meta` and, when present, the
-shared content-version marker in `config_machine_state`. The exact v39-to-v40
+shared content-version marker in `config_machine_state`. The exact v40-to-v41
 backup and quick-integrity scope is those three tables only. Backup and integrity
 cost therefore scale with paired-device inventory and publication metadata, not
 transcripts or other shared-state payloads. The largest deployment's paired-row
@@ -100,11 +101,41 @@ count is unavailable from the implementation checkout and remains a deployment
 qualification requirement.
 
 Column installation and version publication are transactional. Older readers
-refuse schema or content version 40 before serving requests; a package-only
+refuse schema or content version 41 before serving requests; a package-only
 rollback cannot safely reopen personal pairings as shared-owner devices. Restore
 the verified pre-migration backup with its matching older binary instead. Existing
 schema maintenance and update owners retain backup, admission, and recovery
 custody; no runtime profile creation or second store is introduced.
+
+### State schema 40
+
+Schema 40 adds nullable `worker_environments.provision_source_json` through the
+existing environment writer. Manual creation records its original authenticated
+source with its allocation intent. Exact intent replay cannot replace or remove
+that source. Recovery checks the original source through the authentication owner
+before further provisioning; saved evidence alone does not authorize allocation.
+New independently owned internal work leaves the field `NULL`.
+
+Older unleased `requested` and `provisioning` rows and initial leased
+`bootstrapping` rows (owner epoch zero) cannot identify their original source.
+Migration marks only these pending initial creation rows with an explicit
+unavailable source. Unallocated requests fail without allocating; indeterminate provisioning retains
+its exact operation and resource identity for the existing cleanup owner. Initial
+bootstrap cannot continue without its original source and retains its lease for
+cleanup. This also applies to interrupted internal builds and reserves: recreate
+them after their old intent settles. Existing ready, idle, attached, terminal,
+and maintenance-bootstrap rows retain their bytes and behavior, with the new
+field `NULL`.
+
+SQLite and PostgreSQL publish the nullable column, targeted pending-row update,
+and schema/content markers in one migration transaction. Table-scoped verified
+backup and integrity checks cover `worker_environments` and schema publication
+metadata. Backup and pending-row processing cost scales with environment history;
+deployment qualification should record the affected row count. Unrelated state
+is unchanged. Package metadata and native shared-state readers advance to 40;
+older builds refuse the upgraded database instead of ignoring the original source.
+Rollback restores the verified pre-upgrade backup with its matching build. The
+agent schema is unchanged, and no earlier migration is rewritten.
 
 ### State schema 39
 

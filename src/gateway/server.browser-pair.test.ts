@@ -299,7 +299,11 @@ describe("browser device-code pairing", () => {
     setExpiry(requestId, expiresAtMs);
     const before = readFinalEffect(requestId);
     let now = expiresAtMs - 1;
-    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    let decisionClockRead = false;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => {
+      decisionClockRead = true;
+      return now;
+    });
     try {
       // The decision reads its clock before the deadline; the first authority check
       // runs after that read and before the writer admits it, so time passes there.
@@ -309,7 +313,9 @@ describe("browser device-code pairing", () => {
         decision: "approve",
         callerScopes: ["operator.admin"],
         assertCurrent: () => {
-          now = expiresAtMs + 1;
+          if (decisionClockRead) {
+            now = expiresAtMs + 1;
+          }
         },
       });
       expect(await approval).toEqual({ status: "expired" });

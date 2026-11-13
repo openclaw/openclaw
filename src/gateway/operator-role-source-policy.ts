@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-operator-authority.types.js";
 import type {
   GatewayOperatorRoleDefinition,
   GatewayOperatorRolesConfig,
@@ -63,4 +64,17 @@ export function haveSameOperatorRoleSourcePolicies(
     return false;
   }
   return isDeepStrictEqual(sourceRolePolicies(previous), sourceRolePolicies(next));
+}
+
+export function prepareRunRolePolicy(
+  role: ReturnType<typeof sourceRolePolicy>,
+): AdmittedRunOperatorAuthority["rolePolicy"] {
+  return role
+    ? {
+        sessionAccessCap: role.sessions.others,
+        sandboxRequired: role.sandbox === "required",
+        agents: role.agents,
+        accessPrograms: role.accessPrograms,
+      }
+    : undefined;
 }

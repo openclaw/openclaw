@@ -17,13 +17,16 @@ import {
 import {
   ensureCanonicalGatewayOwnerProfile,
   ensureCanonicalUserProfileForEmail,
+  ensureCanonicalDelegatedUserProfile,
   ensureCanonicalUserProfileForOpenClawIdIdentity,
   ensureCanonicalUserProfileForTailscaleIdentity,
 } from "../state/user-profile-writes.js";
 import type { GatewayAuthResult } from "./auth.js";
+import type { ControlUiPluginTabAuthGrant } from "./control-ui-plugin-tabs.js";
 import { shouldUseGatewayOwnerProfile } from "./gateway-owner-profile.js";
 import { createAuthenticatedGitHubIdentitySync } from "./github-user-identity.js";
 import type { AdmittedHttpOperatorDevice } from "./http-operator-device-token.js";
+import type { GatewayHttpRequestAuthority } from "./http-request-authority.js";
 import {
   getRemoteControlUiIngressContext,
   assertRemoteControlUiIngressCurrent,
@@ -46,6 +49,8 @@ import {
 } from "./operator-role-policy.js";
 import { resolveBrowserOriginPolicy } from "./origin-check.js";
 import type { GatewayClient, GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
+import { isGatewayDelegationCurrent } from "./trusted-proxy-delegation.js";
+import { syncTrustedProxyGitCoauthor } from "./trusted-proxy-git-coauthor.js";
 import { formatForLog } from "./ws-log.js";
 
 const profileLog = createSubsystemLogger("gateway/user-profiles");
@@ -208,6 +213,11 @@ export async function resolveAuthenticatedHttpUserProfile(params: {
     if (
       params.operatorDevice?.isCurrent() === false ||
       peerSource?.isCurrent() === false ||
+      (params.authResult.delegation &&
+        !isGatewayDelegationCurrent(
+          params.authResult.delegation,
+          params.getRuntimeConfig?.() ?? getRuntimeConfig(),
+        )) ||
       params.req.aborted ||
       params.req.socket?.destroyed ||
       params.res?.destroyed ||
@@ -320,21 +330,30 @@ export async function resolveAuthenticatedHttpUserProfile(params: {
       params.authResult.openclawId?.kind === "member"
         ? params.authResult.openclawId
         : undefined;
-    const profile = member
-      ? await ensureCanonicalUserProfileForOpenClawIdIdentity(
-          { accountId: member.accountId },
-          options,
-        )
-      : syncGitHubIdentity
-        ? await syncGitHubIdentity()
-        : params.authResult.tailscaleIdentity
-          ? await ensureCanonicalUserProfileForTailscaleIdentity(
-              params.authResult.tailscaleIdentity,
-              options,
-            )
-          : await ensureCanonicalUserProfileForEmail(authenticatedUserId, options);
+    const profile = params.authResult.delegation
+      ? await ensureCanonicalDelegatedUserProfile(params.authResult.delegation.identity, options)
+      : member
+        ? await ensureCanonicalUserProfileForOpenClawIdIdentity(
+            { accountId: member.accountId },
+            options,
+          )
+        : syncGitHubIdentity
+          ? await syncGitHubIdentity()
+          : params.authResult.tailscaleIdentity
+            ? await ensureCanonicalUserProfileForTailscaleIdentity(
+                params.authResult.tailscaleIdentity,
+                options,
+              )
+            : await ensureCanonicalUserProfileForEmail(authenticatedUserId, options);
     const profileId = "profileId" in profile ? profile.profileId : profile.id;
-    return await prepareHttpProfile(
+    await syncTrustedProxyGitCoauthor({
+      authConfig: params.cfg.gateway?.auth,
+      authResult: params.authResult,
+      headers: params.req.headers,
+      profileId,
+      assertCurrent,
+    });
+    const prepared = await prepareHttpProfile(
       profileId,
       profile.updatedAt,
       assertCurrent,
@@ -343,11 +362,27 @@ export async function resolveAuthenticatedHttpUserProfile(params: {
         : params.cfg,
       operatorSource,
     );
+    const delegation = params.authResult.delegation;
+    if (delegation) {
+      const profileCurrent = prepared.hasCurrentProfileAuthority;
+      return {
+        ...prepared,
+        hasCurrentProfileAuthority: () =>
+          profileCurrent?.() !== false &&
+          isGatewayDelegationCurrent(delegation, params.getRuntimeConfig?.() ?? getRuntimeConfig()),
+      };
+    }
+    return prepared;
   } catch (error) {
     assertCurrent();
     // Attribution enriches authenticated requests; configured role/access policies
     // make durable profile resolution a prerequisite for authorization.
-    if (operatorSource?.enrollment || rolesConfigured || accessPoliciesConfigured) {
+    if (
+      operatorSource?.enrollment ||
+      params.authResult.delegation ||
+      rolesConfigured ||
+      accessPoliciesConfigured
+    ) {
       throw error;
     }
     return {};
@@ -481,3 +516,24 @@ export function applyHttpOperatorRoleScopeCeiling(
     ? intersectOperatorScopes(permitted, auth.operatorProfileScopeCeiling)
     : permitted;
 }
+
+export type AuthorizedGatewayHttpRequest = AuthenticatedHttpUserProfile & {
+  authMethod?: GatewayAuthResult["method"];
+  user?: string;
+  trustDeclaredOperatorScopes: boolean;
+  deviceOperatorScopes?: string[];
+  revalidate?: () => Promise<void>;
+  hasCurrentClientAuthority?: () => boolean;
+  controlUiPluginGrants?: ControlUiPluginTabAuthGrant[];
+  controlUiPluginGrant?: ControlUiPluginTabAuthGrant;
+};
+
+export type GatewayHttpRequestAuthCheckResult =
+  | {
+      ok: true;
+      requestAuth: AuthorizedGatewayHttpRequest & GatewayHttpRequestAuthority;
+    }
+  | {
+      ok: false;
+      authResult: GatewayAuthResult;
+    };

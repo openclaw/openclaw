@@ -44,7 +44,6 @@ import {
   mintPluginNodeCapabilityToken,
   resolvePluginNodeCapabilityExpiresAtMs,
   setClientPluginNodeCapability,
-  type PluginNodeCapabilitySurface,
 } from "../../plugin-node-capability.js";
 import { formatForLog, formatPeerTextForLog } from "../../ws-log.js";
 import { buildClientPresence } from "../client-presence.js";
@@ -67,18 +66,15 @@ import {
 import {
   createGatewayConnectProfileLifecycle,
   resolveGatewayConnectProfileAdmission,
+  resolveGatewayConnectOwnerProfile,
   scheduleGatewayConnectProfileSync,
 } from "./connect-user-profile.js";
 import type {
+  AuthenticatedNodePairingAdmission,
   DeviceAuthorizedGatewayConnect,
   GatewayConnectPhaseContext,
+  PendingPluginNodeCapability,
 } from "./message-handler-types.js";
-
-type AuthenticatedNodePairingAdmission = NonNullable<
-  Awaited<ReturnType<typeof captureAuthenticatedNodePairingState>>
-> & {
-  authenticated: { nodeId: string; publicKey: string; token: string };
-};
 
 export async function attachAuthenticatedGatewayConnect(
   context: GatewayConnectPhaseContext,
@@ -225,6 +221,12 @@ export async function attachAuthenticatedGatewayConnect(
       authMethod === "password" ||
       remoteIngressPrincipal?.operatorRoleActor.kind === "system" ||
       openclawIdPrincipal?.kind === "owner");
+  // An owner device whose OpenClaw ID account is linked to a profile arrives as that person;
+  // it keeps operatorOwner (from its certificate) and skips role policy like any owner device.
+  const linkedOwnerProfile =
+    operatorOwner && !remoteIngressPrincipal && openclawIdPrincipal?.kind === "owner"
+      ? await resolveGatewayConnectOwnerProfile(context)
+      : null;
   // Authenticated inputs need durable identity even when their presence is omitted.
   const ownerProfileExpected =
     !state.operatorProfileEnrollment &&
@@ -234,7 +236,7 @@ export async function attachAuthenticatedGatewayConnect(
       authenticatedUserId,
       authMethod,
       rolesConfigured,
-      openclawIdOwner: openclawIdPrincipal?.kind === "owner",
+      openclawIdOwner: openclawIdPrincipal?.kind === "owner" && !linkedOwnerProfile,
     });
   const identityStartedAt = performance.now();
   const profileAdmission = transportPolicy
@@ -243,7 +245,9 @@ export async function attachAuthenticatedGatewayConnect(
         context,
         state,
         ownerProfileExpected,
+        linkedOwnerProfile,
         authenticatedUserId,
+        requestHeaders: context.handler.upgradeReq.headers,
         resolveAuthenticatedGitHubIdentity,
         assertCurrent: profileLifecycle.assertCurrent,
       });
@@ -273,13 +277,15 @@ export async function attachAuthenticatedGatewayConnect(
   const scopesStartedAt = performance.now();
   const resolvedScopes = remoteIngressPrincipal
     ? deviceScopes
-    : resolveEffectiveConnectionScopes({
-        role,
-        deviceScopes,
-        verifiedIdentity: state.authPolicy.verifiedIdentity,
-        identityScopes: context.configSnapshot.gateway?.auth?.identityScopes,
-        upgradeReq: context.handler.upgradeReq,
-      });
+    : authResult.delegation
+      ? [...authResult.delegation.scopes]
+      : resolveEffectiveConnectionScopes({
+          role,
+          deviceScopes,
+          verifiedIdentity: state.authPolicy.verifiedIdentity,
+          identityScopes: context.configSnapshot.gateway?.auth?.identityScopes,
+          upgradeReq: context.handler.upgradeReq,
+        });
   // Enrollment cannot borrow a broader scope grant from a different identity source.
   const effectiveScopes = state.operatorProfileEnrollment
     ? intersectOperatorScopes(resolvedScopes, deviceScopes)
@@ -326,11 +332,7 @@ export async function attachAuthenticatedGatewayConnect(
   }
   const pluginSurfaceUrls: Record<string, string> = {};
   const pluginNodeCapabilitySurfaces = indexPluginNodeCapabilitySurfaces(pluginNodeCapabilities);
-  const pendingPluginNodeCapabilities: Array<{
-    surface: PluginNodeCapabilitySurface;
-    capability: string;
-    expiresAtMs: number;
-  }> = [];
+  const pendingPluginNodeCapabilities: PendingPluginNodeCapability[] = [];
   const effectiveNodeCaps = role === "node" ? new Set(connectParams.caps ?? []) : undefined;
   if (pluginSurfaceBaseUrl && !usesLegacyNodeProtocol) {
     for (const pluginCapabilitySurface of Object.values(pluginNodeCapabilitySurfaces)) {
@@ -432,7 +434,8 @@ export async function attachAuthenticatedGatewayConnect(
   const prepareLocalUserIngress = (profile = authenticatedUserProfile) =>
     prepareGatewayLocalUserIngress({
       authMethod,
-      authenticatedUserExpected: Boolean(authenticatedUserId) || ownerProfileExpected,
+      authenticatedUserExpected:
+        Boolean(authenticatedUserId) || ownerProfileExpected || Boolean(linkedOwnerProfile),
       ...(profile
         ? {
             profile: {
@@ -577,8 +580,8 @@ export async function attachAuthenticatedGatewayConnect(
     if (!remoteIngressPrincipal || state.operatorProfileEnrollment) {
       prepareGatewayConnectOperatorAccess(nextClient);
     }
-  } catch {
-    await rejectGatewayConnectOperatorAccess(context);
+  } catch (error) {
+    await rejectGatewayConnectOperatorAccess(context, error);
     return;
   }
   if (!profileLifecycle.isCurrent(preparedProfile)) {

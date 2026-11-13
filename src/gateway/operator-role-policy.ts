@@ -25,7 +25,7 @@ import { SessionMutationAuthorizationChangedError } from "./session-mutation-aut
 const operatorRoleLog = createSubsystemLogger("gateway/operator-roles");
 const reportedUnknownAssignments = new Set<string>();
 type OperatorRolePolicyChange =
-  | { kind: "assignment"; profileId: string }
+  | { kind: "assignment"; profileId: string; roleOnly: boolean }
   | { kind: "config"; context: object };
 const policyListeners = new Set<(change: OperatorRolePolicyChange) => void>();
 const configRevisions = new WeakMap<object, object>();
@@ -45,8 +45,14 @@ type GatewaySessionAgentAuthorization = {
   | { actor?: never; profileId?: never; client: GatewayClient | null | undefined }
 );
 
-/** Publishes a committed assignment change to retained authorization consumers. */
-export function invalidateOperatorRolePolicy(profileId: string): void {
+/**
+ * Publishes a committed assignment change to retained authorization consumers. `roleOnly`
+ * marks a change to the profile's named role alone, with the person behind it unchanged.
+ */
+export function invalidateOperatorRolePolicy(
+  profileId: string,
+  opts?: { roleOnly?: boolean },
+): void {
   assignmentRevision += 1;
   bumpGatewayAccessRevision();
   for (const reported of reportedUnknownAssignments) {
@@ -54,7 +60,11 @@ export function invalidateOperatorRolePolicy(profileId: string): void {
       reportedUnknownAssignments.delete(reported);
     }
   }
-  notifyListeners([...policyListeners], { kind: "assignment", profileId });
+  notifyListeners([...policyListeners], {
+    kind: "assignment",
+    profileId,
+    roleOnly: opts?.roleOnly === true,
+  });
 }
 
 export function onOperatorRolePolicyChanged(
@@ -228,7 +238,7 @@ export function resolveGatewayOperatorRoleActor(
   const actor = client?.internal?.operatorRoleActor;
   const enrollment =
     client?.internal?.operatorProfileEnrollment ??
-    client?.internal?.operatorRunAuthority?.recoverySnapshot?.operatorProfileEnrollment;
+    client?.internal?.operatorRunAuthority?.operatorProfileEnrollment;
   if (actor) {
     if (enrollment && actor.kind === "system") {
       throw new Error(
@@ -258,8 +268,7 @@ export function resolveOperatorRolePolicy(
   const authority = client?.internal?.operatorRunAuthority;
   const principal = client?.internal?.openclawIdPrincipal ?? authority?.openclawIdPrincipal;
   const enrollment =
-    client?.internal?.operatorProfileEnrollment ??
-    authority?.recoverySnapshot?.operatorProfileEnrollment;
+    client?.internal?.operatorProfileEnrollment ?? authority?.operatorProfileEnrollment;
   if (principal) {
     if (!isOpenClawIdTunnelPrincipalCurrent(principal)) {
       throw new Error("OpenClaw ID membership authority changed");
@@ -277,6 +286,14 @@ export function resolveOperatorRolePolicy(
     }
     if (authority.profileId !== actor.profileId) {
       throw new Error("Gateway requester profile changed");
+    }
+    // An unenrolled linked owner keeps certificate authority under its person's profile.
+    if (!enrollment && authority.openclawIdPrincipal?.kind === "owner") {
+      if (!isOpenClawIdTunnelPrincipalCurrent(authority.openclawIdPrincipal)) {
+        throw new Error("OpenClaw ID membership authority changed");
+      }
+      authority.assertCurrent();
+      return undefined;
     }
     if (roleFacts?.policy) {
       return roleFacts.policy;

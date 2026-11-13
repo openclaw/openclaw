@@ -75,7 +75,8 @@ import {
 } from "./openclaw-state-db-schema-v36-template-names.js";
 import { stateWorkerDiskMigrations } from "./openclaw-state-db-schema-v38-repository-disk.js";
 import { stateWorkerRetentionMigration } from "./openclaw-state-db-schema-v39-worker-retention.js";
-import { statePersonalOperatorMigration } from "./openclaw-state-db-schema-v40-personal-operator.js";
+import { stateWorkerProvisionSourceMigration } from "./openclaw-state-db-schema-v40-worker-provision-source.js";
+import { statePersonalOperatorMigration } from "./openclaw-state-db-schema-v41-personal-operator.js";
 import {
   assertSupportedStateSchemaVersion,
   readStateSchemaContentVersion,
@@ -539,6 +540,7 @@ export const versionedStateMigrations = [
   stateTemplateNamesMigration,
   ...stateWorkerDiskMigrations,
   stateWorkerRetentionMigration,
+  stateWorkerProvisionSourceMigration,
   statePersonalOperatorMigration,
 ] as const;
 
@@ -566,6 +568,7 @@ export function migrateBoundedStateSchema(
     stateTemplateNamesMigration,
     ...stateWorkerDiskMigrations,
     stateWorkerRetentionMigration,
+    stateWorkerProvisionSourceMigration,
     statePersonalOperatorMigration,
   ];
   const pending = migrations.filter(({ version }) => version > previousVersion);

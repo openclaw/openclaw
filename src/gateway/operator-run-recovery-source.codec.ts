@@ -10,6 +10,12 @@ const refs = z.strictObject({
   exact: z.array(boundedString).max(4096),
   wildcards: z.array(boundedString).max(256),
 });
+export const operatorProfileEnrollmentSchema = z.strictObject({
+  deviceId: boundedString,
+  publicKey: boundedString,
+  createdAtMs: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  profileId: boundedString,
+});
 const handshakeRecoverySnapshotSchema = z.strictObject({
   profileId: boundedString,
   openclawIdPrincipal: openClawIdRecoveryPrincipalSchema.optional(),
@@ -38,6 +44,7 @@ const handshakeRecoverySnapshotSchema = z.strictObject({
         requestHost: boundedString.optional(),
         origin: boundedString.optional(),
         isLocalClient: z.boolean().optional(),
+        openclawIdTunnel: z.boolean().optional(),
       })
       .optional(),
   }),
@@ -45,14 +52,7 @@ const handshakeRecoverySnapshotSchema = z.strictObject({
   device: z
     .strictObject({ deviceId: boundedString, key: z.string().regex(/^[a-f0-9]{64}$/) })
     .optional(),
-  operatorProfileEnrollment: z
-    .strictObject({
-      deviceId: boundedString,
-      publicKey: boundedString,
-      createdAtMs: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-      profileId: boundedString,
-    })
-    .optional(),
+  operatorProfileEnrollment: operatorProfileEnrollmentSchema.optional(),
   operatorProfileEnrollmentViaPeer: z.literal(true).optional(),
   controlUiAdmin: z.boolean(),
   localOperator: z.boolean(),
@@ -64,6 +64,7 @@ const principalRecoverySnapshotSchema = handshakeRecoverySnapshotSchema.extend({
     pluginId: boundedString,
     audienceId: boundedString,
     recoveryId: boundedString,
+    profileId: boundedString.optional(),
   }),
   authPolicy: z.undefined().optional(),
   sharedGeneration: z.undefined().optional(),

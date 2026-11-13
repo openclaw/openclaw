@@ -120,11 +120,12 @@ export const seedApprovedOperatorReadPairing = async (params: {
   displayName: string;
   platform: string;
   scopes?: string[];
+  operatorProfileId?: string;
 }): Promise<{ identityPath: string; identity: { deviceId: string } }> => {
   const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
   const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
   const { requestDevicePairing } = await import("../infra/device-pairing.js");
-  const { identityPrefix, scopes = ["operator.read"], ...metadata } = params;
+  const { identityPrefix, scopes = ["operator.read"], operatorProfileId, ...metadata } = params;
   const { identityPath, identity } = await createOperatorIdentityFixture(identityPrefix);
   const seeded = await requestDevicePairing({
     ...metadata,
@@ -135,6 +136,7 @@ export const seedApprovedOperatorReadPairing = async (params: {
   });
   await approveDevicePairing(seeded.request.requestId, {
     callerScopes: ["operator.admin"],
+    ...(operatorProfileId ? { operatorProfileId } : {}),
   });
   return { identityPath, identity: { deviceId: identity.deviceId } };
 };

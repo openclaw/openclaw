@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import {
   createCoreGatewayMethodDescriptors,
   STARTUP_UNAVAILABLE_GATEWAY_METHODS,
@@ -12,6 +13,12 @@ const descriptor = (name: string) => descriptors.find((entry) => entry.name === 
 
 it.each([
   ["device.profile.enroll", "operator.admin", { since: "2026.11" }],
+  ["toolUsage.status", "operator.admin", { since: "2026.11" }],
+  [
+    "toolUsage.import toolUsage.reset",
+    "operator.admin",
+    { since: "2026.11", controlPlaneWrite: true },
+  ],
   ["agents.avatar.generate", "operator.admin", { since: "2026.10", controlPlaneWrite: true }],
   [
     "models.authSetApiKey plugins.reload plugins.refresh cron.add cron.update cron.remove cron.run",
@@ -90,3 +97,19 @@ it.each([
   expect(listGatewayMethods()).toContain(name);
   expect(coreGatewayHandlers[name]).toBeTypeOf("function");
 });
+
+it.each(["toolUsage.status", "toolUsage.import", "toolUsage.reset"])(
+  "requires admin authority for %s, including inspection",
+  (method) => {
+    expect(authorizeOperatorScopesForMethod(method, ["operator.admin"]).allowed).toBe(true);
+    expect(
+      authorizeOperatorScopesForMethod(method, ["operator.read", "operator.write"]).allowed,
+    ).toBe(false);
+    expect(
+      authorizeOperatorScopesForMethod(method, [
+        "operator.sessions.read",
+        "operator.sessions.write",
+      ]).allowed,
+    ).toBe(false);
+  },
+);

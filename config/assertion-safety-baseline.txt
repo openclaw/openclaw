@@ -971,7 +971,6 @@ packages/memory-host-sdk/src/host/memory-schema.ts	7
 packages/memory-host-sdk/src/host/multimodal.ts	1
 packages/memory-host-sdk/src/host/read-retry.ts	1
 packages/memory-host-sdk/src/host/session-files.ts	1
-packages/memory-host-sdk/src/host/session-reset-recall.ts	1
 packages/memory-host-sdk/src/host/sqlite.ts	1
 packages/model-catalog-core/src/model-catalog-normalize.ts	5
 packages/model-catalog-core/src/model-catalog-types.ts	1
@@ -1193,7 +1192,6 @@ src/agents/plugin-text-transforms.ts	4
 src/agents/prepared-model-catalog.ts	1
 src/agents/prepared-model-catalog.worker.ts	1
 src/agents/prepared-model-runtime.configured.ts	1
-src/agents/prepared-model-runtime.facts.ts	1
 src/agents/prepared-model-runtime.ts	1
 src/agents/provider-attribution.ts	5
 src/agents/provider-auth-aliases.ts	1
@@ -1300,7 +1298,7 @@ src/agents/transcript-policy.ts	1
 src/agents/transport-message-transform.ts	2
 src/agents/utils/frontmatter.ts	2
 src/agents/workspace-legacy-state.ts	2
-src/agents/workspace.ts	3
+src/agents/workspace.ts	2
 src/agents/worktrees/run-lease.ts	1
 src/audit/execution-identity-admission.ts	3
 src/audit/execution-identity-context-build.ts	3
@@ -1701,7 +1699,6 @@ src/gateway/plugin-activation-runtime-config.ts	2
 src/gateway/probe.ts	1
 src/gateway/restart-trace.ts	2
 src/gateway/secret-input-paths.ts	1
-src/gateway/server-broadcast.ts	1
 src/gateway/server-chat-state.ts	1
 src/gateway/server-chat.ts	3
 src/gateway/server-core-runtime.ts	1
@@ -2231,11 +2228,10 @@ src/talk/provider-internal.ts	2
 src/talk/turn-context-tracker.ts	2
 src/templates/cron.ts	9
 src/templates/mcp.ts	1
-src/templates/openclaw-profile.ts	1
 src/templates/project-build.ts	4
 src/templates/project.ts	2
 src/templates/reader.ts	3
-src/templates/schema.ts	2
+src/templates/schema.ts	1
 src/trajectory/export.ts	7
 src/trajectory/runtime-store.sqlite.ts	1
 src/trajectory/runtime.ts	2

@@ -115,7 +115,11 @@ export function captureGatewayOperatorRecoverySnapshot(params: {
     return normalizeGatewayOperatorRecoverySnapshot({
       ...source,
       sourceIngress: "principal",
-      ingress: remote.recoverySource,
+      ingress: {
+        ...remote.recoverySource,
+        // Transport authority and personal enrollment have independent identity owners.
+        profileId: remote.authenticatedUserProfile.profileId,
+      },
       controlUiAdmin: false,
       localOperator: false,
     });

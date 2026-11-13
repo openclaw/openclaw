@@ -1,7 +1,10 @@
 import { createSignal, flush } from "solid-js";
 import { afterEach, expect } from "vitest";
+import type { ApplicationContext } from "../app/context-types.ts";
+import { ApplicationProvider } from "../lib/reactive/context.ts";
 import { DevicesView } from "../pages/devices/view.tsx";
 import type { DevicesProps } from "../pages/devices/view.types.ts";
+import { createApplicationGateway } from "./application-context-fixtures.ts";
 import { createDevicesViewProps } from "./devices-fixtures.ts";
 import { mountSolid } from "./mount-solid.ts";
 
@@ -18,7 +21,12 @@ export function renderDevicesInto(container: HTMLElement, overrides: Partial<Dev
       () => {
         const [current, setCurrent] = createSignal(props);
         fixtures.set(container, (next) => setCurrent(next));
-        return <DevicesView {...current()} />;
+        const { gateway } = createApplicationGateway();
+        return (
+          <ApplicationProvider value={{ gateway } as ApplicationContext}>
+            <DevicesView {...current()} />
+          </ApplicationProvider>
+        );
       },
       { container },
     );

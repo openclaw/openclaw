@@ -600,19 +600,18 @@ self.addEventListener("fetch", (event) => {
   // Public asset membership comes from the same build inventory as their version.
   const hashedAsset =
     /^\/assets\/[^/]+-[\w-]{8,}\.(?:js|css|webp|png|svg|woff2)$/u.test(pathname) && !url.search;
+  // Prior documents retain versioned fonts/themes too. New network writes
+  // still require the current version; private reads never need cache policy.
+  const publicAsset =
+    OFFLINE_BOOT?.publicAssets.includes(pathname.slice(1)) && /^\?v=[^&]+$/u.test(url.search);
   const permitsCache =
-    event.request.cache !== "no-store" && !event.request.headers.has("Authorization");
+    (hashedAsset || publicAsset) &&
+    !event.request.headers.has("Authorization") &&
+    event.request.cache !== "no-store";
 
   respondToControlUiRequest(event, async () => {
     const cacheable = permitsCache && (hashedAsset || isVersionedPublicAsset(url, pathname));
-    // Prior documents retain versioned fonts/themes too. Only exact cached
-    // URLs are reusable; new network writes still require the current version.
-    const publicAsset =
-      OFFLINE_BOOT?.publicAssets.includes(pathname.slice(1)) && /^\?v=[^&]+$/u.test(url.search);
-    const cached =
-      permitsCache && (hashedAsset || publicAsset)
-        ? await matchControlUiAsset(event.request, cacheable)
-        : undefined;
+    const cached = permitsCache ? await matchControlUiAsset(event.request, cacheable) : undefined;
     return cached || fetchControlUiRequest(event, cacheable);
   });
 });

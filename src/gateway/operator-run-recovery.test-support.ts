@@ -184,6 +184,11 @@ export async function createOperatorRecoveryFixture(params: {
   return {
     client,
     context,
+    capture: async () =>
+      expectDefined(
+        await captureGatewayOperatorRunAuthority({ client, context, sourceAuthority: null }),
+        "retained authenticated operator source",
+      ),
     target,
     entry,
     sourceAuthority,

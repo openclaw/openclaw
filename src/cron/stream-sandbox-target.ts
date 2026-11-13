@@ -1,6 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { openClawIdRecoveryPrincipalSchema } from "../gateway/openclaw-id/tunnel-principal.js";
 import type { OpenClawIdTunnelPrincipal } from "../gateway/openclaw-id/tunnel-principal.js";
+import type { OperatorProfileEnrollment } from "../gateway/operator-device-profile.types.js";
+import { operatorProfileEnrollmentSchema } from "../gateway/operator-run-recovery-source.codec.js";
 import type { GatewayAccessGrantRef } from "../plugins/gateway-access-policy.types.js";
 
 /** Creator-owned logical target; physical process custody belongs to the sandbox registry. */
@@ -21,6 +23,7 @@ export type CronStreamSandboxTarget = {
   operator?: {
     profileId: string;
     openclawIdPrincipal?: OpenClawIdTunnelPrincipal;
+    operatorProfileEnrollment?: Readonly<OperatorProfileEnrollment>;
     scopes: string[];
     assignedRole: string | null;
     githubLogin: string | null;
@@ -46,6 +49,7 @@ const TARGET_FIELDS = new Set([
 ]);
 const OPERATOR_FIELDS = new Set([
   "openclawIdPrincipal",
+  "operatorProfileEnrollment",
   "profileId",
   "scopes",
   "assignedRole",
@@ -98,7 +102,11 @@ export function parseCronStreamSandboxTarget(value: unknown): CronStreamSandboxT
       input.openclawIdPrincipal === undefined
         ? undefined
         : openClawIdRecoveryPrincipalSchema.safeParse(input.openclawIdPrincipal);
-    if (principal && !principal.success) {
+    const enrollment =
+      input.operatorProfileEnrollment === undefined
+        ? undefined
+        : operatorProfileEnrollmentSchema.safeParse(input.operatorProfileEnrollment);
+    if ((principal && !principal.success) || (enrollment && !enrollment.success)) {
       return undefined;
     }
     const grant = input.gatewayAccessGrant;
@@ -117,6 +125,7 @@ export function parseCronStreamSandboxTarget(value: unknown): CronStreamSandboxT
     operator = {
       profileId: input.profileId,
       ...(principal?.success ? { openclawIdPrincipal: principal.data } : {}),
+      ...(enrollment?.success ? { operatorProfileEnrollment: enrollment.data } : {}),
       scopes: [...input.scopes],
       assignedRole: input.assignedRole,
       githubLogin: input.githubLogin,

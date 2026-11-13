@@ -311,6 +311,7 @@ describe("remote Control UI ingress production composition", () => {
         },
         handleUpgrade,
         handleSandboxRequest: createSandboxHostHttpRequestHandler({ clients }),
+        admissionSignal: lifetime.signal,
         signal: lifetime.signal,
       },
     });

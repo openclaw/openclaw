@@ -179,6 +179,28 @@ describe("browser cookie batch route", () => {
 });
 
 describe("browser storage route boundaries", () => {
+  it.each([null, false, true, 0, "all", "", [], {}])(
+    "rejects invalid cookie partition selector %j before browser acquisition",
+    async (partition) => {
+      const response = await runRoute(getHandler("get", "/cookies"), { query: { partition } });
+      expectResponse(response, { error: "partition must be unpartitioned when specified" }, 400);
+      expect(routeState.withPlaywrightRouteContext).not.toHaveBeenCalled();
+    },
+  );
+
+  it("forwards explicit partition selection with the route cancellation scope", async () => {
+    const controller = new AbortController();
+    await runRoute(getHandler("get", "/cookies"), {
+      query: { partition: "unpartitioned" },
+      signal: controller.signal,
+    });
+    expect(routeState.cookiesGetViaPlaywright).toHaveBeenCalledWith({
+      ...target,
+      partition: "unpartitioned",
+      signal: controller.signal,
+    });
+  });
+
   it("coerces numeric storage keys", async () => {
     const response = await post(
       "/storage/:kind/set",

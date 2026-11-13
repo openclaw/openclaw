@@ -83,7 +83,8 @@ export const deviceProfileEnrollHandler: GatewayRequestHandler = async (options)
         !sourceProfileId ||
         client.connect.role !== "operator" ||
         (client.internal?.operatorRoleActor?.kind === "system" &&
-          sourceProfileId !== GATEWAY_OWNER_PROFILE_ID) ||
+          sourceProfileId !== GATEWAY_OWNER_PROFILE_ID &&
+          idPrincipal?.kind !== "owner") ||
         client.connectionSignal?.aborted ||
         client.invalidated ||
         client.connect.device?.id.trim() !== sourceDeviceId

@@ -172,7 +172,7 @@ export class GatewayBrowserClient {
         this.recovery = { ...this.recovery, generation: context.generation + 1, resolved: false };
         this.clearInboundActivity();
         this.scopeUpgradeBinding = null;
-        const error = this.pairingFailure ?? context.connectFailure?.error ?? this.nativeAuthError;
+        const error = decision.pendingError;
         this.pendingPairing = null;
         if (decision.notify) {
           const info = {

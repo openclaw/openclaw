@@ -722,6 +722,21 @@ describe("printDaemonStatus", () => {
     expect(errors).not.toContain("Connectivity check: failed");
     expect(logs).not.toContain("not a warm-up delay");
   });
+  it("does not recommend reinstalling an overridden launcher for a reachable newer Gateway", () => {
+    printDaemonStatus({
+      cli: { version: "2026.11.1" },
+      gateway: { ...gateway, version: "2026.11.2" },
+      service: {
+        command: {
+          programArguments: ["node", "/service/dist/index.js", "gateway"],
+          managedOverrides: { launcher: "command" },
+        },
+      },
+    });
+    expect(output(runtime.error)).toContain("running Gateway is version 2026.11.2");
+    expect(output(runtime.error)).not.toContain("or reinstall the Gateway service");
+    expect(output(runtime.error)).toContain("CLI matching the running Gateway");
+  });
   it("does not warn about the service install when it matches the CLI version", () => {
     printDaemonStatus({
       cli: { version: "2026.6.35", entrypoint: "/home/ops/.local/bin/openclaw" },

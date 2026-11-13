@@ -3,6 +3,7 @@ import {
   bindMessageInjectionAdmission,
   MessageInjectionAcceptedUnconfirmedError,
 } from "../../../auto-reply/reply/message-injection-authority.js";
+import { resolveReplyMessageInjectionFailure } from "../../../sessions/session-controller.message-injection-failure.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../../sessions/user-turn-transcript.test-support.js";
 import { createDeferredCore as deferred } from "../../../shared/deferred.js";
@@ -125,6 +126,70 @@ async function admittedFixture(
   }
   return { ...f, realSession: session };
 }
+
+it.each([
+  "transcript_commit_timeout",
+  "tool_boundary_timeout",
+  "session_ended",
+  "session_handoff",
+  "steering_closed",
+  "source_cancelled",
+] as const)("reports %s after withdrawing the exact pending steer", async (runtimeReason) => {
+  vi.useFakeTimers();
+  const target = message("pending correction");
+  const f = fixture([target]);
+  const closed = new AbortController();
+  if (runtimeReason === "tool_boundary_timeout") {
+    f.session.agent!.getToolInterruptionStatus = () => ({
+      interruptible: [],
+      blocked: [{ toolCallId: "held-tool", toolName: "synthetic_tool" }],
+    });
+  }
+  const waiting = observe(
+    steerActiveSessionWithOptionalDeliveryWait(
+      f.session,
+      "pending correction",
+      {
+        queueIdentity: "pending correction",
+        waitForTranscriptCommit: true,
+        abortSignal: f.abort.signal,
+        onQueueAccepted: f.accepted,
+      },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      closed.signal,
+    ),
+  );
+  await vi.advanceTimersByTimeAsync(0);
+  expect(f.accepted).toHaveBeenCalledExactlyOnceWith(true);
+  expect(waiting.isSettled()).toBe(false);
+  if (runtimeReason.endsWith("timeout")) {
+    await vi.advanceTimersByTimeAsync(120_000);
+  } else if (runtimeReason === "session_ended" || runtimeReason === "session_handoff") {
+    f.emit({ type: runtimeReason === "session_ended" ? "agent_settled" : "agent_handoff" });
+  } else if (runtimeReason === "steering_closed") {
+    closed.abort();
+  } else {
+    f.abort.abort();
+  }
+  await waiting.done;
+  expect(waiting.result.error).toMatchObject({
+    name: "MessageInjectionWithdrawnError",
+    runtimeReason,
+  });
+  expect(
+    resolveReplyMessageInjectionFailure(waiting.result.error, { accepted: true }),
+  ).toMatchObject({
+    status: "rejected",
+    reason: "injection_unavailable",
+    runtimeReason,
+  });
+  expect(f.queue).toEqual([]);
+  expect(f.listeners).toHaveLength(0);
+});
 
 it("retains real enqueued input when admission cleanup fails", async () => {
   const f = await admittedFixture(async (consume) => {

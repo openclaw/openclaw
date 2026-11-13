@@ -85,6 +85,10 @@ When you run several Gateways, set `gateway.controlUi.environment` to distinguis
 
 The environment adds a 2 px top stripe, an agent-avatar ring, label pills in the sidebar and narrow topbar, a browser-title suffix, and a matching favicon. The label is trimmed and must contain 1–24 characters. Available colors are `teal`, `amber`, `purple`, `coral`, `pink`, `blue`, `green`, `red`, and `gray`. The label and color are intentionally visible before sign-in; leave `environment` unset to keep the standard appearance unchanged.
 
+## Appearance preferences
+
+Personal Appearance preferences remain available when you cannot read Gateway-wide settings. Session observer and session-source settings require Gateway read access; unavailable reads do not stay marked as loading. A missing observer status does not mean that no utility model is configured.
+
 ## Browser tab icon
 
 In **Settings → Appearance → Browser tab icon**, choose **Default**, **Agent avatar**, or **Lobsterdex**. Default keeps the theme and Gateway environment icon. Agent avatar follows the explicitly selected agent, fitting its image without cropping and falling back to Default when it is unavailable. Lobsterdex lets you choose a fixed lobster from those already unlocked in this browser. Activity and attention dots remain visible in every mode.
@@ -127,11 +131,13 @@ On macOS, the owner's avatar defaults to the Gateway host account's user picture
 
 Choose **Use for new sessions** to set a **New session default**. Existing sessions keep their account choice. **Use shared default** clears only this personal default; saved accounts and existing sessions stay unchanged. Shared fallback rules still apply, so an account preference isn’t a billing guarantee.
 
+**Linked emails** shows email addresses, not opaque trusted-proxy sign-in subjects. Issuer-qualified subjects remain bound to the same profile for authentication without becoming a default display name. Set a human-readable **Display name** to replace the generic profile label.
+
 GitHub-backed sign-in through Cloudflare Access or Tailscale Serve fills the read-only **GitHub account** row with the verified public avatar and account link without replacing a custom OpenClaw avatar. **Git co-author credit** is a separate profile-wide toggle, on by default for verified accounts, that controls future commits from shared sessions. It stays editable for personal profiles without a single display account, including merged accounts on multiple enterprise hosts. See [User model](/concepts/user-model#gateway-profile-and-github-credit) for verification, retry, account-change, noreply privacy, and eligibility rules.
 
-**Settings → Profile → GitHub accounts** separately shows **My GitHub** and **System GitHub**. Identified people, including read-scoped operators, can connect and disconnect only their own account; administrators can also change the shared System account. Connecting defaults to **For me** for identified users and never changes their sign-in identity, co-author preference, or shared execution defaults. Personal credentials support explicit Gateway-brokered **Publish PR** actions, not ordinary agent shell commands. See [GitHub connections](/concepts/user-model#github-connections).
+**Settings → Profile → GitHub accounts** shows **My GitHub** separately from the agents' accounts: the **Shared agent account**, used by every agent without its own account, and one row per agent showing the account it uses and whether it is shared or its own. An agent's account, own or shared, serves its commands, its authenticated dashboard data, and **Publish PR** unless you choose My GitHub. Identified people, including read-scoped operators, can connect and disconnect only their own account; administrators can also change the shared agent account and give any agent its own account, inline beneath that agent. Connecting My GitHub never changes sign-in identity, co-author preference, or agent accounts. Personal credentials support explicit Gateway-brokered **Publish PR** actions, not ordinary agent shell commands. See [GitHub connections](/concepts/user-model#github-connections).
 
-Administrators also see the default agent's effective GitHub account and verification status here. **View agent account** opens **Agent settings → Tools → GitHub account**, where any agent's account source, credential type, OAuth expiry, and refresh state are available. Authenticated [GitHub Actions widgets](/tools/show-widget#read-github-actions-runs) use this effective agent account. **Verified** confirms the account with GitHub; repository permissions are checked on each data request.
+Each agent's row shows its account, where that account comes from, and its verification status; **Agent settings → Tools → GitHub account** shows the same facts read-only, with credential type, OAuth expiry, and refresh state. Authenticated [GitHub Actions widgets](/tools/show-widget#read-github-actions-runs) use the agent's account. **Verified** confirms the account with GitHub; repository permissions are checked on each data request.
 
 Credentials reserved for Control UI link previews are excluded from both agent authentication and its displayed status, including when the preview credential uses a SecretRef.
 
@@ -176,7 +182,12 @@ times in milliseconds. It samples every ten seconds while the page is visible
 and summarizes the last 100 successful samples from the current connection.
 The sample count makes small sets visible; p95 and p99 become more useful as
 samples accumulate. Reconnecting, switching Gateways, or leaving the page resets
-the readings. Failed requests are excluded and shown as a retry notice.
+the readings. Transient failures are excluded and shown as a retry notice.
+Ping and host activity require `operator.read` and their advertised Gateway
+methods. When either diagnostic is unavailable or denied, it settles as unavailable
+instead of repeatedly requesting access or claiming to retry. The connection can
+remain healthy, and browser-local connection settings remain usable. A fresh
+connection or refreshed capabilities can make the diagnostics available again.
 
 The ping graph shows individual round trips. **Gateway activity** uses the same
 CPU, process memory, and event-loop delay graphs as the debug overlay, with up to
@@ -218,6 +229,8 @@ The Appearance panel has the built-in Claw, Knot, Dash, Absolutely, Tide, Beacon
 Theme stylesheets can set `--chat-composer-corner-shape` (default `round`) to give the chat composer a different corner family, such as `scoop scoop round round`, in browsers that draw `corner-shape`; other browsers keep the circular corners.
 
 Themes can choose a neutral prompt mark instead of the lobster mascot and supply their own long-wait status vocabulary. They can also add occasional penguin or fedora visitors to the composer ledge and occasional hats on agent avatars from the `fedora`, `crown`, `santa`, `party`, and `pumpkin` catalog. A theme without the mascot hides the resident lobster and visiting lobster strangers while ordinary ledge traffic continues under the unchanged **Lobster visits** toggle. A theme can also hide **Lobsterdex**, including its visit and sound controls and collected-lobster tab icons. This preserves your collection, saved tab icon, and visit preferences; switching back to a theme that shows Lobsterdex restores them. Hiding Lobsterdex alone does not change mascot or critter behavior. See the [theme definition fields](/tools/theme#create-and-apply-a-personal-theme) for the portable settings and limits.
+
+Theme cards preview each theme’s own background and accent colors in the current color mode, independently of the selected theme or accent override. A theme with only one color mode uses that palette in both previews.
 
 Plugin themes can also bring their own SVG hats and composer visitors through [declared artwork](/plugins/manifest/surfaces#themes).
 

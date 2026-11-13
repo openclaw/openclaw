@@ -1,5 +1,9 @@
 import type { IncomingMessage } from "node:http";
 import type {
+  buildPairingConnectErrorDetails,
+  ConnectErrorDetailCodes,
+} from "../../../../packages/gateway-protocol/src/connect-error-details.js";
+import type {
   ConnectParams,
   RequestFrame,
   ResponseFrame,
@@ -7,6 +11,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { CloudWorkerSetupMutationAdmission } from "../../../infra/device-bootstrap.worker-types.js";
+import type { captureAuthenticatedNodePairingState } from "../../../infra/device-pairing-node-state.js";
 import type { DeviceAuthToken } from "../../../infra/device-pairing.types.js";
 import type { createSubsystemLogger } from "../../../logging/subsystem.js";
 import type { DeviceBootstrapProfile } from "../../../shared/device-bootstrap-profile.js";
@@ -212,4 +217,25 @@ export type DeviceAuthorizedGatewayConnect = AuthenticatedGatewayConnect & {
     scopes: string[];
     issuedAtMs: number;
   }>;
+};
+
+export type GatewayPairingHandshakeFailure = {
+  message: string;
+  details?:
+    | ReturnType<typeof buildPairingConnectErrorDetails>
+    | { code: typeof ConnectErrorDetailCodes.AUTH_VERIFIED_USER_REQUIRED };
+  closeCause?: { cause: string; meta: Record<string, unknown> };
+  closeReason?: string;
+};
+
+export type AuthenticatedNodePairingAdmission = NonNullable<
+  Awaited<ReturnType<typeof captureAuthenticatedNodePairingState>>
+> & {
+  authenticated: { nodeId: string; publicKey: string; token: string };
+};
+
+export type PendingPluginNodeCapability = {
+  surface: PluginNodeCapabilitySurface;
+  capability: string;
+  expiresAtMs: number;
 };

@@ -25,7 +25,7 @@ import {
 import { controlUiPluginAssetRoot } from "./control-ui-plugin-assets-contract.js";
 import { resolveAssistantMediaRoutePath } from "./control-ui-resource-routes.js";
 import {
-  classifyControlUiRequest,
+  isControlUiHttpRequest,
   isControlUiApprovalDocumentPath,
   isControlUiPluginManagerRequest,
 } from "./control-ui-routing.js";
@@ -73,6 +73,7 @@ import {
 import {
   getNativeHookRelayModule,
   getControlUiModule,
+  getControlUiAssistantMediaHandler,
   getControlUiPluginAssetsModule,
   getCanvasServeModule,
   getBoardHttpModule,
@@ -347,22 +348,8 @@ export function createGatewayHttpRequestHandler(
         config: configSnapshot,
         ...routeAuth,
       };
-      const loadControlUi = () => {
-        const url = req.url ? new URL(req.url, "http://localhost") : undefined;
-        // Media owns its method/query policy, including explicit-allow POSTs.
-        // Classify the current URL so plugin fallthrough cannot load unrelated UI code.
-        return url &&
-          (url.pathname === resolveAssistantMediaRoutePath(controlUiBasePath) ||
-            classifyControlUiRequest({
-              basePath: normalizeControlUiBasePath(controlUiBasePath),
-              pathname: url.pathname,
-              search: url.search,
-              method: req.method,
-              accept: req.headers.accept,
-            }).kind !== "not-control-ui")
-          ? getControlUiModule()
-          : undefined;
-      };
+      const loadControlUi = () =>
+        isControlUiHttpRequest(req, controlUiRouteBasePath) ? getControlUiModule() : undefined;
       const handleControlUiRequest = async () =>
         (await loadControlUi())?.handleControlUiHttpRequest(req, res, {
           ...controlUiRouteOptions,
@@ -712,7 +699,7 @@ export function createGatewayHttpRequestHandler(
       addRequestStage(
         scopedRequestPath === resolveAssistantMediaRoutePath(controlUiBasePath),
         async () =>
-          (await loadControlUi())?.handleControlUiAssistantMediaRequest(req, res, {
+          (await getControlUiAssistantMediaHandler(req.url, controlUiBasePath))?.(req, res, {
             ...controlUiRouteOptions,
             agentId: resolveAssistantAgentId(configSnapshot),
           }) ?? false,

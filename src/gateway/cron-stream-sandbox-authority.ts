@@ -16,6 +16,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCronScheduledToolPolicy } from "../cron/scheduled-tool-policy.js";
 import { parseCronStreamSandboxTarget } from "../cron/stream-sandbox-target.js";
 import type { CronStoredJob } from "../cron/types.js";
+import { loadPairedDevicePairingStoreRecordReadOnly } from "../infra/device-pairing-store-readonly.js";
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import type { PluginGatewayAccessAuthority } from "../plugins/gateway-access-policy.types.js";
@@ -33,13 +34,16 @@ import { prepareUserProfileIdentity } from "../state/user-profile-list.js";
 import {
   isOpenClawIdTunnelPrincipalCurrent,
   onOpenClawIdTunnelPrincipalsChanged,
-  openclawIdTunnelRolePolicy,
   prepareOpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
 import { resumeGatewayOperatorAccessGrant } from "./operator-access-policy.js";
 import {
+  captureOperatorProfileEnrollmentAssertion,
+  isOperatorProfileEnrollmentCurrent,
+} from "./operator-profile-enrollment-authority.js";
+import {
   onOperatorRolePolicyChanged,
-  resolveOperatorRolePolicyForAssignment,
+  resolveOperatorRolePolicyForPrincipal,
 } from "./operator-role-policy.js";
 import { sourceRolePolicy } from "./operator-role-source-policy.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
@@ -84,7 +88,8 @@ export async function prepareCronStreamSandboxAuthority(params: {
   const configuredWorkspace = resolveAgentWorkspaceDir(config, target.agentId);
   const operator = target.operator;
   const principal = operator?.openclawIdPrincipal;
-  const membershipPolicy = openclawIdTunnelRolePolicy(principal);
+  const enrollment = operator?.operatorProfileEnrollment;
+  let assertEnrollment: (() => void) | undefined;
   if (principal) {
     await prepareOpenClawIdTunnelPrincipal(principal);
   }
@@ -93,13 +98,14 @@ export async function prepareCronStreamSandboxAuthority(params: {
   const originalRole = operator
     ? structuredClone(
         sourceRolePolicy(
-          membershipPolicy ??
-            resolveOperatorRolePolicyForAssignment(
-              operator.profileId,
-              operator.assignedRole,
-              config,
-              operator.githubLogin,
-            ),
+          resolveOperatorRolePolicyForPrincipal(
+            operator.profileId,
+            operator.assignedRole,
+            config,
+            operator.githubLogin,
+            principal,
+            enrollment,
+          ),
         ),
       )
     : undefined;
@@ -108,6 +114,7 @@ export async function prepareCronStreamSandboxAuthority(params: {
         operatorRoleActor: { kind: "operator", profileId: operator.profileId },
         // The original source is checked below; the client carries its role ceiling.
         openclawIdPrincipal: principal,
+        operatorProfileEnrollment: enrollment,
         scopes: [...operator.scopes],
       })
     : undefined;
@@ -232,6 +239,7 @@ export async function prepareCronStreamSandboxAuthority(params: {
     revoked.signal.throwIfAborted();
     params.signal?.throwIfAborted();
     params.assertCurrent();
+    assertEnrollment?.();
     if (principal && !isOpenClawIdTunnelPrincipalCurrent(principal)) {
       throw unavailable();
     }
@@ -248,19 +256,23 @@ export async function prepareCronStreamSandboxAuthority(params: {
     }
     const identity = profile?.readCurrentFacts(emailBindingIds);
     const role = operator
-      ? (membershipPolicy ??
-        resolveOperatorRolePolicyForAssignment(
+      ? resolveOperatorRolePolicyForPrincipal(
           operator.profileId,
           operator.assignedRole,
           currentConfig,
           identity ? (identity.profile.githubLogin ?? null) : operator.githubLogin,
-        ))
+          principal,
+          enrollment,
+        )
       : undefined;
     if (operator) {
+      // Only an unenrolled owner is bounded by its certificate instead of its person's role.
+      const ownerCertificate =
+        !enrollment && principal?.kind === "owner" && isOpenClawIdTunnelPrincipalCurrent(principal);
       if (
         (profile &&
           (identity?.profile.profileId !== operator.profileId ||
-            identity.profile.assignedRole !== operator.assignedRole ||
+            (!ownerCertificate && identity.profile.assignedRole !== operator.assignedRole) ||
             (identity.profile.githubLogin ?? null) !== operator.githubLogin)) ||
         !isDeepStrictEqual(sourceRolePolicy(role), originalRole) ||
         (role &&
@@ -342,7 +354,7 @@ export async function prepareCronStreamSandboxAuthority(params: {
         assertExecutionPolicy(currentConfig, entry, currentRuntime);
       }
     }
-    return { currentConfig, identity, entry };
+    return { currentConfig, identity, entry, role };
   };
   const assertAuthorityCurrent = () => {
     try {
@@ -354,6 +366,8 @@ export async function prepareCronStreamSandboxAuthority(params: {
           current.identity.profile,
           current.currentConfig,
           operator.gatewayAccessGrant,
+          undefined,
+          enrollment ? undefined : principal,
         );
       }
       // Plugin callbacks may synchronously publish role, profile, session, or config changes.
@@ -376,7 +390,16 @@ export async function prepareCronStreamSandboxAuthority(params: {
   subscriptions.push(
     onUserProfilesChanged(recheck),
     onOperatorRolePolicyChanged((change) => {
-      if (change.kind === "assignment" && change.profileId === operator?.profileId) {
+      if (
+        change.kind === "assignment" &&
+        change.profileId === operator?.profileId &&
+        change.roleOnly &&
+        !enrollment &&
+        principal?.kind === "owner"
+      ) {
+        // An unenrolled owner's authority is its certificate, not its person's role.
+        recheck();
+      } else if (change.kind === "assignment" && change.profileId === operator?.profileId) {
         revoke(unavailable());
       } else if (change.kind === "config") {
         recheck();
@@ -414,6 +437,13 @@ export async function prepareCronStreamSandboxAuthority(params: {
   params.signal?.addEventListener("abort", sourceAborted, { once: true });
   subscriptions.push(() => params.signal?.removeEventListener("abort", sourceAborted));
   try {
+    if (operator && enrollment) {
+      const paired = await loadPairedDevicePairingStoreRecordReadOnly(enrollment.deviceId);
+      if (!isOperatorProfileEnrollmentCurrent(paired, enrollment, operator.scopes)) {
+        throw unavailable();
+      }
+      assertEnrollment = captureOperatorProfileEnrollmentAssertion(enrollment, operator.scopes);
+    }
     assertAuthorityCurrent();
     if (operator) {
       profile = await prepareUserProfileIdentity(operator.profileId);
@@ -434,6 +464,8 @@ export async function prepareCronStreamSandboxAuthority(params: {
         prepared.identity.profile,
         prepared.currentConfig,
         operator.gatewayAccessGrant,
+        undefined,
+        enrollment ? undefined : principal,
       );
       const originalAccess = access;
       const accessAborted = () => revoke(originalAccess?.signal.reason ?? unavailable());
@@ -476,6 +508,7 @@ export async function prepareCronStreamSandboxAuthority(params: {
       ? createAdmittedRunOperatorAuthority({
           profileId: operator.profileId,
           openclawIdPrincipal: principal,
+          operatorProfileEnrollment: enrollment,
           scopes: operator.scopes,
           gatewayAccessGrant: operator.gatewayAccessGrant,
           assertCurrent: assertAuthorityCurrent,
@@ -483,7 +516,7 @@ export async function prepareCronStreamSandboxAuthority(params: {
           readCurrentRoleFacts: () => ({
             assignedRole: operator.assignedRole,
             githubLogin: operator.githubLogin,
-            ...(membershipPolicy ? { policy: membershipPolicy } : {}),
+            policy: assertPreparedCurrent().role,
           }),
           ...(originalRole
             ? {

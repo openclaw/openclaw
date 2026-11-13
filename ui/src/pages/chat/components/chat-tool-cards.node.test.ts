@@ -5,6 +5,7 @@ import { resolveCanvasIframeUrl } from "../../../lib/chat/canvas-embed-policy.ts
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import {
   extractToolCardsCached as extractToolCards,
+  readLiveToolStreamOutput,
   resolveToolCardOutcome,
 } from "../../../lib/chat/tool-cards.ts";
 
@@ -107,17 +108,26 @@ it.each([
   },
 );
 
-it("gives canvas previews precedence over browser metadata", () => {
-  const browserTab = { ...browserTarget, url: 42, title: [] };
+it("prefers assistant Canvas details, then text, over browser metadata", () => {
+  const browserTab = browserDetails.browserTab;
   const canvas = { kind: "canvas", view: { id: "cv_app" }, mcpApp: { viewId: "cv_app" } };
-  for (const toolName of ["browser", "canvas_render"]) {
+  const textCanvas = { ...canvas, view: { id: "cv_text" }, mcpApp: { viewId: "cv_text" } };
+  for (const [toolName, target] of [
+    ["browser", "assistant_message"],
+    ["browser", "node_panel"],
+    ["canvas_render", undefined],
+  ] as const) {
     const message = {
       role: "tool",
       toolName,
-      details: { browserTab, ...(toolName === "canvas_render" ? {} : { mcpAppPreview: canvas }) },
-      ...(toolName === "canvas_render" ? { content: JSON.stringify(canvas) } : {}),
+      details: { browserTab, ...(target ? { mcpAppPreview: { ...canvas, target } } : {}) },
+      content: JSON.stringify(textCanvas),
     };
-    expect(extractToolCards(message)[0]?.preview?.kind).toBe("canvas");
+    expect(extractToolCards(message)[0]?.preview).toMatchObject({
+      kind: "canvas",
+      surface: "assistant_message",
+      viewId: target === "assistant_message" ? "cv_app" : "cv_text",
+    });
   }
 });
 
@@ -193,6 +203,16 @@ it.each([
       },
     );
     expect(cards).toMatchObject([{ live: true, completed: received, outputText: text }]);
+    expect(
+      readLiveToolStreamOutput({
+        content: [
+          { type: "toolcall", name: "bash" },
+          { type: "toolresult", text },
+        ],
+        __openclawToolStreamLive: true,
+        __openclawToolStreamResultReceived: received,
+      }),
+    ).toEqual(received ? undefined : { outputText: text, liveOutput: undefined });
     expect(
       cards.map((card) => [
         resolveToolCardOutcome(card, true),

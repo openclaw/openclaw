@@ -3,7 +3,7 @@ import { performance } from "node:perf_hooks";
 import * as restartTrace from "../../gateway/restart-trace.js";
 import type { startGatewayServer } from "../../gateway/server.js";
 import type { GatewayInstallationReplacement } from "../../gateway/stale-install.js";
-import { readChildRuntimeViability } from "../../infra/child-runtime-viability.js";
+import { prepareChildRuntimeViability } from "../../infra/child-runtime-viability.js";
 import { startDiagnosticsTimeline } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { GatewayBootLifecycleCompletion } from "../../infra/gateway-boot-lifecycle.js";
@@ -47,10 +47,7 @@ import {
   createGatewayRunTerminal,
   type GatewayShutdownFailure as ShutdownFailure,
 } from "./run-loop-terminal.js";
-import {
-  armShutdownHardExitWatchdog,
-  type ShutdownHardExitWatchdog,
-} from "./shutdown-hard-exit.js";
+import type { ShutdownHardExitWatchdog } from "./shutdown-hard-exit.js";
 import { GatewayUpdateSuccessor } from "./update-successor.js";
 const gatewayLog = createSubsystemLogger("gateway");
 const HARD_EXIT_WATCHDOG_GRACE_MS = 2_000;
@@ -243,30 +240,42 @@ export async function runGatewayLoop(params: GatewayRunLoopParams): Promise<numb
     alreadyCancelledOwner?: GatewayRestartIntent["successorOwner"],
   ): Promise<void> => {
     await cleanup.settleResource("restart.close.signals", () => signals.drain());
-    if (runtimeResourcesRetained) {
-      gatewayLog.warn("shutdown resources remain; refusing in-process restart and exiting");
-      return finishLoopAfterCleanup(0);
-    }
-    if (activeRestartRequest?.restartIntent?.requireFreshProcess) {
-      gatewayLog.error(
-        "Fresh-process restart failed; the unsettled native worker cannot recover in-process. Exiting through the verified service owner.",
-      );
-      return finishLoopAfterCleanup(1);
-    }
-    if (!readChildRuntimeViability().available) {
-      gatewayLog.error(
-        "Fresh-process restart failed; the unavailable child runtime cannot recover in-process. Restart through the service owner after repairing its runtime.",
-      );
-      return finishLoopAfterCleanup(1);
-    }
-    if (foregroundUpdateClosed) {
-      return finishLoopAfterCleanup(1);
-    }
     for (;;) {
-      if (forcedExitStarted) {
+      if (forcedExitStarted || terminalExitCode !== undefined) {
         return;
       }
+      if (runtimeResourcesRetained) {
+        gatewayLog.warn("shutdown resources remain; refusing in-process restart and exiting");
+        return finishLoopAfterCleanup(0);
+      }
+      if (activeRestartRequest?.restartIntent?.requireFreshProcess) {
+        gatewayLog.error(
+          "Fresh-process restart failed; the unsettled native worker cannot recover in-process. Exiting through the verified service owner.",
+        );
+        return finishLoopAfterCleanup(1);
+      }
+      if (foregroundUpdateClosed) {
+        return finishLoopAfterCleanup(1);
+      }
       const restartRequest = activeRestartRequest;
+      const runtimeViability = await prepareChildRuntimeViability();
+      if (forcedExitStarted || terminalExitCode !== undefined) {
+        return;
+      }
+      if (
+        activeRestartRequest !== restartRequest ||
+        runtimeResourcesRetained ||
+        foregroundUpdateClosed ||
+        restartRequest?.restartIntent?.requireFreshProcess
+      ) {
+        continue;
+      }
+      if (!runtimeViability.publish().available) {
+        gatewayLog.error(
+          "Fresh-process restart failed; the unavailable child runtime cannot recover in-process. Restart through the service owner after repairing its runtime.",
+        );
+        return finishLoopAfterCleanup(1);
+      }
       const restartOwner = restartRequest?.restartIntent?.successorOwner;
       const restoration = sameManagedUpdateOwner(restartOwner, alreadyCancelledOwner)
         ? "restored-in-process"
@@ -623,15 +632,10 @@ export async function runGatewayLoop(params: GatewayRunLoopParams): Promise<numb
         // The process lease already retains unfinished cleanup. A future deadline must
         // not keep a failed-but-settled Gateway alive after that lease is released.
         forceExitTimer.unref();
-        hardExitWatchdog = armShutdownHardExitWatchdog({
-          delayMs: deadlineMs + HARD_EXIT_WATCHDOG_GRACE_MS,
-          describePending: restartTrace.formatGatewayPendingCloseSteps,
-          onError: (error) => {
-            gatewayLog.warn(
-              `hard-exit watchdog failed; retaining main-thread shutdown timer: ${formatErrorMessage(error)}`,
-            );
-          },
-        });
+        hardExitWatchdog = loopExit.armGatewayShutdownHardExitWatchdog(
+          deadlineMs + HARD_EXIT_WATCHDOG_GRACE_MS,
+          gatewayLog,
+        );
       }
     };
     const clearForceExitTimer = () => {
@@ -765,13 +769,7 @@ export async function runGatewayLoop(params: GatewayRunLoopParams): Promise<numb
           throw startupFailure.error;
         }
       } catch (err) {
-        const error =
-          startupFailure && startupFailure.error !== err
-            ? new AggregateError(
-                [startupFailure.error, err],
-                "Gateway startup and close cleanup failed",
-              )
-            : err;
+        const error = loopCompletion.combineShutdownFailures(err, startupFailure);
         shutdownFailure = cleanup.classifyShutdownFailure(error, shutdownStep);
       } finally {
         await cleanup.stopOwnedProcesses();

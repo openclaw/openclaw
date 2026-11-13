@@ -64,6 +64,7 @@ import type {
   AuthenticatedGatewayConnect,
   DeviceAuthorizedGatewayConnect,
   GatewayConnectPhaseContext,
+  GatewayPairingHandshakeFailure,
 } from "./message-handler-types.js";
 
 export async function authorizeGatewayConnectDevice(
@@ -98,14 +99,7 @@ export async function authorizeGatewayConnectDevice(
     skipLocalBackendSelfPairing,
     controlUiPairingKind,
   } = state;
-  const failPairingHandshake = (params: {
-    message: string;
-    details?:
-      | ReturnType<typeof buildPairingConnectErrorDetails>
-      | { code: typeof ConnectErrorDetailCodes.AUTH_VERIFIED_USER_REQUIRED };
-    closeCause?: { cause: string; meta: Record<string, unknown> };
-    closeReason?: string;
-  }) => {
+  const failPairingHandshake = (params: GatewayPairingHandshakeFailure) => {
     const { message, details, closeCause, closeReason } = params;
     setHandshakeState("failed");
     if (closeCause) {
@@ -114,19 +108,29 @@ export async function authorizeGatewayConnectDevice(
     sendHandshakeErrorResponse(ErrorCodes.NOT_PAIRED, message, details ? { details } : undefined);
     close(1008, truncateCloseReason(closeReason ?? message));
   };
-  const enrollment = await prepareGatewayConnectDeviceEnrollment(context, state);
+  const enrollment = await prepareGatewayConnectDeviceEnrollment(
+    context,
+    authResult.delegation ? { ...state, scopes: [...authResult.delegation.scopes] } : state,
+  );
   if (!enrollment.ok) {
     failPairingHandshake({ message: enrollment.message });
     return undefined;
   }
   let { scopes, operatorProfileEnrollment } = enrollment;
-  const {
-    operatorDevice,
-    personalBootstrap,
-    isCurrent: isConnectAuthorizationCurrent,
-  } = enrollment;
+  const { operatorDevice, personalBootstrap, isCurrent: isAuthorizationCurrent } = enrollment;
   if (scopes !== state.scopes) {
     connectParams.scopes = scopes;
+  }
+  if (authResult.delegation) {
+    // Delegation never pairs or issues tokens, but an enrolled key still represents its person.
+    return {
+      ...state,
+      scopes,
+      handoffBootstrapProfile: null,
+      deviceToken: null,
+      bootstrapDeviceTokens: [],
+      ...(operatorProfileEnrollment ? { operatorProfileEnrollment } : {}),
+    };
   }
   const roleConfiguredHumanOperator = role === "operator" && Boolean(configSnapshot.gateway?.roles);
   // An admitted OpenClaw ID owner device is the Gateway owner, like a shared-secret client.
@@ -320,7 +324,7 @@ export async function authorizeGatewayConnectDevice(
             commands: connectParams.commands ?? [],
             caps: connectParams.caps ?? [],
             accessMetadata: clientAccessMetadata,
-            isCurrent: isConnectAuthorizationCurrent,
+            isCurrent: isAuthorizationCurrent,
           });
         } else if (operatorApprovalScopes !== null && plan.operatorApprovalKind) {
           approved = await approveDevicePairing(pairing.request.requestId, {
@@ -328,7 +332,7 @@ export async function authorizeGatewayConnectDevice(
             accessMetadata: clientAccessMetadata,
             approvedVia: plan.operatorApprovalKind,
             autoApproveNewDeviceScopes: operatorApprovalScopes,
-            isApprovalCurrent: isConnectAuthorizationCurrent,
+            isApprovalCurrent: isAuthorizationCurrent,
           });
         } else if (plan.bootstrapApprovalProfile) {
           approved = await approveBootstrapDevicePairing(
@@ -336,7 +340,7 @@ export async function authorizeGatewayConnectDevice(
             plan.bootstrapApprovalProfile,
             {
               accessMetadata: clientAccessMetadata,
-              isApprovalCurrent: isConnectAuthorizationCurrent,
+              isApprovalCurrent: isAuthorizationCurrent,
               ...(authMethod === "bootstrap-token" && state.bootstrapTokenCandidate
                 ? {
                     bootstrapSource: {
@@ -369,7 +373,7 @@ export async function authorizeGatewayConnectDevice(
               const currentConfig = getRuntimeConfigSnapshot();
               if (
                 !currentConfig ||
-                !isConnectAuthorizationCurrent() ||
+                !isAuthorizationCurrent() ||
                 pending.deviceId !== device.id ||
                 pending.publicKey !== devicePublicKey ||
                 // Pending retries can merge roles; a node connect cannot approve
@@ -664,7 +668,7 @@ export async function authorizeGatewayConnectDevice(
           state: { ...state, scopes, handoffBootstrapProfile },
           scopes,
           hasApprovedDeviceBaseline: hasServerApprovedDeviceTokenBaseline,
-          isIssuanceCurrent: isConnectAuthorizationCurrent,
+          isIssuanceCurrent: isAuthorizationCurrent,
         });
 
   // A token issued over the OpenClaw ID tunnel belongs to the device key that obtained it.
@@ -716,7 +720,7 @@ export async function authorizeGatewayConnectDevice(
       if (personalBootstrap && current?.profileId !== personalBootstrap.operatorProfileId) {
         throw new Error("The personal handoff association was not committed");
       }
-      if (!isConnectAuthorizationCurrent()) {
+      if (!isAuthorizationCurrent()) {
         throw new Error("Device admission authority changed");
       }
       operatorProfileEnrollment = current;

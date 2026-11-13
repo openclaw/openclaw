@@ -10,6 +10,7 @@ import { pnpmLockfileDocuments } from "./lib/pnpm-lockfile-documents.mjs";
 import { runAsScript } from "./lib/ts-guard-utils.mts";
 
 const ALLOWED_PATCHED_DEPENDENCIES = new Map([
+  ["acorn@8.19.0", "patches/acorn@8.19.0.patch"],
   ["@homebridge/ciao@1.3.12", "patches/@homebridge__ciao@1.3.12.patch"],
   ["proper-lockfile@4.1.2", "patches/proper-lockfile@4.1.2.patch"],
   ["@clawdbot/lobster@2026.10.1", "patches/@clawdbot__lobster@2026.10.1.patch"],

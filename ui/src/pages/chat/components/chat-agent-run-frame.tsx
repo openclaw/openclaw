@@ -8,6 +8,7 @@ import {
   getOwner,
   lazy,
   Match,
+  merge,
   onSettled,
   runWithOwner,
   Show,
@@ -209,8 +210,7 @@ function prepareFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions
   const shell: MessageGroupData = {
     key: frame.key,
     kind: "group",
-    // A completed tool-only continuation owns activity, not an empty agent reply.
-    role: firstAssistant || streamRun || frame.outcome.kind !== "completed" ? "assistant" : "tool",
+    role: "assistant",
     senderLabel: firstAssistant?.senderLabel,
     replyToSender: firstAssistant?.replyToSender ?? streamRun?.replyToSender,
     replyToMessage: firstAssistant?.replyToMessage ?? streamRun?.replyToMessage,
@@ -295,24 +295,6 @@ export function AgentRunFrame(props: FrameProps) {
 function RunFrame(props: FrameProps) {
   const state = createMemo(() => prepareFrame(props.frame, props.options));
   const firstBubbleKey = createMemo(() => state().firstBubbleKey);
-  const timedWork = createMemo(() => {
-    const recap = props.options.turnRecap;
-    if (!recap) {
-      return undefined;
-    }
-    const work = props.frame.fragment
-      ? props.frame.fragment.work
-      : props.frame.parts.find(
-          (part) => part.kind === "work-group" && part.replyRunId === props.frame.runId,
-        );
-    // The recap retains this run's terminal timing after the session moves on.
-    // Run duration appears only on the Worked summary; turns without one show no timing.
-    if (work?.kind !== "work-group") {
-      return undefined;
-    }
-    const durationMs = work.durationMs ?? recap.runtimeMs;
-    return durationMs > 0 ? { ...work, durationMs } : undefined;
-  });
   const frameContent = [
     <FrameBody
       parts={state().bodyParts}
@@ -324,6 +306,11 @@ function RunFrame(props: FrameProps) {
       {(input) => {
         const part = () => input().part;
         const options = () => input().options;
+        const streamOptions = merge(() => options().streamOptions, {
+          get firstBubbleKey() {
+            return firstBubbleKey();
+          },
+        });
         const groupOptions = (group: MessageGroupData) => ({
           ...options().renderGroupOptions(group),
           firstBubbleKey: firstBubbleKey(),
@@ -352,21 +339,14 @@ function RunFrame(props: FrameProps) {
           <Switch>
             <Match when={streamPart()}>
               {(stream) => (
-                <StreamPartView
-                  part={stream()}
-                  options={{
-                    ...options().streamOptions,
-                    firstBubbleKey: firstBubbleKey(),
-                  }}
-                  presentation="standalone"
-                />
+                <StreamPartView part={stream()} options={streamOptions} presentation="standalone" />
               )}
             </Match>
             <Match when={workPart()}>
               {(work) => (
                 <>
                   <WorkGroupSummary
-                    item={timedWork()?.key === work().key ? timedWork()! : work()}
+                    item={work()}
                     options={{
                       expanded: options().isWorkExpanded(work().key),
                       mediaReadAllowed: options().streamOptions.mediaReadAllowed,

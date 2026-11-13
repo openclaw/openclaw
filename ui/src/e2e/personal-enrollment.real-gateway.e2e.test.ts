@@ -247,12 +247,12 @@ async function upgradePublishedFixture(page: Page) {
   expect(update.code, update.stderr).toBe(0);
   expect(
     JSON.parse(await readFile(path.join(installedRoot, "package.json"), "utf8")),
-  ).toMatchObject({ openclaw: { schemaVersions: { state: 40 } } });
+  ).toMatchObject({ openclaw: { schemaVersions: { state: 41 } } });
   await instance.startGateway();
   expect(instance.child?.pid).not.toBe(baselinePid);
   await page.reload();
   await waitForControlUiGatewayReady(page);
-  expect(schemaVersion()).toBe(40);
+  expect(schemaVersion()).toBe(41);
   const after = await evaluateControlUiContext(page, (app) => ({
     profileId: app.gateway.snapshot.selfUser?.id,
     method: app.gateway.snapshot.hello?.auth?.method,
@@ -283,7 +283,7 @@ async function upgradePublishedFixture(page: Page) {
         status: "preservation-passed",
         baselineVersion: "2026.11.3",
         baselineSchema: 22,
-        candidateSchema: 40,
+        candidateSchema: 41,
         baselinePid,
         candidatePid: instance.child?.pid,
         operatorCredentialPreserved: true,
@@ -402,11 +402,7 @@ suite.define(() => {
           await upgradePublishedFixture(page);
           await page.goto(suite.server.baseUrl + "settings/profile");
           await waitForControlUiGatewayReady(page);
-          await assertServedUi(
-            page,
-            suite.server.baseUrl,
-            installedRoot ? path.join(installedRoot, "dist/control-ui") : undefined,
-          );
+          await assertServedUi(page, suite.server.baseUrl, installedRoot);
           await page
             .locator(".personal-enrollment")
             .getByRole("button", { name: "Set up personal profile" })
@@ -629,7 +625,7 @@ suite.define(() => {
                 instance.stdout.join("").slice(stdoutOffset) +
                 instance.stderr.join("").slice(stderrOffset);
               expect(refusal).toMatch(
-                /schema.*(?:newer|40|supported)|(?:newer|incompatible|unsupported).*schema/is,
+                /schema.*(?:newer|41|supported)|(?:newer|incompatible|unsupported).*schema/is,
               );
             } finally {
               entrypoint[0] = current;
@@ -660,7 +656,7 @@ suite.define(() => {
                       publishedUpgrade: {
                         baseline: "2026.11.3",
                         baselineSchema: 22,
-                        candidateSchema: 40,
+                        candidateSchema: 41,
                         baselinePid: published.baselinePid,
                         sharedStatePreserved: true,
                         releasedReaderRefused: true,
