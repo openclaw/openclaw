@@ -5,8 +5,9 @@ import { expect, inject, it } from "vitest";
 import type { ControlUiRootState } from "../../../src/gateway/server-control-ui-root.ts";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
+import { buildProductionControlUiE2e } from "../test-helpers/control-ui-e2e-build.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { buildProductionControlUiE2e, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
+import { pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const runtime = createDeferred();
@@ -27,10 +28,27 @@ const suite = createControlUiE2eSuite({
     } else {
       await mkdir(path.resolve(".openclaw/tmp"), { recursive: true });
       currentUiRoot = await mkdtemp(path.resolve(".openclaw/tmp/fallback-current-ui-"));
-      await buildProductionControlUiE2e(currentUiRoot, "fallback-current-source");
     }
-    const { createOpenClawTestState } =
-      await import("../../../src/test-utils/openclaw-test-state.ts");
+    // Join both preparations before allocating state, including either failure.
+    const [build, stateModule] = await Promise.allSettled([
+      productionRoot
+        ? undefined
+        : buildProductionControlUiE2e(currentUiRoot, "fallback-current-source"),
+      import("../../../src/test-utils/openclaw-test-state.ts"),
+    ]);
+    if (build.status === "rejected") {
+      if (stateModule.status === "rejected") {
+        throw new AggregateError(
+          [build.reason, stateModule.reason],
+          "Fresh-browser preparation failed",
+        );
+      }
+      throw build.reason;
+    }
+    if (stateModule.status === "rejected") {
+      throw stateModule.reason;
+    }
+    const { createOpenClawTestState } = stateModule.value;
     const state = await createOpenClawTestState({
       prefix: "fresh-browser-maintenance-",
       scenario: "minimal",

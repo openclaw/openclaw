@@ -34,9 +34,9 @@ import { createOpenClawTestState } from "../../../src/test-utils/openclaw-test-s
 import { reserveTestPortListener } from "../../../src/test-utils/port-claims.js";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { buildProductionControlUiE2e } from "../test-helpers/control-ui-e2e-build.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
-  buildProductionControlUiE2e,
   captureControlUiE2eFailureDiagnostics,
   controlUiE2eWaitTimeoutMs,
   installMockGateway,

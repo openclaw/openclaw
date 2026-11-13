@@ -1,4 +1,5 @@
 import { expect, it, vi, type Mock } from "vitest";
+import { traceResumeTimerRegistrations } from "../../../../test/helpers/lane2430-resume-timer-diagnostic.js";
 import * as transcripts from "../../../config/sessions/transcript-write-context.js";
 import type { CallGatewayOptions } from "../../../gateway/call.js";
 import { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugin-in-process-dispatch.js";
@@ -409,28 +410,33 @@ export function registerDeliveryRetryOwnerTests({
       const { entry, controller } = run;
       const runs = controller.options.runs;
       await useRetryTimers();
-      if (state === "stale generation") {
-        const stale = controller.bumpCleanupGeneration(entry);
-        const current = controller.bumpCleanupGeneration(entry);
-        scheduleResumeSubagentRun(controller, entry, 1_000, current);
-        scheduleResumeSubagentRun(controller, entry, 2_000, stale);
-      } else {
-        controller.scheduleResume(entry, 1_000);
-        controller.scheduleResume(entry, 1_000);
-        expect(vi.getTimerCount()).toBe(1);
-      }
-      if (state === "replaced") {
-        runs.set(entry.runId, createRunEntry({ ...entry, generation: 2 }));
-      } else if (state === "cancelled") {
-        controller.clearRuntimeState();
-      }
-      await vi.advanceTimersByTimeAsync(1_000);
-      if (state === "stale generation") {
-        expect(resume).toHaveBeenCalledExactlyOnceWith(entry.runId);
+      const timerDiagnostics = traceResumeTimerRegistrations();
+      try {
+        if (state === "stale generation") {
+          const stale = controller.bumpCleanupGeneration(entry);
+          const current = controller.bumpCleanupGeneration(entry);
+          scheduleResumeSubagentRun(controller, entry, 1_000, current);
+          scheduleResumeSubagentRun(controller, entry, 2_000, stale);
+        } else {
+          controller.scheduleResume(entry, 1_000);
+          controller.scheduleResume(entry, 1_000);
+          expect(vi.getTimerCount()).toBe(1);
+        }
+        if (state === "replaced") {
+          runs.set(entry.runId, createRunEntry({ ...entry, generation: 2 }));
+        } else if (state === "cancelled") {
+          controller.clearRuntimeState();
+        }
         await vi.advanceTimersByTimeAsync(1_000);
+        if (state === "stale generation") {
+          expect(resume).toHaveBeenCalledExactlyOnceWith(entry.runId);
+          await vi.advanceTimersByTimeAsync(1_000);
+        }
+        expect(resume).toHaveBeenCalledTimes(state === "replaced" || state === "cancelled" ? 0 : 1);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        timerDiagnostics[Symbol.dispose]();
       }
-      expect(resume).toHaveBeenCalledTimes(state === "replaced" || state === "cancelled" ? 0 : 1);
-      expect(vi.getTimerCount()).toBe(0);
     },
   );
 

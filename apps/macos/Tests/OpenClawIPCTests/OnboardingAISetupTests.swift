@@ -943,6 +943,7 @@ private func inspectAISetupSurface(
 ) async -> (labels: [String], actions: [String: Bool], size: NSSize) {
     // Self-process AX enumerates all windows; keep this fixture isolated through teardown.
     await TestIsolation.withIsolatedState {
+        FileHandle.standardError.write(Data("native-auth phase=surface-isolation-entered\n".utf8))
         _ = AppKitTestSupport.application
         var appeared = false
         let hosting = NSHostingView(rootView: content
@@ -2502,6 +2503,7 @@ struct OnboardingAISetupTests {
                 let sessionID = try #require(request.params["sessionId"] as? String)
                 cancelledSessions.withValue { $0.append(sessionID) }
                 let cancellation = cancellationRequests.claim()
+                FileHandle.standardError.write(Data("native-auth phase=cancel-request index=\(cancellation)\n".utf8))
                 if scenario.terminalFirst, cancellation == 0 {
                     await cancellationGate.wait()
                 }
@@ -2532,13 +2534,17 @@ struct OnboardingAISetupTests {
             groupLabel: nil, icon: nil, website: nil, kind: "oauth", featured: false, modelTarget: nil
         )
 
+        FileHandle.standardError.write(Data("native-auth phase=detect-begin\n".utf8))
         await model.detectConnections()
+        FileHandle.standardError.write(Data("native-auth phase=detect-end\n".utf8))
         model.startProviderWizard(option, kind: kind)
         try await TestWait.observed("provider auth step") { model.authStep != nil }
         let sessionID = try #require(model._test_authSessionID)
         model.authText = "callback-value"
         model.continueProviderAuth()
+        FileHandle.standardError.write(Data("native-auth phase=next-admission-begin\n".utf8))
         await nextGate.waitUntilStarted()
+        FileHandle.standardError.write(Data("native-auth phase=next-admitted\n".utf8))
 
         let cancellation = model.cancelProviderAuth()
         try #require(model.activeAuthOption == option)
@@ -2546,14 +2552,20 @@ struct OnboardingAISetupTests {
         #expect(model.authBusy)
         var terminalError: OnboardingAISetupModel.Failure?
         if scenario.terminalFirst {
+            FileHandle.standardError.write(Data("native-auth phase=cancel-admission-begin\n".utf8))
             await cancellationGate.waitUntilStarted()
+            FileHandle.standardError.write(Data("native-auth phase=cancel-admitted\n".utf8))
             await nextGate.release()
+            FileHandle.standardError.write(Data("native-auth phase=next-released\n".utf8))
             try await TestWait.observed("provider terminal response") {
                 model.connected || model.authError?.copyText.contains("Provider declined sign-in") == true
             }
+            FileHandle.standardError.write(Data("native-auth phase=terminal-observed\n".utf8))
             terminalError = model.authError
             await cancellationGate.release()
+            FileHandle.standardError.write(Data("native-auth phase=cancel-join-begin\n".utf8))
             await cancellation?.value
+            FileHandle.standardError.write(Data("native-auth phase=cancel-joined\n".utf8))
             #expect(model.authError == terminalError)
         } else {
             try await TestWait.observed("provider cancellation response") {
@@ -2561,9 +2573,11 @@ struct OnboardingAISetupTests {
             }
             #expect(model.providerAuthCancellation == .unconfirmed)
             await nextGate.release()
+            FileHandle.standardError.write(Data("native-auth phase=next-released\n".utf8))
             try await TestWait.observed("provider terminal response") {
                 model.connected || model.authError?.copyText.contains("Provider declined sign-in") == true
             }
+            FileHandle.standardError.write(Data("native-auth phase=terminal-observed\n".utf8))
             terminalError = model.authError
         }
 
@@ -2581,7 +2595,9 @@ struct OnboardingAISetupTests {
             }
             #expect(model.providerAuthCancellation == nil)
             #expect(!model.authBusy)
+            FileHandle.standardError.write(Data("native-auth phase=sheet-begin\n".utf8))
             let sheet = await inspectAISetupSheet(model)
+            FileHandle.standardError.write(Data("native-auth phase=sheet-end\n".utf8))
             if let terminalError {
                 #expect(sheet.labels.contains(terminalError.summary))
                 #expect(
@@ -2599,7 +2615,9 @@ struct OnboardingAISetupTests {
             #expect(model.connected)
             #expect(model.authError == nil)
         }
+        FileHandle.standardError.write(Data("native-auth phase=shutdown-begin\n".utf8))
         await gateway.shutdown()
+        FileHandle.standardError.write(Data("native-auth phase=shutdown-end\n".utf8))
     }
 
     @Test(

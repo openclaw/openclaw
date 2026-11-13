@@ -4351,7 +4351,6 @@
 ["src/gateway/config-get-response.invalid-config.test.ts","../config/config.js","7e1a20a709c92a2cdf6e7ada027ceb8c55a2e99cb1bf536ce83ead1a1f8c4bf2",1]
 ["src/gateway/config-get-response.invalid-config.test.ts","../plugins/runtime.js","477e5eaf51db71d2f171b24cfe0da09d41dcbb913968590ecae8a2a0f29e7a0f",1]
 ["src/gateway/config-get-response.test.ts","../plugins/runtime.js","4a590ed84dc14b561772ccaa4ade3a52a6d5f4598579b129e703f5e17ae27d9e",1]
-["src/gateway/control-ui-assistant-media-policy.test.ts","./http-utils.js","b1d34f3c6f794fca41c82916de2b6724f365f9b15293400ae108b1ccaa364b51",1]
 ["src/gateway/control-ui-session-prs-retention.test.ts","../infra/git-worker.js","73b1601423791dced3e8926147c1acbbc424d262187b7a663c2d4c6ba6471644",1]
 ["src/gateway/control-ui-session-prs.test.ts","../infra/git-worker.js","73b1601423791dced3e8926147c1acbbc424d262187b7a663c2d4c6ba6471644",1]
 ["src/gateway/control-ui.http.test.ts","../infra/dev-install-branch.js","44417829ee73353c7c876e4c6690c2752f0cd345f071d3589eab7281c8a8d746",1]

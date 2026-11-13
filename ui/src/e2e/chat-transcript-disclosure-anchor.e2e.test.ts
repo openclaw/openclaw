@@ -48,6 +48,7 @@ type DisclosureFrame = {
   rowTop: number;
   scrollHeight: number;
   scrollTop: number;
+  geometry: unknown;
 };
 
 async function toggleDisclosureWithFrameTrace(
@@ -74,6 +75,27 @@ async function toggleDisclosureWithFrameTrace(
         rowTop: row.getBoundingClientRect().top - thread.getBoundingClientRect().top,
         scrollHeight: thread.scrollHeight,
         scrollTop: thread.scrollTop,
+        geometry: {
+          clientHeight: thread.clientHeight,
+          extentHeight: Number.parseFloat(
+            thread.querySelector<HTMLElement>(".chat-thread-inner")?.style.height ?? "",
+          ),
+          blockStart: Number.parseFloat(
+            thread.querySelector<HTMLElement>(".chat-virtual-block")?.style.top ?? "",
+          ),
+          fonts: document.fonts.status,
+          rowIndex: Number(row.dataset.index),
+          rows: Array.from(thread.querySelectorAll<HTMLElement>(".chat-virtual-row"))
+            .slice(0, 40)
+            .map((item) => ({
+              index: Number(item.dataset.index),
+              prepared: item.hasAttribute("data-prepared-row"),
+              virtualSize: Number(item.dataset.rowSize),
+              offsetHeight: item.offsetHeight,
+              top: item.getBoundingClientRect().top - thread.getBoundingClientRect().top,
+              height: item.getBoundingClientRect().height,
+            })),
+        },
       });
     };
     sample();

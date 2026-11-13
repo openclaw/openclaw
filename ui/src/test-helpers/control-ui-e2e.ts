@@ -24,6 +24,7 @@ import {
   controlUiE2eBuildPlugins,
   type ControlUiE2eBuildOptions,
 } from "./control-ui-e2e-build-publication.ts";
+import { buildControlUiE2e } from "./control-ui-e2e-build.ts";
 import type {
   ControlUiMockGateway,
   ControlUiMockGatewayInstallOptions,
@@ -427,63 +428,6 @@ function createBundledControlUiE2eConfig(
     logLevel: "error" as const,
     root: uiRoot,
   };
-}
-
-export async function buildProductionControlUiE2e(
-  outDir: string,
-  buildId: string,
-  options: ControlUiE2eBuildOptions = {},
-): Promise<void> {
-  await buildControlUiE2e(outDir, buildId, options, "--production-build");
-}
-
-async function buildControlUiE2e(
-  outDir: string,
-  buildId: string,
-  options: ControlUiE2eBuildOptions,
-  command: "--production-build" | "--production-preview-build" | "--bundled-build",
-): Promise<void> {
-  // Compile outside Vitest so its NODE_ENV=test cannot disable production
-  // behavior or select development dependencies in the shared browser artifact.
-  const repoRoot = resolveRepoRoot();
-  const uiRoot = path.join(repoRoot, "ui");
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    NODE_ENV: "production",
-    OPENCLAW_CONTROL_UI_BUILD_ID: buildId,
-  };
-  for (const key of Object.keys(env)) {
-    if (key.startsWith("VITEST")) {
-      delete env[key];
-    }
-  }
-  const result = spawnSync(
-    process.execPath,
-    [
-      "--import",
-      "tsx",
-      fileURLToPath(import.meta.url),
-      command,
-      outDir,
-      ...(options.includeBootGroups === false ? ["--individual-boot-modules"] : []),
-      ...(options.protocolVersion === undefined
-        ? []
-        : [`--protocol-version=${options.protocolVersion}`]),
-    ],
-    {
-      cwd: uiRoot,
-      encoding: "utf8",
-      env,
-      // Forward build activity while spawnSync waits; retain stderr for failures.
-      stdio: ["ignore", "inherit", "pipe"],
-      maxBuffer: 10 * 1024 * 1024,
-    },
-  );
-  if (result.status !== 0) {
-    throw new Error(
-      `Production Control UI build failed (exit ${result.status ?? "unknown"}):\n${result.stderr || result.error?.message || "See streamed build output above."}`,
-    );
-  }
 }
 
 export async function refreshProductionControlUiE2e(
