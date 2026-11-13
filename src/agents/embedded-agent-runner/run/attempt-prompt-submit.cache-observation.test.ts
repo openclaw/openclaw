@@ -48,6 +48,26 @@ it("rechecks request authority after asynchronous observation before dispatch", 
   expect(provider).not.toHaveBeenCalled();
 });
 
+it("leaves the provider result for its consumer to read", async () => {
+  const { activeSession } = createSession();
+  const stream = createAssistantResultStream(createAssistant(testModel, "Done."));
+  // Result decorators (tool-call argument repair) settle when result() is read.
+  const read = vi.spyOn(stream, "result");
+  activeSession.agent.streamFn = () => stream;
+  await submitEmbeddedAttemptPrompt({
+    ...createBaseInput(),
+    activeSession,
+    promptActiveSession: async (_prompt, options) => {
+      options?.preflightResult?.(true);
+      const sent = await activeSession.agent.streamFn(testModel, { messages: [] });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(read).not.toHaveBeenCalled();
+      await sent.result();
+      expect(read).toHaveBeenCalledTimes(1);
+    },
+  });
+});
+
 it("observes canonical request prefixes before managed cache consumption and skips compaction", async () => {
   const { activeSession } = createSession();
   const observations = vi.fn<Parameters<typeof createPromptCacheRequestObserver>[1]>();

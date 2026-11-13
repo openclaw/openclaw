@@ -17,6 +17,7 @@ import {
 import type { FixedRequestTokenPressure } from "../../sessions/context-token-pressure.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
+import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
 import { log } from "../logger.js";
 import {
   declarePromptHistoryRewrite,
@@ -95,6 +96,24 @@ function reportSessionPrefix(
       `[prompt-cache] session prefix rebuilt (${report.reason}${report.index === undefined ? "" : ` at ${report.index}`}) sessionId=${sessionId}`,
     );
   }
+}
+
+/** The request joins the session series when its consumer reads an accepted result. */
+function commitSessionPrefixOnAccept(
+  stream: MutableAssistantMessageEventStream,
+  commit: () => void,
+): MutableAssistantMessageEventStream {
+  // The consumer owns result(): reading it early would settle result decorators (tool-call
+  // argument repair) before the consumer drains queued events.
+  const originalResult = stream.result.bind(stream);
+  stream.result = async () => {
+    const message = await originalResult();
+    if (message.stopReason !== "error" && message.stopReason !== "aborted") {
+      commit();
+    }
+    return message;
+  };
+  return stream;
 }
 
 export async function submitEmbeddedAttemptPrompt(input: {
@@ -281,18 +300,9 @@ export async function submitEmbeddedAttemptPrompt(input: {
             projectionRecorder?.markSentToProvider?.();
           }
           const stream = await baseStreamFn(model, requestContext, options);
-          if (commitSessionPrefix) {
-            const commit = commitSessionPrefix;
-            void stream.result().then(
-              (message) => {
-                if (message.stopReason !== "error" && message.stopReason !== "aborted") {
-                  commit();
-                }
-              },
-              () => undefined,
-            );
-          }
-          return stream;
+          return commitSessionPrefix
+            ? commitSessionPrefixOnAccept(stream, commitSessionPrefix)
+            : stream;
         },
         { checkAfter: false },
       );
