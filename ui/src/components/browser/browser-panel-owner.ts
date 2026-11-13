@@ -442,10 +442,8 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
       } else if (
         options?.focusBrowserTab === false &&
         stream.ownsView(panel.activeTargetId) &&
-        panel.tabs.some(
-          (tab) =>
-            tab.id === panel.activeTargetId && (tab.id === targetId || tab.targetId === targetId),
-        )
+        panel.tabs.find((tab) => tab.id === targetId || tab.targetId === targetId)?.id ===
+          panel.activeTargetId
       ) {
         // A newer session result for the tab already streaming here keeps the live view.
         return;
