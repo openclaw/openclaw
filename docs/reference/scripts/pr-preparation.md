@@ -141,6 +141,24 @@ workflow identity. It does not replace the retained workflow binding. Land
 and independently review this capability first; an unlanded wrapper cannot admit
 itself, and developer-wrapper opt-in still grants no authority.
 
+Both proof commands first authenticate the reviewed workflow against the canonical
+owner's cached `refs/remotes/origin/main`, before executing that workflow. A stale
+cache therefore refuses even when the reviewed workflow has landed. Keep the
+review unchanged. Resolve the canonical owner with `gwt owner`, check `low-data
+status`, verify its `origin` is the official OpenClaw repository, and verify the
+tracking ref is nonsymbolic. Then acquire main through the guarded Git command:
+
+```bash
+git -C <canonical-owner> -c gc.auto=0 -c maintenance.auto=false fetch \
+  --no-auto-maintenance --no-tags --no-write-fetch-head --refmap= \
+  origin refs/heads/main:refs/remotes/origin/main
+```
+
+Using the named canonical `origin` preserves its configured transport and partial
+clone filter. Do not force the ref, bypass low-data admission, or replace the
+reviewed source with a local commit. Retry the original proof command after
+acquisition; its locked private-main checkpoint still revalidates ancestry.
+
 The source review must be a fresh independent exact-source correction review with
 that same typed pending-proof authorization, incoming review, workflow source,
 workflow binding, and hosted lease. The default source-review file is

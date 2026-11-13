@@ -697,6 +697,36 @@ describePosix("proof baseline from the retained publication lifecycle", () => {
     "keeps reviewed workflow identity when main advances by %s",
     (change) => {
       const f = fixture();
+      const retained = JSON.parse(f.git(f.repo, "show", f.binding + ":binding.json")).source;
+      const acquireMain = () => {
+        const fetchHead = readFileSync(join(f.repo, ".git/FETCH_HEAD"));
+        f.git(
+          f.repo,
+          "-c",
+          "gc.auto=0",
+          "-c",
+          "maintenance.auto=false",
+          "fetch",
+          "--no-auto-maintenance",
+          "--no-tags",
+          "--no-write-fetch-head",
+          "--refmap=",
+          "origin",
+          "refs/heads/main:refs/remotes/origin/main",
+        );
+        expect(readFileSync(join(f.repo, ".git/FETCH_HEAD"))).toEqual(fetchHead);
+      };
+      const refuseStaleCache = (operation: string, args: string[]) => {
+        f.git(f.repo, "update-ref", "refs/remotes/origin/main", retained);
+        const before = nativeState(f);
+        const refused = f.run(operation, args, f.extra);
+        expect(refused.status).toBe(1);
+        expect(refused.stderr).toContain(
+          "Reviewed proof workflow is absent from cached official main",
+        );
+        expect(nativeState(f)).toEqual(before);
+        acquireMain();
+      };
       const advance = (label: string) => {
         if (change === "closure") {
           const path = join(f.repo, "scripts/pr-lib/common.sh");
@@ -705,10 +735,11 @@ describePosix("proof baseline from the retained publication lifecycle", () => {
         }
         f.git(f.repo, "commit", "--allow-empty", "-qm", `test: ${label}`);
         const main = f.git(f.repo, "rev-parse", "HEAD");
-        f.git(f.repo, "fetch", "-q", "origin", "main");
+        acquireMain();
         return main;
       };
       const main = advance("main advanced before baseline");
+      refuseStaleCache(command, f.args);
       const advancedMain = f.git(
         f.repo,
         "commit-tree",
@@ -775,23 +806,20 @@ exec git "$@"`,
       );
       const review = f.readLocal("correction-review.json");
       advance("main advanced before proof succession");
-      const succeeded = f.run(
-        "prepare-workflow-successor",
-        [
-          "--for-proof",
-          ...flags({
-            "--expected-binding": f.binding,
-            "--from-workflow": JSON.parse(f.git(f.repo, "show", f.binding + ":binding.json"))
-              .source,
-            "--to-workflow": f.workflow,
-            "--expected-head": candidate,
-            "--expected-tree": f.tree,
-            "--expected-review": f.oid("correction-review.json"),
-            "--expected-hosted-head": f.published,
-          }),
-        ],
-        f.extra,
-      );
+      const successorArgs = [
+        "--for-proof",
+        ...flags({
+          "--expected-binding": f.binding,
+          "--from-workflow": retained,
+          "--to-workflow": f.workflow,
+          "--expected-head": candidate,
+          "--expected-tree": f.tree,
+          "--expected-review": f.oid("correction-review.json"),
+          "--expected-hosted-head": f.published,
+        }),
+      ];
+      refuseStaleCache("prepare-workflow-successor", successorArgs);
+      const succeeded = f.run("prepare-workflow-successor", successorArgs, f.extra);
       expect(succeeded.status, succeeded.stdout + succeeded.stderr).toBe(0);
       const binding = f.git(f.repo, "rev-parse", "refs/openclaw/pr-workflow-bindings/42");
       expect(JSON.parse(f.git(f.repo, "show", binding + ":binding.json")).source).toBe(f.workflow);
@@ -1222,15 +1250,17 @@ exec git "$@"`,
     const expected =
       fault === "wrong-review"
         ? /Selected proof source review changed/u
-        : fault === "wrong-proof-lease"
-          ? /Proof source hosted lease changed/u
-          : fault === "private-baseline"
-            ? /merge-base --is-ancestor/u
-            : fault.startsWith("unsigned")
-              ? /verify-commit/u
-              : fault === "stale-lease"
-                ? /PR head changed|PR identity changed/u
-                : /Proof publication requires|workflow continuation changed|does not exist/u;
+        : fault === "wrong-workflow"
+          ? /Reviewed proof workflow is absent from cached official main/u
+          : fault === "wrong-proof-lease"
+            ? /Proof source hosted lease changed/u
+            : fault === "private-baseline"
+              ? /merge-base --is-ancestor/u
+              : fault.startsWith("unsigned")
+                ? /verify-commit/u
+                : fault === "stale-lease"
+                  ? /PR head changed|PR identity changed/u
+                  : /Proof publication requires|workflow continuation changed|does not exist/u;
     expect(error).toMatch(expected);
     f.expectSnapshot(f.before);
     expect(existsSync(f.local("prepare-baseline.json"))).toBe(false);

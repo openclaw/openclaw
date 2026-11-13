@@ -469,9 +469,15 @@ try {
       requireAdmission(run(["rev-parse", "--verify", `${anchor}^{commit}`]), anchor);
       try {
         requireSource(current.source, proof.workflowSource);
+      } catch {
+        throw new Error("Proof publication requires a workflow descended from the retained source.");
+      }
+      try {
         requireSource(proof.workflowSource, anchor);
       } catch {
-        throw new Error("Proof publication requires a workflow between the retained source and official main.");
+        throw new Error(anchor === "refs/remotes/origin/main"
+          ? "Reviewed proof workflow is absent from cached official main. Land it first; if already landed, refresh the canonical owner's official main tracking ref as documented in PR preparation, then retry the unchanged review."
+          : "Reviewed proof workflow is not an ancestor of captured official main.");
       }
       return proof.workflowSource;
     };

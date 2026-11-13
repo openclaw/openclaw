@@ -95,6 +95,7 @@ describe.skipIf(process.platform === "win32")("native workflow binding storage",
     "before binding",
     "divergent",
     "unlanded",
+    "stale main",
     "nonofficial",
     "changed review",
     "changed binding",
@@ -154,8 +155,18 @@ describe.skipIf(process.platform === "win32")("native workflow binding storage",
       f.git(["update-ref", "refs/openclaw/other-binding", binding]);
       f.git(["symbolic-ref", ref, "refs/openclaw/other-binding"]);
     }
-    const selected = f.run("workflow-proof-select", review, path);
-    const selectedBeforeDrift = fault === "valid" || fault === "replaced binding";
+    if (fault === "stale main") f.git(["update-ref", "refs/remotes/origin/main", bound]);
+    let selected = f.run("workflow-proof-select", review, path);
+    if (fault === "stale main") {
+      expect(selected.status).toBe(1);
+      expect(selected.stderr).toContain(
+        "Reviewed proof workflow is absent from cached official main",
+      );
+      expect(f.git(["rev-parse", ref])).toBe(binding);
+      f.git(["update-ref", "refs/remotes/origin/main", main]);
+      selected = f.run("workflow-proof-select", review, path);
+    }
+    const selectedBeforeDrift = ["valid", "replaced binding", "stale main"].includes(fault);
     expect(selected.status, selected.stderr).toBe(selectedBeforeDrift ? 0 : 1);
     let retainedBinding = binding;
     if (selectedBeforeDrift) {
@@ -180,8 +191,8 @@ describe.skipIf(process.platform === "win32")("native workflow binding storage",
         review,
         path,
       );
-      expect(admitted.status, admitted.stderr).toBe(fault === "valid" ? 0 : 1);
-      if (fault === "valid") expect(admitted.stdout).toBe(binding);
+      expect(admitted.status, admitted.stderr).toBe(fault === "replaced binding" ? 1 : 0);
+      if (fault !== "replaced binding") expect(admitted.stdout).toBe(binding);
       // Ordinary current-workflow admission retains its exact-main requirement.
       expect(f.run("workflow-admission-provenance", "", "", main, reviewed).status).toBe(1);
     }
