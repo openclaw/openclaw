@@ -139,6 +139,11 @@ export class PluginInvocationScope {
     if (!this.consumers.has(instance)) {
       this.work?.retain(instance);
     }
+    // This lease owns exact work, not its parent's invocation lifetime.
+    // Unknown instances still resolve through the parent and its admission guard.
+    if (this.work && this.bindings.has(instance)) {
+      return;
+    }
     this.parent?.retainInvocation?.(instance);
   }
 
