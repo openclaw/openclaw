@@ -10,73 +10,66 @@ export function coerceImageModelConfig(cfg?: OpenClawConfig): ImageModelConfig {
   return coerceToolModelConfig(cfg?.agents?.defaults?.imageModel);
 }
 
-function resolveProviderlessConfiguredImageModelRef(params: {
-  cfg?: OpenClawConfig;
-  ref: string;
-}): string {
-  const ref = params.ref.trim();
-  if (!ref || ref.includes("/")) {
-    return ref;
-  }
-
-  const providers = params.cfg?.models?.providers;
-  const matchedRefs = new Set<string>();
-  for (const [providerKey, providerConfig] of Object.entries(providers ?? {})) {
-    const provider = normalizeProviderId(providerKey);
-    if (!provider || !Array.isArray(providerConfig?.models)) {
-      continue;
-    }
-    for (const entry of providerConfig.models) {
-      const modelId = entry?.id?.trim();
-      if (!modelId || !Array.isArray(entry?.input) || !entry.input.includes("image")) {
-        continue;
-      }
-      const candidates = [modelId];
-      const slash = modelId.indexOf("/");
-      if (slash > 0 && normalizeProviderId(modelId.slice(0, slash)) === provider) {
-        candidates.push(modelId.slice(slash + 1));
-      }
-      const normalizedRef = normalizeLowercaseStringOrEmpty(ref);
-      if (
-        !candidates.some(
-          (candidate) => normalizeLowercaseStringOrEmpty(candidate) === normalizedRef,
-        )
-      ) {
-        continue;
-      }
-      matchedRefs.add(
-        slash > 0 && normalizeProviderId(modelId.slice(0, slash)) === provider
-          ? modelId
-          : `${provider}/${modelId}`,
-      );
-    }
-  }
-  const matches = [...matchedRefs];
-  if (matches.length <= 1) {
-    return matches.at(0) ?? ref;
-  }
-  throw new Error(
-    `Ambiguous image model "${ref}". Configure a provider-prefixed ref such as ${matches
-      .map((match) => `"${match}"`)
-      .join(" or ")}.`,
-  );
-}
-
 export function resolveConfiguredImageModelRefs(params: {
   cfg?: OpenClawConfig;
   imageModelConfig: ImageModelConfig;
 }): ImageModelConfig {
   const primary = params.imageModelConfig.primary?.trim();
+  const matchesByRef = new Map<string, Set<string>>();
+  for (const rawRef of [...(params.imageModelConfig.fallbacks ?? []), primary ?? ""]) {
+    const ref = rawRef.trim();
+    if (ref && !ref.includes("/")) {
+      matchesByRef.set(normalizeLowercaseStringOrEmpty(ref), new Set());
+    }
+  }
+
+  if (matchesByRef.size > 0) {
+    for (const [providerKey, providerConfig] of Object.entries(
+      params.cfg?.models?.providers ?? {},
+    )) {
+      const provider = normalizeProviderId(providerKey);
+      if (!provider || !Array.isArray(providerConfig?.models)) {
+        continue;
+      }
+      for (const entry of providerConfig.models) {
+        const modelId = entry?.id?.trim();
+        if (!modelId || !Array.isArray(entry?.input) || !entry.input.includes("image")) {
+          continue;
+        }
+        const slash = modelId.indexOf("/");
+        const providerPrefixed =
+          slash > 0 && normalizeProviderId(modelId.slice(0, slash)) === provider;
+        const ref = providerPrefixed ? modelId.slice(slash + 1) : modelId;
+        matchesByRef
+          .get(normalizeLowercaseStringOrEmpty(ref))
+          ?.add(providerPrefixed ? modelId : `${provider}/${modelId}`);
+      }
+    }
+  }
+
+  const resolveRef = (rawRef: string): string => {
+    const ref = rawRef.trim();
+    if (!ref || ref.includes("/")) {
+      return ref;
+    }
+    const matches = [...(matchesByRef.get(normalizeLowercaseStringOrEmpty(ref)) ?? [])];
+    if (matches.length <= 1) {
+      return matches.at(0) ?? ref;
+    }
+    throw new Error(
+      `Ambiguous image model "${ref}". Configure a provider-prefixed ref such as ${matches
+        .map((match) => `"${match}"`)
+        .join(" or ")}.`,
+    );
+  };
   const fallbacks = params.imageModelConfig.fallbacks
-    ?.map((ref) => resolveProviderlessConfiguredImageModelRef({ cfg: params.cfg, ref }))
+    ?.map(resolveRef)
     .filter((ref) => ref.length > 0);
 
   return {
     ...(params.imageModelConfig.primary !== undefined
       ? {
-          primary: primary
-            ? resolveProviderlessConfiguredImageModelRef({ cfg: params.cfg, ref: primary })
-            : primary,
+          primary: primary ? resolveRef(primary) : primary,
         }
       : {}),
     ...(fallbacks && fallbacks.length > 0 ? { fallbacks } : {}),

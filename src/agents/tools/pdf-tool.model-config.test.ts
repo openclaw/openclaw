@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { finalizePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
@@ -108,6 +109,41 @@ it("falls back to explicit imageModel config", () => {
       agents: { defaults: { imageModel: { primary: "openai/gpt-5.4-mini" } } },
     }),
   ).toEqual({ primary: "openai/gpt-5.4-mini" });
+});
+
+it("resolves image refs after fallback-first ambiguity", () => {
+  const models = ["moondream", "llava"].map((id): ModelDefinitionConfig => ({
+    id,
+    name: id,
+    reasoning: false,
+    input: ["text", "image"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 32_000,
+    maxTokens: 4_096,
+  }));
+  expect(() =>
+    resolve({
+      agents: { defaults: { imageModel: { primary: "moondream", fallbacks: ["llava"] } } },
+      models: {
+        providers: {
+          ollama: { baseUrl: "https://example.com/v1", models },
+          lmstudio: { baseUrl: "https://example.com/v1", models },
+        },
+      },
+    }),
+  ).toThrow(
+    'Ambiguous image model "llava". Configure a provider-prefixed ref such as "ollama/llava" or "lmstudio/llava".',
+  );
+  expect(
+    resolve({
+      agents: { defaults: { imageModel: { primary: "moondream", fallbacks: ["llava"] } } },
+      models: {
+        providers: {
+          ollama: { baseUrl: "https://example.com/v1", models },
+        },
+      },
+    }),
+  ).toEqual({ primary: "ollama/moondream", fallbacks: ["ollama/llava"] });
 });
 
 it.each([
