@@ -5,9 +5,9 @@ import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { migrateSingletonStateFoldInV12 } from "./openclaw-state-db-schema-v12-foldin.js";
 import { migrateJsonCanonicalWideRowsV13 } from "./openclaw-state-db-schema-v13-widerow.js";
 import { TEMPLATE_RECORD_VERSIONS } from "./openclaw-state-db-schema-v36-template-names.js";
-import { CONTENT_VERSION_KEY } from "./openclaw-state-db-schema-version.js";
 import { getOpenClawStateFeatureSchemaSql } from "./openclaw-state-feature-schema.js";
 import { getOpenClawStateRuntimeSchema } from "./openclaw-state-schema-compatibility.js";
+import { writeStateSchemaContentVersion } from "./openclaw-state-schema-publication.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import {
   buildSqliteWithFoldIns,
@@ -90,10 +90,7 @@ function stampStateSchema(db: DatabaseSync): void {
      ON CONFLICT(meta_key) DO UPDATE SET role = 'global', schema_version = excluded.schema_version,
        agent_id = NULL, app_version = excluded.app_version, updated_at = excluded.updated_at`,
   ).run(OPENCLAW_STATE_SCHEMA_VERSION, VERSION, now, now);
-  db.prepare(
-    `INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?)
-     ON CONFLICT(state_key) DO UPDATE SET value_json = excluded.value_json, updated_at_ms = excluded.updated_at_ms`,
-  ).run(CONTENT_VERSION_KEY, String(OPENCLAW_STATE_SCHEMA_VERSION), now);
+  writeStateSchemaContentVersion(db);
 }
 
 export function createStateSwapTarget(): SqliteSwapTarget {
