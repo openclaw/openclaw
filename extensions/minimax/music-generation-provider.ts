@@ -183,12 +183,14 @@ export function buildMinimaxMusicGenerationProvider(
               resolveStreamEnvelopeMaxBytes(maxGeneratedMusicBytes),
             ),
           );
-          for (const rawLine of text.split(/\r?\n/u)) {
-            const line = rawLine.trim();
-            if (!line.startsWith("data:")) {
-              continue;
-            }
-            const json = line.slice("data:".length).trim();
+          for (const event of text.replace(/\r\n|\r/gu, "\n").split("\n\n")) {
+            // An SSE event can carry JSON across multiple data fields.
+            const json = event
+              .split("\n")
+              .map((line) => line.trim())
+              .filter((line) => line.startsWith("data:"))
+              .map((line) => line.slice("data:".length).trim())
+              .join("\n");
             if (!json || json === "[DONE]") {
               continue;
             }
