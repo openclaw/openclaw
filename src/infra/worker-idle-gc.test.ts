@@ -24,11 +24,11 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it("lets task bursts finish and only schedules collection after heap or external growth", async () => {
+it("collects the first idle heap after a burst, then requires heap or external growth", async () => {
   vi.useFakeTimers();
   const memory = process.memoryUsage();
-  let heapUsed = 64 * 1024 * 1024;
-  let external = memory.external;
+  let heapUsed = 8 * 1024 * 1024;
+  let external = 0;
   vi.spyOn(process, "memoryUsage").mockImplementation(() => ({ ...memory, heapUsed, external }));
 
   for (const pauseMs of [250, 750, 999]) {
