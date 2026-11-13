@@ -207,6 +207,19 @@ async function held(
   return run;
 }
 
+function hasLoneSurrogate(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    const unit = value.charCodeAt(i);
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      const next = value.charCodeAt(i + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return true;
+    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
 describe("agent group thread dispatch", () => {
   it.each([false, true])("shares settled post-hook finals (prepared: %s)", async (prepared) => {
     replyHooks.enabled = true;
@@ -524,20 +537,14 @@ describe("agent group thread dispatch", () => {
     // A round-1 reply whose length crosses MAX_FINAL_CHARS mid-emoji: a naive
     // UTF-16 code-unit slice would leave a dangling surrogate in the captured
     // reply text that then leaks into the next round's digest (ctx.BodyForAgent).
-    const longReply = "x".repeat(3999) + "🥐" + "tail";
+    const longReply = "x".repeat(3999) + "🥐tail";
     const run = await completed({
       cfg: continuationConfig(),
-      reply: (_turn, index) => {
-        if (index === 0) {
-          return [longReply];
-        }
-        return ["A short reply."];
-      },
+      reply: (_turn, index) => (index === 0 ? [longReply] : ["A short reply."]),
     });
-    const digest = run.turns[3]?.ctx.BodyForAgent;
-    expect(digest).toBeDefined();
+    const digest = run.turns[3]?.ctx.BodyForAgent ?? "";
     // No lone surrogate: the emoji is kept whole or dropped whole, never split.
-    expect(digest.isWellFormed()).toBe(true);
+    expect(hasLoneSurrogate(digest)).toBe(false);
   });
 });
 describe("group thread entry compatibility", () => {
