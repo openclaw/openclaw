@@ -1049,7 +1049,8 @@ export function inspectPersonalCredentialWriters(
           ts.isVariableDeclaration(node) ||
           ts.isBindingElement(node)) &&
         node.name &&
-        ts.isIdentifier(node.name)
+        ts.isIdentifier(node.name) &&
+        names.has(node.name.text)
       ) {
         const enclosing = operation(node);
         const id = key(
