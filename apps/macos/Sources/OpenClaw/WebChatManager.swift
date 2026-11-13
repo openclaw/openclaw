@@ -42,6 +42,7 @@ final class WebChatManager {
         var route: WebChatRoute
         let connection: GatewayConnection?
         let controller: WebChatSwiftUIWindowController
+        let connectionConsumer: MacGatewayConnectionFleet.Consumer?
     }
 
     private var keyChatWindowID: UUID?
@@ -265,6 +266,7 @@ final class WebChatManager {
         requestedRoute: WebChatRoute?,
         sourceIsCurrent: () -> Bool) async throws
     {
+        let consumer = MacGatewayConnectionFleet.shared.retainConsumer(for: target)
         let generation = self.windowGeneration
         let primaryGeneration = self.primaryGeneration
         // An older close must finish retiring the fleet before this open can acquire its successor.
@@ -319,7 +321,7 @@ final class WebChatManager {
             gatewayTarget: target,
             windowTitle: "\(name) — OpenClaw",
             windowAutosaveName: "OpenClawChatWindow-\(autosaveID)")
-        self.install(controller, target: target, route: route, connection: connection)
+        self.install(controller, target: target, route: route, connection: connection, consumer: consumer)
     }
 
     static func sessionLink(base: URL, sessionKey: String, agentID: String?, preview: Bool) -> URL? {
@@ -343,7 +345,8 @@ final class WebChatManager {
         _ controller: WebChatSwiftUIWindowController,
         target: DashboardGatewayTarget,
         route: WebChatRoute,
-        connection: GatewayConnection?)
+        connection: GatewayConnection?,
+        consumer: MacGatewayConnectionFleet.Consumer? = nil)
     {
         let windowID = UUID()
         let previousController = self.gatewayWindowOrder.reversed().lazy
@@ -393,7 +396,8 @@ final class WebChatManager {
             target: target,
             route: route,
             connection: connection,
-            controller: controller)
+            controller: controller,
+            connectionConsumer: consumer)
         self.gatewayWindowOrder.append(windowID)
         controller.cascade(from: previousController)
         controller.show()

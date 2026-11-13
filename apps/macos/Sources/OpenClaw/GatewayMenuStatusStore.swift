@@ -44,10 +44,11 @@ final class GatewayMenuStatusStore {
             return try await GatewayMenuStatusStore.probeConnection(connection)
         },
         disconnectLocal: @escaping @MainActor @Sendable () async -> Void = {
-            await MacGatewayConnectionFleet.shared.disconnectLocal(ifCurrent: { !Task.isCancelled })
+            await MacGatewayConnectionFleet.shared.disconnectLocal(onlyIfIdle: true, ifCurrent: { !Task.isCancelled })
         },
         disconnectProfile: @escaping @MainActor @Sendable (String) async -> Void = { profileID in
-            await MacGatewayConnectionFleet.shared.disconnect(profileID: profileID, ifCurrent: { !Task.isCancelled })
+            await MacGatewayConnectionFleet.shared.disconnect(
+                profileID: profileID, onlyIfIdle: true, ifCurrent: { !Task.isCancelled })
         })
     {
         self.primaryProbe = primaryProbe
