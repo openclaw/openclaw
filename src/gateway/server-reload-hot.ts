@@ -86,9 +86,10 @@ export function createGatewayReloadHandlers(
 
   const applyHotReload = async (
     plan: GatewayReloadPlan,
-    nextConfig: OpenClawConfig,
+    preparedConfig: OpenClawConfig,
     publication?: GatewayHotReloadPublication,
   ): Promise<GatewayHotReloadApplication> => {
+    let nextConfig = preparedConfig;
     publication?.assertInvokerOwned?.();
     assertIrreversibleReloadPlanHasRecoveryOwner(plan, restartRecoveryAvailable);
     const isCurrent = () => !isRestartRetryStopped() && (publication?.isCurrent?.() ?? true);
@@ -253,7 +254,6 @@ export function createGatewayReloadHandlers(
     let releasePreparedModelRuntimeDrain: (() => void) | undefined;
     let recoveryRestartScheduled = false;
     const laneConcurrency = resolveGatewayLaneConcurrency(nextConfig);
-    // Use one candidate env snapshot before publication and through later channel starts.
     const shouldSkipChannelRestart = isChannelStartupSuppressedByEnvironment(candidateEnv);
     const channelReloadTargets = () =>
       new Set<ChannelKind>([...channelsToRestart, ...restartChannelAccounts.keys()]);
