@@ -618,7 +618,7 @@ describe("buildAttemptSystemPrompt", () => {
       attemptOverrides: { sessionUserProfileId: "alice" },
     });
     const gate = (prepared: typeof verified.prepared) =>
-      prepared.runtimeContextFragments.filter(({ text }) =>
+      (prepared.runtimeContextFragments ?? []).filter(({ text }) =>
         text.includes("not from a verified Gateway person"),
       );
     expect(verified.prepared.systemPromptText).toContain("Alice prefers terse replies.");
