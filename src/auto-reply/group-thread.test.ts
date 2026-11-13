@@ -208,16 +208,7 @@ async function held(
 }
 
 function hasLoneSurrogate(value: string): boolean {
-  for (let i = 0; i < value.length; i++) {
-    const unit = value.charCodeAt(i);
-    if (unit >= 0xd800 && unit <= 0xdbff) {
-      const next = value.charCodeAt(i + 1);
-      if (!(next >= 0xdc00 && next <= 0xdfff)) return true;
-    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
-      return true;
-    }
-  }
-  return false;
+  return /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(value);
 }
 
 describe("agent group thread dispatch", () => {
