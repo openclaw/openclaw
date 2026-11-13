@@ -22,6 +22,15 @@ import { isLoopbackAddress } from "./net.js";
 import { checkBrowserOrigin } from "./origin-check.js";
 
 const DEFAULT_MCP_BODY_TIMEOUT_MS = 30_000;
+// Bounds how long a `tools/call` waits for a native CLI backend's tool-capture
+// handshake to resolve (see `nativeCronCreatorToolAllowlist` in
+// mcp-grant-store.ts) before falling back to the original hard reject. The
+// handshake is an early, in-process stdout callback from an already-spawned
+// child (comparable in shape to `ACP_BACKEND_READY_TIMEOUT_MS` in
+// gateway/server-startup-post-attach.ts, which bounds waiting for an ACP
+// backend to report readiness at 5s) — it does not wait on model generation,
+// so a few seconds is a conservative upper bound, not a typical wait time.
+const MCP_NATIVE_TOOL_ALLOWLIST_WAIT_TIMEOUT_MS = 5_000;
 
 function readPositiveIntEnv(name: string, fallback: number): number {
   const raw = process.env[name]?.trim();
@@ -245,6 +254,10 @@ export function validateMcpLoopbackRequest(params: {
 
 export function resolveMcpHttpBodyTimeoutMs(): number {
   return readPositiveIntEnv("OPENCLAW_MCP_LOOPBACK_BODY_TIMEOUT_MS", DEFAULT_MCP_BODY_TIMEOUT_MS);
+}
+
+export function resolveMcpNativeToolAllowlistWaitTimeoutMs(): number {
+  return MCP_NATIVE_TOOL_ALLOWLIST_WAIT_TIMEOUT_MS;
 }
 
 export function resolveMcpCliCaptureKey(

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
@@ -25,6 +25,7 @@ import {
   revokeMcpLoopbackClientGrant as revokeClient,
   revokeMcpLoopbackClientGrantsForRuntime as revokeRuntime,
   transferMcpLoopbackClientGrant as transferClient,
+  waitForMcpLoopbackClientGrantNativeToolAllowlist as waitForNativeToolAllowlist,
 } from "./mcp-grant-store.js";
 
 const T0 = 1_000_000_000_000;
@@ -36,6 +37,9 @@ const grantParams = (token: string, captureKey: string, runtimeOwnerToken = "run
   captureKey,
   runtimeOwnerToken,
 });
+/** Reads the live allowlist through the authenticated resolver, as the HTTP handler does. */
+const liveAllowlist = (token: string, captureKey: string) =>
+  resolveClient(grantParams(token, captureKey))?.context.nativeCronCreatorToolAllowlist;
 type ClientParams = Parameters<typeof mintMcpLoopbackClientGrant>[0];
 function mintClient({
   context,
@@ -477,5 +481,216 @@ describe("mcp-grant-store", () => {
   it("requires a session key for loopback client grants", () => {
     expect(() => mintClient({ context: { sessionKey: "  " } })).toThrow(/sessionKey is required/);
     expect(() => mintClient({ runtimeOwnerToken: "  " })).toThrow(/runtimeOwnerToken is required/);
+  });
+
+  describe("waitForMcpLoopbackClientGrantNativeToolAllowlist", () => {
+    const LONG_TIMEOUT_MS = 60_000;
+    // Time is controlled: the clock only moves when a test advances it, so a wait that
+    // returns without an advance woke on its event, and its timeout timer is gone.
+    const controlTime = () => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    async function mintNativeCaptureGrant(params: { runId: string; runtimeOwnerToken: string }) {
+      const admittedRunContext = await admitted(params.runId);
+      const grant = mintMcpLoopbackClientGrant({
+        context: {
+          sessionKey: `agent:main:${params.runId}`,
+          senderIsOwner: false,
+          nativeCronCreatorToolAllowlist: null,
+        },
+        runtimeOwnerToken: params.runtimeOwnerToken,
+        admittedRunContext,
+      });
+      const capture = activateCapture({
+        token: grant.token,
+        runtimeOwnerToken: params.runtimeOwnerToken,
+        captureKey: `capture-${params.runId}`,
+      });
+      if (!capture) {
+        throw new Error("expected an active native capture");
+      }
+      controlTime();
+      return { grant, capture };
+    }
+
+    it("returns immediately when the grant never gates on a native allowlist", async () => {
+      const grant = mintMcpLoopbackClientGrant({
+        context: { sessionKey: "agent:main:no-native-gate", senderIsOwner: false },
+        runtimeOwnerToken: "runtime-one",
+      });
+      controlTime();
+      await waitForNativeToolAllowlist({
+        token: grant.token,
+        timeoutMs: LONG_TIMEOUT_MS,
+      });
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("returns immediately when the allowlist already resolved before the wait began", async () => {
+      const { grant, capture } = await mintNativeCaptureGrant({
+        runId: "already-resolved",
+        runtimeOwnerToken: "runtime-one",
+      });
+      expect(capture.captureNativeToolAuthority(["read"])).toBe(true);
+      await waitForNativeToolAllowlist({
+        token: grant.token,
+        timeoutMs: LONG_TIMEOUT_MS,
+      });
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("wakes as soon as a real allowlist lands, not at the timeout, and the live value is fresh afterward", async () => {
+      const { grant, capture } = await mintNativeCaptureGrant({
+        runId: "wakes-on-capture",
+        runtimeOwnerToken: "runtime-one",
+      });
+      const waitPromise = waitForNativeToolAllowlist({
+        token: grant.token,
+        timeoutMs: LONG_TIMEOUT_MS,
+      });
+      // The wait subscribes synchronously when called, so the capture below lands on
+      // a live waiter.
+      expect(liveAllowlist(grant.token, "capture-wakes-on-capture")).toBeNull();
+      expect(capture.captureNativeToolAuthority(["read", "exec"])).toBe(true);
+      await waitPromise;
+      expect(vi.getTimerCount()).toBe(0);
+      // The wait function itself returns nothing; correctness depends on the
+      // caller re-reading live state afterward rather than any pre-wait
+      // snapshot — assert that live read directly.
+      expect(liveAllowlist(grant.token, "capture-wakes-on-capture")).toEqual(["read", "exec"]);
+    });
+
+    it("a captureNativeToolAuthority(null) liveness probe does not wake waiters", async () => {
+      const { grant, capture } = await mintNativeCaptureGrant({
+        runId: "null-probe-no-wake",
+        runtimeOwnerToken: "runtime-one",
+      });
+      let waitSettled = false;
+      const waitPromise = waitForNativeToolAllowlist({
+        token: grant.token,
+        timeoutMs: 60,
+      }).then(() => {
+        waitSettled = true;
+      });
+      // Re-arming the null placeholder (as prepare.ts does to probe liveness
+      // before reporting a real list) must not be mistaken for a resolution.
+      expect(capture.captureNativeToolAuthority(null)).toBe(true);
+      await vi.advanceTimersByTimeAsync(59);
+      expect(waitSettled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await waitPromise;
+      expect(waitSettled).toBe(true);
+      expect(liveAllowlist(grant.token, "capture-null-probe-no-wake")).toBeNull();
+    });
+
+    it("wakes every concurrent waiter on the same grant together", async () => {
+      const { grant, capture } = await mintNativeCaptureGrant({
+        runId: "concurrent-waiters",
+        runtimeOwnerToken: "runtime-one",
+      });
+      let firstSettled = false;
+      let secondSettled = false;
+      const first = waitForNativeToolAllowlist({
+        token: grant.token,
+        timeoutMs: LONG_TIMEOUT_MS,
+      }).then(() => {
+        firstSettled = true;
+      });
+      const second = waitForNativeToolAllowlist({
+        token: grant.token,
+        timeoutMs: LONG_TIMEOUT_MS,
+      }).then(() => {
+        secondSettled = true;
+      });
+      expect(capture.captureNativeToolAuthority(["read"])).toBe(true);
+      await Promise.all([first, second]);
+      expect(firstSettled).toBe(true);
+      expect(secondSettled).toBe(true);
+    });
+
+    it("falls back once timeoutMs elapses with nothing resolved, leaving the allowlist null", async () => {
+      const { grant } = await mintNativeCaptureGrant({
+        runId: "timeout-fallback",
+        runtimeOwnerToken: "runtime-one",
+      });
+      let settled = false;
+      const waitPromise = waitForNativeToolAllowlist({ token: grant.token, timeoutMs: 30 }).then(
+        () => {
+          settled = true;
+        },
+      );
+      await vi.advanceTimersByTimeAsync(29);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await waitPromise;
+      expect(liveAllowlist(grant.token, "capture-timeout-fallback")).toBeNull();
+    });
+
+    it("does not leak a pending waiter when the grant is revoked before it ever captures", async () => {
+      const { grant } = await mintNativeCaptureGrant({
+        runId: "revoked-mid-wait",
+        runtimeOwnerToken: "runtime-one",
+      });
+      const waitPromise = waitForNativeToolAllowlist({
+        token: grant.token,
+        timeoutMs: LONG_TIMEOUT_MS,
+      });
+      revokeClient(grant.token);
+      await waitPromise;
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("does not leak a pending waiter when its capture is deactivated before it ever captures", async () => {
+      const { grant } = await mintNativeCaptureGrant({
+        runId: "deactivated-mid-wait",
+        runtimeOwnerToken: "runtime-one",
+      });
+      const waitPromise = waitForNativeToolAllowlist({
+        token: grant.token,
+        timeoutMs: LONG_TIMEOUT_MS,
+      });
+      expect(
+        deactivateCapture({
+          token: grant.token,
+          runtimeOwnerToken: "runtime-one",
+          captureKey: "capture-deactivated-mid-wait",
+        }),
+      ).toBe(true);
+      await waitPromise;
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("migrates a pending waiter across a warm-token transfer so it still wakes", async () => {
+      const { grant } = await mintNativeCaptureGrant({
+        runId: "transfer-mid-wait",
+        runtimeOwnerToken: "runtime-one",
+      });
+      const waitPromise = waitForNativeToolAllowlist({
+        token: grant.token,
+        timeoutMs: LONG_TIMEOUT_MS,
+      });
+      const targetToken = "warm-target-token-transfer-mid-wait";
+      expect(
+        transferClient({
+          sourceToken: grant.token,
+          targetToken,
+          runtimeOwnerToken: "runtime-one",
+        }),
+      ).toBe(true);
+      const capture = activateCapture({
+        token: targetToken,
+        runtimeOwnerToken: "runtime-one",
+        captureKey: "capture-transfer-mid-wait",
+      });
+      if (!capture) {
+        throw new Error("expected an active native capture on the target token");
+      }
+      expect(capture.captureNativeToolAuthority(["exec"])).toBe(true);
+      await waitPromise;
+      expect(vi.getTimerCount()).toBe(0);
+      expect(liveAllowlist(targetToken, "capture-transfer-mid-wait")).toEqual(["exec"]);
+    });
   });
 });
