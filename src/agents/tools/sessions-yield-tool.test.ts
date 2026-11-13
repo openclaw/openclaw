@@ -133,7 +133,7 @@ describe("sessions_yield tool", () => {
     expect(result.details).toMatchObject({
       status: "already_pending",
       message:
-        "An earlier turn of this session already yielded for 1 child session whose completion is still pending: Work session (agent:main:dashboard:child), running, started 2026-09-21T02:50:52.000Z. Their completion will arrive in this session as a later turn; do not re-spawn, re-send, or poll to wake them. This turn owns no new claim, so no yield is needed: end this turn normally.",
+        "An earlier turn of this session already yielded for 1 child session whose completion is still pending: Work session (agent:main:dashboard:child), running, started 2026-09-21T02:50:52.000Z. Their completion will arrive in this session as a later turn; do not re-spawn, re-send, or poll to wake them. This call did not pause this turn or claim a new wait. Continue any independent unfinished work; end the turn normally only after that work is complete.",
     });
     expect(result.details).toHaveProperty("pendingChildren", pendingChildren);
     expect(onYield).not.toHaveBeenCalled();
@@ -158,7 +158,7 @@ describe("sessions_yield tool", () => {
     expect(result.details).toMatchObject({
       status: "already_pending",
       message:
-        "1 child session spawned by an earlier turn of this session is paused by its own sessions_yield and will not complete until an incoming continuation arrives: agent:main:subagent:worker, paused, started 2026-09-21T03:00:00.000Z. An authorized caller can send that continuation with sessions_send; owning a child does not grant that tool. Otherwise the work stays waiting. This turn owns no new claim, so no yield is needed: end this turn normally.",
+        "1 child session spawned by an earlier turn of this session is paused by its own sessions_yield and will not complete until an incoming continuation arrives: agent:main:subagent:worker, paused, started 2026-09-21T03:00:00.000Z. An authorized caller can send that continuation with sessions_send; owning a child does not grant that tool. Otherwise the work stays waiting. This call did not pause this turn or claim a new wait. Continue any independent unfinished work; end the turn normally only after that work is complete.",
     });
     expect(onYield).not.toHaveBeenCalled();
   });
