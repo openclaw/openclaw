@@ -61,7 +61,6 @@ export function createPickerPhoneSheet(options: {
             type="button"
             class="picker-select__sheet-close"
             aria-label={t("common.close")}
-            title={t("common.close")}
             onClick={options.dismiss}
           >
             <Icon name="x" />

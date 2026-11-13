@@ -9,7 +9,6 @@ import {
 import { SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { registerProfileEnglish } from "../../i18n/locales/en-profile.ts";
 import { profileDirectory } from "../../lib/profile-directory.ts";
-import { projectGateway } from "../../lib/reactive/application.ts";
 import { projectCallbackOwner } from "../../lib/reactive/callback-owner.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
@@ -17,9 +16,9 @@ import { PersonalEnrollmentState } from "./personal-enrollment-state.ts";
 
 registerEnglishCatalog(registerProfileEnglish);
 
-const PersonalRolePreview = lazy(() =>
-  import("./personal-role-preview.tsx").then((module) => ({ default: module.PersonalRolePreview })),
-);
+const PersonalRolePreview = lazy(() => import("./personal-role-preview.tsx"), {
+  export: "PersonalRolePreview",
+});
 
 /** Shared by Profile, Devices and the post-inference optional setup step. */
 type PersonalEnrollmentProps = {
@@ -83,18 +82,18 @@ function PersonalEnrollmentForm(
   },
 ) {
   const owner = props.staticOwner;
-  const gateway = projectGateway(owner.gateway);
   const directory = profileDirectory(owner.gateway);
   const people = projectOwner(directory, (source) => source);
   const [expanded, setExpanded] = createSignal(false);
-  const snapshot = () => gateway.read().snapshot;
   const state = () => props.readState();
+  const snapshot = () => state().gateway.snapshot;
   const attached = () => !props.initialDeviceId && state().personal && !state().expectedProfileId;
   const disconnected = () => snapshot().phase !== "connected";
   const selectedRole = () =>
     personalProfileChoices(people.read().result?.profiles).find(
       (person) => person.id === state().profileId,
     )?.effectiveRole;
+  const needsEnrollment = () => !attached() && !state().success && !state().expectedProfileId;
   return (
     <div class="personal-enrollment" hidden={props.hidden}>
       <SettingsSection title={t("profilePage.enrollment.title")}>
@@ -103,16 +102,14 @@ function PersonalEnrollmentForm(
           description={!state().personal ? t("profilePage.enrollment.shared") : undefined}
           stackedOnNarrow
           control={
-            !attached() && !expanded() && !state().success && !state().expectedProfileId ? (
+            needsEnrollment() && !expanded() ? (
               <button class="btn" disabled={!state().canEnroll} onClick={() => setExpanded(true)}>
                 {t("profilePage.enrollment.start")}
               </button>
             ) : undefined
           }
         />
-        <Show
-          when={!attached() && !state().canEnroll && !state().success && !state().expectedProfileId}
-        >
+        <Show when={needsEnrollment() && !state().canEnroll}>
           <SettingsRow
             title={t(
               disconnected()
@@ -135,7 +132,7 @@ function PersonalEnrollmentForm(
             )}
           </div>
         </Show>
-        <Show when={expanded() && !attached() && !state().success && !state().expectedProfileId}>
+        <Show when={expanded() && needsEnrollment()}>
           <form
             class="personal-enrollment__form"
             onSubmit={(event) => {

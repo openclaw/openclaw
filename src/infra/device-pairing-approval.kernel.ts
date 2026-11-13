@@ -9,7 +9,6 @@ import {
   resolveMissingRequestedScope,
   resolveScopeOutsideRequestedRoles,
 } from "../shared/operator-scope-compat.js";
-import { assertBootstrapPersonInDatabase } from "./device-bootstrap-profile.worker.js";
 import { requireDeviceBootstrapSourceInWorker } from "./device-bootstrap.worker-kernel.js";
 import type {
   DevicePairingAccessMetadata,
@@ -40,6 +39,7 @@ import type {
   PairedDevice,
   PairedDeviceApprovalKind,
 } from "./device-pairing.types.js";
+import { assertBootstrapPersonInDatabase } from "./device-profile-enrollment.worker.js";
 import type { EngineConnection } from "./sql-connection.js";
 
 const OPERATOR_ROLE = "operator";

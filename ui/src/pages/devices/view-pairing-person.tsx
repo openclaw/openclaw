@@ -4,13 +4,13 @@ import {
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
 } from "../../../../src/shared/device-bootstrap-profile.js";
 import { userProfileDisplayName } from "../../../../src/shared/user-profile-display-name.js";
-import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { PersonalProfileOptions } from "../../components/solid/personal-profile-options.tsx";
 import type {
   DevicePairSetupAccess,
   DevicePairSetupPerson,
   DevicePairSetupPersonInput,
 } from "../../lib/device-pair-setup.ts";
+import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { profileDirectory } from "../../lib/profile-directory.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
@@ -33,16 +33,10 @@ export function PairingPersonChoice(props: {
         const gateway = projectGateway(application.gateway);
         const directory = profileDirectory(application.gateway);
         const people = projectOwner(directory, (owner) => owner);
-        const canChoose = () => {
-          const snapshot = gateway.read().snapshot;
-          const auth = snapshot.hello?.auth;
-          return (
-            snapshot.phase === "connected" &&
-            auth?.role === "operator" &&
-            Array.isArray(auth.scopes) &&
-            readGatewayOperatorAccess(snapshot).canAdmin
-          );
-        };
+        const canChoose = () =>
+          canCallGatewayMethod(gateway.read().snapshot, "device.pair.setupCode", "operator.admin", {
+            requireAdvertisement: false,
+          });
         const value = () =>
           props.input ? ("profileId" in props.input ? props.input.profileId : "new") : "";
         const profile = () => {

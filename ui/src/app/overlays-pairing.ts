@@ -12,6 +12,7 @@ import {
   setDevicePairSetupAccess,
   syncDevicePairSetupCountdown,
 } from "../lib/device-pair-setup.ts";
+import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 import { readGatewayOperatorAccess } from "./operator-access.ts";
 
@@ -34,14 +35,12 @@ export function createOverlayPairing(params: {
     onChange: params.publish,
     canAssociatePerson: () => {
       const snapshot = params.gateway.snapshot;
-      const auth = snapshot.hello?.auth;
       return (
         !params.isDisposed() &&
-        snapshot.phase === "connected" &&
         snapshot.client === state.client &&
-        auth?.role === "operator" &&
-        Array.isArray(auth.scopes) &&
-        readGatewayOperatorAccess(snapshot).canAdmin
+        canCallGatewayMethod(snapshot, "device.pair.setupCode", "operator.admin", {
+          requireAdvertisement: false,
+        })
       );
     },
   });

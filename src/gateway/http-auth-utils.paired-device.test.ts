@@ -13,7 +13,10 @@ import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE } from "./control-ui-bootstrap-contract.js";
 import { handleControlUiHttpRequest } from "./control-ui.js";
-import { authorizeControlUiReadRequestOrReply } from "./http-auth-utils.js";
+import {
+  authorizeControlUiReadRequestOrReply,
+  authorizeScopedGatewayHttpRequestOrReply,
+} from "./http-auth-utils.js";
 import { markGatewayIngressTransport } from "./ingress-attribution.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { readStoredClaw, writeStoredClaw } from "./openclaw-id/claw-store.js";
@@ -285,6 +288,50 @@ it("authenticates remote HTTP reads only from the grant and refuses reusable cre
     }
   });
 });
+
+it.each(["resource", "scoped"])(
+  "applies personal policy to forwarded %s HTTP reads",
+  async (surface) => {
+    await withOpenClawTestState({ label: "remote-http-personal-policy" }, async () => {
+      const ingress = createRemoteControlUiIngressTestContext({
+        operatorScopeCeiling: ["operator.admin"],
+      });
+      const principal = ingress.resolvePrincipal();
+      const context = createRemoteControlUiIngressTestContext({
+        ...ingress,
+        resolvePrincipal: () => ({
+          ...principal,
+          operatorRolePolicy: {
+            scopes: ["operator.talk"],
+            agents: [],
+            sessions: { others: "none" },
+          },
+        }),
+      });
+      const req = createRequest({ path: "/claw/avatar/main?meta=1", host: "ui.example.test" });
+      markGatewayIngressTransport(req, { kind: "remote-forwarded", context });
+      const res = new ServerResponse(req);
+      try {
+        const options = { req, res, auth: AUTH_TOKEN, cfg: {}, getRuntimeConfig: () => ({}) };
+        const result =
+          surface === "resource"
+            ? await authorizeControlUiReadRequestOrReply({
+                ...options,
+                requiredOperatorMethod: "agent.identity.get",
+              })
+            : await authorizeScopedGatewayHttpRequestOrReply({
+                ...options,
+                operatorMethod: "agent.identity.get",
+              });
+        expect(result).toBeNull();
+        expect(res.statusCode).toBe(403);
+      } finally {
+        res.destroy();
+        req.destroy();
+      }
+    });
+  },
+);
 
 it("keeps the public shell when a paired token is revoked during bootstrap admission", async () => {
   await withOpenClawTestState({ label: "bootstrap-revoked-device" }, async () => {

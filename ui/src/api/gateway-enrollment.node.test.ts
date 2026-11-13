@@ -23,56 +23,21 @@ beforeEach(() => {
   vi.spyOn(nodes, "signDevicePayload").mockResolvedValue("signature");
 });
 
-it("stores only the current signed device's refreshed personal token before returning", async () => {
+async function connectOperator(scopes = ["operator.admin"]) {
   const client = createClient();
   const { ws, connectFrame } = await startConnect(client);
   ws.emitMessage({
     type: "res",
     id: connectFrame.id,
     ok: true,
-    payload: {
-      type: "hello-ok",
-      protocol: PROTOCOL_VERSION,
-      auth: { role: "operator", scopes: ["operator.admin"] },
-    },
+    payload: { type: "hello-ok", protocol: PROTOCOL_VERSION, auth: { role: "operator", scopes } },
   });
   await vi.advanceTimersByTimeAsync(0);
-  expect(client.profileEnrollment?.deviceId).toBe("signed-device");
-  const params = { enrollmentId: "11111111-1111-4111-8111-111111111111", name: "Ada" };
-  const pending = enrollGatewayProfile(client, params);
-  const frame = JSON.parse(ws.sent.at(-1)!);
-  expect(frame).toMatchObject({ method: "device.profile.enroll", params });
-  ws.emitMessage({
-    type: "res",
-    id: frame.id,
-    ok: true,
-    payload: {
-      deviceId: "signed-device",
-      profileId: "person",
-      operatorToken: { token: "personal-token", scopes: ["operator.read"] },
-    },
-  });
-  await pending;
-  expect(
-    nodes.loadDeviceAuthToken({
-      deviceId: "signed-device",
-      gatewayUrl: client.gatewayUrl,
-      role: "operator",
-    }),
-  ).toMatchObject({ token: "personal-token", scopes: ["operator.read"] });
-});
+  return { client, ws };
+}
 
 it("finishes personal credential reconnect when the enrollment form was dismissed", async () => {
-  const client = createClient();
-  const { ws, connectFrame } = await startConnect(client);
-  const auth = { role: "operator", scopes: ["operator.admin"] };
-  ws.emitMessage({
-    type: "res",
-    id: connectFrame.id,
-    ok: true,
-    payload: { type: "hello-ok", protocol: PROTOCOL_VERSION, auth },
-  });
-  await vi.advanceTimersByTimeAsync(0);
+  const { client, ws } = await connectOperator();
   const { gateway } = createApplicationGateway(
     createApplicationGatewaySnapshot({ client, phase: "connected", hello: client.hello }),
   );
@@ -103,19 +68,7 @@ it("finishes personal credential reconnect when the enrollment form was dismisse
 });
 
 it("does not persist a returned token after its connection authority retires", async () => {
-  const client = createClient();
-  const { ws, connectFrame } = await startConnect(client);
-  ws.emitMessage({
-    type: "res",
-    id: connectFrame.id,
-    ok: true,
-    payload: {
-      type: "hello-ok",
-      protocol: PROTOCOL_VERSION,
-      auth: { role: "operator", scopes: ["operator.admin"] },
-    },
-  });
-  await vi.advanceTimersByTimeAsync(0);
+  const { client, ws } = await connectOperator();
   const pending = enrollGatewayProfile(client, { profileId: "person" });
   const rejected = expect(pending).rejects.toThrow();
   client.stop();
@@ -135,19 +88,7 @@ it("does not persist a returned token after its connection authority retires", a
 });
 
 it("keeps self enrollment pending until replacement admission confirms the returned person", async () => {
-  const client = createClient();
-  const { ws, connectFrame } = await startConnect(client);
-  ws.emitMessage({
-    type: "res",
-    id: connectFrame.id,
-    ok: true,
-    payload: {
-      type: "hello-ok",
-      protocol: PROTOCOL_VERSION,
-      auth: { role: "operator", scopes: ["operator.admin"] },
-    },
-  });
-  await vi.advanceTimersByTimeAsync(0);
+  const { client, ws } = await connectOperator();
   const original = createApplicationGatewaySnapshot({
     client,
     phase: "connected",
@@ -201,19 +142,7 @@ it("keeps self enrollment pending until replacement admission confirms the retur
     expect(state).toMatchObject({ success: false, busy: false, reconnecting: false });
     expect(state.error).toContain("approved owner or admin");
 
-    const nextClient = createClient();
-    const next = await startConnect(nextClient);
-    next.ws.emitMessage({
-      type: "res",
-      id: next.connectFrame.id,
-      ok: true,
-      payload: {
-        type: "hello-ok",
-        protocol: PROTOCOL_VERSION,
-        auth: { role: "operator", scopes: ["operator.read"] },
-      },
-    });
-    await vi.advanceTimersByTimeAsync(0);
+    const { client: nextClient } = await connectOperator(["operator.read"]);
     publish({ ...original, client: nextClient, hello: nextClient.hello, selfUser: undefined });
     expect(state).toMatchObject({ success: false, busy: true, reconnecting: true, error: null });
     publish({ ...gateway.snapshot, selfUser: { id: "another-person" } });
@@ -225,42 +154,4 @@ it("keeps self enrollment pending until replacement admission confirms the retur
     stop();
     state.dispose();
   }
-});
-
-it("records cross-device assignment without claiming or requesting its connection admission", async () => {
-  const client = createClient();
-  const { ws, connectFrame } = await startConnect(client);
-  ws.emitMessage({
-    type: "res",
-    id: connectFrame.id,
-    ok: true,
-    payload: {
-      type: "hello-ok",
-      protocol: PROTOCOL_VERSION,
-      auth: { role: "operator", scopes: ["operator.admin"] },
-    },
-  });
-  await vi.advanceTimersByTimeAsync(0);
-  const { gateway } = createApplicationGateway(
-    createApplicationGatewaySnapshot({ client, phase: "connected", hello: client.hello }),
-  );
-  const state = new PersonalEnrollmentState(gateway, () => undefined, "other-device");
-  const connect = vi.spyOn(gateway, "connect");
-  const pending = state.enroll();
-  const request = JSON.parse(ws.sent.at(-1)!);
-  ws.emitMessage({
-    type: "res",
-    id: request.id,
-    ok: true,
-    payload: { deviceId: "other-device", profileId: "assigned-person" },
-  });
-  await pending;
-  expect(state).toMatchObject({
-    success: true,
-    busy: false,
-    reconnecting: false,
-    expectedProfileId: null,
-  });
-  expect(connect).not.toHaveBeenCalled();
-  state.dispose();
 });

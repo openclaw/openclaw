@@ -13,6 +13,7 @@ import {
 } from "../../shared/browser-pair.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { retireDeviceTokenClients } from "../device-token-client-lifecycle.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "../operator-role-enforcement.js";
 import { broadcastRejectedDevicePairing } from "../pairing-events.js";
 import { holdGatewayPolicyResponse } from "../server/ws-policy-close.js";
 import { resolveDeviceSessionAuthz } from "./device-management-authz.js";
@@ -86,7 +87,11 @@ export const devicePairCodeHandlers: GatewayRequestHandlers = {
         const assertPairingSupported = () => {
           authority.assertCurrent();
           assertAdmin?.();
-          if (decision === "approve" && !profileId && context.getRuntimeConfig().gateway?.roles) {
+          if (
+            decision === "approve" &&
+            !profileId &&
+            isNamedOperatorRoleEnforcementEnabled(context.getRuntimeConfig())
+          ) {
             throw new Error(BROWSER_PAIR_IDENTITY_REQUIRED_MESSAGE);
           }
         };

@@ -41,6 +41,7 @@ describe("shared control ownership", () => {
         "components/panel-tab-strip-solid.ts",
         "components/solid/menu.ts",
         "components/solid/tabs.ts",
+        "pages/chat/components/chat-model-provider-rail.ts",
       ]),
     ).toEqual([]);
     expect(

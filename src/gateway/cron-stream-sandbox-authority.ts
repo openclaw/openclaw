@@ -45,7 +45,7 @@ import {
   onOperatorRolePolicyChanged,
   resolveOperatorRolePolicyForPrincipal,
 } from "./operator-role-policy.js";
-import { sourceRolePolicy } from "./operator-role-source-policy.js";
+import { prepareRunRolePolicy, sourceRolePolicy } from "./operator-role-source-policy.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import {
   authorizePreparedSessionMutation,
@@ -518,16 +518,7 @@ export async function prepareCronStreamSandboxAuthority(params: {
             githubLogin: operator.githubLogin,
             policy: assertPreparedCurrent().role,
           }),
-          ...(originalRole
-            ? {
-                rolePolicy: {
-                  sessionAccessCap: originalRole.sessions.others,
-                  sandboxRequired: originalRole.sandbox === "required",
-                  agents: originalRole.agents,
-                  accessPrograms: originalRole.accessPrograms,
-                },
-              }
-            : {}),
+          rolePolicy: prepareRunRolePolicy(originalRole),
           retain: () => {
             assertAuthorityCurrent();
             references += 1;

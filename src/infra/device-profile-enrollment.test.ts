@@ -31,15 +31,7 @@ beforeEach(async () => {
   baseDir = path.dirname(options.path);
   options.path = path.join(baseDir, "state", "openclaw.sqlite");
   vi.stubEnv("OPENCLAW_STATE_DIR", baseDir);
-  const request = await requestDevicePairing(
-    {
-      deviceId: "device",
-      publicKey: syntheticPublicKey,
-      roles: ["operator", "node"],
-      scopes: ["operator.read"],
-    },
-    baseDir,
-  );
+  const request = await requestDevice(["operator", "node"]);
   await approveDevicePairing(
     request.request.requestId,
     { callerScopes: ["operator.admin"] },
@@ -47,6 +39,13 @@ beforeEach(async () => {
   );
 });
 afterEach(() => vi.unstubAllEnvs());
+
+function requestDevice(roles = ["operator"]) {
+  return requestDevicePairing(
+    { deviceId: "device", publicKey: syntheticPublicKey, roles, scopes: ["operator.read"] },
+    baseDir,
+  );
+}
 
 async function readOperatorGrant() {
   const device = await getPairedDevice("device", baseDir);
@@ -205,15 +204,7 @@ it("publishes the selected person with pairing approval while leaving the node s
     options,
   );
   const before = await getPairedDevice("device", baseDir);
-  const request = await requestDevicePairing(
-    {
-      deviceId: "device",
-      publicKey: syntheticPublicKey,
-      role: "operator",
-      scopes: ["operator.read"],
-    },
-    baseDir,
-  );
+  const request = await requestDevice();
   const approved = await approveDevicePairing(
     request.request.requestId,
     { callerScopes: ["operator.admin"], operatorProfileId: person.id },
@@ -226,15 +217,7 @@ it("publishes the selected person with pairing approval while leaving the node s
   expect(after?.tokens?.node).toEqual(before?.tokens?.node);
   expect(resolveNodePairingGeneration(after)).toEqual(resolveNodePairingGeneration(before));
   for (const profileId of [GATEWAY_OWNER_PROFILE_ID, "missing-person"]) {
-    const pending = await requestDevicePairing(
-      {
-        deviceId: "device",
-        publicKey: syntheticPublicKey,
-        role: "operator",
-        scopes: ["operator.read"],
-      },
-      baseDir,
-    );
+    const pending = await requestDevice();
     await expect(
       approveDevicePairing(
         pending.request.requestId,

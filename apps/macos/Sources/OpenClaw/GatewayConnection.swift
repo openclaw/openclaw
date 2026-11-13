@@ -57,6 +57,8 @@ actor GatewayConnection: Observable {
         let deviceAuthGatewayID: String?
         let revision: UInt64?
         let browserSession: GatewayBrowserSession?
+        /// The OpenClaw ID operator tunnel serving this route; its generation is `routeAuthority`.
+        let openClawIDSession: WebSocketSessionBox?
 
         init(
             config: Config,
@@ -64,7 +66,8 @@ actor GatewayConnection: Observable {
             routeAuthority: UInt64?,
             deviceAuthGatewayID: String? = nil,
             revision: UInt64? = nil,
-            browserSession: GatewayBrowserSession? = nil)
+            browserSession: GatewayBrowserSession? = nil,
+            openClawIDSession: WebSocketSessionBox? = nil)
         {
             self.config = config
             self.tls = tls
@@ -72,6 +75,7 @@ actor GatewayConnection: Observable {
             self.deviceAuthGatewayID = deviceAuthGatewayID
             self.revision = revision
             self.browserSession = browserSession
+            self.openClawIDSession = openClawIDSession
         }
     }
 
@@ -260,6 +264,13 @@ actor GatewayConnection: Observable {
     var realtimeTalkSubscribers: [UInt64: [UUID: AsyncStream<PushDelivery>.Continuation]] = [:]
     var lastSnapshot: HelloOk? {
         didSet { self.publishConnectedServerLease() }
+    }
+
+    /// Whether the connected Gateway granted `scope` (admin grants all). A hello without a scope
+    /// list predates scope reporting and is treated as granting it, as before.
+    func grantsScope(_ scope: String) -> Bool {
+        guard let scopes = self.lastSnapshot?.advertisedOperatorScopes() else { return true }
+        return scopes.contains(scope) || scopes.contains("operator.admin")
     }
 
     nonisolated var connectedEndpointRevision: UInt64? {
@@ -1022,13 +1033,14 @@ extension GatewayConnection {
             throw CancellationError()
         }
         let activationBindingKey = self.activationBindingKeyProvider()
-        let sessionBox = self.sessionProvider(browserSession == nil ? endpoint.tls : nil) ?? browserSession.map { _ in
-            WebSocketSessionBox(session: GatewayTLSPinningSession(
-                params: GatewayTLSParams(
-                    required: true, expectedFingerprint: nil, allowTOFU: false, storeKey: nil),
-                allowsRedirects: false,
-                allowsStoredCredentials: false))
-        }
+        let sessionBox = endpoint.openClawIDSession ??
+            self.sessionProvider(browserSession == nil ? endpoint.tls : nil) ?? browserSession.map { _ in
+                WebSocketSessionBox(session: GatewayTLSPinningSession(
+                    params: GatewayTLSParams(
+                        required: true, expectedFingerprint: nil, allowTOFU: false, storeKey: nil),
+                    allowsRedirects: false,
+                    allowsStoredCredentials: false))
+            }
         let client = GatewayChannelActor(
             url: config.url,
             token: browserSession == nil ? config.token : nil,

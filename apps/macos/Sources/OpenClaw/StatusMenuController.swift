@@ -327,7 +327,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         button.appearsDisabled = false
         button.toolTip = self.state.voiceWakeMeterActive
             ? String(localized: "OpenClaw - Voice Wake live meter active")
-            : String(localized: "OpenClaw")
+            : nil
     }
 
     private func scheduleDebugMenuOpen() {

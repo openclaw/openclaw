@@ -67,25 +67,22 @@ export async function resolveOpenClawIdOperatorProfileEnrollment(
   // Alias resolution belongs to new admission only. Retained sources keep the raw association.
   const catalog = enrollment ? await prepareUserProfileCatalog() : undefined;
   try {
-    if (catalog) {
-      const canonicalIds = enrollments.map(({ profileId }) => {
-        const identity = catalog.readCurrentIdentity(profileId);
-        if (!identity) {
-          throw new Error("OpenClaw ID operator profile is unavailable.");
-        }
-        return identity.profileId;
-      });
-      if (new Set(canonicalIds).size > 1) {
-        throw new Error("OpenClaw ID peer has conflicting personal operator enrollments.");
+    const canonicalIds = new Set<string>();
+    const ceilings = enrollments.map(({ deviceId, profileId }) => {
+      const identity = catalog?.readCurrentIdentity(profileId);
+      if (!identity) {
+        throw new Error("OpenClaw ID operator profile is unavailable.");
       }
-    }
-    const ceilings = enrollments.map(({ deviceId }) => {
+      canonicalIds.add(identity.profileId);
       const device = publication.readDevice(deviceId);
       if (!device) {
         throw new Error("OpenClaw ID operator pairing authority is unavailable.");
       }
       return resolveApprovedDeviceScopeBaseline(device) ?? [];
     });
+    if (canonicalIds.size > 1) {
+      throw new Error("OpenClaw ID peer has conflicting personal operator enrollments.");
+    }
     const scopeCeiling = enrollment
       ? Object.freeze(ceilings.reduce((left, right) => intersectOperatorScopes(left, right)))
       : undefined;

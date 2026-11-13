@@ -74,12 +74,6 @@ suite.define(() => {
                 exact: false,
               })
               .waitFor();
-            await dialog.getByText("Default local role: viewer.", { exact: false }).waitFor();
-            await dialog
-              .getByText("Combined operator scope ceiling: operator.sessions.read.", {
-                exact: false,
-              })
-              .waitFor();
           }
           if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR) {
             const dir = createControlUiE2eArtifactDir("personal-qr-after-" + width);

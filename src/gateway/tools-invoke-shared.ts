@@ -1,4 +1,4 @@
-import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 // Gateway tool invocation engine.
 // Shared implementation behind HTTP and RPC tool invocation adapters.
 import {
@@ -43,6 +43,7 @@ import {
 } from "../sessions/agent-harness-session-key.js";
 import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
 import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
 import { withOperatorToolGatewayAuthority } from "./server-plugin-in-process-dispatch.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
@@ -74,29 +75,12 @@ import type {
   ToolsInvokeErrorType,
   ToolsInvokeOutcome,
 } from "./tools-invoke-shared.types.js";
+import { isToolUploadRequest } from "./tools-invoke-upload.js";
 import {
   areGatewayUploadsEnabled,
   assertGatewayUploadsEnabled,
   GATEWAY_UPLOADS_DISABLED_MESSAGE,
-  isGatewayUploadRequest,
 } from "./upload-policy.js";
-
-/** New client bytes, not a request to deliver a file already owned by the Gateway. */
-function isToolUploadRequest(toolName: string, args: unknown): boolean {
-  if (!isRecord(args)) {
-    return false;
-  }
-  switch (toolName) {
-    case "file_write":
-      return typeof args.contentBase64 === "string";
-    case "workboard_attachment_add":
-      return true;
-    case "message":
-      return isGatewayUploadRequest("message.action", { params: args });
-    default:
-      return false;
-  }
-}
 
 const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
 
@@ -275,7 +259,7 @@ async function invokeGatewayToolWithSignal(
   }
   const { agentId: selectedAgentId, sessionKey } = sessionTarget;
   const authenticatedUserProfile =
-    params.cfg.gateway?.roles ||
+    isNamedOperatorRoleEnforcementEnabled(params.cfg) ||
     params.operatorProfileEnrollment ||
     sourceClient?.internal?.operatorProfileEnrollment
       ? params.authenticatedUserProfile
@@ -300,7 +284,7 @@ async function invokeGatewayToolWithSignal(
         })
       ).entry;
   const profiles =
-    isGatewayAdmin(client) && !params.cfg.gateway?.roles
+    isGatewayAdmin(client) && !isNamedOperatorRoleEnforcementEnabled(params.cfg)
       ? undefined
       : await prepareSessionSharingProfiles(client);
   const prepareAuthorization = async (
@@ -313,7 +297,7 @@ async function invokeGatewayToolWithSignal(
   ) => {
     if (!profiles) {
       sessionChecks.push(() => {
-        if (getRuntimeConfig().gateway?.roles) {
+        if (isNamedOperatorRoleEnforcementEnabled(getRuntimeConfig())) {
           throw sessionMutationForbiddenError("Session role policy changed; retry the request");
         }
       });

@@ -140,39 +140,53 @@ it("Not now leaves identity, profile and credential owners untouched", async () 
   expect(mocks.save).not.toHaveBeenCalled();
 });
 
-it("creates one email-less intent, previews the selected Gateway's current role and confirms fresh token admission", async () => {
-  const p = prompter();
-  p.select.mockResolvedValueOnce("setup").mockResolvedValue("new");
-  await expect(offerTerminalPersonalSetup(p, { token: "synthetic-shared" })).resolves.toEqual({
-    deviceId: "interactive-device",
-    profileId: "person",
-    gatewayUrl: "wss://selected.example",
-  });
-  const requests = mocks.call.mock.calls.map(([request]) => request);
-  expect(requests.map((request) => request.method)).toEqual([
-    "users.self",
-    "users.list",
-    "config.get",
-    "device.profile.enroll",
-    "users.self",
-  ]);
-  expect(requests[3].params).toEqual({
-    name: "Alex",
-    enrollmentId: expect.stringMatching(/^[a-f0-9-]{36}$/),
-  });
-  expect(requests[4]).toMatchObject({
-    expectUrl: "wss://selected.example",
-    useStoredDeviceAuth: true,
-    deviceIdentity: { deviceId: "interactive-device" },
-  });
-  expect(requests[4].token).toBeUndefined();
-  expect(requests[4].password).toBeUndefined();
-  expect(mocks.save.mock.invocationCallOrder[0]).toBeLessThan(
-    mocks.call.mock.invocationCallOrder[4]!,
-  );
-  expect(p.note).toHaveBeenCalledWith(expect.stringContaining("writer"), "Personal access preview");
-  expect(JSON.stringify(p.note.mock.calls)).not.toContain("synthetic-replacement");
-});
+it.each([true, false])(
+  "creates one email-less intent and confirms fresh token admission (named roles: %s)",
+  async (enforced) => {
+    if (!enforced) {
+      const normal = mocks.call.getMockImplementation()!;
+      mocks.call.mockImplementation(async (options: CallGatewayCliOptions) =>
+        options.method === "config.get"
+          ? { valid: true, config: { gateway: { roles: { ...roles, default: undefined } } } }
+          : normal(options),
+      );
+    }
+    const p = prompter();
+    p.select.mockResolvedValueOnce("setup").mockResolvedValue("new");
+    await expect(offerTerminalPersonalSetup(p, { token: "synthetic-shared" })).resolves.toEqual({
+      deviceId: "interactive-device",
+      profileId: "person",
+      gatewayUrl: "wss://selected.example",
+    });
+    const requests = mocks.call.mock.calls.map(([request]) => request);
+    expect(requests.map((request) => request.method)).toEqual([
+      "users.self",
+      "users.list",
+      "config.get",
+      "device.profile.enroll",
+      "users.self",
+    ]);
+    expect(requests[3].params).toEqual({
+      name: "Alex",
+      enrollmentId: expect.stringMatching(/^[a-f0-9-]{36}$/),
+    });
+    expect(requests[4]).toMatchObject({
+      expectUrl: "wss://selected.example",
+      useStoredDeviceAuth: true,
+      deviceIdentity: { deviceId: "interactive-device" },
+    });
+    expect(requests[4].token).toBeUndefined();
+    expect(requests[4].password).toBeUndefined();
+    expect(mocks.save.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.call.mock.invocationCallOrder[4]!,
+    );
+    expect(p.note).toHaveBeenCalledWith(
+      expect.stringContaining(enforced ? "writer" : "no named roles"),
+      "Personal access preview",
+    );
+    expect(JSON.stringify(p.note.mock.calls)).not.toContain("synthetic-replacement");
+  },
+);
 
 it.each([
   "denied role",
@@ -189,7 +203,17 @@ it.each([
   const normal = mocks.call.getMockImplementation()!;
   mocks.call.mockImplementation(async (options: CallGatewayCliOptions) => {
     if (options.method === "config.get" && failure === "denied role") {
-      return { valid: true, config: { gateway: { roles: { ...roles, default: undefined } } } };
+      return {
+        valid: true,
+        config: {
+          gateway: {
+            roles: {
+              ...roles,
+              definitions: { writer: { ...roles.definitions.writer, scopes: [] } },
+            },
+          },
+        },
+      };
     }
     if (options.method === "device.profile.enroll" && failure === "lost response") {
       throw new Error("connection lost");

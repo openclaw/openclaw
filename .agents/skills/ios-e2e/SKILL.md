@@ -65,7 +65,7 @@ Crashes land in `~/Library/Logs/DiagnosticReports/OpenClaw-*.ips`; the first `Op
 4. Compare builds: the same steps on `main` and on the change, each on its own fresh simulator, with matching screenshots.
 5. Stop the Gateway and delete the simulators.
 
-Node commands, permissions, auth failures, outages, rejected sends, upgrades and iPad layout: [PROOF.md](PROOF.md), which also lists what only a device proves.
+Node commands, permissions, auth failures, outages, rejected sends, upgrades and iPad layout: [PROOF.md](PROOF.md), which also lists what only a device proves. Chat scrolling, streaming, keyboard and relaunch stability (rows jumping, drifting or rebuilding), measured against a scripted model: [BEHAVIOR.md](BEHAVIOR.md).
 
 **Done:** screenshots or recorded output show the behavior on the change and its absence on `main`; the Gateway port is closed and no `openclaw-pair-*` simulator remains.
 

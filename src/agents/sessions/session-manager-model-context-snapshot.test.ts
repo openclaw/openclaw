@@ -33,6 +33,7 @@ import {
   historyLane,
   targetDiscoveryLane,
 } from "../../config/sessions/session-transcript-worker-resources.js";
+import { isOwnedTranscriptPayload } from "../../config/sessions/transcript-json.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
 import {
   getOwnedSessionTranscriptReader,
@@ -756,6 +757,7 @@ it.each([
             const questionPayload = question.message;
             const replyPayload = reply.message;
             expect(context.messages[0]).toBe(questionPayload);
+            expect(isOwnedTranscriptPayload(questionPayload)).toBe(true);
             expect(assistantMessage(context.messages[1]).content).toBe(replyPayload.content);
             expect(Object.isFrozen(questionPayload)).toBe(true);
             const writable = manager.getEntry(questionId!);

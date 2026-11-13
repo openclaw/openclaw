@@ -3,7 +3,6 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
-import { issueControlUiBrowserHandoff } from "../commands/control-ui-handoff.js";
 import { setRuntimeConfigSnapshot, clearRuntimeConfigSnapshot } from "../config/io.js";
 import { devicePairSetupHandlers } from "../gateway/server-methods/device-pair-setup.js";
 import type { GatewayClient } from "../gateway/server-methods/types.js";
@@ -11,12 +10,10 @@ import { createGatewayRequestContext } from "../gateway/server-request-context.j
 import { makeContextParams } from "../gateway/server-request-context.test-support.js";
 import { dispatchProfile } from "../gateway/server/client-fixtures.test-support.js";
 import { createOperatorWsClient } from "../gateway/server/ws-connection/authenticated-request-dispatch.test-support.js";
-import { isControlUiOwnerBootstrapProfile } from "../gateway/server/ws-connection/connect-device-metadata.js";
 import { issueGatewayConnectDeviceTokens } from "../gateway/server/ws-connection/connect-device-tokens.js";
 import type { AuthenticatedGatewayConnect } from "../gateway/server/ws-connection/message-handler-types.js";
 import { decodePairingSetupCode } from "../pairing/setup-code.js";
 import {
-  CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES,
   FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE as mobile,
   NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE as nodeOnly,
   VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE as voice,
@@ -37,6 +34,7 @@ import {
   verifyDeviceBootstrapToken,
 } from "./device-bootstrap.js";
 import { approveBootstrapDevicePairing } from "./device-pairing-approval.js";
+import type { DeviceBootstrapApprovalOptions } from "./device-pairing-core.types.js";
 import { ensureDeviceToken, rotateDeviceToken } from "./device-pairing-tokens.js";
 import { getPairedDevice, requestDevicePairing } from "./device-pairing.js";
 import * as workerAdmission from "./sqlite-worker-operation-admission.js";
@@ -97,6 +95,18 @@ async function issuedPerson(profileId?: string) {
   return { source, profile: bound.profile, requestId: request.request.requestId };
 }
 
+function approveHandoff(
+  handoff: Awaited<ReturnType<typeof issuedPerson>>,
+  approvalOptions: DeviceBootstrapApprovalOptions = {},
+) {
+  return approveBootstrapDevicePairing(
+    handoff.requestId,
+    handoff.profile,
+    { bootstrapSource: handoff.source, ...approvalOptions },
+    baseDir,
+  );
+}
+
 it("retains the exact person and named-role scope ceiling for node-first operator grants", async () => {
   applyReaderConfig();
   const person = await local();
@@ -106,14 +116,7 @@ it("retains the exact person and named-role scope ceiling for node-first operato
     scopes: ["operator.read"],
   });
   expect(isMobilePairingSetupBootstrapProfile(handoff.profile)).toBe(true);
-  expect(
-    await approveBootstrapDevicePairing(
-      handoff.requestId,
-      handoff.profile,
-      { bootstrapSource: handoff.source },
-      baseDir,
-    ),
-  ).toMatchObject({ status: "approved" });
+  expect(await approveHandoff(handoff)).toMatchObject({ status: "approved" });
   const paired = await getPairedDevice("mobile-device", baseDir);
   expect(paired?.operatorProfileId).toBe(person.id);
   expect(paired?.tokens?.operator?.scopes).toEqual(["operator.read"]);
@@ -139,12 +142,7 @@ it("retains the exact person and named-role scope ceiling for node-first operato
 it("narrows only the operator sibling when a new person-bound handoff has a reduced named-role ceiling", async () => {
   const person = await local();
   const original = await issuedPerson(person.id);
-  await approveBootstrapDevicePairing(
-    original.requestId,
-    original.profile,
-    { bootstrapSource: original.source },
-    baseDir,
-  );
+  await approveHandoff(original);
   const before = await getPairedDevice("mobile-device", baseDir);
   applyReaderConfig();
   const narrowed = await issuedPerson(person.id);
@@ -208,46 +206,6 @@ it("narrows only the operator sibling when a new person-bound handoff has a redu
   ).rejects.toThrow("source");
 });
 
-it("binds an explicitly selected dashboard person without granting the owner-purpose admin scopes", async () => {
-  applyReaderConfig();
-  const person = await local();
-  const handoff = await issueControlUiBrowserHandoff(
-    { httpUrl: "http://127.0.0.1:18789", wsUrl: "ws://127.0.0.1:18789" },
-    { profileId: person.id },
-  );
-  const token = new URLSearchParams(new URL(handoff.browserUrl).hash.slice(1)).get(
-    "bootstrapToken",
-  );
-  if (!token) {
-    throw new Error("Expected opaque dashboard bootstrap credential");
-  }
-  const source = {
-    baseDir,
-    token,
-    deviceId: "dashboard-browser",
-    publicKey: "synthetic-browser-key",
-  };
-  expect(
-    await verifyDeviceBootstrapToken({
-      ...source,
-      role: "operator",
-      scopes: [...CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES],
-    }),
-  ).toEqual({ ok: true });
-  const bound = await getBoundDeviceBootstrapContext(source);
-  expect(bound?.profile).toMatchObject({
-    operatorProfileId: person.id,
-    purpose: "control-ui-owner",
-    scopes: ["operator.read"],
-  });
-  expect(
-    isControlUiOwnerBootstrapProfile({
-      profile: bound?.profile ?? null,
-      requestedScopes: ["operator.read"],
-    }),
-  ).toBe(true);
-});
-
 it("keeps legacy unbound setup grants unbound", async () => {
   const handoff = await issuedPerson();
   expect(handoff.profile.operatorProfileId).toBeUndefined();
@@ -298,40 +256,18 @@ it("refuses revoked source authority and conflicting person reassociation withou
   const person = await local();
   const handoff = await issuedPerson(person.id);
   await expect(
-    approveBootstrapDevicePairing(
-      handoff.requestId,
-      handoff.profile,
-      { bootstrapSource: { ...handoff.source, publicKey: "wrong-synthetic-key" } },
-      baseDir,
-    ),
+    approveHandoff(handoff, {
+      bootstrapSource: { ...handoff.source, publicKey: "wrong-synthetic-key" },
+    }),
   ).rejects.toThrow("source");
-  await approveBootstrapDevicePairing(
-    handoff.requestId,
-    handoff.profile,
-    { bootstrapSource: handoff.source },
-    baseDir,
-  );
+  await approveHandoff(handoff);
   const before = await getPairedDevice("mobile-device", baseDir);
   const other = await local();
   const conflict = await issuedPerson(other.id);
-  await expect(
-    approveBootstrapDevicePairing(
-      conflict.requestId,
-      conflict.profile,
-      { bootstrapSource: conflict.source },
-      baseDir,
-    ),
-  ).rejects.toThrow("replace");
+  await expect(approveHandoff(conflict)).rejects.toThrow("replace");
   expect(await getPairedDevice("mobile-device", baseDir)).toEqual(before);
   await revokeDeviceBootstrapToken({ baseDir, token: conflict.source.token });
-  await expect(
-    approveBootstrapDevicePairing(
-      conflict.requestId,
-      conflict.profile,
-      { bootstrapSource: conflict.source },
-      baseDir,
-    ),
-  ).rejects.toThrow("source");
+  await expect(approveHandoff(conflict)).rejects.toThrow("source");
 });
 
 it("checks current role and requester at worker commit, rolling back the operator and node together", async () => {
@@ -343,28 +279,16 @@ it("checks current role and requester at worker commit, rolling back the operato
     admit(request, grant);
   });
   try {
-    expect(
-      await approveBootstrapDevicePairing(
-        handoff.requestId,
-        handoff.profile,
-        { bootstrapSource: handoff.source, isApprovalCurrent: () => !committing },
-        baseDir,
-      ),
-    ).toMatchObject({ status: "forbidden" });
+    expect(await approveHandoff(handoff, { isApprovalCurrent: () => !committing })).toMatchObject({
+      status: "forbidden",
+    });
     expect(await getPairedDevice("mobile-device", baseDir)).toBeNull();
   } finally {
     observer.mockRestore();
   }
   applyReaderConfig();
   await setCanonicalUserProfileRole(person.id, "reader", options);
-  await expect(
-    approveBootstrapDevicePairing(
-      handoff.requestId,
-      handoff.profile,
-      { bootstrapSource: handoff.source },
-      baseDir,
-    ),
-  ).rejects.toThrow("role");
+  await expect(approveHandoff(handoff)).rejects.toThrow("role");
   expect(await getPairedDevice("mobile-device", baseDir)).toBeNull();
 });
 

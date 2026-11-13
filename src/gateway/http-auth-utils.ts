@@ -139,11 +139,12 @@ function resolveControlUiReadOperatorScopes(
     "operatorRolePolicy" | "operatorProfileScopeCeiling"
   >,
 ): string[] {
-  if (authMethod === "remote-ingress") {
-    return getRemoteControlUiIngressContext(req)?.resolvePrincipal().scopes ?? [];
-  }
-  if (authMethod === "device-token") {
-    return applyHttpOperatorRoleScopeCeiling(deviceScopes ?? [], authenticatedRequest);
+  if (authMethod === "remote-ingress" || authMethod === "device-token") {
+    const scopes =
+      authMethod === "remote-ingress"
+        ? getRemoteControlUiIngressContext(req)?.resolvePrincipal().scopes
+        : deviceScopes;
+    return applyHttpOperatorRoleScopeCeiling(scopes ?? [], authenticatedRequest);
   }
   if (authMethod === "trusted-proxy" || authMethod === "tailscale") {
     return resolveTrustedHttpOperatorScopes(req, {
@@ -687,7 +688,10 @@ export function resolveTrustedHttpOperatorScopes(
 ): string[] {
   const ingress = getRemoteControlUiIngressContext(req);
   if (ingress) {
-    const scopes = ingress.resolvePrincipal().scopes;
+    const scopes = applyHttpOperatorRoleScopeCeiling(
+      ingress.resolvePrincipal().scopes,
+      requestAuth,
+    );
     const header = getHeader(req, "x-openclaw-scopes");
     return header === undefined
       ? scopes

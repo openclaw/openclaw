@@ -1,4 +1,8 @@
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
+import {
+  assertDeviceBootstrapPersonalSelection,
+  type DeviceBootstrapProfile,
+} from "../shared/device-bootstrap-profile.js";
 import { selectResolvedUserProfileById } from "../state/user-profiles-internal.js";
 import type { PairedDeviceTokenIdentity } from "./device-pairing-core.types.js";
 import { isPairedDeviceTokenIdentityCurrent } from "./device-pairing-identity.js";
@@ -28,6 +32,17 @@ export function assertPersonalOperatorEnrollmentProfile(
     profile.id === GATEWAY_OWNER_PROFILE_ID
   ) {
     throw new Error("Enrollment requires a current personal profile");
+  }
+}
+
+/** Bootstrap grants use the same exact person check, plus their attended-purpose contract. */
+export function assertBootstrapPersonInDatabase(
+  db: EngineConnection,
+  profile: DeviceBootstrapProfile,
+): void {
+  assertDeviceBootstrapPersonalSelection(profile);
+  if (profile.operatorProfileId !== undefined) {
+    assertPersonalOperatorEnrollmentProfile(db, profile.operatorProfileId);
   }
 }
 
@@ -64,35 +79,27 @@ export function enrollDeviceProfileInWorker(
         deviceId: input.deviceId,
         profileId: input.profileId,
       });
-      if (device.operatorProfileId === input.profileId) {
-        return {
-          value: {
-            deviceId: device.deviceId,
-            profileId: input.profileId,
-            operatorToken: existing,
-            replaced: false,
-          },
-        };
-      }
-      const token = createDeviceAuthToken({
-        role: "operator",
-        scopes: existing.scopes,
-        existing,
-        preserveExistingIssuer: true,
-        now: input.nowMs,
-        rotatedAtMs: input.nowMs,
-      });
+      const replaced = device.operatorProfileId !== input.profileId;
+      const token = replaced
+        ? createDeviceAuthToken({
+            role: "operator",
+            scopes: existing.scopes,
+            existing,
+            preserveExistingIssuer: true,
+            now: input.nowMs,
+            rotatedAtMs: input.nowMs,
+          })
+        : existing;
       return {
         value: {
           deviceId: device.deviceId,
           profileId: input.profileId,
           operatorToken: token,
-          replaced: true,
+          replaced,
         },
-        patch: {
-          operatorProfileId: input.profileId,
-          tokens: { ...device.tokens, operator: token },
-        },
+        patch: replaced
+          ? { operatorProfileId: input.profileId, tokens: { ...device.tokens, operator: token } }
+          : undefined,
       };
     },
   );

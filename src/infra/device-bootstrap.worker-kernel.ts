@@ -15,7 +15,6 @@ import type {
   WorkerOperations,
   WorkerWriteOperationContext,
 } from "../state/worker-operation-registry.js";
-import { assertBootstrapPersonInDatabase } from "./device-bootstrap-profile.worker.js";
 import {
   DEVICE_BOOTSTRAP_TOKEN_TTL_MS,
   resolveDeviceBootstrapTokenExpiresAtMs,
@@ -44,6 +43,7 @@ import type {
   DeviceBootstrapTokenRecord,
   DevicePairSetupCompletionRecord,
 } from "./device-pairing.types.js";
+import { assertBootstrapPersonInDatabase } from "./device-profile-enrollment.worker.js";
 import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
 import { runSqliteReadOperationSync } from "./sqlite-schema-facts.js";
 

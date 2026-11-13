@@ -32,17 +32,6 @@ function fixture() {
 }
 afterEach(() => vi.useRealTimers());
 describe("personal setup issuance", () => {
-  it("preserves limited ceiling while selecting an existing person", async () => {
-    const { state, request } = fixture();
-    await setDevicePairSetupAccess(state, "limited");
-    await refreshDevicePairSetup(state, { profileId: "person-existing" });
-    expect(request.mock.calls[0]?.[1]).toEqual({
-      bootstrapProfile: "limited",
-      profileId: "person-existing",
-    });
-    expect(state.devicePairSetupLifecycle.phase).toBe("waiting");
-    closeDevicePairSetup(state);
-  });
   it("keeps an email-less enrollment ID and original name across uncertain issuance and dismissal", async () => {
     const { state, request } = fixture();
     request.mockRejectedValueOnce(new Error("connection lost"));

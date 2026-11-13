@@ -24,7 +24,7 @@ export function devicePersonalEnrollmentAction(
   };
 }
 
-export function showPersonalEnrollment(options: {
+function showPersonalEnrollment(options: {
   gateway: ApplicationGateway;
   basePath: string;
   deviceId: string;

@@ -1,10 +1,10 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { onSettled, Show } from "solid-js";
 import { intersectOperatorScopes } from "../../../../src/shared/operator-scope-compat.js";
-import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { registerProfileEnglish } from "../../i18n/locales/en-profile.ts";
 import { currentDisplayRuntimeConfig } from "../../lib/config/config-state-model.ts";
 import { formatList } from "../../lib/format.ts";
+import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication, useOptionalApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
@@ -28,15 +28,10 @@ function DefaultRolePolicy(props: { ceiling?: readonly string[] }) {
   const context = useApplication();
   const gateway = projectGateway(context.gateway);
   const config = sharedRuntimeConfigProjection(context.runtimeConfig);
-  const authorized = () => {
-    const snapshot = gateway.read().snapshot;
-    return (
-      snapshot.phase === "connected" &&
-      snapshot.hello?.auth?.role === "operator" &&
-      Array.isArray(snapshot.hello.auth.scopes) &&
-      readGatewayOperatorAccess(snapshot).canAdmin
-    );
-  };
+  const authorized = () =>
+    canCallGatewayMethod(gateway.read().snapshot, "config.get", "operator.admin", {
+      requireAdvertisement: false,
+    });
   onSettled(() => {
     if (authorized()) {
       void context.runtimeConfig.ensureDisplayLoaded().catch(() => undefined);
@@ -60,6 +55,9 @@ function DefaultRolePolicy(props: { ceiling?: readonly string[] }) {
       return { role: null };
     }
     const roles = asOptionalRecord(gatewayConfig.roles);
+    if (roles && roles.default === undefined) {
+      return { role: null };
+    }
     const role = typeof roles?.default === "string" ? roles.default : undefined;
     const definition = role
       ? asOptionalRecord(asOptionalRecord(roles?.definitions)?.[role])

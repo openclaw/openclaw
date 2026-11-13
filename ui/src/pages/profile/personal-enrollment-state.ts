@@ -2,9 +2,9 @@ import { GATEWAY_OWNER_PROFILE_ID } from "../../../../packages/gateway-protocol/
 import { enrollGatewayProfile } from "../../api/gateway-profile-enrollment.ts";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
-import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { persistSessionToken } from "../../app/settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 
@@ -40,11 +40,9 @@ export class PersonalEnrollmentState {
     const snapshot = this.gateway.snapshot;
     const enrollment = snapshot.client?.profileEnrollment;
     return (
-      snapshot.phase === "connected" &&
-      snapshot.hello?.auth?.role === "operator" &&
-      snapshot.hello.auth.scopes !== undefined &&
-      hasOperatorAdminAccess(snapshot.hello.auth) &&
-      Boolean(enrollment?.deviceId || enrollment?.native?.enrollProfile)
+      canCallGatewayMethod(snapshot, "device.profile.enroll", "operator.admin", {
+        requireAdvertisement: false,
+      }) && Boolean(enrollment?.deviceId || enrollment?.native?.enrollProfile)
     );
   }
 

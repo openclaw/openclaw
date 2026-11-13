@@ -10,7 +10,7 @@ import { prepareCorePluginStateReplacement } from "../../plugin-state/plugin-sta
 import type { OpenClawIdTunnelPrincipal } from "./tunnel-principal.js";
 
 /** One recorded binding: the token of (device, role) belongs to `peerKey`. */
-export type DeviceTokenBinding = {
+type DeviceTokenBinding = {
   device_id: string;
   role: string;
   peer_key: string;

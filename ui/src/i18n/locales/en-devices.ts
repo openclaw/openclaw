@@ -10,6 +10,7 @@ const enDevices = {
       browserPairingRequired:
         "You can view devices, but this browser needs approval to change them.",
       pairingRequired: "You can view devices, but only admins can change them.",
+      pairingRequiredTooltip: "Admin access required to manage devices.",
       adminRequired:
         "You can view command approvals and device bindings, but only admins can change them.",
       pairingAndAdminRequired:
@@ -56,6 +57,7 @@ const enDevices = {
       notEnrolled: "Not personally enrolled; sign-in may supply an identity",
       keepIdentity: "Keep current identity (Shared Owner if unbound)",
       desktopOpenWindow: "Open this desktop in a new window",
+      desktopOpenWindowTooltip: "Open in new window",
       desktopEnableHint:
         "Desktop sharing starts enabled on desktop devices. In the desktop app on that device, check the Desktop sharing switch under Settings. Approve any pending desktop access request here. If sharing still doesn’t work, ask an admin to check the desktop policy. The device needs Screen Sharing or an authenticated local VNC server.",
       uptime: "up {time}",
@@ -247,7 +249,6 @@ const enDevices = {
       expiredTitle: "Setup code expired",
       generateNewCode: "Create new code",
       nodeWaiting: "Run the command on the device, then review its pairing request here.",
-      help: "Connection help",
       helpNewTab: "Connection help (opens in a new tab)",
       manageDevices: "Manage devices",
     },

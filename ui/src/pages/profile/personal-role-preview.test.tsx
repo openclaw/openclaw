@@ -8,12 +8,7 @@ import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { PersonalRolePreview } from "./personal-role-preview.tsx";
 import { createConnectedContext } from "./profile-page.test-support.tsx";
 
-it("loads applied default-role policy only for an admin preview and intersects the supplied approval ceiling", async () => {
-  const applied = {
-    gateway: {
-      roles: { default: "guest", definitions: { guest: { scopes: ["operator.sessions.read"] } } },
-    },
-  };
+function mountPreview(applied: Record<string, unknown>) {
   const request = vi.fn().mockResolvedValue({
     exists: true,
     valid: true,
@@ -32,6 +27,16 @@ it("loads applied default-role policy only for an admin preview and intersects t
     view.unmount();
     runtimeConfig.dispose();
   });
+  return { view, harness, request, runtimeConfig };
+}
+
+it("loads applied default-role policy only for an admin preview and intersects the supplied approval ceiling", async () => {
+  const applied = {
+    gateway: {
+      roles: { default: "guest", definitions: { guest: { scopes: ["operator.sessions.read"] } } },
+    },
+  };
+  const { view, harness, request } = mountPreview(applied);
   await waitForSolid(() =>
     expect(view.container.textContent).toContain(
       "Default local role: guest. Operator scope policy: operator.sessions.read.",
@@ -48,37 +53,25 @@ it("loads applied default-role policy only for an admin preview and intersects t
   expect(request).toHaveBeenCalledTimes(1);
 });
 
-it("distinguishes a known absent role policy from an unreported applied projection", async () => {
-  const applied = { gateway: {} };
-  const request = vi.fn().mockResolvedValue({
-    exists: true,
-    valid: true,
-    hash: "synthetic",
-    config: applied,
-    runtimeConfig: applied,
-  });
-  const harness = createConnectedContext(request);
-  harness.emitHello(gatewayHelloForMethods(["config.get"]));
-  const runtimeConfig = createRuntimeConfigCapability(harness.context.gateway);
-  const provider = createSolidApplicationContextProvider({ ...harness.context, runtimeConfig });
-  const view = mountSolid(() => <PersonalRolePreview ceiling={["operator.write"]} />, {
-    wrapper: provider.wrapper,
-  });
-  onTestFinished(() => {
-    view.unmount();
-    runtimeConfig.dispose();
-  });
-  await waitForSolid(() =>
-    expect(view.container.textContent).toContain("No additional role policy is configured."),
-  );
-  expect(view.container.textContent).toContain(
-    "Available device/setup scope ceiling: operator.write.",
-  );
-  expect(view.container.textContent).not.toContain("Default role policy is not currently reported");
-  request.mockResolvedValueOnce({ exists: true, valid: true, hash: "partial", config: applied });
-  await runtimeConfig.refreshDisplay();
-  await waitForSolid(() =>
-    expect(view.container.textContent).toContain("Default role policy is not currently reported"),
-  );
-  expect(view.container.textContent).not.toContain("No additional role policy is configured.");
-});
+it.each([{}, { roles: { definitions: { guest: { scopes: ["operator.read"] } } } }])(
+  "distinguishes disabled enforcement from an unreported applied projection: %j",
+  async (gateway) => {
+    const applied = { gateway };
+    const { view, request, runtimeConfig } = mountPreview(applied);
+    await waitForSolid(() =>
+      expect(view.container.textContent).toContain("No additional role policy is configured."),
+    );
+    expect(view.container.textContent).toContain(
+      "Available device/setup scope ceiling: operator.write.",
+    );
+    expect(view.container.textContent).not.toContain(
+      "Default role policy is not currently reported",
+    );
+    request.mockResolvedValueOnce({ exists: true, valid: true, hash: "partial", config: applied });
+    await runtimeConfig.refreshDisplay();
+    await waitForSolid(() =>
+      expect(view.container.textContent).toContain("Default role policy is not currently reported"),
+    );
+    expect(view.container.textContent).not.toContain("No additional role policy is configured.");
+  },
+);

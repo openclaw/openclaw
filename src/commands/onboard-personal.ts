@@ -3,6 +3,7 @@ import {
   type ConfirmedOperatorEnrollment,
   type EnrollmentOptions,
 } from "../cli/devices-cli-enrollment.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "../gateway/operator-role-enforcement.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 
 /** Called only by terminal continuations after inference; browsers own their own offer. */
@@ -28,7 +29,9 @@ export async function offerTerminalPersonalSetup(
   const enrolled = await enrollDevicesOperator(
     options,
     async (config, selectedProfile) => {
-      const namedRoles = config.gateway?.roles;
+      const namedRoles = isNamedOperatorRoleEnforcementEnabled(config)
+        ? config.gateway?.roles
+        : undefined;
       const defaultRole = namedRoles?.default;
       const role = selectedProfile
         ? (

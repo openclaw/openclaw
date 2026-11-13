@@ -1,6 +1,5 @@
 import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
 import { resolveMissingRequestedScope, roleScopesAllow } from "../shared/operator-scope-compat.js";
-import { assertBootstrapPersonInDatabase } from "./device-bootstrap-profile.worker.js";
 import { requireDeviceBootstrapSourceInWorker } from "./device-bootstrap.worker-kernel.js";
 import type {
   RotateDeviceTokenResult,
@@ -29,6 +28,7 @@ import {
 } from "./device-pairing-token-policy.js";
 import { createDeviceAuthToken } from "./device-pairing-token-utils.js";
 import type { DeviceAuthToken, PairedDevice } from "./device-pairing.types.js";
+import { assertBootstrapPersonInDatabase } from "./device-profile-enrollment.worker.js";
 import type { EngineConnection } from "./sql-connection.js";
 
 /** Record use only if the current token still authorizes the request. */
