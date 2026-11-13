@@ -431,7 +431,7 @@ async function acquirePreparedModelRuntimeLeaseAttempt(
         ? {
             ...entry,
             readOnly: false,
-            config: undefined,
+            config: entry.config,
             allowGatewaySubagentBinding: false,
             loadRuntimePlugins: false,
             runtimePluginPurpose: undefined,
