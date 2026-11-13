@@ -17,6 +17,7 @@ import { saveAuthProfileStore } from "../auth-profiles/store-runtime.js";
 import { buildCliMcpGrantContext } from "../cli-runner/mcp-grant-context.js";
 import type { RunCliAgentParams } from "../cli-runner/types.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
+import { FailoverError } from "../failover-error.js";
 import { createAgentAttemptLifecycleCallbacks } from "./attempt-callbacks.js";
 import { createCompletionHandoff } from "./attempt-execution.announce.test-support.js";
 import type { runAgentAttempt } from "./attempt-execution.js";
@@ -315,6 +316,30 @@ export function registerCommandCliAdmissionTests({
     expect(onRuntimeTurnStarted).not.toHaveBeenCalled();
     observePhase({ phase: "assistant_output_started" });
     expect(onRuntimeTurnStarted).toHaveBeenCalledOnce();
+  });
+
+  it("resumes a first-turn session that the CLI runner kept after a format refusal", async () => {
+    const nativeSessionId = "refused-first-turn";
+    const { runCli } = await createCliSession(
+      "agent:main:subagent:cli-first-refusal",
+      makeSessionEntry("session-cli-first-refusal"),
+    );
+    runCliAgentMock.mockImplementationOnce(async (run: RunCliAgentParams) => {
+      // The runner keeps the refused first turn through this owner before rethrowing.
+      await run.persistStoppedFirstCliSession?.({ sessionId: nativeSessionId });
+      throw new FailoverError("CLI JSONL output exceeded 8388608 characters", {
+        reason: "format",
+        provider: "claude-cli",
+        model: "opus",
+      });
+    });
+    await expect(runCli({})).rejects.toMatchObject({ name: "FailoverError", reason: "format" });
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("resumed", nativeSessionId));
+    await runCli({});
+    expect(runCliAgentMock.mock.calls.map(([run]) => run.cliSessionId)).toEqual([
+      undefined,
+      nativeSessionId,
+    ]);
   });
 }
 

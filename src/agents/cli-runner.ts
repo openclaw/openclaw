@@ -50,7 +50,7 @@ import {
   attachCliMessagingDeliveryEvidence,
   getCliMessagingDeliveryEvidence,
 } from "./cli-runner/delivery-evidence.js";
-import { createCliFailoverError } from "./cli-runner/exit-error.js";
+import { createCliFailoverError, readCliStreamRefusalOutput } from "./cli-runner/exit-error.js";
 import { loadCliPromptImages } from "./cli-runner/helpers.js";
 import { cliBackendLog } from "./cli-runner/log.js";
 import type { ClaudeCliRunDiagnosticLifecycle } from "./cli-runner/run-diagnostics.js";
@@ -316,8 +316,10 @@ async function runPreparedCliAgentOwned(
   let userTurnHandled = false;
   // A directly stopped first turn rethrows its abort unsettled: no transcript, hooks,
   // or replay. Its flushed native session is the chat's only continuity, so bind
-  // it into the still-empty binding. Superseded, restarted, resumed, and forked
-  // runs keep the abort guards from #147139 and bind nothing here.
+  // it into the still-empty binding. A first turn whose stream was refused as
+  // unparseable is kept the same way so the fallback retry resumes it.
+  // Superseded, restarted, resumed, and forked runs keep the abort guards from
+  // #147139 and bind nothing here.
   const persistStoppedFirstCliSession = async (
     error: unknown,
     output: CliOutput,
@@ -326,12 +328,14 @@ async function runPreparedCliAgentOwned(
     const sessionId = output.sessionId;
     if (
       !params.persistStoppedFirstCliSession ||
-      !output.terminalInterruption ||
+      !(
+        (output.terminalInterruption && isAgentRunDirectAbortReason(error)) ||
+        readCliStreamRefusalOutput(error) === output
+      ) ||
       !sessionId ||
       cliSessionIdToUse ||
       resolveCliSessionId(context.reusableCliSession) ||
       sessionBindingDisabled ||
-      !isAgentRunDirectAbortReason(error) ||
       !isClaudeCliBackend(params.provider) ||
       !(await isCliBindingFlushed(sessionId, params.provider, context.cwd ?? context.workspaceDir))
     ) {
@@ -403,7 +407,13 @@ async function runPreparedCliAgentOwned(
               : {}),
           }
         : undefined,
-    );
+    ).catch(async (error: unknown) => {
+      const refused = readCliStreamRefusalOutput(error);
+      if (refused) {
+        await persistStoppedFirstCliSession(error, refused, cliSessionIdToUse);
+      }
+      throw error;
+    });
     try {
       params.assertCurrent?.();
     } catch (error) {
