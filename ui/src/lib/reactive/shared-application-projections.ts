@@ -3,10 +3,6 @@ import type { profileDirectory } from "../profile-directory.ts";
 import type { SessionPullRequestSnapshotStore } from "../session-pull-requests.ts";
 import { createSharedOwnerProjection } from "./shared-owner-projection.ts";
 
-export const sharedThemeProjection = createSharedOwnerProjection(
-  (theme: ApplicationContext["theme"]) => theme,
-);
-
 export const sharedRuntimeConfigProjection = createSharedOwnerProjection(
   (config: ApplicationContext["runtimeConfig"]) => ({
     state: config.state,

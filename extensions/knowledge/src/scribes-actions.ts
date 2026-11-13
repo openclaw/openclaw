@@ -74,6 +74,7 @@ export async function repairScribe(
   snapshot: ScribeSnapshot,
   job: ScribeJob,
   agentId: string,
+  attempt: string,
 ) {
   const { scribe } = snapshot;
   const sessionKey = await conversation(host, snapshot, agentId);
@@ -92,7 +93,7 @@ export async function repairScribe(
     sessionKey,
     agentId,
     message: prompt,
-    idempotencyKey: `knowledge:scribe:${scribe.id}:repair:${crypto.randomUUID()}`,
+    idempotencyKey: `knowledge:scribe:${scribe.id}:repair:${attempt}`,
   });
   return sessionKey;
 }
