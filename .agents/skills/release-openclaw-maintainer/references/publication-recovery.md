@@ -339,7 +339,9 @@ escalate a sustained no-progress condition to the ClawHub owner. Never probe,
 unlock, or validate ClawHub credentials for a pending public state. Recover only
 a `failed` attempt, only under explicit recovery authority with the approved
 human publisher-token workflow described below. Never dispatch recovery for
-`pending`, `published`, or merely slow versions.
+`pending`, `published`, or merely slow versions. This boundary follows the
+verified pending-versus-failed recovery history in
+https://github.com/openclaw/openclaw/pull/168153.
 
 ClawHub publication and recovery run independently from the existing dispatch
 point. A ClawHub failure must not fail or stall core publication, GitHub
