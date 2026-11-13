@@ -401,6 +401,11 @@ function createPreparationSession(context: CaptureCommand) {
               artifact.captureRecoverySource = markPluginSourceCaptureOperation(() =>
                 ownRecovery(captureRecovery()),
               );
+              // Both transports use the same recovery owner. Frozen generations and
+              // custody forks still call the synchronous operation inside this worker.
+              artifact.captureRecoverySourceAsync = markPluginSourceCaptureOperation(async () =>
+                artifact.captureRecoverySource(),
+              );
               const retainCustody = artifact.retainSourceCustody.bind(artifact);
               artifact.retainSourceCustody = markPluginSourceCaptureOperation(() => {
                 const custody = retainCustody();
