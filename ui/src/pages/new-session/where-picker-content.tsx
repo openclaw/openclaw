@@ -15,7 +15,7 @@ import {
   environmentCloudDisabledReason,
 } from "./hosted-environments.ts";
 import { PickerNavigation, pickerOptionRef } from "./picker-navigation.ts";
-import { createPickerScrollRef, PickerBack, PickerSkeleton } from "./picker.tsx";
+import { createPickerScrollRef, PickerSkeleton } from "./picker.tsx";
 import { environmentCapabilityLabels } from "./place-facts.ts";
 import { DevicePoolIcon, EnvironmentDeviceIcon } from "./where-chip-icons.tsx";
 import type { WhereChipProps } from "./where-chip.tsx";
@@ -216,7 +216,6 @@ export function WherePickerContent(props: Omit<WhereChipProps, "ref">) {
     <div class="new-session-page__environment-layout new-session-page__picker-navigation">
       <div class="new-session-page__picker-root new-session-page__environment-picker">
         <HeaderSearch
-          leading={<PickerBack onBack={() => props.params.place.browser.close()} />}
           label={t("newSession.environmentSearchPlaceholder")}
           query={props.params.place.browser.environmentQuery}
           autofocus="popover"

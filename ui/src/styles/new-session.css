@@ -663,10 +663,10 @@ span.new-session-page__select {
   color: var(--muted);
 }
 
-/* Project browsing uses a wider shell for paths and remote result details. */
-.oc-popover.new-session-page__project-popover,
-.oc-popover.new-session-page__where-popover {
-  --oc-overlay-max-width: min(420px, calc(100vw - 24px));
+/* Compact menus share the native anchor, viewport budget, and surface. */
+.oc-popover.new-session-page__picker-popover {
+  --oc-overlay-distance: 6px;
+  --oc-overlay-max-width: min(300px, calc(100dvw - 24px));
   width: var(--oc-overlay-max-width);
   padding: 0;
   overflow: hidden;
@@ -694,9 +694,9 @@ span.new-session-page__select {
   overflow-y: auto;
 }
 
-/* Destination search and mode controls stay visible while the flat inventory scrolls. */
-.oc-popover.new-session-page__where-popover {
-  --oc-overlay-max-width: min(360px, calc(100vw - 24px));
+/* Project names and paths keep a little extra width. */
+.oc-popover.new-session-page__project-popover {
+  --oc-overlay-max-width: min(320px, calc(100dvw - 24px));
 }
 
 .new-session-page__environment-layout {
@@ -1538,14 +1538,11 @@ div.new-session-page__project-search {
   }
 }
 
-/* The context tray tucks behind the composer; its open surface overlays recents. */
+/* The context tray tucks behind the composer; each picker anchors its own menu. */
 .new-session-page__context-tray {
-  --oc-overlay-show-duration: 240ms;
-  --oc-overlay-hide-duration: 220ms;
   --new-session-tray-radius: var(--composer-radius);
   --new-session-tray-edge: 18px;
   --new-session-tray-surface: color-mix(in oklab, var(--text) 3%, var(--bg));
-  --new-session-tray-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
 
   position: relative;
   z-index: 1;
@@ -1555,7 +1552,6 @@ div.new-session-page__project-search {
   background: var(--new-session-tray-surface);
   box-shadow: var(--shadow-sm);
   corner-shape: superellipse(1.5);
-  anchor-name: --new-session-context-tray;
 }
 
 .new-session-page__composer > .agent-chat__input {
@@ -1611,9 +1607,6 @@ div.new-session-page__project-search {
 }
 
 .new-session-page__context-tray .new-session-page__trigger {
-  opacity: 1;
-  transition: opacity calc(var(--oc-overlay-hide-duration) * 0.4) var(--new-session-tray-ease);
-
   min-width: 0;
   max-width: 100%;
   height: 26px;
@@ -1624,6 +1617,12 @@ div.new-session-page__project-search {
   border-radius: var(--radius-full);
   font-size: 12px;
   font-weight: var(--control-ui-font-weight-normal);
+}
+
+@media (hover: hover) {
+  .new-session-page__context-tray .new-session-page__trigger:hover:not(:disabled) {
+    background: var(--surface-hover);
+  }
 }
 
 .new-session-page__context-tray .new-session-page__trigger-label {
@@ -1653,19 +1652,37 @@ div.new-session-page__project-search {
 
 .new-session-page__picker-panel {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
   font-size: calc(13px * var(--control-ui-text-scale, 1));
 }
 
+.new-session-page__picker-panel > .new-session-page__environment-layout,
+.new-session-page__picker-popover .new-session-page__browser {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.new-session-page__picker-popover .new-session-page__browser-list {
+  min-height: 0;
+}
+
+.new-session-page__picker-popover .new-session-page__browser-entry {
+  min-height: 30px;
+  padding: 4px 6px;
+}
+
 .new-session-page__picker-popover .header-search {
   position: relative;
   gap: 8px;
-  height: 52px;
-  min-height: 52px;
+  height: 42px;
+  min-height: 42px;
   margin: 0;
-  padding: 8px var(--new-session-tray-edge) 8px calc(var(--new-session-tray-edge) - 7px);
+  padding: 6px 10px;
   border: 0;
   color: var(--text);
   font-size: 13px;
@@ -1680,8 +1697,8 @@ div.new-session-page__project-search {
 .new-session-page__context-tray .new-session-page__picker-popover input:hover,
 .new-session-page__context-tray .new-session-page__picker-popover input:focus,
 .new-session-page__context-tray .new-session-page__picker-popover input:focus-visible {
-  height: 32px;
-  padding-inline: 12px;
+  height: 28px;
+  padding-inline: 8px;
   border: 0;
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--chat-composer-surface) 35%, var(--new-session-tray-surface));
@@ -1699,42 +1716,12 @@ div.new-session-page__project-search {
   color: var(--muted);
 }
 
-.new-session-page__picker-back {
-  display: inline-grid;
-  flex: none;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  margin: 0;
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-full);
-  background: none;
-  color: var(--muted);
-  cursor: var(--cursor-action);
-}
-
-.new-session-page__picker-back:hover {
-  color: var(--text);
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
-}
-
-.new-session-page__picker-back:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
-.new-session-page__picker-back svg {
-  width: 14px;
-  height: 14px;
-  stroke-width: 1.5px;
-}
-
 .new-session-page__picker-popover .new-session-page__picker-root,
 .new-session-page__picker-popover .new-session-page__environment-list {
-  flex: none;
+  flex: 0 1 auto;
+  min-height: 0;
   max-height: 248px;
-  padding: 0 calc(var(--new-session-tray-edge, 18px) - 8px) 8px;
+  padding: 0 6px 6px;
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-width: thin;
@@ -1762,24 +1749,28 @@ div.new-session-page__project-search {
 
 .new-session-page__project-popover .new-session-page__picker-root {
   /* Eight option rows plus the section heading. */
-  max-height: calc(8 * 32px + 28px);
+  max-height: calc(8 * 30px + 24px);
   padding-bottom: 0;
 }
 
 .new-session-page__project-popover
   .new-session-page__picker-root:has(> .oc-menu-heading ~ .oc-menu-heading) {
-  max-height: calc(8 * 32px + 2 * 28px + 6px);
+  max-height: calc(8 * 30px + 2 * 24px + 4px);
 }
 
 .new-session-page__picker-popover .new-session-page__environment-picker {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
   max-height: none;
   padding: 0;
   overflow: hidden;
 }
 
 .new-session-page__picker-popover .oc-menu-heading {
-  min-height: 28px;
-  padding-inline: 8px;
+  min-height: 24px;
+  padding-inline: 6px;
 }
 
 .new-session-page__picker-popover .oc-menu-heading__action {
@@ -1798,12 +1789,12 @@ div.new-session-page__project-search {
 }
 
 .new-session-page__picker-popover .oc-menu-heading:not(:first-child) {
-  margin-top: 6px;
+  margin-top: 4px;
 }
 
 .new-session-page__picker-popover .session-menu__item {
-  min-height: 32px;
-  padding: 0 8px;
+  min-height: 30px;
+  padding: 4px 6px;
   gap: 6px;
   margin: 0;
 }
@@ -1855,14 +1846,14 @@ div.new-session-page__project-search {
 
 .new-session-page__picker-foot {
   flex: none;
-  padding: 6px calc(var(--new-session-tray-edge, 18px) - 8px);
+  padding: 4px 6px;
 }
 
 .new-session-page__picker-foot::before {
   content: "";
   display: block;
   height: 1px;
-  margin: 0 8px 6px;
+  margin: 0 6px 4px;
   background: var(--border);
 }
 
@@ -1872,36 +1863,69 @@ div.new-session-page__project-search {
 }
 
 .new-session-page__checkout-popover .new-session-page__picker-root {
-  padding-top: 6px;
-  padding-bottom: 12px;
+  padding: 6px;
   max-height: min(420px, 60vh);
+}
+
+.new-session-page__checkout-popover .oc-menu-heading {
+  min-height: 26px;
+  padding: 4px 8px 6px;
+}
+
+.new-session-page__checkout-popover .oc-menu-heading__label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.new-session-page__checkout-popover .session-menu__item {
+  min-height: 30px;
+  padding: 4px 6px;
+  gap: 6px;
+  font-size: calc(13px * var(--control-ui-text-scale, 1));
+}
+
+.new-session-page__checkout-popover .session-menu__item + .session-menu__item {
+  margin-top: 2px;
+}
+
+.new-session-page__checkout-fields {
+  display: grid;
+  gap: 8px;
+  padding: 8px 6px 4px;
 }
 
 .new-session-page__checkout-popover .new-session-page__menu-field {
   display: grid;
-  grid-template-columns: 52px minmax(0, 1fr);
-  max-width: 400px;
+  grid-template-columns: 44px minmax(0, 1fr);
   gap: 8px;
-  margin-block: 10px 0;
-  padding: 0 8px;
+  margin: 0;
+  padding: 0;
 }
 
-.new-session-page__checkout-popover .session-menu__item + .new-session-page__menu-field {
-  margin-top: 6px;
-}
-
-.new-session-page__checkout-popover .new-session-page__menu-field input {
+.new-session-page__checkout-popover
+  .new-session-page__checkout-fields
+  .new-session-page__menu-field
+  input {
   width: 100%;
-  padding-block: 0;
+  height: 30px;
+  padding: 0 8px;
+  background: var(--surface-hover);
   font: inherit;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale, 1));
 }
 
 .new-session-page__checkout-popover .new-session-page__menu-note {
-  padding: 0 8px 0 68px;
-  margin-top: 4px;
+  padding: 4px 6px;
+  margin: 0;
   font-size: 12px;
   line-height: 1.45;
+}
+
+.new-session-page__checkout-fields > .new-session-page__menu-note {
+  padding: 0 0 0 52px;
 }
 
 .new-session-page__skeletons {
@@ -1970,95 +1994,7 @@ div.new-session-page__project-search {
   }
 }
 
-/* Both layers stay present throughout the native popover's open/close phases.
-   Only the surface height clips; its content keeps its final layout. */
-
-.new-session-page__context-tray:has(
-    .new-session-page__picker-popover[open]:not([data-phase="closing"])
-  )
-  .new-session-page__trigger {
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity calc(var(--oc-overlay-show-duration) * 0.4) var(--new-session-tray-ease);
-}
-
-/* The tray owns placement even when a lazy picker loads shared RTL styles. */
-.new-session-page__context-tray .oc-overlay.new-session-page__picker-popover[data-placement] {
-  position-area: none;
-}
-
-.new-session-page__context-tray .new-session-page__picker-popover {
-  position: fixed;
-  right: auto;
-  position-try-fallbacks: none;
-  top: calc(anchor(--new-session-context-tray top) + var(--new-session-tray-radius) - 6px);
-  left: anchor(--new-session-context-tray left);
-  width: anchor-size(--new-session-context-tray width);
-  max-width: none;
-  min-width: 0;
-  height: 42px;
-  min-height: 42px;
-  max-height: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  border: 0;
-  border-radius: 0 0 var(--new-session-tray-radius) var(--new-session-tray-radius);
-  background: transparent;
-  backdrop-filter: none;
-  opacity: 1;
-  scale: 1;
-  overflow: clip;
-  box-shadow: var(--shadow-sm);
-  interpolate-size: allow-keywords;
-  transition:
-    height var(--oc-overlay-hide-duration) var(--new-session-tray-ease),
-    box-shadow var(--oc-overlay-hide-duration) var(--new-session-tray-ease);
-}
-
-.new-session-page__context-tray
-  .new-session-page__picker-popover[open]:not([data-phase="closing"]) {
-  height: auto;
-  box-shadow:
-    0 18px 32px -14px rgb(0 0 0 / 16%),
-    0 2px 6px -2px rgb(0 0 0 / 6%);
-  transition-duration: var(--oc-overlay-show-duration);
-}
-
-.new-session-page__context-tray .new-session-page__picker-panel {
-  flex: none;
-  min-height: max-content;
-  background: var(--new-session-tray-surface);
-  opacity: 0;
-  transition: opacity calc(var(--oc-overlay-hide-duration) * 0.8) var(--new-session-tray-ease);
-}
-
-.new-session-page__context-tray
-  .new-session-page__picker-popover[open]:not([data-phase="closing"])
-  > .new-session-page__picker-panel {
-  opacity: 1;
-  transition: opacity calc(var(--oc-overlay-show-duration) * 0.8) var(--new-session-tray-ease);
-}
-
-@starting-style {
-  .new-session-page__context-tray
-    .new-session-page__picker-popover[open]:not([data-phase="closing"]) {
-    height: 42px;
-    box-shadow: var(--shadow-sm);
-  }
-  .new-session-page__context-tray
-    .new-session-page__picker-popover[open]:not([data-phase="closing"])
-    > .new-session-page__picker-panel {
-    opacity: 0;
-  }
-}
-
 @media (max-width: 768px) {
-  .new-session-page__welcome-hint {
-    anchor-name: --new-session-subtitle;
-  }
-
   .new-session-page__context-tray {
     order: -1;
     margin: 0 0 4px;
@@ -2112,58 +2048,6 @@ div.new-session-page__project-search {
     max-width: none;
   }
 
-  .new-session-page__context-tray .new-session-page__picker-popover {
-    /* Cap the upward panel at the subtitle; keep short lists bottom-aligned. */
-    top: calc(anchor(--new-session-subtitle bottom) + 12px);
-    bottom: anchor(--new-session-context-tray bottom);
-    height: anchor-size(--new-session-context-tray height);
-    min-height: 0;
-    max-height: stretch;
-    align-self: end;
-    justify-content: flex-end;
-    border-radius: var(--new-session-tray-radius);
-  }
-
-  .new-session-page__context-tray .new-session-page__picker-panel {
-    flex: 0 1 auto;
-    min-height: 0;
-  }
-
-  .new-session-page__picker-popover .new-session-page__picker-root,
-  .new-session-page__picker-popover .new-session-page__environment-list {
-    flex: 0 1 auto;
-    min-height: 0;
-  }
-
-  .new-session-page__picker-popover .new-session-page__browser {
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-  }
-
-  .new-session-page__picker-popover .new-session-page__browser-head,
-  .new-session-page__picker-popover .new-session-page__browser-actions {
-    flex: none;
-  }
-
-  .new-session-page__picker-popover .new-session-page__browser-list {
-    min-height: 0;
-    scrollbar-width: thin;
-    scrollbar-color: color-mix(in srgb, var(--text) 20%, transparent) transparent;
-  }
-
-  .new-session-page__context-tray
-    .new-session-page__picker-popover[open]:not([data-phase="closing"]) {
-    height: auto;
-  }
-
-  @starting-style {
-    .new-session-page__context-tray
-      .new-session-page__picker-popover[open]:not([data-phase="closing"]) {
-      height: anchor-size(--new-session-context-tray height);
-    }
-  }
-
   .new-session-page__skeletons--tray {
     flex-direction: column;
   }
@@ -2175,11 +2059,6 @@ div.new-session-page__project-search {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .new-session-page__context-tray .new-session-page__trigger,
-  .new-session-page__context-tray .new-session-page__picker-popover,
-  .new-session-page__context-tray .new-session-page__picker-panel {
-    transition: none;
-  }
   .new-session-page__skeleton-row {
     animation: none;
   }
@@ -2241,42 +2120,9 @@ div.new-session-page__project-search {
 
 .new-session-page__picker-popover .new-session-page__browser-head,
 .new-session-page__picker-popover .new-session-page__browser-actions {
+  flex: none;
+  padding: 6px 8px;
   border: 0;
-}
-
-/* A lazy picker keeps the resting tray geometry until its panel is ready. */
-.new-session-page__context-tray
-  .new-session-page__picker-popover[open]:has(.new-session-page__skeletons--tray) {
-  height: 42px;
-}
-
-.new-session-page__picker-panel > .new-session-page__skeletons--tray {
-  align-items: center;
-  height: 42px;
-  padding: 0 calc(var(--new-session-tray-edge) - 10px);
-}
-
-@media (max-width: 768px) {
-  .new-session-page__context-tray
-    .new-session-page__picker-popover[open]:has(.new-session-page__skeletons--tray) {
-    height: anchor-size(--new-session-context-tray height);
-    box-shadow: none;
-  }
-
-  .new-session-page__context-tray
-    .new-session-page__picker-panel:has(> .new-session-page__skeletons--tray) {
-    background: transparent;
-  }
-
-  .new-session-page__picker-panel > .new-session-page__skeletons--tray {
-    align-items: stretch;
-    height: auto;
-    padding: 0 calc(var(--chat-composer-editor-inset-inline, 14px) + 1px);
-  }
-}
-
-.new-session-page__context-tray .new-session-page__picker-popover:not([open]) {
-  display: none;
 }
 
 /* Pointer and keyboard navigation share one highlighted row. */
@@ -2302,4 +2148,20 @@ div.new-session-page__project-search {
 
 .new-session-page__picker-navigation .session-menu__item[aria-pressed="true"][data-highlighted] {
   background: var(--surface-selected-hover);
+}
+
+@media (pointer: coarse) {
+  .new-session-page__picker-popover .session-menu__item,
+  .new-session-page__picker-popover .new-session-page__browser-entry {
+    min-height: 44px;
+  }
+
+  .new-session-page__picker-popover .header-search {
+    height: auto;
+    min-height: 52px;
+  }
+
+  .new-session-page__context-tray .new-session-page__picker-popover input {
+    min-height: 40px;
+  }
 }

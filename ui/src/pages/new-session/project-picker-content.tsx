@@ -26,7 +26,7 @@ import { findBrowsableDeviceFolderHost } from "./device-placement.ts";
 import type { BrowserProjectRegistration } from "./draft-place-browser.ts";
 import { parentFolderDisplayName } from "./path.ts";
 import { PickerNavigation, pickerOptionRef } from "./picker-navigation.ts";
-import { createPickerScrollRef, PickerBack, PickerSkeleton } from "./picker.tsx";
+import { createPickerScrollRef, PickerSkeleton } from "./picker.tsx";
 import { PlaceBrowser } from "./place-browser.tsx";
 import { disambiguate } from "./place-labels.ts";
 import { projectCloneInput } from "./project-chip.ts";
@@ -286,7 +286,6 @@ export function ProjectPickerContent(props: ProjectChipProps) {
           data-chat-autotype-exempt
         >
           <HeaderSearch
-            leading={<PickerBack onBack={() => props.params.place.browser.close()} />}
             class="new-session-page__project-search"
             label={t("newSession.projectSearchPlaceholder")}
             query={props.params.place.browser.projectQuery}
