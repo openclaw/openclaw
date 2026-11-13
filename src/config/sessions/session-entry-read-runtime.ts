@@ -13,6 +13,7 @@ import { resolveStateDir } from "../state-dir.js";
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
 import { resolveSessionLifecycleTimestampsWithHeader } from "./lifecycle-timestamps.js";
 import { matchesPluginHostCleanupSession } from "./plugin-host-cleanup.js";
+import { hasOrphanedMainSessionWork } from "./restart-recovery-state.js";
 import {
   assertMemoryExactReadSource,
   captureMemoryExactSessionReader,
@@ -291,14 +292,18 @@ export function createSessionEntryListReader(
 /** Read descriptive summaries through the original store selection and reader lifetime. */
 export async function readSessionEntrySummariesInWorker(
   input: Omit<SessionStoreWorkerReadScope, "agentId"> &
-    Pick<SessionEntryListWorkerInput["scope"], "agentId" | "cleanupSession" | "readConsistency">,
+    Pick<
+      SessionEntryListWorkerInput["scope"],
+      "agentId" | "cleanupSession" | "mainSessionRecovery" | "readConsistency"
+    >,
 ) {
   const memory = captureMemoryExactSessionReader(input);
   if (memory) {
     return memory
       .entries("list")
       .filter(({ sessionKey, entry }) =>
-        matchesPluginHostCleanupSession(sessionKey, entry, input.cleanupSession),
+        matchesPluginHostCleanupSession(sessionKey, entry, input.cleanupSession) &&
+        (!input.mainSessionRecovery || hasOrphanedMainSessionWork(entry, sessionKey)),
       );
   }
   const { scope } = captureSessionEntryReadScope({ ...input, sessionKey: "" });
@@ -313,6 +318,7 @@ export async function readSessionEntrySummariesInWorker(
           env: database.env,
           projection: "list",
           cleanupSession: input.cleanupSession,
+          mainSessionRecovery: input.mainSessionRecovery,
           hydrateSkillPromptRefs: false,
           readConsistency: input.readConsistency,
         },

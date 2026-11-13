@@ -600,6 +600,19 @@ export function hasMainSessionRecoveryClaim(entry: InternalSessionEntry | undefi
   );
 }
 
+/** Shared startup selection; the marking owner rechecks current state before writing. */
+export function hasOrphanedMainSessionWork(
+  entry: InternalSessionEntry,
+  sessionKey: string,
+): boolean {
+  return (
+    isMainRestartRecoveryCandidate(entry, sessionKey) &&
+    (hasMainSessionRecoveryClaim(entry) ||
+      entry.abortedLastRun === true ||
+      entry.status === "interrupted")
+  );
+}
+
 /** A new turn may retire an aborted claim only when restart recovery will not resume it. */
 export function canReplaceAbortedRestartRecoveryClaim(
   entry: SessionEntry,

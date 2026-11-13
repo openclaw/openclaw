@@ -1,3 +1,4 @@
+import { jsonExtractText, jsonValid } from "../../infra/database-engine/json-values.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
@@ -10,6 +11,7 @@ import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { matchesPluginHostCleanupSession } from "./plugin-host-cleanup.js";
+import { hasOrphanedMainSessionWork } from "./restart-recovery-state.js";
 import {
   listSqliteSessionEntriesFromDatabase,
   readSelectedSessionEntriesInDatabase,
@@ -26,7 +28,7 @@ import type {
   SessionEntryListWorkerResult,
 } from "./session-entry-read.types.js";
 
-/** Cleanup selects identity columns before materializing metadata in the same worker snapshot. */
+/** Scoped startup reads select keys before materializing metadata in the same worker snapshot. */
 export function readSessionEntryList(
   request: SessionEntryListWorkerInput,
 ): Omit<SessionEntryListWorkerResult, "kind"> {
@@ -44,6 +46,57 @@ export function readSessionEntryList(
     (database) =>
       readWithCanonicalSessionReaderContinuation(database, request.continuation, () => {
         source = captureSessionEntryReadSource(database, request.expectedIdentity);
+        if (scope.mainSessionRecovery === "orphans") {
+          const keys = executeSqliteQuerySync(
+            database.db,
+            getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db)
+              .selectFrom("session_nodes")
+              .select("session_key")
+              .where("archived_at", "is", null)
+              .where((eb) =>
+                // Malformed legacy payloads still reach the canonical reader's skip/reject policy.
+                eb.case()
+                  .when(jsonValid(database.db, eb.ref("entry_json")), "=", false)
+                  .then(true)
+                  .else(
+                    eb.or([
+                      ...[
+                        "mainRestartRecovery",
+                        "restartRecoveryRuns",
+                        "restartRecoveryDeliveryRunId",
+                        "pendingFinalDelivery",
+                      ].map((field) =>
+                        eb(
+                          jsonExtractText(database.db, eb.ref("entry_json"), field),
+                          "is not",
+                          null,
+                        ),
+                      ),
+                      eb(
+                        eb.cast<string>(
+                          jsonExtractText(database.db, eb.ref("entry_json"), "abortedLastRun"),
+                          "text",
+                        ),
+                        "in",
+                        ["1", "true"],
+                      ),
+                      eb(
+                        jsonExtractText(database.db, eb.ref("entry_json"), "status"),
+                        "=",
+                        "interrupted",
+                      ),
+                    ]),
+                  )
+                  .end(),
+              ),
+          ).rows.map((row) => row.session_key);
+          // Even an empty selection must validate pending canonical siblings.
+          return readSelectedSessionEntriesInDatabase(database, keys).filter(
+            ({ entry, sessionKey }) =>
+              hasOrphanedMainSessionWork(entry, sessionKey) &&
+              matchesPluginHostCleanupSession(sessionKey, entry, scope.cleanupSession),
+          );
+        }
         if (scope.cleanupSession === undefined) {
           const read = () =>
             listSqliteSessionEntriesFromDatabase(

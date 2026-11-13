@@ -37,6 +37,7 @@ import {
 import { prepareSessionDeliveryGeneration } from "./session-delivery-generation.js";
 import {
   readSessionEntriesFromStoreInWorker,
+  readSessionEntrySummariesInWorker,
   withSessionEntriesFromStoresInWorker,
 } from "./session-entry-read-runtime.js";
 import {
@@ -45,6 +46,7 @@ import {
 } from "./session-entry-read.worker.js";
 import type { SessionEntrySnapshotField } from "./session-entry-snapshot-values.js";
 import { addSessionMember } from "./session-sharing-store.native.js";
+import type { InternalSessionEntry } from "./types.js";
 
 it("hydrates only requested snapshots while retaining exact-read lifecycle and authorization facts", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
@@ -625,49 +627,120 @@ it.each(["sharing", "list"] as const)(
   },
 );
 
-it.each([false, true])("preserves dirty sibling validation (transcript=%s)", async (transcript) => {
+it("selects active startup orphans without changing baseline recovery eligibility", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
-    const sessionKey = "agent:main:selected";
-    const sibling = "agent:main:matrix:channel:!mixed:example.org";
-    for (const key of [sessionKey, sibling]) {
-      writeSessionEntry(database, key, { sessionId: key, updatedAt: 1 });
+    const runs = [{ runId: "previous-run", lifecycleGeneration: "previous-gateway" }];
+    const entries: Record<string, Partial<InternalSessionEntry>> = {
+      archived: { archivedAt: 1, abortedLastRun: true },
+      empty: { restartRecoveryRuns: [] },
+      settled: { status: "done" },
+      terminal: { restartRecoveryRuns: runs, restartRecoveryTerminalRunIds: ["previous-run"] },
+      tombstoned: {
+        mainRestartRecovery: { chargedAttempts: 0, tombstone: { reason: "exhausted" } },
+      },
+      "pending-delivery": { status: "done", restartRecoveryDeliveryRunId: "delivery-run" },
+      "pending-execution": { status: "done", restartRecoveryRuns: runs },
+      "pending-final": {
+        status: "done",
+        pendingFinalDelivery: { createdAt: 1, kind: "transport-only" },
+      },
+      "orphan-aborted": { abortedLastRun: true },
+      "orphan-interrupted": { status: "interrupted" },
+      // This branch's marking owner still decides how to settle terminal interruptions.
+      "terminal-interruption": {
+        status: "interrupted",
+        abortedLastRun: false,
+        lastRunId: "previous-run",
+        restartRecoveryTerminalRunIds: ["previous-run"],
+      },
+      "subagent:orphan": { abortedLastRun: true },
+      "cron:orphan": { abortedLastRun: true },
+      "acp:orphan": { abortedLastRun: true },
+      "spawned-orphan": { abortedLastRun: true, spawnDepth: 1 },
+    };
+    for (const [name, entry] of Object.entries(entries)) {
+      replaceSessionEntrySync(
+        { agentId: "main", env, sessionKey: "agent:main:" + name },
+        { sessionId: name, updatedAt: 1, ...entry },
+      );
     }
-    const read = async () =>
-      transcript
-        ? readExactSessionEntriesWithLifecycle({
+    const selected = await readSessionEntrySummariesInWorker({
+      agentId: "main",
+      storePath: database.path,
+      env,
+      mainSessionRecovery: "orphans",
+    });
+    expect(selected.map(({ sessionKey }) => sessionKey).toSorted()).toEqual([
+      "agent:main:orphan-aborted",
+      "agent:main:orphan-interrupted",
+      "agent:main:pending-delivery",
+      "agent:main:pending-execution",
+      "agent:main:pending-final",
+      "agent:main:terminal-interruption",
+      "agent:main:tombstoned",
+    ]);
+  });
+});
+
+it.each(["selected", "transcript", "orphans"] as const)(
+  "preserves dirty sibling validation (%s)",
+  async (mode) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+      const database = openOpenClawAgentDatabase({ agentId: "main", env });
+      const sessionKey = "agent:main:selected";
+      const sibling = "agent:main:matrix:channel:!mixed:example.org";
+      for (const key of [sessionKey, sibling]) {
+        writeSessionEntry(database, key, { sessionId: key, updatedAt: 1 });
+      }
+      const read = async () => {
+        if (mode === "orphans") {
+          return {
+            entries: await readSessionEntrySummariesInWorker({
+              agentId: "main",
+              storePath: database.path,
+              env,
+              mainSessionRecovery: "orphans",
+            }),
+          };
+        }
+        if (mode === "transcript") {
+          return readExactSessionEntriesWithLifecycle({
             kind: "session-exact-entries",
             database: { agentId: "main", path: database.path },
             env,
             sessionKeys: [sessionKey],
             projection: "list",
             selection: { kind: "transcript-aliases", sessionIds: [] },
-          })
-        : await readSessionEntriesFromStoreInWorker({
-            agentId: "main",
-            storePath: database.path,
-            env,
-            sessionKeys: [sessionKey],
-            projection: "list",
           });
-    expect((await read()).entries).toHaveLength(1);
-    markCanonicalSessionValidationPending(database, [sibling]);
-    database.db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
-      JSON.stringify({
-        sessionId: sibling,
-        updatedAt: 1,
-        delivery: normalizeSessionDeliveryState({
-          context: { channel: "matrix", to: "!Mixed:example.org" },
+        }
+        return readSessionEntriesFromStoreInWorker({
+          agentId: "main",
+          storePath: database.path,
+          env,
+          sessionKeys: [sessionKey],
+          projection: "list",
+        });
+      };
+      expect((await read()).entries).toHaveLength(mode === "orphans" ? 0 : 1);
+      markCanonicalSessionValidationPending(database, [sibling]);
+      database.db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
+        JSON.stringify({
+          sessionId: sibling,
+          updatedAt: 1,
+          delivery: normalizeSessionDeliveryState({
+            context: { channel: "matrix", to: "!Mixed:example.org" },
+          }),
         }),
-      }),
-      sibling,
-    );
-    database.db
-      .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
-      .run(sibling);
-    await expect(read()).rejects.toThrow("non-canonical persisted row");
-  });
-});
+        sibling,
+      );
+      database.db
+        .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
+        .run(sibling);
+      await expect(read()).rejects.toThrow("non-canonical persisted row");
+    });
+  },
+);
 
 it("reads retained headers and entries from one committed sharing snapshot", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {

@@ -49,7 +49,10 @@ export type SessionEntryReadWorkerResult = {
 export type SessionEntryListWorkerInput = {
   kind: "session-entry-list";
   database: { agentId: string; path: string };
-  scope: SessionEntryListScope & { cleanupSession?: string };
+  scope: SessionEntryListScope & {
+    cleanupSession?: string;
+    mainSessionRecovery?: "orphans";
+  };
   expectedIdentity?: DatabasePathIdentity;
   continuation?: CanonicalSessionReaderContinuation;
   ifRevision?: string;

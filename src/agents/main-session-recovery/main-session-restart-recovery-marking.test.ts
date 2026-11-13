@@ -59,7 +59,7 @@ import {
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-restart-owner-");
 
-it("keeps retained subagent interruptions out of main-session startup recovery", async () => {
+it("loads only startup orphan candidates through the session worker", async () => {
   const stateDir = sessionDirs.make();
   const storePath = path.join(stateDir, "sessions.json");
   const sessionKey = "agent:main:main";
@@ -67,14 +67,21 @@ it("keeps retained subagent interruptions out of main-session startup recovery",
     { storePath, sessionKey },
     { sessionId: "main-session", updatedAt: 1, abortedLastRun: true },
   );
-  const summaries = await sessionEntryReader.readSessionEntrySummariesInWorker({ storePath });
-  const retained = Array.from({ length: 4_500 }, (_, index) => ({
-    sessionKey: `agent:main:subagent:retained-${index}`,
-    entry: { sessionId: `retained-${index}`, updatedAt: 1, abortedLastRun: true },
-  }));
-  const read = vi
-    .spyOn(sessionEntryReader, "readSessionEntrySummariesInWorker")
-    .mockResolvedValue([...retained, ...summaries]);
+  for (let index = 0; index < 16; index++) {
+    await replaceSessionEntry(
+      { storePath, sessionKey: `agent:main:subagent:retained-${index}` },
+      { sessionId: `retained-${index}`, updatedAt: 1, abortedLastRun: true },
+    );
+    await replaceSessionEntry(
+      { storePath, sessionKey: `agent:main:archived-${index}` },
+      { sessionId: `archived-${index}`, updatedAt: 1, abortedLastRun: true, archivedAt: 1 },
+    );
+    await replaceSessionEntry(
+      { storePath, sessionKey: `agent:main:settled-${index}` },
+      { sessionId: `settled-${index}`, updatedAt: 1, status: "done" },
+    );
+  }
+  const read = vi.spyOn(sessionEntryReader, "readSessionEntrySummariesInWorker");
   const warn = vi.spyOn(mainSessionRecoveryLog, "warn").mockImplementation(() => {});
   try {
     expect(
@@ -87,6 +94,8 @@ it("keeps retained subagent interruptions out of main-session startup recovery",
       abortedLastRun: true,
       mainRestartRecovery: { chargedAttempts: 0 },
     });
+    const batches = await Promise.all(read.mock.results.map(({ value }) => value));
+    expect(batches.flat().map((item) => item.sessionKey)).toEqual([sessionKey]);
   } finally {
     read.mockRestore();
     warn.mockRestore();
@@ -239,6 +248,52 @@ it("keeps healthy stores recoverable when an earlier startup mark fails", async 
       expect(readStartupRecoveryWarning()).toBeUndefined();
     } finally {
       replacementSpy.mockRestore();
+    }
+  });
+});
+
+it("does not commit or mark a startup store checked after its authority changes", async () => {
+  await withOpenClawTestState({ label: "recovery-stale-scan" }, async (state) => {
+    await captureRuntimeConfigAsyncReader()();
+    const sessionKey = "agent:main:main";
+    await replaceSessionEntry(
+      { sessionKey },
+      { sessionId: "orphan", updatedAt: 1, abortedLastRun: true },
+    );
+    const before = loadSessionEntry({ sessionKey });
+    const startupCheckedStorePaths = new Set<string>();
+    let current = true;
+    const apply = sessionAccessor.applySessionEntryReplacements;
+    const replacement = vi
+      .spyOn(sessionAccessor, "applySessionEntryReplacements")
+      .mockImplementationOnce((params) =>
+        apply({
+          ...params,
+          update: async (entries) => {
+            const prepared = await params.update(entries);
+            current = false;
+            return prepared;
+          },
+        }),
+      );
+    const warn = vi.spyOn(mainSessionRecoveryLog, "warn").mockImplementation(() => {});
+    try {
+      const result = await markStartupOrphanedMainSessionsForRecovery({
+        stateDir: state.stateDir,
+        startupCheckedStorePaths,
+        assertCommitAllowed: () => {
+          if (!current) {
+            throw new Error("startup authority changed");
+          }
+        },
+      });
+      expect(result.marked).toBe(0);
+      expect(result.failedTargets).toHaveLength(1);
+      expect(startupCheckedStorePaths.size).toBe(0);
+      expect(loadSessionEntry({ sessionKey })).toEqual(before);
+    } finally {
+      replacement.mockRestore();
+      warn.mockRestore();
     }
   });
 });
