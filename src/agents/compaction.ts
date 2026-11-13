@@ -20,9 +20,9 @@ import type {
   StreamFn,
   ThinkingLevel,
 } from "./runtime/index.js";
+import { generateSummary } from "./sessions/compaction/compaction.js";
 import type { SessionModelUsageSink } from "./sessions/compaction/runtime.js";
 import type { ExtensionContext } from "./sessions/index.js";
-import { generateSummary } from "./sessions/index.js";
 export { estimateMessagesTokens } from "./compaction-planning.js";
 
 const DEFAULT_SUMMARY_FALLBACK = "No prior history.";

@@ -39,13 +39,15 @@ import {
   agentSessionAutomaticCompaction,
   agentSessionSetContextReplacementHook,
 } from "../sessions/agent-session-compaction.js";
+import type { AgentSession } from "../sessions/agent-session.js";
+import { estimateTokens } from "../sessions/compaction/compaction.js";
 import { createStandaloneCompactionRequestBudget } from "../sessions/compaction/request-budget.js";
-import { type AgentSession, estimateTokens, SessionManager } from "../sessions/index.js";
 import { getModelRegistryRuntime } from "../sessions/model-registry-runtime.js";
 import { setPreparedCompaction } from "../sessions/prepared-compaction.js";
 import { DefaultResourceLoader } from "../sessions/resource-loader.js";
 import { createAgentSession } from "../sessions/sdk.js";
 import { sessionManagerReadTranscriptBranch } from "../sessions/session-manager-view-types.js";
+import { SessionManager } from "../sessions/session-manager.js";
 import { setSessionModelUsageSink } from "../sessions/session-model-usage.js";
 import {
   type BoundedCompactionSession,

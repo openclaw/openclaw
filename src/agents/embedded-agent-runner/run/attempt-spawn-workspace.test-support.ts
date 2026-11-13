@@ -240,25 +240,21 @@ vi.mock("../../sessions/resource-loader.js", () => ({
   },
 }));
 
-// mock-isolation: Keep session storage and provider runtime inside the in-memory attempt fixture.
-vi.mock("../../sessions/index.js", () => {
-  function AuthStorage() {}
-  function ModelRegistry() {}
-  const estimateTokens = (value: unknown) =>
-    Math.max(1, Math.ceil(JSON.stringify(value ?? "").length / 4));
+// mock-isolation: Keep session storage inside the in-memory attempt fixture.
+vi.mock("../../sessions/session-manager.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../sessions/session-manager.js")>()),
+  SessionManager: {
+    inMemory: hoisted.sessionManagerOpenMock,
+    openAsync: async (...args: unknown[]) => hoisted.sessionManagerOpenMock(...args),
+  },
+}));
 
-  return {
-    AuthStorage,
-    createAgentSession: hoisted.createAgentSessionMock,
-    estimateTokens,
-    generateSummary: async () => "",
-    ModelRegistry,
-    SessionManager: {
-      inMemory: hoisted.sessionManagerOpenMock,
-      openAsync: async (...args: unknown[]) => hoisted.sessionManagerOpenMock(...args),
-    },
-  };
-});
+vi.mock("../../sessions/compaction/compaction.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../sessions/compaction/compaction.js")>()),
+  estimateTokens: (value: unknown) =>
+    Math.max(1, Math.ceil(JSON.stringify(value ?? "").length / 4)),
+  generateSummary: async () => "",
+}));
 
 // mock-isolation: Keep session storage and provider runtime outside the attempt fixture.
 vi.mock("../../sessions/sdk.js", () => ({

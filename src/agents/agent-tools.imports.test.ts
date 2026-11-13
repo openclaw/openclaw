@@ -19,6 +19,7 @@ it("keeps cold chat preparation independent of tool construction", () => {
         "src/agents/tools/cron-tool.ts",
         "src/agents/openclaw-tools.swarm.ts",
         "src/agents/agent-tools.read.ts",
+        "src/agents/sessions/index.ts",
       ],
     ),
   ).toEqual([]);
