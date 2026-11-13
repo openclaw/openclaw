@@ -1780,7 +1780,7 @@ private fun GatewaySettingsScreen(
           if (entry.tls && entry.host != null && entry.port != null) {
             BrowserSignInButton(
               targetUrl = browserSignInUrl(entry.address, entry.port.toString(), true),
-              onSignedIn = { viewModel.switchToGateway(entry.stableId) },
+              onConnect = { viewModel.switchToGateway(entry.stableId) },
             )
           }
         }

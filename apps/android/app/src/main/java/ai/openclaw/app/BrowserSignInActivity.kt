@@ -2,6 +2,7 @@ package ai.openclaw.app
 
 import ai.openclaw.app.gateway.ReverseProxyBrowserSessions
 import ai.openclaw.app.gateway.browserSessionOrigin
+import ai.openclaw.app.gateway.isBrowserGatewayReturn
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.OpenClawTheme
 import ai.openclaw.app.ui.design.ClawTheme
@@ -55,6 +56,8 @@ class BrowserSignInActivity : ComponentActivity() {
   private var error by mutableStateOf<String?>(null)
   private var busy by mutableStateOf(false)
   private var loading by mutableStateOf(true)
+  private var visitedAuthenticationRoute = false
+  private var admissionWait: kotlinx.coroutines.Job? = null
   private var pageFailed by mutableStateOf(false)
 
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -64,18 +67,28 @@ class BrowserSignInActivity : ComponentActivity() {
       debuggable = BuildConfig.DEBUG && (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0,
       recordingOptIn = BuildConfig.BROWSER_SIGN_IN_RECORDING,
     )
-    val target = intent.getStringExtra(TARGET_URL)?.toHttpUrlOrNull()
-    if (target == null || target.scheme != "https" || target.username.isNotEmpty() || target.password.isNotEmpty() || target.fragment != null) {
+    val login = app.browserSessions.attempt(intent.getStringExtra(ATTEMPT_ID))
+    if (login == null || !app.browserSessions.isCurrent(login)) {
       finish()
       return
     }
-    if (!app.browserSessions.isSupported()) {
-      error = "Update Android System WebView to use browser sign-in."
-    } else {
-      val login = app.browserSessions.begin(target)
-      attempt = login
-      currentUrl = target.toString()
-      webView = createBrowser(login)
+    val target = login.target
+    attempt = login
+    visitedAuthenticationRoute = savedInstanceState?.getBoolean("visitedAuthenticationRoute") ?: false
+    currentUrl = target.toString()
+    if (app.browserSessions.isAdmitted(login)) {
+      accepted = true
+      setResult(Activity.RESULT_OK)
+      finish()
+      return
+    }
+    webView = createBrowser(login)
+    lifecycleScope.launch {
+      if (login.admission.await() && app.browserSessions.isCurrent(login)) {
+        accepted = true
+        setResult(Activity.RESULT_OK)
+        finish()
+      }
     }
     setContent {
       OpenClawTheme {
@@ -114,17 +127,35 @@ class BrowserSignInActivity : ComponentActivity() {
           override fun shouldOverrideUrlLoading(
             view: WebView,
             request: WebResourceRequest,
-          ): Boolean = request.url.scheme != "https"
+          ): Boolean {
+            val url = request.url.toString().toHttpUrlOrNull()
+            if (url == null || url.scheme != "https" || url.username.isNotEmpty() || url.password.isNotEmpty()) return true
+            if (request.isForMainFrame && isBrowserGatewayReturn(login.target, url.toString()) && visitedAuthenticationRoute) {
+              // Never boot a second Control UI device identity in the returned Gateway SPA.
+              loading = false
+              view.stopLoading()
+              complete(login.target)
+              return true
+            }
+            return false
+          }
 
           override fun onPageStarted(
             view: WebView,
             url: String,
             favicon: Bitmap?,
           ) {
-            currentUrl = url
+            if (!isBrowserGatewayReturn(login.target, url)) visitedAuthenticationRoute = true
             loading = true
             pageFailed = false
             error = null
+          }
+
+          override fun onPageCommitVisible(
+            view: WebView,
+            url: String,
+          ) {
+            currentUrl = url
           }
 
           override fun onPageFinished(
@@ -133,6 +164,7 @@ class BrowserSignInActivity : ComponentActivity() {
           ) {
             currentUrl = url
             loading = false
+            if (isBrowserGatewayReturn(login.target, url)) complete(login.target)
           }
 
           override fun onReceivedError(
@@ -174,27 +206,18 @@ class BrowserSignInActivity : ComponentActivity() {
 
   private fun complete(target: HttpUrl) {
     val login = attempt ?: return
-    if (loading || pageFailed || !returnedTo(target) || login.cookies.getCookie(target.toString()).isNullOrBlank()) {
-      error = "Finish signing in to the gateway before continuing."
-      return
-    }
-    busy = true
-    destroyBrowser()
-    app.browserSessions.revoke(target)
-    lifecycleScope.launch {
-      try {
-        app.ensureRuntime().retireBrowserConnections(target.host, target.port)
-        app.browserSessions.accept(login)
-        accepted = true
-        setResult(Activity.RESULT_OK, Intent().putExtra(TARGET_URL, target.toString()))
-        finish()
-      } catch (failure: CancellationException) {
-        throw failure
-      } catch (failure: Exception) {
-        error = failure.message ?: "Could not finish browser sign-in. Try again."
-        busy = false
+    if (accepted || admissionWait?.isActive == true || !app.browserSessions.isCurrent(login)) return
+    // Navigation only requests a retry. Native connect admission is the only completion proof.
+    app.ensureRuntime().resumeBrowserConnection(target) { app.browserSessions.isCurrent(login) }
+    admissionWait =
+      lifecycleScope.launch {
+        busy = true
+        val result = kotlinx.coroutines.withTimeoutOrNull(20_000) { login.admission.await() }
+        if (result != true) {
+          error = "The native Gateway has not verified this sign-in. Finish signing in or retry."
+          busy = false
+        }
       }
-    }
   }
 
   private fun signOut(target: HttpUrl) {
@@ -224,13 +247,22 @@ class BrowserSignInActivity : ComponentActivity() {
     webView = null
   }
 
+  override fun onSaveInstanceState(outState: Bundle) {
+    outState.putBoolean("visitedAuthenticationRoute", visitedAuthenticationRoute)
+    super.onSaveInstanceState(outState)
+  }
+
   override fun onDestroy() {
     destroyBrowser()
-    if (!accepted) attempt?.let(app.browserSessions::cancel)
+    if (!isChangingConfigurations) attempt?.let { login ->
+      val wasAdmitted = app.browserSessions.isAdmitted(login)
+      app.browserSessions.cancel(login)
+      if (!wasAdmitted) app.ensureRuntime().cancelBrowserCredentialEpoch(login.profileName)
+    }
     super.onDestroy()
   }
 
   companion object {
-    internal const val TARGET_URL = "ai.openclaw.app.BROWSER_SIGN_IN_TARGET"
+    internal const val ATTEMPT_ID = "ai.openclaw.app.BROWSER_SIGN_IN_ATTEMPT"
   }
 }

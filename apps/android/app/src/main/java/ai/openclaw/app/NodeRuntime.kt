@@ -586,6 +586,8 @@ data class GatewayConnectionDisplay(
   val isConnected: Boolean,
   val statusText: String,
   val problem: GatewayConnectionProblem?,
+  val targetStableId: String? = null,
+  val nodeConnected: Boolean = false,
 )
 
 private const val GATEWAY_STATUS_OFFLINE = "Offline"
@@ -2385,7 +2387,11 @@ class NodeRuntime internal constructor(
           operatorProblem = operatorConnectionProblem,
           nodeProblem = nodeConnectionProblem,
         )
-      _gatewayConnectionDisplay.value = display
+      _gatewayConnectionDisplay.value =
+        display.copy(
+          targetStableId = (connectingEndpoint ?: connectedEndpoint)?.stableId,
+          nodeConnected = _nodeConnected.value,
+        )
       _isConnected.value = display.isConnected
     }
   }
@@ -2854,9 +2860,7 @@ class NodeRuntime internal constructor(
         if (!isCurrent()) return false
         prefs.clearGatewayCredentials(stableId)
         clearAppearancePreferenceOwner(stableId)
-        val deviceId = identityStore.loadOrCreate().deviceId
-        deviceAuthStore.clearToken(stableId, deviceId, "node")
-        deviceAuthStore.clearToken(stableId, deviceId, "operator")
+        deviceAuthStore.clearGateway(stableId)
         true
       }
     }
@@ -4262,6 +4266,24 @@ class NodeRuntime internal constructor(
       }
     }
 
+  internal fun cancelBrowserCredentialEpoch(profileName: String) {
+    operatorSession.retireBrowserCredentialEpoch(profileName)
+    nodeSession.retireBrowserCredentialEpoch(profileName)
+    secondaryOperatorSessions.values.forEach { it.session.retireBrowserCredentialEpoch(profileName) }
+  }
+
+  internal fun resumeBrowserConnection(
+    target: okhttp3.HttpUrl,
+    currentAttempt: () -> Boolean,
+  ) {
+    refreshGatewayConnection {
+      val endpoint = connectingEndpoint ?: connectedEndpoint
+      currentAttempt() && endpoint != null && connectionManager.resolveTlsParams(endpoint) != null &&
+        endpoint.host.equals(target.host, ignoreCase = true) && endpoint.port == target.port &&
+        endpoint.contextPath.trimEnd('/') == target.encodedPath.trimEnd('/')
+    }
+  }
+
   fun refreshGatewayConnection(isCurrent: () -> Boolean = { true }) {
     val intent = beginGatewayReplacementOperation(isCurrent) ?: return
     intent.handedOff = true
@@ -4515,6 +4537,13 @@ class NodeRuntime internal constructor(
         )
       }
       connectNodeSession(endpoint, auth, tls, connectionManager.buildNodeConnectOptions())
+    }
+
+  private fun browserDeviceCredentialScope(endpoint: GatewayEndpoint): String =
+    if (connectionManager.resolveTlsParams(endpoint) == null) {
+      endpoint.stableId
+    } else {
+      browserAuthorizationProvider?.invoke(endpoint)?.deviceCredentialScope(endpoint.stableId) ?: endpoint.stableId
     }
 
   private fun operatorConnectOptions(
@@ -4932,7 +4961,7 @@ class NodeRuntime internal constructor(
     role: String,
   ): DeviceAuthEntry? {
     val deviceId = identityStore.loadOrCreate().deviceId
-    return deviceAuthStore.loadEntry(endpoint.stableId, deviceId, role)
+    return deviceAuthStore.loadEntry(browserDeviceCredentialScope(endpoint), deviceId, role)
   }
 
   private fun maybeStartOperatorSessionAfterNodeConnect(
@@ -4975,6 +5004,11 @@ class NodeRuntime internal constructor(
   ) {
     // Discovery metadata can omit TLS even when ConnectionManager requires it.
     fun matches(endpoint: GatewayEndpoint?): Boolean = endpoint != null && connectionManager.resolveTlsParams(endpoint) != null && endpoint.host.equals(host, ignoreCase = true) && endpoint.port == port
+    val credentialTargets =
+      prefs.gatewayRegistry.entries.value
+        .filter {
+          it.host.equals(host, ignoreCase = true) && it.port == port
+        }.map { it.stableId }
     val retiring =
       synchronized(gatewayLifecycleIntentLock) {
         val secondary = secondaryOperatorSessions.values.filter { matches(it.endpoint) }.map { it.session }
@@ -4992,6 +5026,7 @@ class NodeRuntime internal constructor(
         secondary + if (primary) listOf(operatorSession, nodeSession) else emptyList()
       }
     retiring.forEach { it.disconnectAndJoin() }
+    credentialTargets.forEach(deviceAuthStore::clearGateway)
   }
 
   fun disconnect() = disconnectGatewayLifecycle(retireRunState = false)
@@ -5066,9 +5101,7 @@ class NodeRuntime internal constructor(
       if (!removalStaged) return false
       val authRetired =
         runCatching {
-          val deviceId = identityStore.loadOrCreate().deviceId
-          deviceAuthStore.clearToken(normalized, deviceId, "node")
-          deviceAuthStore.clearToken(normalized, deviceId, "operator")
+          deviceAuthStore.clearGateway(normalized)
           prefs.clearGatewayCredentials(normalized)
           clearAppearancePreferenceOwner(normalized)
           prefs.clearGatewayCustomHeaders(normalized)

@@ -362,12 +362,17 @@ fun OnboardingFlow(
   ClawDesignTheme(dark = onboardingDark, family = appearanceThemeFamily, accentArgb = appearanceAccentArgb ?: gatewayAccentArgb) {
     val context = LocalContext.current
     val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
-    val statusText = gatewayConnectionDisplay.statusText
-    val gatewayConnectionProblem = gatewayConnectionDisplay.problem
-    val isConnected = gatewayConnectionDisplay.isConnected
-    val isNodeConnected by viewModel.isNodeConnected.collectAsState()
-    val nodeCapabilityApproval by viewModel.nodeCapabilityApproval.collectAsState()
-    val nodeApprovalAction by viewModel.nodeApprovalAction.collectAsState()
+    val savedActiveTarget by viewModel.activeGatewayStableId.collectAsState()
+    var onboardingTarget by rememberSaveable { mutableStateOf(savedActiveTarget) }
+    val targetMatches = onboardingTarget != null && gatewayConnectionDisplay.targetStableId == onboardingTarget
+    val statusText = if (targetMatches) gatewayConnectionDisplay.statusText else "Waiting for this Gateway connection"
+    val gatewayConnectionProblem = gatewayConnectionDisplay.problem.takeIf { targetMatches }
+    val isConnected = targetMatches && gatewayConnectionDisplay.isConnected
+    val isNodeConnected = targetMatches && gatewayConnectionDisplay.nodeConnected
+    val currentNodeCapabilityApproval by viewModel.nodeCapabilityApproval.collectAsState()
+    val currentNodeApprovalAction by viewModel.nodeApprovalAction.collectAsState()
+    val nodeCapabilityApproval = if (targetMatches) currentNodeCapabilityApproval else GatewayNodeCapabilityApproval.Loading
+    val nodeApprovalAction = if (targetMatches) currentNodeApprovalAction else ai.openclaw.app.GatewayNodeApprovalActionState()
     val nodesDevicesRefreshing by viewModel.nodesDevicesRefreshing.collectAsState()
     val serverName by viewModel.serverName.collectAsState()
     val gateways by viewModel.gateways.collectAsState()
@@ -377,6 +382,9 @@ fun OnboardingFlow(
     val pendingTrust by viewModel.pendingGatewayTrust.collectAsState()
     val startAtGatewaySetup by viewModel.startOnboardingAtGatewaySetup.collectAsState()
     var step by rememberSaveable { mutableStateOf(OnboardingStep.Welcome) }
+    LaunchedEffect(savedActiveTarget, step) {
+      if (onboardingTarget == null && step == OnboardingStep.Welcome) onboardingTarget = savedActiveTarget
+    }
     var setupCode by rememberSaveable { mutableStateOf("") }
     var manualHost by rememberSaveable { mutableStateOf("") }
     var manualPort by rememberSaveable { mutableStateOf("18789") }
@@ -394,16 +402,12 @@ fun OnboardingFlow(
     var nodeApprovalCheckRefreshStarted by rememberSaveable { mutableStateOf(false) }
     var nodeApprovalAutoContinueEnabled by rememberSaveable { mutableStateOf(false) }
     var nativeNodeApprovalRequested by rememberSaveable { mutableStateOf(false) }
-    val ready =
-      canFinishOnboarding(
-        isConnected = isConnected,
-        isNodeConnected = isNodeConnected,
-        nodeCapabilityApproval = nodeCapabilityApproval,
-      ) &&
+    val ready = canFinishOnboarding(gatewayConnectionDisplay, onboardingTarget)
+    val nodeApprovalReady =
+      canFinishNodeCapabilityApproval(isConnected, isNodeConnected, nodeCapabilityApproval) &&
         (
           accessStage != OnboardingAccessStage.PermissionReapproval ||
-            nodeCapabilityApproval == GatewayNodeCapabilityApproval.Unsupported ||
-            nodeApprovalAction.verified
+            nodeCapabilityApproval == GatewayNodeCapabilityApproval.Unsupported || nodeApprovalAction.verified
         )
 
     OpenClawSystemBarAppearance(lightAppearance = !onboardingDark)
@@ -482,8 +486,8 @@ fun OnboardingFlow(
       }
     }
 
-    LaunchedEffect(step, ready, nodeApprovalAction.verified, nativeNodeApprovalRequested) {
-      if (step == OnboardingStep.NodeApproval && nativeNodeApprovalRequested && nodeApprovalAction.verified && ready) {
+    LaunchedEffect(step, nodeApprovalReady, nodeApprovalAction.verified, nativeNodeApprovalRequested) {
+      if (step == OnboardingStep.NodeApproval && nativeNodeApprovalRequested && nodeApprovalAction.verified && nodeApprovalReady) {
         advanceAfterNodeApproval()
       }
     }
@@ -525,18 +529,18 @@ fun OnboardingFlow(
           checkRequested = nodeApprovalCheckRequested,
           refreshStarted = nodeApprovalCheckRefreshStarted,
           nodesDevicesRefreshing = nodesDevicesRefreshing,
-          ready = ready,
+          ready = nodeApprovalReady,
         )
       ) {
         advanceAfterNodeApproval()
       }
     }
 
-    LaunchedEffect(step, ready, nodeCapabilityApproval, nodeApprovalAutoContinueEnabled, nativeNodeApprovalRequested) {
+    LaunchedEffect(step, nodeApprovalReady, nodeCapabilityApproval, nodeApprovalAutoContinueEnabled, nativeNodeApprovalRequested) {
       if (
         nodeApprovalShouldAutoContinue(
           step = step,
-          ready = ready,
+          ready = nodeApprovalReady,
           nodeCapabilityApproval = nodeCapabilityApproval,
           autoContinueEnabled = nodeApprovalAutoContinueEnabled && !nativeNodeApprovalRequested,
         )
@@ -559,6 +563,13 @@ fun OnboardingFlow(
       }
     }
 
+    LaunchedEffect(step, isConnected, onboardingTarget) {
+      if (step == OnboardingStep.Recovery && isConnected) {
+        accessStage = OnboardingAccessStage.DirectPermissions
+        step = OnboardingStep.Permissions
+      }
+    }
+
     fun connectGateway(
       plan: GatewayConnectPlan,
       inputSource: OnboardingGatewayInputSource,
@@ -568,7 +579,8 @@ fun OnboardingFlow(
       setupScanErrorCode = OnboardingErrorCode.None
       attemptedGatewayName = attemptedName
       lastGatewayInputSource = inputSource
-      viewModel.saveGatewayConfigAndConnect(plan)
+      onboardingTarget = null
+      viewModel.saveGatewayConfigAndConnect(plan, onTargetAdmitted = { onboardingTarget = it })
       step = OnboardingStep.Recovery
     }
 
@@ -1684,7 +1696,7 @@ private fun ManualGatewaySetupScreen(
         item {
           BrowserSignInButton(
             targetUrl = browserSignInUrl(manualHost, manualPort, transport.effectiveTls),
-            onSignedIn = onPair,
+            onConnect = onPair,
           )
         }
         item {
@@ -2773,7 +2785,7 @@ private fun recoveryGatewayApprovalCommand(gatewayConnectionProblem: GatewayConn
 
 internal fun recoveryNodeApprovalCommand(pendingRequestId: String?): String {
   val requestId = pendingRequestId?.trim()?.takeIf { it.isNotEmpty() }
-  return if (requestId != null) "openclaw nodes approve $requestId" else "openclaw nodes approve REQUEST_ID"
+  return if (requestId != null) "openclaw nodes approve $requestId" else "openclaw nodes pending"
 }
 
 internal fun approvalRequestId(approval: GatewayNodeCapabilityApproval): String? =
@@ -2903,23 +2915,17 @@ private class PermissionState(
 
 /** Onboarding finishes only after the gateway resolves node capability approval. */
 internal fun canFinishOnboarding(
-  isConnected: Boolean,
-  isNodeConnected: Boolean,
-  nodeCapabilityApproval: GatewayNodeCapabilityApproval,
-): Boolean =
-  isConnected &&
-    isNodeConnected &&
-    when (nodeCapabilityApproval) {
-      is GatewayNodeCapabilityApproval.PendingApproval,
-      is GatewayNodeCapabilityApproval.PendingReapproval,
-      GatewayNodeCapabilityApproval.Unapproved,
-      GatewayNodeCapabilityApproval.Loading,
-      -> false
+  connection: ai.openclaw.app.GatewayConnectionDisplay,
+  targetStableId: String?,
+): Boolean = targetStableId != null && connection.targetStableId == targetStableId && connection.isConnected
 
-      GatewayNodeCapabilityApproval.Approved,
-      GatewayNodeCapabilityApproval.Unsupported,
-      -> true
-    }
+internal fun canFinishNodeCapabilityApproval(
+  isOperatorConnected: Boolean,
+  isNodeConnected: Boolean,
+  approval: GatewayNodeCapabilityApproval,
+): Boolean =
+  isOperatorConnected && isNodeConnected &&
+    (approval == GatewayNodeCapabilityApproval.Approved || approval == GatewayNodeCapabilityApproval.Unsupported)
 
 private val requiredContactPermissions = listOf(Manifest.permission.READ_CONTACTS, Manifest.permission.WRITE_CONTACTS)
 private val requiredCalendarPermissions = listOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR)

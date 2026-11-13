@@ -546,6 +546,15 @@ class GatewaySession(
   private val reconnectSignal = Channel<Unit>(Channel.CONFLATED)
 
   /** Starts or replaces the desired gateway connection and launches the reconnect loop. */
+  internal fun retireBrowserCredentialEpoch(profileName: String) {
+    val socket = synchronized(notificationLock) {
+      synchronized(lifecycleLock) {
+        currentConnection?.takeIf { it.deviceCredentialScope.endsWith(".browser.$profileName") }?.retire()
+      }
+    }
+    socket?.cancel()
+  }
+
   fun connect(
     endpoint: GatewayEndpoint,
     token: String?,
@@ -1117,8 +1126,11 @@ class GatewaySession(
     private val connectResponseAccepted = AtomicBoolean(false)
     private val ingressRetirementStarted = AtomicBoolean(false)
     private val ingressCalls = ConcurrentHashMap.newKeySet<Call>()
+
+    @Volatile private var admissionRequest: Request? = null
     private val ingressAuthorization =
       if (target.tls == null) null else ingressAuthorizationProvider?.invoke(target.endpoint)
+    val deviceCredentialScope = ingressAuthorization?.deviceCredentialScope(target.endpoint.stableId) ?: target.endpoint.stableId
     private var ingressHeaders: Map<String, String> = emptyMap()
 
     @Volatile
@@ -1190,6 +1202,7 @@ class GatewaySession(
             }
           check(request.url == original.url) { "Ingress authorization cannot change the Gateway route" }
           ingressAuthorization?.requireCurrent(request)
+          admissionRequest = request
           if (ingressAuthorization != null) {
             ingressHeaders = request.headers.names().associateWith { request.header(it).orEmpty() }
           }
@@ -1744,7 +1757,7 @@ class GatewaySession(
 
     private suspend fun sendConnect(connectChallenge: ConnectChallenge) {
       val identity = identityStore.loadOrCreate()
-      val storedEntry = deviceAuthStore.loadEntry(target.endpoint.stableId, identity.deviceId, target.options.role)
+      val storedEntry = deviceAuthStore.loadEntry(deviceCredentialScope, identity.deviceId, target.options.role)
       val storedToken = storedEntry?.token?.trim()
       val selectedAuth =
         selectConnectAuth(
@@ -1767,6 +1780,11 @@ class GatewaySession(
       val res = request(GatewayMethod.Connect.rawValue, payload, timeoutMs = CONNECT_RPC_TIMEOUT_MS)
       if (!res.ok) {
         val error = res.error ?: ErrorShape("UNAVAILABLE", "connect failed")
+        if (error.code == "NOT_PAIRED" && error.details?.code == "PAIRING_REQUIRED" &&
+          ingressAuthorization?.admitGatewayRole(target.options.role, ::isAdmissionCurrent) == false
+        ) {
+          throw GatewayExternalAuthorizationException()
+        }
         // Only implicitly loaded credentials may recover an old install's spent setup code.
         // Never turn a rejection of newly supplied setup auth into access under an older grant.
         if (
@@ -1776,7 +1794,7 @@ class GatewaySession(
           error.details?.code == "AUTH_BOOTSTRAP_TOKEN_INVALID" &&
           shouldPersistBootstrapHandoffTokens(selectedAuth.authSource) &&
           listOf("node", "operator").all { role ->
-            !deviceAuthStore.loadToken(target.endpoint.stableId, identity.deviceId, role).isNullOrBlank()
+            !deviceAuthStore.loadToken(deviceCredentialScope, identity.deviceId, role).isNullOrBlank()
           }
         ) {
           target.recoveringStoredBootstrap = true
@@ -1795,7 +1813,7 @@ class GatewaySession(
           selectedAuth.authDeviceToken != null &&
           error.details?.code == "AUTH_DEVICE_TOKEN_MISMATCH"
         ) {
-          deviceAuthStore.clearToken(target.endpoint.stableId, identity.deviceId, target.options.role, onlyIfToken = storedToken)
+          deviceAuthStore.clearToken(deviceCredentialScope, identity.deviceId, target.options.role, onlyIfToken = storedToken)
         }
         throw GatewayConnectFailure(error)
       }
@@ -1852,16 +1870,26 @@ class GatewaySession(
         } else {
           scopes
         }
-      return deviceAuthStore.saveToken(target.endpoint.stableId, deviceId, role, token, persistedScopes, replacesStoredToken)
+      if (!isAdmissionCurrent()) return false
+      admissionRequest?.let { ingressAuthorization?.requireCurrent(it) }
+      return deviceAuthStore.saveToken(deviceCredentialScope, deviceId, role, token, persistedScopes, replacesStoredToken)
     }
 
-    private fun parseConnectSuccess(
+    private fun isAdmissionCurrent(): Boolean =
+      synchronized(lifecycleLock) {
+        desired === target && currentConnection === this && job?.isActive == true
+      }
+
+    private suspend fun parseConnectSuccess(
       res: RpcResult,
       deviceId: String,
       selectedAuth: SelectedConnectAuth,
     ): ConnectedGateway {
       val payloadJson = res.payloadJson ?: throw IllegalStateException("connect failed: missing payload")
       val obj = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: throw IllegalStateException("connect failed")
+      if (ingressAuthorization?.admitGatewayRole(target.options.role, ::isAdmissionCurrent) == false) {
+        throw GatewayExternalAuthorizationException()
+      }
       target.pendingDeviceTokenRetry = false
       target.deviceTokenRetryBudgetUsed = false
       target.reconnectPausedForAuthFailure = false
@@ -1944,9 +1972,9 @@ class GatewaySession(
         // roles before retiring its rejected bootstrap; this is never a fresh-setup path.
         for (role in listOf("node", "operator")) {
           if (role in persistedRoles) continue
-          val entry = deviceAuthStore.loadEntry(target.endpoint.stableId, deviceId, role) ?: continue
+          val entry = deviceAuthStore.loadEntry(deviceCredentialScope, deviceId, role) ?: continue
           persistedRoles[role] =
-            deviceAuthStore.saveToken(target.endpoint.stableId, deviceId, role, entry.token, entry.scopes, replacesStoredToken = entry.token)
+            deviceAuthStore.saveToken(deviceCredentialScope, deviceId, role, entry.token, entry.scopes, replacesStoredToken = entry.token)
         }
       }
       if (persistedRoles["node"] == true && persistedRoles["operator"] == true) {

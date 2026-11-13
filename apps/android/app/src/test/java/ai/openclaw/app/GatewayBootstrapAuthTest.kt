@@ -330,9 +330,8 @@ class GatewayBootstrapAuthTest {
 
         fun ready(): Boolean =
           canFinishOnboarding(
-            isConnected = runtime.gatewayConnectionDisplay.value.isConnected,
-            isNodeConnected = runtime.nodeConnected.value,
-            nodeCapabilityApproval = runtime.nodeCapabilityApproval.value,
+            connection = runtime.gatewayConnectionDisplay.value,
+            targetStableId = runtime.gatewayConnectionDisplay.value.targetStableId,
           )
 
         connectSession(if (nodeFirst) "nodeSession" else "operatorSession")

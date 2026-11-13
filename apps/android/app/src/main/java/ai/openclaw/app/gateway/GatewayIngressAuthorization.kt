@@ -9,6 +9,15 @@ interface GatewayIngressAuthorization {
   /** Internal same-request upgrade retries retain this grant; its owner cancels and drains the socket on retirement. */
   suspend fun authorizeUpgrade(request: Request): Request
 
+  /** Device grants belong to the ingress credential epoch, never a different signed-in account. */
+  fun deviceCredentialScope(gatewayId: String): String = gatewayId
+
+  /** Called only after a parsed native connect admission (or post-auth pairing requirement). */
+  suspend fun admitGatewayRole(
+    role: String,
+    isCurrentNative: () -> Boolean,
+  ): Boolean = isCurrentNative()
+
   /** Prepare each native HTTP exchange. Browser cookies must be resolved for its actual URL. */
   fun authorizeHttp(request: Request): Request = request
 

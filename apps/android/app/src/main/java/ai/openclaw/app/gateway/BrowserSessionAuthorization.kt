@@ -10,7 +10,15 @@ internal class BrowserSessionAuthorization(
   private val cookies: (HttpUrl) -> String?,
   private val isCurrent: () -> Boolean,
   private val receiveCookies: (HttpUrl, List<String>) -> Unit = { _, _ -> },
+  private val credentialEpoch: String? = null,
 ) : GatewayIngressAuthorization {
+  override fun deviceCredentialScope(gatewayId: String): String = credentialEpoch?.let { "$gatewayId.browser.$it" } ?: gatewayId
+
+  override suspend fun admitGatewayRole(
+    role: String,
+    isCurrentNative: () -> Boolean,
+  ): Boolean = isCurrent() && isCurrentNative()
+
   override suspend fun authorizeUpgrade(request: Request): Request = authorizeHttp(request)
 
   override fun authorizeHttp(request: Request): Request {
