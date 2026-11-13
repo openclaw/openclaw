@@ -7,6 +7,12 @@ import {
 } from "../chat/tool-call-grouping.js";
 import { isAgentPlanProgressToolName } from "../session-cards/progress-card-input.js";
 
+/** Display cue only: suffixes can collide and never replace the full routing or lifecycle identity. */
+export function formatSubagentProgressReference(id: string | undefined): string | undefined {
+  const uuid = id?.match(/(?:^|:)([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})$/i)?.[1];
+  return uuid ? `…${uuid.slice(-4)}` : undefined;
+}
+
 /**
  * A successfully completed wrapper is replaced only by a recorded call beneath it
  * that stays visible in progress. A wrapper whose recorded calls are all routine

@@ -2,6 +2,7 @@ import type { AnyAgentTool } from "../../agents/tools/common.js";
 import type { CloudWorkerSetupMutationAdmission } from "../../infra/device-bootstrap.worker-types.js";
 import type { GatewayScheduler } from "../../infra/gateway-scheduler.js";
 import type { WorkerExecutionMode, WorkerProfile } from "../../plugins/types.js";
+import type { QueuedOperatorRecoverySource } from "../operator-run-recovery-source.codec.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import type { WorkerEnvironmentNodeTunnel } from "./environment-access.js";
 import type { WorkerInferenceStore } from "./inference-store.js";
@@ -30,12 +31,13 @@ export type WorkerEnvironmentCreateRequest = {
   admittedIntent?: WorkerProviderPreparedIntent;
   /** Revalidate caller authority after preparation, immediately before provider effects. */
   beforeProvision?: () => void;
+  /** Original requesting source, immutable across retries and Gateway restarts. */
+  provisionSource?: QueuedOperatorRecoverySource;
 };
 
 export type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOptions &
   Pick<PreparedPoolPresenceOptions, "resolveHumanPresenceDemand" | "presenceDemandStore"> &
   WorkerEnvironmentSessionAttachmentOptions & {
-    resolveGatewayContext?: import("../server-methods/types.js").GatewayContextResolver;
     prepareComputer?: (
       claim: import("./placement-store.js").WorkerSessionTurnClaim,
     ) => Promise<import("./computer-transport.js").PreparedWorkerComputer | undefined>;

@@ -1001,6 +1001,12 @@ async function runPreparedNpmCommand(argv) {
             client: createReleaseEvidenceClient(common.repository),
             shareAcquisitionReads: true,
           });
+    } else if (command === "authorize" || command === "consume") {
+      // Parent dispatch and direct recovery lack a carrier. Share raw reads only
+      // within this command; the final sweep still refreshes live authority.
+      adoptionParams.immutableReads = createReleaseEvidenceReplay({}, undefined, {
+        shareAcquisitionReads: true,
+      });
     }
     adoption = await authenticatePreparedNpmArtifactEvidence(adoptionParams, false);
     if (options["--evidence-output"]) {

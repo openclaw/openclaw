@@ -126,7 +126,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "gateway.openclawId.issuerUrl":
     "OpenClaw ID issuer used to sign in for identity only while linking a claw. It is never trusted for membership, device approval or which server a client dials.",
   "gateway.openclawId.clientId":
-    "Public OAuth client (authorization code with PKCE) the Control UI uses for Sign in with OpenClaw ID in its account menu. Its redirect URI is <Control UI origin>/openclaw-id/callback; sign-in works only from the Control UI on this machine.",
+    "Public OAuth client (authorization code with PKCE) the Control UI uses for Sign in with OpenClaw ID in its account menu. Its redirect URI is <Control UI origin>/openclaw-id/callback. On this machine sign-in uses that redirect; a Control UI reached through a personal sign-in such as Tailscale uses the issuer's device grant.",
   "gateway.openclawId.discoveryUrl":
     "Discovery service that mirrors the claw descriptor and membership snapshot and relays mailbox messages. It is untrusted: every statement it returns is verified against the claw's pinned owner root.",
   "gateway.openclawId.relayUrl":
@@ -163,8 +163,20 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Login/auth attempt throttling controls to reduce credential brute-force risk at the gateway boundary. Keep enabled in exposed environments and tune thresholds to your traffic baseline.",
   "gateway.auth.trustedProxy":
     "Trusted-proxy auth header mapping for upstream identity providers that inject user claims. Use only with known proxy CIDRs and strict header allowlists to prevent spoofed identity headers.",
+  "gateway.auth.trustedProxy.delegation":
+    "Accept revision-scoped OCE browser identity and scope grants through the private trusted proxy. Delegated profiles do not use email aliases or device grants.",
+  "gateway.auth.trustedProxy.delegation.credentialFile":
+    "Absolute path to a private file containing the revision's 32-byte credential as 64 lowercase hexadecimal characters. File replacement or removal invalidates existing grants.",
   "gateway.auth.trustedProxy.cloudflareAccessOidc":
     "Optional verified GitHub identity from a selected Cloudflare Access OIDC provider. Requires the standard Access email and assertion headers. Missing claims keep email-only profiles; existing profile roles and co-author preferences are preserved.",
+  "gateway.auth.trustedProxy.gitCoauthor":
+    "Optional organization co-author defaults from authenticated proxy headers. The proxy must overwrite these fields. They do not verify GitHub identity or grant permissions; supplied email addresses require saved consent before appearing in commit history.",
+  "gateway.auth.trustedProxy.gitCoauthor.nameHeader":
+    "Header containing the organization's co-author name for the authenticated principal.",
+  "gateway.auth.trustedProxy.gitCoauthor.emailHeader":
+    "Header containing the organization's commit credit email for the authenticated principal.",
+  "gateway.auth.trustedProxy.gitCoauthor.emailVerifiedHeader":
+    "Optional header that must equal true before organization defaults are imported. Omit only when the proxy's email assertion is sufficient for your policy.",
   "gateway.auth.trustedProxy.cloudflareAccessOidc.issuer":
     "Exact HTTPS origin of the trusted Cloudflare Access team, such as https://example.cloudflareaccess.com, without a trailing slash. Claims from other issuers do not supply GitHub identity.",
   "gateway.auth.trustedProxy.cloudflareAccessOidc.providerId":

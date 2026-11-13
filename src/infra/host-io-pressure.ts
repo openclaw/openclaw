@@ -27,11 +27,11 @@ export function createHostIoPressureProbe(): () => Promise<boolean> {
     if (process.platform !== "linux") {
       return false;
     }
+    const started = performance.now();
     const psi = await readKernelCounter("/proc/pressure/io");
-    // Ten percent partial stalls or one percent whole-host stalls warrant a quiet tick.
-    let pressured =
-      Number(/^some avg10=([\d.]+)/m.exec(psi)?.[1]) >= 10 ||
-      Number(/^full avg10=([\d.]+)/m.exec(psi)?.[1]) >= 1;
+    // Co-tenant IO is normal. Brake only when at least half the last minute was
+    // stalled, or our own IO round trip / filesystem commits take a full second.
+    let pressured = Number(/^some avg10=[\d.]+ avg60=([\d.]+)/m.exec(psi)?.[1]) >= 50;
     const next = new Map<string, { commits: number; totalMs: number }>();
     const filesystems = await fs.readdir("/sys/fs/btrfs").catch(() => []);
     for (const id of filesystems) {
@@ -58,6 +58,6 @@ export function createHostIoPressureProbe(): () => Promise<boolean> {
       next.set(id, { commits, totalMs });
     }
     previous = next;
-    return pressured;
+    return pressured || performance.now() - started >= SLOW_COMMIT_MS;
   };
 }

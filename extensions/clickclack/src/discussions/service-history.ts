@@ -1,11 +1,11 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type { ClickClackClient } from "../http-client.js";
-import type { CoreConfig } from "../types.js";
+import type { CoreConfig, ResolvedClickClackAccount } from "../types.js";
 import type {
   ClickClackDiscussionBinding,
   ClickClackDiscussionBindingStore,
 } from "./binding-store.js";
-import { resolveDiscussionBindingAccount } from "./eligibility.js";
+import { resolvePreparedDiscussionBindingAccount } from "./eligibility.js";
 import { prepareClickClackDiscussionChannelRevocation } from "./revoked-channel-store.js";
 import { prepareDiscussionSessionEntry } from "./session-authority.js";
 
@@ -40,6 +40,7 @@ export async function readDiscussionHistory(params: {
   sessionKey: string;
   binding: ClickClackDiscussionBinding;
   client: ClickClackClient;
+  account: ResolvedClickClackAccount;
   limit: number;
 }): Promise<{ binding?: ClickClackDiscussionBinding; text: string }> {
   const { runtime, store, sessionKey, binding, client, limit } = params;
@@ -69,7 +70,8 @@ export async function readDiscussionHistory(params: {
           current.channelId === binding.channelId &&
           sessionEntry.entry?.sessionId === binding.sessionId &&
           sessionEntry.entry.archivedAt === undefined &&
-          resolveDiscussionBindingAccount(config, binding).state === "active" &&
+          resolvePreparedDiscussionBindingAccount(config, binding, params.account).state ===
+            "active" &&
           !channelRevocation.isRevoked(current)
         );
       } catch {

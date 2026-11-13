@@ -46,6 +46,7 @@ import { type AgentSession, estimateTokens, SessionManager } from "../sessions/i
 import { getModelRegistryRuntime } from "../sessions/model-registry-runtime.js";
 import { DefaultResourceLoader } from "../sessions/resource-loader.js";
 import { createAgentSession } from "../sessions/sdk.js";
+import { sessionManagerReadTranscriptBranch } from "../sessions/session-manager-view-types.js";
 import { setSessionModelUsageSink } from "../sessions/session-model-usage.js";
 import { normalizeUsage, type UsageLike } from "../usage.js";
 import { isSummaryTimeoutFailure, resolveCompactionFailure } from "./compact-reasons.js";
@@ -71,6 +72,7 @@ import { wrapStreamFnWithDiagnosticModelCallEvents } from "./run/attempt.model-d
 import { readCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
 import { estimateLlmBoundaryTokenPressure } from "./run/preemptive-compaction.js";
 import { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
+import { readSessionSentTools } from "./session-prompt-state.js";
 import { collectRegisteredToolNames, toSessionToolAllowlist } from "./tool-name-allowlist.js";
 import { mapThinkingLevel, mapThinkingLevelForProvider } from "./utils.js";
 import { flushPendingToolResultsAfterIdle } from "./wait-for-idle-before-flush.js";
@@ -156,7 +158,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       contextWindowTokens: contextTokenBudget,
       allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
       missingToolResultText: responsesApi ? "aborted" : undefined,
-      allowedToolNames,
       withCompactionPersistenceAsync:
         params.seedCompaction ?? accountingRecorder?.withCompactionPersistenceAsync,
     });
@@ -216,8 +217,10 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       }),
     });
 
+    // Summary requests carry no tools; this session's tools only estimate the request the
+    // conversation sends after compaction, so prefer its sent definitions to the registry.
     const customTools = toToolDefinitions(
-      effectiveTools,
+      readSessionSentTools(sessionManager[sessionManagerReadTranscriptBranch]()) ?? effectiveTools,
       {
         agentId: sessionAgentId,
         config: params.config,
@@ -481,7 +484,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         };
         // The refusal floor makes no model call, including a server-side compaction.
         const skipServerCompaction = params.seedCompaction || params.summaryRefusal === "floor";
-        const serverResult = skipServerCompaction
+        const serverAttempt = skipServerCompaction
           ? undefined
           : await attemptServerEndpointCompaction({
               trigger,
@@ -491,6 +494,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               sessionManager,
               extraParams: effectiveExtraParams,
               requestBudget: accountingRecorder?.requestBudget,
+              estimatedInputTokens: observedTokenCount,
               customInstructions: params.customInstructions,
               onUsage: recordUsage,
               onCompactionCommitted: recordServerCompaction,
@@ -503,6 +507,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
                 signal: params.abortSignal,
               },
             });
+        const serverResult = serverAttempt === "context-overflow" ? undefined : serverAttempt;
         const activeSession = session;
         // The resolved session budget can be smaller than the summarizer's model
         // window. Carry it into manual fitting when allowing larger replay artifacts.
@@ -547,6 +552,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
                     requestBudget: manualRequestBudget ?? accountingRecorder?.requestBudget,
                     requestFromEntryId: accountingRecorder?.requestFromEntryId,
                     pendingUserEntryId: accountingRecorder?.pendingUserEntryId,
+                    requestRequiresCompaction: accountingRecorder?.requestRequiresCompaction,
                     onSummaryReady: () => {
                       summaryReady = true;
                     },
@@ -569,7 +575,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             // The client watchdog starts here; refresh the delegated host watchdog with it.
             refreshCompactionWatchdogs();
             const outcome = await compactClient(
-              params.summaryRefusal === "floor"
+              params.summaryRefusal === "floor" || serverAttempt === "context-overflow"
                 ? "deterministic"
                 : resolveEffectiveCompactionMode(params.config) === "default"
                   ? undefined

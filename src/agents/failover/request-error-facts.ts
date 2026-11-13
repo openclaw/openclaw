@@ -4,6 +4,7 @@ import {
   formatTransportErrorCopy,
 } from "../../shared/assistant-error-format.js";
 import { describeFailoverError } from "../failover-error.js";
+import { AgentHarnessModelRequestPolicyError } from "../harness/errors.js";
 import {
   renderAssistantRequestFailureCopy,
   renderFormatErrorCopy,
@@ -35,6 +36,7 @@ export function resolveReplyFailoverFacts(error: unknown, message: string) {
     authMode: described.authMode,
     requestFailureText:
       storageCopy ??
+      (error instanceof AgentHarnessModelRequestPolicyError ? error.message : undefined) ??
       (reason === "format"
         ? renderFormatErrorCopy(rawError)
         : transportCopy

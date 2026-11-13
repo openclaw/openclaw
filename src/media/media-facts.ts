@@ -11,7 +11,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { cloneTranscriptEnvelope } from "../config/sessions/transcript-json.js";
+import { cloneTranscriptEnvelope } from "../shared/transcript-payload-ownership.js";
 import type { PromptImageOrderEntry } from "./prompt-image-order.js";
 
 /** One ordered runtime attachment; array position is its alignment identity. */

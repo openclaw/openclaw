@@ -268,7 +268,9 @@ the runner submits the same prepared image bytes after approval. The event is a
 copy, so mutating its images does not rewrite model input. `images: []` means no
 current-turn images; an absent field means an older host without this contract.
 Gateway worker turns expose Gateway-prepared images too; legacy worker turns do
-not expose a worker-local system prompt. Paired-node CLI sessions do not support
+not expose a worker-local system prompt. Their history preparation reads the selected
+conversation branch, leaving inactive branches unloaded. Recorder-owned user input
+is persisted only after policy approval. Paired-node CLI sessions do not support
 images. This hook remains limited to runners that implement it. Return `{ outcome: "block", reason, message? }`
 to stop the run before the model reads the prompt. `reason` is internal;
 `message` is the user-facing replacement. Only `pass` and `block` outcomes are

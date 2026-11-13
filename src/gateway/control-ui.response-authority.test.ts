@@ -38,12 +38,9 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
+import { handleControlUiAssistantMediaRequest } from "./control-ui-assistant-media-http.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "./control-ui-contract.js";
-import {
-  handleControlUiAssistantMediaRequest,
-  handleControlUiAvatarRequest,
-  handleControlUiHttpRequest,
-} from "./control-ui.js";
+import { handleControlUiAvatarRequest, handleControlUiHttpRequest } from "./control-ui.js";
 import { invalidateOperatorRolePolicy, resolveCreatorSandbox } from "./operator-role-policy.js";
 import { withLocalWorkspaceProjection } from "./worker-environments/local-workspace-projection.js";
 import type { LocalWorkspaceOwner } from "./worker-environments/local-workspace-types.js";

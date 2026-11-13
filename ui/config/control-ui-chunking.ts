@@ -31,8 +31,6 @@ const chatPresentationModules = new Set([
   "ui/src/pages/chat/components/chat-tool-outcome-summary.solid.tsx",
   "ui/src/pages/chat/components/chat-tool-render-model.ts",
   "ui/src/pages/chat/components/chat-message-bubble-tools.tsx",
-  "ui/src/pages/chat/components/chat-permission-card.tsx",
-  "ui/src/pages/chat/components/chat-tool-content.solid.tsx",
   "ui/src/pages/chat/components/chat-tool-cards.solid.tsx",
   "ui/src/pages/chat/components/chat-message-activity-operation.tsx",
   "ui/src/pages/chat/components/chat-diff-stat.solid.tsx",
@@ -41,7 +39,6 @@ const chatPresentationModules = new Set([
   "ui/src/lib/chat/tool-call-input.ts",
   "src/agents/tool-display-name.ts",
   "ui/src/i18n/locales/en-chat-details.ts",
-  "ui/src/i18n/locales/en-chat-permissions.ts",
   "ui/src/pages/chat/components/chat-details-process-row.tsx",
   "ui/src/pages/chat/components/chat-environment-content.tsx",
 ]);
@@ -211,6 +208,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/solid/checkbox.tsx":
     case "ui/src/lib/session-progress-cards.ts":
     case "ui/src/pages/templates/creator-publication.ts":
+    case "src/shared/plugin-inline-view.ts":
     case "src/agents/core-tool-facts.ts":
     case "src/agents/tools/automations-tool-name.ts":
     case "ui/src/components/terminal/terminal-controller-lifecycle.ts":
@@ -402,6 +400,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/pages/chat/components/chat-composer-skill-menu.tsx":
     case "ui/src/pages/chat/components/chat-composer-slash-menu-options.tsx":
     case "ui/src/pages/chat/components/chat-composer-slash-menu-dom.tsx":
+    case "ui/src/pages/chat/components/chat-composer-slash-menu-values.ts":
     case "ui/src/pages/chat/components/chat-composer-slash-menu.tsx":
       // Share interaction-only rows without four separate preload-map entries.
       return "composer-invocation-menus";
@@ -621,9 +620,6 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
             ...(["shared", "new", "chat"] as const).map((route, index) => {
               const modules = new Set(controlUiBootModules[route]);
               if (route === "shared") {
-                // Plugin activation validates versions on every route without
-                // evaluating Chat or adding a separate contract request.
-                modules.add("src/shared/plugin-inline-view.ts");
                 // Plugin contributions can initialize after the New Session boot capture.
                 modules.add("ui/src/plugins/control-ui-actions.ts");
                 // Both routes read deferred resources; share their existing boot partition.

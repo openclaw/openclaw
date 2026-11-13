@@ -10,6 +10,49 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Gateway connect denial" });
 
 suite.define(() => {
+  it.each(["grant-revoked", "plugin-lifetime-retired"])(
+    "shows a post-connect %s cause and permits only paced transient recovery",
+    async (cause) => {
+      await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+        const gateway = await installMockGateway(page);
+        await page.goto(suite.server.baseUrl);
+        await waitForControlUiGatewayReady(page);
+        await page.clock.install();
+        await pauseVirtualClock(page);
+        const attempts = (await gateway.getRequests("connect")).length;
+        const transient = cause === "plugin-lifetime-retired";
+        const message = `Gateway access stopped [access-cause=${cause}]; ${transient ? "retry after policy refresh." : "ask an administrator to restore access."}`;
+        await gateway.closeLatest(4001, message);
+        await page.clock.runFor(1);
+        const frame = await takeControlUiScreenshotFrame(page, page.locator("body"), [], {
+          animations: "disabled",
+        });
+        await writeFile(path.join(suite.artifactDir, `post-connect-${cause}.png`), frame.png);
+        await page.clock.runFor(29_000);
+        expect(await gateway.getRequests("connect")).toHaveLength(attempts);
+        if (transient) {
+          await page.getByText("Reconnecting…", { exact: true }).first().waitFor();
+          await page.clock.runFor(7_000);
+        } else {
+          const gate = page.locator(".login-gate");
+          await gate.getByText("No access to this Gateway", { exact: true }).waitFor();
+          await gate.getByText("Show details", { exact: true }).click();
+          await gate.getByText(message, { exact: true }).waitFor();
+          await page.evaluate(() => {
+            window.dispatchEvent(new Event("online"));
+            window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }));
+          });
+          await page.clock.runFor(60_000);
+          expect(await gateway.getRequests("connect")).toHaveLength(attempts);
+          await gate.getByRole("button", { name: "Connect", exact: true }).click();
+        }
+        await page.clock.resume();
+        await waitForControlUiGatewayReady(page);
+        expect(await gateway.getRequests("connect")).toHaveLength(attempts + 1);
+      });
+    },
+  );
+
   it.each(["denied", "unavailable"])(
     "paces %s handshakes at a reachable Gateway",
     async (failure) => {

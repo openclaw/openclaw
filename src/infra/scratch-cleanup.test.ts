@@ -29,6 +29,7 @@ async function fixture() {
   return {
     root,
     target,
+    cursor,
     pause,
     async file(name: string, age = SCRATCH_TTL_MS + 1) {
       const file = path.join(root, name);
@@ -37,7 +38,8 @@ async function fixture() {
       await fs.utimes(file, (now - age) / 1000, (now - age) / 1000);
       return file;
     },
-    run: () => cleanScratch({ targets: [target], now, assertCurrent: () => {}, pause, cursor }),
+    run: (nextCursor = cursor) =>
+      cleanScratch({ targets: [target], now, assertCurrent: () => {}, pause, cursor: nextCursor }),
   };
 }
 
@@ -55,12 +57,31 @@ it("expires only entries whose newest file is older than 24 hours, retaining bou
   const result = await f.run();
   expect(result).toMatchObject({ entriesRemoved: 1, bytesRemoved: 5, skippedLive: 0, errors: [] });
   await expect(fs.stat(expired)).rejects.toMatchObject({ code: "ENOENT" });
+  expect((await fs.readdir(path.join(f.root, ".openclaw/tmp"))).toSorted()).toEqual([
+    "boundary",
+    "mixed",
+  ]);
   for (const file of [boundary, fresh, oldSibling, outside]) {
     expect(await fs.readFile(file, "utf8")).toBe("proof");
   }
 });
 
-it("skips live or queued custody and stops paced deletion when custody becomes live", async () => {
+it("retains a replacement entry when identity changes after expiry inspection", async () => {
+  const f = await fixture();
+  const directory = path.dirname(await f.file(".openclaw/tmp/expired/proof"));
+  let preparations = 0;
+  f.target.prepare = async () => {
+    if (++preparations === 2) {
+      await fs.rename(directory, path.join(f.root, "retained-original"));
+      await f.file(".openclaw/tmp/expired/fresh", 1);
+    }
+  };
+  expect(await f.run()).toMatchObject({ entriesRemoved: 0, filesRemoved: 0, deferred: 1 });
+  expect(await fs.readFile(path.join(directory, "fresh"), "utf8")).toBe("proof");
+  expect(await fs.readFile(path.join(f.root, "retained-original/proof"), "utf8")).toBe("proof");
+});
+
+it("skips live custody and isolates claimed cleanup from new work at the original path", async () => {
   const f = await fixture();
   f.target.isLive = () => true;
   const file = await f.file(".openclaw/tmp/proof/file");
@@ -71,14 +92,40 @@ it("skips live or queued custody and stops paced deletion when custody becomes l
     await f.file(`.openclaw/tmp/proof/${index}`);
   }
   f.pause.mockImplementation(async () => {
+    await expect(fs.stat(path.dirname(file))).rejects.toMatchObject({ code: "ENOENT" });
+    await f.file(".openclaw/tmp/proof/fresh", 1);
     f.target.isLive = () => true;
   });
-  expect(await f.run()).toMatchObject({ skippedLive: 1, filesRemoved: 128, entriesRemoved: 0 });
+  expect(await f.run()).toMatchObject({ filesRemoved: 131, entriesRemoved: 1, errors: [] });
   expect(f.pause).toHaveBeenCalledExactlyOnceWith(100);
-  expect((await fs.readdir(path.dirname(file))).length).toBe(2);
+  expect(await fs.readdir(path.dirname(file))).toEqual(["fresh"]);
 });
 
-it("refuses symlinks at the scratch boundary and inside entries without deleting outside files", async () => {
+it("joins worker cancellation at a deletion checkpoint before releasing the checkout", async () => {
+  const f = await fixture();
+  const controller = new AbortController();
+  for (let index = 0; index < 130; index++) {
+    await f.file(`.openclaw/tmp/proof/${index}`);
+  }
+  await expect(
+    cleanScratch({
+      targets: [f.target],
+      now,
+      cursor: f.cursor,
+      signal: controller.signal,
+      assertCurrent: () => controller.signal.throwIfAborted(),
+      pause: async () => controller.abort(),
+    }),
+  ).rejects.toMatchObject({ name: "AbortError" });
+  const remaining = await fs.readdir(path.join(f.root, ".openclaw/tmp"));
+  expect(remaining).toHaveLength(1);
+  expect(await fs.readdir(path.join(f.root, ".openclaw/tmp", remaining[0]!))).toHaveLength(2);
+  // Ordinary expiry rediscovers the partially drained entry without a claim journal.
+  expect(await f.run()).toMatchObject({ entriesRemoved: 1, filesRemoved: 3, errors: [] });
+  expect(await fs.readdir(path.join(f.root, ".openclaw/tmp"))).toEqual([]);
+});
+
+it("refuses symlink scratch roots but expires contained links without following their targets", async () => {
   const f = await fixture();
   const outside = await f.file("outside/proof");
   await fs.mkdir(path.join(f.root, ".openclaw"));
@@ -86,24 +133,62 @@ it("refuses symlinks at the scratch boundary and inside entries without deleting
   expect(await f.run()).toMatchObject({ filesRemoved: 0, deferred: 1 });
   await fs.unlink(path.join(f.root, ".openclaw/tmp"));
   await fs.mkdir(path.join(f.root, ".openclaw/tmp/proof"), { recursive: true });
-  await fs.symlink(outside, path.join(f.root, ".openclaw/tmp/proof/link"));
-  expect(await f.run()).toMatchObject({ filesRemoved: 0, deferred: 1 });
+  const link = path.join(f.root, ".openclaw/tmp/proof/link");
+  await fs.symlink(outside, link);
+  await fs.lutimes(link, (now - SCRATCH_TTL_MS - 1) / 1000, (now - SCRATCH_TTL_MS - 1) / 1000);
+  expect(await f.run()).toMatchObject({ entriesRemoved: 1, filesRemoved: 2, deferred: 0 });
   expect(await fs.readFile(outside, "utf8")).toBe("proof");
 });
 
-it("cleans only node-coverage directories in runtime temp and advances a bounded pass", async () => {
+it("expires nested clone object links by directory age, not another checkout's pack refresh", async () => {
   const f = await fixture();
-  f.target.kind = "coverage";
-  const unrelated = await f.file("other-temp/proof");
-  const regular = await f.file("node-coverage-file");
-  for (let index = 0; index < 258; index++) {
-    await f.file(`node-coverage-${index}/proof`);
-  }
-  expect(await f.run()).toMatchObject({ entriesRemoved: 256, bytesRemoved: 1280 });
-  expect(await f.run()).toMatchObject({ entriesRemoved: 2, bytesRemoved: 10 });
-  expect(await fs.readFile(unrelated, "utf8")).toBe("proof");
-  expect(await fs.readFile(regular, "utf8")).toBe("proof");
+  const shared = await f.file("base/.git/objects/pack/pack-synthetic.pack", 1);
+  const clone = path.join(f.root, ".openclaw/tmp/landing/native");
+  await f.file(".openclaw/tmp/landing/native/.git/FETCH_HEAD");
+  const packs = path.join(clone, ".git/objects/pack");
+  await fs.mkdir(packs, { recursive: true });
+  await fs.link(shared, path.join(packs, "pack-synthetic.pack"));
+  const old = (now - SCRATCH_TTL_MS - 1) / 1000;
+  // A newly linked object still protects the entry until its directory ages out.
+  await fs.utimes(packs, now / 1000, now / 1000);
+  expect(await f.run()).toMatchObject({ entriesRemoved: 0, errors: [] });
+  await fs.utimes(packs, old, old);
+  expect(await f.run()).toMatchObject({ entriesRemoved: 1, errors: [] });
+  await expect(fs.stat(clone)).rejects.toMatchObject({ code: "ENOENT" });
+  expect(await fs.readFile(shared, "utf8")).toBe("proof");
+  expect((await fs.stat(shared)).nlink).toBe(1);
 });
+
+it.each(["checkout", "coverage"] as const)(
+  "resumes bounded %s cleanup after losing its cursor",
+  async (kind) => {
+    const f = await fixture();
+    f.target.kind = kind;
+    const prefix = kind === "checkout" ? ".openclaw/tmp/" : "";
+    const unrelated = await f.file("other-temp/proof");
+    const regular = await f.file("node-coverage-file");
+    for (let index = 0; index < 258; index++) {
+      await f.file(`${prefix}node-coverage-${index}/proof`);
+    }
+    expect(await f.run()).toMatchObject({ entriesRemoved: 256, bytesRemoved: 1280 });
+    await closeScratchCleanupCursor(f.cursor);
+    const restartedCursor: ScratchCleanupCursor = {};
+    cursors.push(restartedCursor);
+    expect(await f.run(restartedCursor)).toMatchObject({
+      entriesRemoved: 2,
+      bytesRemoved: 10,
+      scanned: kind === "checkout" ? 4 : 6,
+      errors: [],
+    });
+    expect(await f.run(restartedCursor)).toMatchObject({
+      entriesRemoved: 0,
+      filesRemoved: 0,
+      scanned: kind === "checkout" ? 0 : 2,
+    });
+    expect(await fs.readFile(unrelated, "utf8")).toBe("proof");
+    expect(await fs.readFile(regular, "utf8")).toBe("proof");
+  },
+);
 
 it("retains an entry when its newest file cannot be established within the scan depth", async () => {
   const f = await fixture();

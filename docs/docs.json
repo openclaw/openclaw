@@ -2304,7 +2304,7 @@
                   },
                   {
                     "group": "Decision models",
-                    "pages": ["providers/liquid-ai", "providers/rerank"]
+                    "pages": ["providers/celeris", "providers/fastino", "providers/liquid-ai", "providers/nace", "providers/rerank"]
                   },
                   {
                     "group": "Speech and audio",

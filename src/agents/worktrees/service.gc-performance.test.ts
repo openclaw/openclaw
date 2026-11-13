@@ -542,6 +542,8 @@ describe("worktree Git maintenance", () => {
   ])(
     "consolidates a backlog exceeding the old $label budget",
     async ({ packBytes, indexBytes }) => {
+      // This proves byte-budget admission; retirement deadlines are covered separately.
+      vi.spyOn(performance, "now").mockReturnValue(0);
       const repo = await initRepo(tempDirs.make("worktree-backlog-"));
       const { objects, packs: stems } = await packBlobs(repo, [
         "backlog-a",
@@ -710,7 +712,7 @@ describe("worktree Git maintenance", () => {
     vi.spyOn(performance, "now").mockImplementation(() => now);
     const remove = fs.rm;
     let retired: string | undefined;
-    vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+    const retirement = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
       await remove(target, options);
       if (String(target).startsWith(packsPath(repo)) && String(target).endsWith(".idx")) {
         retired = String(target).slice(0, -4);
@@ -718,12 +720,17 @@ describe("worktree Git maintenance", () => {
       }
     });
     const progress = new WorktreeGcProgress();
-    await createWorktreeGitMaintenance(env)({ progress });
+    const maintain = createWorktreeGitMaintenance(env);
+    await maintain({ progress });
     expect(progress.result.gitMaintenance).toMatchObject({ stage: "completed", packsAfter: 3 });
     expect(retired).toBeDefined();
     for (const extension of ["idx", "pack", "rev", "bitmap", "promisor"]) {
       await expect(fs.access(`${retired}.${extension}`)).rejects.toHaveProperty("code", "ENOENT");
     }
+    expect(await objectTypes(repo, objects)).toBe("blob\nblob\nblob");
+    retirement.mockRestore();
+    await maintain({ checkBacklog: true });
+    expect((await packNames(repo)).length).toBeLessThan(3);
     expect(await objectTypes(repo, objects)).toBe("blob\nblob\nblob");
   });
 

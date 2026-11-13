@@ -236,7 +236,6 @@ suite.define(() => {
       await historyToggle.click();
       await gateway.waitForRequest("openclaw.changes.list");
       await page.locator(".custodian__change-card").waitFor();
-
       const requestCount = (await gateway.getRequests("openclaw.changes.list")).length;
       await gateway.deferNext("openclaw.changes.list");
       await historyToggle.click();

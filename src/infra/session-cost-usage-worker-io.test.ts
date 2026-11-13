@@ -47,6 +47,7 @@ import { prepareUsageCostWorker, runUsageCostWorker } from "./session-cost-usage
 import {
   discoverAllSessions,
   loadCostUsageSummary,
+  loadCostUsageSummaryFromCache,
   loadSessionCostSummary,
   loadSessionCostSummariesFromCache as loadCached,
 } from "./session-cost-usage.js";
@@ -189,6 +190,18 @@ it("reads recorded usage across append, rewrite, and rollup replacement without 
         { sessionId: scope.sessionId, sessionFile, mtime: expect.any(Number) },
       ]);
       expect(await cached()).toMatchObject({ summaries: [{ totalTokens: 3 }] });
+      expect(
+        await loadCostUsageSummaryFromCache({
+          agentId: "main",
+          startMs: 0,
+          endMs: Date.UTC(2030, 0, 1) - 1,
+          dayBucket: utcBucket,
+          requestRefresh: false,
+        }),
+      ).toMatchObject({
+        totals: { totalTokens: 3, totalCost: 3 },
+        cacheStatus: { status: "fresh" },
+      });
       expect(await loadSessionCostSummary({ agentId: "main", sessionFile })).toMatchObject({
         totalTokens: 3,
         totalCost: 3,
@@ -509,7 +522,12 @@ it.each(["table-missing", "schema-missing"] as const)(
           }),
         ).resolves.toMatchObject({
           kind: "summary",
-          summary: { totals: { totalTokens: 0 } },
+          summary: {
+            totals: { totalTokens: reason === "table-missing" ? 10 : 0 },
+            ...(reason === "table-missing"
+              ? { cacheStatus: { status: "partial", staleFiles: 1 } }
+              : {}),
+          },
         });
         expect(readRows("main")).toEqual(before);
       } finally {

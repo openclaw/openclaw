@@ -253,7 +253,7 @@ The saved sidebar also retains the session rows for its initial viewport, along 
 
 The Online sidebar loads people's open and running session counts when you open it. Switching to Sessions or Pages stops those count refreshes; opening Online again loads current counts. Restoring a Sessions sidebar does not wait for Online counts.
 
-Message reactions share the message footer. Desktop Chat Details lists automations after session information and task progress so arriving automation results keep those sections in place. The mobile composer reserves one activity row so arriving task and subagent status does not move the transcript.
+Message reactions appear in a compact tab on the message bubble. Open the tab to see each emoji count, including in read-only sessions. Desktop Chat Details lists automations after session information and task progress so arriving automation results keep those sections in place. The mobile composer reserves one activity row so arriving task and subagent status does not move the transcript.
 
 The desktop **Subagents** tab places nested subagents beneath the subagent that started them. Each row keeps its own activity and controls. Floating **Details** and the mobile list remain compact, direct-child views.
 
@@ -333,7 +333,7 @@ The chat header’s **Details** panel groups session information into collapsibl
 
 Session details share concurrent reads across the sidebar, chat, and resource panels. Returning to a session reuses its details on the same connection, including updates received through complete session snapshots. Incomplete updates, explicit refreshes, and reconnects fetch current details; failed reads remain retryable.
 
-Sidebar pull-request indicators reuse the last known snapshot. Subscriptions acknowledge the requested sessions immediately; session preparation and fresh pull-request snapshots arrive through background updates. Opening a session, its progress card, or its Git activity requests current checkout facts; sidebar rows alone do not poll Git. Active panels detect branch and staged changes from Git metadata. Tool completion refreshes working-tree stats, with a five-minute fallback for edits made outside OpenClaw.
+Sidebar pull-request indicators reuse the last known snapshot. Subscriptions acknowledge the requested sessions immediately; session preparation and fresh pull-request snapshots arrive through background updates. Recorded pull requests update when their receipts or session access and lineage change, without polling passive rows or rechecking unrelated audiences on owner-certified metadata-only updates. Delivery still checks each recipient’s current access. Opening a session, its progress card, or its Git activity requests current checkout facts; sidebar rows alone do not poll Git. Active panels detect branch and staged changes from Git metadata. Tool completion refreshes working-tree stats, with a five-minute fallback for edits made outside OpenClaw.
 
 Changes summaries share identical concurrent polls and reuse unchanged checkout results when file metadata can establish freshness. Summary reads have a separate worker queue from full patches and PR statistics, with priority inside the shared Git child limit. Running Git commands still finish normally, and background work keeps making progress.
 

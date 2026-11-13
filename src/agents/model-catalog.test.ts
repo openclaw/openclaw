@@ -37,7 +37,7 @@ import { AuthStorage } from "./sessions/auth-storage.js";
 import { ModelRegistry } from "./sessions/model-registry.js";
 
 type AugmentModelCatalogWithProviderPlugins =
-  typeof import("../plugins/provider-runtime.js").augmentModelCatalogWithProviderPlugins;
+  typeof import("../plugins/provider-runtime.runtime.js").augmentModelCatalogWithProviderPlugins;
 
 const mocks = vi.hoisted(() => ({
   augmentModelCatalogWithProviderPlugins: vi.fn<AugmentModelCatalogWithProviderPlugins>(

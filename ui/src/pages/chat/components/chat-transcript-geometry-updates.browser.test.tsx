@@ -333,7 +333,9 @@ it.each([
   const slot = document.body.appendChild(document.createElement("div"));
   const viewport = slot.appendChild(document.createElement("div"));
   viewport.style.cssText = "width: 600px; height: 400px; overflow: auto; overflow-anchor: none";
-  const content = viewport.appendChild(document.createElement("div"));
+  const column = viewport.appendChild(document.createElement("div"));
+  column.className = "chat-thread-content";
+  const content = column.appendChild(document.createElement("div"));
   const changed = vi.fn();
   const layout = new TranscriptLayoutOwner(changed);
   layout.connect(viewport);

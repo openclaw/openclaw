@@ -1,6 +1,6 @@
 import { mkdir, realpath, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, assert, describe, expect, it } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildTemplateAddPlan } from "./lifecycle.js";
 import { emptyPluginCapabilityEvidence } from "./packages.test-support.js";
@@ -14,6 +14,7 @@ const extension = { ref: "@acme/market-data", version: "2.0.1" } as const;
 async function planApplication(
   manifest: Record<string, unknown>,
   packagePreflight?: () => Promise<TemplatePackagePreflightResult>,
+  options: { defaultWorkspace?: boolean } = {},
 ) {
   const root = tempDirs.make("openclaw-template-application-plan-");
   await mkdir(join(root, "workspace", "schemas"), { recursive: true });
@@ -33,7 +34,9 @@ async function planApplication(
       byteLength: 0,
     },
     context: {
-      workspace: join(await realpath(root), "new-workspace"),
+      ...(options.defaultWorkspace
+        ? {}
+        : { workspace: join(await realpath(root), "new-workspace") }),
       ...(packagePreflight ? { packagePreflight } : {}),
     },
   });
@@ -85,6 +88,16 @@ describe("Template application schema v1", () => {
 });
 
 describe("Template application planning v1", () => {
+  it("defaults a new agent's workspace to the state directory", async () => {
+    const stateDir = await realpath(tempDirs.make("openclaw-template-state-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    try {
+      const plan = await planApplication({}, undefined, { defaultWorkspace: true });
+      expect(plan.agent.workspace).toBe(join(stateDir, "workspace-analyst"));
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
   it("allows ordinary sessions_spawn authority without model or named delegates", async () => {
     const plan = await planApplication({
       agent: { id: "analyst", tools: { allow: ["sessions_spawn"] } },

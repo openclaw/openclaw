@@ -133,10 +133,6 @@ export function prepareEmbeddedRunTerminal(input: {
     finalAssistantStopReason !== "error" && finalAssistantStopReason !== "aborted";
   const costUsd = estimateAggregateUsageCost({
     usage: usageMeta.usage,
-    provider: reportedModelRef.provider,
-    model: reportedModelRef.model,
-    config: runParams.config,
-    agentDir: runParams.agentDir,
   });
   // Attempt normalization already folded every attempt (terminal included)
   // into the accumulator, so read it directly instead of re-adding the attempt.

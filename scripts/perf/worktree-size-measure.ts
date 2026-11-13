@@ -21,6 +21,8 @@
 // Acceptance: identical byte totals, fewer full scans, lower CPU/allocation.
 // --hydrate-objects <OID file> --ref <commit> isolates the explicit hydration owner,
 // including stale-batch replays with --iterations. --concurrent submits two callers.
+// --transport-base-file compares saved base-fetch.ts; --allow-failure reports
+// failed launches as failures with timing/allocation, never as successful hydration.
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import { Session, type HeapProfiler } from "node:inspector/promises";
@@ -37,6 +39,8 @@ const { values } = parseArgs({
     cold: { type: "boolean" },
     "base-file": { type: "string" },
     "hydration-base-file": { type: "string" },
+    "transport-base-file": { type: "string" },
+    "allow-failure": { type: "boolean" },
     iterations: { type: "string" },
     repo: { type: "string" },
     "previous-ref": { type: "string" },
@@ -91,6 +95,10 @@ const hydrationUrl = new URL("../../src/agents/worktrees/object-hydration.ts", i
   .href;
 const hydrationBaseUrl = values["hydration-base-file"]
   ? pathToFileURL(path.resolve(values["hydration-base-file"])).href
+  : undefined;
+const transportUrl = new URL("../../src/agents/worktrees/base-fetch.ts", import.meta.url).href;
+const transportBaseUrl = values["transport-base-file"]
+  ? pathToFileURL(path.resolve(values["transport-base-file"])).href
   : undefined;
 const hooks = registerHooks({
   load(url, context, nextLoad) {
@@ -158,7 +166,9 @@ export async function requireGit(cwd, args, options) {
         ? baseUrl
         : url === hydrationUrl && hydrationBaseUrl
           ? hydrationBaseUrl
-          : url,
+          : url === transportUrl && transportBaseUrl
+            ? transportBaseUrl
+            : url,
       context,
     );
   },
@@ -202,13 +212,21 @@ try {
     });
   }
   const samples: number[] = [];
+  const failures: string[] = [];
   const loadBefore = loadavg();
   const cpuStart = process.cpuUsage();
   const allocatedStart = getHeapStatistics().total_allocated_bytes;
   const start = performance.now();
   for (let index = 0; index < iterations; index++) {
     const operationStart = performance.now();
-    await measure();
+    try {
+      await measure();
+    } catch (error) {
+      if (!values["allow-failure"]) {
+        throw error;
+      }
+      failures.push(error instanceof Error ? error.message : String(error));
+    }
     samples.push(performance.now() - operationStart);
   }
   const wallMs = performance.now() - start;
@@ -224,12 +242,13 @@ try {
   const sortedSamples = samples.toSorted((a, b) => a - b);
   console.log(
     JSON.stringify({
-      revision: baseUrl || hydrationBaseUrl ? "base" : "candidate",
+      revision: baseUrl || hydrationBaseUrl || transportBaseUrl ? "base" : "candidate",
       mode: values.allocation ? "allocation" : "timing",
       scope: repo
         ? "direct owner with native Git; wall includes Git/I/O, process CPU excludes Git child CPU; optional seed excluded"
         : `${values.cold ? "cold" : "advancing-commit"} JS owner and synthetic Git adapter; excludes native Git, network, and worker queues`,
       operations: iterations,
+      failures,
       hydrationObjects: hydrateObjects?.length,
       concurrent: Boolean(values.concurrent),
       samplesMs: hydrateObjects ? samples : undefined,

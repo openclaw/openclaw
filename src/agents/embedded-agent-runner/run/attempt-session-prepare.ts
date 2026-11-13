@@ -633,7 +633,6 @@ export async function prepareEmbeddedAttemptSessionManager(
       : undefined,
     allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
     missingToolResultText: isOpenAIResponsesApi ? "aborted" : undefined,
-    allowedToolNames: input.replayAllowedToolNames,
     trigger: attempt.trigger,
     suppressNextUserMessagePersistence:
       prepareInitialUserTurnReplay !== undefined || attempt.suppressNextUserMessagePersistence,
