@@ -49,11 +49,11 @@ jobs:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       SOURCE_SHA: db48e205e03f5a0458af2cb78bcf5434fc9a70a0
       OVERLAY_SHA256: 91749b303ce7d34e5e7a4d00a1f6be60ad6ae681a022dc3a9d8edddc9d92100a
-      PROOF_DIR: ${{ runner.temp }}/placement-owner-proof
     steps:
       - name: Initialize failure-safe run binding
         shell: bash
         env:
+          PROOF_DIR: ${{ runner.temp }}/placement-owner-proof
           INPUT_TARGET: ${{ inputs.target_ref }}
           WORKFLOW_SHA: ${{ github.workflow_sha }}
           WORKFLOW_REF: ${{ github.workflow_ref }}
@@ -62,6 +62,7 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
+          printf 'PROOF_DIR=%s\n' "$PROOF_DIR" >> "$GITHUB_ENV"
           mkdir -p "$PROOF_DIR"
           printf 'repository=%s\nworkflow_sha=%s\nworkflow_ref=%s\nrun_id=%s\nrun_attempt=%s\nsource_sha=%s\noverlay_sha256=%s\nlane=%s\n' \
             "$REPOSITORY" "$WORKFLOW_SHA" "$WORKFLOW_REF" "$RUN_ID" "$RUN_ATTEMPT" \
