@@ -1,157 +1,28 @@
 // One Gateway session through every mid-session trigger: each provider request must extend the
 // previous one byte for byte, except at the explicit compaction.
 import fs from "node:fs/promises";
-import { createServer, type ServerResponse } from "node:http";
+import { createServer } from "node:http";
 import path from "node:path";
 import { afterEach, beforeEach, expect } from "vitest";
-import type { ModelDefinitionConfig, ModelProviderConfig } from "../src/config/types.models.js";
 import { startGatewayWithClient } from "../src/gateway/test-helpers.e2e.js";
 import { waitForGatewayActiveWork } from "../src/infra/gateway-active-work.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../src/test-utils/env.js";
+import {
+  buildFakeProvider,
+  fakeTransportRuntime,
+  hasToolResult,
+  latestInput as lastMessage,
+  readWireRequest,
+  writeReply,
+  type FakeReply as Reply,
+  type FakeTransport as Api,
+  type WireRequest,
+} from "./helpers/fake-model-transports.js";
 import { listenProofProvider, useRuntimeProofFixture } from "./runtime-proof.test-support.js";
 
 const TOKEN = "prefix-stability-token";
 const TARGET = "agent:main:prefix-stability-target";
 const SENDER = "agent:main:prefix-stability-sender";
-
-export type Api = "anthropic-messages" | "openai-completions";
-type Reply = { text: string } | { tool: string; args: Record<string, unknown> };
-type WireRequest = { system: string; tools: string; messages: string[]; text: string };
-
-// Cache markers move to the newest message on every request, and the newest message carries
-// its text as a block so it can hold one. Providers cache the processed prompt, where a string
-// and a single text block are the same content, so neither difference is a prefix change.
-function withoutCacheMarkers(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(withoutCacheMarkers);
-  }
-  if (value && typeof value === "object") {
-    const content = (value as { content?: unknown }).content;
-    if (typeof content === "string" && "role" in value) {
-      return withoutCacheMarkers({ ...value, content: [{ type: "text", text: content }] });
-    }
-    return Object.fromEntries(
-      Object.entries(value)
-        .filter(([key]) => key !== "cache_control")
-        .map(([key, entry]) => [key, withoutCacheMarkers(entry)]),
-    );
-  }
-  return value;
-}
-
-function readWireRequest(api: Api, body: Record<string, unknown>): WireRequest {
-  const all = (body.messages as Array<{ role?: unknown }> | undefined) ?? [];
-  // Chat Completions sends the system prompt as leading system messages.
-  const lead =
-    api === "openai-completions"
-      ? all.findIndex(({ role }) => role !== "system" && role !== "developer")
-      : 0;
-  const json = (value: unknown) => JSON.stringify(withoutCacheMarkers(value));
-  const system = json(api === "openai-completions" ? all.slice(0, lead) : body.system);
-  const messages = all.slice(lead).map(json);
-  return {
-    system,
-    tools: json(body.tools ?? []),
-    messages,
-    text: `${system}\n${messages.join("\n")}`,
-  };
-}
-
-/** Messages after the newest assistant reply: the current input, carriers and tool results. */
-function lastMessage(request: WireRequest): string {
-  const assistant = request.messages.findLastIndex((message) =>
-    message.startsWith('{"role":"assistant"'),
-  );
-  return request.messages.slice(assistant + 1).join("\n");
-}
-
-function writeReply(api: Api, response: ServerResponse, reply: Reply, ordinal: number) {
-  response.writeHead(200, { "content-type": "text/event-stream; charset=utf-8" });
-  if (api === "anthropic-messages") {
-    const block =
-      "text" in reply
-        ? { type: "text", text: "" }
-        : { type: "tool_use", id: `toolu_${ordinal}`, name: reply.tool, input: {} };
-    const delta =
-      "text" in reply
-        ? { type: "text_delta", text: reply.text }
-        : { type: "input_json_delta", partial_json: JSON.stringify(reply.args) };
-    const events = [
-      {
-        type: "message_start",
-        message: {
-          id: `msg_${ordinal}`,
-          type: "message",
-          role: "assistant",
-          model: "claude-opus-5",
-          content: [],
-          stop_reason: null,
-          usage: { input_tokens: 10, output_tokens: 0 },
-        },
-      },
-      { type: "content_block_start", index: 0, content_block: block },
-      { type: "content_block_delta", index: 0, delta },
-      { type: "content_block_stop", index: 0 },
-      {
-        type: "message_delta",
-        delta: { stop_reason: "text" in reply ? "end_turn" : "tool_use", stop_sequence: null },
-        usage: { output_tokens: 5 },
-      },
-      { type: "message_stop" },
-    ];
-    response.end(events.map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join(""));
-    return;
-  }
-  const chunk = (delta: unknown, finish: string | null) =>
-    `data: ${JSON.stringify({
-      id: `chatcmpl_${ordinal}`,
-      object: "chat.completion.chunk",
-      created: 0,
-      model: "gpt-5.4-mini",
-      choices: [{ index: 0, delta, finish_reason: finish }],
-      ...(finish ? { usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } } : {}),
-    })}\n\n`;
-  const delta =
-    "text" in reply
-      ? { role: "assistant", content: reply.text }
-      : {
-          role: "assistant",
-          tool_calls: [
-            {
-              index: 0,
-              id: `call_${ordinal}`,
-              type: "function",
-              function: { name: reply.tool, arguments: JSON.stringify(reply.args) },
-            },
-          ],
-        };
-  response.end(
-    `${chunk(delta, null)}${chunk({}, "text" in reply ? "stop" : "tool_calls")}data: [DONE]\n\n`,
-  );
-}
-
-function buildProvider(api: Api, baseUrl: string) {
-  const id = api === "anthropic-messages" ? "claude-opus-5" : "gpt-5.4-mini";
-  const providerId = api === "anthropic-messages" ? "fake-anthropic" : "fake-completions";
-  const model: ModelDefinitionConfig = {
-    id,
-    name: `Fake ${id}`,
-    api,
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 200_000,
-    maxTokens: 4096,
-  };
-  const config: ModelProviderConfig = {
-    baseUrl: api === "anthropic-messages" ? baseUrl : `${baseUrl}/v1`,
-    apiKey: "prefix-stability-key", // pragma: allowlist secret
-    api,
-    // The fake provider listens on loopback.
-    request: { allowPrivateNetwork: true },
-    models: [model],
-  };
-  return { providerId, modelRef: `${providerId}/${id}`, config } as const;
-}
 
 /** Requests that do not extend the previous request in the same session, with the first change. */
 function prefixBreaks(requests: readonly WireRequest[]): Array<{ at: number; change: string }> {
@@ -196,12 +67,12 @@ export function usePrefixStabilityJourney() {
     let ordinal = 0;
     const script = (request: WireRequest): Reply => {
       const latest = lastMessage(request);
-      const hasToolResult = /tool_result|"role":"tool"/.test(latest);
+      const toolResult = hasToolResult(latest);
       if (request.tools === "[]") {
         return { text: "Summary: the session ran the probe journey." };
       }
       if (request.text.includes(`session=${SENDER}`)) {
-        return hasToolResult || !latest.includes("forward a ping")
+        return toolResult || !latest.includes("forward a ping")
           ? { text: "REPLY_SKIP" }
           : {
               tool: "sessions_send",
@@ -212,7 +83,7 @@ export function usePrefixStabilityJourney() {
         return { text: "child-done" };
       }
       targetRequests.push(request);
-      if (hasToolResult) {
+      if (toolResult) {
         return { text: "acknowledged" };
       }
       if (latest.includes("STEP-EXEC")) {
@@ -220,6 +91,9 @@ export function usePrefixStabilityJourney() {
           tool: "exec",
           args: { command: "sleep 1; echo exec-finished", background: true },
         };
+      }
+      if (latest.includes("STEP-SILENT")) {
+        return { text: "NO_REPLY" };
       }
       if (latest.includes("STEP-SPAWN")) {
         return {
@@ -244,8 +118,19 @@ export function usePrefixStabilityJourney() {
       });
     });
     let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
+    let transportEnv: ReturnType<typeof captureEnv> | undefined;
     try {
-      const provider = buildProvider(api, await listenProofProvider(server));
+      const provider = buildFakeProvider(api, await listenProofProvider(server));
+      const runtime = fakeTransportRuntime(api);
+      transportEnv = captureEnv(Object.keys(runtime.env));
+      for (const [key, value] of Object.entries(runtime.env)) {
+        setTestEnvValue(key, value);
+      }
+      if (runtime.pluginId) {
+        // The owning bundled plugin registers this transport.
+        deleteTestEnvValue("OPENCLAW_DISABLE_BUNDLED_PLUGINS");
+        deleteTestEnvValue("OPENCLAW_BUNDLED_PLUGINS_DIR");
+      }
       await fs.writeFile(path.join(fixture.workspaceDir, "AGENTS.md"), "# Rules\n- Be brief.\n");
       const cfg = fixture.config(
         provider,
@@ -258,7 +143,13 @@ export function usePrefixStabilityJourney() {
           },
         },
         {
-          plugins: { enabled: false },
+          plugins: runtime.pluginId
+            ? {
+                allow: [runtime.pluginId],
+                entries: { [runtime.pluginId]: { enabled: true } },
+                slots: { memory: "none" },
+              }
+            : { enabled: false },
           tools: {
             codeMode: { enabled: false },
             toolSearch: false,
@@ -332,7 +223,9 @@ export function usePrefixStabilityJourney() {
         );
         await send(TARGET, "TARGET after skill");
         await fs.appendFile(path.join(fixture.workspaceDir, "AGENTS.md"), "- Prefer bullets.\n");
-        await send(TARGET, "TARGET after workspace edit");
+        // A silent reply to a turn that also carried the workspace update, then the next turn.
+        await send(TARGET, "STEP-SILENT after workspace edit");
+        await send(TARGET, "TARGET after silent turn");
         // Explicit compaction is the one allowed rebuild point in this journey.
         await client.request("sessions.compact", { key: TARGET }, { timeoutMs: 65_000 });
         await settle();
@@ -349,6 +242,7 @@ export function usePrefixStabilityJourney() {
       }
     } finally {
       await fixture.close(gateway, server, true);
+      transportEnv?.restore();
     }
   };
 }
