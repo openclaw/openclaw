@@ -14,6 +14,14 @@ import type {
 } from "../infra/approval-gateway-runtime.types.js";
 import { createApprovalNativeRouteCoordinator } from "../infra/approval-native-route-coordinator.js";
 import type { ChannelApprovalKind } from "../infra/approval-types.js";
+import { createBackgroundActivityIndicator } from "../infra/background-activity-indicator.js";
+import {
+  isBackgroundActivityTypingEnabled,
+  listArmedCronWakeSessionKeys,
+  listArmedSubagentWaitSessionKeys,
+  resolveBackgroundActivitySessionDelivery,
+  resolveBackgroundActivityTypingIntervalSeconds,
+} from "../infra/background-activity-sources.js";
 import { GatewayDispatchUnavailableError } from "../infra/restart-recovery-errors.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
@@ -82,6 +90,37 @@ export function createGatewayInstanceRuntime(
       (await loadLifecycleTypingAdapter()).getLoadedChannelPlugin(channel)?.heartbeat,
     onError: () => options.logError?.("lifecycle typing unavailable; final delivery continues"),
   });
+  // Second, independent typing-style signal for background work that
+  // continues *after* a turn ends (armed subagent wait / armed cron wake) --
+  // see src/infra/background-activity-indicator.ts for why this never touches the turn-bound TypingController.
+  const backgroundActivity = createBackgroundActivityIndicator({
+    isAvailable: () => !closed && options.isDispatchAvailable(),
+    sources: {
+      listArmedSubagentWaitSessionKeys,
+      listArmedCronWakeSessionKeys: () =>
+        listArmedCronWakeSessionKeys({
+          cron: options.getContext().cron,
+          cfg: options.getContext().getRuntimeConfig(),
+        }),
+    },
+    target: {
+      getConfig: () => options.getContext().getRuntimeConfig(),
+      resolveDelivery: (sessionKey) =>
+        resolveBackgroundActivitySessionDelivery(
+          sessionKey,
+          options.getContext().getRuntimeConfig(),
+        ),
+      resolveChannelPlugin: async (channel) =>
+        (await loadLifecycleTypingAdapter()).getLoadedChannelPlugin(channel),
+      isTypingEnabled: (sessionKey) =>
+        isBackgroundActivityTypingEnabled(sessionKey, options.getContext().getRuntimeConfig()),
+      typingIntervalSeconds: () =>
+        resolveBackgroundActivityTypingIntervalSeconds(options.getContext().getRuntimeConfig()),
+    },
+    onError: () =>
+      options.logError?.("background activity indicator unavailable; no operator-visible effect"),
+  });
+  backgroundActivity.start();
 
   const assertDispatchAvailable = (method: string) => {
     if (closed || !options.isDispatchAvailable()) {
@@ -493,6 +532,7 @@ export function createGatewayInstanceRuntime(
     close: () => {
       closed = true;
       lifecycleTyping.close();
+      backgroundActivity.stop();
       releaseLifecycleRuntime();
       approvalSubscribers.clear();
       pendingApprovalPublications.clear();
