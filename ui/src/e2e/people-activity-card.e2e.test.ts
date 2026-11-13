@@ -112,7 +112,7 @@ function scenario(recentSessionLabel = recentLabel) {
         lastActivityAt: now - 60_000,
         deviceFamily: "Mac",
         platform: "macOS",
-        timeZone: "Europe/Paris",
+        timeZone: "Pacific/Chatham",
         watchedSessions: [watched, "agent:main:main", "agent:private:hidden"],
       },
     ],
@@ -181,7 +181,7 @@ suite.define(() => {
       // Presence reorders the row; keep focus in the card while its activity changes.
       await link(card, "View activity").focus();
       await expectText(card.locator(".person-activity-card__status"), "Idle");
-      await expectText(card, "Online for");
+      await expectText(card.locator(".person-activity-card__status"), "Idle for");
       for (const [personId, activity] of [
         ["alice", "idle"],
         ["bob", "active"],
@@ -297,7 +297,11 @@ suite.define(() => {
         await expectCount(row.getByRole("button", { name: "Actions for Alice", exact: true }), 1);
         await person.hover();
         await card.waitFor({ state: "visible" });
-        await expectText(card.locator(".person-activity-card__clock"), "Europe/Paris");
+        await expectAttribute(
+          card.locator(".person-activity-card__clock"),
+          "title",
+          "Pacific/Chatham",
+        );
         await expect
           .poll(() => card.locator("a").allTextContents())
           .toEqual(

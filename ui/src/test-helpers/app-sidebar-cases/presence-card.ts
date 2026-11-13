@@ -76,7 +76,8 @@ it("AppSidebar person activity card projects authorized facts and keeps links st
       platform,
       mode,
       clientId,
-      timeZone: "Europe/Paris",
+      // Far from any test host zone, so the local-time suffix always shows.
+      timeZone: "Pacific/Chatham",
       user: { id: "alice", identity: { type: "profile" as const, id: "alice" }, name: "Alice" },
       watchedSessions: [
         "AGENT:research:watched",
@@ -97,8 +98,8 @@ it("AppSidebar person activity card projects authorized facts and keeps links st
   sessions.publishList({ result });
   await activityQuery?.refresh();
   await settleLitElement(sidebar);
-  expect(view.text(".person-activity-card__status")?.trim()).toBe("Online");
-  expect(view.text(".person-activity-card__clock")).toContain("Europe/Paris");
+  expect(view.text(".person-activity-card__status")?.trim()).toMatch(/^Online · .+ local time$/);
+  expect(view.query(".person-activity-card__clock")?.getAttribute("title")).toBe("Pacific/Chatham");
   // Connection details belong to the Activity page.
   for (const [label] of devices) {
     expect(card.textContent).not.toContain(label);

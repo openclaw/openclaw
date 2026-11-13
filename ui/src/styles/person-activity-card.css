@@ -10,7 +10,7 @@
 .person-activity-card {
   display: grid;
   gap: 14px;
-  padding: 20px 16px 12px;
+  padding: 16px 16px 12px;
   font-size: calc(12px * var(--control-ui-text-scale));
   line-height: 1.5;
 }
@@ -23,32 +23,39 @@
 
 .person-activity-card__header {
   display: grid;
-  justify-items: center;
-  gap: 2px;
-  text-align: center;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px 12px;
+  /* Identity reads as one unit; give it more room than the sections below. */
+  margin-bottom: 4px;
+}
+
+.person-activity-card__identity {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
 }
 
 .person-activity-card__avatar {
   position: relative;
   display: flex;
-  margin-bottom: 8px;
 }
 
 .person-activity-card__avatar .viewer-avatar--footer {
-  width: 48px;
-  height: 48px;
+  width: 40px;
+  height: 40px;
   border: 0;
-  font-size: calc(17px * var(--control-ui-text-scale));
+  font-size: calc(14px * var(--control-ui-text-scale));
 }
 
 /* Offline and unobserved presence carry no dot; the status line names them. */
 .person-activity-card__avatar[data-presence-activity]::after {
   position: absolute;
-  right: -1px;
-  bottom: -1px;
+  right: -2px;
+  bottom: -2px;
   box-sizing: content-box;
-  width: 12px;
-  height: 12px;
+  width: 10px;
+  height: 10px;
   border: 2px solid var(--popover);
   border-radius: var(--radius-full);
   background: var(--ok);
@@ -63,33 +70,40 @@
   background: var(--muted);
 }
 
+/* Name and metadata stay one line each; full values remain in titles. */
+.person-activity-card h2,
+.person-activity-card__status {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .person-activity-card h2 {
-  overflow-wrap: anywhere;
   color: var(--text-strong);
   font-size: calc(15px * var(--control-ui-text-scale));
   font-weight: 600;
-  line-height: 1.33;
+  line-height: 1.3;
 }
 
-.person-activity-card__status,
-.person-activity-card__clock {
+.person-activity-card__status {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
-  line-height: 1.33;
+  line-height: 1.4;
 }
 
-.person-activity-card__clock {
-  overflow-wrap: anywhere;
-  line-height: 1.16;
+/* The face's spaces are narrow; widen them so two facts read as two. */
+.person-activity-card__separator {
+  padding-inline: 0.2em;
+  color: var(--text-tertiary);
 }
 
 .person-activity-card__clock strong {
   color: var(--text);
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .person-activity-card__hint {
-  padding-top: 8px;
+  grid-column: 1 / -1;
   color: var(--muted);
   line-height: 1.42;
 }

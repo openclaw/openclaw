@@ -8,6 +8,7 @@ import { handleNavigationClick } from "../lib/navigation-click.ts";
 import {
   presenceMatchesProfile,
   presenceViewerActivity,
+  presenceViewerLastActivity,
   presenceUserLabel,
   type PresenceViewer,
 } from "../lib/presence-users.ts";
@@ -82,50 +83,64 @@ function sessionIdentity(key: string, agentId: string, input: PersonCardInput): 
   return `${scope}\u0000${canonical}`;
 }
 
-function Elapsed(props: {
-  timestamp: number;
-  display?: "compact" | "minute-compact" | "single-unit";
-}) {
+function Elapsed(props: { timestamp: number }) {
   const date = createMemo(() => new Date(props.timestamp));
   const localizedDate = createMemo(() => date().toLocaleString(getLocale()));
   return (
-    <time
-      datetime={date().toISOString()}
-      title={localizedDate()}
-      aria-label={props.display === "minute-compact" ? undefined : localizedDate()}
-    >
-      <ElapsedTime
-        startMs={props.timestamp}
-        minimumUnit={props.display === "minute-compact" ? "minute" : "second"}
-        singleUnit={props.display === "single-unit"}
-      />
+    <time datetime={date().toISOString()} title={localizedDate()} aria-label={localizedDate()}>
+      <ElapsedTime startMs={props.timestamp} singleUnit />
     </time>
   );
 }
 
-function ZoneClock(props: { zone: string }) {
-  const formatter = createMemo(() => {
+/** Their wall-clock time, shown only when it differs from the viewer's. */
+function LocalTime(props: { zone: string }) {
+  const formatters = createMemo(() => {
+    const options = { hour: "numeric", minute: "2-digit" } as const;
     try {
-      return new Intl.DateTimeFormat(getLocale(), {
-        hour: "numeric",
-        minute: "2-digit",
-        timeZone: props.zone,
-      });
+      return [
+        new Intl.DateTimeFormat(getLocale(), { ...options, timeZone: props.zone }),
+        new Intl.DateTimeFormat(getLocale(), options),
+      ];
     } catch {
-      // Clients report their own zone; an unrecognized one still shows by name.
+      // Clients report their own zone; an unrecognized one is omitted.
       return undefined;
     }
   });
   // The card already reads the second clock, so the minute turns over on time.
-  const time = createMemo(() => formatter()?.format(readVisibleTime(1_000)));
+  const time = createMemo(() => {
+    const now = readVisibleTime(1_000);
+    const [theirs, mine] = formatters() ?? [];
+    const value = theirs?.format(now);
+    return value === mine?.format(now) ? undefined : value;
+  });
+  // Emphasize the time within the translated phrase, whatever its word order.
+  const parts = createMemo(() => {
+    const value = time();
+    if (!value) {
+      return undefined;
+    }
+    const text = t("presence.card.localTime", { time: value });
+    const at = text.indexOf(value);
+    return at < 0
+      ? { before: text, value: "", after: "" }
+      : {
+          before: text.slice(0, at),
+          value,
+          after: text.slice(at + value.length),
+        };
+  });
   return (
-    <span class="person-activity-card__clock">
-      <Show when={time()}>
-        <strong>{time()}</strong>
-        {" · "}
-      </Show>
-      {props.zone}
-    </span>
+    <Show when={parts()}>
+      {(phrase) => (
+        <span class="person-activity-card__clock" title={props.zone}>
+          <span class="person-activity-card__separator"> · </span>
+          {phrase().before}
+          <strong>{phrase().value}</strong>
+          {phrase().after}
+        </span>
+      )}
+    </Show>
   );
 }
 
@@ -181,7 +196,7 @@ function Sessions(props: {
                     />
                     <Show when={session().row.updatedAt != null}>
                       <span class="person-activity-card__session-age">
-                        <Elapsed timestamp={session().row.updatedAt!} display="single-unit" />
+                        <Elapsed timestamp={session().row.updatedAt!} />
                       </span>
                     </Show>
                   </a>
@@ -203,15 +218,14 @@ function PersonActivityCard(props: { input: PersonCardInput }) {
   );
   // Undefined means presence has not been observed; an empty snapshot means offline.
   const offline = () => user().entries?.length === 0;
-  const onlineSince = createMemo(() => {
-    const times = (user().entries ?? []).flatMap((entry) =>
-      entry.onlineSince === undefined ? [] : [entry.onlineSince],
-    );
-    return times.length ? Math.min(...times) : undefined;
-  });
   const activity = createMemo(() => presenceViewerActivity(user()));
-  const zones = createMemo(() =>
-    [...new Set(user().entries?.flatMap((entry) => entry.timeZone?.trim() || []))].toSorted(),
+  const lastActivityAt = createMemo(() => presenceViewerLastActivity(user()));
+  // One clock: the zone of the connection they used most recently.
+  const zone = createMemo(() =>
+    (user().entries ?? [])
+      .filter((entry) => entry.timeZone?.trim())
+      .toSorted((a, b) => (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0))[0]
+      ?.timeZone?.trim(),
   );
   let recentSessionKeys: string[] | undefined;
   const sessions = createMemo(() => {
@@ -264,25 +278,25 @@ function PersonActivityCard(props: { input: PersonCardInput }) {
             aria-hidden="true"
           />
         </span>
-        <h2>{label().name}</h2>
-        <Show when={user().entries !== undefined}>
-          <span class="person-activity-card__status">
-            {offline() ? (
-              t("presence.offline")
-            ) : onlineSince() === undefined ? (
-              t("presence.rosterTitle")
-            ) : (
-              <>
-                {t("presence.card.onlineFor")}{" "}
-                <Elapsed timestamp={onlineSince()!} display="minute-compact" />
-              </>
-            )}
-            {!offline() && activity() !== "unknown" ? (
-              <> · {t(activity() === "active" ? "presence.active" : "presence.idle")}</>
-            ) : undefined}
-          </span>
-          <For each={zones()}>{(zone) => <ZoneClock zone={zone} />}</For>
-        </Show>
+        <div class="person-activity-card__identity">
+          <h2 title={label().name}>{label().name}</h2>
+          <Show when={user().entries !== undefined}>
+            <span class="person-activity-card__status">
+              {offline() ? (
+                t("presence.offline")
+              ) : activity() === "active" ? (
+                t("presence.active")
+              ) : activity() === "idle" ? (
+                <>
+                  {t("presence.card.idleFor")} <Elapsed timestamp={lastActivityAt()!} />
+                </>
+              ) : (
+                t("presence.rosterTitle")
+              )}
+              <Show when={!offline() && zone()}>{(value) => <LocalTime zone={value()} />}</Show>
+            </span>
+          </Show>
+        </div>
         <Show when={label().isSharedOwner}>
           <p class="person-activity-card__hint">{t("presence.sharedOwner.hint")}</p>
         </Show>
