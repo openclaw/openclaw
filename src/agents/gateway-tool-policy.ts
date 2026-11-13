@@ -3,6 +3,7 @@ import type { TSchema } from "typebox";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayToolPolicyConfig } from "../config/types.tools.js";
+import { transformAgentToolInputSchemas } from "./agent-tool-availability.js";
 import { copyAgentToolMetadata, isGatewayToolPolicyControl } from "./agent-tool-metadata.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { isCodeModeControlTool } from "./code-mode-control-tools.js";
@@ -159,10 +160,19 @@ export function applyGatewayToolPolicy<T extends GatewayToolPolicyTarget>(
     if (!parameters) {
       return [];
     }
-    return [
-      isExecutableTool(tool)
-        ? copyAgentToolMetadata(tool, { ...tool, parameters })
-        : { ...tool, parameters },
-    ];
+    if (!isExecutableTool(tool)) {
+      return [{ ...tool, parameters }];
+    }
+    const narrowed = copyAgentToolMetadata(tool, { ...tool });
+    transformAgentToolInputSchemas(narrowed, (schema) => {
+      const result = narrowActions({ name: tool.name, parameters: schema }, actions);
+      if (!result) {
+        throw new Error(
+          `Gateway tool policy actions for ${tool.name} do not match its input schema.`,
+        );
+      }
+      return result;
+    });
+    return [narrowed];
   });
 }

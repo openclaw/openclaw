@@ -16,11 +16,13 @@ import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
+import { createCodeModeToolApiFile } from "./code-mode-tool-api.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import { resetCodeModeTestState, runUntilCompleted } from "./code-mode.test-support.js";
 import { applyGatewayToolPolicy } from "./gateway-tool-policy.js";
 import { stringEnum } from "./schema/string-enum.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
+import { compactToolSearchCatalogEntry } from "./tool-search-catalog.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import {
   applyToolSearchCatalog,
@@ -55,6 +57,63 @@ afterEach(async () => {
 });
 
 describe("required Gateway tool policy", () => {
+  it.each(["headless", "compacted"] as const)(
+    "narrows canonical Gemini input schemas in the %s catalog",
+    async (mode) => {
+      const broad: OpenClawConfig = {
+        tools: {
+          gatewayPolicy: { allow: ["automations"], actions: { automations: ["list", "status"] } },
+        },
+      };
+      const narrow: OpenClawConfig = {
+        tools: {
+          toolSearch: true,
+          gatewayPolicy: { allow: ["automations"], actions: { automations: ["list"] } },
+        },
+      };
+      const source = {
+        ...createStubTool("automations"),
+        parameters: Type.Object({
+          action: stringEnum(["list", "status"]),
+          failureAlert: Type.Optional(Type.Literal(false)),
+        }),
+      };
+      const [finalized] = finalizeAgentTools({
+        tools: [source],
+        config: broad,
+        modelProvider: "google",
+        hookContext: {},
+        wrapBeforeToolCallHook: false,
+      });
+      const tool = expectDefined(finalized, "finalized tool");
+      const catalogRef = createToolSearchCatalogRef();
+      if (mode === "headless") {
+        registerHeadlessToolSearchCatalog({
+          catalogRef,
+          tools: [tool],
+          hookContext: { config: narrow },
+        });
+      } else {
+        applyToolSearchCatalog({
+          catalogRef,
+          config: narrow,
+          tools: [...createToolSearchTools({ catalogRef, config: narrow }), tool],
+        });
+      }
+      const entry = expectDefined(
+        catalogRef.current?.entries.find((item) => item.name === "automations"),
+        "catalog entry",
+      );
+      expect(entry.parameters).toHaveProperty("properties.action.enum", ["list"]);
+      expect(entry.parameters).toHaveProperty("properties.failureAlert.const", false);
+      expect(compactToolSearchCatalogEntry(entry).input).not.toContain("status");
+      const declaration = (await createCodeModeToolApiFile(entry.name, entry)).content;
+      expect(declaration).toContain('"list"');
+      expect(declaration).not.toContain('"status"');
+      expect(declaration).toContain("false");
+      expect(source.parameters).toHaveProperty("properties.action.enum", ["list", "status"]);
+    },
+  );
   it("projects only explicit actions while preserving the tool's other required arguments", () => {
     const [tool] = applyGatewayToolPolicy([actionTool()], config);
     const parameters = expectDefined(tool, "allowed action tool").parameters;
