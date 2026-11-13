@@ -29,6 +29,7 @@ const graph = createRuntimeImportGraph(
     "src/agents/command/attempt-execution.ts",
     "src/gateway/agent-turn/agent-turn-service.ts",
     "src/daemon/service-command.ts",
+    "src/config/legacy-workboard-database.ts",
   ],
   { sourceImports: true },
 );
@@ -95,6 +96,7 @@ console.log("prewarm-cold-selection-ok");`,
     ["src/gateway/config-get-response.ts", "src/config/runtime-schema.ts"],
     ["src/daemon/service-command.ts", "src/daemon/launchd-runtime.ts"],
     ["src/daemon/service-command.ts", "src/daemon/schtasks-layout.ts"],
+    ["src/config/legacy-workboard-database.ts", "src/infra/database-engine/open.ts"],
   ])("loads %s without the demand-only %s", (entry, deferred) => {
     expect(collectStaticValueImports(entry)).not.toContain(path.normalize(deferred));
   });
