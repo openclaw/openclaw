@@ -95,15 +95,41 @@ it.each([
   await expect(guard.claim(event)).resolves.toMatchObject({ kind: nextKind });
 });
 
-it("scopes keys by namespace and supports recency cleanup", async () => {
-  const guard = createGuard();
-  const work = { accountId: "work", keys: ["message-4"] };
-  const home = { accountId: "home", keys: ["message-4"] };
+it.each([
+  { workNamespace: "work", workKey: "message-4", homeNamespace: "home", homeKey: "message-4" },
+  {
+    workNamespace: "account:thread",
+    workKey: "message",
+    homeNamespace: "account",
+    homeKey: "thread:message",
+  },
+])(
+  "scopes keys by namespace and supports recency cleanup ($workNamespace)",
+  async ({ workNamespace, workKey, homeNamespace, homeKey }) => {
+    const guard = createGuard();
+    const work = { accountId: workNamespace, keys: [workKey] };
+    const home = { accountId: homeNamespace, keys: [homeKey] };
 
-  await expect(guard.shouldProcess(work)).resolves.toBe(true);
-  await expect(guard.shouldProcess(work)).resolves.toBe(false);
-  await expect(guard.shouldProcess(home)).resolves.toBe(true);
-  await expect(guard.hasRecent(work)).resolves.toBe(true);
-  await expect(guard.forget(work)).resolves.toBe(true);
-  await expect(guard.hasRecent(work)).resolves.toBe(false);
+    await expect(guard.shouldProcess(work)).resolves.toBe(true);
+    await expect(guard.shouldProcess(work)).resolves.toBe(false);
+    await expect(guard.shouldProcess(home)).resolves.toBe(true);
+    await expect(guard.hasRecent(work)).resolves.toBe(true);
+    await expect(guard.forget(work)).resolves.toBe(true);
+    await expect(guard.hasRecent(work)).resolves.toBe(false);
+    await expect(guard.hasRecent(home)).resolves.toBe(true);
+  },
+);
+
+it("keeps inflight claims separate for delimiter-containing namespaces and keys", async () => {
+  const guard = createGuard();
+  const first = await guard.claim({ accountId: "account:thread", keys: ["message"] });
+  const second = await guard.claim({ accountId: "account", keys: ["thread:message"] });
+  if (first.kind === "claimed") {
+    first.handle.release();
+  }
+  if (second.kind === "claimed") {
+    second.handle.release();
+  }
+  expect(first.kind).toBe("claimed");
+  expect(second.kind).toBe("claimed");
 });
