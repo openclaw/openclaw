@@ -1,25 +1,39 @@
-name: Artifact consumer static diagnosis 11a
+name: Minimal transport-plugin diagnostic01-02 exact11a
 'on':
   workflow_dispatch:
     inputs:
       workflow_ref:
-        description: Exact reviewed workflow SHA
+        description: Exact reviewed workflow commit SHA
         required: true
         type: string
 permissions:
   contents: read
 concurrency:
-  group: artifact-consumer-static-11a
+  group: minimal-transport-plugin-diagnostic-exact11a
   cancel-in-progress: false
 env:
   CI: 'true'
   OPENCLAW_RELEASE_CONTEXT_REF: release/2026.11.4
   WORKFLOW_SHA: ${{ github.workflow_sha }}
   EXPECTED_WORKFLOW_SHA: ${{ inputs.workflow_ref }}
+  NODE_OPTIONS: --max-old-space-size=8192
+  OPENCLAW_VITEST_MAX_WORKERS: '2'
+  OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: '300000'
 jobs:
-  proof:
+  diagnose:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        lane:
+        - transport
+        - plugin
+    env:
+      LANE: ${{ matrix.lane }}
+      SAFE_PROOF: .artifacts/transport-plugin
+      PRIVATE_PROOF: ${{ github.workspace }}/../transport-plugin-private
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
@@ -27,190 +41,96 @@ jobs:
         ref: 11a0a9680d22977f0570409dbe8016c85a1ec3fd
         persist-credentials: false
         fetch-depth: 1
-    - name: Initialize reviewed static capsule
+    - name: Initialize private diagnostic capsule
       shell: bash
       run: 'set -euo pipefail
 
-        mkdir -p "$PRIVATE_PROOF"
-
-        : > "$PRIVATE_PROOF/static.py.b64"
-
-        : > "$PRIVATE_PROOF/manifest.json.b64"
-
-        : > "$PRIVATE_PROOF/static-manifest.json.b64"
-
-        : > "$PRIVATE_PROOF/production.patch.b64"
-
-        : > "$PRIVATE_PROOF/tests.patch.b64"
-
-        : > "$PRIVATE_PROOF/tsconfig.scripts.json.b64"
-
-        : > "$PRIVATE_PROOF/tsconfig.scripts.corrected.json.b64"
-
-        : > "$PRIVATE_PROOF/tsconfig.tests.json.b64"
-
-        : > "$PRIVATE_PROOF/tsconfig.tests.corrected.json.b64"
-
-        '
-    - name: Transport static.py chunk 1
+        mkdir -p "$PRIVATE_PROOF"'
+    - name: Decode hosted.py
       shell: bash
       run: 'set -euo pipefail
 
-        printf %s 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 >> "$PRIVATE_PROOF/static.py.b64"
+        printf %s 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
+        | base64 --decode | gzip -d > "$PRIVATE_PROOF/hosted.py"
 
-        '
-    - name: Transport manifest.json chunk 1
+        echo "c80737cac799ff5fdc786550bb693e666227ab1b4dd1c16b451760d9f46ed873  $PRIVATE_PROOF/hosted.py" | sha256sum --check
+        --strict'
+    - name: Decode verify_results.py
       shell: bash
       run: 'set -euo pipefail
 
-        printf %s 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 >> "$PRIVATE_PROOF/manifest.json.b64"
+        printf %s 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
+        | base64 --decode | gzip -d > "$PRIVATE_PROOF/verify_results.py"
 
-        '
-    - name: Transport static-manifest.json chunk 1
+        echo "ff892e3e4329a9676f488f2c1a2882147d40fcb2d60e5cb279bc6ec9052b3b0d  $PRIVATE_PROOF/verify_results.py" | sha256sum
+        --check --strict'
+    - name: Decode manifest.json
       shell: bash
       run: 'set -euo pipefail
 
-        printf %s H4sIAAAAAAAC/6VWS2/USBC+8yusOWcm/X7AaXc5cGHFAtIeVhy6Hp0xOPZge4IQ4r9veTKThPDKslGksV3d9VVVf/VVf3rUNKsJt3xZVo8bfba8DmN70fale176tvI0v9oW44OYVzVDJJdrTMVrizokLA5L8Joi1egZjAvgFXrnCZArx5w0cDFBK4tqdfC/G9th/J235Up+X4zDUMX3J7GIbdz38uKsN9YmbWI6u/7+YRjf1W74sEShlcJqjA7WV8e+ZJWtAjTgXWLyrKD47AysjnvfDrDkZo385WwlxKOhjHNbC86L1alkrU8q53vGp+2F1GDBnQ51eFwiMFRWvmjlNBsJg0Ni8FmTiSqWRApCcDHnTJFdDikELJ6qC9VmfQoLysRd2/Oz169fOOVe8m4caI9MgjWPez4uw2Hfz5N8++fw3hwrdbDtyrxdIpslwvMJx3Y3T+d133XrkTsW/+tTFtNmWbMRR2d3t0/TAc7bO19pP5a5HfrnC6iWOseNC+5o/3z2wCh23V5ItN7toWvx4O8mlh+G4tx3QwlGbVJKp0gOv28eHWO6ZtVLRhb4W8YylFytLuSiB5etJ69qtinFWGsIFWIlk2xhKztziAwk9EqcUsBl5TVjhw89j8/KtOXplqrzhENf24vNMeXN22lYyLvyukSbyZhAzJnFHSIpYZbVHpKNJkZIITkCMAljydHniGiK9BIhuhNBDvU8odw8XFdPuma+AcxBGQQdvITNRjlgHaURyDogsr4YVW2NsDSLISoWUDKlWiScwIrqTwBxGPkaVTpgpNs8jTRCsbECSWaeNLoI3qYivRRyQkom5cAWUXrPiQ5oMGSytdWolHU8wZ4o07Vw3g1YurXoEb5bixbM7SVvLg/0X4HGYmVnsoEDaArWQKagyFqqBjNlr3wEkEZLUStRA4fWLdCZgyF3H07cr+fpYjj5D6ouNSRpX1uklIVJjqk6wrQcC6EL1lkpn4/CHhZtyr5KU+tYI4virW6oeF23B/NFS+U4kOKsYsDoVMmQ2YvEWbYiGjZUtCVEb1UIMRudrInaQo4kCpzDzfHdB5CDGxlnvj2yiiVxNNozsyenOMEi3xiyl4yhgs0RRNEUewWQbbZRkjRJU5U3lb6CWmhxh/neyEY5YHbE1mYGlB6AFEGLuKKrvqIyIQaRAeVq1IFN4aSrJhuKh++4/zqPLPsAnUgtgotW2hvIOx0W3Q2UlDKRa4yuJlzoRkxCA6uci6Eoh/H+WT1ty0U/THOLL0TMbtX2O4f2nxr0uHhzI8Xnp6e1bJj2lzyuRbyuysznP4T7NQ/3ivdLvu6c8v/Yfy8ScfTmcAT90P+9bWXNriDf75qfTLXLt4feTd5gBSU9Kzoo3V9zsaXwIoxauKsiUvRBJrbcSFCYArIWF9UyxaSE+VtSJP5l9Ew3YPKA2/aKT5g6SOeIDnEs1UVxariAzlWDhQLVRxR1Ff2hVJQ2Mmi0SrVWJYMhCmT+gkUPHN4L9as2crdSnqvlLJl6I/AueMshFKqZHSiIgo0xk9xMNAebapZMjVjCN2EfMq2XlCMQayDp7pqCDDDRHw5ZWli+AUdrtXbJMkt1RZ0pg4weoznJ1ImW70ikMGPHi8tXs8Dheui7j00dOrni7XdPGhjmbbPvcVv6C6Zm2k87YU5zTaepGWDi8UoMwFWG0/Kd2iXq0jVtjyNfcj+X7vFyjWqOtBPrpvlzaI5TpTlw8qyBcSjU7EauXXuxnc+aOzVohrF5vy9dW48fNs1vNOwOppHf79uRp6bnD80fTemp+Wt9uCd8ueVJ0w+z+JdbbiP/23aa5X4tQ665aqcW2q6dP25Wjz4/+hdKtTgcigsAAA== >> "$PRIVATE_PROOF/static-manifest.json.b64"
+        printf %s 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
+        | base64 --decode | gzip -d > "$PRIVATE_PROOF/manifest.json"
 
-        '
-    - name: Transport production.patch chunk 1
+        echo "aaec2f7f40dfe73e52106046e15ad310bdc893c8a04a662929911f33ccfa335b  $PRIVATE_PROOF/manifest.json" | sha256sum
+        --check --strict'
+    - name: Decode proposed.patch
       shell: bash
       run: 'set -euo pipefail
 
-        printf %s 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 >> "$PRIVATE_PROOF/production.patch.b64"
+        printf %s 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
+        | base64 --decode | gzip -d > "$PRIVATE_PROOF/proposed.patch"
 
-        '
-    - name: Transport tests.patch chunk 1
+        echo "8b3aff927be24ec8751f275c05b9453d73603869e8d89fe1a733ce966f477d89  $PRIVATE_PROOF/proposed.patch" | sha256sum
+        --check --strict'
+    - name: Decode transport-groups.json
       shell: bash
       run: 'set -euo pipefail
 
-        printf %s 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 >> "$PRIVATE_PROOF/tests.patch.b64"
+        printf %s H4sIAAAAAAAC/42QwWrDMAyG732KkHOd0B33FLuXUjRbycRs2chKWDf27lOSEdZL2cHI+pH+D/3nQ9N82Wua1mceaKztc3NeBZMUq/Yz/SndxKRuAPtt853Wdh2/HDcbYh+ngC+gisJ3dlV8DyOy1h7TK4aAwa29k4kZpU85YOw+gbqVZdbHf+9a6YsgpqI0o/M5FfBKmTvBEuH20LJInimguIq12o6DYSC79PFWpVTihoq4oBx+oJ9WqApwLVl0d7hLqb6BhCtDQgvIohd0e7Lu6ZfWKiXi8fqOt2UqEIycq5J3JlOC6HaKke3a0wkWzPfhcvgB/VCmIdkBAAA=
+        | base64 --decode | gzip -d > "$PRIVATE_PROOF/transport-groups.json"
 
-        '
-    - name: Transport tsconfig.scripts.json chunk 1
+        echo "f87b3127464d6440f2f6c557e938dd66a2f7e2e1ddb9e967853bdecf84499727  $PRIVATE_PROOF/transport-groups.json" | sha256sum
+        --check --strict'
+    - name: Decode plugin-groups.json
       shell: bash
       run: 'set -euo pipefail
 
-        printf %s H4sIAAAAAAAC/21OOw7CMAzde4oqc5vu7MwcADGE1AFXTlLFKapU9e44DYIFyYP9Pn5va9pWwZohjKxOrdJ6kMlsY3D40GwTzpn1xDGormht9DMSpMucMYbi2QQWIsSzxyx3Tgt0FcNgE3gI2ZAQzhCDEPvxyMmXYr9WaQ3+5A1uIeoTEBiG3qSMzlip4SdW3T894X0QRWn0lctin/iCwyWm2xErlWgZoQRXANYf0OzNG+ONsRgRAQAA >> "$PRIVATE_PROOF/tsconfig.scripts.json.b64"
+        printf %s H4sIAAAAAAAC/12OywrCMBBF9/2KkLVJcetXuBeRIR3TwXQqmbFaxH83fQjqYrhw4Zw7h8qYZzljbOj5TFHszhzmolSKovVAX+EjKN5hdIJ5wOwXyKvYmTluFhdxSLcG96CKmX+ckkO9SupF4q7pFonFJzpjGENCH1pgxiR+3vy3Swu5OTF0WMQWIrJScOUVzX0qNmB0rep1Fbu72JVU6ojj6YLjRDYEkXuZ4FJTB+lD4AOCbrcw7b6qY/UGO3KiSScBAAA=
+        | base64 --decode | gzip -d > "$PRIVATE_PROOF/plugin-groups.json"
 
-        '
-    - name: Transport tsconfig.scripts.corrected.json chunk 1
+        echo "df1e2b7d0f94753dd88c0a516e902bb52c2c3e3e1fcd297aea181d2e12e51455  $PRIVATE_PROOF/plugin-groups.json" | sha256sum
+        --check --strict'
+    - name: Bind exact source and workflow
       shell: bash
-      run: 'set -euo pipefail
-
-        printf %s H4sIAAAAAAAC/22OsQ7CMAxE935FlbmkOzszH4AYQuqAq8SpEhdVqvrvOE0FC1IG5/nOd2vTtgoWBhqyOrdK614eZxvJ4VNnm3DirMccSXVFa2OY0EO6ToyRimcVLAuKl4Asf04zdJUh2QQBiI0/FsK3/Y6TI8V9q8qae8T1bvb+lMCDyXAyidEZKy3CmFX3T+/x0YuiFPrKZbAvfMPuEtN9j5VGfh6gBFcAyw80W/MBzBscOhABAAA= >> "$PRIVATE_PROOF/tsconfig.scripts.corrected.json.b64"
-
-        '
-    - name: Transport tsconfig.tests.json chunk 1
-      shell: bash
-      run: 'set -euo pipefail
-
-        printf %s H4sIAAAAAAAC/3WOQQrDIBBF9zlFcJ2Yffdd9wClC2vGMmWi4oxQCLl7xwbSbgou9H/f561d3xt4CcSZzak31k56BFgmYZ9iwMdxsS22JSWxT07RDI31aclIUC5ZMMW2sWqsRUznBUXfUioMe4bRF1ggiiMtgiMGLbbPUNCVhl/3rz8i7Atm4SlUorEAgWMYXREMzgvvVsJm+Atmqg+MY653Qu+a54EftMK3j4c6Up2hmewBvL5Bt3VvPyJA1zIBAAA= >> "$PRIVATE_PROOF/tsconfig.tests.json.b64"
-
-        '
-    - name: Transport tsconfig.tests.corrected.json chunk 1
-      shell: bash
-      run: 'set -euo pipefail
-
-        printf %s H4sIAAAAAAAC/3WOsQrDIBBA93xFcE7M3r1zP6B0sOYMV4yKd0Ig5N97JiXtUnDQd77jrU3bKlgYwkjq0iqtBzkMxAOTjcHhdF50xTrHyPpFMaiuujbOCT3kW2KMoe5YBcsgxOuMLG/OBbqDYbAZZghs/GcgfNv3OFlS7fvx86eDbMbENLjifZ/BgyHoTWZ0xjIdUUyq+ysmXyYMfSpPj9bUzFM/bZEfe4ck+jJCLTkALF/QbM0bTt0pPTEBAAA= >> "$PRIVATE_PROOF/tsconfig.tests.corrected.json.b64"
-
-        '
-    - name: Verify static capsule and exact source
-      shell: bash
-      run: 'set -euo pipefail
-
-        base64 --decode "$PRIVATE_PROOF/static.py.b64" | gzip -d > "$PRIVATE_PROOF/static.py"
-
-        echo d65b5e691af6d50bf62607429f8d7510585b51827f315eeea825ee39027b28e6  "$PRIVATE_PROOF/static.py" | sha256sum --check --strict
-
-        base64 --decode "$PRIVATE_PROOF/manifest.json.b64" | gzip -d > "$PRIVATE_PROOF/manifest.json"
-
-        echo f9b7d49f78a513c168ca4ca651d7df75eb246b50c545dbcefe7981bea26103c0  "$PRIVATE_PROOF/manifest.json" | sha256sum --check --strict
-
-        base64 --decode "$PRIVATE_PROOF/static-manifest.json.b64" | gzip -d > "$PRIVATE_PROOF/static-manifest.json"
-
-        echo eccd7d929640c8e8603be789c79a72d0e57a68fb66d3241c0c6ca1505bf75447  "$PRIVATE_PROOF/static-manifest.json" | sha256sum --check --strict
-
-        base64 --decode "$PRIVATE_PROOF/production.patch.b64" | gzip -d > "$PRIVATE_PROOF/production.patch"
-
-        echo b7a95efea61f872e8fd4a315ea7a5f116aa88217079329aeaa7117d7b3adb333  "$PRIVATE_PROOF/production.patch" | sha256sum --check --strict
-
-        base64 --decode "$PRIVATE_PROOF/tests.patch.b64" | gzip -d > "$PRIVATE_PROOF/tests.patch"
-
-        echo 52f48b013bed14915bc6bbaf564c7122b41f35a604a6b3907f2a75d48b10b5d6  "$PRIVATE_PROOF/tests.patch" | sha256sum --check --strict
-
-        base64 --decode "$PRIVATE_PROOF/tsconfig.scripts.json.b64" | gzip -d > "$PRIVATE_PROOF/tsconfig.scripts.json"
-
-        echo 1d1ce6d0e9076c740a9b9e5f223e3f4636fc3a67530667921832713b97d16896  "$PRIVATE_PROOF/tsconfig.scripts.json" | sha256sum --check --strict
-
-        base64 --decode "$PRIVATE_PROOF/tsconfig.scripts.corrected.json.b64" | gzip -d > "$PRIVATE_PROOF/tsconfig.scripts.corrected.json"
-
-        echo fca8e7215eee5d40e8bca65c6955e8bfb397b2630e50bb9393795f281dfb9308  "$PRIVATE_PROOF/tsconfig.scripts.corrected.json" | sha256sum --check --strict
-
-        base64 --decode "$PRIVATE_PROOF/tsconfig.tests.json.b64" | gzip -d > "$PRIVATE_PROOF/tsconfig.tests.json"
-
-        echo 552e5033fe4de339ebc6deb87b1335c4f5fc02676fac04f716e2ae81f1d36a5b  "$PRIVATE_PROOF/tsconfig.tests.json" | sha256sum --check --strict
-
-        base64 --decode "$PRIVATE_PROOF/tsconfig.tests.corrected.json.b64" | gzip -d > "$PRIVATE_PROOF/tsconfig.tests.corrected.json"
-
-        echo 9e2abc4a8dcb473ad4bd5416b6646d80027ef774f8c33f2ded324304476a04c7  "$PRIVATE_PROOF/tsconfig.tests.corrected.json" | sha256sum --check --strict
-
-        python3 "$PRIVATE_PROOF/static.py" bind
-
-        '
+      run: python3 "$PRIVATE_PROOF/hosted.py" bind
     - uses: ./.github/actions/setup-node-env
       with:
         semantic-checks: 'true'
-        install-bun: 'true'
+        install-bun: 'false'
         cache-mode: 'off'
         frozen-lockfile: 'true'
-    - name: Observe original configs then targeted static proof
+    - uses: ./.github/actions/setup-test-bun
+    - name: Run bounded Node subset through canonical router
       shell: bash
-      run: 'set -euo pipefail
-
-        python3 "$PRIVATE_PROOF/static.py" run
-
-        '
-    - name: Retain terminal status
+      run: python3 "$PRIVATE_PROOF/hosted.py" run
+    - name: Capture bounded outcomes even on failure
       if: always()
       shell: bash
-      run: 'set -euo pipefail
-
-        python3 "$PRIVATE_PROOF/static.py" finalize
-
-        '
-    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      run: if [ -f "$PRIVATE_PROOF/hosted.py" ]; then python3 "$PRIVATE_PROOF/hosted.py" finalize; fi
+    - name: Upload explicit safe evidence only
+      if: always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
       with:
-        name: artifact-consumer-static-${{ github.run_id }}-${{ github.run_attempt }}
-        path: '.artifacts/artifact-consumer-safe/identity.json
+        name: transport-plugin-${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
+        path: '.artifacts/transport-plugin/identity.json
 
-          .artifacts/artifact-consumer-safe/report.json
+          .artifacts/transport-plugin/report.json
 
-          .artifacts/artifact-consumer-safe/prior-proof.json
+          .artifacts/transport-plugin/outcomes.json
 
-          .artifacts/artifact-consumer-safe/formatted-hashes.json
+          .artifacts/transport-plugin/tests.json
 
-          .artifacts/artifact-consumer-safe/formatted.patch
-
-          .artifacts/artifact-consumer-safe/tsconfig.scripts.json
-
-          .artifacts/artifact-consumer-safe/tsconfig.scripts.corrected.json
-
-          .artifacts/artifact-consumer-safe/tsconfig.tests.json
-
-          .artifacts/artifact-consumer-safe/tsconfig.tests.corrected.json
-
-          .artifacts/artifact-consumer-safe/types-scripts-original-diagnostics.json
-
-          .artifacts/artifact-consumer-safe/types-scripts-corrected-diagnostics.json
-
-          .artifacts/artifact-consumer-safe/types-tests-original-diagnostics.json
-
-          .artifacts/artifact-consumer-safe/types-tests-corrected-diagnostics.json'
+          .artifacts/transport-plugin/inner-status.json'
         include-hidden-files: true
         if-no-files-found: error
         retention-days: 14
-      if: always()
-    env:
-      PRIVATE_PROOF: ${{ github.workspace }}/.artifacts/artifact-consumer-private
-      SAFE_PROOF: .artifacts/artifact-consumer-safe
