@@ -4627,7 +4627,7 @@ jobs:
             profiles: stable full
           - suite_id: native-live-test
             label: Native live test harnesses
-            command: OPENCLAW_LIVE_CODEX_NODE_EXEC_TIMEOUT=1 node .release-harness/scripts/test-live-shard.mjs native-live-test
+            command: OPENCLAW_LIVE_CODEX_NODE_EXEC_TIMEOUT=1 OPENCLAW_LIVE_OWNER_ASSIGNMENT=1 node .release-harness/scripts/test-live-shard.mjs native-live-test
             timeout_minutes: 60
             profile_env_only: false
             profiles: stable full

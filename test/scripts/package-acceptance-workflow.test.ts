@@ -10563,7 +10563,7 @@ describe("package artifact reuse", () => {
       "command: OPENCLAW_LIVE_CODEX_HARNESS=1 OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-backends",
       "suite_id: native-live-src-infra",
       "command: OPENCLAW_LIVE_APNS_REACHABILITY=1 OPENCLAW_LIVE_SESSION_EVENT_WAKE=1 node .release-harness/scripts/test-live-shard.mjs native-live-src-infra",
-      "command: OPENCLAW_LIVE_CODEX_NODE_EXEC_TIMEOUT=1 node .release-harness/scripts/test-live-shard.mjs native-live-test",
+      "command: OPENCLAW_LIVE_CODEX_NODE_EXEC_TIMEOUT=1 OPENCLAW_LIVE_OWNER_ASSIGNMENT=1 node .release-harness/scripts/test-live-shard.mjs native-live-test",
       "suite_id: native-live-src-gateway-profiles-anthropic-smoke",
       "suite_id: native-live-src-gateway-profiles-anthropic-opus",
       "suite_id: native-live-src-gateway-profiles-anthropic-sonnet-haiku",
