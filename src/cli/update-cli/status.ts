@@ -46,7 +46,7 @@ import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { readUpdateRunStatus } from "../../infra/update-run-status.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { defaultRuntime } from "../../runtime.js";
-import { AsyncWorkScope } from "../../shared/async-work-scope.js";
+import { AsyncWorkScope, getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { withArtifactPreservingStateReads } from "../../state/openclaw-state-db-readonly.js";
 import { resolveSafeTimeoutDelayMs } from "../../utils/timer-delay.js";
 import { VERSION } from "../../version.js";
@@ -112,7 +112,14 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
   const checkTimeoutMs = parseUpdateTimeoutMs(opts.timeout);
   // --timeout bounds update checks; a short network budget must not discard local history.
   const timeoutMs = resolveSafeTimeoutDelayMs(Math.max(30_000, checkTimeoutMs ?? 0));
+  const parentSignal = getAsyncWorkSignal();
   const scope = new AsyncWorkScope();
+  const onAbort = () => scope.beginClose(parentSignal?.reason);
+  if (parentSignal?.aborted) {
+    onAbort();
+  } else {
+    parentSignal?.addEventListener("abort", onAbort, { once: true });
+  }
   const timer = setTimeout(
     () => scope.beginClose(new Error(`Update status timed out after ${timeoutMs / 1000} seconds`)),
     timeoutMs,
@@ -129,6 +136,7 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
     );
   } finally {
     clearTimeout(timer);
+    parentSignal?.removeEventListener("abort", onAbort);
     scope.beginClose();
   }
 }
