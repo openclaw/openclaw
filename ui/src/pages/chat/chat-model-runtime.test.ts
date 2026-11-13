@@ -274,6 +274,41 @@ describe("chat model runtime choices", () => {
     expect(container.querySelector('[data-chat-thinking-option="medium"]')).toBeNull();
   });
 
+  it.each([
+    ["codex", "openai", "claude-cli", "claude-cli", "Claude CLI · native"],
+    ["claude-cli", "anthropic", "openclaw", "anthropic", "API · OpenClaw"],
+  ])(
+    "labels Default with the configured route while the session pins %s",
+    async (pinnedRuntime, sessionProvider, defaultRuntime, group, routeLabel) => {
+      const opus: ModelCatalogEntry = {
+        id: "claude-opus-5-5",
+        name: "Claude Opus 5.5",
+        provider: "anthropic",
+        available: true,
+        // Same-provider session pins describe the route being left, not the configured one.
+        agentRuntime: {
+          id: sessionProvider === "anthropic" ? pinnedRuntime : "claude-cli",
+          source: "model",
+        },
+      };
+      const sonnet = { ...opus, id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5" };
+      const pinned = sessionProvider === "anthropic" ? sonnet : model;
+      const result = createSessionsListResult({
+        model: pinned.id,
+        modelProvider: pinned.provider,
+        modelOverrideSource: "user",
+        defaultsModel: opus.id,
+        defaultsProvider: opus.provider,
+      });
+      result.sessions[0]!.agentRuntime = { id: pinnedRuntime, source: "session-key" };
+      result.defaults.agentRuntime = { id: defaultRuntime, source: "model" };
+      const container = await renderControls(result, [model, opus, sonnet]);
+      const row = container.querySelector<HTMLElement>('[data-chat-model-default="true"]')!;
+      expect(row.closest("section")?.dataset.chatModelProviderGroup).toBe(group);
+      expect(row.textContent).toContain(routeLabel);
+    },
+  );
+
   it.each(["missing-auth", "unsupported-runtime", "locked"] as const)(
     "preserves the %s guard for additional harness rows",
     async (guard) => {
