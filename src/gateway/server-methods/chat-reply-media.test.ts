@@ -463,13 +463,19 @@ it("preserves per-item trust in a pending batch", async () => {
     },
     {},
   );
+  const errors: string[] = [];
   const { assistantContent: content } = await buildContent({
     agentId: "main",
     payloads: [payload],
     managedMediaLocalRoots: [workspaceDir],
+    onManagedMediaPrepareError: (message) => errors.push(message),
   });
   expect(content).toEqual([
     expect.objectContaining({ type: "audio", mimeType: "audio/mpeg" }),
     attachmentError("delivery-failed", "untrusted.mp3", "audio", "audio/mpeg"),
+  ]);
+  // The log line keeps the refusal reason that the displayed failure omits.
+  expect(errors).toEqual([
+    'Managed audio attachment "untrusted.mp3" could not be prepared: Error: Local audio/video media requires an explicitly trusted reply payload',
   ]);
 });

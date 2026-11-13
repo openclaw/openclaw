@@ -254,8 +254,11 @@ export async function buildAssistantReplyContentFromInputs(
           mediaBySource.set(normalizeMediaReferenceForComparison(url), blocks);
         }
       },
-      onPrepareError: (error) => {
-        params.onManagedMediaPrepareError?.(error.message);
+      onPrepareError: (error, cause) => {
+        // Callers only log this; the sanitized message alone hides why preparation failed.
+        params.onManagedMediaPrepareError?.(
+          cause === error ? error.message : `${error.message}: ${formatForLog(cause)}`,
+        );
       },
     });
     if (payload.audioAsVoice === true) {
