@@ -20,16 +20,19 @@ vi.mock("../lib/nodes/index.ts", async (importOriginal) => ({
   signDevicePayload: vi.fn(async () => "signature"),
 }));
 
-// The issuing Gateway formats the command so it names that Gateway's profile.
-const pairCommand = {
-  command: "openclaw --profile work pair ABCD-EFGH",
+// The issuing Gateway shows its profile in the code, so a bare `openclaw pair` reaches it.
+const issued = {
+  code: "work:ABCD-EFGH",
+  command: "openclaw pair work:ABCD-EFGH",
   commandNeedsGatewayEnv: false,
 };
 const started = {
   requestId: "request-1",
   code: "ABCDEFGH",
+  displayCode: issued.code,
+  command: issued.command,
+  commandNeedsGatewayEnv: issued.commandNeedsGatewayEnv,
   expiresAtMs: Date.now() + 600_000,
-  ...pairCommand,
 };
 const approved = {
   status: "approved",
@@ -100,7 +103,7 @@ async function mountWaitingGate(lastError = "", code: string | null = null) {
   element.querySelector<HTMLButtonElement>(".login-gate__browser-pair-get")!.click();
   await settle();
   expect(element.querySelector(".login-gate__browser-pair-code")?.textContent).toContain(
-    "ABCD-EFGH",
+    "work:ABCD-EFGH",
   );
   return { element, collect, onBrowserPaired, onConnect, approve: hold.resolve };
 }
@@ -161,7 +164,7 @@ describe("browser pairing", () => {
     expect(gate.element.textContent).toContain("administrator access");
     expect(gate.element.textContent).toContain("not a guest invitation");
     expect(gate.element.querySelector(".login-gate__command--hero code")?.textContent).toBe(
-      "openclaw --profile work pair ABCD-EFGH",
+      "openclaw pair work:ABCD-EFGH",
     );
     expect(gate.element.textContent).not.toContain("OPENCLAW_STATE_DIR");
   });
@@ -178,16 +181,14 @@ describe("browser pairing", () => {
     await settle();
     expect(pair.onState).toHaveBeenLastCalledWith({
       kind: "reconnecting",
-      code: "ABCD-EFGH",
       browserId: "01234567",
-      ...pairCommand,
+      ...issued,
     });
     await vi.advanceTimersByTimeAsync(2_100);
     expect(pair.onState).toHaveBeenLastCalledWith({
       kind: "waiting",
-      code: "ABCD-EFGH",
       browserId: "01234567",
-      ...pairCommand,
+      ...issued,
     });
     await vi.advanceTimersByTimeAsync(2_100);
     expect(pair.onApproved).toHaveBeenCalledWith(gatewayUrl);
@@ -225,9 +226,8 @@ describe("browser pairing", () => {
     await vi.advanceTimersByTimeAsync(10_001);
     expect(pair.onState).toHaveBeenLastCalledWith({
       kind: "reconnecting",
-      code: "ABCD-EFGH",
       browserId: "01234567",
-      ...pairCommand,
+      ...issued,
     });
     await vi.advanceTimersByTimeAsync(2_100);
     expect(pair.onApproved).toHaveBeenCalledWith(gatewayUrl);
@@ -271,9 +271,8 @@ describe("browser pairing", () => {
     await pair.start("ws://gateway.example");
     expect(pair.onState).toHaveBeenLastCalledWith({
       kind: "waiting",
-      code: "ABCD-EFGH",
       browserId: "01234567",
-      ...pairCommand,
+      ...issued,
     });
     await vi.advanceTimersByTimeAsync(4_100);
     expect(pair.onApproved).toHaveBeenCalledWith("ws://gateway.example");
@@ -317,9 +316,8 @@ describe("browser pairing", () => {
     await settle();
     expect(pair.onState).toHaveBeenLastCalledWith({
       kind: "cancelling",
-      code: "ABCD-EFGH",
       browserId: "01234567",
-      ...pairCommand,
+      ...issued,
     });
     const cancellationRequest = fetchMock.mock.calls[2];
     if (!cancellationRequest) {
@@ -338,9 +336,8 @@ describe("browser pairing", () => {
     expect(pair.onApproved).not.toHaveBeenCalled();
     expect(pair.onState).toHaveBeenLastCalledWith({
       kind: "cancelling",
-      code: "ABCD-EFGH",
       browserId: "01234567",
-      ...pairCommand,
+      ...issued,
     });
     withdrawal.resolve(json({ status: "cancelled" }));
     await cancelling;
@@ -362,9 +359,8 @@ describe("browser pairing", () => {
     await pair.cancel();
     expect(pair.onState).toHaveBeenLastCalledWith({
       kind: "cancelFailed",
-      code: "ABCD-EFGH",
       browserId: "01234567",
-      ...pairCommand,
+      ...issued,
     });
     await vi.advanceTimersByTimeAsync(12_000);
     expect(fetchMock).toHaveBeenCalledTimes(3);

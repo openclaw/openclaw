@@ -81,20 +81,28 @@ function verifyBrowserPairProof(action: BrowserPairAction, body: BrowserPairBody
 }
 
 /**
- * The approval command for this Gateway, so a host running several Gateways reaches the issuer.
- * `--profile` reproduces only a profile's default config location; any other location
- * (OPENCLAW_STATE_DIR, OPENCLAW_CONFIG_PATH, OPENCLAW_HOME) lives in the Gateway's own
- * environment, which the page cannot show, so it says the command needs that environment instead.
+ * The code as shown and the approval command, so a host running several Gateways reaches the issuer.
+ * A named profile rides in the code (`work:ABCD-EFGH`); the CLI selects it before loading config.
+ * A profile reproduces only its default config location; any other location (OPENCLAW_STATE_DIR,
+ * OPENCLAW_CONFIG_PATH, OPENCLAW_HOME) lives in the Gateway's own environment, which the page
+ * cannot show, so it says the command needs that environment instead.
  */
 export function buildBrowserPairCommand(
   code: string,
   env: NodeJS.ProcessEnv = process.env,
-): { command: string; commandNeedsGatewayEnv: boolean } {
-  const plainShell = { OPENCLAW_PROFILE: normalizeProfileName(env.OPENCLAW_PROFILE) ?? undefined };
+): { displayCode: string; command: string; commandNeedsGatewayEnv: boolean } {
+  const profile = normalizeProfileName(env.OPENCLAW_PROFILE);
+  const displayCode = formatBrowserPairCode(code, profile);
   return {
-    command: formatCliCommand(`openclaw pair ${formatBrowserPairCode(code)}`, env),
+    displayCode,
+    // The code carries the profile, so only a container hint is left to add.
+    command: formatCliCommand(`openclaw pair ${displayCode}`, {
+      ...env,
+      OPENCLAW_PROFILE: undefined,
+    }),
     commandNeedsGatewayEnv:
-      resolveConfigPath(env) !== resolveConfigPath(plainShell, undefined, os.homedir),
+      resolveConfigPath(env) !==
+      resolveConfigPath({ OPENCLAW_PROFILE: profile ?? undefined }, undefined, os.homedir),
   };
 }
 

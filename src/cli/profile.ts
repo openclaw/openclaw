@@ -8,7 +8,9 @@ import {
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
 } from "../daemon/constants.js";
+import { getCommandPositionalsWithRootOptions } from "../infra/cli-root-options.js";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";
+import { splitBrowserPairCodeProfile } from "../shared/browser-pair.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import {
   isValidProfileName,
@@ -68,7 +70,38 @@ export function parseCliProfileArgs(
     return { kind: "pass" };
   });
 
-  return scanned.ok ? { ok: true, profile, argv: scanned.argv } : scanned;
+  return scanned.ok ? selectPairCodeProfile(scanned.argv, profile) : scanned;
+}
+
+/** `openclaw pair work:ABCD-EFGH` selects the issuing Gateway's profile before paths are pinned. */
+function selectPairCodeProfile(
+  argv: string[],
+  profile: string | null,
+): { ok: true; profile: string | null; argv: string[] } | { ok: false; error: string } {
+  const [pairCode] =
+    getCommandPositionalsWithRootOptions(argv, {
+      commandPath: ["pair"],
+      booleanFlags: ["--yes", "--json", "--expect-final"],
+      valueFlags: ["--url", "--port", "--token", "--password", "--timeout"],
+      maxPositionals: 1,
+    }) ?? [];
+  const codeProfile = pairCode ? splitBrowserPairCodeProfile(pairCode).profile : null;
+  if (codeProfile === null) {
+    return { ok: true, profile, argv };
+  }
+  if (!isValidProfileName(codeProfile)) {
+    return {
+      ok: false,
+      error: `The pairing code names an invalid profile "${codeProfile}". Copy the code shown in the browser again.`,
+    };
+  }
+  if (profile && profile !== codeProfile) {
+    return {
+      ok: false,
+      error: `This pairing code is for profile "${codeProfile}", but profile "${profile}" was selected. Drop --profile or use the matching one.`,
+    };
+  }
+  return { ok: true, profile: codeProfile, argv };
 }
 
 export function applyCliProfileEnv(params: {

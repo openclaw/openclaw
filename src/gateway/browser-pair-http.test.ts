@@ -28,7 +28,7 @@ it.each([
 });
 
 it.each([
-  ["the default profile", {}, "openclaw pair ABCD-EFGH", false],
+  ["the default profile", {}, "ABCD-EFGH", false],
   [
     "a named profile",
     {
@@ -36,15 +36,14 @@ it.each([
       OPENCLAW_STATE_DIR: path.join(os.homedir(), ".openclaw-work"),
       OPENCLAW_CONFIG_PATH: path.join(os.homedir(), ".openclaw-work", "openclaw.json"),
     },
-    "openclaw --profile work pair ABCD-EFGH",
+    "work:ABCD-EFGH",
     false,
   ],
-  [
-    "a custom state directory",
-    { OPENCLAW_STATE_DIR: "/srv/openclaw-b" },
-    "openclaw pair ABCD-EFGH",
-    true,
-  ],
-])("targets the issuing Gateway on %s", (_name, env, command, commandNeedsGatewayEnv) => {
-  expect(buildBrowserPairCommand("ABCDEFGH", env)).toEqual({ command, commandNeedsGatewayEnv });
+  ["a custom state directory", { OPENCLAW_STATE_DIR: "/srv/openclaw-b" }, "ABCD-EFGH", true],
+])("targets the issuing Gateway on %s", (_name, env, displayCode, commandNeedsGatewayEnv) => {
+  expect(buildBrowserPairCommand("ABCDEFGH", env)).toEqual({
+    displayCode,
+    command: `openclaw pair ${displayCode}`,
+    commandNeedsGatewayEnv,
+  });
 });

@@ -3,7 +3,6 @@
 import {
   BROWSER_PAIR_ROUTE_PREFIX,
   buildBrowserPairPayload,
-  formatBrowserPairCode,
   formatBrowserPairDeviceId,
   type BrowserPairAction,
 } from "../../../src/shared/browser-pair.js";
@@ -27,7 +26,7 @@ export type BrowserPairFailure =
 type BrowserPairCode = {
   code: string;
   browserId: string;
-  /** Issued by the Gateway so it targets that Gateway's profile. */
+  /** Issued by the Gateway so code and command target that Gateway's profile. */
   command: string;
   commandNeedsGatewayEnv: boolean;
 };
@@ -50,7 +49,7 @@ type BrowserPairReply = {
   error?: string;
   status?: string;
   requestId?: string;
-  code?: string;
+  displayCode?: string;
   command?: string;
   commandNeedsGatewayEnv?: boolean;
   deviceId?: string;
@@ -216,7 +215,7 @@ export function createBrowserPairSession(params: {
         return;
       }
       const body = result?.response.ok ? result.body : undefined;
-      if (!body?.requestId || !body.code || !body.command) {
+      if (!body?.requestId || !body.displayCode || !body.command) {
         fail(result?.response.status === 429 ? "busy" : "unavailable");
         return;
       }
@@ -225,7 +224,7 @@ export function createBrowserPairSession(params: {
         basePath,
         identity,
         requestId: body.requestId,
-        code: formatBrowserPairCode(body.code),
+        code: body.displayCode,
         browserId: formatBrowserPairDeviceId(body.deviceId ?? identity.deviceId),
         command: body.command,
         commandNeedsGatewayEnv: body.commandNeedsGatewayEnv === true,
