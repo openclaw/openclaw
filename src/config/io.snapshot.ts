@@ -298,6 +298,7 @@ async function readConfigSnapshot(
       () => prepareConfigSnapshotValidation(validationRequest),
     );
     const olderReleaseWarnings: ConfigValidationIssue[] = [];
+    let olderReleaseMigration: ConfigFileSnapshot["olderReleaseMigration"];
     const olderRelease = readOlderSupportedReleaseVersion(effectiveConfigRaw);
     if (!validated.ok && olderRelease && options.prepareValidation !== "strict") {
       // An upgrade must not refuse settings the previous release accepted. Run Doctor's
@@ -313,6 +314,7 @@ async function readConfigSnapshot(
       if (projected && retried?.validated.ok) {
         validated = retried.validated;
         deferredPluginMigrations = retried.deferredPluginMigrations;
+        olderReleaseMigration = { version: olderRelease.version, changes: projected.changes };
         olderReleaseWarnings.push({
           path: "meta.lastTouchedVersion",
           message: `Config written by OpenClaw ${olderRelease.version} uses settings this release retired. Running with Doctor's migration until it is saved: ${projected.changes.join(" ")} Run "openclaw doctor --fix" to save it; Doctor keeps the original file.`,
@@ -446,7 +448,7 @@ async function readConfigSnapshot(
             runtimeConfig: snapshotConfig,
             issues: [],
             legacyIssues: [],
-            ...(olderReleaseWarnings.length > 0 ? { olderReleaseMigration: true as const } : {}),
+            ...(olderReleaseMigration ? { olderReleaseMigration } : {}),
           }),
           envSnapshotForRestore: readResolution.envSnapshotForRestore,
           includeFileHashesForWrite,
@@ -510,6 +512,8 @@ export async function prepareConfigRecoveryFromContext(
     if (
       !current.exists ||
       !current.valid ||
+      // The file of a projected older-release config is not valid; Doctor migrates it instead.
+      current.olderReleaseMigration ||
       typeof current.raw !== "string" ||
       containsConfigIncludeDirective(current.parsed)
     ) {

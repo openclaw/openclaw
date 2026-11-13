@@ -59,7 +59,7 @@ export function canPlanAutomaticConfigRepair(
     (pendingStateMigration ||
       !snapshot.valid ||
       // A config an older release wrote runs on Doctor's in-memory migration until saved.
-      snapshot.olderReleaseMigration === true ||
+      snapshot.olderReleaseMigration !== undefined ||
       findLegacyConfigRuleIssues(
         snapshot.sourceConfig,
         LEGACY_TALK_VOICE_CALL_INHERITANCE.legacyRules ?? [],

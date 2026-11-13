@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { useConfigCliIntegrationHarness } from "../cli/config-cli.integration.test-harness.js";
-import { createPreUpdateConfigSnapshot } from "./backup-rotation.js";
+import { createPreUpdateConfigSnapshot, prepareConfigFileWrite } from "./backup-rotation.js";
 import { withExecutor } from "./config-executor.test-support.js";
 import {
   expectPosixMode,
@@ -105,6 +105,39 @@ describe("config backup rotation", () => {
 
       await expectFile(`${configPath}.pre-2026.10.10`, original, 0o600);
       expect(JSON.parse(await fs.readFile(configPath, "utf8")).gateway.port).toBe(19002);
+    });
+  });
+
+  it("never keeps a partial older-release original and retries after a failed write", async () => {
+    await withTempHome(async () => {
+      const configPath = resolveConfigPathFromTempState();
+      const retainedPath = `${configPath}.pre-2026.10.10`;
+      const original = '{"gateway":{"mode":"local"},"meta":{"lastTouchedVersion":"2026.10.10"}}\n';
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      const failing = {
+        ...fsNode,
+        promises: {
+          ...fsNode.promises,
+          writeFile: async (...args: Parameters<typeof fs.writeFile>) => {
+            if (String(args[0]).startsWith(retainedPath)) {
+              await fs.writeFile(args[0], String(args[1]).slice(0, 10), args[2]);
+              throw Object.assign(new Error("injected ENOSPC"), { code: "ENOSPC" });
+            }
+            return await fs.writeFile(...args);
+          },
+        },
+      } as typeof fsNode; // SAFETY: spreads the real module and overrides one promise method.
+      const prepare = (fsModule: typeof fsNode) =>
+        prepareConfigFileWrite({ configPath, content: "{}", previousRaw: original, fsModule });
+
+      await prepare(failing);
+      await expectPathMissing(retainedPath);
+      expect(await fs.readdir(path.dirname(configPath))).toEqual(
+        expect.not.arrayContaining([expect.stringMatching(/\.tmp$/)]),
+      );
+
+      await prepare(fsNode);
+      await expectFile(retainedPath, original, 0o600);
     });
   });
 

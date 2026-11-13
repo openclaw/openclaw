@@ -314,7 +314,7 @@ it.each([
       expect(snapshot.config.agents?.defaults?.compaction?.memoryFlush ?? {}).not.toHaveProperty(
         "model",
       );
-      expect(snapshot.olderReleaseMigration).toBe(true);
+      expect(snapshot.olderReleaseMigration?.version).toBe(scenario.writer);
       const warning = snapshot.warnings.find((entry) => entry.path === "meta.lastTouchedVersion");
       expect(warning?.message).toContain("openclaw doctor --fix");
       expect(warning?.message.includes("heartbeat settings are paused")).toBe(scenario.heartbeat);

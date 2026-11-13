@@ -289,16 +289,19 @@ async function retainOlderReleaseConfig(params: {
     return;
   }
   const retainedPath = `${params.configPath}.pre-${previousVersion}`;
+  const tempPath = `${retainedPath}.${randomUUID()}.tmp`;
+  const files = params.fsModule.promises;
   try {
-    await params.fsModule.promises.writeFile(retainedPath, previousRaw, {
-      flag: "wx",
-      mode: 0o600,
-    });
+    // Stage complete bytes, then link: never overwrites a kept original or exposes a partial one.
+    await files.writeFile(tempPath, previousRaw, { flag: "wx", mode: 0o600 });
+    await files.link(tempPath, retainedPath);
   } catch (error) {
     if (!(error instanceof Error && hasErrnoCode(error, "EEXIST"))) {
       params.warn(
         `Could not keep the original config at ${retainedPath}: ${formatErrorMessage(error)}`,
       );
     }
+  } finally {
+    await files.rm(tempPath, { force: true }).catch(() => {});
   }
 }

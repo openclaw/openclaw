@@ -158,5 +158,5 @@ export type ConfigFileSnapshot = {
   warnings: ConfigValidationIssue[];
   legacyIssues: LegacyConfigIssue[];
   /** Valid only through Doctor's in-memory migration of a config an older release wrote. */
-  olderReleaseMigration?: true;
+  olderReleaseMigration?: { version: string; changes: string[] };
 };
