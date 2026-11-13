@@ -49,7 +49,7 @@ import {
 import {
   inspectRestorableDatabaseFiles,
   prepareRestorableDatabaseFiles,
-} from "./update-database-backup-source.js";
+} from "./update-database-backup-files.js";
 import { checkUpdateDatabaseBackupSpace } from "./update-database-backup-space.js";
 import type { SqliteDatabaseGenerationReceipt } from "./update-database-generations.js";
 import {
@@ -118,6 +118,8 @@ type BackupInput = {
   /** Native migration owns the stopped Gateway until Doctor takes custody. */
   stopped?: boolean;
   postgresOffline?: boolean;
+  /** Rollback captures stay on the PostgreSQL server; the owner drops them on retirement. */
+  postgresSchemaCaptures?: boolean;
   /** Migration exporters may require a physical engine before any server export. */
   sourceEngine?: "sqlite";
   /** Manual recovery evidence: live commits after its coherent image change nothing it promises. */
@@ -414,6 +416,13 @@ export async function createUpdateDatabaseBackupInProcess(
           if (engine.engine === "postgres") {
             const { capturePostgresBackup } = await import("../snapshot/database-backup.js");
             const exportDirectory = `${snapshotPath}.postgres`;
+            // Client credential rollback reads the shared state family's portable image.
+            const schemaCapture =
+              input.postgresSchemaCaptures &&
+              resolvePathViaExistingAncestorSync(sourcePath) !==
+                resolvePathViaExistingAncestorSync(
+                  path.join(input.stateDir, "state", "openclaw.sqlite"),
+                );
             await capturePostgresBackup({
               sourcePath,
               directory: exportDirectory,
@@ -421,6 +430,7 @@ export async function createUpdateDatabaseBackupInProcess(
               config: input.config,
               pluginOwners: input.pluginOwners,
               assertCurrent: () => {},
+              ...(schemaCapture ? { carrier: "postgres-schema" as const } : {}),
             });
             postgres = { ...engine, exportDirectory };
           }

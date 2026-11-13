@@ -54,7 +54,7 @@ import {
 } from "../../../state/openclaw-agent-db.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
-  readCustodiedSqliteSource,
+  readCustodiedDrainedSqliteSource,
 } from "../../../state/openclaw-state-maintenance-context.js";
 import { chunkItems } from "../../../utils/chunk-items.js";
 import {
@@ -162,8 +162,8 @@ export async function scanDoctorSessionEntryRecords(
       return scan(databaseOptions, expectedIdentity);
     }
     assertSourceCurrent();
-    if (readCustodiedSqliteSource(scope.storePath)) {
-      // Maintenance custody permits a direct read, including committed WAL frames.
+    if (readCustodiedDrainedSqliteSource(scope.storePath)) {
+      // The backup owner has already drained WAL under the same maintenance custody.
       const inPlace = withArtifactPreservingStateReads(
         () => scan(databaseOptions, expectedIdentity),
         { agentDatabases: true },

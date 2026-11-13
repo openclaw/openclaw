@@ -76,15 +76,19 @@ export function maintenanceOwnerHasSourceCustody(
   return !allowsMaintenanceLiveAuthorityReads(scope, pathname);
 }
 
-/** Read-only WAL views are safe under custody; rollback journals still need private recovery. */
-export function readCustodiedSqliteSource(pathname: string): BigIntStats | undefined {
+/** An orphaned WAL read can reset its commit counter; only drained sources preserve custody. */
+export function readCustodiedDrainedSqliteSource(pathname: string): BigIntStats | undefined {
+  if (!maintenanceOwnerHasSourceCustody(getOpenClawDatabaseMaintenanceScope(), pathname)) {
+    return undefined;
+  }
+  const canonicalPath = resolveIdentityPathViaExistingAncestorSync(pathname);
   if (
-    !maintenanceOwnerHasSourceCustody(getOpenClawDatabaseMaintenanceScope(), pathname) ||
-    fs.existsSync(`${resolveIdentityPathViaExistingAncestorSync(pathname)}-journal`)
+    fs.existsSync(`${canonicalPath}-journal`) ||
+    (fs.statSync(`${canonicalPath}-wal`, { throwIfNoEntry: false })?.size ?? 0) > 0
   ) {
     return undefined;
   }
-  return fs.statSync(pathname, { bigint: true });
+  return fs.statSync(canonicalPath, { bigint: true });
 }
 
 const MAINTENANCE_IN_PROCESS_COPY_MAX_BYTES = 64 * 1024 * 1024;

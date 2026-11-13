@@ -53,6 +53,7 @@ for label in sequence:
     run = tree / ".local/lane2456/qualifying-run"
     staging = args.staging / label
     assert not run.exists() and not staging.exists(), "Reconcile an interrupted arm before resuming"
+    run.parent.mkdir(parents=True, exist_ok=True)
     staging.mkdir(mode=0o700)
     observations = args.output / (label + "-children")
     observations.mkdir()

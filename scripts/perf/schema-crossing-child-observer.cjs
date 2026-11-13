@@ -23,6 +23,8 @@ if (directory) {
   };
   const sql = new Map();
   if (process.env.SCHEMA_CROSSING_SQL_TIMINGS === "1") {
+    // Forward each database receiver explicitly below.
+    // oxlint-disable-next-line typescript/unbound-method
     const prepare = DatabaseSync.prototype.prepare;
     DatabaseSync.prototype.prepare = function (query) {
       const statement = prepare.call(this, query);
@@ -54,7 +56,9 @@ if (directory) {
   }
   let active;
   process.on("message", (message) => {
-    if (!message || !Array.isArray(message.args)) return;
+    if (!message || !Array.isArray(message.args)) {
+      return;
+    }
     active = {
       id: message.id,
       mode: message.args[0],
@@ -73,7 +77,7 @@ if (directory) {
     });
   });
   if (process.send) {
-    const send = process.send;
+    const send = process.send.bind(process);
     process.send = function (message, ...args) {
       if (active && message?.id === active.id) {
         log({
@@ -86,8 +90,9 @@ if (directory) {
           resultType: message.result?.type,
           ok: message.result?.ok,
         });
-        if (message.result?.type === "complete" || message.result?.ok !== undefined)
+        if (message.result?.type === "complete" || message.result?.ok !== undefined) {
           active = undefined;
+        }
       }
       return Reflect.apply(send, this, [message, ...args]);
     };
@@ -109,7 +114,9 @@ if (directory) {
   process.on("exit", () => {
     let allocatedBytes;
     inspector?.post("HeapProfiler.stopSampling", (error, result) => {
-      if (error) throw error;
+      if (error) {
+        throw error;
+      }
       allocatedBytes = result.profile.samples.reduce((sum, sample) => sum + sample.size, 0);
     });
     inspector?.disconnect();
@@ -118,7 +125,7 @@ if (directory) {
       cpu: process.cpuUsage(),
       readBytes,
       allocatedBytes,
-      sql: [...sql].sort((a, b) => b[1].ms - a[1].ms).slice(0, 30),
+      sql: [...sql].toSorted((a, b) => b[1].ms - a[1].ms).slice(0, 30),
     });
   });
 }

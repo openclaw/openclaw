@@ -39,6 +39,7 @@ export async function prepareRestorableDatabaseFiles(
   };
 }
 
+/** Fence every durable database file an update rollback restores. */
 export async function inspectRestorableDatabaseFiles(
   databases: readonly string[],
   previous?: ReadonlyMap<string, BigIntStats>,

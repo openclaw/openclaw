@@ -52,7 +52,7 @@ it.each(["drained", "wal", "wal-symlink", "journal", "journal-symlink", "unowned
           await prepareArtifactPreservingSqliteRead(requested);
           using db = openSqliteReadOnlyDatabase(requested);
           expect(db.prepare("SELECT value FROM probe").get()).toEqual({ value: 42 });
-          expect(db.location() === file).toBe(kind === "drained" || kind.startsWith("wal"));
+          expect(db.location() === file).toBe(kind === "drained");
           expect(() => db.exec("UPDATE probe SET value = 99")).toThrow(/readonly/);
         },
         { agentDatabases: true },

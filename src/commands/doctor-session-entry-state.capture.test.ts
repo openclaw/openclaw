@@ -114,7 +114,7 @@ it("closes a captured journal inspection reader before removing its private snap
 });
 
 it.each(["drained", "wal"])(
-  "inspects a captured %s database in place without a private copy",
+  "preserves the captured generation during a %s inspection",
   async (kind) => {
     const legacy = seedEntry("captured-drained", { pendingFinalDelivery: true });
     const family =
@@ -158,7 +158,7 @@ it.each(["drained", "wal"])(
         await scope.close();
       }
     });
-    expect(privateCopy).not.toHaveBeenCalled();
+    expect(privateCopy).toHaveBeenCalledTimes(kind === "wal" ? 1 : 0);
     expectBytesEqual(fs.readFileSync(legacy.databasePath), originalBytes, "inspected database");
     expect(fs.readdirSync(directory).toSorted()).toEqual(originalEntries);
   },

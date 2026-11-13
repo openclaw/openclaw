@@ -12,7 +12,7 @@ import {
   artifactPreservingReads,
   isArtifactPreservingStateRead,
 } from "../state/artifact-preserving-state-reads.js";
-import { readCustodiedSqliteSource } from "../state/openclaw-state-maintenance-context.js";
+import { readCustodiedDrainedSqliteSource } from "../state/openclaw-state-maintenance-context.js";
 import { getDatabaseEngineInput } from "./database-engine/context.js";
 import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "./node-sqlite.js";
 import { SqliteSnapshotCleanupError } from "./sqlite-lifecycle-errors.js";
@@ -140,7 +140,7 @@ export async function prepareArtifactPreservingSqliteRead(
     getDatabaseEngineInput("agent") ||
     !isArtifactPreservingStateRead("agent", pathname) ||
     isUpdateRehearsalPrivateDatabase(pathname, process.env) ||
-    readCustodiedSqliteSource(pathname)
+    readCustodiedDrainedSqliteSource(pathname)
   ) {
     return;
   }
@@ -160,13 +160,6 @@ export async function prepareArtifactPreservingSqliteRead(
   } else {
     retainArtifactSnapshot(scope, prepared, sourceIdentity);
   }
-}
-
-function readCustodiedDrainedSqliteSource(pathname: string): BigIntStats | undefined {
-  const source = readCustodiedSqliteSource(pathname);
-  return source && (fs.statSync(`${pathname}-wal`, { throwIfNoEntry: false })?.size ?? 0) === 0
-    ? source
-    : undefined;
 }
 
 // Immutable reads cannot detect a writer, so a changed source invalidates what was read.
@@ -196,13 +189,10 @@ export function openSqliteReadOnlyDatabase(
   // and scoped, but do not copy the same database again for each canary check.
   const sourceIdentity = readDatabasePathIdentitySync(pathname);
   let snapshot = findArtifactSnapshot(scope, sourceIdentity);
-  const custodied = snapshot ? undefined : readCustodiedSqliteSource(sourceIdentity.canonicalPath);
-  const drained =
-    custodied &&
-    (fs.statSync(`${sourceIdentity.canonicalPath}-wal`, { throwIfNoEntry: false })?.size ?? 0) === 0
-      ? custodied
-      : undefined;
-  if (!snapshot && !custodied && !isUpdateRehearsalPrivateDatabase(pathname, process.env)) {
+  const drained = snapshot
+    ? undefined
+    : readCustodiedDrainedSqliteSource(sourceIdentity.canonicalPath);
+  if (!snapshot && !drained && !isUpdateRehearsalPrivateDatabase(pathname, process.env)) {
     const prepared = prepareSqliteReadOnlyLocationSync(pathname);
     snapshot = retainArtifactSnapshot(scope, prepared, sourceIdentity);
   }
