@@ -63,8 +63,13 @@ type SlotUpdateResult = {
   message: string;
 };
 
-/** The Node the installed service runs. Commands never rely on PATH to find it. */
-async function resolveServiceNode(env: NodeJS.ProcessEnv): Promise<string> {
+/**
+ * The Node and port of the installed service, read from its definition file. The
+ * updater never relies on PATH for Node or on config for the service's port.
+ */
+async function readServiceCommand(
+  env: NodeJS.ProcessEnv,
+): Promise<{ node: string; port?: number }> {
   const args =
     process.platform === "darwin"
       ? (
@@ -82,16 +87,24 @@ async function resolveServiceNode(env: NodeJS.ProcessEnv): Promise<string> {
   const node = args?.find(
     (arg) => path.isAbsolute(arg) && /^node(?:\.exe)?$/u.test(path.basename(arg)),
   );
-  return node ?? process.execPath;
+  const port = Number(args?.[args.indexOf("--port") + 1]);
+  return {
+    node: node ?? process.execPath,
+    ...(args?.includes("--port") && Number.isInteger(port) ? { port } : {}),
+  };
 }
 
-async function restartGateway(env: NodeJS.ProcessEnv): Promise<"requested" | "service" | null> {
+async function restartGateway(
+  env: NodeJS.ProcessEnv,
+  port: number | undefined,
+): Promise<"requested" | "service" | null> {
   try {
     await callGateway({
       method: "gateway.restart.request",
       params: { reason: "update" },
       deviceIdentity: null,
       timeoutMs: 10_000,
+      ...(port ? { localPortOverride: port } : {}),
     });
     return "requested";
   } catch {
@@ -167,7 +180,8 @@ async function runSlotUpdate(
   const existing = readRuntimePointer(dir);
   const current = existing?.current ?? root;
   const before = await readPackageVersion(current);
-  const node = await resolveServiceNode(env);
+  const service = await readServiceCommand(env);
+  const node = service.node;
   const target = await resolveTarget({
     git,
     channel,
@@ -263,7 +277,7 @@ async function runSlotUpdate(
     if (opts.restart === false) {
       return done("ok", "next-start", "Update applies on the next Gateway start.");
     }
-    const restart = await restartGateway(env);
+    const restart = await restartGateway(env, service.port);
     if (!restart) {
       return done(
         "ok",
