@@ -56,8 +56,14 @@ suite.define(() => {
           updatedAt: now - 1_000,
         };
         const calls = [
-          { id: "read-notes", name: "read", arguments: { path: "/repo/notes.md" } },
           {
+            type: "toolCall",
+            id: "read-notes",
+            name: "read",
+            arguments: { path: "/repo/notes.md" },
+          },
+          {
+            type: "toolCall",
             id: "send-child",
             name: "sessions_send",
             arguments: { sessionKey: child.key, message: "Also check Friday departures." },
@@ -79,7 +85,7 @@ suite.define(() => {
               runId: "parent-run",
               timestamp: now - 5_000,
               __openclaw: { id: "steer", seq: 2, runId: "parent-run" },
-              content: calls.map((call) => ({ type: "toolCall", ...call })),
+              content: calls,
               activity: [
                 {
                   itemId: "tool:read-notes",
