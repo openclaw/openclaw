@@ -519,6 +519,26 @@ describe("agent group thread dispatch", () => {
       { text: "Bob completed the review.", participant: { agentId: "bob", name: "Bob" } },
     ]);
   });
+
+  it("keeps the next round digest well-formed when a captured reply is truncated at a surrogate boundary", async () => {
+    // A round-1 reply whose length crosses MAX_FINAL_CHARS mid-emoji: a naive
+    // UTF-16 code-unit slice would leave a dangling surrogate in the captured
+    // reply text that then leaks into the next round's digest (ctx.BodyForAgent).
+    const longReply = "x".repeat(3999) + "🥐" + "tail";
+    const run = await completed({
+      cfg: continuationConfig(),
+      reply: (_turn, index) => {
+        if (index === 0) {
+          return [longReply];
+        }
+        return ["A short reply."];
+      },
+    });
+    const digest = run.turns[3]?.ctx.BodyForAgent;
+    expect(digest).toBeDefined();
+    // No lone surrogate: the emoji is kept whole or dropped whole, never split.
+    expect(digest.isWellFormed()).toBe(true);
+  });
 });
 describe("group thread entry compatibility", () => {
   it("prefers a qualified WhatsApp entry and keeps unqualified arrays single-pass and WhatsApp-only", () => {
