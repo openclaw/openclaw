@@ -23,6 +23,19 @@ function logUltraProgress(message: string): void {
   writeSync(2, `[live] ${message}\n`);
 }
 
+// Decode before the caller checks live ownership; forward the original body unchanged.
+export async function readOpenAIUltraRequestBody(
+  body: RequestInit["body"],
+): Promise<string | undefined> {
+  if (typeof body === "string") {
+    return body;
+  }
+  if (body instanceof Blob) {
+    return await body.text();
+  }
+  return ArrayBuffer.isView(body) ? new TextDecoder().decode(body) : undefined;
+}
+
 export function assertOpenAIUltraWireEffort(params: {
   expectedModel: string;
   observations: OpenAIUltraWireObservation[];

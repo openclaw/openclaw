@@ -156,6 +156,7 @@ import {
 } from "./gateway-models.profiles.live.test-helpers.js";
 import {
   assertOpenAIUltraWireEffort,
+  readOpenAIUltraRequestBody,
   OPENAI_ULTRA_NORMAL_EFFORT,
   type OpenAIUltraWireObservation,
 } from "./gateway-models.profiles.live.ultra-wire.test-helpers.js";
@@ -4096,18 +4097,10 @@ function startOpenAIUltraWireCapture(upstreamBaseUrls: readonly string[]): OpenA
       if (!fetchModel) {
         return fetchModel;
       }
-      return ((input: RequestInfo | URL, init?: RequestInit) => {
+      return (async (input: RequestInfo | URL, init?: RequestInit) => {
         const url =
           typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-        // Responses bodies are pre-encoded bytes; decode synchronously so ownership
-        // is captured in the dispatching async context.
-        const rawBody = init?.body;
-        const body =
-          typeof rawBody === "string"
-            ? rawBody
-            : ArrayBuffer.isView(rawBody)
-              ? new TextDecoder().decode(rawBody)
-              : undefined;
+        const body = await readOpenAIUltraRequestBody(init?.body);
         if (init && endpoints.has(url) && body !== undefined) {
           if (observations.length >= OPENAI_ULTRA_WIRE_CAPTURE_LIMIT) {
             overflow = true;
@@ -4255,7 +4248,7 @@ describe("OpenAI Ultra wire capture", () => {
           await fetchModel(endpoint, {
             method: "POST",
             headers: { traceparent: formatDiagnosticTraceparent(trace)! },
-            body: JSON.stringify({ model: model.id, reasoning: { effort } }),
+            body: new Blob([JSON.stringify({ model: model.id, reasoning: { effort } })]),
           }),
       );
     };
@@ -4485,12 +4478,14 @@ describe("OpenAI Ultra wire capture", () => {
     const request: RequestInit = {
       method: "POST",
       headers: { authorization: "Bearer test-only", "content-type": "application/json" },
-      body: JSON.stringify({
-        model: "gpt-5.6-sol",
-        reasoning: { effort: "max" },
-        input: "private prompt must not be retained",
-        tools: [{ name: "sessions_spawn", strict: false, parameters: { required: ["task"] } }],
-      }),
+      body: new Blob([
+        JSON.stringify({
+          model: "gpt-5.6-sol",
+          reasoning: { effort: "max" },
+          input: "private prompt must not be retained",
+          tools: [{ name: "sessions_spawn", strict: false, parameters: { required: ["task"] } }],
+        }),
+      ]),
       signal: new AbortController().signal,
     };
     try {
