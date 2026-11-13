@@ -107,7 +107,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     sandboxSessionKey,
     sessionAgentId,
   } = input.setup;
-  const { catalogToolHookContext, effectiveTools, toolSearchRunPlan } = input.toolCatalog;
+  const { catalogToolHookContext, effectiveTools } = input.toolCatalog;
   const { clientTools, uncompactedEffectiveTools } = input.bundleTools;
   const {
     codeModeControlsEnabledForRun,
@@ -141,7 +141,6 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
           resources.sessionManager = manager;
           resources.ownsSessionManager = manager !== attempt.sessionManager;
         },
-        replayAllowedToolNames: toolSearchRunPlan.replayAllowedToolNames,
         resolveActiveContextEnginePluginId: input.resolveActiveContextEnginePluginId,
         withOwnedTranscriptWrite: sessionLock.withOwnedTranscriptWrite,
       }),
@@ -161,6 +160,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   const sessionPromptState = promptStateLease.state;
   const usesSystemPromptSeries =
     !input.isRawModelRun && attempt.operation !== "settled-tool-finalization";
+  const pinsSystemPrompt = transcriptPolicy.pinnedSystemPrompt === true;
   const promptRouteKey = buildSystemPromptRouteKey({
     provider: attempt.provider,
     model: attempt.modelId,
@@ -248,7 +248,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     beginSessionSystemPrompt({
       state: sessionPromptState,
       routeKey: promptRouteKey,
-      enabled: transcriptPolicy.inHistorySystemUpdates === true,
+      enabled: pinsSystemPrompt,
       getEntries: () => sessionManager[sessionManagerReadTranscriptBranch](),
     })
   ) {
@@ -288,7 +288,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   let freshSystemPrompt = systemPromptText;
   let projectedSystemPrompt: string | undefined;
   const prepareSystemPromptUpdate: SystemPromptUpdatePreparation | undefined =
-    usesSystemPromptSeries && (transcriptPolicy.inHistorySystemUpdates || rankingEnabled)
+    usesSystemPromptSeries && (pinsSystemPrompt || rankingEnabled)
       ? async (nextPrompt: string, freshlyRendered = false) => {
           let preparedPrompt = nextPrompt;
           let wasFreshlyRendered = freshlyRendered;
@@ -304,7 +304,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
           if (wasFreshlyRendered || preparedPrompt !== projectedSystemPrompt) {
             freshSystemPrompt = preparedPrompt;
           }
-          if (!transcriptPolicy.inHistorySystemUpdates) {
+          if (!pinsSystemPrompt) {
             return { systemPrompt: freshSystemPrompt };
           }
           const prepared = prepareSessionSystemPrompt({

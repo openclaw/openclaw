@@ -568,7 +568,10 @@ while you use its controls.
 Enable **Settings → Labs → Composer predictions** to try optional next-message
 suggestions. The experiment is off by default. After a reply finishes in the
 active conversation, OpenClaw can make one additional model request and show a
-possible follow-up as muted text in an empty composer. It may show no suggestion.
+possible follow-up as muted text in an empty composer. The suggestion is written
+as your reply: when the assistant asks a question or offers options, it answers
+with the recommended choice. It may show no suggestion, for example while the
+assistant is still working or after an error.
 It does not predict on every keystroke. Each active browser tab can make its own
 prediction request. Read-only, imported, and incognito conversations do not show
 predictions.
@@ -588,7 +591,8 @@ The Labs model selector offers:
   conversation's model override.
 
 Predictions use bounded recent text from the current conversation in an isolated,
-tool-free request. They cannot run tools, retrieve memory, or send messages. An
+tool-free request. Tool calls and results are skipped, and long messages keep
+their endings. They cannot run tools, retrieve memory, or send messages. An
 unavailable selected model skips the suggestion rather than silently switching
 to another model. Enabling the experiment can add model usage and cost; existing
 model configuration, provider credentials, and session access rules still apply.

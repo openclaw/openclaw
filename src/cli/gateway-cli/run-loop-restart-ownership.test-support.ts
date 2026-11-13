@@ -8,6 +8,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { expectCallCount, withRunLoopCleanup } from "./run-loop-cleanup.test-support.js";
 import {
   createCloseMock,
+  createSignaledStart,
   createUpdateRespawnChild,
   advanceWithoutCalls,
   setPlatform,
@@ -134,6 +135,8 @@ export function registerGatewayRestartOwnershipTests({
         const cleanup = createDeferredCore();
         const close = createCloseMock().mockImplementationOnce(() => cleanup.promise);
         const { start, runtime, exited } = await startLoop({ close });
+        const replacement = createSignaledStart(close);
+        start.mockImplementationOnce(replacement.start);
         const stop = captureSignal("SIGINT");
         vi.useFakeTimers();
         try {
@@ -144,6 +147,7 @@ export function registerGatewayRestartOwnershipTests({
           if (cleanupCompletes) {
             cleanup.resolve();
             await vi.advanceTimersByTimeAsync(0);
+            await replacement.started;
             expect(start).toHaveBeenCalledTimes(2);
           } else {
             await advanceWithoutCalls(74_000, runtime.exit);
