@@ -577,29 +577,27 @@ describe("native command auth in groups", () => {
 
 describe("native command admission in DMs", () => {
   it.each<[string, TelegramAccountConfig]>([
-    ["account", {}],
-    ["scoped direct-chat", { direct: { "*": { allowFrom: ["99999"] } } }],
-  ])(
-    "drops /think silently when the %s allowlist does not admit the sender",
-    async (_name, scope) => {
-      const bot = await createBot(true, true, {
-        channels: {
-          telegram: {
-            dmPolicy: "allowlist",
-            allowFrom: ["99999"],
-            streaming: { mode: "off" },
-            ...scope,
-          },
+    ["account allowlist", {}],
+    ["scoped direct-chat allowlist", { direct: { "*": { allowFrom: ["99999"] } } }],
+    ["disabled DM policy", { dmPolicy: "disabled" }],
+  ])("drops /think silently when the %s does not admit the sender", async (_name, scope) => {
+    const bot = await createBot(true, true, {
+      channels: {
+        telegram: {
+          dmPolicy: "allowlist",
+          allowFrom: ["99999"],
+          streaming: { mode: "off" },
+          ...scope,
         },
-      });
-      const sendMessage = vi.spyOn(bot.api, "sendMessage");
+      },
+    });
+    const sendMessage = vi.spyOn(bot.api, "sendMessage");
 
-      await bot.handleUpdate({ update_id: 2001, message: commandMessage("/think") });
+    await bot.handleUpdate({ update_id: 2001, message: commandMessage("/think") });
 
-      expect(harness.replySpy).not.toHaveBeenCalled();
-      expect(sendMessage).not.toHaveBeenCalled();
-    },
-  );
+    expect(harness.replySpy).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
 
   it("still answers an admitted /think sender who lacks command permission", async () => {
     const bot = await createBot(true, true, {

@@ -266,21 +266,19 @@ async function resolveTelegramCommandAuth(params: {
     storeAllowFrom: isGroup ? [] : storeAllowFrom,
     dmPolicy: effectiveDmPolicy,
   });
-  const rejectNotAuthorized = async (senderIsOwner: boolean) => {
-    // Ordinary DMs silently drop senders the effective policy does not admit;
-    // native refusals must not reveal the bot (#181955). Explicit grants and
-    // admitted command-denied senders retain their existing behavior (#131408).
-    if (
-      !isGroup &&
-      !senderIsOwner &&
-      !preContextCommandAccess.authorizedByConfig &&
-      effectiveDmPolicy === "allowlist" &&
-      !dmAllow.hasWildcard &&
-      !dmAllow.entries.includes(senderId)
-    ) {
-      logVerbose(
-        `Dropped telegram native command in DM ${chatId} (sender not admitted by dmPolicy)`,
-      );
+  // A DM sender the policy does not admit is ignored, as for ordinary messages (#181955).
+  // Owners and explicit command grants keep the refusal, as do admitted senders (#131408).
+  const ignoreUnadmittedDmSender =
+    !isGroup &&
+    !preContextCommandAccess.senderIsOwner &&
+    !preContextCommandAccess.authorizedByConfig &&
+    (effectiveDmPolicy === "disabled" ||
+      (effectiveDmPolicy === "allowlist" &&
+        !dmAllow.hasWildcard &&
+        !dmAllow.entries.includes(senderId)));
+  const rejectNotAuthorized = async () => {
+    if (ignoreUnadmittedDmSender) {
+      logVerbose(`Dropped telegram native command in DM ${chatId} (sender not admitted)`);
       return null;
     }
     await withTelegramApiErrorLogging({
@@ -312,7 +310,7 @@ async function resolveTelegramCommandAuth(params: {
       );
       return null;
     }
-    return await rejectNotAuthorized(preContextCommandAccess.senderIsOwner);
+    return await rejectNotAuthorized();
   }
 
   const policyAccess = evaluateTelegramGroupPolicyAccess({
@@ -335,7 +333,7 @@ async function resolveTelegramCommandAuth(params: {
       policyAccess.reason === "group-policy-allowlist-no-sender" ||
       policyAccess.reason === "group-policy-allowlist-unauthorized"
     ) {
-      return await rejectNotAuthorized(preContextCommandAccess.senderIsOwner);
+      return await rejectNotAuthorized();
     }
     if (policyAccess.reason === "group-chat-not-allowed") {
       logVerbose(`Blocked telegram command in group ${chatId} (group not allowed)`);
@@ -357,7 +355,7 @@ async function resolveTelegramCommandAuth(params: {
     ownerContext,
   });
   if (requireAuth && !commandAuthorized) {
-    return await rejectNotAuthorized(senderIsOwner);
+    return await rejectNotAuthorized();
   }
   return {
     chatId,
