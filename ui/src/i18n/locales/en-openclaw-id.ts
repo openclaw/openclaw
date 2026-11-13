@@ -101,7 +101,8 @@ const enOpenClawId = {
     yourDevices: "Your devices",
     reachOffer: "Signed in as {account}. Reach this claw from anywhere?",
     makeReachableLocalOnly:
-      "To turn on remote access, open OpenClaw on the computer that runs this claw.",
+      "To turn on remote access, sign in as an admin through Tailscale or another personal sign-in, or open OpenClaw on the computer that runs this claw.",
+    makeReachableAdminOnly: "Only an admin can turn on remote access for this claw.",
     needsLoaderDomain:
       "Remote access is not set up for this claw. Ask the person who manages it to finish setup.",
     makeReachable: "Turn on remote access",

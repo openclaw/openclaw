@@ -6,6 +6,7 @@ import type { ApplicationContext } from "../../app/context-types.ts";
 import { createSkillFileHovercard } from "../../components/skill-file-hovercard.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
+import { composerInputFocusElement } from "../../lib/composer-input.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
@@ -473,8 +474,9 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
       (replacement) => {
         const replacementElement = replacement && replacementComposer.read();
         const footer = getComposerFooter();
+        const composer = getChatComposerState(input.props.paneId).composerTextarea;
         const target =
-          replacementElement || getChatComposerState(input.props.paneId).composerTextarea || footer;
+          replacementElement || (composer && composerInputFocusElement(composer)) || footer;
         // The fallback is a keyboard destination, not a pointer-focusable editor ancestor.
         if (target === footer) {
           footer?.setAttribute("tabindex", "-1");

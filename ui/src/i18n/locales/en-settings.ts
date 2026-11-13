@@ -127,6 +127,12 @@ const enSettings = {
       notSet: "Not set",
       inheritDefault: "Inherit default",
       inheritDefaultModel: "Inherit default ({model})",
+      utilityModel: "Utility model",
+      utilityModelHelp:
+        "Runs this agent's background tasks: titles, progress narration, session summaries. Inherit the Models page default or choose one for this agent only.",
+      utilityModelInheritAutomatic: "Automatic",
+      utilityModelDisabled: "Disabled for this agent",
+      utilityModelFallbacks: "This agent's utility fallbacks: {models}",
       fallbacks: "Fallbacks",
       addFallback: "Add fallback…",
     },
@@ -433,6 +439,27 @@ const enSettings = {
       title: "GPT-Live",
       hint: "Released browser/Gateway-owned WebRTC tries OAuth first and falls back to a Platform API key. Direct backend sockets and unlisted or private routes require Platform API-key access. Delegated work can be steered while running and requires exact spoken confirmation for high-impact actions.",
       ready: "Ready",
+    },
+    transcription: {
+      title: "Speech to text",
+      description:
+        "Speech to text for Talk dictation and inbound voice notes (tools.media). Status shows the provider Talk uses.",
+      unavailableHint: "Connect to the Gateway to check speech-to-text readiness.",
+      failedHint: "Couldn’t check speech-to-text readiness.",
+      noProvider: "No speech-to-text model is configured yet.",
+      readyWithoutProvider: "A configured local transcription model is ready.",
+      modelTitle: "Speech-to-text model",
+      modelDescription:
+        "Used for voice notes, and for Talk dictation when no streaming transcription provider or speech-to-text voice-model default is configured; those take precedence for Talk. Automatic tries configured audio models in order.",
+      invalidModel:
+        "“{value}” isn’t a provider/model reference, so it wasn’t saved. Use provider/model, for example openrouter/openai/whisper-large-v3-turbo.",
+      automatic: "Automatic",
+      custom: "Other model (provider/model)",
+      preferredNotReadyTitle: "Preferred model",
+      providerNotReady: "Not ready",
+      providerNotReadyDescription:
+        "{provider} can’t transcribe yet. It may need a key, which is added on Settings → Models, or it may not support speech to text.",
+      openModels: "Open Models",
     },
   },
   configForm: {
@@ -1259,6 +1286,10 @@ const enSettings = {
       disabled: "Disabled",
       fallback: "Fallback model",
       utilityFallback: "Utility fallback model",
+      utilityOverridesTitle: "Agents with their own utility settings:",
+      utilityOverridesOthers: "Other agents use this default.",
+      utilityOverrideDefaultModel: "default model",
+      utilityOverrideFallbacks: "fallbacks: {models}",
       noFallback: "No fallback model",
       clearFallbacks: "No fallback model (remove all {count})",
       moreFallbackOne: "1 more fallback after this one",

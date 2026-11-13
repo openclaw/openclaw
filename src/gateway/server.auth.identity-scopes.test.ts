@@ -532,9 +532,15 @@ test("denies missing person access, retires grant or alias authority, and preser
       expect(guest.connected.ok).toBe(true);
       expect((await rpcReq(guest.ws, "status")).ok).toBe(true);
       policyUnavailable = true;
+      // An evaluation outage refuses this handshake without revoking the admitted grant.
       expect((await connect("visitor@example.com")).connected).toMatchObject({
         ok: false,
-        error: { details: { accessCause: "policy-check-failed" }, retryable: false },
+        error: {
+          code: "UNAVAILABLE",
+          message: "Gateway access policy is unavailable; retry the operation.",
+          details: { code: "OPERATOR_ACCESS_UNAVAILABLE" },
+          retryable: true,
+        },
       });
       expect(grant.signal.aborted).toBe(false);
       expect((await rpcReq(guest.ws, "status")).ok).toBe(true);
