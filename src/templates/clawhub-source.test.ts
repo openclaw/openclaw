@@ -424,6 +424,7 @@ describe("public ClawHub Template catalog", () => {
     expect(detail).toMatchObject({
       packageName: personalPackageName,
       version,
+      agentId: "research-briefing",
       agentName: "Research Briefing",
       channel: "community",
       official: false,

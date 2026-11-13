@@ -1643,7 +1643,7 @@ var External = [
     /(^category$|^entries$)/u,
     /(^packageName$|^version$)/u,
     /(^detail$)/u,
-    /(^packageName$|^displayName$|^iconUrl$|^summary$|^latestVersion$|^channel$|^official$|^ownerHandle$|^downloads$|^installs$|^featuredAt$|^updatedAtMs$|^version$|^agentName$|^agentDescription$|^workspaceFiles$|^skills$|^plugins$|^mcpServers$|^scheduledJobs$|^contents$|^scanStatus$)/u,
+    /(^packageName$|^displayName$|^iconUrl$|^summary$|^latestVersion$|^channel$|^official$|^ownerHandle$|^downloads$|^installs$|^featuredAt$|^updatedAtMs$|^version$|^agentId$|^agentName$|^agentDescription$|^workspaceFiles$|^skills$|^plugins$|^mcpServers$|^scheduledJobs$|^contents$|^scanStatus$)/u,
     /(^instructions$|^skills$|^integrations$|^automations$)/u,
     /(^name$|^source$|^excerpt$)/u,
     /(^name$|^source$|^ref$|^version$|^excerpt$)/u,
@@ -19956,6 +19956,7 @@ var External = [
     (value.featuredAt === void 0 || !("featuredAt" in value) || check_644(value.featuredAt)) &&
     check_1388(value.updatedAtMs) &&
     check_6(value.version) &&
+    (value.agentId === void 0 || !("agentId" in value) || check_63(value.agentId)) &&
     (value.agentName === void 0 || !("agentName" in value) || check_63(value.agentName)) &&
     (value.agentDescription === void 0 ||
       !("agentDescription" in value) ||

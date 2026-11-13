@@ -80,6 +80,8 @@ export type ClawHubTemplateCatalogOverview = {
 };
 export type ClawHubTemplateCatalogDetail = ClawHubTemplateCatalogEntry & {
   version: string;
+  /** The Template's own agent id; Add derives the new agent's id from it. */
+  agentId: string;
   agentName?: string;
   agentDescription?: string;
   workspaceFiles: number;
@@ -391,6 +393,7 @@ export async function readClawHubTemplateDetail(
     return {
       ...projectCatalogEntry({ ...pkg, icon: release.version.icon }, params.baseUrl),
       version,
+      agentId: summary.id,
       ...(summary.name ? { agentName: summary.name } : {}),
       ...(summary.description ? { agentDescription: summary.description } : {}),
       workspaceFiles: contents.instructions.length,

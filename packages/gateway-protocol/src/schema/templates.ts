@@ -113,6 +113,7 @@ export const TemplatesCatalogDetailParamsSchema = closedObject({
 export const TemplatesCatalogDetailSchema = closedObject({
   ...TemplatesCatalogEntrySchema.properties,
   version: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
   agentName: Type.Optional(NonEmptyString),
   agentDescription: Type.Optional(Type.String()),
   workspaceFiles: Type.Integer({ minimum: 0 }),
