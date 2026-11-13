@@ -406,7 +406,7 @@ describe("configureOpenAICompatibleSelfHostedProviderNonInteractive", () => {
     { expected: 8_192, saved: [expectedModel("Qwen/Qwen3-32B", { maxTokens: 8_192 })] },
     { expected: 4_096, saved: [] },
     { expected: 128_000, providerLimit: 200_000, saved: [] },
-  ])("keeps the saved output limit $expected when setup runs again", async (row) => {
+  ])("uses the saved row, then the provider limit within the context ($expected)", async (row) => {
     const ctx = createContext();
     const maxTokens = row.providerLimit ?? 4_096;
     ctx.config = {
