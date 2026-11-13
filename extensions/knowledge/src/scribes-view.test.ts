@@ -720,6 +720,68 @@ it("reports a skipped run that could not complete as failed", async () => {
   expect(view.querySelector(".scribe-run .scribe-chip-warn")?.textContent).toBe("Failing");
 });
 
+it.each([
+  ["Repair", true],
+  ["Try again", true],
+  ["Repair", false],
+  ["Try again", false],
+] as const)(
+  "reuses a lost %s request after reconnecting (existing conversation: %s)",
+  async (action, existing) => {
+    const failing = { ...reviewJob, state: { ...reviewJob.state, consecutiveErrors: 1 } };
+    const { render, ui, calls, request, create, events } = fixture({
+      sessions: existing ? reviewSession : {},
+      jobs: [failing],
+    });
+    create.mockImplementation(async () => `agent:main:repair:${create.mock.calls.length}`);
+    ui.s.scribe = "claim-consolidation";
+    const answer = request.getMockImplementation()!;
+    const sends = () => calls.filter(([method]) => method === "chat.send").map(([, p]) => p!);
+    let loseResponse = false;
+    request.mockImplementation(async (method, params) => {
+      const result = await answer(method, params);
+      if (method === "chat.send" && loseResponse) {
+        loseResponse = false;
+        throw new Error("response lost after acceptance");
+      }
+      return result;
+    });
+    let view = await render();
+    try {
+      if (action === "Try again") {
+        buttonNamed(view, "Repair").click();
+        await vi.waitFor(() => expect(sends()).toHaveLength(1));
+        vi.spyOn(Date, "now").mockReturnValue(Date.now() + 4 * 60_000);
+        view = await render();
+      }
+      loseResponse = true;
+      const retry = buttonNamed(view, action);
+      retry.click();
+      await vi.waitFor(() => {
+        expect(loseResponse).toBe(false);
+        expect(retry.disabled).toBe(false);
+      });
+      // A dropped response replaces the host and page before the operator retries.
+      Object.assign(ui.s.context, { host: { ...ui.s.context.host } });
+      buttonNamed(await render(), action).click();
+      await vi.waitFor(() => expect(sends()).toHaveLength(action === "Repair" ? 2 : 3));
+      const sent = sends();
+      expect(sent.at(-1)!.idempotencyKey).toBe(sent.at(-2)!.idempotencyKey);
+      expect(sent.map((send) => send.sessionKey)).toEqual(
+        Array(sent.length).fill(existing ? "s-review" : "agent:main:repair:1"),
+      );
+      expect(create).toHaveBeenCalledTimes(existing ? 0 : 1);
+      if (action === "Try again") {
+        expect(sent[1]!.idempotencyKey).not.toBe(sent[0]!.idempotencyKey);
+      }
+    } finally {
+      vi.restoreAllMocks();
+      ui.s.disposed = true;
+      events.get("cron.inventory.changed")?.();
+    }
+  },
+);
+
 it("repairs an archived scribe by restoring its conversation and turning it on, without a turn", async () => {
   const { render, ui, calls } = fixture({
     sessions: {
