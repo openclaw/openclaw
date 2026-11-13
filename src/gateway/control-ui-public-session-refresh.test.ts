@@ -270,6 +270,7 @@ it("jitters conditional reads, retains ETag manually, and catches up only when v
   await vi.advanceTimersByTimeAsync(1500);
   expect(f.fetch).toHaveBeenCalledTimes(1);
   expect(f.document.title).toBe("updated · OpenClaw");
+  expect(f.document.querySelector(".article-head h1")?.textContent).toBe("updated");
   expect(
     [...f.document.querySelectorAll("[data-public-title]")].map((node) => node.textContent),
   ).toEqual(["updated", "updated"]);

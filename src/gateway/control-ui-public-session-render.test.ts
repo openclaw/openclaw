@@ -258,7 +258,14 @@ describe("public session document", () => {
     expect(readerFrame.querySelector(".session-indicator")).not.toBeNull();
     expect(reader.querySelector(".reader-title .reader-badge")?.textContent).toBe("Public session");
     expect(reader.querySelector(".article-head .reader-badge")?.textContent).toBe("Public session");
-    expect(reader.querySelector(".reader-login")?.getAttribute("href")).toBe(entryUrl);
+    expect(reader.querySelector(".reader-menu, .reader-login")).toBeNull();
+    expect(reader.querySelector(".reader-actions #session-login")?.getAttribute("href")).toBe(
+      entryUrl,
+    );
+    expect(reader.querySelectorAll(`a[href="${entryUrl}"]`)).toHaveLength(1);
+    expect(reader.querySelector(".reader-topbar .brand")?.getAttribute("href")).toBe(
+      "https://openclaw.ai",
+    );
     expect(reader.querySelector(".colophon")?.textContent).toBe(
       "Made with OpenClawYour assistant, on your devices, in your chats.Get startedWhy OpenClaw",
     );
