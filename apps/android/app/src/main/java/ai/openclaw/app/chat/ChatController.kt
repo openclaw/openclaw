@@ -1696,33 +1696,46 @@ class ChatController internal constructor(
     if (!sessionBranchSwitchClaimed.compareAndSet(false, true)) return false
     val switchGeneration = sessionBranchSwitchGeneration.incrementAndGet()
     _sessionBranchSwitching.value = true
-    val mutationLease = beginOutboxSessionMutation(snapshot, expectedEventReason = "branch-switch")
-    if (mutationLease == null) {
+    // Admission may reconcile over the network before a durable mutation lease exists.
+    // The caller owns the UI claim across that wait as well as the mutation itself.
+    return try {
+      val mutationLease =
+        beginOutboxSessionMutation(snapshot, expectedEventReason = "branch-switch") ?: return false
+      if (!isCurrentBranchSwitch(snapshot, switchGeneration)) {
+        cancelOutboxSessionMutation(snapshot, mutationLease)
+        return false
+      }
+      val actionHistoryGeneration = historyLoadGeneration.incrementAndGet()
+      runOutboxSessionMutation(snapshot, mutationLease, switchGeneration = switchGeneration) {
+        val params =
+          sessionRequestParams(snapshot.sessionKey, snapshot.ownerAgentId) {
+            put("leafEntryId", JsonPrimitive(leaf))
+          }
+        requestGatewayBound(
+          snapshot.gatewayScope?.gatewayId,
+          "sessions.branches.switch",
+          params.toString(),
+        )
+        val branchConfirmed = confirmOutboxBranchChange(snapshot, leaf, mutationLease)
+        if (!isCurrentBranchSwitch(snapshot, switchGeneration)) {
+          return@runOutboxSessionMutation false
+        }
+        val historyApplied = refreshHistoryForSessionAction(snapshot, actionHistoryGeneration)
+        val branchesApplied =
+          historyApplied?.let {
+            refreshSessionBranches(snapshot, it.branchState, BranchRefreshPurpose.ReadOnly)
+          } == true
+        if (!branchConfirmed || historyApplied == null) {
+          recoverOutboxAfterSessionMutationRefreshFailure(snapshot, mutationLease)
+        }
+        branchConfirmed && branchesApplied
+      } ?: false
+    } finally {
       if (switchGeneration == sessionBranchSwitchGeneration.get()) {
         sessionBranchSwitchClaimed.set(false)
         _sessionBranchSwitching.value = false
       }
-      return false
     }
-    if (!isCurrentBranchSwitch(snapshot, switchGeneration)) {
-      cancelOutboxSessionMutation(snapshot, mutationLease)
-      return false
-    }
-    val actionHistoryGeneration = historyLoadGeneration.incrementAndGet()
-    return runOutboxSessionMutation(snapshot, mutationLease, switchGeneration = switchGeneration) {
-      val params =
-        sessionRequestParams(snapshot.sessionKey, snapshot.ownerAgentId) {
-          put("leafEntryId", JsonPrimitive(leaf))
-        }
-      requestGatewayBound(snapshot.gatewayScope?.gatewayId, "sessions.branches.switch", params.toString())
-      val branchConfirmed = confirmOutboxBranchChange(snapshot, leaf, mutationLease)
-      if (!isCurrentBranchSwitch(snapshot, switchGeneration)) return@runOutboxSessionMutation false
-      val historyApplied = refreshHistoryForSessionAction(snapshot, actionHistoryGeneration)
-      val branchesApplied =
-        historyApplied?.let { refreshSessionBranches(snapshot, it.branchState, BranchRefreshPurpose.ReadOnly) } == true
-      if (!branchConfirmed || historyApplied == null) recoverOutboxAfterSessionMutationRefreshFailure(snapshot, mutationLease)
-      branchConfirmed && branchesApplied
-    } ?: false
   }
 
   suspend fun refreshSessionBranches(): Boolean {
@@ -2027,10 +2040,6 @@ class ChatController internal constructor(
       null
     } finally {
       if (mutatesBranch) releaseOutboxSessionMutation(snapshot, mutationLease)
-      if (switchGeneration != null && switchGeneration == sessionBranchSwitchGeneration.get()) {
-        sessionBranchSwitchClaimed.set(false)
-        _sessionBranchSwitching.value = false
-      }
     }
 
   private suspend fun cancelOutboxSessionMutation(
