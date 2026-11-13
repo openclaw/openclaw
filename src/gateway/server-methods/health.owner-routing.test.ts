@@ -14,7 +14,7 @@ import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import { beginAgentDeletionJournal } from "../../test-utils/agent-deletion-journal.js";
 import { observeMainThreadFs } from "../../test-utils/main-thread-fs-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import type { HealthSummary } from "../health/types.js";
+import type { HealthSummary, ReadinessChecker } from "../health/types.js";
 import type { GatewayHostLifecycle } from "../server-public.js";
 import * as processVitals from "../server/process-vitals.js";
 import { createReadinessChecker } from "../server/readiness.js";
@@ -76,7 +76,7 @@ function healthSnapshot(stateDir: string, overrides: Partial<HealthSummary> = {}
 function createHealthReader(
   snapshot: HealthSummary,
   getEventLoopHealth?: () => HealthSummary["eventLoop"],
-  getReadiness?: import("../server/readiness.js").ReadinessChecker,
+  getReadiness?: ReadinessChecker,
   scopes: string[] | null = ["operator.read"],
 ) {
   const context = {

@@ -598,13 +598,38 @@ CLI-test typecheck, typed lint, formatting and diff checks passed. Production
 and support line counts are unchanged. Full dead-code scans and hosted/landing
 outcomes are tracked in [PR #197639](https://github.com/openclaw/openclaw/pull/197639).
 
+### Tool-result fidelity at each output
+
+At `a41c7111235fdfcb5e4103edba0e5ff711d7e02c`, the single tool-result reuse
+case mixed trajectory, callback and terminal values and searched for a secret
+also present in metadata. Its persistence check had the same weakness. The
+repair keeps both existing completion routes and independently asserts complete
+text and metadata at every output. It preserves the distinct stored/display
+image contracts, awaits the session append and removes the direct sanitizer
+replay plus an unused mock-reset hook. No production or support code changes;
+the physical and expanded case counts both remain one.
+
+The original case passed with `sanitizeToolResult`'s text output deliberately
+emptied (488.40 seconds). The repaired case rejected the same fault at its first
+trajectory assertion (135.74 seconds). Both mutations were restored byte for
+byte. Baseline owner/sibling proof passed all 50 cases (555.94 seconds). The
+original ran in agents-core; the repaired case routes to unit-fast. These
+single runs, with different worker-cache states, do not establish a speedup.
+
+The clean repaired case passed (330.24 seconds). Independent preservation
+review and full local ClawSweeper review of
+`dbdea04a67b99b9541ea64fba03de9a10a3cfe3f` found no actionable issues. The
+agents-root test typecheck, typed lint, formatting and diff checks passed.
+Full dead-code scans and hosted/landing outcomes are tracked in
+[PR #197771](https://github.com/openclaw/openclaw/pull/197771).
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Pending: Twitch settled flag; it needs current-source and runtime keeper qualification.
 - Transfer rows before consolidating Android loading/blank-auth, persisted outbox keys/epochs, terminal initial projection, and native PCM/decoder/reader cases. Keep typed host-error precedence and active-run settlement.
 - Retain the CodeMode worker-leg deadline case: its real warmed worker and interruption path are distinct from the cancellation table's typed host-error precedence. Both suites keep their active-run settlement checks; this is a source-only retention decision.
 - Repair Android runtime/model fixture custody through existing guaranteed closers; no measured leak is claimed. Retarget misleading coroutine/authority/streaming assertions. Qualify Android dropdown arithmetic, IPv6 URL, empty SMS defaults and component-state mapping against their stronger keepers.
-- Repair swallowed/unrelated setup errors, silent auth/symlink skips, SSRF negative controls, content-absence/privacy results, delayed observer proofs, missing CLI fixture cleanup and aggregate-only tool-result fidelity. Retain CI inventory gaps as route repairs, including PostgreSQL conformance and removed Logbook worker paths.
+- Repair swallowed/unrelated setup errors, silent auth/symlink skips, SSRF negative controls, content-absence/privacy results, delayed observer proofs, missing CLI fixture cleanup. Retain CI inventory gaps as route repairs, including PostgreSQL conformance and removed Logbook worker paths.
 - Diagnostics OTel: the NodeSDK replay removal remains qualified above; content capture completion proof is recorded separately above.
 - SDK removal search was incomplete: public2,115/2,527 complete and bundled169/179 complete. No observed consumer is not proof of no external reliance. The retired target facade was private and excluded from packaging since `780bc791470`.
 - Retain duplicate Swift TLS fixtures in separate packages, renderer-discovered Blobster JSON (also production prompt inputs), process-entry helpers referenced extensionlessly, stable borrowed-reference assertions, and independent release/architecture/platform guards.

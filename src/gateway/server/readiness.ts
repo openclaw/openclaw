@@ -12,25 +12,11 @@ import {
   evaluateChannelHealth,
   type ChannelHealthPolicy,
 } from "../channel-health-policy.js";
+import type { ReadinessChecker, ReadinessResult } from "../health/types.js";
 import type { ChannelManager } from "../server-channels.js";
 import type { GatewayPluginReloadStatus } from "../server-plugin-reload-status.types.js";
 import type { GatewayEventLoopHealth } from "./event-loop-health.js";
 
-type ReadinessResult = {
-  ready: boolean;
-  coreReady: boolean;
-  failing: string[];
-  degraded?: string[];
-  suppressed?: string[];
-  uptimeMs: number;
-  eventLoop?: GatewayEventLoopHealth;
-  pluginReload?: GatewayPluginReloadStatus;
-  agentDatabases?: readonly AgentDatabaseAdmissionRefusal[];
-  agentDeletions?: readonly AgentDatabaseAdmissionRefusal[];
-  stateDatabase?: { reason: string };
-};
-
-export type ReadinessChecker = (childRuntime?: ChildRuntimeViability) => ReadinessResult;
 export type PreparedReadinessChecker = ReadinessChecker & {
   prepare: () => Promise<{ publish: () => ReadinessResult }>;
 };
