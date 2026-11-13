@@ -620,38 +620,33 @@ export async function prepareGatewayRunBootstrap(params: GatewayRunGuardParams):
   // Stop the early proxy before selection can choose another config/state target. Its lifecycle
   // restores the underlying env snapshot so the selected target's trusted dotenv can replace it.
   await getGatewayRunRuntimeHooks().releaseManagedProxy?.();
+  if (!params.opts.reset) {
+    // Outdated state is upgraded by copy and swap before anything reads it. A start
+    // the config guard would refuse stays read-only: the previous package must still
+    // read its state.
+    const { upgradeStateOnGatewayStart } = await import("../../state/state-upgrade-startup.js");
+    await measureGatewayBootstrapStep("cli.bootstrap.state-upgrade", () =>
+      upgradeStateOnGatewayStart(
+        process.env,
+        (start) =>
+          getGatewayStartGuardErrors({
+            ...start,
+            allowUnconfigured: params.opts.allowUnconfigured === true,
+          }).length === 0,
+      ),
+    );
+  }
   const environmentSelection = selectedGatewayRunEnvironment;
   selectedGatewayRunEnvironment = undefined;
   if (!environmentSelection) {
     gatewayRunTargetSelectedByConfig = false;
   }
-  let guarded = params.opts.reset
+  const guarded = params.opts.reset
     ? await guardGatewayRunReset(params)
     : await guardGatewayRunSelectedConfig({
         ...params,
         environmentSelection,
       });
-  const admitted = lastGuardedGatewayRunSnapshot;
-  // A start this config refuses stays read-only; only an admitted start upgrades state.
-  if (
-    guarded &&
-    !params.opts.reset &&
-    admitted &&
-    getGatewayStartGuardErrors({
-      allowUnconfigured: params.opts.allowUnconfigured === true,
-      configExists: admitted.exists,
-      mode: admitted.sourceConfig.gateway?.mode,
-    }).length === 0
-  ) {
-    const { upgradeStateOnGatewayStart } = await import("../../state/state-upgrade-startup.js");
-    const upgraded = await measureGatewayBootstrapStep("cli.bootstrap.state-upgrade", () =>
-      upgradeStateOnGatewayStart(process.env),
-    );
-    if (upgraded) {
-      // The upgrade can migrate the config; guard the result like any fresh read.
-      guarded = await guardGatewayRunSelectedConfig({ ...params, environmentSelection });
-    }
-  }
   await pinGatewayRunRuntimePaths();
   // Dev reset deletes the state directory before recreating config. Migrating first would
   // archive legacy state and then delete its imported SQLite rows.
