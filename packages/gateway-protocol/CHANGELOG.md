@@ -8,7 +8,6 @@ authoring dates (2026), not package publication dates.
 
 ## Unreleased
 
-- Add optional `thinkingInheritedDefault` to `agents.list` agent rows. It is present only when the agent sets its own `thinkingDefault`, and names the level clearing that override resolves to (per-agent and shared model params, the global default, then the model default). Additive; existing clients can ignore it.
 - **Breaking:** retire A2UI widgets and the generic registered-renderer API. Stored A2UI widgets are backed up and deleted by Doctor; recreate them as HTML widgets. The v4 registered-content wire declarations remain for parsing older messages and reporting the retired operation, not for rendering or persistence.
 - Keep wire protocol v4 after widget retirement. The retired `registered` widget-put shape remains wire-valid but returns an actionable HTML replacement error without mutating the board; surviving widget responses retain v4-compatible shapes. General clients remain on v4, and authenticated nodes and lightweight probes retain the v3 compatibility window.
 

@@ -1,4 +1,5 @@
 import { createMemo, createUniqueId, Errored, For, Loading, onSettled, Show } from "solid-js";
+import { ALL_THINKING_LEVELS } from "../../../../src/auto-reply/thinking.shared.js";
 import { normalizeAgentModelRefForConfig } from "../../../../src/config/model-input.js";
 import type {
   AgentIdentityResult,
@@ -40,7 +41,10 @@ import {
 import type { AgentsPanel } from "../../lib/agents/index.ts";
 import type { AgentSettingsAccess } from "../../lib/agents/settings-access.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
-import { formatThinkingOverrideLabel } from "../../lib/chat/thinking.ts";
+import {
+  formatThinkingOverrideLabel,
+  normalizeThinkingOptionValue,
+} from "../../lib/chat/thinking.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { createIdentityAvatars } from "../../lib/identity-avatar-loader.ts";
 import {
@@ -206,21 +210,21 @@ export function AgentOverview(
         value: "",
         // Without config the source of the resolved level is unknown: show it as is.
         label: !params.configForm
-          ? formatThinkingOverrideLabel(params.agent.thinkingDefault ?? "")
+          ? thinkingLevelLabel(params.agent.thinkingDefault ?? "")
           : inherited
             ? t("agents.overview.inheritDefaultThinking", {
-                level: formatThinkingOverrideLabel(inherited),
+                level: thinkingLevelLabel(inherited),
               })
             : t("agents.overview.inheritDefault"),
       },
       ...levels.map((level) => ({
         value: level.id,
-        label: formatThinkingOverrideLabel(level.id, level.label),
+        label: thinkingLevelLabel(level.id, level.label),
       })),
     ];
     // A level the current model does not offer stays visible instead of being rewritten.
     if (saved && !levels.some((level) => level.id === saved)) {
-      options.push({ value: saved, label: formatThinkingOverrideLabel(saved), disabled: true });
+      options.push({ value: saved, label: thinkingLevelLabel(saved), disabled: true });
     }
     return options;
   });
@@ -622,6 +626,17 @@ export function AgentOverview(
       </SettingsSection>
     </div>
   );
+}
+
+const STANDARD_THINKING_LEVELS = new Set<string>(ALL_THINKING_LEVELS);
+
+// Standard levels use the shared translated names, as the Models page does; provider-specific
+// levels keep their own label.
+function thinkingLevelLabel(value: string, label?: string): string {
+  const level = normalizeThinkingOptionValue(value);
+  return STANDARD_THINKING_LEVELS.has(level)
+    ? t(`quickSettings.model.thinkingLevels.${level}`)
+    : formatThinkingOverrideLabel(value, label);
 }
 
 export function renderAgentContextSection(
