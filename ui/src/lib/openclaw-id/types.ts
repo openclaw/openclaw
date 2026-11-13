@@ -1,5 +1,8 @@
 // Response shapes of the OpenClaw ID Gateway methods (openclawId.*) the Control UI reads.
-import type { SignedStatement } from "../../../../packages/openclaw-id-protocol/src/index.ts";
+import type {
+  MemberRole,
+  SignedStatement,
+} from "../../../../packages/openclaw-id-protocol/src/index.ts";
 import type { OpenClawIdLinkPreparation } from "./link.ts";
 
 export type OpenClawIdPublication =
@@ -24,8 +27,20 @@ export type OpenClawIdStatusResult = {
     hostname?: string;
     rootPub?: string;
   };
-  /** How this browser reaches the Gateway: only `local_operator` may link or sign in. */
+  /** How this browser reaches the Gateway: direct loopback, the OpenClaw ID tunnel, or neither. */
   channel: "local_operator" | "tunnel" | null;
+  /**
+   * Whether this connection may turn on remote access: the loopback operator, an admin with
+   * a verified personal identity, or neither.
+   */
+  remoteAccessSetup: "local" | "personal_admin" | null;
+  /** The publication at Discovery, for a personal admin who is not an owner. */
+  publication?: OpenClawIdPublication;
+  /**
+   * How this connection signs in with OpenClaw ID: the loopback popup, the device grant
+   * (a verified personal sign-in such as Tailscale), or not at all.
+   */
+  accountSignIn: "popup" | "device" | null;
   /** Whether `openclawId.people` answers this client (loopback operator or an owner device). */
   owner?: boolean;
   /** Active owner devices, returned only to an owner. */
@@ -57,7 +72,7 @@ type OpenClawIdConnection =
     }
   | {
       kind: "member";
-      role: "operator" | "viewer";
+      role: MemberRole;
       accountId: string;
       email: string | null;
       displayName: string | null;
@@ -82,6 +97,8 @@ export type OpenClawIdOwnerDevice = {
   peerKeys: string[];
   /** Who approved it: "root" (the recovery kit) or the approving device's fingerprint. */
   approvedBy: string;
+  /** The node key bound to this device's approval, if it also runs tools for the claw. */
+  nodePeerKey?: string;
   /** When the claw last admitted it (or added it), unix seconds. */
   lastSeen: number;
   /** Its OwnerDeviceCert: public and signed. */

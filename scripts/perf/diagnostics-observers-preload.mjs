@@ -21,34 +21,34 @@ if (isMainThread) {
     {
       pattern: /\/diagnostic-events-[^/]+\.mjs$/,
       counters: [
-        { name: "emit", anchor: /function emitDiagnosticEventWithTrust\([^)]*\) \{/ },
-        { name: "dispatch", anchor: /function dispatchDiagnosticEvent\([^)]*\) \{/ },
+        { name: "emit", anchor: /function emitDiagnosticEventWithTrust\([^)]*\)\s*\{/ },
+        { name: "dispatch", anchor: /function dispatchDiagnosticEvent\([^)]*\)\s*\{/ },
       ],
     },
     {
       pattern: /\/main-thread-stall-[^/]+\.mjs$/,
       counters: [
-        { name: "task", anchor: /run\(name, run, taskPhase\) \{/ },
-        { name: "continuation", anchor: /begin\(name, now\(\)\);/ },
+        { name: "task", anchor: /run\(name,\s*run,\s*taskPhase\)\s*\{/ },
+        { name: "continuation", anchor: /begin\(name,\s*now\(\)\);/ },
       ],
     },
     {
       pattern: /\/diagnostic-profile-[^/]+\.mjs$/,
       counters: [
-        { name: "profile.parse", anchor: /function parseNativeCpuProfile\([^)]*\) \{/ },
-        { name: "profile.frame", anchor: /function sanitizeDiagnosticProfileFrame\([^)]*\) \{/ },
+        { name: "profile.parse", anchor: /function parseNativeCpuProfile\([^)]*\)\s*\{/ },
+        { name: "profile.frame", anchor: /function sanitizeDiagnosticProfileFrame\([^)]*\)\s*\{/ },
       ],
     },
     {
       pattern: /\/gateway-prewarm\.js$/,
-      counters: [{ name: "flight.sample", anchor: /sample\(stall\) \{/ }],
+      counters: [{ name: "flight.sample", anchor: /sample\(stall\)\s*\{/ }],
     },
     {
       pattern: /\/extensions\/diagnostics-prometheus\/index\.js$/,
       counters: [
-        { name: "series", anchor: /const series = \([^)]*\) => \{/ },
-        { name: "histogram", anchor: /const histogram = \([^)]*\) => \{/ },
-        { name: "scrape", anchor: /const render = \(\) => \{/ },
+        { name: "series", anchor: /const series\s*=\s*\([^)]*\)\s*=>\s*\{/ },
+        { name: "histogram", anchor: /const histogram\s*=\s*\([^)]*\)\s*=>\s*\{/ },
+        { name: "scrape", anchor: /const render\s*=\s*\(\)\s*=>\s*\{/ },
       ],
     },
   ];

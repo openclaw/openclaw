@@ -106,8 +106,11 @@ and explicitly approve the signed redemption, which includes the node's
 self-reported name, platform, commands, and capabilities.
 
 On the first connection for each newly approved node listing, the Gateway
-automatically pairs the node device once. Only commands and capabilities within the description
-the owner approved qualify for automatic surface approval. Additional access uses
+automatically pairs the node device once. Only commands and capabilities within
+the description the owner approved qualify for automatic surface approval. The
+OS permission states the node reports on that first connection are recorded with
+the approved surface, so reconnects that declare the same or less access need no
+approval. Additional commands, capabilities, or newly granted OS permissions use
 the normal `node.pair` approval flow. Gateway command policy, node-local execution
 approvals, and OS permissions still apply.
 

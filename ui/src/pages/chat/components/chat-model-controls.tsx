@@ -160,7 +160,7 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
     const headingKey = (id: string) => {
       const provider = normalizeChatModelProviderId(id);
       // Usage aliases are not billing identities: Claude CLI's native account
-      // and the direct Anthropic API connection own separate picker headings.
+      // and the direct Anthropic API connection own separate authentication identities.
       return provider === "claude-cli"
         ? provider
         : normalizeChatModelProviderGroupId(canonicalModelAuthProviderId(provider));
@@ -281,8 +281,8 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
         pickerOption.agentRuntimeId = agentRuntimeId;
       }
       if (isDefault && sessionRuntimePinned && resolveModelRuntimeRoute(pickerOption.provider)) {
-        // Default clears the runtime pin; session-scoped metadata describes the route being left.
-        pickerOption.agentRuntimeId = undefined;
+        // Default clears the runtime pin; label the configured default route, not the one being left.
+        pickerOption.agentRuntimeId = defaultsRuntimeId?.trim() || undefined;
       }
       const options = [pickerOption];
       for (const choice of runtimeSelectionLocked ? [] : (catalogEntry?.runtimeChoices ?? [])) {

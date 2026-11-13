@@ -209,7 +209,11 @@ export function projectChatSystemNotice(
     return pendingItems;
   }
   const summary = projectSystemNoticeSummary({
-    label: noticeKind ? t(noticeKind.labelKey, { plugin: pluginName ?? "" }) : t("common.system"),
+    label: !noticeKind
+      ? t("common.system")
+      : noticeKind.labelKey
+        ? t(noticeKind.labelKey)
+        : (pluginName ?? ""),
     text,
     detailed: Boolean(noticeKind?.collapsedBody),
     statusOnly: Boolean(summaryKey),
@@ -218,7 +222,7 @@ export function projectChatSystemNotice(
     {
       kind: "notice",
       key: item.key,
-      icon: "cpu",
+      icon: noticeKind?.icon ?? "cpu",
       ...(pending ? {} : { systemEvent: "info" as const }),
       label: summary.label,
       ...(noticeKind?.startsTurn === false ? {} : { startsTurn: true }),

@@ -83,6 +83,7 @@ export async function readOwnerLinkStatus(params: {
       addedBy: node.added_by,
       lastSeen: node.last_seen,
       inviteId: node.invite_id,
+      ownerDevice: node.owner_device,
     })),
     nodeInvites: await listNodeInviteViews(record, Math.floor(Date.now() / 1000)),
     // After a restart, the last publication recorded with the claw stands in.

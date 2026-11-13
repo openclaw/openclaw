@@ -35,7 +35,6 @@ import { executeSqliteQuerySync, iterateSqliteQuerySync } from "../../../infra/k
 import { isPostgresSqlConnection } from "../../../infra/sql-connection.js";
 import {
   prepareArtifactPreservingSqliteRead,
-  readCustodiedDrainedSqliteSource,
   startSqliteReadOnlyLocationAsync,
 } from "../../../infra/sqlite-snapshot-source.js";
 import {
@@ -53,7 +52,10 @@ import {
   runOpenClawAgentWriteTransaction,
   withOpenClawAgentDatabaseAsync,
 } from "../../../state/openclaw-agent-db.js";
-import { getOpenClawDatabaseMaintenanceScope } from "../../../state/openclaw-state-maintenance-context.js";
+import {
+  getOpenClawDatabaseMaintenanceScope,
+  readCustodiedDrainedSqliteSource,
+} from "../../../state/openclaw-state-maintenance-context.js";
 import { chunkItems } from "../../../utils/chunk-items.js";
 import {
   deliveryContextFromSession,
@@ -161,7 +163,7 @@ export async function scanDoctorSessionEntryRecords(
     }
     assertSourceCurrent();
     if (readCustodiedDrainedSqliteSource(scope.storePath)) {
-      // The artifact-preserving owner reads a drained, custodied source in place.
+      // The backup owner has already drained WAL under the same maintenance custody.
       const inPlace = withArtifactPreservingStateReads(
         () => scan(databaseOptions, expectedIdentity),
         { agentDatabases: true },

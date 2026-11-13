@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnv } from "../test-utils/env.js";
+import { hasErrnoCode } from "./errno.js";
 import {
   getTrustedSafeBinDirs,
   isTrustedSafeBinPath,
@@ -65,21 +66,26 @@ describe("exec safe bin trust", () => {
     expect(await trusts("/tmp/evil/jq", trusted)).toBe(false);
   });
 
-  it("matches trusted dirs through path-local case folding on case-insensitive filesystems", async () => {
+  it("matches trusted dirs through path-local case folding on case-insensitive filesystems", async ({
+    skip,
+  }) => {
     await withTestDir({ prefix: "OpenClaw-Safe-Bin-" }, async (dir) => {
       const swapped = swapAsciiCase(dir);
       if (swapped === dir) {
-        return;
+        skip("requires a path with case-distinct characters");
       }
       const originalStat = await fs.stat(dir);
       let swappedStat: Awaited<ReturnType<typeof fs.stat>>;
       try {
         swappedStat = await fs.stat(swapped);
-      } catch {
-        return;
+      } catch (error) {
+        if (hasErrnoCode(error, "ENOENT")) {
+          skip("requires a case-insensitive filesystem");
+        }
+        throw error;
       }
       if (originalStat.dev !== swappedStat.dev || originalStat.ino !== swappedStat.ino) {
-        return;
+        skip("requires case variants to refer to the same directory");
       }
 
       expect(
@@ -88,15 +94,20 @@ describe("exec safe bin trust", () => {
     });
   });
 
-  it("keeps case-distinct trusted dirs separate on case-sensitive filesystems", async () => {
+  it("keeps case-distinct trusted dirs separate on case-sensitive filesystems", async ({
+    skip,
+  }) => {
     await withTestDir({ prefix: "openclaw-safe-bin-case-" }, async (parent) => {
       const trustedDir = path.join(parent, "ToolBin");
       const untrustedDir = path.join(parent, "toolbin");
       await fs.mkdir(trustedDir);
       try {
         await fs.mkdir(untrustedDir);
-      } catch {
-        return;
+      } catch (error) {
+        if (hasErrnoCode(error, "EEXIST")) {
+          skip("requires a case-sensitive filesystem");
+        }
+        throw error;
       }
 
       expect(

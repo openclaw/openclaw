@@ -5,7 +5,6 @@ import { en } from "./en.ts";
 const catalog = {
   chat: {
     view: {
-      activityDetails: "View activity details",
       workingDetails: "Agent is working. View details",
     },
     composer: {
@@ -78,6 +77,8 @@ const catalog = {
         inputShort: "In",
         outputShort: "Out",
         costShort: "Cost",
+        sessionTotal: "Session total",
+        unpriced: "Unpriced",
         quotaAccountUnknown: "Quota account unknown",
         openUsage: "Open usage dashboard",
         resets: "Resets {time}",
@@ -193,7 +194,7 @@ const catalog = {
       retryQueuedMessage: "Retry queued message",
       discard: "Discard",
       discardPendingMessage:
-        "Discard this local pending copy. This does not cancel a message already received by the Gateway.",
+        "Discard this local copy. This does not cancel a message already received by the Gateway.",
       steer: "Steer",
       steerQueuedMessage: "Steer queued message",
       resume: "Resume",
@@ -313,8 +314,7 @@ const catalog = {
       openOriginal: "Open original",
       compressToFit: "Compress to fit",
       retryCompression: "Retry compression",
-      compressionHint:
-        "Video is too large. Compress a copy on this device; the original stays unchanged.",
+      compressionHint: "Compress a smaller copy on this device. The original is unchanged.",
       compressing: "Compressing · {progress}%",
       compressionUnsupported: "This browser cannot compress this video.",
       compressionTooLarge: "Video is still too large. Try a smaller file.",

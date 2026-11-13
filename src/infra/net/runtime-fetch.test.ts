@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { fetchWithRuntimeDispatcher } from "./runtime-fetch.js";
 
 const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
@@ -79,7 +79,14 @@ describe("fetchWithRuntimeDispatcher", () => {
     const body = sentInit.body as unknown as RuntimeFormData;
     expect(body).toBeInstanceOf(RuntimeFormData);
     expect(body.records.find((record) => record.name === "model")?.value).toBe("gpt-4o-transcribe");
-    expect(body.records.find((record) => record.name === "file")?.filename).toBe("clip.ogg");
+    const file = body.records.find((record) => record.name === "file");
+    expect(file?.filename).toBe("clip.ogg");
+    const blob = file?.value;
+    assert.instanceOf(blob, Blob);
+    expect(blob.type).toBe("audio/ogg");
+    // This fixed three-byte upload Blob is not an untrusted HTTP response.
+    // nosemgrep: security.opengrep.ghsa-p536-vvpp-9mc8.openclaw.web-fetch-or-media-unbounded-response-read
+    expect(new Uint8Array(await blob.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3]));
     const sentHeaders = new Headers(sentInit.headers);
     expect(sentHeaders.has("content-length")).toBe(false);
     expect(sentHeaders.has("content-type")).toBe(false);

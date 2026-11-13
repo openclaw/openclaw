@@ -597,8 +597,7 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
         next.id,
         nextEntry,
         expectedUpdatedAt,
-        options.ownerSlot.ownerId,
-        options.ownerSlot.now,
+        options.ownerSlot,
       );
       if (result === "owner_busy") {
         throw new Error(`Owner ${options.ownerSlot.ownerId} already has active Workboard work.`);

@@ -403,6 +403,6 @@ struct StatusMenuProblemLineView: View {
             }
         }
         .fixedSize(horizontal: false, vertical: true)
-        .help(self.diagnostic.map { "\(self.label)\n\($0)" } ?? self.label)
+        .help(self.diagnostic.map { "\(self.label)\n\($0)" } ?? "")
     }
 }

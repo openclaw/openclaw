@@ -70,8 +70,6 @@ const enLogin = {
       noSecret: "no secret",
       change: "Change",
     },
-    showSecret: "Show Gateway secret",
-    hideSecret: "Hide Gateway secret",
     toggleSecretVisibility: "Toggle Gateway secret visibility",
     failure: {
       rawError: "Show details",

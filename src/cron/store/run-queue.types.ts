@@ -84,9 +84,14 @@ export type CronRunQueueOperations = {
     };
     output: { skipped: CronSkippedRequest[] };
   };
-  /** A fired condition stops counting as a check while its payload runs. */
+  /**
+   * A fired condition stops counting as a check. A timed check then waits, holding neither a
+   * check nor a run slot, until the queue drain hands it a slot in due order; `runSlot` is false
+   * until then, and the host asks again each time the queue moves.
+   */
   "cron.settleConditionCheck": {
     input: { storeKey: string; jobId: string; receiptId: string };
-    output: { job?: CronStoredJob };
+    /** `stale`: the receipt no longer owns the job's running marker. */
+    output: { job?: CronStoredJob; runSlot: boolean; stale?: true };
   };
 };

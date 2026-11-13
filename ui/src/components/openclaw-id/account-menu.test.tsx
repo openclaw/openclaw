@@ -3,8 +3,12 @@ import { createRoot, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createGatewayHarness, flushMicrotasks } from "../../app/overlays-access.test-support.ts";
-import { signOutOfOpenClawId } from "../../lib/openclaw-id/account.ts";
+import { openClawIdAccount, signOutOfOpenClawId } from "../../lib/openclaw-id/account.ts";
 import { OPENCLAW_ID_CALLBACK_KEY_PREFIX } from "../../lib/openclaw-id/callback-contract.ts";
+import {
+  beginOpenClawIdDeviceSignIn,
+  finishOpenClawIdDeviceSignIn,
+} from "../../lib/openclaw-id/device-sign-in.ts";
 import type { OpenClawIdPublication, OpenClawIdStatusResult } from "../../lib/openclaw-id/types.ts";
 import { disposeSidebarContextLifecycles } from "../../test-helpers/app-sidebar-context-lifecycle.ts";
 import { createContext, createSessions } from "../../test-helpers/app-sidebar.ts";
@@ -30,6 +34,11 @@ function status(overrides: Partial<OpenClawIdStatusResult> = {}): OpenClawIdStat
     status: { state: "on" },
     link: { linked: false },
     channel: "local_operator",
+    remoteAccessSetup:
+      (overrides.channel === undefined ? "local_operator" : overrides.channel) === "local_operator"
+        ? "local"
+        : null,
+    accountSignIn: "popup",
     owner: true,
     connection: { kind: "local" },
     ownerDeviceCount: 2,
@@ -258,6 +267,102 @@ describe("approved OpenClaw ID account menu", () => {
     },
   );
 
+  it("signs in over a personal sign-in with a device code and shows the account", async () => {
+    vi.useFakeTimers();
+    const personal = status({
+      channel: null,
+      accountSignIn: "device",
+      owner: false,
+      connection: { kind: "none" },
+    });
+    // The person's own profile heads the menu until this browser holds an OpenClaw ID.
+    expect(openClawIdMenuIdentity(personal)).toBeNull();
+    let polls = 0;
+    const request = vi.fn(async (method: string, params: Record<string, unknown>) => {
+      expect(method).toBe("openclawId.account");
+      if (params.action === "device_begin") {
+        return {
+          state: "d1",
+          userCode: "WDJB-MJHT",
+          verificationUri: "https://issuer.example.test/device",
+          verificationUriComplete: "https://issuer.example.test/device?user_code=WDJB-MJHT",
+          expiresAt: Date.now() + 600_000,
+          interval: 5,
+        };
+      }
+      expect(params).toEqual({ action: "device_poll", state: "d1" });
+      polls += 1;
+      return polls < 2 ? { pending: true, interval: 5 } : { account, idToken: "device-token" };
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const started = await beginOpenClawIdDeviceSignIn(client);
+    const finished = finishOpenClawIdDeviceSignIn({
+      client,
+      started,
+      basePath: "",
+      signal: new AbortController().signal,
+    });
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(polls).toBe(0);
+    await vi.advanceTimersByTimeAsync(10_001);
+    await expect(finished).resolves.toMatchObject({ signedIn: { email: "owner@example.test" } });
+    expect(openClawIdAccount()?.idToken).toBe("device-token");
+    expect(openClawIdMenuIdentity(personal)).toEqual({
+      name: "Owner",
+      detail: "owner@example.test · OpenClaw ID",
+    });
+    const signedIn = menu(personal);
+    expect(signedIn.labels).toContain("Sign out of OpenClaw ID");
+    // Signing in grants nothing: remote access setup and owner tools stay on this computer.
+    expect(signedIn.labels).not.toContain("Move to new keys");
+    expect(signedIn.labels).not.toContain("Your devices");
+    vi.useRealTimers();
+  });
+
+  it("retires a device sign-in when this origin signs out while it starts", async () => {
+    const begun = Promise.withResolvers<unknown>();
+    const request = vi.fn(async () => begun.promise);
+    const starting = beginOpenClawIdDeviceSignIn({ request } as unknown as GatewayBrowserClient);
+    window.localStorage.setItem("openclaw.openclawId.signedOut", "another-tab");
+    begun.resolve({
+      state: "d1",
+      userCode: "WDJB-MJHT",
+      verificationUri: "https://issuer.example.test/device",
+      verificationUriComplete: null,
+      expiresAt: Date.now() + 600_000,
+      interval: 5,
+    });
+    await expect(starting).rejects.toThrow("You signed out while sign-in was in progress");
+  });
+
+  it("stops polling a device sign-in when it is cancelled", async () => {
+    vi.useFakeTimers();
+    const request = vi.fn(async () => ({ pending: true, interval: 5 }));
+    const stop = new AbortController();
+    const finished = finishOpenClawIdDeviceSignIn({
+      client: { request } as unknown as GatewayBrowserClient,
+      started: {
+        state: "d1",
+        userCode: "WDJB-MJHT",
+        verificationUri: "https://issuer.example.test/device",
+        verificationUriComplete: null,
+        expiresAt: Date.now() + 600_000,
+        interval: 5,
+        signOutGeneration: window.localStorage.getItem("openclaw.openclawId.signedOut"),
+      },
+      basePath: "",
+      signal: stop.signal,
+    });
+    const settled = expect(finished).rejects.toBeDefined();
+    await vi.advanceTimersByTimeAsync(5_000);
+    stop.abort();
+    await settled;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(request).toHaveBeenCalledOnce();
+    expect(openClawIdAccount()).toBeNull();
+    vi.useRealTimers();
+  });
+
   it("is absent when the Labs flag is off", () => {
     expect(menu(null).labels).toEqual([]);
     expect(menu(status({ status: { state: "off" } })).text.trim()).toBe("");
@@ -279,8 +384,17 @@ describe("approved OpenClaw ID account menu", () => {
   it.each([
     [status(), null],
     [
-      status({ channel: null, owner: false, connection: { kind: "none" } }),
-      "Sign in on the computer that runs this claw.",
+      status({ channel: null, accountSignIn: null, owner: false, connection: { kind: "none" } }),
+      "Sign in through Tailscale or another personal sign-in, or on the computer that runs this claw.",
+    ],
+    [
+      status({
+        channel: null,
+        accountSignIn: "device",
+        owner: false,
+        connection: { kind: "none" },
+      }),
+      null,
     ],
     [
       status({ services: { issuerUrl: null, discoveryUrl: null, loaderDomain: null } }),
@@ -335,9 +449,13 @@ describe("approved OpenClaw ID account menu", () => {
     expect(menu(current).rows[0]?.details).toBeUndefined();
   });
 
-  it.each(["viewer", "operator"] as const)(
+  it.each([
+    ["viewer", "Viewer"],
+    ["operator", "Operator"],
+    ["guest", "guest"],
+  ] as const)(
     "remote %s shows own email, role and known inviter with no owner items",
-    (role) => {
+    (role, label) => {
       const current = status({
         channel: "tunnel",
         owner: false,
@@ -353,7 +471,7 @@ describe("approved OpenClaw ID account menu", () => {
       });
       expect(openClawIdMenuIdentity(current)).toEqual({
         name: "member@example.test",
-        detail: `${role === "viewer" ? "Viewer" : "Operator"} on studio`,
+        detail: `${label} on studio`,
       });
       expect(menu(current).labels).toEqual([]);
       expect(menu(current).text).toContain("Invited by Owner");
@@ -375,7 +493,7 @@ describe("approved OpenClaw ID account menu", () => {
         displayName: null,
       },
     });
-    expect(openClawIdMenuIdentity(current).name).toBe("OpenClaw ID account");
+    expect(openClawIdMenuIdentity(current)?.name).toBe("OpenClaw ID account");
     expect(menu(current).text).not.toContain("Invited by");
   });
 
@@ -410,7 +528,7 @@ describe("approved OpenClaw ID account menu", () => {
         connection: { kind: "local", accountEmail: account.email, accountName: account.name },
       });
       await signIn(current);
-      expect(openClawIdMenuIdentity(current).detail).toBe("owner@example.test · Local access");
+      expect(openClawIdMenuIdentity(current)?.detail).toBe("owner@example.test · Local access");
       expect(menu(current).labels).toEqual([
         "Copy claw link",
         "Move to new keys",
@@ -426,7 +544,7 @@ describe("approved OpenClaw ID account menu", () => {
     const current = status();
     const request = await signIn(current);
     expect(menu(current).labels).toEqual(["Turn on remote access", "Sign out of OpenClaw ID"]);
-    expect(openClawIdMenuIdentity(current).name).toBe("OpenClaw ID account");
+    expect(openClawIdMenuIdentity(current)?.name).toBe("OpenClaw ID account");
     expect(request).toHaveBeenLastCalledWith("openclawId.authority", {
       action: "account_complete",
       state: "s1",
@@ -517,6 +635,57 @@ describe("approved OpenClaw ID account menu", () => {
       action: "account_link_code",
       idToken: "test-token",
     });
+  });
+
+  it("offers Turn on remote access to an admin on a personal sign-in, not to other people", async () => {
+    await signIn(status());
+    const personal = (remoteAccessSetup: OpenClawIdStatusResult["remoteAccessSetup"]) =>
+      status({
+        channel: null,
+        remoteAccessSetup,
+        accountSignIn: "device",
+        owner: false,
+        connection: { kind: "none" },
+      });
+    const admin = menu(personal("personal_admin"));
+    expect(admin.labels).toEqual(["Turn on remote access", "Sign out of OpenClaw ID"]);
+    expect(admin.rows[0]?.disabled).toBeFalsy();
+    const graham = menu(personal(null)).rows[0];
+    expect(graham?.label).toBe("Turn on remote access");
+    expect(graham?.disabled).toBe(true);
+    expect(graham?.attributes?.title).toBe(
+      "Only an admin can turn on remote access for this claw.",
+    );
+    // Linked: the admin may publish new keys (from the status's publication), never move them.
+    const linkedAdmin = menu(
+      status({
+        channel: null,
+        remoteAccessSetup: "personal_admin",
+        accountSignIn: "device",
+        owner: false,
+        connection: { kind: "none" },
+        link: linked,
+        publication: { state: "failed", code: "needs_link_code", message: "x" },
+      }),
+    );
+    expect(linkedAdmin.text).toContain("New keys aren't published yet");
+    expect(linkedAdmin.labels).toContain("Publish new keys");
+    expect(linkedAdmin.labels).not.toContain("Move to new keys");
+    expect(linkedAdmin.labels).not.toContain("Copy claw link");
+    const request = vi.fn(async (_method: string, params: Record<string, unknown>) =>
+      params.action === "account_link_code" ? { code: "ACCOUNT-CODE" } : { publication: null },
+    );
+    selectOpenClawIdMenuValue("openclaw-id:publish-keys", {
+      status: personal("personal_admin"),
+      client: { request } as unknown as GatewayBrowserClient,
+      basePath: "",
+    });
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenLastCalledWith("openclawId.authority", {
+        action: "publish",
+        enrollmentCode: "ACCOUNT-CODE",
+      }),
+    );
   });
 
   it("offers remote sign-out only with the loader's real service worker", () => {

@@ -7,6 +7,7 @@ import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
@@ -249,51 +250,64 @@ it.each(["admin", "writer"])(
   },
 );
 
-it("uses an explicit owner credential independently of a revoked ambient visitor cookie", async () => {
-  await withRoleConfig(async () => {
-    const profile = ensureProfileForEmail("visitor@example.test");
-    const { config, registry } = createPluginRegistryFixture();
-    registerVirtualTestPlugin({
-      registry,
-      config,
-      id: "person-access",
-      name: "Person access",
-      register(api) {
-        api.registerGatewayAccessPolicy({
-          authorize() {
-            throw new Error("Visitor grant ended");
-          },
-        });
-      },
-    });
-    setActivePluginRegistry(registry.registry);
-    const auth = tokenAuth("independent-owner");
-    const cookie = issueCookie(profile.id, { generation: cookieGeneration(auth) });
-    const catalog = await prepareUserProfileCatalog();
-    try {
-      for (const authorization of [undefined, "Bearer independent-owner"]) {
-        const { res } = makeMockHttpResponse();
-        const result = await admit({
-          req: createGatewayRequest({ path: requestPath, headers: { cookie }, authorization }),
-          res,
-          auth,
-          resolveOperatorScopes: resolveSharedSecretHttpOperatorScopes,
-        });
-        if (authorization) {
-          expect(result?.requestAuth.operatorRoleActor).toEqual({ kind: "system" });
-          expect(result?.operatorScopes).toContain("operator.admin");
-          expect(res.writableEnded).toBe(false);
-        } else {
-          expect(result).toBeNull();
-          expect(res.statusCode).toBe(403);
+it.each(["revoked", "unavailable"] as const)(
+  "uses an explicit owner credential independently of a %s ambient visitor cookie",
+  async (failure) => {
+    await withRoleConfig(async () => {
+      const profile = ensureProfileForEmail("visitor@example.test");
+      const { config, registry } = createPluginRegistryFixture();
+      registerVirtualTestPlugin({
+        registry,
+        config,
+        id: "person-access",
+        name: "Person access",
+        register(api) {
+          api.registerGatewayAccessPolicy({
+            authorize() {
+              if (failure === "unavailable") {
+                throw new Error("Plugin invocation scope is closed");
+              }
+              const signal = AbortSignal.abort(new Error("Visitor grant ended"));
+              return { signal, assertCurrent: () => signal.throwIfAborted() };
+            },
+          });
+        },
+      });
+      setActivePluginRegistry(registry.registry);
+      const auth = tokenAuth("independent-owner");
+      const cookie = issueCookie(profile.id, { generation: cookieGeneration(auth) });
+      const catalog = await prepareUserProfileCatalog();
+      try {
+        for (const authorization of [undefined, "Bearer independent-owner"]) {
+          const { res } = makeMockHttpResponse();
+          const result = await admit({
+            req: createGatewayRequest({ path: requestPath, headers: { cookie }, authorization }),
+            res,
+            auth,
+            resolveOperatorScopes: resolveSharedSecretHttpOperatorScopes,
+          });
+          if (authorization) {
+            expect(result?.requestAuth.operatorRoleActor).toEqual({ kind: "system" });
+            expect(result?.operatorScopes).toContain("operator.admin");
+            expect(res.writableEnded).toBe(false);
+          } else {
+            expect(result).toBeNull();
+            expect(res.statusCode).toBe(failure === "revoked" ? 403 : 503);
+          }
+          res.destroy();
         }
-        res.destroy();
+        if (failure === "unavailable") {
+          // Revalidation has no response argument; its outer HTTP owner translates the error.
+          expect(() =>
+            authorizeCookie(cookie, resolveSharedGatewaySessionGeneration(auth)),
+          ).toThrow(GatewayOperatorAccessUnavailableError);
+        }
+      } finally {
+        catalog.release();
       }
-    } finally {
-      catalog.release();
-    }
-  });
-});
+    });
+  },
+);
 
 it("revokes issued Tailscale cookies on policy changes without rotating shared credentials", async () => {
   await withStateConfig(
