@@ -156,6 +156,7 @@ export const worktreeTemplateReadOperations = {
             .selectFrom("worktree_templates")
             .selectAll()
             .orderBy("last_used_at", "asc")
+            .orderBy("created_at", "asc")
             .orderBy("id", "asc"),
         ).rows.map(rowToRecord)
       : [],
