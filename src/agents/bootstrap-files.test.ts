@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
@@ -9,6 +10,9 @@ import {
   upsertSessionEntryCore,
   type SessionTranscriptRuntimeTarget,
 } from "../config/sessions/session-accessor.js";
+import { seedUnindexedTranscriptForTest } from "../config/sessions/session-accessor.sqlite-import.test-support.js";
+import { readSessionTranscriptAnchorsAsync } from "../config/sessions/session-transcript-anchor-read.js";
+import { runWithSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   clearInternalHooks,
@@ -535,7 +539,7 @@ describe("hasCompletedBootstrapTurn", () => {
         sessionManager.appendLeafControl({ targetId: firstEntryId, appendParentId: firstEntryId });
       }
       expect(await hasCompletedBootstrapTurn(sessionTarget)).toBe(false);
-      if (boundary !== "compaction") {
+      if (boundary === "branch") {
         return;
       }
       sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, { timestamp: 3 });
@@ -547,6 +551,62 @@ describe("hasCompletedBootstrapTurn", () => {
       } finally {
         hostExec.mockRestore();
       }
+    },
+  );
+
+  it("retains full bootstrap completion beyond 500 ordinary transcript events", async () => {
+    sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, {
+      context: "same instruction ".repeat(1_000),
+    });
+    for (let index = 0; index < 501; index++) {
+      await sessionManager.appendMessageAsync(makeUserMessage(`later ${index}`, index + 1));
+    }
+
+    expect(await hasCompletedBootstrapTurn(sessionTarget)).toBe(true);
+  });
+
+  it.each([false, true])(
+    "reads only markers before the admitted user (before: %s)",
+    async (before) => {
+      if (before) {
+        await sessionManager.appendCustomEntryAsync(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, {});
+      }
+      const entryId = expectDefined(
+        await sessionManager.appendMessageAsync(makeUserMessage("current input", 1)),
+        "Expected the committed input identity",
+      );
+      if (!before) {
+        await sessionManager.appendCustomEntryAsync(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, {});
+      }
+      const { anchors } = await readSessionTranscriptAnchorsAsync(sessionTarget, {
+        entryIds: [entryId],
+      });
+      const anchor = expectDefined(anchors[0], "Expected the admitted input anchor");
+      expect(
+        await runWithSessionTranscriptReadFence(
+          { ...anchor, role: "user", logicalTurnId: "bootstrap-turn" },
+          () => hasCompletedBootstrapTurn(sessionTarget),
+        ),
+      ).toBe(before);
+    },
+  );
+
+  it.each([false, true])(
+    "uses the final imported customType member (marker last: %s)",
+    async (markerLast) => {
+      const types = markerLast
+        ? ["unrelated", FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE]
+        : [FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, "unrelated"];
+      const marker = `{"type":"custom","id":"marker","parentId":null,"customType":${JSON.stringify(types[0])},"customType":${JSON.stringify(types[1])},"data":${JSON.stringify("compressed ".repeat(1000))}}`;
+      await seedUnindexedTranscriptForTest({
+        ...sessionTarget,
+        entry: { sessionId: sessionTarget.sessionId, updatedAt: 1 },
+        events: [
+          { session_id: sessionTarget.sessionId, seq: 0, event_json: marker, created_at: 1 },
+        ],
+      });
+
+      expect(await hasCompletedBootstrapTurn(sessionTarget)).toBe(markerLast);
     },
   );
 });
