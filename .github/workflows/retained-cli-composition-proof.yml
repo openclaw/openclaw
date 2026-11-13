@@ -1,4 +1,4 @@
-name: Release 11.4 corrected plugin repair proof
+name: Release 11.4 gateway capture prerequisite investigation
 on:
   workflow_dispatch:
     inputs:
@@ -8,20 +8,20 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: release-114-corrected-plugin-43372397865-proof
+  group: release-114-gateway-capture-investigation-proof
   cancel-in-progress: false
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   EXPECTED_TARGET: db48e205e03f5a0458af2cb78bcf5434fc9a70a0
 jobs:
   proof:
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 30
     strategy:
       fail-fast: false
-      max-parallel: 4
+      max-parallel: 1
       matrix:
-        lane: [plugins, static, types-plugins-platform]
+        lane: [gateway-capture]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -103,61 +103,28 @@ jobs:
           cache-mode: restore
       - uses: ./.github/actions/setup-test-bun
       - uses: ./.github/actions/setup-ripgrep
-      - name: Plugin invocation and transcript cleanup
-        if: matrix.lane == 'plugins'
-        shell: bash
-        run: |
-          set -euo pipefail
-          OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE=1 pnpm test src/plugins/plugin-invocation-scope.test.ts src/plugins/plugin-instance.consumer.test.ts src/plugins/registry-inspection-resources.invocation.test.ts src/plugins/capability-provider-acquisition.test.ts src/transcripts/capture-stop.test.ts --maxWorkers=1 2>&1 | tee .artifacts/drained-repair-proof/plugins.log
-      - name: Format corrected assertion file
-        if: matrix.lane == 'static'
+      - name: Observe canonical Gateway capture preparation and test
         shell: bash
         run: |
           set -euo pipefail
           proof=.artifacts/drained-repair-proof
+          base64 --decode > "$proof/observe-build.py" <<'BOUND_OBSERVER'
+          IyBDSS1vbmx5IG9ic2VydmVyOiBubyBwcm9kdWN0IGNoYW5nZXMsIHNpZ25hbHMsIGVudmlyb25tZW50IG9yIGNvbW1hbmQtbGluZSBjYXB0dXJlLgppbXBvcnQgY29sbGVjdGlvbnMKaW1wb3J0IGhhc2hsaWIKaW1wb3J0IGpzb24KaW1wb3J0IG9zCmZyb20gcGF0aGxpYiBpbXBvcnQgUGF0aAppbXBvcnQgcmUKaW1wb3J0IHN1YnByb2Nlc3MKaW1wb3J0IHN5cwppbXBvcnQgdGltZQoKSU5URVJWQUwgPSAzMApNQVhfU0FNUExFUyA9IDYxCk1BWF9QUk9DRVNTRVMgPSAxMjgKTUFYX1RIUkVBRFMgPSA1MTIKTUFYX0NHUk9VUFMgPSAzMgpvdXQgPSBQYXRoKCcuYXJ0aWZhY3RzL2RyYWluZWQtcmVwYWlyLXByb29mL3Jlc291cmNlLW9ic2VydmF0aW9ucy5qc29ubCcpCmVycm9ycyA9IGNvbGxlY3Rpb25zLkNvdW50ZXIoKQoKZGVmIHJlYWQocGF0aCk6CiAgICB0cnk6CiAgICAgICAgcmV0dXJuIFBhdGgocGF0aCkucmVhZF90ZXh0KCkKICAgIGV4Y2VwdCAoT1NFcnJvciwgVW5pY29kZUVycm9yKSBhcyBlcnJvcjoKICAgICAgICBlcnJvcnNbdHlwZShlcnJvcikuX19uYW1lX19dICs9IDEKICAgICAgICByZXR1cm4gTm9uZQoKZGVmIHN0YXQocGF0aCk6CiAgICByYXcgPSByZWFkKHBhdGgpCiAgICBpZiByYXcgaXMgTm9uZToKICAgICAgICByZXR1cm4gTm9uZQogICAgIyBJZ25vcmUgdGhlIGV4ZWN1dGFibGUvdGFzayBuYW1lLCB3aGljaCBtYXkgYmUgY2FsbGVyLWNvbnRyb2xsZWQuCiAgICBmaWVsZHMgPSByYXdbcmF3LnJmaW5kKCcpJykgKyAyOl0uc3BsaXQoKQogICAgaWYgbGVuKGZpZWxkcykgPCAyMjoKICAgICAgICBlcnJvcnNbJ1Nob3J0U3RhdCddICs9IDEKICAgICAgICByZXR1cm4gTm9uZQogICAgcmV0dXJuIGRpY3QocGlkPWludChyYXcuc3BsaXQoJyAnLCAxKVswXSksIHBwaWQ9aW50KGZpZWxkc1sxXSksIHN0YXRlPWZpZWxkc1swXSwKICAgICAgICAgICAgICAgIGNwdV91c2VyX3RpY2tzPWludChmaWVsZHNbMTFdKSwgY3B1X3N5c3RlbV90aWNrcz1pbnQoZmllbGRzWzEyXSksCiAgICAgICAgICAgICAgICB0aHJlYWRzPWludChmaWVsZHNbMTddKSwgc3RhcnRfdGlja3M9aW50KGZpZWxkc1sxOV0pLAogICAgICAgICAgICAgICAgdmlydHVhbF9ieXRlcz1pbnQoZmllbGRzWzIwXSksIHJzc19wYWdlcz1pbnQoZmllbGRzWzIxXSkpCgpkZWYgbnVtZXJpY190ZXh0KHBhdGgpOgogICAgdmFsdWUgPSByZWFkKHBhdGgpCiAgICBpZiB2YWx1ZSBpcyBOb25lOgogICAgICAgIHJldHVybiBOb25lCiAgICAjIE9ubHkgZml4ZWQga2VybmVsIGNvdW50ZXJzL3ByZXNzdXJlIGZpZWxkcywgbmV2ZXIgZmlsZSBwYXRocyBvciB0YXNrIG5hbWVzLgogICAgdmFsdWUgPSB2YWx1ZS5zdHJpcCgpCiAgICBpZiBsZW4odmFsdWUpID4gODE5MiBvciBub3QgcmUuZnVsbG1hdGNoKHInW2EtekEtWjAtOV8uPSBcblx0LV0qJywgdmFsdWUpOgogICAgICAgIGVycm9yc1snVW5leHBlY3RlZENvdW50ZXInXSArPSAxCiAgICAgICAgcmV0dXJuIE5vbmUKICAgIHJldHVybiB2YWx1ZQoKZGVmIHNhbXBsZShyb290X3BpZCwgc2VxdWVuY2UsIHN0YXJ0ZWQpOgogICAgZXJyb3JzLmNsZWFyKCkKICAgIGFsbF9zdGF0cyA9IHt9CiAgICBmb3IgZW50cnkgaW4gUGF0aCgnL3Byb2MnKS5pdGVyZGlyKCk6CiAgICAgICAgaWYgZW50cnkubmFtZS5pc2RlY2ltYWwoKToKICAgICAgICAgICAgaXRlbSA9IHN0YXQoZW50cnkgLyAnc3RhdCcpCiAgICAgICAgICAgIGlmIGl0ZW0gaXMgbm90IE5vbmU6CiAgICAgICAgICAgICAgICBhbGxfc3RhdHNbaXRlbVsncGlkJ11dID0gaXRlbQogICAgc2VsZWN0ZWQgPSB7cm9vdF9waWR9CiAgICB3aGlsZSBUcnVlOgogICAgICAgIGNoaWxkcmVuID0ge3BpZCBmb3IgcGlkLCBpdGVtIGluIGFsbF9zdGF0cy5pdGVtcygpIGlmIGl0ZW1bJ3BwaWQnXSBpbiBzZWxlY3RlZH0KICAgICAgICBuZXcgPSBzZWxlY3RlZCB8IGNoaWxkcmVuCiAgICAgICAgaWYgbmV3ID09IHNlbGVjdGVkOgogICAgICAgICAgICBicmVhawogICAgICAgIHNlbGVjdGVkID0gbmV3CiAgICBwaWRzID0gc29ydGVkKHNlbGVjdGVkICYgYWxsX3N0YXRzLmtleXMoKSlbOk1BWF9QUk9DRVNTRVNdCiAgICBwcm9jZXNzZXMgPSBbXQogICAgZ3JvdXBzID0gc2V0KCkKICAgIHRocmVhZF9idWRnZXQgPSBNQVhfVEhSRUFEUwogICAgZm9yIHBpZCBpbiBwaWRzOgogICAgICAgIGl0ZW0gPSBhbGxfc3RhdHNbcGlkXQogICAgICAgIGl0ZW1bJ2lvJ10gPSBudW1lcmljX3RleHQoZicvcHJvYy97cGlkfS9pbycpCiAgICAgICAgc3RhdGVzID0gY29sbGVjdGlvbnMuQ291bnRlcigpCiAgICAgICAgd2FpdF9jaGFubmVscyA9IGNvbGxlY3Rpb25zLkNvdW50ZXIoKQogICAgICAgIHRocmVhZHMgPSBbXQogICAgICAgIHRyeToKICAgICAgICAgICAgdGFza19pZHMgPSBzb3J0ZWQoUGF0aChmJy9wcm9jL3twaWR9L3Rhc2snKS5pdGVyZGlyKCksIGtleT1sYW1iZGEgcDogaW50KHAubmFtZSkpCiAgICAgICAgZXhjZXB0IE9TRXJyb3IgYXMgZXJyb3I6CiAgICAgICAgICAgIGVycm9yc1t0eXBlKGVycm9yKS5fX25hbWVfX10gKz0gMQogICAgICAgICAgICB0YXNrX2lkcyA9IFtdCiAgICAgICAgZm9yIHRhc2sgaW4gdGFza19pZHNbOnRocmVhZF9idWRnZXRdOgogICAgICAgICAgICB0ID0gc3RhdCh0YXNrIC8gJ3N0YXQnKQogICAgICAgICAgICBpZiB0IGlzIE5vbmU6CiAgICAgICAgICAgICAgICBjb250aW51ZQogICAgICAgICAgICBzdGF0ZXNbdFsnc3RhdGUnXV0gKz0gMQogICAgICAgICAgICB3YWl0ID0gcmVhZCh0YXNrIC8gJ3djaGFuJykKICAgICAgICAgICAgaWYgd2FpdCBpcyBub3QgTm9uZSBhbmQgcmUuZnVsbG1hdGNoKHInW2EtekEtWjAtOV9dK1xzKicsIHdhaXQpOgogICAgICAgICAgICAgICAgd2FpdF9jaGFubmVsc1t3YWl0LnN0cmlwKCldICs9IDEKICAgICAgICAgICAgdGhyZWFkcy5hcHBlbmQoe2tleTogdFtrZXldIGZvciBrZXkgaW4gWydwaWQnLCAnc3RhdGUnLCAnY3B1X3VzZXJfdGlja3MnLCAnY3B1X3N5c3RlbV90aWNrcyddfSkKICAgICAgICB0aHJlYWRfYnVkZ2V0ID0gbWF4KDAsIHRocmVhZF9idWRnZXQgLSBsZW4odGhyZWFkcykpCiAgICAgICAgaXRlbVsnc2FtcGxlZF90aHJlYWRfc3RhdGVzJ10gPSBkaWN0KHN0YXRlcykKICAgICAgICBpdGVtWydzYW1wbGVkX3dhaXRfY2hhbm5lbHMnXSA9IGRpY3Qod2FpdF9jaGFubmVscykKICAgICAgICBpdGVtWydzYW1wbGVkX3RocmVhZHMnXSA9IHRocmVhZHMKICAgICAgICBwcm9jZXNzZXMuYXBwZW5kKGl0ZW0pCiAgICAgICAgbWVtYmVyc2hpcCA9IHJlYWQoZicvcHJvYy97cGlkfS9jZ3JvdXAnKQogICAgICAgIGlmIG1lbWJlcnNoaXA6CiAgICAgICAgICAgIGZvciBsaW5lIGluIG1lbWJlcnNoaXAuc3BsaXRsaW5lcygpOgogICAgICAgICAgICAgICAgaWYgbGluZS5zdGFydHN3aXRoKCcwOjonKToKICAgICAgICAgICAgICAgICAgICBncm91cCA9IFBhdGgoJy9zeXMvZnMvY2dyb3VwJykgLyBsaW5lWzM6XS5sc3RyaXAoJy8nKQogICAgICAgICAgICAgICAgICAgICMgUmVhZCBudW1lcmljIGFuY2VzdG9yIGxpbWl0cyB0b28sIGJ1dCBuZXZlciBkaXNjbG9zZSB0aGVpciBwYXRocy4KICAgICAgICAgICAgICAgICAgICBmb3IgYW5jZXN0b3IgaW4gW2dyb3VwLCAqZ3JvdXAucGFyZW50c106CiAgICAgICAgICAgICAgICAgICAgICAgIGlmIGFuY2VzdG9yID09IFBhdGgoJy9zeXMnKSBvciBhbmNlc3RvciA9PSBQYXRoKCcvJyk6CiAgICAgICAgICAgICAgICAgICAgICAgICAgICBicmVhawogICAgICAgICAgICAgICAgICAgICAgICBpZiBhbmNlc3Rvci5pc19yZWxhdGl2ZV90bygnL3N5cy9mcy9jZ3JvdXAnKToKICAgICAgICAgICAgICAgICAgICAgICAgICAgIGdyb3Vwcy5hZGQoYW5jZXN0b3IpCiAgICBjZ3JvdXBzID0gW10KICAgIGZvciBncm91cCBpbiBzb3J0ZWQoZ3JvdXBzKVs6TUFYX0NHUk9VUFNdOgogICAgICAgIHJlY29yZCA9IHsnaWQnOiBoYXNobGliLnNoYTI1NihzdHIoZ3JvdXApLmVuY29kZSgpKS5oZXhkaWdlc3QoKVs6MTZdfQogICAgICAgIGZvciBuYW1lIGluIFsnY3B1LnN0YXQnLCAnY3B1Lm1heCcsICdjcHUucHJlc3N1cmUnLCAnbWVtb3J5LmN1cnJlbnQnLCAnbWVtb3J5Lm1heCcsCiAgICAgICAgICAgICAgICAgICAgICdtZW1vcnkuZXZlbnRzJywgJ21lbW9yeS5wcmVzc3VyZScsICdpby5wcmVzc3VyZScsICdwaWRzLmN1cnJlbnQnLCAncGlkcy5tYXgnXToKICAgICAgICAgICAgcmVjb3JkW25hbWVdID0gbnVtZXJpY190ZXh0KGdyb3VwIC8gbmFtZSkKICAgICAgICBjZ3JvdXBzLmFwcGVuZChyZWNvcmQpCiAgICByZXR1cm4gZGljdChzYW1wbGU9c2VxdWVuY2UsIGVsYXBzZWRfc2Vjb25kcz1yb3VuZCh0aW1lLm1vbm90b25pYygpLXN0YXJ0ZWQsIDMpLAogICAgICAgICAgICAgICAgY2xvY2tfdGlja3NfcGVyX3NlY29uZD1vcy5zeXNjb25mKCdTQ19DTEtfVENLJyksIHBhZ2VfYnl0ZXM9b3Muc3lzY29uZignU0NfUEFHRV9TSVpFJyksCiAgICAgICAgICAgICAgICBwcm9jZXNzX2NvdW50PWxlbihzZWxlY3RlZCAmIGFsbF9zdGF0cy5rZXlzKCkpLCBwcm9jZXNzX2xpbWl0PU1BWF9QUk9DRVNTRVMsCiAgICAgICAgICAgICAgICB0aHJlYWRfbGltaXQ9TUFYX1RIUkVBRFMsIGNncm91cF9saW1pdD1NQVhfQ0dST1VQUywKICAgICAgICAgICAgICAgIHByb2Nlc3Nlcz1wcm9jZXNzZXMsIGNncm91cHM9Y2dyb3VwcywKICAgICAgICAgICAgICAgIGhvc3RfcHJlc3N1cmU9e2tpbmQ6bnVtZXJpY190ZXh0KCcvcHJvYy9wcmVzc3VyZS8nK2tpbmQpIGZvciBraW5kIGluIFsnY3B1JywnbWVtb3J5JywnaW8nXX0sCiAgICAgICAgICAgICAgICBvYnNlcnZhdGlvbl9lcnJvcnM9ZGljdChlcnJvcnMpKQoKc3RhcnRlZCA9IHRpbWUubW9ub3RvbmljKCkKIyBDYW5vbmljYWwgY29tbWFuZCBhbmQgaW5oZXJpdGVkIGVudmlyb25tZW50OyBvYnNlcnZlciBuZXZlciBhZGp1c3RzIGJ1aWxkIGZsYWdzIG9yIHNlbmRzIHNpZ25hbHMuCmNoaWxkID0gc3VicHJvY2Vzcy5Qb3BlbihbJ3BucG0nLCAndGVzdDplMmU6Z2F0ZXdheScsICd0ZXN0L2UyZS9nYXRld2F5LXRyYW5zY3JpcHRzLWRpc2NvcmQtY2FwdHVyZS5lMmUudGVzdC50cyddKQp3aXRoIG91dC5vcGVuKCd3JywgYnVmZmVyaW5nPTEpIGFzIHN0cmVhbToKICAgIHN0cmVhbS53cml0ZShqc29uLmR1bXBzKHsnc2NoZW1hJzoxLCAnaW50ZXJ2YWxfc2Vjb25kcyc6SU5URVJWQUwsICdtYXhfc2FtcGxlcyc6TUFYX1NBTVBMRVMsICdzdGFydGVkX3VuaXhfc2Vjb25kcyc6dGltZS50aW1lKCksICdsb2dpY2FsX2NwdXMnOm9zLmNwdV9jb3VudCgpLCAnYWxsb3dlZF9jcHVfY291bnQnOmxlbihvcy5zY2hlZF9nZXRhZmZpbml0eSgwKSl9KSsnXG4nKQogICAgZm9yIHNlcXVlbmNlIGluIHJhbmdlKE1BWF9TQU1QTEVTKToKICAgICAgICB0cnk6CiAgICAgICAgICAgIHN0cmVhbS53cml0ZShqc29uLmR1bXBzKHNhbXBsZShjaGlsZC5waWQsc2VxdWVuY2Usc3RhcnRlZCksc29ydF9rZXlzPVRydWUpKydcbicpCiAgICAgICAgZXhjZXB0IEV4Y2VwdGlvbiBhcyBlcnJvcjoKICAgICAgICAgICAgIyBPYnNlcnZhYmlsaXR5IGZhaWx1cmUgY2Fubm90IGNhbmNlbCBvciByZXBsYWNlIHRoZSBjYW5vbmljYWwgdGVzdCBvdXRjb21lLgogICAgICAgICAgICBzdHJlYW0ud3JpdGUoanNvbi5kdW1wcyh7J3NhbXBsZSc6c2VxdWVuY2UsJ29ic2VydmVyX2Vycm9yJzp0eXBlKGVycm9yKS5fX25hbWVfX30pKydcbicpCiAgICAgICAgdHJ5OgogICAgICAgICAgICByZXN1bHQgPSBjaGlsZC53YWl0KHRpbWVvdXQ9SU5URVJWQUwpCiAgICAgICAgICAgIGJyZWFrCiAgICAgICAgZXhjZXB0IHN1YnByb2Nlc3MuVGltZW91dEV4cGlyZWQ6CiAgICAgICAgICAgIGNvbnRpbnVlCiAgICBlbHNlOgogICAgICAgIHJlc3VsdCA9IGNoaWxkLndhaXQoKQogICAgc3RyZWFtLndyaXRlKGpzb24uZHVtcHMoeydjaGlsZF9leGl0JzpyZXN1bHQsJ2VsYXBzZWRfc2Vjb25kcyc6cm91bmQodGltZS5tb25vdG9uaWMoKS1zdGFydGVkLDMpfSkrJ1xuJykKc3lzLmV4aXQocmVzdWx0IGlmIHJlc3VsdCA+PSAwIGVsc2UgMTI4LXJlc3VsdCkK
+          BOUND_OBSERVER
+          printf '%s  %s\n' '31e6ba88906e9cb3d31b2cb09a597b148fe9c5dd5e28dd6947ca7f406963128b' "$proof/observe-build.py" | sha256sum --check --strict
+          python3 --version
+          node --version
           set +e
-          pnpm format:check src/plugins/plugin-invocation-scope.test.ts 2>&1 | tee .artifacts/drained-repair-proof/format.log
-          check_statuses=("${PIPESTATUS[@]}")
+          OPENCLAW_E2E_VERBOSE=1 OPENCLAW_E2E_WORKERS=1 python3 "$proof/observe-build.py" 2>&1 | tee "$proof/gateway-capture.log"
+          statuses=("${PIPESTATUS[@]}")
           set -e
-          check_status="${check_statuses[0]}"
-          printf 'format_check_exit=%s\nformat_check_log_exit=%s\n' "$check_status" "${check_statuses[1]}" > "$proof/format-status.txt"
-          if (( check_status != 0 )); then
-            # Recovery evidence only: never replace the failed qualifying check.
-            set +e
-            pnpm format src/plugins/plugin-invocation-scope.test.ts 2>&1 | tee "$proof/format-recovery.log"
-            recovery_statuses=("${PIPESTATUS[@]}")
-            set -e
-            printf 'format_recovery_exit=%s\nformat_recovery_log_exit=%s\n' "${recovery_statuses[0]}" "${recovery_statuses[1]}" >> "$proof/format-status.txt"
-            git diff --binary --full-index > "$proof/formatted-working-tree.patch"
-            while IFS= read -r path; do
-              mkdir -p "$proof/formatted/$(dirname "$path")"
-              cp "$path" "$proof/formatted/$path"
-            done < "$proof/repair-paths.txt"
-            (cd "$proof/formatted" && while IFS= read -r path; do sha256sum "$path"; done < ../repair-paths.txt) > "$proof/formatted.sha256"
-            # Subsequent lint remains bound to the original repair, not formatter output.
-            while IFS= read -r path; do
-              cp "$proof/overlays/$path" "$path"
-            done < "$proof/repair-paths.txt"
-            sha256sum --check --strict "$proof/overlays.sha256"
-          fi
-          exit "$check_status"
-      - name: Lint plugins-platform
-        if: always() && matrix.lane == 'static'
-        shell: bash
-        run: |
-          set -euo pipefail
-          node scripts/run-oxlint.mjs --tsconfig test/tsconfig/tsconfig.core.test.plugins-platform.json src/plugins/plugin-invocation-scope.test.ts 2>&1 | tee .artifacts/drained-repair-proof/lint-plugins-platform.log
-      - name: Typegraph plugins-platform
-        if: matrix.lane == 'types-plugins-platform'
-        shell: bash
-        run: |
-          set -euo pipefail
-          node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.plugins-platform.json --incremental --tsBuildInfoFile .artifacts/drained-repair-proof/plugins-platform.tsbuildinfo 2>&1 | tee .artifacts/drained-repair-proof/types-plugins-platform.log
+          printf 'canonical_e2e_exit=%s\nlog_exit=%s\n' "${statuses[0]}" "${statuses[1]}" > "$proof/gateway-capture-status.txt"
+          exit "${statuses[0]}"
       - name: Preserve repair evidence and failure artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:
-          name: release-114-corrected-plugin-43372397865-${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: release-114-gateway-capture-investigation-${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             .artifacts/
             test-results/
