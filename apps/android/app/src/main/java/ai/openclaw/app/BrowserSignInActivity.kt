@@ -1,18 +1,15 @@
 package ai.openclaw.app
 
 import ai.openclaw.app.gateway.ReverseProxyBrowserSessions
-import ai.openclaw.app.gateway.browserSessionOrigin
 import ai.openclaw.app.gateway.isBrowserGatewayReturn
-import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.OpenClawTheme
-import ai.openclaw.app.ui.design.ClawTheme
+import android.annotation.SuppressLint
 import android.app.Activity
-import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.graphics.Bitmap
 import android.net.http.SslError
 import android.os.Bundle
-import android.view.WindowManager
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.SslErrorHandler
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -22,26 +19,12 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawingPadding
-import androidx.compose.material3.Button
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.lifecycleScope
 import androidx.webkit.WebViewCompat
-import kotlinx.coroutines.CancellationException
+import androidx.webkit.WebViewFeature
 import kotlinx.coroutines.launch
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
@@ -84,7 +67,7 @@ class BrowserSignInActivity : ComponentActivity() {
     }
     webView = createBrowser(login)
     lifecycleScope.launch {
-      if (login.admission.await() && app.browserSessions.isCurrent(login)) {
+      if (login.admission.await() && attempt === login && app.browserSessions.isCurrent(login)) {
         accepted = true
         setResult(Activity.RESULT_OK)
         finish()
@@ -105,106 +88,146 @@ class BrowserSignInActivity : ComponentActivity() {
     }
   }
 
-  private fun createBrowser(login: ReverseProxyBrowserSessions.Attempt): WebView =
-    WebView(this).apply {
-      WebViewCompat.setProfile(this, login.profileName)
-      login.cookies.setAcceptCookie(true)
-      login.cookies.setAcceptThirdPartyCookies(this, false)
-      settings.apply {
-        javaScriptEnabled = true // Authelia and other forward-auth login pages require JavaScript.
-        domStorageEnabled = true
-        allowFileAccess = false
-        allowContentAccess = false
-        mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-        safeBrowsingEnabled = true
-        setSupportMultipleWindows(false)
-      }
-      // There is deliberately no WebChromeClient permission grant, download listener, or JS interface.
-      webViewClient =
-        object : WebViewClient() {
-          override fun shouldOverrideUrlLoading(
-            view: WebView,
-            request: WebResourceRequest,
-          ): Boolean {
-            val url = request.url.toString().toHttpUrlOrNull()
-            if (url == null || url.scheme != "https" || url.username.isNotEmpty() || url.password.isNotEmpty()) return true
-            if (request.isForMainFrame && isBrowserGatewayReturn(login.target, url.toString()) && visitedAuthenticationRoute) {
-              // Never boot a second Control UI device identity in the returned Gateway SPA.
+  // HTTPS provider login requires JavaScript; this profile has no native bridge or local-file access.
+  @SuppressLint("SetJavaScriptEnabled")
+  private fun createBrowser(login: ReverseProxyBrowserSessions.Attempt): WebView? =
+    if (WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) {
+      WebView(this).apply {
+        WebViewCompat.setProfile(this, login.profileName)
+        login.cookies.setAcceptCookie(true)
+        login.cookies.setAcceptThirdPartyCookies(this, false)
+        settings.apply {
+          javaScriptEnabled = true // Authelia and other forward-auth login pages require JavaScript.
+          domStorageEnabled = true
+          allowFileAccess = false
+          allowContentAccess = false
+          mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+          safeBrowsingEnabled = true
+          setSupportMultipleWindows(false)
+        }
+        // There is deliberately no WebChromeClient permission grant, download listener, or JS interface.
+        webViewClient =
+          object : WebViewClient() {
+            override fun shouldOverrideUrlLoading(
+              view: WebView,
+              request: WebResourceRequest,
+            ): Boolean {
+              if (!isCurrentBrowser(view, login)) return true
+              val url = request.url.toString().toHttpUrlOrNull()
+              if (url == null || url.scheme != "https" || url.username.isNotEmpty() || url.password.isNotEmpty()) return true
+              if (request.isForMainFrame && isBrowserGatewayReturn(login.target, url.toString()) && visitedAuthenticationRoute) {
+                // Never boot a second Control UI device identity in the returned Gateway SPA.
+                loading = false
+                view.stopLoading()
+                complete(login.target)
+                return true
+              }
+              return false
+            }
+
+            override fun onPageStarted(
+              view: WebView,
+              url: String,
+              favicon: Bitmap?,
+            ) {
+              if (!isCurrentBrowser(view, login)) return
+              if (!isBrowserGatewayReturn(login.target, url)) visitedAuthenticationRoute = true
+              loading = true
+              pageFailed = false
+              error = null
+            }
+
+            override fun onPageCommitVisible(
+              view: WebView,
+              url: String,
+            ) {
+              if (!isCurrentBrowser(view, login)) return
+              currentUrl = url
+            }
+
+            override fun onPageFinished(
+              view: WebView,
+              url: String,
+            ) {
+              if (!isCurrentBrowser(view, login)) return
+              currentUrl = url
               loading = false
-              view.stopLoading()
-              complete(login.target)
+              if (isBrowserGatewayReturn(login.target, url)) complete(login.target)
+            }
+
+            override fun onReceivedError(
+              view: WebView,
+              request: WebResourceRequest,
+              failure: WebResourceError,
+            ) {
+              if (isCurrentBrowser(view, login) && request.isForMainFrame) {
+                pageFailed = true
+                error = "Could not load the sign-in page. Check your connection and try again."
+              }
+            }
+
+            override fun onReceivedSslError(
+              view: WebView,
+              handler: SslErrorHandler,
+              sslError: SslError,
+            ) {
+              handler.cancel()
+              if (!isCurrentBrowser(view, login)) return
+              pageFailed = true
+              error = "The sign-in site has an invalid TLS certificate. Contact your gateway administrator."
+            }
+
+            override fun onReceivedHttpError(
+              view: WebView,
+              request: WebResourceRequest,
+              response: WebResourceResponse,
+            ) {
+              if (isCurrentBrowser(view, login) && request.isForMainFrame && response.statusCode >= 500) {
+                pageFailed = true
+                error = "The sign-in service is unavailable. Try again."
+              }
+            }
+
+            override fun onRenderProcessGone(
+              view: WebView,
+              detail: RenderProcessGoneDetail,
+            ): Boolean {
+              if (webView !== view) return true
+              admissionWait?.cancel()
+              admissionWait = null
+              busy = false
+              loading = false
+              pageFailed = true
+              destroyBrowser(rendererGone = true)
+              if (retireAttempt()) {
+                // Only the already-recorded native admission can turn renderer loss into success.
+                accepted = true
+                setResult(Activity.RESULT_OK)
+                finish()
+              } else {
+                error = "The sign-in browser stopped. Close sign-in and try again."
+              }
               return true
             }
-            return false
           }
-
-          override fun onPageStarted(
-            view: WebView,
-            url: String,
-            favicon: Bitmap?,
-          ) {
-            if (!isBrowserGatewayReturn(login.target, url)) visitedAuthenticationRoute = true
-            loading = true
-            pageFailed = false
-            error = null
-          }
-
-          override fun onPageCommitVisible(
-            view: WebView,
-            url: String,
-          ) {
-            currentUrl = url
-          }
-
-          override fun onPageFinished(
-            view: WebView,
-            url: String,
-          ) {
-            currentUrl = url
-            loading = false
-            if (isBrowserGatewayReturn(login.target, url)) complete(login.target)
-          }
-
-          override fun onReceivedError(
-            view: WebView,
-            request: WebResourceRequest,
-            failure: WebResourceError,
-          ) {
-            if (request.isForMainFrame) {
-              pageFailed = true
-              error = "Could not load the sign-in page. Check your connection and try again."
-            }
-          }
-
-          override fun onReceivedSslError(
-            view: WebView,
-            handler: SslErrorHandler,
-            sslError: SslError,
-          ) {
-            handler.cancel()
-            pageFailed = true
-            error = "The sign-in site has an invalid TLS certificate. Contact your gateway administrator."
-          }
-
-          override fun onReceivedHttpError(
-            view: WebView,
-            request: WebResourceRequest,
-            response: WebResourceResponse,
-          ) {
-            if (request.isForMainFrame && response.statusCode >= 500) {
-              pageFailed = true
-              error = "The sign-in service is unavailable. Try again."
-            }
-          }
-        }
-      loadUrl(login.target.toString())
+        loadUrl(login.target.toString())
+      }
+    } else {
+      retireAttempt()
+      loading = false
+      pageFailed = true
+      error = "Update Android System WebView to use browser sign-in."
+      null
     }
 
-  private fun returnedTo(target: HttpUrl): Boolean = currentUrl.toHttpUrlOrNull()?.let { it.scheme == "https" && it.browserSessionOrigin() == target.browserSessionOrigin() } == true
+  private fun isCurrentBrowser(
+    view: WebView,
+    login: ReverseProxyBrowserSessions.Attempt,
+  ): Boolean = webView === view && attempt === login && app.browserSessions.isCurrent(login)
 
   private fun complete(target: HttpUrl) {
     val login = attempt ?: return
-    if (accepted || admissionWait?.isActive == true || !app.browserSessions.isCurrent(login)) return
+    if (accepted || pageFailed || webView == null || admissionWait?.isActive == true || !app.browserSessions.isCurrent(login)) return
     // Navigation only requests a retry. Native connect admission is the only completion proof.
     app.ensureRuntime().resumeBrowserConnection(target) { app.browserSessions.isCurrent(login) }
     admissionWait =
@@ -218,13 +241,22 @@ class BrowserSignInActivity : ComponentActivity() {
       }
   }
 
-  private fun destroyBrowser() {
-    webView?.apply {
-      stopLoading()
-      (parent as? android.view.ViewGroup)?.removeView(this)
-      destroy()
-    }
+  private fun destroyBrowser(rendererGone: Boolean = false) {
+    val browser = webView ?: return
     webView = null
+    // A dead renderer cannot service stopLoading; detach and destroy only this owned instance.
+    if (!rendererGone) browser.stopLoading()
+    (browser.parent as? android.view.ViewGroup)?.removeView(browser)
+    browser.destroy()
+  }
+
+  private fun retireAttempt(): Boolean {
+    val login = attempt ?: return false
+    attempt = null
+    val wasAdmitted = app.browserSessions.isAdmitted(login)
+    app.browserSessions.cancel(login)
+    if (!wasAdmitted) app.ensureRuntime().cancelBrowserCredentialEpoch(login.profileName)
+    return wasAdmitted
   }
 
   override fun onSaveInstanceState(outState: Bundle) {
@@ -234,13 +266,7 @@ class BrowserSignInActivity : ComponentActivity() {
 
   override fun onDestroy() {
     destroyBrowser()
-    if (!isChangingConfigurations) {
-      attempt?.let { login ->
-        val wasAdmitted = app.browserSessions.isAdmitted(login)
-        app.browserSessions.cancel(login)
-        if (!wasAdmitted) app.ensureRuntime().cancelBrowserCredentialEpoch(login.profileName)
-      }
-    }
+    if (!isChangingConfigurations) retireAttempt()
     super.onDestroy()
   }
 

@@ -486,6 +486,8 @@ class SecurePrefs(
         }
       }.toMap()
 
+  // KTX edit(commit = true) discards the Boolean needed to reject an unpersisted browser grant.
+  @Suppress("UseKtx")
   internal fun saveBrowserSessionProfile(
     origin: String,
     profileName: String?,

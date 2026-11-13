@@ -38,12 +38,27 @@ private object AndroidBrowserProfileAccess : BrowserProfileAccess {
   override fun cookies(
     name: String,
     create: Boolean,
-  ): CookieManager? = if (create) ProfileStore.getInstance().getOrCreateProfile(name).cookieManager else ProfileStore.getInstance().getProfile(name)?.cookieManager
+  ): CookieManager? =
+    if (WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) {
+      val store = ProfileStore.getInstance()
+      (if (create) store.getOrCreateProfile(name) else store.getProfile(name))?.cookieManager
+    } else {
+      error("Update Android System WebView to use browser sign-in.")
+    }
 
-  override fun names(): Collection<String> = ProfileStore.getInstance().allProfileNames
+  override fun names(): Collection<String> =
+    if (WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) {
+      ProfileStore.getInstance().allProfileNames
+    } else {
+      error("Update Android System WebView to use browser sign-in.")
+    }
 
   override fun delete(name: String) {
-    ProfileStore.getInstance().deleteProfile(name)
+    if (WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) {
+      ProfileStore.getInstance().deleteProfile(name)
+    } else {
+      error("Update Android System WebView to use browser sign-in.")
+    }
   }
 }
 
