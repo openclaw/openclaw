@@ -1,0 +1,4 @@
+# Live supervised-stdio recovery coverage for node-host MCP dispose retries (#191202):
+# a real MCP server process and transport recovering after a stderr-detach fault,
+# plus the fake-timer growth of the mocked recovery tests from the same review.
+237
