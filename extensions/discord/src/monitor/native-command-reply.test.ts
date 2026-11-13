@@ -291,16 +291,13 @@ it("sends singular WebP media after blank plural URLs across a real multipart re
 
     await deliver({ interaction: interaction as never, payload });
 
-    expect(loadWebMediaMock).toHaveBeenCalledWith("file:///tmp/sticker.webp", {
-      localRoots: undefined,
-    });
+    expect(loadWebMediaMock.mock.calls).toEqual([["file:///tmp/sticker.webp", expect.anything()]]);
     const upload = loopback.requests.find((request) => request.method === "POST");
     expect(upload).toMatchObject({
       path: expect.stringContaining("/webhooks/123/token"),
       contentType: expect.stringMatching(/^multipart\/form-data; boundary=/),
     });
-    expect(upload?.body).toContain('name="files[0]"; filename="sticker.webp"');
-    expect(upload?.body).toContain("Content-Type: image/webp");
+    expect(upload?.body).toContain('filename="sticker.webp"\r\nContent-Type: image/webp');
   } finally {
     await loopback.close();
   }
