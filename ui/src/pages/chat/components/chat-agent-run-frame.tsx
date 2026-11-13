@@ -8,6 +8,7 @@ import {
   getOwner,
   lazy,
   Match,
+  merge,
   onSettled,
   runWithOwner,
   Show,
@@ -40,6 +41,7 @@ import {
   type StreamGroupPart,
 } from "./chat-message-stream-view.tsx";
 import { NO_REPLY_LINE, resolveGroupReplyLine } from "./chat-reply-attribution.ts";
+import { transcriptArraysEqual } from "./chat-transcript-memo.ts";
 import type { projectTranscriptWorkPreviews } from "./chat-transcript-work-previews.ts";
 import { WorkGroupSummary } from "./chat-work-group-summary.tsx";
 import "../../../styles/chat/source-previews.css";
@@ -54,6 +56,7 @@ type AgentRunFrameOptions = {
   streamOptions: StreamGroupOptions;
   workPreviews: ReturnType<typeof projectTranscriptWorkPreviews>;
   renderGroupOptions: (group: MessageGroupData) => NativeMessageGroupOptions;
+  partDependencies: (part: BodyPart) => readonly unknown[];
   isWorkExpanded: (key: string) => boolean;
   onToggleWork: (key: string, expanded: boolean) => void;
   turnRecap?: TurnRecap;
@@ -64,6 +67,7 @@ type BodyPart =
   | StreamGroupPart;
 type PartInput = { part: BodyPart; options: AgentRunFrameOptions };
 type PartRange = {
+  dependencies: readonly unknown[];
   start: Comment;
   end: Comment;
   write: (input: PartInput) => void;
@@ -134,9 +138,13 @@ function RetainedFrameBody(props: FrameBodyProps): JSX.Element {
     }
     const ordered = parts.map((value) => {
       const key = `${value.kind}:${value.key}`;
+      const dependencies = options.partDependencies(value);
       const existing = ranges.get(key);
       if (existing) {
-        existing.write({ part: value, options });
+        if (!transcriptArraysEqual(existing.dependencies, dependencies)) {
+          existing.dependencies = dependencies;
+          existing.write({ part: value, options });
+        }
         return existing;
       }
       const start = document.createComment("frame-part");
@@ -155,7 +163,7 @@ function RetainedFrameBody(props: FrameBodyProps): JSX.Element {
             },
           );
           insert(parent, render(readInput), end);
-          return { start, end, write, dispose };
+          return { dependencies, start, end, write, dispose };
         }),
       );
       ranges.set(key, range);
@@ -271,7 +279,6 @@ function prepareFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions
     frameReplyLine,
     bodyParts,
     firstBubbleKey,
-    workPreviews: opts.workPreviews,
     sourcePreviews,
   };
 }
@@ -287,24 +294,7 @@ export function AgentRunFrame(props: FrameProps) {
 
 function RunFrame(props: FrameProps) {
   const state = createMemo(() => prepareFrame(props.frame, props.options));
-  const timedWork = createMemo(() => {
-    const recap = props.options.turnRecap;
-    if (!recap) {
-      return undefined;
-    }
-    const work = props.frame.fragment
-      ? props.frame.fragment.work
-      : props.frame.parts.find(
-          (part) => part.kind === "work-group" && part.replyRunId === props.frame.runId,
-        );
-    // The recap retains this run's terminal timing after the session moves on.
-    // Run duration appears only on the Worked summary; turns without one show no timing.
-    if (work?.kind !== "work-group") {
-      return undefined;
-    }
-    const durationMs = work.durationMs ?? recap.runtimeMs;
-    return durationMs > 0 ? { ...work, durationMs } : undefined;
-  });
+  const firstBubbleKey = createMemo(() => state().firstBubbleKey);
   const frameContent = [
     <FrameBody
       parts={state().bodyParts}
@@ -316,9 +306,14 @@ function RunFrame(props: FrameProps) {
       {(input) => {
         const part = () => input().part;
         const options = () => input().options;
+        const streamOptions = merge(() => options().streamOptions, {
+          get firstBubbleKey() {
+            return firstBubbleKey();
+          },
+        });
         const groupOptions = (group: MessageGroupData) => ({
           ...options().renderGroupOptions(group),
-          firstBubbleKey: state().firstBubbleKey,
+          firstBubbleKey: firstBubbleKey(),
         });
         const streamPart = () => {
           const value = part();
@@ -344,21 +339,14 @@ function RunFrame(props: FrameProps) {
           <Switch>
             <Match when={streamPart()}>
               {(stream) => (
-                <StreamPartView
-                  part={stream()}
-                  options={{
-                    ...options().streamOptions,
-                    firstBubbleKey: state().firstBubbleKey,
-                  }}
-                  presentation="standalone"
-                />
+                <StreamPartView part={stream()} options={streamOptions} presentation="standalone" />
               )}
             </Match>
             <Match when={workPart()}>
               {(work) => (
                 <>
                   <WorkGroupSummary
-                    item={timedWork()?.key === work().key ? timedWork()! : work()}
+                    item={work()}
                     options={{
                       expanded: options().isWorkExpanded(work().key),
                       mediaReadAllowed: options().streamOptions.mediaReadAllowed,
@@ -366,7 +354,7 @@ function RunFrame(props: FrameProps) {
                       onToggle: () =>
                         options().onToggleWork(work().key, options().isWorkExpanded(work().key)),
                       presentation: "continuation",
-                      browserTabPreviews: state().workPreviews.get(work().key),
+                      browserTabPreviews: options().workPreviews.get(work().key),
                     }}
                   />
                   <Show when={!props.frame.fragment && options().isWorkExpanded(work().key)}>
@@ -400,7 +388,7 @@ function RunFrame(props: FrameProps) {
                 <>
                   <MessageGroupContent group={group()} options={groupOptions(group())} />
                   <BrowserTabPreviews
-                    previews={state().workPreviews.get(group().key)}
+                    previews={options().workPreviews.get(group().key)}
                     mediaReadAllowed={options().streamOptions.mediaReadAllowed}
                   />
                 </>

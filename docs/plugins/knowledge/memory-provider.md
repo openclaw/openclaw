@@ -79,7 +79,9 @@ agent to:
   for each person, organization or project the user treats as significant:
   reuse the page recall found or create it right away through
   knowledge-entities, keep its
-  current state accurate through knowledge-capture, and record the agent's own
+  current state accurate through knowledge-capture (when a remembered decision,
+  outcome or status change alters what an existing page's State says, the agent
+  also rewrites that State in place before its final reply), and record the agent's own
   findings there as analysis rather than in `knowledge_remember`, which never
   stores agent inference;
 - record replacements and contradictions with knowledge-correct instead of

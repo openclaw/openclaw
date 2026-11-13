@@ -49,6 +49,7 @@ import { MessageWorkContext } from "./chat-message-context-view.tsx";
 import {
   AssistantAttachments,
   ChatClawHubCard,
+  ChatTemplatePluginCards,
   MessageAttachment,
 } from "./chat-message-deferred.tsx";
 import { MessageImages } from "./chat-message-images-solid.tsx";
@@ -85,6 +86,8 @@ export function GroupedMessage(props: {
   messageKey: string;
   options: GroupedMessageOptions;
   onOpenSidebar?: (content: SidebarContent) => void;
+  /** Reactions hang off this bubble's outer corner, so the bubble owns their anchor. */
+  reactions?: JSX.Element;
 }) {
   const refreshMedia = () => void refresh(state);
   const state = createMemo(() =>
@@ -189,6 +192,7 @@ export function GroupedMessage(props: {
                         {t("chat.composer.runInterrupted")}
                       </div>
                     </Show>
+                    {props.reactions}
                   </div>
                   <Show when={readMessageWorkContext(state().message)}>
                     <MessageWorkContext message={state().message} />
@@ -352,6 +356,7 @@ function BubbleContents(props: ContentProps) {
   return (
     <>
       <Show when={props.state().sourceRole === "assistant"}>
+        <ChatTemplatePluginCards notices={props.state().templatePluginCards} />
         <For each={props.state().clawHubCards} keyed={(card) => card.id}>
           {(card) => <ChatClawHubCard recommendation={card()} agentId={props.options.agentId} />}
         </For>

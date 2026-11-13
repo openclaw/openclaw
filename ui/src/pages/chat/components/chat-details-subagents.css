@@ -83,12 +83,11 @@
 }
 
 .chat-details-subagents__spinner {
+  --spinner-art: var(--spinner-mask-small);
   color: var(--accent);
   display: block;
   width: 8px;
   height: 8px;
-  background: currentColor;
-  mask: var(--spinner-mask-small);
   border-radius: 50%;
   animation: btn-spinner-spin 1.5s linear infinite;
 }

@@ -28,6 +28,15 @@ import {
   type ScribeSnapshot,
   type ScribeStatus,
 } from "./scribes-state.js";
+import {
+  markUpdating,
+  settleUpdates,
+  update,
+  updateNotice,
+  updateState,
+  updatingNotice,
+  watchUpdates,
+} from "./scribes-updates.js";
 import { storeLabel, storeOf } from "./stores-view.js";
 import { icon } from "./ui-icons.js";
 
@@ -35,6 +44,7 @@ const STATUS: Record<ScribeStatus, [string, string]> = {
   available: ["Available", ""],
   starting: ["Starting", ""],
   on: ["On", "scribe-chip-on"],
+  attention: ["Needs attention", "scribe-chip-warn"],
   paused: ["Paused", ""],
   failing: ["Failing", "scribe-chip-warn"],
   done: ["Done", "scribe-chip-on"],
@@ -117,7 +127,7 @@ function activeMeta(snapshot: ScribeSnapshot) {
   const { status, job, result } = snapshot;
   const meta = el("span", undefined, "scribe-meta");
   const dot = el("span", undefined, "scribe-dot");
-  if (status === "failing" || status === "missing") {
+  if (status === "failing" || status === "missing" || status === "attention") {
     dot.classList.add("scribe-dot-warn");
   } else if (status !== "on") {
     dot.classList.add("scribe-dot-idle");
@@ -193,15 +203,23 @@ export async function scribes(ui: Page, n: number, target: HTMLElement) {
   const host = s.context.host;
   const agentId = ui.viewedAgent();
   const selected = scribeById(s.scribe);
-  const [snapshots, detection] = await Promise.all([
+  const [loaded, detection] = await Promise.all([
     loadScribes(host, agentId),
     // A detail only needs detection for its plugin; the list shows every scribe's facts.
     selected && !selected.plugin
       ? Promise.resolve({})
       : detectSources(host, agentId).catch(() => ({})),
   ]);
+  const snapshots = loaded;
+  settleUpdates(ui, agentId, snapshots);
+  watchUpdates(ui);
   if (host.connection.canWrite) {
-    await Promise.all(snapshots.map((snapshot) => startFirstRun(ui, snapshot)));
+    await Promise.all(
+      snapshots.map(async (snapshot) => {
+        await update(ui, snapshot, agentId);
+        await startFirstRun(ui, snapshot);
+      }),
+    );
   }
   const snapshot = selected && snapshots.find((entry) => entry.scribe.id === selected.id);
   const runs = snapshot?.job ? await loadRuns(host, snapshot.job, agentId).catch(() => []) : [];
@@ -351,6 +369,12 @@ function activeRow(ui: Page, snapshot: ScribeSnapshot) {
   );
   chevron.setAttribute("aria-label", `Open ${scribe.title}`);
   chevron.append(icon("chevronRight", 16));
+  const state = updateState(ui, snapshot.job);
+  if (state === "updating") {
+    actions.append(chip("Updating…"));
+  } else if (snapshot.runMessage?.state === "differs") {
+    actions.append(chip("New run instructions"));
+  }
   actions.append(statusChip(snapshot.status), chevron);
   row.append(link, actions);
   return row;
@@ -499,7 +523,19 @@ function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[], detection
     actions.append(
       control(
         "Repair",
-        () => repairScribe(host, snapshot, job, agentId),
+        async () => {
+          await repairScribe(host, snapshot, job, agentId);
+          // Restoring an archived conversation needs no turn; every other repair is one.
+          if (!(status === "missing" && session?.archived)) {
+            markUpdating(
+              ui,
+              job,
+              agentId,
+              () => true,
+              () => repairScribe(host, snapshot, job, agentId),
+            );
+          }
+        },
         status === "missing" && session?.archived
           ? `Restored ${scribeLabel(scribe)} and turned it back on.`
           : `Asked ${scribeLabel(scribe)} to repair its setup.`,
@@ -633,11 +669,20 @@ function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[], detection
   const rows = el("div", undefined, "knowledge-surface");
   for (const run of runs) {
     const line = el("div", undefined, "scribe-run");
-    line.append(
-      el("time", when(run.runAtMs ?? run.ts)),
-      el("span", runText(run)),
-      runFailed(run) ? statusChip("failing") : el("span"),
-    );
+    const end = el("span", undefined, "scribe-run-end");
+    if (runFailed(run)) {
+      end.append(statusChip("failing"));
+    }
+    // A run in its own session keeps its transcript there, not in the scribe's conversation;
+    // the Automations page shows it, also after that session is cleaned up.
+    if (job && run.runId && run.sessionKey && run.sessionKey !== session?.key) {
+      const params = new URLSearchParams({ job: job.id, run: run.runId });
+      const href = `${host.basePath}/automations?${params}`;
+      end.append(
+        button("Open run", () => window.location.assign(href), "knowledge-quiet knowledge-small"),
+      );
+    }
+    line.append(el("time", when(run.runAtMs ?? run.ts)), el("span", runText(run)), end);
     rows.append(line);
   }
   if (!runs.length && firstRunPending(snapshot)) {
@@ -659,6 +704,13 @@ function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[], detection
     );
   }
   history.append(rows);
-  root.append(crumb, head, feedback, grid, history);
+  root.append(crumb, head, feedback);
+  const state = updateState(ui, job);
+  if (state) {
+    root.append(updatingNotice(ui, snapshot, state));
+  } else if (job && snapshot.runMessage?.state === "differs") {
+    root.append(updateNotice(ui, snapshot, job, agentId, snapshot.runMessage.current));
+  }
+  root.append(grid, history);
   return root;
 }

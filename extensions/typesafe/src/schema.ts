@@ -1,5 +1,4 @@
 import { isDeepStrictEqual } from "node:util";
-import { EvaluationError } from "./errors.js";
 import type { Evaluation, EvaluationInput } from "./schema-definition.js";
 import {
   isEvaluation,
@@ -27,10 +26,7 @@ function assertBoundedJson(value: unknown): void {
   let nodes = 0;
   const visit = (node: unknown, depth: number): void => {
     if (++nodes > MAX_JSON_NODES || depth > MAX_JSON_DEPTH) {
-      throw new EvaluationError(
-        "TypeSafe JSON exceeds resource limits (262144 nodes or depth 64).",
-        "unsupported-input",
-      );
+      throw new Error("TypeSafe JSON exceeds resource limits (262144 nodes or depth 64).");
     }
     if (node === null || typeof node === "string" || typeof node === "boolean") {
       return;
@@ -39,14 +35,14 @@ function assertBoundedJson(value: unknown): void {
       return;
     }
     if (typeof node !== "object" || !node) {
-      throw new EvaluationError("TypeSafe input must be JSON.", "unsupported-input");
+      throw new Error("TypeSafe input must be JSON.");
     }
     const array = Array.isArray(node);
     const prototype = Object.getPrototypeOf(node);
     if (
       array ? prototype !== Array.prototype : prototype !== Object.prototype && prototype !== null
     ) {
-      throw new EvaluationError("TypeSafe input must be plain JSON.", "unsupported-input");
+      throw new Error("TypeSafe input must be plain JSON.");
     }
     if (array) {
       if (
@@ -54,15 +50,12 @@ function assertBoundedJson(value: unknown): void {
         Object.keys(node).length !== node.length ||
         Object.hasOwn(node, "toJSON")
       ) {
-        throw new EvaluationError(
-          "TypeSafe input must be a bounded JSON array.",
-          "unsupported-input",
-        );
+        throw new Error("TypeSafe input must be a bounded JSON array.");
       }
       for (let index = 0; index < node.length; index++) {
         const descriptor = Object.getOwnPropertyDescriptor(node, index);
         if (!descriptor?.enumerable || !("value" in descriptor)) {
-          throw new EvaluationError("TypeSafe input must be plain JSON.", "unsupported-input");
+          throw new Error("TypeSafe input must be plain JSON.");
         }
         visit(descriptor.value, depth + 1);
       }
@@ -70,21 +63,18 @@ function assertBoundedJson(value: unknown): void {
     }
     for (const key of Object.getOwnPropertyNames(node)) {
       if (["__proto__", "constructor", "prototype"].includes(key)) {
-        throw new EvaluationError("TypeSafe input contains a reserved key.", "unsupported-input");
+        throw new Error("TypeSafe input contains a reserved key.");
       }
       const descriptor = Object.getOwnPropertyDescriptor(node, key);
       if (!descriptor?.enumerable || !("value" in descriptor)) {
-        throw new EvaluationError("TypeSafe input must be plain JSON.", "unsupported-input");
+        throw new Error("TypeSafe input must be plain JSON.");
       }
       visit(descriptor.value, depth + 1);
     }
   };
   visit(value, 0);
   if (Buffer.byteLength(JSON.stringify(value), "utf8") > MAX_JSON_BYTES) {
-    throw new EvaluationError(
-      "TypeSafe JSON exceeds the plugin resource limit of 4 MiB.",
-      "unsupported-input",
-    );
+    throw new Error("TypeSafe JSON exceeds the plugin resource limit of 4 MiB.");
   }
 }
 
@@ -112,16 +102,14 @@ export function parseInput(value: unknown): EvaluationInput {
                 : kind === "noul"
                   ? "Noul criteria may contain only true/false descriptions, or null."
                   : "type must be choice, score, or noul.";
-          throw new EvaluationError(
+          throw new Error(
             `Invalid TypeSafe questions entry #${index + 1}: ${hint} Instructions/descriptions accept text, object, array, or null; no extra question fields.`,
-            "unsupported-input",
           );
         }
       }
     }
-    throw new EvaluationError(
+    throw new Error(
       "Invalid TypeSafe evaluation input: supply state (text/object/array/null), a nonempty questions map, and optionally a valid model ID; no extra fields.",
-      "unsupported-input",
     );
   }
   return value;

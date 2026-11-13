@@ -288,17 +288,6 @@ select.usage-select {
   white-space: nowrap;
 }
 
-/* The refresh button keeps its shared size, which grows on touch. */
-.usage-header .btn--icon:not(.refresh-button) {
-  width: 32px;
-  height: 32px;
-  min-height: 32px;
-}
-
-.usage-pin-btn.active {
-  color: var(--accent);
-}
-
 .usage-query-section {
   display: grid;
   gap: 8px;
@@ -322,13 +311,6 @@ select.usage-select {
 
 .usage-query-count {
   margin-left: auto;
-}
-
-.usage-filter-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
 }
 
 .usage-filter-select,
@@ -402,13 +384,15 @@ select.usage-select {
   color: var(--muted);
 }
 
-.usage-value-picker__search > svg {
+.usage-value-picker__search > svg,
+.usage-filter-menu__query > svg {
   flex: none;
   width: 14px;
   height: 14px;
 }
 
-.usage-value-picker__search input {
+.usage-value-picker__search input,
+.usage-filter-menu__query input {
   flex: 1;
   min-width: 0;
   height: 100%;
@@ -421,7 +405,8 @@ select.usage-select {
   font-size: var(--control-ui-text-sm);
 }
 
-.usage-value-picker__search input::placeholder {
+.usage-value-picker__search input::placeholder,
+.usage-filter-menu__query input::placeholder {
   color: var(--text-tertiary);
 }
 
@@ -528,29 +513,6 @@ select.usage-select {
   color: var(--muted);
 }
 
-.usage-filter-menu__query > svg {
-  flex: none;
-  width: 14px;
-  height: 14px;
-}
-
-.usage-filter-menu__query input {
-  flex: 1;
-  min-width: 0;
-  height: 100%;
-  padding: 0;
-  border: 0;
-  outline: 0;
-  background: none;
-  color: var(--text-strong);
-  font: inherit;
-  font-size: var(--control-ui-text-sm);
-}
-
-.usage-filter-menu__query input::placeholder {
-  color: var(--text-tertiary);
-}
-
 .usage-filter-menu__suggestion {
   font-family: var(--mono);
   font-size: var(--control-ui-text-xs);
@@ -573,10 +535,6 @@ select.usage-select {
 
 .usage-filter-menu {
   margin-inline-start: auto;
-}
-
-.usage-filter-menu__trigger[aria-expanded="true"] {
-  background: var(--bg-hover);
 }
 
 /* Applied filters: their own row under the toolbar, one chip per field. */
@@ -757,7 +715,8 @@ select.usage-select {
   color: var(--muted);
 }
 
-.usage-display-menu__trigger[aria-expanded="true"] {
+/* The phone sheet trigger is a button; the desktop icon button owns its own open state. */
+.btn.usage-display-menu__trigger[aria-expanded="true"] {
   background: var(--bg-hover);
 }
 
@@ -2299,7 +2258,6 @@ select.usage-creator-filter {
   }
 
   .usage-controls,
-  .usage-filter-row,
   .usage-filters-inline {
     align-items: stretch;
   }

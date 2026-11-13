@@ -13,6 +13,8 @@ const enOpenClawId = {
     errorApprovalWait:
       "Wait for the verification number on both screens. Approve only if the numbers match.",
     technicalDetails: "Technical details",
+    errorRegistrationUnsettled:
+      "This claw's registration with OpenClaw ID isn't finished. Publish it first, then move to new keys.",
     errorNotPrepared: "Setup is not ready. Close this dialog and start again.",
     errorAlreadyLinked:
       "Remote access is already set up. Close this dialog and check its status in the account menu.",
@@ -69,7 +71,11 @@ const enOpenClawId = {
     approveNewDevice: "Approve a new device",
     approvalNotice: "A new browser is asking for owner access",
     signIn: "Sign in with OpenClaw ID",
-    signInLocalOnly: "Sign in on the computer that runs this claw.",
+    signInLocalOnly:
+      "Sign in through Tailscale or another personal sign-in, or on the computer that runs this claw.",
+    errorSignInCancelled: "Sign-in was cancelled in OpenClaw ID.",
+    errorDeviceSignInUnsupported:
+      "OpenClaw ID can't sign in this browser yet. Sign in on the computer that runs this claw.",
     signInUnconfigured:
       "OpenClaw ID is not set up for this claw. Ask the person who manages it to finish setup.",
     signedIn: "Signed in to OpenClaw ID as {account}",
@@ -101,6 +107,19 @@ const enOpenClawId = {
     makeReachable: "Turn on remote access",
     roleOperator: "Operator",
     roleViewer: "Viewer",
+    moveToNewKeys: "Move to new keys",
+    keyRecoverySignIn: "Sign in with OpenClaw ID from the account menu, then move to new keys.",
+    keysMissing: "Remote access is off: a key file is missing",
+    keysMismatch: "Remote access is off: a key file doesn't match",
+    keysRefusedDetail:
+      "Restore the original key files and restart, or move this claw to new keys with your recovery kit.",
+    bindingSuperseded: "Newer keys are in use for this claw",
+    bindingSupersededDetail:
+      "Its keys were moved on another computer, or a restored backup is older. If you didn't move them, move to new keys now with your recovery kit.",
+    needsLinkCode: "New keys aren't published yet",
+    needsLinkCodeDetail: "Publish them so your devices can reach this claw.",
+    publishNewKeys: "Publish new keys",
+    newKeysPublished: "New keys published",
   },
 } satisfies TranslationMap;
 

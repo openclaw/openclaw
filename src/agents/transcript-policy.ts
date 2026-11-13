@@ -174,5 +174,11 @@ export function resolveTranscriptPolicy(params: {
     policy.inHistorySystemUpdates = context.inHistorySystemUpdates;
     policy.appendOnlyRuntimeContext ||= context.inHistorySystemUpdates;
   }
+  // Anthropic caches tools, then system, then messages: any system change re-writes the whole
+  // conversation. Every Anthropic Messages route (custom base URLs, proxies and OAuth included)
+  // therefore pins the session prompt; routes without in-history system messages receive the
+  // delta as a user-role note.
+  policy.pinnedSystemPrompt =
+    policy.inHistorySystemUpdates === true || modelApi === "anthropic-messages";
   return policy;
 }

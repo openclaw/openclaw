@@ -5,6 +5,7 @@ import { loadSettings } from "../../app/settings.ts";
 import { transactionComplete } from "../../lib/chat/control-ui-database.runtime.ts";
 import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
 import { createGatewayRequestMock } from "../../test-helpers/gateway-client.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   createGatewayBrowserClientFixture,
   createInitializationContext,
@@ -176,7 +177,9 @@ describe("chat pane warm reload", () => {
         transcript.update();
         expect(container.querySelector(".chat-thread")?.hasAttribute("inert")).toBe(false);
         if (!empty && !priorProjection) {
-          expect(container.textContent).toContain("The browser remembers this conversation.");
+          await waitForSolid(() =>
+            expect(container.textContent).toContain("The browser remembers this conversation."),
+          );
         }
         await store.flush();
         Object.assign(pane.state, { client, connected: true, connectionEpoch: 1 });
@@ -186,7 +189,9 @@ describe("chat pane warm reload", () => {
         view.update(threadProps("warm-reload-pane", sessionKey, pane.state.chatMessages));
         transcript.update();
         if (priorProjection && !empty) {
-          expect(container.textContent).toContain("A newer turn is present on the Gateway.");
+          await waitForSolid(() =>
+            expect(container.textContent).toContain("A newer turn is present on the Gateway."),
+          );
         }
         expect(request).toHaveBeenCalledExactlyOnceWith(
           "chat.startup",

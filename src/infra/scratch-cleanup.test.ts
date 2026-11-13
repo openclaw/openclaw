@@ -29,6 +29,7 @@ async function fixture() {
   return {
     root,
     target,
+    cursor,
     pause,
     async file(name: string, age = SCRATCH_TTL_MS + 1) {
       const file = path.join(root, name);
@@ -37,7 +38,8 @@ async function fixture() {
       await fs.utimes(file, (now - age) / 1000, (now - age) / 1000);
       return file;
     },
-    run: () => cleanScratch({ targets: [target], now, assertCurrent: () => {}, pause, cursor }),
+    run: (nextCursor = cursor) =>
+      cleanScratch({ targets: [target], now, assertCurrent: () => {}, pause, cursor: nextCursor }),
   };
 }
 
@@ -78,7 +80,7 @@ it("skips live or queued custody and stops paced deletion when custody becomes l
   expect((await fs.readdir(path.dirname(file))).length).toBe(2);
 });
 
-it("refuses symlinks at the scratch boundary and inside entries without deleting outside files", async () => {
+it("refuses symlink scratch roots but expires contained links without following their targets", async () => {
   const f = await fixture();
   const outside = await f.file("outside/proof");
   await fs.mkdir(path.join(f.root, ".openclaw"));
@@ -86,24 +88,62 @@ it("refuses symlinks at the scratch boundary and inside entries without deleting
   expect(await f.run()).toMatchObject({ filesRemoved: 0, deferred: 1 });
   await fs.unlink(path.join(f.root, ".openclaw/tmp"));
   await fs.mkdir(path.join(f.root, ".openclaw/tmp/proof"), { recursive: true });
-  await fs.symlink(outside, path.join(f.root, ".openclaw/tmp/proof/link"));
-  expect(await f.run()).toMatchObject({ filesRemoved: 0, deferred: 1 });
+  const link = path.join(f.root, ".openclaw/tmp/proof/link");
+  await fs.symlink(outside, link);
+  await fs.lutimes(link, (now - SCRATCH_TTL_MS - 1) / 1000, (now - SCRATCH_TTL_MS - 1) / 1000);
+  expect(await f.run()).toMatchObject({ entriesRemoved: 1, filesRemoved: 2, deferred: 0 });
   expect(await fs.readFile(outside, "utf8")).toBe("proof");
 });
 
-it("cleans only node-coverage directories in runtime temp and advances a bounded pass", async () => {
+it("expires nested clone object links by directory age, not another checkout's pack refresh", async () => {
   const f = await fixture();
-  f.target.kind = "coverage";
-  const unrelated = await f.file("other-temp/proof");
-  const regular = await f.file("node-coverage-file");
-  for (let index = 0; index < 258; index++) {
-    await f.file(`node-coverage-${index}/proof`);
-  }
-  expect(await f.run()).toMatchObject({ entriesRemoved: 256, bytesRemoved: 1280 });
-  expect(await f.run()).toMatchObject({ entriesRemoved: 2, bytesRemoved: 10 });
-  expect(await fs.readFile(unrelated, "utf8")).toBe("proof");
-  expect(await fs.readFile(regular, "utf8")).toBe("proof");
+  const shared = await f.file("base/.git/objects/pack/pack-synthetic.pack", 1);
+  const clone = path.join(f.root, ".openclaw/tmp/landing/native");
+  await f.file(".openclaw/tmp/landing/native/.git/FETCH_HEAD");
+  const packs = path.join(clone, ".git/objects/pack");
+  await fs.mkdir(packs, { recursive: true });
+  await fs.link(shared, path.join(packs, "pack-synthetic.pack"));
+  const old = (now - SCRATCH_TTL_MS - 1) / 1000;
+  // A newly linked object still protects the entry until its directory ages out.
+  await fs.utimes(packs, now / 1000, now / 1000);
+  expect(await f.run()).toMatchObject({ entriesRemoved: 0, errors: [] });
+  await fs.utimes(packs, old, old);
+  expect(await f.run()).toMatchObject({ entriesRemoved: 1, errors: [] });
+  await expect(fs.stat(clone)).rejects.toMatchObject({ code: "ENOENT" });
+  expect(await fs.readFile(shared, "utf8")).toBe("proof");
+  expect((await fs.stat(shared)).nlink).toBe(1);
 });
+
+it.each(["checkout", "coverage"] as const)(
+  "resumes bounded %s cleanup after losing its cursor",
+  async (kind) => {
+    const f = await fixture();
+    f.target.kind = kind;
+    const prefix = kind === "checkout" ? ".openclaw/tmp/" : "";
+    const unrelated = await f.file("other-temp/proof");
+    const regular = await f.file("node-coverage-file");
+    for (let index = 0; index < 258; index++) {
+      await f.file(`${prefix}node-coverage-${index}/proof`);
+    }
+    expect(await f.run()).toMatchObject({ entriesRemoved: 256, bytesRemoved: 1280 });
+    await closeScratchCleanupCursor(f.cursor);
+    const restartedCursor: ScratchCleanupCursor = {};
+    cursors.push(restartedCursor);
+    expect(await f.run(restartedCursor)).toMatchObject({
+      entriesRemoved: 2,
+      bytesRemoved: 10,
+      scanned: kind === "checkout" ? 4 : 6,
+      errors: [],
+    });
+    expect(await f.run(restartedCursor)).toMatchObject({
+      entriesRemoved: 0,
+      filesRemoved: 0,
+      scanned: kind === "checkout" ? 0 : 2,
+    });
+    expect(await fs.readFile(unrelated, "utf8")).toBe("proof");
+    expect(await fs.readFile(regular, "utf8")).toBe("proof");
+  },
+);
 
 it("retains an entry when its newest file cannot be established within the scan depth", async () => {
   const f = await fixture();

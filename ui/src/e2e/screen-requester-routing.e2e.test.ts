@@ -32,6 +32,68 @@ const callGateway = vi.spyOn(gatewayTransport, "callInProcessGatewayTool");
 afterAll(() => callGateway.mockRestore());
 
 suite.define(() => {
+  it("keeps the reader in their chat when a background session opens a portal", async () => {
+    const source = "agent:main:session-a";
+    const background = "agent:main:session-b";
+    const page = await (
+      await suite.newBrowserContext({ viewport: { width: 1100, height: 800 } })
+    ).newPage();
+    const gateway = await installMockGateway(page, {
+      sessionKey: source,
+      featureMethods: [...defaultControlUiFeatureMethods, "portal.list"],
+      methodResponses: {
+        "sessions.list": chatSessionListResponse(),
+        "portal.list": {
+          portals: [
+            {
+              id: "preview-web",
+              title: "Preview",
+              port: 3000,
+              listenPort: 43210,
+              tokenQuery: "openclaw_portal=synthetic",
+              publicUrl: "http://127.0.0.1:43210/",
+              url: "http://127.0.0.1:43210/?openclaw_portal=synthetic",
+              createdAtMs: 1,
+            },
+          ],
+        },
+      },
+      historyMessages: [
+        { role: "assistant", content: [{ type: "text", text: "Keep reading this chat." }] },
+      ],
+    });
+    await page.route("http://127.0.0.1:43210/**", (route) =>
+      route.fulfill({
+        contentType: "text/html",
+        body: "<!doctype html><h1>Preview app</h1>",
+      }),
+    );
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, source));
+    const composer = page.locator(".agent-chat__composer-combobox textarea");
+    await composer.fill("Unfinished thought");
+    await composer.evaluate((element: HTMLTextAreaElement) => element.setSelectionRange(4, 4));
+    const command = { kind: "panel", panel: "portal", open: true, portalId: "preview-web" };
+    await gateway.emitGatewayEvent("ui.command", { command, sessionKey: background });
+    expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(source));
+    expect(await composer.inputValue()).toBe("Unfinished thought");
+    expect(
+      await composer.evaluate((element: HTMLTextAreaElement) => ({
+        focused: document.activeElement === element,
+        caret: element.selectionStart,
+      })),
+    ).toEqual({ focused: true, caret: 4 });
+    expect(await page.locator("openclaw-portals-page[embedded]").count()).toBe(0);
+    expect(await gateway.getRequests("portal.list")).toHaveLength(0);
+
+    await gateway.emitGatewayEvent("ui.command", { command, sessionKey: source });
+    await page
+      .frameLocator("openclaw-portals-page[embedded] iframe")
+      .getByRole("heading", { name: "Preview app" })
+      .waitFor();
+    expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(source));
+    expect(await composer.inputValue()).toBe("Unfinished thought");
+  });
+
   it("opens the selected session and its app views only in the browser that asked the agent", async () => {
     const source = "agent:main:session-a";
     const destination = "agent:main:session-b";
@@ -43,9 +105,13 @@ suite.define(() => {
           sessionKey: source,
           featureMethods: [
             ...defaultControlUiFeatureMethods,
+            "agents.list",
+            "config.get",
             "desktop.observe",
             "environments.status",
             "portal.list",
+            "tools.catalog",
+            "tools.effective",
             "ui.command.result",
           ],
           methodResponses: {
@@ -195,13 +261,14 @@ suite.define(() => {
     await captureUiProof(suite, requester.page, "github-reconnect", "before.png");
     await screen.execute("reconnect-github", { action: "github_identity_settings" });
     await Promise.all(deliveries);
-    await expect
-      .poll(() => new URL(requester.page.url()).pathname)
-      .toBe("/settings/agents/main/tools");
+    await expect.poll(() => new URL(requester.page.url()).pathname).toBe("/settings/profile");
     await requester.gateway.waitForRequest("tools.github.status", {
       match: { agentId: "main", selectedScope: "agent" },
     });
-    const identity = requester.page.locator("openclaw-github-identity");
+    // Every agent's account is reconnected in Profile, on that agent's row.
+    const identity = requester.page.locator(
+      '#settings-profile-github-connections [data-agent-id="main"]',
+    );
     await identity.waitFor();
     await identity.scrollIntoViewIfNeeded();
     await captureUiProof(suite, requester.page, "github-reconnect", "after.png");

@@ -174,7 +174,10 @@ it("recovers a retargeted guest PR, retains saved data and publishes the resolve
     ) {
       return commandResult(JSON.stringify(publicationPullRequestResponse(pr)));
     }
-    if (argv.includes("fetch") && (argv.includes(partialBase) || argv.includes("--stdin"))) {
+    if (
+      argv.includes("fetch") &&
+      (argv.some((arg) => arg.split(":")[0] === partialBase) || argv.includes("--stdin"))
+    ) {
       expect(argv).toContain("https://github.com/openclaw/openclaw.git");
       expect(argv).toContain("credential.helper=!gh auth git-credential");
       if (argv.includes("--stdin")) {
