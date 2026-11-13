@@ -109,7 +109,8 @@ export function resolveOperatorRoleSelection(
       if (
         Object.hasOwn(assignments, configuredLogin) &&
         configuredLogin.trim().toLowerCase() === login &&
-        Object.hasOwn(roles.definitions, assignments[configuredLogin])
+        // SAFETY: the own key above belongs to the validated string-valued assignment map.
+        Object.hasOwn(roles.definitions, assignments[configuredLogin]!)
       ) {
         return { effectiveRole: assignments[configuredLogin], roleSource: "githubLogin" };
       }
