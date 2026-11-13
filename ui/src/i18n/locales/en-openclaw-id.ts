@@ -9,7 +9,7 @@ const enOpenClawId = {
     errorApprovalTab:
       "Another tab is waiting for browsers to approve. Use that tab, or close it and retry here.",
     errorApprovalExpired:
-      "This browser request expired or was cancelled. Start a new request on the other browser.",
+      "This browser request expired or was canceled. Start a new request on the other browser.",
     errorApprovalWait:
       "Wait for the verification number on both screens. Approve only if the numbers match.",
     technicalDetails: "Technical details",

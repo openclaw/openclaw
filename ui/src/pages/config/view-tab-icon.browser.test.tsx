@@ -100,7 +100,7 @@ it("keeps unavailable saved choices and makes an empty collection quietly unavai
     tabIcon: "lobster:gold",
     setTabIconMode: vi.fn(),
   });
-  expect(container.textContent).toContain("not unlocked in this browser");
+  expect(container.textContent).toContain("isn’t unlocked in this browser");
   expect(container.querySelectorAll(".settings-tab-icon__pick")).toHaveLength(4);
   expect(pressedLabels(container)).toEqual(["Default"]);
   expect(props.setTabIconMode).not.toHaveBeenCalled();

@@ -441,7 +441,7 @@ const startupEnglish = {
     running: "Running",
     queued: "Queued",
     completed: "Completed",
-    cancelled: "Cancelled",
+    cancelled: "Canceled",
     linked: "Linked",
     mode: "Mode",
     system: "System",
