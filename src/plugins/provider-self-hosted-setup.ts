@@ -61,6 +61,12 @@ function buildOpenAICompatibleSelfHostedProviderConfig(
 ): { config: OpenClawConfig; modelRef: string; profileId: string } {
   const modelRef = `${params.providerId}/${params.modelId}`;
   const profileId = `${params.providerId}:default`;
+  const contextWindow = params.contextWindow ?? SELF_HOSTED_DEFAULT_CONTEXT_WINDOW;
+  // Saved model limits override the provider default; only the default must fit the context.
+  const saved = resolveMergedModelProviderConfig(params.cfg, params.providerId);
+  const savedMaxTokens =
+    saved?.models?.find((model) => model.id === params.modelId)?.maxTokens ??
+    (saved?.maxTokens === undefined ? undefined : Math.min(saved.maxTokens, contextWindow));
   return {
     config: {
       ...params.cfg,
@@ -80,12 +86,9 @@ function buildOpenAICompatibleSelfHostedProviderConfig(
                 reasoning: params.reasoning ?? false,
                 input: params.input ?? ["text"],
                 cost: SELF_HOSTED_DEFAULT_COST,
-                contextWindow: params.contextWindow ?? SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
+                contextWindow,
                 maxTokens:
-                  params.maxTokens ??
-                  resolveDefaultModelMaxTokens(
-                    params.contextWindow ?? SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
-                  ),
+                  savedMaxTokens ?? params.maxTokens ?? resolveDefaultModelMaxTokens(contextWindow),
               },
             ],
           },
