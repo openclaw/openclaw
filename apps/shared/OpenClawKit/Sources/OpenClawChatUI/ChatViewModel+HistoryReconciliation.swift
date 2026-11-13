@@ -10,12 +10,10 @@ extension OpenClawChatViewModel {
 
     static func decodeMessages(
         _ raw: [AnyCodable],
-        activity: [OpenClawChatHistoryActivity]? = nil) -> [OpenClawChatMessage]
+        activity: [OpenClawChatHistoryActivity]? = nil) async -> [OpenClawChatMessage]
     {
-        let decoded = raw.compactMap { item in
-            try? GatewayPayloadDecoding.decode(item, as: OpenClawChatMessage.self)
-        }
-        return Self.prepareHistoryMessages(decoded, activity: activity)
+        let decoded = await Self.decodeHistoryRows(raw, isDelta: false)
+        return Self.prepareHistoryMessages(decoded ?? [], activity: activity)
     }
 
     private static func prepareHistoryMessages(
@@ -31,21 +29,41 @@ extension OpenClawChatViewModel {
     }
 
     /// A cursor must never commit past a row that failed decoding.
-    static func decodeHistoryDelta(_ payload: OpenClawChatHistoryPayload) -> [OpenClawChatMessage]? {
+    static func decodeHistoryDelta(_ payload: OpenClawChatHistoryPayload) async -> [OpenClawChatMessage]? {
         guard ChatPayloadDecoding.trimmedNonEmptyString(payload.deltaCursor) != nil,
-              let envelopes = payload.messages else { return nil }
-        var messages: [OpenClawChatMessage] = []
-        for envelope in envelopes {
-            guard let row = envelope.dictionaryValue?["message"],
-                  // Anchored activities can precede the accepted cursor. Reload canonical order
-                  // before decoding drops placement metadata that native rows cannot compose.
-                  row.dictionaryValue?["__openclaw"]?.dictionaryValue?["transcriptPosition"]?
-                      .dictionaryValue?["activity"] == nil,
-                      let message = try? GatewayPayloadDecoding.decode(row, as: OpenClawChatMessage.self)
-            else { return nil }
-            messages.append(message)
-        }
+              let envelopes = payload.messages,
+              let messages = await Self.decodeHistoryRows(envelopes, isDelta: true) else { return nil }
         return Self.prepareHistoryMessages(messages, activity: payload.activity)
+    }
+
+    // Only the value decoder leaves MainActor. Ingestion, sanitization and reconciliation
+    // keep their existing actor; callers recheck admission after this structured suspension.
+    @concurrent
+    private nonisolated static func decodeHistoryRows(
+        _ raw: [AnyCodable],
+        isDelta: Bool) async -> [OpenClawChatMessage]?
+    {
+        var messages: [OpenClawChatMessage] = []
+        for item in raw {
+            guard !Task.isCancelled else { return nil }
+            let row: AnyCodable
+            if isDelta {
+                guard let message = item.dictionaryValue?["message"],
+                      // Anchored activities can precede the accepted cursor. Reload canonical order
+                      // before decoding drops placement metadata that native rows cannot compose.
+                      message.dictionaryValue?["__openclaw"]?.dictionaryValue?["transcriptPosition"]?
+                          .dictionaryValue?["activity"] == nil else { return nil }
+                row = message
+            } else {
+                row = item
+            }
+            if let message = try? GatewayPayloadDecoding.decode(row, as: OpenClawChatMessage.self) {
+                messages.append(message)
+            } else if isDelta {
+                return nil
+            }
+        }
+        return messages
     }
 
     static func stripInboundMetadata(from message: OpenClawChatMessage) -> OpenClawChatMessage {
@@ -806,21 +824,14 @@ extension OpenClawChatViewModel {
         preservingOptimisticLocalMessages: Bool,
         replacingCanonicalHistory: Bool = false,
         syncThinkingOptions: Bool = false,
-        decodedDeltaMessages: [OpenClawChatMessage]? = nil) -> Bool
+        decodedMessages: [OpenClawChatMessage]?) -> Bool
     {
         guard self.canApplyHistory(request) else { return false }
         self.applyHistoryReasoningLevel(payload.sessionInfo?.reasoningLevel)
         let replacingCanonicalHistory = replacingCanonicalHistory || request.replacingCanonicalHistory
         let isDelta = payload.kind == "delta"
         guard request.deltaCursor == self.historyDeltaCursor else { return false }
-        let decoded: [OpenClawChatMessage]
-        if isDelta {
-            guard request.deltaCursor != nil,
-                  let messages = decodedDeltaMessages ?? Self.decodeHistoryDelta(payload) else { return false }
-            decoded = messages
-        } else {
-            decoded = Self.decodeMessages(payload.messages ?? [], activity: payload.activity)
-        }
+        guard let decoded = decodedMessages, !isDelta || request.deltaCursor != nil else { return false }
         let incoming = self.adoptingProvisionalFinalMessageIDs(in: decoded)
         let canonical = Self.reconcileMessageIDs(previous: self.messages, incoming: incoming)
         // These local echoes outlive old route run IDs until history confirms them.

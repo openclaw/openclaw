@@ -69,7 +69,8 @@ extension OpenClawChatViewModel {
         request original: HistoryRequest,
         policy: HistoryRefreshPolicy,
         requireCurrentInvalidation: Bool = false,
-        canonicalRead: (@MainActor @Sendable () async throws -> OpenClawChatHistoryPayload)? = nil) async
+        canonicalRead: (@MainActor @Sendable () async throws
+            -> (payload: OpenClawChatHistoryPayload, messages: [OpenClawChatMessage]))? = nil) async
         -> RunHistoryRefreshResult
     {
         var request = original
@@ -168,21 +169,25 @@ extension OpenClawChatViewModel {
         request initial: HistoryRequest,
         policy: HistoryRefreshPolicy,
         invalidationRequest: HistoryRequest?,
-        canonicalRead: (@MainActor @Sendable () async throws -> OpenClawChatHistoryPayload)?) async
+        canonicalRead: (@MainActor @Sendable () async throws
+            -> (payload: OpenClawChatHistoryPayload, messages: [OpenClawChatMessage]))?) async
         -> RunHistoryRefreshResult
     {
         var request = initial
         do {
             var payload: OpenClawChatHistoryPayload
             var replacingCanonicalHistory: Bool
-            var decodedDeltaMessages: [OpenClawChatMessage]?
+            var decodedMessages: [OpenClawChatMessage]?
             while true {
                 guard !Task.isCancelled, !self.isTransportDetached,
                       self.canApplyHistory(request) else { return .failed }
                 request.deltaCursor = self.historyDeltaCursor
                 var malformedCursorPayload = false
+                decodedMessages = nil
                 if let canonicalRead {
-                    payload = try await canonicalRead()
+                    let canonical = try await canonicalRead()
+                    payload = canonical.payload
+                    decodedMessages = canonical.messages
                 } else if let cursor = request.deltaCursor {
                     do {
                         payload = try await transport.requestHistory(sessionKey: request.session.key, cursor: cursor)
@@ -199,19 +204,38 @@ extension OpenClawChatViewModel {
                 // Request IDs order callers, not server projections. Retry from the accepted cursor
                 // rather than treating a response from an overlapping cursor read as a newer tip.
                 if request.deltaCursor != self.historyDeltaCursor { continue }
-                decodedDeltaMessages = payload.kind == "delta" ? Self.decodeHistoryDelta(payload) : nil
+                if payload.kind == "delta" {
+                    decodedMessages = await Self.decodeHistoryDelta(payload)
+                }
+                guard !Task.isCancelled, !self.isTransportDetached,
+                      self.canApplyHistory(request) else { return .failed }
+                if request.deltaCursor != self.historyDeltaCursor { continue }
                 replacingCanonicalHistory = malformedCursorPayload || request.replacingCanonicalHistory ||
                     payload.kind == "reset" ||
-                    (payload.kind == "delta" && decodedDeltaMessages == nil)
+                    (payload.kind == "delta" && decodedMessages == nil)
                 if payload.kind == "reset" || payload.kind == "delta" && replacingCanonicalHistory {
+                    decodedMessages = nil
                     if let canonicalRead {
-                        payload = try await canonicalRead()
+                        let canonical = try await canonicalRead()
+                        payload = canonical.payload
+                        decodedMessages = canonical.messages
                     } else {
                         payload = try await transport.requestHistory(sessionKey: request.session.key)
                     }
                     guard self.canApplyHistory(request) else { return .failed }
                     if request.deltaCursor != self.historyDeltaCursor { continue }
                 }
+                if decodedMessages == nil {
+                    decodedMessages = if payload.kind == "delta" {
+                        await Self.decodeHistoryDelta(payload)
+                    } else {
+                        await Self.decodeMessages(payload.messages ?? [], activity: payload.activity)
+                    }
+                }
+                guard !Task.isCancelled, !self.isTransportDetached,
+                      self.canApplyHistory(request) else { return .failed }
+                // Decoding can overlap live events and another accepted cursor just like the wire read.
+                if request.deltaCursor != self.historyDeltaCursor { continue }
                 break
             }
             guard !Task.isCancelled, !self.isTransportDetached else { return .failed }
@@ -226,7 +250,7 @@ extension OpenClawChatViewModel {
                 preservingOptimisticLocalMessages: policy.preservingOptimisticLocalMessages,
                 replacingCanonicalHistory: replacingCanonicalHistory,
                 syncThinkingOptions: policy.syncThinkingOptions,
-                decodedDeltaMessages: decodedDeltaMessages)
+                decodedMessages: decodedMessages)
             let hasInFlightRun = ChatPayloadDecoding.trimmedNonEmptyString(payload.inFlightRun?.runId) != nil
             let sessionHasActiveRun = payload.sessionInfo?.hasActiveRun == true
             // `hasActiveRun` is session-wide and can be true for an embedded agent run.
