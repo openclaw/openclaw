@@ -7,6 +7,39 @@ import WebKit
 @Suite(.serialized, .testWaitLimit)
 @MainActor
 struct DashboardSessionShortcutDeliveryTests {
+    @Test(arguments: ["previous", "next"])
+    func `native session menu commands reach the loaded dashboard`(direction: String) async throws {
+        _ = AppKitTestSupport.application
+        let server = try await DashboardHTTPFixture.start(
+            html: """
+            <!doctype html><body><script>
+            window.observed = [];
+            for (const direction of ['previous', 'next']) {
+              window.addEventListener('openclaw:native-' + direction + '-session', () => {
+                window.observed.push(direction);
+              });
+            }
+            window.__OPENCLAW_NATIVE_COMMANDS_READY__ = true;
+            </script></body>
+            """,
+            contentSecurityPolicy: "default-src 'none'; script-src 'unsafe-inline'")
+        defer { server.stop() }
+        let auth = DashboardWindowAuth.unauthenticated
+        let controller = DashboardWindowController(
+            url: server.url(),
+            auth: auth,
+            websiteDataStore: .nonPersistent(),
+            windowAutosaveName: "",
+            requestBrowserProfileImportOffer: { _ in false })
+        defer { controller.closeDashboard() }
+        controller.show(url: server.url(), auth: auth)
+        try await DashboardTestWait.document(controller, "session menu command document")
+        controller.dispatchNativeCommand(direction == "previous" ? .previousSession : .nextSession)
+        try await TestWait.state("session menu command delivery") {
+            try await controller.webView.evaluateJavaScript("window.observed.join(',')") as? String == direction
+        }
+    }
+
     @Test(arguments: [("o", UInt16(31)), ("a", UInt16(0))], ["body", "composer"])
     func `session chords reach the focused body and composer through the dashboard window`(
         chord: (key: String, keyCode: UInt16), target: String) async throws

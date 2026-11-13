@@ -18,6 +18,7 @@ import { SETTINGS_ROUTE_TARGETS } from "../pages/config/route-data.ts";
 import { projectSidebarSessionReference } from "./app-sidebar-agent-session-rows.ts";
 import {
   buildReconciledSidebarZone,
+  distinctSidebarSessionRows,
   findSidebarSessionRow,
 } from "./app-sidebar-session-navigation-logic.ts";
 import type { SidebarSessionNavigationState } from "./app-sidebar-session-navigation-logic.ts";
@@ -29,6 +30,7 @@ import {
 } from "./app-sidebar-session-types.ts";
 import type { SessionDataOwner } from "./session-data.ts";
 import type { SessionOwnerFilter } from "./session-owner-filter.ts";
+import type { ContextualSidebar } from "./sidebar-context-state.ts";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 
 type PersonalNavigationHost = Parameters<typeof projectSidebarSessionReference>[0]["host"] & {
@@ -544,4 +546,31 @@ export function sidebarVisibleRowsInOrder(
       );
   // Keep appearances until the clicked range is resolved; batch targets deduplicate later.
   return [...pins, ...personalGroupRows, ...visibleRows];
+}
+
+export function selectAdjacentSidebarSession(
+  host: {
+    readonly navigationView: "pages" | "sessions" | "online";
+    readonly contextualSidebar: ContextualSidebar | undefined;
+    readonly sidebarSnapshot: SidebarSnapshotModel | null;
+    readonly sessionKey: string;
+    selectSession(key: string, agentId?: string, row?: SidebarRecentSession): void;
+  },
+  direction: -1 | 1,
+  visibleTree: () => SidebarRecentSession[],
+): boolean {
+  if (host.navigationView !== "sessions" || host.contextualSidebar || host.sidebarSnapshot) {
+    return false;
+  }
+  const rows = distinctSidebarSessionRows(visibleTree());
+  const index = rows.findIndex((row) => row.key === host.sessionKey);
+  if (index < 0 || rows.length < 2) {
+    return false;
+  }
+  const row = rows[(index + direction + rows.length) % rows.length];
+  if (!row) {
+    return false;
+  }
+  host.selectSession(row.key, undefined, row);
+  return true;
 }

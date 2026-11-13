@@ -39,6 +39,7 @@ import {
   personalSidebarOwnerFilterId,
   projectUnpinnedSessionRows,
   sidebarVisibleRowsInOrder,
+  selectAdjacentSidebarSession,
 } from "./app-sidebar-personal-navigation.ts";
 import { sidebarPresenceScope } from "./app-sidebar-presence.ts";
 import type { SidebarCatalogRuntime } from "./app-sidebar-session-catalog-row.ts";
@@ -559,6 +560,9 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   protected visibleSessionTreeInOrder(): SidebarRecentSession[] {
     return this.sessionProjection.visibleTree(this.visibleSessionRowsInOrder(), this);
   }
+
+  selectAdjacentSession = (direction: -1 | 1): boolean =>
+    selectAdjacentSidebarSession(this, direction, () => this.visibleSessionTreeInOrder());
 
   selectedVisibleSessions(): SidebarRecentSession[] {
     if (this.selectedSessionKeys.size === 0) {

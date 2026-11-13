@@ -2,6 +2,7 @@ import { cleanup, render } from "@solidjs/testing-library";
 import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../../lib/keyboard-shortcut-contract.ts";
+import { KEYBOARD_REFERENCE_COMBOS } from "../../lib/keyboard-shortcut-reference.ts";
 import { Kbd, KeyboardShortcut, ShortcutHint, ShortcutText } from "./kbd.tsx";
 
 afterEach(cleanup);
@@ -11,7 +12,7 @@ describe("Solid keyboard hints", () => {
     [KEYBOARD_SHORTCUT_COMBOS.browserPanel, true, false, ["⌘⌥⇧U"], 3],
     [KEYBOARD_SHORTCUT_COMBOS.browserPanel, false, false, ["CtrlAlt⇧U"], 1],
     [KEYBOARD_SHORTCUT_COMBOS.browserPanel, false, true, ["Ctrl", "Alt", "⇧", "U"], 1],
-    [KEYBOARD_SHORTCUT_COMBOS.newline, true, true, ["⇧", "⏎"], 2],
+    [KEYBOARD_REFERENCE_COMBOS.newline, true, true, ["⇧", "⏎"], 2],
   ] as const)(
     "renders platform key labels and accessible symbols",
     (combo, applePlatform, separateKeys, labels, count) => {

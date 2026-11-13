@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
-import { expect, it } from "vitest";
+import { chromium } from "playwright";
+import { expect, inject, it } from "vitest";
 import {
   formatEd25519PublicKey,
   formatIrohEndpointKey,
@@ -11,6 +12,7 @@ import type {
   OpenClawIdPublication,
   OpenClawIdStatusResult,
 } from "../lib/openclaw-id/types.ts";
+import { waitForControlUiFrameLayout } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   createControlUiMockBootstrapConfig,
   defaultControlUiFeatureMethods,
@@ -23,10 +25,53 @@ import {
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
 
-const suite = createControlUiE2eSuite({ name: "OpenClaw ID account menu" });
+const suite = createControlUiE2eSuite({
+  name: "OpenClaw ID account menu",
+  // Chromium shares its clipboard across contexts. Keep real reads isolated
+  // from parallel chat-copy suites without serializing unrelated browser work.
+  browserLaunchOptions: {},
+});
 const label = "Sign in with OpenClaw ID";
 
 suite.define(() => {
+  it("retains its clipboard when a parallel browser suite writes", async () => {
+    const endpoint = inject("controlUiE2eChromium").wsEndpoint;
+    if (!endpoint) {
+      throw new Error("Expected the invocation's shared Chromium endpoint");
+    }
+    const peer = await chromium.connect(endpoint);
+    const context = await peer.newContext({ permissions: ["clipboard-read", "clipboard-write"] });
+    try {
+      await suite.withPage(
+        { permissions: ["clipboard-read", "clipboard-write"] },
+        async ({ page }) => {
+          const competingPage = await context.newPage();
+          for (const target of [page, competingPage]) {
+            await target.route("**/clipboard-isolation", (route) =>
+              route.fulfill({
+                contentType: "text/html",
+                body: "<!doctype html><title>Clipboard</title>",
+              }),
+            );
+            await target.goto(`${suite.server.baseUrl}clipboard-isolation`);
+          }
+          await page.evaluate(() =>
+            navigator.clipboard.writeText("https://synthetic.claws.example.test"),
+          );
+          await competingPage.evaluate(() =>
+            navigator.clipboard.writeText("Name\tValue\nalpha\t1"),
+          );
+          expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+            "https://synthetic.claws.example.test",
+          );
+        },
+      );
+    } finally {
+      await context.close();
+      await peer.close();
+    }
+  });
+
   it("keeps remote-access completion compact and actions reachable after the real ceremony", async () => {
     const signer = await generateEd25519Signer();
     const preparation: OpenClawIdLinkPreparation = {
@@ -406,6 +451,8 @@ suite.define(() => {
                 await page.setViewportSize({ width, height: 900 });
                 for (const reducedMotion of ["no-preference", "reduce"] as const) {
                   await page.emulateMedia({ reducedMotion });
+                  // Resize repositions the open menu before publication changes its height.
+                  await waitForControlUiFrameLayout([menu]);
                   const before = await menu.boundingBox();
                   const motion =
                     reducedMotion === "no-preference"

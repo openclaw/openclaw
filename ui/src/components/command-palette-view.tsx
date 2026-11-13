@@ -23,6 +23,7 @@ import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
 } from "../lib/keyboard-shortcut-contract.ts";
+import { KEYBOARD_REFERENCE_COMBOS } from "../lib/keyboard-shortcut-reference.ts";
 import { elementRef } from "../lib/reactive/element-ref.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { keyboardHintsVisible } from "../lib/reactive/keyboard-hints.ts";
@@ -254,7 +255,7 @@ function PaletteNewlineHint() {
           combo={
             isMobileBrowserPlatform()
               ? KEYBOARD_SHORTCUT_COMBOS.sendMessage
-              : KEYBOARD_SHORTCUT_COMBOS.newline
+              : KEYBOARD_REFERENCE_COMBOS.newline
           }
         />
       }

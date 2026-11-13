@@ -71,58 +71,6 @@ const enCommandPalette = {
         .transcriptSearchArchivedExcluded,
   },
 
-  shortcutsOverlay: {
-    title: en.shortcutsOverlay.title,
-    sections: {
-      general: "General",
-      chat: "Chat",
-      panels: "Panels",
-      sidebar: "Sidebar",
-      imageViewer: "Image viewer",
-      approvals: "Approvals",
-    },
-    labels: {
-      commandPalette: "Open command palette",
-      newSession: "Open New Session",
-      archiveSession: "Archive current session",
-      paletteStartSession: "Start a background session (in the command palette)",
-      keyboardShortcuts: "Show keyboard shortcuts",
-      toggleSidebar: "Toggle sidebar",
-      debugOverlay: "Toggle debug overlay",
-      appearanceSettings: "Open appearance settings",
-      startNewSession: "Start new session (from the new-session page)",
-      startNewSessionBackground: "Start new session in background (from the new-session page)",
-      closeDialog: "Close dialog or exit settings",
-      sendMessage: "Send message",
-      newline: "Insert new line",
-      steerImmediately: "Steer active response",
-      historyRecall: "Browse sent message history",
-      transcriptSearch: "Search conversation",
-      clearReply: "Clear reply",
-      stopResponse: "Stop active response",
-      cancelDictation: "Cancel dictation",
-      saveQueuedMessage: "Save queued message",
-      toggleSessionSelect: "Select multiple sessions",
-      extendSessionSelect: "Extend session selection",
-      zoomIn: "Zoom in",
-      zoomOut: "Zoom out",
-      zoomReset: "Reset zoom",
-      panImageHorizontal: "Pan image horizontally",
-      panImageVertical: "Pan image vertically",
-      terminalPanel: "Toggle terminal panel",
-      homePanel: "Talk to your Home agent",
-      workspaceFiles: "Toggle workspace files",
-      sideChat: "Toggle side chat",
-      browserPanel: "Toggle browser panel",
-      desktopPanel: "Toggle desktop panel",
-      discussionPanel: "Toggle discussion panel",
-      dashboardPanel: "Toggle dashboard panel",
-      reviewPanel: "Toggle review panel",
-      approveOnce: "Approve once",
-      approveAlways: "Always allow",
-      denyApproval: "Deny approval",
-    },
-  },
   chat: {
     welcome: registerChatWelcomeEnglish.catalog.chat.welcome,
     commands: registerChatCommandsEnglish.catalog.chat.commands,
@@ -131,7 +79,6 @@ const enCommandPalette = {
 
 export const registerCommandPaletteEnglish = Object.assign(
   () => {
-    Object.assign(en.shortcutsOverlay, enCommandPalette.shortcutsOverlay);
     Object.assign(en.chat.welcome, enCommandPalette.chat.welcome);
     Object.assign(en.chat.commands, enCommandPalette.chat.commands);
     Object.assign(en.commandPalette, enCommandPalette.commandPalette);

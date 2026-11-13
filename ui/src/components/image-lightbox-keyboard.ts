@@ -1,15 +1,13 @@
 import type { PanzoomObject } from "@panzoom/panzoom";
-import {
-  KEYBOARD_SHORTCUT_COMBOS,
-  matchesShortcutCombo,
-} from "../lib/keyboard-shortcut-contract.ts";
+import { matchesShortcutCombo } from "../lib/keyboard-shortcut-contract.ts";
+import { KEYBOARD_REFERENCE_COMBOS } from "../lib/keyboard-shortcut-reference.ts";
 
 const PAN_STEP_PX = 48;
 const PAN_DIRECTIONS = [
-  { combo: KEYBOARD_SHORTCUT_COMBOS.imagePanLeft, x: -1, y: 0 },
-  { combo: KEYBOARD_SHORTCUT_COMBOS.imagePanRight, x: 1, y: 0 },
-  { combo: KEYBOARD_SHORTCUT_COMBOS.imagePanUp, x: 0, y: -1 },
-  { combo: KEYBOARD_SHORTCUT_COMBOS.imagePanDown, x: 0, y: 1 },
+  { combo: KEYBOARD_REFERENCE_COMBOS.imagePanLeft, x: -1, y: 0 },
+  { combo: KEYBOARD_REFERENCE_COMBOS.imagePanRight, x: 1, y: 0 },
+  { combo: KEYBOARD_REFERENCE_COMBOS.imagePanUp, x: 0, y: -1 },
+  { combo: KEYBOARD_REFERENCE_COMBOS.imagePanDown, x: 0, y: 1 },
 ] as const;
 
 export function panImageWithKeyboard(event: KeyboardEvent, panzoom?: PanzoomObject): boolean {

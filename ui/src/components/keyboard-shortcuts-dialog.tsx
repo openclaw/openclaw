@@ -1,7 +1,7 @@
 import { For, Show } from "solid-js";
 import { openShellNewSession, type ShellNewSessionHost } from "../app/app-shell-new-session.ts";
 import type { ChatSendShortcut } from "../app/settings.ts";
-import { registerCommandPaletteEnglish } from "../i18n/locales/en-command-palette.ts";
+import { registerKeyboardShortcutsEnglish } from "../i18n/locales/en-keyboard-shortcuts.ts";
 import { isMobileBrowserPlatform } from "../lib/browser-platform.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
@@ -9,6 +9,7 @@ import {
   resolveNewSessionShortcut,
   type KeyboardShortcutCombo,
 } from "../lib/keyboard-shortcut-contract.ts";
+import { KEYBOARD_REFERENCE_COMBOS } from "../lib/keyboard-shortcut-reference.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { defineSolidBridge } from "../lib/solid-bridge.ts";
@@ -17,7 +18,7 @@ import { KeyboardShortcut } from "./solid/kbd.tsx";
 import "./keyboard-shortcuts-dialog.css";
 import "./modal-dialog.tsx";
 
-registerCommandPaletteEnglish();
+registerKeyboardShortcutsEnglish();
 
 type KeyboardShortcutEntry = ReturnType<typeof keyboardShortcutEntry>;
 type KeyboardShortcutSection = ReturnType<typeof keyboardShortcutSection>;
@@ -44,14 +45,16 @@ const KEYBOARD_SHORTCUT_SECTIONS = [
     keyboardShortcutEntry("closeDialog", KEYBOARD_SHORTCUT_COMBOS.escape),
   ]),
   keyboardShortcutSection("chat", [
+    keyboardShortcutEntry("previousSession", KEYBOARD_SHORTCUT_COMBOS.previousSession),
+    keyboardShortcutEntry("nextSession", KEYBOARD_SHORTCUT_COMBOS.nextSession),
     keyboardShortcutEntry("archiveSession", KEYBOARD_SHORTCUT_COMBOS.archiveSession),
     keyboardShortcutEntry("sendMessage", KEYBOARD_SHORTCUT_COMBOS.sendMessage),
-    keyboardShortcutEntry("newline", KEYBOARD_SHORTCUT_COMBOS.newline),
+    keyboardShortcutEntry("newline", KEYBOARD_REFERENCE_COMBOS.newline),
     keyboardShortcutEntry("steerImmediately", KEYBOARD_SHORTCUT_COMBOS.modifiedEnter),
     keyboardShortcutEntry(
       "historyRecall",
-      KEYBOARD_SHORTCUT_COMBOS.historyPrevious,
-      KEYBOARD_SHORTCUT_COMBOS.historyNext,
+      KEYBOARD_REFERENCE_COMBOS.historyPrevious,
+      KEYBOARD_REFERENCE_COMBOS.historyNext,
     ),
     keyboardShortcutEntry("transcriptSearch", KEYBOARD_SHORTCUT_COMBOS.transcriptSearch),
     keyboardShortcutEntry("clearReply", KEYBOARD_SHORTCUT_COMBOS.escape),
@@ -71,22 +74,22 @@ const KEYBOARD_SHORTCUT_SECTIONS = [
     keyboardShortcutEntry("reviewPanel", KEYBOARD_SHORTCUT_COMBOS.reviewPanel),
   ]),
   keyboardShortcutSection("sidebar", [
-    keyboardShortcutEntry("toggleSessionSelect", KEYBOARD_SHORTCUT_COMBOS.toggleSessionSelect),
-    keyboardShortcutEntry("extendSessionSelect", KEYBOARD_SHORTCUT_COMBOS.extendSessionSelect),
+    keyboardShortcutEntry("toggleSessionSelect", KEYBOARD_REFERENCE_COMBOS.toggleSessionSelect),
+    keyboardShortcutEntry("extendSessionSelect", KEYBOARD_REFERENCE_COMBOS.extendSessionSelect),
   ]),
   keyboardShortcutSection("imageViewer", [
-    keyboardShortcutEntry("zoomIn", KEYBOARD_SHORTCUT_COMBOS.zoomIn),
-    keyboardShortcutEntry("zoomOut", KEYBOARD_SHORTCUT_COMBOS.zoomOut),
-    keyboardShortcutEntry("zoomReset", KEYBOARD_SHORTCUT_COMBOS.zoomReset),
+    keyboardShortcutEntry("zoomIn", KEYBOARD_REFERENCE_COMBOS.zoomIn),
+    keyboardShortcutEntry("zoomOut", KEYBOARD_REFERENCE_COMBOS.zoomOut),
+    keyboardShortcutEntry("zoomReset", KEYBOARD_REFERENCE_COMBOS.zoomReset),
     keyboardShortcutEntry(
       "panImageHorizontal",
-      KEYBOARD_SHORTCUT_COMBOS.imagePanLeft,
-      KEYBOARD_SHORTCUT_COMBOS.imagePanRight,
+      KEYBOARD_REFERENCE_COMBOS.imagePanLeft,
+      KEYBOARD_REFERENCE_COMBOS.imagePanRight,
     ),
     keyboardShortcutEntry(
       "panImageVertical",
-      KEYBOARD_SHORTCUT_COMBOS.imagePanUp,
-      KEYBOARD_SHORTCUT_COMBOS.imagePanDown,
+      KEYBOARD_REFERENCE_COMBOS.imagePanUp,
+      KEYBOARD_REFERENCE_COMBOS.imagePanDown,
     ),
   ]),
   keyboardShortcutSection("approvals", [

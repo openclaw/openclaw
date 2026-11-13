@@ -1,3 +1,4 @@
+import { routeIdFromPath } from "../app-route-paths.ts";
 import type { AppSidebarElement } from "../components/app-sidebar.tsx";
 import { isCommandPaletteShortcut } from "../components/command-palette-contract.ts";
 import { activeElement, tabbableElements } from "../components/focus-navigation.ts";
@@ -23,7 +24,12 @@ export type ShellNavigationElements = {
 export type ShellNavigationSurfaces = {
   readonly element: HTMLElement;
   readonly navigationSidebar: HTMLElement &
-    Partial<Pick<AppSidebarElement, "dismissTransientMenus" | "activeNavigationViewElement">>;
+    Partial<
+      Pick<
+        AppSidebarElement,
+        "dismissTransientMenus" | "activeNavigationViewElement" | "selectAdjacentSession"
+      >
+    >;
   readonly queryRenderedElements: RouteElements["renderedElements"];
 };
 
@@ -138,4 +144,49 @@ export function floatingSidebarAttentionVisible(params: {
   const attentionNeedsFloating =
     params.navigationSurfaceHidden && !params.mobileNavLayout && !params.onboarding;
   return attentionNeedsFloating && !params.compact;
+}
+
+/** Native menu equivalents re-enter the focused control's normal keyboard guards. */
+export function dispatchNativeSessionShortcut(element: HTMLElement, key: "[" | "]"): void {
+  const target = activeElement(element);
+  // Ordinary keydown never crosses a browsing-context boundary either.
+  if (target instanceof HTMLIFrameElement) {
+    return;
+  }
+  (target ?? document).dispatchEvent(
+    new KeyboardEvent("keydown", {
+      key,
+      metaKey: true,
+      bubbles: true,
+      composed: true,
+      cancelable: true,
+    }),
+  );
+}
+
+/** Validate native routes before acknowledging them; unknown routes retain native fallback. */
+export function nativeNavigationTarget(event: Event, basePath: string) {
+  // SAFETY: DashboardWindowController dispatches a CustomEvent; payloads are validated below.
+  const detail = (event as CustomEvent<{ path?: unknown; search?: unknown }>).detail;
+  const path = detail?.path;
+  const schemeCandidate = typeof path === "string" ? path.slice(1) : "";
+  if (
+    typeof path !== "string" ||
+    !path.startsWith("/") ||
+    path.startsWith("//") ||
+    /^[a-z][a-z\d+.-]*:/i.test(schemeCandidate)
+  ) {
+    return undefined;
+  }
+  const routeId = routeIdFromPath(path);
+  if (!routeId) {
+    return undefined;
+  }
+  // Preserve the destination within the Gateway mount, not only the route ID.
+  const options: { pathname: string; search?: string } = { pathname: `${basePath}${path}` };
+  const search = detail?.search;
+  if (typeof search === "string" && search.startsWith("?") && !search.includes("#")) {
+    options.search = search;
+  }
+  return { routeId, options };
 }

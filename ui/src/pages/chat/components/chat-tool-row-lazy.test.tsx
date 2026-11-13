@@ -28,6 +28,7 @@ it("keeps card chrome through import recovery and retains the current resolved r
   const staleLoad = createDeferred();
   const readyLoad = createDeferred();
   const recovery = createDeferred<boolean>();
+  const permissionLoad = createDeferred();
   let pending = initialLoad.promise;
   const load = vi.fn(() => pending);
   retryStale.mockReturnValue(recovery.promise);
@@ -35,12 +36,18 @@ it("keeps card chrome through import recovery and retains the current resolved r
     await load();
     return original();
   });
+  vi.doMock(import("./chat-permission-card.tsx"), async (original) => {
+    await permissionLoad.promise;
+    return original();
+  });
   onTestFinished(() => {
     initialLoad.resolve();
     staleLoad.resolve();
     readyLoad.resolve();
     recovery.resolve(false);
+    permissionLoad.resolve();
     vi.doUnmock("./chat-tool-card-row.solid.tsx");
+    vi.doUnmock("./chat-permission-card.tsx");
   });
   const toggle = vi.fn();
   const initialCard: ToolCard = {
@@ -121,6 +128,8 @@ it("keeps card chrome through import recovery and retains the current resolved r
   onTestFinished(root.unmount);
   flush();
   await vi.waitFor(() => expect(load).toHaveBeenCalled());
+  // Permission recovery has its own lazy chunk, independent of the held tool row.
+  permissionLoad.resolve();
   const placeholder = root.container.querySelector<HTMLButtonElement>(".chat-tool-row[aria-busy]")!;
   expect(placeholder.disabled).toBe(true);
   expect(placeholder.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe("Exec");

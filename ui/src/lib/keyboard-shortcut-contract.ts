@@ -8,6 +8,7 @@ import {
   type KeyboardShortcutModifier,
 } from "../../../src/shared/keyboard-shortcuts.ts";
 import { isNativeWebChromeHost } from "../app/native-web-chrome.ts";
+import type { KEYBOARD_REFERENCE_COMBOS } from "./keyboard-shortcut-reference.ts";
 
 export { isApplePlatform } from "../../../src/shared/keyboard-shortcuts.ts";
 
@@ -16,6 +17,8 @@ export const KEYBOARD_SHORTCUT_COMBOS = {
   newSession: { modifiers: ["mod", "shift"], key: "o", platformSpecific: true },
   nativeNewSession: { modifiers: ["mod"], key: "n", platformSpecific: true },
   archiveSession: { modifiers: ["mod", "shift"], key: "a", platformSpecific: true },
+  previousSession: { modifiers: ["mod"], key: "[", platformSpecific: true },
+  nextSession: { modifiers: ["mod"], key: "]", platformSpecific: true },
   keyboardShortcuts: { modifiers: ["mod"], key: "/" },
   toggleSidebar: { modifiers: ["mod"], key: "b", platformSpecific: true },
   debugOverlay: { modifiers: ["mod", "shift"], key: "d" },
@@ -23,7 +26,6 @@ export const KEYBOARD_SHORTCUT_COMBOS = {
   escape: { modifiers: [], key: "Escape" },
   sendMessage: { modifiers: [], key: "Enter" },
   modifiedEnter: { modifiers: ["mod"], key: "Enter" },
-  newline: { modifiers: ["shift"], key: "Enter" },
   transcriptSearch: { modifiers: ["mod"], key: "f", platformSpecific: true },
   terminalPanel: { modifiers: ["ctrl"], key: "Backquote" },
   homePanel: { modifiers: ["mod", "shift"], key: "h" },
@@ -36,21 +38,10 @@ export const KEYBOARD_SHORTCUT_COMBOS = {
   reviewPanel: { modifiers: ["mod", "alt", "shift"], key: "e" },
   approveAlways: { modifiers: ["mod", "shift"], key: "Enter" },
   denyApproval: { modifiers: ["mod"], key: "d" },
-  historyPrevious: { modifiers: [], key: "ArrowUp" },
-  historyNext: { modifiers: [], key: "ArrowDown" },
-  zoomIn: { modifiers: [], key: "+" },
-  zoomOut: { modifiers: [], key: "-" },
-  zoomReset: { modifiers: [], key: "0" },
-  imagePanLeft: { modifiers: ["shift"], key: "ArrowLeft" },
-  imagePanRight: { modifiers: ["shift"], key: "ArrowRight" },
-  imagePanUp: { modifiers: ["shift"], key: "ArrowUp" },
-  imagePanDown: { modifiers: ["shift"], key: "ArrowDown" },
-  // Display-only mouse chords; never keyboard-matched.
-  toggleSessionSelect: { modifiers: ["alt"], key: "Click" },
-  extendSessionSelect: { modifiers: ["shift"], key: "Click" },
 } as const satisfies Record<string, KeyboardShortcutDefinition>;
 
 type KeyboardShortcutKey =
+  | (typeof KEYBOARD_REFERENCE_COMBOS)[keyof typeof KEYBOARD_REFERENCE_COMBOS]["key"]
   | (typeof KEYBOARD_SHORTCUT_COMBOS)[keyof typeof KEYBOARD_SHORTCUT_COMBOS]["key"]
   | (typeof COMMAND_PALETTE_SHORTCUTS)[number]["key"];
 export type KeyboardShortcutCombo = KeyboardShortcutDefinition<KeyboardShortcutKey>;
@@ -87,7 +78,9 @@ export function formatKeyboardShortcutParts(
 }
 
 export function matchesShortcutCombo(combo: KeyboardShortcutCombo, event: KeyboardEvent): boolean {
-  return matchesKeyboardShortcut(combo, event, isApplePlatform(), resolveAsciiShortcutKey(event));
+  // Bracket navigation follows the produced character, not US physical-key positions.
+  const key = combo.key === "[" || combo.key === "]" ? event.key : resolveAsciiShortcutKey(event);
+  return matchesKeyboardShortcut(combo, event, isApplePlatform(), key);
 }
 
 /** Runtime controls of the lazily loaded shortcuts dialog. */

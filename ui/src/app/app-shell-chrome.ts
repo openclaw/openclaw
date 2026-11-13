@@ -1,5 +1,5 @@
 import { isSettingsTakeover } from "../app-navigation.ts";
-import { isSessionRouteId, routeIdFromPath } from "../app-route-paths.ts";
+import { isSessionRouteId } from "../app-route-paths.ts";
 import {
   applyCommandPaletteTargetEvent,
   COMMAND_PALETTE_OPEN_EVENT,
@@ -52,7 +52,6 @@ import {
 import type { ShellNavigationCapability } from "./app-shell-navigation.ts";
 import { openShellNewSession, type ShellNewSessionHost } from "./app-shell-new-session.ts";
 import { ShellPanelOwner, type ShellPanelHost } from "./app-shell-panels.ts";
-import type { ApplicationNavigationOptions } from "./context.ts";
 import {
   clearLazyShellAction,
   lazyShellEvent,
@@ -70,6 +69,8 @@ import {
 import { NavDrawerSwipeLoader } from "./nav-drawer-swipe-loader.ts";
 import {
   NAVIGATION_RAIL_WIDTH,
+  nativeNavigationTarget,
+  dispatchNativeSessionShortcut,
   dismissNavigationTransientSurfaces,
   handleNavDrawerKeydown,
   setToastInNavDrawer,
@@ -87,8 +88,6 @@ export interface ShellChromeHost
   extends ShellNewSessionHost, ShellPanelHost, ShellNavigationElements, ShellNavigationSurfaces {
   readonly shellNavigation: ShellNavigationCapability;
   readonly elements: ShellOwnedElements;
-  readonly element: HTMLElement;
-  readonly isConnected: boolean;
   readonly activeSessionKey: string;
   readonly updateComplete: Promise<boolean>;
   readonly queryRenderedElement: (tagName: string) => Element | null;
@@ -103,6 +102,7 @@ export interface ShellChromeHost
 }
 
 export class ShellChromeOwner {
+  private claimedSessionKey: string | null = null;
   readonly panels: ShellPanelOwner;
   private readonly palette: ShellCommandPaletteOwner;
   private pendingLazyAction = readLazyShellAction();
@@ -131,6 +131,8 @@ export class ShellChromeOwner {
     this.listeners = [
       listen(host.element, COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget),
       listen(document, "keydown", this.handleDocumentKeydown, { capture: true }),
+      listen(document, "keyup", this.releaseSessionShortcut, { capture: true }),
+      listen(window, "blur", this.releaseSessionShortcut),
       listen(document, "keydown", this.handleDocumentKeydownBubble),
       listen(window, "dragover", this.handleUnhandledFileDrag),
       listen(window, "drop", this.handleUnhandledFileDrag),
@@ -150,6 +152,8 @@ export class ShellChromeOwner {
       ["openclaw:native-open-search", this.openPalette],
       ["openclaw:native-toggle-search", this.handleNativeToggleSearch],
       ["openclaw:native-new-session", this.handleNativeNewSession],
+      ["openclaw:native-previous-session", () => dispatchNativeSessionShortcut(host.element, "[")],
+      ["openclaw:native-next-session", () => dispatchNativeSessionShortcut(host.element, "]")],
       ["openclaw:native-navigate", this.handleNativeNavigate],
       [TERMINAL_PANEL_TOGGLE_EVENT, this.panels.handleDeferredTerminalToggle],
       [TERMINAL_PANEL_DOCK_BOTTOM_EVENT, this.panels.handleDeferredTerminalDock],
@@ -173,6 +177,7 @@ export class ShellChromeOwner {
   }
 
   disconnect(): void {
+    this.releaseSessionShortcut();
     this.commandPaletteLoading.clear();
     const listenerOwner = this.listeners;
     this.listeners?.forEach((stop) => stop());
@@ -302,32 +307,12 @@ export class ShellChromeOwner {
   };
 
   readonly handleNativeNavigate = (event: Event): void => {
-    const detail = (event as CustomEvent<{ path?: unknown; search?: unknown }>).detail;
-    const path = detail?.path;
-    const schemeCandidate = typeof path === "string" ? path.slice(1) : "";
-    if (
-      typeof path !== "string" ||
-      !path.startsWith("/") ||
-      path.startsWith("//") ||
-      /^[a-z][a-z\d+.-]*:/i.test(schemeCandidate)
-    ) {
-      return;
-    }
-    const routeId = routeIdFromPath(path);
     const context = this.host.context;
-    if (!routeId || !context) {
-      // Unhandled native routes remain eligible for the host's URL fallback.
-      return;
+    const target = context && nativeNavigationTarget(event, context.basePath);
+    if (target) {
+      event.preventDefault();
+      this.host.shellNavigation.navigate(target.routeId, target.options);
     }
-    event.preventDefault();
-    // Native paths are relative to the Gateway mount. A route ID alone loses
-    // the destination and can reopen the current session instead.
-    const options: ApplicationNavigationOptions = { pathname: `${context.basePath}${path}` };
-    const search = detail?.search;
-    if (typeof search === "string" && search.startsWith("?") && !search.includes("#")) {
-      options.search = search;
-    }
-    this.host.shellNavigation.navigate(routeId, options);
   };
 
   readonly handleNativeHistoryState = (event: Event): void => {
@@ -388,20 +373,45 @@ export class ShellChromeOwner {
     if (event.defaultPrevented || !matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.escape, event)) {
       return;
     }
-    if (host.navDrawerOpen && isMobileNavLayout() && !this.shouldIgnoreSettingsEscape(event)) {
+    if (host.navDrawerOpen && isMobileNavLayout() && !this.ignoreNavigationKey(event)) {
       event.preventDefault();
       host.closeNavDrawer({ restoreFocus: true });
-    } else if (
-      isSettingsTakeover(host.routeState.routeId) &&
-      !this.shouldIgnoreSettingsEscape(event)
-    ) {
+    } else if (isSettingsTakeover(host.routeState.routeId) && !this.ignoreNavigationKey(event)) {
       event.preventDefault();
       host.shellNavigation.leaveSettingsLevel();
     }
   };
 
+  private readonly releaseSessionShortcut = (): void => {
+    this.claimedSessionKey = null;
+  };
+
   readonly handleDocumentKeydown = (event: KeyboardEvent): void => {
     const host = this.host;
+    const previous = event.key === "[";
+    if (
+      matchesShortcutCombo(
+        previous ? KEYBOARD_SHORTCUT_COMBOS.previousSession : KEYBOARD_SHORTCUT_COMBOS.nextSession,
+        event,
+      )
+    ) {
+      // Navigation can autofocus the composer; held keys must not fall through to history.
+      if (event.repeat && this.claimedSessionKey === event.key) {
+        event.preventDefault();
+      } else if (
+        !event.defaultPrevented &&
+        !event.repeat &&
+        !host.onboardingMode &&
+        isSessionRouteId(host.routeState.routeId) &&
+        !this.ignoreNavigationKey(event) &&
+        host.element.contains(host.navigationSidebar) &&
+        host.navigationSidebar.selectAdjacentSession?.(previous ? -1 : 1)
+      ) {
+        this.claimedSessionKey = event.key;
+        event.preventDefault();
+      }
+      return;
+    }
     if (
       this.pendingDebugFrame &&
       shouldCloseDebugOverlay(
@@ -575,8 +585,8 @@ export class ShellChromeOwner {
     this.requestShellComponent("shortcuts", descriptor);
   };
 
-  // Only connected overlays and editable controls own Escape before Settings.
-  shouldIgnoreSettingsEscape(event: KeyboardEvent): boolean {
+  // Connected overlays and editable controls own navigation keys before the shell.
+  ignoreNavigationKey(event: KeyboardEvent): boolean {
     const host = this.host;
     const overlaySnapshot = host.context?.overlays.snapshot;
     if (
@@ -590,15 +600,17 @@ export class ShellChromeOwner {
     ) {
       return true;
     }
-    const target = event.target;
-    const control =
-      target instanceof Element
-        ? target.closest(
+    // Composed paths retain editable descendants inside open shadow roots.
+    return event
+      .composedPath()
+      .some(
+        (target) =>
+          target instanceof Element &&
+          target !== host.navDrawerElement &&
+          target.matches(
             "input, textarea, select, [contenteditable], dialog, [role='dialog'], [role='menu'], [role='listbox']",
-          )
-        : null;
-    // The drawer owns Escape; its own dialog role is not a nested modal.
-    return control !== null && control !== host.navDrawerElement;
+          ),
+      );
   }
 
   get commandPaletteLoading() {

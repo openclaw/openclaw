@@ -18,8 +18,9 @@ import { createSessionOwnerMenu } from "../../../components/session-owner-menu.t
 import { sessionPlacementAction } from "../../../components/session-placement-action.ts";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import type { MenuControls, MenuEntry, MenuItem } from "../../../components/solid/menu.tsx";
+import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { readSessionMethodAccess } from "../../../lib/session-method-access.ts";
 import { collectKnownSessionGroups } from "../../../lib/sessions/grouping.ts";
@@ -52,6 +53,8 @@ import type {
 import { useChatQuickActionEntries } from "./chat-quick-action.tsx";
 import { useChatSessionSharingMenu } from "./chat-session-sharing-menu.tsx";
 import { canManageChatSessionSharing } from "./chat-session-sharing-shared.tsx";
+
+registerEnglishCatalog(registerChatSessionOptionalEnglish);
 
 const COMPACT_MENU_VIEW_BY_VALUE: Record<string, CompactMenuView> = {
   "compact:open-sharing": "sharing",

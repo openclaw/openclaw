@@ -122,6 +122,21 @@ it.each([false, true])(
 
 it.each([
   [
+    "chat.sessionSharing.publicDraftDescription",
+    "The public link stays readable in draft.",
+    () => import("../pages/chat/components/chat-session-sharing-content.tsx"),
+  ],
+  [
+    "chat.sessionSharing.sharedDescription",
+    "Everyone with access can send",
+    () => import("../pages/chat/components/chat-session-sharing-menu.tsx"),
+  ],
+  [
+    "chat.sessionSharing.searchPeople",
+    "Search people…",
+    () => import("../pages/chat/components/chat-session-sharing-mobile.tsx"),
+  ],
+  [
     "chat.sessionSharing.copyPublicLink",
     "Copy public link",
     () => import("../pages/chat/components/chat-session-sharing-content.tsx"),
@@ -162,9 +177,24 @@ it.each([
     () => import("../pages/chat/components/chat-subagents-mobile.tsx"),
   ],
   [
+    "chat.sessionHeader.continueInTerminal.action",
+    "Continue in terminal…",
+    () => import("../pages/chat/components/chat-header-session-menu-content.tsx"),
+  ],
+  [
     "chat.sessionHeader.continueInTerminal.title",
     "Continue in terminal",
     () => import("../pages/chat/components/continue-in-terminal-dialog.tsx"),
+  ],
+  [
+    "chat.catalog.sessionMenu",
+    "External session actions",
+    () => import("../components/catalog-session-menu-solid.tsx"),
+  ],
+  [
+    "chat.catalog.deleteSessionTitle",
+    "Delete this external session?",
+    () => import("../components/app-sidebar-catalog-menu.runtime.tsx"),
   ],
 ] as const)("loads cold owner copy only with its consumer: %s", async (key, copy, load) => {
   const { en, manager } = await loadI18n({ common: { health: "Gesundheit" } });
@@ -185,14 +215,13 @@ it.each([
       "chat.sessionDetails.contextProject",
     );
     expect(manager.t("chat.sessionDiff.modeUnified")).toBe("chat.sessionDiff.modeUnified");
-  } else {
+  } else if (key !== "chat.sessionHeader.continueInTerminal.action") {
     expect(manager.t("chat.sessionSharing.copyPublicLink")).toBe(
       "chat.sessionSharing.copyPublicLink",
     );
   }
   expect(manager.t("chat.sessionSharing.publicIndicator")).toBe("Public");
   expect(manager.t("chat.subagentsPanel.stop", { name: "Build" })).toBe("Stop Build");
-  expect(manager.t("chat.sessionHeader.continueInTerminal.action")).toBe("Continue in terminal…");
   expect(manager.t("common.health")).toBe("Gesundheit");
   expect(manager.getLocale()).toBe("de");
   expect(en.chat.sessionSharing).toBe(sharing);
@@ -201,13 +230,14 @@ it.each([
 });
 
 it.each([false, true])(
-  "preserves sharing, subagent, and terminal catalogs when leaves load first=%s",
+  "preserves sharing, subagent, terminal, and external-session catalogs when leaves load first=%s",
   async (leavesFirst) => {
     const { en, manager } = await loadI18n({
       chat: {
         sessionSharing: { visibility: "Sichtbarkeit" },
         subagentsPanel: { empty: "Keine Subagents.", nativeStatus: { running: "Läuft" } },
         sessionHeader: { continueInTerminal: { authNote: "Ohne Zugangsdaten." } },
+        catalog: { sessionMenu: "Externe Sitzungsaktionen" },
       },
     });
     const { registerEnglishCatalog } = await import("../lib/reactive/i18n.ts");
@@ -216,9 +246,12 @@ it.each([false, true])(
       await import("./locales/en-chat-session-optional.ts");
     const { registerChatSessionSharingEnglish } =
       await import("./locales/en-chat-session-sharing.ts");
+    const { registerSessionCatalogMenuEnglish } =
+      await import("./locales/en-session-catalog-menu.ts");
     await manager.setLocale("de");
     const registrars = [
       registerChatSessionEnglish,
+      registerSessionCatalogMenuEnglish,
       registerChatSessionOptionalEnglish,
       registerChatSessionSharingEnglish,
     ];
@@ -228,12 +261,18 @@ it.each([false, true])(
     const panel = en.chat.subagentsPanel;
     const header = en.chat.sessionHeader;
     const terminal = header.continueInTerminal;
+    const catalog = en.chat.catalog;
     for (const register of ordered.slice(1)) {
       registerEnglishCatalog(register);
     }
     registerChatSessionEnglish();
 
     expect(manager.t("chat.sessionSharing.copyPublicLink")).toBe("Copy public link");
+    expect(manager.t("chat.catalog.sessionMenu")).toBe("Externe Sitzungsaktionen");
+    expect(manager.t("chat.catalog.deleteSessionTitle")).toBe("Delete this external session?");
+    expect(manager.t("chat.catalog.remoteViewOnly")).toBe(
+      "This session is on a paired device and is view-only.",
+    );
     expect(manager.t("chat.sessionSharing.publicIndicator")).toBe("Public");
     expect(manager.t("chat.sessionSharing.visibility")).toBe("Sichtbarkeit");
     expect(manager.t("chat.sessionHeader.continueInTerminal.title")).toBe("Continue in terminal");
@@ -248,6 +287,7 @@ it.each([false, true])(
     expect(en.chat.sessionSharing).toBe(sharing);
     expect(en.chat.sessionHeader).toBe(header);
     expect(en.chat.sessionHeader.continueInTerminal).toBe(terminal);
+    expect(en.chat.catalog).toBe(catalog);
     const status = panel.nativeStatus;
     const filters = panel.desktopFilter;
     registerChatSessionOptionalEnglish();

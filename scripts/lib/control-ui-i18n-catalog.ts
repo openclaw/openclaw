@@ -49,6 +49,7 @@ import { registerDreamingEnglish } from "../../ui/src/i18n/locales/en-dreaming.t
 import { registerFilePreviewEnglish } from "../../ui/src/i18n/locales/en-file-preview.ts";
 import { registerGitHubConnectionsEnglish } from "../../ui/src/i18n/locales/en-github-connections.ts";
 import { registerGitHubEnglish } from "../../ui/src/i18n/locales/en-github.ts";
+import { registerKeyboardShortcutsEnglish } from "../../ui/src/i18n/locales/en-keyboard-shortcuts.ts";
 import { registerLabsEnglish } from "../../ui/src/i18n/locales/en-labs.ts";
 import { registerLinkReaderEnglish } from "../../ui/src/i18n/locales/en-link-reader.ts";
 import { registerLocalErrorsEnglish } from "../../ui/src/i18n/locales/en-local-errors.ts";
@@ -77,6 +78,7 @@ import { registerProfileEnglish } from "../../ui/src/i18n/locales/en-profile.ts"
 import { registerProviderUsageEnglish } from "../../ui/src/i18n/locales/en-provider-usage.ts";
 import { registerRouteSubtitlesEnglish } from "../../ui/src/i18n/locales/en-route-subtitles.ts";
 import { registerSecretsStoreEnglish } from "../../ui/src/i18n/locales/en-secrets-store.ts";
+import { registerSessionCatalogMenuEnglish } from "../../ui/src/i18n/locales/en-session-catalog-menu.ts";
 import { registerSessionMachineEnglish } from "../../ui/src/i18n/locales/en-session-machine.ts";
 import { registerSessionMenuEnglish } from "../../ui/src/i18n/locales/en-session-menu.ts";
 import { registerSessionNavigationEnglish } from "../../ui/src/i18n/locales/en-session-navigation.ts";
@@ -164,6 +166,7 @@ const sourceFiles = [
   "en-templates.ts",
   "en-code-blocks.ts",
   "en-command-palette.ts",
+  "en-keyboard-shortcuts.ts",
   "en-connection-recovery.ts",
   "en-cron.ts",
   "en-cron-schedule.ts",
@@ -191,6 +194,7 @@ const sourceFiles = [
   "en-session-machine.ts",
   "en-session-menu.ts",
   "en-session-navigation.ts",
+  "en-session-catalog-menu.ts",
   "en-session-organization-shared.ts",
   "en-session-organization.ts",
   "en-session-people.ts",
@@ -372,29 +376,50 @@ export function loadControlUiSourceCatalog(): TranslationMap {
   )) {
     sessionSharing[key] = value;
     const coldKeys: Array<keyof typeof sharingCopy> =
-      key === "closeSearch"
-        ? ["noPeopleFound", "tryAnotherName"]
-        : key === "current"
-          ? ["visibility"]
-          : key === "draft"
-            ? ["publishDraft"]
-            : key === "owner"
-              ? ["noPeople"]
-              : key === "guestWelcomeRetry"
-                ? ["publicAccess"]
-                : key === "worldReadable"
-                  ? [
-                      "notPublic",
-                      "enablePublicAccess",
-                      "disablePublicAccess",
-                      "copyPublicLink",
-                      "publicConfirmTitle",
-                      "publicConfirmMessage",
-                      "publicConfirmEnable",
-                      "publicEnabled",
-                      "publicDisabled",
-                    ]
-                  : [];
+      key === "sessionAccess"
+        ? [
+            "sharedDescription",
+            "readOnlyDescription",
+            "suggestDescription",
+            "draftDescription",
+            "linkSharing",
+            "anyoneWithLink",
+            "publicLinkDescription",
+            "publicDraftDescription",
+            "linkUnavailable",
+            "permissions",
+          ]
+        : key === "creator"
+          ? [
+              "canRead",
+              "canSuggest",
+              "canSend",
+              "searchPeople",
+              "closeSearch",
+              "noPeopleFound",
+              "tryAnotherName",
+            ]
+          : key === "current"
+            ? ["visibility"]
+            : key === "draft"
+              ? ["publishDraft"]
+              : key === "owner"
+                ? ["noPeople"]
+                : key === "guestWelcomeRetry"
+                  ? ["publicAccess"]
+                  : key === "worldReadable"
+                    ? [
+                        "notPublic",
+                        "enablePublicAccess",
+                        "disablePublicAccess",
+                        "copyPublicLink",
+                        "publicConfirmTitle",
+                        "publicConfirmMessage",
+                        "publicConfirmEnable",
+                        "publicEnabled",
+                        "publicDisabled",
+                      ]
+                    : [];
     for (const name of coldKeys) {
       sessionSharing[name] = sharingCopy[name];
     }
@@ -419,18 +444,8 @@ export function loadControlUiSourceCatalog(): TranslationMap {
       subagentsPanel[name] = panelCopy[name];
     }
   }
-  const continueInTerminal: TranslationMap = {};
-  for (const [key, value] of Object.entries(
-    registerChatSessionEnglish.catalog.chat.sessionHeader.continueInTerminal,
-  )) {
-    continueInTerminal[key] = value;
-    if (key === "action") {
-      Object.assign(
-        continueInTerminal,
-        registerChatSessionOptionalEnglish.catalog.chat.sessionHeader.continueInTerminal,
-      );
-    }
-  }
+  const continueInTerminal =
+    registerChatSessionOptionalEnglish.catalog.chat.sessionHeader.continueInTerminal;
   const toolCards: TranslationMap = {};
   const toolContent = registerChatToolContentEnglish.catalog.chat.toolCards;
   // Deferred widget leaves retain their original translation-memory positions.
@@ -578,14 +593,19 @@ export function loadControlUiSourceCatalog(): TranslationMap {
         ...registerChatFailedMessageEditEnglish.catalog.chat,
         ...registerChatSessionOptionalEnglish.catalog.chat,
         ...registerSessionNavigationEnglish.catalog.chat,
+        catalog: {
+          ...registerSessionNavigationEnglish.catalog.chat.catalog,
+          ...registerSessionCatalogMenuEnglish.catalog.chat.catalog,
+        },
         workspaceConflict,
         sessionDetails,
         sessionSharing,
         subagentsPanel,
-        sessionHeader: {
-          ...registerChatSessionEnglish.catalog.chat.sessionHeader,
-          continueInTerminal,
-        },
+        sessionHeader: Object.fromEntries(
+          Object.entries(registerChatSessionEnglish.catalog.chat.sessionHeader).map(
+            ([key, value]) => [key, key === "continueInTerminal" ? continueInTerminal : value],
+          ),
+        ),
         sessionSuggestions: {
           ...registerSessionNavigationEnglish.catalog.chat.sessionSuggestions,
           ...registerChatSessionEnglish.catalog.chat.sessionSuggestions,
@@ -614,7 +634,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
       board: { ...registerBoardDocumentEnglish.catalog.board, widget: boardWidget },
       newSession,
       sessionsView,
-      shortcutsOverlay: registerCommandPaletteEnglish.catalog.shortcutsOverlay,
+      shortcutsOverlay: registerKeyboardShortcutsEnglish.catalog.shortcutsOverlay,
       commandPalette: registerCommandPaletteEnglish.catalog.commandPalette,
       palette: registerCommandPaletteEnglish.catalog.palette,
       debug: registerDebugEnglish.catalog.debug,

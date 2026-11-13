@@ -10,20 +10,6 @@ const enSessionNavigation = {
       unsupportedViewOnly: "This external session source is view-only.",
       sourceHandoffRequired:
         "This is a read-only snapshot. Its authenticated original publisher must run the handoff command from the original conversation before you can continue here.",
-      sessionMenu: "External session actions",
-      openInOpenClaw: "Open in OpenClaw",
-      importToOpenClaw: "Import to OpenClaw",
-      importComplete: "Imported {count} transcript items.",
-      importUnchanged: "The imported transcript is up to date.",
-      importIncomplete:
-        "Imported {count} transcript items. Older history exceeded the import limit.",
-      openImportedSession: "Open imported session",
-      openInTerminal: "Open in terminal",
-      deleteSession: "Delete",
-      deleteSessionTitle: "Delete this external session?",
-      deleteSessionConfirm:
-        "Make sure it isn’t in use elsewhere. Beamed sessions are deleted permanently. Sessions kept by another tool, such as Codex, are archived there and may be restorable.",
-      terminalUnavailable: "Terminal opening is unavailable for this session.",
     },
     sessionSuggestions: {
       suggest: "Suggest",
