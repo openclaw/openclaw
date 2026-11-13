@@ -841,7 +841,7 @@
 .chat-notice-inline {
   margin-block: 0 12px;
   margin-inline: calc(4px + var(--chat-avatar-gutter, 46px)) 16px;
-  color: color-mix(in oklab, var(--text) 60%, transparent);
+  color: var(--muted);
   font-size: calc(13px * var(--control-ui-text-scale));
   line-height: 1.5;
 }
@@ -854,9 +854,7 @@
   max-width: 100%;
   border-radius: var(--radius-sm);
   list-style: none;
-  user-select: none;
   cursor: var(--cursor-action);
-  transition: color 150ms ease-out;
 }
 
 .chat-notice-inline > summary::-webkit-details-marker {
@@ -867,9 +865,8 @@
   color: var(--text);
 }
 
-/* Keep the ring inside the control so virtual-row paint containment cannot clip it. */
+/* Keep the global ring inside the control so virtual-row paint containment cannot clip it. */
 .chat-notice-inline > summary:focus-visible {
-  outline: 2px solid var(--ring);
   outline-offset: -2px;
 }
 
@@ -879,7 +876,8 @@
   flex: none;
 }
 
-.chat-notice-inline__icon svg {
+.chat-notice-inline__icon svg,
+.chat-notice-inline__chevron svg {
   width: 14px;
   height: 14px;
   stroke-width: calc(12px / 7);
@@ -896,24 +894,18 @@
 
 .chat-notice-inline__time {
   flex: none;
-  color: color-mix(in oklab, var(--text) 40%, transparent);
+  color: var(--text-tertiary);
 }
 
 /* Like the activity rollups, the chevron appears on hover or focus and stays while open. */
 .chat-notice-inline__chevron {
   opacity: 0;
   transition:
-    opacity 150ms ease-out,
-    transform 150ms ease-out;
+    opacity 150ms,
+    transform 150ms;
 }
 
-.chat-notice-inline__chevron svg {
-  width: 12px;
-  height: 12px;
-  stroke-width: 2px;
-}
-
-.chat-notice-inline > summary:is(:hover, :focus-visible) .chat-notice-inline__chevron,
+summary:is(:hover, :focus-visible) > .chat-notice-inline__chevron,
 .chat-notice-inline[open] .chat-notice-inline__chevron {
   opacity: 1;
 }
@@ -929,7 +921,7 @@
   margin-inline: 6px 0;
   padding-block: 2px;
   padding-inline: 12px 0;
-  border-inline-start: 2px solid color-mix(in oklab, var(--text) 12%, transparent);
+  border-inline-start: 2px solid var(--border-strong);
 }
 
 /* Avatar-less layouts (direct threads, narrow screens) start groups at the column edge. */
