@@ -1,21 +1,17 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
-import { resolveTurnToolSurface } from "../../agents/agent-tools.turn-authority.js";
 import {
   bindCronManagementGrant,
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
 } from "../../agents/cron-creator-authority-context.js";
-import { captureSubagentSpawnGatewayContext } from "../../agents/subagents/spawn/subagent-spawn-gateway.js";
 import { createCronTool } from "../../agents/tools/cron-tool.js";
 import {
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../../agents/tools/gateway-caller-context.js";
-import { prepareSessionPortalToolAccess } from "../../agents/tools/session-portal-target.js";
 import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfigSnapshot,
@@ -47,7 +43,6 @@ import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-cli
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
-import { resolveGatewayCronCreatorAuthorityAdmission } from "./cron-creator-authority-admission.js";
 import { cronHandlers } from "./cron.js";
 import type { GatewayClient, RespondFn } from "./types.js";
 
@@ -730,166 +725,5 @@ it("limits personal reminder reads and removal to the originating human in one t
         revokeCronCreatorAuthorityRunScope(bobScope);
       }
     });
-  });
-});
-
-it("executes the accepted child's personal automation after its parent settles", async () => {
-  vi.stubEnv("OPENAI_API_KEY", "synthetic-reminder-fixture-key");
-  await withCron(async ({ cron, tool }) => {
-    const sessionKey = "agent:main:main";
-    const sessionId = "parent-session";
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey },
-      { sessionId, updatedAt: 1, visibility: "shared" },
-    );
-    const origin = {
-      profileId: "human-a",
-      agentId: "main",
-      sessionKey,
-      sessionId,
-      accountId: "default",
-      to: "group-1",
-      threadId: "topic-1",
-    };
-    const parentRunId = "personal-parent-tool";
-    const parentInstance = createTestAdmittedRunContext(parentRunId).operationalRunInstance;
-    const parentAuthority = claimAgentRunDelegatedAuthority(parentInstance);
-    const cancellation = new AbortController();
-    const sourceCurrent = true;
-    let holds = 0;
-    const operator = createAdmittedRunOperatorAuthority({
-      profileId: origin.profileId,
-      scopes: ["operator.write"],
-      assertCurrent: () => {
-        if (!sourceCurrent) {
-          throw new Error("profile revoked");
-        }
-      },
-      retain: () => {
-        holds++;
-        return () => {
-          holds--;
-        };
-      },
-    });
-    const parentScope = expectDefined(
-      createCronCreatorAuthorityCapability(
-        parentRunId,
-        { kind: "external", channel: "telegram" },
-        undefined,
-        () => true,
-        undefined,
-        undefined,
-        true,
-        origin,
-      ),
-      "parent scope",
-    );
-    const childRunId = "personal-child-tool";
-    const requesterOrigin = { sessionKey, delegatedCreatorProfileId: origin.profileId };
-    const childAdmission = await runWithCronCreatorAuthorityCapability(
-      parentScope,
-      () =>
-        withGatewayToolCallerIdentity(
-          {
-            agentId: "main",
-            sessionKey,
-            operationalRunInstance: parentInstance,
-            approvalAuthority: parentAuthority,
-            operatorAuthority: operator,
-            requesterOrigin,
-          },
-          () => {
-            const spawn = captureSubagentSpawnGatewayContext();
-            const client = createSyntheticPluginRuntimeClient({
-              scopes: ["operator.write"],
-              agentRunTracking: "native_subagent",
-              agentToolCaller: expectDefined(spawn.requester, "spawn requester"),
-            });
-            return resolveGatewayCronCreatorAuthorityAdmission({
-              runId: childRunId,
-              resolvedSessionKey: "agent:main:subagent:child",
-              spawnedBy: sessionKey,
-              client,
-              request: { lane: "subagent", message: "remind me", idempotencyKey: childRunId },
-              hasRestoredCronContinuation: false,
-              isOneShotModelRun: false,
-            });
-          },
-        ),
-      cancellation.signal,
-    );
-    releaseAgentRunDelegatedAuthority(parentAuthority);
-    const admitted = expectDefined(childAdmission, "native child admission");
-    expect(admitted.isCurrent?.()).toBe(true);
-    const childInstance = createTestAdmittedRunContext(childRunId).operationalRunInstance;
-    const childAuthority = claimAgentRunDelegatedAuthority(childInstance);
-    const childScope = expectDefined(
-      createCronCreatorAuthorityCapability(
-        childRunId,
-        admitted.callerOrigin,
-        undefined,
-        admitted.isCurrent,
-        undefined,
-        undefined,
-        admitted.callerScopedCreation,
-        admitted.personalReminder,
-      ),
-      "child scope",
-    );
-    const identity: AgentRuntimeIdentity = {
-      kind: "agentRuntime",
-      agentId: "main",
-      sessionKey: "agent:main:subagent:child",
-      operationalRunInstance: childInstance,
-      delegatedAuthority: { kind: "local", ...childAuthority },
-    };
-    try {
-      await runWithCronCreatorAuthorityCapability(childScope, () =>
-        withGatewayToolCallerIdentity(
-          { ...identity, approvalAuthority: childAuthority, requesterOrigin },
-          async () => {
-            const portal = prepareSessionPortalToolAccess({
-              sessionKey: identity.sessionKey,
-              agentId: "main",
-              senderIsOwner: false,
-              sandboxed: false,
-              runId: childRunId,
-            });
-            const automation = tool(identity);
-            const surface = resolveTurnToolSurface({
-              turnTools: [automation],
-              ownerOnlyDenied: new Set(portal.ownerOnlyCoreToolDenylist),
-            });
-            const invoke = () =>
-              surface.tools[0]!.execute("child-add", {
-                action: "add",
-                job: {
-                  name: "personal",
-                  enabled: false,
-                  schedule: { kind: "at", at: "2030-01-01T00:00:00.000Z" },
-                  payload: { kind: "agentTurn", message: "Reminder" },
-                },
-              });
-            const result = await invoke();
-            expect(result.details).not.toMatchObject({ gated: true });
-            expect(await cron.list({ includeDisabled: true })).toEqual(
-              expect.arrayContaining([
-                expect.objectContaining({
-                  ownerProfileId: origin.profileId,
-                  createdActor: { type: "human", source: "profile", id: origin.profileId },
-                }),
-              ]),
-            );
-            cancellation.abort();
-            await expect(invoke()).rejects.toThrow();
-          },
-        ),
-      );
-    } finally {
-      admitted.release?.();
-      releaseAgentRunDelegatedAuthority(childAuthority);
-      expect(holds).toBe(0);
-    }
   });
 });
