@@ -23,24 +23,35 @@ export async function createOwnerProxy(connection: string, stopAfterReady: numbe
     const outbound = net.connect(upstream.port, upstream.host);
     sockets.push(inbound, outbound);
     inbound.on("data", (chunk) => {
-      if (ready < stopAfterReady) outbound.write(chunk);
+      if (ready < stopAfterReady) {
+        outbound.write(chunk);
+      }
     });
-    outbound.on("data", (chunk) => {
+    outbound.on("data", (chunk: Buffer) => {
       pending = Buffer.concat([pending, chunk]);
       while (pending.length >= 5) {
         const length = pending.readUInt32BE(1) + 1;
-        if (pending.length < length) break;
+        if (pending.length < length) {
+          break;
+        }
         const frame = pending.subarray(0, length);
         pending = pending.subarray(length);
         // Startup ReadyForQuery is forwarded; the selected query's complete
         // result can be retained together with a later server FATAL.
-        if (ready >= stopAfterReady - 1 && stopAfterReady > 1) retained.push(frame);
-        else if (ready < stopAfterReady) inbound.write(frame);
+        if (ready >= stopAfterReady - 1 && stopAfterReady > 1) {
+          retained.push(frame);
+        } else if (ready < stopAfterReady) {
+          inbound.write(frame);
+        }
         if (frame[0] === 90) {
           ready++;
-          if (ready === stopAfterReady) bufferedReady();
+          if (ready === stopAfterReady) {
+            bufferedReady();
+          }
         }
-        if (frame[0] === 69 && ready >= stopAfterReady) bufferedFatal();
+        if (frame[0] === 69 && ready >= stopAfterReady) {
+          bufferedFatal();
+        }
       }
     });
     inbound.on("error", () => outbound.destroy());
@@ -55,9 +66,13 @@ export async function createOwnerProxy(connection: string, stopAfterReady: numbe
   server.on("drop", () => {
     unexpectedConnections++;
   });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
   const address = server.address();
-  if (!address || typeof address === "string") throw new Error("Expected TCP proxy");
+  if (!address || typeof address === "string") {
+    throw new Error("Expected TCP proxy");
+  }
   target.host = `127.0.0.1:${address.port}`;
   return {
     connection: target.toString(),
@@ -69,10 +84,16 @@ export async function createOwnerProxy(connection: string, stopAfterReady: numbe
       downstream?.write(bytes);
       return bytes.length;
     },
-    async close() {
-      for (const socket of sockets) socket.destroy();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-      if (unexpectedConnections) throw new Error("Owner proxy received an unexpected connection");
+    async close(this: void) {
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+      if (unexpectedConnections) {
+        throw new Error("Owner proxy received an unexpected connection");
+      }
     },
   };
 }

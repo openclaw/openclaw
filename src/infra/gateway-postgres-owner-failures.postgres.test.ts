@@ -15,7 +15,9 @@ const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.
 const connection = typeof configured === "string" ? configured : undefined;
 const cleanup: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
-  for (const step of cleanup.splice(0).toReversed()) await step();
+  for (const step of cleanup.splice(0).toReversed()) {
+    await step();
+  }
   resetDatabaseEngineSelectionForTest();
   vi.restoreAllMocks();
 });
@@ -93,11 +95,13 @@ describe.skipIf(!connection)("Gateway PostgreSQL owner failure boundaries", () =
         proxy.stopped,
         acquisition.then(() => {
           throw new Error(
-            `Owner settled before proxy boundary: ${String(result?.error ?? result?.owner)}`,
+            `Owner settled before proxy boundary: ${result?.error instanceof Error ? result.error.message : JSON.stringify(result)}`,
           );
         }),
       ]);
-      if (phase !== "acquire") proxy.forwardRetained();
+      if (phase !== "acquire") {
+        proxy.forwardRetained();
+      }
       if (phase === "heartbeat") {
         await acquisition;
         expect(result?.owner).toBeDefined();
@@ -140,12 +144,17 @@ describe.skipIf(!connection)("Gateway PostgreSQL owner failure boundaries", () =
       proxy.stopped,
       acquisition.then((result) => {
         throw new Error(
-          `Owner settled before lock response: ${String(result.error ?? result.owner)}`,
+          `Owner settled before lock response: ${result.error instanceof Error ? result.error.message : JSON.stringify(result)}`,
         );
       }),
     ]);
-    const client = queries.mock.contexts.find((context) => context.port === proxy.port);
-    if (!client) throw new Error("Expected real owner client");
+    const client = queries.mock.contexts.find(
+      (context): context is pg.Client =>
+        context instanceof pg.Client && context.port === proxy.port,
+    );
+    if (!client) {
+      throw new Error("Expected real owner client");
+    }
     const socket = client.connection.stream;
     socket.pause();
     let fatalBeforeSettlement = false;
@@ -169,9 +178,11 @@ describe.skipIf(!connection)("Gateway PostgreSQL owner failure boundaries", () =
     expect(onLost).not.toHaveBeenCalled();
     await vi.waitFor(() => expect(socket.destroyed).toBe(true));
     expect(
-      queries.mock.calls.filter(([config]) =>
-        typeof config === "string" ? config === "SELECT 1" : config?.text === "SELECT 1",
-      ),
+      queries.mock.calls
+        .map(([config]): string | pg.QueryConfig => config)
+        .filter((config) =>
+          typeof config === "string" ? config === "SELECT 1" : config.text === "SELECT 1",
+        ),
     ).toHaveLength(0);
     const next = await acquireDirect(schemaPrefix);
     cleanup.push(async () => next?.release());

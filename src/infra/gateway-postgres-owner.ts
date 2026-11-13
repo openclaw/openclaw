@@ -20,6 +20,7 @@ const TIMEOUT_MS = 10_000;
 const APPLICATION = "openclaw-gateway-owner";
 // pg supports per-query timeouts at runtime, but its QueryConfig types omit
 // the field. Explicit query bounds take precedence over DSN query_timeout.
+// Typed locals avoid fresh-literal excess checks at Client.query overloads.
 type OwnerQuery = QueryConfig<string[]> & { query_timeout: number };
 const log = createSubsystemLogger("gateway");
 let reportedHolder: string | undefined;
@@ -38,14 +39,15 @@ function ownerLockKey(schemaPrefix: string): string {
 
 /** Names the live holder from PostgreSQL itself; there is no owner row to go stale. */
 async function readHolder(client: Client, key: string, timeoutMs: number) {
-  const { rows } = await client.query<{ pid: number; application_name: string }>({
+  const query: OwnerQuery = {
     text: `SELECT a.pid, a.application_name FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
      WHERE l.locktype = 'advisory' AND l.granted AND l.objsubid = 1
        AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database())
        AND ((l.classid::bigint << 32) | l.objid::bigint) = $1::bigint`,
     values: [key],
     query_timeout: timeoutMs,
-  } satisfies OwnerQuery);
+  };
+  const { rows } = await client.query<{ pid: number; application_name: string }>(query);
   const holder = rows[0];
   const match = holder?.application_name?.match(new RegExp(`^${APPLICATION}:(\\d+):(.*)$`));
   return holder
@@ -109,11 +111,12 @@ async function acquireGatewayPostgresOwner(
   client.on("end", () => lose(new Error("the ownership session ended")));
   try {
     await client.connect();
-    const { rows } = await client.query<{ acquired: boolean }>({
+    const query: OwnerQuery = {
       text: "SELECT pg_try_advisory_lock($1::bigint) AS acquired",
       values: [key],
       query_timeout: timing.timeoutMs,
-    } satisfies OwnerQuery);
+    };
+    const { rows } = await client.query<{ acquired: boolean }>(query);
     if (!rows[0]?.acquired) {
       const holder = await readHolder(client, key, timing.timeoutMs);
       throw new GatewayStateOwnerContentionError(
@@ -139,15 +142,14 @@ async function acquireGatewayPostgresOwner(
       clearInterval(heartbeat);
       return;
     }
-    client
-      .query({ text: "SELECT 1", query_timeout: timing.timeoutMs } satisfies OwnerQuery)
-      .catch((error: unknown) =>
-        lose(
-          new Error(`heartbeat failed: ${error instanceof Error ? error.message : String(error)}`, {
-            cause: error,
-          }),
-        ),
-      );
+    const query: OwnerQuery = { text: "SELECT 1", query_timeout: timing.timeoutMs };
+    client.query(query).catch((error: unknown) =>
+      lose(
+        new Error(`heartbeat failed: ${error instanceof Error ? error.message : String(error)}`, {
+          cause: error,
+        }),
+      ),
+    );
   }, timing.heartbeatMs);
   heartbeat.unref();
   return {
