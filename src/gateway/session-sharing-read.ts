@@ -23,6 +23,7 @@ import {
 } from "./operator-role-policy.js";
 import { authenticatedProfileUnavailableError } from "./server-methods/gateway-client-identity.js";
 import type { GatewayClient, SessionMutationAuthorization } from "./server-methods/types.js";
+import { resolveTelegramSessionDirect } from "./session-channel-direct-read.js";
 import { resolveTelegramSessionGroup } from "./session-channel-group.js";
 import {
   readTelegramSessionMembership,
@@ -149,7 +150,7 @@ export function prepareSessionSharing(
     : params.cfg && operatorSessionCap(params.client, params.cfg);
   const cap = { value: sessionCap };
   const resolveRole = prepareSessionSharingRole(params, cap, isCreator);
-  const roleForTarget = (target: SessionSharingTarget, isMember?: boolean) =>
+  const originalRoleForTarget = (target: SessionSharingTarget, isMember?: boolean) =>
     resolveRole(
       target,
       isMember ?? (prepared && Boolean(identity && prepared.isMember(target, identity.id))),
@@ -170,10 +171,13 @@ export function prepareSessionSharing(
       return Boolean(
         key &&
         params.cfg &&
+        entry.visibility !== "draft" &&
+        entry.incognito !== true &&
+        !isIncognitoSessionKey(key) &&
         canReadSessionAccess(params.cfg, key, entry, isCreator) &&
         operatorScopeSatisfied("operator.sessions.read", params.client?.connect.scopes ?? []) &&
         !authorizeCurrentOperatorRoleScopes(params.client, params.cfg) &&
-        resolveTelegramSessionGroup(key, entry) &&
+        (resolveTelegramSessionGroup(key, entry) || resolveTelegramSessionDirect(key, entry)) &&
         (prepared?.channelRead?.(key, entry) ??
           readTelegramSessionMembership(params.client, params.cfg, key, entry)),
       );
@@ -181,6 +185,16 @@ export function prepareSessionSharing(
   };
   const entryFilter = guardChannel(originalEntryFilter);
   const directEntryFilter = guardChannel(originalDirectEntryFilter);
+  const channelParticipant = (target: SessionSharingTarget) =>
+    sessionCap === "none" &&
+    (target.entry.visibility ?? "shared") === "shared" &&
+    originalDirectEntryFilter?.(target.canonicalKey, target.entry) === false &&
+    directEntryFilter?.(target.canonicalKey, target.entry) === true &&
+    operatorScopeSatisfied("operator.write", params.client?.connect.scopes ?? []);
+  const capForTarget = (target: SessionSharingTarget) =>
+    channelParticipant(target) ? ("invited" as const) : sessionCap;
+  const roleForTarget = (target: SessionSharingTarget, isMember?: boolean) =>
+    channelParticipant(target) ? ("member" as const) : originalRoleForTarget(target, isMember);
   return {
     identity,
     isCreator,
@@ -200,8 +214,9 @@ export function prepareSessionSharing(
         Boolean(sessionCap === "invited" && identity && prepared?.isMember(target, identity.id)),
       ) ?? true,
     roleForTarget,
+    capForTarget,
     authorizeTarget: (target: SessionSharingTarget, role = roleForTarget(target)) =>
-      authorizeSessionSharingTarget({ ...params, target }, { ...cap, role }),
+      authorizeSessionSharingTarget({ ...params, target }, { value: capForTarget(target), role }),
   };
 }
 

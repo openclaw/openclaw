@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { prepareUserProfileRoleAuthority } from "../state/user-channel-identity-operations.js";
 import type { GatewayClient } from "./server-methods/types.js";
+import { prepareTelegramLinkedDirectReads } from "./session-channel-direct-read.js";
 import { resolveTelegramSessionGroup } from "./session-channel-group.js";
 import {
   prepareTelegramGroupMemberships,
@@ -22,6 +23,7 @@ type Binding = {
   runtimeConfig: OpenClawConfig;
   current: () => boolean;
   groups: Map<string, GroupRead>;
+  direct?: Awaited<ReturnType<typeof prepareTelegramLinkedDirectReads>>;
   revision: number;
   timer?: ReturnType<typeof setTimeout>;
   stop: () => void;
@@ -44,9 +46,12 @@ export function readTelegramSessionMembership(
   key: string,
   entry: Parameters<typeof resolveTelegramSessionGroup>[1],
 ): boolean {
+  const binding = currentBinding(client, cfg);
+  if (binding?.direct?.canRead(key, entry)) {
+    return true;
+  }
   const group = resolveTelegramSessionGroup(key, entry);
-  const binding = group && currentBinding(client, cfg);
-  const read = binding && binding.groups.get(groupKey(group));
+  const read = group && binding?.groups.get(groupKey(group));
   return Boolean(read?.fact && Date.now() - read.checkedAt < FRESH_MS && read.fact.isCurrent());
 }
 
@@ -59,6 +64,7 @@ export function telegramSessionMembershipKey(client: GatewayClient | null, cfg: 
   const now = Date.now();
   return JSON.stringify([
     binding.revision,
+    binding.direct?.revisionKey(),
     [...binding.groups].map(([key, read]) => [
       key,
       Boolean(read.fact && now - read.checkedAt < FRESH_MS && read.fact.isCurrent()),
@@ -79,7 +85,6 @@ export async function prepareTelegramSessionReads(params: {
   if (
     !client ||
     !profileId ||
-    !params.groups.length ||
     client.internal?.agentToolCaller ||
     client.internal?.agentRuntimeIdentity
   ) {
@@ -132,10 +137,35 @@ export async function prepareTelegramSessionReads(params: {
   if (params.runtimeConfig && binding.runtimeConfig !== params.runtimeConfig) {
     // Credentials or adapter policy changed: old facts cannot authorize the new runtime.
     binding.groups.clear();
+    binding.direct = undefined;
     binding.revision++;
     binding.runtimeConfig = params.runtimeConfig;
   }
   const owner = binding;
+  const directRuntimeConfig = owner.runtimeConfig;
+  const direct = prepareTelegramLinkedDirectReads({
+    profileId,
+    signal: client.connectionSignal,
+    qualifyAccount: (_key, route) => {
+      // The owner grants the complete legacy conversation explicitly. This does
+      // not infer historical ownership from the last route or activate a global ACL.
+      return (
+        cfg.session?.sharing?.legacyDirectAccess?.some(
+          (grant) =>
+            grant.channel === "telegram" &&
+            grant.agentId === route.agentId &&
+            grant.accountId === route.accountId &&
+            grant.peerId === route.peerId &&
+            grant.profileIds.includes(profileId),
+        ) === true
+      );
+    },
+  }).then((facts) => {
+    if (owner.current() && owner.runtimeConfig === directRuntimeConfig) {
+      owner.direct = facts;
+      owner.revision++;
+    }
+  });
   const refresh = async (groups: readonly Group[]) => {
     const selected = [...new Map(groups.map((group) => [groupKey(group), group])).values()].map(
       (group) => {
@@ -197,7 +227,7 @@ export async function prepareTelegramSessionReads(params: {
     owner.timer.unref();
   };
   try {
-    await refresh(params.groups);
+    await Promise.all([refresh(params.groups), direct]);
     schedule();
   } catch {
     owner.stop();
@@ -223,8 +253,6 @@ export async function prepareTelegramSessionListMembership(
     getConfig: () => projection.getPolicyConfig(),
     groups,
   });
-  return groups.length
-    ? (key: string, entry: Parameters<typeof resolveTelegramSessionGroup>[1]) =>
-        readTelegramSessionMembership(client, projection.getPolicyConfig(), key, entry)
-    : undefined;
+  return (key: string, entry: Parameters<typeof resolveTelegramSessionGroup>[1]) =>
+    readTelegramSessionMembership(client, projection.getPolicyConfig(), key, entry);
 }

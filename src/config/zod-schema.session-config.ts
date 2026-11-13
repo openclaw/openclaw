@@ -68,6 +68,18 @@ export const SessionSchema = z
         suggest: z.boolean().optional(),
         drafts: z.boolean().optional(),
         controlUiDefaultAccess: z.literal("creator").optional(),
+        // Explicit grants for old DM keys whose history predates account-qualified routing.
+        legacyDirectAccess: z
+          .array(
+            z.strictObject({
+              channel: z.literal("telegram"),
+              accountId: z.string().trim().min(1),
+              agentId: z.string().trim().min(1),
+              peerId: z.string().regex(/^[1-9]\d*$/),
+              profileIds: z.array(z.string().trim().min(1)).min(1).max(1000),
+            }),
+          )
+          .optional(),
         accessPolicy: z
           .strictObject({
             default: z.literal("creator"),

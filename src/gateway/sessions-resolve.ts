@@ -24,6 +24,11 @@ import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-
 import { parseSessionLabel } from "../sessions/session-label.js";
 import { hasOperatorBoundary } from "./operator-role-policy.js";
 import type { GatewayClient } from "./server-methods/types.js";
+import { resolveTelegramSessionGroup } from "./session-channel-group.js";
+import {
+  prepareTelegramSessionReads,
+  prepareTelegramSessionListMembership,
+} from "./session-channel-read.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import { invalidSessionRequest } from "./session-request-error.js";
 import { withReadySessionRows, type SessionRowReadView } from "./session-row-prepared-read.js";
@@ -171,21 +176,46 @@ export async function withPreparedSessionResolve<T>(
             pending.set(JSON.stringify([query.agentId, query.key, query.storePath]), query);
           }
         }
+        const queries = (cfg: OpenClawConfig) => {
+          const selected = [
+            ...pending.values(),
+            ...(sessionUrlCandidates(projection, selectionParams) ?? []),
+          ];
+          if (key) {
+            const agent = resolveRequestedSessionAgentId(cfg, key, p.agentId, "read");
+            if (agent.ok) {
+              selected.push({ key, agentId: agent.agentId });
+            }
+          }
+          return selected;
+        };
+        if (params.client?.authenticatedUserProfile) {
+          // URL resolution precedes history on a fresh browser connection. Prepare
+          // the same channel authority before discovery filters hide the target.
+          const groups = await withReadySessionRows(projection, queries, (read) =>
+            queries(read.state.cfg).flatMap((query) => {
+              const record = read.describe(query);
+              const group =
+                record &&
+                resolveTelegramSessionGroup(record.key, record.storedEntry ?? record.entry);
+              return group ? [group] : [];
+            }),
+          );
+          if (!key && !p.reference && !p.shortId) {
+            await prepareTelegramSessionListMembership(projection, params.client);
+          } else {
+            await prepareTelegramSessionReads({
+              client: params.client,
+              cfg: projection.getPolicyConfig(),
+              runtimeConfig: projection.state.cfg,
+              getConfig: () => projection.getPolicyConfig(),
+              groups,
+            });
+          }
+        }
         return await withReadySessionRows(
           projection,
-          (cfg) => {
-            const selected = [
-              ...pending.values(),
-              ...(sessionUrlCandidates(projection, selectionParams) ?? []),
-            ];
-            if (key) {
-              const agent = resolveRequestedSessionAgentId(cfg, key, p.agentId, "read");
-              if (agent.ok) {
-                selected.push({ key, agentId: agent.agentId });
-              }
-            }
-            return selected;
-          },
+          queries,
           resolve,
           // Discovery needs current selection metadata, not every session's display row.
           {

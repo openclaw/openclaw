@@ -204,7 +204,7 @@ export function createSessionTargetPolicyAuthorizer(context: {
       ? authorizeSessionSharingTarget(
           { cfg, client: params.client, target, ...targetOwnership },
           {
-            value: policy.sessionCap,
+            value: policy.capForTarget(target),
             role: policy.roleForTarget(target),
           },
         )

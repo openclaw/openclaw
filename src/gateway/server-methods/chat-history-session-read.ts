@@ -136,13 +136,13 @@ export async function prepareChatHistorySessionRead({
     const selected = selectSession(read);
     return selected?.entry && resolveTelegramSessionGroup(selected.canonicalKey, selected.entry);
   });
-  if (candidateGroup) {
+  if (client?.authenticatedUserProfile) {
     await prepareTelegramSessionReads({
       client,
       cfg: rowProjection.getPolicyConfig(),
       runtimeConfig: context.getRuntimeConfig(),
       getConfig: () => rowProjection.getPolicyConfig(),
-      groups: [candidateGroup],
+      groups: candidateGroup ? [candidateGroup] : [],
     });
   }
   const selectedSession = await measureDiagnosticsTimelineSpan(

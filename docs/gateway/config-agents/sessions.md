@@ -183,3 +183,38 @@ must also retain the referenced files. See
 for eligibility and recovery, and
 [cold transcript backups](/install/backups#cold-transcript-backups) before enabling
 the feature.
+
+### Linked Telegram conversations in the Control UI
+
+A linked profile can open its Telegram groups after the Gateway verifies current
+membership using the same bot account. URL resolution, history, and the session
+list use the same check. A member with `operator.write` can continue a `shared`
+conversation, subject to the role's agent restrictions. This does not give them
+ownership, access to drafts, or permission to change sharing.
+
+Older private Telegram sessions can have keys without a bot account. For those
+sessions, explicitly grant access to the complete legacy conversation:
+
+```json5
+{
+  session: {
+    sharing: {
+      legacyDirectAccess: [
+        {
+          channel: "telegram",
+          accountId: "default",
+          agentId: "personal-assistant",
+          peerId: "123456789",
+          profileIds: ["linked-profile-id"],
+        },
+      ],
+    },
+  },
+}
+```
+
+The account, peer, agent, and current profile link must all match. The grant
+covers that peer's existing conversation and its threads. Removing the grant or
+unlinking the identity revokes access. An explicit private session ACL still
+applies. This setting does not change the access policy for newly created
+conversations. Account-qualified DM keys use their matching current identity link.
