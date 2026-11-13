@@ -418,6 +418,7 @@ describe("renderSkills", () => {
     expect([...select.options].map((option) => option.textContent)).toEqual([
       "All 2",
       "Ready 1",
+      "Not enabled for this agent 0",
       "Needs setup 0",
       "Disabled 1",
     ]);
@@ -426,7 +427,7 @@ describe("renderSkills", () => {
     expect(onStatusFilterChange).toHaveBeenCalledWith("needs-setup");
   });
 
-  it("treats skills blocked by the selected agent filter as needing setup", async () => {
+  it("shows skills excluded by the selected agent filter under a separate not-enabled status", async () => {
     const { container, query, text, render } = createView(true);
     const report: SkillStatusReport = skillReport([createSkill({ blockedByAgentFilter: true })]);
 
@@ -435,12 +436,14 @@ describe("renderSkills", () => {
 
     expect(container.querySelectorAll(".plugins-item")).toHaveLength(0);
     expect(text()).toContain("Ready 0");
-    expect(text()).toContain("Needs setup 1");
+    expect(text()).toContain("Not enabled for this agent 1");
+    expect(text()).not.toContain("Needs setup 1");
 
-    render({ report, statusFilter: "needs-setup", detailKey: "repo-skill" });
+    render({ report, statusFilter: "not-enabled", detailKey: "repo-skill" });
     await Promise.resolve();
 
     expect(query(".plugins-item .settings-status--warn")).not.toBeNull();
+    expect(text()).toContain("Not enabled for this agent");
     expect(text()).toContain("Reason: blocked by agent filter");
     expect(query(".skill-reader-dialog .settings-status--warn")).not.toBeNull();
   });

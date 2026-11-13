@@ -7,6 +7,7 @@ import {
   computeSkillMissing,
   computeSkillReasons,
   isSkillAvailable,
+  isSkillExcludedByAgentFilter,
 } from "../../lib/skills-shared.ts";
 import { clawhubVerdictKey, type ClawHubSkillSecurityVerdict } from "../../lib/skills/index.ts";
 
@@ -20,7 +21,13 @@ export function SkillStatusChips(props: { skill: SkillStatusEntry; showBundledBa
         <span class="chip">{t("skillStatus.bundled")}</span>
       </Show>
       <span class={["chip", isSkillAvailable(props.skill) ? "chip-ok" : "chip-warn"]}>
-        {t(isSkillAvailable(props.skill) ? "skillStatus.eligible" : "skillStatus.blocked")}
+        {t(
+          isSkillAvailable(props.skill)
+            ? "skillStatus.eligible"
+            : isSkillExcludedByAgentFilter(props.skill)
+              ? "skillsPage.tabs.notEnabled"
+              : "skillStatus.blocked",
+        )}
       </span>
       <Show when={props.skill.disabled}>
         <span class="chip chip-warn">{t("skillStatus.disabled")}</span>
@@ -81,7 +88,9 @@ function skillStateStatus({ skill, verdict }: SkillStateProps) {
               ? "eligible" in skill
                 ? "skillsPage.tabs.ready"
                 : "skillsPage.enabled"
-              : "skillsPage.tabs.needsSetup",
+              : "eligible" in skill && isSkillExcludedByAgentFilter(skill)
+                ? "skillsPage.tabs.notEnabled"
+                : "skillsPage.tabs.needsSetup",
         );
   const details =
     "missing" in skill

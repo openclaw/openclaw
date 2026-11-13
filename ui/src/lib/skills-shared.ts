@@ -29,6 +29,11 @@ export function isSkillAvailable(skill: SkillStatusEntry): boolean {
   return skill.eligible && !skill.blockedByAgentFilter;
 }
 
+/** A skill the selected agent's allowlist excludes even though it is otherwise eligible. */
+export function isSkillExcludedByAgentFilter(skill: SkillStatusEntry): boolean {
+  return skill.eligible && skill.blockedByAgentFilter;
+}
+
 /** Learned Workshop skills bypass agent allowlists; archiving in the Workshop hides one. */
 export function isWorkshopSkill(skill: Pick<SkillStatusEntry, "source">): boolean {
   return skill.source === "openclaw-workshop";

@@ -11,6 +11,7 @@ import {
   computeSkillMissing,
   computeSkillReasons,
   isSkillAvailable,
+  isSkillExcludedByAgentFilter,
 } from "../../lib/skills-shared.ts";
 import type { ClawHubSkillSecurityVerdict } from "../../lib/skills/index.ts";
 import { MarkdownContent, SkillReaderDialog } from "./skill-reader-dialog.tsx";
@@ -142,13 +143,21 @@ export function SkillDetail(props: {
         <div class="oc-dialog__rows">
           <div class="oc-dialog__row">
             <SettingsStatus
-              kind={props.skill.disabled ? "muted" : isSkillAvailable(props.skill) ? "ok" : "warn"}
+              kind={
+                props.skill.disabled
+                  ? "muted"
+                  : isSkillAvailable(props.skill)
+                    ? "ok"
+                    : "warn"
+              }
               label={t(
                 props.skill.disabled
                   ? "skillsPage.tabs.disabled"
                   : isSkillAvailable(props.skill)
                     ? "skillsPage.tabs.ready"
-                    : "skillsPage.tabs.needsSetup",
+                    : isSkillExcludedByAgentFilter(props.skill)
+                      ? "skillsPage.tabs.notEnabled"
+                      : "skillsPage.tabs.needsSetup",
               )}
             />
             <SettingsToggle

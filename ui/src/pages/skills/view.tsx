@@ -19,7 +19,7 @@ import { createProgressiveList } from "../../lib/reactive/progressive-list.ts";
 import "../../styles/carapace-control-ui.css";
 import "../../styles/plugins.css";
 import { groupSkills, type SkillGroup } from "../../lib/skills-grouping.ts";
-import { isSkillAvailable } from "../../lib/skills-shared.ts";
+import { isSkillAvailable, isSkillExcludedByAgentFilter } from "../../lib/skills-shared.ts";
 import { SkillDiscovery } from "./discovery-view.tsx";
 import { SkillDialogBoundary } from "./skill-dialog-boundary.tsx";
 import { SkillRowStatus, verdictForSkill, verdictStatus } from "./skill-status.tsx";
@@ -36,12 +36,19 @@ const ClawHubDetailDialog = lazy(() => import("./skill-reader-dialog.tsx"), {
 const STATUS_TABS: Array<{ id: SkillsStatusFilter; labelKey: string }> = [
   { id: "all", labelKey: "skillsPage.tabs.all" },
   { id: "ready", labelKey: "skillsPage.tabs.ready" },
+  { id: "not-enabled", labelKey: "skillsPage.tabs.notEnabled" },
   { id: "needs-setup", labelKey: "skillsPage.tabs.needsSetup" },
   { id: "disabled", labelKey: "skillsPage.tabs.disabled" },
 ];
 
 function skillStatus(skill: SkillStatusEntry): Exclude<SkillsStatusFilter, "all"> {
-  return skill.disabled ? "disabled" : isSkillAvailable(skill) ? "ready" : "needs-setup";
+  return skill.disabled
+    ? "disabled"
+    : isSkillAvailable(skill)
+      ? "ready"
+      : isSkillExcludedByAgentFilter(skill)
+        ? "not-enabled"
+        : "needs-setup";
 }
 
 function skillControlsLocked(view: SkillsProps): boolean {
@@ -82,6 +89,7 @@ export function Skills(props: SkillsProps) {
     const counts: Record<SkillsStatusFilter, number> = {
       all: skills().length,
       ready: 0,
+      "not-enabled": 0,
       "needs-setup": 0,
       disabled: 0,
     };
