@@ -1,0 +1,2 @@
+355
+# Long initial readings: carrier-acknowledged ordering, protected opening and input resumption, cancellation, unchanged short/continuous paths, synthetic long-audio overflow replay; shared harness extraction avoids oversized handler growth.

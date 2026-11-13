@@ -6,17 +6,12 @@ import type {
   RealtimeVoiceProviderPlugin,
   RealtimeVoiceSessionHarness,
 } from "openclaw/plugin-sdk/realtime-voice";
-import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
-import { WebSocket, type RawData } from "openclaw/plugin-sdk/websocket-runtime";
+import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { VoiceCallRealtimeConfig } from "../config.js";
 import type { CallManager } from "../manager.js";
 import type { CallRecord, NormalizedEvent, ToolHandlerContext } from "../types.js";
-import {
-  connectWs as openWebSocket,
-  startUpgradeWsServer as openUpgradeServer,
-  waitForClose,
-} from "../websocket-test-support.js";
+import { waitForClose } from "../websocket-test-support.js";
 import { RealtimeAudioPacer } from "./realtime-audio-pacer.js";
 import { makeBridge, makeCall as makeCallRecord } from "./realtime-call-control.test-helpers.js";
 import { RealtimeCallHandler } from "./realtime-handler.js";
@@ -24,10 +19,23 @@ import {
   createRealtimeConfig,
   makeRequest,
   makeRealtimeProvider,
-  updateCallMetadata,
   sendCarrierStart,
 } from "./realtime-handler.lifecycle.test-helpers.js";
+import {
+  closeCallHarnessTransports,
+  connectWs,
+  makeCallHarness,
+  parseWebSocketMessage,
+  resetContinuity,
+  startRealtimeServer,
+  startStreamSessionServer,
+  waitFor,
+  waitForCalls,
+  type RealtimeBridgeRequest,
+} from "./realtime-handler.test-helpers.js";
 import { StreamDisconnectGrace } from "./stream-disconnect-grace.js";
+
+type RecentTalkEvent = { turnId?: string; type: string };
 
 const realtimeVoiceHarnessTestHooks = vi.hoisted(() => ({
   onCreate: undefined as ((harness: RealtimeVoiceSessionHarness) => void) | undefined,
@@ -49,33 +57,12 @@ vi.mock("openclaw/plugin-sdk/realtime-voice", async (importOriginal) => {
   };
 });
 
-const cleanup: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
   realtimeVoiceHarnessTestHooks.onCreate = undefined;
   realtimeVoiceHarnessTestHooks.sessions.clear();
   vi.useRealTimers();
-  for (const close of cleanup.splice(0).toReversed()) {
-    await close();
-  }
+  await closeCallHarnessTransports();
 });
-
-async function connectWs(url: string) {
-  const ws = await openWebSocket(url);
-  cleanup.push(async () => {
-    if (ws.readyState !== WebSocket.CLOSED) {
-      const closed = waitForClose(ws);
-      ws.close();
-      await closed;
-    }
-  });
-  return ws;
-}
-
-async function startUpgradeWsServer(params: Parameters<typeof openUpgradeServer>[0]) {
-  const server = await openUpgradeServer(params);
-  cleanup.push(server.close);
-  return server;
-}
 
 const PROVIDER_WITH_LOCAL_BARGE_IN_CAPABILITIES = {
   transports: ["gateway-relay"],
@@ -89,116 +76,10 @@ const PROVIDER_BARGE_IN_CAPABILITIES = {
   handlesInputAudioBargeIn: true,
 };
 
-async function startRealtimeServer(handler: RealtimeCallHandler, params?: URLSearchParams) {
-  const payload = handler.buildTwiMLPayload(makeRequest("/voice/webhook"), params);
-  const streamUrl = expectDefined(payload.body.match(/wss:\/\/[^" ]+/)?.[0], "realtime stream URL");
-  return startStreamSessionServer(handler, streamUrl);
-}
-
-async function startStreamSessionServer(handler: RealtimeCallHandler, streamUrl: string) {
-  return startUpgradeWsServer({
-    urlPath: new URL(streamUrl).pathname,
-    onUpgrade: (request, socket, head) => handler.handleWebSocketUpgrade(request, socket, head),
-  });
-}
-
-async function waitFor(
-  callback: () => void | Promise<void>,
-  options: { timeout?: number; interval?: number } = {},
-) {
-  await vi.waitFor(callback, { interval: 1, ...options });
-}
-
-async function waitForCalls(mock: unknown, count = 1) {
-  await waitFor(() => expect(mock).toHaveBeenCalledTimes(count));
-}
-
 function delay(ms = 0) {
   return new Promise<void>((resolve) => {
     setTimeout(resolve, ms);
   });
-}
-
-type RealtimeBridgeRequest = Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0];
-type RecentTalkEvent = { turnId?: string; type: string };
-
-function makeCallHarness(
-  bridge:
-    | Partial<RealtimeVoiceBridge>
-    | ((request: RealtimeBridgeRequest, index: number) => RealtimeVoiceBridge) = {},
-  options: {
-    call?: CallRecord;
-    config?: Partial<VoiceCallRealtimeConfig>;
-    deps?: {
-      manager?: Partial<CallManager>;
-      providerConfig?: Record<string, unknown>;
-      realtimeProvider?: RealtimeVoiceProviderPlugin;
-      resolveInstructions?: (call: CallRecord) => string;
-      streamDisconnectLifecycle?: StreamDisconnectGrace;
-    };
-  } = {},
-) {
-  const call = options.call ?? makeCallRecord("CA-test");
-  const calls = new Map([[call.providerCallId, call]]);
-  const getCallByProviderCallId = (id: string) => {
-    if (options.call) {
-      return options.call;
-    }
-    const record = calls.get(id) ?? makeCallRecord(id);
-    calls.set(id, record);
-    return record;
-  };
-  const callbacks: RealtimeBridgeRequest[] = [];
-  const processEvent = vi.fn<CallManager["processEvent"]>(async () => ({ kind: "processed" }));
-  const endCall = vi.fn(async () => ({ success: true }));
-  const createBridge = vi.fn((request: RealtimeBridgeRequest) => {
-    callbacks.push(request);
-    return typeof bridge === "function"
-      ? bridge(request, callbacks.length - 1)
-      : makeBridge(bridge);
-  });
-  const config = { ...createRealtimeConfig(), ...options.config };
-  const streamDisconnectLifecycle =
-    options.deps?.streamDisconnectLifecycle ?? new StreamDisconnectGrace(() => {});
-  const provider = {
-    ...makeRealtimeProvider(createBridge),
-    ...options.deps?.realtimeProvider,
-    createBridge,
-  };
-  const handler = new RealtimeCallHandler(
-    config,
-    {
-      processEvent,
-      endCall,
-      updateCallMetadata,
-      getCallForStream: vi.fn<CallManager["getCallForStream"]>(async () => undefined),
-      getCallByProviderCallId,
-      ...options.deps?.manager,
-    } as unknown as CallManager,
-    (record) => ({
-      agentId: record.agentId ?? "main",
-      provider,
-      providerConfig: options.deps?.providerConfig ?? { apiKey: "test-key" },
-      instructions: options.deps?.resolveInstructions?.(record) ?? config.instructions,
-    }),
-    "/voice/webhook",
-    streamDisconnectLifecycle,
-  );
-  onTestFinished(async () => {
-    try {
-      await handler.close();
-    } finally {
-      streamDisconnectLifecycle.close();
-    }
-  });
-  async function start(streamId = "MZ-test", providerCallId = call.providerCallId) {
-    const count = callbacks.length;
-    const ws = await connectWs((await startRealtimeServer(handler)).url);
-    sendCarrierStart(ws, streamId, providerCallId);
-    await waitFor(() => expect(callbacks).toHaveLength(count + 1));
-    return { ws, callbacks: expectDefined(callbacks[count], "provider callbacks") };
-  }
-  return { call, handler, callbacks, createBridge, processEvent, endCall, start };
 }
 
 async function openConsult(
@@ -250,19 +131,8 @@ async function expectToolResult(
   });
 }
 
-function resetContinuity(callbacks: RealtimeBridgeRequest | undefined) {
-  expectDefined(callbacks, "provider callbacks").onEvent?.({
-    direction: "client",
-    type: "session.continuity.reset",
-  });
-}
-
 function sendMedia(ws: WebSocket, audio: Buffer) {
   ws.send(JSON.stringify({ event: "media", media: { payload: audio.toString("base64") } }));
-}
-
-function parseWebSocketMessage(data: RawData): Record<string, unknown> {
-  return JSON.parse(rawDataToString(data, "utf8")) as Record<string, unknown>;
 }
 
 async function bargeInHarness(params: {

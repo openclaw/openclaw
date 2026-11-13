@@ -92,3 +92,52 @@ export function resolveFinalTranscriptText(params: {
   }
   return normalizeTranscriptText(`${rawPartial}${params.final}`);
 }
+
+type UserTranscript = { text: string; raw?: string; updatedAt?: number };
+export type TranscriptSnapshot = { buffer: UserTranscript | undefined; text: string | undefined };
+export type NativeConsultTranscript = () => TranscriptSnapshot;
+
+export type UserTranscriptState = {
+  partial?: UserTranscript;
+  recentFinal?: UserTranscript;
+  recentFinalTimer?: ReturnType<typeof setTimeout>;
+};
+
+export function captureNativeConsultTranscript(
+  state: UserTranscriptState,
+): NativeConsultTranscript {
+  // Keep the current utterance, including its remaining incremental ASR text.
+  const buffer = state.partial ?? state.recentFinal;
+  return () => ({ buffer, text: buffer?.text });
+}
+
+export function clearRecentFinalUserTranscript(state: UserTranscriptState): void {
+  clearTimeout(state.recentFinalTimer);
+  state.recentFinalTimer = undefined;
+  state.recentFinal = undefined;
+}
+
+export function consumeUserTranscript(
+  state: UserTranscriptState,
+  consumed: TranscriptSnapshot | undefined,
+): void {
+  const buffer = consumed?.buffer;
+  const text = consumed?.text?.trim();
+  if (
+    !buffer ||
+    !text ||
+    (buffer !== state.partial && buffer !== state.recentFinal) ||
+    !buffer.text.toLowerCase().startsWith(text.toLowerCase())
+  ) {
+    return;
+  }
+  const remaining = buffer.text.slice(text.length).trimStart();
+  if (remaining) {
+    buffer.text = remaining;
+    buffer.raw = remaining;
+  } else if (buffer === state.partial) {
+    state.partial = undefined;
+  } else {
+    clearRecentFinalUserTranscript(state);
+  }
+}
