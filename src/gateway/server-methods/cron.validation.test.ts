@@ -1039,7 +1039,7 @@ describe("cron method validation", () => {
         const replay = await invokeCron(`cron.${method}`, params, { context, client });
         expectResponseError(replay.respond, {
           code: "INVALID_REQUEST",
-          messageIncludes: "Configured MCP cron authority is no longer active",
+          messageIncludes: "Automation requester authority is no longer active",
         });
         expect(committed).toHaveLength(1);
       } finally {
@@ -1055,11 +1055,11 @@ describe("cron method validation", () => {
 
     const mismatch = await invokeCron("cron.add", agentTurnCronParams(), {
       context,
-      client: callerClientWithCronCreatorAuthority({ ...grant, runId: "run-other" }),
+      client: callerClientWithCronCreatorAuthority(grant, "run-other"),
     });
     expectResponseError(mismatch.respond, {
       code: "INVALID_REQUEST",
-      messageIncludes: "Configured MCP cron authority is no longer active",
+      messageIncludes: "Automation requester authority is no longer active",
     });
     expect(context.committedAdds).toHaveLength(0);
 
@@ -1100,7 +1100,7 @@ describe("cron method validation", () => {
       });
       expectResponseError(respond, {
         code: "INVALID_REQUEST",
-        messageIncludes: "Configured MCP cron authority is no longer active",
+        messageIncludes: "Automation requester authority is no longer active",
       });
       expect(context.committedAdds).toHaveLength(0);
       expect(context.committedUpdates).toHaveLength(0);
