@@ -32,6 +32,40 @@ function classifyResult(
 }
 
 describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
+  it.each([true, false])(
+    "preserves only verified daily quota diagnostics through terminal payloads (daily=%s)",
+    (daily) => {
+      const payloads = buildPayloads({
+        provider: "fixture",
+        lastAssistant: makeAssistantMessageFixture({
+          provider: "fixture",
+          model: "selected-model",
+          errorMessage: "429: Quota exhausted",
+          errorCode: "RESOURCE_EXHAUSTED",
+          ...(daily ? { quotaScope: "daily-model" as const } : {}),
+        }),
+      });
+      const classification = classifyResult("fixture", "selected-model", {
+        payloads,
+        meta: { durationMs: 1 },
+      });
+      expect(classification).toMatchObject(
+        daily
+          ? {
+              reason: "rate_limit",
+              status: 429,
+              code: "RESOURCE_EXHAUSTED",
+              quotaScope: "daily-model",
+            }
+          : { reason: "rate_limit", code: "embedded_error_payload" },
+      );
+      if (!daily) {
+        expect(classification).not.toHaveProperty("quotaScope");
+        expect(classification).not.toHaveProperty("status");
+      }
+    },
+  );
+
   it.each([false, true])(
     "retains retry exhaustion across fallback aggregation (billing=%s)",
     async (billing) => {

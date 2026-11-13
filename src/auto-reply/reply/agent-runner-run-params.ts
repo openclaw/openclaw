@@ -50,7 +50,7 @@ export function resolveModelFallbackOptions(
   // Only agent-turn jobs pick a model; system-event turns keep the session's fallback policy.
   const automation =
     run.scheduledAutomation?.job.payload.kind === "agentTurn" ? run.scheduledAutomation : undefined;
-  const modelFallbackAvailability = resolveModelFallbackAvailability({
+  const selectionParams: Parameters<typeof resolveModelFallbackAvailability>[0] = {
     cfg: config,
     agentId: run.agentId,
     sessionKey: run.sessionKey,
@@ -73,7 +73,8 @@ export function resolveModelFallbackOptions(
           hasAutoFallbackProvenance: run.hasAutoFallbackProvenance === true,
           subagentSpawnLineage: run.subagentSpawnLineage,
         }),
-  });
+  };
+  const modelFallbackAvailability = resolveModelFallbackAvailability(selectionParams);
   return {
     cfg: config,
     provider: run.provider,

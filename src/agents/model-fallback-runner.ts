@@ -1,6 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitFailoverEvent } from "../infra/diagnostic-events.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import {
@@ -14,7 +13,6 @@ import { hasAnyAuthProfileStoreSourceAsync } from "./auth-profiles/source-check.
 import {
   FailoverError,
   buildProviderReauthCommand,
-  coerceToFailoverError,
   describeFailoverError,
   isFailoverError,
   isNonProviderRuntimeCoordinationError,
@@ -24,7 +22,6 @@ import {
   shouldPreserveTransientCooldownProbeSlot,
   shouldUseTransientCooldownProbeSlot,
 } from "./failover-policy.js";
-import { isLikelyContextOverflowError } from "./failover/classify.js";
 import type { FailoverReason } from "./failover/signal.js";
 import {
   getFallbackCandidateSkipReason,
@@ -35,6 +32,7 @@ import { isAgentHarnessPreflightError, isMissingAgentHarnessError } from "./harn
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import {
   appendFailedCandidateAttempt,
+  normalizeFallbackError,
   hasDifferentLiveSessionRuntimeSelection,
   isTranscriptNotContinuableError,
   type ModelFallbackAuthRuntime,
@@ -611,15 +609,7 @@ async function runWithModelFallbackInternal<T>(
     if (isMissingAgentHarnessError(err)) {
       throw err;
     }
-    const normalized =
-      coerceToFailoverError(err, failoverContext) ??
-      (isLikelyContextOverflowError(formatErrorMessage(err))
-        ? new FailoverError(formatErrorMessage(err), {
-            reason: "context_overflow",
-            ...failoverContext,
-            cause: err,
-          })
-        : err);
+    const normalized = normalizeFallbackError(err, failoverContext);
 
     // Jump to later live selections; stale targets remain classified failures.
     if (err instanceof LiveSessionModelSwitchError) {
@@ -664,7 +654,7 @@ async function runWithModelFallbackInternal<T>(
 
     // Cache non-primary auth failures for the next turn.
     if (
-      isKnownFailover &&
+      isFailoverError(normalized) &&
       !isPrimary &&
       params.sessionId &&
       (normalized.reason === "auth" || normalized.reason === "auth_permanent")
@@ -679,7 +669,7 @@ async function runWithModelFallbackInternal<T>(
       });
     }
 
-    if (isKnownFailover && normalized.reason === "tls_certificate") {
+    if (isFailoverError(normalized) && normalized.reason === "tls_certificate") {
       tlsFailedProviders.add(candidate.provider);
     }
     candidates = preferContextFitFallbackCandidates({

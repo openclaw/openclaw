@@ -229,6 +229,13 @@ export function classifyFailoverSignalCore(
   if (resolveExecutionApprovalFailureMessage(signal.message)) {
     return null;
   }
+  if (
+    signal.quotaScope === "daily-model" &&
+    signal.status === 429 &&
+    signal.code === "RESOURCE_EXHAUSTED"
+  ) {
+    return { kind: "reason", reason: "rate_limit", sameModelRetry: false };
+  }
   const inferredStatus = inferSignalStatus(signal);
   const explicitStatus = Number.isFinite(signal.status) ? signal.status : undefined;
   const messageClassification = signal.message
