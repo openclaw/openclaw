@@ -81,6 +81,7 @@ struct CommandSessionActionsModifier: ViewModifier {
     let session: OpenClawChatSessionEntry
     let mainSessionKey: String
     let categories: [String]
+    let canChangePlacement: Bool
     let isArchived: Bool
     let isEnabled: Bool
     let canArchive: Bool
@@ -108,13 +109,15 @@ struct CommandSessionActionsModifier: ViewModifier {
                     self.patch(color: .some($0))
                 }
                 if !self.isArchived {
-                    self.actionButton(
-                        self.session.pinned == true
-                            ? OpenClawTextValue.localized("Unpin")
-                            : OpenClawTextValue.localized("Pin"),
-                        systemImage: self.session.pinned == true ? "pin.slash" : "pin")
-                    {
-                        self.patch(pinned: self.session.pinned != true)
+                    if self.canChangePlacement {
+                        self.actionButton(
+                            self.session.pinned == true
+                                ? OpenClawTextValue.localized("Unpin")
+                                : OpenClawTextValue.localized("Pin"),
+                            systemImage: self.session.pinned == true ? "pin.slash" : "pin")
+                        {
+                            self.patch(pinned: self.session.pinned != true)
+                        }
                     }
                     if self.canSnooze {
                         self.snoozeMenu
@@ -138,7 +141,9 @@ struct CommandSessionActionsModifier: ViewModifier {
                     {
                         self.fork()
                     }
-                    self.groupMenu
+                    if self.canChangePlacement {
+                        self.groupMenu
+                    }
                 }
                 if self.canArchive {
                     self.actionButton(
@@ -370,6 +375,7 @@ extension View {
         session: OpenClawChatSessionEntry,
         mainSessionKey: String = "main",
         categories: [String],
+        canChangePlacement: Bool = true,
         isArchived: Bool = false,
         isEnabled: Bool = true,
         canArchive: Bool = true,
@@ -382,6 +388,9 @@ extension View {
             session: session,
             mainSessionKey: mainSessionKey,
             categories: categories,
+            canChangePlacement: canChangePlacement &&
+                session.parentSessionKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false &&
+                session.spawnedBy?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false,
             isArchived: isArchived,
             isEnabled: isEnabled,
             canArchive: canArchive,
