@@ -1,8 +1,12 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { afterEach, expect, it, vi } from "vitest";
 import { SCRATCH_TTL_MS } from "../shared/scratch-expiry.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
+import { listDirectoryTreeStrict } from "./directory-walk.js";
 import {
   cleanScratch,
   closeScratchCleanupCursor,
@@ -124,6 +128,65 @@ it("joins worker cancellation at a deletion checkpoint before releasing the chec
   expect(await f.run()).toMatchObject({ entriesRemoved: 1, filesRemoved: 3, errors: [] });
   expect(await fs.readdir(path.join(f.root, ".openclaw/tmp"))).toEqual([]);
 });
+
+it("resumes a claimed tree after a process crash without touching a replacement checkout", async () => {
+  const f = await fixture();
+  await f.file(".openclaw/tmp/proof/.git/HEAD");
+  for (let index = 0; index < 130; index++) {
+    await f.file(`.openclaw/tmp/proof/${index}`);
+  }
+  const run = (crash: boolean) =>
+    promisify(execFile)(
+      process.execPath,
+      [
+        "--import",
+        fileURLToPath(new URL("../../scripts/tsx.mjs", import.meta.url)),
+        "--input-type=module",
+        "--eval",
+        `import { writeSync } from "node:fs";
+         const { cleanScratch, closeScratchCleanupCursor } = await import(${JSON.stringify(new URL("./scratch-cleanup.ts", import.meta.url).href)});
+         const cursor = {};
+         const result = await cleanScratch({
+           targets: [{ root: process.argv[1], kind: "checkout", isLive: () => false }],
+           now: Number(process.argv[2]), cursor, assertCurrent() {},
+           async pause() {
+             if (process.argv[3] === "true") {
+               writeSync(1, "deletion checkpoint\\n");
+               process.kill(process.pid, "SIGKILL");
+             }
+           },
+         });
+         await closeScratchCleanupCursor(cursor);
+         writeSync(1, JSON.stringify(result));
+         process.exit(0);`,
+        f.root,
+        String(now),
+        String(crash),
+      ],
+      { timeout: 30_000 },
+    );
+  await expect(run(true)).rejects.toMatchObject({
+    signal: "SIGKILL",
+    killed: false,
+    stdout: "deletion checkpoint\n",
+  });
+  const scratch = path.join(f.root, ".openclaw/tmp");
+  const claims = await fs.readdir(scratch);
+  expect(claims).toHaveLength(1);
+  expect(claims[0]).toMatch(/^\.reclaim-/);
+  // 131 files, the Git directory and the claimed root, less the first 128 removals.
+  expect(await listDirectoryTreeStrict(path.join(scratch, claims[0]!))).toHaveLength(4);
+  const fresh = await f.file(".openclaw/tmp/proof/fresh", 1);
+  const resumed = await run(false);
+  expect(JSON.parse(resumed.stdout)).toMatchObject({
+    entriesRemoved: 1,
+    filesRemoved: 5,
+    deferred: 0,
+    errors: [],
+  });
+  expect(await fs.readdir(scratch)).toEqual(["proof"]);
+  expect(await fs.readFile(fresh, "utf8")).toBe("proof");
+}, 60_000);
 
 it("refuses symlink scratch roots but expires contained links without following their targets", async () => {
   const f = await fixture();

@@ -1984,6 +1984,7 @@
     "ios:release:upload": "node scripts/mobile-release.mjs run --platform ios",
     "ios:run": "/bin/bash scripts/ios-run.sh",
     "ios:screenshots": "/bin/bash scripts/ios-screenshots.sh",
+    "ios:sim:pair": "node --import ./scripts/tsx.mjs scripts/ios-sim-pair.mts",
     "ios:test": "pnpm --silent ios:gen && node --import ./scripts/tsx.mjs scripts/ios-test.mts",
     "ios:version": "node --import ./scripts/tsx.mjs scripts/ios-version.ts --json",
     "ios:version:check": "node --import ./scripts/tsx.mjs scripts/ios-sync-versioning.ts --check",
