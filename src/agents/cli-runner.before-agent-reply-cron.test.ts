@@ -153,6 +153,7 @@ async function makeStubContext(params: Parameters<ProductionRunCliAgent>[0]) {
     authEpochVersion: 0,
     backendResolved: {},
     preparedBackend: { backend: { sessionMode: "none" } },
+    executionTarget: { kind: "process" },
     reusableCliSession: { mode: "none" },
   };
 }

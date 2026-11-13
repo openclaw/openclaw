@@ -11,6 +11,7 @@ import {
 } from "../../scripts/plugin-npm-evidence-reuse.mjs";
 import {
   authenticatePreparedNpmArtifact,
+  downloadPreparedNpmRelease,
   main,
   PREPARED_NPM_MANIFEST,
   preparedNpmArtifactName,
@@ -125,7 +126,7 @@ function fixture(pageHeavy = false, sameSha = false) {
   const raw = (args: readonly string[]): unknown => {
     if (args[0] === "run") {
       calls.push("run view " + f.runId);
-      return JSON.stringify(f.client.getRunView(f.runId));
+      return f.client.getRunView(f.runId).then((view) => JSON.stringify(view));
     }
     const route = args[1]!.replace("repos/" + f.repository + "/", "");
     calls.push(route);
@@ -170,7 +171,11 @@ function fixture(pageHeavy = false, sameSha = false) {
         : Promise.resolve(f.client.getRun(run[1]!)).then(done);
     }
     if (route.includes("/artifacts?")) {
-      return done({ total_count: 2, artifacts: [artifacts.get(91), artifacts.get(92)] });
+      const runId = Number(/^actions\/runs\/(\d+)/u.exec(route)![1]);
+      const listed = [...artifacts.values()].filter(
+        (metadata) => metadata.workflow_run.id === runId,
+      );
+      return done({ total_count: listed.length, artifacts: listed });
     }
     const jobs = /^actions\/runs\/(\d+)\/(?:attempts\/(\d+)\/)?jobs\?/u.exec(route);
     if (jobs) {
@@ -274,6 +279,51 @@ it.each([false, true])(
   },
 );
 
+it("replays completed attempts and SHA lineage through the real evidence client", () => {
+  const base = "a".repeat(40);
+  const head = "b".repeat(40);
+  const run = { id: 40, run_attempt: 1, status: "completed", conclusion: "success" };
+  transport.read = vi.fn(() => JSON.stringify(run));
+  const writer = createReleaseEvidenceReplay({});
+  const client = createReleaseEvidenceClient("openclaw/openclaw", { immutableReads: writer });
+  const read = (owner: ReturnType<typeof createReleaseEvidenceClient>) => [
+    owner.getRunAttempt(40, 1),
+    owner.compareCommitLineage(base, head),
+    owner.compareCommits(base, head),
+  ];
+  const expected = read(client);
+  expect(transport.read).toHaveBeenCalledTimes(3);
+  transport.read = vi.fn(() => {
+    throw new Error("immutable evidence reacquired");
+  });
+  const replay = createReleaseEvidenceReplay({}, JSON.parse(writer.serialize()));
+  expect(
+    read(createReleaseEvidenceClient("openclaw/openclaw", { immutableReads: replay })),
+  ).toEqual(expected);
+  expect(transport.read).not.toHaveBeenCalled();
+  transport.read = vi.fn(() => JSON.stringify({ status: "ahead" }));
+  client.compareCommitLineage(base, "main");
+  createReleaseEvidenceClient("openclaw/openclaw", { immutableReads: replay }).compareCommitLineage(
+    base,
+    "main",
+  );
+  expect(transport.read).toHaveBeenCalledTimes(2);
+});
+
+it("keeps nonterminal exact attempts live and rejects them in retained payloads", () => {
+  const route = "actions/runs/40/attempts/1";
+  const raw = JSON.stringify({ status: "in_progress" });
+  const writer = createReleaseEvidenceReplay({});
+  expect(writer.text(route, () => raw)).toBe(raw);
+  const payload = JSON.parse(writer.serialize());
+  expect(payload.entries).toEqual([]);
+  const fresh = vi.fn(() => raw);
+  expect(createReleaseEvidenceReplay({}, payload).text(route, fresh)).toBe(raw);
+  expect(fresh).toHaveBeenCalledOnce();
+  payload.entries.push([route, { kind: "text", data: raw, sha256: digest(raw) }]);
+  expect(() => createReleaseEvidenceReplay({}, payload)).toThrow(/Only completed exact-attempt/);
+});
+
 it("keeps nonterminal historical job pages live without serializing their status", async () => {
   const route = "actions/runs/101/attempts/1/jobs?per_page=100&page=1";
   const raw = JSON.stringify({ total_count: 1, jobs: [{ id: 123, status: "queued" }] });
@@ -361,7 +411,21 @@ async function carrierFixture(prepare?: (source: ReturnType<typeof fixture>) => 
     GITHUB_RUN_ATTEMPT: "2",
   });
   const writer = createReleaseEvidenceReplay(binding);
-  await authenticatePreparedNpmArtifact({ ...params, immutableReads: writer });
+  const adopted = await authenticatePreparedNpmArtifact({ ...params, immutableReads: writer });
+  if (prepare) {
+    await downloadPreparedNpmRelease({
+      ...params,
+      ...adopted,
+      token: "synthetic-token",
+      fetchImpl: async (input: string | URL | Request) => {
+        const url = new URL(input instanceof Request ? input.url : input.toString());
+        const body = await transport.read(["api", url.pathname.slice(1) + url.search]);
+        return body instanceof Uint8Array
+          ? new Response(Uint8Array.from(body))
+          : new Response(String(body));
+      },
+    });
+  }
   const payload = JSON.parse(writer.serialize());
   const zip = makeStoredZip({ "plugin-npm-evidence.json": JSON.stringify(payload) });
   const run = {
@@ -398,6 +462,9 @@ async function carrierFixture(prepare?: (source: ReturnType<typeof fixture>) => 
   const fetchImpl = async (input: string | URL | Request) => {
     const url = new URL(input instanceof Request ? input.url : input.toString());
     calls.push(url.pathname + url.search);
+    if (url.pathname === "/rate_limit") {
+      return Response.json({ resources: { core: { remaining: 5000, reset: 4070908800 } } });
+    }
     if (url.pathname.endsWith("/artifacts/900")) {
       return Response.json(metadata);
     }
@@ -505,6 +572,23 @@ it.each([
   expect(() => createReleaseEvidenceReplay(binding, f.payload)).toThrow(/differs/);
 });
 
+it("does not trust a caller-forged prepared projection in the public helper", async () => {
+  const { params } = fixture();
+  const immutableReads = Object.assign(createReleaseEvidenceReplay(params), {
+    authenticatedPreparedEvidence: {
+      artifact: params.artifact,
+      workflowSha: params.artifact.workflowSha,
+    },
+  });
+  await expect(
+    authenticatePreparedNpmArtifact({
+      ...params,
+      fullReleaseValidationRunAttempt: 2,
+      immutableReads,
+    }),
+  ).rejects.toThrow();
+});
+
 it("replays raw responses through semantic validators, not just their content hashes", async () => {
   const { params } = fixture();
   const writer = createReleaseEvidenceReplay(params);
@@ -567,7 +651,7 @@ function cliEnvironment(f: Awaited<ReturnType<typeof carrierFixture>>, root: str
   vi.stubGlobal("fetch", f.paramsForLoad.fetchImpl);
 }
 
-it("preserves the public return-time gate but removes exactly one CLI combined gate", async () => {
+it("preserves public return-time authority while coalescing CLI acquisition", async () => {
   const f = await carrierFixture();
   const root = tempDirs.make("npm-cli-authorize-");
   cliEnvironment(f, root);
@@ -588,10 +672,21 @@ it("preserves the public return-time gate but removes exactly one CLI combined g
   f.calls.length = 0;
   await main(["authorize", "--source-sha", f.params.sourceSha]);
   const removed = publicCalls.length - f.source.calls.length;
-  // Compare the real final callback with the eliminated identical boundary.
-  // The raw fixture graph is smaller than the saved production trace.
-  expect(removed).toBe(finalGateCalls.length);
-  expect(removed).toBe(18);
+  // CLI acquisition also shares repeated observations; the process fixture
+  // owns exact request accounting for the complete recovery graph.
+  expect(removed).toBeGreaterThanOrEqual(finalGateCalls.length);
+  // The completed admission attempt and job page replay; its current run and
+  // permissions remain live. Exact-attempt replay and the shared same-actor
+  // permission check remove two of the original 17 reads.
+  expect(finalGateCalls).not.toContain("actions/runs/40/attempts/1/jobs?per_page=100");
+  expect(finalGateCalls).not.toContain("actions/runs/40/attempts/1");
+  expect(finalGateCalls).toEqual(
+    expect.arrayContaining([
+      "actions/artifacts/70",
+      "actions/runs/40",
+      "collaborators/release-operator/permission",
+    ]),
+  );
   expect(f.calls.length).toBe(publicFetchCalls);
   expect(f.source.calls.filter((route) => route === "actions/runs/800")).toHaveLength(2);
   console.log(
@@ -683,6 +778,27 @@ async function cliPackageFixture() {
     });
     packageArchives.set(9001, manifestZip);
     packageArchives.set(9002, packageZip);
+    source.archives.set(9001, manifestZip);
+    source.artifacts.set(9002, {
+      id: 9002,
+      name: entry.artifact.artifactName,
+      digest: entry.artifact.artifactDigest,
+      size_in_bytes: packageZip.length,
+      expired: false,
+      expires_at: "2099-01-01T00:00:00Z",
+      created_at: "2026-08-28T12:01:02.000Z",
+      workflow_run: { id: 101, head_sha: source.params.sourceSha, head_branch: source.f.branch },
+    });
+    source.artifacts.set(9001, {
+      id: 9001,
+      name: source.params.artifact.artifactName,
+      digest: source.params.artifact.artifactDigest,
+      size_in_bytes: manifestZip.length,
+      expired: false,
+      expires_at: "2099-01-01T00:00:00Z",
+      created_at: "2026-08-28T12:01:02.000Z",
+      workflow_run: { id: 101, head_sha: source.params.sourceSha, head_branch: source.f.branch },
+    });
   });
   cliEnvironment(f, root);
   const fetch = f.paramsForLoad.fetchImpl;
@@ -704,7 +820,8 @@ async function cliPackageFixture() {
         digest: artifact.artifactDigest,
         size_in_bytes: bytes.length,
         expired: false,
-        workflow_run: { id: 101, head_sha: f.params.sourceSha },
+        expires_at: "2099-01-01T00:00:00Z",
+        workflow_run: { id: 101, head_sha: f.params.sourceSha, head_branch: f.source.f.branch },
       });
     }
     if (url.pathname.endsWith("/runs/101/attempts/1")) {
@@ -766,6 +883,9 @@ it.each(["load", "consume"])("keeps %s output behind the final fresh check", asy
   expect(readFileSync(f.output, "utf8")).toContain(
     command === "load" ? "has_candidates=true" : "tarball_sha256=",
   );
+  if (command === "load") {
+    expect(readFileSync(f.output, "utf8")).toContain("core_deferrals=[]");
+  }
 });
 
 it.each(["permission", "tag", "frv-attempt", "carrier-attempt", "expiry"])(

@@ -318,7 +318,10 @@ describe("Codex native configuration lifecycle", () => {
         expect(placed).toBe(threads[0]?.preparedOpenClawBaseInstructions);
         expect(placed).toContain("You are a personal assistant running inside OpenClaw.");
         const carrier = isJsonObject(request.params) ? request.params[carrierKey] : undefined;
-        expect(typeof carrier === "string" && carrier.startsWith(`${placed}`)).toBe(true);
+        expect(
+          typeof carrier === "string" &&
+            carrier.startsWith(nativeBaseKey ? `<thread_policy>\n${placed}` : `${placed}`),
+        ).toBe(true);
         expect(request.params).toMatchObject({
           config: {
             "features.tool_suggest": false,
@@ -391,7 +394,8 @@ describe("Codex native configuration lifecycle", () => {
     // Replacing OpenClaw policy does not remove native collaboration guidance;
     // managed threads now carry that guidance in the developer instructions.
     const developerInstructions = frames.at(-1)?.[1].developerInstructions;
-    expect(developerInstructions).toContain("<collaboration_mode>");
+    expect(developerInstructions).toMatch(/^<thread_policy>\n<collaboration_mode>\n/);
+    expect(developerInstructions).toMatch(/<\/collaboration_mode>\n<\/thread_policy>$/);
     expect(developerInstructions).not.toContain("personal assistant running inside OpenClaw");
     expect(developerInstructions).not.toContain("OpenClaw has dynamic tools");
     expect(frames.at(-1)?.[1].baseInstructions).toBe(key ? undefined : "");

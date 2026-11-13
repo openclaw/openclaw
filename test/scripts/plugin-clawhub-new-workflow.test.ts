@@ -210,6 +210,8 @@ describe("Plugin ClawHub New workflow", () => {
       "actions/runs/${RELEASE_PUBLISH_RUN_ID}/attempts/${EXPECTED_RUN_ATTEMPT}",
     );
     expect(validation.run).toContain("repository: .repository.full_name");
+    const projection = validation.run?.match(/jq '(\{[\s\S]*?\})'/u)?.[1];
+    expect(projection).toMatch(/\bpath\s*,/u);
     expect(validation.run).toContain(
       'EXPECTED_WORKFLOW_REF="refs/tags/${EXPECTED_WORKFLOW_BRANCH}"',
     );

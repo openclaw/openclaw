@@ -41,6 +41,7 @@ import {
 import { getOptionalBrowserStateRuntime } from "../browser-runtime-state.js";
 import { applyBrowserTabToolBinding } from "../browser-tool-binding.js";
 import { createBrowserToolSessionTabs } from "../browser-tool-session-tabs.js";
+import { isOperatorOnlyBrowserPageUrl } from "../browser/cdp-target-filter.js";
 import { persistBrowserProxyResultFiles } from "../browser/proxy-files.js";
 import {
   isBrowserHostLocalRoute,
@@ -201,7 +202,17 @@ export async function handleBrowserGatewayRequest({
       const tabs = responseRecord.tabs.flatMap((value: unknown) => {
         const tab = asNullableRecord(value);
         const targetId = normalizeOptionalString(tab?.targetId);
-        return targetId ? [{ value, targetId, tabId: normalizeOptionalString(tab?.tabId) }] : [];
+        return targetId
+          ? [
+              {
+                value,
+                targetId,
+                tabId: normalizeOptionalString(tab?.tabId),
+                // Only operator listings contain these; they belong to no session.
+                operatorOnly: isOperatorOnlyBrowserPageUrl(normalizeOptionalString(tab?.url)),
+              },
+            ]
+          : [];
       });
       const tracked = new Set(
         await registry.filterTrackedSessionBrowserTabs({
@@ -240,6 +251,7 @@ export async function handleBrowserGatewayRequest({
         tabs: tabs
           .filter(
             (tab) =>
+              tab.operatorOnly ||
               tracked.has(tab) ||
               referenced.has(tab.targetId) ||
               Boolean(tab.tabId && referenced.has(tab.tabId)),
@@ -258,7 +270,14 @@ export async function handleBrowserGatewayRequest({
       authority,
     });
     if (openTab) {
-      await sessionTabs.trackOpened(scopeParams.result, scopeParams.closeTab);
+      // Session tab records reach agent tools; operator-only pages stay out of them.
+      if (
+        !isOperatorOnlyBrowserPageUrl(
+          normalizeOptionalString(asNullableRecord(scopeParams.result)?.url),
+        )
+      ) {
+        await sessionTabs.trackOpened(scopeParams.result, scopeParams.closeTab);
+      }
     } else if (closeTab) {
       await sessionTabs.untrack(decodeURIComponent(path.slice(6)));
     } else if (touchTab) {
@@ -611,6 +630,12 @@ export async function handleBrowserGatewayRequest({
             client.invalidated !== true &&
             !requesterSignal.aborted &&
             hasCurrentClientAuthority?.() !== false,
+          // Chrome settings pages are operator-only: only an authenticated Control UI
+          // socket qualifies; agent tools (synthetic clients), CLI and nodes never do.
+          ...(client.internal?.authenticatedControlUi === true &&
+          client.internal.syntheticClient !== true
+            ? { operatorUi: true as const }
+            : {}),
         }
       : undefined;
   let resolvedProfile: string | undefined;

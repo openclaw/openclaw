@@ -472,8 +472,10 @@ describe("qa-bus server", () => {
   });
 
   it("keeps oversized numeric poll and search fields bounded", async () => {
-    const { post, raw, inbound } = await fixture();
-    const message = inbound("bounded numeric fields");
+    const { state, post, raw, inbound } = await fixture();
+    const messages = Array.from({ length: 501 }, (_, index) =>
+      inbound(`bounded numeric fields ${index}`),
+    );
 
     const pollResponse = await post("/v1/poll", {
       accountId: "acct-a",
@@ -481,17 +483,35 @@ describe("qa-bus server", () => {
       limit: 10_000,
       timeoutMs: 60_000,
     });
-    await expectSuccess(pollResponse, {
-      events: [{ message: { id: message.id } }],
-    });
+    expect(pollResponse.status).toBe(200);
+    const pollResult = (await pollResponse.json()) as QaBusPollResult;
+    expect(messageIds(pollResult)).toEqual(messages.slice(0, 500).map((message) => message.id));
+    expect(pollResult.cursor).toBe(500);
 
     const extremeSearchResponse = await raw(
       "/v1/actions/search",
       `{"accountId":"acct-a","limit":1e309,"query":"bounded"}`,
     );
-    await expectSuccess(extremeSearchResponse, {
-      messages: [{ id: message.id }],
-    });
+    expect(extremeSearchResponse.status).toBe(200);
+    const searchResult = (await extremeSearchResponse.json()) as {
+      messages: Array<{ id: string }>;
+    };
+    expect(searchResult.messages.map((message) => message.id)).toEqual(
+      messages.slice(-100).map((message) => message.id),
+    );
+
+    const cursor = state.getSnapshot().cursor;
+    const wait = vi.spyOn(state, "waitForCursorAdvance").mockResolvedValue(undefined);
+    try {
+      await expectJson(
+        await post("/v1/poll", { accountId: "acct-a", cursor, timeoutMs: 60_000 }),
+        200,
+        { cursor, events: [] },
+      );
+      expect(wait).toHaveBeenCalledExactlyOnceWith(cursor, 30_000, expect.any(Function));
+    } finally {
+      wait.mockRestore();
+    }
   });
   it.each([
     { pathname: "/v1/inbound/message", limit: 16 * 1024 * 1024 },

@@ -7,6 +7,7 @@ import { parse as parseYaml } from "yaml";
 import {
   prepareSandboxDependencyTemplate,
   resolveSandboxDependencyTemplateIdentity,
+  type SandboxDependencyTemplateIdentity,
 } from "../../agents/sandbox/dependency-template.js";
 import type { SandboxConfig } from "../../agents/sandbox/types.js";
 import type { WorktreeAllocationGuard } from "../../agents/worktrees/allocation.js";
@@ -60,7 +61,7 @@ async function validateTemplate(
   directory: string,
   commit: string,
   guard: Pick<WorktreeAllocationGuard, "signal" | "commitGuard">,
-  mode: "validate" | "dependencies" | "source-only" = "validate",
+  mode: "dependencies" | "source-only",
 ) {
   return await withWorktreeGitConfig(
     directory,
@@ -124,9 +125,6 @@ async function validateTemplate(
           }
           continue;
         }
-        if (mode === "validate") {
-          return false;
-        }
         guard.commitGuard();
         await fs.rm(target, { recursive: true, force: true });
       }
@@ -143,11 +141,17 @@ type LocalWorkspaceTemplateParams = {
   templateRoot: string;
   env: NodeJS.ProcessEnv;
   sandbox: SandboxConfig;
+  identity?: SandboxDependencyTemplateIdentity;
+  backgroundUsedAt?: number;
   buildCacheInputs?: string[];
   guard: Pick<WorktreeAllocationGuard, "commitGuard" | "rollbackGuard" | "requireDiskSpace"> & {
     signal: AbortSignal;
   };
 };
+
+export function sandboxTemplateCacheKey(commonDir: string, templateRoot: string, identity: string) {
+  return digest(`sandbox-v1\n${commonDir}\n${templateRoot}\n${identity}`);
+}
 
 /** The returned template retains its generation until the caller settles its clone. */
 export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTemplateParams) {
@@ -208,10 +212,12 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
     );
     return undefined;
   }
-  const identity = await resolveSandboxDependencyTemplateIdentity(params.sandbox, {
-    signal: guard.signal,
-    assertCurrent: guard.commitGuard,
-  });
+  const identity =
+    params.identity ??
+    (await resolveSandboxDependencyTemplateIdentity(params.sandbox, {
+      signal: guard.signal,
+      assertCurrent: guard.commitGuard,
+    }));
   if (!identity) {
     log.debug("sandbox dependency template skipped: local image identity unavailable");
     return undefined;
@@ -271,11 +277,13 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
     const contained =
       result.installed && (await hasContainedVirtualStore(directory, identity.docker.workdir));
     templateGuard.commitGuard();
-    const valid = await validateTemplate(
-      directory,
-      params.baseCommit,
-      templateGuard,
-      contained ? "dependencies" : "source-only",
+    const valid = await timeWorktreePreparationPhase("templateValidateOutput", () =>
+      validateTemplate(
+        directory,
+        params.baseCommit,
+        templateGuard,
+        contained ? "dependencies" : "source-only",
+      ),
     );
     if (contained && valid) {
       log.info("sandbox dependency template prepared for the selected commit");
@@ -300,8 +308,9 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
   const record = await prepareWorktreeTemplate({
     env: params.env,
     now: Date.now,
+    backgroundUsedAt: params.backgroundUsedAt,
     options: guard,
-    cacheKey: digest(`sandbox-v1\n${commonDir}\n${params.templateRoot}\n${identity.key}`),
+    cacheKey: sandboxTemplateCacheKey(commonDir, params.templateRoot, identity.key),
     contentKey: digest(`${params.baseCommit}\n${digest(lockfile.stdout)}\n${identity.key}`),
     repoRoot: params.repoRoot,
     commonDir,
@@ -313,8 +322,7 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
         [{ path: params.templateRoot, bytes: WORKTREE_SETUP_HEADROOM_BYTES }],
         "sandbox dependency template",
       ),
-    validate: (existing, templateOptions) =>
-      validateTemplate(existing.path, existing.sourceCommit, templateOptions),
+    // Ready generations were validated after the builder stopped and have no writers.
     refresh: async (existing, preparing, templateOptions) => {
       previousGeneration = existing;
       // Retain exact commit identity: lifecycle scripts and local packages can consume
@@ -352,7 +360,9 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
       ) {
         return false;
       }
-      await backend.cloneTemplate(existing.path, preparing.path, templateOptions);
+      await timeWorktreePreparationPhase("templateClone", () =>
+        backend.cloneTemplate(existing.path, preparing.path, templateOptions),
+      );
       await prepare(preparing.path, templateOptions, existing.sourceCommit);
       await prepareManifest(preparing, templateOptions);
       return true;

@@ -1,3 +1,4 @@
+import { isNamedOperatorRoleEnforcementEnabled } from "openclaw/plugin-sdk/gateway-config-runtime";
 import {
   captureGatewayIngressPersonPrincipal,
   type GatewayIngressPrincipal,
@@ -26,7 +27,12 @@ export function relayCaller(
   const ceiling = [
     ...new Set([...scopes, ...(canWrite ? ["operator.read", "operator.write"] : [])]),
   ];
-  if (config.gateway?.roles || config.gateway?.auth?.mode === "trusted-proxy") {
+  if (
+    isNamedOperatorRoleEnforcementEnabled(config) ||
+    config.gateway?.auth?.mode === "trusted-proxy" ||
+    client.internal?.openclawIdPrincipal?.kind === "member" ||
+    client.internal?.operatorRoleActor?.kind === "operator"
+  ) {
     const profile = client.authenticatedUserProfile;
     const actor = client.internal?.operatorRoleActor;
     if (

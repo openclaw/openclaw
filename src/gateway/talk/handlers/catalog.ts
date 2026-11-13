@@ -553,7 +553,7 @@ export const talkCatalogHandler: GatewayRequestHandler = async ({
         err instanceof AgentSelectionRequiredError
           ? ErrorCodes.INVALID_REQUEST
           : ErrorCodes.UNAVAILABLE,
-        formatForLog(err),
+        err instanceof AgentSelectionRequiredError ? err.message : formatForLog(err),
       ),
     );
   }

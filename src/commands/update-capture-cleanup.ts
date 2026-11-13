@@ -22,7 +22,16 @@ import type { RecoveryCleanupArtifact } from "./update-cleanup-types.js";
 
 type CaptureIdentity = { dev: bigint; ino: bigint };
 
-/** A rollback original is superseded only after a later update succeeded. */
+/** A verified healthy update supersedes the rollback sources it, or anything earlier, left behind. */
+export function isVerifiedSuccessfulUpdate(run: UpdateRunRecord): boolean {
+  return (
+    run.status === "succeeded" &&
+    run.finishedAtMs !== null &&
+    isUpdateRunVerificationConfirmed(run.verification)
+  );
+}
+
+/** A rollback original is superseded after a later update succeeded or a verified one finished. */
 export function readCompletedUpdateHistory(env: NodeJS.ProcessEnv) {
   try {
     const completed = listUpdateRuns({ limit: 100, succeeded: true }, { env });
@@ -30,10 +39,12 @@ export function readCompletedUpdateHistory(env: NodeJS.ProcessEnv) {
     const verified = completed.find(
       (run) => run.finishedAtMs !== null && isUpdateRunVerificationConfirmed(run.verification),
     );
+    const verifiedSuccess = completed.find(isVerifiedSuccessfulUpdate);
     return {
       runs: listUpdateRuns({ limit: 100 }, { env }),
       latestCompletedStartedAt: latest && latest.finishedAtMs !== null ? latest.createdAtMs : 0,
       latestVerifiedStartedAt: verified?.createdAtMs ?? 0,
+      latestVerifiedFinishedAt: verifiedSuccess?.finishedAtMs ?? 0,
       hasPendingRecovery: inspectUpdateRecoveries({ env }).some(({ record }) =>
         isUpdateRecoveryPending(record),
       ),
@@ -88,15 +99,19 @@ function classifyCapture(
   }
   // An incomplete copy may still contain the only pre-failure bytes. A bare
   // success label without Gateway verification cannot supersede that evidence.
-  if (!((sealed ? latestCompletedStartedAt : latestVerifiedStartedAt) > run.finishedAtMs)) {
+  if ((sealed ? latestCompletedStartedAt : latestVerifiedStartedAt) > run.finishedAtMs) {
     return {
-      outcome: "protected",
-      reason: sealed ? "awaiting-later-completed-update" : "awaiting-later-verified-update",
+      outcome: "candidate",
+      reason: sealed ? "superseded-update-capture" : "unsealed-update-capture",
     };
   }
+  // Its Gateway verified the migrated state, so the copy restores nothing that is still needed.
+  if (isVerifiedSuccessfulUpdate(run)) {
+    return { outcome: "candidate", reason: "verified-update-capture" };
+  }
   return {
-    outcome: "candidate",
-    reason: sealed ? "superseded-update-capture" : "unsealed-update-capture",
+    outcome: "protected",
+    reason: sealed ? "awaiting-later-completed-update" : "awaiting-later-verified-update",
   };
 }
 

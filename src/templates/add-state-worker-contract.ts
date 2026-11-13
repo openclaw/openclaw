@@ -6,6 +6,7 @@ export type TemplateAddStateWorkerOperations = {
     input: {
       workspaceDir: string;
       bootstrapSeededAt: string;
+      bootstrapSha256: string;
       nowMs: number;
       leases?: readonly OpenClawStateLeaseIdentity[];
     };

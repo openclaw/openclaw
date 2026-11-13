@@ -605,6 +605,7 @@ describe("Vercel Container Registry publishing", () => {
       VERCEL_TOKEN: "${{ secrets.VERCEL_TOKEN }}",
     });
     expect(finalizeRelease.needs).toEqual([
+      "resolve_release_target",
       "publish",
       "publish_docker",
       "approve_github_release",

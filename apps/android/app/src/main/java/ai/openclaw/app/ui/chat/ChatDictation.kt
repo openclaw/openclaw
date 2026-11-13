@@ -22,6 +22,7 @@ import androidx.compose.material.icons.outlined.MicNone
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -453,6 +454,7 @@ internal fun ChatComposerMicButton(
   Surface(
     modifier =
       modifier
+        .minimumInteractiveComponentSize()
         .size(ClawTheme.spacing.touchTarget)
         .combinedClickable(
           enabled = interactionEnabled,

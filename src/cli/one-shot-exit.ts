@@ -1,3 +1,4 @@
+import { ChildProcess } from "node:child_process";
 import { writeSync } from "node:fs";
 import { drainProcessOutput } from "../process/output-drain.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -132,6 +133,7 @@ function armSettledExitWatchdog(params: { delayMs: number; terminateFailedExit: 
   const { delayMs, terminateFailedExit } = params;
   // Unref'd: a natural exit is never delayed.
   setTimeout(() => {
+    const { TLSSocket } = process.getBuiltinModule("node:tls");
     const summarize = (names: string[]) => {
       const counts = new Map<string, number>();
       for (const name of names) {
@@ -144,6 +146,18 @@ function armSettledExitWatchdog(params: { delayMs: number; terminateFailedExit: 
       (process as NodeJS.Process & { _getActiveHandles?: () => object[] })["_getActiveHandles"]?.();
     const resources = summarize(process.getActiveResourcesInfo());
     const handleTypes = summarize(handles?.map((handle) => handle.constructor.name) ?? []);
+    const handleDetails = handles?.slice(0, 8).map((handle) => {
+      if (handle === process.stdout || handle === process.stderr) {
+        return handle === process.stdout ? "stdout" : "stderr";
+      }
+      if (handle instanceof TLSSocket) {
+        return { tls: (handle.servername || "").slice(0, 255), remote: handle.remoteAddress };
+      }
+      if (handle instanceof ChildProcess) {
+        return { argv0: handle.spawnargs[0]?.slice(0, 255) };
+      }
+      return handle.constructor.name;
+    });
     // Only a clean POSIX outcome is ended here unless the caller opted out; a non-zero status
     // can be a supervisor's restart instruction that no signal can carry, so it stays with the
     // supervisor.
@@ -151,7 +165,7 @@ function armSettledExitWatchdog(params: { delayMs: number; terminateFailedExit: 
       process.platform !== "win32" && (terminateFailedExit || resolveProcessExitCode() === 0);
     writeSync(
       2,
-      `command settled but the process is still alive after ${delayMs}ms; active resources: ${resources}; active handles: ${handleTypes}${terminate ? "; terminating" : ""}\n`,
+      `command settled but the process is still alive after ${delayMs}ms; active resources: ${resources}; active handles: ${handleTypes}; handle details: ${JSON.stringify(handleDetails ?? [])}${terminate ? "; terminating" : ""}\n`,
     );
     if (terminate) {
       // Re-raise the stop signal with its default action: no Node exit teardown

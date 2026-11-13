@@ -295,6 +295,24 @@ class ChatComposerLayoutTest {
   }
 
   @Test
+  fun compactComposerRetainsSeparateMinimumTouchTargets() {
+    val height = mutableStateOf(720.dp)
+    showChat(viewportWidth = 320.dp, viewportHeight = { height.value })
+    composerEditor().performTextReplacement("Touch target draft")
+    composeRule.onNodeWithContentDescription(nativeString("Details")).assertDoesNotExist()
+    assertComposerControlsVisible(primaryAction = "Send")
+
+    composeRule.runOnIdle { height.value = 180.dp }
+    composeRule.onNodeWithContentDescription(nativeString("Details")).assertIsDisplayed()
+    assertComposerControlsVisible(primaryAction = "Send")
+    composerEditor().assertTextEquals("Touch target draft")
+
+    composeRule.runOnIdle { height.value = 720.dp }
+    composeRule.onNodeWithContentDescription(nativeString("Details")).assertDoesNotExist()
+    assertComposerControlsVisible(primaryAction = "Send")
+  }
+
+  @Test
   fun placeholderFollowsComposerOwnerWithoutChangingBoundDrafts() {
     val scale = mutableStateOf(1f)
     val model = showChat(viewportWidth = 320.dp, viewportHeight = { 640.dp }, fontScale = { scale.value })
@@ -1114,6 +1132,39 @@ class ChatComposerLayoutTest {
     lastSuggestion.performClick()
     editor.assertTextEquals("/loop ")
     assertComposerControlsVisible(primaryAction = "Send")
+  }
+
+  @Test
+  @Config(sdk = [34], qualifiers = "w1000dp-h1000dp-mdpi")
+  fun slashNameSuggestionsCloseWhenEditingArgumentsAndReturnForTheCommandToken() {
+    val model = showChat(viewportHeight = { 800.dp })
+    val owner = model.captureChatShareOwner()
+    val editor = composerEditor()
+    editor.performTextReplacement("/lo")
+    composeRule.waitForIdle()
+    val suggestion = composeRule.onNodeWithText("/loop")
+    suggestion.assertIsDisplayed()
+    suggestion.performClick()
+    composeRule.waitForIdle()
+
+    editor.assertTextEquals("/loop ")
+    suggestion.assertDoesNotExist()
+    val draft = "/loop 5m check the build"
+    editor.performTextReplacement(draft)
+    composeRule.waitForIdle()
+    editor.assertTextEquals(draft)
+    suggestion.assertDoesNotExist()
+    composeRule.onNodeWithText(nativeString("No commands found")).assertDoesNotExist()
+    assertComposerControlsVisible(primaryAction = "Send")
+    composeRule.runOnIdle {
+      assertEquals(draft, model.chatComposerState.textDrafts[owner])
+      assertFalse(owner in model.chatComposerState.sendStates.value)
+    }
+
+    editor.performTextReplacement("/lo")
+    composeRule.waitForIdle()
+    suggestion.assertIsDisplayed()
+    editor.assertTextEquals("/lo")
   }
 
   @Test
@@ -6548,7 +6599,7 @@ class ChatComposerLayoutTest {
     controlBounds.forEach { bounds ->
       val retainsTouchTarget =
         with(composeRule.density) {
-          (bounds.right - bounds.left).roundToPx() >= (if (compact) 36.dp else 48.dp).roundToPx() &&
+          (bounds.right - bounds.left).roundToPx() >= 48.dp.roundToPx() &&
             (bounds.bottom - bounds.top).roundToPx() >= 48.dp.roundToPx()
         }
       assertTrue("Composer controls must retain their touch targets: $bounds inside $viewport", retainsTouchTarget)

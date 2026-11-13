@@ -1718,22 +1718,68 @@ class GatewayBootstrapAuthTest {
   }
 
   @Test
-  fun connect_showsTlsTimeoutGuidanceWhenFingerprintProbeTimesOut() {
+  fun tlsHandshakeTimeoutShowsRetryableNetworkRecoveryWithoutCertificatePrompt() {
     val (_, _, runtime) =
       gatewayFixture { _, _ -> GatewayTlsProbeResult(failure = GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT) }
-
     runtime.connect(
-      tlsGatewayEndpoint(),
+      GatewayEndpoint.manual(host = "gateway.tail-example.ts.net", port = 443),
       auth(token = "shared-token"),
     )
-
-    val prompt = waitForGatewayTrustPrompt(runtime)
+    runBlocking {
+      withTimeout(5_000) {
+        runtime.gatewayConnectionDisplay.first { it.problem?.code == "NETWORK_UNREACHABLE" }
+      }
+    }
+    val problem = runtime.gatewayConnectionDisplay.value.problem
     assertEquals(
       "Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry.",
-      runtime.gatewayConnectionDisplay.value.statusText,
+      problem?.message,
     )
+    assertEquals(GATEWAY_TLS_HANDSHAKE_TIMEOUT_REASON, problem?.reason)
+    assertTrue(problem?.retryable == true)
+    assertTrue(problem?.isTailscaleRoute == true)
+    assertNull(runtime.pendingGatewayTrust.value)
+  }
+
+  @Test
+  fun tlsHandshakeTimeoutRecoveryCanEnterAManualPinThatIsEnforced() {
+    val probes = AtomicInteger()
+    val (_, prefs, runtime) =
+      gatewayFixture { _, _ ->
+        probes.incrementAndGet()
+        GatewayTlsProbeResult(failure = GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT)
+      }
+    val endpoint = tlsGatewayEndpoint()
+    prefs.gatewayRegistry.upsert(
+      GatewayRegistryEntry(
+        stableId = endpoint.stableId,
+        kind = GatewayRegistryEntryKind.MANUAL,
+        name = endpoint.name,
+        host = endpoint.host,
+        port = endpoint.port,
+        tls = true,
+      ),
+    )
+    prefs.gatewayRegistry.setActive(endpoint.stableId)
+    prefs.saveGatewayCredentials(endpoint.stableId, token = "test-token-placeholder")
+    runtime.connect(endpoint)
+    runBlocking {
+      withTimeout(5_000) {
+        runtime.gatewayConnectionDisplay.first { it.problem?.reason == GATEWAY_TLS_HANDSHAKE_TIMEOUT_REASON }
+      }
+    }
+
+    runtime.refreshGatewayConnection(manualTlsTrust = true)
+    val prompt = waitForGatewayTrustPrompt(runtime)
     assertNull(prompt.fingerprintSha256)
-    assertEquals(GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT, prompt.probeFailure)
+    assertEquals(endpoint.stableId, prompt.endpoint.stableId)
+    assertEquals("Manual pin entry must not wait for another stalled probe", 1, probes.get())
+
+    val manualFingerprint = "cd".repeat(32)
+    runtime.acceptGatewayTrustPrompt(prompt, manualFingerprint)
+    val desired = waitForDesiredConnection(runtime, "nodeSession")
+    assertEquals(manualFingerprint, readField<GatewayTlsParams>(desired, "tls").expectedFingerprint)
+    assertEquals(manualFingerprint, prefs.loadGatewayTlsFingerprint(endpoint.stableId))
   }
 
   @Test

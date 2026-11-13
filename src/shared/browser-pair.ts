@@ -3,7 +3,7 @@
 const BROWSER_PAIR_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const BROWSER_PAIR_CODE_RE = /^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8}$/u;
 
-export const BROWSER_PAIR_CODE_LENGTH = 8;
+const BROWSER_PAIR_CODE_LENGTH = 8;
 export const BROWSER_PAIR_ROUTE_PREFIX = "/__openclaw__/browser-pair";
 export const BROWSER_PAIR_IDENTITY_REQUIRED_MESSAGE =
   "Browser-code pairing is unavailable when gateway.roles is configured because this sign-in does not verify a user identity. Use your Gateway's identity-aware sign-in instead, or ask an administrator for the supported sign-in method.";

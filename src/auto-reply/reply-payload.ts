@@ -321,7 +321,7 @@ export type ReplyPayloadMetadata = {
   };
   /** The final-dispatch owner joins cleanup to the core dispatcher's settled receipt. */
   pendingFinalDeliveryCleanup?: { preserveActivity?: boolean };
-  /** replyToId existed before reply threading could inject an implicit target. */
+  /** Explicit quote identity; false retains a producer-selected implicit reply target. */
   replyToIdExplicit?: boolean;
   /** The host's single-use reply policy already consumed its target. */
   replyTargetSuppressed?: true;
@@ -521,7 +521,8 @@ export function copyReplyPayloadMetadata<T extends object>(source: object, paylo
 
 export function retainSilentFinalPayloads(payloads: readonly ReplyPayload[]): ReplyPayload[] {
   return payloads.flatMap((payload) => {
-    if (payload.isError) {
+    // Silence belongs to the last input; an earlier steered input keeps its answer.
+    if (payload.isError || getReplyPayloadMetadata(payload)?.precedingInputAnswer) {
       return [payload];
     }
     const nonTextPayload = { ...payload, text: undefined };

@@ -13,6 +13,7 @@ import {
   createConfiguredModelCatalogOverridesResolver,
 } from "./model-catalog-route.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
+import { createModelVisibilityPolicy } from "./model-visibility-policy.js";
 import { openAIModelCatalogRoutePolicy } from "./openai-model-routes.js";
 
 beforeEach(() => {
@@ -48,6 +49,23 @@ const project = (params: Partial<Parameters<typeof projectModelCatalogEntryForRo
   });
 
 afterEach(() => vi.restoreAllMocks());
+it("keeps a selected non-chat route out of chat choices despite a chat-capable sibling", () => {
+  const { entry } = project({
+    entry: { ...platformEntry, inference: { chat: true } },
+    catalog: [
+      { ...platformEntry, inference: { chat: true } },
+      { ...chatGPTEntry, inference: { chat: false } },
+    ],
+  });
+  const policy = createModelVisibilityPolicy({
+    cfg: {},
+    catalog: [entry],
+    defaultProvider: entry.provider,
+    defaultModel: entry.id,
+  });
+  expect(policy.allowedCatalog).toEqual([]);
+});
+
 it.each([
   ["subscription", chatGPTRoute, "ultra", "fixture-subscription"],
   ["unresolved", undefined, "off", undefined],
