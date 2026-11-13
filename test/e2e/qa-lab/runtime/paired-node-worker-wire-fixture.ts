@@ -764,14 +764,27 @@ export async function createPairedNodeWorkerHost(
     },
   };
 
-  await supervisor.initialize();
-  await connect();
-  await waitForApprovedWireNode(
-    options.operator,
-    identity.deviceId,
-    options.pluginRuntime?.manifest.commands ?? [],
-  );
-  return host;
+  try {
+    await supervisor.initialize();
+    await connect();
+    await waitForApprovedWireNode(
+      options.operator,
+      identity.deviceId,
+      options.pluginRuntime?.manifest.commands ?? [],
+    );
+    return host;
+  } catch (error) {
+    // The caller cannot own cleanup until this factory returns the host.
+    try {
+      await host.stop();
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "paired node worker startup and cleanup failed",
+      );
+    }
+    throw error;
+  }
 }
 
 export async function startPairedNodeWorkerGateway(params: {

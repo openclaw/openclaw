@@ -11,6 +11,7 @@ export const NODE_WORKER_E2E_TEST_FILES = [
   "test/e2e/qa-lab/runtime/native-worker-slot.e2e.test.ts",
   "test/e2e/qa-lab/runtime/node-worker-launch-wire.e2e.test.ts",
   "test/e2e/qa-lab/runtime/paired-node-worker-lifecycle-wire.e2e.test.ts",
+  "test/e2e/qa-lab/runtime/paired-node-worker-skills-reconnect.e2e.test.ts",
   "test/e2e/qa-lab/runtime/paired-node-worker-upgrade-wire.e2e.test.ts",
   "test/e2e/qa-lab/runtime/required-native-same-session.e2e.test.ts",
   "test/e2e/qa-lab/runtime/skill-library-worker-wire.e2e.test.ts",
