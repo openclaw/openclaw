@@ -1,14 +1,15 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   activateRuntimeSlot,
-  confirmRuntimeSlot,
   ensureRuntimeSlots,
   readRuntimePointer,
   selectInactiveSlot,
+  settleRuntimeSlot,
+  stageRuntimeSlot,
 } from "./runtime-slots.js";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
@@ -22,7 +23,7 @@ function writeSlot(root: string, name: string, exitCode: number) {
   fs.mkdirSync(root, { recursive: true });
   fs.writeFileSync(
     path.join(root, "openclaw.mjs"),
-    `console.log(JSON.stringify({ slot: ${JSON.stringify(name)}, args: process.argv.slice(2), trial: process.env.OPENCLAW_RUNTIME_TRIAL ?? null, env: process.env.OPENCLAW_RUNTIME_SLOT }));\nprocess.exitCode = ${exitCode};\n`,
+    `console.log(JSON.stringify({ slot: ${JSON.stringify(name)}, args: process.argv.slice(2), entry: process.argv[1] }));\nprocess.exitCode = ${exitCode};\n`,
   );
 }
 
@@ -57,7 +58,7 @@ it("writes the launcher with explicit modes and starts the origin until an updat
   expect(start(dir)).toMatchObject({
     slot: "origin",
     args: ["gateway", "--port", "19001"],
-    env: origin,
+    entry: path.join(origin, "openclaw.mjs"),
   });
 });
 
@@ -66,20 +67,25 @@ it("spends two trial starts on a failing slot, then returns to the previous slot
   const slot = selectInactiveSlot(dir, readRuntimePointer(dir)!);
   expect(path.basename(slot)).toBe("a");
   writeSlot(slot, "a", 1);
-  activateRuntimeSlot(dir, slot);
+  activateRuntimeSlot(dir, slot, "run-1");
 
-  expect(start(dir)).toMatchObject({ slot: "a", status: 1, trial: "1" });
+  expect(start(dir)).toMatchObject({ slot: "a", status: 1 });
   expect(readRuntimePointer(dir)?.trial).toBe(1);
-  expect(start(dir)).toMatchObject({ slot: "a", status: 1, trial: "1" });
+  expect(start(dir)).toMatchObject({ slot: "a", status: 1 });
   const third = start(dir);
-  expect(third).toMatchObject({ slot: "origin", status: 0, trial: null });
+  expect(third).toMatchObject({ slot: "origin", status: 0 });
   expect(third.stderr).toContain("did not start");
   expect(readRuntimePointer(dir)).toEqual({
     current: origin,
     previous: fs.realpathSync(slot),
     origin,
     failed: fs.realpathSync(slot),
+    run: "run-1",
   });
+  // The Gateway that the launcher returned to finishes the update run as rolled back.
+  const running = { env: { OPENCLAW_STATE_DIR: path.dirname(dir) }, entry: third.entry };
+  expect(settleRuntimeSlot(running)).toEqual({ outcome: "rolled-back", run: "run-1" });
+  expect(settleRuntimeSlot(running)).toBeNull();
   // The next update stages the failed slot again, never the running one.
   expect(selectInactiveSlot(dir, readRuntimePointer(dir)!)).toBe(slot);
 });
@@ -90,16 +96,13 @@ it("keeps a slot that its Gateway confirmed", async () => {
   writeSlot(slot, "a", 0);
   activateRuntimeSlot(dir, slot);
   const first = start(dir);
-  expect(first).toMatchObject({ slot: "a", trial: "1" });
+  expect(first).toMatchObject({ slot: "a" });
+  expect(readRuntimePointer(dir)?.trial).toBe(1);
   expect(
-    confirmRuntimeSlot({
-      ...process.env,
-      OPENCLAW_STATE_DIR: path.dirname(dir),
-      OPENCLAW_RUNTIME_SLOT: first.env,
-    }),
-  ).toBe(true);
+    settleRuntimeSlot({ env: { OPENCLAW_STATE_DIR: path.dirname(dir) }, entry: first.entry }),
+  ).toEqual({ outcome: "confirmed" });
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    expect(start(dir)).toMatchObject({ slot: "a", trial: null });
+    expect(start(dir)).toMatchObject({ slot: "a" });
   }
   expect(readRuntimePointer(dir)?.trial).toBeUndefined();
   // A CLI call reads the pointer and never spends a trial start.
@@ -110,7 +113,7 @@ it("keeps a slot that its Gateway confirmed", async () => {
     `const { launchRuntime } = await import(${JSON.stringify(path.join(dir, "launcher.mjs"))});\nlaunchRuntime(${JSON.stringify(dir)}, ["status"], { start: false });\n`,
   );
   const cli = spawnSync(node, [caller], { encoding: "utf8", env: childEnv, timeout: 20_000 });
-  expect(JSON.parse(cli.stdout)).toMatchObject({ slot: "a", args: ["status"], trial: null });
+  expect(JSON.parse(cli.stdout)).toMatchObject({ slot: "a", args: ["status"] });
   expect(readRuntimePointer(dir)?.trial).toBe(2);
 });
 
@@ -129,4 +132,42 @@ it("never stages the slot that the running Gateway uses", async () => {
   expect(path.basename(second)).toBe("b");
   activateRuntimeSlot(dir, second);
   expect(readRuntimePointer(dir)).toMatchObject({ previous: fs.realpathSync(first), trial: 2 });
+});
+
+it("stages each attempt apart, so an orphaned install from a killed update cannot block it", async () => {
+  const { dir } = await createLayout();
+  const slot = selectInactiveSlot(dir, readRuntimePointer(dir)!);
+  // A kill -9 left this attempt's npm child writing into its own stage directory.
+  const abandoned = path.join(dir, ".stage-a-killed");
+  fs.mkdirSync(abandoned);
+  const orphan = spawn(
+    node,
+    [
+      "-e",
+      `const fs=require("node:fs");let i=0;setInterval(()=>{fs.mkdirSync(${JSON.stringify(abandoned)}+"/d"+i,{recursive:true});fs.writeFileSync(${JSON.stringify(abandoned)}+"/d"+(i++)+"/f","x")},1)`,
+    ],
+    { stdio: "ignore" },
+  );
+  try {
+    const root = await stageRuntimeSlot({
+      slot,
+      source: { kind: "npm", spec: "openclaw@test" },
+      node,
+      env: childEnv,
+      timeoutMs: 20_000,
+      command: async (argv) => {
+        const prefix = argv[argv.indexOf("--prefix") + 1]!;
+        expect(prefix).not.toBe(slot);
+        writeSlot(path.join(prefix, "node_modules", "openclaw"), "staged", 0);
+        return { code: 0, stdout: "", stderr: "" };
+      },
+    });
+    expect(root).toBe(path.join(slot, "node_modules", "openclaw"));
+    expect(fs.existsSync(path.join(root, "openclaw.mjs"))).toBe(true);
+    // Only the orphan's own directory can remain; the next update removes it again.
+    const stages = fs.readdirSync(dir).filter((name) => name.startsWith(".stage-"));
+    expect(stages.filter((name) => name !== ".stage-a-killed")).toEqual([]);
+  } finally {
+    orphan.kill("SIGKILL");
+  }
 });

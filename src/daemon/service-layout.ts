@@ -8,6 +8,7 @@ import { pathExists } from "../infra/fs-safe.js";
 import { readPackageName, readPackageVersion } from "../infra/package-json.js";
 import { realpathOrResolve } from "../infra/path-existence.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { resolveLauncherRuntimeRoot } from "../infra/runtime-slots.js";
 import { isBunRuntime, resolveRuntimeScriptPosition } from "./runtime-binary.js";
 import {
   hasGatewayServiceLauncherOverride,
@@ -203,6 +204,10 @@ async function isGatewayServiceSourceCheckoutRoot(candidate: string): Promise<bo
 }
 
 async function resolveOpenClawPackageRoot(entrypoint: string): Promise<string | undefined> {
+  const slot = resolveLauncherRuntimeRoot(entrypoint);
+  if (slot) {
+    return slot;
+  }
   let current = path.dirname(path.resolve(entrypoint));
   // Installed dist entrypoints can sit several levels below package root in
   // pnpm layouts; bound the walk to avoid scanning arbitrary filesystem depth.

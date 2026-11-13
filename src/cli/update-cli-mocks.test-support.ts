@@ -204,6 +204,11 @@ vi.mock(import("../infra/update-activated-gateway-check.js"), async (original) =
 }));
 // Runtime retention and publication have real owner/process coverage; CLI
 // orchestration must not copy or rebuild the checkout behind its simulated updater.
+// These suites cover the in-place updater that Windows and other installs keep.
+vi.mock("./update-cli/update-slots.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-cli/update-slots.js")>()),
+  tryRunRuntimeSlotUpdate: async () => false,
+}));
 vi.mock("./update-cli/update-command-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-cli/update-command-runtime.js")>()),
   completeSourceUpdateRuntime: sourceRuntimeCompletion,

@@ -9,16 +9,32 @@ type GatewayReadinessLog = {
 
 /**
  * A launcher-started runtime slot on trial is proven once the Gateway is ready
- * (listening, channels started): clear its trial so later starts keep it.
+ * (listening, channels started): clear its trial so later starts keep it, and
+ * finish the chat or Control UI update run that flipped to it.
  */
 export async function confirmRuntimeSlotOnReady(log: GatewayReadinessLog["log"]) {
-  if (!process.env.OPENCLAW_RUNTIME_SLOT) {
-    return;
-  }
   try {
-    const { confirmRuntimeSlot } = await import("../infra/runtime-slots.js");
-    if (confirmRuntimeSlot()) {
-      log.info("runtime slot confirmed");
+    const { settleRuntimeSlot } = await import("../infra/runtime-slots.js");
+    const settled = settleRuntimeSlot();
+    if (!settled) {
+      return;
+    }
+    log.info(`runtime slot ${settled.outcome}`);
+    if (settled.run) {
+      const [{ finishUpdateRunAsync }, { VERSION }] = await Promise.all([
+        import("../infra/update-run-write.async.js"),
+        import("../version.js"),
+      ]);
+      await finishUpdateRunAsync(
+        settled.run,
+        settled.outcome === "confirmed"
+          ? { status: "succeeded", after: { version: VERSION } }
+          : {
+              status: "rolled-back",
+              reason: "runtime-slot-rolled-back",
+              after: { version: VERSION },
+            },
+      );
     }
   } catch (error) {
     (log.warn ?? log.info)(`runtime slot confirmation failed: ${String(error)}`);

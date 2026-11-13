@@ -5,7 +5,7 @@ import { resolveOpenClawCliInvocation } from "../../cli-invocation.mjs";
 import { SUPPORTED_NODE_VERSIONS } from "../../node-version.mjs";
 import type { GatewayDaemonRuntime } from "../commands/daemon-runtime.js";
 import { resolveBrewOpenClawPath } from "../infra/brew.js";
-import { mapRuntimeSlotPathToOrigin } from "../infra/runtime-slots.js";
+import { mapRuntimeSlotPathToOrigin, resolveRuntimeLauncher } from "../infra/runtime-slots.js";
 import { resolveRuntimeArgs } from "../infra/runtime-worker-url.js";
 import {
   buildGatewayDistEntrypointCandidates,
@@ -261,6 +261,12 @@ async function resolveCliProgramArguments(params: {
     };
   }
 
+  // A runtime slot layout's Gateway service always runs the frozen launcher, so
+  // updates never rewrite the service definition.
+  const launcher = params.service === "node" ? undefined : resolveRuntimeLauncher();
+  if (launcher && params.runtime === "node") {
+    return { programArguments: [runtimePath, launcher, ...params.args] };
+  }
   const cliEntrypointPath =
     typeof params.cliEntrypoint === "object"
       ? params.cliEntrypoint.planned

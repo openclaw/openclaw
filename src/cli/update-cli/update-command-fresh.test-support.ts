@@ -19,6 +19,7 @@ import * as packageDestination from "./update-command-package-destination.js";
 import * as packageUpdate from "./update-command-package.js";
 import * as commandRun from "./update-command-run.js";
 import * as servicePlan from "./update-command-service-plan.js";
+import * as slotUpdate from "./update-slots.js";
 
 export const targetMetadata = {
   version: "2026.9.2",
@@ -99,6 +100,8 @@ export function installFreshUpdateFixture() {
       pkgOwnership: createSystemPackageOwnershipInspection(5_000),
     }));
     vi.spyOn(servicePlan, "isGatewayServiceManagementAllowedForUpdate").mockReturnValue(false);
+    // The fixture exercises the in-place updater that Windows and other installs keep.
+    vi.spyOn(slotUpdate, "tryRunRuntimeSlotUpdate").mockResolvedValue(false);
     vi.spyOn(databaseContext, "inspectUpdateDatabaseContexts").mockImplementation(async () => ({
       service: undefined,
       services: new Map(),

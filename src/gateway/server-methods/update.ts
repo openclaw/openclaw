@@ -5,13 +5,10 @@ import { prepareCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
 import { UpdatePreMutationError } from "../../cli/update-cli/shared.js";
 import { formatCommandOwnerHint } from "../../commands/doctor-command-owner.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
-import { resolveConfigPath } from "../../config/paths.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
-import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { readGatewayOwnerLeaseAsync } from "../../infra/gateway-owner-lease.js";
 import {
   EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON,
   isGatewayExternallySupervised,
@@ -42,7 +39,6 @@ import {
 import {
   buildUpdateRestartSentinelPayload,
   type UpdateRestartSentinelMeta,
-  type ForegroundUpdateOrigin,
 } from "../../infra/update-restart-sentinel-payload.js";
 import { renderUpdateRunNotice } from "../../infra/update-run-notice.js";
 import { getUpdateRunAsync as getUpdateRun } from "../../infra/update-run-reader.js";
@@ -57,7 +53,6 @@ import { resolveUnmanagedUpdateInstallReason } from "../../infra/update-runner-i
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { getUpdateAvailable } from "../../infra/update-status-state.js";
 import { SystemPackageOwnershipError } from "../../infra/update-system-package-ownership.js";
-import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { mergeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
@@ -76,6 +71,7 @@ import {
   admitGatewayUpdateRequest,
   retainUpdateRequesterAuthority,
   createUnexpectedUpdateFailureResult,
+  readForegroundUpdateOrigin,
   recordHandoffFailure,
   resolveGatewayUpdateAdmission,
   reportImmutableGatewayUpdateRefusal,
@@ -83,6 +79,7 @@ import {
 import { updateRecoveryCleanupHandler } from "./update-cleanup.js";
 import { recordGatewayUpdateOutcome } from "./update-outcome-observation.js";
 import { updateReportHandler } from "./update-report.js";
+import { prepareGatewaySlotUpdate } from "./update-runtime-slot.js";
 import { updateStatusHandlers } from "./update-status.js";
 
 const MANAGED_HANDOFF_ALREADY_RUNNING_REASON = "managed-service-handoff-already-running";
@@ -205,6 +202,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       | { status: "already-running" | "unavailable"; command: string; message: string }
       | null = null;
     let managedHandoffOwner: GatewayRestartIntent["successorOwner"];
+    let slotUpdate: Awaited<ReturnType<typeof prepareGatewaySlotUpdate>> = null;
     let ackDelivered = false;
     let ackQueued = false;
     let acknowledgement: string | undefined;
@@ -309,11 +307,8 @@ export const updateHandlers: GatewayRequestHandlers = {
       const explicitDevTarget = params.target
         ? devUpdateTargetFromGitTarget(params.target)
         : undefined;
-      // A slot install updates with `openclaw update`; the in-place handoff would
-      // rewrite its service onto a slot that the next update deletes.
-      let targetFailureReason = process.env.OPENCLAW_RUNTIME_SLOT
-        ? "runtime-slot-cli-update"
-        : explicitDevTarget && (installSurface.kind !== "git" || effectiveChannel !== "dev")
+      let targetFailureReason =
+        explicitDevTarget && (installSurface.kind !== "git" || effectiveChannel !== "dev")
           ? "unsupported-update-target"
           : explicitDevTarget && explicitDevTarget.upstreamRef !== status.git?.upstream
             ? "update-target-upstream-mismatch"
@@ -379,24 +374,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       const detectedSupervisor = detectRespawnSupervisor(process.env, process.platform, {
         includeLinuxOpenClawGatewayServiceMarker: true,
       });
-      const gatewayOwner = await readGatewayOwnerLeaseAsync();
-      const foregroundOrigin: ForegroundUpdateOrigin | undefined =
-        gatewayOwner?.mode === "foreground" &&
-        gatewayOwner.state === "live" &&
-        gatewayOwner.pid === process.pid &&
-        gatewayOwner.startedAt !== null
-          ? {
-              owner: gatewayOwner.owner,
-              pid: gatewayOwner.pid,
-              host: gatewayOwner.host,
-              startedAt: gatewayOwner.startedAt,
-              port: gatewayOwner.port,
-              stateDatabasePath: resolvePathViaExistingAncestorSync(
-                resolveOpenClawStateSqlitePath(),
-              ),
-              configPath: resolvePathViaExistingAncestorSync(resolveConfigPath()),
-            }
-          : undefined;
+      const foregroundOrigin = await readForegroundUpdateOrigin();
       const assertForegroundRespawnEnabled = () => {
         if (foregroundOrigin && isTruthyEnvValue(process.env.OPENCLAW_NO_RESPAWN)) {
           outcomeMessage =
@@ -445,6 +423,24 @@ export const updateHandlers: GatewayRequestHandlers = {
           installSurface.kind === "global" ? "restart-unavailable" : "restart-disabled",
           beforeVersion,
         );
+      } else if (
+        installRoot &&
+        (slotUpdate = await prepareGatewaySlotUpdate({
+          runId,
+          installRoot,
+          mode: installSurface.mode,
+          request: { channel: handoffChannel, tag: adoptedPackageTargetVersion, timeoutMs },
+          sha: devTarget?.upstreamSha,
+          actor,
+          log: context?.logGateway,
+        }))
+      ) {
+        if (!(await acknowledgeUpdate(slotUpdate.result.before?.version ?? null))) {
+          return;
+        }
+        assertUpdateAdmissionCurrent();
+        ({ handoff, result } = slotUpdate);
+        ownsUpdateOutcome = true;
       } else {
         if (!installRoot) {
           throw new Error("managed update install root is unavailable");
@@ -686,6 +682,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       }
     }
 
+    void slotUpdate?.start(sentinelPersisted);
     // Publish the outcome before the terminal campaign event prompts clients to
     // read it. Recheck ownership after persistence may have yielded to a replacement.
     if (

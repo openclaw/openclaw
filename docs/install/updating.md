@@ -1040,38 +1040,39 @@ openclaw update
 
 ### Runtime slots (Linux and macOS)
 
-On Linux and macOS, `openclaw update` for an npm or git install never changes
-the running files. It keeps two runtime slots in `<state>/runtime/` and a
-pointer, `slots.json`, that selects one of them:
+On Linux and macOS, updates of an npm or git install never change the running
+files. OpenClaw keeps two runtime slots in `<state>/runtime/` and a pointer,
+`slots.json`, that selects one of them. `openclaw update`, chat `/update` and
+the Control UI all use the same steps:
 
 1. The update installs the target into the slot that is not running:
    `npm install --prefix <slot>` for npm installs, or a Git worktree of your
-   checkout for git installs (it shares the object store; no copy, no pack
-   limit).
+   checkout followed by `pnpm install` and `pnpm build` for git installs. The
+   worktree shares the object store and the pnpm store; there is no copy and no
+   pack limit. Each attempt stages in its own directory, so a killed update
+   cannot leave a half-written slot behind.
 2. It runs `<slot> --version` with the Node executable that the service uses.
    A slot that fails this check is never selected.
 3. It replaces `slots.json` with one atomic rename and gives the new slot two
    trial starts.
-4. It asks the Gateway to restart. The service manager starts it again on the
-   new slot. If the Gateway does not answer, it runs `systemctl --user restart`
-   or `launchctl kickstart -k`. If neither works, the update applies on the next
-   Gateway start; that is not a failure.
+4. The Gateway restarts. From the CLI, the update asks the Gateway to restart;
+   if the Gateway does not answer, it runs `systemctl --user restart` or
+   `launchctl kickstart -k`. If neither works, the update applies on the next
+   Gateway start; that is not a failure. From chat or the Control UI, the
+   Gateway restarts itself and the new Gateway reports the result.
 
-The installed service runs your original install, as before. Its first step
-starts the selected slot through `<state>/runtime/launcher.mjs`, a small
-launcher that updates never rewrite. Updates do not rewrite the systemd unit
-or LaunchAgent. When a new slot fails to reach "gateway ready" on two starts,
-the launcher returns to the previous slot and `openclaw update` reports the
-rollback. The CLI on your `PATH` follows the selected slot too, so
-`openclaw --version` reports the running version.
+The systemd unit or LaunchAgent runs `<state>/runtime/launcher.mjs`, a small
+launcher that updates never rewrite, so the service definition does not change
+when the version changes. The first update after upgrading to this release
+creates the layout (nothing is copied) and points the service at the launcher
+once. When a new slot does not reach "gateway ready" on two starts, the
+launcher returns to the previous slot and the update reports the rollback. The
+CLI on your `PATH` follows the selected slot too, so `openclaw --version`
+reports the running version.
 
 The updater needs no user session bus, `XDG_RUNTIME_DIR`, `PATH` entry for
-Node, or particular umask; it works from cron. Disk use is the original install
-plus two slots. The first update after upgrading to this release creates the
-layout; nothing is copied.
-
-Chat `/update` is not available for a slot install yet; run `openclaw update`
-on the Gateway host. Windows, Homebrew, system packages, the macOS app and
+Node, or particular umask; it works from cron. Disk use is the original
+install plus two slots. Windows, Homebrew, system packages, the macOS app and
 container images keep their existing update paths.
 
 Starting with the release that adds [candidate-owned admission](/cli/update#candidate-owned-admission),

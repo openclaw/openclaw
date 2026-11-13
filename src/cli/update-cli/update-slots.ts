@@ -1,6 +1,7 @@
-// `openclaw update` for user-owned npm and git installs on Linux and macOS:
-// stage the inactive runtime slot, prove it starts, flip slots.json, and ask the
-// Gateway to exit so its supervisor starts the new slot through the launcher.
+// Updates for user-owned npm and git installs on Linux and macOS: stage the
+// inactive runtime slot, prove it starts, flip slots.json, then restart the
+// Gateway so its supervisor starts the new slot through the frozen launcher.
+// `openclaw update` and the Gateway's update.run (chat `/update`) both run here.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { readConfigFileSnapshot } from "../../config/config.js";
@@ -27,6 +28,8 @@ import {
   readRuntimePointer,
   resolveRuntimeSlotsDir,
   RUNTIME_SLOT_TRIAL_STARTS,
+  runtimeSlotEnv,
+  sameRuntimeRoot,
   selectInactiveSlot,
   smokeRuntimeSlot,
   stageRuntimeSlot,
@@ -49,50 +52,91 @@ import {
 } from "./shared.js";
 import { persistRequestedUpdateChannel } from "./update-command-config.js";
 
-const SLOT_PLATFORMS = new Set<NodeJS.Platform>(["linux", "darwin"]);
 const DEFAULT_STAGE_TIMEOUT_MS = 30 * 60_000;
 const DEFAULT_RESTART_WAIT_MS = 180_000;
 
-type SlotUpdateResult = {
+export type RuntimeSlotUpdateResult = {
   status: "ok" | "skipped" | "error";
   mode: "npm" | "git";
   reason?: string;
   before?: string | null;
   after?: string | null;
   slot?: string;
-  restart?: RuntimeSlotOutcome | "next-start";
+  restart?: RuntimeSlotOutcome | "next-start" | "self";
   message: string;
 };
 
 /**
- * The Node and port of the installed service, read from its definition file. The
- * updater never relies on PATH for Node or on config for the service's port.
+ * Linux and macOS user npm installs (not Homebrew), git checkouts, and installs
+ * already on the slot layout. Everything else keeps its own updater.
  */
-async function readServiceCommand(
-  env: NodeJS.ProcessEnv,
-): Promise<{ node: string; port?: number }> {
-  const args =
-    process.platform === "darwin"
-      ? (
-          await readLaunchAgentProgramArgumentsFromFile(resolveLaunchAgentPlistPath(env)).catch(
-            () => null,
-          )
-        )?.programArguments
-      : await fs
-          .readFile(resolveSystemdUnitPath(env), "utf8")
-          .then((unit) => {
-            const line = unit.split("\n").find((entry) => entry.startsWith("ExecStart="));
-            return line ? parseSystemdExecStart(line.slice("ExecStart=".length)) : undefined;
-          })
-          .catch(() => undefined);
+export async function resolveRuntimeSlotInstall(
+  root: string,
+): Promise<{ root: string; git: boolean } | null> {
+  if ((process.platform !== "linux" && process.platform !== "darwin") || process.versions.bun) {
+    return null;
+  }
+  const git = await isGitCheckout(root);
+  const dir = resolveRuntimeSlotsDir();
+  if (git || isPathInside(dir, root) || readRuntimePointer(dir) !== null) {
+    return { root, git };
+  }
+  const npm =
+    root.split(path.sep).includes("node_modules") && !(await resolveBrewOpenClawPath(root));
+  return npm ? { root, git } : null;
+}
+
+/** The installed service's argv, read from its definition file without D-Bus or launchctl. */
+async function readServiceArgs(env: NodeJS.ProcessEnv): Promise<string[] | undefined> {
+  if (process.platform === "darwin") {
+    const plist = await readLaunchAgentProgramArgumentsFromFile(
+      resolveLaunchAgentPlistPath(env),
+    ).catch(() => null);
+    return plist?.programArguments;
+  }
+  const unit = await fs.readFile(resolveSystemdUnitPath(env), "utf8").catch(() => "");
+  const line = unit.split("\n").find((entry) => entry.startsWith("ExecStart="));
+  return line ? parseSystemdExecStart(line.slice("ExecStart=".length)) : undefined;
+}
+
+/** The service's own Node and port: never PATH for Node, never config for the port. */
+function readServiceCommand(args: string[] | undefined) {
   const node = args?.find(
     (arg) => path.isAbsolute(arg) && /^node(?:\.exe)?$/u.test(path.basename(arg)),
   );
   const port = Number(args?.[args.indexOf("--port") + 1]);
   return {
     node: node ?? process.execPath,
-    ...(args?.includes("--port") && Number.isInteger(port) ? { port } : {}),
+    port: args?.includes("--port") && Number.isInteger(port) ? port : undefined,
   };
+}
+
+/**
+ * A service that does not run the launcher yet gets its definition written once,
+ * by the staged release, which also restarts it. Its origin entry still hands
+ * off to the launcher if that rewrite cannot run (for example without D-Bus).
+ */
+async function moveServiceToLauncher(params: {
+  args: string[] | undefined;
+  dir: string;
+  staged: string;
+  node: string;
+  env: NodeJS.ProcessEnv;
+}): Promise<boolean> {
+  const launcher = path.join(params.dir, "launcher.mjs");
+  if (!params.args || params.args.some((arg) => sameRuntimeRoot(arg, launcher))) {
+    return false;
+  }
+  const entry = path.join(params.staged, "openclaw.mjs");
+  const result = await runCommandWithTimeout(
+    [params.node, entry, "gateway", "install", "--force", "--json"],
+    {
+      cwd: params.staged,
+      env: runtimeSlotEnv(params.node, params.env),
+      timeoutMs: 120_000,
+    },
+  ).catch(() => null);
+  return result?.code === 0;
 }
 
 async function restartGateway(
@@ -165,12 +209,24 @@ async function readHead(root: string): Promise<string | null> {
   return result?.code === 0 ? result.stdout.trim() : null;
 }
 
-async function runSlotUpdate(
-  opts: UpdateCommandOptions,
-  root: string,
-  git: boolean,
-): Promise<SlotUpdateResult> {
+export type RuntimeSlotUpdateRequest = Pick<
+  UpdateCommandOptions,
+  "channel" | "tag" | "sha" | "timeout" | "yes" | "dryRun" | "restart"
+> & {
+  /** Gateway update run that the Gateway confirming the slot finishes. */
+  runId?: string;
+  /** The calling Gateway restarts itself after the flip (chat `/update`). */
+  restartSelf?: () => void;
+  log?: (line: string) => void;
+};
+
+export async function runRuntimeSlotUpdate(
+  opts: RuntimeSlotUpdateRequest,
+  install: { root: string; git: boolean },
+): Promise<RuntimeSlotUpdateResult> {
+  const { root, git } = install;
   const mode = git ? "git" : "npm";
+  const log = opts.log ?? (() => {});
   const env = process.env;
   const dir = resolveRuntimeSlotsDir(env);
   const timeoutMs = parseUpdateTimeoutMs(opts.timeout) ?? DEFAULT_STAGE_TIMEOUT_MS;
@@ -181,8 +237,8 @@ async function runSlotUpdate(
   const existing = readRuntimePointer(dir);
   const current = existing?.current ?? root;
   const before = await readPackageVersion(current);
-  const service = await readServiceCommand(env);
-  const node = service.node;
+  const serviceArgs = await readServiceArgs(env);
+  const { node, port } = readServiceCommand(serviceArgs);
   const target = await resolveTarget({
     git,
     channel,
@@ -199,6 +255,7 @@ async function runSlotUpdate(
       repo: root,
       remote: target.remote,
       ref: target.ref,
+      ...(opts.sha ? { sha: opts.sha } : {}),
       node,
       env,
       timeoutMs,
@@ -208,7 +265,7 @@ async function runSlotUpdate(
   }
   const version = target.version;
   const refuse = (status: "error" | "skipped", reason: string, message: string) =>
-    ({ status, mode, reason, before, after: version, message }) satisfies SlotUpdateResult;
+    ({ status, mode, reason, before, after: version, message }) satisfies RuntimeSlotUpdateResult;
   if (version && before && (compareSemverStrings(version, before) ?? 0) < 0 && !opts.yes) {
     return refuse(
       "error",
@@ -236,12 +293,11 @@ async function runSlotUpdate(
   const release = await acquireRuntimeSlotsLock(dir);
   try {
     if (pointer.trial !== undefined && pointer.trial < RUNTIME_SLOT_TRIAL_STARTS) {
-      defaultRuntime.error(
+      log(
         `Warning: ${pointer.current} has not been confirmed by a Gateway start; it becomes the rollback target.`,
       );
     }
     const slot = selectInactiveSlot(dir, pointer);
-    const log = (line: string) => !opts.json && defaultRuntime.log(line);
     log(`Staging ${mode} update in ${slot} (Node ${node})`);
     const staged = await stageRuntimeSlot({
       slot,
@@ -259,13 +315,13 @@ async function runSlotUpdate(
     });
     const after = await readPackageVersion(staged);
     log(`Staged ${reported}; selecting it.`);
-    activateRuntimeSlot(dir, staged);
+    activateRuntimeSlot(dir, staged, opts.runId);
     log(`Selected ${staged}.`);
     const done = (
-      status: SlotUpdateResult["status"],
-      restart: NonNullable<SlotUpdateResult["restart"]>,
+      status: RuntimeSlotUpdateResult["status"],
+      restart: NonNullable<RuntimeSlotUpdateResult["restart"]>,
       message: string,
-    ): SlotUpdateResult => ({
+    ): RuntimeSlotUpdateResult => ({
       status,
       mode,
       ...(status === "error" ? { reason: "rolled-back" } : {}),
@@ -278,19 +334,26 @@ async function runSlotUpdate(
     if (opts.restart === false) {
       return done("ok", "next-start", "Update applies on the next Gateway start.");
     }
-    const restart = await restartGateway(env, service.port);
-    if (!restart) {
-      return done(
-        "ok",
-        "next-start",
-        "No running Gateway or service answered; the update applies on the next Gateway start.",
+    if (await moveServiceToLauncher({ args: serviceArgs, dir, staged, node, env })) {
+      log("Pointed the Gateway service at the runtime launcher and restarted it.");
+    } else if (opts.restartSelf) {
+      opts.restartSelf();
+      return done("ok", "self", `Restarting the Gateway on ${after}.`);
+    } else {
+      const restart = await restartGateway(env, port);
+      if (!restart) {
+        return done(
+          "ok",
+          "next-start",
+          "No running Gateway or service answered; the update applies on the next Gateway start.",
+        );
+      }
+      log(
+        restart === "requested"
+          ? "Asked the Gateway to restart; waiting for it to confirm the new slot."
+          : "Restarted the service; waiting for the Gateway to confirm the new slot.",
       );
     }
-    log(
-      restart === "requested"
-        ? "Asked the Gateway to restart; waiting for it to confirm the new slot."
-        : "Restarted the service; waiting for the Gateway to confirm the new slot.",
-    );
     const outcome = await waitForRuntimeSlotOutcome(dir, staged, DEFAULT_RESTART_WAIT_MS);
     return outcome === "rolled-back"
       ? done(
@@ -310,35 +373,25 @@ async function runSlotUpdate(
   }
 }
 
-/** Dispatch before the in-place updater admits state, retains runtime, or inspects services. */
+/** `openclaw update`: runs before the in-place updater admits state or inspects services. */
 export async function tryRunRuntimeSlotUpdate(opts: UpdateCommandOptions): Promise<boolean> {
-  if (
-    !SLOT_PLATFORMS.has(process.platform) ||
-    process.versions.bun ||
-    opts.run ||
-    opts.recovery ||
-    opts.sourceUpdate
-  ) {
+  if (opts.run || opts.recovery || opts.sourceUpdate) {
     return false;
   }
-  const root = await resolveUpdateRoot();
-  const git = await isGitCheckout(root);
-  const dir = resolveRuntimeSlotsDir();
-  const onSlots = isPathInside(dir, root) || readRuntimePointer(dir) !== null;
-  if (
-    !onSlots &&
-    !git &&
-    (!root.split(path.sep).includes("node_modules") || (await resolveBrewOpenClawPath(root)))
-  ) {
+  const install = await resolveRuntimeSlotInstall(await resolveUpdateRoot());
+  if (!install) {
     return false;
   }
-  let result: SlotUpdateResult;
+  let result: RuntimeSlotUpdateResult;
   try {
-    result = await runSlotUpdate(opts, root, git);
+    result = await runRuntimeSlotUpdate(
+      { ...opts, log: (line) => !opts.json && defaultRuntime.log(line) },
+      install,
+    );
   } catch (error) {
     result = {
       status: "error",
-      mode: git ? "git" : "npm",
+      mode: install.git ? "git" : "npm",
       reason: "slot-update-failed",
       message: formatErrorMessage(error),
     };

@@ -6,14 +6,11 @@ export type RuntimePointer = {
   trial?: number;
   /** The slot the launcher left after its trial ran out. */
   failed?: string;
+  /** Gateway update run that the flip carried; the Gateway that settles the slot finishes it. */
+  run?: string;
 };
-export const RUNTIME_SLOT_ENV: "OPENCLAW_RUNTIME_SLOT";
 export const RUNTIME_POINTER_FILE: "slots.json";
 export function readRuntimePointer(dir: string): RuntimePointer | null;
 export function writeRuntimePointer(dir: string, pointer: RuntimePointer): void;
 export function runtimeEntry(root: string): string;
-export const RUNTIME_TRIAL_ENV: "OPENCLAW_RUNTIME_TRIAL";
-export function selectRuntimeRoot(
-  dir: string,
-  options: { start: boolean },
-): { root: string; trial: boolean };
+export function selectRuntimeRoot(dir: string, options: { start: boolean }): string;

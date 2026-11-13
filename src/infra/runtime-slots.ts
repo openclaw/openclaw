@@ -1,28 +1,27 @@
 // Owner of the runtime slot layout: <state>/runtime/{launcher.mjs, slots.json, a/, b/}.
 // An update stages the inactive slot, proves it starts, and flips slots.json. The
 // launcher (scripts/openclaw-runtime-launcher.mjs) owns trial starts and flip-back.
+import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import {
   readRuntimePointer,
   runtimeEntry,
-  RUNTIME_SLOT_ENV,
   writeRuntimePointer,
   type RuntimePointer,
 } from "../../scripts/openclaw-runtime-launcher.mjs";
 import { resolveStateDir } from "../config/state-dir.js";
-import { runCommandWithTimeout } from "../process/exec-runner.js";
-import { resolveControlUiAssetHealth } from "./control-ui-assets.js";
-import { isPathInside } from "./path-guards.js";
+import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
 import { applyPathPrepend } from "./path-prepend.js";
-import { resolveUpdateBuildManager } from "./update-package-manager.js";
 
-export { readRuntimePointer, RUNTIME_SLOT_ENV, type RuntimePointer };
+export { readRuntimePointer, type RuntimePointer };
 
 /** Gateway starts a new slot gets before the launcher returns to the previous one. */
 export const RUNTIME_SLOT_TRIAL_STARTS = 2;
 const SLOT_NAMES = ["a", "b"] as const;
+const RUNTIME_LAUNCHER_FILE = "launcher.mjs";
 const LOCK_STALE_MS = 60_000;
 
 export type RuntimeSlotSource =
@@ -31,6 +30,24 @@ export type RuntimeSlotSource =
 
 export function resolveRuntimeSlotsDir(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(resolveStateDir(env), "runtime");
+}
+
+/** The frozen launcher a slot layout's Gateway service runs, once the layout exists. */
+export function resolveRuntimeLauncher(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const launcher = path.join(resolveRuntimeSlotsDir(env), RUNTIME_LAUNCHER_FILE);
+  return fsSync.existsSync(launcher) ? launcher : undefined;
+}
+
+/** The package root a launcher entry serves: the slot its pointer selects. */
+export function resolveLauncherRuntimeRoot(entrypoint: string): string | undefined {
+  if (path.basename(entrypoint) !== RUNTIME_LAUNCHER_FILE) {
+    return undefined;
+  }
+  try {
+    return readRuntimePointer(path.dirname(entrypoint))?.current;
+  } catch {
+    return undefined;
+  }
 }
 
 const realpath = (file: string) => {
@@ -68,7 +85,7 @@ export async function ensureRuntimeSlots(params: {
 }): Promise<RuntimePointer> {
   await fs.mkdir(params.dir, { recursive: true, mode: 0o700 });
   await fs.chmod(params.dir, 0o700);
-  const launcher = path.join(params.dir, "launcher.mjs");
+  const launcher = path.join(params.dir, RUNTIME_LAUNCHER_FILE);
   if (!fsSync.existsSync(launcher)) {
     const source = await fs.readFile(
       path.join(params.packageRoot, "scripts", "openclaw-runtime-launcher.mjs"),
@@ -140,7 +157,7 @@ export async function acquireRuntimeSlotsLock(dir: string): Promise<() => Promis
       };
     } catch (error) {
       const stat = await fs.stat(file).catch(() => null);
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST" || !stat) {
+      if (!hasNodeErrorCode(error, "EEXIST") || !stat) {
         throw error;
       }
       if (Date.now() - stat.mtimeMs < LOCK_STALE_MS) {
@@ -157,12 +174,15 @@ export type RuntimeSlotCommand = (
   options: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number },
 ) => Promise<{ code: number | null; stdout: string; stderr: string }>;
 
-const runSlotCommand: RuntimeSlotCommand = (argv, options) =>
-  runCommandWithTimeout(argv, { ...options, baseEnv: {} });
+// Startup paths import this module for the pointer; staging loads its tools on use.
+const runSlotCommand: RuntimeSlotCommand = async (argv, options) => {
+  const { runCommandWithTimeout } = await import("../process/exec-runner.js");
+  return await runCommandWithTimeout(argv, { ...options, baseEnv: {} });
+};
 
 const tail = (text: string) => text.trim().split("\n").slice(-12).join("\n");
 
-async function run(
+async function runChecked(
   command: RuntimeSlotCommand,
   argv: string[],
   options: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number },
@@ -179,29 +199,29 @@ async function run(
 /** Commands run under the service's Node without assuming it is on PATH. */
 export function runtimeSlotEnv(node: string, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const next: NodeJS.ProcessEnv = { ...env };
-  delete next[RUNTIME_SLOT_ENV];
   applyPathPrepend(next, [path.dirname(node)]);
   return next;
 }
 
-async function clearSlot(
-  slot: string,
-  source: RuntimeSlotSource,
-  command: RuntimeSlotCommand,
-  env: NodeJS.ProcessEnv,
-) {
-  // A kill -9 of an earlier update can leave its npm/pnpm child writing into this
-  // slot. Retry the removal (ENOTEMPTY) for up to about one minute; the --version
-  // smoke check rejects a slot that the orphan still corrupts after that.
-  await fs.rm(slot, { recursive: true, force: true, maxRetries: 15, retryDelay: 500 });
-  if (source.kind === "git") {
-    await command(["git", "-C", source.repo, "worktree", "prune"], {
-      cwd: source.repo,
-      env,
-      timeoutMs: 60_000,
-    });
+const STAGE_PREFIX = ".stage-";
+
+/**
+ * Each attempt stages into its own directory and renames it onto the slot when it
+ * is complete. A killed updater's orphaned npm/pnpm child keeps writing only into
+ * its abandoned directory, which a later update removes when it can.
+ */
+async function removeAbandonedStages(dir: string, repo: string | undefined, git: Git) {
+  for (const name of await fs.readdir(dir).catch(() => [])) {
+    if (name.startsWith(STAGE_PREFIX)) {
+      await fs.rm(path.join(dir, name), { recursive: true, force: true }).catch(() => {});
+    }
+  }
+  if (repo) {
+    await git("worktree", "prune").catch(() => {});
   }
 }
+
+type Git = (...args: string[]) => Promise<string>;
 
 /** Installs or builds the target into the slot and returns its package root. */
 export async function stageRuntimeSlot(params: {
@@ -216,33 +236,55 @@ export async function stageRuntimeSlot(params: {
   const { slot, source, timeoutMs } = params;
   const command = params.command ?? runSlotCommand;
   const env = runtimeSlotEnv(params.node, params.env);
-  await clearSlot(slot, source, command, env);
-  if (source.kind === "npm") {
-    await fs.mkdir(slot, { recursive: true, mode: 0o755 });
-    await writeFileWithMode(path.join(slot, "package.json"), '{ "private": true }\n', 0o644);
-    params.onStep?.(`npm install ${source.spec}`);
-    await run(
-      command,
-      ["npm", "install", "--prefix", slot, "--no-audit", "--no-fund", "--omit=dev", source.spec],
-      { cwd: slot, env, timeoutMs },
-    );
-    return path.join(slot, "node_modules", "openclaw");
-  }
-  // The worktree shares the checkout's object store; nothing is packed or copied.
-  params.onStep?.(`git worktree add ${source.sha}`);
-  await run(
-    command,
-    ["git", "-C", source.repo, "worktree", "add", "--detach", "--force", slot, source.sha],
-    {
-      cwd: source.repo,
+  const dir = path.dirname(slot);
+  const repo = source.kind === "git" ? source.repo : undefined;
+  const git: Git = (...args) =>
+    runChecked(command, ["git", "-C", repo ?? dir, ...args], {
+      cwd: repo ?? dir,
       env,
       timeoutMs,
-    },
-  );
+    });
+  await removeAbandonedStages(dir, repo, git);
+  const stage = path.join(dir, `${STAGE_PREFIX}${path.basename(slot)}-${randomUUID()}`);
+  if (source.kind === "npm") {
+    await fs.mkdir(stage, { recursive: true, mode: 0o755 });
+    await writeFileWithMode(path.join(stage, "package.json"), '{ "private": true }\n', 0o644);
+    params.onStep?.(`npm install ${source.spec}`);
+    await runChecked(
+      command,
+      ["npm", "install", "--prefix", stage, "--no-audit", "--no-fund", "--omit=dev", source.spec],
+      { cwd: stage, env, timeoutMs },
+    );
+    await fs.rm(slot, { recursive: true, force: true });
+    await fs.rename(stage, slot);
+    return path.join(slot, "node_modules", "openclaw");
+  }
+  // The worktree shares the checkout's object store and pnpm's content store.
+  params.onStep?.(`git worktree add ${source.sha}`);
+  await git("worktree", "add", "--detach", stage, source.sha);
+  await buildGitSlot({ root: stage, command, env, timeoutMs, onStep: params.onStep });
+  await fs.rm(slot, { recursive: true, force: true });
+  await git("worktree", "prune");
+  await git("worktree", "move", stage, slot);
+  return slot;
+}
+
+async function buildGitSlot(params: {
+  root: string;
+  command: RuntimeSlotCommand;
+  env: NodeJS.ProcessEnv;
+  timeoutMs: number;
+  onStep?: (name: string) => void;
+}) {
+  const { root, command, env, timeoutMs } = params;
+  const [{ resolveUpdateBuildManager }, { resolveControlUiAssetHealth }] = await Promise.all([
+    import("./update-package-manager.js"),
+    import("./control-ui-assets.js"),
+  ]);
   const manager = await resolveUpdateBuildManager(
     (argv, options) =>
-      command(argv, { cwd: options.cwd ?? slot, env: options.env ?? env, timeoutMs }),
-    slot,
+      command(argv, { cwd: options.cwd ?? root, env: options.env ?? env, timeoutMs }),
+    root,
     timeoutMs,
     env,
   );
@@ -254,21 +296,23 @@ export async function stageRuntimeSlot(params: {
     const script = (name: string) =>
       manager.manager === "pnpm" ? ["pnpm", name] : [manager.manager, "run", name];
     params.onStep?.(`${manager.manager} install`);
-    await run(
+    // A slot's node_modules is never edited, so it may share the store's files:
+    // copy-on-write clones where the filesystem has them, hardlinks otherwise.
+    const pnpmArgs = ["--frozen-lockfile", "--package-import-method=auto"];
+    await runChecked(
       command,
-      [manager.manager, "install", ...(manager.manager === "pnpm" ? ["--frozen-lockfile"] : [])],
-      { cwd: slot, env: buildEnv, timeoutMs },
+      [manager.manager, "install", ...(manager.manager === "pnpm" ? pnpmArgs : [])],
+      { cwd: root, env: buildEnv, timeoutMs },
     );
     params.onStep?.(`${manager.manager} build`);
-    await run(command, script("build"), { cwd: slot, env: buildEnv, timeoutMs });
-    if ((await resolveControlUiAssetHealth({ root: slot })).kind !== "ready") {
+    await runChecked(command, script("build"), { cwd: root, env: buildEnv, timeoutMs });
+    if ((await resolveControlUiAssetHealth({ root })).kind !== "ready") {
       params.onStep?.(`${manager.manager} ui:build`);
-      await run(command, script("ui:build"), { cwd: slot, env: buildEnv, timeoutMs });
+      await runChecked(command, script("ui:build"), { cwd: root, env: buildEnv, timeoutMs });
     }
   } finally {
     await manager.cleanup?.();
   }
-  return slot;
 }
 
 /**
@@ -279,6 +323,8 @@ export async function fetchRuntimeSlotGitTarget(params: {
   repo: string;
   remote: string;
   ref: string;
+  /** A commit the fetched ref must contain, such as a pinned dev target. */
+  sha?: string;
   node: string;
   env: NodeJS.ProcessEnv;
   timeoutMs: number;
@@ -291,9 +337,13 @@ export async function fetchRuntimeSlotGitTarget(params: {
     timeoutMs: params.timeoutMs,
   };
   const target = "refs/openclaw/runtime-slot-target";
-  const git = (...args: string[]) => run(command, ["git", "-C", params.repo, ...args], options);
+  const git = (...args: string[]) =>
+    runChecked(command, ["git", "-C", params.repo, ...args], options);
   await git("fetch", "--no-tags", params.remote, `+${params.ref}:${target}`);
-  return await git("rev-parse", "--verify", `${target}^{commit}`);
+  if (params.sha) {
+    await git("merge-base", "--is-ancestor", params.sha, target);
+  }
+  return await git("rev-parse", "--verify", `${params.sha ?? target}^{commit}`);
 }
 
 /** A slot that cannot print its version under the service's Node never becomes current. */
@@ -310,16 +360,18 @@ export async function smokeRuntimeSlot(params: {
       `${params.root} predates runtime slots; install that release with your package manager instead.`,
     );
   }
-  const output = await run(
+  const smokeState = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-slot-smoke-"));
+  const output = await runChecked(
     params.command ?? runSlotCommand,
     [params.node, runtimeEntry(params.root), "--version"],
     {
       cwd: params.root,
-      env: { ...runtimeSlotEnv(params.node, params.env), [RUNTIME_SLOT_ENV]: params.root },
+      // An empty state dir has no slot pointer, so the staged entry runs instead of current.
+      env: { ...runtimeSlotEnv(params.node, params.env), OPENCLAW_STATE_DIR: smokeState },
       // The first run completes a package lifecycle that npm skipped.
       timeoutMs: 5 * 60_000,
     },
-  );
+  ).finally(() => fs.rm(smokeState, { recursive: true, force: true }));
   if (params.expectedVersion && !output.includes(params.expectedVersion)) {
     throw new Error(`Staged runtime reports ${output}, expected ${params.expectedVersion}.`);
   }
@@ -327,7 +379,7 @@ export async function smokeRuntimeSlot(params: {
 }
 
 /** rename(2) makes the flip atomic; the next Gateway start begins the trial. */
-export function activateRuntimeSlot(dir: string, root: string): RuntimePointer {
+export function activateRuntimeSlot(dir: string, root: string, run?: string): RuntimePointer {
   const pointer = readRuntimePointer(dir);
   if (!pointer) {
     throw new Error(`No runtime pointer in ${dir}.`);
@@ -338,25 +390,66 @@ export function activateRuntimeSlot(dir: string, root: string): RuntimePointer {
     previous: neverStarted(pointer) ? (pointer.previous ?? pointer.origin) : pointer.current,
     origin: pointer.origin,
     trial: RUNTIME_SLOT_TRIAL_STARTS,
+    ...(run ? { run } : {}),
   };
   writeRuntimePointer(dir, next);
   return next;
 }
 
-/** The Gateway confirms its slot once it listens and its channels have started. */
-export function confirmRuntimeSlot(env: NodeJS.ProcessEnv = process.env): boolean {
-  const own = env[RUNTIME_SLOT_ENV];
-  if (!own) {
-    return false;
+type RunningSlot = { env?: NodeJS.ProcessEnv; entry?: string };
+
+/** The pointer when this process runs the slot it selects; the launcher execs `<slot>/openclaw.mjs`. */
+function readOwnSlotPointer({ env = process.env, entry = process.argv[1] }: RunningSlot) {
+  if (!entry) {
+    return null;
   }
   const dir = resolveRuntimeSlotsDir(env);
   const pointer = readRuntimePointer(dir);
-  if (pointer?.trial === undefined || !sameRuntimeRoot(pointer.current, own)) {
+  return pointer && isPathInside(realpath(pointer.current), realpath(entry))
+    ? { dir, pointer }
+    : null;
+}
+
+/** A launcher-started slot that has not been confirmed yet. */
+export function isRuntimeSlotOnTrial(running: RunningSlot = {}): boolean {
+  try {
+    return readOwnSlotPointer(running)?.pointer.trial !== undefined;
+  } catch {
     return false;
   }
-  const { trial: _trial, ...confirmed } = pointer;
-  writeRuntimePointer(dir, confirmed);
-  return true;
+}
+
+/**
+ * EX_CONFIG (78) from sysexits.h: systemd (RestartPreventExitStatus=78) stops
+ * restarting instead of entering a restart storm on a bad config. A slot on
+ * trial exits 1 instead, so the launcher can return to the previous slot.
+ */
+export function configErrorExitCode(): 1 | 78 {
+  return isRuntimeSlotOnTrial() ? 1 : 78;
+}
+
+/**
+ * Called once the Gateway is ready (listening, channels started). A slot on trial
+ * is confirmed; a Gateway the launcher returned to records the rollback. Either
+ * way it hands back the update run that the flip carried.
+ */
+export function settleRuntimeSlot(
+  running: RunningSlot = {},
+): { outcome: "confirmed" | "rolled-back"; run?: string } | null {
+  const own = readOwnSlotPointer(running);
+  if (!own) {
+    return null;
+  }
+  const { trial, run, ...settled } = own.pointer;
+  if (trial !== undefined) {
+    writeRuntimePointer(own.dir, settled);
+    return { outcome: "confirmed", ...(run ? { run } : {}) };
+  }
+  if (run && settled.failed) {
+    writeRuntimePointer(own.dir, settled);
+    return { outcome: "rolled-back", run };
+  }
+  return null;
 }
 
 export type RuntimeSlotOutcome = "confirmed" | "rolled-back" | "pending";

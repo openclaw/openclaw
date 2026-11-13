@@ -6,8 +6,6 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-export const RUNTIME_SLOT_ENV = "OPENCLAW_RUNTIME_SLOT";
-
 function readProfileArg(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -59,9 +57,6 @@ export async function redirectToCurrentRuntimeSlot(packageRoot, { gatewayRun }) 
     return;
   }
   const own = realpath(packageRoot);
-  if (process.env[RUNTIME_SLOT_ENV] && realpath(process.env[RUNTIME_SLOT_ENV]) === own) {
-    return;
-  }
   const dir = resolveRuntimeSlotsDir();
   let pointer;
   try {

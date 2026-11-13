@@ -30,8 +30,7 @@ import {
 } from "../../gateway/net.js";
 import { installGatewayDatabaseEngine } from "../../gateway/server-database-engine.js";
 import { isChannelStartupSuppressedByEnvironment } from "../../gateway/server-sidecar-startup-mode.js";
-import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
-import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
+import { setGatewayWsLogStyle, type GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -51,6 +50,7 @@ import {
   findVerifiedGatewayListenerPidsOnPortSync,
   formatGatewayPidList,
 } from "../../infra/gateway-processes.js";
+import { configErrorExitCode } from "../../infra/runtime-slots.js";
 import type { RespawnSupervisor } from "../../infra/supervisor-markers.js";
 import { parseTcpPort } from "../../infra/tcp-port.js";
 import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logging/console.js";
@@ -103,14 +103,8 @@ const SUPERVISED_GATEWAY_HEALTH_PROBE_TIMEOUT_MS = 1000;
 
 type GatewayRunLogger = Pick<ReturnType<typeof createSubsystemLogger>, "info" | "warn">;
 
-/**
- * EX_CONFIG (78) from sysexits.h — used for configuration errors so systemd
- * (via RestartPreventExitStatus=78) stops restarting instead of entering a
- * restart storm that can render low-resource hosts unresponsive.
- */
-// A runtime slot on trial exits 1 instead, so the supervisor restarts the launcher
-// and it can return to the previous slot.
-const EXIT_CONFIG_ERROR = process.env.OPENCLAW_RUNTIME_TRIAL ? 1 : 78;
+/** EX_CONFIG (78) stops systemd restarts (RestartPreventExitStatus=78); see configErrorExitCode. */
+const EXIT_CONFIG_ERROR = configErrorExitCode();
 
 async function readGatewayStartupConfig(
   startupTrace: ReturnType<typeof createGatewayCliStartupTrace>,

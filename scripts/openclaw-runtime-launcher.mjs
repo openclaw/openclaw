@@ -9,9 +9,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const RUNTIME_SLOT_ENV = "OPENCLAW_RUNTIME_SLOT";
-// Set while the started slot is on trial: its config errors must not park the service.
-export const RUNTIME_TRIAL_ENV = "OPENCLAW_RUNTIME_TRIAL";
 export const RUNTIME_POINTER_FILE = "slots.json";
 const FILE_MODE = 0o644;
 
@@ -66,28 +63,25 @@ export function selectRuntimeRoot(dir, { start }) {
       previous: pointer.current,
       origin: pointer.origin,
       failed: pointer.current,
+      // The Gateway that starts on the fallback reports the update run as rolled back.
+      ...(pointer.run ? { run: pointer.run } : {}),
     });
-    return { root: fallback, trial: false };
+    return fallback;
   }
   if (start && onTrial) {
     writeRuntimePointer(dir, { ...pointer, trial: pointer.trial - 1 });
   }
-  return { root: pointer.current, trial: start && onTrial };
+  return pointer.current;
 }
 
 export function launchRuntime(dir, argv, { start }) {
-  const { root, trial } = selectRuntimeRoot(dir, { start });
-  const env = { ...process.env, [RUNTIME_SLOT_ENV]: root };
-  delete env[RUNTIME_TRIAL_ENV];
-  if (trial) {
-    env[RUNTIME_TRIAL_ENV] = "1";
-  }
+  const root = selectRuntimeRoot(dir, { start });
   const args = [...process.execArgv, runtimeEntry(root), ...argv];
   if (process.platform !== "win32" && typeof process.execve === "function") {
     // Keep the supervisor's PID: the slot replaces this process.
-    process.execve(process.execPath, [process.execPath, ...args], env);
+    process.execve(process.execPath, [process.execPath, ...args], process.env);
   }
-  const child = spawn(process.execPath, args, { env, stdio: "inherit" });
+  const child = spawn(process.execPath, args, { stdio: "inherit" });
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
     process.on(signal, () => child.kill(signal));
   }
