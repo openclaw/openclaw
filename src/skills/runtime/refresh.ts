@@ -117,7 +117,6 @@ function pool() {
       new WorkerTaskPool({
         workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.skillsDiscovery),
         workerClass: "singleton",
-        idleTimeoutMs: 0,
       }),
   ));
 }
