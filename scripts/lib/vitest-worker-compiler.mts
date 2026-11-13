@@ -161,7 +161,7 @@ async function compileVitestWorkerArtifacts(
         load(id) {
           recordInput(id);
           // Keep schema loading in this callback instead of crossing into JS twice per input.
-          return schemaPlugin.load.call(
+          return schemaPlugin.load.handler.call(
             {
               addWatchFile: (file) => {
                 recordInput(file);
