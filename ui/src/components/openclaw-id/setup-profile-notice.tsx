@@ -81,7 +81,6 @@ export function SetupProfileNotice(props: {
   return (
     <InlineAlert
       tone="warning"
-      compact
       class="openclaw-id-setup__profile"
       action={
         props.notice.canLink ? (
