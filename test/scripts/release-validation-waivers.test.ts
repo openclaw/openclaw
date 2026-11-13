@@ -360,7 +360,7 @@ if (endpoint === "repos/openclaw/openclaw/actions/jobs/2/logs") {
     ["2026.11.1", "productPerformance", "failure", false, true],
     ["2026.11.2", "productPerformance", "failure", false, true],
     ["2026.11.3", "productPerformance", "failure", false, true],
-    ["2026.11.4", "productPerformance", "failure", false, false],
+    ["2026.11.4", "productPerformance", "failure", false, true],
     ["2026.11.30", "productPerformance", "failure", false, false],
     ["2026.11.3", "releaseChecksCandidate", "failure", false, false],
     ["2026.11.3", "productPerformance", "cancelled", false, false],
@@ -410,7 +410,7 @@ if (endpoint === "repos/openclaw/openclaw/actions/jobs/2/logs") {
     }
   });
 
-  it("limits the 2026.11.4 RSS/CPU grant to the reviewed attempt and retains raw failures", () => {
+  it("waives all 2026.11.4 performance runs, attempts, and candidates while retaining raw failures", () => {
     const performance = child("productPerformance", {
       runId: "43341818523",
       runAttempt: 1,
@@ -418,19 +418,38 @@ if (endpoint === "repos/openclaw/openclaw/actions/jobs/2/logs") {
       conclusion: "failure",
       jobs: [job("Kova mock provider performance", 1)],
     });
-    expect(
-      classifyReleaseSnapshot({ children: [performance], targetVersion: "2026.11.4" }),
-    ).toMatchObject({
-      state: "passed",
-      waivers: [{ targetVersion: "2026.11.4", runId: "43341818523", runAttempt: 1 }],
-    });
-    expect(performance).toMatchObject({ conclusion: "failure", jobs: [{ conclusion: "failure" }] });
+    for (const changed of [
+      {},
+      { runId: "43341818524" },
+      { runAttempt: 2 },
+      {
+        runId: "43341818525",
+        runAttempt: 3,
+        workflowSha: "c".repeat(40),
+        workflowRef: "release-ci/new-candidate",
+      },
+    ]) {
+      const observed = { ...performance, ...changed };
+      expect(
+        classifyReleaseSnapshot({ children: [observed], targetVersion: "2026.11.4" }),
+      ).toMatchObject({
+        state: "passed",
+        waivers: [
+          { targetVersion: "2026.11.4", runId: observed.runId, runAttempt: observed.runAttempt },
+        ],
+      });
+      expect(observed).toMatchObject({ conclusion: "failure", jobs: [{ conclusion: "failure" }] });
+    }
+    for (const changed of [{ runId: undefined }, { runAttempt: undefined }]) {
+      expect(
+        classifyReleaseSnapshot({
+          children: [{ ...performance, ...changed }],
+          targetVersion: "2026.11.4",
+        }).state,
+      ).toBe("blocked_complete");
+    }
     expect(terminalPolicyPass(performance, "2026.11.5")).toBe(false);
     for (const changed of [
-      { runId: "43341818524" },
-      { runId: undefined },
-      { runAttempt: 2 },
-      { runAttempt: undefined },
       { key: "normalCi" },
       { jobs: [] },
       { jobs: [job("Other performance job", 1)] },
