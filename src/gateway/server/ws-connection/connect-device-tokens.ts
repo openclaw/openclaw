@@ -10,8 +10,11 @@ export async function issueGatewayConnectDeviceTokens(params: {
   scopes: string[];
   hasApprovedDeviceBaseline: boolean;
   isIssuanceCurrent: () => boolean;
+  /** Live shared-auth generation; present whenever the gateway runs shared token/password auth. */
+  requiredSharedGatewaySessionGeneration?: string;
 }): Promise<Pick<DeviceAuthorizedGatewayConnect, "deviceToken" | "bootstrapDeviceTokens">> {
-  const { state, scopes, hasApprovedDeviceBaseline } = params;
+  const { state, scopes, hasApprovedDeviceBaseline, requiredSharedGatewaySessionGeneration } =
+    params;
   const {
     role,
     device,
@@ -23,15 +26,28 @@ export async function issueGatewayConnectDeviceTokens(params: {
     deviceTokenSharedGatewaySessionGeneration,
     handoffBootstrapProfile,
   } = state;
-  const sharedGatewayAuthIssuer =
+  const isBrowserRelated = isBrowserOperatorUi || isWebchat;
+  const sessionBoundGeneration =
     sessionSharedGatewaySessionGeneration &&
     (deviceTokenSharedGatewaySessionGeneration !== undefined ||
-      (sessionUsesSharedGatewayAuth && (isBrowserOperatorUi || isWebchat)))
-      ? {
-          kind: "shared-gateway-auth" as const,
-          generation: sessionSharedGatewaySessionGeneration,
-        }
+      (sessionUsesSharedGatewayAuth && isBrowserRelated))
+      ? sessionSharedGatewaySessionGeneration
       : undefined;
+  // Browser tokens are verified against the live shared-auth generation on every
+  // reconnect; one minted without an issuer is refused as legacy-browser-token.
+  // A browser can reach this point without carrying the shared credential (a
+  // QR/mobile setup code, or a bare device-key pairing approved on the gateway),
+  // so bind those tokens to the live generation too instead of minting one the
+  // gateway will reject after its next restart.
+  const issuerGeneration =
+    sessionBoundGeneration ??
+    (isBrowserRelated ? requiredSharedGatewaySessionGeneration : undefined);
+  const sharedGatewayAuthIssuer = issuerGeneration
+    ? {
+        kind: "shared-gateway-auth" as const,
+        generation: issuerGeneration,
+      }
+    : undefined;
   const nodePrincipal = role === "node" ? state.authResult.openclawId : undefined;
   // Manual re-pairing stays manual, but its issued role still belongs to this live listing.
   const issuedDeviceGrant =
