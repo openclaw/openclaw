@@ -317,17 +317,15 @@ export const dispatchTelegramMessage = async (
   if (statusReactionController && !isRoomEvent) {
     void statusReactionController.setThinking();
   }
-  // A flood-refused final that the delivery queue still holds is not a turn failure:
-  // recovery owns its resend, so it must not trigger the "something went wrong" fallback.
-  const isQueuedFinalRefusal = (err: unknown) =>
-    turn.finalHandoff === "delivery-queue" && err === turn.finalDeliveryError;
   try {
     turnDispatched = await runTelegramDispatchTurn(turn);
   } catch (err) {
     turn.previewLifecycle.observeFailure(
       isChannelPartialDeliveryError(err) ? err.deliveryResult : undefined,
     );
-    if (isQueuedFinalRefusal(err)) {
+    // A flood-refused final that the delivery queue still holds is not a turn failure:
+    // recovery owns its resend, so it must not trigger the "something went wrong" fallback.
+    if (turn.finalHandoff === "delivery-queue" && err === turn.finalDeliveryError) {
       logVerbose(`telegram: final reply queued for recovery after flood refusal: ${String(err)}`);
     } else {
       turn.dispatchError = err;
@@ -340,17 +338,11 @@ export const dispatchTelegramMessage = async (
     try {
       await finalizePendingAnswerBlockDraft(turn);
     } catch (err) {
+      turn.dispatchError ??= err;
       turn.previewLifecycle.observeFailure(
         isChannelPartialDeliveryError(err) ? err.deliveryResult : undefined,
       );
-      if (isQueuedFinalRefusal(err)) {
-        logVerbose(
-          `telegram: terminal block queued for recovery after flood refusal: ${String(err)}`,
-        );
-      } else {
-        turn.dispatchError ??= err;
-        runtime.error?.(danger(`telegram terminal block delivery failed: ${String(err)}`));
-      }
+      runtime.error?.(danger(`telegram terminal block delivery failed: ${String(err)}`));
     }
     await cleanupDrafts(turn, isDispatchSuperseded());
   }
