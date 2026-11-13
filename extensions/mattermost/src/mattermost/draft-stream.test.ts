@@ -354,6 +354,98 @@ describe("createMattermostDraftStream", () => {
 describe("Mattermost preview final placement", () => {
   type TimelinePost = { id: string; message: string; root_id: string; type?: string };
 
+  function createTimelineFixture(options: { rootId?: string; failChannelReads?: boolean }) {
+    const timeline: TimelinePost[] = [];
+    const channelReads: string[] = [];
+    const previewWrites: string[] = [];
+    let nextId = 1;
+    const request: MattermostClient["request"] = async <T>(
+      path: string,
+      init?: RequestInit,
+    ): Promise<T> => {
+      if (path.startsWith("/channels/channel-1/posts?")) {
+        channelReads.push(path);
+        if (options.failChannelReads) {
+          throw new Error("Mattermost API 403 Forbidden");
+        }
+        const after = new URLSearchParams(path.split("?")[1]).get("after");
+        const later = timeline.slice(timeline.findIndex((post) => post.id === after) + 1);
+        return {
+          order: later.map((post) => post.id).toReversed(),
+          posts: Object.fromEntries(later.map((post) => [post.id, post])),
+        } as T;
+      }
+      const body = typeof init?.body === "string" ? parseRequestJson(init) : {};
+      if (path === "/posts") {
+        const post = {
+          id: `post-${nextId++}`,
+          message: String(body.message),
+          root_id: typeof body.root_id === "string" ? body.root_id : "",
+        };
+        timeline.push(post);
+        previewWrites.push(post.message);
+        return post as T;
+      }
+      const id = path.slice("/posts/".length).replace(/\/patch$/, "");
+      const post = timeline.find((entry) => entry.id === id);
+      if (!post) {
+        throw new Error(`Unexpected Mattermost request: ${init?.method} ${path}`);
+      }
+      if (init?.method === "DELETE") {
+        timeline.splice(timeline.indexOf(post), 1);
+        return undefined as T;
+      }
+      post.message = String(body.message);
+      previewWrites.push(post.message);
+      return post as T;
+    };
+    const log = vi.fn();
+    const draft = createDraftStreamFixture({ request, rootId: options.rootId, log });
+    const logVerboseMessage = vi.fn();
+    const deliverPayload = vi.fn(async (payload: ReplyPayload) => {
+      timeline.push({
+        id: "final-post",
+        message: payload.text ?? "",
+        root_id: options.rootId ?? "",
+      });
+      return {
+        outcome: "text" as const,
+        messageIds: ["final-post"],
+        visibleReplySent: true,
+        content: payload.text,
+      };
+    });
+    const addNewerPost = (post: Partial<TimelinePost> = {}) => {
+      timeline.push({ id: "newer-post", message: "Progress note", root_id: "root-1", ...post });
+    };
+    const deliverFinal = (text: string) =>
+      deliverMattermostReplyWithDraftPreview({
+        payload: { text },
+        info: { kind: "final" },
+        kind: "channel",
+        client: draft.client,
+        previewLifecycle: createLivePreviewLifecycle<ReplyPayload, string>({
+          draft: { ...draft.stream, id: draft.stream.postId },
+        }),
+        effectiveReplyToId: options.rootId,
+        resolvePreviewFinalText: (finalText) => ({ editText: finalText, alreadyDelivered: false }),
+        logVerboseMessage,
+        deliverPayload,
+        findPostAfterPreview: draft.stream.findPostAfter,
+      });
+    return {
+      ...draft,
+      timeline,
+      channelReads,
+      previewWrites,
+      log,
+      logVerboseMessage,
+      deliverPayload,
+      addNewerPost,
+      deliverFinal,
+    };
+  }
+
   it.each([
     { case: "a message-tool post in its thread", rootId: "root-1", newer: {}, inPlace: false },
     {
@@ -376,77 +468,14 @@ describe("Mattermost preview final placement", () => {
     },
     { case: "a failed order check", rootId: "root-1", newer: "error", inPlace: true },
   ] as const)("places the final correctly after $case", async ({ rootId, newer, inPlace }) => {
-    const timeline: TimelinePost[] = [];
-    const channelReads: string[] = [];
-    let nextId = 1;
-    const request: MattermostClient["request"] = async <T>(
-      path: string,
-      init?: RequestInit,
-    ): Promise<T> => {
-      if (path.startsWith("/channels/channel-1/posts?")) {
-        channelReads.push(path);
-        if (newer === "error") {
-          throw new Error("Mattermost API 403 Forbidden");
-        }
-        const after = new URLSearchParams(path.split("?")[1]).get("after");
-        const later = timeline.slice(timeline.findIndex((post) => post.id === after) + 1);
-        return {
-          order: later.map((post) => post.id).toReversed(),
-          posts: Object.fromEntries(later.map((post) => [post.id, post])),
-        } as T;
-      }
-      const body = typeof init?.body === "string" ? parseRequestJson(init) : {};
-      if (path === "/posts") {
-        const post = {
-          id: `post-${nextId++}`,
-          message: String(body.message),
-          root_id: typeof body.root_id === "string" ? body.root_id : "",
-        };
-        timeline.push(post);
-        return post as T;
-      }
-      const id = path.slice("/posts/".length).replace(/\/patch$/, "");
-      const post = timeline.find((entry) => entry.id === id);
-      if (!post) {
-        throw new Error(`Unexpected Mattermost request: ${init?.method} ${path}`);
-      }
-      if (init?.method === "DELETE") {
-        timeline.splice(timeline.indexOf(post), 1);
-        return undefined as T;
-      }
-      post.message = String(body.message);
-      return post as T;
-    };
-    const { client, stream, publish } = createDraftStreamFixture({ request, rootId });
-    const logVerboseMessage = vi.fn();
-    const deliverPayload = vi.fn(async (payload: ReplyPayload) => {
-      timeline.push({ id: "final-post", message: payload.text ?? "", root_id: rootId ?? "" });
-      return {
-        outcome: "text" as const,
-        messageIds: ["final-post"],
-        visibleReplySent: true,
-        content: payload.text,
-      };
-    });
+    const fixture = createTimelineFixture({ rootId, failChannelReads: newer === "error" });
+    const { timeline, channelReads, logVerboseMessage, deliverPayload } = fixture;
 
-    await publish("Running tools…");
+    await fixture.publish("Running tools…");
     if (newer !== "error") {
-      timeline.push({ id: "newer-post", message: "Progress note", root_id: "root-1", ...newer });
+      fixture.addNewerPost(newer);
     }
-    await deliverMattermostReplyWithDraftPreview({
-      payload: { text: "Final answer" },
-      info: { kind: "final" },
-      kind: "channel",
-      client,
-      previewLifecycle: createLivePreviewLifecycle<ReplyPayload, string>({
-        draft: { ...stream, id: stream.postId },
-      }),
-      effectiveReplyToId: rootId,
-      resolvePreviewFinalText: (text) => ({ editText: text, alreadyDelivered: false }),
-      logVerboseMessage,
-      deliverPayload,
-      findPostAfterPreview: stream.findPostAfter,
-    });
+    await fixture.deliverFinal("Final answer");
 
     const messages = timeline.map((post) => post.message);
     if (inPlace) {
@@ -468,6 +497,52 @@ describe("Mattermost preview final placement", () => {
         "mattermost preview order check failed; finalizing in place (Error: Mattermost API 403 Forbidden)",
       );
     }
+  });
+
+  it("keeps streamed answer text out of a preview that has a newer post below it", async () => {
+    const fixture = createTimelineFixture({ rootId: "root-1" });
+
+    await fixture.publish("Working • exec");
+    fixture.addNewerPost();
+    await fixture.publish("Final", true);
+    await fixture.publish("Final answer", true);
+    await fixture.publish("Working • exec, read");
+    await fixture.publish("Final answer", true);
+    await fixture.deliverFinal("Final answer");
+
+    // A deleted preview can stay on screen in Mattermost clients, so it never held the answer.
+    expect(fixture.previewWrites).toEqual(["Working • exec", "Working • exec, read"]);
+    expect(fixture.timeline.map((post) => [post.id, post.message])).toEqual([
+      ["newer-post", "Progress note"],
+      ["final-post", "Final answer"],
+    ]);
+    expect(fixture.log).toHaveBeenCalledWith(
+      "mattermost preview post-1 is above newer post newer-post; keeping answer text out of it",
+    );
+    // One check when the answer first replaces the status (the verdict sticks), one at finalize.
+    expect(fixture.channelReads).toHaveLength(2);
+  });
+
+  it("streams the answer into a preview that is still the newest post", async () => {
+    const fixture = createTimelineFixture({ rootId: "root-1" });
+
+    await fixture.publish("Working • exec");
+    await fixture.publish("Final", true);
+    await fixture.publish("Final answer", true);
+    await fixture.deliverFinal("Final answer.");
+
+    expect(fixture.previewWrites).toEqual([
+      "Working • exec",
+      "Final",
+      "Final answer",
+      "Final answer.",
+    ]);
+    expect(fixture.timeline.map((post) => [post.id, post.message])).toEqual([
+      ["post-1", "Final answer."],
+    ]);
+    expect(fixture.deliverPayload).not.toHaveBeenCalled();
+    // Streamed answer edits extend the checked text, so only the transition and finalize read.
+    expect(fixture.channelReads).toHaveLength(2);
   });
 });
 
