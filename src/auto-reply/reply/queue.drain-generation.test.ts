@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { PluginInstanceUnavailableError } from "../../plugins/plugin-instance-error.js";
 import { PluginInstance } from "../../plugins/plugin-instance.js";
+import { PluginInvocationScope } from "../../plugins/plugin-invocation-scope.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { resolvePluginProvidersCore } from "../../plugins/providers.runtime.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -22,13 +23,14 @@ afterEach(() => {
 });
 
 it.each(["followup", "collect"] as const)(
-  "resolves the current provider for queued %s input after its predecessor retires",
+  "resolves the current provider for queued %s input after its predecessor scope closes and retires",
   async (mode) => {
     const released = createDeferred();
     const started = createDeferred();
     const key = `generation-reload-${mode}`;
     const original = captureActivePluginRegistrySnapshot();
     const predecessor = new PluginInstance("queue-generation-fixture");
+    const successor = new PluginInstance("queue-generation-fixture");
     const stale = createEmptyPluginRegistry();
     const current = createEmptyPluginRegistry();
     const retiredHook = predecessor.wrap(() => "retired");
@@ -50,37 +52,47 @@ it.each(["followup", "collect"] as const)(
         id: "queue-generation-fixture",
         label: "Fixture",
         auth: [],
-        formatApiKey: currentHook,
+        formatApiKey: successor.wrap(currentHook),
       },
     });
+    const scope = new PluginInvocationScope(stale, [predecessor], { retained: true });
     const queued = createQueueTestRun({ prompt: "accepted before reload" });
     const delivered: Array<{ prompt: string; reply: string | undefined }> = [];
     try {
       setActivePluginRegistry(stale);
-      withPluginRuntimeGenerationScope(
-        {
-          metadataSnapshot: createPluginMetadataSnapshotFixture(),
-          pluginRegistry: stale,
-        },
-        () => {
-          expect(enqueueFollowupRun(key, queued, { mode, debounceMs: 0, cap: 50 })).toBe(true);
-          scheduleFollowupDrain(key, async (run) => {
-            started.resolve();
-            await released.promise;
-            const provider = resolvePluginProvidersCore({ registryScope: "loaded" })[0];
-            delivered.push({
-              prompt: run.prompt,
-              reply: provider?.formatApiKey?.({
-                type: "api_key",
-                provider: "queue-generation-fixture",
-                key: "synthetic-only",
-              }),
+      scope.run(() =>
+        withPluginRuntimeGenerationScope(
+          {
+            metadataSnapshot: createPluginMetadataSnapshotFixture(),
+            pluginRegistry: stale,
+          },
+          () => {
+            expect(enqueueFollowupRun(key, queued, { mode, debounceMs: 0, cap: 50 })).toBe(true);
+            scheduleFollowupDrain(key, async (run) => {
+              started.resolve();
+              await released.promise;
+              try {
+                const provider = resolvePluginProvidersCore({ registryScope: "loaded" })[0];
+                delivered.push({
+                  prompt: run.prompt,
+                  reply: provider?.formatApiKey?.({
+                    type: "api_key",
+                    provider: "queue-generation-fixture",
+                    key: "synthetic-only",
+                  }),
+                });
+              } catch (error) {
+                // Stop fixture retries so a broken drain reports an assertion failure.
+                clearFollowupQueue(key);
+                throw error;
+              }
             });
-          });
-        },
+          },
+        ),
       );
       await started.promise;
       expect(getExistingFollowupQueue(key)?.items).toEqual([queued]);
+      scope.release();
       await predecessor.dispose();
       expect(() => retiredHook()).toThrow(PluginInstanceUnavailableError);
       setActivePluginRegistry(current);
@@ -95,7 +107,9 @@ it.each(["followup", "collect"] as const)(
     } finally {
       released.resolve();
       clearFollowupQueue(key);
+      scope.release();
       await predecessor.dispose();
+      await successor.dispose();
       restoreActivePluginRegistrySnapshot(original);
     }
   },
