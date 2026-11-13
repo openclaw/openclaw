@@ -408,6 +408,49 @@ it.each([20, 21])(
 );
 
 it.each([
+  { stored: "José", typed: "José" },
+  { stored: "José", typed: "José" },
+] as const)(
+  "filters context entries typed in another Unicode form ($stored vs $typed)",
+  async ({ stored, typed }) => {
+    const value = {
+      ...report,
+      skills: {
+        promptChars: 8000,
+        entries: [
+          ...Array.from({ length: 20 }, (_, index) => ({
+            name: `skill-${index + 1}`,
+            blockChars: 100,
+          })),
+          { name: stored, blockChars: 100 },
+        ],
+      },
+    };
+    const view = mountContextPage(value);
+    try {
+      await view.ready;
+      flush();
+      categoryButton(view.container, "skills").click();
+      flush();
+      const section = () => view.container.querySelector('[data-context-section="skills"]')!;
+      section().querySelector<HTMLButtonElement>(".chat-context__show-all")!.click();
+      flush();
+      const input = section().querySelector<HTMLInputElement>("input")!;
+      input.value = typed;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      flush();
+      const names = Array.from(section().querySelectorAll(".chat-context__entry-name")).map(
+        (element) => element.textContent?.trim(),
+      );
+      expect(names).toContain(stored);
+      expect(names).not.toContain("skill-20");
+    } finally {
+      view.unmount();
+    }
+  },
+);
+
+it.each([
   { options: { empty: true }, message: "Send a message to capture context usage.", retry: false },
   { options: { offline: true }, message: "Reconnect to load the context breakdown.", retry: false },
   { options: { missing: true }, message: "No matching context report", retry: false },
