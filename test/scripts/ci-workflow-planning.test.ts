@@ -10382,6 +10382,49 @@ describe("ci workflow guards", () => {
     ]);
   });
 
+  it("records Node selection provenance without changing selected targets", () => {
+    const target = "src/owner.test.ts";
+    const selections = [
+      { rule: "reverse-import", input: "src/first.ts", targets: [target] },
+      { rule: "reverse-import", input: "src/second.ts\n::error::fixture", targets: [target] },
+      {
+        rule: "adaptive-qualified-unchanged",
+        input: "README.md",
+        targets: ["test/omitted.test.ts"],
+      },
+    ];
+    const result = runCiManifestFixture({
+      bundledPlanner: true,
+      targetSelector: false,
+      eventName: "pull_request",
+      changedPaths: ["src/first.ts"],
+      changedPlannerSource: `
+        export const resolveChangedNodeTestTargets = (_paths, { onSelection }) => {
+          ${JSON.stringify(selections)}.forEach(onSelection);
+          return [${JSON.stringify(target)}];
+        };
+        export const createChangedNodeTestShards = (_paths, { selectedTestTargets }) => [{
+          checkName: "selected", runner: "ubuntu-24.04", requiresDist: false,
+          targets: selectedTestTargets,
+        }];
+      `,
+    });
+    expect(result.status, result.output).toBe(0);
+    const prefix = "Node test selection provenance: ";
+    expect(
+      result.manifestStdout
+        .split("\n")
+        .filter((line) => line.startsWith(prefix))
+        .map((line) => JSON.parse(line.slice(prefix.length))),
+    ).toEqual(selections);
+    expect(result.manifestStdout).not.toContain("\n::error::fixture");
+    expect(
+      readJsonOutput(result.outputs, "checks_node_core_nondist_matrix").include.flatMap(
+        (row: { targets: string[] }) => row.targets,
+      ),
+    ).toEqual([target]);
+  });
+
   it("uses target-owned CI plans and capabilities for older release checkouts", () => {
     const androidRun = requiredWorkflowStep(
       readCiWorkflow().jobs.android.steps,
