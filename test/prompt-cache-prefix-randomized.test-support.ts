@@ -81,7 +81,11 @@ export function randomJourney(seed: number, length = TURN_KINDS.length + 6): Tur
 /** First change of `current` against `previous`, or undefined when it extends it. */
 function prefixChange(previous: WireRequest, current: WireRequest): string | undefined {
   if (previous.system !== current.system) {
-    return "system";
+    let at = 0;
+    while (previous.system[at] === current.system[at]) {
+      at++;
+    }
+    return `system @${at}: ${previous.system.slice(Math.max(0, at - 80), at + 120)} -> ${current.system.slice(Math.max(0, at - 80), at + 120)}`;
   }
   if (previous.tools !== current.tools) {
     const byName = (tools: string) =>
