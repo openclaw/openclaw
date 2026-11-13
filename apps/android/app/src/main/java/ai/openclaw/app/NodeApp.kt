@@ -127,6 +127,27 @@ class NodeApp : Application() {
     runtimeScope.launch { block() }
   }
 
+  /** Starting an explicit login retires cached data belonging to the previous principal first. */
+  internal suspend fun beginBrowserSignIn(target: okhttp3.HttpUrl) =
+    kotlinx.coroutines.withContext(Dispatchers.Main.immediate) {
+      val login = browserSessions.begin(target)
+      try {
+        ensureRuntime().retireBrowserConnections(target.host, target.port)
+        login
+      } catch (failure: Exception) {
+        browserSessions.cancel(login)
+        throw failure
+      }
+    }
+
+  /** Retire only this app browser session, not the identity provider or other Gateways. */
+  internal suspend fun signOutBrowserSession(target: okhttp3.HttpUrl) =
+    kotlinx.coroutines.withContext(Dispatchers.Main.immediate) {
+      browserSessions.revoke(target)
+      ensureRuntime().retireBrowserConnections(target.host, target.port)
+      browserSessions.signOut(target)
+    }
+
   /** Clears pairing auth without racing lazy process-runtime construction. */
   suspend fun resetGatewaySetupAuth(stableId: String): Boolean {
     val runtime =

@@ -861,7 +861,7 @@ class GatewaySessionCustomHeadersTest {
       }
     }
 
-  private fun sourceFaviconTls(): Pair<SSLSocketFactory, String> {
+  internal fun sourceFaviconTls(): Pair<SSLSocketFactory, String> {
     val keyPair = KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }.generateKeyPair()
     val algorithm = AlgorithmIdentifier(PKCSObjectIdentifiers.sha256WithRSAEncryption, DERNull.INSTANCE)
     val subject = X500Name("CN=source-favicon-test")

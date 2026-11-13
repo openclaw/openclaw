@@ -8,23 +8,21 @@ import okhttp3.Response
 internal class PendingBrowserAuthorization(
   private val target: HttpUrl,
   private val profileName: String,
+  private val expectedCookie: String?,
+  private val credentialEpoch: String? = null,
   private val current: () -> Boolean,
   private val accepted: () -> Boolean,
   private val cookieHeader: (HttpUrl) -> String?,
   private val receiveCookies: (HttpUrl, List<String>) -> Unit,
   private val acceptOperator: suspend (() -> Boolean) -> Boolean,
 ) : GatewayIngressAuthorization {
-  @Volatile private var requestCookie: String? = null
-  private val delegate = BrowserSessionAuthorization(target, cookieHeader, ::isCurrent, receiveCookies)
+  private val delegate = BrowserSessionAuthorization(target, { url -> if (accepted()) cookieHeader(url) else expectedCookie }, ::isCurrent, receiveCookies)
 
-  override fun deviceCredentialScope(gatewayId: String): String = "$gatewayId.browser.$profileName"
+  override fun deviceCredentialScope(gatewayId: String): String = "$gatewayId.browser.$profileName" + (credentialEpoch?.let { ".$it" } ?: "")
 
-  override suspend fun authorizeUpgrade(request: Request): Request {
-    requestCookie = cookieHeader(target)
-    return delegate.authorizeUpgrade(request)
-  }
+  override suspend fun authorizeUpgrade(request: Request): Request = delegate.authorizeUpgrade(request)
 
-  private fun isCurrent(): Boolean = current() && (accepted() || requestCookie == null || requestCookie == cookieHeader(target))
+  private fun isCurrent(): Boolean = current() && (accepted() || expectedCookie == cookieHeader(target))
 
   override suspend fun admitGatewayRole(
     role: String,

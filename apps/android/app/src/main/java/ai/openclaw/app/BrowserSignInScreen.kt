@@ -54,13 +54,10 @@ internal fun BrowserSignInScreen(
   browser: View?,
   busy: Boolean,
   canContinue: Boolean,
-  showSignOut: Boolean,
   onCancel: () -> Unit,
   onContinue: () -> Unit,
-  onSignOut: () -> Unit,
 ) {
   val origin = browserSecurityOrigin(currentUrl) ?: nativeString("Opening secure sign-in")
-  var showActions by remember { mutableStateOf(false) }
   Surface(Modifier.fillMaxSize().testTag("browser-signin-root"), color = ClawTheme.colors.canvas, contentColor = ClawTheme.colors.text) {
     BoxWithConstraints(
       Modifier
@@ -85,9 +82,6 @@ internal fun BrowserSignInScreen(
               Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = nativeString("Continue in OpenClaw"))
             }
           }
-          if (showSignOut && compact) {
-            BrowserSessionActions(showActions, { showActions = it }, !busy, onSignOut)
-          }
         }
         if (error != null && !compact) {
           Text(error, color = ClawTheme.colors.warning, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.heightIn(max = 64.dp))
@@ -108,32 +102,9 @@ internal fun BrowserSignInScreen(
             Button(onClick = onContinue, enabled = canContinue, modifier = Modifier.weight(1f)) {
               Text(nativeString("Continue in OpenClaw"), maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            if (showSignOut) BrowserSessionActions(showActions, { showActions = it }, !busy, onSignOut)
           }
         }
       }
-    }
-  }
-}
-
-@Composable
-private fun BrowserSessionActions(
-  expanded: Boolean,
-  onExpanded: (Boolean) -> Unit,
-  enabled: Boolean,
-  onSignOut: () -> Unit,
-) {
-  Box {
-    IconButton(onClick = { onExpanded(true) }, enabled = enabled) { Icon(Icons.Default.MoreVert, contentDescription = nativeString("More browser actions")) }
-    DropdownMenu(expanded = expanded, onDismissRequest = { onExpanded(false) }) {
-      DropdownMenuItem(
-        text = { Text(nativeString("Sign out of saved browser session")) },
-        enabled = enabled,
-        onClick = {
-          onExpanded(false)
-          onSignOut()
-        },
-      )
     }
   }
 }

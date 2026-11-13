@@ -405,7 +405,8 @@ class OnboardingFlowLogicTest {
   @Test
   fun gatewayPairingContinueOnlyRoutesToNodeApprovalWhenApprovalNeedsUserAction() {
     listOf(
-      GatewayContinueCase(OnboardingStep.Permissions, ready = true, approval = GatewayNodeCapabilityApproval.PendingApproval(null)),
+      GatewayContinueCase(OnboardingStep.NodeApproval, ready = true, approval = GatewayNodeCapabilityApproval.PendingApproval(null)),
+      GatewayContinueCase(OnboardingStep.Permissions, ready = true, approval = GatewayNodeCapabilityApproval.Loading),
       GatewayContinueCase(OnboardingStep.NodeApproval, ready = false, approval = GatewayNodeCapabilityApproval.PendingApproval(null)),
       GatewayContinueCase(OnboardingStep.NodeApproval, ready = false, approval = GatewayNodeCapabilityApproval.PendingReapproval(null)),
       GatewayContinueCase(OnboardingStep.NodeApproval, ready = false, approval = GatewayNodeCapabilityApproval.Unapproved),

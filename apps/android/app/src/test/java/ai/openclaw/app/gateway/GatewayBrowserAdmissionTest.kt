@@ -96,9 +96,8 @@ class GatewayBrowserAdmissionTest {
         } finally {
           resumed.close()
         }
-        val replacement = Harness(store = first.store, profile = "synthetic-new-account-epoch")
+        val replacement = Harness(store = first.store, profile = "synthetic-new-account-epoch", initialCookie = "session=synthetic-new-account")
         try {
-          replacement.cookie = "session=synthetic-new-account"
           replacement.connect(token = null)
           assertEquals("ready", withTimeout(5_000) { replacement.terminal.await() })
           assertNull(
@@ -155,6 +154,7 @@ class GatewayBrowserAdmissionTest {
     private val unauthorized: Boolean = false,
     private val replyGate: CompletableDeferred<Unit>? = null,
     initiallyAccepted: Boolean = false,
+    initialCookie: String = "session=synthetic-principal",
   ) {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val endpoint = GatewayEndpoint.manual("gateway.example.test", 443, tlsEnabled = true)
@@ -165,7 +165,7 @@ class GatewayBrowserAdmissionTest {
     val accepts = AtomicInteger()
     val connects = AtomicInteger()
 
-    @Volatile var cookie = "session=synthetic-principal"
+    @Volatile var cookie = initialCookie
 
     @Volatile var accepted = initiallyAccepted
 
@@ -175,6 +175,7 @@ class GatewayBrowserAdmissionTest {
       PendingBrowserAuthorization(
         target = "https://gateway.example.test/".toHttpUrl(),
         profileName = profile,
+        expectedCookie = cookie,
         current = { live },
         accepted = { accepted },
         cookieHeader = { cookie },

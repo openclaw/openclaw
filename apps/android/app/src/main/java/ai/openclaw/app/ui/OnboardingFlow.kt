@@ -564,13 +564,6 @@ fun OnboardingFlow(
       }
     }
 
-    LaunchedEffect(step, isConnected, onboardingTarget) {
-      if (step == OnboardingStep.Recovery && isConnected) {
-        accessStage = OnboardingAccessStage.DirectPermissions
-        step = OnboardingStep.Permissions
-      }
-    }
-
     fun connectGateway(
       plan: GatewayConnectPlan,
       inputSource: OnboardingGatewayInputSource,
@@ -926,8 +919,10 @@ fun OnboardingFlow(
               nodesDevicesRefreshing = nodesDevicesRefreshing,
             ),
           checkRequested = nodeApprovalCheckRequested,
-          ready = ready,
+          ready = nodeApprovalReady,
+          canContinueToChat = ready,
           onBack = ::goBack,
+          onContinueToChat = { if (canFinishOnboarding(viewModel.gatewayConnectionDisplay.value, onboardingTarget)) viewModel.setOnboardingCompleted(true) },
           onCopyCommand = { command -> context.copyTextWithConfirmation("OpenClaw pairing approval command", command, nativeText("Approval command copied").resolveNativeText()) },
           onCheckApproval = ::checkNodeApproval,
           onApprove = { requestId ->
@@ -2031,7 +2026,9 @@ private fun NodeApprovalScreen(
   checkingApproval: Boolean,
   checkRequested: Boolean,
   ready: Boolean,
+  canContinueToChat: Boolean,
   onBack: () -> Unit,
+  onContinueToChat: () -> Unit,
   onCopyCommand: (String) -> Unit,
   onCheckApproval: () -> Unit,
   onApprove: (String) -> Unit,
@@ -2078,6 +2075,13 @@ private fun NodeApprovalScreen(
             if (pending != null) onApprove(pending.requestId) else onCheckApproval()
           },
         )
+        if (canContinueToChat) {
+          ClawSecondaryButton(
+            text = nativeString("Continue to chat"),
+            onClick = onContinueToChat,
+            modifier = Modifier.onboardingActionButton(),
+          )
+        }
       }
     },
   ) {
@@ -2114,7 +2118,9 @@ private fun NodeApprovalScreen(
           modifier = Modifier.fillMaxWidth(),
         )
         ApprovalCommandBlock(command = "openclaw nodes pending", onCopy = { onCopyCommand("openclaw nodes pending") })
-        ApprovalCommandBlock(command = approveCommand, onCopy = { onCopyCommand(approveCommand) })
+        if (approvalRequestId(approval) != null) {
+          ApprovalCommandBlock(command = approveCommand, onCopy = { onCopyCommand(approveCommand) })
+        }
         Text(
           text = nativeString("Use the requestId from the pending command in the approve command."),
           style = ClawTheme.type.caption,
@@ -2813,8 +2819,8 @@ internal fun gatewayPairingContinueDestination(
   nodeCapabilityApproval: GatewayNodeCapabilityApproval,
 ): OnboardingStep? =
   when {
-    ready -> OnboardingStep.Permissions
     nodeCapabilityApprovalNeedsUserAction(nodeCapabilityApproval) -> OnboardingStep.NodeApproval
+    ready -> OnboardingStep.Permissions
     else -> null
   }
 

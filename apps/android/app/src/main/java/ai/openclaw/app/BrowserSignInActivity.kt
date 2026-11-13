@@ -98,10 +98,8 @@ class BrowserSignInActivity : ComponentActivity() {
           browser = webView,
           busy = busy,
           canContinue = !busy && !loading && !pageFailed,
-          showSignOut = app.browserSessions.hasSession(target),
           onCancel = { finish() },
           onContinue = { complete(target) },
-          onSignOut = { signOut(target) },
         )
       }
     }
@@ -220,24 +218,6 @@ class BrowserSignInActivity : ComponentActivity() {
       }
   }
 
-  private fun signOut(target: HttpUrl) {
-    busy = true
-    destroyBrowser()
-    app.browserSessions.revoke(target)
-    lifecycleScope.launch {
-      try {
-        app.ensureRuntime().retireBrowserConnections(target.host, target.port)
-        app.browserSessions.signOut(target)
-        finish()
-      } catch (failure: CancellationException) {
-        throw failure
-      } catch (failure: Exception) {
-        error = failure.message ?: "Could not sign out. Try again."
-        busy = false
-      }
-    }
-  }
-
   private fun destroyBrowser() {
     webView?.apply {
       stopLoading()
@@ -254,10 +234,12 @@ class BrowserSignInActivity : ComponentActivity() {
 
   override fun onDestroy() {
     destroyBrowser()
-    if (!isChangingConfigurations) attempt?.let { login ->
-      val wasAdmitted = app.browserSessions.isAdmitted(login)
-      app.browserSessions.cancel(login)
-      if (!wasAdmitted) app.ensureRuntime().cancelBrowserCredentialEpoch(login.profileName)
+    if (!isChangingConfigurations) {
+      attempt?.let { login ->
+        val wasAdmitted = app.browserSessions.isAdmitted(login)
+        app.browserSessions.cancel(login)
+        if (!wasAdmitted) app.ensureRuntime().cancelBrowserCredentialEpoch(login.profileName)
+      }
     }
     super.onDestroy()
   }

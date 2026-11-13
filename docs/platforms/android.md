@@ -35,8 +35,11 @@ System control (launchd/systemd) lives on the Gateway host — see [Gateway](/ga
 
 For an HTTPS Gateway protected by Authelia or another browser-session reverse proxy,
 choose **Sign in with browser** in manual setup, or next to a saved HTTPS Gateway
-in Settings. Complete the proxy's login, return to the Gateway, and choose
-**Continue in OpenClaw**. The app then makes its normal native Gateway connection.
+in Settings. The app starts the original native connection once. After the proxy
+login, verified native operator admission returns you to that connection automatically.
+A native pairing requirement can return you to device approval before node access is
+approved. **Continue in OpenClaw** remains a retry fallback, not a cookie/URL-based
+login confirmation.
 A Gateway token or password may still be required if the Gateway itself uses
 shared-secret authentication; browser sign-in only authenticates the proxy layer.
 It is not an LDAP client or an OIDC configuration.
@@ -55,15 +58,26 @@ Reconnecting or fetching media after an expired proxy session can require anothe
 browser sign-in. The proxy still owns server-side session validity, including any
 already-upgraded WebSocket.
 
-Opening sign-in creates a fresh profile, so a different account can be selected.
-Canceling before continuing leaves the saved session unchanged. Continuing replaces
-the saved browser session only after retiring the old native connections. Browser
-session storage is separate from the Gateway's device identity, pairing tokens,
-and node/operator roles; existing Gateway authorization rules still apply.
+Opening a new sign-in creates a fresh credential profile and retires the previous
+browser session for that origin, so another account cannot inherit its authority or
+locally cached conversations. Other saved Gateways are unaffected. Canceling leaves that origin requiring sign-in; it does not restore the previous
+account. A rotation/reconnect within an accepted profile retains its credential epoch
+and persistent device identity. Native role grants are scoped to the Gateway and
+browser credential epoch; selecting a new account never reuses the previous epoch's
+tokens. Existing device, operator, node-role and phone-capability approvals remain
+distinct and are not automatically approved.
 
-To remove a saved browser session, open **Sign in with browser** for that Gateway
-and choose **Sign out of saved browser session**. This disconnects affected native
-connections and deletes the app's saved profile. Browser sign-in is required again
+An admitted operator can continue onboarding while optional node access is still
+loading or offline. If phone capability approval is pending, **Continue to chat**
+leaves that approval unchanged. Enabling phone capabilities still requires the
+separate consent and Gateway approval; a node connection alone is not an operator
+login. Progress and approval actions remain associated with the requested Gateway.
+
+To remove a saved browser session, open **Settings → Gateway** and choose
+**Sign out of saved browser session** on that Gateway's saved card. It remains
+available after automatic return from sign-in. This disconnects affected native
+connections, clears that Gateway's local cached conversations and role grants, and
+deletes the app's saved browser profile. Browser sign-in is required again
 for that origin, including after restarting the app; signout does not silently fall
 back to a saved Gateway token or device credential. It does not assume or invoke a
 provider logout endpoint, revoke an LDAP account, or sign out other browsers.
@@ -708,8 +722,8 @@ local-cleartext policy permits them. Provider redirect ports are not Gateway por
 
 The browser's compact header shows the current HTTPS security origin, including a
 nondefault port, rather than redirect paths, query strings, or state. Short landscape
-and keyboard-sized windows use compact actions; saved-session signout is under
-**More browser actions**.
+and keyboard-sized windows use compact actions. Saved-session signout stays on the
+persistent **Settings → Gateway** card, not in the transient login browser.
 
 Browser sign-in remains capture-protected in ordinary debug and release builds.
 For a deliberately recording-enabled developer proof APK, use

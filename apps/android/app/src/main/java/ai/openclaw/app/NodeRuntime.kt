@@ -5044,7 +5044,7 @@ class NodeRuntime internal constructor(
         if (primary) {
           preferredGatewayReconnectSuppressed = true
           advanceGatewayLifecycleIntent()
-          disconnect(retireRunState = false)
+          disconnect(retireRunState = true)
         }
         // Browser identity is shared only by this origin. Other saved Gateways stay connected.
         secondaryOperatorSessions.entries
@@ -5054,7 +5054,14 @@ class NodeRuntime internal constructor(
         secondary + if (primary) listOf(operatorSession, nodeSession) else emptyList()
       }
     retiring.forEach { it.disconnectAndJoin() }
-    credentialTargets.forEach(deviceAuthStore::clearGateway)
+    for (stableId in credentialTargets) {
+      // A new browser identity must not hydrate the previous principal's offline chat.
+      chat.clearGatewayCache(stableId) {
+        clientDatabases.commitGatewayRemoval(stableId, requireCacheRemoval = true)
+        externalTranscriptCache?.clearGateway(stableId)
+      }
+      deviceAuthStore.clearGateway(stableId)
+    }
   }
 
   fun disconnect() = disconnectGatewayLifecycle(retireRunState = false)

@@ -72,10 +72,8 @@ class BrowserSignInScreenTest {
               browser = browser,
               busy = false,
               canContinue = true,
-              showSignOut = true,
               onCancel = {},
               onContinue = {},
-              onSignOut = {},
             )
           }
         }

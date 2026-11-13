@@ -8,6 +8,8 @@ import androidx.webkit.ProfileStore
 import androidx.webkit.WebViewFeature
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.HttpUrl
@@ -19,17 +21,30 @@ import java.util.concurrent.atomic.AtomicBoolean
 /** Platform profile operations; authentication and attempt state remain owned below. */
 internal interface BrowserProfileAccess {
   fun supported(): Boolean
-  fun cookies(name: String, create: Boolean): CookieManager?
+
+  fun cookies(
+    name: String,
+    create: Boolean,
+  ): CookieManager?
+
   fun names(): Collection<String>
+
   fun delete(name: String)
 }
 
 private object AndroidBrowserProfileAccess : BrowserProfileAccess {
   override fun supported(): Boolean = WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)
-  override fun cookies(name: String, create: Boolean): CookieManager? =
-    if (create) ProfileStore.getInstance().getOrCreateProfile(name).cookieManager else ProfileStore.getInstance().getProfile(name)?.cookieManager
+
+  override fun cookies(
+    name: String,
+    create: Boolean,
+  ): CookieManager? = if (create) ProfileStore.getInstance().getOrCreateProfile(name).cookieManager else ProfileStore.getInstance().getProfile(name)?.cookieManager
+
   override fun names(): Collection<String> = ProfileStore.getInstance().allProfileNames
-  override fun delete(name: String) { ProfileStore.getInstance().deleteProfile(name) }
+
+  override fun delete(name: String) {
+    ProfileStore.getInstance().deleteProfile(name)
+  }
 }
 
 /** App-owned browser profiles, separate from Control UI/Canvas and external browser cookies. */
@@ -43,17 +58,39 @@ internal class ReverseProxyBrowserSessions(
     val cookies: CookieManager,
   ) {
     val admission = CompletableDeferred<Boolean>()
-    internal val responseCookies = mutableListOf<Pair<HttpUrl, List<String>>>()
+
+    @Volatile internal var credentialEpoch: CookieEpoch? = null
+
+    internal fun epochFor(cookie: String?): CookieEpoch =
+      synchronized(this) {
+        credentialEpoch?.takeIf { it.cookie == cookie } ?: CookieEpoch(cookie).also { credentialEpoch = it }
+      }
+  }
+
+  internal class CookieEpoch(
+    val cookie: String?,
+  ) {
+    val id: String = UUID.randomUUID().toString()
+    val responseCookies = mutableListOf<Pair<HttpUrl, List<String>>>()
   }
 
   private class Session(
     val profileName: String,
     val cookies: CookieManager,
+    val credentialEpoch: String,
   ) {
     val live = AtomicBoolean(true)
   }
 
   private val sessions = ConcurrentHashMap<String, Session>()
+  private val _signedInOrigins = MutableStateFlow<Set<String>>(emptySet())
+  val signedInOrigins = _signedInOrigins.asStateFlow()
+
+  private fun publishSessions() {
+    // A revoked session remains removable when connection draining or durable cleanup fails.
+    _signedInOrigins.value = sessions.keys.toSet()
+  }
+
   private val configuredOrigins = ConcurrentHashMap.newKeySet<String>()
   private val pendingProfiles = mutableSetOf<String>()
   private val attempts = ConcurrentHashMap<String, Attempt>()
@@ -67,11 +104,12 @@ internal class ReverseProxyBrowserSessions(
       val store = profiles
       for ((origin, profileName) in saved) {
         if (profileName.isNotEmpty()) {
-          store.cookies(profileName, false)?.let { sessions[origin] = Session(profileName, it) }
+          store.cookies(profileName, false)?.let { sessions[origin] = Session(profileName, it, prefs.loadBrowserCredentialEpoch(profileName)) }
         }
       }
       removeAbandonedProfiles()
     }
+    publishSessions()
   }
 
   fun isSupported(): Boolean = profiles.supported()
@@ -88,6 +126,7 @@ internal class ReverseProxyBrowserSessions(
     // must not fall back to another browser principal or a legacy device-token slot.
     check(prefs.saveBrowserSessionProfile(origin, "")) { "Could not start browser sign-in securely." }
     sessions.remove(origin)?.let(::retire)
+    publishSessions()
     configuredOrigins.add(origin)
     removeAbandonedProfiles()
     val name = "openclaw-proxy-" + UUID.randomUUID().toString()
@@ -108,27 +147,30 @@ internal class ReverseProxyBrowserSessions(
 
   fun revoke(target: HttpUrl) {
     sessions[target.browserSessionOrigin()]?.live?.set(false)
+    publishSessions()
   }
 
   /** Caller destroys the login WebView and retires/drains native connections before replacement. */
   private fun acceptVerified(
     attempt: Attempt,
+    epoch: CookieEpoch,
     proofIsCurrent: () -> Boolean,
   ): Boolean {
     checkMainThread()
     val origin = attempt.target.browserSessionOrigin()
-    if (sessions[origin]?.let { it.profileName == attempt.profileName && it.live.get() } == true) return true
-    if (pendingByOrigin[origin] !== attempt || !proofIsCurrent()) return false
+    if (sessions[origin]?.let { it.profileName == attempt.profileName && it.credentialEpoch == epoch.id && it.live.get() } == true) return true
+    if (pendingByOrigin[origin] !== attempt || attempt.credentialEpoch !== epoch || !proofIsCurrent()) return false
     attempt.cookies.flush()
-    check(prefs.saveBrowserSessionProfile(origin, attempt.profileName)) { "Could not save the browser session securely." }
+    check(prefs.saveBrowserSessionProfile(origin, attempt.profileName, epoch.id)) { "Could not save the browser session securely." }
     pendingProfiles.remove(attempt.profileName)
     pendingByOrigin.remove(origin, attempt)
-    sessions.put(origin, Session(attempt.profileName, attempt.cookies))?.let(::retire)
-    synchronized(attempt.responseCookies) {
-      for ((url, headers) in attempt.responseCookies) for (header in headers) attempt.cookies.setCookie(url.toString(), header)
-      attempt.responseCookies.clear()
+    sessions.put(origin, Session(attempt.profileName, attempt.cookies, epoch.id))?.let(::retire)
+    synchronized(epoch.responseCookies) {
+      for ((url, headers) in epoch.responseCookies) for (header in headers) attempt.cookies.setCookie(url.toString(), header)
+      epoch.responseCookies.clear()
       attempt.cookies.flush()
     }
+    publishSessions()
     attempt.admission.complete(true)
     return true
   }
@@ -153,6 +195,7 @@ internal class ReverseProxyBrowserSessions(
     // back to a saved Gateway/device credential after explicit signout or restart.
     check(prefs.saveBrowserSessionProfile(origin, "")) { "Could not remove the saved browser session. Try again." }
     sessions.remove(origin)?.let { retire(it) }
+    publishSessions()
     configuredOrigins.add(origin)
   }
 
@@ -166,27 +209,30 @@ internal class ReverseProxyBrowserSessions(
     val origin = url.browserSessionOrigin()
     if (!configuredOrigins.contains(origin)) return null
     pendingByOrigin[origin]?.let { attempt ->
+      val epoch = attempt.epochFor(attempt.cookies.getCookie(url.toString()))
       return PendingBrowserAuthorization(
         target = url,
         profileName = attempt.profileName,
-        current = { isCurrent(attempt) },
-        accepted = { sessions[origin]?.let { it.profileName == attempt.profileName && it.live.get() } == true },
+        credentialEpoch = epoch.id,
+        expectedCookie = epoch.cookie,
+        current = { isCurrent(attempt) && attempt.credentialEpoch === epoch },
+        accepted = { sessions[origin]?.let { it.profileName == attempt.profileName && it.credentialEpoch == epoch.id && it.live.get() } == true },
         cookieHeader = { requestUrl -> attempt.cookies.getCookie(requestUrl.toString()) },
         receiveCookies = { requestUrl, headers ->
-          if (sessions[origin]?.profileName == attempt.profileName) {
+          if (sessions[origin]?.let { it.profileName == attempt.profileName && it.credentialEpoch == epoch.id } == true) {
             for (header in headers) attempt.cookies.setCookie(requestUrl.toString(), header)
             if (headers.isNotEmpty()) attempt.cookies.flush()
           } else {
-            synchronized(attempt.responseCookies) { attempt.responseCookies.add(requestUrl to headers) }
+            synchronized(epoch.responseCookies) { epoch.responseCookies.add(requestUrl to headers) }
           }
         },
-        acceptOperator = { current -> withContext(Dispatchers.Main.immediate) { acceptVerified(attempt, current) } },
+        acceptOperator = { current -> withContext(Dispatchers.Main.immediate) { acceptVerified(attempt, epoch, current) } },
       )
     }
     val session = sessions[origin]
     return BrowserSessionAuthorization(
       origin = url,
-      credentialEpoch = session?.profileName,
+      credentialEpoch = session?.let { if (it.credentialEpoch == it.profileName) it.profileName else it.profileName + "." + it.credentialEpoch },
       cookies = { requestUrl -> session?.cookies?.getCookie(requestUrl.toString()) },
       isCurrent = { session != null && session.live.get() && sessions[origin] === session },
       receiveCookies = { requestUrl, headers ->
@@ -204,7 +250,8 @@ internal class ReverseProxyBrowserSessions(
 
   private fun removeAbandonedProfiles() {
     val retained = sessions.values.map { it.profileName }.toSet() + pendingProfiles
-    profiles.names()
+    profiles
+      .names()
       .filter { it.startsWith("openclaw-proxy-") && it !in retained }
       .forEach(::deleteProfile)
   }

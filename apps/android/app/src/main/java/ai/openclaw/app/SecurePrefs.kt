@@ -489,12 +489,19 @@ class SecurePrefs(
   internal fun saveBrowserSessionProfile(
     origin: String,
     profileName: String?,
+    credentialEpoch: String? = null,
   ): Boolean {
     val editor = plainPrefs.edit()
     val key = "gateway.browserProfile.$origin"
+    val previous = plainPrefs.getString(key, null)
+    if (!previous.isNullOrEmpty() && previous != profileName) editor.remove("gateway.browserCredentialEpoch.$previous")
     if (profileName == null) editor.remove(key) else editor.putString(key, profileName)
+    if (!profileName.isNullOrEmpty()) editor.putString("gateway.browserCredentialEpoch.$profileName", credentialEpoch ?: profileName)
     return editor.commit()
   }
+
+  // Existing accepted profiles used their profile name as the credential epoch.
+  internal fun loadBrowserCredentialEpoch(profileName: String): String = plainPrefs.getString("gateway.browserCredentialEpoch.$profileName", null) ?: profileName
 
   fun clearGatewayCredentials(stableId: String) {
     synchronized(gatewayCredentialLock) {

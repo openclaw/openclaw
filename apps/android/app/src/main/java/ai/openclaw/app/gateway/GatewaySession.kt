@@ -547,11 +547,12 @@ class GatewaySession(
 
   /** Starts or replaces the desired gateway connection and launches the reconnect loop. */
   internal fun retireBrowserCredentialEpoch(profileName: String) {
-    val socket = synchronized(notificationLock) {
-      synchronized(lifecycleLock) {
-        currentConnection?.takeIf { it.deviceCredentialScope.endsWith(".browser.$profileName") }?.retire()
+    val socket =
+      synchronized(notificationLock) {
+        synchronized(lifecycleLock) {
+          currentConnection?.takeIf { (it.deviceCredentialScope.endsWith(".browser.$profileName") || it.deviceCredentialScope.contains(".browser.$profileName.")) }?.retire()
+        }
       }
-    }
     socket?.cancel()
   }
 
@@ -2108,8 +2109,21 @@ class GatewaySession(
       val frame = json.parseToJsonElement(text).asObjectOrNull() ?: return
       // Accepted responses settle this socket's pending requests even after close.
       when (frame["type"].asStringOrNull()) {
-        "res" -> handleResponse(frame)
-        "event" -> if (state.get() != ConnectionState.CLOSED) handleEvent(frame)
+        "res" -> {
+          handleResponse(frame)
+        }
+
+        "event" -> {
+          if (state.get() != ConnectionState.CLOSED) {
+            try {
+              admissionRequest?.let { ingressAuthorization?.requireCurrent(it) }
+            } catch (failure: GatewayExternalAuthorizationException) {
+              retire()?.cancel()
+              throw failure
+            }
+            handleEvent(frame)
+          }
+        }
       }
     }
 
