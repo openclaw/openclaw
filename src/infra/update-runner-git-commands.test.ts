@@ -35,6 +35,7 @@ describe("git version prerequisite", () => {
   it.each([
     ["git version 2.31.0\n", null],
     ["git version 2.54.0 (Apple Git-157)\n", null],
+    ["", null],
     [
       "git version 2.23.0\n",
       /^Update refused: Git 2\.23\.0 at .+ is too old for Git-checkout updates\. Replace it with Git 2\.31 or newer, then retry openclaw update\. No changes were made\.$/u,

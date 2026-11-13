@@ -37,19 +37,17 @@ export function createGitStepFactory(root: string, step: StepFactory) {
 // echoes the flag back as a revision instead of failing, so the update breaks later.
 const MINIMUM_GIT_VERSION = [2, 31] as const;
 
-/** One operator-facing line when the Git on PATH cannot run a Git-checkout update. */
+/** One operator-facing line when the updater's Git is too old for a Git-checkout update. */
 export async function describeUnsupportedGit(
   runCommand: CommandRunner,
   options: Parameters<CommandRunner>[1],
 ): Promise<string | null> {
-  const required = `Git ${MINIMUM_GIT_VERSION.join(".")} or newer`;
+  // Only a known old version refuses. A missing or unreadable Git keeps its existing failure.
   const probe = await runCommand(["git", "--version"], options).catch(() => null);
-  const match = /^git version (\d+)\.(\d+)/u.exec(probe?.code === 0 ? probe.stdout : "");
-  if (!match) {
-    return `Update refused: Git was not found on PATH. Install ${required}, then retry openclaw update. No changes were made.`;
-  }
-  const [major, minor] = [Number(match[1]), Number(match[2])];
+  const match = probe?.code === 0 ? /^git version (\d+)\.(\d+)\S*/u.exec(probe.stdout) : null;
+  const [major, minor] = [Number(match?.[1]), Number(match?.[2])];
   if (
+    !match ||
     major > MINIMUM_GIT_VERSION[0] ||
     (major === MINIMUM_GIT_VERSION[0] && minor >= MINIMUM_GIT_VERSION[1])
   ) {
@@ -57,7 +55,8 @@ export async function describeUnsupportedGit(
   }
   // The updater's PATH puts its Node directory and system directories first, so name the
   // Git it actually runs rather than the one the operator's shell finds.
-  const found = probe!.stdout.trim().replace(/^git version /u, "");
+  const found = match[0].replace(/^git version /u, "");
+  const required = `Git ${MINIMUM_GIT_VERSION.join(".")} or newer`;
   const location = resolveExecutablePath("git", { cwd: options.cwd, useCache: false });
   return location
     ? `Update refused: Git ${found} at ${location} is too old for Git-checkout updates. Replace it with ${required}, then retry openclaw update. No changes were made.`
