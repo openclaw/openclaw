@@ -70,6 +70,21 @@ describe("classifyAttachmentBytes", () => {
       }),
     ).resolves.toEqual({ mime: "application/octet-stream", class: "binary" });
   });
+
+  it.each([
+    ["NUL pages", 0],
+    ["an ASCII schema page", 0x41],
+  ] as const)("keeps a SQLite database binary when it has %s", async (_label, fill) => {
+    const buffer = Buffer.alloc(4096, fill);
+    Buffer.from("SQLite format 3\0", "latin1").copy(buffer);
+    await expect(
+      classifyAttachmentBytes({
+        buffer,
+        declaredMime: "application/octet-stream",
+        name: "t.db",
+      }),
+    ).resolves.toEqual({ mime: "application/x-sqlite3", class: "binary" });
+  });
 });
 
 it("matches a configured text/yaml allowlist against classified .yaml files", async () => {
