@@ -8,6 +8,7 @@ import { formatModelRuntimeLabel } from "../../../lib/model-runtime-label.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { keyboardHintsVisible } from "../../../lib/reactive/keyboard-hints.ts";
+import { ChatContextWindowControl } from "./chat-context-window-control.tsx";
 import {
   formatModelContextMeta,
   formatModelLabel,
@@ -83,11 +84,18 @@ function optionPresentation(options: ModelPresentationProps) {
   const resetsPin = options.entry.isDefault && options.sessionModelPinned;
   const needsAuth = optionNeedsAuth(options.entry);
   const onModelSetup = needsAuth ? options.onModelSetup : undefined;
-  const modelMeta = needsAuth
-    ? runtime?.detail !== undefined
-      ? runtimeLabel
-      : ""
-    : [formatModelContextMeta(options.entry, t), runtimeLabel].filter(Boolean).join(" · ");
+  const context =
+    selected && (options.contextWindow?.options.length ?? 0) > 1
+      ? options.contextWindow
+      : undefined;
+  const contextOption = context?.options.find((option) => option.id === context.selected);
+  const modelMeta =
+    contextOption?.label ??
+    (needsAuth
+      ? runtime?.detail !== undefined
+        ? runtimeLabel
+        : ""
+      : formatModelContextMeta(options.entry, t));
   const accessibleStatus = needsAuth
     ? t("modelSetup.candidates.signInNeeded")
     : options.entry.unavailableReason === "unsupported-runtime"
@@ -95,6 +103,7 @@ function optionPresentation(options: ModelPresentationProps) {
       : "";
   return {
     selected,
+    context: contextOption ? context : undefined,
     modelLabel,
     runtimeLabel,
     chatOnlyHelp,
@@ -248,7 +257,17 @@ function ModelOptionButton(
             </span>
           </Show>
           <Show when={props.presentation.modelMeta}>
-            <span class="chat-controls__model-option-meta">{props.presentation.modelMeta}</span>
+            <span
+              class={[
+                "chat-controls__model-option-meta",
+                { "chat-controls__context-placeholder": Boolean(props.presentation.context) },
+              ]}
+            >
+              {props.presentation.modelMeta}
+              <Show when={props.presentation.context}>
+                <Icon name="chevronDown" />
+              </Show>
+            </span>
           </Show>
         </span>
       </span>
@@ -266,14 +285,26 @@ function ModelOptionButton(
 export function ChatModelPickerOption(props: ChatModelPickerOptionProps) {
   const presentation = createOptionPresentation(props);
   return (
-    <Tooltip
-      class="chat-controls__model-tooltip"
-      content={[presentation().modelLabel, presentation().detail].filter(Boolean).join(". ")}
-      delay={800}
-      describe={Boolean(presentation().detail)}
+    <div
+      class={[
+        "chat-controls__model-option-wrap",
+        { "chat-controls__model-option-wrap--context": Boolean(presentation().context) },
+      ]}
     >
-      <ModelOptionButton {...props} presentation={presentation()} />
-    </Tooltip>
+      <Tooltip
+        class="chat-controls__model-tooltip"
+        content={[presentation().modelLabel, presentation().detail].filter(Boolean).join(". ")}
+        delay={800}
+        describe={Boolean(presentation().detail)}
+      >
+        <ModelOptionButton {...props} presentation={presentation()} />
+      </Tooltip>
+      <Show when={presentation().context}>
+        {(context) => (
+          <ChatContextWindowControl contextWindow={context()} sessionKey={props.sessionKey!} />
+        )}
+      </Show>
+    </div>
   );
 }
 

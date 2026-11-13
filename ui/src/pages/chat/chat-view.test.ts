@@ -2501,10 +2501,9 @@ describe("chat model controls", () => {
         },
         container,
       );
-      expect(container.querySelector(".chat-controls__account-selection")?.textContent).toBe(
-        "work@example.com · Sign in with ChatGPT",
-      );
-      container.querySelector<HTMLButtonElement>("[data-chat-account-group-toggle]")!.click();
+      const accountLabel = container.querySelector(".chat-controls__account-selection");
+      expect(accountLabel?.textContent).toBe("Sign in with ChatGPT");
+      container.querySelector<HTMLButtonElement>(".chat-controls__account-trigger")!.click();
       await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
       await vi.waitFor(() => {
         const rows = [...container.querySelectorAll("[data-chat-account-option]")];
@@ -2816,7 +2815,7 @@ describe("chat model controls", () => {
     picker.open = true;
     picker.dispatchEvent(new Event("toggle"));
 
-    expect(container.querySelector("[data-chat-context-window-toggle]")).toBeNull();
+    expect(container.querySelector(".chat-controls__context-trigger")).toBeNull();
     expect(container.querySelector("[data-chat-model-context-badge]")).toBeNull();
   });
 
@@ -2909,9 +2908,10 @@ describe("chat model controls", () => {
       const option = container.querySelector<HTMLButtonElement>(
         '[data-chat-model-option="openai/gpt-5.6-sol"]',
       );
-      expect(option?.querySelector(".chat-controls__model-option-meta")?.textContent).toBe(
-        optionRuntimeId ? "1M · Codex" : "1M",
-      );
+      expect(option?.querySelector(".chat-controls__model-option-meta")?.textContent).toBe("1M");
+      if (optionRuntimeId) {
+        expect(option?.getAttribute("aria-label")).toContain("Codex");
+      }
       if (implicitDefault) {
         expect(option?.textContent).not.toContain("272k active");
       }
