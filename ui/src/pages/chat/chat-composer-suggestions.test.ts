@@ -153,15 +153,10 @@ describe("chat composer suggestion accessibility", () => {
       expect(status?.getAttribute("aria-live")).toBe("polite");
       const announcementText = expectDefined(status?.textContent?.trim(), "announcement");
       expect(announcementText).not.toBe("");
-      const expectedAnnouncement =
+      expect(announcementText).toBe(
         draft === "/tools "
           ? `/tools ${text(activeOption, ".slash-menu-name")}`
-          : [".slash-menu-name", ".slash-menu-args", ".slash-menu-desc"]
-              .map((selector) => text(activeOption, selector))
-              .filter(Boolean)
-              .join(" ");
-      expect(announcementText).toBe(
-        draft === "/" ? `${expectedAnnouncement}.` : expectedAnnouncement,
+          : "/reset Reset the current session.",
       );
 
       inputDraft(container, "plain message");
@@ -353,7 +348,7 @@ it("starts Goal mode with the prose behind a leading /goal token as its objectiv
 
   await import("./components/chat-composer-slash-menu.tsx");
   await waitForSolid(() =>
-    expect(container.querySelector(".slash-menu-name")?.textContent?.trim()).toContain("/goal"),
+    expect(container.querySelector(".slash-menu-name")?.textContent?.trim()).toContain("Goal"),
   );
   keydownComposer(container, "Enter");
 

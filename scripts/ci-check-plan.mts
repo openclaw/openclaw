@@ -20,6 +20,7 @@ type CheckRow = {
   type_graph_names_json?: string;
   core_type_graph_names_json?: string;
   core_type_concurrency?: number;
+  requires_sdk_declarations?: boolean;
 };
 type StripeRow = {
   stripe: number;
@@ -188,6 +189,13 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
         ? [
             {
               ...row,
+              // This capability excludes frozen/release targets; downsize only measured serial graphs.
+              ...(hosted &&
+              input.extensionLintMode !== undefined &&
+              row.runner_label === "blacksmith-4vcpu-ubuntu-2404" &&
+              other.every(({ name }) => name === "extensions-test" || name === "scripts")
+                ? { runner_label: "blacksmith-2vcpu-ubuntu-2404" }
+                : {}),
               core_type_graph_names_json: JSON.stringify(centralCore.map(({ name }) => name)),
               core_type_concurrency: !hosted && input.changedCoreTestPaths ? 2 : 1,
               type_graph_names_json: JSON.stringify(other.map(({ name }) => name)),
@@ -230,6 +238,7 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
     }
   }
   let centralLintSelection = lintPlan ? JSON.stringify(lintPlan.central) : "";
+  let centralRequiresSdkDeclarations: boolean | undefined;
   // Older targets omit this capability and retain their original full fallback.
   const extensionSelection =
     runs("lint") && input.extensionLintMode !== undefined
@@ -289,6 +298,7 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
               : { fullExtensionStripes: stripes }),
           };
     const central = payload(lintPlan ? JSON.stringify(lintPlan.central) : undefined, true);
+    centralRequiresSdkDeclarations = false;
     if (!lintPlan) {
       central.fullGroups = hosted ? ["scripts"] : ["core", "scripts"];
     }
@@ -343,14 +353,14 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
         ];
       });
       extensionLint = [];
-      centralLintSelection = JSON.stringify(
-        withExtensions(
-          central,
-          selectedStripes.filter((stripeIndex) => stripeIndex === 6 && tailOwner === undefined),
-        ),
+      const centralExtensionStripes = selectedStripes.filter(
+        (stripeIndex) => stripeIndex === 6 && tailOwner === undefined,
       );
+      centralRequiresSdkDeclarations = centralExtensionStripes.length > 0;
+      centralLintSelection = JSON.stringify(withExtensions(central, centralExtensionStripes));
     } else {
       extensionLint = [];
+      centralRequiresSdkDeclarations = selectedStripes.length > 0;
       centralLintSelection = JSON.stringify(withExtensions(central, selectedStripes));
     }
   }
@@ -358,6 +368,13 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
   // owners separate, and retain a check row for the existing required gate.
   const firstCoreLint = coreLint.find((row) => row.stripe === 1);
   const centralLintIndex = checkRows.findIndex((row) => row.task === "lint");
+  const centralLintRow = checkRows[centralLintIndex];
+  if (centralLintRow && centralRequiresSdkDeclarations !== undefined) {
+    checkRows[centralLintIndex] = {
+      ...centralLintRow,
+      requires_sdk_declarations: centralRequiresSdkDeclarations,
+    };
+  }
   if (
     input.runnerProfile === "hybrid" &&
     input.preserveFullChecks &&

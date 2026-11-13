@@ -158,11 +158,20 @@ export function measureCodeBlockWidthOverflow(wrapper: HTMLElement): (() => void
   if (!viewport || !code) {
     return undefined;
   }
-  const overflowing =
-    !wrapper.classList.contains("is-wrapped") && code.scrollWidth > viewport.clientWidth + 1;
+  // Human fences start wrapped, so their toggle matters only while a row soft-wraps.
+  // Unwrapped, their rows scroll with the padding that clears the toggle.
+  const wrapOnly = wrapper.classList.contains("code-block-wrapper--wrap-only");
+  const overflowing = wrapper.classList.contains("is-wrapped")
+    ? wrapOnly && softWraps(code)
+    : (wrapOnly ? viewport : code).scrollWidth > viewport.clientWidth + 1;
   return () => {
     wrapper.classList.toggle("has-horizontal-overflow", overflowing);
   };
+}
+
+function softWraps(code: HTMLElement): boolean {
+  const rows = code.clientHeight / Number.parseFloat(getComputedStyle(code).lineHeight);
+  return rows > (code.textContent ?? "").replace(/\n$/, "").split("\n").length + 0.5;
 }
 
 /** Highlight when available; plain escaped code remains readable while the chunk loads. */
@@ -201,6 +210,11 @@ function renderCodeBlockCopyButton(text: string): string {
   return `<button type="button" class="code-block-copy" data-markdown-key="copy" data-code="${attrSafe}" data-code-encoding="${blockArtCodeBlockCopyPayloadEncoding}" aria-label="${escapeHtml(t("common.copyCode"))}"><span class="code-block-copy__idle" aria-hidden="true"></span><span class="code-block-copy__done" aria-hidden="true"></span><span class="code-block-copy__failed" aria-hidden="true">!</span></button>`;
 }
 
+function renderCodeBlockWrapButton(wrapped = false): string {
+  const label = escapeHtml(t(wrapped ? "chat.codeBlock.disableWrap" : "chat.codeBlock.enableWrap"));
+  return `<button type="button" class="code-block-wrap" data-markdown-key="wrap" aria-label="${label}" title="${label}" aria-pressed="${wrapped}"><span class="code-block-wrap__icon" aria-hidden="true"></span></button>`;
+}
+
 export function renderMarkdownCodeBlock(
   text: string,
   lang: string,
@@ -212,6 +226,8 @@ export function renderMarkdownCodeBlock(
   // SAFETY: markdown-it supplies normalized internal renderer options.
   const renderEnv = env as Partial<MarkdownRenderEnv> | undefined;
   const interactive = renderEnv?.codeBlockInteraction === "interactive";
+  // Aligned block art never wraps, so it keeps the passive block.
+  const wrapOnly = renderEnv?.codeBlockInteraction === "wrap" && !blockArt;
   const { wrapperClass, hiddenLineCount, long } = markdownCodeBlockLayout(text, lang);
   const deferredHighlight =
     interactive && long && hiddenLineCount > 0 && highlight !== false && !blockArt;
@@ -224,8 +240,11 @@ export function renderMarkdownCodeBlock(
   const deferredAttr = deferredHighlight ? ` data-code-highlight="${escapeHtml(lang)}"` : "";
   const codeBlock = `<pre><code${classAttr}${deferredAttr}>${highlighted}</code></pre>`;
   const copyEnabled = renderEnv?.codeBlockChrome !== "none";
-  if (!copyEnabled && !interactive) {
+  if (!copyEnabled && !interactive && !wrapOnly) {
     return codeBlock;
+  }
+  if (wrapOnly) {
+    return `<div class="code-block-wrapper code-block-wrapper--wrap-only is-wrapped">${renderCodeBlockWrapButton(true)}<div class="code-block-viewport" data-markdown-key="viewport">${codeBlock}</div></div>`;
   }
   const copyButton = copyEnabled ? renderCodeBlockCopyButton(options.copyText ?? text) : "";
   // Reveal and wrap controls are inert without a host that runs the code-block
@@ -250,11 +269,9 @@ export function renderMarkdownCodeBlock(
   const expandButton = hiddenLineCount
     ? `<button type="button" class="code-block-expand" data-markdown-key="expand" aria-label="${escapeHtml(expandLabel)}" aria-expanded="false"><span class="code-block-chevron" aria-hidden="true"></span><span>${escapeHtml(hiddenLabel)}</span></button>`
     : "";
-  const wrapLabel = escapeHtml(t("chat.codeBlock.enableWrap"));
-  const wrapButton = `<button type="button" class="code-block-wrap" data-markdown-key="wrap" aria-label="${wrapLabel}" title="${wrapLabel}" aria-pressed="false"><span class="code-block-wrap__icon" aria-hidden="true"></span></button>`;
   const header = renderCodeBlockHeader(
     lang,
-    `${tree ? renderMarkdownJsonModes() : ""}${wrapButton}${copyButton}`,
+    `${tree ? renderMarkdownJsonModes() : ""}${renderCodeBlockWrapButton()}${copyButton}`,
   );
   return `<div class="${wrapperClass}${tree ? " code-block-wrapper--json" : ""}${hiddenLineCount ? " is-collapsible" : ""}">${header}${tree}<div class="code-block-viewport" data-markdown-key="viewport">${codeBlock}</div>${expandButton}</div>`;
 }

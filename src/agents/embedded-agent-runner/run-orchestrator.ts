@@ -651,10 +651,10 @@ async function runEmbeddedAgentForSession(
               : run());
             const continuation = refresh.takeContinuation();
             if (refreshed || continuation) {
-              mergeCompletedAgentUsage({
+              await mergeCompletedAgentUsage({
                 usage,
                 diagnosticUsage,
-                agentMeta: result.meta.agentMeta,
+                agentMetas: [result.meta.agentMeta],
                 config: params.config ?? EMPTY_EMBEDDED_AGENT_CONFIG,
                 agentDir: params.agentDir,
               });

@@ -13,6 +13,7 @@ import type {
 } from "../chat-pane-embedded-types.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
 import type { SidebarDock, SidebarLayout, SidebarSlotId } from "../sidebar-layout.ts";
+import type { SidebarPanelHost } from "./chat-sidebar-panel-host.ts";
 
 export type SidebarPanelDefinition = {
   slot: SidebarSlotId;
@@ -83,12 +84,6 @@ export type RegionProps = {
   /** A lazy recipient has mounted; the pane can deliver its queued commands. */
   onPanelReady?: () => void;
 };
-export type SidebarPanelHost = HTMLElement & {
-  readonly updateComplete?: Promise<unknown>;
-  handleToggleRequest?: (event: Event) => void;
-  activateTerminalHost?: () => void;
-};
-export type SidebarPanelHostRegistration = (element: SidebarPanelHost) => () => void;
 export type RegionMethods = {
   readMobileChromeHeight(): number;
   readPanelHost: (slot: SidebarSlotId) => SidebarPanelHost | null;

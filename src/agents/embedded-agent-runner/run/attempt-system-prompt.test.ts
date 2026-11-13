@@ -622,6 +622,25 @@ describe("buildAttemptSystemPrompt", () => {
     }
   });
 
+  it("keeps the session prompt when a completion wake inherits its producer's tool ceiling", async () => {
+    const ceiling = { skills: { prompt: "", toolsAllow: ["read", "write", "exec"] } };
+    const userTurn = await preparePermissionPrompt({ attemptOverrides: { trigger: "user" } });
+    const wake = await preparePermissionPrompt({
+      ...ceiling,
+      attemptOverrides: {
+        trigger: "event",
+        inputProvenance: { kind: "internal_system", sourceTool: "exec" },
+      },
+    });
+    expect(wake.prepared.systemPromptText).toBe(userTurn.prepared.systemPromptText);
+    // A narrowly scoped run that is not a host wake keeps the minimal prompt.
+    const scoped = await preparePermissionPrompt({
+      ...ceiling,
+      attemptOverrides: { trigger: "user" },
+    });
+    expect(scoped.prepared.systemPromptText).not.toBe(userTurn.prepared.systemPromptText);
+  });
+
   it("keeps model instructions identical when only reasoning effort changes", async () => {
     const prompts = [];
     for (const effort of ["low", "high", "medium"] as const) {

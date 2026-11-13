@@ -1,6 +1,7 @@
 import type { JSX } from "@solidjs/web";
+import { dynamic } from "@solidjs/web";
 import { createMemo, Show } from "solid-js";
-import { groupToolCalls } from "../../../../../src/chat/tool-call-grouping.js";
+import { groupToolCalls, type ToolCallGroup } from "../../../../../src/chat/tool-call-grouping.js";
 import { fnv1aUtf16 } from "../../../../../src/shared/fnv1a.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MessageGroup as MessageGroupData, ToolCard } from "../../../lib/chat/chat-types.ts";
@@ -20,17 +21,20 @@ import { ownSessionLaunchCalls } from "../chat-spawned-subagent.ts";
 import { transcriptRunId } from "../chat-thread-run-identity.ts";
 import { selectActivityHeadline } from "./chat-activity-headline-selection.ts";
 import { ChatActivityHeadline } from "./chat-activity-headline.solid.tsx";
-import { BrowserTabPreviews } from "./chat-browser-tab-previews.tsx";
 import { descendantCards } from "./chat-message-activity-operation.tsx";
 import type { ActivityOperationProps } from "./chat-message-bubble-options.ts";
 import type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
 import { syncToolDisclosureOverflow } from "./chat-tool-card-chrome.tsx";
-import { selectBrowserTabPreviews } from "./chat-tool-cards.ts";
 import { ToolReviewOutcome } from "./chat-tool-outcome-summary.solid.tsx";
 
-function prepareActivityGroup(
+export function prepareActivityGroup(
   groups: readonly MessageGroupData[],
   opts: NativeMessageGroupOptions,
+  source?: {
+    rootGroups: ReadonlyMap<ToolCard, ToolCallGroup<ToolCard>>;
+    toolCardOverrides: ReadonlyMap<ToolCard, ActivityOperationProps | null>;
+    currentRunActivity: ReadonlySet<ReturnType<typeof readPreparedActivity>[number]>;
+  },
 ) {
   const firstGroup = groups[0];
   if (!firstGroup || opts.showToolCalls === false) {
@@ -44,6 +48,7 @@ function prepareActivityGroup(
   const activity = entries.flatMap((entry) => {
     const prepared = readPreparedActivity(entry.message);
     if (
+      !source &&
       opts.runActive &&
       opts.activityRunId &&
       (!opts.activityGroupKey || groups.some((group) => group.key === opts.activityGroupKey)) &&
@@ -68,14 +73,21 @@ function prepareActivityGroup(
   const visibleActivity = activity.filter(
     (item) => !item.hideFromChannelProgress && !item.suppressChannelProgress,
   );
+  // Segments have unique disclosure keys; the original group owns run membership.
+  const activeRunActivity = source?.currentRunActivity ?? currentRunActivity;
   const currentActivity = [
     ...new Map(
       visibleActivity
-        .filter((item) => currentRunActivity.has(item))
+        .filter((item) => activeRunActivity.has(item))
         .map((item) => [item.toolCallId ?? item.itemId, item]),
     ).values(),
   ];
-  const cardGroups = groupToolCalls(cards);
+  const cardGroups = source
+    ? cards.flatMap((card) => {
+        const root = source.rootGroups.get(card);
+        return root ? [root] : [];
+      })
+    : groupToolCalls(cards);
   const headline = selectActivityHeadline(currentActivity, cardGroups, preparedByCard);
   const visibleCalls = new Set(visibleActivity.map((item) => item.toolCallId ?? item.itemId));
   const activityDisclosureId = `activity:${firstGroup.key}`;
@@ -106,7 +118,7 @@ function prepareActivityGroup(
     visibleCalls.size === 1 &&
     (stepActivity?.status === "completed" || stepActivity?.status === "failed") &&
     visibleCalls.has(stepActivity.toolCallId ?? stepActivity.itemId);
-  if (activityExpanded || soleStep) {
+  if (!source && (activityExpanded || soleStep || opts.inlineCommands)) {
     for (const group of cardGroups) {
       if (group.children.length > 0) {
         for (const card of descendantCards(group)) {
@@ -129,35 +141,46 @@ function prepareActivityGroup(
     activityBodyId,
     activityExpanded,
     soleStep,
-    toolCardOverrides,
+    toolCardOverrides: source?.toolCardOverrides ?? toolCardOverrides,
+    cardGroups,
+    currentRunActivity: activeRunActivity,
   };
 }
 
-type ActivityState = NonNullable<ReturnType<typeof prepareActivityGroup>>;
+export type ActivityState = NonNullable<ReturnType<typeof prepareActivityGroup>>;
 type ActivityEntries = (
   overrides: () => ReadonlyMap<ToolCard, ActivityOperationProps | null>,
+  groups: () => readonly MessageGroupData[],
 ) => JSX.Element;
 
-function ActivityGroupBody(props: {
+export function ActivityGroupBody(props: {
   state: ActivityState;
   groups: readonly MessageGroupData[];
   options: NativeMessageGroupOptions;
   renderEntries: ActivityEntries;
+  inline?: boolean;
+  segmented?: boolean;
+  liveBubble?: boolean;
 }) {
   let disclosureContent: HTMLSpanElement | undefined;
   const syncOverflow = (event: Event) => syncToolDisclosureOverflow(event, disclosureContent);
   const state = () => props.state;
   const overrides = () => props.state.toolCardOverrides;
+  const groups = () => props.groups;
   const soleStep = () => state().soleStep && !props.options.bubbleMode;
+  const exposed = () => soleStep() || props.inline;
   const compact = () => Boolean(props.options.bubbleMode);
   const liveBubble = () =>
-    compact() && props.groups.some((group) => group.key === props.options.bubbleActivityGroupKey);
+    compact() &&
+    (props.liveBubble ??
+      props.groups.some((group) => group.key === props.options.bubbleActivityGroupKey));
   return (
     <div
       class={[
         "chat-activity-group",
         {
           "chat-activity-group--step": soleStep(),
+          "chat-activity-group--inline": props.inline,
           "chat-activity-group--bubble": compact(),
           "chat-activity-group--working": liveBubble(),
           "is-open": !soleStep() && state().activityExpanded,
@@ -165,7 +188,7 @@ function ActivityGroupBody(props: {
       ]}
       data-file-session-key={state().firstGroup.senderSession?.sessionKey ?? undefined}
     >
-      <Show when={!soleStep()}>
+      <Show when={!exposed()}>
         <button
           class="chat-inline-disclosure chat-activity-group__summary"
           type="button"
@@ -212,41 +235,44 @@ function ActivityGroupBody(props: {
       </Show>
       <div
         class="chat-activity-group__body"
-        id={soleStep() ? undefined : state().activityBodyId}
-        hidden={!soleStep() && !state().activityExpanded}
+        id={exposed() ? undefined : state().activityBodyId}
+        hidden={!exposed() && !state().activityExpanded}
       >
-        <Show when={soleStep() || state().activityExpanded}>
-          {(_visible) => props.renderEntries(overrides)}
+        <Show when={exposed() || state().activityExpanded}>
+          {(_visible) => props.renderEntries(overrides, groups)}
         </Show>
       </div>
-      <Show when={!props.options.bubbleMode || state().activityExpanded}>
-        <BrowserTabPreviews previews={selectBrowserTabPreviews(props.groups, props.options)} />
-      </Show>
     </div>
   );
 }
 
-export function ActivityGroupContent(props: {
+export type ActivityGroupContentProps = {
   groups: readonly MessageGroupData[];
   options: NativeMessageGroupOptions;
   presentation: "standalone" | "continuation";
   renderEntries: ActivityEntries;
-}) {
+};
+
+export function ActivityGroupContent(props: ActivityGroupContentProps) {
   const state = createMemo(() => prepareActivityGroup(props.groups, props.options));
+  const InlineContent = dynamic(() => props.options.inlineCommands?.InlineActivityGroupContent);
+  const body = () => (
+    <Show
+      when={props.options.inlineCommands}
+      fallback={state() && <ActivityGroupBody {...props} state={state()!} />}
+    >
+      <InlineContent {...props} state={state()!} />
+    </Show>
+  );
   return (
     <Show when={state()}>
       {(activity) => (
-        <Show
-          when={props.presentation === "standalone"}
-          fallback={<ActivityGroupBody {...props} state={activity()} />}
-        >
+        <Show when={props.presentation === "standalone"} fallback={body()}>
           <div
             class="chat-group tool chat-group--turn-block chat-group--activity chat-group--with-footer"
             data-chat-row-key={activity().firstGroup.key}
           >
-            <div class="chat-group-messages">
-              <ActivityGroupBody {...props} state={activity()} />
-            </div>
+            <div class="chat-group-messages">{body()}</div>
           </div>
         </Show>
       )}

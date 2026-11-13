@@ -236,6 +236,12 @@ ownerSuite.define(() => {
           await confirmation
             .getByRole("button", { name: `Switch to 127.0.0.1:${ownerPort}`, exact: true })
             .click();
+          const agentScope = page.locator(".agent-scope-control openclaw-agent-select");
+          await agentScope.locator(".agent-select__trigger").click();
+          await agentScope
+            .locator(".agent-select__option[data-agent-option]")
+            .filter({ hasText: "All agents" })
+            .click();
           // The dismissed dialog can leave the pointer over a row and lift its title.
           await page.mouse.move(0, 0);
 
@@ -482,6 +488,9 @@ suite.define(() => {
               ]);
               await page.goto(new URL("usage", suite.server.baseUrl).toString());
               await waitForControlUiGatewayReady(page);
+              const agentScope = page.locator(".agent-scope-control openclaw-agent-select");
+              await agentScope.locator(".agent-select__trigger").click();
+              await agentScope.locator('[data-agent-option][value="opus"]').click();
               const selected = page.locator(
                 `.session-bar-row[title="${key}"] .session-bar-selection`,
               );

@@ -1,5 +1,8 @@
 export * from "./session-binding.js";
-import type { inspectConversationBinding } from "openclaw/plugin-sdk/conversation-binding-inspection-runtime";
+import type {
+  inspectConversationBindingAsync,
+  prepareConversationBindingInspections,
+} from "openclaw/plugin-sdk/conversation-binding-inspection-runtime";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { legacyCodexConversationBindingId } from "../conversation-binding-data.js";
 import {
@@ -199,10 +202,10 @@ export function testConversationIdentity(sessionFile: string) {
 export const { read: readTestConversationBinding, write: writeTestConversationBinding } =
   bindingAccessors(testConversationIdentity, { clientId: "test-client" });
 
-export function createConversationInspection(
-  conversation: Parameters<typeof inspectConversationBinding>[0],
+function createConversationInspection(
+  conversation: Parameters<typeof inspectConversationBindingAsync>[0],
   bindingId: string | undefined,
-): ReturnType<typeof inspectConversationBinding> {
+): Awaited<ReturnType<typeof inspectConversationBindingAsync>> {
   return {
     status: "available",
     binding: bindingId
@@ -215,5 +218,23 @@ export function createConversationInspection(
           boundAt: 1,
         }
       : null,
+  };
+}
+
+export async function prepareConversationInspections(
+  conversations: Parameters<typeof prepareConversationBindingInspections>[0],
+  readBinding: () => string | undefined,
+) {
+  const bindingId = readBinding();
+  return {
+    inspect() {
+      if (readBinding() !== bindingId) {
+        throw new Error("Conversation binding ownership changed. Retry the request.");
+      }
+      return conversations.map((conversation) =>
+        createConversationInspection(conversation, bindingId),
+      );
+    },
+    dispose() {},
   };
 }

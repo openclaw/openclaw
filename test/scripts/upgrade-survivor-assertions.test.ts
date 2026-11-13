@@ -32,6 +32,51 @@ const testBashExecPath = process.platform === "darwin" ? "/bin/bash" : "bash";
 
 const ASSERTIONS_PATH = "scripts/e2e/lib/upgrade-survivor/assertions.mjs";
 
+it.each(["(params) {", "(e) {", "(e){"])(
+  "injects the upgrade deadline into a built plugin owner %s",
+  (signature) => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-deadline-"));
+    try {
+      const dist = join(root, "dist");
+      mkdirSync(dist);
+      writeFileSync(
+        join(dist, "update-command-plugins-fixture.mjs"),
+        `export async function updatePluginsAfterCoreUpdate${signature} return "uninterrupted"; }`,
+      );
+      const error = "Update finalization timed out in plugins after 15000ms";
+      writeFileSync(
+        join(dist, "writer.mjs"),
+        `function mutateConfigFileWithRetry() { throw new Error(${JSON.stringify(error)}); }
+export { mutateConfigFileWithRetry as write };`,
+      );
+      execFileSync(testNodeExecPath, [
+        "scripts/e2e/lib/upgrade-survivor/abandoned-update.mjs",
+        "deadline-hook",
+        root,
+        root,
+      ]);
+      const driver = join(root, "driver.mjs");
+      writeFileSync(
+        driver,
+        `import assert from "node:assert/strict";
+import { pathToFileURL } from "node:url";
+globalThis.setTimeout = callback => queueMicrotask(callback);
+await import(pathToFileURL(${JSON.stringify(join(root, "repair-deadline-hook.mjs"))}).href);
+const { updatePluginsAfterCoreUpdate } = await import(pathToFileURL(${JSON.stringify(join(dist, "update-command-plugins-fixture.mjs"))}).href);
+await assert.rejects(updatePluginsAfterCoreUpdate({ configWriteOptions: {} }), { message: ${JSON.stringify(error)} });`,
+      );
+      execFileSync(testNodeExecPath, [driver, "update", "repair"]);
+      expect(JSON.parse(readFileSync(join(root, "deadline-write-refused.json"), "utf8"))).toEqual({
+        phase: "plugins",
+        deadlineMs: 15_000,
+        refused: true,
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  },
+);
+
 function selectFrozenUpgradeOracle(
   root: string,
   version: string,

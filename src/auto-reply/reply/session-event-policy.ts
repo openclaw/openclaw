@@ -203,6 +203,8 @@ export function captureSessionEventConfigRelevance(
         },
         agent: {
           ...resolveAgentEntry({ agents }, agentId),
+          // Display identity does not change an admitted event's authority.
+          identity: undefined,
           modelPolicy: selection ? undefined : resolveAgentEntry({ agents }, agentId)?.modelPolicy,
         },
       },
@@ -242,8 +244,10 @@ export function captureSessionEventConfigRelevance(
         );
       }
       if (tokens?.[0] === "agents" && tokens[1] === "entries" && typeof tokens[2] === "string") {
-        // Matches the projection, which keeps only this agent's entry.
-        return normalizeAgentId(tokens[2]) === normalizeAgentId(agentId);
+        // Matches the projection: only this agent's non-display settings.
+        return (
+          tokens[3] !== "identity" && normalizeAgentId(tokens[2]) === normalizeAgentId(agentId)
+        );
       }
       return (
         !job ||

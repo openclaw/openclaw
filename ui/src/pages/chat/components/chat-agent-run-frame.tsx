@@ -8,6 +8,7 @@ import {
   getOwner,
   lazy,
   Match,
+  merge,
   onSettled,
   runWithOwner,
   Show,
@@ -25,7 +26,6 @@ import {
 } from "../chat-agent-run-grouping.ts";
 import type { TurnRecap } from "../chat-progress.ts";
 import { rawMessageTimestamp } from "../chat-thread-items.ts";
-import { BrowserTabPreviews } from "./chat-browser-tab-previews.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import {
   ActivityGroup,
@@ -41,7 +41,6 @@ import {
 } from "./chat-message-stream-view.tsx";
 import { NO_REPLY_LINE, resolveGroupReplyLine } from "./chat-reply-attribution.ts";
 import { transcriptArraysEqual } from "./chat-transcript-memo.ts";
-import type { projectTranscriptWorkPreviews } from "./chat-transcript-work-previews.ts";
 import { WorkGroupSummary } from "./chat-work-group-summary.tsx";
 import "../../../styles/chat/source-previews.css";
 
@@ -53,7 +52,6 @@ type AgentRunFrameOptions = {
   basePath?: string;
   sessionPublicOrigin?: string;
   streamOptions: StreamGroupOptions;
-  workPreviews: ReturnType<typeof projectTranscriptWorkPreviews>;
   renderGroupOptions: (group: MessageGroupData) => NativeMessageGroupOptions;
   partDependencies: (part: BodyPart) => readonly unknown[];
   isWorkExpanded: (key: string) => boolean;
@@ -305,6 +303,11 @@ function RunFrame(props: FrameProps) {
       {(input) => {
         const part = () => input().part;
         const options = () => input().options;
+        const streamOptions = merge(() => options().streamOptions, {
+          get firstBubbleKey() {
+            return firstBubbleKey();
+          },
+        });
         const groupOptions = (group: MessageGroupData) => ({
           ...options().renderGroupOptions(group),
           firstBubbleKey: firstBubbleKey(),
@@ -333,14 +336,7 @@ function RunFrame(props: FrameProps) {
           <Switch>
             <Match when={streamPart()}>
               {(stream) => (
-                <StreamPartView
-                  part={stream()}
-                  options={{
-                    ...options().streamOptions,
-                    firstBubbleKey: firstBubbleKey(),
-                  }}
-                  presentation="standalone"
-                />
+                <StreamPartView part={stream()} options={streamOptions} presentation="standalone" />
               )}
             </Match>
             <Match when={workPart()}>
@@ -350,12 +346,10 @@ function RunFrame(props: FrameProps) {
                     item={work()}
                     options={{
                       expanded: options().isWorkExpanded(work().key),
-                      mediaReadAllowed: options().streamOptions.mediaReadAllowed,
                       bubbleMode: options().streamOptions.bubbleMode,
                       onToggle: () =>
                         options().onToggleWork(work().key, options().isWorkExpanded(work().key)),
                       presentation: "continuation",
-                      browserTabPreviews: options().workPreviews.get(work().key),
                     }}
                   />
                   <Show when={!props.frame.fragment && options().isWorkExpanded(work().key)}>
@@ -385,15 +379,7 @@ function RunFrame(props: FrameProps) {
               }}
             </Match>
             <Match when={messageGroup()}>
-              {(group) => (
-                <>
-                  <MessageGroupContent group={group()} options={groupOptions(group())} />
-                  <BrowserTabPreviews
-                    previews={options().workPreviews.get(group().key)}
-                    mediaReadAllowed={options().streamOptions.mediaReadAllowed}
-                  />
-                </>
-              )}
+              {(group) => <MessageGroupContent group={group()} options={groupOptions(group())} />}
             </Match>
           </Switch>
         );

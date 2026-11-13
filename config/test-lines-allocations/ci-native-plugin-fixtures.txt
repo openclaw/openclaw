@@ -1,2 +1,0 @@
-# Isolate native plugin browser fixtures and preserve exact source selection coverage.
-26

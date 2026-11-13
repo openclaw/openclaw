@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import { createHostIoPressureProbe } from "../infra/host-io-pressure.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { scheduleGatewayIdleTask, type GatewayIdleTaskHandle } from "./server-idle-task.js";
 import type { GatewayStartupTrace } from "./server-startup-trace.js";
@@ -172,25 +172,33 @@ export function scheduleGatewayHandlerPrewarm(params: {
 export function scheduleGatewayPrewarm(
   params: Parameters<typeof scheduleGatewayHandlerPrewarm>[0],
 ): GatewayIdleTaskHandle[] {
+  const memoryLimit = process.constrainedMemory();
+  // Leave scarce cgroup memory to requests; every warmup has a request-time loader.
+  if (memoryLimit > 0 && process.availableMemory() <= memoryLimit * 0.2) {
+    return [];
+  }
+  const hasIoPressure = createHostIoPressureProbe();
   return [
     scheduleGatewayHandlerPrewarm(params),
     scheduleGatewayIdleTask({
       id: "startup:dependency-template-prewarm",
       scheduler: params.scheduler,
       delayMs: 0,
-      retryDelayMs: GATEWAY_HANDLER_PREWARM_RETRY_DELAY_MS,
+      retryDelayMs: 60_000,
+      repeatDelayMs: 60_000,
       isClosing: () => false,
-      isBusy: () => false,
+      isBusy: () => getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0,
+      waitForReady: params.waitForPostReadyWork,
       run: async (signal) => {
-        await racePromiseWithAbortSignal(
-          params.waitForPostReadyWork?.() ?? Promise.resolve(),
-          signal,
-        );
-        signal.throwIfAborted();
         const { prewarmLocalWorkspaceTemplates } =
           await import("./worker-environments/local-workspace-prewarm.js");
         signal.throwIfAborted();
-        await prewarmLocalWorkspaceTemplates({ getConfig: params.getConfig, signal });
+        await prewarmLocalWorkspaceTemplates({
+          getConfig: params.getConfig,
+          signal,
+          shouldDefer: async () =>
+            getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0 || (await hasIoPressure()),
+        });
       },
       log: params.log,
       errorMessage: "post-ready sandbox dependency prewarm failed",
