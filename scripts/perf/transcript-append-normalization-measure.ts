@@ -11,6 +11,8 @@
  * getrusage-based threadCpuUsage updates too coarsely for individual normalizations.
  * --seed-database clones an offline checkpointed synthetic DB using a required reflink;
  * --workspace reuses an offline synthetic workspace. Neither seed is modified.
+ * --batch-size requires the paired IPC controller; it alternates warmup and measured
+ * batches without overlapping appends. Active wall excludes explicit controller waits.
  * Acceptance: identical persisted-message hash, reduced normalization visits and
  * allocation/CPU, no established material append regression. This is the append
  * owner path, not a whole Gateway or a production-size database/I/O benchmark.
@@ -18,6 +20,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash, hash } from "node:crypto";
+import { once } from "node:events";
 import { constants, existsSync, readFileSync } from "node:fs";
 import { copyFile, mkdir, stat, writeFile } from "node:fs/promises";
 import { Session, type HeapProfiler } from "node:inspector/promises";
@@ -40,6 +43,7 @@ const { values } = parseArgs({
     mode: { type: "string", default: "timing" },
     fixture: { type: "string", default: "mixed" },
     history: { type: "string", default: "12" },
+    "batch-size": { type: "string" },
     operations: { type: "string", default: "1000" },
     "payload-bytes": { type: "string", default: "16384" },
   },
@@ -57,6 +61,18 @@ assert(["mixed", "plain", "reasoning", "signature", "media", "tools"].includes(v
 const integer = (raw: string, label: string) =>
   parseStrictIntegerOption({ raw, label, min: 1, fallback: 1 });
 const operations = integer(values.operations, "operations");
+const batchSize = values["batch-size"] ? integer(values["batch-size"], "batch-size") : 0;
+assert(
+  !batchSize || (mode === "timing" && typeof process.send === "function"),
+  "Batches require the timing IPC controller",
+);
+async function batchBarrier(phase: "warmup" | "measure", completed: number): Promise<number> {
+  const started = performance.now();
+  const next = once(process, "message");
+  process.send!({ phase, completed });
+  assert.equal((await next)[0], "continue");
+  return performance.now() - started;
+}
 const payloadBytes = integer(values["payload-bytes"], "payload-bytes");
 const repo = fileURLToPath(new URL("../../", import.meta.url));
 const counters: Record<string, number> = {};
@@ -303,8 +319,14 @@ try {
     timestamp: 0,
   });
   const warmup = integer(values.history, "history");
+  if (batchSize) {
+    await batchBarrier("warmup", 0);
+  }
   for (let index = 0; index < warmup; index++) {
     await manager.appendMessageAsync(fixture(index));
+    if (batchSize && ((index + 1) % batchSize === 0 || index + 1 === warmup)) {
+      await batchBarrier("warmup", index + 1);
+    }
   }
   const messages =
     values.fixture === "tools"
@@ -328,6 +350,10 @@ try {
     await inspector.post("Profiler.start");
   }
   const latencies: number[] = [];
+  if (batchSize) {
+    await batchBarrier("measure", 0);
+  }
+  let controllerWaitMs = 0;
   const hostBefore = loadavg();
   const cpuBefore = process.cpuUsage();
   const threadBefore = process.threadCpuUsage();
@@ -338,12 +364,19 @@ try {
     const message = messages?.[index] ?? fixture(index + warmup);
     await manager.appendMessageAsync(message);
     latencies.push(performance.now() - start);
+    if (batchSize && (index + 1) % batchSize === 0 && index + 1 < operations) {
+      controllerWaitMs += await batchBarrier("measure", index + 1);
+    }
   }
-  const wallMs = performance.now() - started;
+  const wallMs = performance.now() - started - controllerWaitMs;
   const threadCpu = process.threadCpuUsage(threadBefore);
   const cpu = process.cpuUsage(cpuBefore);
   const hostAfter = loadavg();
   const measuredCounters = { ...counters };
+  if (batchSize) {
+    // Keep readback and cleanup out of the peer's final measured batch.
+    await batchBarrier("measure", operations);
+  }
   const profile =
     inspector && mode === "allocation"
       ? (await inspector.post("HeapProfiler.stopSampling")).profile
@@ -383,6 +416,7 @@ try {
     fixture: values.fixture,
     operations,
     warmupOperations: warmup,
+    ...(batchSize ? { batchSize, controllerWaitMs } : {}),
     payloadBytes,
     node: process.version,
     owners: owners.map(({ name, sha256 }) => ({ name, sha256 })),
@@ -430,4 +464,7 @@ try {
   }
   Reflect.deleteProperty(globalThis, counterKey);
   Reflect.deleteProperty(globalThis, cpuClockKey);
+  if (batchSize && process.connected) {
+    process.disconnect?.();
+  }
 }
