@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { callGateway as gatewayCall } from "../../gateway/call.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -21,46 +21,61 @@ async function withStoredChannelRows(
 }
 
 describe("sessions_list channel visibility", () => {
-  it("propagates a sibling history read failure while channel access remains current", async () => {
-    const requester = "agent:main:slack:channel:c111:thread:failure-1";
-    const sibling = "agent:main:slack:channel:c111:thread:failure-2";
-    const rows = [requester, sibling].map((key) => ({
-      key,
-      sessionId: key,
-      agentId: "main",
-      chatType: "channel" as const,
-      space: "t111",
-      origin: { provider: "slack", chatType: "channel" },
-      deliveryContext: { channel: "slack", accountId: "default", to: "channel:c111" },
-    }));
-    await withStoredChannelRows(rows, async (owner) => {
-      const failure = new Error("Synthetic sibling history timeout");
-      const tool = createSessionsListTool({
-        agentSessionKey: requester,
-        config: { tools: { sessions: { visibility: "channel" } } },
-        callGateway: async <T = Record<string, unknown>>(
-          request: Parameters<typeof gatewayCall>[0],
-        ): Promise<T> => {
-          if (request.method === "sessions.describe") {
-            return {
-              session: rows.find((row) => row.key === (request.params as { key: string }).key),
-            } as T;
-          }
-          if (request.method === "chat.history") {
-            if ((request.params as { sessionKey: string }).sessionKey === sibling) {
-              throw failure;
+  it.each([false, true])(
+    "preserves inventory errors unless the sibling is withdrawn (%s)",
+    async (withdrawn) => {
+      const requester = "agent:main:slack:channel:c111:thread:failure-1";
+      const sibling = "agent:main:slack:channel:c111:thread:failure-2";
+      const rows = [requester, sibling].map((key) => ({
+        key,
+        sessionId: key,
+        agentId: "main",
+        chatType: "channel" as const,
+        space: "t111",
+        origin: { provider: "slack", chatType: "channel" },
+        deliveryContext: { channel: "slack", accountId: "default", to: "channel:c111" },
+      }));
+      await withStoredChannelRows(rows, async (owner) => {
+        const failure = new Error("Synthetic sibling history timeout");
+        const tool = createSessionsListTool({
+          agentSessionKey: requester,
+          config: { tools: { sessions: { visibility: "channel" } } },
+          callGateway: async <T = Record<string, unknown>>(
+            request: Parameters<typeof gatewayCall>[0],
+          ): Promise<T> => {
+            if (request.method === "sessions.describe") {
+              return {
+                session: rows.find((row) => row.key === (request.params as { key: string }).key),
+              } as T;
             }
-            return { messages: [] } as T;
-          }
-          return { sessions: rows, hasMore: false } as T;
-        },
-      });
+            if (request.method === "chat.history") {
+              if ((request.params as { sessionKey: string }).sessionKey === sibling) {
+                if (withdrawn) {
+                  owner.setRow({
+                    ...rows[1]!,
+                    deliveryContext: { ...rows[1]!.deliveryContext, to: "channel:c222" },
+                  });
+                }
+                throw failure;
+              }
+              return { messages: [] } as T;
+            }
+            return { sessions: rows, hasMore: false } as T;
+          },
+        });
 
-      await expect(
-        owner.run(() => tool.execute("channel-history-error", { messageLimit: 1 })),
-      ).rejects.toBe(failure);
-    });
-  });
+        const result = owner.run(() => tool.execute("channel-history-error", { messageLimit: 1 }));
+        if (withdrawn) {
+          expect((await result).details).toMatchObject({
+            count: 1,
+            sessions: [{ key: requester }],
+          });
+        } else {
+          await expect(result).rejects.toBe(failure);
+        }
+      });
+    },
+  );
 
   it.each([true, "all"] as const)(
     "preserves explicit archived=%s same-channel metadata inventory",
@@ -175,6 +190,7 @@ describe("sessions_list channel visibility", () => {
       row(other, "channel:c222"),
     ];
     const owner = createSessionChannelReadFixture(rows);
+    const prepare = vi.spyOn(owner.projection, "withPreparedExactRows");
     const tool = createSessionsListTool({
       agentSessionKey: requester,
       config: { tools: { sessions: { visibility: "channel" } } },
@@ -198,6 +214,7 @@ describe("sessions_list channel visibility", () => {
       ],
     });
     expect(JSON.stringify(result.details)).not.toContain("OTHER CUSTOMER SECRET");
+    expect(prepare).toHaveBeenCalledTimes(1);
   });
 
   it("drops a sibling whose channel route changes before result emission", async () => {
@@ -289,7 +306,9 @@ describe("sessions_list channel visibility", () => {
     const rows = [row(requester), row(sibling)];
     const owner = createSessionChannelReadFixture(rows);
     const prepare = owner.projection.withPreparedExactRows.bind(owner.projection);
+    let preparations = 0;
     owner.projection.withPreparedExactRows = async (queries, consume, options) => {
+      preparations += 1;
       await Promise.resolve();
       // Metadata-only reassignment retains sessionId/lifecycle generation.
       owner.setRow(row(sibling, "channel:c222"));
@@ -319,5 +338,6 @@ describe("sessions_list channel visibility", () => {
       sessions: [expect.objectContaining({ key: requester })],
     });
     expect(JSON.stringify(result.details)).not.toContain("LATE CHANNEL SECRET");
+    expect(preparations).toBe(1);
   });
 });

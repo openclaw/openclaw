@@ -165,14 +165,12 @@ export async function prepareSessionsListChannelAccess(params: {
         return undefined;
       }
     },
-    revalidateCurrent,
   };
 }
 
 /** Apply channel and existing row-owner checks in the same synchronous publication. */
 export async function finalizeSessionsListChannelRead<T>(params: {
   sessions: readonly SessionCandidate[];
-  channelAccess: Awaited<ReturnType<typeof prepareSessionsListChannelAccess>>;
   visibility: "self" | "tree" | "channel" | "agent" | "all";
   requesterAgentId: string;
   requesterSessionKey: string;
@@ -183,11 +181,6 @@ export async function finalizeSessionsListChannelRead<T>(params: {
   hasEnrichment: boolean;
   finalize: (visible: readonly boolean[]) => T;
 }): Promise<T> {
-  const channelVisible = await pMap(
-    params.sessions,
-    ({ entry, agentId }) => params.channelAccess.revalidateCurrent(entry, agentId),
-    { concurrency: 4, stopOnError: true },
-  );
   const channelRead = {
     requesterAgentId: params.requesterAgentId,
     requesterSessionKey: params.requesterSessionKey,
@@ -201,27 +194,22 @@ export async function finalizeSessionsListChannelRead<T>(params: {
     })),
   };
   if (!params.requireSessionReadOwner && !params.hasEnrichment) {
-    const currentVisible =
+    return params.finalize(
       params.visibility === "channel"
         ? currentSessionChannelReadAccess(channelRead)
-        : channelVisible;
-    return params.finalize(
-      currentVisible.map((visible, index) => visible && channelVisible[index] === true),
+        : params.sessions.map(() => true),
     );
   }
   const { withCurrentSessionListRows } = await import("../../gateway/session-list-read-result.js");
   return withCurrentSessionListRows(
     params.sessions.map(({ entry }) => entry),
     (ownerVisible, read) => {
-      const currentVisible =
-        params.visibility === "channel"
-          ? currentSessionChannelReadAccess(channelRead, read)
-          : channelVisible;
+      if (params.visibility !== "channel") {
+        return params.finalize(ownerVisible);
+      }
+      const currentVisible = currentSessionChannelReadAccess(channelRead, read);
       return params.finalize(
-        ownerVisible.map(
-          (visible, index) =>
-            visible && channelVisible[index] === true && currentVisible[index] === true,
-        ),
+        ownerVisible.map((visible, index) => visible && currentVisible[index] === true),
       );
     },
     params.requireSessionReadOwner,

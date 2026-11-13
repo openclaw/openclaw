@@ -702,7 +702,6 @@ export function createSessionsListTool(opts?: {
       };
       return finalizeSessionsListChannelRead({
         sessions,
-        channelAccess,
         visibility,
         requesterAgentId,
         requesterSessionKey: effectiveRequesterKey,
