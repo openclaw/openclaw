@@ -5,7 +5,10 @@ import type {
   PluginGatewayAccessPolicy,
 } from "./gateway-access-policy.types.js";
 import { PluginInstanceUnavailableError } from "./plugin-instance-error.js";
-import type { PluginInstanceHandle } from "./plugin-instance-scope.js";
+import {
+  runOutsideReleasedPluginInvocationScope,
+  type PluginInstanceHandle,
+} from "./plugin-instance-scope.js";
 
 // Native AbortSignal composition stores internal WeakRefs. Recursively proxying
 // those values makes Node's eventual GC cleanup call a retired plugin instance.
@@ -93,7 +96,7 @@ function bindAccessAuthority(
     },
     assertCurrent: () => {
       try {
-        return instance.run(assertCurrent);
+        return runOutsideReleasedPluginInvocationScope(() => instance.run(assertCurrent));
       } catch (error) {
         failureCause ??=
           instance.disposing ||
