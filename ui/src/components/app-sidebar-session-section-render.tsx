@@ -1,10 +1,12 @@
-import { createMemo, For, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import { presenceUserKey } from "../../../src/shared/presence-user.ts";
 import { presenceActivityLabel, presenceViewerLabel } from "../lib/presence-users.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { createIntersectionObserver } from "../lib/reactive/observers.ts";
 import { renderHoverMarquee } from "../lib/solid/hover-marquee.tsx";
 import type {
   RenderableSessionSection,
+  RosterContinuation,
   SidebarSessionListHost,
   PersonHeaders,
 } from "./app-sidebar-session-render-types.ts";
@@ -22,6 +24,7 @@ export function renderSessionSection(params: {
   host: SidebarSessionListHost;
   section: RenderableSessionSection;
   personHeaders: PersonHeaders | undefined;
+  roster?: RosterContinuation;
 }) {
   const host = createMemo(() => params.host),
     section = createMemo(() => params.section),
@@ -195,7 +198,7 @@ export function renderSessionSection(params: {
         ) : undefined}
         {collapsedAttentionDot() ? (
           <span
-            class="sidebar-session-group-attention"
+            class="session-unread-dot sidebar-session-group-attention"
             role="img"
             aria-label={t("sessionsView.attentionRequired")}
             title={t("sessionsView.attentionRequired")}
@@ -408,19 +411,38 @@ export function renderSessionSection(params: {
               </div>
             </div>
           ) : undefined}
-          <SessionPagination host={host()} section={section()} />
+          <SessionPagination host={host()} section={section()} roster={params.roster} />
         </>
       )}
     </div>
   );
 }
 
-/** Section paging only reveals rows the roster already holds. Fetching the next
- *  roster page is a list-level action because it feeds every section at once --
- *  bolting it to one section left the others unable to recover missing rows. */
+/** The fetch for older roster pages, wherever the list places it. */
+export function RosterLoadMoreButton(props: { host: SidebarSessionListHost; loading: boolean }) {
+  return (
+    <button
+      type="button"
+      class="sidebar-session-pagination__button"
+      aria-label={props.loading ? t("common.loading") : t("chat.selectors.loadMoreRosterSessions")}
+      disabled={props.loading}
+      aria-busy={props.loading ? "true" : "false"}
+      onClick={() => void props.host.loadMoreSidebarSessions()}
+    >
+      {props.loading ? <span class="session-run-spinner" aria-hidden="true" /> : undefined}
+      {props.loading ? t("common.loading") : t("chat.selectors.loadMoreRosterSessions")}
+    </button>
+  );
+}
+
+/** Section paging reveals rows the roster already holds. A roster page feeds
+ *  every section at once, so grouped views fetch it below the list. The flat
+ *  list is one section: it continues at its own end, loaded rows first, and a
+ *  collapsed list has no end to continue from. */
 function SessionPagination(params: {
   host: SidebarSessionListHost;
   section: RenderableSessionSection;
+  roster: RosterContinuation | undefined;
 }) {
   const host = createMemo(() => params.host),
     section = createMemo(() => params.section);
@@ -428,23 +450,53 @@ function SessionPagination(params: {
   const canShowLess = createMemo(
     () => section().visibleRowCount > section().collapsedVisibleRowCount,
   );
+  const canLoadMore = createMemo(() => params.roster?.hasMore === true && !canShowMore());
+  const showMore = () =>
+    host().setVisibleSessionLimit(section().id, section().visibleLimit + SIDEBAR_SESSION_PAGE_SIZE);
+  const [end, setEnd] = createSignal<HTMLDivElement>();
+  // Observation follows the element alone. Page and row updates must not
+  // observe it again: every new observation reports an end still in view.
+  const observedEnd = createMemo(() => (params.roster ? end() : undefined));
+  // One step per entry into view: the end has to leave and come back before the
+  // next step, so a failed load or rows that land off-screen never loop. The
+  // buttons stay as the manual and keyboard path.
+  createIntersectionObserver(
+    () => {
+      const target = observedEnd();
+      return target ? [target] : [];
+    },
+    (entries) => {
+      if (!params.roster?.auto || !entries.some((entry) => entry.isIntersecting)) {
+        return;
+      }
+      if (canShowMore()) {
+        showMore();
+      } else if (canLoadMore()) {
+        void host().loadMoreSidebarSessions();
+      }
+    },
+  );
   return (
-    <Show when={canShowMore() || canShowLess()}>
-      <div class="sidebar-session-pagination">
+    <Show when={canShowMore() || canShowLess() || canLoadMore()}>
+      <div
+        ref={setEnd}
+        class={[
+          "sidebar-session-pagination",
+          { "sidebar-session-pagination--roster": canLoadMore() },
+        ]}
+      >
         {canShowMore() ? (
           <button
             type="button"
             class="sidebar-session-pagination__button"
             aria-label={t("chat.selectors.loadMoreSessions")}
-            onClick={() => {
-              host().setVisibleSessionLimit(
-                section().id,
-                section().visibleLimit + SIDEBAR_SESSION_PAGE_SIZE,
-              );
-            }}
+            onClick={showMore}
           >
             {t("chat.selectors.loadMoreSessions")}
           </button>
+        ) : undefined}
+        {canLoadMore() ? (
+          <RosterLoadMoreButton host={host()} loading={params.roster?.loading === true} />
         ) : undefined}
         {canShowLess() ? (
           <button

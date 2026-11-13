@@ -356,11 +356,12 @@ describe("sidebar session feedback", () => {
       harness.sessions,
     );
     await selectFilter(sidebar, "status:all");
-    // Flat view may auto-load the visible page before the click; either path
-    // must wait on this pending page.
     const pending = createDeferred<typeof harness.sessions.state.result>();
     harness.list.mockImplementation(async () => (await pending.promise)!);
     setSessionsGrouping(sidebar.sessionOrganizer, "none");
+    await settleLitElement(sidebar);
+    // The flat list offers older pages once its loaded rows are shown.
+    sidebar.querySelector<HTMLButtonElement>('button[aria-label="Show more"]')!.click();
     await settleLitElement(sidebar);
     sidebar.querySelector<HTMLButtonElement>(pagination)!.click();
     setSessionsGrouping(sidebar.sessionOrganizer, "category");

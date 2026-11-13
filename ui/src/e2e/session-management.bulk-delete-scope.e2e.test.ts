@@ -104,6 +104,7 @@ suite.define(() => {
               const sessions = application.sessions;
               const filtered = sessions.listSnapshot(query);
               return {
+                loading: filtered.loading,
                 keys: filtered.result?.sessions.map((row) => row.key) ?? [],
                 revision:
                   sessions.state.agentId === "research" && !sessions.state.loading
@@ -162,7 +163,16 @@ suite.define(() => {
           match: filteredQuery,
         });
         await expect.poll(settledResearchRevision).toBeGreaterThan(revision);
-        await expect.poll(() => loadMore.isDisabled()).toBe(true);
+        // The reconciliation read is pending, but nobody asked for older sessions.
+        await expect.poll(async () => (await sidebarState()).loading).toBe(true);
+        await page.evaluate(
+          () =>
+            new Promise<void>((resolve) => {
+              requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+            }),
+        );
+        expect(await loadMore.isDisabled()).toBe(false);
+        await ui.expectAttribute(loadMore, "aria-busy", "false");
         expect((await gateway.getRequests("sessions.delete")).map(({ params }) => params)).toEqual(
           targets.map((target) =>
             expect.objectContaining({
@@ -185,10 +195,7 @@ suite.define(() => {
         await ui.expectAttribute(loadMore, "aria-busy", "true");
         await ui.pollAttribute(loadMore, "aria-label").toContain("Loading");
         await gateway.resolveDeferred("sessions.list");
-        await expect.poll(() => loadMore.isDisabled()).toBe(false);
-        await ui.expectAttribute(loadMore, "aria-busy", "false");
-        await ui.expectAttribute(loadMore, "aria-label", "Load more sessions");
-        await loadMore.click();
+        // The request made during the pending read follows it instead of being dropped.
         await expect
           .poll(() =>
             gateway.getRequests("sessions.list", { agentId: "research", offset: pageSize }),

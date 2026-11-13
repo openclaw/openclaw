@@ -1467,13 +1467,7 @@ div.shell.shell--onboarding {
 }
 
 .sidebar-session-group-attention {
-  width: 6px;
-  height: 6px;
-  flex: none;
   margin-left: 4px;
-  border-radius: 50%;
-  background: var(--warn);
-  box-shadow: 0 0 6px color-mix(in srgb, var(--warn) 48%, transparent);
 }
 
 /* The wrapper keeps the shared presence dot outside the avatar's clipping.

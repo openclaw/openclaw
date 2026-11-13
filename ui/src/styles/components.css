@@ -3058,7 +3058,8 @@ select.data-table-pagination__size {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
-.sidebar-recent-session .session-unread-dot {
+.sidebar-recent-session .session-unread-dot,
+.sidebar-session-group-attention {
   width: 8px;
   height: 8px;
   box-shadow: none;
