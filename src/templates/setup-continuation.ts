@@ -8,8 +8,8 @@ import { sessionEntryCommitGuardOptions } from "../config/sessions/session-sourc
 import { normalizeAgentId } from "../routing/session-key.js";
 import { withOpenClawStateLeaseAsync } from "../state/openclaw-state-lease.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
-import type { GatewayTemplateAddApplyResult } from "./gateway-add-apply.js";
 import type { ChatTemplateAddInput } from "./gateway-add-chat.js";
+import type { GatewayTemplateAddApplyResult } from "./gateway-add-result.js";
 
 /** The ordinary session owns this one-shot continuation, not an installed Template ledger. */
 export async function continueTemplateSetup(
@@ -41,19 +41,25 @@ export async function continueTemplateSetup(
     }
     return undefined;
   }
-  const result = (error?: string): GatewayTemplateAddApplyResult => ({
-    agentId,
-    sessionKey,
-    status: error ? "partial" : "complete",
-    readiness: { ready: !error && !setup?.report.failures.length, requirements: [] },
-    ...(error
-      ? {
-          agentRetained: true,
-          initializationPending: true,
-          error: { code: "template_opening_failed", message: error },
-        }
-      : {}),
-  });
+  const result = (openingError?: string): GatewayTemplateAddApplyResult => {
+    const error = openingError
+      ? { code: "template_opening_failed", message: openingError }
+      : setup?.report.failures.length
+        ? {
+            code: "template_setup_incomplete",
+            message:
+              "Some Template dependencies could not be set up. The agent and conversation were kept. Continue in this chat; do not add another copy.",
+          }
+        : undefined;
+    return {
+      agentId,
+      sessionKey,
+      status: error ? "partial" : "complete",
+      readiness: { ready: !error, requirements: [] },
+      ...(error ? { agentRetained: true, error } : {}),
+      ...(openingError ? { initializationPending: true } : {}),
+    };
+  };
   if (!setup) {
     // A stale Retry can outlive the consumed setup receipt. Reconcile the
     // existing conversation instead of falling through to a fresh Add.

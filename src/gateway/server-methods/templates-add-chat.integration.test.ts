@@ -483,64 +483,78 @@ it("creates the Template's agent without a plan, then hands the outcome to its f
   });
 });
 
-it("keeps the agent and reports each dependency it could not set up", async () => {
-  await withGateway(async (gateway) => {
-    deliver(
-      await writeTemplate(gateway.root, {
-        ...travelCopilot,
-        mcpServers: {
-          ...travelCopilot.mcpServers,
-          search: { url: "https://mcp.example.com/search", transport: "streamable-http" },
+it.each([false, true])(
+  "keeps dependency failures visible after setup (retry: %s)",
+  async (retry) => {
+    await withGateway(async (gateway) => {
+      deliver(
+        await writeTemplate(gateway.root, {
+          ...travelCopilot,
+          mcpServers: {
+            ...travelCopilot.mcpServers,
+            search: { url: "https://mcp.example.com/search", transport: "streamable-http" },
+          },
+        }),
+      );
+      skills.preflight.mockResolvedValue({
+        ok: false,
+        code: "skill_not_found",
+        error: "Skill @steipete/goplaces@1.0.0 was not found on ClawHub.",
+      });
+      // An operator's own server already holds one declared name.
+      await gateway.state.writeConfig({
+        ...gateway.config(),
+        mcp: { servers: { docs: { url: "https://internal.example.com/docs", transport: "sse" } } },
+      });
+
+      if (retry) {
+        greeting.mockRejectedValueOnce(new Error("Fixture first setup turn failed"));
+        const [firstOk, first] = await gateway.add(chatAdd);
+        expect(firstOk).toBe(true);
+        expect(first).toMatchObject({
+          status: "partial",
+          agentRetained: true,
+          initializationPending: true,
+        });
+      }
+      const [ok, result] = await gateway.add({ ...chatAdd, ...(retry ? { resume: true } : {}) });
+
+      expect(ok, JSON.stringify(result)).toBe(true);
+      expect(result).toMatchObject({
+        agentId: "travel-copilot",
+        sessionKey: expect.any(String),
+        status: "partial",
+        agentRetained: true,
+        readiness: { ready: false },
+        error: {
+          code: "template_setup_incomplete",
+          message: expect.stringContaining("Continue in this chat; do not add another copy."),
         },
-      }),
-    );
-    skills.preflight.mockResolvedValue({
-      ok: false,
-      code: "skill_not_found",
-      error: "Skill @steipete/goplaces@1.0.0 was not found on ClawHub.",
+      });
+      const workspace = gateway.workspace("travel-copilot");
+      expect(skills.install).not.toHaveBeenCalled();
+      expect(await exists(path.join(workspace, "skills", "itinerary", "SKILL.md"))).toBe(true);
+      expect(await fs.readFile(path.join(workspace, "CLAW.md"), "utf8")).toBe(
+        await fs.readFile(path.join(gateway.root, "CLAW.md"), "utf8"),
+      );
+      const listed = await listConfiguredMcpServers();
+      expect(listed.ok && listed.mcpServers.docs).toMatchObject({
+        url: "https://internal.example.com/docs",
+      });
+      expect(result).not.toHaveProperty("initializationPending");
+      const prompt = greeting.mock.calls.at(-1)![4] as string;
+      expect(prompt).toContain('The Gateway added these servers: ["search"]');
+      const report = (
+        await readSessionEntryReadOnlyInWorker({ agentId: "travel-copilot", sessionKey })
+      )?.templateSetup?.report;
+      // The successful setup receipt is consumed, not a permanent Template manager.
+      expect(report).toBeUndefined();
+      expect(prompt).toContain('"kind":"skill","name":"@steipete/goplaces"');
+      expect(prompt).toContain("Skill @steipete/goplaces@1.0.0 was not found on ClawHub.");
+      expect(prompt).toContain('"kind":"mcpServer","name":"docs"');
     });
-    // An operator's own server already holds one declared name.
-    await gateway.state.writeConfig({
-      ...gateway.config(),
-      mcp: { servers: { docs: { url: "https://internal.example.com/docs", transport: "sse" } } },
-    });
-
-    const [ok, result] = await gateway.add(chatAdd);
-
-    expect(ok, JSON.stringify(result)).toBe(true);
-    expect(result).toMatchObject({
-      agentId: "travel-copilot",
-      sessionKey: expect.any(String),
-      status: "partial",
-      agentRetained: true,
-      readiness: { ready: false },
-      error: {
-        code: "template_setup_incomplete",
-        message: expect.stringContaining("Continue in this chat; do not add another copy."),
-      },
-    });
-    const workspace = gateway.workspace("travel-copilot");
-    expect(skills.install).not.toHaveBeenCalled();
-    expect(await exists(path.join(workspace, "skills", "itinerary", "SKILL.md"))).toBe(true);
-    expect(await fs.readFile(path.join(workspace, "CLAW.md"), "utf8")).toBe(
-      await fs.readFile(path.join(gateway.root, "CLAW.md"), "utf8"),
-    );
-    const listed = await listConfiguredMcpServers();
-    expect(listed.ok && listed.mcpServers.docs).toMatchObject({
-      url: "https://internal.example.com/docs",
-    });
-    const prompt = greeting.mock.calls[0]![4] as string;
-    expect(prompt).toContain('The Gateway added these servers: ["search"]');
-    const report = (
-      await readSessionEntryReadOnlyInWorker({ agentId: "travel-copilot", sessionKey })
-    )?.templateSetup?.report;
-    // The successful setup receipt is consumed, not a permanent Template manager.
-    expect(report).toBeUndefined();
-    expect(prompt).toContain('"kind":"skill","name":"@steipete/goplaces"');
-    expect(prompt).toContain("Skill @steipete/goplaces@1.0.0 was not found on ClawHub.");
-    expect(prompt).toContain('"kind":"mcpServer","name":"docs"');
-  });
-});
+  },
+);
 
 it.each(["fetch", "workspace", "manifest collision"] as const)(
   "leaves no agent and no chat when the Template %s fails, and a repeated Add succeeds",
