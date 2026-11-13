@@ -58,6 +58,6 @@ it("delivers a destination push after the real synchronous prepared-read owner r
     expect(sendApnsAlert).toHaveBeenCalledTimes(1);
     const alert = vi.mocked(sendApnsAlert).mock.calls[0]![0];
     expect(alert.destination).toEqual({ gatewayDeviceId: "fixture-gateway", sessionKey: key });
-    expect(await alert.isCurrent?.()).toBe(true);
+    expect(alert.isCurrent).toBeUndefined();
   });
 });

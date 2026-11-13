@@ -252,20 +252,24 @@ describe("push.test handler", () => {
     vi.mocked(shouldClearStoredApnsRegistration).mockReturnValue(false);
   });
 
-  it("resolves an existing destination and derives its Gateway identity", async () => {
+  it("admits a push destination once and lets the started send finish", async () => {
+    mocks.destination.mockClear();
     mocks.destination.mockReturnValue({ ok: true, key: "agent:main:incident", agentId: "main" });
-    vi.mocked(sendApnsAlert).mockResolvedValue(apnsResult({}));
-    await apnsRequest({ nodeId: "ios-node-1", sessionKey: "agent:main:incident" });
-    expect(sendApnsAlert).toHaveBeenCalledWith(
+    vi.mocked(sendApnsAlert).mockImplementationOnce(async (alert) => {
+      mocks.destination.mockReturnValue({ ok: true, missing: true });
+      if (alert.isCurrent && !(await alert.isCurrent())) {
+        throw new Error("APNs send invalidated");
+      }
+      return apnsResult({});
+    });
+    const respond = await apnsRequest({ nodeId: "ios-node-1", sessionKey: "agent:main:incident" });
+    expectSuccess(respond, apnsResult({}));
+    expect(sendApnsAlert).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         destination: { gatewayDeviceId: "gateway-fixture", sessionKey: "agent:main:incident" },
-        isCurrent: expect.any(Function),
       }),
     );
-    const alertRequest = vi.mocked(sendApnsAlert).mock.calls[0]?.[0];
-    expect(await alertRequest?.isCurrent?.()).toBe(true);
-    mocks.destination.mockReturnValue({ ok: true, missing: true });
-    expect(await alertRequest?.isCurrent?.()).toBe(false);
+    expect(mocks.destination).toHaveBeenCalledTimes(1);
   });
 
   it.each<SessionsResolveResult>([

@@ -268,22 +268,9 @@ export const pushHandlers = {
                   if (!resolved.ok || !("key" in resolved)) {
                     throw new Error("Push chat destination is unavailable");
                   }
-                  // The APNs transport rechecks this at its actual send boundary,
-                  // including after relay preparation. A resolved key is not a grant.
-                  const isCurrent = async () => {
-                    try {
-                      return await withPreparedSessionResolve(selection, (current) => {
-                        sessionMutationAuthorization?.assertCurrent();
-                        return current.ok && "key" in current && current.key === resolved.key;
-                      });
-                    } catch {
-                      return false;
-                    }
-                  };
                   return {
                     ...alert,
                     destination: { gatewayDeviceId: identity.deviceId, sessionKey: resolved.key },
-                    isCurrent,
                   };
                 });
                 return await sendApnsAlert(preparedAlert);
