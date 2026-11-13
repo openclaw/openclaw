@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveManagedGitHubProfileDir } from "../agents/github-tool-profile-path.js";
 import { resolveDaemonRuntimePinStorePath } from "../daemon/runtime-pin-store.js";
 import { resolveClientCredentialStorePath } from "../infra/client-credential-paths.js";
 import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
@@ -10,6 +11,32 @@ import { restorePrivateStateStoreModes } from "./openclaw-state-db-permissions.j
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const mode = (target: string) => fs.lstatSync(target).mode & 0o7777;
+
+/** Applies what an fsGroup remount re-applies: setgid, and the owner bits in the group class. */
+function remountBroaden(directory: string): void {
+  fs.chmodSync(directory, 0o2770);
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const target = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      remountBroaden(target);
+    } else {
+      fs.chmodSync(target, 0o660);
+    }
+  }
+}
+
+/** Asserts the restore narrowed a whole private store back to its owner alone. */
+function expectPrivateStore(directory: string): void {
+  expect(mode(directory)).toBe(0o700);
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const target = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      expectPrivateStore(target);
+    } else {
+      expect(mode(target)).toBe(0o600);
+    }
+  }
+}
 
 /**
  * Lays out the private stores an fsGroup volume remount broadens.
@@ -32,7 +59,43 @@ function installation() {
     fs.writeFileSync(store, `retained ${path.basename(store)}`, { mode: 0o600 });
   }
   fs.mkdirSync(captures, { recursive: true, mode: 0o700 });
-  return { env, root, stateDir, credentials, runtimePins, captures };
+  // Stores whose names are minted at runtime: one managed GitHub identity
+  // generation per scope, and the runtime bundle an enrolled Codex worker reads back.
+  const profileId = `ghp_${"0123456789abcdef".repeat(2)}`;
+  const profile = resolveManagedGitHubProfileDir({
+    agentId: "main",
+    env,
+    scope: "system",
+    profileId,
+  });
+  const agentProfile = resolveManagedGitHubProfileDir({
+    agentId: "main",
+    env,
+    scope: "agent",
+    profileId,
+  });
+  for (const generation of [profile, agentProfile]) {
+    fs.mkdirSync(generation, { recursive: true, mode: 0o700 });
+    for (const name of ["config.yml", "hosts.yml"]) {
+      fs.writeFileSync(path.join(generation, name), `retained ${name}`, { mode: 0o600 });
+    }
+  }
+  const codexRuntime = path.join(stateDir, "codex-runtime");
+  fs.mkdirSync(codexRuntime, { recursive: true, mode: 0o700 });
+  for (const name of ["config.toml", "openclaw-auth.mjs", "version"]) {
+    fs.writeFileSync(path.join(codexRuntime, name), `retained ${name}`, { mode: 0o600 });
+  }
+  return {
+    env,
+    root,
+    stateDir,
+    credentials,
+    runtimePins,
+    captures,
+    profile,
+    agentProfile,
+    codexRuntime,
+  };
 }
 
 describe.runIf(process.platform !== "win32")("restorePrivateStateStoreModes", () => {
@@ -63,35 +126,92 @@ describe.runIf(process.platform !== "win32")("restorePrivateStateStoreModes", ()
   }, 15_000);
 
   it("restores private modes an fsGroup remount broadened and preserves contents", () => {
-    const { env, stateDir, credentials, runtimePins, captures } = installation();
+    const {
+      env,
+      stateDir,
+      credentials,
+      runtimePins,
+      captures,
+      profile,
+      agentProfile,
+      codexRuntime,
+    } = installation();
     // A remount re-applies group permissions to every directory and file, and
     // Linux propagates the volume's setgid bit into directories created under it.
-    for (const directory of [
-      stateDir,
-      path.dirname(credentials),
-      path.dirname(runtimePins),
-      captures,
-    ]) {
-      fs.chmodSync(directory, 0o2770);
-    }
-    for (const store of [credentials, runtimePins]) {
-      fs.chmodSync(store, 0o660);
-    }
+    remountBroaden(stateDir);
+    remountBroaden(captures);
     const stateDirMode = mode(stateDir);
 
     restorePrivateStateStoreModes(env);
 
-    for (const directory of [path.dirname(credentials), path.dirname(runtimePins), captures]) {
-      expect(mode(directory)).toBe(0o700);
+    for (const store of [
+      path.dirname(credentials),
+      path.dirname(runtimePins),
+      captures,
+      profile,
+      agentProfile,
+      codexRuntime,
+    ]) {
+      expectPrivateStore(store);
     }
     // A shared, group-accessible state root is a supported layout, and config
     // publication preserves its mode, so the restore must leave it untouched.
     expect(mode(stateDir)).toBe(stateDirMode);
     for (const store of [credentials, runtimePins]) {
-      expect(mode(store)).toBe(0o600);
       expect(fs.readFileSync(store, "utf8")).toBe(`retained ${path.basename(store)}`);
     }
   });
+
+  // A state directory need not hold every store: each admits itself.
+  it.each(["capture root", "minted stores"] as const)(
+    "restores a state directory that holds only a %s",
+    (layout) => {
+      const root = dirs.make("state-store-modes-only-");
+      const stateDir = path.join(root, ".openclaw");
+      fs.mkdirSync(stateDir, { mode: 0o700 });
+      const env = { OPENCLAW_STATE_DIR: stateDir };
+      const captures = resolveUpdateCaptureRoot(stateDir);
+      const minted =
+        layout === "capture root"
+          ? []
+          : [
+              resolveManagedGitHubProfileDir({
+                agentId: "main",
+                env,
+                scope: "system",
+                profileId: `ghp_${"0123456789abcdef".repeat(2)}`,
+              }),
+              path.join(stateDir, "codex-runtime"),
+            ];
+      if (layout === "capture root") {
+        fs.mkdirSync(captures, { mode: 0o700 });
+        fs.writeFileSync(path.join(captures, "retained"), "retained", { mode: 0o600 });
+      }
+      for (const store of minted) {
+        fs.mkdirSync(store, { recursive: true, mode: 0o700 });
+        fs.writeFileSync(path.join(store, "retained"), "retained", { mode: 0o600 });
+      }
+      // No SQLite store exists here: the repair must not wait for one.
+      expect(fs.existsSync(path.join(stateDir, "client"))).toBe(false);
+
+      remountBroaden(stateDir);
+      // The capture root is a sibling of the state directory, outside that walk.
+      if (layout === "capture root") {
+        remountBroaden(captures);
+      }
+
+      restorePrivateStateStoreModes(env);
+
+      if (layout === "capture root") {
+        // Only the root directory is repaired; its writer admits the files.
+        expect(mode(captures)).toBe(0o700);
+        expect(fs.readFileSync(path.join(captures, "retained"), "utf8")).toBe("retained");
+      }
+      for (const store of minted) {
+        expectPrivateStore(store);
+      }
+    },
+  );
 
   it("restores the sqlite sidecars a remount broadened alongside their database", () => {
     const { env, credentials } = installation();
@@ -121,21 +241,87 @@ describe.runIf(process.platform !== "win32")("restorePrivateStateStoreModes", ()
   });
 
   it("does not follow a symbolic link standing in for a private store", () => {
-    const { env, stateDir, credentials } = installation();
+    const { env, stateDir, credentials, profile } = installation();
     const foreign = path.join(dirs.make("state-store-foreign-"), "target");
     fs.mkdirSync(foreign);
     // mkdir masks its mode by umask, so set the remount-style mode explicitly.
     fs.chmodSync(foreign, 0o2770);
     fs.rmSync(path.dirname(credentials), { recursive: true });
     fs.symlinkSync(foreign, path.dirname(credentials));
+    // The scope root above a minted store is not private itself, but entering it
+    // through an alias would lend the repair to a tree outside the installation.
+    const scope = path.join(dirs.make("state-store-scope-"), "target");
+    fs.mkdirSync(scope);
+    fs.renameSync(profile, path.join(scope, path.basename(profile)));
+    fs.rmdirSync(path.dirname(profile));
+    fs.symlinkSync(scope, path.dirname(profile));
+    remountBroaden(scope);
     fs.chmodSync(stateDir, 0o2770);
-    const before = [foreign, stateDir].map(mode);
 
     restorePrivateStateStoreModes(env);
 
     expect(fs.lstatSync(path.dirname(credentials)).isSymbolicLink()).toBe(true);
-    expect(mode(foreign)).toBe(before[0]);
-    expect(mode(stateDir)).toBe(before[1]);
+    expect(mode(foreign)).toBe(0o2770);
+    const grafted = path.join(scope, path.basename(profile));
+    expect(mode(grafted)).toBe(0o2770);
+    expect(mode(path.join(grafted, "hosts.yml"))).toBe(0o660);
+    expect(mode(stateDir)).toBe(0o2770);
+  });
+
+  it("refuses a store chain reached through a symlinked credentials directory", () => {
+    const { env, stateDir, credentials, profile, codexRuntime } = installation();
+    const external = path.join(dirs.make("state-store-credential-chain-"), "target");
+    fs.mkdirSync(path.join(external, "github", "system"), { recursive: true });
+    const generation = path.join(external, "github", "system", path.basename(profile));
+    fs.mkdirSync(generation);
+    for (const name of ["config.yml", "hosts.yml"]) {
+      fs.writeFileSync(path.join(generation, name), `outside ${name}`, { mode: 0o600 });
+    }
+    fs.rmSync(path.join(stateDir, "credentials"), { recursive: true });
+    fs.symlinkSync(external, path.join(stateDir, "credentials"));
+    remountBroaden(external);
+    remountBroaden(path.dirname(credentials));
+    remountBroaden(codexRuntime);
+    fs.chmodSync(stateDir, 0o2770);
+
+    restorePrivateStateStoreModes(env);
+
+    // Entering credentials/ through an alias would lend the repair to another tree.
+    expect(mode(external)).toBe(0o2770);
+    expect(mode(generation)).toBe(0o2770);
+    expect(mode(path.join(generation, "hosts.yml"))).toBe(0o660);
+    // The stores this installation still names are repaired as before.
+    expect(mode(path.dirname(credentials))).toBe(0o700);
+    expect(mode(credentials)).toBe(0o600);
+    expectPrivateStore(codexRuntime);
+    expect(mode(stateDir)).toBe(0o2770);
+  });
+
+  it("refuses a store chain reached through a symlinked managed-github directory", () => {
+    const { env, stateDir, credentials, profile, codexRuntime } = installation();
+    const external = path.join(dirs.make("state-store-github-chain-"), "target");
+    fs.mkdirSync(path.join(external, "system"), { recursive: true });
+    const generation = path.join(external, "system", path.basename(profile));
+    fs.mkdirSync(generation);
+    for (const name of ["config.yml", "hosts.yml"]) {
+      fs.writeFileSync(path.join(generation, name), `outside ${name}`, { mode: 0o600 });
+    }
+    const managedGitHub = path.join(stateDir, "credentials", "github");
+    fs.rmSync(managedGitHub, { recursive: true });
+    fs.symlinkSync(external, managedGitHub);
+    remountBroaden(external);
+    remountBroaden(path.dirname(credentials));
+    remountBroaden(codexRuntime);
+    fs.chmodSync(stateDir, 0o2770);
+
+    restorePrivateStateStoreModes(env);
+
+    expect(mode(generation)).toBe(0o2770);
+    expect(mode(path.join(generation, "hosts.yml"))).toBe(0o660);
+    expect(mode(path.dirname(credentials))).toBe(0o700);
+    expect(mode(credentials)).toBe(0o600);
+    expectPrivateStore(codexRuntime);
+    expect(mode(stateDir)).toBe(0o2770);
   });
 
   it("refuses a store file reached through a symlinked store directory", () => {
