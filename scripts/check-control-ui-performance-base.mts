@@ -5,7 +5,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createControlUiPrecompressedAssetVariants } from "../ui/vite.config.ts";
 import { createControlUiBuildInputs } from "./lib/control-ui-build-inputs.mts";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
@@ -219,7 +219,7 @@ async function main(): Promise<void> {
           : buildEnv,
         true,
       );
-    const loader = path.join(repoRoot, "scripts/tsx.mjs");
+    const loader = pathToFileURL(path.join(repoRoot, "scripts/tsx.mjs")).href;
     run(process.execPath, [
       "--import",
       loader,
