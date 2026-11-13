@@ -245,12 +245,17 @@ or no package path at all.
 
 **What needs new work:**
 
-- A rule in `assertManagedServiceUpdateHandoffRoot` for a linked release, on the
-  model of its pnpm exception. Without it, the post-core child of a
-  Gateway-initiated update runs from a different resolved root and is refused.
-- Journaled activation for a linked root, with the pointer intent recorded
-  before the rename. The journal's path key stays valid because the package
-  path does not change.
+- Resolved roots that are compared across the update. No new rule is needed in
+  `assertManagedServiceUpdateHandoffRoot`: the parent already rebinds the
+  post-core child to the activated root (`update-command-post-core.ts`), which
+  is how a pnpm generation change passes today. The updater that flips has to
+  return the stable package path as its result root. Three other comparisons
+  need work when the flip is built: the executor's `enter` key, the child
+  grant, and the managed handoff helper's recovery after a failed or
+  still-starting update, which requires the result root to resolve to its
+  lease key.
+- Journaled activation for a linked root. This is a storage design of its own;
+  see [below](#journaled-activation-for-a-linked-root).
 - Plugin links. The existing relink and startup repair cover a flip. Linking to
   the stable path instead would remove the stale state altogether; decide
   during implementation.
@@ -263,6 +268,57 @@ or no package path at all.
   only.
 - Leases and collection, below.
 - `openclaw update status` reporting the active and retained releases.
+
+#### Journaled activation for a linked root
+
+Recording "a pointer intent before the rename" is not a small addition to the
+existing journal. A source trace at `649ca5f879f1e` found:
+
+- The journal is one SQLite row in a control directory beside the package,
+  named by a hash of the install key. The install key is a real path
+  (`resolveUpdateInstallRoot`), so for a linked root the journal would sit
+  inside the old release and its name would change after the flip. The
+  published-driver cell shows exactly that: the control directory appears
+  inside the release directory.
+- Every caller that settles or recovers an activation selects the generation
+  by a directory identity. A link needs its own selector: the link's inode, its
+  target text, and the target directory's identity.
+- Preparation moves the candidate into the journal's anchor. A release
+  directory must not move.
+- An older release that reads a journal row with an intent or descriptor field
+  it does not know fails closed and refuses to update until the row is
+  repaired. The repair helper is copied from the release that wrote the row, so
+  repair works, but a downgrade can leave an installation refusing updates.
+- Activation is not journaled on Windows at all.
+- Today's swap for a linked root has no recovery if the process dies between
+  moving the old link away and putting the new tree in place. The package path
+  is then absent, and a later update deletes the backup link as stale. This is
+  an existing defect, separate from this design.
+
+The [storage design checkpoint](/reference/database-schemas/storage-changes#review-checkpoint-for-material-changes)
+covers this change: a new intent kind is a new interpretation of durable data
+and changes the recovery and downgrade contract, even with the columns and
+version unchanged. It needs a written design that a maintainer accepts before
+implementation. That record has to answer:
+
+1. Whether the install key becomes the link's own path for a linked root. It
+   is a real path everywhere today, including the executor lease key.
+2. How a candidate that must not move is taken into custody.
+3. How a completed linked-root record stays readable, or is archived, so a
+   downgraded release does not refuse updates.
+4. Whether the intent binds the link's target text as well as its inode, since
+   inode reuse can make a foreign link match.
+5. Which owner retires the previous release directory. The journal's removal
+   names are inside the anchor only.
+6. What the update-run recovery descriptor needs. It also assumes a directory
+   for the previous release, and was not traced.
+7. Whether Windows stays unjournaled with `.previous` reconciliation, or does
+   not get the linked layout.
+
+`publishImmutablePointer` has the algorithm this needs: create the temporary
+link, record its identity and the current link's identity, rename, and
+reconcile by comparing identities. Its code assumes root ownership and the
+immutable layout, so the algorithm transfers and the code does not.
 
 **Retention.** Each process holds a lease on the release it runs, because it
 keeps loading files from that directory after a flip. Collection removes a
@@ -430,11 +486,10 @@ older release, with no download when that release is still retained. See
 These are proposals, not permission to open them.
 
 1. **B1, candidate-owned rehearsal.** In review as #197922.
-2. **Linked-root readiness, no layout change.** The handoff root rule,
-   journaled activation for a linked root, and a permanent published-driver
-   cell with a linked root. That cell ran by hand; its installed-tree budget
-   check has to accept a linked root first. Nothing an existing installation
-   can observe.
+2. **Linked-root readiness, no layout change.** A permanent published-driver
+   cell with a linked root, and the accepted storage design for journaled
+   linked-root activation. No handoff rule is needed. Nothing an existing
+   installation can observe.
 3. **A shared release installer.** Make the node host a caller of it.
    `openclaw update status` reports prepared and retained releases.
 4. **Adoption and the flip on the `install-cli.sh` prefix and the durable
@@ -451,15 +506,15 @@ B3, route 4, and Windows each need their own proposal.
 
 A maintainer accepted these answers on November 13, 2026.
 
-| #   | Decision                                                                   | Answer                                                                                                                                            | Still open                                                                   |
-| --- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| 1   | Whether owned prefixes switch releases through a linked package root.      | Yes, over rebinding and over the immutable owner, for the reasons under routes 1 and 2.                                                           | Adoption waits on the design answering what the published-driver cell found. |
-| 2   | Whether the activation journal records a pointer intent for a linked root. | Yes, through the [storage design checkpoint](/reference/database-schemas/storage-changes#review-checkpoint-for-material-changes). No new journal. | The checkpoint review itself.                                                |
-| 3   | The retention rule for release directories.                                | Leases plus a minimum age.                                                                                                                        | The minimum age.                                                             |
-| 4   | Where release directories live for the durable service copy.               | Beside `<stateDir>/npm`.                                                                                                                          | Confirm first how state backups and Doctor treat that directory today.       |
-| 5   | Whether to accept the B1 package marker.                                   | Yes. It ships with #197922.                                                                                                                       | None.                                                                        |
-| 6   | Whether npm-owned global prefixes take a linked root.                      | Not now. It needs its own proposal.                                                                                                               | That proposal.                                                               |
-| 7   | Whether equal schema versions are enough to skip the state rehearsal.      | Yes for the snapshot and migration rehearsal; no for config validation and plugin planning.                                                       | None.                                                                        |
+| #   | Decision                                                                   | Answer                                                                                                                                            | Still open                                                                                                                           |
+| --- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| 1   | Whether owned prefixes switch releases through a linked package root.      | Yes, over rebinding and over the immutable owner, for the reasons under routes 1 and 2.                                                           | Adoption waits on the design answering what the published-driver cell found.                                                         |
+| 2   | Whether the activation journal records a pointer intent for a linked root. | Yes, through the [storage design checkpoint](/reference/database-schemas/storage-changes#review-checkpoint-for-material-changes). No new journal. | The storage design record, which has seven questions to answer. See [journaled activation](#journaled-activation-for-a-linked-root). |
+| 3   | The retention rule for release directories.                                | Leases plus a minimum age.                                                                                                                        | The minimum age.                                                                                                                     |
+| 4   | Where release directories live for the durable service copy.               | Beside `<stateDir>/npm`.                                                                                                                          | Confirm first how state backups and Doctor treat that directory today.                                                               |
+| 5   | Whether to accept the B1 package marker.                                   | Yes. It ships with #197922.                                                                                                                       | None.                                                                                                                                |
+| 6   | Whether npm-owned global prefixes take a linked root.                      | Not now. It needs its own proposal.                                                                                                               | That proposal.                                                                                                                       |
+| 7   | Whether equal schema versions are enough to skip the state rehearsal.      | Yes for the snapshot and migration rehearsal; no for config validation and plugin planning.                                                       | None.                                                                                                                                |
 
 ## Not doing
 
