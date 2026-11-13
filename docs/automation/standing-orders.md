@@ -78,12 +78,13 @@ openclaw automations add \
   --name daily-inbox-triage \
   --cron "0 8 * * 1-5" \
   --tz America/New_York \
-  --timeout-seconds 300 \
   --announce \
   --channel imessage \
   --to "+1XXXXXXXXXX" \
   --message "Execute daily inbox triage per standing orders. Check mail for new alerts. Parse, categorize, and persist each item. Report summary to owner. Escalate unknowns."
 ```
+
+This example leaves `--timeout-seconds` unset, so the isolated agent-turn job uses the scheduler's default 60-minute watchdog. If you set an explicit limit, size it for the whole workflow: setup, execution, and delivery all count toward the budget. See [Automation runtime budgets](/automation/cron-jobs/how-it-works#how-automations-work).
 
 ## Examples
 
