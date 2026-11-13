@@ -78,6 +78,27 @@ export function randomJourney(seed: number, length = TURN_KINDS.length + 6): Tur
   return ["user", ...kinds, "user"];
 }
 
+// The Advisor plugin forks the running session after each tool call. A fork's
+// request ends with fork-only items (a placeholder for a running tool, the review question), and
+// everything before them is the parent's own history.
+const ADVISOR_REVIEW = "You are an advisor reading this conversation";
+const FORK_ONLY = new RegExp(`${ADVISOR_REVIEW}|This tool call is still running`);
+
+/** First difference between a fork and the parent's next request, over what the fork shares. */
+function forkChange(fork: WireRequest, parent: WireRequest): string | undefined {
+  if (fork.system !== parent.system || fork.tools !== parent.tools) {
+    return `fork ${prefixChange(parent, { ...fork, messages: parent.messages })}`;
+  }
+  const shared = fork.messages.findIndex((message) => FORK_ONLY.test(message));
+  const end = shared < 0 ? fork.messages.length : shared;
+  for (let index = 0; index < end; index++) {
+    if (fork.messages[index] !== parent.messages[index]) {
+      return `fork message ${index}: ${fork.messages[index]!.slice(0, 200)} -> parent ${(parent.messages[index] ?? "(missing)").slice(0, 200)}`;
+    }
+  }
+  return undefined;
+}
+
 /** First change of `current` against `previous`, or undefined when it extends it. */
 function prefixChange(previous: WireRequest, current: WireRequest): string | undefined {
   if (previous.system !== current.system) {
@@ -134,13 +155,20 @@ export function usePrefixRandomizedJourney() {
       : randomJourney(seed);
     const fixture = await createFixture(`openclaw-prefix-random-${api}-${seed}-`, TOKEN, "1");
     // Target requests in order, each tagged with the step that sent it.
-    const target: Array<{ step: number; kind: TurnKind; request: WireRequest }> = [];
+    const target: Array<{ step: number; kind: TurnKind; request: WireRequest; fork?: boolean }> =
+      [];
     const seen: string[] = [];
     let step = -1;
     let ordinal = 0;
     const script = (request: WireRequest, thinkingEnabled: boolean): Reply => {
       const latest = lastMessage(request);
       const toolResult = hasToolResult(latest);
+      if (latest.includes(ADVISOR_REVIEW)) {
+        if (request.text.includes(`session=${TARGET}`)) {
+          target.push({ step, kind: journey[step] ?? "user", request, fork: true });
+        }
+        return { text: "NO_CHANGE" };
+      }
       if (request.tools === "[]") {
         return { text: "Summary: the session ran a randomized journey." };
       }
@@ -223,10 +251,9 @@ export function usePrefixRandomizedJourney() {
       for (const [key, value] of Object.entries(runtime.env)) {
         setTestEnvValue(key, value);
       }
-      if (runtime.pluginId) {
-        deleteTestEnvValue("OPENCLAW_DISABLE_BUNDLED_PLUGINS");
-        deleteTestEnvValue("OPENCLAW_BUNDLED_PLUGINS_DIR");
-      }
+      // Bundled plugins load for the transport plugin and the Advisor.
+      deleteTestEnvValue("OPENCLAW_DISABLE_BUNDLED_PLUGINS");
+      deleteTestEnvValue("OPENCLAW_BUNDLED_PLUGINS_DIR");
       await fs.writeFile(path.join(fixture.workspaceDir, "AGENTS.md"), "# Rules\n- Be brief.\n");
       await fs.writeFile(path.join(fixture.workspaceDir, "notes.txt"), "alpha\nbeta\n");
       await fs.writeFile(
@@ -251,13 +278,14 @@ export function usePrefixRandomizedJourney() {
           },
         },
         {
-          plugins: runtime.pluginId
-            ? {
-                allow: [runtime.pluginId],
-                entries: { [runtime.pluginId]: { enabled: true } },
-                slots: { memory: "none" },
-              }
-            : { enabled: false },
+          plugins: {
+            allow: ["advisor", ...(runtime.pluginId ? [runtime.pluginId] : [])],
+            entries: {
+              advisor: { enabled: true, config: { everyToolCalls: 1, everyMinutes: 0 } },
+              ...(runtime.pluginId ? { [runtime.pluginId]: { enabled: true } } : {}),
+            },
+            slots: { memory: "none" },
+          },
           tools: tools(false),
         },
       );
@@ -409,20 +437,32 @@ export function usePrefixRandomizedJourney() {
         // Each request is compared with the previous request of the same session; the first
         // request of each rebuild step may start a new prefix.
         const unexpected: Array<{ step: number; kind: TurnKind; change: string }> = [];
-        for (let index = 1; index < target.length; index++) {
-          const previous = target[index - 1]!;
-          const current = target[index]!;
+        // A fork is a side lineage: the parent chain skips it, and the fork must share the
+        // parent's bytes up to its own items.
+        const parents = target.filter((entry) => !entry.fork);
+        for (let index = 1; index < parents.length; index++) {
+          const previous = parents[index - 1]!;
+          const current = parents[index]!;
           const change = prefixChange(previous.request, current.request);
           const rebuild =
             REBUILD_KINDS.has(current.kind) &&
-            target.findIndex((entry) => entry.step === current.step) === index;
+            parents.findIndex((entry) => entry.step === current.step) === index;
           if (change && !rebuild) {
             unexpected.push({ step: current.step, kind: current.kind, change });
           }
         }
+        for (const [index, fork] of target.entries()) {
+          const parent = fork.fork
+            ? target.slice(index + 1).find((entry) => !entry.fork)
+            : undefined;
+          const change = parent ? forkChange(fork.request, parent.request) : undefined;
+          if (change) {
+            unexpected.push({ step: fork.step, kind: fork.kind, change });
+          }
+        }
         expect(
           JSON.stringify(unexpected, null, 1),
-          `seed=${seed} journey=${journey.join(",")}`,
+          `seed=${seed} journey=${journey.join(",")} breaks=${JSON.stringify(unexpected)}`,
         ).toBe("[]");
       } catch (error) {
         throw new Error(`${String(error)}\n${seen.join("\n")}`, { cause: error });
