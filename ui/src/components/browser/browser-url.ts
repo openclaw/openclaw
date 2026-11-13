@@ -76,3 +76,12 @@ export function bareNameAddress(raw: string): string | null {
   const url = normalizeBrowserUrlDraft(raw);
   return url && url !== resolveBrowserAddressInput(raw) ? url : null;
 }
+
+/**
+ * Chrome's own pages (chrome://settings, chrome://password-manager) typed by the operator.
+ * The Gateway decides which ones the operator may open; the agent never can.
+ */
+export function normalizeChromePageUrlDraft(raw: string): string | null {
+  const parsed = URL.parse(raw.trim());
+  return parsed?.protocol === "chrome:" && parsed.host ? parsed.href : null;
+}
