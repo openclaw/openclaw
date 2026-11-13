@@ -193,7 +193,9 @@ publication approval wait “released.”
 When taking on retrospective ledger fixes, claim and maintain their status in
 the issue body of [the per-agent tracker](retrospective.md#track-in-flight-fixes-per-agent)
 (`openclaw/tideclaw#11`), rather than committing in-flight status to the ledger.
-Keep open repair PRs and blocked or handed-off work visible there until resolved.
+Keep active, unmerged, blocked, or handed-off work visible there. Once a batch
+is complete and its durable ledger-update PR has merged, follow the tracker
+procedure to archive it in a comment before removing its live status.
 
 ## Resume or hand off
 

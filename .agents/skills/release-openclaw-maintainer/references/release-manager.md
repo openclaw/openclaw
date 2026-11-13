@@ -160,3 +160,5 @@ For agents fixing retrospective ledger findings, use the persistent
 `openclaw/tideclaw#11`. Check existing claims before assigning work, name each
 actual repair owner, and link their issue-body section for status and handoffs.
 Do not require ledger/repository commits to announce claims or intermediate progress.
+Archive completed batches through that procedure only after their durable
+ledger-update PR has merged; keep active batches in the issue body.

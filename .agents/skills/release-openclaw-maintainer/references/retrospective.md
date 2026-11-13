@@ -123,9 +123,20 @@ report/ledger delivery process above.
    verified outcome and fix/merge evidence when complete, or mark `released`
    with a reason when stopping without a fix. Use `blocked` with the missing
    prerequisite and next owner when work cannot proceed. Do not close issue
-   #11 when your work finishes. Comments are optional for completed-batch
-   closeout summaries, not live claims or progress. Update durable ledger
-   outcomes through their normal reviewed process, not progress commits.
+   #11 when your work finishes. Update durable ledger outcomes through their
+   normal reviewed process, not progress commits. Keep active, unmerged, or
+   blocked batches in the issue body.
+6. **Archive completed batches after the ledger merges.** Only when the batch
+   is finished **and its durable ledger-update PR is verified merged**, post a
+   required archive comment containing its final status, repair evidence, and
+   merged ledger-update PR link. Verify the comment exists and preserves that
+   evidence before removing live status. Then freshly read the issue body and
+   remove only your completed batch section or rows, preserving the
+   introduction, every other agent, and your own still-active batches. Reread
+   and verify the removal and preserved content. Reconcile uncertain writes
+   before retrying; if the archive or ledger merge cannot be verified, leave
+   the live record in place. Comments archive completed batches; they do not
+   own live claims or progress.
 
 Merge this section into the issue body, replacing placeholders and omitting
 unused fields:
