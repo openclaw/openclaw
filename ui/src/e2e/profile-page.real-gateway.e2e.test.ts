@@ -27,7 +27,8 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 
-const authenticatedUser = "primary.user@example.test";
+const authenticatedUser =
+  "https://identity.example.test/realms/team#00000000-0000-4000-8000-000000000003";
 const administrator = "administrator@example.test";
 
 suite.define(() => {
@@ -47,7 +48,8 @@ suite.define(() => {
     await runQaGatewayFixture(
       async () => {
         const guest = ensureProfileForEmail(authenticatedUser);
-        setDisplayName(guest.id, "Test Person");
+        // Reproduce a profile created before opaque proxy subjects stopped becoming names.
+        setDisplayName(guest.id, authenticatedUser);
         setUserProfileRole(ensureProfileForEmail(administrator).id, "administrator");
         const origin = new URL(suite.server.baseUrl).origin;
         const trustedProxy = {
@@ -146,7 +148,7 @@ suite.define(() => {
         const adminClient = admin;
 
         await suite.withPage(
-          { locale: "en-US", serviceWorkers: "block", viewport: { height: 800, width: 1280 } },
+          { locale: "en-US", serviceWorkers: "block", viewport: { height: 1100, width: 1280 } },
           async ({ page }) => {
             const text = (selector: string) =>
               expect.poll(() => page.locator(selector).textContent());
@@ -168,10 +170,22 @@ suite.define(() => {
               });
               await writeFile(path.join(suite.artifactDir, name), frame.png);
             };
-            await text(".profile-hero__name").toBe("Test Person");
+            const name = page.locator(".identity-name-control input");
+            await expect.poll(() => name.isEnabled()).toBe(true);
             await page.locator("#personal-instructions-content:enabled").waitFor();
+            await capture("proxy-profile.png", "#settings-profile-identity");
+            await text(".profile-hero__name").toBe(`Person ${guest.id.slice(0, 8)}`);
+            await expect.poll(() => name.inputValue()).toBe("");
+            expect(await page.locator(".identity-emails").count()).toBe(0);
+            expect(await page.locator(".profile-hero").textContent()).not.toContain(
+              authenticatedUser,
+            );
+            await name.fill("Test Person");
+            await name.press("Enter");
+            await text(".profile-hero__name").toBe("Test Person");
+            expect(await page.locator(".identity-emails").count()).toBe(0);
             await capture("guest-profile.png", "#settings-profile-access");
-            await text(".profile-hero__handle").toContain(authenticatedUser);
+            await text(".profile-hero__handle").not.toContain(authenticatedUser);
             await text(".profile-hero").not.toContain("Clipper");
             const draft = page.locator(".identity-name-control input");
             await draft.fill("Local draft");
@@ -194,6 +208,7 @@ suite.define(() => {
             await expect
               .poll(() => image.evaluate((element: HTMLImageElement) => element.naturalWidth))
               .toBeGreaterThan(0);
+            expect(await editor.locator(".identity-emails").count()).toBe(0);
             await editor.reload();
             await expect.poll(() => nameInput.inputValue()).toBe("Remote Person");
             await expect

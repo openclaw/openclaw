@@ -166,13 +166,13 @@ export function resolveProjectedControlUiSessionPrTarget(
 
 /** Audience and lineage are part of snapshot identity, never inherited from another viewer. */
 function withControlUiTaskPrTarget(
-  target: ControlUiSessionPrTarget | undefined,
+  target: ControlUiSessionPrTarget,
   projection: SessionRowProjection,
   root: EntryRow,
   getAllows: Parameters<typeof prepareTaskPublicationSessions>[2],
   ownerProfileId?: string,
-): ControlUiSessionPrTarget | undefined {
-  if (!target || root.entry.incognito || isIncognitoSessionKey(root.key)) {
+): ControlUiSessionPrTarget {
+  if (root.entry.incognito || isIncognitoSessionKey(root.key)) {
     return target;
   }
   const selected = {
@@ -190,10 +190,7 @@ function withControlUiTaskPrTarget(
     branchIdentity: target.branchIdentity ?? target.identity,
     taskReceipts,
     identity: JSON.stringify([target.identity, JSON.stringify(taskReceipts)]),
-    assertCurrent: () => {
-      target.assertCurrent?.();
-      selection.assertCurrent();
-    },
+    assertCurrent: selection.assertCurrent,
   };
 }
 
@@ -231,7 +228,6 @@ export async function prepareControlUiSessionPrServiceTarget(
         ? {
             ...target,
             assertCurrent: () => {
-              target.assertCurrent?.();
               if (
                 getProjection() !== projection ||
                 projection.capture(lookup) !== record ||
@@ -494,9 +490,7 @@ export function createControlUiSessionPrRead(params: {
         },
         actorProfile,
       );
-      return target
-        ? { target, repository, projectedIdentity: projectedTarget.identity }
-        : undefined;
+      return { target, repository, projectedIdentity: projectedTarget.identity };
     } catch (error) {
       if (error instanceof SessionRowFactsPending) {
         throw error;

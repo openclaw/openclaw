@@ -12,6 +12,7 @@ import {
   keptChannelEdits,
   buildChannelConfigPatch,
 } from "../../pages/channels/channel-config-draft.ts";
+import { storedSkillApiKeySource } from "../skills/api-key-source.ts";
 import { storedSecretSource } from "./stored-secret-source.ts";
 
 // Every snapshot here goes through the Gateway's own include, env and redaction code, so the form
@@ -254,3 +255,14 @@ it.each([
     );
   },
 );
+
+it.each([
+  ["plaintext", "plain-key-not-real", literal],
+  ["a SecretRef", { source: "env", provider: "default", id: "SET_TOKEN" }, reference],
+  ["a whole ${VAR}", "${SET_TOKEN}", { kind: "environment", name: "SET_TOKEN" }],
+  ["no key", undefined, null],
+])("classifies a skill API key stored as %s", (_name, apiKey, source) => {
+  const snapshot = gatewaySnapshot({ skills: { entries: { github: { apiKey } } } });
+  expect(storedSkillApiKeySource(snapshot, "github")).toEqual(source);
+  expect(storedSkillApiKeySource({ ...snapshot, valid: false }, "github")).toBeUndefined();
+});

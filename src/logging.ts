@@ -1,6 +1,7 @@
 export { enableConsoleCapture } from "./logging/console.js";
 export {
   getChildLogger,
+  getFileLogLevel,
   getResolvedLoggerSettings,
   isFileLogLevelEnabled,
   resetLogger,

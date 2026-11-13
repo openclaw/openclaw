@@ -9,6 +9,7 @@ import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { queuePluginSessionsChanged } from "../plugins/gateway-events.js";
 import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
+import { isGatewayAuthPolicyCurrent } from "./auth-policy.js";
 import { projectHealthSummary } from "./health/presentation.js";
 import type { HealthSummary } from "./health/types.js";
 import { ADMIN_SCOPE, QUESTIONS_SCOPE, READ_SCOPE, WRITE_SCOPE } from "./operator-scopes.js";
@@ -26,6 +27,7 @@ import {
   isSessionReadInvalidation,
   isTargetedTranscriptionEvent,
   modelMetadataInvalidationFragment,
+  resolveBroadcastSessionScope,
 } from "./server-broadcast-scopes.js";
 import type {
   SessionEventProjection,
@@ -40,6 +42,7 @@ import type { SessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import { MAX_BUFFERED_BYTES, WEBSOCKET_OPEN_READY_STATE } from "./server-constants.js";
 import type { GatewayClientRegistry } from "./server/client-registry.js";
 import { closeGatewayTransportWithGrace } from "./server/connection-transport-close.js";
+import { invalidateGatewayPolicyClient } from "./server/ws-policy-close.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { prepareSessionEventMetrics } from "./session-event-metrics.js";
 import { invalidateSharedReadResponses } from "./shared-read-responses.js";
@@ -116,36 +119,6 @@ function serializeFrameField(
   }
   const fragment = fieldJSON.startsWith(`{"${name}":`) ? `,${fieldJSON.slice(1, -1)}` : "";
   return serializeSession ? [Buffer.from(fragment)] : fragment;
-}
-
-function resolveBroadcastSessionScope(
-  payload: unknown,
-  explicit: readonly string[] | undefined,
-  explicitAgentId: string | undefined,
-): { sessionKeys: readonly string[]; agentId?: string } {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    return {
-      sessionKeys: explicit ?? [],
-      ...(explicitAgentId ? { agentId: explicitAgentId } : {}),
-    };
-  }
-  const record = payload as {
-    sessionKey?: unknown;
-    agentId?: unknown;
-    suggestion?: { sessionKey?: unknown; agentId?: unknown };
-    request?: { sessionKey?: unknown; agentId?: unknown };
-  };
-  const source = [record, record.suggestion, record.request].find(
-    (candidate) => typeof candidate?.sessionKey === "string" && candidate.sessionKey.trim(),
-  );
-  const sessionKey = typeof source?.sessionKey === "string" ? source.sessionKey.trim() : "";
-  const agentId =
-    explicitAgentId ??
-    (typeof source?.agentId === "string" ? source.agentId.trim() || undefined : undefined);
-  return {
-    sessionKeys: explicit?.length ? explicit : sessionKey ? [sessionKey] : [],
-    ...(agentId ? { agentId } : {}),
-  };
 }
 
 type FrameFields = {
@@ -272,6 +245,13 @@ export function createGatewayBroadcaster(params: {
     const sessionSubscriptionVerified = opts?.sessionSubscriptionVerified === true;
     const isSessionSubscriptionEvent = SESSION_SUBSCRIPTION_EVENTS.has(event);
     const sessionMessageSubscribers = params.sessionMessageSubscribers;
+    const outputOnly =
+      (event === "agent" || event === "session.tool") &&
+      isPlainEventPayload(payload) &&
+      payload.stream === "tool" &&
+      isPlainEventPayload(payload.data) &&
+      payload.data.phase === "update" &&
+      payload.data.outputOnly === true;
     const subscriptionRequired = event === "session.typing" || sessionSubscriptionVerified;
     let sessionSubscriberConnIdsByKey: ReadonlySet<string>[] | undefined;
     let recipientConnIds = targetConnIds;
@@ -409,6 +389,14 @@ export function createGatewayBroadcaster(params: {
         sessionKeys.length > 0 &&
         params.canReceiveSessionEvent &&
         !params.canReceiveSessionEvent(c, sessionKeys, agentId, event, payload)
+      ) {
+        continue;
+      }
+      // Capability and run targeting do not express current stdout interest.
+      // Recheck the subscription owner even for retained/verified deliveries.
+      if (
+        outputOnly &&
+        !sessionKeys.some((key) => sessionMessageSubscribers?.getLiveToolOutput(key).has(c.connId))
       ) {
         continue;
       }
@@ -683,6 +671,14 @@ export function createGatewayBroadcaster(params: {
       // Targeted frames ride the same per-client sequence as fanout frames:
       // an unstamped frame is invisible to the client's gap detector, so a
       // drop between two targeted sends would go unnoticed forever.
+      if (c.authPolicy?.delegation && !isGatewayAuthPolicyCurrent(c.authPolicy)) {
+        invalidateGatewayPolicyClient(c, {
+          reason: "gateway-policy-changed",
+          code: 4001,
+          message: "gateway policy changed",
+        });
+        continue;
+      }
       clientSeq.set(c, nextSeq);
       delivery.recordReceipt(state, sessionKeys, live, publication);
       state.inFlight += 1;

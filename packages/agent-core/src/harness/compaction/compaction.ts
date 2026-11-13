@@ -16,7 +16,7 @@ import {
   MAX_LATEST_USER_REQUEST_CHARS,
   parseCompactionDetails,
 } from "./compaction-details.js";
-import { buildCompactionFloor } from "./compaction-floor.js";
+import { buildCompactionFloor, stripSummaryFloor } from "./compaction-floor.js";
 import {
   capCompactionSummary,
   fitCompactionSummary,
@@ -29,12 +29,12 @@ import {
   clearCompactionPendingAskSection,
   computeFileLists,
   createFileOps,
+  extractCompactionMessageText,
   extractFileOpsFromMessages,
   findLatestCompactionUserMessage,
   type FileOperations,
   formatCompactionUserLabel,
   formatFileOperations,
-  getCompactionContent,
   mergeSummaryFileOperations,
   removeGeneratedCompactionSection,
 } from "./utils.js";
@@ -72,11 +72,8 @@ const MAX_REQUIRED_ASK_CONTEXT_CHARS = 2_000;
 const REQUIRED_ASK_CONTEXT_TRUNCATED_MARKER = "\n[... split-turn ask context truncated ...]\n";
 
 function extractLatestUserRequest(messages: AgentMessage[]): string | undefined {
-  const message = findLatestCompactionUserMessage(
-    messages,
-    (candidate) => getCompactionContent(candidate.content).text,
-  );
-  const source = message ? getCompactionContent(message.content).text.trim() : "";
+  const message = findLatestCompactionUserMessage(messages, extractCompactionMessageText);
+  const source = message ? extractCompactionMessageText(message) : "";
   if (!source || source.length <= MAX_LATEST_USER_REQUEST_CHARS) {
     return source || undefined;
   }
@@ -366,7 +363,8 @@ export function prepareCompaction(
   let boundaryStart = 0;
   if (prevBoundaryIndex >= 0) {
     const prevBoundary = pathEntries[prevBoundaryIndex];
-    previousSummary = prevBoundary?.type === "compaction" ? prevBoundary.summary : undefined;
+    previousSummary =
+      prevBoundary?.type === "compaction" ? stripSummaryFloor(prevBoundary.summary) : undefined;
     if (prevBoundary?.type === "compaction") {
       const details = parseCompactionDetails(prevBoundary.details);
       previousLatestUnresolvedUserRequest = details?.latestUnresolvedUserRequest;
@@ -635,10 +633,10 @@ export function compactWithoutSummary(
   const sourceMessage = preparation.isSplitTurn
     ? preparation.turnPrefixMessages.findLast(
         (message): message is Extract<AgentMessage, { role: "user" }> =>
-          message.role === "user" && Boolean(getCompactionContent(message.content).text.trim()),
+          message.role === "user" && Boolean(extractCompactionMessageText(message)),
       )
     : undefined;
-  const sourceText = sourceMessage ? getCompactionContent(sourceMessage.content).text : "";
+  const sourceText = sourceMessage ? extractCompactionMessageText(sourceMessage) : "";
   const sourceLabel = sourceMessage ? formatCompactionUserLabel(sourceMessage) : "User";
   const sourceAsk = sourceMessage
     ? formatRequiredAskContext(

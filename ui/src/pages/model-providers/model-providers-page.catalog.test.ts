@@ -451,6 +451,22 @@ describe("Models page catalog publication", () => {
     expect(discover).toHaveBeenCalledOnce();
   });
 
+  it("reports a saved default as done while discovery continues in the background", async () => {
+    const { context, readPublished, runtimeConfig } = createCatalogHarness();
+    readPublished.mockReturnValue({ ...preparedCatalog, pendingProviders: ["openai"] });
+    const page = appendPage(context);
+    await waitForProviders(page, savedModelConfig);
+    const progress = () =>
+      page.querySelector('.model-providers__catalog-progress[role="status"]')?.textContent;
+    await waitForSolid(() => expect(progress()).toBe("Looking for more models in the background…"));
+
+    page.view.props.onPrimaryChange("openai/prepared-utility");
+    await waitForSolid(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+    await drainPageUpdates(page);
+
+    expect(progress()).toBe("Saved. Looking for more models in the background…");
+  });
+
   it.each(["utility"] as const)(
     "Models page %s picker opens without a request and preserves saved choices as publication completes",
     async (role) => {
@@ -542,7 +558,6 @@ describe("Models page catalog publication", () => {
         page.querySelector('[role="option"][data-value="openai/published-later"]'),
       ).not.toBeNull();
       const utility = modelPicker(page, "utility");
-      utility.querySelector<HTMLButtonElement>(".header-search__toggle")!.click();
       await utility.updateComplete;
       const search = utility.querySelector<HTMLInputElement>('input[type="search"]');
       expect(search).not.toBeNull();

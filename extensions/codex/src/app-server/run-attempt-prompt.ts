@@ -29,6 +29,10 @@ import { joinPresentSections, renderCodexThreadPolicy } from "./developer-instru
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import type { CodexAttemptContext } from "./run-attempt-context.js";
 import { estimateCodexAppServerProjectedTurnTokens } from "./run-attempt-lifecycle.js";
+import {
+  resolveCodexPromptContinuity,
+  selectCodexStaleBindingDelta,
+} from "./run-attempt-prompt-continuity.js";
 import { resolveCodexShiftedPromptRanges } from "./run-attempt-prompt-ranges.js";
 import { prependCurrentInboundContext } from "./run-attempt-state.js";
 import { rotateOversizedCodexAppServerStartupBinding } from "./startup-binding.js";
@@ -36,7 +40,6 @@ import type { CodexAppServerThreadLifecycleBinding } from "./thread-lifecycle-ty
 import { hasAuthoredCodexBaseInstructions } from "./thread-prompt.js";
 import { resolveCodexProjectionStartupBinding } from "./thread-restricted-resume.js";
 import { buildCodexHistoryProvenancePrefix, buildTurnCollaborationMode } from "./turn-params.js";
-import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 
 export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   const {
@@ -342,6 +345,19 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       deferredHistoryRejection = error;
     }
   }
+  // The binding owner decides native continuity. The connection may already have rotated
+  // the admitted binding away, and thread startup may later replace it.
+  const { initialNativeThreadId } = connection;
+  let nativeThreadAction: "started" | "resumed" | "forked" | undefined;
+  const resolveContinuity = () =>
+    resolveCodexPromptContinuity({
+      initialNativeThreadId,
+      nativeThreadAction,
+      currentNativeThreadId: mutable.startupBinding?.threadId,
+      historyIncluded:
+        promptState.noEngineContinuityProjectionApplied || contextEngineBootstrapPromptApplied,
+    });
+  let reportedContinuity: ReturnType<typeof resolveContinuity> | undefined;
   // Refresh changes the transport prompt, but retains the admitted request's recorder.
   const buildPromptFromCurrentInputs = () =>
     resolveAgentHarnessBeforePromptBuildResult({
@@ -367,6 +383,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
         // Shipped prompt-hook capabilities revalidate synchronously after awaits.
         assertActive: connection.assertLegacyCurrent,
       },
+      continuity: (reportedContinuity = resolveContinuity()),
     });
   const decorateCodexTurnPromptText = (
     promptBuildResult: {
@@ -500,36 +517,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   const applyResumeStaleBindingContinuityProjection = async (
     binding: NonNullable<typeof mutable.startupBinding>,
   ) => {
-    const cutoff = Date.parse(binding.historyCoveredThrough ?? "");
-    const nativeThreadPrefix = `codex-app-server:${binding.threadId}:`;
-    const newerVisibleMessages = historyState.messages.filter((message) => {
-      if (
-        message.role !== "user" &&
-        message.role !== "assistant" &&
-        !isCodexDurableCustomMessage(message)
-      ) {
-        return false;
-      }
-      const mirrorIdentity = readMirrorIdentity(message);
-      const timestamp =
-        typeof message.timestamp === "number"
-          ? message.timestamp
-          : typeof message.timestamp === "string"
-            ? Date.parse(message.timestamp)
-            : Number.NaN;
-      return (
-        !(
-          "idempotencyKey" in message &&
-          typeof message.idempotencyKey === "string" &&
-          message.idempotencyKey.startsWith(nativeThreadPrefix)
-        ) &&
-        // Origin alone does not imply coverage: temporary threads and host-admitted
-        // user rows belong in the unseen delta. Unqualified rows rely on the cutoff.
-        !mirrorIdentity?.startsWith(nativeThreadPrefix) &&
-        Number.isFinite(timestamp) &&
-        timestamp > (Number.isFinite(cutoff) ? cutoff : 0)
-      );
-    });
+    const newerVisibleMessages = selectCodexStaleBindingDelta(historyState.messages, binding);
     if (newerVisibleMessages.length === 0) {
       return false;
     }
@@ -555,7 +543,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     }
     return await applyResumeStaleBindingContinuityProjection(binding);
   };
-  const applyNoContextEngineContinuityProjection = async (
+  const applyThreadContinuityProjection = async (
     action: "started" | "resumed" | "forked",
     binding?: NonNullable<typeof mutable.startupBinding>,
   ) => {
@@ -617,6 +605,18 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       return true;
     }
     return false;
+  };
+  // Returns whether the turn prompt needs a rebuild, including when a resume fell back
+  // to a new thread: enrichment that saw `resumed` must run again and see `invalidated`.
+  const applyNoContextEngineContinuityProjection = async (
+    action: "started" | "resumed" | "forked",
+    binding?: NonNullable<typeof mutable.startupBinding>,
+  ) => {
+    nativeThreadAction = action;
+    return (
+      (await applyThreadContinuityProjection(action, binding)) ||
+      resolveContinuity().state !== reportedContinuity?.state
+    );
   };
   const precomputedStaleBindingContinuityProjectionApplied =
     await precomputeNoContextEngineStaleBindingProjection();

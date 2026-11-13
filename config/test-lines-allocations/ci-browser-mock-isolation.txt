@@ -1,2 +1,0 @@
-# Prove disjoint browser isolation, entrypoint discovery, and empty scoped selection.
-24
