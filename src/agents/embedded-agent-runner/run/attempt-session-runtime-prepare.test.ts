@@ -18,6 +18,7 @@ import {
   resolveAdmittedRunActiveAssertion,
 } from "../../admitted-run-context.js";
 import type { SessionEntry } from "../../sessions/session-manager-types.js";
+import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 
 const mocks = vi.hoisted(() => ({
   createAnthropicPayloadLogger: vi.fn(),
@@ -75,6 +76,7 @@ vi.mock("./attempt-transcript-helpers.js", () => ({
   resolveAttemptTrajectorySessionFile: mocks.trajectoryPath,
 }));
 
+import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import { persistSessionSystemPrompt } from "../session-prompt-state.js";
 import { prepareEmbeddedAttemptSessionRuntime } from "./attempt-session-runtime-prepare.js";
 import {
@@ -102,7 +104,10 @@ function createCheckpointWriter(entries: SessionEntry[], prefix: string) {
 
 function createHistoryFixture(messages?: ReturnType<typeof buildSystemUpdateMessage>[]) {
   const fixture = createFixture();
-  fixture.transcriptPolicy.inHistorySystemUpdates = true;
+  Object.assign(fixture.transcriptPolicy, {
+    inHistorySystemUpdates: true,
+    pinnedSystemPrompt: true,
+  });
   const entries: SessionEntry[] = [];
   const appendCustomEntryAsync = createCheckpointWriter(entries, "marker");
   Object.assign(fixture.sessionManager, {
@@ -283,6 +288,37 @@ afterEach(async () => {
 });
 
 describe("prepareEmbeddedAttemptSessionRuntime", () => {
+  it("pins the session prompt on a proxy Anthropic route without in-history system messages", async () => {
+    const fixture = createHistoryFixture();
+    const model = makeProviderModelFixture({
+      provider: "proxy",
+      id: "claude-opus-5",
+      api: "anthropic-messages",
+      baseUrl: "https://proxy.example.test",
+    });
+    const policy = resolveTranscriptPolicy({
+      config: {},
+      directApiKey: true,
+      provider: model.provider,
+      modelApi: model.api,
+      modelId: model.id,
+      model,
+    });
+    expect(policy).toMatchObject({ inHistorySystemUpdates: false, pinnedSystemPrompt: true });
+    Object.assign(fixture.transcriptPolicy, policy);
+    const userTurn = await prepareEmbeddedAttemptSessionRuntime(fixture.input);
+    const admitted = await userTurn.prepareSystemPromptUpdate!(
+      "## Tooling\n- exec\n- suggest_task",
+    );
+    admitted.commit?.();
+    await fixture.persist(userTurn);
+    // An inter-session turn renders without the task-suggestion grant.
+    const sendTurn = await prepareEmbeddedAttemptSessionRuntime(fixture.input);
+    const next = await sendTurn.prepareSystemPromptUpdate!("## Tooling\n- exec");
+    expect(next.systemPrompt).toBe(admitted.systemPrompt);
+    expect(next.update?.content).toContain("## Tooling\n- exec");
+  });
+
   it("clears an unsent prompt without reading history when prompt updates remain enabled", async () => {
     const fixture = createHistoryFixture();
     const first = await prepareEmbeddedAttemptSessionRuntime(fixture.input);

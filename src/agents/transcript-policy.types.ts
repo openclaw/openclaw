@@ -14,6 +14,12 @@ export type TranscriptPolicy = {
   preserveSignatures: boolean;
   appendOnlyRuntimeContext?: boolean;
   inHistorySystemUpdates?: boolean;
+  /**
+   * Keep one system prompt per session and send later prompt changes as appended deltas.
+   * The delta is an in-history system message when `inHistorySystemUpdates` allows it,
+   * otherwise a user-role note.
+   */
+  pinnedSystemPrompt?: boolean;
   sanitizeThoughtSignatures?: {
     allowBase64Only?: boolean;
     includeCamelCase?: boolean;

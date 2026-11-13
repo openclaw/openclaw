@@ -96,7 +96,7 @@ export async function runEmbeddedAttemptPromptPhase(
     state: sessionRuntimeState,
     toolResultPromptProjectionState,
     trajectoryRecorder,
-    transcriptPolicy: { appendOnlyRuntimeContext, inHistorySystemUpdates },
+    transcriptPolicy: { appendOnlyRuntimeContext, inHistorySystemUpdates, pinnedSystemPrompt },
     transport: {
       effectiveAgentTransport,
       effectiveExtraParams,
@@ -526,7 +526,7 @@ export async function runEmbeddedAttemptPromptPhase(
         persistToolResultProjections: async () => {
           if (
             !isRawModelRun &&
-            (inHistorySystemUpdates ||
+            (pinnedSystemPrompt ||
               sessionPromptState.pendingToolSurface ||
               toolResultPromptProjectionState.frozen.size > 0)
           ) {
@@ -538,7 +538,7 @@ export async function runEmbeddedAttemptPromptPhase(
               );
               const appendEntry = (customType: string, data: unknown) =>
                 sessionManager.appendCustomEntryAsync(customType, data);
-              await (sessionRuntime.prepareSystemPromptUpdate
+              await (sessionRuntime.prepareSystemPromptUpdate && pinnedSystemPrompt
                 ? persistSessionSystemPrompt(sessionPromptState, appendEntry)
                 : persistSessionToolSurface(sessionPromptState, appendEntry));
             });

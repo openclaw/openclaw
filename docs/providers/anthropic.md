@@ -499,7 +499,11 @@ order, and lifetime without changing the pinned system prompt.
 Tool results and queued extension context also clear turn-scoped messages, so
 OpenClaw renews the current user turn's runtime context after those continuations.
 
-OAuth, proxies, Bedrock, Vertex, and Foundry keep their existing behavior.
+Every other Anthropic Messages route (OAuth, proxies and custom base URLs, Vertex,
+Foundry, and other Claude models) also pins the session system prompt. The prompt
+updates arrive as user-role notes, because these routes cannot send
+mid-conversation system messages. Runtime context keeps its user-role carrier.
+Bedrock keeps its existing behavior.
 Prefix-binding models such as Fable 5.1, Opus 5.5, and Sonnet 5.5 retain hidden
 user-role runtime-context carriers and inline inbound metadata, preserving
 consecutive user turns on the Messages API; Bedrock Converse still merges
