@@ -43,6 +43,17 @@ import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
 const { testing: externalAuthTesting } = await import("./external-auth.test-support.js");
 
+const gatewayOwner = vi.hoisted(() => ({ pid: undefined as number | undefined }));
+// mock-isolation: The owning Gateway is another process; this test process cannot hold its lock.
+vi.mock("../../infra/gateway-lock.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/gateway-lock.js")>();
+  return {
+    ...actual,
+    readActiveGatewayLockIdentity: async () =>
+      gatewayOwner.pid ? { pid: gatewayOwner.pid, port: 18789, createdAt: "" } : undefined,
+  };
+});
+
 function oauth(access: string, refresh: string, overrides: Partial<OAuthCredential> = {}) {
   return createCredential({ access, refresh, ...overrides });
 }
@@ -668,4 +679,40 @@ describe("Copilot tenant boundaries", () => {
       });
     },
   );
+});
+
+describe("credentials owned by a running Gateway", () => {
+  afterEach(() => {
+    gatewayOwner.pid = undefined;
+  });
+
+  it.each([
+    ["uses a still-valid sign-in without refreshing it", 60_000],
+    ["refuses to refresh an expired sign-in before any write", -60_000],
+  ])("%s", async (_name, expiresInMs) => {
+    await withOAuthAgentDirs("oauth-manager-gateway-owned-", async ({ mainAgentDir }) => {
+      const profileId = "openai:oauth";
+      const credential = oauth("current-access", "current-refresh", {
+        expires: Date.now() + expiresInMs,
+      });
+      saveCredential(profileId, credential, mainAgentDir);
+      const refreshCredential = vi.fn(async () => rotated());
+      gatewayOwner.pid = process.pid + 1;
+
+      const result = resolve(
+        createTestManager({ refreshCredential }),
+        profileId,
+        credential,
+        mainAgentDir,
+      );
+
+      await (expiresInMs > 0
+        ? expect(result).resolves.toMatchObject({ apiKey: "current-access" })
+        : expect(result).rejects.toThrow(
+            `The openai sign-in "openai:oauth" needs a refresh, but the Gateway (pid ${process.pid + 1}, port 18789) owns the shared credentials and only it may refresh them. No credential was changed.`,
+          ));
+      expect(refreshCredential).not.toHaveBeenCalled();
+      expect(readStored(mainAgentDir).profiles[profileId]).toEqual(credential);
+    });
+  });
 });
