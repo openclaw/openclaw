@@ -10,11 +10,7 @@ interface BrowserPanelViewportHost {
   readonly canAutoResizeViewport: boolean;
   readonly view: BrowserPanelView | null;
   readonly operations: Pick<BrowserPanelOperations, "captureClient">;
-  runAction(
-    action: (client: BrowserRequestClient) => Promise<void>,
-    refreshView?: boolean,
-    options?: { passive?: boolean },
-  ): Promise<boolean>;
+  runAction(action: (client: BrowserRequestClient) => Promise<void>): Promise<boolean>;
 }
 
 const VIEWPORT_RESIZE_DELAY_MS = 300;
@@ -135,8 +131,7 @@ export class BrowserPanelViewportOwner {
       // Invalidation retires observations, but an issued resize still has to settle.
       this.resizing = true;
       void this.controller
-        // Viewport sync is not the person's action, so it leaves their error visible.
-        .runAction((client) => resizeBrowserViewport(client, request), true, { passive: true })
+        .runAction((client) => resizeBrowserViewport(client, request))
         .finally(() => {
           this.resizing = false;
           this.schedule();

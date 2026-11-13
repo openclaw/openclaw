@@ -38,9 +38,6 @@ export type { BrowserPanelHost } from "./browser-panel-operation-ownership.ts";
 /** Synchronous browser navigation, capture and input authority; the view owns its lifetime. */
 export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
   let activeClient: GatewayBrowserClient | null = null;
-  // The shown error came from the person's own action. Passive refreshes and
-  // viewport sync keep it visible; the next action or a different error replaces it.
-  let errorFromAction = false;
   const operations = createBrowserPanelOperations(host);
   const pendingInput = new BrowserPanelPendingInput();
   const initialState: BrowserPanelState = {
@@ -95,9 +92,6 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
       // Recovery belongs to the displayed failure, not to the next operation.
       if (key === "errorText" && value === null) {
         panel.errorRetry = null;
-      }
-      if (key === "errorText") {
-        errorFromAction = false;
       }
       if (Object.is(panel[key], value)) {
         return;
@@ -202,9 +196,7 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
         return;
       }
       const invocation = operations.beginSnapshot(client);
-      if (!errorFromAction) {
-        panel.setState("errorText", null);
-      }
+      panel.setState("errorText", null);
       if (!native.activeTab && !stream.ownsView(panel.activeTargetId)) {
         panel.setState("loading", true);
       }
@@ -265,7 +257,6 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
     async runAction(
       action: (client: BrowserRequestClient) => Promise<void>,
       refreshView = true,
-      { passive = false }: { passive?: boolean } = {},
     ): Promise<boolean> {
       const client = operations.captureClient();
       if (!client) {
@@ -274,9 +265,7 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
       const epoch = operations.epoch;
       const current = () => operations.isLive(epoch, client);
       try {
-        if (!passive) {
-          panel.setState("errorText", null);
-        }
+        panel.setState("errorText", null);
         await action(client);
         if (current() && refreshView) {
           snapshots.scheduleRefresh(epoch, current);
@@ -290,7 +279,6 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
           panel.setState("evaluateUnavailable", true);
         }
         panel.reportError(error);
-        errorFromAction = !passive;
         if (!operations.hasPendingCapture) {
           panel.setState("loading", false);
         }
