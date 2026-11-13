@@ -266,6 +266,7 @@ final class GatewayProcessManager {
         self.refreshEnvironmentStatus()
         if active, self.hostingChangeInProgress { return }
         if active {
+            if source == .recovery, self.recheckActiveGatewayForRecovery() { return }
             self.startIfNeeded()
         } else {
             self.stop()
@@ -927,6 +928,33 @@ final class GatewayProcessManager {
 }
 
 extension GatewayProcessManager {
+    /// `startIfNeeded` returns while the status names a Gateway, so transport recovery alone
+    /// never notices that an attached or launchd Gateway exited. Re-check its port first; a
+    /// departed Gateway demotes the stale status and the normal start path, with its ownership
+    /// rules, decides what follows. App-hosted children are left to their supervisor's events.
+    private func recheckActiveGatewayForRecovery() -> Bool {
+        switch self.status {
+        case .running, .attachedExisting: break
+        case .stopped, .starting, .failed: return false
+        }
+        guard !self.hasAppHostedGateway else { return false }
+        guard self.gatewayStartTask == nil else { return true }
+        let observed = self.status
+        let generation = self.gatewayStartGeneration
+        let port = GatewayEnvironment.gatewayPort()
+        self.beginGatewayStartTask(generation: generation) { [weak self] in
+            let listener = await PortGuardian.shared.describe(port: port)
+            guard let self, listener == nil, self.status == observed,
+                  self.gatewayStartGeneration == generation, self.desiredActive, !self.isTerminating
+            else { return }
+            self.appendLog("[gateway] recovery found no gateway on port \(port); starting again\n")
+            self.existingGatewayDetails = nil
+            self.status = .stopped
+            self.startIfNeeded()
+        }
+        return true
+    }
+
     func gatewayReadinessContext(
         purpose: GatewayReadinessPurpose,
         port: Int,

@@ -63,6 +63,48 @@ struct GatewayProcessManagerTests {
         }
     }
 
+    @Test(arguments: [false, true])
+    func `transport recovery restarts only after the attached Gateway leaves its port`(
+        listenerRemains: Bool) async throws
+    {
+        let port = try self.availableGatewayPort()
+        try await self.withLaunchAgentEnvironment(port: port) {
+            let appState = AppStateStore.shared
+            let previousPause = appState.isPaused
+            let previousMode = appState.connectionMode
+            let previousHosting = AppDefaults.standard.object(forKey: GatewayHosting.defaultsKey)
+            let manager = self.manager
+            appState.connectionMode = .local
+            appState.isPaused = false
+            defer {
+                manager._testResetGatewayStartTask()
+                appState.isPaused = previousPause
+                appState.connectionMode = previousMode
+                AppDefaults.standard.set(previousHosting, forKey: GatewayHosting.defaultsKey)
+            }
+            let attached = GatewayProcessManager.Status.attachedExisting(details: "pid 4343")
+            if listenerRemains {
+                await PortGuardian.shared.setTestingDescriptor(self.gatewayDescriptor(pid: 4343), forPort: port)
+            }
+            manager.desiredActive = true
+            manager.status = attached
+            let generation = manager.gatewayStartGeneration
+
+            manager.setActive(true, source: .recovery)
+            // The recovery check runs as the start task; a restart replaces it with the next one.
+            await manager.gatewayStartTask?.value
+            await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
+
+            if listenerRemains {
+                #expect(manager.status == attached)
+                #expect(manager.gatewayStartGeneration == generation)
+            } else {
+                #expect(manager.status != attached)
+                #expect(manager.gatewayStartGeneration > generation)
+            }
+        }
+    }
+
     @Test(arguments: ["request", "recovery", "failed-recovery", "paused", "quit", "generation", "operator"])
     func `prepared runtime activation preserves intent until explicit Retry and valid custody`(
         scenario: String) async throws
