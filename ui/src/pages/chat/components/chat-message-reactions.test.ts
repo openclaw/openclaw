@@ -56,7 +56,7 @@ function show(
     });
     return [...host.querySelectorAll<HTMLElement>("openclaw-message-reaction-picker")];
   };
-  return { onReact, pickers: render(initialReactions), render };
+  return { onReact, pickers: render(initialReactions), render, role };
 }
 
 function pickerButton(picker: HTMLElement, label: string) {
@@ -111,7 +111,7 @@ describe("transcript message reactions", () => {
     [{ streaming: true }, "ineligible"],
     [{ role: "system" }, "ineligible"],
   ] as const)("renders %j reactions as %s", async (options, access) => {
-    const { onReact, pickers, render } = show(options);
+    const { onReact, pickers, render, role } = show(options);
     if (access === "ineligible") {
       expect(pickers).toHaveLength(0);
       expect(host.querySelector(".chat-message-reactions")).toBeNull();
@@ -123,7 +123,7 @@ describe("transcript message reactions", () => {
     const summary = host.querySelector(".chat-message-reactions")!;
     expect(
       summary.parentElement?.classList.contains(
-        options.role === "assistant" ? "chat-group-footer" : "chat-bubble",
+        role === "assistant" ? "chat-group-footer" : "chat-bubble",
       ),
     ).toBe(true);
     expect(summary.classList.contains("chat-message-reactions--own")).toBe(true);

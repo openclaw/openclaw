@@ -236,6 +236,7 @@ export function ActivityGroup(props: {
 export function MessageGroupContent(props: {
   group: MessageGroupData;
   options: NativeMessageGroupOptions;
+  footerReactionMessageKey?: string;
 }) {
   const options = createMemo(() => resolveFileLinkOwnerOptions(props.group, props.options));
   return (
@@ -252,6 +253,7 @@ export function MessageGroupContent(props: {
             item={item()}
             index={index()}
             options={{ ...options(), isForwarded: hasForwardedSource(props.group) }}
+            bubbleReactions={props.footerReactionMessageKey !== item().key}
           />
         )}
       </For>
