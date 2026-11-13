@@ -472,6 +472,23 @@ or rate limits recover, then refresh aggregates. After rotating a file, exec, or
 store secret, run `openclaw plugins reload team-reports`; environment changes
 require a Gateway restart with the updated environment.
 
+**A source warning says an API response exceeded the size limit.** Team Reports
+reads each GitHub and Discord API page with a fixed 32 MiB budget. A page over
+the budget aborts the collection that needed it — the remaining pages for that
+repository, team, or channel are not fetched — while other repositories, teams,
+channels, and sources keep collecting. A roster read — a team members or
+collaborators endpoint — that exceeds the budget aborts the entire run before
+Discord or any other source collects, so no other source runs for that period.
+The warning names the size the host declared, or how many bytes were read when it
+declared none, so a page just over
+the budget reads differently from a proxy returning something far larger. A
+failed day is not published over the last accepted report: the run records the
+source warning and leaves that day's accepted report in place. Check the
+configured API base URL (for example a GitHub Enterprise Server endpoint) and any
+proxy in front of it for oversized or unexpected output, then regenerate the
+affected days with `openclaw team-reports generate --date <day>`. The budget is a
+fixed collection bound, not a configuration option.
+
 Repository advisories are optional. An advisory request returning HTTP 403 or
 404 counts toward `advisoriesSkipped` in the GitHub source stats without adding
 a warning or marking the day stale. Rate-limit responses still wait and retry;

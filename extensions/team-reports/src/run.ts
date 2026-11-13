@@ -26,7 +26,8 @@ export async function generateReportPeriods(params: {
   };
   const loaded = await sources.github.loadRoster(resolved.github);
   if (!loaded.status.ok) {
-    throw new Error("GitHub roster unavailable; check token access and configured teams");
+    const detail = loaded.status.warnings.length ? ` (${loaded.status.warnings.join("; ")})` : "";
+    throw new Error(`GitHub roster unavailable; check token access and configured teams${detail}`);
   }
   const roster = buildRoster(resolved.people, loaded.people);
   params.onRoster([...new Set(roster.byLogin.values())]);

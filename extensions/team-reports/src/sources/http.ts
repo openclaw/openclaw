@@ -1,12 +1,39 @@
 import { readErrorName } from "openclaw/plugin-sdk/error-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { z } from "zod";
+import { MAX_API_RESPONSE_BYTES, formatApiResponseSize } from "../limits.js";
 import type { SourceStatus } from "../types.js";
 
 export class ApiResponseReadError extends Error {
-  constructor(readonly kind: "timeout" | "release") {
+  constructor(
+    readonly kind: "timeout" | "release" | "too-large",
+    /** Bytes read before the cutoff tripped, recorded so the warning can describe the read. */
+    readonly size?: number,
+    /** Size the host advertised, which names the real page size when the response declares one. */
+    readonly declared?: number,
+  ) {
     super(kind);
   }
+}
+
+/** Overflow detail both sources append, so the warning names the cutoff and what arrived. */
+export function describeResponseOverflow(error: ApiResponseReadError): string {
+  if (error.declared !== undefined) {
+    return ` (host declared ${formatApiResponseSize(error.declared)})`;
+  }
+  return error.size === undefined
+    ? ""
+    : ` (read ${formatApiResponseSize(error.size)} before the cutoff)`;
+}
+
+function declaredResponseBytes(response: Response): number | undefined {
+  const header = response.headers.get("content-length");
+  if (header === null) {
+    return undefined;
+  }
+  const bytes = Number(header);
+  return Number.isSafeInteger(bytes) && bytes > 0 ? bytes : undefined;
 }
 
 export async function readApiResponse(
@@ -28,10 +55,20 @@ export async function readApiResponse(
     });
     const response = result.response;
     release = result.release;
-    const body = await response.text();
+    const body = await readResponseWithLimit(response, MAX_API_RESPONSE_BYTES, {
+      onOverflow: ({ size }) => {
+        const declared = declaredResponseBytes(response);
+        // An encoded response declares its transferred length, which is below what we decoded.
+        return new ApiResponseReadError(
+          "too-large",
+          size,
+          declared !== undefined && declared >= size ? declared : undefined,
+        );
+      },
+    });
     let data: unknown;
     try {
-      data = JSON.parse(body);
+      data = JSON.parse(body.toString("utf8"));
     } catch {
       data = undefined;
     }

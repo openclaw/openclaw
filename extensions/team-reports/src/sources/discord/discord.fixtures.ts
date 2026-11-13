@@ -1,5 +1,7 @@
+import { expect } from "vitest";
+import { MAX_API_RESPONSE_BYTES } from "../../limits.js";
 import type { ReportFixtureFetch } from "../../report-network.test-support.js";
-import type { DiscordSourceConfig, SourceRuntime } from "../../types.js";
+import type { DiscordSourceConfig, SourceRuntime, SourceStatus } from "../../types.js";
 
 export const config: DiscordSourceConfig = {
   token: "synthetic-discord-secret",
@@ -32,6 +34,23 @@ export function message(atMs: number, content = "Synthetic discussion", idOffset
 
 export function json(body: unknown, status = 200, headers?: HeadersInit) {
   return new Response(JSON.stringify(body), { status, headers });
+}
+
+export function archives(threads: ReturnType<typeof thread>[], has_more = true) {
+  return json({ threads, has_more });
+}
+
+export function oversizedPage() {
+  return json([message(window.sinceMs + 1, "x".repeat(MAX_API_RESPONSE_BYTES))]);
+}
+
+export function expectStatus(status: SourceStatus, warnings: unknown[], skipped = 0) {
+  expect(status).toMatchObject({
+    ok: warnings.length === 0,
+    warnings,
+    stats: { privateArchivesSkipped: skipped },
+  });
+  expect(status.stale === true).toBe(warnings.length > 0);
 }
 
 export function runtime(

@@ -1,0 +1,2 @@
+# Preserve the roster read-failure size warning through the run-failure path (Rev 7).
+25

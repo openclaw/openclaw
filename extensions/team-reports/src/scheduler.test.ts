@@ -835,6 +835,31 @@ describe("Team Reports scheduler lifecycle", () => {
     expect(context.serviceHealth.clearFailure).toHaveBeenCalledOnce();
   });
 
+  it("records roster read failures with their size warning and aborts before other collection", async () => {
+    const { generate, store, github, discord } = await setup({ discord: true });
+    github.loadRoster.mockResolvedValueOnce({
+      people: [],
+      status: {
+        ok: false,
+        stale: true,
+        warnings: [
+          "Load team sample/engineers: API response exceeded the 32 MiB limit (host declared 209,715,214 bytes); check the API base URL or proxy for oversized output, then regenerate the affected days",
+        ],
+        stats: { apiCalls: 1 },
+      },
+    });
+    const id = await generate();
+    const run = await runById(store, id);
+    expect(run?.status).toBe("error");
+    expect(run?.error).toContain(
+      "GitHub roster unavailable; check token access and configured teams",
+    );
+    expect(run?.error).toContain("exceeded the 32 MiB limit");
+    expect(run?.error).toContain("209,715,214 bytes");
+    expect(github.collect).not.toHaveBeenCalled();
+    expect(discord.collect).not.toHaveBeenCalled();
+  });
+
   it("preserves only rollups overlapping a rejected day at month rollover", async () => {
     vi.setSystemTime(new Date("2026-09-01T12:00:00Z"));
     const { generate, store, github, nextRun } = await setup({
