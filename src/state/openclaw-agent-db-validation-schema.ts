@@ -10,6 +10,7 @@ import {
   adoptSqliteSchemaFacts,
   getAdmittedSqliteSchemaFacts,
 } from "../infra/sqlite-schema-facts.js";
+import { AgentDatabaseSchemaAdmissionChangedError } from "./agent-database-admission-error.js";
 import { adoptCanonicalSessionValidationSchema } from "./openclaw-agent-canonical-validation-schema.js";
 import {
   agentDatabaseValidationKey,
@@ -49,7 +50,9 @@ export function adoptAgentValidationSchema(
     Atomics.load(new Int32Array(schema.valid), 0) === 1,
   );
   if (required && !adopted) {
-    throw new Error("Agent schema admission changed before handle adoption; retry the operation");
+    throw new AgentDatabaseSchemaAdmissionChangedError(
+      "Agent schema admission changed before handle adoption; retry the operation",
+    );
   }
   if (adopted) {
     adoptCanonicalSessionValidationSchema(database.db);
