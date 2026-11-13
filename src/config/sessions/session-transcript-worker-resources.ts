@@ -510,7 +510,10 @@ export async function prepareSessionStoreCandidatesInWorker(
   lane.pending++;
   try {
     const reply = await lane.pool.run(
-      () => ({ kind: "session-target-prepare", request: prepared }),
+      () => {
+        lane.native = true;
+        return { kind: "session-target-prepare", request: prepared };
+      },
       {
         diagnosticOperation: "session-target-prepare",
         inputBytes: JSON.stringify(prepared).length * 2,

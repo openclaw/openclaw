@@ -1,3 +1,4 @@
+import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import { expect, it, vi } from "vitest";
 import * as lookup from "../../gateway/session-utils-store-lookup.js";
@@ -21,6 +22,31 @@ import type { PreparedSessionEntryWorkerRead } from "./session-entry-read-runtim
 import { assertCapturedSessionEntryReadSource } from "./session-entry-read-source.js";
 import { readExactSessionEntriesWithLifecycleAsync } from "./session-entry-read.worker.js";
 import * as preparation from "./session-transcript-worker-resources.js";
+
+it("retires a preparation-only worker under memory pressure and can prepare again", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const request = { storePath: database.path };
+    await closeOpenClawAgentDatabasesAsync();
+    const lane = preparation.sessionStoreLane;
+    try {
+      const first = await preparation.prepareSessionStoreCandidatesInWorker(request);
+      expect(first.candidates).not.toHaveLength(0);
+      expect(lane.pool.getSnapshot().workers).toBe(1);
+      channel("openclaw.memory.critical").publish(true);
+      await lane.rotation;
+      expect(lane.pool.getSnapshot().workers).toBe(0);
+
+      const reopened = await preparation.prepareSessionStoreCandidatesInWorker(request);
+      expect(reopened).toEqual(first);
+      expect(lane.pool.getSnapshot().workers).toBe(1);
+      channel("openclaw.memory.critical").publish(true);
+      await lane.rotation;
+      expect(lane.pool.getSnapshot().workers).toBe(0);
+    } finally {
+      await preparation.rotateDatabaseWorkers(lane);
+    }
+  }));
 
 it("projects worker discovery config while retaining the host configuration owner", () =>
   withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
