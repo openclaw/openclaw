@@ -21,7 +21,8 @@ extension OnboardingOpenClawIDService {
 enum OnboardingOpenClawIDIntent { case makeReachable, connect, joinNode }
 
 enum OnboardingOpenClawIDAction {
-    case signIn, selectClaw(String), saveRecoveryKit, confirmRecoveryKit, requestNode, checkApproval, requestChat
+    case signIn, switchAccount, selectClaw(String), saveRecoveryKit, confirmRecoveryKit, requestNode, checkApproval,
+         requestChat
     case pasteNodeInvitation(discoveryOrigin: String)
     case approveFromDevice, useRecoveryKit, chooseKitFile, retry, back
     /// The person's own comparison of the six digits on this Mac.
@@ -135,7 +136,10 @@ final class OnboardingOpenClawIDModel {
         guard !self.busy, self.unavailableReason == nil else { return nil }
         self.wait?.cancel()
         self.wait = nil
-        if case .signIn = action { self.step = .signingIn }
+        switch action {
+        case .signIn, .switchAccount: self.step = .signingIn
+        default: break
+        }
         if case .retry = action, case .ownerConnected = self.step {
             return self.run { self.step }
         }

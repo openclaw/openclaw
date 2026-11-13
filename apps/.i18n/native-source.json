@@ -1433,6 +1433,7 @@
     {"path":"apps/macos/Sources/OpenClaw/OnboardingOpenClawIDView.swift","kind":"ui-call","surface":"apple","id":"native.apple.a8da6633c7462cc6","source":"This only confirms who you are. Access to a claw still needs your approval."},
     {"path":"apps/macos/Sources/OpenClaw/OnboardingOpenClawIDView.swift","kind":"ui-call","surface":"apple","id":"native.apple.d4d40add2415ce06","source":"Try again"},
     {"path":"apps/macos/Sources/OpenClaw/OnboardingOpenClawIDView.swift","kind":"ui-call","surface":"apple","id":"native.apple.4102c03d123718e4","source":"Use OpenClaw ID to reach this Mac’s assistant from your other devices, without a VPN."},
+    {"path":"apps/macos/Sources/OpenClaw/OnboardingOpenClawIDView.swift","kind":"ui-call","surface":"apple","id":"native.apple.7a1a85beedd13d17","source":"Use a different account"},
     {"path":"apps/macos/Sources/OpenClaw/OnboardingOpenClawIDView.swift","kind":"ui-call","surface":"apple","id":"native.apple.cdb83305a1596540","source":"Use a node invitation"},
     {"path":"apps/macos/Sources/OpenClaw/OnboardingOpenClawIDView.swift","kind":"ui-call","surface":"apple","id":"native.apple.7eca19e778dfcaa0","source":"Use your recovery kit"},
     {"path":"apps/macos/Sources/OpenClaw/OnboardingOpenClawIDView.swift","kind":"ui-call","surface":"apple","id":"native.apple.ee731b6838746b9c","source":"Use your recovery kit instead"},

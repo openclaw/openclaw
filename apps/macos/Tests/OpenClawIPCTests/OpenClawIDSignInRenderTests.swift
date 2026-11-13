@@ -11,6 +11,27 @@ struct OpenClawIDSignInRenderTests {
     private static let mac = "Josh’s Mac Studio"
 
     @Test(.enabled(if: ProcessInfo.processInfo.environment["OPENCLAW_ONBOARDING_RENDER_DIR"] != nil))
+    func `account switch picker and no claws render`() async throws {
+        let output = try OnboardingRenderTests.outputDirectory()
+        let cases: [(String, OnboardingOpenClawIDStep)] = [
+            ("switch-picker", .claws(account: "sam@example.test", claws: [
+                .init(id: "studio", name: "studio.example.test", relationship: "Owner", online: true),
+                .init(id: "team", name: "team.example.test", relationship: "Operator", online: true),
+            ])),
+            ("switch-no-claws", .problem(.notInvited(account: "sam@example.test"))),
+        ]
+        for (name, step) in cases {
+            let model = OnboardingOpenClawIDModel(service: RenderService(step: step), onJoined: { _ in })
+            await model.begin(.connect)?.value
+            try #require(model.step == step)
+            try OnboardingRenderTests.capture(
+                OnboardingOpenClawIDView(model: model), name: name, label: Self.label, output: output,
+                width: 574)
+            model.cancel()
+        }
+    }
+
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["OPENCLAW_ONBOARDING_RENDER_DIR"] != nil))
     func `onboarding pages offer OpenClaw ID sign in`() throws {
         let output = try OnboardingRenderTests.outputDirectory()
         let state = AppState(preview: true)
