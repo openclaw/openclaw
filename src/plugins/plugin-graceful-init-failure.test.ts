@@ -36,10 +36,12 @@ async function loadPlugins(
   warnings?: string[],
   previousRegistry?: NonNullable<Parameters<typeof loadOpenClawPlugins>[0]>["previousRegistry"],
   errors?: string[],
+  loadMode?: Partial<NonNullable<Parameters<typeof loadOpenClawPlugins>[0]>>,
 ) {
   clearPluginLoaderCache();
   const allow = plugins.map(({ id }) => id);
   return loadOpenClawPlugins({
+    ...loadMode,
     cache: false,
     previousRegistry,
     config: {
@@ -190,4 +192,31 @@ it("summarizes error-level blocked hook registrations at startup", async () => {
   expect(summary).toContain("those handlers will never run");
   expect(summary).toContain("/status plugins");
   expect(summary).toContain("openclaw plugins inspect <id> --runtime --json");
+});
+
+it("summarizes blocked hooks on the Gateway's non-activating startup load", async () => {
+  // src/gateway/server-plugins.ts loads with activate:false + runtimeSideEffects:true,
+  // which is the load an operator actually watches. A metadata/inspection load sets
+  // neither flag and must stay quiet.
+  const blocked = writePlugin("gateway-shape-blocked", {
+    body: `module.exports = { id: "gateway-shape-blocked", register(api) {
+    api.on("before_prompt_build", () => undefined);
+  } };`,
+  });
+
+  const gatewayErrors: string[] = [];
+  await loadPlugins([blocked], undefined, undefined, gatewayErrors, {
+    activate: false,
+    runtimeSideEffects: true,
+  });
+  const quietErrors: string[] = [];
+  await loadPlugins([blocked], undefined, undefined, quietErrors, {
+    activate: false,
+    runtimeSideEffects: false,
+  });
+
+  expect(gatewayErrors.find((entry) => entry.includes("hook registrations blocked"))).toContain(
+    "gateway-shape-blocked",
+  );
+  expect(quietErrors.filter((entry) => entry.includes("hook registrations blocked"))).toEqual([]);
 });

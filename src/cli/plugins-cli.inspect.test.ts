@@ -384,6 +384,7 @@ describe("plugins cli inspect", () => {
     const message =
       'typed hook "before_prompt_build" was NOT registered: set ' +
       "plugins.entries.openclaw-beads.hooks.allowConversationAccess to true";
+    const unreported = 'typed hook "before_agent_reply" was NOT registered: no section reports it';
     const plugin = createPluginRecord({ id: "openclaw-beads", name: "Beads" });
     mockInspection(plugin, {
       shape: "hook-only",
@@ -398,6 +399,18 @@ describe("plugins cli inspect", () => {
           source: "/plugins/openclaw-beads/index.js",
         },
       ],
+      // The loader emits a diagnostic for the same refusal; the section above is
+      // the richer copy. The second diagnostic has no matching record, so the
+      // Diagnostics section stays an operator's only record of it.
+      diagnostics: [
+        { level: "error", message, pluginId: plugin.id, code: "hook-registration-blocked" },
+        {
+          level: "error",
+          message: unreported,
+          pluginId: plugin.id,
+          code: "hook-registration-blocked",
+        },
+      ],
     });
 
     await plugins("inspect", plugin.id, "--runtime");
@@ -405,6 +418,8 @@ describe("plugins cli inspect", () => {
     const output = logs.join("\n");
     expect(output).toContain("Blocked hooks");
     expect(output).toContain(`ERROR before_prompt_build: ${message}`);
+    expect(output.split(message).length - 1).toBe(1);
+    expect(output).toContain(`ERROR: ${unreported}`);
   });
 
   it.each(["", "-other"])(

@@ -1,6 +1,5 @@
 import { availableParallelism } from "node:os";
 import { isDeepStrictEqual } from "node:util";
-import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentToolResultMiddlewareRuntimeIds } from "./agent-tool-result-middleware.js";
@@ -27,7 +26,6 @@ import {
   warnAboutUntrackedLoadedPlugins,
   warnWhenAllowlistIsOpen,
 } from "./loader-provenance.js";
-import { formatPluginFailureSummary } from "./loader-records.js";
 import { samePluginLoadInput } from "./loader-registration-config.js";
 import {
   loadRuntimePluginCandidate,
@@ -47,6 +45,7 @@ import {
   maybeThrowOnPluginLoadError,
   resolveAuthorizedDreamingSidecar,
 } from "./loader-shared.js";
+import { emitPluginStartupSummaries } from "./loader-startup-summaries.js";
 import type { PluginLoadOptions } from "./loader-types.js";
 import {
   loadPluginManifestRegistryCore,
@@ -705,26 +704,7 @@ export function* loadOpenClawPluginsSteps(
       options.previousRegistry,
       replacedIds,
     );
-    if (context.shouldActivate && options.mode !== "validate") {
-      const failedPlugins = registry.plugins.filter((plugin) => plugin.failedAt != null);
-      if (failedPlugins.length > 0) {
-        logger.warn(
-          `[plugins] ${failedPlugins.length} plugin(s) failed to initialize (${formatPluginFailureSummary(
-            failedPlugins,
-          )}). Run 'openclaw plugins inspect <id> --runtime --json' for runtime diagnostics and 'openclaw plugins list' for registry state. After fixing plugin code or load paths, run 'openclaw plugins reload <id>' to retry.`,
-        );
-      }
-      const blockedHookPluginIds = uniqueValues(
-        registry.blockedHooks
-          .filter((entry) => entry.severity === "error")
-          .map((entry) => entry.pluginId),
-      );
-      if (blockedHookPluginIds.length > 0) {
-        logger.error(
-          `[plugins] hook registrations blocked for ${blockedHookPluginIds.length} plugin(s) (${blockedHookPluginIds.join(", ")}); those handlers will never run. Run '/status plugins' or 'openclaw plugins inspect <id> --runtime --json' for the blocked hook names and the config key that unblocks each one.`,
-        );
-      }
-    }
+    emitPluginStartupSummaries(registry, logger, context, options.mode);
     // Presence of this identity also admits immutable private-registry policy caching.
     getPluginRuntimeLoadContextState(registry)!.loaderCacheIdentity = loaderCacheIdentity;
     if (context.shouldActivate) {

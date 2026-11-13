@@ -1,3 +1,4 @@
+import { isBlockedHookDiagnosticReported } from "../plugins/blocked-hook-diagnostics.js";
 import type { PluginDiagnostic } from "../plugins/manifest-types.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
 
@@ -186,29 +187,15 @@ function shouldSuppressChannelPluginDiagnostic(
   );
 }
 
-function shouldSuppressBlockedHookDiagnostic(
-  diagnostic: PluginDiagnosticRecord,
-  blockedHooks: readonly BlockedPluginHookRecord[],
-): boolean {
-  if (diagnostic.code !== "hook-registration-blocked") {
-    return false;
-  }
-  // Same rule as channel failures: only suppress when the blocked-hook section
-  // actually reports it, so a diagnostic without a matching record still counts.
-  return blockedHooks.some(
-    (blocked) =>
-      blocked.message === diagnostic.message &&
-      (diagnostic.pluginId == null || blocked.pluginId === diagnostic.pluginId),
-  );
-}
-
 function getReportableDiagnostics(snapshot: StatusPluginHealthSnapshot): PluginDiagnosticRecord[] {
   const channelPluginFailures = snapshot.channelPluginFailures ?? [];
   const blockedHooks = snapshot.blockedHooks ?? [];
   return snapshot.diagnostics.filter(
     (entry) =>
+      // Same rule as channel failures: only suppress when the blocked-hook section
+      // actually reports it, so a diagnostic without a matching record still counts.
       !shouldSuppressChannelPluginDiagnostic(entry, channelPluginFailures) &&
-      !shouldSuppressBlockedHookDiagnostic(entry, blockedHooks),
+      !isBlockedHookDiagnosticReported(entry, blockedHooks),
   );
 }
 
