@@ -179,6 +179,36 @@ describe("registered id commands", () => {
   );
 
   it.each([true, false])(
+    "prints each line of a multi-line publication failure (json=%s)",
+    async (json) => {
+      readFailure = new Error(
+        "Gateway not reachable at ws://127.0.0.1:18789 (ECONNREFUSED).\n" +
+          "Start it with `openclaw gateway run` or check `openclaw gateway status`.",
+      );
+      await expect(run("rebind", json)).resolves.toBeUndefined();
+      expect(commits).toHaveLength(1);
+      expect(process.exitCode).toBe(2);
+      if (json) {
+        expect(JSON.parse(output)).toEqual({
+          moved: true,
+          bindingSeq: 2,
+          published: null,
+          publicationError:
+            "Gateway not reachable at ws://127.0.0.1:18789 (ECONNREFUSED).\n" +
+            "Start it with `openclaw gateway run` or check `openclaw gateway status`.",
+          nextStep: "openclaw id status",
+        });
+      } else {
+        expect(output).not.toContain("\\n");
+        expect(output).toContain(
+          "Publication check failed: Gateway not reachable at ws://127.0.0.1:18789 (ECONNREFUSED).\n",
+        );
+        expect(output).toContain("Start it with `openclaw gateway run`");
+      }
+    },
+  );
+
+  it.each([true, false])(
     "reports committed follow-up failure without polling or retrying (json=%s)",
     async (json) => {
       followUpError = "restart failed";

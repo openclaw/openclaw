@@ -217,7 +217,11 @@ function writeCommittedWarning(
   error: unknown,
   stage: "follow-up" | "publication",
 ) {
-  const reason = sanitizeTerminalText(error instanceof Error ? error.message : String(error));
+  // Gateway failures carry remedy lines; sanitize each line and keep its line break.
+  const reason = (error instanceof Error ? error.message : String(error))
+    .split("\n")
+    .map(sanitizeTerminalText)
+    .join("\n");
   write(
     opts,
     {
