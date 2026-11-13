@@ -25,10 +25,20 @@ function casePreservingPeerSpan(
   return undefined;
 }
 
+function matrixEventThreadIdStart(raw: string): number {
+  const marker = ":thread:";
+  const index = raw.toLowerCase().lastIndexOf(marker);
+  const start = index + marker.length;
+  return index >= 0 && raw[start] === "$" ? start : -1;
+}
+
 export function requiresFoldedSessionKeyAliasProof(sessionKey: string | undefined | null): boolean {
   const raw = normalizeOptionalString(sessionKey);
   if (!raw) {
     return false;
+  }
+  if (matrixEventThreadIdStart(raw) >= 0) {
+    return true;
   }
   const parts = raw.split(":");
   let bodyStartIndex = 0;
@@ -84,6 +94,11 @@ function writeNormalizedSessionKeyCache(raw: string, normalized: string): void {
 // Collect spans before folding so a Signal-shaped substring cannot lowercase a Matrix tail.
 function collectCasePreservedSpans(raw: string): PreservedSpan[] {
   const spans: PreservedSpan[] = [];
+  // Matrix DMs can thread the shared main session, with no Matrix channel prefix.
+  const eventStart = matrixEventThreadIdStart(raw);
+  if (eventStart >= 0) {
+    spans.push({ start: eventStart, end: raw.length, trim: false });
+  }
   // matchAll clones the global matcher, so separate keys never share a cursor.
   for (const match of raw.matchAll(SIGNAL_GROUP_ID_PATTERN)) {
     const matched = match[0];
@@ -128,7 +143,7 @@ export function normalizeSessionKeyPreservingOpaquePeerIds(
   const folded = raw.toLowerCase();
   // Ordinary inventory keys are cheap to fold and would churn the bounded
   // opaque-key cache, repeatedly scanning deleted Map entries during eviction.
-  if (!folded.includes("signal:") && !folded.includes("matrix:")) {
+  if (!folded.includes("signal:") && !folded.includes("matrix:") && !folded.includes(":thread:$")) {
     return folded;
   }
   const spans = collectCasePreservedSpans(raw)
