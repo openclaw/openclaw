@@ -3,10 +3,13 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, type Page } from "playwright/test";
 import { beforeEach, it } from "vitest";
+import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   installMockGateway,
+  createControlUiMockBootstrapConfig,
+  defaultControlUiFeatureMethods,
   type ControlUiMockGatewayScenario,
 } from "../test-helpers/control-ui-e2e.ts";
 import { fulfillWithControlUiCsp } from "./control-ui-csp.test-support.ts";
@@ -79,10 +82,14 @@ suite.define(() => {
     page: Page,
     methodResponses: Record<string, unknown> = {},
     presenceUsers = testPresenceUsers,
+    openClawIdEnabled = false,
   ) {
-    const gateway = await installMockGateway(page, {
+    const scenario: ControlUiMockGatewayScenario = {
       basePath,
       presenceUsers,
+      featureMethods: openClawIdEnabled
+        ? [...defaultControlUiFeatureMethods, "openclawId.status", "openclawId.account"]
+        : defaultControlUiFeatureMethods,
       methodResponses: {
         "users.self": { profile: testProfile },
         "agents.list": {
@@ -91,11 +98,55 @@ suite.define(() => {
         },
         ...methodResponses,
       },
-    });
+    };
+    const gateway = await installMockGateway(page, scenario);
+    if (openClawIdEnabled) {
+      await page.route("**" + CONTROL_UI_BOOTSTRAP_CONFIG_PATH, (route) =>
+        route.fulfill({
+          contentType: "application/json",
+          body: JSON.stringify({
+            ...createControlUiMockBootstrapConfig(scenario),
+            openclawIdEnabled: true,
+          }),
+        }),
+      );
+    }
     const response = await page.goto(new URL(profilePath, suite.server.baseUrl).href);
     expect(response?.status()).toBe(200);
     return gateway;
   }
+
+  it("shows the saved OpenClaw ID link over the tunnel without offering link changes", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const gateway = await openProfilePage(
+        page,
+        {
+          "openclawId.status": {
+            status: { state: "on" },
+            link: { linked: true, hostname: "studio-test.claws.example.test" },
+            channel: "tunnel",
+            accountSignIn: null,
+            remoteAccessSetup: null,
+            services: { issuerUrl: null, discoveryUrl: null, loaderDomain: null },
+          },
+          "openclawId.account": { linked: [{ email: "test@example.com", owner: true }] },
+        },
+        testPresenceUsers,
+        true,
+      );
+      const identity = page.locator("#settings-profile-identity");
+      await expect(identity.getByText("OpenClaw ID", { exact: true })).toBeVisible();
+      await expect(identity.getByText("Loading…", { exact: true })).toHaveCount(0);
+      await screenshot(page, "openclaw-id-tunnel.png");
+      await expect(identity).toContainText("test@example.com · Owner of studio");
+      await gateway.waitForRequest("openclawId.account", { match: { action: "link_status" } });
+      await expect(identity.getByRole("button", { name: "Unlink", exact: true })).toHaveCount(0);
+      await expect(
+        identity.getByRole("button", { name: "Link OpenClaw ID", exact: true }),
+      ).toHaveCount(0);
+      await expect(identity).not.toContainText("Link over a personal sign-in");
+    });
+  });
 
   it("wraps a long display name and email in both hero fields on narrow screens", async () => {
     const longName = "Primaryuser".repeat(8);

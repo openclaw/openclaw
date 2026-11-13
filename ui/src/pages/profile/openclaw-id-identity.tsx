@@ -5,6 +5,10 @@
 // as this person. Linking grants nothing; owner authority still comes from each device's
 // certificate.
 import { createSignal, For, Match, onSettled, Show, Switch } from "solid-js";
+import {
+  GatewayRequestError,
+  resolveGatewayErrorDetailCode,
+} from "../../api/gateway-connect-errors.ts";
 import { clawNameFromHostname } from "../../components/openclaw-id/claw-name.ts";
 import { RetryAction, SettingsRow, SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { registerProfileEnglish } from "../../i18n/locales/en-profile.ts";
@@ -25,7 +29,7 @@ type RowState =
   | { kind: "off" }
   | { kind: "unavailable" }
   | { kind: "failed" }
-  | { kind: "ready"; links: Link[]; claw: string | null };
+  | { kind: "ready"; links: Link[]; claw: string | null; canLink: boolean };
 
 export function OpenClawIdIdentity() {
   const context = useApplication();
@@ -46,22 +50,32 @@ export function OpenClawIdIdentity() {
       setState({ kind: "off" });
       return;
     }
-    if (status.accountSignIn !== "device") {
-      setState({ kind: "unavailable" });
-      return;
-    }
+    const canLink = status.accountSignIn === "device";
     const { linked } = await current.request<{ linked: Link[] }>("openclawId.account", {
       action: "link_status",
     });
+    if (!canLink && linked.length === 0) {
+      setState({ kind: "unavailable" });
+      return;
+    }
     setState({
       kind: "ready",
       links: linked,
+      canLink,
       claw: status.link.hostname ? clawNameFromHostname(status.link.hostname) : null,
     });
   };
   const reload = () => {
     setState({ kind: "loading" });
-    void load().catch(() => setState({ kind: "failed" }));
+    void load().catch((cause: unknown) =>
+      setState({
+        kind:
+          cause instanceof GatewayRequestError &&
+          resolveGatewayErrorDetailCode(cause) === "not_personal_connection"
+            ? "unavailable"
+            : "failed",
+      }),
+    );
   };
   const run = async (operation: () => Promise<void>) => {
     setBusy(true);
@@ -158,10 +172,12 @@ export function OpenClawIdIdentity() {
             <Match when={state().kind === "unavailable"}>{null}</Match>
             <Match when={ready()}>
               {(current) => (
-                <Show when={current().links.length > 0} fallback={linkButton(busy())}>
-                  <button class="btn btn--sm" disabled={busy()} onClick={() => void unlink()}>
-                    {t("profilePage.openclawId.unlink")}
-                  </button>
+                <Show when={current().canLink}>
+                  <Show when={current().links.length > 0} fallback={linkButton(busy())}>
+                    <button class="btn btn--sm" disabled={busy()} onClick={() => void unlink()}>
+                      {t("profilePage.openclawId.unlink")}
+                    </button>
+                  </Show>
                 </Show>
               )}
             </Match>

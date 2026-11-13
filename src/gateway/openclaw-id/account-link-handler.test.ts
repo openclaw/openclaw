@@ -165,11 +165,40 @@ describe("openclawId.account linking", () => {
     );
   });
 
+  it("reads a linked tunnel profile without allowing sign-in or link changes", async () => {
+    const tunnel = {
+      ...personal,
+      connId: "conn-tunnel",
+      internal: { ...personal.internal, openclawIdPeerKey: "tunnel-peer" },
+    };
+    live.add(tunnel);
+    store.linksOf.mockClear();
+    store.link.mockClear();
+    store.unlink.mockClear();
+    try {
+      expect(await call(tunnel, { action: "link_status", profileId: "someone-else" })).toEqual({
+        ok: true,
+        payload: { linked: [{ email: "josh@id.test", owner: false }] },
+        code: undefined,
+      });
+      expect(store.linksOf).toHaveBeenCalledExactlyOnceWith("profile-josh");
+      for (const action of ["device_begin", "device_poll", "link_held", "unlink"]) {
+        expect((await call(tunnel, { action })).code).toBe("not_personal_connection");
+      }
+      expect(store.link).not.toHaveBeenCalled();
+      expect(store.unlink).not.toHaveBeenCalled();
+    } finally {
+      live.delete(tunnel);
+    }
+  });
+
   it("refuses link status and unlink without a personal connection", async () => {
     store.unlink.mockClear();
     for (const client of [
       { internal: { isLocalClient: true } },
       { ...personal, authenticatedUserProfile: undefined },
+      { ...personal, authenticatedUserProfile: { profileId: "gateway-owner" } },
+      { ...personal, internal: { authenticatedOperator: true, syntheticClient: true } },
     ]) {
       for (const action of ["link_status", "unlink"]) {
         expect((await call(client, { action })).code).toBe("not_personal_connection");
