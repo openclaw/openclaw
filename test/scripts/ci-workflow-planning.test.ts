@@ -7032,11 +7032,21 @@ describe("ci workflow guards", () => {
           const manifest = runCiManifestFixture({
             bundledPlanner: true,
             eventName: "pull_request",
+            changedPaths: ["src/owner.test.ts"],
             scopeEnv: {
               OPENCLAW_CI_HEAD_REPOSITORY: fork.headRepository,
-              OPENCLAW_CI_RUNNER_BACKEND: profile.outputs.placement_runner_backend,
-              OPENCLAW_CI_RUNNER_PROFILE: profile.outputs.runner_profile,
-              OPENCLAW_CI_NODE_RUNNER_BACKEND: profile.outputs.node_runner_backend,
+              OPENCLAW_CI_RUNNER_BACKEND: expectDefined(
+                profile.outputs.placement_runner_backend,
+                "placement runner backend",
+              ),
+              OPENCLAW_CI_RUNNER_PROFILE: expectDefined(
+                profile.outputs.runner_profile,
+                "runner profile",
+              ),
+              OPENCLAW_CI_NODE_RUNNER_BACKEND: expectDefined(
+                profile.outputs.node_runner_backend,
+                "Node runner backend",
+              ),
             },
           });
           expect(manifest.status, manifest.output).toBe(0);
