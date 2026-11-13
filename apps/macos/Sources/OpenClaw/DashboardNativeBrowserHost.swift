@@ -158,30 +158,42 @@ final class DashboardNativeBrowserHost {
         }
         self.scheduleStatePush()
         self.onOpen?()
-        browser.webView.load(URLRequest(url: url))
+        browser.trackNavigation(browser.webView.load(URLRequest(url: url)))
     }
 
     func navigate(tabId: String, url: URL) throws {
         let webView = try self.requireWebView(tabId)
-        webView.load(URLRequest(url: url))
+        self.browserTab(for: webView)?.trackNavigation(webView.load(URLRequest(url: url)))
     }
 
     func perform(_ action: DashboardBrowserAction, tabId: String) throws {
         let webView = try self.requireWebView(tabId)
+        let browser = self.browserTab(for: webView)
         switch action {
-        case .back: webView.goBack()
-        case .forward: webView.goForward()
+        case .back: self.goBack(in: webView)
+        case .forward: self.goForward(in: webView)
         case .reload:
-            if let url = self.browserTab(for: webView)?.failedURL {
-                webView.load(URLRequest(url: url))
+            if let url = browser?.failedURL {
+                browser?.trackNavigation(webView.load(URLRequest(url: url)))
             } else {
-                webView.reload()
+                browser?.trackNavigation(webView.reload())
             }
-        case .stop: webView.stopLoading()
+        case .stop: browser?.stopLoading()
         case .close: try self.close(tabId: tabId)
         case .snapshot, .download: throw DashboardBrowserError.invalidRequest
         }
         self.scheduleStatePush()
+    }
+
+    /// Back and Forward are user navigation from the Browser panel and the Navigate menu alike.
+    func goBack(in webView: WKWebView) {
+        let navigation = webView.goBack()
+        self.browserTab(for: webView)?.trackNavigation(navigation)
+    }
+
+    func goForward(in webView: WKWebView) {
+        let navigation = webView.goForward()
+        self.browserTab(for: webView)?.trackNavigation(navigation)
     }
 
     func close(tabId: String) throws {
@@ -273,10 +285,10 @@ final class DashboardNativeBrowserHost {
         }
     }
 
-    func navigationDidFail(for webView: WKWebView, error: Error) {
+    func navigationDidFail(_ navigation: WKNavigation?, for webView: WKWebView, error: Error) {
         guard let tab = self.tabs.first(where: { $0.browser.webView === webView }) else { return }
         let browser = tab.browser
-        browser.failNavigation()
+        browser.failNavigation(navigation)
         let nsError = error as NSError
         // Stop, replacement navigations, and response-policy handoffs (downloads,
         // external browser) cancel deliberately and keep the current page.

@@ -938,11 +938,11 @@ extension DashboardWindowController {
     }
 
     func navigateBack() {
-        self.activeNavigationWebView.goBack()
+        self.nativeBrowser.goBack(in: self.activeNavigationWebView)
     }
 
     func navigateForward() {
-        self.activeNavigationWebView.goForward()
+        self.nativeBrowser.goForward(in: self.activeNavigationWebView)
     }
 
     fileprivate func closeFocusedPanelOrWindow() {
@@ -1464,9 +1464,9 @@ extension DashboardWindowController {
         self.webView(webView, didFail: navigation, withError: error)
     }
 
-    func webView(_ webView: WKWebView, didFail _: WKNavigation!, withError error: Error) {
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         if self.nativeBrowser.owns(webView) {
-            self.nativeBrowser.navigationDidFail(for: webView, error: error)
+            self.nativeBrowser.navigationDidFail(navigation, for: webView, error: error)
             return
         }
         guard webView === self.webView else { return }
@@ -1490,8 +1490,8 @@ extension DashboardWindowController {
                 URLError(.networkConnectionLost),
                 message: String(localized: "The dashboard page stopped unexpectedly."),
                 detail: String(localized: "Choose Reload to try loading the dashboard again."))
-        } else if self.nativeBrowser.owns(webView) {
-            webView.reload()
+        } else if let browser = self.nativeBrowser.browserTab(for: webView) {
+            browser.trackNavigation(webView.reload())
         }
     }
 

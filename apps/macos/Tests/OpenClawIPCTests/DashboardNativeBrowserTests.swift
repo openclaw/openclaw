@@ -432,7 +432,7 @@ struct DashboardNativeBrowserHostTests {
         #expect(fixture.host.state.tabs.count == 2)
 
         try fixture.host.close(tabId: current.id)
-        fixture.host.navigationDidFail(for: original, error: URLError(.cannotConnectToHost))
+        fixture.host.navigationDidFail(nil, for: original, error: URLError(.cannotConnectToHost))
         #expect(try fixture.host.open(tabId: "mac-retry", url: requested, sessionKey: "") == "mac-retry")
         #expect(fixture.host.state.tabs.map(\.id) == ["mac-original", "mac-retry"])
 
@@ -513,7 +513,7 @@ struct DashboardNativeBrowserHostTests {
         tab.updateRepresentedURL(redirected)
         switch transition {
         case "replacement": tab.startNavigation(NSObject())
-        case "failure": tab.failNavigation()
+        case "failure": tab.failNavigation(nil)
         default:
             tab.finishNavigation(navigation, at: redirected, title: nil)
             tab.updateRepresentedURL(replacement)
@@ -717,12 +717,14 @@ struct DashboardNativeBrowserFailureTests {
         #expect(webView.canGoBack)
     }
 
-    @Test(arguments: ["download", "stop", "replacement"])
+    @Test(arguments: ["download", "stop", "stop-before-start", "stop-after-fragment", "replacement"])
     func `deliberate interruptions keep the page without failure UI`(_ trigger: String) async throws {
         let server = try await Self.server()
         defer { server.stop() }
+        let requestReceived = AsyncTestGate()
         let stalled = try await DashboardHTTPFixture.start(beforeResponse: {
-            try? await Task.sleep(for: .seconds(60))
+            requestReceived.open()
+            await AsyncTestGate().wait()
         })
         defer { stalled.stop() }
         let controller = Self.controller(server)
@@ -732,21 +734,23 @@ struct DashboardNativeBrowserFailureTests {
         let browser = try #require(controller.nativeBrowser.browserTab(for: webView))
         try await TestWait.state("loaded article") { !webView.isLoading && webView.title == "Article" }
 
-        let expectedPath: String
+        let expectedPath = trigger == "replacement" ? "/plain" : "/article"
         switch trigger {
-        case "download":
-            try controller.nativeBrowser.navigate(tabId: "mac-article", url: server.url("/archive.bin"))
-            expectedPath = "/article"
-        case "stop":
-            try controller.nativeBrowser.navigate(tabId: "mac-article", url: stalled.url("/pending"))
-            try await TestWait.state("request reaches the stalled server") { stalled.activeConnectionCount > 0 }
-            try controller.nativeBrowser.perform(.stop, tabId: "mac-article")
-            expectedPath = "/article"
+        case "download": try controller.nativeBrowser.navigate(tabId: "mac-article", url: server.url("/archive.bin"))
         default:
-            try controller.nativeBrowser.navigate(tabId: "mac-article", url: stalled.url("/pending"))
-            try await TestWait.state("request reaches the stalled server") { stalled.activeConnectionCount > 0 }
-            try controller.nativeBrowser.navigate(tabId: "mac-article", url: server.url("/plain"))
-            expectedPath = "/plain"
+            if trigger == "stop-after-fragment" {
+                try controller.nativeBrowser.navigate(tabId: "mac-article", url: server.url("/article#section"))
+                try await TestWait
+                    .state("fragment navigation") { webView.url?.fragment == "section" && !webView.isLoading }
+                _ = try await webView.evaluateJavaScript("location.href = '\(stalled.url("/pending"))'; true")
+            } else {
+                try controller.nativeBrowser.navigate(tabId: "mac-article", url: stalled.url("/pending"))
+            }
+            if trigger != "stop-before-start" { try await requestReceived.wait("request reaches the stalled server") }
+            switch trigger {
+            case "replacement": try controller.nativeBrowser.navigate(tabId: "mac-article", url: server.url("/plain"))
+            default: try controller.nativeBrowser.perform(.stop, tabId: "mac-article")
+            }
         }
         try await TestWait.state("\(trigger) settles") {
             !webView.isLoading && webView.url?.path == expectedPath &&
@@ -777,7 +781,7 @@ struct DashboardNativeBrowserFailureTests {
             port: port,
             html: """
             <!doctype html><html><head><title>Article</title><link rel="icon" href="\(self.favicon)"></head>
-            <body>Article</body></html>
+            <body><a id="jump" href="#section">Section</a><h2 id="section">Section</h2></body></html>
             """,
             contentSecurityPolicy: "default-src 'none'; img-src data:; connect-src data:",
             rawResponseHandler: { request in
