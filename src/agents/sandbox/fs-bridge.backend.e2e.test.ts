@@ -2,10 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  createSandboxedWriteTool,
-  wrapToolMemoryFlushAppendOnlyWrite,
-} from "../agent-tools.read.js";
+import { wrapToolMemoryFlushAppendOnlyWrite } from "../agent-tools.memory-flush.js";
+import { createSandboxedWriteTool } from "../agent-tools.read.js";
 import type { SandboxBackendHandle } from "./backend-handle.types.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
 import { createLocalRemoteShellScriptRunner } from "./remote-fs-bridge.test-helpers.js";

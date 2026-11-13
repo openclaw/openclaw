@@ -18,6 +18,7 @@ it("keeps cold chat preparation independent of tool construction", () => {
         "src/agents/harness/host-capability.ts",
         "src/agents/tools/cron-tool.ts",
         "src/agents/openclaw-tools.swarm.ts",
+        "src/agents/agent-tools.read.ts",
       ],
     ),
   ).toEqual([]);

@@ -6,11 +6,11 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readMemoryArtifactProvenance } from "../memory/memory-artifact-provenance.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
+import { wrapToolMemoryFlushAppendOnlyWrite } from "./agent-tools.memory-flush.js";
 import {
   createSandboxedEditTool,
   createSandboxedReadTool,
   createSandboxedWriteTool,
-  wrapToolMemoryFlushAppendOnlyWrite,
   wrapToolWorkspaceRootGuardWithOptions,
 } from "./agent-tools.read.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";

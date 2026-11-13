@@ -5,11 +5,9 @@ import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { wrapToolMemoryFlushAppendOnlyWrite } from "./agent-tools.memory-flush.js";
 import { afterFileRead, asSource, hostFileTools } from "./agent-tools.mutation.test-support.js";
-import {
-  createHostWorkspaceWriteTool,
-  wrapToolMemoryFlushAppendOnlyWrite,
-} from "./agent-tools.read.js";
+import { createHostWorkspaceWriteTool } from "./agent-tools.read.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
