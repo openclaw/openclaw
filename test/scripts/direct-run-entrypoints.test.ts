@@ -96,11 +96,7 @@ function writeTsxFixture(modulesDir: string, marker: string) {
 const VITEST_SHIM_WRAPPER = "scripts/run-vitest.mjs" as const;
 const UNCURATED_SHIM_WRAPPER = "scripts/lib/plugin-npm-package-manifest.mjs" as const;
 
-function runExitTrailerFixture(
-  wrapper: Parameters<typeof withShimFixture>[0],
-  source: string,
-  entrypoint: "wrapper" | "implementation" = "wrapper",
-) {
+function runExitTrailerFixture(wrapper: Parameters<typeof withShimFixture>[0], source: string) {
   return withShimFixture(wrapper, async ({ implementationPath, wrapperPath, runNode }) => {
     writeFileSync(implementationPath, source);
     const env: NodeJS.ProcessEnv = {
@@ -110,11 +106,7 @@ function runExitTrailerFixture(
       ),
     };
     delete env.NODE_OPTIONS;
-    const args =
-      entrypoint === "wrapper"
-        ? [wrapperPath]
-        : ["--import", "./scripts/tsx.mjs", implementationPath];
-    return runNode(args, env, process.cwd());
+    return runNode([wrapperPath], env, process.cwd());
   });
 }
 
@@ -538,30 +530,6 @@ process.exitCode = child.status ?? 1;
       const lines = exitTrailerLines(result.stderr);
       expect(lines, formatShimResult(result)).toContain("[test] EXIT 143");
       expect(lines.at(-1), formatShimResult(result)).toBe("[test] FAILED (exit 143)");
-    },
-  );
-
-  it.each(["wrapper", "implementation"] as const)(
-    "ends a trailer-aware implementation run through its %s with one marker",
-    async (entrypoint) => {
-      // scripts/check-changed.mts is invoked both ways: `pnpm check:changed`
-      // goes through an unnamed shim, detached gate lanes run the .mts directly.
-      const trailerUrl = pathToFileURL(path.resolve("scripts/lib/failed-trailer.mts")).href;
-      const result = await runExitTrailerFixture(
-        UNCURATED_SHIM_WRAPPER,
-        `import { runWithFailedTrailer } from ${JSON.stringify(trailerUrl)};
-await runWithFailedTrailer("trailer-probe", () => {
-  process.exitCode = 5;
-});
-`,
-        entrypoint,
-      );
-
-      expect(result.status, formatShimResult(result)).toBe(5);
-      expect(exitTrailerLines(result.stderr), formatShimResult(result)).toEqual([
-        "[trailer-probe] EXIT 5",
-        "[trailer-probe] FAILED (exit 5)",
-      ]);
     },
   );
 

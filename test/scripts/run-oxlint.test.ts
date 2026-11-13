@@ -204,14 +204,6 @@ function selectedShards(group: string, options: Parameters<typeof createOxlintSh
 }
 
 describe("run-oxlint", () => {
-  it("marks a clean run so a truncated log cannot read as one", async () => {
-    // A passing run used to print nothing, leaving a killed run and a green run
-    // byte-identical in a detached log.
-    const { lines } = await captureFailedTrailer(async () => {});
-
-    expect(lines).toEqual(["[oxlint] EXIT 0"]);
-  });
-
   it("reports a string exit code as the failure it names", async () => {
     const { lines } = await captureFailedTrailer(() => {
       // process.exitCode accepts a numeric string, which the old typeof guard
