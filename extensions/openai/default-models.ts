@@ -1,11 +1,7 @@
 import {
-  listAgentIds,
-  resolveAgentEffectiveModelPrimary,
-  resolveAllowedModelRef,
-} from "openclaw/plugin-sdk/agent-runtime";
-import {
   applyAgentDefaultModelPrimary,
   ensureModelAllowlistEntry,
+  isInitialDefaultModelAllowed,
   resolveAgentModelPrimaryValue,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
@@ -18,24 +14,8 @@ export const OPENAI_DEFAULT_AUDIO_TRANSCRIPTION_MODEL = "gpt-4o-transcribe";
 export const OPENAI_DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small";
 
 function applyAllowedOpenAIProviderConfig(cfg: OpenClawConfig): OpenClawConfig | undefined {
-  // A shared default must remain usable for every agent that would inherit it.
   // Check before adding metadata: a legacy model map may itself be the restriction.
-  const inheritingAgents = listAgentIds(cfg).filter(
-    (agentId) => !resolveAgentEffectiveModelPrimary(cfg, agentId),
-  );
-  if (
-    [undefined, ...inheritingAgents].some(
-      (agentId) =>
-        "error" in
-        resolveAllowedModelRef({
-          cfg,
-          agentId,
-          catalog: [],
-          raw: OPENAI_DEFAULT_MODEL,
-          defaultProvider: "openai",
-        }),
-    )
-  ) {
+  if (!isInitialDefaultModelAllowed(cfg, OPENAI_DEFAULT_MODEL)) {
     return undefined;
   }
   const configuredModel = cfg.agents?.defaults?.model;

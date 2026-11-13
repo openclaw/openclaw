@@ -1,9 +1,4 @@
-import {
-  loadAuthProfileStoreWithoutExternalProfiles,
-  listAgentIds,
-  resolveAgentEffectiveModelPrimary,
-  resolveAllowedModelRef,
-} from "openclaw/plugin-sdk/agent-runtime";
+import { loadAuthProfileStoreWithoutExternalProfiles } from "openclaw/plugin-sdk/agent-runtime";
 import {
   createMigrationItem,
   markMigrationItemConflict,
@@ -26,6 +21,7 @@ import {
   updateAuthProfileStoreWithLock,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-auth";
+import { isInitialDefaultModelAllowed } from "openclaw/plugin-sdk/provider-onboard";
 import {
   isRecord,
   normalizeOptionalString as readString,
@@ -313,25 +309,8 @@ function applyCredentialConfig(
   credential: CodexAuthCredential,
   profileId: string,
 ): OpenClawConfig {
-  // Inspect policy before imported metadata can widen a legacy map or change an inherited default.
-  const inheritingAgents = listAgentIds(config).filter(
-    (agentId) => !resolveAgentEffectiveModelPrimary(config, agentId),
-  );
   const configureModels =
-    credential.kind === "oauth" &&
-    [undefined, ...inheritingAgents].every(
-      (agentId) =>
-        !(
-          "error" in
-          resolveAllowedModelRef({
-            cfg: config,
-            agentId,
-            catalog: [],
-            raw: OPENAI_CODEX_DEFAULT_MODEL,
-            defaultProvider: OPENAI_PROVIDER_ID,
-          })
-        ),
-    );
+    credential.kind === "oauth" && isInitialDefaultModelAllowed(config, OPENAI_CODEX_DEFAULT_MODEL);
   const next = applyAuthProfileConfig(
     configureModels
       ? (mergeMigrationConfigValue(config, credential.configPatch) as OpenClawConfig)
