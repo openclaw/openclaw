@@ -602,7 +602,9 @@ try {
       : undefined,
     scratchRemaining:
       scratchClones && fs.existsSync(scratchRoot)
-        ? fs.readdirSync(scratchRoot).filter((name) => name.startsWith("clone-")).length
+        ? fs
+            .readdirSync(scratchRoot, { withFileTypes: true })
+            .filter((entry) => entry.isDirectory()).length
         : 0,
     injectedPsiTrace: values["psi-trace"],
     pressureProbeReads,

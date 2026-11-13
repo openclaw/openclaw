@@ -57,6 +57,10 @@ it("expires only entries whose newest file is older than 24 hours, retaining bou
   const result = await f.run();
   expect(result).toMatchObject({ entriesRemoved: 1, bytesRemoved: 5, skippedLive: 0, errors: [] });
   await expect(fs.stat(expired)).rejects.toMatchObject({ code: "ENOENT" });
+  expect((await fs.readdir(path.join(f.root, ".openclaw/tmp"))).sort()).toEqual([
+    "boundary",
+    "mixed",
+  ]);
   for (const file of [boundary, fresh, oldSibling, outside]) {
     expect(await fs.readFile(file, "utf8")).toBe("proof");
   }
@@ -118,6 +122,7 @@ it("joins worker cancellation at a deletion checkpoint before releasing the chec
   expect(await fs.readdir(path.join(f.root, ".openclaw/tmp", remaining[0]!))).toHaveLength(2);
   // Ordinary expiry rediscovers the partially drained entry without a claim journal.
   expect(await f.run()).toMatchObject({ entriesRemoved: 1, filesRemoved: 3, errors: [] });
+  expect(await fs.readdir(path.join(f.root, ".openclaw/tmp"))).toEqual([]);
 });
 
 it("refuses symlink scratch roots but expires contained links without following their targets", async () => {
