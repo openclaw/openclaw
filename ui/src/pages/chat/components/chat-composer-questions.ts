@@ -1,5 +1,6 @@
 import { createMemo, createStore, merge } from "solid-js";
 import { pathForSession } from "../../../app-session-path-builder.ts";
+import { composerInputHasFocus } from "../../../lib/composer-input.ts";
 import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
 import { projectPresentation } from "../../../lib/reactive/presentation.ts";
 import { projectSource } from "../../../lib/reactive/projection.ts";
@@ -128,7 +129,7 @@ export function createComposerQuestions(paneId: string, readProps: () => Questio
       draftKey: composerDraftKey(props),
       editing:
         Boolean((props.draftSource?.read().draft ?? props.draft).trim()) ||
-        (state.composerTextarea !== null && document.activeElement === state.composerTextarea),
+        (state.composerTextarea !== null && composerInputHasFocus(state.composerTextarea)),
     };
   });
   const [disclosure, update] = createStore<QuestionDisclosure>(

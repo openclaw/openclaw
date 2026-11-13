@@ -15,6 +15,7 @@ import { mapThinkingLevel } from "../../agents/embedded-agent-runner/utils.js";
 import { resolveFastModeForElapsed, resolveFastModeState } from "../../agents/fast-mode.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { registerProviderStreamForModel } from "../../agents/provider-stream.js";
+import { withPreparedSessionCapabilityRead } from "../../agents/subagents/spawn/subagent-session-store.js";
 import { normalizeUsage, hasObservedModelUsage, toDiagnosticUsage } from "../../agents/usage.js";
 import { emitAgentEventForRunContext } from "../../infra/agent-events.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
@@ -214,39 +215,44 @@ export const executePreparedWorkerInference = async (
       runContext?.lifecycleStartedAt ??
       runContext?.registeredAt ??
       Date.now();
-    applyExtraParamsToAgent(
-      streamAgent,
-      config,
-      approved.provider,
-      approved.model,
-      {
-        ...structuredClone(streamPolicyOptions),
-        fastMode:
-          fastModeSetting === "auto"
-            ? () =>
-                resolveFastModeForElapsed({
-                  mode: "auto",
-                  startedAtMs: fastModeStartedAtMs,
-                  fastAutoOnSeconds:
-                    promptCacheContext.fastModeAutoOnSeconds ?? fastMode.fastAutoOnSeconds,
-                }).enabled
-            : fastModeSetting,
-      },
-      streamPolicyOptions.reasoning,
-      target.agentId,
-      approved.workspaceDir,
-      providerModel,
-      agentDir,
-      undefined,
-      {
-        nativeWebSearchPolicyContext: {
-          sessionKey: target.sessionKey,
-          webSearchEnabled:
-            (await getWorkerTurnToolSurface(identity)?.getSurface(identity))?.tools.some(
-              ({ definition }) => definition.name === "web_search",
-            ) === true,
+    const admittedWebSearch =
+      (await getWorkerTurnToolSurface(identity)?.getSurface(identity))?.tools.some(
+        ({ definition }) => definition.name === "web_search",
+      ) === true;
+    // Capability preparation only catches the synchronous policy read.
+    // An async callback lets SessionCapabilityReadRequired escape before the store is loaded.
+    await withPreparedSessionCapabilityRead(() =>
+      applyExtraParamsToAgent(
+        streamAgent,
+        config,
+        approved.provider,
+        approved.model,
+        {
+          ...structuredClone(streamPolicyOptions),
+          fastMode:
+            fastModeSetting === "auto"
+              ? () =>
+                  resolveFastModeForElapsed({
+                    mode: "auto",
+                    startedAtMs: fastModeStartedAtMs,
+                    fastAutoOnSeconds:
+                      promptCacheContext.fastModeAutoOnSeconds ?? fastMode.fastAutoOnSeconds,
+                  }).enabled
+              : fastModeSetting,
         },
-      },
+        streamPolicyOptions.reasoning,
+        target.agentId,
+        approved.workspaceDir,
+        providerModel,
+        agentDir,
+        undefined,
+        {
+          nativeWebSearchPolicyContext: {
+            sessionKey: target.sessionKey,
+            webSearchEnabled: admittedWebSearch,
+          },
+        },
+      ),
     );
     const recordServiceTierObservation = prepared.recordServiceTierObservation;
     const scopedStream = recordServiceTierObservation
@@ -283,6 +289,13 @@ export const executePreparedWorkerInference = async (
       return inferenceError("cancelled");
     }
 
+    const costConfig = isDiagnosticsEnabled(config)
+      ? await resolveModelCostConfig({ provider: model.provider, model: model.id, config })
+      : undefined;
+    if (signal.aborted || !params.isCurrent()) {
+      return inferenceError("cancelled");
+    }
+
     const startedAt = Date.now();
     const trace = createDiagnosticTraceContextFromActiveScope();
     let modelCallSeq = 0;
@@ -312,11 +325,7 @@ export const executePreparedWorkerInference = async (
         usage.cost?.total ??
         estimateUsageCost({
           usage,
-          cost: resolveModelCostConfig({
-            provider: model.provider,
-            model: model.id,
-            config,
-          }),
+          cost: costConfig,
         });
       emitTrustedDiagnosticEvent({
         type: "model.usage",

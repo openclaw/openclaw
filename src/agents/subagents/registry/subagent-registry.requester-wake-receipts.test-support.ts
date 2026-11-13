@@ -2,7 +2,13 @@ import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import {
+  loadExactSessionEntryReadOnly,
+  replaceSessionEntry,
+} from "../../../config/sessions/session-accessor.js";
+import { readTranscriptEventRows } from "../../../config/sessions/session-accessor.sqlite-read.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
+import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { createSubagentRunParams } from "../../subagent-test-fixtures.test-helpers.js";
@@ -195,6 +201,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
   waitForDeliveredCleanup,
   waitForAgentCallCount,
   getRequesterWakeCalls,
+  getFixture,
   createGatewayContext,
   sendMessageMock,
   setEmptyReply,
@@ -249,10 +256,17 @@ export function registerRequesterWakeReceiptBoundaryTests({
     "delivery replacement",
     "rejected wake",
     "rejected persistence",
+    "rejected newer yield",
+    "rejected stopped",
+    "rejected stable",
+    "rejected stable persistence",
+    "rejected stable newer yield",
+    "rejected stable before newer yield",
     "empty reply",
   ])("settles requester receipts: %s", async (scenario) => {
-    const rejectPersistence = scenario === "rejected persistence";
-    const rejectRequesterWake = scenario === "rejected wake" || rejectPersistence;
+    const rejectPersistence = scenario.endsWith("persistence");
+    const stableBatch = scenario.startsWith("rejected stable");
+    const rejectRequesterWake = scenario.startsWith("rejected");
     const emptyReply = scenario === "empty reply";
     const receiptDrift = scenario === "transition drift";
     const outcomeDrift = scenario === "outcome drift";
@@ -296,14 +310,80 @@ export function registerRequesterWakeReceiptBoundaryTests({
       !rejectRequesterWake && !emptyReply
         ? holdRequesterWakeReceipts({ holdOutcome: outcomeDrift })
         : undefined;
-    const settleWakeOwner = outcomeDrift || rejectPersistence ? observeRootWork() : undefined;
+    const settleWakeOwner = outcomeDrift || rejectRequesterWake ? observeRootWork() : undefined;
     const yieldTool = createRequesterYieldTool(requesterSessionKey, requesterTurnRunId);
     await expect(
       yieldTool.execute("yield-requester-wake", { message: "Wait for visible children" }),
     ).resolves.toMatchObject({ details: { status: "yielded" } });
 
+    const requesterScope = {
+      agentId: "main",
+      sessionKey: requesterSessionKey,
+      storePath: getFixture().sessionStorePath,
+    };
+    if (rejectRequesterWake) {
+      const entry = getFixture().sessionStore[requesterSessionKey]!;
+      const runId =
+        scenario === "rejected newer yield" || scenario === "rejected stable before newer yield"
+          ? "newer-yield"
+          : requesterTurnRunId;
+      await replaceSessionEntry(requesterScope, {
+        ...entry,
+        lifecycleRunId: runId,
+        activeWriterRunId: runId,
+        startedAt: Date.now() - 1_000,
+        endedAt: Date.now(),
+        ...(scenario === "rejected stopped" ? { status: "killed" } : {}),
+      });
+      getFixture().sessionStore[requesterSessionKey] =
+        loadExactSessionEntryReadOnly(requesterScope)!.entry;
+    }
+    const stableReceipt =
+      scenario === "rejected stable newer yield"
+        ? holdRequesterWakeReceipts({ holdOutcome: true })
+        : undefined;
     setWakeRefusal(rejectRequesterWake, rejectPersistence);
+    if (stableBatch) {
+      const batchRunIds = [alpha.runId, beta.runId];
+      await mutateSubagentRuns(batchRunIds, (rows) => ({
+        value: undefined,
+        postimages: new Map(
+          batchRunIds.map((runId) => {
+            const entry = rows.get(runId)!;
+            return [
+              runId,
+              {
+                ...entry,
+                requesterSettleWake: {
+                  status: "pending" as const,
+                  attemptCount: 0,
+                  batchRunIds,
+                  requesterYieldBatch: true,
+                  rearmGeneration: 1,
+                },
+              },
+            ];
+          }),
+        ),
+      }));
+      expect(
+        loadSubagentRegistryFromSqlite().get(beta.runId)?.requesterSettleWake,
+      ).not.toHaveProperty("requesterRunId");
+    }
     await settleTurn(requesterTurnRunId, [alpha, beta]);
+    if (stableReceipt) {
+      // Replace the writer after handoff failure but before its lifecycle effect.
+      await stableReceipt.outcome.entered.promise;
+      const entry = loadExactSessionEntryReadOnly(requesterScope)!.entry;
+      await replaceSessionEntry(requesterScope, {
+        ...entry,
+        lifecycleRunId: "newer-yield",
+        activeWriterRunId: "newer-yield",
+      });
+      getFixture().sessionStore[requesterSessionKey] =
+        loadExactSessionEntryReadOnly(requesterScope)!.entry;
+      stableReceipt.releaseAll();
+    }
     if (heldReceipts) {
       const members = await heldReceipts.transition.entered.promise;
       expect(members).toHaveLength(2);
@@ -422,6 +502,42 @@ export function registerRequesterWakeReceiptBoundaryTests({
         delivery: { status: "delivered" },
       });
       expect(entry?.requesterSettleWake).toBeUndefined();
+    }
+    if (rejectRequesterWake) {
+      // Cohort publication precedes its parked-lifecycle projection.
+      await settleWakeOwner?.(true);
+      const entry = loadExactSessionEntryReadOnly(requesterScope)?.entry;
+      expect(entry).toMatchObject(
+        scenario.endsWith("newer yield")
+          ? { lifecycleRunId: "newer-yield", activeWriterRunId: "newer-yield" }
+          : scenario === "rejected stopped"
+            ? { status: "killed" }
+            : stableBatch
+              ? { lifecycleRunId: requesterTurnRunId, activeWriterRunId: requesterTurnRunId }
+              : { status: "failed", lastRunId: requesterTurnRunId },
+      );
+      if (scenario === "rejected wake" || stableBatch || rejectPersistence) {
+        const events = readTranscriptEventRows(
+          openOpenClawAgentDatabase({ agentId: "main" }),
+          entry!.sessionId,
+        );
+        expect(
+          events
+            .map((event) => JSON.parse(event.eventJson))
+            .filter((event) => event.customType === "run-failed-before-reply"),
+        ).toEqual([
+          expect.objectContaining({
+            content:
+              "⚠️ The child result couldn't be delivered to this conversation. Your conversation is preserved. Check the child sessions for saved work, then retry or resend your request.",
+            display: true,
+            details: expect.objectContaining({
+              runId: stableBatch
+                ? `announce:requester-settle:main:${requesterSessionKey}:run-alpha,run-beta:yield-1:delivery-failure`
+                : requesterTurnRunId,
+            }),
+          }),
+        ]);
+      }
     }
 
     releaseAgentCall(beta.childSessionKey);

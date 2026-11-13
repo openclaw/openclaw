@@ -1,3 +1,4 @@
+import { mergeCatalog } from "../lib/merge-catalog.ts";
 import type { TranslationMap } from "../lib/types.ts";
 import { en } from "./en.ts";
 
@@ -8,7 +9,6 @@ const catalog = {
       workingDetails: "Agent is working. View details",
     },
     composer: {
-      running: "running",
       composerInput: "Chat composer",
       usePrediction: "Use suggestion",
       predictionShortcut: "Tab",
@@ -25,7 +25,6 @@ const catalog = {
       runDone: "Done",
       runInterrupted: "Interrupted",
       localCancellationCaveat: "Cancellation requested; the local model may still be finishing.",
-      runStatus: "Run status: {status}",
       compactingContext: "Compacting context…",
       contextCompacted: "Context compacted",
       fallbackActive: "Fallback active: {model}",
@@ -43,7 +42,6 @@ const catalog = {
       browserAnnotationPreview: "Browser annotation preview",
       browserAnnotationRegion: "{count} marked region",
       browserAnnotationRegions: "{count} marked regions",
-      browserAnnotationInspectedElement: "Element inspected",
       browserAnnotationRemoved: "Browser annotation removed.",
       browserAnnotationUndoUnavailable:
         "Undo is unavailable because the browser annotation limit has been reached.",
@@ -69,7 +67,6 @@ const catalog = {
       overrides: {
         count: "{count} overrides",
         countOne: "{count} override",
-        clear: "Reset this session’s changes",
       },
       contextUsage: {
         title: "Context usage details",
@@ -81,9 +78,6 @@ const catalog = {
         inputShort: "In",
         outputShort: "Out",
         costShort: "Cost",
-        latestRunTokens: "Latest run tokens",
-        estimatedCost: "Est. cost",
-        planUsage: "Plan usage",
         quotaAccountUnknown: "Quota account unknown",
         openUsage: "Open usage dashboard",
         resets: "Resets {time}",
@@ -98,7 +92,6 @@ const catalog = {
         compactDescription: "Summarizes older messages to free up space.",
         compactAfterRun: "Available after this reply finishes.",
       },
-      takePhoto: "Take photo",
       cameraAccessFailed:
         "Couldn’t access the camera. Check this browser’s camera permission and try again.",
       cameraBusy: "The camera is busy or unavailable to the browser.",
@@ -133,8 +126,6 @@ const catalog = {
       dictationProviderUnavailableShort: "No transcription provider is configured.",
       talkCapabilityChecking: "Checking provider availability…",
       talkCapabilityUnknown: "Couldn’t check provider availability. Try again.",
-      openRealtimeTalkSettings: "Talk settings",
-      openDictationSettings: "Transcription setup",
       configureCapability: "Configure",
       holdToRecordSetting: "Hold the mic button to dictate",
       holdToDictate: "Hold to dictate",
@@ -150,8 +141,6 @@ const catalog = {
       dictationFinalizing: "Finishing dictation…",
       dictationListening: "Listening…",
       dictationStopAndKeep: "Stop and keep text",
-      dictationProviderUnavailable:
-        "No transcription provider is configured for dictation. Choose one in Settings to dictate.",
       realtimeTalkCancellationRejected: "Realtime output cancellation was not accepted.",
       realtimeTalkMissingTurnIdentity: "Realtime output is missing its turn identity.",
       realtimeTalkRelayUnresponsive:
@@ -217,6 +206,7 @@ const catalog = {
       moreActions: "More queued message actions",
       cancelEdit: "Cancel editing and keep the queued message",
       states: {
+        followup: "Queued",
         applyingSettings: "Applying session settings",
         blockedByReview:
           "Queue paused. Review or discard the earlier held message in the conversation.",
@@ -224,7 +214,6 @@ const catalog = {
         pausedByStopReason: "You stopped the run",
         runningCommand: "Running command",
         waitingForReconnect: "Waiting for reconnect",
-        editing: "Editing",
         needsReview: "Needs review",
       },
       imageCount: "Image ({count})",
@@ -236,7 +225,6 @@ const catalog = {
       empty: "No people found",
       truncated: "Keep typing to find more people.",
       online: "Online",
-      offline: "Disconnected",
       unavailable: "Could not load people. Try again.",
       accessDenied: "Mention access denied. Sign in or contact an admin.",
       profileUnavailable: "Profile unverified. Reconnect or contact an admin.",
@@ -398,34 +386,6 @@ const catalog = {
   },
 } satisfies TranslationMap;
 
-export const registerChatComposerEnglish = Object.assign(
-  () => {
-    const {
-      view,
-      composer,
-      queue,
-      mentions,
-      permissions,
-      voice,
-      sendErrors,
-      attachments,
-      privateDraftReload,
-      progressLabels,
-      ...outboxRecovery
-    } = catalog.chat;
-    Object.assign(en.chat, outboxRecovery);
-    Object.assign(en.chat.view, view);
-    const { menu, ...composerLabels } = composer;
-    Object.assign(en.chat.composer, composerLabels);
-    en.chat.composer.menu ??= menu;
-    Object.assign(en.chat.queue, queue);
-    Object.assign(en.chat.mentions, mentions);
-    Object.assign(en.chat.permissions, permissions);
-    Object.assign(en.chat.voice, voice);
-    Object.assign(en.chat.sendErrors, sendErrors);
-    Object.assign(en.chat.attachments, attachments);
-    Object.assign(en.chat.privateDraftReload, privateDraftReload);
-    Object.assign(en.chat.progressLabels, progressLabels);
-  },
-  { catalog },
-);
+export const registerChatComposerEnglish = Object.assign(() => mergeCatalog(en, catalog), {
+  catalog,
+});

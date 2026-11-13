@@ -224,7 +224,7 @@ suite.define(() => {
     fallbackCase("chat", pullUrl, true),
     fallbackCase("chat", pullUrl, true, "focus"),
   ])(
-    "keeps $route $input title hints (reader: $reader) when the optional hover runtime cannot load",
+    "keeps $route $input title hints (reader: $reader) when the same-build optional hover runtime cannot load",
     ({ route, routeId, selector, reader, input }) =>
       suite.withPage({}, async ({ page }) => {
         const hovercardModule = controlUiE2eBuiltModuleRequest(
@@ -249,21 +249,19 @@ suite.define(() => {
           const link = page.locator(selector);
           await prepareFallbackLink(link);
           await expectProviderUnloaded(page);
-          // A missing hashed chunk reloads the page; wait before hovering the new document.
+          const timeOrigin = await page.evaluate(() => performance.timeOrigin);
           await Promise.all([
             page.waitForEvent("requestfailed", (request) => hovercardModule.test(request.url())),
-            page.waitForEvent("domcontentloaded"),
             // Reader prefetch may request the module before hover; release its failure only now.
             link.hover().then(() => failRuntime.resolve()),
           ]);
-          await waitForControlUiRoute(page, { routeId });
-          await prepareFallbackLink(link);
           await page.mouse.move(0, 0);
           await link[input === "focus" ? "focus" : "hover"]();
           await page.locator(".tooltip-content").filter({ hasText: "Guide details" }).waitFor();
           expect(await page.locator(".link-hovercard").count()).toBe(0);
           expect(await gateway.getRequests("controlUi.linkPreview")).toEqual([]);
           expect(await gateway.getRequests("forge.preview")).toEqual([]);
+          expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin);
         } finally {
           failRuntime.resolve();
         }

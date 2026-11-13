@@ -121,7 +121,6 @@ suite.define(() => {
         await ring.focus();
         await page.keyboard.press("Enter");
         const panel = page.locator(".context-usage__popover");
-        await panel.waitFor({ state: "visible" });
         const expectedAccount = baseline
           ? scenario.reverse
             ? accounts[1]
@@ -135,6 +134,7 @@ suite.define(() => {
         if (unknown) {
           expect(await panel.locator(".context-usage__account").count()).toBe(0);
         } else {
+          await panel.locator(".context-usage__limit-value").waitFor({ state: "visible" });
           expect(await panel.locator(".context-usage__limit-value").allTextContents()).toContain(
             `${expectedAccount.percent}%`,
           );

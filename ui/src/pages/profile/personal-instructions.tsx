@@ -17,10 +17,16 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { hasOperatorSelfReadAccess } from "../../app/operator-access.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
-import { SettingsEmpty, SettingsSection } from "../../components/solid/settings-ui.tsx";
+import {
+  RetryAction,
+  SettingsEmpty,
+  SettingsLoadingSkeleton,
+  SettingsSection,
+} from "../../components/solid/settings-ui.tsx";
 import { registerPersonalInstructionsEnglish } from "../../i18n/locales/en-personal-instructions.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
+import { projectAgents } from "../../lib/reactive/domain-capabilities.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
 
@@ -244,6 +250,7 @@ class PersonalInstructionsState {
 
 export function PersonalInstructions(props: { hidden?: boolean }) {
   const context = useApplication();
+  const roster = projectAgents(context.agents);
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const [fileRequest, setFileRequest] = createSignal<
     PersonalFileResult | Promise<PersonalFileResult>
@@ -371,10 +378,27 @@ export function PersonalInstructions(props: { hidden?: boolean }) {
               when={view().available}
               fallback={<SettingsEmpty message={view().unavailableMessage} />}
             >
+              <Show when={roster.read().agentsError}>
+                <SettingsEmpty
+                  message={
+                    <span role="alert">
+                      {formatUiError(roster.read().agentsError)}{" "}
+                      <RetryAction type="button" onRetry={() => void context.agents.ensureList()} />
+                    </span>
+                  }
+                />
+              </Show>
               <Show
                 when={view().agents.length}
                 fallback={
-                  <SettingsEmpty message={t("profilePage.personalInstructions.noAgents")} />
+                  <Show when={!roster.read().agentsError}>
+                    <Show
+                      when={roster.read().agentsList && !roster.read().agentsLoading}
+                      fallback={<SettingsLoadingSkeleton label={t("common.loading")} rows={1} />}
+                    >
+                      <SettingsEmpty message={t("profilePage.personalInstructions.noAgents")} />
+                    </Show>
+                  </Show>
                 }
               >
                 <Loading on={fileRequest()} fallback={<Editor file={view().file} pending />}>

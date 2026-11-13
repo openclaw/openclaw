@@ -105,17 +105,21 @@ const mocks = await vi.hoisted(async () => ({
     }
     return {};
   }),
-  describeImageFile: vi.fn(async () => ({
-    text: "friendly lobster",
-    provider: "openai",
-    model: "gpt-4.1-mini",
-  })),
+  describeImageFile: vi.fn<typeof import("../media-understanding/runtime.js").describeImageFile>(
+    async () => ({
+      text: "friendly lobster",
+      provider: "openai",
+      model: "gpt-4.1-mini",
+    }),
+  ),
   prepareImageDescriptionInput: vi.fn(async () => ({
     buffer: Buffer.from("image"),
     fileName: "photo.jpg",
     mime: "image/jpeg",
   })),
-  describePreparedImageWithModel: vi.fn(async () => ({
+  describePreparedImageWithModel: vi.fn<
+    typeof import("../media-understanding/runtime.js").describePreparedImageWithModel
+  >(async () => ({
     text: "friendly lobster",
     model: "gpt-4.1-mini",
   })),
@@ -532,12 +536,11 @@ describe("capability cli", () => {
   const firstPreparedModelParams = () =>
     callArg<Record<string, unknown>>(mocks.acquireSimpleCompletionModelForAgent);
   const firstJsonOutput = () => callArg<Record<string, unknown>>(mocks.runtime.writeJson);
-  const imageDescribeCall = (index = 0) =>
-    callArg<ImageDescribeParams>(mocks.describeImageFile, index);
+  const imageDescribeCall = (index = 0) => mocks.describeImageFile.mock.calls[index]?.[0];
   const firstImagePrepareCall = () =>
     callArg<ImageDescribeParams>(mocks.prepareImageDescriptionInput);
   const firstImageDescribeWithModelCall = () =>
-    callArg<ImageDescribeParams>(mocks.describePreparedImageWithModel);
+    mocks.describePreparedImageWithModel.mock.calls[0]?.[0];
   const firstImageGenerationCall = () => callArg<Record<string, unknown>>(mocks.generateImage);
   const firstVideoGenerationCall = () => callArg<Record<string, unknown>>(mocks.generateVideo);
 
@@ -958,27 +961,43 @@ describe("capability cli", () => {
     },
   );
 
-  it.each(["local", "gateway", "audio"])("cancels pending %s execution", async (kind) => {
-    await interruptCapability((waitForAbort) => {
-      if (kind === "gateway") {
-        mocks.callGateway.mockImplementationOnce(({ signal }) => waitForAbort(signal));
-      } else if (kind === "local") {
-        mocks.completeWithPreparedSimpleCompletionModel.mockImplementationOnce(({ options }) =>
-          waitForAbort(options?.signal),
-        );
-      } else {
-        mocks.transcribeAudioFile.mockImplementationOnce((_params, execution) =>
-          waitForAbort(execution?.signal),
-        );
-        return runCap("infer", "audio", "transcribe", "--file", "memo.m4a", "--json");
-      }
-      return runModelProbe(...(kind === "gateway" ? ["--gateway"] : []));
-    });
-    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
-    expect(mocks.runtime.log).not.toHaveBeenCalled();
-    expect(mocks.runtime.error).not.toHaveBeenCalled();
-    expect(mocks.releaseSimpleCompletion).toHaveBeenCalledTimes(kind === "local" ? 1 : 0);
-  });
+  const ttsGatewayKinds = ["tts status", "tts providers", "tts personas", "tts disable"];
+  it.each(["local", "gateway", "audio", "tts", "image", "image-model", ...ttsGatewayKinds])(
+    "cancels pending %s execution",
+    async (kind) => {
+      await interruptCapability((waitForAbort) => {
+        if (kind === "gateway" || kind.startsWith("tts")) {
+          mocks.callGateway.mockImplementationOnce(({ signal }) => waitForAbort(signal));
+        } else if (kind === "local") {
+          mocks.completeWithPreparedSimpleCompletionModel.mockImplementationOnce(({ options }) =>
+            waitForAbort(options?.signal),
+          );
+        } else if (kind === "audio") {
+          mocks.transcribeAudioFile.mockImplementationOnce((_params, execution) =>
+            waitForAbort(execution?.signal),
+          );
+          return runCap("infer", "audio", "transcribe", "--file", "memo.m4a", "--json");
+        } else if (kind === "image" || kind === "image-model") {
+          const describeImage =
+            kind === "image" ? mocks.describeImageFile : mocks.describePreparedImageWithModel;
+          describeImage.mockImplementationOnce((_params, execution) =>
+            waitForAbort(execution?.signal),
+          );
+          const model = kind === "image-model" ? ["--model", "ollama/vision"] : [];
+          return runCapability("image", "describe", "--file", "photo.jpg", ...model, "--json");
+        }
+        if (kind.startsWith("tts")) {
+          const command = kind === "tts" ? ["convert", "--text", "hello"] : [kind.slice(4)];
+          return runCap("capability", "tts", ...command, "--gateway", "--json");
+        }
+        return runModelProbe(...(kind === "gateway" ? ["--gateway"] : []));
+      });
+      expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+      expect(mocks.runtime.log).not.toHaveBeenCalled();
+      expect(mocks.runtime.error).not.toHaveBeenCalled();
+      expect(mocks.releaseSimpleCompletion).toHaveBeenCalledTimes(kind === "local" ? 1 : 0);
+    },
+  );
 
   it("defaults tts status to gateway transport", async () => {
     await runCapability("tts", "status", "--json");
@@ -1025,13 +1044,7 @@ describe("capability cli", () => {
       await runCapability(
         "image",
         action,
-        ...cliOptions({
-          file: files,
-          model,
-          prompt,
-          "timeout-ms": timeoutMs,
-          json: true,
-        }),
+        ...cliOptions({ file: files, model, prompt, "timeout-ms": timeoutMs, json: true }),
       );
       if (model) {
         expect(firstImagePrepareCall()).toMatchObject({ filePath: files[0], mediaUrl: files[0] });
@@ -1078,10 +1091,8 @@ describe("capability cli", () => {
       }),
     );
     expect(mocks.prepareImageDescriptionInput).toHaveBeenCalledTimes(1);
-    const calls = mocks.describePreparedImageWithModel.mock.calls as unknown as Array<
-      [ImageDescribeParams]
-    >;
-    expect(calls.map(([call]) => `${String(call.provider)}/${String(call.model)}`)).toEqual([
+    const calls = mocks.describePreparedImageWithModel.mock.calls;
+    expect(calls.map(([call]) => `${call.provider}/${call.model}`)).toEqual([
       "openrouter/google/gemma-4-31b-it:free",
       "openrouter/google/gemma-4-31b-it",
     ]);
@@ -1099,6 +1110,30 @@ describe("capability cli", () => {
       ],
       outputs: [{ text: "fallback description", model: "google/gemma-4-31b-it" }],
     });
+  });
+
+  it("does not start an image fallback after interruption", async () => {
+    primeImageFallback();
+    const scope = new AsyncWorkScope();
+    mocks.describePreparedImageWithModel.mockImplementationOnce(async () => {
+      scope.beginClose(new DOMException("interrupted", "AbortError"));
+      throw new Error("upstream 429 rate limit");
+    });
+    await scope.track(() =>
+      runCapability(
+        "image",
+        "describe",
+        ...cliOptions({
+          file: "photo.jpg",
+          model: "openrouter/google/gemma-4-31b-it:free",
+          json: true,
+        }),
+      ),
+    );
+    await scope.drain();
+    expect(mocks.describePreparedImageWithModel).toHaveBeenCalledTimes(1);
+    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+    expect(mocks.runtime.error).not.toHaveBeenCalled();
   });
 
   it.each([

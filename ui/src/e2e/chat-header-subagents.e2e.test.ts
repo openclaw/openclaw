@@ -216,9 +216,7 @@ suite.define(() => {
         expect(await pendingStatus.locator("openclaw-working-phrase").count()).toBe(0);
         expect(await pendingStatus.textContent()).toContain("Waiting on Backend review");
         expect(await panel.isVisible()).toBe(true);
-        expect(
-          await activePane.locator(".chat-thread openclaw-chat-subagent-activity").count(),
-        ).toBe(0);
+        expect(await activePane.locator(".chat-thread .chat-subagent-activity").count()).toBe(0);
         expect(await activePane.locator('[data-test-id="chat-delegation"]').count()).toBe(0);
         expect(await waitLine.count()).toBe(0);
         expect(await transcriptHeight()).toBe(beforeWaitHeight);

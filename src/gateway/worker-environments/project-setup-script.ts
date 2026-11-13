@@ -11,7 +11,7 @@ import {
 } from "./workspace-inventory-limits.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "./workspace-sync-scripts.js";
 
-const PreparedSetupEnvironment = z
+export const PreparedSetupEnvironment = z
   .record(
     z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/u),
     z
@@ -291,7 +291,29 @@ const runSetup = (command, workspaceDir, homeDir) => {
     fs.unlinkSync(previous.completedManifest);
     fs.rmdirSync(previous.completionDirectory);
     for (const ref of new Set([previous.sourceManifestRef, previous.preparedManifestRef])) fs.unlinkSync(path.join(manifestRoot, ref.slice(7) + ".json"));
-    git(workspaceDir, ["fetch", "--depth=1", "--no-tags", "--no-write-fetch-head", "--update-shallow", "--negotiation-tip=HEAD", seed, input.baseCommit]);
+    let linked = false;
+    try {
+      const seedGit = path.join(seed, ".git");
+      const workspaceGit = path.join(workspaceDir, ".git");
+      const sourcePacks = ownedDirectory(ownedDirectory(seedGit, "objects"), "pack");
+      const targetPacks = ownedDirectory(ownedDirectory(workspaceGit, "objects"), "pack");
+      const packs = fs.readdirSync(sourcePacks).filter((name) => name.endsWith(".pack"));
+      if (packs.length) {
+        // The seed verified new objects against the same retained base. Share immutable
+        // packs instead of making fetch walk and transfer both object stores again.
+        for (const pack of packs) {
+          for (const name of [pack, pack.slice(0, -5) + ".idx"]) {
+            try { fs.linkSync(path.join(sourcePacks, name), path.join(targetPacks, name)); }
+            catch (error) { if (error.code !== "EEXIST") throw error; }
+          }
+        }
+        const shallow = path.join(workspaceGit, "shallow");
+        const boundaries = [fs.readFileSync(path.join(seedGit, "shallow"), "utf8"), fs.existsSync(shallow) ? fs.readFileSync(shallow, "utf8") : ""];
+        fs.writeFileSync(shallow, [...new Set(boundaries.join("\\n").trim().split(/\\s+/))].join("\\n") + "\\n", { mode: 0o600 });
+        linked = git(workspaceDir, ["rev-parse", "--verify", input.baseCommit + "^{commit}"]) === input.baseCommit;
+      }
+    } catch { /* Unsupported links or incomplete packs use the existing local fetch. */ }
+    if (!linked) git(workspaceDir, ["fetch", "--depth=1", "--no-tags", "--no-write-fetch-head", "--update-shallow", "--negotiation-tip=HEAD", seed, input.baseCommit]);
     // Content-only refreshes retain install outputs; lifecycle scripts reading other tracked files do not rerun.
     skipInstall = recipe.source === "detected" && !git(workspaceDir, ["diff", "--no-renames", "--name-only", "-z", previous.baseCommit, input.baseCommit]).split("\\0").some((file) => /(^|\\/)(package\\.json|pnpm-lock\\.yaml|pnpm-workspace\\.yaml|\\.npmrc|\\.pnpmfile\\.cjs|yarn\\.lock|\\.yarnrc(?:\\.yml)?|package-lock\\.json|npm-shrinkwrap\\.json|bun\\.lockb?|\\.nvmrc|\\.node-version|\\.tool-versions|mise\\.toml)$|(^|\\/)(patches|\\.yarn\\/(plugins|releases))\\//.test(file));
     // onCreate is not repeated for a content refresh; retain its generated artifacts.

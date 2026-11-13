@@ -28,6 +28,8 @@ export type ToolSearchCallOptions = CatalogVisibilityOptions &
 
 export type ToolSearchCatalogToolExecutor = (params: {
   tool: CatalogTool;
+  /** Stable catalog identity captured by the catalog owner before execution. */
+  toolId: string;
   toolName: string;
   source: CatalogSource;
   sourceName?: string;

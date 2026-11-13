@@ -94,22 +94,17 @@ export function createModelProviders(
       }
     },
     onComplete: ({ client, data }) => {
-      // A page refresh settles its feedback; an overlapping picker Retry is best effort.
-      core.resetCatalog();
       supplemental.adoptCoreData(client, data);
     },
     onCatalogComplete: (result) => {
       state.data &&= {
         ...state.data,
-        providerOutcomes: result.providerOutcomes ?? [],
-        pendingProviders: result.pendingProviders ?? [],
-        catalogRequestFailed: false,
-        catalogError: null,
+        ...result,
       };
     },
   });
   const refreshPolicy = new UsageRefreshPolicy({
-    isLoading: () => loaderPending || !routeDataObserved || core.loading || supplemental.loading,
+    isLoading: () => loaderPending || !routeDataObserved || supplemental.loading,
     reload: () => supplemental.loadUsage(),
     onIncompleteUsageExhausted: notify,
   });
@@ -288,12 +283,6 @@ export function createModelProviders(
       core.invalidate();
       routeDataObserved = true;
       setSelectedAgent(context.settingsAgentSelection.state.selectedId ?? "");
-      // The catalog can change after preload completes but before this page subscribes.
-      const catalogScope = { agentId: state.selectedAgentId };
-      const catalogCurrent =
-        !data.client ||
-        !modelCatalog.peekModelCatalog(data.client, catalogScope, { allowStale: true }) ||
-        modelCatalog.peekModelCatalog(data.client, catalogScope) !== undefined;
       if (
         readAccess &&
         (data.agentId ?? "") === state.selectedAgentId &&
@@ -301,10 +290,19 @@ export function createModelProviders(
         gateway.isRouteDataCurrent(data)
       ) {
         supplemental.adoptCoreData(data.client, data.data);
-        if (!catalogCurrent) {
-          retryCatalog();
-        }
+        const client = data.client;
+        const epoch = gateway.epoch;
+        const capturedAgentEpoch = agentEpoch;
+        void core.adoptPreloadedCatalog(
+          data,
+          () =>
+            client !== null &&
+            gateway.isCurrent({ client, epoch }) &&
+            state.selectedAgentId === data.agentId &&
+            agentEpoch === capturedAgentEpoch,
+        );
       } else {
+        data.catalog?.controller.abort();
         state.data = null;
         dataClient = null;
         refreshPolicy.resetPayload();
@@ -312,6 +310,7 @@ export function createModelProviders(
       ensureInitialData();
     }
     if (loaderChanged && !pending) {
+      ensureInitialData();
       supplemental.resume();
     }
     notify();
@@ -385,6 +384,8 @@ export function createModelProviders(
     synchronizeRoute(inputs.routeData, inputs.loaderPending ?? false);
     return () => {
       mutations.retire();
+      // A coalesced catalog reload must not fire after the page is gone.
+      core.invalidate();
       projection.dispose();
       connected = false;
       for (const cleanup of cleanups) {

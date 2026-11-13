@@ -11,12 +11,14 @@ import {
   withoutMemberBrowsers,
   withoutOwnerDevices,
 } from "./allowlist.js";
+import { withoutNodes } from "./nodes.js";
 import { applied, refuse, type AuthorityResult, type AuthorityState } from "./state.js";
 
 // A listing a revocation targets: an owner device, or one member's browser, with the seq at
 // which it was listed.
 type RevocationMatch =
   | { kind: "owner_device"; fp: KeyFingerprint; listedSeq: number }
+  | { kind: "node"; key: IrohEndpointKey; listedSeq: number }
   | { kind: "member_browser"; account: string; key: IrohEndpointKey; listedSeq: number };
 
 /**
@@ -62,13 +64,17 @@ export async function applyRevocation(
   );
   const owners = withoutOwnerDevices(state, [...devices]);
   const browsers = covered.flatMap((match) => (match.kind === "member_browser" ? [match] : []));
+  const nodes = covered.flatMap((match) => (match.kind === "node" ? [match.key] : []));
   const next = withoutMemberBrowsers(owners.state, (account, key) =>
     browsers.some((browser) => browser.account === account && browser.key === key),
   );
-  const removed = [...new Set([...owners.peers, ...browsers.map((browser) => browser.key)])];
-  return applied(next, [
+  const removed = [
+    ...new Set([...owners.peers, ...browsers.map((browser) => browser.key), ...nodes]),
+  ];
+  return applied(withoutNodes(next, nodes), [
     { type: "disconnect", peer_keys: removed },
     { type: "invalidate_tokens", peer_keys: removed },
+    ...(nodes.length ? [{ type: "remove_node_pairings" as const, peer_keys: nodes }] : []),
     { type: "publish_snapshot" },
   ]);
 }
@@ -106,6 +112,13 @@ async function peerKeyMatches(
         const listedSeq = memberPeerListedSeq(member, key) ?? 0;
         matches.push({ kind: "member_browser", account, key, listedSeq });
       }
+    }
+  }
+  for (const [key, node] of Object.entries(state.nodes)) {
+    // SAFETY: nodes is keyed by IrohEndpointKey; Object.entries widens keys to string.
+    const peer = key as IrohEndpointKey;
+    if ((await fingerprint(peer)) === target) {
+      matches.push({ kind: "node", key: peer, listedSeq: node.listed_seq });
     }
   }
   return matches;

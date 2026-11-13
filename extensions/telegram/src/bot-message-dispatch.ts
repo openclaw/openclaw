@@ -3,6 +3,7 @@ import {
   formatMediaPlaceholderText,
   isChannelPartialDeliveryError,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { runInDetachedAsyncContext } from "openclaw/plugin-sdk/concurrency-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import {
@@ -445,7 +446,8 @@ export const dispatchTelegramMessage = async (
   }
 
   const scheduleDmTopicLabel = () => {
-    if (!isDmTopic || !shouldLabelDmTopic) {
+    // Control commands (/reset, /model) leave the topic eligible for its first real message.
+    if (!isDmTopic || !shouldLabelDmTopic || dispatchContext.ctxPayload.CommandSource) {
       return;
     }
     const { RawBody, BodyForAgent, Body, media } = dispatchContext.ctxPayload;
@@ -464,7 +466,8 @@ export const dispatchTelegramMessage = async (
       return;
     }
     const topicThreadId = dispatchContext.threadSpec.id!;
-    void (async () => {
+    // The turn's work scope closes on return; the label outlives it.
+    void runInDetachedAsyncContext(async () => {
       try {
         const label = await generateTopicLabel({
           userMessage,
@@ -501,7 +504,7 @@ export const dispatchTelegramMessage = async (
       } catch (err) {
         logVerbose(`auto-topic-label: failed: ${String(err)}`);
       }
-    })();
+    });
   };
   scheduleDmTopicLabel();
   if (statusReactionController) {

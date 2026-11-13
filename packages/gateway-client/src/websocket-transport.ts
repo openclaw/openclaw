@@ -7,6 +7,7 @@ import {
   parseGatewayIpAddress,
   parseHostForAddressChecks,
 } from "./client-address-utils.js";
+import { parseUnixGatewayUrl } from "./unix-target.js";
 import type { GatewayWebSocketClientOptions, GatewayWebSocketTargetOptions } from "./websocket.js";
 
 const PRIVATE_OR_LOOPBACK_IPV4_RANGES = new Set<string>([
@@ -93,6 +94,15 @@ export function resolveGatewayWebSocketTransport(
     normalizeTlsFingerprint?: (fingerprint: string | undefined) => string;
   },
 ): { options: GatewayWebSocketClientOptions } {
+  const unix = parseUnixGatewayUrl(params.url);
+  if (unix) {
+    if (params.tlsFingerprint || params.tlsServerName) {
+      throw new GatewayWebSocketTransportConfigurationError(
+        "Unix Gateway transport does not use TLS options",
+      );
+    }
+    return { options: { ...params.options, followRedirects: false } };
+  }
   const usesTls = isWssUrl(params.url);
   if (params.tlsFingerprint && !usesTls) {
     throw new GatewayWebSocketTransportConfigurationError(

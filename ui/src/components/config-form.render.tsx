@@ -18,6 +18,7 @@ import {
 } from "./config-form.shared.ts";
 import { splitConfigSchemaByTier } from "./config-form.tiers.ts";
 import { Icon } from "./solid/icon.tsx";
+import { InlineAlert } from "./solid/inline-alert.tsx";
 import { Popover, type PopoverHandle } from "./solid/popover.tsx";
 import { SettingsDisclosure } from "./solid/settings-disclosure.tsx";
 import { SettingsEmpty, SettingsPage, LearnMoreLink } from "./solid/settings-ui.tsx";
@@ -355,7 +356,7 @@ export function ConfigForm(props: ConfigFormProps): SolidJSX.Element {
     >
       <Show
         when={schemaType(props.schema!) === "object" && props.schema!.properties}
-        fallback={<div class="callout danger">{t("configForm.unsupportedSchema")}</div>}
+        fallback={<InlineAlert tone="danger">{t("configForm.unsupportedSchema")}</InlineAlert>}
       >
         <Show
           when={visibleSections().length > 0}

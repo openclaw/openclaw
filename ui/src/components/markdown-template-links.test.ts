@@ -1,10 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { CONTROL_UI_BASE_PATH_ATTRIBUTE } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { pathForTemplateCatalogEntry } from "../app-route-paths.ts";
-import { markdownTemplatePackage } from "./markdown-template-links.ts";
 import { htmlFragment, toStreamingMarkdownParts } from "./markdown.test-support.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 
 const path = pathForTemplateCatalogEntry("@steipete/peterbot");
+afterEach(() => {
+  document.documentElement.removeAttribute(CONTROL_UI_BASE_PATH_ATTRIBUTE);
+});
 describe("inline Template recommendations", () => {
   it("renders named local catalog links as inline references in settled and streaming chat", () => {
     const source = `I’d start with [Peterbot](${path}).`;
@@ -28,7 +31,8 @@ describe("inline Template recommendations", () => {
       `${path}#other`,
       "/templates/packages/%40steipete%2F..",
     ]) {
-      expect(markdownTemplatePackage(href)).toBeNull();
+      const html = toSanitizedMarkdownHtml(`[Template](${href})`, { sessionLinks: true });
+      expect(htmlFragment(html).querySelector("a.markdown-template-link")).toBeNull();
     }
     expect(
       toSanitizedMarkdownHtml(`\`[Peterbot](${path})\``, { sessionLinks: true }),
@@ -38,7 +42,17 @@ describe("inline Template recommendations", () => {
     );
   });
   it("uses the active Control UI base path", () => {
-    expect(markdownTemplatePackage(`/work${path}`, "/work")).toBe("@steipete/peterbot");
-    expect(markdownTemplatePackage(`/other${path}`, "/work")).toBeNull();
+    document.documentElement.setAttribute(CONTROL_UI_BASE_PATH_ATTRIBUTE, "/work");
+    for (const [base, expected] of [
+      ["/work", "@steipete/peterbot"],
+      ["/other", null],
+    ]) {
+      const html = toSanitizedMarkdownHtml(`[Template](${base}${path})`, { sessionLinks: true });
+      expect(
+        htmlFragment(html)
+          .querySelector("a.markdown-template-link")
+          ?.getAttribute("data-template-package") ?? null,
+      ).toBe(expected);
+    }
   });
 });

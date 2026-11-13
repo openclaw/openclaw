@@ -37,7 +37,7 @@ it("reports the current host budget through the registered kernel status handler
       sidecarStartup: "defer",
       hostLifecycle: host.capability,
     });
-    kernel.kernel.unlockStartupMethods();
+    await kernel.kernel.unlockStartupMethods();
     kernel.kernel.markSidecarsReady();
     kernel.kernel.setDispatchReady(true);
     const client = createSyntheticPluginRuntimeClient({ scopes: [...CLI_DEFAULT_OPERATOR_SCOPES] });

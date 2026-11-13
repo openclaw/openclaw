@@ -7,6 +7,7 @@ import type {
   ConfirmDialogChoiceOptions,
   ConfirmDialogOptions,
 } from "./confirm-dialog-types.ts";
+import { Checkbox } from "./solid/checkbox.tsx";
 import { DialogHeader } from "./solid/dialog-header.tsx";
 
 export type ConfirmDialogViewOptions = ConfirmDialogOptions & Partial<ConfirmDialogChoiceOptions>;
@@ -117,8 +118,7 @@ export function ConfirmDialogView(props: {
             ) : undefined}
             {initialOptions.requiredAcknowledgement ? (
               <label class="field checkbox">
-                <input
-                  type="checkbox"
+                <Checkbox
                   checked={acknowledged()}
                   onChange={(event) => setAcknowledged(event.currentTarget.checked)}
                 />
@@ -127,8 +127,7 @@ export function ConfirmDialogView(props: {
             ) : undefined}
             {initialOptions.skipPreference && !initialOptions.requiredAcknowledgement ? (
               <label class="field checkbox exec-approval-skip">
-                <input
-                  type="checkbox"
+                <Checkbox
                   onChange={(event) => {
                     skipRequested = event.currentTarget.checked;
                   }}

@@ -133,40 +133,41 @@ it.each(["removed", "HEAD", "completion", "standalone", "appeared"] as const)(
         ? await f.preparedOperation()
         : await f.preparedOperation(undefined, { project, key: "b".repeat(64) });
     let calls = 0;
+    const runScript = async (script: string) => {
+      calls++;
+      const result = await f.runScript(script);
+      if (changed === "appeared") {
+        const replacement = await f.preparedOperation();
+        await replacement.project.prepare(f);
+        replacement.close();
+      } else if (calls === 1) {
+        const workspace = prepared.workspaceDir;
+        const git = (...args: string[]) => requireGit(workspace, args);
+        if (changed === "removed") {
+          await fs.rename(path.dirname(workspace), path.join(f.home, "retired"));
+        } else if (changed === "HEAD") {
+          await git("fetch", "--depth=1", "--update-shallow", f.repository, project.baseCommit);
+          await git("checkout", "--detach", project.baseCommit);
+        } else if (changed === "completion") {
+          const completionRoot = manifests(prepared.homeDir);
+          await fs.rename(
+            path.join(completionRoot, prepared.sourceManifestRef.slice(7)),
+            path.join(completionRoot, "0".repeat(64)),
+          );
+        } else {
+          await fs.writeFile(
+            path.join(workspace, ".git/objects/info/alternates"),
+            `${path.join(f.repository, ".git", "objects")}\n`,
+          );
+        }
+      }
+      return result;
+    };
     await expect(
       next.project.prepare({
         ...f,
-        runScriptWithBudget: (createScript) => f.runScriptWithBudget(createScript),
-        runScript: async (script) => {
-          calls++;
-          const result = await f.runScript(script);
-          if (changed === "appeared") {
-            const replacement = await f.preparedOperation();
-            await replacement.project.prepare(f);
-            replacement.close();
-          } else if (calls === 1) {
-            const workspace = prepared.workspaceDir;
-            const git = (...args: string[]) => requireGit(workspace, args);
-            if (changed === "removed") {
-              await fs.rename(path.dirname(workspace), path.join(f.home, "retired"));
-            } else if (changed === "HEAD") {
-              await git("fetch", "--depth=1", "--update-shallow", f.repository, project.baseCommit);
-              await git("checkout", "--detach", project.baseCommit);
-            } else if (changed === "completion") {
-              const completionRoot = manifests(prepared.homeDir);
-              await fs.rename(
-                path.join(completionRoot, prepared.sourceManifestRef.slice(7)),
-                path.join(completionRoot, "0".repeat(64)),
-              );
-            } else {
-              await fs.writeFile(
-                path.join(workspace, ".git/objects/info/alternates"),
-                `${path.join(f.repository, ".git", "objects")}\n`,
-              );
-            }
-          }
-          return result;
-        },
+        runScript,
+        runScriptWithBudget: (createScript) => runScript(createScript(30_000)),
       }),
     ).rejects.toThrow(
       changed === "standalone" ? "Git base is not standalone" : "changed during preparation",
@@ -178,3 +179,14 @@ it.each(["removed", "HEAD", "completion", "standalone", "appeared"] as const)(
     expect(next.getPreparedWorkspace()).toBeUndefined();
   },
 );
+
+it("requires a budgeted transport before transferring a new prepared workspace", async () => {
+  const f = await fixture();
+  const operation = await f.preparedOperation();
+  await expect(
+    operation.project.prepare({ runScript: f.runScript, upload: f.upload }),
+  ).rejects.toThrow("Prepared workspaces require a provider command budget");
+  operation.close();
+  expect(f.runScript).not.toHaveBeenCalled();
+  expect(f.upload).not.toHaveBeenCalled();
+});

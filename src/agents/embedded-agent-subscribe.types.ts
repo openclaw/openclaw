@@ -9,6 +9,7 @@ import type { EmbeddedRunAttemptParams } from "./embedded-agent-runner/run/types
 import type { PreparedProviderFailoverOwner } from "./failover/provider-patterns.js";
 import type { AgentMessage } from "./runtime/index.js";
 import type { AgentSession } from "./sessions/index.js";
+import type { RunToolUsageRecorder } from "./tool-usage-recorder.js";
 import type { NormalizedUsage } from "./usage.js";
 export type { BlockReplyChunking } from "./embedded-agent-subscribe.shared-types.js";
 
@@ -56,6 +57,10 @@ export type SubscribeEmbeddedAgentSessionParams = Pick<
   | "internalEvents"
 > & {
   session: AgentSession;
+  /** Created only by the opted-in embedded attempt; absent for incognito and other harnesses. */
+  toolUsageRecorder?: RunToolUsageRecorder;
+  /** Bound source ids for direct calls, refreshed with the native tool surface. */
+  toolUsageIdsByName?: ReadonlyMap<string, string>;
   hookRunner?: HookRunner;
   reasoningMode?: ReasoningLevel;
   thinkingLevel?: ThinkLevel;

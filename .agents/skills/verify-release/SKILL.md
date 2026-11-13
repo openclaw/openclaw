@@ -22,6 +22,11 @@ publish skill; use `$release-openclaw-maintainer` before changing release state.
 - If the checkout is dirty or divergent, use it only for scripts/reference.
   For version metadata, fetch from GitHub release/tag or unpack the tag tarball
   under `/tmp`.
+- Verify selected npm plugins published successfully before core npm.
+- Report ClawHub separately from core release readiness. Its pending or failed
+  publication/verification never blocks core, GitHub finalization, main
+  closeout, or the retrospective PR. Keep its exact run/attempt, owner, and next
+  action visible; do not call ClawHub complete without public-byte proof.
 - Never print secrets.
 - Keep the final terse: `yes/no`, evidence bullets, caveats, cleanup.
 
@@ -64,8 +69,10 @@ Use these checks only for the regular orchestrated release track.
    - For each expected npm plugin, verify the planned version and npm selector
      from that immutable publication plan. A regular beta publishes to `beta`;
      do not require it to move `latest`. Verify any planned mirror tags separately.
-4. ClawHub:
+4. ClawHub (independent status, not a core or closeout gate):
    - Check the Plugin ClawHub Release workflow conclusion and publish job count.
+     If pending or failed, record that state and its follow-up separately;
+     continue core verification and closeout without waiting.
    - Use OpenClaw itself for live registry proof:
      `openclaw plugins search <known-plugin> --json`.
    - Install one official plugin at the exact requested release version from
@@ -76,13 +83,28 @@ Use these checks only for the regular orchestrated release track.
 5. Release workflows:
    - Verify conclusions for release notes evidence links:
      Full Release Validation, OpenClaw Release Checks, OpenClaw NPM Release,
-     Plugin NPM Release, Plugin ClawHub Release, mac preflight/validation/publish
-     when stable mac assets are expected.
+     Plugin NPM Release, mac preflight/validation/publish when stable mac assets
+     are expected. Report Plugin ClawHub Release independently, even when its
+     result is still pending or failed.
    - For stable, verify `OpenClaw Stable Main Closeout` succeeded and its
      manifest records the matching release tag, current rollback drill, stable
      soak, and blocking performance evidence.
    - Summarize only relevant successful/failed jobs; ignore routine skipped
      optional lanes unless the release body promised them.
+6. Container registries:
+   - Resolve `VERCEL_VCR_IMAGE` from the repository variable and use the
+     trusted tooling checkout to run `scripts/container-registry-readback.mjs`
+     with the exact version, both `ghcr.io/openclaw/openclaw` and
+     `docker.io/openclaw/openclaw`, and the Vercel image. Pass
+     `--include-browser` when the release Dockerfile includes that variant.
+   - Require every default, slim, browser, amd64, and arm64 immutable tag in all
+     three registries, matching cross-registry platform descriptors, and every
+     policy-owned moving alias at the immutable digest and descriptor set.
+     Beta intentionally has zero moving aliases; do not require a `beta`
+     container alias.
+   - Use existing Docker credential state for private Vercel reads. If it is
+     unavailable, report Vercel live readback as a gap rather than treating the
+     workflow conclusion as equivalent proof.
 
 ## Extended-stable checks
 
@@ -112,13 +134,15 @@ the live tag, workflow, registry, provenance, and image state.
    `node --import tsx scripts/openclaw-npm-postpublish-verify.ts <VERSION>`.
    Require signatures, canonical-branch provenance, and publish/preflight
    digest binding to the release SHA. Preserve output and workflow URLs.
-5. **Docker:** verify exact default, slim, browser, and architecture images and
-   attestations in both registries. Only the three `extended-stable*` aliases may
-   resolve to those digests. Require the successful `OpenClaw Release Publish`
-   parent run and its completed Docker verification. The normal route finalizes
-   afterward; an explicitly requested fast path may activate GitHub first. Repair
-   aliases through current-main `Docker Channel Promotion` for the exact tag,
-   without rebuilding.
+5. **Docker:** run `scripts/container-registry-readback.mjs` against
+   GHCR, Docker Hub, and the repository's `VERCEL_VCR_IMAGE`. Require exact
+   default, slim, browser, and architecture images, matching platform descriptor
+   sets, and only the three `extended-stable*` aliases at those immutable
+   digests. Separately verify attestations in GHCR and Docker Hub. Require the
+   successful `OpenClaw Release Publish` parent run and its completed Docker
+   verification. The normal route finalizes afterward; an explicitly requested
+   fast path may activate GitHub first. Repair aliases through current-main
+   `Docker Channel Promotion` for the exact tag, without rebuilding.
 6. **Recovery:** never republish. Use `promote_extended_stable` in the
    `openclaw/releases` dist-tag workflow for the root selector (an unsuffixed
    final patch `33+`) and approved credential-isolated tooling for others, then repeat
@@ -128,8 +152,9 @@ the live tag, workflow, registry, provenance, and image state.
 
 ## Published package smoke
 
-After the track-specific publication checks pass, use a disposable
-installation/cache with isolated OpenClaw state:
+After the track-specific core publication checks pass, use a disposable
+installation/cache with isolated OpenClaw state. Do not wait for independent
+ClawHub verification to run this smoke:
 
 - `npm exec --yes --package openclaw@<VERSION> -- openclaw --version`.
 - Run at least one harmless command that touches the published CLI surface,
@@ -145,6 +170,9 @@ Run additional manual live checks only when explicitly requested.
 - Dist-tag caveat: stable `latest` is release truth; if optional `beta` mirrors
   still point at a beta version, report it as a caveat, not a stable-release
   blocker, unless the user asked to verify beta promotion.
+- ClawHub caveat: distinguish “core release verified; ClawHub pending/failed”
+  from “all selected publication surfaces verified.” The former still permits
+  main closeout and the retrospective PR.
 - Track caveat: name the track and intentionally absent surfaces. Do not call
   missing regular-release artifacts an extended-stable failure.
 - Divergent checkout caveat: say when local source SHA differs from release tag

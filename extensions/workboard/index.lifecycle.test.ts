@@ -75,7 +75,10 @@ function registerGeneration(
   };
   const start = async () => {
     for (const [service] of registerService.mock.calls) {
-      assert(service.apiVersion !== 2, "Workboard uses v1 services without a host scheduler");
+      assert(
+        service.apiVersion !== 2 && service.apiVersion !== 3,
+        "Workboard uses v1 services without a host scheduler",
+      );
       await service.start(serviceContext);
     }
     void gatewayStart({ port: 0 }, {});

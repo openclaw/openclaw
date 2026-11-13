@@ -50,6 +50,11 @@ export type OpenClawPluginToolModelExecution = {
   ) => Promise<T>;
 };
 
+/** Narrows a tool auth lookup to one stored credential type, such as subscription OAuth. */
+export type OpenClawPluginToolAuthQuery = {
+  credentialType?: "api_key" | "oauth" | "token";
+};
+
 /** Trusted execution context passed to plugin-owned agent tool factories. */
 type OpenClawPluginToolContextBase = {
   config?: OpenClawConfig;
@@ -103,10 +108,20 @@ type OpenClawPluginToolContextBase = {
   };
   messageChannel?: string;
   agentAccountId?: string;
-  /** Trusted provider auth availability from the active auth profile store. */
-  hasAuthForProvider?: (providerId: string) => boolean;
-  /** Resolves an API key from the active auth profile store when available. */
-  resolveApiKeyForProvider?: (providerId: string) => Promise<string | undefined>;
+  /**
+   * Trusted provider auth availability from the active auth profile store. With
+   * `credentialType`, only ordered stored profiles of that type count.
+   */
+  hasAuthForProvider?: (providerId: string, query?: OpenClawPluginToolAuthQuery) => boolean;
+  /**
+   * Resolves an API key from the active auth profile store when available. With
+   * `credentialType`, only ordered stored profiles of that type are used; there is
+   * no environment or other-type fallback.
+   */
+  resolveApiKeyForProvider?: (
+    providerId: string,
+    query?: OpenClawPluginToolAuthQuery,
+  ) => Promise<string | undefined>;
   /** Trusted ambient delivery route for the active agent/session. */
   deliveryContext?: DeliveryContext;
   /** Host-bound current-route delivery. Retained copies fail after the owning turn closes. */

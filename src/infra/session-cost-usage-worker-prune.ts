@@ -53,7 +53,9 @@ export function createUsageCostRollupPruner(send: (rows: PruneRows) => Promise<v
  * archive, that archive's current key; the caller prunes the earlier row only
  * after the current identity commits, so an undecodable archive keeps its usage.
  */
-export function createSupersededArchiveKeyResolver(files: readonly UsageCostTranscriptFile[]) {
+export function createSupersededArchiveKeyResolver(
+  files: readonly Pick<UsageCostTranscriptFile, "kind" | "sourcePath" | "filePath">[],
+) {
   const currentKeys = new Map(
     files.flatMap((file) =>
       file.kind === "jsonl" && file.sourcePath.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX)
