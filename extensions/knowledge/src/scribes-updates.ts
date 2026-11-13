@@ -2,7 +2,7 @@
 import type { Page } from "./page-context.js";
 import { button, el } from "./page-dom.js";
 import { changedLines, openConfirmDialog } from "./scribe-dialog.js";
-import { needsUpdate, updateScribe } from "./scribes-actions.js";
+import { needsUpdate, repairScribe, updateScribe } from "./scribes-actions.js";
 import type { ScribeJob, ScribeSnapshot } from "./scribes-state.js";
 
 /**
@@ -15,7 +15,7 @@ import type { ScribeJob, ScribeSnapshot } from "./scribes-state.js";
  * reloads, since the revision stays until the turn re-declares the automation; Try again after it
  * stayed unchanged starts a new attempt.
  */
-type Attempt = { id: string; sent: boolean };
+type Attempt = { id: string; sent: boolean; session?: ScribeSnapshot["session"] };
 const attempts = new Map<string, Map<string, Attempt>>();
 const attemptsOf = (ui: Page) => {
   const gateway = ui.s.context.host.basePath;
@@ -105,6 +105,34 @@ export async function update(
       throw error;
     }
     ui.announce(`${snapshot.scribe.title}: the update was not sent. ${ui.errorText(error)}`);
+  }
+}
+
+/** Repair shares the update attempt owner so lost responses survive page replacement. */
+export async function repair(ui: Page, snapshot: ScribeSnapshot, job: ScribeJob, agentId: string) {
+  const map = attemptsOf(ui);
+  const asked = `repair:${job.id}:${job.configRevision ?? ""}`;
+  const previous = map.get(asked);
+  const attempt: Attempt =
+    previous && !previous.sent ? previous : { id: crypto.randomUUID(), sent: false };
+  map.set(asked, attempt);
+  const target = attempt.session ? { ...snapshot, session: attempt.session } : snapshot;
+  try {
+    await repairScribe(ui.s.context.host, target, job, agentId, attempt.id);
+  } finally {
+    // Creation can succeed before chat.send loses its response; retries keep that target.
+    attempt.session = target.session;
+  }
+  attempt.sent = true;
+  // Restoring an archived conversation needs no turn; every other repair is one.
+  if (!(target.status === "missing" && target.session?.archived)) {
+    markUpdating(
+      ui,
+      job,
+      agentId,
+      () => true,
+      (current) => repair(current, target, job, agentId),
+    );
   }
 }
 

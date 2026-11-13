@@ -123,7 +123,7 @@ jobs:
       actions: read
       pull-requests: read
     if: ${{ (github.event_name != 'schedule' || (github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main')) && ((github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.OPENCLAW_CI_ON_PUSH == 'true') && (github.event_name != 'pull_request' || !github.event.pull_request.draft)) }}
-    runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON((contains(fromJSON('["github","boat"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.event_name != 'workflow_dispatch' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) || (contains(fromJSON('["hybrid","runson"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) && github.run_attempt != 1)) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-2vcpu-ubuntu-2404' || 'ubuntu-24.04')))) || ((contains(fromJSON('["github","boat"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.event_name != 'workflow_dispatch' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) || (contains(fromJSON('["hybrid","runson"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) && github.run_attempt != 1)) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-2vcpu-ubuntu-2404' || 'ubuntu-24.04')) }}
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON((contains(fromJSON('["github","boat"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.event_name != 'workflow_dispatch' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) || (contains(fromJSON('["hybrid","runson"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) && github.run_attempt != 1)) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-2vcpu-ubuntu-2404' || 'ubuntu-24.04')))) || ((contains(fromJSON('["github","boat"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.event_name != 'workflow_dispatch' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) || (contains(fromJSON('["hybrid","runson"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) && github.run_attempt != 1)) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-2vcpu-ubuntu-2404' || 'ubuntu-24.04')) }}
     timeout-minutes: 20
     outputs:
       checkout_revision: &target_sha ${{ steps.checkout_ref.outputs.sha }}
@@ -1186,17 +1186,6 @@ jobs:
             runner_profile=github
           fi
           node_runner_backend="$runner_profile"
-          # Plan fork first attempts for their available backend (Blacksmith when
-          # repository variables are absent), independently of the author.
-          # Fork retries route hosted because forks cannot read the backend override.
-          if [[
-            "$hosted_runner_profile_contract" == "true" &&
-            "$fork_pull_request" == "true" &&
-            "$GITHUB_REPOSITORY" == "openclaw/openclaw" &&
-            "${GITHUB_RUN_ATTEMPT:-1}" == "1"
-          ]]; then
-            node_runner_backend="$qualified_runner_profile"
-          fi
           qualification_runner_backend=
           if [[ "$ci_qualification" == "true" && "${GITHUB_RUN_ATTEMPT:-1}" == "1" ]]; then
             runner_profile="$qualified_runner_profile"
@@ -1226,6 +1215,12 @@ jobs:
               node_runner_backend=github
               effective_runner_backend=github
             fi
+          fi
+          # Forks cannot rely on repository variables or trusted provider credentials.
+          if [[ "$fork_pull_request" == "true" && "$GITHUB_REPOSITORY" == "openclaw/openclaw" ]]; then
+            runner_profile=github
+            node_runner_backend=github
+            effective_runner_backend=github
           fi
           placement_runner_backend="$effective_runner_backend"
           [[ "$placement_runner_backend" != "boat" ]] || placement_runner_backend=hybrid

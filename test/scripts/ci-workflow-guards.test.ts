@@ -1661,18 +1661,17 @@ AFTER_CD
         JSON.stringify(context),
       ).toBe(96);
     }
-    // Fork first attempts keep hosted check stripes but plan Node shards with the
-    // configured backend, so they get the same Node parallelism.
+    // Forks retain hosted concurrency even when the repository backend differs.
     expect(
       evaluateWorkflowExpression(nodeParallel, {
         ...canonicalNodePr,
         runnerBackend: "hybrid",
         headRepository: "contributor/openclaw",
         runnerProfile: "github",
-        preflightOutputs: { node_runner_backend: "hybrid" },
+        preflightOutputs: { node_runner_backend: "github" },
       }),
       "fork first attempt",
-    ).toBe(130);
+    ).toBe(96);
     // Author association no longer limits capacity.
     for (const authorAssociation of [
       "FIRST_TIME_CONTRIBUTOR",
@@ -2533,7 +2532,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     },
   );
 
-  it("keeps tiny hybrid controls hosted without moving security or fork first attempts", () => {
+  it("keeps tiny hybrid controls hosted and preserves same-repository security placement", () => {
     const context = {
       eventName: "pull_request",
       repository: "openclaw/openclaw",
@@ -2552,9 +2551,13 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
         runner({
           authorAssociation: "NONE",
           headRepository: "contributor/openclaw",
+          preflightOutputs: {
+            effective_runner_backend: "github",
+            placement_runner_backend: "github",
+          },
         }),
         `${jobName}: untrusted fork first attempt`,
-      ).toBe("blacksmith-2vcpu-ubuntu-2404");
+      ).toBe("ubuntu-24.04");
       for (const override of [
         { runAttempt: 0 },
         { runAttempt: 2 },
@@ -2610,7 +2613,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
             }),
             `${runnerBackend}: ${authorAssociation}: ${headRepository}`,
           ).toBe(
-            runnerBackend === "hybrid" && headRepository === "openclaw/openclaw"
+            runnerBackend === "hybrid" || headRepository !== "openclaw/openclaw"
               ? "ubuntu-24.04"
               : "blacksmith-2vcpu-ubuntu-2404",
           );

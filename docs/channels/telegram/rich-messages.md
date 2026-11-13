@@ -211,7 +211,7 @@ Rich Telegram surfaces: formatted messages, inline keyboards, agent message acti
 }
 ```
 
-    Default: off, for client compatibility. Older Telegram clients cannot render widgets, so keep this off unless every client used with the bot is current. The setting also works per account (`channels.telegram.accounts.<id>.widgets`). `/status` shows whether widgets are on. While it is off, `show_widget` behaves as before and taps on earlier widgets are dropped. Groups, channels, and DM topics always use the normal widget surfaces.
+    Default: off, for client compatibility. Older Telegram clients cannot render widgets, so keep this off unless every client used with the bot is current. The setting also works per account (`channels.telegram.accounts.<id>.widgets`). `/status` shows whether widgets are on. While it is off, `show_widget` behaves as before and taps on earlier widgets are dropped. Private bot chat topics are supported, and widget requests return to the originating topic. Groups, channels, and channel direct-message topics always use the normal widget surfaces.
 
     - **No network.** Widgets run in Telegram's sandbox without CDNs, libraries, or remote images. The agent draws charts with inline SVG or canvas and inlines images as `data:` URLs.
     - **Limits.** 32 KB of HTML and 4 KB after compression. There are no text inputs; widgets use buttons.
