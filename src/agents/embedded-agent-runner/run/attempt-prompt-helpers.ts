@@ -6,6 +6,7 @@ import type {
   ContextEngineSessionTarget,
 } from "../../../context-engine/types.js";
 import type { HookRunner } from "../../../plugins/hooks.js";
+import { buildPromptBuildDropResult } from "../../../plugins/prompt-build-drop.js";
 import type {
   PluginHookAgentContext,
   PluginHookBeforePromptBuildResult,
@@ -49,10 +50,6 @@ export async function resolvePromptBuildHookResult(params: {
   refreshContinuation?: boolean;
 }): Promise<ResolvedPromptBuildHookResult> {
   const turnContext = await resolvePluginTurnContext(params);
-  const logHookFailure = (hookName: string) => (hookErr: unknown) => {
-    log.warn(`${hookName} hook failed: ${String(hookErr)}`);
-    return undefined;
-  };
   const promptBuildResult = params.hookRunner?.hasHooks("before_prompt_build")
     ? await params.hookRunner
         .runBeforePromptBuild(
@@ -62,7 +59,14 @@ export async function resolvePromptBuildHookResult(params: {
           },
           params.hookCtx,
         )
-        .catch(logHookFailure("before_prompt_build"))
+        .catch((hookErr: unknown) => {
+          log.warn(`before_prompt_build hook failed: ${String(hookErr)}`);
+          // The contribution is gone; say so in the prompt rather than handing
+          // the agent a context that only looks complete (openclaw-beads-201).
+          // The error stays in the warn above: the marker carries a bounded
+          // reason code, never error-derived text.
+          return buildPromptBuildDropResult([{ reason: "dispatch-failed" }]);
+        })
     : undefined;
   const decisionPromptBuildFields = promptBuildResult
     ? Object.fromEntries(

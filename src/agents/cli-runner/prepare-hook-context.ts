@@ -2,6 +2,7 @@ import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-con
 import type { PluginHookAgentContext } from "../../plugins/hook-agent-context.types.js";
 import type { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { MemoryAudience } from "../../plugins/memory-provider-types.js";
+import { buildPromptBuildDropResult } from "../../plugins/prompt-build-drop.js";
 import { resolveAdmittedRunActiveAssertion } from "../admitted-run-context.js";
 import { buildAgentHookMemoryAudienceFields } from "../harness/hook-context.js";
 import { cliBackendLog } from "./log.js";
@@ -105,11 +106,21 @@ export async function runCliAuthorizedPromptBuild(params: {
     return undefined;
   }
   const { invalidatedReason } = params;
+  // Preparation gets its own catch, matching the ordinary phase: a session-history load never
+  // reaches the dispatcher, so reporting it as a dropped contribution would hand the model a
+  // false recovery instruction.
+  let messages: unknown[];
+  try {
+    messages = await params.messages();
+  } catch (error) {
+    cliBackendLog.warn(`authorized cli prompt-build hook preparation failed: ${String(error)}`);
+    return undefined;
+  }
   try {
     return await hookRunner.runAuthorizedPromptBuild(
       {
         prompt: admitted.prompt,
-        messages: await params.messages(),
+        messages,
         continuity: {
           state: invalidatedReason ? "invalidated" : params.nativeSessionId ? "resumed" : "fresh",
           ...(invalidatedReason ? { invalidatedReason } : {}),
@@ -125,6 +136,9 @@ export async function runCliAuthorizedPromptBuild(params: {
     );
   } catch (error) {
     cliBackendLog.warn(`authorized CLI prompt-build hook failed: ${String(error)}`);
-    return undefined;
+    // This prepared run continues, so the lost contribution has to be visible in the prompt it
+    // continues with. A rejection here is dispatch-level and never reaches
+    // runAuthorizedPromptBuild's per-handler drop collector.
+    return buildPromptBuildDropResult([{ reason: "dispatch-failed" }]);
   }
 }

@@ -77,10 +77,6 @@ import {
   claudeCliSessionTranscriptHasOrphanedToolUse,
 } from "../command/attempt-execution.helpers.js";
 import {
-  resolvePromptBuildHookResult,
-  type ResolvedPromptBuildHookResult,
-} from "../embedded-agent-runner/run/attempt-prompt-helpers.js";
-import {
   applyEmbeddedAttemptToolsAllow,
   mergeForcedEmbeddedAttemptToolsAllow,
 } from "../embedded-agent-runner/run/attempt-tool-construction-plan.js";
@@ -126,6 +122,7 @@ import {
 } from "./execution-target.js";
 import { isClaudeCliBackendId, normalizeCliModel } from "./helpers.js";
 import { replayableTarget, prepareCliHistoryBoundary } from "./history-boundary.js";
+import { resolveCliPromptBuildHookResult } from "./hook-prompt-build.js";
 import { cliBackendLog } from "./log.js";
 import { prepareCliLoopbackBundleMcp } from "./loopback-bundle-mcp.js";
 import { mintCliMcpClientGrant } from "./mcp-client-grant.js";
@@ -572,6 +569,10 @@ async function prepareCliRunContextWithinReadFence(
     contextModelIds: [requestedContextModelId, normalizedContextModelId],
   });
   let openClawHistoryMessages: unknown[] | undefined;
+  const loadOpenClawHistoryMessages = async () => {
+    openClawHistoryMessages ??= await loadCliSessionHistoryMessages(params);
+    return openClawHistoryMessages;
+  };
   const { turnAudience, promptBuildHookContext } = await prepareCliTurnHookContext(
     { ...params, config: runConfig },
     {
@@ -584,20 +585,14 @@ async function prepareCliRunContextWithinReadFence(
     },
   );
   const promptBuildHookRunner = skipsTurnPreparation ? undefined : getGlobalHookRunner();
-  let promptBuildHookResult: ResolvedPromptBuildHookResult | undefined;
-  if (!skipsTurnPreparation) {
-    try {
-      promptBuildHookResult = await resolvePromptBuildHookResult({
-        config: runConfig,
-        prompt: params.prompt,
-        messages: (openClawHistoryMessages ??= await loadCliSessionHistoryMessages(params)),
-        hookCtx: promptBuildHookContext,
-        hookRunner: promptBuildHookRunner,
-      });
-    } catch (error) {
-      cliBackendLog.warn(`cli prompt-build hook preparation failed: ${String(error)}`);
-    }
-  }
+  const promptBuildHookResult = await resolveCliPromptBuildHookResult({
+    skipsTurnPreparation,
+    config: runConfig,
+    prompt: params.prompt,
+    loadMessages: loadOpenClawHistoryMessages,
+    hookCtx: promptBuildHookContext,
+    hookRunner: promptBuildHookRunner,
+  });
   const promptBuildToolsAllow = mergeForcedEmbeddedAttemptToolsAllow(
     promptBuildHookResult?.toolsAllow,
     {
