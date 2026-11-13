@@ -33,7 +33,7 @@ export type ClawHubDetailReceipt = {
   completion: ReturnType<typeof loadClawHubDetail>;
 };
 
-export type SkillsStatusFilter = "all" | "ready" | "needs-setup" | "disabled";
+export type SkillsStatusFilter = "all" | "ready" | "needs-setup" | "excluded" | "disabled";
 export type SkillDetailTab = "overview" | "card";
 
 export type SkillsPresentation = {

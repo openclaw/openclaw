@@ -430,6 +430,7 @@ describe("renderSkills", () => {
       "All 2",
       "Ready 1",
       "Needs setup 0",
+      "Excluded 0",
       "Disabled 1",
     ]);
     select.value = "needs-setup";
@@ -437,23 +438,56 @@ describe("renderSkills", () => {
     expect(onStatusFilterChange).toHaveBeenCalledWith("needs-setup");
   });
 
-  it("treats skills blocked by the selected agent filter as needing setup", async () => {
+  it("keeps excluded skills separate from missing prerequisites", async () => {
     const { container, query, text, render } = createView(true);
-    const report: SkillStatusReport = skillReport([createSkill({ blockedByAgentFilter: true })]);
+    const excluded = createSkill({ blockedByAgentFilter: true });
+    const missing = createSkill({
+      skillKey: "missing",
+      name: "Missing Dependency",
+      eligible: false,
+      blockedByAgentFilter: true,
+      missing: { ...excluded.missing, bins: ["fixture-bin"] },
+    });
+    const report = skillReport([
+      createSkill({ skillKey: "ready", name: "Ready Skill" }),
+      excluded,
+      missing,
+      createSkill({
+        skillKey: "disabled",
+        name: "Disabled Skill",
+        disabled: true,
+        eligible: false,
+      }),
+      createSkill({
+        skillKey: "bundled-excluded",
+        name: "Excluded Bundled Skill",
+        eligible: false,
+        blockedByAllowlist: true,
+      }),
+    ]);
 
-    render({ report, statusFilter: "ready" });
+    render({ report, statusFilter: "needs-setup" });
     await Promise.resolve();
-
-    expect(container.querySelectorAll(".plugins-item")).toHaveLength(0);
-    expect(text()).toContain("Ready 0");
+    expect(text()).toContain("All 5");
+    expect(text()).toContain("Ready 1");
     expect(text()).toContain("Needs setup 1");
+    expect(text()).toContain("Excluded 2");
+    expect(text()).toContain("Disabled 1");
+    expect(container.querySelectorAll(".plugins-item")).toHaveLength(1);
+    expect(query(".plugins-item [role=img]")?.getAttribute("title")).toContain("bin:fixture-bin");
 
-    render({ report, statusFilter: "needs-setup", detailKey: "repo-skill" });
-    await Promise.resolve();
-
-    expect(query(".plugins-item .settings-status--warn")).not.toBeNull();
-    expect(text()).toContain("Reason: blocked by agent filter");
-    expect(query(".skill-reader-dialog .settings-status--warn")).not.toBeNull();
+    render({ report, statusFilter: "excluded", detailKey: excluded.skillKey });
+    await waitForFast(() => {
+      const statuses = [...container.querySelectorAll(".plugins-item [role=img]")];
+      expect(statuses.map(normalizeText)).toEqual(["Excluded", "Excluded"]);
+      expect(statuses.map((status) => status.getAttribute("title"))).toContain(
+        "Excluded · blocked by agent filter",
+      );
+    });
+    await waitForFast(() => {
+      expect(text()).toContain("Reason: blocked by agent filter");
+      expect(query(".skill-reader-dialog .settings-status")?.textContent).toContain("Excluded");
+    });
   });
 
   it("gives one signal per meaning and says why the toggle is locked", async () => {

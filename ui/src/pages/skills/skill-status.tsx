@@ -49,6 +49,29 @@ export function verdictForSkill(
   );
 }
 
+export const SKILL_INVENTORY_STATUS = {
+  ready: { labelKey: "skillsPage.tabs.ready", tone: "ok" },
+  "needs-setup": { labelKey: "skillsPage.tabs.needsSetup", tone: "warn" },
+  excluded: { labelKey: "skillsPage.tabs.excluded", tone: "muted" },
+  disabled: { labelKey: "skillsPage.tabs.disabled", tone: "muted" },
+} as const;
+
+export function classifySkillInventoryStatus(
+  skill: SkillStatusEntry,
+): keyof typeof SKILL_INVENTORY_STATUS {
+  if (skill.disabled) {
+    return "disabled";
+  }
+  if (skill.blockedByAllowlist) {
+    return "excluded";
+  }
+  // Missing prerequisites remain visible even if the selected agent also excludes the skill.
+  if (!skill.eligible) {
+    return "needs-setup";
+  }
+  return skill.blockedByAgentFilter ? "excluded" : "ready";
+}
+
 type SkillStateProps = {
   skill: SkillStatusEntry | { disabled: boolean };
   verdict?: ClawHubSkillSecurityVerdict | null;
@@ -57,32 +80,21 @@ type SkillStateProps = {
 function skillStateStatus({ skill, verdict }: SkillStateProps) {
   const invalid =
     "clawhub" in skill && skill.clawhub?.status === "invalid" ? skill.clawhub.reason : null;
-  const available = "eligible" in skill ? isSkillAvailable(skill) : !skill.disabled;
+  const inventoryStatus =
+    "eligible" in skill
+      ? SKILL_INVENTORY_STATUS[classifySkillInventoryStatus(skill)]
+      : skill.disabled
+        ? SKILL_INVENTORY_STATUS.disabled
+        : { labelKey: "skillsPage.enabled", tone: SKILL_INVENTORY_STATUS.ready.tone };
   const flagged = verdict && (!verdict.ok || verdict.decision !== "pass");
   const blocked = flagged && verdict.securityStatus === "malicious";
   const tone: "danger" | "warn" | "muted" | "ok" =
-    invalid || blocked
-      ? "danger"
-      : flagged
-        ? "warn"
-        : skill.disabled
-          ? "muted"
-          : available
-            ? "ok"
-            : "warn";
+    invalid || blocked ? "danger" : flagged ? "warn" : inventoryStatus.tone;
   const label = flagged
     ? t(blocked ? "skillsPage.verdict.blocked" : "skillsPage.verdict.review")
     : invalid
       ? t("skillsPage.invalidLink")
-      : t(
-          skill.disabled
-            ? "skillsPage.tabs.disabled"
-            : available
-              ? "eligible" in skill
-                ? "skillsPage.tabs.ready"
-                : "skillsPage.enabled"
-              : "skillsPage.tabs.needsSetup",
-        );
+      : t(inventoryStatus.labelKey);
   const details =
     "missing" in skill
       ? [...computeSkillReasons(skill), ...computeSkillMissing(skill)]
