@@ -71,7 +71,7 @@ function identity(enabled: boolean): AgentRuntimeIdentity {
 }
 
 function requestOptions(
-  runtimeIdentity: AgentRuntimeIdentity | undefined,
+  runtimeIdentity: AgentRuntimeIdentity,
   validateAuthority: () => boolean = () => true,
 ): GatewayRequestHandlerOptions {
   const request = {
@@ -94,7 +94,7 @@ function requestOptions(
     client: {
       connId: "conn-agent-runtime",
       connect: { client: { id: "test-client", displayName: "Test Client" } },
-      internal: runtimeIdentity ? { agentRuntimeIdentity: runtimeIdentity } : undefined,
+      internal: { agentRuntimeIdentity: runtimeIdentity },
     },
     isWebchatConnect: () => false,
     respond: vi.fn(),
@@ -601,17 +601,6 @@ describe("exec approval signed agent runtime", () => {
     });
   });
 
-  it("does not promote an RPC caller's run ID to approval routing metadata", async (testContext) => {
-    await withApproval(testContext, async (fixture) => {
-      const { pending, payload } = await requestApproval(fixture, requestOptions(undefined));
-      expect(payload).toMatchObject({ request: { runId: "forged-run" } });
-      expect(payload).not.toHaveProperty("runId");
-      const record = await pendingRecord(fixture);
-      await fixture.manager.resolve(record.id, "deny");
-      await pending;
-    });
-  });
-
   it.for([
     ["enabled", true],
     ["disabled", false],
@@ -622,8 +611,7 @@ describe("exec approval signed agent runtime", () => {
         const { manager, databaseOptions } = fixture;
         const opts = requestOptions(identity(enabled));
 
-        const { pending, payload } = await requestApproval(fixture, opts);
-        expect(payload).toMatchObject({ runId: "run-1" });
+        const { pending } = await requestApproval(fixture, opts);
         expect(opts.context.broadcast).toHaveBeenCalled();
         const approvalId = String(
           (vi.mocked(opts.context.broadcast).mock.calls[0]?.[1] as { id?: unknown } | undefined)

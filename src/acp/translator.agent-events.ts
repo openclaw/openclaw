@@ -273,13 +273,13 @@ export class AcpTranslatorAgentEvents {
     if (params.runId) {
       return this.findPendingBySessionKey(params.sessionKey, params.runId);
     }
-    const { runtimeRunId, toolCallId } = params.approvalEvent;
+    const { runId, toolCallId } = params.approvalEvent;
     let match: AcpPendingPrompt | undefined;
     for (const pending of this.pendingPrompts.values()) {
       if (
         pending.sessionKey !== params.sessionKey ||
-        (runtimeRunId
-          ? pending.idempotencyKey !== runtimeRunId
+        (runId
+          ? pending.idempotencyKey !== runId
           : toolCallId && pending.toolCalls?.get(toolCallId)?.kind !== "execute")
       ) {
         continue;

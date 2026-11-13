@@ -40,8 +40,6 @@ export function handlePendingApprovalRequestWithDelivery<TKind extends keyof App
   > & {
     approvalKind: TKind;
     source?: "rpc" | "node-policy";
-    /** Run proven by the requesting agent runtime, independent of caller-supplied request.runId. */
-    runtimeRunId?: string;
     forwardRequest?: (event: RequestedApproval<TKind>) => Promise<boolean>;
     getIosPushDelivery: () =>
       | {
@@ -57,17 +55,13 @@ export function handlePendingApprovalRequestWithDelivery<TKind extends keyof App
   const {
     approvalKind,
     source,
-    runtimeRunId,
     forwardRequest,
     getIosPushDelivery,
     afterDecision,
     afterDecisionErrorLabel,
     ...pending
   } = params;
-  const requestEvent = {
-    ...buildRequestedApprovalEvent(pending.record, approvalKind),
-    ...(runtimeRunId ? { runId: runtimeRunId } : {}),
-  };
+  const requestEvent = buildRequestedApprovalEvent(pending.record, approvalKind);
   const iosPushDelivery = getIosPushDelivery();
   const iosPushRequest = iosPushDelivery?.handleRequested?.bind(iosPushDelivery);
   const logContext = source === "node-policy" ? "node policy " : "";
