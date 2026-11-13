@@ -4986,7 +4986,7 @@ jobs:
         id: python_tooling
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest ruff pyyaml
+          python -m pip install pytest ruff==0.17.4 pyyaml
 
       - name: Lint Python skill scripts
         if: ${{ !cancelled() && steps.python_tooling.outcome == 'success' }}
