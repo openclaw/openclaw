@@ -198,7 +198,7 @@ export type SessionsSendStart =
 /** Rejections that leave a Cron run-scoped target to its durable parent session. */
 const FALLBACK_STEER_REJECTIONS = new Set<
   Extract<SessionControllerSteerResult, { status: "rejected" }>["reason"]
->(["no_active_run", "not_running", "stale_run", "injection_unavailable"]);
+>(["no_active_run", "not_running", "not_streaming", "stale_run", "injection_unavailable"]);
 
 /** Decide steering before preparing custody for a new turn. */
 export async function trySessionsSendActiveRunDelivery(

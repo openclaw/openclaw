@@ -259,7 +259,6 @@ export function registerSessionsSendActiveSteeringTests({
       requesterSessionKey: requesterKey,
     });
     const queue = vi.spyOn(controllerSteer, "steerSessionControllerOperation");
-    const prepare = vi.spyOn(sessionsSendFollowup, "prepareSessionsSendFollowup");
     try {
       queue.mockResolvedValueOnce({ status: "rejected", reason: "injection_unavailable" });
       mockAcceptedChildFollowup();
@@ -299,7 +298,6 @@ export function registerSessionsSendActiveSteeringTests({
     } finally {
       await settleContinuations();
       queue.mockRestore();
-      prepare.mockRestore();
     }
   });
 
@@ -380,6 +378,43 @@ export function registerSessionsSendActiveSteeringTests({
       }
     },
   );
+
+  it("sessions_send does not throw queue_message_failed for a non-child not_streaming target", async () => {
+    const requesterKey = "agent:main:main";
+    const targetKey = "agent:main:dashboard:run:settlement-target";
+    const sessionId = "settlement-not-streaming-session";
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: targetKey },
+      { sessionId, updatedAt: 1 },
+    );
+    await activeRun(targetKey, {
+      config: cloneTestConfig(),
+      sessionId,
+      requesterSessionKey: requesterKey,
+    });
+    const queue = vi.spyOn(controllerSteer, "steerSessionControllerOperation");
+    try {
+      queue.mockResolvedValueOnce({ status: "rejected", reason: "not_streaming" });
+      mockAcceptedChildFollowup();
+      const result = await runChildFollowup(() =>
+        getSessionTool("sessions_send", {
+          agentSessionKey: requesterKey,
+        }).execute("settlement-send", {
+          sessionKey: targetKey,
+          message: "settlement reply after yield",
+          timeoutSeconds: 0,
+        }),
+      );
+      // The delivery must not fail with queue_message_failed; the not_streaming
+      // rejection falls back to the ordinary send path instead of throwing.
+      const details = result.details as { status: string; error?: string };
+      expect(details.error ?? "").not.toContain("queue_message_failed");
+    } finally {
+      await settleContinuations();
+      queue.mockRestore();
+    }
+  });
+
 
   it("sessions_send never replays uncertain sibling steering", async () => {
     const ordinaryActiveKey = "agent:main:main";
