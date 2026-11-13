@@ -9,6 +9,8 @@ import {
   createTestIngressQueue,
   withTempState,
 } from "../channels/message/ingress-drain.test-helpers.js";
+import { PluginInstance } from "../plugins/plugin-instance.js";
+import { PluginInvocationScope } from "../plugins/plugin-invocation-scope.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { getPluginLoaderCacheState } from "../plugins/registry-lifecycle.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
@@ -38,6 +40,67 @@ const mutate = (agentId = "default") =>
   });
 
 describe("prepared model runtime reload auth adoption", () => {
+  it("owns queued auth publication after the emitting invocation closes", async () => {
+    await start();
+    const input = fixture.agentInput("default", {});
+    const original = await prepareModelRuntimeSnapshot(input);
+    const instance = new PluginInstance("auth-publication-fixture");
+    const invocation = new PluginInvocationScope(createEmptyPluginRegistry(), [instance]);
+    const credentialDiscovery = vi.fn(() => ({}));
+    const discoverCredentials = instance.wrap(credentialDiscovery);
+    const retainedCallback = invocation.wrap(discoverCredentials);
+    const drain = beginPreparedModelRuntimePluginDrain();
+    const events: string[] = [];
+    const unregister = registerPreparedModelRuntimePublicationListener((event) => {
+      if (
+        event.phase === "invalidated" ||
+        event.phase === "published" ||
+        event.phase === "failed"
+      ) {
+        events.push(event.phase);
+      }
+    });
+    // Keep the real plugin call boundary while fixing external credential discovery.
+    mocks.resolveAmbientCredentials.mockImplementation(() => discoverCredentials());
+    let read: ReturnType<typeof prepareModelRuntimeSnapshot> | undefined;
+    try {
+      invocation.run(() => mutate());
+      invocation.release();
+      expect(() => retainedCallback()).toThrow("Plugin invocation scope is closed");
+      expect(original.isCurrent()).toBe(false);
+      expect(credentialDiscovery).not.toHaveBeenCalled();
+
+      read = prepareModelRuntimeSnapshot(input);
+      void read.catch(() => undefined);
+      drain.release();
+      const refreshed = await read.catch((error: unknown) => {
+        throw new Error(
+          `Auth publication failed; warnings: ${JSON.stringify(mocks.warn.mock.calls)}`,
+          {
+            cause: error,
+          },
+        );
+      });
+      expect(refreshed).not.toBe(original);
+      expect(refreshed.isCurrent()).toBe(true);
+      expect(original.isCurrent()).toBe(false);
+      expect(credentialDiscovery).toHaveBeenCalled();
+      expect(await loadDispatch({ agentId: "default" })).toMatchObject({
+        agentId: "default",
+        agentDir: input.agentDir,
+      });
+      expect(events).toEqual(["invalidated", "published"]);
+      expect(mocks.warn).not.toHaveBeenCalled();
+      expect(() => retainedCallback()).toThrow("Plugin invocation scope is closed");
+    } finally {
+      invocation.release();
+      drain.release();
+      await Promise.allSettled([read]);
+      unregister();
+      await instance.dispose();
+    }
+  });
+
   it("republishes a failed auth owner on the next inbound dispatch", async () => {
     await start();
     const failure = new Error("configured model publication timed out");

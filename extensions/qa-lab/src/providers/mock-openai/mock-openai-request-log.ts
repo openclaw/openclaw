@@ -1,7 +1,7 @@
 import type { ServerResponse } from "node:http";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resolveQaDebugRequestCursor } from "../shared/debug-request-cursor.js";
-import { writeJson } from "../shared/http-json.js";
+import { writeJson, writeJsonArray } from "../shared/http-json.js";
 import type { QaMockContinuationCheckpoint, QaMockContinuationHold } from "../shared/types.js";
 import {
   MOCK_OPENAI_DEBUG_REQUEST_LIMIT,
@@ -36,25 +36,43 @@ export function createMockOpenAiRequestLog() {
         writeJson(res, 200, requests.at(-1) ?? { ok: false, error: "no request recorded" });
       } else if (url.pathname === "/debug/request-cursor") {
         writeJson(res, 200, { cursor: nextCursor - 1 });
-      } else if (url.pathname === "/debug/requests") {
+      } else if (
+        url.pathname === "/debug/requests" ||
+        url.pathname === "/debug/request-plans"
+      ) {
         const afterText = url.searchParams.get("after");
-        if (afterText === null) {
-          writeJson(res, 200, requests);
+        const after =
+          afterText === null
+            ? null
+            : resolveQaDebugRequestCursor(
+                afterText,
+                requests[0]?.cursor ?? nextCursor,
+                nextCursor - 1,
+              );
+        if (after !== null && typeof after !== "number") {
+          writeJson(res, after.status, after.body);
           return true;
         }
-        const after = resolveQaDebugRequestCursor(
-          afterText,
-          requests[0]?.cursor ?? nextCursor,
-          nextCursor - 1,
-        );
-        if (typeof after !== "number") {
-          writeJson(res, after.status, after.body);
-        } else {
+        // Freeze membership before streaming: rotation or new requests must not change this read.
+        const selected = requests.filter((request) => after === null || request.cursor > after);
+        if (url.pathname === "/debug/request-plans") {
+          const inputContains = url.searchParams.get("inputContains")?.toLowerCase();
+          if (!inputContains) {
+            writeJson(res, 400, { error: "inputContains must be non-empty" });
+            return true;
+          }
           writeJson(
             res,
             200,
-            requests.filter((request) => request.cursor > after),
+            selected
+              .filter((request) => request.allInputText.toLowerCase().includes(inputContains))
+              .map((request) => ({
+                cursor: request.cursor,
+                plannedToolName: request.plannedToolName ?? null,
+              })),
           );
+        } else {
+          writeJsonArray(res, selected);
         }
       } else {
         return false;

@@ -5272,6 +5272,44 @@ describe("ci workflow guards", () => {
     ).toHaveLength(6);
   });
 
+  it("ignores unrelated shared backends only for ordinary hosted dispatches", () => {
+    const hosted = runRunnerProfileFixture({
+      configuredProfile: "boat",
+      eventName: "workflow_dispatch",
+      targetSupportsContract: true,
+    });
+    expect(hosted.status, hosted.output).toBe(0);
+    expect(hosted.outputs.runner_profile).toBe("github");
+    expect(hosted.outputs.node_runner_backend).toBe("github");
+
+    for (const options of [
+      { eventName: "push" as const, targetSupportsContract: true },
+      { eventName: "workflow_dispatch" as const, targetSupportsContract: false },
+      {
+        eventName: "workflow_dispatch" as const,
+        targetSupportsContract: true,
+        qualificationDispatch: true,
+      },
+    ]) {
+      const result = runRunnerProfileFixture({ configuredProfile: "boat", ...options });
+      expect(result.status).toBe(1);
+      expect(result.output).toContain(
+        "OPENCLAW_CI_RUNNER_BACKEND must be github, hybrid, blacksmith, or runson",
+      );
+    }
+
+    const unadmitted = runRunnerProfileFixture({
+      configuredProfile: "boat",
+      eventName: "workflow_dispatch",
+      targetSupportsContract: true,
+      requestedProfile: "runson",
+    });
+    expect(unadmitted.status).toBe(1);
+    expect(unadmitted.output).toContain(
+      "Runner and shape overrides require an admitted CI qualification",
+    );
+  });
+
   it("admits CI qualification only for a maintainer's open exact-head canonical main PR", () => {
     const step = expectDefined(
       readCiWorkflow().jobs.preflight.steps.find(

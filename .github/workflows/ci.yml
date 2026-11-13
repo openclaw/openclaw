@@ -1074,7 +1074,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          hosted_runner_profile_contract=false
+          grep -Fq "hosted-runner-profile-contract-v1" .github/workflows/ci.yml &&
+            hosted_runner_profile_contract=true
           runner_profile="${CONFIGURED_RUNNER_PROFILE:-blacksmith}"
+          # Ordinary dispatches use hosted runners regardless of the shared backend.
+          # Admitted runner qualifications still validate and exercise that backend.
+          if [[ "$hosted_runner_profile_contract" == "true" && "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "${QUALIFICATION_DISPATCH:-false}" != "true" ]]; then
+            runner_profile=github
+          fi
           case "$runner_profile" in
             github | hybrid | blacksmith | runson) ;;
             *) echo "OPENCLAW_CI_RUNNER_BACKEND must be github, hybrid, blacksmith, or runson" >&2; exit 1 ;;
@@ -1097,9 +1105,6 @@ jobs:
             runner_profile=hybrid
           fi
           qualified_runner_profile="$runner_profile"
-          hosted_runner_profile_contract=false
-          grep -Fq "hosted-runner-profile-contract-v1" .github/workflows/ci.yml &&
-            hosted_runner_profile_contract=true
           fork_pull_request=false
           [[ "$GITHUB_EVENT_NAME" == "pull_request" && "$HEAD_REPOSITORY" != "$GITHUB_REPOSITORY" ]] &&
             fork_pull_request=true

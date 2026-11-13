@@ -300,6 +300,10 @@ openclaw-sidebar-agent-roster {
   .sidebar-recent-session.sidebar-recent-session--team > .sidebar-recent-session__aside {
     grid-column: 3;
   }
+  /* The third grid column already reserves touch actions for team rows. */
+  .sidebar-recent-session.sidebar-recent-session--team > .sidebar-recent-session__link {
+    margin-inline-end: 0;
+  }
   .sidebar-recent-session--team:is(:hover, :focus-within) > .sidebar-recent-session__link {
     padding-right: 0;
   }

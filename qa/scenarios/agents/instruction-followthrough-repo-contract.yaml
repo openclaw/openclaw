@@ -132,7 +132,7 @@ flow:
               expr: "`repo contract followthrough bounced for permission or stalled: ${outbound.text}`"
         - set: followthroughDebugRequests
           value:
-            expr: "env.mock ? [...(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`))].filter((request) => /repo contract followthrough check/i.test(String(request.allInputText ?? ''))) : []"
+            expr: "env.mock ? (env.providerMode === 'mock-openai' ? await fetchJson(`${env.mock.baseUrl}/debug/request-plans?after=${requestCursorBefore}&inputContains=repo%20contract%20followthrough%20check`) : [...(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`))].filter((request) => /repo contract followthrough check/i.test(String(request.allInputText ?? '')))) : []"
         - assert:
             expr: "!env.mock || followthroughDebugRequests.filter((request) => request.plannedToolName === 'read').length >= 3"
             message:

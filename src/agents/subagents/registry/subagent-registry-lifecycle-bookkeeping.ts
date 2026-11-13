@@ -1,3 +1,4 @@
+import { pluginInvocationContext } from "../../../plugins/plugin-instance-scope.js";
 import { runWithGatewayDetachedWorkContinuation } from "../../../process/gateway-work-admission.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { isCronRunSessionKey } from "../../../sessions/session-key-utils.js";
@@ -65,18 +66,22 @@ export async function completeCleanupBookkeeping(
     const runCleanupTail = (label: string, run: () => Promise<unknown>) => {
       // Admission can outlive the caller's async scope. Own the tail's lifetime
       // and recheck row ownership after waiting; surviving tails still block snapshots.
-      void runWithGatewayDetachedWorkContinuation(async () => {
-        if (
-          !(await context.shouldSuppressSessionEffects(entry)) &&
-          postBookkeepingEffectsAllowed()
-        ) {
-          await run();
-        }
-      }, "subagents:lifecycle-cleanup").catch((error: unknown) => {
-        defaultRuntime.log(
-          `[warn] subagent ${label} failed (${cleanupParams.runId}): ${String(error)}`,
-        );
-      });
+      void pluginInvocationContext
+        .exit(() =>
+          runWithGatewayDetachedWorkContinuation(async () => {
+            if (
+              !(await context.shouldSuppressSessionEffects(entry)) &&
+              postBookkeepingEffectsAllowed()
+            ) {
+              await run();
+            }
+          }, "subagents:lifecycle-cleanup"),
+        )
+        .catch((error: unknown) => {
+          defaultRuntime.log(
+            `[warn] subagent ${label} failed (${cleanupParams.runId}): ${String(error)}`,
+          );
+        });
     };
     // The admitted tails report their own failures after bookkeeping has committed.
     if (!cleanupParams.preserveTranscript) {

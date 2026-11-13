@@ -23,6 +23,9 @@ import {
   registerAgentRunContext,
   releaseAgentRunDelegatedAuthority,
 } from "../../../infra/agent-run-registry.js";
+import { PluginInstanceUnavailableError } from "../../../plugins/plugin-instance-error.js";
+import { PluginInstance } from "../../../plugins/plugin-instance.js";
+import { PluginInvocationScope } from "../../../plugins/plugin-invocation-scope.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { PluginRegistryInspectionResources } from "../../../plugins/registry-inspection-resources.js";
 import { retireInspectionInstances } from "../../../plugins/registry-inspection.test-support.js";
@@ -4270,6 +4273,60 @@ describe("requester settle wake trigger", () => {
       .mockResolvedValue(undefined);
   });
 
+  it.each(["completion", "announce cleanup"] as const)(
+    "runs independent %s after the spawning plugin invocation closes",
+    async (phase) => {
+      const instance = new PluginInstance("detached-lifecycle");
+      const scope = new PluginInvocationScope(createEmptyPluginRegistry(), [instance]);
+      const continuation = scope.run(() => AsyncLocalStorage.snapshot());
+      const managedCall = instance.wrap(() => "detached completion result");
+      const captureSubagentCompletionReply = vi.fn(async () => managedCall());
+      const runSubagentAnnounceFlow = vi.fn(async () => {
+        expect(managedCall()).toBe("detached completion result");
+        return "delivered" as const;
+      });
+      const entry = createRunEntry({
+        expectsCompletionMessage: phase === "announce cleanup",
+        ...(phase === "announce cleanup"
+          ? {
+              endedAt: Date.now(),
+              outcome: { status: "ok" as const },
+              completion: { required: true, resultText: "detached completion result" },
+            }
+          : {}),
+      });
+      const controller = createLifecycleController({
+        entry,
+        captureSubagentCompletionReply,
+        runSubagentAnnounceFlow,
+      });
+      const join = observeRootWork();
+      try {
+        scope.release();
+        expect(() => continuation(managedCall)).toThrow("Plugin invocation scope is closed");
+        if (phase === "completion") {
+          await continuation(() => completeRun(controller, entry, { endedAt: Date.now() }));
+          expect(captureSubagentCompletionReply).toHaveBeenCalledOnce();
+          expect(readLifecycleRun(entry).completion?.resultText).toBe("detached completion result");
+        } else {
+          expect(continuation(() => controller.startSubagentAnnounceCleanupFlow(entry))).toBe(true);
+        }
+        await join();
+        if (phase === "announce cleanup") {
+          expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce();
+          expect(readLifecycleRun(entry).cleanupCompletedAt).toBeTypeOf("number");
+        }
+        // The handoff removes only caller scope; a retired plugin is still unavailable.
+        instance.quiesce();
+        expect(managedCall).toThrow(PluginInstanceUnavailableError);
+      } finally {
+        scope.release();
+        await join();
+        await instance.dispose();
+      }
+    },
+  );
+
   it.each(["completed", "stale-after-resolution", "restart-before-admission"] as const)(
     "owns context cleanup after its caller scope drains (%s)",
     async (mode) => {
@@ -4277,6 +4334,9 @@ describe("requester settle wake trigger", () => {
       await resetContextEngineRuntimeQuarantineForTests();
       runtimeMocks.log.mockClear();
       const registry = createEmptyPluginRegistry();
+      const instance = new PluginInstance("detached-cleanup");
+      const invocationScope = new PluginInvocationScope(registry, [instance]);
+      const ordinaryCall = instance.wrap(() => {});
       const resources = new PluginRegistryInspectionResources(retireInspectionInstances);
       resources.attach(registry);
       const retire = vi.fn();
@@ -4293,12 +4353,14 @@ describe("requester settle wake trigger", () => {
         disposalStarted.resolve();
         await disposalGate.promise;
       });
-      const factory = vi.fn(async () => {
-        expect(getAsyncWorkSignal()?.aborted).toBe(false);
-        factoryStarted.resolve();
-        await factoryGate.promise;
-        return Object.assign(new LegacyContextEngine(), { onSubagentEnded, dispose });
-      });
+      const factory = vi.fn(
+        instance.wrap(async () => {
+          expect(getAsyncWorkSignal()?.aborted).toBe(false);
+          factoryStarted.resolve();
+          await factoryGate.promise;
+          return Object.assign(new LegacyContextEngine(), { onSubagentEnded, dispose });
+        }),
+      );
       registerContextEngineInRegistry(registry, "cleanup-owned", factory, "plugin:fixture");
       registerContextEngineInRegistry(registry, "legacy", () => new LegacyContextEngine(), "core");
       vi.mocked(getRuntimeConfig).mockReturnValue({
@@ -4330,7 +4392,9 @@ describe("requester settle wake trigger", () => {
         },
       });
       const caller = new AsyncWorkScope();
-      const continuation = caller.run(() => AsyncLocalStorage.snapshot());
+      const continuation = caller.run(() =>
+        invocationScope.run(() => AsyncLocalStorage.snapshot()),
+      );
       const suspension = tryBeginGatewaySuspendAdmission(() => {});
       expect(suspension?.commit()).toBe(true);
       try {
@@ -4341,6 +4405,8 @@ describe("requester settle wake trigger", () => {
         );
         // Admission is parked while the originating async owner becomes permanently closed.
         await caller.drain();
+        invocationScope.release();
+        expect(() => continuation(ordinaryCall)).toThrow("Plugin invocation scope is closed");
         expect(factory).not.toHaveBeenCalled();
         if (mode === "restart-before-admission") {
           markGatewayRestartDraining();
@@ -4388,11 +4454,13 @@ describe("requester settle wake trigger", () => {
         resetSubagentRegistryRuntimeLoadersForTests();
         await resetContextEngineRuntimeQuarantineForTests();
         resetGatewayWorkAdmission();
+        invocationScope.release();
+        await instance.dispose();
       }
     },
   );
 
-  it("runs a detached settle wake outside a disposed requester transcript owner", async () => {
+  it("runs a detached settle wake outside disposed requester transcript and plugin scopes", async () => {
     const sessionKey = "agent:main:disposed-settle-wake-owner";
     const entry = createRunEntry({ requesterSessionKey: sessionKey, endedAt: 4_000 });
     let disposed = false;
@@ -4405,10 +4473,14 @@ describe("requester settle wake trigger", () => {
       }
       return await operation();
     };
+    const instance = new PluginInstance("detached-requester-wake");
+    const invocationScope = new PluginInvocationScope(createEmptyPluginRegistry(), [instance]);
+    const continuation = invocationScope.run(() => AsyncLocalStorage.snapshot());
     const freshTranscriptWrite = vi.fn(async () => {});
+    const managedWrite = instance.wrap(freshTranscriptWrite);
     const settleWake = vi.fn(async () => {
       await wakeReady.promise;
-      await runWithOwnedSessionTranscriptWrite({ sessionKey }, freshTranscriptWrite);
+      await runWithOwnedSessionTranscriptWrite({ sessionKey }, managedWrite);
       return false;
     });
     const controller = createLifecycleController({
@@ -4416,19 +4488,30 @@ describe("requester settle wake trigger", () => {
       maybeWakeRequesterAfterAllChildrenSettled: settleWake,
     });
 
-    await withOwnedSessionTranscriptWrites(
-      { sessionKey, withTranscriptWrite: withRequesterTranscriptWrite },
-      async () => {
-        await finishCleanup(controller, entry);
-      },
-    );
+    const join = observeRootWork();
+    try {
+      await continuation(() =>
+        withOwnedSessionTranscriptWrites(
+          { sessionKey, withTranscriptWrite: withRequesterTranscriptWrite },
+          () => finishCleanup(controller, entry),
+        ),
+      );
 
-    disposed = true;
-    wakeReady.resolve();
+      disposed = true;
+      invocationScope.release();
+      expect(() => continuation(managedWrite)).toThrow("Plugin invocation scope is closed");
+      wakeReady.resolve();
+      await join();
 
-    await waitForLifecycleState(() => expect(freshTranscriptWrite).toHaveBeenCalledOnce());
-    expect(requesterTranscriptWrite).not.toHaveBeenCalled();
-    expect(settleWake).toHaveBeenCalledOnce();
+      expect(freshTranscriptWrite).toHaveBeenCalledOnce();
+      expect(requesterTranscriptWrite).not.toHaveBeenCalled();
+      expect(settleWake).toHaveBeenCalledOnce();
+    } finally {
+      wakeReady.resolve();
+      invocationScope.release();
+      await join();
+      await instance.dispose();
+    }
   });
 
   it.each(["replacement row", "newer child generation"])(

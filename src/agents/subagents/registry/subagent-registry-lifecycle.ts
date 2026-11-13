@@ -1,5 +1,6 @@
 import pLimit from "p-limit";
 import type { ProgressContinuationState } from "../../../channels/progress-continuation.js";
+import { pluginInvocationContext } from "../../../plugins/plugin-instance-scope.js";
 import {
   getCanonicalGatewayContextResolver,
   getGatewayContextResolver,
@@ -390,23 +391,26 @@ export class SubagentLifecycleController {
     // Retry timers can outlive their original async scope. Reserve a detached
     // Gateway root before the limiter, then revalidate row ownership when the
     // execution slot opens; the queued wait still counts during restart drain.
-    return runWithGatewayDetachedWorkContinuation(() => {
-      if (!this.restoredRequesterSettleWakeRuns.has(getSubagentRunRuntimeKey(entry))) {
-        return runCurrent();
-      }
-      const resolve = getGatewayContextResolver(entry);
-      // Native caller wrappers share the instance resolver. Standalone bindings
-      // retain their captured resolver; wholly unbound calls belong to this controller.
-      const owner = (resolve && getCanonicalGatewayContextResolver(resolve)) ?? resolve ?? this;
-      // Retired callbacks keep their queue and roots, but cannot consume the
-      // replacement Gateway's capacity while their old async work unwinds.
-      let limit = this.restoredRequesterSettleWakeLimits.get(owner);
-      if (!limit) {
-        limit = pLimit(RESTORED_REQUESTER_SETTLE_WAKE_CONCURRENCY);
-        this.restoredRequesterSettleWakeLimits.set(owner, limit);
-      }
-      return limit(runCurrent);
-    }, "subagents:lifecycle-wake");
+    // Plugin calls belong to this wake, not the spawning turn's finite scope.
+    return pluginInvocationContext.exit(() =>
+      runWithGatewayDetachedWorkContinuation(() => {
+        if (!this.restoredRequesterSettleWakeRuns.has(getSubagentRunRuntimeKey(entry))) {
+          return runCurrent();
+        }
+        const resolve = getGatewayContextResolver(entry);
+        // Native caller wrappers share the instance resolver. Standalone bindings
+        // retain their captured resolver; wholly unbound calls belong to this controller.
+        const owner = (resolve && getCanonicalGatewayContextResolver(resolve)) ?? resolve ?? this;
+        // Retired callbacks keep their queue and roots, but cannot consume the
+        // replacement Gateway's capacity while their old async work unwinds.
+        let limit = this.restoredRequesterSettleWakeLimits.get(owner);
+        if (!limit) {
+          limit = pLimit(RESTORED_REQUESTER_SETTLE_WAKE_CONCURRENCY);
+          this.restoredRequesterSettleWakeLimits.set(owner, limit);
+        }
+        return limit(runCurrent);
+      }, "subagents:lifecycle-wake"),
+    );
   };
   unmarkRequesterSettleWakeRunScheduled = (entry: SubagentRunRecord): void => {
     this.scheduledRequesterSettleWakeRuns.delete(getSubagentRunRuntimeKey(entry));
@@ -425,29 +429,32 @@ export class SubagentLifecycleController {
     // Task finalization can make the run disappear from suspension blockers
     // before browser/MCP retirement and cleanup delivery hand off. Own this
     // entire transition as an independent root so that boundary stays atomic.
-    // Callers can detach while retaining parent ALS, so nesting is intentional.
-    await runWithGatewayIndependentRootWorkContinuation(async () => {
-      const entry = completeParams.expectedEntry
-        ? getCurrentSubagentRunOwner(this.options.runs, completeParams.expectedEntry)
-        : this.options.runs.get(completeParams.runId);
-      const identity = entry && this.trackRun(entry);
-      if (identity) {
-        this.terminalEffectUsers.set(identity, (this.terminalEffectUsers.get(identity) ?? 0) + 1);
-      }
-      try {
-        await completeSubagentRunAttempt(this, completeParams);
-      } finally {
+    // Callers can retain a closed plugin invocation scope in ALS. This owner
+    // starts fresh plugin calls without changing Gateway or completion authority.
+    await pluginInvocationContext.exit(() =>
+      runWithGatewayIndependentRootWorkContinuation(async () => {
+        const entry = completeParams.expectedEntry
+          ? getCurrentSubagentRunOwner(this.options.runs, completeParams.expectedEntry)
+          : this.options.runs.get(completeParams.runId);
+        const identity = entry && this.trackRun(entry);
         if (identity) {
-          const count = (this.terminalEffectUsers.get(identity) ?? 1) - 1;
-          if (count) {
-            this.terminalEffectUsers.set(identity, count);
-          } else {
-            this.terminalEffectUsers.delete(identity);
-          }
+          this.terminalEffectUsers.set(identity, (this.terminalEffectUsers.get(identity) ?? 0) + 1);
         }
-        this.pruneRetiredRuns([completeParams.runId]);
-      }
-    }, "subagents:lifecycle-complete");
+        try {
+          await completeSubagentRunAttempt(this, completeParams);
+        } finally {
+          if (identity) {
+            const count = (this.terminalEffectUsers.get(identity) ?? 1) - 1;
+            if (count) {
+              this.terminalEffectUsers.set(identity, count);
+            } else {
+              this.terminalEffectUsers.delete(identity);
+            }
+          }
+          this.pruneRetiredRuns([completeParams.runId]);
+        }
+      }, "subagents:lifecycle-complete"),
+    );
   };
 
   completeCleanupBookkeeping = (params: CleanupBookkeepingParams) =>

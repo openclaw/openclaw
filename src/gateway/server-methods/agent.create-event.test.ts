@@ -11,6 +11,10 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import { pluginInvocationContext } from "../../plugins/plugin-instance-scope.js";
+import { PluginInstance } from "../../plugins/plugin-instance.js";
+import { PluginInvocationScope } from "../../plugins/plugin-invocation-scope.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
@@ -42,6 +46,7 @@ const agentIngressMocks = vi.hoisted(() => ({
 }));
 const preparedRuntimeMocks = vi.hoisted(() => ({
   captured: vi.fn(),
+  executed: vi.fn(),
   acquired: vi.fn(),
   releaseDispatch: vi.fn(async () => {}),
   releaseSelected: vi.fn(async () => {}),
@@ -63,8 +68,13 @@ vi.mock("../../agents/prepared-model-runtime.js", async (importOriginal) => {
         getPreparedModelRuntimeBorrowedSnapshot(options.pluginGeneration),
         preparedRuntimeMocks.releaseDispatch.mock.calls.length,
       );
+      const invocation = new PluginInvocationScope(createEmptyPluginRegistry(), []);
       return {
-        [Symbol.asyncDispose]: preparedRuntimeMocks.releaseSelected,
+        run: <T>(run: () => T) => invocation.run(run),
+        [Symbol.asyncDispose]: async () => {
+          invocation.release();
+          await preparedRuntimeMocks.releaseSelected();
+        },
         snapshot: input,
         pluginGeneration: options.pluginGeneration,
       };
@@ -89,10 +99,15 @@ vi.mock("../../agents/prepared-model-runtime.js", async (importOriginal) => {
           metadataSnapshot: runtime.pluginGeneration.pluginMetadataSnapshot,
         };
         preparedRuntimeMocks.captured(snapshot);
+        const invocation = new PluginInvocationScope(createEmptyPluginRegistry(), []);
         onRuntimeLease?.({
+          run: <T>(run: () => T) => invocation.run(run),
           snapshot,
           pluginGeneration: runtime.pluginGeneration,
-          [Symbol.asyncDispose]: preparedRuntimeMocks.releaseDispatch,
+          [Symbol.asyncDispose]: async () => {
+            invocation.release();
+            await preparedRuntimeMocks.releaseDispatch();
+          },
         });
         return runtime;
       },
@@ -123,7 +138,20 @@ describe("agent handler session create events", () => {
     setRuntimeConfigSnapshot(configMocks.getRuntimeConfig());
     configMocks.getRuntimeConfig.mockClear();
     agentIngressMocks.agentCommandFromIngress.mockClear();
-    agentIngressMocks.agentCommandFromIngress.mockResolvedValue({ ok: true });
+    agentIngressMocks.agentCommandFromIngress.mockImplementation(async () => {
+      // Real invocation scopes prove the selected run does not retain the closed
+      // dispatch lease; a mock-only lease would hide this execution failure.
+      const instance = new PluginInstance("agent-execution");
+      try {
+        expectDefined(pluginInvocationContext.getStore(), "selected run invocation scope").lookup(
+          instance,
+        );
+        preparedRuntimeMocks.executed();
+        return { ok: true };
+      } finally {
+        await instance.dispose();
+      }
+    });
     Object.values(preparedRuntimeMocks).forEach((mock) => mock.mockClear());
     await fs.writeFile(storePath, "{}\n", "utf8");
   });
@@ -209,6 +237,7 @@ describe("agent handler session create events", () => {
       expect(responseCall?.[2]).toBeUndefined();
       expect(responseCall?.[3]?.runId).toBe(runId);
       await execution;
+      expect(preparedRuntimeMocks.executed).toHaveBeenCalledOnce();
       expect(preparedRuntimeMocks.acquired).toHaveBeenCalledExactlyOnceWith(
         preparedRuntimeMocks.captured.mock.calls[0]?.[0],
         0,
