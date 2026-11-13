@@ -2870,15 +2870,15 @@ select.data-table-pagination__size {
   align-items: center;
   gap: 16px;
   min-width: 0;
-  /* The switch sits as far from the side as from the top and bottom; the keys end on the
-     list's own right margin. */
-  padding-inline: 10px 18px;
+  /* The selected tab starts where the list's selected row does, which puts its icon under
+     the row icons and the field's text; the keys end on the list's own right margin. */
+  padding-inline: 8px 18px;
 }
 
 .cmd-palette__mode-tabs {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
 }
 
 .cmd-palette__mode {
@@ -2886,9 +2886,9 @@ select.data-table-pagination__size {
   align-items: center;
   justify-content: center;
   gap: 7px;
-  height: 32px;
-  padding: 0 14px 0 12px;
-  border-radius: calc(16px * var(--openclaw-corner-radius-scale));
+  height: 30px;
+  padding: 0 11px 0 10px;
+  border-radius: calc(9px * var(--openclaw-corner-radius-scale));
   corner-shape: var(--chat-composer-corner-shape);
   color: var(--muted);
   font-size: 13px;
@@ -2905,16 +2905,12 @@ select.data-table-pagination__size {
 }
 
 .cmd-palette__mode:hover:not([aria-selected="true"], :disabled) {
-  background: var(--surface-hover);
   color: var(--text-strong);
 }
 
-/* The selected pill is a piece of the panel, lifted the same way. */
+/* Tabs, not buttons: the selected one is a quiet tint of the dock, with no edge or lift. */
 .cmd-palette__mode[aria-selected="true"] {
-  background: var(--chat-composer-surface);
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--text-strong) 6%, transparent),
-    0 1px 2px rgb(0 0 0 / 6%);
+  background: color-mix(in srgb, var(--text-strong) 7%, transparent);
   color: var(--text-strong);
 }
 
@@ -2975,7 +2971,7 @@ select.data-table-pagination__size {
   .cmd-palette__mode {
     flex: 1;
     height: 40px;
-    border-radius: calc(20px * var(--openclaw-corner-radius-scale));
+    border-radius: calc(12px * var(--openclaw-corner-radius-scale));
   }
 }
 
