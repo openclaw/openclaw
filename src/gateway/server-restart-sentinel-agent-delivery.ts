@@ -47,6 +47,24 @@ import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-w
 
 const log = createSubsystemLogger("gateway/restart-sentinel");
 const AGENT_DELIVERY_OWNERSHIP_RETRY_MS = 1_000;
+// A delivery that stays owned by another owner must not rewrite its queue row once per
+// second forever: the wait backs off with queue age and settles at one attempt per minute.
+const AGENT_DELIVERY_OWNERSHIP_RETRY_MAX_MS = 60_000;
+const AGENT_DELIVERY_OWNERSHIP_RETRY_MAX_STEP = 6;
+
+/**
+ * Ownership backoff keyed on how long the entry has been queued, so a permanently stuck
+ * delivery costs at most one row rewrite per minute instead of sixty. The entry keeps its
+ * place in the queue (and stays visible to health) rather than being retried in a hot loop.
+ */
+export function agentDeliveryOwnershipRetryDelayMs(enqueuedAt: number, now = Date.now()): number {
+  const ageMs = Math.max(0, now - enqueuedAt);
+  const step = Math.min(
+    AGENT_DELIVERY_OWNERSHIP_RETRY_MAX_STEP,
+    Math.floor(ageMs / AGENT_DELIVERY_OWNERSHIP_RETRY_MAX_MS),
+  );
+  return Math.min(AGENT_DELIVERY_OWNERSHIP_RETRY_MAX_MS, AGENT_DELIVERY_OWNERSHIP_RETRY_MS << step);
+}
 // Outbound receipts dedupe a host media send across crashes between the send
 // and durable queue settlement.
 const GENERATED_MEDIA_DELIVERY_COMPLETION_RETENTION = {
@@ -303,7 +321,7 @@ export async function deliverQueuedGeneratedMediaCompletion(params: {
       ) {
         await deferSessionDelivery(
           entry.id,
-          AGENT_DELIVERY_OWNERSHIP_RETRY_MS,
+          agentDeliveryOwnershipRetryDelayMs(entry.enqueuedAt),
           params.queueContext,
         );
         throw new SessionDeliveryDeferredError(
@@ -354,7 +372,11 @@ export async function deliverQueuedGeneratedMediaCompletion(params: {
             deliveryQueueContext,
           );
         const deferToOutboundOwner = async (): Promise<never> => {
-          await deferSessionDelivery(entry.id, AGENT_DELIVERY_OWNERSHIP_RETRY_MS, queueContext);
+          await deferSessionDelivery(
+            entry.id,
+            agentDeliveryOwnershipRetryDelayMs(entry.enqueuedAt),
+            queueContext,
+          );
           throw new SessionDeliveryDeferredError(
             "queued generated-media send is still owned by outbound delivery recovery",
           );
