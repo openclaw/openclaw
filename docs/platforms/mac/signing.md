@@ -27,6 +27,8 @@ The signature audit also requires a native Mach-O signature. Some Apple toolchai
 
 The signer seals App and Sparkle bundle owners once, after their nested code. A separate signature on a bundle's main executable would also reseal that bundle's resources. After the signer seals the app, a fresh inventory feeds the Team ID and elevation audits. Scanner or classifier failures stop signing. Runtime portability checks inspect each native architecture and reject nonportable dependencies and broken or escaping symlinks.
 
+Before signing, packaging also checks native dependency closure across the assembled app. Each executable, including MLX and nested Sparkle helpers, resolves dependencies with its own runpaths rather than borrowing the main app's paths. Missing bundled libraries fail packaging even when a build-host toolchain has a copy. Sparkle comes from the locked SwiftPM XCFramework artifact; the MLX helper's Swift compatibility dependency points directly to `Contents/Frameworks`.
+
 Sign a private staged copy that no other process modifies. The signer rejects hardlinked files and special files such as FIFOs before attribute cleanup. Copy or rebuild the bundle if this check fails. Attribute cleanup and signing use macOS `/usr/bin/sandbox-exec`. It restricts filesystem writes to the fixed app and temporary signing directories. Extra inherited file descriptors are closed. Signing fails if this mutation boundary cannot start. There is no unrestricted fallback.
 
 Before signing, release and development builds remove TypeScript declarations,

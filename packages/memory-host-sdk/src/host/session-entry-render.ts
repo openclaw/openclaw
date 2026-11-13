@@ -21,25 +21,25 @@ import {
 import { prepareAssistantTranscriptText } from "../../../../src/shared/chat-message-content.js";
 import {
   collectRawSessionText,
-  hashSessionEntrySnapshot,
+  createSessionEntryHasher,
   parseSessionTimestampMs,
   renderSessionExportLines,
 } from "./session-entry-projection.js";
 import type {
   BuildSessionEntryOptions,
+  SessionEntryPage,
   SessionEntrySnapshot,
-  SessionFileEntry,
+  SessionEntrySummary,
   SessionFileState,
 } from "./session-files.js";
 import { classifySessionMessageOrigin } from "./session-provenance.js";
 import {
-  resolveSessionResetRecallCutoff,
+  createSessionResetRecallCutoffTracker,
   type SessionResetRecallCutoff,
 } from "./session-reset-recall.js";
 import type { MemoryEntryProvenance, MemoryOriginClass } from "./types.js";
 
 const SESSION_ENTRY_PARSE_YIELD_LINES = 250;
-const SESSION_ENTRY_TEXT_CHUNK_CHARS = 256 * 1024;
 const DIRECT_CRON_PROMPT_RE = /^\[cron:[^\]]+\]\s*/;
 const SESSION_RESET_RECALL_CUTOFF = Symbol.for("openclaw.memory.sessionResetRecallCutoff");
 
@@ -47,9 +47,7 @@ type SessionEntrySource = SessionFileState &
   (
     | {
         kind: "sqlite";
-        records: readonly unknown[];
-        consumeRecord?: () => unknown;
-        resetRecallCutoff: SessionResetRecallCutoff;
+        records: Iterable<unknown>;
         sessionKey?: string;
       }
     | {
@@ -62,9 +60,12 @@ type SessionEntrySource = SessionFileState &
       }
   );
 
-export function readSessionEntryResetRecallCutoff(
-  entry: SessionFileEntry,
-): SessionResetRecallCutoff {
+/** A rendered page; worker pages also carry the observed messages for host observers. */
+export type SessionEntryRenderedPage = SessionEntryPage & {
+  messages?: { message: unknown; observedAt: number }[];
+};
+
+export function readSessionEntryResetRecallCutoff(entry: object): SessionResetRecallCutoff {
   const value: unknown = Object.getOwnPropertyDescriptor(entry, SESSION_RESET_RECALL_CUTOFF)?.value;
   if (!value || typeof value !== "object" || !("state" in value)) {
     return { state: "invalid" };
@@ -78,10 +79,10 @@ export function readSessionEntryResetRecallCutoff(
   return { state: "invalid" };
 }
 
-export function attachSessionEntryResetRecallCutoff(
-  entry: SessionFileEntry,
+export function attachSessionEntryResetRecallCutoff<Entry extends object>(
+  entry: Entry,
   cutoff: SessionResetRecallCutoff,
-): SessionFileEntry {
+): Entry {
   Object.defineProperty(entry, SESSION_RESET_RECALL_CUTOFF, {
     configurable: false,
     enumerable: false,
@@ -230,51 +231,89 @@ function isExecCompletionEvent(event: string): boolean {
   return Boolean(match && (match[5] === undefined || match[5] === EXEC_TIMEOUT_RETRY_GUIDANCE));
 }
 
+/** Pages are bounded by rendered UTF-16 code units, about 1 MiB each. */
+const SESSION_ENTRY_PAGE_CHARS = 512 * 1024;
+const SESSION_ENTRY_PAGE_LINE_OVERHEAD_CHARS = 32;
+
+export type SessionEntryRenderSink = {
+  /** Also hash the first N lines, for checkpoints that compare an earlier export. */
+  prefixLineCount?: number;
+  /** Receives bounded pages of rendered lines in source order. */
+  page?: (page: SessionEntryRenderedPage) => void | Promise<void>;
+  /** Discards every page delivered so far; the next page starts at line 0 again. */
+  reset?: () => void | Promise<void>;
+  /** Carry observed messages in pages instead of invoking the caller's observer. */
+  pageMessages?: boolean;
+};
+
 /** Render the worker's admitted snapshot without entering host discovery or restoration. */
 export function renderSessionEntrySnapshot(
   absPath: string,
   opts: BuildSessionEntryOptions & { agentId: string; sessionId: string; storePath: string },
-  snapshot: SessionEntrySnapshot,
-  consumeSnapshot = false,
-): Promise<SessionFileEntry> {
-  const resetRecallCutoff = resolveSessionResetRecallCutoff(snapshot.events);
-  // Only the worker's uncached snapshot transfers ownership. Pop in source order so
-  // rendered text does not retain the complete projected transcript alongside it.
-  if (consumeSnapshot) {
-    snapshot.events.reverse();
-  }
-  return renderSessionEntry(absPath, opts, {
-    ...sqliteSessionFileState(absPath, opts, snapshot.stats, opts.updatedAtMs),
-    kind: "sqlite",
-    records: snapshot.events,
-    consumeRecord: consumeSnapshot ? () => snapshot.events.pop() : undefined,
-    resetRecallCutoff,
-    sessionKey: snapshot.sessionKey,
-  });
+  snapshot: Omit<SessionEntrySnapshot, "events"> & { events: Iterable<unknown> },
+  sink: SessionEntryRenderSink = {},
+): Promise<SessionEntrySummary> {
+  return renderSessionEntry(
+    absPath,
+    opts,
+    {
+      ...sqliteSessionFileState(absPath, opts, snapshot.stats, opts.updatedAtMs),
+      kind: "sqlite",
+      records: snapshot.events,
+      sessionKey: snapshot.sessionKey,
+    },
+    sink,
+  );
 }
 
+/**
+ * Streams one transcript's memory export. Rendered text leaves in bounded pages; only per-message
+ * line facts and event identities are retained, so the persisted hash needs no full content.
+ */
 export async function renderSessionEntry(
   absPath: string,
   opts: BuildSessionEntryOptions,
   source: SessionEntrySource,
-): Promise<SessionFileEntry> {
+  sink: SessionEntryRenderSink = {},
+): Promise<SessionEntrySummary> {
   const { mtimeMs, size, path: memoryPath } = source;
   const sqliteSource = source.kind === "sqlite" ? source : null;
   const raw = source.kind === "file" ? source.raw : "";
   const sessionStoreClassification = source.kind === "file" ? source.classification : null;
-  const collected: string[] = [];
-  const textChunks: string[] = [];
-  let collectedChars = 0;
-  const flushText = () => {
-    if (collected.length > 0) {
-      textChunks.push(collected.join("\n"));
-      collected.length = 0;
-      collectedChars = 0;
+  const hasher = createSessionEntryHasher(sink.prefixLineCount);
+  const resetRecall = sqliteSource ? createSessionResetRecallCutoffTracker() : undefined;
+  const originClasses = new Set<MemoryOriginClass>();
+  let page: SessionEntryRenderedPage | undefined;
+  let pageChars = 0;
+  let nextLine = 0;
+  let deliveredPages = false;
+  const openPage = () =>
+    (page ??= {
+      startLine: nextLine,
+      lines: [],
+      lineMap: [],
+      messageTimestampsMs: [],
+      lineProvenance: [],
+    });
+  const flushPage = async (force: boolean) => {
+    if (!page || (!force && pageChars < SESSION_ENTRY_PAGE_CHARS)) {
+      return;
+    }
+    const current = page;
+    page = undefined;
+    pageChars = 0;
+    if (current.lines.length > 0 || current.messages?.length) {
+      deliveredPages ||= current.lines.length > 0;
+      await sink.page?.(current);
     }
   };
-  const lineMap: number[] = [];
-  const messageTimestampsMs: number[] = [];
-  const lineProvenance: MemoryEntryProvenance[] = [];
+  const observe = sink.pageMessages
+    ? (message: unknown, observedAt: number) => {
+        const current = openPage();
+        (current.messages ??= []).push({ message, observedAt });
+        pageChars += JSON.stringify(message)?.length ?? 0;
+      }
+    : opts.onTranscriptMessage;
   const parseYieldEveryLines = resolveSessionEntryParseYieldLines(opts);
   const sqliteSessionKey = !opts.sessionKey ? sqliteSource?.sessionKey : undefined;
   let generatedByDreamingNarrative =
@@ -294,21 +333,23 @@ export async function renderSessionEntry(
   let insideHeartbeatTurn = false;
   let insideRecalledMemoryTurn = false;
   let turnOrigin: MemoryOriginClass = "untrusted";
-  // SQLite is fully snapshotted before yielding or invoking observers. Archives
+  // SQLite records arrive from an admitted snapshot or its fenced slices. Archives
   // retain raw line ordinals, including blank and malformed JSONL entries.
-  const recordCount = sqliteSource?.records.length ?? 0;
-  for (
-    let jsonlIdx = 0, lineStart = 0;
-    sqliteSource ? jsonlIdx < recordCount : lineStart <= raw.length;
-    jsonlIdx++
-  ) {
+  const records = sqliteSource ? sqliteSource.records[Symbol.iterator]() : undefined;
+  for (let jsonlIdx = 0, lineStart = 0; ; jsonlIdx++) {
     await yieldSessionEntryParseIfNeeded(jsonlIdx, parseYieldEveryLines);
     let record: unknown;
-    if (sqliteSource) {
-      record = sqliteSource.consumeRecord
-        ? sqliteSource.consumeRecord()
-        : sqliteSource.records[jsonlIdx];
+    if (records) {
+      const next = records.next();
+      if (next.done) {
+        break;
+      }
+      record = next.value;
+      resetRecall!.observe(record);
     } else {
+      if (lineStart > raw.length) {
+        break;
+      }
       const newlineIndex = raw.indexOf("\n", lineStart);
       const lineEnd = newlineIndex === -1 ? raw.length : newlineIndex;
       const line = raw.slice(lineStart, lineEnd);
@@ -331,12 +372,21 @@ export async function renderSessionEntry(
     if (identifiesDreamingNarrative || identifiesCronRun) {
       generatedByDreamingNarrative ||= identifiesDreamingNarrative;
       generatedByCronRun ||= identifiesCronRun;
-      collected.length = 0;
-      textChunks.length = 0;
-      collectedChars = 0;
-      lineMap.length = 0;
-      messageTimestampsMs.length = 0;
-      lineProvenance.length = 0;
+      // Generated transcripts export nothing; earlier lines no longer belong to this entry.
+      hasher.reset();
+      originClasses.clear();
+      nextLine = 0;
+      if (page) {
+        page.lines.length = 0;
+        page.lineMap.length = 0;
+        page.messageTimestampsMs.length = 0;
+        page.lineProvenance.length = 0;
+        page.startLine = 0;
+      }
+      if (deliveredPages) {
+        deliveredPages = false;
+        await sink.reset?.();
+      }
     }
     const candidate = asOptionalRecord(record);
     if (candidate?.type !== "message") {
@@ -350,7 +400,7 @@ export async function renderSessionEntry(
       continue;
     }
     const timestampMs = parseSessionTimestampMs(candidate, message);
-    opts.onTranscriptMessage?.(message, Math.max(0, Math.floor(timestampMs || mtimeMs)));
+    observe?.(message, Math.max(0, Math.floor(timestampMs || mtimeMs)));
     const inputProvenance = asOptionalRecord(message.provenance);
     const isHeartbeatUser =
       message.role === "user" &&
@@ -365,6 +415,7 @@ export async function renderSessionEntry(
       turnOrigin = classifySessionMessageOrigin(message, turnOrigin);
     }
     if (message.role === "user" && hasInterSessionUserProvenance(message)) {
+      await flushPage(false);
       continue;
     }
     // Observers and turn provenance still see excluded messages; text export does not.
@@ -372,70 +423,67 @@ export async function renderSessionEntry(
       insideHeartbeatTurn ||
       insideRecalledMemoryTurn ||
       generatedByDreamingNarrative ||
-      generatedByCronRun
+      generatedByCronRun ||
+      ("display" in message && message.display === false)
     ) {
-      continue;
-    }
-    if ("display" in message && message.display === false) {
+      await flushPage(false);
       continue;
     }
     const rawText = prepareAssistantTranscriptText(
       message,
       collectRawSessionText(message.content) ?? undefined,
     );
-    if (rawText === undefined) {
-      continue;
-    }
-
     // User text is not trusted archive-wide provenance. Per-message sanitization
     // drops cron prompts without clearing unrelated content from the archive.
-    const text = sanitizeSessionText(rawText, message.role);
+    const text = rawText === undefined ? null : sanitizeSessionText(rawText, message.role);
     if (!text) {
+      await flushPage(false);
       continue;
     }
     const label = message.role === "user" ? "User" : "Assistant";
     const renderedLines = renderSessionExportLines(label, text);
-    const memoryProvenance: MemoryEntryProvenance = {
-      originClass: classifySessionMessageOrigin(message, turnOrigin),
-      sessionKind,
-      observedAt: Math.max(0, Math.floor(timestampMs || mtimeMs)),
+    const facts = {
+      sourceLine: jsonlIdx + 1,
+      timestampMs,
+      provenance: {
+        originClass: classifySessionMessageOrigin(message, turnOrigin),
+        sessionKind,
+        observedAt: Math.max(0, Math.floor(timestampMs || mtimeMs)),
+      } satisfies MemoryEntryProvenance,
     };
-    collected.push(...renderedLines);
-    collectedChars += renderedLines.reduce((length, line) => length + line.length + 1, 0);
-    // Flatten bounded groups: individual line ropes otherwise retain sanitized
-    // message backing strings until the complete export is joined.
-    if (collectedChars >= SESSION_ENTRY_TEXT_CHUNK_CHARS) {
-      flushText();
+    hasher.append(renderedLines, facts);
+    if (renderedLines.length > 0) {
+      originClasses.add(facts.provenance.originClass);
     }
-    lineMap.push(...renderedLines.map(() => jsonlIdx + 1));
-    messageTimestampsMs.push(...renderedLines.map(() => timestampMs));
-    lineProvenance.push(...renderedLines.map(() => memoryProvenance));
+    for (const line of renderedLines) {
+      const current = openPage();
+      current.lines.push(line);
+      current.lineMap.push(facts.sourceLine);
+      current.messageTimestampsMs.push(timestampMs);
+      current.lineProvenance.push(facts.provenance);
+      nextLine++;
+      pageChars += line.length + SESSION_ENTRY_PAGE_LINE_OVERHEAD_CHARS;
+      await flushPage(false);
+    }
   }
-  flushText();
-  const content = textChunks.join("\n");
-  const entry: SessionFileEntry = {
+  await flushPage(true);
+  const resetRecallCutoff: SessionResetRecallCutoff = resetRecall?.current() ?? {
+    state: "absent",
+  };
+  const { hash, prefixHash } = hasher.finish(resetRecallCutoff);
+  const summary: SessionEntrySummary = {
     path: memoryPath,
     absPath,
     mtimeMs,
     ...(sqliteSource ? { revisionMs: sqliteSource.revisionMs } : {}),
     size,
-    hash: hashSessionEntrySnapshot({
-      content,
-      lineMap,
-      messageTimestampsMs,
-      lineProvenance,
-      resetRecallCutoff: sqliteSource?.resetRecallCutoff ?? { state: "absent" },
-    }),
-    content,
-    lineMap,
-    messageTimestampsMs,
-    lineProvenance,
+    hash,
+    ...(prefixHash ? { prefixHash } : {}),
+    lineCount: hasher.lineCount,
+    lineOriginClasses: [...originClasses].toSorted(),
     sessionKind,
     ...(generatedByDreamingNarrative ? { generatedByDreamingNarrative: true } : {}),
     ...(generatedByCronRun ? { generatedByCronRun: true } : {}),
   };
-  return attachSessionEntryResetRecallCutoff(
-    entry,
-    sqliteSource?.resetRecallCutoff ?? { state: "absent" },
-  );
+  return attachSessionEntryResetRecallCutoff(summary, resetRecallCutoff);
 }

@@ -7,6 +7,8 @@ import { finishElementAnimations } from "../test-helpers/animations.ts";
 import {
   takeControlUiElementScreenshot,
   takeControlUiViewportScreenshot,
+  waitForControlUiFrameLayout,
+  waitForControlUiProofSurface,
 } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, type MockGatewayRequest } from "../test-helpers/control-ui-e2e.ts";
 import {
@@ -219,6 +221,8 @@ suite.define(() => {
         .poll(() => shell.evaluate((element) => element.classList.contains("shell--mobile-nav")))
         .toBe(false);
       await shell.evaluate(finishElementAnimations);
+      await waitForControlUiProofSurface(endpoint, [endpoint]);
+      await waitForControlUiFrameLayout([shell, endpoint]);
       const fieldBefore = await endpoint.boundingBox();
       await gateway.resolveDeferred("config.set");
       await expectSaveStatus(page, "Saved");

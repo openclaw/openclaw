@@ -10,6 +10,207 @@
 /* Settings controls also appear outside the settings workspace: the login
    gate, chat board controls, and the chat MCP form all use these primitives. */
 
+/* Shared rows and disclosures also render in cold chat dialogs. Keep their
+   structure with the shared controls, never behind the Settings route. */
+/* Section rhythm for embedded surfaces (tab panels, split layouts) that host
+   settings sections without .settings-page's centered column. Sections crammed
+   into a plain wrapper collapse to zero separation. */
+.settings-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+}
+
+.settings-group {
+  --btn-bg: var(--surface-hover);
+  --btn-bg-hover: var(--surface-selected);
+  background: var(--card);
+  border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
+  border-radius: var(--composer-radius);
+  overflow: hidden;
+  min-width: 0;
+}
+
+.settings-group:empty {
+  display: none;
+}
+
+.settings-disclosure__sections {
+  margin-top: var(--space-8);
+}
+
+/* A row's own details chevron: the quiet disclosure's glyph, as a button after the row's action. */
+.settings-details-toggle[aria-expanded="true"] svg {
+  transform: rotate(90deg);
+}
+
+/* At the row's end, the glyph lines up with the other rows' chevrons, also when the control
+   wraps under the title on phones. The tooltip host is display: contents. */
+.settings-row__control > openclaw-tooltip:last-child > .settings-details-toggle {
+  margin-inline: auto -6px;
+}
+
+.settings-disclosure__summary {
+  list-style: none;
+}
+
+.settings-disclosure__summary::-webkit-details-marker {
+  display: none;
+}
+
+.settings-disclosure[open] > .settings-disclosure__summary .settings-disclosure__chevron {
+  transform: rotate(90deg);
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--list-row-padding);
+  min-height: var(--list-row-min-height);
+}
+
+.settings-row__text {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-width: 0;
+  flex: 1 1 0;
+}
+
+.settings-row__title {
+  font-size: var(--control-ui-text-md);
+  font-weight: var(--list-row-title-weight);
+  color: var(--text-strong);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.settings-row__desc {
+  font-size: var(--control-ui-text-sm);
+  color: var(--muted);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.settings-row__control > .settings-row__desc[aria-hidden="true"] {
+  overflow-wrap: normal;
+}
+
+.settings-row__control {
+  display: flex;
+  /* No wrap here: Chromium sizes a wrappable shrink-to-fit flex container to
+     its widest item, collapsing multi-control clusters. The <=640px block
+     gives the cluster a definite width and enables wrapping there. */
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 60%;
+}
+
+.settings-row--nav {
+  width: 100%;
+  border: none;
+  background: none;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+  cursor: var(--cursor-action);
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+/* A disclosure that opens whole sections is its own one-row group. */
+.settings-row--nav.settings-group {
+  border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
+  background: var(--card);
+}
+
+.settings-row--nav:hover {
+  background: var(--surface-hover);
+}
+
+/* Fully-inset ring: the group clips overflow, so an outer ring would vanish. */
+.settings-row--nav:focus-visible {
+  outline: 2px solid transparent;
+  outline-offset: -2px;
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--ring) 80%, transparent);
+}
+
+/* The group clips row fills, but a focus ring is a line: flush rows round it to
+   the group's inner corner so it doesn't break at the curve. */
+.settings-group > .settings-row--nav:first-child:focus-visible,
+.settings-group
+  > .provider-list
+  > .provider-row:first-child
+  > .provider-row__summary:focus-visible {
+  border-start-start-radius: calc(var(--composer-radius) - 1px);
+  border-start-end-radius: calc(var(--composer-radius) - 1px);
+  corner-shape: superellipse(1.5);
+}
+
+.settings-group > .settings-row--nav:last-child:focus-visible,
+.settings-group
+  > .provider-list
+  > .provider-row:last-child:not(.provider-row--open)
+  > .provider-row__summary:focus-visible {
+  border-end-start-radius: calc(var(--composer-radius) - 1px);
+  border-end-end-radius: calc(var(--composer-radius) - 1px);
+  corner-shape: superellipse(1.5);
+}
+
+.settings-row__chevron {
+  display: flex;
+  align-items: center;
+  color: var(--muted);
+  opacity: 0.5;
+  flex: 0 0 auto;
+}
+
+.settings-row__chevron svg,
+.settings-row__chevron .session-css-icon {
+  width: var(--list-row-icon-size);
+  height: var(--list-row-icon-size);
+  /* Icons rely on currentColor; without this the SVG falls back to black fill
+     and disappears in dark mode. */
+  stroke: currentColor;
+  fill: none;
+  stroke-width: var(--list-row-icon-stroke);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.settings-subrows:where(:not(.cfg-subrows)) .settings-row {
+  padding-left: var(--space-7);
+}
+
+@media (max-width: 640px) {
+  .settings-row {
+    flex-wrap: wrap;
+  }
+
+  .settings-row__control {
+    /* Definite width makes flex-wrap size lines correctly (see desktop note). */
+    width: 100%;
+    max-width: 100%;
+    flex-wrap: wrap;
+  }
+
+  /* Navigation, toggle, and object-summary controls stay beside their labels. */
+  .settings-row:is(.settings-row--nav, .settings-row--toggle, .cfg-object__summary) {
+    flex-wrap: nowrap;
+  }
+
+  .settings-row:is(.settings-row--nav, .settings-row--toggle, .cfg-object__summary)
+    > .settings-row__control {
+    width: auto;
+    max-width: 50%;
+    justify-content: flex-end;
+  }
+}
+
 /* One control height inside settings clusters. Buttons, inputs, selects, and
    segmented controls share 32px so mixed rows never show ragged heights.
    Multi-select list boxes and textareas keep their natural height. */
@@ -97,7 +298,7 @@ select.settings-select:not([multiple]) {
 
 .settings-segmented--compact > .settings-segmented__btn {
   padding: 0 6px;
-  font-size: calc(10px * var(--control-ui-text-scale));
+  font-size: 10px;
 }
 
 .settings-segmented > .settings-segmented__btn--active,

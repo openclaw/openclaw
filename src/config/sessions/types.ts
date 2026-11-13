@@ -284,6 +284,21 @@ type SessionEntryCore = SessionEntryProvenance &
     pluginExtensions?: Record<string, Record<string, SessionPluginJsonValue>>;
     /** Trusted session initialization is incomplete; all work admission stays blocked. */
     initializationPending?: true;
+    /** Ordinary Template admission owns this exact pending incarnation until verified setup. */
+    templateInitialization?: {
+      source: { packageName: string; version?: string };
+      agentConfig: import("../types.agents.js").AgentEntryConfig;
+      workspaceIdentity: string;
+      /** Verified intent recorded before instructions or config can change. */
+      preparing?: {
+        agentConfig: import("../types.agents.js").AgentEntryConfig;
+        planDigest: string;
+        sourceIntegrity: string;
+        /** Only previously absent files (digest) and directories (null). */
+        workspaceAdditions: Record<string, string | null>;
+      };
+      configured?: { planDigest: string; sourceIntegrity: string };
+    };
     /** Top-level SessionEntry mirror slots owned by plugin session extensions. */
     pluginExtensionSlotKeys?: Record<string, Record<string, string>>;
     /** Durable one-shot prompt additions drained before the next agent turn. */
@@ -620,6 +635,8 @@ type SessionEntryCore = SessionEntryProvenance &
     /** Last ambient room message durably appended to this transcript, keyed by channel scope. */
     ambientTranscriptWatermarks?: Record<string, AmbientTranscriptWatermark>;
     skillsSnapshot?: SessionSkillSnapshot;
+    /** Parent prompt preference persisted by spawn before the child can launch. */
+    toolUsageRankingSeed?: import("../../agents/tool-usage-ranking.js").ToolUsageRankingSnapshot;
     /** Explicit authorized immutable library pins; current speakers never replace this selection. */
     skillLibrarySelections?: import("../../../packages/gateway-protocol/src/schema/skill-library.js").SkillLibrarySelection[];
     systemPromptReport?: SessionSystemPromptReport;
@@ -641,7 +658,24 @@ export type SessionProfileInvolvement = {
   lastMention?: { generation: string; sequence: number; timestamp: number };
 };
 
+/**
+ * The scheduled parent a cron `:run:` row's occurrence was admitted against: the
+ * parent's exact incarnation and the occurrence's owner bit.
+ */
+export type SessionScheduledMemoryParent = {
+  sessionKey: string;
+  sessionId: string;
+  /** Absent when the job's link recorded only the parent session id. */
+  lifecycleRevision?: string;
+  senderIsOwner: boolean;
+};
+
 export type InternalSessionEntryCore = SessionEntryCore & {
+  /**
+   * Written only by cron run preparation on a child-placement `:run:` row, so a
+   * session the run spawns can resolve its memory audience through that parent.
+   */
+  scheduledMemoryParent?: SessionScheduledMemoryParent;
   /** Atomic history-cut receipt for the exact settled local projection, cleared after adoption. */
   localWorkspaceHandoff?: {
     worktreeId: string;

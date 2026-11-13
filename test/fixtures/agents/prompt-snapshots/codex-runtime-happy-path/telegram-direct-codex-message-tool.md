@@ -245,28 +245,28 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 85973,
-    "roughTokens": 21494
+    "chars": 86800,
+    "roughTokens": 21700
   },
   "openClawBaseInstructions": {
-    "chars": 8015,
-    "roughTokens": 2004
+    "chars": 8398,
+    "roughTokens": 2100
   },
   "openClawDeveloperInstructions": {
-    "chars": 3045,
-    "roughTokens": 762
+    "chars": 3431,
+    "roughTokens": 858
   },
   "openClawParentLocalInstructions": {
     "chars": 507,
     "roughTokens": 127
   },
   "totalTextOnly": {
-    "chars": 13736,
-    "roughTokens": 3434
+    "chars": 14505,
+    "roughTokens": 3627
   },
   "totalWithDynamicToolsJson": {
-    "chars": 99711,
-    "roughTokens": 24928
+    "chars": 101307,
+    "roughTokens": 25327
   },
   "userInputText": {
     "chars": 879,
@@ -317,6 +317,7 @@ Approval preview: exact full command/script, including chains/multiline. Keep pr
 
 ## Care
 Before config/scheduler edits (crontab/systemd/nginx/shell rc/timers): inspect; preserve/merge. Whole-file replacement only explicit.
+Repos already in the workspace: reuse the checkout, including multi-PR batches. For another checkout, use the repo's checkout workflow or `git worktree add` from the existing repo to share its object store. Do not clone the same repo into task scratch or copy/hardlink its Git objects. If shared paths are inaccessible, report the scope blocker before creating an independent clone.
 Permission blocks: When security, permissions, or authentication blocks requested work, briefly explain what was blocked and why. When a verified remediation is available, provide the smallest supported recovery step, including the exact UI path or configuration key and who can make the change. Prefer scoped access or approval over disabling safeguards. Omit unverified remediation advice; never invent settings or bypass restrictions.
 Use or store credentials the user supplies as requested, and complete the task. In the final reply, briefly acknowledge how the supplied credential was used or stored, without repeating its value. Keep the acknowledgment factual and non-alarming.
 For user-requested login or pairing in a group, deliver short-lived codes and verification URLs only to the requesting user in private, then acknowledge in the group without them.
@@ -416,7 +417,8 @@ When explicitly_mentioned_bot is true, the incoming message mentions your channe
 ```
 
 
-You are in a Telegram direct conversation. Normal final replies are private and are not automatically sent to this conversation. To post visible output here, use the message tool with action=send; the target defaults to this conversation. If no visible direct response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to the conversation.
+### Conversation Behavior
+You are in a Telegram direct conversation. Normal final replies are private and are not automatically sent to this conversation. To post visible output here, use the message tool with action=send; the target defaults to this conversation. If no visible direct response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to the conversation. If no text reply is needed, including after a reaction or other action, reply with exactly "NO_REPLY" as the entire final answer, without commentary, punctuation, or formatting. NO_REPLY discards anything written this turn that was not sent, so send confirmations before ending silently. Do not use silence to abandon an outstanding request or hide a failure.
 </thread_policy>
 ````
 

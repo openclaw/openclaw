@@ -11,11 +11,13 @@ import {
 import { resolveTelegramIngressNonRetryableFailure } from "./telegram-ingress-non-retryable.js";
 import { runWithTelegramIngressPreparation } from "./telegram-ingress-preparation.js";
 import { openTelegramIngressQueue } from "./telegram-ingress-spool.js";
+import { readTelegramWidgetQueryId, telegramWidgetApi } from "./widgets/widget-bot-api.js";
 
 type TelegramSpooledBot = {
   handleUpdate: (update: never) => Promise<void>;
   api: {
     answerCallbackQuery: (callbackQueryId: string) => Promise<unknown>;
+    raw: object;
   };
 };
 
@@ -99,6 +101,15 @@ export function createTelegramTransportIngressMonitor(
     // Core runs this after append commit and before dispatch, so callback acknowledgement
     // cannot erase Telegram's redelivery path or wait behind the handler lane.
     onDurableAdmission: (update, context) => {
+      // A widget waits at most 15 seconds for an answer. Acknowledge receipt now; the agent's
+      // result reaches the widget later as a state edit.
+      const widgetQueryId = readTelegramWidgetQueryId(update);
+      if (widgetQueryId && context.isNew) {
+        void telegramWidgetApi(params.bot.api)
+          .answerWidgetQuery({ widget_query_id: widgetQueryId })
+          .catch((error: unknown) => params.onError?.(error));
+        return;
+      }
       const callbackQuery = isRecord(update) ? update.callback_query : undefined;
       if (!isRecord(callbackQuery)) {
         return;

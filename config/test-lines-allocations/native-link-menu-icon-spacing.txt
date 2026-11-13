@@ -1,2 +1,0 @@
-12
-# Rendered icon-to-label spacing regression for all three native link menu actions; extends the existing browser action test.

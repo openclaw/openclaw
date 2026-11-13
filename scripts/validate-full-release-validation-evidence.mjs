@@ -704,10 +704,21 @@ export async function authenticateFullReleaseValidationEvidence(options, client)
     evidence,
     publicationAdmission: manifest.publicationAdmission ?? null,
     revalidateAuthority,
+    publicationAuthority: candidateArtifactAuthorityRecord(manifest, evidence),
   };
 }
 
 function candidateArtifactAuthority(manifest, evidence, evidenceClient) {
+  const authority = candidateArtifactAuthorityRecord(manifest, evidence);
+  if (!authority) {
+    return undefined;
+  }
+  const revalidate = () => revalidateCandidateArtifactAuthority(authority, evidenceClient);
+  revalidate();
+  return revalidate;
+}
+
+function candidateArtifactAuthorityRecord(manifest, evidence) {
   const descriptor =
     manifest?.sourceAdmission?.qualificationAdmission ??
     manifest?.receiptRecovery?.qualificationAdmission;
@@ -717,8 +728,8 @@ function candidateArtifactAuthority(manifest, evidence, evidenceClient) {
   if (!evidence.qualificationAdmission) {
     throw new Error("Authenticated candidate admission authority is missing");
   }
-  // Keep live authority process-local and independent of caller-owned data.
-  const authority = structuredClone({
+  // Retain authenticated identities, not live permission or ref verdicts.
+  return structuredClone({
     descriptor,
     admission: evidence.qualificationAdmission,
     recoveryProducer: manifest.receiptRecovery
@@ -730,14 +741,21 @@ function candidateArtifactAuthority(manifest, evidence, evidenceClient) {
         }
       : null,
   });
-  const revalidateAuthority = () => {
+}
+
+// Only an authenticated preview carrier may restore this owner-generated record.
+// It carries the operator identities, never their current permission verdict.
+export function revalidateCandidateArtifactAuthority(authority, evidenceClient) {
+  if (authority) {
     evidenceClient.revalidateQualificationAdmissionAuthority(authority);
     if (authority.recoveryProducer) {
-      verifyReceiptRecoveryAuthority(authority.descriptor.repository, authority.recoveryProducer);
+      if (evidenceClient.verifyReceiptRecoveryAuthority) {
+        evidenceClient.verifyReceiptRecoveryAuthority(authority.recoveryProducer);
+      } else {
+        verifyReceiptRecoveryAuthority(authority.descriptor.repository, authority.recoveryProducer);
+      }
     }
-  };
-  revalidateAuthority();
-  return revalidateAuthority;
+  }
 }
 
 function validateCandidateOwnedArtifactSource(manifest, candidateSha, qualificationSha) {

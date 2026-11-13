@@ -28,8 +28,9 @@ import {
   cliBackendAcceptsAuthProfileForwarding,
   resolveCliExecutionAuthProfileId,
 } from "../cli-execution-auth.js";
+import type { CompactionSummaryRefusalMode } from "../compaction-summary-refusal.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
-import { coerceToFailoverError } from "../failover-error.js";
+import { coerceToFailoverError, hasModelFallbackStop } from "../failover-error.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import { isFallbackSummaryError } from "../model-fallback-attempt.js";
 import { resolveModelCandidateChain } from "../model-fallback-candidates.js";
@@ -54,11 +55,14 @@ import { resolveCompactionRuntimeSelection } from "./compaction-runtime-preparat
 import { resolveCompactionTimeoutMs } from "./compaction-safety-timeout.js";
 import type { PreparedCompactEmbeddedAgentSessionParams } from "./direct-compaction-preparation.js";
 import { compactEmbeddedAgentSessionDirectOnce } from "./direct-compaction.js";
+import { log } from "./logger.js";
 import { readCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
 import { resolveSharedPluginRuntimeWorkspace } from "./run/prepared-runtime-context.js";
-import type { EmbeddedAgentCompactResult } from "./types.js";
+import type { EmbeddedAgentCompactResult, EmbeddedAgentMeta } from "./types.js";
 
 export type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
+
+type Route = { provider: string; model: string };
 
 export async function compactNativeCliSession(params: {
   replyOperation?: ReplyOperation;
@@ -145,9 +149,10 @@ export async function compactNativeCliSession(params: {
     sessionAgentId,
     "agents.native-compaction",
   );
+  let compactedMeta: EmbeddedAgentMeta | undefined;
   try {
     const runControlOperation = async () => {
-      await runCliAgent({
+      const result = await runCliAgent({
         replyOperation: params.replyOperation,
         preparedRunAdmission,
         sessionId: params.compactParams.sessionId,
@@ -172,6 +177,20 @@ export async function compactNativeCliSession(params: {
           ? { sessionEntry: params.compactParams.sessionEntry }
           : {}),
         contextWindow: params.compactParams.sessionEntry?.contextWindow,
+        // Forward the turn's prompt inputs so the compact control op rebuilds
+        // the same request prefix (system prompt, MCP, skills) and the provider
+        // cache hits instead of rewriting history at cache-write price.
+        chatType: params.compactParams.chatType,
+        agentAccountId: params.compactParams.agentAccountId,
+        conversationToolPolicy: params.compactParams.conversationToolPolicy,
+        messageChannel: params.compactParams.messageChannel,
+        messageProvider: params.compactParams.messageProvider,
+        skillsSnapshot: params.compactParams.skillsSnapshot,
+        toolOverrides: params.compactParams.toolOverrides,
+        ownerNumbers: params.compactParams.ownerNumbers,
+        sourceReplyDeliveryMode: params.compactParams.sourceReplyDeliveryMode,
+        extraSystemPrompt: params.compactParams.extraSystemPrompt,
+        bootstrapWorkspaceDir: params.compactParams.bootstrapWorkspaceDir,
         trigger: "manual",
         controlOperation: "compact",
         disableCliLiveSession: true,
@@ -181,6 +200,7 @@ export async function compactNativeCliSession(params: {
         allowEmptyAssistantReplyAsSilent: true,
         abortSignal: params.compactParams.abortSignal,
       });
+      compactedMeta = result.meta.agentMeta;
     };
     await (params.runControlOperation
       ? params.runControlOperation(runControlOperation)
@@ -196,10 +216,15 @@ export async function compactNativeCliSession(params: {
   } finally {
     preparedRunAdmission.close();
   }
+  // Sizes come from the backend's own compaction record, when it reports one.
+  const tokensBefore = compactedMeta?.compactionTokensBefore;
   return {
     ok: true,
     compacted: true,
     reason: `CLI backend "${runtime}" compacted its native session.`,
+    ...(tokensBefore !== undefined
+      ? { result: { tokensBefore, tokensAfter: compactedMeta?.compactionTokensAfter } }
+      : {}),
   };
 }
 
@@ -469,7 +494,41 @@ export async function compactEmbeddedAgentSessionDirect(
           requestedRouteResolution: "resolved" as const,
           fallbacksOverride,
         };
-        const resolvedPrimaryCandidate = resolveModelCandidateChain(fallbackContext)[0];
+        const candidates = resolveModelCandidateChain(fallbackContext);
+        const resolvedPrimaryCandidate = candidates[0];
+        const sameRoute = (left: Route, right: Route) =>
+          left.provider === right.provider && left.model === right.model;
+        // A refusal is one route's decision: arm one summary retry on the next distinct route.
+        const refusalFallbackArmed = candidates.some(
+          (candidate) =>
+            resolvedPrimaryCandidate && !sameRoute(candidate, resolvedPrimaryCandidate),
+        );
+        let refusedRoute: Route | undefined;
+        const runCandidate = async (
+          { provider, model }: Route,
+          summaryRefusal: CompactionSummaryRefusalMode | undefined,
+        ) => {
+          const isPrimaryCandidate =
+            resolvedPrimaryCandidate !== undefined &&
+            sameRoute({ provider, model }, resolvedPrimaryCandidate);
+          const preservesPrimaryAuth =
+            isPrimaryCandidate || primaryAuthProviders.has(resolveAuthProvider(provider));
+          const authProfileId = preservesPrimaryAuth ? params.authProfileId : undefined;
+          return await compactEmbeddedAgentSessionDirectOnce({
+            ...params,
+            provider,
+            model,
+            agentHarnessId: isPrimaryCandidate ? params.agentHarnessId : undefined,
+            requestedRouteResolution: isPrimaryCandidate ? undefined : "resolved",
+            authProfileId,
+            authProfileIdSource: preservesPrimaryAuth ? params.authProfileIdSource : undefined,
+            // The primary attempt retains its already prepared atomic plan. An
+            // actual fallback may change runtime/auth class and must rebuild it.
+            runtimeAuthPlan: isPrimaryCandidate ? params.runtimeAuthPlan : undefined,
+            runtimePlan: isPrimaryCandidate ? params.runtimePlan : undefined,
+            summaryRefusal,
+          });
+        };
         const fallbackSessionKey =
           params.sandboxSessionKey ?? params.sessionKey ?? params.sessionId;
         const fallbackResult = await runWithModelFallback<EmbeddedAgentCompactResult>({
@@ -494,6 +553,11 @@ export async function compactEmbeddedAgentSessionDirect(
             });
           },
           classifyResult: ({ result, provider, model }) => {
+            if (result.failure?.summaryRefused) {
+              // Not a route failure: no cooldown, and the retry below owns the next route.
+              refusedRoute = { provider, model };
+              return null;
+            }
             const reason = result.ok ? undefined : result.reason?.trim();
             if (!reason) {
               return null;
@@ -505,29 +569,39 @@ export async function compactEmbeddedAgentSessionDirect(
             const failoverError = coerceToFailoverError(failureError, { provider, model });
             return failoverError ? { error: failoverError } : null;
           },
-          run: async (provider, model) => {
-            const isPrimaryCandidate =
-              provider === resolvedPrimaryCandidate?.provider &&
-              model === resolvedPrimaryCandidate.model;
-            const preservesPrimaryAuth =
-              isPrimaryCandidate || primaryAuthProviders.has(resolveAuthProvider(provider));
-            const authProfileId = preservesPrimaryAuth ? params.authProfileId : undefined;
-            return await compactEmbeddedAgentSessionDirectOnce({
-              ...params,
-              provider,
-              model,
-              agentHarnessId: isPrimaryCandidate ? params.agentHarnessId : undefined,
-              requestedRouteResolution: isPrimaryCandidate ? undefined : "resolved",
-              authProfileId,
-              authProfileIdSource: preservesPrimaryAuth ? params.authProfileIdSource : undefined,
-              // The primary attempt retains its already prepared atomic plan. An
-              // actual fallback may change runtime/auth class and must rebuild it.
-              runtimeAuthPlan: isPrimaryCandidate ? params.runtimeAuthPlan : undefined,
-              runtimePlan: isPrimaryCandidate ? params.runtimePlan : undefined,
-            });
-          },
+          run: async (provider, model) =>
+            await runCandidate({ provider, model }, refusalFallbackArmed ? "defer" : undefined),
         });
-        return fallbackResult.result;
+        const refused = refusedRoute;
+        if (!refused) {
+          return fallbackResult.result;
+        }
+        const refusedIndex = candidates.findIndex((candidate) => sameRoute(candidate, refused));
+        const next = candidates
+          .slice(refusedIndex + 1)
+          .find((candidate) => !sameRoute(candidate, refused));
+        if (next) {
+          log.warn(
+            `[compaction] summary refused by ${refused.provider}/${refused.model}; ` +
+              `retrying the summary once on ${next.provider}/${next.model}`,
+          );
+          // Setup can throw (for example, a harness that rejects the fallback model). Nothing
+          // was committed yet, so any non-terminal failure still owes the refusal floor.
+          const retry = await runCandidate(next, "fallback").catch((error: unknown) => {
+            if (params.abortSignal?.aborted || hasModelFallbackStop(error)) {
+              throw error;
+            }
+            return buildCompactionFailureResult(formatErrorMessage(error));
+          });
+          if (retry.ok || params.abortSignal?.aborted) {
+            return retry;
+          }
+          log.warn(
+            `[compaction] fallback summary route ${next.provider}/${next.model} failed; ` +
+              `committing the refusal floor: ${retry.reason ?? "unknown"}`,
+          );
+        }
+        return await runCandidate(refused, "floor");
       };
       return await preparedModelRuntimeLease.run(() =>
         withPluginRuntimeGenerationScope(preparedModelRuntime, () => {

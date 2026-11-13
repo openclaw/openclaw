@@ -14,7 +14,7 @@ export type LocalWorkspaceManifestMutation = {
   replace?: boolean;
   treeRoot?: string;
   previousTreeRoot?: string | null;
-  fingerprints?: { target: "canonical" | "projection"; blob: string };
+  fingerprints?: { target: "canonical" | "projection"; blob: string; oppositeBlob?: string };
 };
 export type LocalWorkspaceMutation =
   | { kind: "create"; row: Omit<LocalWorkspaceProjection, "revision" | "rejectedResult"> }
@@ -42,7 +42,7 @@ export type LocalWorkspaceManifestScan = {
   resultingRoot: string;
   treeRoot?: string;
   previousTreeRoot?: string | null;
-  fingerprints?: { target: "canonical" | "projection"; blob: string };
+  fingerprints?: LocalWorkspaceManifestMutation["fingerprints"];
   preparations?: Uint8Array[];
   records: LocalWorkspaceManifestRecord[];
   observation?: LocalWorkspacePreparedUpdate;

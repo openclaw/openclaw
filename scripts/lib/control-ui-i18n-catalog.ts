@@ -35,6 +35,7 @@ import { registerChatSessionSharingEnglish } from "../../ui/src/i18n/locales/en-
 import { registerChatSessionEnglish } from "../../ui/src/i18n/locales/en-chat-session.ts";
 import { registerChatToolContentEnglish } from "../../ui/src/i18n/locales/en-chat-tool-content.ts";
 import { registerChatToolLabelsEnglish } from "../../ui/src/i18n/locales/en-chat-tool-labels.ts";
+import { registerChatToolWidgetsEnglish } from "../../ui/src/i18n/locales/en-chat-tool-widgets.ts";
 import { registerCodeBlocksEnglish } from "../../ui/src/i18n/locales/en-code-blocks.ts";
 import { registerCommandPaletteEnglish } from "../../ui/src/i18n/locales/en-command-palette.ts";
 import { registerConnectionRecoveryEnglish } from "../../ui/src/i18n/locales/en-connection-recovery.ts";
@@ -158,6 +159,7 @@ const sourceFiles = [
   "en-chat-session.ts",
   "en-chat-tool-content.ts",
   "en-chat-tool-labels.ts",
+  "en-chat-tool-widgets.ts",
   "en-chat-welcome.ts",
   "en-templates.ts",
   "en-code-blocks.ts",
@@ -431,8 +433,17 @@ export function loadControlUiSourceCatalog(): TranslationMap {
   }
   const toolCards: TranslationMap = {};
   const toolContent = registerChatToolContentEnglish.catalog.chat.toolCards;
+  // Deferred widget leaves retain their original translation-memory positions.
+  const { canvas, showRawDetails, hideRawDetails, widgetActions, ...widgetExports } =
+    registerChatToolWidgetsEnglish.catalog.chat.toolCards;
   for (const [key, value] of Object.entries(registerChatToolLabelsEnglish.catalog.chat.toolCards)) {
     toolCards[key] = value;
+    if (key === "patch") {
+      Object.assign(toolCards, { tool: en.chat.toolCards.tool, canvas });
+    }
+    if (key === "activity") {
+      Object.assign(toolCards, { showRawDetails, hideRawDetails });
+    }
     const contentKeys: Array<keyof typeof toolContent> =
       key === "toolOutput"
         ? [
@@ -445,8 +456,11 @@ export function loadControlUiSourceCatalog(): TranslationMap {
             "outputLoadFailed",
             "outputDownloadFailed",
             "toolError",
+            "previewMore",
+            "previewCaptured",
+            "previewTruncated",
           ]
-        : key === "hideRawDetails"
+        : key === "activity"
           ? ["viewMode", "diff", "raw"]
           : key === "openFile"
             ? ["openDetails"]
@@ -455,6 +469,12 @@ export function loadControlUiSourceCatalog(): TranslationMap {
               : [];
     for (const contentKey of contentKeys) {
       toolCards[contentKey] = toolContent[contentKey];
+    }
+    if (key === "openFile") {
+      toolCards.widgetActions = widgetActions;
+    }
+    if (key === "downloadFile") {
+      Object.assign(toolCards, widgetExports);
     }
   }
   const boardWidget: TranslationMap = {};

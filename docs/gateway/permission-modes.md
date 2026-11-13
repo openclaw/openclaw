@@ -52,15 +52,51 @@ Existing sessions keep their tool-policy-based Default label and clearing behavi
 
 Creating a worktree pins the working directory without selecting a permission mode. Explicit modes and modes already saved on existing sessions remain unchanged.
 
-When a session uses **Agent default**, the Control UI permission picker shows the agent's resolved exec posture when it matches a session mode, for example **Ask me** for `tools.exec.mode: "ask"` without a stricter host approval policy, and marks that mode's menu row **Default**. Resolution includes global settings, agent overrides, and host approval floors. Without those settings or sandboxing, the default is full access. Allowlist-only policy and non-equivalent `security`/`ask` pairs, including `ask: "always"`, keep the plain **Default** label. Agents whose sandbox configuration could apply to their sessions also keep plain **Default**, because effective policy cannot be stated at agent scope. This is display metadata, not an authorization decision or a filesystem-access guarantee; tool policy still applies. Selecting **Agent default** clears the session override; it does not save the displayed mode into the session.
+When a session uses **Agent default**, the Control UI permission picker shows the agent's resolved posture when it matches a session mode, for example **Ask me** for `tools.exec.mode: "ask"` without a stricter host approval policy, and marks that mode's menu row **Default**. Resolution includes global settings, agent overrides, and host approval floors. **Default (Full Access)** also requires unrestricted Gateway-host execution to be available under effective tool policy and filesystem boundaries. Settings for a disabled tool grant no authority: `tools.exec.mode: "full"` cannot establish Full Access when `exec` is denied. Allowlist-only policy and non-equivalent `security`/`ask` pairs, including `ask: "always"`, keep the plain **Default** label. Agents whose sandbox configuration could apply to their sessions also keep plain **Default**, because effective policy cannot be stated at agent scope. The label is display metadata; execution checks the current run's authority. Selecting **Agent default** clears the session override; it does not save the displayed mode into the session.
 
 ## Delegated setup and repair
 
 When a regular agent delegates a persistent change through its `openclaw` tool,
 the host applies the requesting run's effective permission policy to the exact
-proposed operation. Full Access applies it automatically without an approval
-prompt, including when Full Access comes from the configured default rather than
-an explicit session mode. Restricted runs from messaging channels ask the
+proposed operation. Inferred and explicit Full Access have the same default:
+permitted changes apply automatically. Inference requires effective unrestricted
+execution on the Gateway host through a host-controlled execution path, with no
+unaccounted-for restricting policy. Settings for unavailable tools, a remote node,
+an exported tool catalog, or a requested native Full Access/bypass mode do not
+establish that authority. Applicable execution hooks can restrict it even when
+exec is configured as full with approvals off; hooks for unrelated tools do not.
+Restricted or unknown Default configurations require human approval unless an
+independent grant authorizes the change.
+
+This rule applies across the OpenClaw runtime, Codex, Claude, and external CLI
+backends. Backend identity alone supplies no grant. Current native integrations
+do not certify all effective client-side restrictions, so unknown Default native
+runs require exact approval for each persistent delegated change. Select
+OpenClaw Full Access or use the existing standing delegation setting below to
+avoid those repeated approvals. An allow-once decision authorizes only the exact
+proposal; it does not implicitly save a permission mode or standing grant. If the
+proposal explicitly changes `tools.openclaw.autoApproveChanges` or a per-agent
+override, approving it saves that standing policy for future permitted changes.
+
+Use [`tools.openclaw.autoApproveChanges`](/gateway/config-tools/built-in-tools#tools.openclaw)
+globally or at `agents.entries.<agentId>.tools.openclaw.autoApproveChanges` to
+control this standing authorization. The per-agent value overrides the global
+default; omitted values inherit. `false` requires human approval even in Full
+Access. `true` grants delegated administration within the existing boundaries.
+When unset at both scopes, the Full Access default above applies.
+
+An explicit Full Access selection or `autoApproveChanges: true` grants delegated
+administration independently of direct tool access. It can permit changes that
+enable host code execution, such as configuring services or installing plugins,
+even when direct execution or file-editing tools are denied. To keep those changes
+under human review, set `autoApproveChanges: false`.
+
+Enabling or broadening this grant, removing an explicit `false`, or expanding it
+to other agents requires direct operator administration or human approval for
+the exact change. A model cannot automatically approve its own permission
+increase. Delegation and child runs retain their restrictive inherited ceilings.
+
+When approval is required, runs from messaging channels ask the
 requesting chat for approval: native approval cards where the channel supports
 them, otherwise a `/approve <id> allow-once|deny` reply. Webchat and terminal runs
 decide in the Control UI or apps, which can also decide any chat's approval.
@@ -68,9 +104,11 @@ Free-text replies such as "yes" never authorize the change.
 The requesting tool waits for the human decision and application outcome. Stopping
 the run cancels its pending approval; approving later cannot revive that run.
 
-Independent filesystem and sandbox boundaries, tool policy, and system-agent
-operation restrictions still apply. The host also checks that the requesting run
-and verified inference route remain valid. Interactive setup wizards and agent
+Independent filesystem and sandbox boundaries, access to the `openclaw` tool,
+and system-agent operation restrictions still apply. The host rechecks current
+delegation authority immediately before each persistent effect, so revoking the
+grant also stops automatic changes still being prepared. It also checks that the
+requesting run and verified inference route remain valid. Interactive setup wizards and agent
 handoffs still need a direct operator session. See
 [OpenClaw operations and approval](/cli/openclaw#operations-and-approval).
 

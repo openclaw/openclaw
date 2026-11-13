@@ -160,6 +160,12 @@ packages/normalization-core/src/string-normalization.ts
 packages/normalization-core/src/stringified-error.ts
 packages/normalization-core/src/text-decoding.ts
 packages/normalization-core/src/utf16-slice.ts
+packages/openclaw-id-protocol/src/bytes.ts
+packages/openclaw-id-protocol/src/crypto.ts
+packages/openclaw-id-protocol/src/keys.ts
+packages/openclaw-id-protocol/src/statements/types.ts
+packages/openclaw-id-protocol/src/statements/validate.ts
+packages/openclaw-id-protocol/src/version.ts
 packages/plugin-package-contract/package.json
 packages/plugin-package-contract/src/categories.ts
 packages/plugin-package-contract/src/index.ts
@@ -324,6 +330,7 @@ src/agents/model-catalog-metadata.ts
 src/agents/model-compat-catalog.ts
 src/agents/model-cost-normalization.ts
 src/agents/model-extra-params.ts
+src/agents/model-fallback-stop.ts
 src/agents/model-ref-profile.ts
 src/agents/model-ref-shared.ts
 src/agents/model-runtime-policy.ts
@@ -372,6 +379,7 @@ src/agents/worktrees/allocation.ts
 src/agents/worktrees/branches.runtime.ts
 src/agents/worktrees/capacity-contract.ts
 src/agents/worktrees/capacity-store.ts
+src/agents/worktrees/base-fetch.ts
 src/agents/worktrees/capacity.runtime.ts
 src/agents/worktrees/capacity.ts
 src/agents/worktrees/capacity.worker.ts
@@ -499,6 +507,7 @@ src/auto-reply/reply/delivery-hints.ts
 src/auto-reply/reply/display-text-sanitize.ts
 src/auto-reply/reply/history-limit.ts
 src/auto-reply/reply/inbound-context-marker.ts
+src/auto-reply/reply/message-injection-authority.ts
 src/auto-reply/reply/mixed-silent-reply-tokens.ts
 src/auto-reply/reply/strip-inbound-meta.ts
 src/auto-reply/thinking.shared.ts
@@ -918,6 +927,8 @@ src/gateway/github-remote.ts
 src/gateway/github-repository-publication-snapshot.ts
 src/gateway/model-account-connect-errors.ts
 src/gateway/operator-scopes.ts
+src/gateway/openclaw-id/tunnel-principal.ts
+src/gateway/operator-run-recovery-source.codec.ts
 src/gateway/security-path.ts
 src/gateway/server-methods/workspace-fs.ts
 src/gateway/worker-environments/desktop-endpoint.ts
@@ -1100,6 +1111,7 @@ src/infra/git-content-budget.ts
 src/infra/git-exec.ts
 src/infra/git-maintenance-env.ts
 src/infra/git-network-retry.ts
+src/infra/git-object-store-transport.ts
 src/infra/git-operation-timing.ts
 src/infra/git-operation.worker.ts
 src/infra/git-path-quote.ts
@@ -1198,6 +1210,7 @@ src/infra/process-exit-cleanup.ts
 src/infra/prototype-keys.ts
 src/infra/resolve-system-bin.ts
 src/infra/restart-stale-pids.ts
+src/infra/restart-recovery-errors.ts
 src/infra/retry-attempt-errors.ts
 src/infra/retry.ts
 src/infra/root-walk.ts
@@ -1375,6 +1388,8 @@ src/infra/thread-disk-io.ts
 src/infra/test-runtime-env.ts
 src/infra/tls-certificate-errors.ts
 src/infra/tmp-openclaw-dir.ts
+src/infra/update-capture-paths.ts
+src/infra/update-capture-privacy-marker.ts
 src/infra/update-candidate-io.ts
 src/infra/update-candidate-state.diagnostics.ts
 src/infra/update-candidate-state.inspection.ts
@@ -1462,6 +1477,7 @@ src/infra/update-state-inspection-protocol.ts
 src/infra/update-step-identity.ts
 src/infra/utf8-input.ts
 src/infra/warning-filter.ts
+src/infra/windows-appcontainer-spawn-log.runtime.ts
 src/infra/windows-appcontainer-spawn.ts
 src/infra/windows-encoding.ts
 src/infra/windows-install-roots.ts
@@ -1475,9 +1491,12 @@ src/infra/worker-diagnostic-script.ts
 src/infra/worker-idle-gc.ts
 src/infra/worker-memory.ts
 src/infra/worker-message-metrics.ts
+src/infra/worker-fs-safe.ts
+src/infra/worker-mutation-authority.ts
 src/infra/worker-native-error.ts
 src/infra/worker-native-handle.ts
 src/infra/worker-native-lifecycle.ts
+src/infra/worker-native-lifecycle.types.ts
 src/infra/worker-native-lifecycle.worker.ts
 src/infra/worker-native-port.ts
 src/infra/worker-native-task-port.ts
@@ -1510,9 +1529,14 @@ src/logging/json-console-line.ts
 src/logging/levels.ts
 src/logging/log-file-path.ts
 src/logging/log-file-shared.ts
+src/logging/log-tail.ts
 src/logging/logger-file-message.ts
 src/logging/logger-file-transport.ts
+src/logging/logger-file-io.ts
+src/logging/logger-file-worker.ts
+src/logging/logger-file.worker.ts
 src/logging/logger.ts
+src/logging/parse-log-line.ts
 src/logging/redact-bounded.ts
 src/logging/redact-edit-composition.ts
 src/logging/redact-json-tokens.ts
@@ -2131,6 +2155,7 @@ src/state/openclaw-agent-standing-intents-schema.ts
 src/state/openclaw-agent-storage-migration.ts
 src/state/openclaw-agent-storage-schema.ts
 src/state/openclaw-agent-text-search-migration.ts
+src/state/openclaw-agent-tool-usage-schema.ts
 src/state/openclaw-agent-trajectory-storage-migration.ts
 src/state/openclaw-agent-transcript-fts-schema-source.ts
 src/state/openclaw-agent-transcript-fts-schema.ts
@@ -2205,6 +2230,8 @@ src/state/openclaw-state-db-schema-v36-template-names.ts
 src/state/openclaw-state-db-schema-v37-resource-receipts.ts
 src/state/openclaw-state-db-schema-v38-repository-disk.ts
 src/state/openclaw-state-db-schema-v39-worker-retention.ts
+src/state/openclaw-state-db-schema-v40-worker-provision-source.ts
+src/state/openclaw-state-db-schema-v40-lazy-additions.ts
 src/state/openclaw-state-db-schema-v22-columns.ts
 src/state/openclaw-state-db-schema-v24-indexes.ts
 src/state/openclaw-state-db-schema-v26-layout.ts
@@ -2421,6 +2448,7 @@ src/config/sessions/transcript-tree.ts
 src/shared/chat-message-content.ts
 src/shared/model-fallback-notice.ts
 src/shared/transcript-only-openclaw-assistant.ts
+src/shared/transcript-payload-ownership.ts
 src/state/openclaw-agent-execution-work.ts
 packages/gateway-protocol/src/schema/session-participant.ts
 src/config/sessions/internal-session-key.ts
@@ -2954,5 +2982,10 @@ src/plugins/installed-plugin-snapshot-candidates.ts
 src/plugins/installed-plugin-snapshot-candidates.kernel.ts
 src/plugins/installed-plugin-snapshot-candidates.types.ts
 src/plugins/plugin-source-snapshot-publication.ts
+packages/agent-core/src/harness/compaction/compaction-cut-point.ts
+packages/agent-core/src/harness/compaction/utils.ts
+src/agents/sessions/context-token-pressure.ts
+src/config/sessions/session-context-seed.ts
 src/agents/code-mode-session-store-replay.ts
 src/config/sessions/session-transcript-maintenance-suffix.ts
+src/state/user-channel-authorization-reference.ts

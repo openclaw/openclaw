@@ -1,10 +1,4 @@
-import { createTestInstance } from "../../../plugins/plugin-instance.test-support.js";
-import { setActivePluginRegistry } from "../../../plugins/runtime.js";
 import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
-import {
-  createChannelTestPluginBase,
-  createTestRegistry,
-} from "../../../test-utils/channel-plugins.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 
 export function privateRequesterRouteCases() {
@@ -53,28 +47,4 @@ export function completionReader(
     };
     return child && matchesTranscriptEvent(event, match) ? { event } : undefined;
   };
-}
-
-export function registerDirectTargetTestChannel(channelId: string) {
-  const instance = createTestInstance(channelId);
-  setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: channelId,
-        source: "test",
-        plugin: {
-          ...createChannelTestPluginBase({
-            id: channelId,
-            capabilities: { chatTypes: ["direct", "channel"] },
-          }),
-          messaging: {
-            inferTargetChatType: instance.wrap(({ to }: { to: string }) =>
-              to.startsWith("channel:") || to.startsWith("thread:") ? "channel" : "direct",
-            ),
-          },
-        },
-      },
-    ]),
-  );
-  return instance;
 }

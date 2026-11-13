@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createWindowsCmdShimFixture } from "openclaw/plugin-sdk/test-env";
-import { expect } from "vitest";
 
 export async function createNativeModelPickerCliFixture(fixtureRoot: string) {
   const cliPath = path.join(fixtureRoot, process.platform === "win32" ? "claude.cjs" : "claude");
@@ -62,18 +61,5 @@ if (JSON.stringify(argv) === ${JSON.stringify(JSON.stringify(authArgs))}) {
 `,
     { mode: 0o755 },
   );
-  const readCliCalls = async () => {
-    // Prepared UI rows can precede refreshable discovery; await the native initialize receipt.
-    await expect
-      .poll(() => fs.readFile(nativeRequestsPath, "utf8").catch(() => ""), {
-        interval: 50,
-        timeout: 30_000,
-      })
-      .toContain('"subtype":"initialize"');
-    return (await fs.readFile(authCallsPath, "utf8"))
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line));
-  };
-  return { authCallsPath, nativeRequestsPath, authArgs, discoveryArgs, readCliCalls };
+  return { authCallsPath, nativeRequestsPath, authArgs, discoveryArgs };
 }

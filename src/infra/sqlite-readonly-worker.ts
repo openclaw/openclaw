@@ -438,6 +438,7 @@ export function runOneShotSqliteInspection<T>(params: {
       status: null,
     };
     let stopped = false;
+    let nativeClosed = false;
     const child = execFile(
       process.execPath,
       params.argv,
@@ -471,14 +472,32 @@ export function runOneShotSqliteInspection<T>(params: {
     );
     const runtimeFailure = observeChildRuntime(child);
     const abort = () => {
-      if (!stopped) {
+      if (!stopped && !nativeClosed) {
         stopped = true;
         child.kill("SIGKILL");
       }
     };
     const closed = retainSnapshotWork(
       new Promise<void>((resolveClosed) => {
-        child.once("close", () => resolveClosed());
+        // Retain snapshot and generation custody through diagnosis and result publication.
+        const finishClose = async () => {
+          nativeClosed = true;
+          try {
+            const failure = await runtimeFailure();
+            if (failure) {
+              throw failure;
+            }
+            resolve(params.read(output));
+          } catch (workerError) {
+            reject(workerError instanceof Error ? workerError : new Error(String(workerError)));
+          } finally {
+            params.signal?.removeEventListener("abort", abort);
+            resolveClosed();
+          }
+        };
+        child.once("close", () => {
+          void finishClose();
+        });
       }),
       abort,
     );
@@ -489,20 +508,6 @@ export function runOneShotSqliteInspection<T>(params: {
     if (params.signal?.aborted) {
       abort();
     }
-    // execFile can report an abort/error before close. Ownership ends only
-    // after the process and its pipes have closed, including failed launches.
-    child.once("close", () => {
-      params.signal?.removeEventListener("abort", abort);
-      try {
-        const failure = runtimeFailure();
-        if (failure) {
-          throw failure;
-        }
-        resolve(params.read(output));
-      } catch (workerError) {
-        reject(workerError instanceof Error ? workerError : new Error(String(workerError)));
-      }
-    });
   });
 }
 

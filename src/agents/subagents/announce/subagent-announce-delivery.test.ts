@@ -16,6 +16,7 @@ import {
   PlatformMessageNotDispatchedError,
 } from "../../../infra/outbound/deliver-types.js";
 import { sendMessage as runtimeSendMessage } from "../../../infra/outbound/message.js";
+import { createTestInstance } from "../../../plugins/plugin-instance.test-support.js";
 import { PluginInvocationScope } from "../../../plugins/plugin-invocation-scope.js";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
 import { withSessionTurn } from "../../../sessions/session-controller.admission.js";
@@ -27,7 +28,10 @@ import {
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
-import { createTestRegistry } from "../../../test-utils/channel-plugins.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../../test-utils/channel-plugins.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
@@ -48,7 +52,6 @@ import {
   registerDescendantWakeCurrencyTests,
 } from "./subagent-announce-delivery.test-support.js";
 import { runDescendantWake } from "./subagent-announce-descendant-wake.js";
-import { registerDirectTargetTestChannel } from "./subagent-announce-fixtures.test-support.js";
 import type { SubagentAnnounceDeliveryTestDeps } from "./subagent-announce-overrides.test-support.js";
 import { privateCompletionCases } from "./subagent-announce-private-completion.test-fixtures.js";
 import { createRequesterSettleCases } from "./subagent-announce-requester-settle.test-fixtures.js";
@@ -286,12 +289,6 @@ const messageToolConfig = { messages: { groupChat: { visibleReplies: "message_to
 const silentResult = { payloads: [], meta: { terminalReply: { disposition: "silent" } } };
 const responseWithResult = (result: Record<string, unknown>) => ({ result });
 
-function expectSentMessage(
-  sendMessage: typeof runtimeSendMessage,
-  fields: Record<string, unknown>,
-) {
-  expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining(fields));
-}
 function expectNoExternalDelivery(
   callGateway: typeof runtimeCallGateway,
   sendMessage: typeof runtimeSendMessage,
@@ -369,6 +366,30 @@ const committedSessionSpawnEvidence = {
   acceptedSessionSpawns: [{ runId: "run-child", childSessionKey: "agent:main:child" }],
 } as const;
 
+function registerDirectTargetTestChannel(channelId: string) {
+  const instance = createTestInstance(channelId);
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: channelId,
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({
+            id: channelId,
+            capabilities: { chatTypes: ["direct", "channel"] },
+          }),
+          messaging: {
+            inferTargetChatType: instance.wrap(({ to }: { to: string }) =>
+              to.startsWith("channel:") || to.startsWith("thread:") ? "channel" : "direct",
+            ),
+          },
+        },
+      },
+    ]),
+  );
+  return instance;
+}
+
 function expectGatewayAgentParams(
   callGateway: typeof runtimeCallGateway,
   expected: Record<string, unknown>,
@@ -381,10 +402,8 @@ function expectInProcessAgentParams(
   dispatchGatewayMethodInProcess: typeof runtimeDispatchGatewayMethodInProcess,
   expected: Record<string, unknown>,
 ) {
-  const method = mockCallArg(dispatchGatewayMethodInProcess, 0, 0);
-  expect(method).toBe("agent");
-  const params = mockCallArg(dispatchGatewayMethodInProcess, 0, 1);
-  return expectRecordFields(params, expected);
+  expect(mockCallArg(dispatchGatewayMethodInProcess, 0, 0)).toBe("agent");
+  return expectRecordFields(mockCallArg(dispatchGatewayMethodInProcess, 0, 1), expected);
 }
 
 type AnnouncementInput = Parameters<typeof deliverSubagentAnnouncement>[0];
@@ -472,9 +491,7 @@ async function deliverFixture(
       isActive === true,
     ),
     ...(routeName === "thread" || routeName === "telegram"
-      ? {
-          resolveRequesterSessionAbandonment: () => requesterAbandonment,
-        }
+      ? { resolveRequesterSessionAbandonment: () => requesterAbandonment }
       : {}),
   });
   return deliverAnnouncement({
@@ -492,14 +509,6 @@ async function deliverFixture(
     ...(delivery.completionTarget ? { completionRequesterSessionId: "requester-session-dm" } : {}),
   });
 }
-const deliverSlackThreadAnnouncement = (params: DeliveryFixtureParams) =>
-  deliverFixture("thread", params);
-const deliverSlackChannelAnnouncement = (params: DeliveryFixtureParams) =>
-  deliverFixture("channel", params);
-const deliverDiscordDirectMessageCompletion = (params: DeliveryFixtureParams) =>
-  deliverFixture("discord", params);
-const deliverTelegramDirectMessageCompletion = (params: DeliveryFixtureParams) =>
-  deliverFixture("telegram", params);
 
 async function runDelivery(
   route: keyof typeof deliveryRoutes,
@@ -610,7 +619,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
   ): DeliveryCase => ({ name, route, ...fields });
   it.each<DeliveryCase>([
     completionCase("yield custody", "thread", {
-      response: {},
       params: {
         sessionId: "requester-session-1",
         isActive: true,
@@ -624,6 +632,11 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         terminal: true,
         disposition: "intentional_non_delivery",
       },
+      gatewayCalls: 0,
+    }),
+    completionCase("cron run holding its turn after its attempt ended", "thread", {
+      params: { requesterSessionKey: "agent:main:cron:job:run:run-1", isActive: true },
+      expected: { delivered: false, path: "none", reason: "completion_handoff_pending" },
       gatewayCalls: 0,
     }),
     completionCase("omitted synthesis result", "discord", {
@@ -712,7 +725,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       expected: { ...missingVisibleCompletion, terminal: undefined },
     }),
     completionCase("abandoned requester", "telegram", {
-      response: deliveredPayload("child completion output"),
       params: { requesterAbandonment: "timeout", isActive: false },
       expected: {
         delivered: false,
@@ -796,7 +808,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
     expectRecordFields(result, expected ?? { delivered: true, path: "direct" });
     if (sent) {
-      expectSentMessage(sendMessage, sent);
+      expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining(sent));
     } else {
       expect(sendMessage).not.toHaveBeenCalled();
     }
@@ -974,7 +986,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         };
       }) as unknown as typeof runtimeSendMessage;
 
-      const result = await deliverDiscordDirectMessageCompletion({
+      const result = await deliverFixture("discord", {
         callGateway,
         sendMessage,
         signal: controller.signal,
@@ -1158,7 +1170,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     );
     const callGateway = createPayloadGatewayMock({ text: "child completion output" });
     const sendMessage = createSendMessageMock();
-    let delivery: ReturnType<typeof deliverTelegramDirectMessageCompletion> | undefined;
+    let delivery: ReturnType<typeof deliverFixture> | undefined;
     let input: ReturnType<typeof reserveSessionControllerSource> | undefined;
     try {
       await awaitGateBeforeSettlement(
@@ -1173,7 +1185,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       });
       const compactionClaim = input.mailbox.claim;
       expect(compactionClaim).toBeDefined();
-      delivery = deliverTelegramDirectMessageCompletion({
+      delivery = deliverFixture("telegram", {
         callGateway,
         sendMessage,
         controllerInput: input,
@@ -1479,7 +1491,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     const callGateway = createGatewayMock({ result: gatewayResult });
     const sendMessage = mode === "off-target" ? createSendMessageMock() : undefined;
     const childSessionKey = "agent:worker:subagent:no-output";
-    const result = await deliverSlackChannelAnnouncement({
+    const result = await deliverFixture("channel", {
       callGateway,
       sendMessage,
       directIdempotencyKey: "announce-channel-no-output",
@@ -1511,7 +1523,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
           ? { status: "ok", result: { payloads: [], meta: { yielded: true } } }
           : { status: state },
       );
-      const result = await deliverSlackChannelAnnouncement({
+      const result = await deliverFixture("channel", {
         callGateway,
         directIdempotencyKey: `announce-pending-message-tool-${state}`,
         sourceTool: "subagent_announce",
@@ -1576,7 +1588,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       },
     });
     const sendMessage = createSendMessageMock();
-    const result = await deliverDiscordDirectMessageCompletion({
+    const result = await deliverFixture("discord", {
       callGateway,
       sendMessage,
       sourceTool: "subagent_announce",
@@ -1585,12 +1597,14 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
 
     expectDeliveryPath(result, "direct");
     if (fallsBack) {
-      expectSentMessage(sendMessage, {
-        channel: "discord",
-        accountId: "acct-1",
-        to: "dm:U123",
-        content: "child completion output",
-      });
+      expect(sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channel: "discord",
+          accountId: "acct-1",
+          to: "dm:U123",
+          content: "child completion output",
+        }),
+      );
     } else {
       expect(sendMessage).not.toHaveBeenCalled();
     }
@@ -1664,17 +1678,12 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         deliveryStatus,
       },
     });
-    const result = await deliverSlackThreadAnnouncement({
+    const result = await deliverFixture("thread", {
       callGateway,
       directIdempotencyKey: "announce-undelivered-receipt",
     });
 
-    expect(result).toMatchObject(
-      expected ?? {
-        delivered: false,
-        reason: "visible_reply_missing",
-      },
-    );
+    expect(result).toMatchObject(expected ?? { delivered: false, reason: "visible_reply_missing" });
     expect(result.requesterVisibleFinalDelivered).toBeUndefined();
     if (expected?.disposition === "ambiguous") {
       expect(result.reason).toBeUndefined();
@@ -1741,9 +1750,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
   const writerRebound = (cause?: Error) =>
     Object.assign(
       new Error("session writer claim changed before transcript persistence", { cause }),
-      {
-        name: "SessionTranscriptWriterClaimReboundError",
-      },
+      { name: "SessionTranscriptWriterClaimReboundError" },
     );
   type FailureCase = [
     name: string,
@@ -1794,13 +1801,13 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     const sendMessage = createSendMessageMock();
     const result =
       route === "direct"
-        ? await deliverDiscordDirectMessageCompletion({
+        ? await deliverFixture("discord", {
             callGateway,
             sendMessage,
             sourceTool: "subagent_announce",
             internalEvents: identifiedCompletion(),
           })
-        : await deliverSlackChannelAnnouncement({
+        : await deliverFixture("channel", {
             callGateway,
             directIdempotencyKey: "announce-retry-contract",
             ...(route === "active" ? { isActive: true } : {}),
@@ -1812,6 +1819,20 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     }
   });
 
+  it("routes a completion after the finished child's plugin scope closes", async () => {
+    const scope = new PluginInvocationScope(createTestRegistry(), [
+      registerDirectTargetTestChannel("telegram"),
+    ]);
+    const delivery = scope.run(async () => {
+      await Promise.resolve();
+      return runDelivery("telegram", { internalEvents: identifiedCompletion() });
+    });
+    scope.release();
+    const { result, sendMessage } = await delivery;
+    expect(result).toMatchObject({ delivered: true, path: "direct" });
+    expect(sendMessage).toHaveBeenCalledOnce();
+  });
+
   it("does not text-fallback when source ownership changes during the Gateway attempt", async () => {
     let sourceEffectsAllowed = true;
     const callGateway = createGatewayMock({}, () => {
@@ -1819,7 +1840,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       throw new Error("incomplete terminal response code=incomplete_result");
     });
     const sendMessage = createSendMessageMock();
-    const result = await deliverDiscordDirectMessageCompletion({
+    const result = await deliverFixture("discord", {
       callGateway,
       sendMessage,
       sourceTool: "subagent_announce",
@@ -1838,18 +1859,3 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
-
-it("routes Telegram completion after the producer plugin scope closes", async () => {
-  const instance = registerDirectTargetTestChannel("telegram");
-  const scope = new PluginInvocationScope(createTestRegistry(), [instance]);
-  const resume = createDeferredCore();
-  const delivery = scope.run(async () => {
-    await resume.promise;
-    return runDelivery("telegram", { internalEvents: identifiedCompletion() });
-  });
-  scope.release();
-  resume.resolve();
-  const { result, sendMessage } = await delivery;
-  expect(result).toMatchObject({ delivered: true, path: "direct" });
-  expect(sendMessage).toHaveBeenCalledOnce();
-});

@@ -266,7 +266,7 @@ new code; see the per-row notes below.
     | `plugin-sdk/channel-targets` | Private-local after July 2026; Target parsing helpers; route comparison callers should use `plugin-sdk/channel-route` |
     | `plugin-sdk/channel-contract` | Channel contract types |
     | `plugin-sdk/channel-feedback` | Feedback/reaction wiring |
-    | `plugin-sdk/reply-payload` | Reply payload types, normalization, content/media inspection, host-notice classification (`isHostNoticePayload`), native question option ordering, chunked send helpers, reasoning detection, and reply fan-out |
+    | `plugin-sdk/reply-payload` | Reply payload types, normalization, content/media inspection, host-notice classification (`isHostNoticePayload`), attachment-failure receipts (`appendReplyMediaFailures`, `ReplyMediaFailure`), native question option ordering, chunked send helpers, reasoning detection, and reply fan-out |
   </Accordion>
 
 The September channel facades remain public as `removal-pending` records until
@@ -303,7 +303,7 @@ runtime splinters have been removed; bundled-only helpers are private-local.
     | `plugin-sdk/embedding-providers` | Private-local after July 2026; General embedding provider types and read helpers, including `EmbeddingProviderAdapter`, `getEmbeddingProvider(...)`, and `listEmbeddingProviders(...)`; plugins register providers through `api.registerEmbeddingProvider(...)` so manifest ownership is enforced |
     | `plugin-sdk/embedding-provider-runtime-contract` | Public text-batch capability: `EmbeddingBatchChunk`, `EmbeddingBatchOptions`, and `EmbeddingProviderBatchRuntime`; providers own asynchronous jobs, while the host supplies execution options |
     | `plugin-sdk/provider-tools` | Private-local after July 2026; `ProviderToolCompatFamily`, `buildProviderToolCompatFamilyHooks`, and DeepSeek/Gemini/OpenAI schema cleanup + diagnostics |
-    | `plugin-sdk/provider-usage` | Private-local after July 2026; Provider usage snapshot types, shared usage fetch helpers, and provider fetchers such as `fetchClaudeUsage` |
+    | `plugin-sdk/provider-usage` | Private-local after July 2026; Provider usage snapshot types, shared usage fetch helpers, and provider fetchers such as `fetchCodexUsage` |
     | `plugin-sdk/provider-stream` | Private-local after July 2026; `ProviderStreamFamily`, `buildProviderStreamFamilyHooks`, `composeProviderStreamWrappers`, stream wrapper types, plain-text tool-call compat, and shared Anthropic/Google/Kilocode/MiniMax/Moonshot/OpenAI/OpenRouter/Z.AI wrapper helpers |
     | `plugin-sdk/provider-stream-shared` | Private-local after July 2026; Public shared provider stream wrapper helpers including `composeProviderStreamWrappers`, `createOpenAICompatibleCompletionsThinkingOffWrapper`, `createPlainTextToolCallCompatWrapper`, `createPayloadPatchStreamWrapper`, `createToolStreamWrapper`, `normalizeOpenAICompatibleReasoningPayload`, `setQwenChatTemplateThinking`, and Anthropic/DeepSeek/OpenAI-compatible stream utilities |
     | `plugin-sdk/provider-transport-runtime` | Private-local after July 2026; Native provider transport helpers such as guarded fetch, tool-result text extraction, transport message transforms, writable transport event streams, and `splitSystemPromptRelocatableBoundary` for guarded Runtime-fact relocation |

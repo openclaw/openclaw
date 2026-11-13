@@ -15,9 +15,13 @@ import "../test-helpers/load-styles.ts";
 
 setupSidebarTest();
 
-it.each([false, true])(
-  "hides an archived row immediately with a presentation-only exit (reduced motion: %s)",
-  async (reducedMotion) => {
+it.each([
+  [false, false],
+  [false, true],
+  [true, false],
+])(
+  "hides an archived row immediately with a presentation-only exit (reduced motion: %s, delayed layout: %s)",
+  async (reducedMotion, delayedLayout) => {
     await emulateOverlayMedia({ reducedMotion: reducedMotion ? "reduce" : "no-preference" });
     onTestFinished(() => emulateOverlayMedia({ reducedMotion: "no-preference" }));
     const sessions = createSessionsHarness("main", ["agent:main:b", "agent:main:a"]);
@@ -72,6 +76,20 @@ it.each([false, true])(
     });
     const archive = row.querySelector<HTMLButtonElement>("[data-sidebar-session-archive]")!;
     expect(archive.disabled, archive.outerHTML).toBe(false);
+    const frameCallbacks: FrameRequestCallback[] = [];
+    const nativeFrame = window.requestAnimationFrame.bind(window);
+    // Native animation can finish while a busy frame queue still holds geometry work.
+    const frameGate = delayedLayout
+      ? vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) =>
+          nativeFrame((time) => {
+            if (sidebar.querySelector(`[data-session-key="${archivedKey}"]`)) {
+              callback(time);
+            } else {
+              frameCallbacks.push(callback);
+            }
+          }),
+        )
+      : undefined;
     archive.click();
     await vi.dynamicImportSettled();
     await waitForSolid(() =>
@@ -95,6 +113,13 @@ it.each([false, true])(
       expect(list.hasAttribute("data-sidebar-archive-exiting")).toBe(true);
       const [fade] = exit!.getAnimations();
       expect(fade!.effect!.getTiming().duration).toBe(240);
+      if (delayedLayout) {
+        await fade!.finished;
+        frameGate!.mockRestore();
+        for (const callback of frameCallbacks) {
+          nativeFrame(callback);
+        }
+      }
       // Record the transition even if its event precedes import settlement.
       await waitForSolid(() => expect(observedTransform).toBe(true));
       expect(

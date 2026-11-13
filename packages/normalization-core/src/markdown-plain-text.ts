@@ -48,9 +48,10 @@ export function flattenMarkdownToPlainText(text: string): string {
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/```/g, " ");
   // Code spans become `\0<index>\0` so block and emphasis stripping cannot rewrite them; other NULs are doubled.
+  // A span closes on the next backtick run of its own length, so ``a`b`` keeps its inner backtick.
   const withoutCode = stripInlineLinks(withoutFences).replace(
-    /\0|`([^`]*)`/g,
-    (_match, literal: string | undefined) =>
+    /\0|(?<!`)(`+)(?!`)([\s\S]*?[^`])\1(?!`)/g,
+    (_match, _run: string | undefined, literal: string | undefined) =>
       literal === undefined ? "\0\0" : `\0${code.push(literal) - 1}\0`,
   );
   // Quote markers may nest with horizontal whitespace, but must not consume another line.

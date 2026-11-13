@@ -72,7 +72,7 @@ function fixture() {
       await prepareTelegramAuthorizedIngress(nativeUpdate);
       downstream(nativeUpdate);
     }),
-    api: { answerCallbackQuery: vi.fn() },
+    api: { answerCallbackQuery: vi.fn(), raw: {} },
   };
   createTelegramTransportIngressMonitor({ bot, accountId: "account-a" });
   const invocation = mocks.monitor.mock.calls[0];

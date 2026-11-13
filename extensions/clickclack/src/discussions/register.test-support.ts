@@ -30,9 +30,10 @@ export function captureDiscussionRegistration(runtime: PluginRuntime) {
     registerClickClackDiscussions(api);
     const hook = vi.mocked(api.on<"before_tool_call">).mock.calls[0]?.[1];
     const access = registerAccess.mock.calls[0]?.[0];
+    const accessAsync = registerAccess.mock.calls[0]?.[1]?.resolveAsync;
     const tool = registerTool.mock.calls[0]?.[0];
     const cleanup = registerRuntimeLifecycle.mock.calls[0]?.[0].cleanup;
-    if (!hook || !access || typeof tool !== "function" || !cleanup) {
+    if (!hook || !access || !accessAsync || typeof tool !== "function" || !cleanup) {
       throw new Error("Expected ClickClack discussion registrations");
     }
     cleanups.push(() => cleanup({ reason: "disable" }));
@@ -40,6 +41,8 @@ export function captureDiscussionRegistration(runtime: PluginRuntime) {
       run: hook,
       target: (requesterSessionKey: string, targetSessionKey: string) =>
         access({ action: "history", requesterSessionKey, targetSessionKey }),
+      targetAsync: (requesterSessionKey: string, targetSessionKey: string) =>
+        accessAsync({ action: "history", requesterSessionKey, targetSessionKey }),
       tool(sessionKey?: string) {
         const result = tool({ sessionKey });
         if (!result || Array.isArray(result)) {

@@ -8,6 +8,7 @@ import {
   formatIosSimulatorSelectionSummary,
   resolveIosSimulatorTestSelection,
 } from "./lib/ci-ios-smoke-plan.mjs";
+import { resolveBoatNodeTestCapacity } from "./lib/ci-node-test-capacity.mts";
 import { resolveSkillsPythonTargets } from "./lib/ci-skills-python-plan.mjs";
 import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
@@ -22,15 +23,20 @@ const workflowEventName = process.env.OPENCLAW_CI_EVENT_NAME ?? "";
 const ordinaryPullRequest = workflowEventName === "pull_request";
 const ciQualification =
   workflowEventName === "workflow_dispatch" &&
-  process.env.OPENCLAW_CI_RELEASE_GATE === "true" &&
   (process.env.OPENCLAW_CI_QUALIFICATION === "true" ||
-    process.env.OPENCLAW_CI_NODE_RUNNER_BACKEND === "runson");
+    (process.env.OPENCLAW_CI_RELEASE_GATE === "true" &&
+      process.env.OPENCLAW_CI_NODE_RUNNER_BACKEND === "runson"));
 const mainQualification = ciQualification && process.env.OPENCLAW_CI_SHAPE === "main";
-const eventName = ciQualification
-  ? mainQualification
-    ? "push"
-    : "pull_request"
-  : workflowEventName;
+const exactMainQualification =
+  mainQualification && process.env.OPENCLAW_CI_RELEASE_GATE === "false";
+// Admission owns identity. Project only coverage; the raw event still owns trust and provenance.
+const eventName = exactMainQualification
+  ? "schedule"
+  : ciQualification
+    ? mainQualification
+      ? "push"
+      : "pull_request"
+    : workflowEventName;
 const eventRef = mainQualification ? "refs/heads/main" : process.env.GITHUB_REF;
 const checkoutRevision = process.env.OPENCLAW_CI_CHECKOUT_REVISION ?? "";
 const workflowRevision = process.env.OPENCLAW_CI_WORKFLOW_REVISION ?? "";
@@ -146,6 +152,17 @@ const createPluginContractTestShards =
       ];
 const createMatrix = (include) => ({
   include: include.map((row) => {
+    // Project before serialization so direct and late-planned matrices agree.
+    const capacity =
+      process.env.OPENCLAW_CI_EFFECTIVE_RUNNER_BACKEND === "boat"
+        ? resolveBoatNodeTestCapacity(row.runner, row.check_name, undefined, [
+            ...(row.includePatterns ?? []),
+            ...(row.groups ?? []).flatMap((group) => group.includePatterns ?? []),
+          ])
+        : undefined;
+    if (capacity) {
+      return { ...row, runner: capacity.runner, runner_label: capacity.runner };
+    }
     const label = row.runner_label ?? blacksmithRunnerLabel(row.runner);
     return label ? { ...row, runner_label: label } : row;
   }),
@@ -165,6 +182,9 @@ const packageScripts = packageJson.scripts ?? {};
 const hasPackageScript = (name) => typeof packageScripts[name] === "string";
 const isCanonicalRepository = process.env.OPENCLAW_CI_REPOSITORY === "openclaw/openclaw";
 const changedPaths = (() => {
+  if (exactMainQualification) {
+    return null;
+  }
   try {
     const manifestPath = process.env.OPENCLAW_CI_CHANGED_PATHS_FILE;
     // Frozen target producers can predate the complete file transport.
@@ -178,8 +198,9 @@ const changedPaths = (() => {
     return null;
   }
 })();
-const docsOnly = parseCiEnvFlag(process.env.OPENCLAW_CI_DOCS_ONLY);
-const docsChanged = parseCiEnvFlag(process.env.OPENCLAW_CI_DOCS_CHANGED);
+const docsOnly = !exactMainQualification && parseCiEnvFlag(process.env.OPENCLAW_CI_DOCS_ONLY);
+const docsChanged = exactMainQualification || parseCiEnvFlag(process.env.OPENCLAW_CI_DOCS_CHANGED);
+const scopeEnabled = (value) => exactMainQualification || parseCiEnvFlag(value);
 const rootProseOnly = parseCiEnvFlag(process.env.OPENCLAW_CI_DOCS_ROOT_PROSE_ONLY);
 const releaseGate = parseCiEnvFlag(process.env.OPENCLAW_CI_RELEASE_GATE) && !ciQualification;
 const compactPullRequest = isCanonicalRepository && eventName === "pull_request";
@@ -190,6 +211,9 @@ const runProofTier = eventName !== "pull_request" && !releaseGate;
 const releaseScope = process.env.OPENCLAW_CI_RELEASE_SCOPE ?? "full";
 const validationTier = process.env.OPENCLAW_CI_VALIDATION_TIER ?? "full";
 const mainValidation = validationTier === "main";
+if (exactMainQualification && !mainValidation) {
+  throw new Error("Exact main qualification requires validation_tier=main");
+}
 if (validationTier !== "full" && !mainValidation) {
   throw new Error("validation_tier must be full or main");
 }
@@ -199,7 +223,8 @@ if (
     !isCanonicalRepository ||
     frozenTarget ||
     compatibilityTarget ||
-    ciQualification ||
+    (ciQualification && !exactMainQualification) ||
+    (exactMainQualification && checkoutRevision !== workflowRevision) ||
     releaseGate ||
     releaseScope !== "full" ||
     process.env.OPENCLAW_CI_PULL_REQUEST_NUMBER)
@@ -283,11 +308,12 @@ const nativeGeneratedOnly =
 const runNode =
   !nodeDataOnly &&
   !nativeGeneratedOnly &&
-  ((parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_NODE) && !docsOnly) || toolingOwnerChange);
+  ((scopeEnabled(process.env.OPENCLAW_CI_RUN_NODE) && !docsOnly) || toolingOwnerChange);
 const runNodeFastOnly =
   runNode &&
   !runtimePullRequest &&
   !toolingOwnerChange &&
+  !exactMainQualification &&
   parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_NODE_FAST_ONLY);
 const runNodeFull = runNode && !runNodeFastOnly;
 const runBuiltSourceVerifiers =
@@ -351,9 +377,13 @@ if (
 }
 
 const runNodeFastPluginContracts =
-  runNode && parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_NODE_FAST_PLUGIN_CONTRACTS);
+  runNode &&
+  !exactMainQualification &&
+  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_NODE_FAST_PLUGIN_CONTRACTS);
 const runNodeFastCiRouting =
-  runNode && parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_NODE_FAST_CI_ROUTING);
+  runNode &&
+  !exactMainQualification &&
+  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_NODE_FAST_CI_ROUTING);
 const proposedCheckScope =
   runtimePullRequest &&
   (!frozenTarget || releaseGate) &&
@@ -370,10 +400,25 @@ const pluginContractShards =
     : [];
 const channelContractShards =
   !runtimePullRequest && runNodeFull && !releaseFastLane ? createChannelContractTestShards() : [];
+// Reuse releaseGate's existing exact-SHA/PR admission; never acquire a backend
+// or download models for ordinary PR, push, schedule, or unrelated dispatches.
+const mlxNativeProofScope =
+  workflowEventName === "workflow_dispatch" && releaseGate && !frozenTarget && !compatibilityTarget
+    ? await importTargetPlan("./scripts/ci-changed-scope.mjs")
+    : null;
+const runMlxNativeProof =
+  workflowEventName === "workflow_dispatch" &&
+  releaseGate &&
+  isCanonicalRepository &&
+  !frozenTarget &&
+  !compatibilityTarget &&
+  releaseScope === "full" &&
+  typeof mlxNativeProofScope?.hasMlxNativeProofInputs === "function" &&
+  mlxNativeProofScope.hasMlxNativeProofInputs(changedPaths);
 const runMacos =
   !ordinaryPullRequest &&
   !nativeGeneratedOnly &&
-  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_MACOS) &&
+  scopeEnabled(process.env.OPENCLAW_CI_RUN_MACOS) &&
   !docsOnly &&
   isCanonicalRepository &&
   !releaseFastLane;
@@ -382,7 +427,7 @@ const runMacosNode =
   runMacos ||
   (!ordinaryPullRequest &&
     !nativeGeneratedOnly &&
-    parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_MACOS_NODE) &&
+    scopeEnabled(process.env.OPENCLAW_CI_RUN_MACOS_NODE) &&
     !docsOnly &&
     isCanonicalRepository &&
     !releaseFastLane);
@@ -391,14 +436,14 @@ const supportsCurrentMacosSwiftCi =
   existsSync("scripts/lint-swift.sh") &&
   existsSync("scripts/format-swift.sh");
 const runMacosSwift =
-  runMacos &&
+  (runMacos || runMlxNativeProof) &&
   !deferMacosSwift &&
   (!frozenTarget || compatibilityTarget || supportsCurrentMacosSwiftCi);
 const supportsIosBuild = hasPackageScript("ios:build");
 const supportsCurrentIosCi = supportsIosBuild && supportsCurrentMacosSwiftCi;
 const iosBuildScope =
   !nativeGeneratedOnly &&
-  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_BUILD) &&
+  scopeEnabled(process.env.OPENCLAW_CI_RUN_IOS_BUILD) &&
   !releaseFastLane &&
   !npmQualification &&
   !docsOnly &&
@@ -407,7 +452,7 @@ const iosBuildScope =
 const runIosBuild = !ordinaryPullRequest && iosBuildScope;
 const runAndroid =
   !nativeGeneratedOnly &&
-  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_ANDROID) &&
+  scopeEnabled(process.env.OPENCLAW_CI_RUN_ANDROID) &&
   !npmQualification &&
   !docsOnly &&
   isCanonicalRepository &&
@@ -423,18 +468,18 @@ const runAndroidAccessNative =
     ));
 let runWindows =
   !ordinaryPullRequest &&
-  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_WINDOWS) &&
+  scopeEnabled(process.env.OPENCLAW_CI_RUN_WINDOWS) &&
   !releaseFastLane &&
   !docsOnly &&
   !runNodeFastOnly &&
   isCanonicalRepository;
 const runSkillsPython =
-  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_SKILLS_PYTHON) && !docsOnly && !releaseFastLane;
+  scopeEnabled(process.env.OPENCLAW_CI_RUN_SKILLS_PYTHON) && !docsOnly && !releaseFastLane;
 const runControlUiI18n =
-  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_CONTROL_UI_I18N) && !docsOnly && !releaseFastLane;
+  scopeEnabled(process.env.OPENCLAW_CI_RUN_CONTROL_UI_I18N) && !docsOnly && !releaseFastLane;
 let runUiTests =
   fullUiPullRequest ||
-  (parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_UI_TESTS) &&
+  (scopeEnabled(process.env.OPENCLAW_CI_RUN_UI_TESTS) &&
     !docsOnly &&
     !nodeDataOnly &&
     !releaseFastLane);
@@ -493,7 +538,7 @@ const supportsNativeI18n =
   hasPackageScript("android:i18n:check") &&
   hasPackageScript("apple:i18n:check");
 const runNativeI18n =
-  parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_NATIVE_I18N) &&
+  scopeEnabled(process.env.OPENCLAW_CI_RUN_NATIVE_I18N) &&
   !releaseFastLane &&
   !npmQualification &&
   !docsOnly &&
@@ -632,7 +677,10 @@ if (runtimePullRequest && runNodeFull) {
       !frozenTarget &&
       !compatibilityTarget &&
       nodeSelectionMode === "aggressive",
-    onSelection: (selection) => nodeSelectionReasons.push(selection),
+    onSelection: (selection) => {
+      nodeSelectionReasons.push(selection);
+      console.log(`Node test selection provenance: ${JSON.stringify(selection)}`);
+    },
   });
 }
 const fullIosSimulatorPr = parseCiEnvFlag(process.env.OPENCLAW_CI_IOS_SIMULATOR_FULL);
@@ -971,10 +1019,11 @@ if (runCheckPlan && proposedCheckScope?.types) {
 }
 const fullCoreLintStripes =
   runnerProfile === "hybrid" &&
+  nodeRunnerBackend !== "boat" &&
   !frozenTarget &&
   ((!releaseGate && ["push", "pull_request"].includes(eventName)) ||
     nodeRunnerBackend === "runson" ||
-    ciQualification)
+    (ciQualification && !exactMainQualification))
     ? [1, 2]
     : [1, 2, 3, 4, 5];
 const coreLintRows = fullCoreLintStripes.map((stripe) => ({ stripe }));
@@ -1427,6 +1476,10 @@ const nodeTestShards = targetNodeTestShards
       (b.predictedSeconds ?? 0) - (a.predictedSeconds ?? 0),
   )
   .map((shard) => {
+    const minTotalMemoryBytes = Math.max(
+      0,
+      ...(shard.groups ?? []).map((group) => group.minTotalMemoryBytes ?? 0),
+    );
     const groups =
       shard.groups?.map(projectNodeTestGroup) ??
       (nodeTestGroupsCodec && shard.configs?.length && !shard.targets?.length
@@ -1442,6 +1495,13 @@ const nodeTestShards = targetNodeTestShards
         : undefined);
     const packedGroups =
       groups?.length && nodeTestGroupsCodec ? encodeNodeTestGroups(groups) : undefined;
+    const capacity =
+      process.env.OPENCLAW_CI_EFFECTIVE_RUNNER_BACKEND === "boat"
+        ? resolveBoatNodeTestCapacity(shard.runner, shard.checkName, minTotalMemoryBytes, [
+            ...(shard.includePatterns ?? []),
+            ...(shard.groups ?? []).flatMap((group) => group.includePatterns ?? []),
+          ])
+        : undefined;
     const row = {
       check_name: shard.checkName,
       test_runtime_policy: shard.requiresDist ? "node" : testRuntimeMode,
@@ -1466,16 +1526,14 @@ const nodeTestShards = targetNodeTestShards
       pretest_build_mode: shard.pretestBuildMode,
       git_commits: resolveTestGitCommits(shard),
       requires_dist: shard.requiresDist,
-      runner: shard.runner,
-      runner_label: blacksmithRunnerLabel(
-        shard.runner,
-        Math.max(0, ...(shard.groups ?? []).map((group) => group.minTotalMemoryBytes ?? 0)),
-      ),
+      runner: capacity?.runner ?? shard.runner,
+      runner_label: capacity?.runner ?? blacksmithRunnerLabel(shard.runner, minTotalMemoryBytes),
       timeout_minutes:
         !shard.requiresDist && testRuntimeMode === "dual-all"
           ? 2 * (shard.timeoutMinutes ?? 60)
           : shard.timeoutMinutes,
       plan_concurrency: shard.planConcurrency,
+      cpu_budget: capacity?.cpuBudget ?? shard.cpuBudget,
       predicted_seconds: shard.predictedTestSeconds ?? shard.predictedSeconds,
       targets: shard.targets,
       requires_go: shardRequiresTests(shard, ["test/scripts/docs-i18n.test.ts"], (plan) => {
@@ -1649,7 +1707,7 @@ const additionalChecks = [
     runner: "blacksmith-4vcpu-ubuntu-2404",
   })),
   // Main-shaped qualifications are still dispatches with an exact comparison range.
-  ...(eventName === "workflow_dispatch" || mainQualification
+  ...(eventName === "workflow_dispatch" || (mainQualification && !exactMainQualification)
     ? [
         // Serial renders exceeded 20m; the measured 32-class clears the 8-CPU/24-GiB parallel floor.
         {
@@ -1936,6 +1994,7 @@ const manifest = {
       : [],
   ),
   run_macos_swift: runMacosSwift,
+  run_mlx_native_proof: runMlxNativeProof,
   run_openclawkit_tests: runMacos && !deferMacosSwift && supportsOpenClawKitTests,
   run_ios_build: runIosBuild,
   run_ios_voice_cleanup_tests: iosSimulatorSelection.voice.selected,
@@ -2021,7 +2080,7 @@ if (hybridHostedEligible) {
         "runtime-topology-architecture",
         "plugin-sdk-api-diff",
         "dependencies",
-      ].includes(row.group) || !row.runner.startsWith("blacksmith-"),
+      ].includes(row.group) || row.runner === "ubuntu-24.04",
   ).length;
   const hostedPlanner =
     process.env.OPENCLAW_CI_RUNNER_BACKEND === "runson" || nodeRunnerBackend === "runson";
@@ -2082,14 +2141,19 @@ if (hybridHostedEligible) {
     ),
     "check-additional-shard": count(manifest.run_check_additional, hostedAdditionalRows),
     "check-docs": count(manifest.run_check_docs),
-    "postgres-conformance": count(manifest.run_postgres_conformance, 3),
+    "postgres-conformance": count(
+      manifest.run_postgres_conformance,
+      workflowEventName === "pull_request" ? 4 : 3,
+    ),
     "skills-python": count(manifest.run_skills_python_job),
     "checks-windows": count(
       manifest.run_checks_windows,
       manifest.checks_windows_matrix.include.length,
     ),
     "macos-node": count(manifest.run_macos_node, manifest.macos_node_matrix.include.length),
-    "macos-swift": count(manifest.run_macos_swift, 2),
+    // Eligible profiles emit one app test row plus packages and mlx; settings
+    // and release rows require a different dispatch admission.
+    "macos-swift": count(manifest.run_macos_swift, 3),
     "ios-build": count(manifest.run_ios_build),
     "ios-screenshot-capture": count(parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS), 1),
     "ios-screenshot-evidence": count(parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS)),

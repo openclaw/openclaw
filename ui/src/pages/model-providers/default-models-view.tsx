@@ -53,6 +53,8 @@ export type DefaultModelsViewProps = {
   busy: Record<string, boolean>;
   defaultsSaving?: boolean;
   defaultsSavingField?: ModelDefaultsSaveField | null;
+  /** The last defaults write was acknowledged; later discovery runs in the background. */
+  defaultsSaved?: boolean;
   message?: ModelProviderRowMessage;
   onPrimaryChange: (model: string) => void;
   onFallbackChange: (model: string | null) => void;
@@ -189,6 +191,7 @@ function fastModeOptionValue(value: ReturnType<typeof formatFastModeValue>): Fas
 // Discovery progress does not change the saved selection or disable known models.
 function CatalogFeedback(props: {
   discovering: boolean;
+  saved?: boolean;
   error?: string;
   onRetry: () => void;
 }): JSX.Element {
@@ -197,7 +200,13 @@ function CatalogFeedback(props: {
       {props.discovering ? (
         <div class="model-providers__catalog-progress" role="status" aria-live="polite">
           <span class="btn__spinner" aria-hidden="true" />
-          <span>{t("modelProviders.defaults.discoveringMore")}</span>
+          <span>
+            {t(
+              props.saved
+                ? "modelProviders.defaults.savedDiscoveringMore"
+                : "modelProviders.defaults.discoveringMore",
+            )}
+          </span>
         </div>
       ) : undefined}
       {props.error ? (
@@ -234,8 +243,11 @@ function CatalogProgress(props: DefaultModelsViewProps): JSX.Element {
             reset();
           };
           return (
-            <Loading fallback={<CatalogFeedback discovering onRetry={retry} />}>
+            <Loading
+              fallback={<CatalogFeedback discovering saved={props.defaultsSaved} onRetry={retry} />}
+            >
               <CatalogFeedback
+                saved={props.defaultsSaved}
                 discovering={isPending(read) || Boolean(props.catalogDiscovering)}
                 error={isPending(read) ? undefined : formatUiError(failure())}
                 onRetry={retry}
@@ -247,6 +259,7 @@ function CatalogProgress(props: DefaultModelsViewProps): JSX.Element {
         <Loading
           fallback={
             <CatalogFeedback
+              saved={props.defaultsSaved}
               discovering={Boolean(receipt()) || Boolean(props.catalogDiscovering)}
               onRetry={() => props.onCatalogRetry()}
             />
@@ -254,6 +267,7 @@ function CatalogProgress(props: DefaultModelsViewProps): JSX.Element {
         >
           {latest(read)}
           <CatalogFeedback
+            saved={props.defaultsSaved}
             discovering={isPending(read) || Boolean(props.catalogDiscovering)}
             onRetry={() => props.onCatalogRetry()}
           />

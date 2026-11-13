@@ -137,7 +137,12 @@ skipped update. These non-outcomes do not run rollback verification or offer an
 update failure report.
 
 After durable success, updates automatically retire eligible superseded recovery
-copies through the state owner, retaining the current update's rollback generation.
+copies through the state owner. Once the update's Gateway health verification is
+recorded, this includes the update's own original-state capture and the Doctor
+migration originals it produced; without that verification, for example after
+`--no-restart`, the current update's rollback generation stays until a later
+update. Create a [verified backup](/install/updating/rollback-and-recovery#before-updating-create-a-verified-backup)
+first if you want a downgrade path.
 A failed update that stopped before repair or activation does the same and also
 retires its own original-state capture, since nothing it captured changed.
 Cleanup warnings never fail or roll back the successful update. Manual
@@ -815,7 +820,11 @@ runs and does not recognize the new flag. See
 Updates preserve each store's physical engine. Before database mutation, the
 installed updater keeps the existing exact SQLite captures and captures each
 PostgreSQL store as an unsanitized SQLite export image plus its matching anchor
-and format-2 manifest. These private recovery captures preserve canonical data,
+and format-2 manifest. With `database.postgres.recoveryCaptures: "server"`,
+non-state PostgreSQL stores keep their rows in a `restore_<uuid>` schema on the
+same server instead; see
+[server recovery captures](/reference/database-engines#server-recovery-captures).
+These private recovery captures preserve canonical data,
 transient rows, and allocation facts; ordinary sanitized user backups cannot
 replace them. Recovery receipts record the physical engine and store identity.
 

@@ -16,7 +16,7 @@ export type GitHubPublicationPreparation = {
   hasRequest: () => boolean;
 };
 const identityNextAction =
-  "Reconnect My GitHub or System GitHub in Settings → Profile → GitHub connections (agent overrides: Agents → Tools), then request publication again.";
+  "Reconnect My GitHub, the shared agent account, or the agent’s own account in Settings → Profile → GitHub accounts, then request publication again.";
 
 /** An owner observed a definitive outcome; an unavailable probe is not this failure. */
 export class GitHubPublicationKnownFailure extends Error {
