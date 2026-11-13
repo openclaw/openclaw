@@ -10,7 +10,7 @@ read_when:
 
 # Update generations design
 
-**Design proposal. One slice is implemented and in review; nothing else here is built. No implementation authorization.**
+**Design proposal. One slice is implemented and in review; nothing else here is built. A maintainer accepted the seven [decisions](#decisions) on November 13, 2026. That sets the direction; each slice still needs its own review.**
 Two changes to `openclaw update`: keep each release in its own directory on
 prefixes that OpenClaw owns and switch between them by repointing one link, and
 move update work out of the installed updater into the candidate in stages.
@@ -24,7 +24,7 @@ from `6acf398088c430ba93944a5bc07eec1b2299ac00`.
 | Slice                                        | Status                                                                                 |
 | -------------------------------------------- | -------------------------------------------------------------------------------------- |
 | Candidate-owned rehearsal                    | Implemented in [#197922](https://github.com/openclaw/openclaw/pull/197922), in review. |
-| Release directories behind a linked root     | Proposed below. Needs decisions 1 to 4.                                                |
+| Release directories behind a linked root     | Direction accepted in decisions 1 to 4. Not built.                                     |
 | Owed steps after the commit point            | Proposed.                                                                              |
 | Stop, publish, and rollback in the candidate | Not designed.                                                                          |
 
@@ -203,7 +203,7 @@ and repoints that one link.
   tools/node-v<version>/lib/node_modules/
     openclaw -> <owned prefix>/releases/2026.12.1-a01b.../lib/node_modules/openclaw
   releases/
-    2026.11.4-3f9c.../                  private npm prefix, sealed after install
+    2026.11.4-3f9c.../                  private npm prefix
     2026.12.1-a01b.../
 ```
 
@@ -232,8 +232,10 @@ directory, the updater moves it into `releases/` as the previous release and
 puts the link in its place. This reuses the displacement rename the swap already
 does; the difference is that the old tree is kept, not deleted.
 
-**Rollback points the link back.** The previous release was never touched, so
-there is no backup to verify byte for byte. Config and service definition
+**Rollback points the link back.** A route 3 updater never writes to the
+previous release, so there is no backup to verify byte for byte. An older
+updater can rewrite a release directory, so rollback first checks the release
+against its recorded identity. Config and service definition
 restore stay as they are, and so does the rule that code does not roll back
 across a migration.
 
@@ -252,6 +254,13 @@ or no package path at all.
 - Plugin links. The existing relink and startup repair cover a flip. Linking to
   the stable path instead would remove the stale state altogether; decide
   during implementation.
+- Release identity. A published driver that runs on a linked root rewrites the
+  release directory behind the link in place (see
+  [first hop](#update-behavior-and-first-hop)). A route 3 updater records each
+  release's version and build when it installs it, reads them back from the
+  directory's content before it trusts the directory, and treats a mismatch as
+  input to adoption, never as a rollback target. The directory name is a label
+  only.
 - Leases and collection, below.
 - `openclaw update status` reporting the active and retained releases.
 
@@ -288,7 +297,8 @@ again. This is a separate proposal, after route 3 has run on owned prefixes.
 
 ### What was tested
 
-Both tests used toy packages, not an OpenClaw installation.
+The first two tests used toy packages. The third used published OpenClaw
+releases in Docker.
 
 - **Node 26.12.1.** A process started through the linked root kept loading its
   own release after the link was flipped under it. A process started afterwards
@@ -298,6 +308,14 @@ Both tests used toy packages, not an OpenClaw installation.
   old release. Node's internal path cache explains that, and it is not a
   contract to rely on.
 - **npm 11.20.0.** The behavior described under route 4.
+- **Published drivers on a linked root.** In the published-driver update cell
+  on linux/arm64, the installed release was moved into `releases/<version>/`
+  and a relative link was left at the package path. `2026.10.9` and `2026.11.3`
+  each updated to a build of `089d8b8`. The run finished, `readyz` returned 200,
+  the running version matched, and the durable and incognito session checks
+  passed. Afterwards the link was unchanged and its target directory held the
+  new build. The cell's installed-tree budget check refuses a linked root, so
+  it was pointed at the link's target for these runs.
 
 ## Part B: move update work to the candidate in stages
 
@@ -346,16 +364,16 @@ previous release, which removes the second blocker.
 
 ## Update behavior and first hop
 
-| Hop or case                                    | What happens                                                                                             | Proof                                                                              |
-| ---------------------------------------------- | -------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| Any published driver to a B1 release           | Unchanged. The old driver runs its own rehearsal.                                                        | Ran on #197922 at `758582e`: `2026.10.1`, `2026.10.9`, `2026.11.2`, `2026.11.3`.   |
-| B1 driver to a B1 candidate                    | The candidate rehearses itself.                                                                          | Ran: a local build seeded as the driver, passed.                                   |
-| B1 driver to a candidate without marker        | The updater runs its own rehearsal.                                                                      | Unit tests only.                                                                   |
-| Published driver to the first route 3 release  | Today's swap. The package root stays a plain directory.                                                  | New: a published-driver cell.                                                      |
-| Route 3 driver, package root still a directory | Adoption: the old tree becomes the previous release and the link takes its place.                        | New: `install-cli.sh` prefix and durable service copy, then rollback.              |
-| Route 3 driver, linked package root            | The flip.                                                                                                | New: two consecutive updates, rollback, and a Gateway-initiated update.            |
-| Published driver meets a linked package root   | Expected: its existing linked-root path replaces the link with a directory. Not tested.                  | New: a published-driver cell with a linked root, before any release ships route 3. |
-| Killed around the flip                         | The link names the old or the new release. The journal intent is reconciled against it before any retry. | New: fault injection before and after the rename, and between the Windows renames. |
+| Hop or case                                    | What happens                                                                                                      | Proof                                                                              |
+| ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| Any published driver to a B1 release           | Unchanged. The old driver runs its own rehearsal.                                                                 | Ran on #197922 at `758582e`: `2026.10.1`, `2026.10.9`, `2026.11.2`, `2026.11.3`.   |
+| B1 driver to a B1 candidate                    | The candidate rehearses itself.                                                                                   | Ran: a local build seeded as the driver, passed.                                   |
+| B1 driver to a candidate without marker        | The updater runs its own rehearsal.                                                                               | Unit tests only.                                                                   |
+| Published driver to the first route 3 release  | Today's swap. The package root stays a plain directory.                                                           | New: a published-driver cell.                                                      |
+| Route 3 driver, package root still a directory | Adoption: the old tree becomes the previous release and the link takes its place.                                 | New: `install-cli.sh` prefix and durable service copy, then rollback.              |
+| Route 3 driver, linked package root            | The flip.                                                                                                         | New: two consecutive updates, rollback, and a Gateway-initiated update.            |
+| Published driver meets a linked package root   | It follows the link and swaps the new release into the directory behind it. The update passes and the link stays. | Ran by hand at `089d8b8`: `2026.10.9` and `2026.11.3`. Not yet a permanent cell.   |
+| Killed around the flip                         | The link names the old or the new release. The journal intent is reconciled against it before any retry.          | New: fault injection before and after the rename, and between the Windows renames. |
 
 This design does not repair an updater that is already installed. An
 installation on an older release reaches a B1 or route 3 release with the
@@ -364,8 +382,18 @@ Installations already blocked on a published driver still need their documented
 manual procedure once.
 
 A published driver can meet a linked root after a downgrade to a release from
-before route 3. That row is the one that can strand an installation, so its
-cell gates the first release that ships adoption.
+before route 3. That cell ran, and it does not strand the installation: the
+update finishes, the Gateway is ready, and sessions survive.
+
+It also does not do what the previous version of this page predicted. The
+driver resolves the link, then stages and swaps inside the release directory.
+The link is unchanged, and the directory that held the old release now holds
+the new one. The driver also leaves its activation control directory beside the
+package in that release's `lib/node_modules`.
+
+Route 3 therefore cannot treat a release directory as sealed, or read a
+release's identity from its directory name. See "Release identity" under
+[route 3](#route-3-recommended-a-linked-package-root).
 
 ## Channels and downgrades
 
@@ -385,17 +413,17 @@ older release, with no download when that release is still retained. See
 
 ## Risks
 
-| Risk                                                 | Severity | Mitigation                                                                                                                   |
-| ---------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| Something stores a resolved release path             | High     | Known holders are plugin links, the agent CLI shim, and executor and journal identity. Test that none survives a flip stale. |
-| Collection deletes a release in use                  | High     | Leases, not a newest-N rule. An unknown reference keeps the files.                                                           |
-| A published driver mishandles a linked root          | High     | Run that cell before shipping adoption. If it fails, adoption needs a marker that old drivers already respect.               |
-| The Windows flip is two renames                      | Medium   | The Gateway is stopped, the exposure equals today's swap, and the node host's `.previous` recovery applies.                  |
-| A process keeps running across a flip                | Medium   | It stays in its own release, which is safer than today. Its lease keeps that release from collection.                        |
-| npm reports the package as a link on an owned prefix | Medium   | Document it. A manual `npm install -g` restores a plain directory, and the next update adopts it again.                      |
-| Several Gateways share one owned prefix              | Medium   | One flip moves all of them. Each is drained and stopped, and each state directory gets its own Doctor run.                   |
-| Disk use                                             | Medium   | A release measured 591 MB. Bounded by leases and minimum age. Admission checks free space for the candidate.                 |
-| A new journal record outlives its first form         | Medium   | Version it. Retained recovery runtimes must be able to read it.                                                              |
+| Risk                                                     | Severity | Mitigation                                                                                                                                            |
+| -------------------------------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Something stores a resolved release path                 | High     | Known holders are plugin links, the agent CLI shim, and executor and journal identity. Test that none survives a flip stale.                          |
+| Collection deletes a release in use                      | High     | Leases, not a newest-N rule. An unknown reference keeps the files.                                                                                    |
+| A published driver rewrites a release directory in place | High     | Seen in the linked-root cell. Identify a release by its recorded content identity, never by directory name, and adopt again when the content changed. |
+| The Windows flip is two renames                          | Medium   | The Gateway is stopped, the exposure equals today's swap, and the node host's `.previous` recovery applies.                                           |
+| A process keeps running across a flip                    | Medium   | It stays in its own release, which is safer than today. Its lease keeps that release from collection.                                                 |
+| npm reports the package as a link on an owned prefix     | Medium   | Document it. A manual `npm install -g` restores a plain directory, and the next update adopts it again.                                               |
+| Several Gateways share one owned prefix                  | Medium   | One flip moves all of them. Each is drained and stopped, and each state directory gets its own Doctor run.                                            |
+| Disk use                                                 | Medium   | A release measured 591 MB. Bounded by leases and minimum age. Admission checks free space for the candidate.                                          |
+| A new journal record outlives its first form             | Medium   | Version it. Retained recovery runtimes must be able to read it.                                                                                       |
 
 ## Review slices
 
@@ -403,12 +431,14 @@ These are proposals, not permission to open them.
 
 1. **B1, candidate-owned rehearsal.** In review as #197922.
 2. **Linked-root readiness, no layout change.** The handoff root rule,
-   journaled activation for a linked root, and the published-driver cell with a
-   linked root. Nothing an existing installation can observe.
+   journaled activation for a linked root, and a permanent published-driver
+   cell with a linked root. That cell ran by hand; its installed-tree budget
+   check has to accept a linked root first. Nothing an existing installation
+   can observe.
 3. **A shared release installer.** Make the node host a caller of it.
    `openclaw update status` reports prepared and retained releases.
 4. **Adoption and the flip on the `install-cli.sh` prefix and the durable
-   service copy.** Rollback, leases, and collection. This slice also gives the
+   service copy.** Release identity, rollback, leases, and collection. This slice also gives the
    node host its missing collection and a liveness rule for `activation.lock`.
 5. **Retire what a linked root makes unnecessary,** after measuring: the
    baseline fingerprint, the backup, and the updater's runtime copy.
@@ -417,17 +447,19 @@ These are proposals, not permission to open them.
 
 B3, route 4, and Windows each need their own proposal.
 
-## Decisions needed
+## Decisions
 
-| #   | Decision                                                                   | Suggested answer                                                                                                                                  |
-| --- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | Whether owned prefixes switch releases through a linked package root.      | Yes, over rebinding and over the immutable owner, for the reasons under routes 1 and 2.                                                           |
-| 2   | Whether the activation journal records a pointer intent for a linked root. | Yes, through the [storage design checkpoint](/reference/database-schemas/storage-changes#review-checkpoint-for-material-changes). No new journal. |
-| 3   | The retention rule for release directories.                                | Leases plus a minimum age. A retention change is an approval this repository reserves.                                                            |
-| 4   | Where release directories live for the durable service copy.               | Beside `<stateDir>/npm`. Confirm first how state backups and Doctor treat that directory today.                                                   |
-| 5   | Whether to accept the B1 package marker.                                   | Yes. It is a protocol addition and an approval this repository reserves. Pending on #197922.                                                      |
-| 6   | Whether npm-owned global prefixes take a linked root.                      | Later, as its own proposal.                                                                                                                       |
-| 7   | Whether equal schema versions are enough to skip the state rehearsal.      | Yes for the snapshot and migration rehearsal; no for config validation and plugin planning.                                                       |
+A maintainer accepted these answers on November 13, 2026.
+
+| #   | Decision                                                                   | Answer                                                                                                                                            | Still open                                                                   |
+| --- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| 1   | Whether owned prefixes switch releases through a linked package root.      | Yes, over rebinding and over the immutable owner, for the reasons under routes 1 and 2.                                                           | Adoption waits on the design answering what the published-driver cell found. |
+| 2   | Whether the activation journal records a pointer intent for a linked root. | Yes, through the [storage design checkpoint](/reference/database-schemas/storage-changes#review-checkpoint-for-material-changes). No new journal. | The checkpoint review itself.                                                |
+| 3   | The retention rule for release directories.                                | Leases plus a minimum age.                                                                                                                        | The minimum age.                                                             |
+| 4   | Where release directories live for the durable service copy.               | Beside `<stateDir>/npm`.                                                                                                                          | Confirm first how state backups and Doctor treat that directory today.       |
+| 5   | Whether to accept the B1 package marker.                                   | Yes. It ships with #197922.                                                                                                                       | None.                                                                        |
+| 6   | Whether npm-owned global prefixes take a linked root.                      | Not now. It needs its own proposal.                                                                                                               | That proposal.                                                               |
+| 7   | Whether equal schema versions are enough to skip the state rehearsal.      | Yes for the snapshot and migration rehearsal; no for config validation and plugin planning.                                                       | None.                                                                        |
 
 ## Not doing
 
@@ -464,13 +496,15 @@ existing handoff carries stop, publish, or rollback authority.
 
 ## Evidence limits
 
-- Route 3 has not run on an OpenClaw installation. The two tests used toy
-  packages on macOS.
+- Route 3 itself has not run on an OpenClaw installation. The Node and npm
+  tests used toy packages on macOS.
 - The source trace read code and ran nothing. Not read: the launchd, systemd,
   and Task Scheduler writers, how the plugin loader enforces quarantine, the
   restart sentinel, and every use of the updater's retained runtime.
-- What a published driver does with a linked root is inferred from current
-  source, not from the published packages.
+- The linked-root cell covered two published drivers on Linux, one update each.
+  Not covered: rollback after a failed update on a linked root, a second
+  update, a Gateway-initiated update, older drivers, and Windows. The service
+  definition's path was not captured.
 - The timings come from one Docker run on a small fixture state, and the split
   of the swap step is partly inferred.
 - How many installations use each layout is unknown.
