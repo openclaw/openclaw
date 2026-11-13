@@ -625,4 +625,24 @@ describe("WhatsApp main route", () => {
     ).toBe("+15550002222");
     expect(resolveWhatsAppDmRouteTarget({ msg, normalizeE164: () => null })).toBe("+15550003333");
   });
+
+  it("configures sessionTranscript with historyKind recent for group conversations", async () => {
+    const groupMsg = message({
+      admission: { conversation: { kind: "group", id: "12345@g.us" } },
+    });
+    const { inbound: groupInbound } = await prepare({ msg: groupMsg, groupHistoryLimit: 15 });
+    expect(groupInbound.sessionTranscript).toEqual({
+      historyLimit: 15,
+      historyKind: "recent",
+    });
+
+    const dmMsg = message({
+      admission: { conversation: { kind: "direct", id: "15550003333@s.whatsapp.net" } },
+    });
+    const { inbound: dmInbound } = await prepare({ msg: dmMsg });
+    expect(dmInbound.sessionTranscript).toEqual({
+      historyLimit: 0,
+      historyKind: "pending",
+    });
+  });
 });
