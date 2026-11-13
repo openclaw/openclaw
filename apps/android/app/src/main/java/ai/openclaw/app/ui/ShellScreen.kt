@@ -169,17 +169,19 @@ fun ShellScreen(
         val destination = requestedHomeDestination ?: return@LaunchedEffect
         // HomeDestination is a one-shot command from launch intents and settings
         // actions; consume it after translating to local shell state.
-        nav.selectTab(
-          when (destination) {
-            HomeDestination.Connect -> Tab.Overview
-            HomeDestination.Chat, HomeDestination.Voice -> Tab.Chat
-            HomeDestination.Settings -> Tab.Settings
-          },
-        )
-        // Screenshot scenes can target a settings detail route alongside the tab.
-        viewModel.requestedSettingsRoute.value?.let { route ->
+        val route = viewModel.requestedSettingsRoute.value
+        if (route != null) {
+          // Detail requests must retain their origin before any top-level tab selection.
           nav.openSettingsRoute(route)
           viewModel.clearRequestedSettingsRoute()
+        } else {
+          nav.selectTab(
+            when (destination) {
+              HomeDestination.Connect -> Tab.Overview
+              HomeDestination.Chat, HomeDestination.Voice -> Tab.Chat
+              HomeDestination.Settings -> Tab.Settings
+            },
+          )
         }
         closeSidebar()
         viewModel.clearRequestedHomeDestination()
