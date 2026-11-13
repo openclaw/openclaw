@@ -231,6 +231,41 @@ describe("short-term promotion", () => {
     return notePath;
   }
 
+  it("rejects relocated note metadata while promoting bodies with every supported line ending", async (workspaceDir) => {
+    for (const [index, ending] of ["\n", "\r\n", "\r"].entries()) {
+      const memoryPath = `memory/2026-10-${20 + index}.md`;
+      const body = `Prefer aisle seats on flight ${index + 1}.`;
+      const note = path.join(workspaceDir, memoryPath);
+      await fs.writeFile(
+        note,
+        ["---", "a: b", "c: d", "e: f", "g: h", "status: active", "---", body].join(ending),
+      );
+      await recordMemoryRecalls(workspaceDir, "flight preference", [
+        memoryRecallResult(memoryPath, 6, 6, 0.99, "status: active"),
+        memoryRecallResult(memoryPath, 8, 8, 0.99, body),
+      ]);
+      await fs.writeFile(note, ["---", "status: active", "---", body].join(ending));
+    }
+    const result = await applyAllCandidates(workspaceDir, await rankAllCandidates(workspaceDir));
+    expect(result.appliedCandidates).toHaveLength(3);
+    expect(result.appliedCandidates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          startLine: 4,
+          endLine: 4,
+          snippet: "Prefer aisle seats on flight 3.",
+        }),
+      ]),
+    );
+    expect(result.rejectedCandidates).toHaveLength(3);
+    expect(
+      result.rejectedCandidates.every((rejection) => rejection.category === "source rehydration"),
+    ).toBe(true);
+    const memory = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8");
+    expect(memory).toContain("Prefer aisle seats on flight 3.");
+    expect(memory).not.toContain("status: active");
+  });
+
   async function seedGatewayPromotionCandidate(workspaceDir: string) {
     await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
       "alpha",
