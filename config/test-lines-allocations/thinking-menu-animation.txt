@@ -1,0 +1,2 @@
+# Retain existing geometry assertions while waiting for composer animations and sampling both bounds in one frame (#191881).
+8
