@@ -12,6 +12,7 @@ const enChatSession = {
       speed: "Couldn’t change the speed. Try again. {error}",
       contextWindow: "Couldn’t change the context window. Try again. {error}",
       accessProgram: "Couldn’t change the access program. Try again. {error}",
+      account: "Couldn’t change the account. Try again. {error}",
     },
     savedConversation: "{status} · Saved conversation",
     sessionAutomation: {

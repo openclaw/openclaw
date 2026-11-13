@@ -112,7 +112,10 @@ export function refreshSessionPatchQueuedSelection(params: {
   agentId: string;
   catalog?: ModelCatalogEntry[];
 }): void {
-  const modelSelectionChanged = "agentRuntime" in params.patch || params.patch.model !== undefined;
+  const modelSelectionChanged =
+    "agentRuntime" in params.patch ||
+    "authProfile" in params.patch ||
+    params.patch.model !== undefined;
   const thinkingChanged = modelSelectionChanged || params.patch.thinkingLevel !== undefined;
   if (!thinkingChanged && params.patch.cyberAccessProgram === undefined) {
     return;

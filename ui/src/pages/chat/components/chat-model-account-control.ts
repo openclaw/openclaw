@@ -39,6 +39,8 @@ export function renderChatModelAccountControl(params: {
   ownsSelection: () => boolean;
   onSelect: (account: UserModelAccount) => Promise<boolean>;
   onAutomatic?: () => void;
+  /** New Session restores the new-chat default; an existing chat clears its account. */
+  automaticLabel?: string;
   onManage?: () => void;
 }) {
   const { owner, selection, client } = params;
@@ -153,7 +155,12 @@ export function renderChatModelAccountControl(params: {
         description: description(account),
       })),
     ...(params.onAutomatic
-      ? [{ value: "automatic", label: t("chat.modelAccounts.automatic") }]
+      ? [
+          {
+            value: "automatic",
+            label: params.automaticLabel ?? t("chat.modelAccounts.automatic"),
+          },
+        ]
       : []),
     ...(currentInventory.loading
       ? [{ value: "loading", label: t("common.loading"), disabled: true }]

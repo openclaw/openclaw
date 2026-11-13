@@ -208,8 +208,11 @@ async function applyChatSetting(
   host: ChatModelSettingsHost,
   sessionKey: string,
   captured: ReturnType<typeof captureChatSettingsTarget>,
-  patch: Pick<SessionPatch, "thinkingLevel" | "fastMode" | "contextWindow" | "cyberAccessProgram">,
-  setting: "thinking" | "speed" | "contextWindow" | "accessProgram",
+  patch: Pick<
+    SessionPatch,
+    "thinkingLevel" | "fastMode" | "contextWindow" | "cyberAccessProgram" | "authProfile"
+  >,
+  setting: "thinking" | "speed" | "contextWindow" | "accessProgram" | "account",
 ): Promise<boolean> {
   const canDispatch = (receipt?: SessionPatchResult | null) =>
     (captured.isCurrent() || Boolean(captured.row(receipt))) &&
@@ -243,6 +246,7 @@ async function applyChatSetting(
 export function switchChatSetting(
   host: ChatModelSettingsHost,
   selection:
+    | { kind: "authProfile"; value: null }
     | { kind: "cyberAccessProgram"; value: CyberAccessProgram | null }
     | { kind: "fastMode"; value: "" | "on" | "off" | "auto" | "ultrafast" }
     | { kind: "thinkingLevel" | "contextWindow"; value: string },
@@ -252,6 +256,9 @@ export function switchChatSetting(
     return Promise.resolve(false);
   }
   const captured = captureChatSettingsTarget(host, targetSessionKey);
+  if (selection.kind === "authProfile") {
+    return applyChatSetting(host, targetSessionKey, captured, { authProfile: null }, "account");
+  }
   if (selection.kind === "cyberAccessProgram") {
     if ((captured.settings.cyberAccessProgram ?? null) === selection.value) {
       return Promise.resolve(true);

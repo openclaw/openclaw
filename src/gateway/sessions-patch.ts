@@ -14,7 +14,6 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
-import { prepareAuthProfileProvider } from "../agents/auth-profiles/store-runtime.js";
 import {
   requiresAgentHarnessPluginSelection,
   resolveAgentHarnessOwnerPluginIds,
@@ -85,6 +84,7 @@ import {
   isSessionStatusModelPatchOrigin,
 } from "./session-model-patch-origin.js";
 import { invalidSessionRequest as invalid } from "./session-request-error.js";
+import { clearPatchedAccount, preparePinnedAccount } from "./sessions-patch-account.js";
 import { validateSessionPatchAdmission } from "./sessions-patch-admission.js";
 import { applySessionContextWindowPatch } from "./sessions-patch-context-window.js";
 import {
@@ -151,15 +151,10 @@ export async function prepareSessionsPatchEntry(
         entry: params.existingEntry,
       })
     : undefined;
-  const pinnedProfile =
-    "model" in params.patch && params.existingEntry?.authProfileOverride?.trim();
-  const recordedProvider =
-    pinnedProfile && !splitTrailingAuthProfile(params.patch.model ?? "").profile
-      ? await prepareAuthProfileProvider({
-          agentDir: resolveAgentDir(params.cfg, sessionAgentId),
-          profileId: pinnedProfile,
-        })
-      : undefined;
+  const recordedProvider = await preparePinnedAccount(
+    params,
+    resolveAgentDir(params.cfg, sessionAgentId),
+  );
   const projection = projectSessionPatchSteps(params, acpMeta, recordedProvider);
   const first = projection.next();
   if (first.done) {
@@ -660,6 +655,7 @@ function* projectSessionPatchSteps(
       next.modelFallback = agentModelFallback;
     }
   }
+  clearPatchedAccount(next, patch);
 
   if (typeof rawThinking === "string") {
     const effectiveProvider = next.providerOverride ?? getResolvedDefault().provider;

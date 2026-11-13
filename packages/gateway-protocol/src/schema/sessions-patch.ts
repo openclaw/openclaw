@@ -92,6 +92,8 @@ const SessionsPatchMutationProperties = {
   model: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   /** Explicit runtime for the selected model; null follows configured routing. */
   agentRuntime: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+  /** Null clears the chat's account selection; select an account with `model@profile`. */
+  authProfile: Type.Optional(Type.Null()),
   completionOwnerSessionKey: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   inheritedToolPolicyVersion: Type.Optional(Type.Union([Type.Literal(1), Type.Null()])),
   inheritedToolAllow: Type.Optional(Type.Union([Type.Array(NonEmptyString), Type.Null()])),

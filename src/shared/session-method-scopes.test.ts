@@ -63,7 +63,13 @@ it("scopes sessions.patchMany from the shared patch only", () => {
   };
   expect(batchScope(patch, targetEnvelope)).toBe("operator.write");
   expect(
-    batchScope({ model: null, thinkingLevel: null, cyberAccessProgram: null, fastMode: null }),
+    batchScope({
+      model: null,
+      authProfile: null,
+      thinkingLevel: null,
+      cyberAccessProgram: null,
+      fastMode: null,
+    }),
   ).toBe("operator.write");
   for (const adminPatch of [
     { statusNote: "Working" },

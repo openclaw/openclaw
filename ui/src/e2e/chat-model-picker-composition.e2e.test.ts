@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import { installMockGateway } from "./chat-flow.test-support.ts";
 import {
@@ -86,6 +87,53 @@ suite.define(() => {
       expect(await oldAlternate.count()).toBe(0);
       await search.fill("New alternate");
       await polledVisible(newAlternate).toBe(true);
+    });
+  });
+
+  it("returns an existing chat with a selected account to automatic selection", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const models = [{ id: "shared-alpha", name: "Shared Alpha", provider: "openai" }];
+      const gateway = await installMockGateway(page, {
+        agentModel: "openai/shared-alpha",
+        models,
+        methodResponses: {
+          "models.list": catalog(models, "openai:work"),
+          "models.authStatus": authStatus("openai:work", "work@example.test"),
+          "users.listModelAccounts": { profileId: "test-person", accounts: [], links: [] },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const { picker, trigger } = modelPicker(page);
+      const accountToggle = picker.locator("[data-chat-account-group-toggle]");
+      const automatic = picker.locator('[data-chat-account-option="automatic"]');
+      await trigger.click();
+      await accountToggle.click();
+      await polledVisible(automatic).toBe(true);
+      expect(await automatic.textContent()).toContain("Automatic account selection");
+
+      await gateway.setMethodResponse("models.list", {
+        models,
+        accountSelection: { kind: "automatic", label: "Automatic account selection" },
+      });
+      await automatic.click();
+      const patch = await gateway.waitForRequest("sessions.patch");
+      expect(patch.params).toMatchObject({ authProfile: null });
+      expect(patch.params).not.toHaveProperty("model");
+      await gateway.emitGatewayEvent("sessions.changed", {
+        key: asOptionalRecord(patch.params)?.key,
+        agentId: "main",
+        reason: "patch",
+      });
+      await polledText(picker.locator(".chat-controls__account-selection")).toBe(
+        "Automatic account selection",
+      );
+      if ((await picker.getAttribute("open")) === null) {
+        await trigger.click();
+      }
+      if ((await accountToggle.getAttribute("aria-expanded")) !== "true") {
+        await accountToggle.click();
+      }
+      await polledCount(automatic).toBe(0);
     });
   });
 

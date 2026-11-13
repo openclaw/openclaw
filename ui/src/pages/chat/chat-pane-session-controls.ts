@@ -300,6 +300,19 @@ export function renderChatPaneComposerControls(params: {
               modelAccess.allowed && canPatch({ model: `${accountModel}@${account.authProfileId}` })
                 ? switchChatModel(state, `${accountModel}@${account.authProfileId}`, sessionKey)
                 : Promise.resolve(false),
+            onAutomatic:
+              accountSelection && accountSelection.kind !== "automatic"
+                ? () => {
+                    if (modelAccess.allowed && canPatch({ authProfile: null })) {
+                      void switchChatSetting(
+                        state,
+                        { kind: "authProfile", value: null },
+                        sessionKey,
+                      );
+                    }
+                  }
+                : undefined,
+            automaticLabel: t("chat.modelAccounts.clearSelection"),
             onManage: onModelAccounts,
           }),
         activeRunId: state.chatRunId,

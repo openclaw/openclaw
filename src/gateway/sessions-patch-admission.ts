@@ -1,4 +1,5 @@
 import type { SessionsPatchParams } from "../../packages/gateway-protocol/src/index.js";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { assertRequiredWorkerSelection } from "../config/required-worker-profile.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -49,10 +50,13 @@ export function validateSessionPatchAdmission(params: {
     }
   }
   if (
-    ("model" in patch || "agentRuntime" in patch) &&
+    ("model" in patch || "agentRuntime" in patch || "authProfile" in patch) &&
     isModelSelectionLocked(params.existingEntry)
   ) {
     return invalid(MODEL_SELECTION_LOCKED_MESSAGE);
+  }
+  if ("authProfile" in patch && splitTrailingAuthProfile(patch.model ?? "").profile) {
+    return invalid("Choose an account with model@profile or clear it with authProfile, not both.");
   }
   if (typeof patch.agentRuntime === "string" && typeof patch.model !== "string") {
     return invalid("agentRuntime requires an explicit provider/model selection using full IDs");

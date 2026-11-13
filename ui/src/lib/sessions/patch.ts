@@ -19,6 +19,7 @@ export type SessionPatch = Pick<
   | "boardPresentation"
   | "model"
   | "agentRuntime"
+  | "authProfile"
   | "contextWindow"
   | "thinkingLevel"
   | "fastMode"

@@ -1533,6 +1533,7 @@ const startupEnglish = {
     modelAccounts: {
       section: "Account",
       automatic: "Automatic (new-chat default)",
+      clearSelection: "Automatic account selection",
       manage: "Manage saved accounts…",
     },
     mentions: {},
