@@ -190,12 +190,7 @@ Report verified artifacts, included/deferred fixes, evidence gaps, retrospective
 PR, and any explicitly handed-off work. Do not call a pending handoff or
 publication approval wait “released.”
 
-When taking on retrospective ledger fixes, claim and maintain their status in
-the issue body of [the per-agent tracker](retrospective.md#track-in-flight-fixes-per-agent)
-(`openclaw/tideclaw#11`), rather than committing in-flight status to the ledger.
-Keep active, unmerged, blocked, or handed-off work visible there. Once a batch
-is complete and its durable ledger-update PR has merged, follow the tracker
-procedure to archive it in a comment before removing its live status.
+Track ledger repairs in the [per-agent tracker](retrospective.md#track-in-flight-fixes-per-agent).
 
 ## Resume or hand off
 

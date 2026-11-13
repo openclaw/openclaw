@@ -83,79 +83,11 @@ retrospective PR when they exist.
 
 ## Track in-flight fixes per agent
 
-[openclaw/tideclaw#11 — Release Retro In-Flight Fix Tracker](https://github.com/openclaw/tideclaw/issues/11)
-is the canonical coordination surface for agents fixing retrospective ledger
-findings. Its **issue body**, organized into per-agent sections, owns live claims
-and status. The ledger records durable findings and outcomes. Do not commit
-claim reservations, WIP status, or heartbeat updates to either repository just
-to advertise work. Keep unfinished changes local; commit the actual fix only
-after its required work and validation are complete. This does not change the
-report/ledger delivery process above.
-
-1. **Read before claiming.** Read the current issue body and relevant comments,
-   then locate the selected `RRI-NNN` entries in the current ledger and check
-   linked fixes/PRs. Reuse an existing repair or coordinate with its owner
-   instead of duplicating it. The tracker is coordination, not authority to
-   implement, publish, merge, or release outside the task's authorization.
-2. **Claim in your per-agent body section.** Use your agent name and a stable
-   task/session identifier as the heading. Use one row per ledger item or
-   explicitly grouped shared-cause repair; link entries and describe the scope.
-   Read the issue body immediately before each edit, merge only your own section
-   into that current body, and preserve the introduction and every other
-   agent's section. Never replace the body from a stale local copy.
-3. **Verify the edit and check overlap.** Reread the issue body after writing;
-   confirm your update and the other sections remain intact. Reconcile a lost
-   update or uncertain write against the current body before retrying. If claims
-   overlap, coordinate one implementation owner and mark the other claim as
-   handed off or released. A timestamp is not a lock, and an old update alone
-   does not mean a claim is abandoned. This is lightweight coordination, not a
-   locking protocol.
-4. **Update at meaningful transitions.** Record status, UTC update time, next
-   action, blockers, and branch/PR and focused proof links when available. A
-   parent coordinating children names the actual worker per row; a handoff links
-   the successor's body section and records who owns the next step. Keep live
-   status in the issue body, not parallel comment records. When migrating a live
-   comment, preserve its relevant content in your body section, verify the
-   migration, then mark the old comment historical/superseded with a link to
-   that section.
-5. **Close the claim, not the tracker.** Keep `PR open` distinct from `done`: a
-   published fix awaiting review, CI, or merge is still in flight. Record the
-   verified outcome and fix/merge evidence when complete, or mark `released`
-   with a reason when stopping without a fix. Use `blocked` with the missing
-   prerequisite and next owner when work cannot proceed. Do not close issue
-   #11 when your work finishes. Update durable ledger outcomes through their
-   normal reviewed process, not progress commits. Keep active, unmerged, or
-   blocked batches in the issue body.
-6. **Archive completed batches after the ledger merges.** Only when the batch
-   is finished **and its durable ledger-update PR is verified merged**, post a
-   required archive comment containing its final status, repair evidence, and
-   merged ledger-update PR link. Verify the comment exists and preserves that
-   evidence before removing live status. Then freshly read the issue body and
-   remove only your completed batch section or rows, preserving the
-   introduction, every other agent, and your own still-active batches. Reread
-   and verify the removal and preserved content. Reconcile uncertain writes
-   before retrying; if the archive or ledger merge cannot be verified, leave
-   the live record in place. Comments archive completed batches; they do not
-   own live claims or progress.
-
-Merge this section into the issue body, replacing placeholders and omitting
-unused fields:
-
-```markdown
-## Agent: <name> — <stable task/session identifier>
-
-Updated: <YYYY-MM-DD HH:MM UTC>
-
-| Ledger item(s) | Scope                             | Status  | Next action / blocker | Fix and evidence                |
-| -------------- | --------------------------------- | ------- | --------------------- | ------------------------------- |
-| <RRI links>    | <shared cause or specific repair> | claimed | <next step>           | <PR/proof links when available> |
-
-Handoff: <none, or successor and body-section link>
-```
-
-Use plain statuses: `claimed`, `in progress`, `blocked`, `PR open`, `done`,
-`handed off`, or `released`. Include only information safe for the target
-repository; never paste credentials, private runtime details, or raw logs.
-If you cannot update the issue body, report the claim as **unconfirmed**, retain
-a local note, and ask an authorized coordinator to merge your section. Do not
-substitute a live comment, repository commit, or invisible exclusive claim.
+Use the [shared tracker issue body](https://github.com/openclaw/tideclaw/issues/11)
+for per-agent active claims and status, not repository progress commits.
+Before editing, freshly read the body and merge only your own section,
+preserving other agents and your still-active batches; verify the result.
+Once a batch is finished **and its durable ledger-update PR is merged**,
+archive its outcome and evidence (including that PR) in a comment and verify it;
+then freshly read the body, remove only your completed batch, and verify again.
+Keep active, unmerged, or blocked work in the body. Do not close the tracker.

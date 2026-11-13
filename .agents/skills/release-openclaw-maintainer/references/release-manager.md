@@ -155,10 +155,4 @@ Deduplicate shared lessons and follow-ups; per-release retrospectives retain
 their own evidence. Do not report the campaign complete while a release is
 merely dispatched, waiting for approval, or awaiting an unacknowledged handoff.
 
-For agents fixing retrospective ledger findings, use the persistent
-[per-agent tracker](retrospective.md#track-in-flight-fixes-per-agent) in
-`openclaw/tideclaw#11`. Check existing claims before assigning work, name each
-actual repair owner, and link their issue-body section for status and handoffs.
-Do not require ledger/repository commits to announce claims or intermediate progress.
-Archive completed batches through that procedure only after their durable
-ledger-update PR has merged; keep active batches in the issue body.
+Track ledger repairs in the [per-agent tracker](retrospective.md#track-in-flight-fixes-per-agent).
