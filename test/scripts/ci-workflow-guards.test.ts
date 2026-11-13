@@ -3905,7 +3905,9 @@ server.listen(0, "127.0.0.1", () => {
       "authenticated bootstrap bytes",
     );
     expect(existsSync(path.join(store, "stale-package"))).toBe(false);
-    for (const directory of modules) expect(existsSync(path.join(root, directory))).toBe(false);
+    for (const directory of modules) {
+      expect(existsSync(path.join(root, directory))).toBe(false);
+    }
   });
 
   it("warms full builds with the release runtime without changing test cache selectors", () => {
