@@ -14,8 +14,10 @@ import {
   isBrowserNavigationBlockedError,
   navigateBrowser,
   openBrowserTab,
+  requestBrowserOperatorControl,
   startBrowser,
 } from "./browser-client.ts";
+import { createBrowserPanelControl } from "./browser-panel-control.ts";
 import { createBrowserPanelDownload, type BrowserPanelDownload } from "./browser-panel-download.ts";
 import { BrowserPanelInputOwner } from "./browser-panel-input-owner.ts";
 import { createBrowserPanelNative, type BrowserPanelNative } from "./browser-panel-native-owner.ts";
@@ -62,6 +64,8 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
     inspected: null,
     inspectPointer: null,
     evaluateUnavailable: false,
+    controlling: false,
+    controlAvailable: false,
     urlDraft: "",
     pendingNewTab: false,
     urlDraftEditing: false,
@@ -176,6 +180,7 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
       panel.setState("pendingNewTab", false);
       // Re-probe per connection: another gateway may have evaluate enabled.
       panel.setState("evaluateUnavailable", false);
+      control.reset();
     },
 
     reportError(error: unknown, retry: (() => Promise<unknown>) | null = null): void {
@@ -227,6 +232,9 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
         }
         panel.setState("running", snapshot.running);
         panel.setState("canAutoResizeViewport", snapshot.canAutoResizeViewport);
+        if (active) {
+          control.probe(client);
+        }
         panel.setState(
           "tabs",
           native.mergeRemoteTabs(operations.retainTabSnapshot(client, snapshot.tabs)),
@@ -449,6 +457,11 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
         return;
       }
       if (route && browserRouteKey(operations.route) !== browserRouteKey(route)) {
+        const controlledClient = panel.controlling ? operations.captureClient() : null;
+        if (controlledClient) {
+          // Control belongs to the browser being left; hand it back to the agent there.
+          void requestBrowserOperatorControl(controlledClient, "release").catch(() => {});
+        }
         operations.resetRoute(route);
         panel.resetBrowserState();
       } else if (targetId === panel.activeTargetId && !route) {
@@ -500,6 +513,8 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
         if (!selectedTargetId) {
           return;
         }
+        // Following an agent's tab skips refreshAll; ask about takeover for this route here too.
+        control.probe(actionClient);
         if (options?.focusBrowserTab !== false) {
           await focusBrowserTab(actionClient, selectedTargetId);
         }
@@ -583,6 +598,19 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
         }
       }, false);
       await host.updateComplete;
+    },
+
+    /** Take control from the agent, or hand it back. */
+    toggleControl(): void {
+      const take = !panel.controlling;
+      panel.setState("noticeText", null);
+      void panel.runAction(async (client) => {
+        const status = await requestBrowserOperatorControl(client, take ? "take" : "release");
+        panel.setState("controlling", status.byYou);
+        if (status.byYou) {
+          control.watch();
+        }
+      }, false);
     },
 
     /** Real page reload: re-navigate to the current URL, then re-capture. A bare
@@ -726,6 +754,7 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
       }
     },
   };
+  const control = createBrowserPanelControl(panel);
   const download = createBrowserPanelDownload(panel, notify);
   const input = new BrowserPanelInputOwner(panel);
   const stream = new BrowserPanelStream(panel);
