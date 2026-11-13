@@ -1,6 +1,15 @@
 import { expect, it, vi } from "vitest";
 import { fetchAnthropicUsage, resolveAnthropicUsageAuth } from "./usage.js";
 
+const storedProfileTypes: Record<string, "oauth" | "token"> = {
+  "anthropic:setup": "token",
+  "anthropic:oauth": "oauth",
+};
+vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
+  findPersistedAuthProfileCredentialAsync: async ({ profileId }: { profileId: string }) =>
+    storedProfileTypes[profileId] ? { type: storedProfileTypes[profileId] } : undefined,
+}));
+
 const requestUrl = (input: string | URL | Request) =>
   new URL(input instanceof Request ? input.url : input);
 
@@ -96,12 +105,11 @@ it("aggregates provider-reported costs, cache tokens, models, and categories", a
 const setupToken = `sk-ant-oat01-${"a".repeat(80)}`;
 const webSessionToken = 'openclaw:anthropic-web-session:v1:{"token":"sk-ant-session"}';
 const webSessionEnv = { CLAUDE_AI_SESSION_KEY: "sk-ant-session" };
-// resolveOAuthToken also resolves stored `token` profiles; their values are key candidates.
+// resolveOAuthToken also resolves stored `token` profiles.
 const setupTokenProfile = {
-  resolveApiKeyCandidatesFromConfigAndStore: async () => [setupToken],
   resolveOAuthToken: async () => ({
     token: setupToken,
-    authProfileId: "anthropic:default",
+    authProfileId: "anthropic:setup",
     email: "setup@example.com",
   }),
 };
@@ -122,7 +130,7 @@ it("routes a stored setup-token profile to the claude.ai web session", async () 
   const auth = await resolveAuth({ ...setupTokenProfile, env: webSessionEnv });
   expect(auth).toEqual({
     token: webSessionToken,
-    authProfileId: "anthropic:default",
+    authProfileId: "anthropic:setup",
     email: "setup@example.com",
   });
 
@@ -149,8 +157,8 @@ it("reports an unavailable web session instead of polling OAuth usage", async ()
   expect(fetchFn).toHaveBeenCalledOnce();
 });
 
-it("keeps OAuth usage for an OAuth profile beside a setup-token candidate", async () => {
-  const oauth = { token: "oauth-access-token", subscriptionType: "max" };
+it("keeps OAuth usage for an OAuth profile whose token is also the configured bearer", async () => {
+  const oauth = { token: setupToken, authProfileId: "anthropic:oauth", subscriptionType: "max" };
   const result = await resolveAuth({
     env: webSessionEnv,
     resolveApiKeyCandidatesFromConfigAndStore: async () => [setupToken],

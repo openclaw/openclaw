@@ -242,13 +242,9 @@ export async function resolveAnthropicUsageAuth(
   const oauthToken = await ctx.resolveOAuthToken({
     excludeProfileIds: [CLAUDE_CLI_PROFILE_ID],
   });
-  // Stored setup-token profiles resolve here too. Key candidates never include OAuth
-  // access tokens, so a match is a setup token, which may lack the usage scope.
-  if (oauthToken && !storedCandidates.includes(oauthToken.token)) {
-    return oauthToken;
-  }
-
-  if (oauthToken) {
+  // Stored setup-token profiles resolve here too, but setup tokens lack the user:profile
+  // scope the OAuth usage endpoint requires. Use a configured claude.ai session instead.
+  if (oauthToken && (await isStoredSetupToken(ctx.agentDir, oauthToken.authProfileId))) {
     const sessionKey = resolveClaudeWebSessionKey(ctx.env);
     return sessionKey
       ? {
@@ -256,6 +252,9 @@ export async function resolveAnthropicUsageAuth(
           token: encodeProviderUsageAdminToken(CLAUDE_WEB_SESSION_TOKEN_PREFIX, sessionKey),
         }
       : { handled: true };
+  }
+  if (oauthToken) {
+    return oauthToken;
   }
 
   // Configured bearers carry no credential type, and the setup-token shape check
@@ -271,6 +270,18 @@ export async function resolveAnthropicUsageAuth(
   // Claude owns its native refresh-token family. Do not resolve a copied
   // claude-cli profile here: generic OAuth refresh invalidates Claude's login.
   return { handled: true };
+}
+
+async function isStoredSetupToken(
+  agentDir: string | undefined,
+  profileId: string | undefined,
+): Promise<boolean> {
+  if (!profileId) {
+    return false;
+  }
+  const { findPersistedAuthProfileCredentialAsync } =
+    await import("openclaw/plugin-sdk/agent-runtime");
+  return (await findPersistedAuthProfileCredentialAsync({ agentDir, profileId }))?.type === "token";
 }
 
 /** Formats keychain plan metadata like ("max", "default_max_20x") as "Max (20x)". */
