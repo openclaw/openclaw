@@ -23,7 +23,6 @@ import { TemplateAddMutationError } from "./add.js";
 import { withResolvedClawHubSource, type ClawHubCoordinate } from "./clawhub-source.js";
 import type { TemplateSetupFailure, TemplateSetupReport } from "./conversation.js";
 import type { PersistedTemplateCronRef } from "./cron.js";
-import type { GatewayTemplateAddApplyResult } from "./gateway-add-apply.js";
 import {
   templateInitializationCheckpoints,
   type AdmittedTemplateAgent,
@@ -32,6 +31,7 @@ import {
   buildGatewayTemplateAddPlan,
   type GatewayTemplateAddPlanningContext,
 } from "./gateway-add-plan.js";
+import type { GatewayTemplateAddApplyResult } from "./gateway-add-result.js";
 import { installTemplateMcpServersStateless } from "./mcp.js";
 import { installTemplatePackages } from "./packages.js";
 import { templateManifestWorkspaceConflictsWithPath } from "./schema.js";
