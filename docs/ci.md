@@ -532,9 +532,10 @@ freshness stamps instead of starting another full build.
 
 Vitest transform-cache generations include direct Vitest configs at every depth and the shared `test/vitest/` inputs, except the two database-worker membership inventories, unit-fast discovery inventory, and the E2E config factory. Each project fingerprints its declaring config and imported config dependencies; the E2E factory also supplies its canonical file when loaded through a wrapper. E2E-only config edits therefore invalidate E2E transforms while preserving unrelated unit transforms. Shared compiler, helper, dependency, and schema inputs retain their invalidation. Generations exclude the generated `.ci-harness` checkout so CI consumers and the protected warmer hash the same source inputs. Node bytecode caching remains enabled for ordinary Vitest runs; Vitest owns the worker-level coverage safeguard described in [local testing](/reference/test/local#core-commands).
 
-Transform keys also include each project's dependency optimizer directory. This
-prevents cached UI imports from mixing separate projects' Lit instances when a
-focused run and a full run share the persistent cache.
+Transform keys also include each project's dependency optimizer directory because
+cached imports embed project-specific optimized dependency paths. This prevents
+focused and full runs that share the persistent cache from reusing transforms
+that point into another project's optimizer cache.
 
 Linux PR tests use Bun for compatible unit lanes and Control UI Vitest selections.
 Audited synchronous unit-fast tests can use Bun's native runner; changed test or
