@@ -34,7 +34,6 @@ import {
 import type { SqliteStagingToken as SnapshotToken } from "./sqlite-staging-token.js";
 
 const currentAgeMs = 15 * 60 * 1000;
-const reclamationByteBudget = 512 * 1024 * 1024;
 
 export function sqliteSnapshotStagingParent(root: string): string | undefined {
   const parent = path.basename(root) === "openclaw" ? path.dirname(root) : root;
@@ -79,12 +78,10 @@ export function* reclaimAbandonedSqliteSnapshots(
     return;
   }
   try {
-    let admittedBytes = 0;
-    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
-      if (admittedBytes >= reclamationByteBudget) {
-        report("Stopped SQLite snapshot reclamation: byte budget exhausted for this pass.");
-        break;
-      }
+    // The worker already stops at directory boundaries on cancellation or deadline.
+    // A byte cap can starve large copies behind newly abandoned smaller ones.
+    using entries = fs.opendirSync(root);
+    for (let entry = entries.readSync(); entry; entry = entries.readSync()) {
       const legacy = legacyMarker.test(entry.name);
       if (!entry.isDirectory() || !isStagingName(entry.name)) {
         continue;
@@ -96,12 +93,6 @@ export function* reclaimAbandonedSqliteSnapshots(
           cutoff: Date.now() - (legacy ? legacyAgeMs : currentAgeMs),
         });
         const { bytes } = retirement;
-        // Admit one oversized directory before spending the pass budget; otherwise
-        // interrupted multi-gigabyte copies can never be reclaimed.
-        if (admittedBytes > 0 && bytes > reclamationByteBudget - admittedBytes) {
-          throw new Error("Snapshot reclamation byte budget exhausted for this pass");
-        }
-        admittedBytes += bytes;
         retireSqliteSnapshotPayload(retirement);
         const claimed = path.join(
           root,

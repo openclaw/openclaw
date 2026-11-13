@@ -380,17 +380,17 @@ retirement is committed before handles close so a late worker cannot restart it.
 The Gateway schedules abandoned-copy reclamation after startup, once foreground
 root work is idle, then revisits every 15 minutes after a completed pass. Each
 pass yields to foreground work and rechecks ownership and age, so copies skipped
-as recent or over budget can become eligible without restarting the Gateway.
+as recent can become eligible without restarting the Gateway.
 Snapshot allocation only creates and registers its own token;
 neither synchronous nor asynchronous allocation waits for a reclamation pass.
 Reclamation runs in a SQLite worker, keeping directory traversal and removal off
 the Gateway event loop, and logs the copied-data byte count. Concurrent cleanup
 requests for one root share a pass. Reclamation requires verifiable inactive
 owner and worker tokens, applies a 15-minute grace period to current staging
-directories, and uses a 512 MiB copied-byte budget per pass. The first reclaimed
-directory may exceed that budget, after the same ownership and age checks; the
-pass then stops, so oversized interrupted copies can make progress one at a time.
-Active, recent, over-budget, or
+directories. The sweep streams entries and can reclaim large copies after smaller
+ones in the same pass. Recognized payloads include fs-safe's
+`.fs-safe-<UUID>.tmp` publication files left by interrupted copies.
+Active, recent, or
 structurally unknown directories remain untouched. Shutdown and the existing
 reclamation deadline stop at directory boundaries, after removal and token
 release settle together. Reclamation worker failures warn without preventing

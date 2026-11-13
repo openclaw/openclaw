@@ -355,37 +355,29 @@ it.each(["sync", "async"] as const)(
   },
 );
 
-it("reclaims one oversized abandoned snapshot per pass without starving the next pass", () => {
+it("reclaims oversized snapshots and an interrupted nested publication in one pass", () => {
   const { cache } = createFixture();
-  const abandoned = Array.from({ length: 2 }, () => {
-    const directory = createSqliteSnapshotStagingDirectorySync(cache);
-    const payload = path.join(directory, "database.sqlite");
-    fs.closeSync(fs.openSync(payload, "w", 0o600));
-    fs.truncateSync(payload, 512 * 1024 * 1024 + 1);
-    releaseSnapshotTempDirectory(directory);
-    ageSnapshotTree(directory);
-    return directory;
-  });
-  const reports: string[] = [];
-  try {
-    for (const _ of reclaimAbandonedSqliteSnapshots(cache, (message) => {
-      reports.push(message);
-    })) {
-      // Drain the bounded reclamation pass.
-    }
-    expect(abandoned.filter((directory) => fs.existsSync(directory))).toHaveLength(1);
-    expect(reports).toContain(
-      `Reclaimed ${512 * 1024 * 1024 + 1} bytes of interrupted SQLite snapshot data.`,
-    );
-    for (const _ of reclaimAbandonedSqliteSnapshots(cache, () => {})) {
-      // A new pass must make progress on the remaining oversized directory.
-    }
-    expect(abandoned.some((directory) => fs.existsSync(directory))).toBe(false);
-  } finally {
-    for (const directory of abandoned) {
-      removeTempDirectory(directory);
-    }
+  const small = path.join(cache, "openclaw-sqlite-readonly-v2-Aaaaaa");
+  const large = path.join(cache, "openclaw-sqlite-readonly-v2-Bbbbbb");
+  const interrupted = path.join(cache, "openclaw-sqlite-readonly-v2-Cccccc");
+  const child = path.join(interrupted, "openclaw-sqlite-readonly-v2-Dddddd");
+  fs.mkdirSync(small);
+  fs.mkdirSync(large);
+  fs.mkdirSync(child, { recursive: true });
+  for (const directory of [small, large, interrupted, child]) {
+    fs.writeFileSync(path.join(directory, "owner.sqlite"), "");
   }
+  fs.writeFileSync(path.join(small, "database.sqlite"), "small");
+  for (const file of [
+    path.join(large, "database.sqlite"),
+    path.join(child, ".fs-safe-03b4546f-c812-43a1-a63a-afdd917a6f8a.tmp"),
+  ]) {
+    fs.closeSync(fs.openSync(file, "w"));
+    fs.truncateSync(file, 512 * 1024 * 1024 + 1);
+  }
+  ageSnapshotTree(cache);
+  Array.from(reclaimAbandonedSqliteSnapshots(cache, () => {}));
+  expect(fs.readdirSync(cache)).toEqual([]);
 });
 
 it("reclaims only legacy snapshots older than 24 hours", async () => {
