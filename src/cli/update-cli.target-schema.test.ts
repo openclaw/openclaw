@@ -409,6 +409,8 @@ describe("update-cli", () => {
         `Update refused: openclaw@9999.0.0 needs Node >=999.0.0, but this updater runs Node ${process.versions.node} at ${process.execPath}.`,
       ),
     );
+    // The owner's recovery steps stay visible beneath the refusal line.
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringMatching(/^\d+\. /u));
     expect(runtime.log).not.toHaveBeenCalledWith(
       expect.stringContaining("Failing check node-runtime"),
     );

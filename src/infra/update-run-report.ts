@@ -280,13 +280,13 @@ export function renderUpdateRunReport(
     (run.reason === "node-runtime-preflight" ||
       run.reason === "preflight-node-runtime-incompatible");
   const warnings = updateRunWarningMessages(run.steps).map((message) => `Warning: ${message}`);
-  // Prerequisite refusals change nothing and lead with one "Update refused: ..." line.
-  const refusalLine =
-    run.status === "failed" && isUpdatePrerequisiteRefusal(run.reason)
-      ? (opts.nextAction ?? run.origin.nextAction)
-          ?.split("\n")[0]
-          ?.match(/^Update refused: .+/u)?.[0]
+  // A fresh prerequisite refusal leads with its producer's refusal block: the problem line,
+  // then the owner's recovery steps. Saved records keep the historical-advice layout below.
+  const refusalBlock =
+    run.status === "failed" && isUpdatePrerequisiteRefusal(run.reason) && opts.nextAction
+      ? opts.nextAction.split("\n\n")[0]?.split("\n")
       : undefined;
+  const refusalLine = refusalBlock?.[0]?.match(/^Update refused: .+/u)?.[0];
   let headline: string;
   switch (run.status) {
     case "succeeded": {
@@ -554,10 +554,12 @@ export function renderUpdateRunReport(
   if (refusalLine) {
     // The terminal shows only the instruction; the saved report keeps every detail.
     const details = ["Details:", `Reason code: ${reason}`, ...lines, ...hints].join("\n");
+    const steps = refusalBlock?.slice(1) ?? [];
+    const lead = bounded([headline, ...steps].join("\n"), 1100);
     return {
       headline,
-      lines: [],
-      markdown: `${headline}\n\n${bounded(details, markdownLimit - headline.length - 2)}`,
+      lines: steps,
+      markdown: `${lead}\n\n${bounded(details, markdownLimit - lead.length - 2)}`,
     };
   }
   if (runtimeCheckFailed || run.reason === "doctor-maintenance-pending") {
