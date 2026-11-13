@@ -14,6 +14,16 @@ title: "Install"
 - **macOS, Linux, or Windows** - Windows users can start with the native Windows Hub app, the PowerShell CLI installer, or a WSL2 Gateway. See [Windows](/platforms/windows).
 - `pnpm` is only needed if you build from source.
 
+<Note>
+Git installs (`--install-method git`) build from source. The current full-build
+guard requires at least a 4352 MiB Node heap, plus memory for native bundling and
+other build stages; a 4 GiB machine or container cannot meet the default budget.
+The roughly 4.7 GB runtime-bundling peak reported by the guard is not a total-memory
+guarantee for the entire build. On smaller hosts, use the default npm installer
+below, which installs prebuilt OpenClaw JavaScript. For containers, increase the
+container memory limit; extra host RAM alone does not raise it.
+</Note>
+
 ## Download the desktop app
 
 Prefer a normal app download over the CLI? OpenClaw ships desktop companions:
