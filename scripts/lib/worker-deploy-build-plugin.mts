@@ -87,6 +87,18 @@ export function resolveWorkerDeployGeneratorInputs(rootDir = process.cwd()) {
 }
 
 /** Only named entries and build-owned chunks travel in the sealed worker archive. */
+/**
+ * Local runtime-only builds may skip the sealed worker deploy bundle, about half of the
+ * tsdown CPU. dist/worker/ then holds only the local process helpers, and preparing a
+ * worker bundle fails with "OpenClaw worker deploy artifact is missing". Declaration,
+ * package and release builds always produce it.
+ */
+export function shouldBuildWorkerDeployBundle(env: NodeJS.ProcessEnv = process.env) {
+  return (
+    env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD !== "1" || env.OPENCLAW_BUILD_WORKER_DEPLOY_BUNDLE !== "0"
+  );
+}
+
 export function isUnstagedWorkerDeployRuntimeArtifact(
   fileName: string,
   entrypoints: ReadonlySet<string>,

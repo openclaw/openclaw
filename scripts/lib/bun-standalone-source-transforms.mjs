@@ -36,6 +36,22 @@ function handler(plugin, name) {
   if (typeof hook.handler === "function" && !hook.filter) {
     return hook.handler;
   }
+  // Evaluate the filter shapes the build plugins declare, as Rolldown does natively.
+  const { id, code, ...unsupported } = hook.filter ?? {};
+  if (
+    typeof hook.handler === "function" &&
+    !Object.keys(unsupported).length &&
+    (id === undefined || id instanceof RegExp) &&
+    (code === undefined || typeof code === "string")
+  ) {
+    return function filtered(...args) {
+      const [source, moduleId] = name === "transform" ? args : [undefined, args[0]];
+      if ((id && !id.test(moduleId)) || (code !== undefined && !source.includes(code))) {
+        return undefined;
+      }
+      return hook.handler.apply(this, args);
+    };
+  }
   throw new Error(`Unsupported standalone source hook ${plugin.name}.${name}`);
 }
 

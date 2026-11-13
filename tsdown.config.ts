@@ -55,6 +55,7 @@ import { cacheTsdownRuntimeConfigs } from "./scripts/lib/tsdown-runtime-cache.mt
 import { rootRuntimeProcessDeclarationEntries } from "./scripts/lib/vitest-worker-declarations.mts";
 import {
   createWorkerDeployBuildPlugin,
+  shouldBuildWorkerDeployBundle,
   WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
 } from "./scripts/lib/worker-deploy-build-plugin.mts";
 import { buildPackageDistEntriesFromExports } from "./scripts/lib/workspace-package-entries.mts";
@@ -98,6 +99,9 @@ const workerDeployVersion = (
 ).version;
 const OUTPUT_SOURCE_MAPS = process.env.OUTPUT_SOURCE_MAPS === "1";
 const RUN_NODE_SKIP_DTS_BUILD = process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD === "1";
+const workerDeployEntries = shouldBuildWorkerDeployBundle()
+  ? Object.entries(runtimeProcessDeployManifest)
+  : [];
 const TSDOWN_DECLARATIONS = !RUN_NODE_SKIP_DTS_BUILD;
 const TSDOWN_PACKAGE_DECLARATIONS = TSDOWN_DECLARATIONS
   ? { tsconfig: "tsconfig.packages.json" }
@@ -1074,7 +1078,7 @@ const configs: UserConfig[] = [
     },
     false,
   ),
-  ...Object.entries(runtimeProcessDeployManifest).map(([name, entry]) =>
+  ...workerDeployEntries.map(([name, entry]) =>
     workerDeployBuildConfig(
       {
         ["worker/" + name]: entry.source,
