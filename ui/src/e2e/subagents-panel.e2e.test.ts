@@ -589,6 +589,14 @@ suite.define(() => {
           .filter({ has: page.getByText(child.label, { exact: true }) })
           .waitFor();
         await expect.poll(() => panel.locator(".subagents-desktop__row").count()).toBe(5);
+        const adjacentRoots = panel
+          .locator(
+            '.subagents-desktop__row[data-depth="0"]:has(+ .subagents-desktop__row[data-depth="0"])',
+          )
+          .first();
+        expect(
+          await adjacentRoots.evaluate((root) => getComputedStyle(root, "::after").content),
+        ).toBe('""');
         await panel
           .locator(`[data-group="waiting"][data-session-key="${queued.key}"]`)
           .getByText("Queued", { exact: true })

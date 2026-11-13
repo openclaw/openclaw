@@ -4,6 +4,7 @@ import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
 import { canRetryGatewayStatus } from "../../../components/gateway-status.ts";
 import { PersonAvatarLink } from "../../../components/person-activity-link-solid.tsx";
 import { personActivityLink } from "../../../components/person-activity-link.ts";
+import { IconButton } from "../../../components/solid/icon-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { MobileNavToggle } from "../../../components/solid/mobile-nav-toggle.tsx";
 import { renderSessionOwnerChip } from "../../../components/solid/session-presentation.tsx";
@@ -159,7 +160,7 @@ function ChatPaneHeaderChrome(
         "chat-pane__header",
         {
           "chat-pane__header--mobile": props.mergedChrome,
-          "chat-pane__header--agent": Boolean(props.agent),
+          "chat-pane__header--agent": Boolean(props.agent) && props.mergedChrome,
           "chat-pane__header--closable": props.onClosePane !== undefined,
           "chat-pane__header--stacked-status":
             props.narrow &&
@@ -184,8 +185,7 @@ function ChatPaneHeaderChrome(
             />
           </openclaw-tooltip>
         </Show>
-        {/* Roster mode has no session crumbs beside the agent pill; rename still edits inline. */}
-        <Show when={!props.agent || props.editing}>
+        <Show when={!props.agent || !props.mergedChrome || props.editing}>
           <IdentityCrumbs {...props} />
         </Show>
         <Show when={!props.mergedChrome}>
@@ -260,7 +260,7 @@ function ChatPaneHeaderChrome(
           {(placement) => <ChatPanePlacement {...placement()} />}
         </Show>
       </div>
-      <Show when={props.agent}>
+      <Show when={props.mergedChrome ? props.agent : undefined}>
         {(agent) => (
           <div class="chat-pane__header-agent">
             <AgentCrumb {...props} agent={agent()} />
@@ -372,13 +372,12 @@ function ChatPaneHeaderChrome(
               placement="bottom"
               prop:openOnClick={true}
             >
-              <button
-                type="button"
-                class="btn btn--ghost btn--icon chat-icon-btn chat-pane__incognito"
-                aria-label={t("sessionsView.incognitoLabel")}
-              >
-                <Icon name="incognito" />
-              </button>
+              <IconButton
+                class="chat-pane__incognito"
+                icon="incognito"
+                label={t("sessionsView.incognitoLabel")}
+                tooltip={false}
+              />
             </openclaw-tooltip>
           </Show>
           <Show when={!props.mergedChrome}>
@@ -431,41 +430,33 @@ function ChatPaneHeaderChrome(
           <Show
             when={!props.mergedChrome && !props.externalPanelsToggle && props.onToggleSidePanel}
           >
-            <openclaw-tooltip prop:content={t("chat.sessionHeader.panels")}>
-              <button
-                type="button"
-                class="btn btn--ghost btn--icon chat-icon-btn chat-pane__panels-toggle"
-                aria-label={t("chat.sessionHeader.panels")}
-                aria-expanded={
-                  props.sidebarLayout?.open === true && !props.sidebarLayout.expanded
-                    ? "true"
-                    : "false"
-                }
-                onClick={() => props.onToggleSidePanel?.()}
-              >
-                <Icon
-                  name={
-                    props.sidebarLayout?.open === true && !props.sidebarLayout.expanded
-                      ? "sessionPanelsActive"
-                      : "sessionPanels"
-                  }
-                />
-              </button>
-            </openclaw-tooltip>
+            <IconButton
+              size={28}
+              class="chat-pane__panels-toggle"
+              label={t("chat.sessionHeader.panels")}
+              icon={
+                props.sidebarLayout?.open === true && !props.sidebarLayout.expanded
+                  ? "sessionPanelsActive"
+                  : "sessionPanels"
+              }
+              aria-expanded={
+                props.sidebarLayout?.open === true && !props.sidebarLayout.expanded
+                  ? "true"
+                  : "false"
+              }
+              onClick={() => props.onToggleSidePanel?.()}
+            />
           </Show>
         </div>
         {/* Inactive panes hide session actions, but must keep their close control. */}
         <Show when={!props.mergedChrome && props.onClosePane}>
-          <button
-            type="button"
-            class="btn btn--ghost btn--icon chat-icon-btn chat-pane__close"
-            aria-label={t("chat.splitView.closePane")}
-            title={t("chat.splitView.closePane")}
+          <IconButton
+            class="chat-pane__close"
+            icon="x"
+            label={t("chat.splitView.closePane")}
             disabled={props.actionsDisabled}
             onClick={() => props.onClosePane?.(props.paneId)}
-          >
-            <Icon name="x" />
-          </button>
+          />
         </Show>
       </div>
       <Show when={props.narrow && (props.mergedChrome || !props.detailsControl)}>

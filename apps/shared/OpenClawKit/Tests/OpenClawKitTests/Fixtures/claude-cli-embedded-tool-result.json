@@ -1,0 +1,56 @@
+{
+  "messages": [
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "toolcall",
+          "id": "wire-call",
+          "name": "mcp__openclaw__exec",
+          "caller": {
+            "type": "direct"
+          },
+          "arguments": {
+            "command": "printf output",
+            "title": "Read output"
+          }
+        },
+        {
+          "tool_use_id": "wire-call",
+          "type": "tool_result",
+          "content": [
+            {
+              "type": "text",
+              "text": "Recorded output"
+            }
+          ],
+          "name": "mcp__openclaw__exec"
+        }
+      ],
+      "timestamp": 1793688831024,
+      "__openclaw": {
+        "id": "wire-message",
+        "importedFrom": "claude-cli"
+      }
+    }
+  ],
+  "activity": [
+    {
+      "messageId": "wire-message",
+      "items": [
+        {
+          "itemId": "tool:wire-call",
+          "toolCallId": "wire-call",
+          "name": "mcp__openclaw__exec",
+          "kind": "tool",
+          "phase": "end",
+          "title": "Exec Read output",
+          "summary": "Outcome unknown",
+          "meta": "printf output",
+          "commandBearing": true
+        }
+      ]
+    }
+  ],
+  "sessionKey": "main"
+}

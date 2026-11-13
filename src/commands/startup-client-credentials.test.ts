@@ -28,12 +28,12 @@ import {
   loadOrCreateDeviceIdentity,
 } from "../infra/device-identity.js";
 import { listDirectoryTreeStrictSync } from "../infra/directory-walk.js";
-import { ExecApprovalsMigrationRequiredError } from "../infra/exec-approvals-migration-gate.js";
 import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
 import {
   acquireGatewayStateOwner,
   GatewayStateOwnerContentionError,
 } from "../infra/gateway-state-owner.js";
+import { readStartupMigrationWarning } from "../infra/state-migrations.messages.js";
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
@@ -176,7 +176,7 @@ describe("automatic client credential preparation", () => {
     { filename: "identity/node-device-auth.json", claim: "auth:node", kind: "auth" },
     { filename: "exec-approvals.json", claim: undefined, kind: "approvals" },
   ] as const)(
-    "preserves all files before refusing malformed required $kind",
+    "preserves malformed $kind without importing it",
     async ({ filename, claim, kind }) => {
       const fixture = await bootstrap();
       if (claim) {
@@ -192,11 +192,15 @@ describe("automatic client credential preparation", () => {
       fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
       fs.writeFileSync(sourcePath, '{"retiredCredential":"preserve for recovery"}');
       const before = snapshotFiles(fixture.root);
-      await expect(fixture.prepare({ config: {} })).rejects.toThrow(
-        kind === "approvals"
-          ? ExecApprovalsMigrationRequiredError
-          : ClientCredentialMigrationRequiredError,
-      );
+      if (kind === "approvals") {
+        await expect(fixture.prepare({ config: {} })).resolves.toBeUndefined();
+        expect(readStartupMigrationWarning()).toContain("legacy-exec-approvals-invalid");
+        expect(readStartupMigrationWarning()).not.toContain("preserve for recovery");
+      } else {
+        await expect(fixture.prepare({ config: {} })).rejects.toThrow(
+          ClientCredentialMigrationRequiredError,
+        );
+      }
       expect(snapshotFiles(fixture.root)).toEqual(before);
     },
   );

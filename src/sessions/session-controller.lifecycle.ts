@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
+import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { assertAgentInitializationCompleteInWorker } from "../config/sessions/agent-initialization.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import type { GatewayContextResolver } from "../gateway/server-methods/types.js";
 import { getAgentRunLifecycleGeneration } from "../infra/agent-run-registry.js";
@@ -34,6 +36,7 @@ import { assertAgentControllerAdmissionOpen } from "./session-controller.lifecyc
 import {
   createLifecycleDiagnosticOperation,
   type SessionLifecycleDiagnosticLabel,
+  type SessionLifecycleDiagnosticWaitDurations,
 } from "./session-controller.lifecycle-diagnostics.js";
 import {
   runAfterRetiringSessionSources,
@@ -124,6 +127,7 @@ export async function runSessionMutation<T>(
   params: {
     requiredSessionId?: string;
     diagnosticLabel?: SessionLifecycleDiagnosticLabel;
+    diagnosticSubphaseDurationsMs?: Readonly<SessionLifecycleDiagnosticWaitDurations>;
     prepare?: (owner: {
       closeWorkAdmissions: (reason: Error) => void;
       operations: readonly ReplyOperation[];
@@ -210,6 +214,7 @@ export async function runSessionMutation<T>(
       targets.flatMap((target) => target.aliases.map((alias) => `${target.storeScope}\0${alias}`)),
     signal,
     mutationKind: params.diagnosticLabel ?? params.kind,
+    subphaseDurationsMs: params.diagnosticSubphaseDurationsMs,
   });
   const mutation: Mutation = {
     diagnostic,
@@ -635,6 +640,13 @@ export async function beginSessionEffect(
             await params.revalidateAllowed();
           } else {
             await params.assertAllowed?.(signal);
+          }
+          if (effect.agent && params.run) {
+            await assertAgentInitializationCompleteInWorker(
+              getRuntimeConfigSnapshot() ?? {},
+              effect.agent.agentId,
+              () => signal.throwIfAborted(),
+            );
           }
         });
         signal.throwIfAborted();

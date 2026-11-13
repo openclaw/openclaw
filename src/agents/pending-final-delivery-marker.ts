@@ -20,7 +20,6 @@ export type PendingFinalDeliverySource = Readonly<
 
 type PersistPendingFinalDeliveryMarkerParams = {
   admittedSource?: PendingFinalDeliverySource;
-  compactionTransitions?: readonly SessionAdmissionTransition[];
   agentId: string;
   deliver: boolean;
   sessionStore?: Record<string, SessionEntry>;
@@ -74,26 +73,7 @@ export async function persistPendingFinalDeliveryMarker(
   params.assertCurrent?.();
   const sessionKey = resolveSqliteSessionKey(params.sessionKey, params.agentId);
   const now = Date.now();
-  let admitted = params.admittedSource;
-  for (const transition of params.compactionTransitions ?? []) {
-    if (
-      !admitted ||
-      transition.previous?.sessionId !== admitted.sessionId ||
-      transition.previous.lifecycleRevision !== admitted.lifecycleRevision
-    ) {
-      admitted = undefined;
-      break;
-    }
-    admitted = { ...admitted, ...transition.current };
-  }
-  if (params.admittedSource && !admitted) {
-    return {
-      sessionEntry: params.sessionEntry,
-      pendingFinalDeliveryMarkerPersisted: false,
-      hasSendableFinalPayload,
-    };
-  }
-  const expected = admitted ?? entry;
+  const expected = params.admittedSource ?? entry;
   const intentId = randomUUID();
   const deliveryId = randomUUID();
   const persisted = await applySessionEntryReplacements<SessionEntry | undefined>({

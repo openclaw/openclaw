@@ -63,6 +63,7 @@ describe("buildSandboxCreateArgs", () => {
       );
       for (const docker of [config.docker, resolveSandboxBrowserDockerCreateConfig(config)]) {
         expect(valuesForFlag(build(docker).argv, "--pids-limit")).toEqual([expected]);
+        expect(valuesForFlag(build(docker).argv, "--ulimit")).toEqual(["core=0"]);
       }
     },
   );
@@ -95,7 +96,8 @@ describe("buildSandboxCreateArgs", () => {
   });
 
   it.each([
-    [{ tmpfs: ["/tmp"] }, "--tmpfs", ["/tmp"]],
+    [{ tmpfs: ["/tmp"] }, "--tmpfs", ["/tmp:size=1g"]],
+    [{ tmpfs: ["/tmp:size=64m,mode=1777"] }, "--tmpfs", ["/tmp:size=64m,mode=1777"]],
     [{ user: "1000:1000" }, "--user", ["1000:1000"]],
     [{ capDrop: ["ALL"] }, "--cap-drop", ["ALL"]],
     [{ memory: "512m" }, "--memory", ["512m"]],

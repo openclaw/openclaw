@@ -132,7 +132,7 @@ describe("repository environment preparation", () => {
       captureRequired: true,
       preparedWorkspace: { cacheKey: prepared.cacheKey },
     });
-    expect(refreshedResult.recipePreparation!.phaseDurationsMs).toEqual({
+    expect(refreshedResult.recipePreparation!.phaseDurationsMs).toMatchObject({
       updateContent: expect.any(Number),
     });
     await expectFiles(prepared.workspaceDir, {
@@ -217,11 +217,13 @@ describe("repository environment preparation", () => {
     await expect(operation.project.prepare({ ...f, recordRecipePreparation })).rejects.toThrow(
       "Prepared project setup failed: exit 7: declared-error",
     );
-    expect(recordRecipePreparation).toHaveBeenCalledWith({
-      source: "devcontainer",
-      phaseDurationsMs: { onCreate: expect.any(Number) },
-      failure: { reason: "Prepared project setup failed: exit 7", outputTail: "declared-error" },
-    });
+    expect(recordRecipePreparation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "devcontainer",
+        phaseDurationsMs: expect.objectContaining({ onCreate: expect.any(Number) }),
+        failure: { reason: "Prepared project setup failed: exit 7", outputTail: "declared-error" },
+      }),
+    );
     const workspace = path.join(
       f.home,
       ".openclaw-worker",

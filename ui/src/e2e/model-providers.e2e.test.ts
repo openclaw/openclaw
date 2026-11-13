@@ -560,7 +560,12 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         models: { providers: { openai: providerConfig("openai:manual-api-key") } },
       };
       await resolveConfigMutation(gateway, keyedConfig, "model-providers-hash-key", "openai");
-      await expect.poll(async () => openaiCard.textContent()).toContain("API key saved.");
+      // The saved key is checked right away with the same probe as Test access.
+      await expect
+        .poll(async () => openaiCard.textContent())
+        .toContain("API key saved and verified.");
+      const probeCount = (await gateway.getRequests("models.probe")).length;
+      expect(probeCount).toBe(1);
 
       await gateway.deferNext("models.probe");
       const testConnection = openaiCard.getByRole("button", {
@@ -569,7 +574,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       });
       await testConnection.focus();
       await page.keyboard.press("Enter");
-      const probe = await gateway.waitForRequest("models.probe");
+      const probe = await gateway.waitForRequest("models.probe", { after: probeCount });
       expect(probe.params).toEqual({ provider: "openai", agentId: "main" });
       const testing = openaiCard.getByRole("button", { name: "Testing…: OpenAI", exact: true });
       await expect.poll(() => testing.isDisabled()).toBe(true);
@@ -847,11 +852,14 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       await gateway.setMethodResponse("models.list", {
         models: [catalogModel("openai", "reconnected-model", "Reconnected Model")],
       });
-      const authRequestCount = (await gateway.getRequests("models.authStatus")).length;
+      // The rail retains its main-agent scope while Settings follows Writer.
+      const authScope = { agentId: "writer" };
+      const authRequestCount = (await gateway.getRequests("models.authStatus", authScope)).length;
       await gateway.closeLatest(1012, "model provider reconnect proof");
-      await expect
-        .poll(async () => (await gateway.getRequests("models.authStatus")).length)
-        .toBeGreaterThan(authRequestCount);
+      await gateway.waitForRequest("models.authStatus", {
+        after: authRequestCount,
+        match: authScope,
+      });
       await expect
         .poll(() =>
           modelPickerValue(
@@ -866,21 +874,17 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       await expect
         .poll(async () => (await agentPicker.locator(".agent-select__label").textContent())?.trim())
         .toBe("Writer");
-      for (const request of (await gateway.getRequests("models.authStatus")).slice(
-        authRequestCount,
-      )) {
-        expect(request.params).toEqual(expect.objectContaining({ agentId: "writer" }));
-      }
       if (recordVisuals) {
         await captureProviderProof("06-reconnected-model.png", primary);
       }
 
-      const accessChangeAuthCount = (await gateway.getRequests("models.authStatus")).length;
+      const accessAuthCount = (await gateway.getRequests("models.authStatus", authScope)).length;
       await gateway.setOperatorScopes(["operator.read"]);
       await gateway.closeLatest(1012, "model provider access-change proof");
-      await expect
-        .poll(async () => (await gateway.getRequests("models.authStatus")).length)
-        .toBeGreaterThan(accessChangeAuthCount);
+      await gateway.waitForRequest("models.authStatus", {
+        after: accessAuthCount,
+        match: authScope,
+      });
       await expect.poll(() => page.getByRole("alert").count()).toBe(0);
       await primary.locator(".picker-select__trigger").click();
       const readOnlyModel = primary.locator(

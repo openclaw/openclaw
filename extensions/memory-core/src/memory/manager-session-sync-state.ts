@@ -1,5 +1,5 @@
 import type {
-  SessionFileEntry,
+  SessionEntrySummary,
   SessionFileState,
   SessionTranscriptCorpusEntry,
 } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
@@ -18,7 +18,7 @@ export function isMemorySessionIndexable(
     "generatedByDreamingNarrative" | "generatedByCronRun" | "sessionKind"
   > &
     Partial<Pick<SessionTranscriptCorpusEntry, "sessionId" | "sessionKey" | "pluginOwnerId">> &
-    Partial<Pick<SessionFileEntry, "lineProvenance">>,
+    Partial<Pick<SessionEntrySummary, "lineOriginClasses">>,
   archivedSessionKey?: string,
 ): boolean {
   return !(
@@ -36,9 +36,9 @@ export function isMemorySessionIndexable(
       (isDreamingNarrativeSessionStoreKey(archivedSessionKey) ||
         isCronRunSessionKey(archivedSessionKey) ||
         archivedSessionKey.endsWith(":heartbeat"))) ||
-    (entry.lineProvenance !== undefined &&
-      entry.lineProvenance.length > 0 &&
-      entry.lineProvenance.every((line) => line.originClass === "system"))
+    (entry.lineOriginClasses !== undefined &&
+      entry.lineOriginClasses.length > 0 &&
+      entry.lineOriginClasses.every((originClass) => originClass === "system"))
   );
 }
 

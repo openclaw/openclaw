@@ -40,7 +40,6 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
-import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   resolveDefaultSlackAccountId,
   resolveSlackAccount,
@@ -62,6 +61,7 @@ import { formatSlackError } from "./errors.js";
 import { shouldSuppressLocalSlackExecApprovalPrompt } from "./exec-approvals.js";
 import { resolveSlackGroupRequireMention, resolveSlackGroupToolPolicy } from "./group-policy.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
+import { slackMentionAdapter } from "./mention-adapter.js";
 import { SLACK_PRESENTATION_CAPABILITIES } from "./presentation.js";
 import type { SlackProbe } from "./probe.js";
 import { normalizeSlackReplyPayload, resolveSlackReplyBlocks } from "./reply-blocks.js";
@@ -662,17 +662,7 @@ export const slackPlugin = createChatChannelPlugin<ResolvedSlackAccount, SlackPr
         });
       },
     },
-    mentions: {
-      stripPatterns: ({ ctx }) => {
-        const preparedPatterns = ctx.ChannelContext?.chat?.mentionStripPatterns;
-        const exactPatterns = Array.isArray(preparedPatterns)
-          ? preparedPatterns.flatMap((pattern) =>
-              typeof pattern === "string" ? [escapeRegExp(pattern)] : [],
-            )
-          : [];
-        return [...exactPatterns, "<@[^>\\s]+>"];
-      },
-    },
+    mentions: slackMentionAdapter,
   },
   pairing: {
     idLabel: "slackUserId",

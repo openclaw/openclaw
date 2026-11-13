@@ -16,6 +16,7 @@ import {
   requestSqliteWorkerOperationAdmission,
   type SqliteWorkerBackend,
   type SqliteWorkerCommand,
+  type SynchronousSqliteCallback,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { MAX_FRAMES_PER_CALL, pickKeyframeId } from "./analyze.js";
 import { isLogbookWriteOperation } from "./store-contract.js";
@@ -35,7 +36,10 @@ import type { LogbookBatch, LogbookCard, LogbookFrame, LogbookObservation } from
 const WRITE_BATCH_SIZE = 64;
 const FRAME_PRUNE_BATCH_SIZE = 64;
 
-function runAdmittedTransaction<T>(db: EngineConnection, operation: () => T): T {
+function runAdmittedTransaction<T>(
+  db: EngineConnection,
+  operation: SynchronousSqliteCallback<T>,
+): T {
   requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
   return runSqliteImmediateTransactionSync(db, operation, {
     withCommit(commit) {
@@ -267,7 +271,7 @@ class LogbookDatabaseStore {
     }
   }
 
-  private runTransaction<T>(operationLabel: string, operation: () => T): T {
+  private runTransaction<T>(operationLabel: string, operation: SynchronousSqliteCallback<T>): T {
     return runSqliteImmediateTransactionSync(this.db, operation, {
       busyTimeoutMs: LOGBOOK_SQLITE_BUSY_TIMEOUT_MS,
       databaseLabel: "logbook",

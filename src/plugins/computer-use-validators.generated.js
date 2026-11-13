@@ -272,7 +272,10 @@ function SomeAll(value, callback) {
   );
 }
 function Counted(value, callback) {
-  return value.reduce((result, value2, index) => (callback(value2, index) ? ++result : result), 0);
+  return value.reduce(
+    (result, value2, index) => (callback(value2, index) ? result + 1 : result),
+    0,
+  );
 }
 function ShiftLeft(array, true_, false_) {
   return IsEqual(array.length, 0) ? false_() : true_(array[0], array.slice(1));

@@ -77,6 +77,7 @@ type CiManifestFixtureOptions = {
   publishedDriverUpdateCapability?: boolean;
   changedPaths?: string[] | null;
   checkFamilyScope?: boolean;
+  checkPlanSource?: string;
   ciLintPlan?: Awaited<ReturnType<typeof createChangedCiLintPlan>>;
   ciTypeGraphNames?: string[];
   ciTypeBoundaryFailure?: boolean;
@@ -177,6 +178,10 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
       selectedTargetFiles.delete(missing);
     }
     writeFixtures(selectedTargetFiles);
+    writeFixture(
+      "scripts/ci-changed-scope.mjs",
+      reexport("hasMlxNativeProofInputs", "scripts/ci-changed-scope.mjs"),
+    );
     if (options.bunTestRuntime) {
       const inspection = options.nativeBunInspection;
       writeScript(
@@ -314,6 +319,7 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
     if (options.changedCoreTestSupport) {
       copyFixtures([
         "scripts/changed-lanes.mts",
+        "scripts/lib/windows-test-targets.mts",
         "scripts/lib/changed-path-facts.mjs",
         "scripts/lib/release-changelog.mjs",
         "scripts/lib/arg-utils.mts",
@@ -328,7 +334,10 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
       ]);
     }
     if (options.checkFamilyScope) {
-      copyFixture("scripts/ci-check-plan.mts");
+      writeFixture(
+        "scripts/ci-check-plan.mts",
+        options.checkPlanSource ?? readFileSync("scripts/ci-check-plan.mts"),
+      );
       writeScript(
         "ci-check-family-scope.mts",
         reexport("resolveCiCheckFamilyScope", "scripts/lib/ci-check-family-scope.mts"),
@@ -350,7 +359,7 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
       if (!options.changedCoreTestSupport) {
         writeFixture(
           "scripts/changed-lanes.mts",
-          reexport("detectChangedLanes", "scripts/changed-lanes.mts"),
+          reexport("detectChangedLanes, detectChangedLanesForPaths", "scripts/changed-lanes.mts"),
         );
       }
       // Substitute the native compiler inventory, retaining canonical graph selection
@@ -501,6 +510,10 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
     }
     if (options.bundledPlanner) {
       writeScript(
+        "vitest-runtime-selection.mts",
+        reexport("resolveCiVitestWorkerPreset", "scripts/lib/vitest-runtime-selection.mts"),
+      );
+      writeScript(
         "ci-docker-seed-plan.mts",
         options.dockerSeedPlannerSource ??
           reexport(
@@ -574,7 +587,16 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
       ".ci-harness/scripts/ci-build-manifest.mjs",
       readFileSync(new URL("../../scripts/ci-build-manifest.mjs", import.meta.url)),
     );
-    for (const name of ["release-context.mjs", "release-version.mjs", "ci-ios-smoke-plan.mjs"]) {
+    for (const name of [
+      "release-context.mjs",
+      "release-version.mjs",
+      "ci-ios-smoke-plan.mjs",
+      "ci-blacksmith-capacity.mjs",
+      "ci-node-test-capacity.mts",
+      "vitest-shard-metadata.mts",
+      "ci-skills-python-plan.mjs",
+      "changed-path-facts.mjs",
+    ]) {
       copyFixture(`.ci-harness/scripts/lib/${name}`, `scripts/lib/${name}`);
     }
     copyFixture(

@@ -23,6 +23,7 @@ const activeFoundation = {
   outputModalities: ["TEXT"],
   responseStreamingSupported: true,
   modelLifecycle: { status: "ACTIVE" },
+  inferenceTypesSupported: ["ON_DEMAND"] as string[] | undefined,
 };
 
 function foundation(
@@ -36,9 +37,8 @@ function mockDiscovery(
   modelSummaries: Record<string, unknown>[],
   inferenceProfileSummaries: Record<string, unknown>[] = [],
 ): void {
-  sendMock
-    .mockResolvedValueOnce({ modelSummaries })
-    .mockResolvedValueOnce({ inferenceProfileSummaries });
+  sendMock.mockResolvedValueOnce({ modelSummaries });
+  sendMock.mockResolvedValueOnce({ inferenceProfileSummaries });
 }
 
 function profile(
@@ -120,9 +120,10 @@ beforeEach(() => {
   destroyMock.mockClear();
 });
 
-it("filters to active streaming text models and maps modalities", async () => {
+it("filters to active streaming on-demand text models and maps modalities", async () => {
   const models = await discoverFixture([
     foundation(undefined, { inputModalities: ["TEXT", "IMAGE"] }),
+    foundation("provisioned-only", { inferenceTypesSupported: ["PROVISIONED"] }),
     foundation("anthropic.claude-3-haiku-20240307-v1:0", {
       responseStreamingSupported: false,
     }),
@@ -271,9 +272,9 @@ it("aborts stalled Bedrock model discovery requests", async () => {
   }
 });
 
-it("discovers inference profiles and inherits foundation model capabilities", async () => {
+it("inherits profile capabilities from hidden foundations", async () => {
   const models = await discoverFixture(
-    [sonnetSummary()],
+    [{ ...sonnetSummary(), inferenceTypesSupported: ["INFERENCE_PROFILE"] }],
     [
       sonnetProfile("us", [sonnetId, `arn:aws:bedrock:us-west-2::foundation-model/${sonnetId}`]),
       sonnetProfile("global"),
@@ -282,11 +283,11 @@ it("discovers inference profiles and inherits foundation model capabilities", as
       }),
     ],
   );
-  expect(models).toHaveLength(3);
+  expect(models).toHaveLength(2);
   expect(models[0]?.id).toBe(`global.${sonnetId}`);
-  expectModel(models, sonnetId, { input: ["text", "image"] });
   expectModel(models, `us.${sonnetId}`, {
     name: "US Anthropic Claude Sonnet 4.6",
+    reasoning: true,
     input: ["text", "image"],
     contextWindow: 1000000,
     maxTokens: 4096,
@@ -407,7 +408,6 @@ it("resolves au. and apac. prefixes for regional inference profiles", async () =
   for (const prefix of ["au", "apac"]) {
     const id = `${prefix}.${sonnetId}`;
     expectModel(models, id, {
-      id,
       name: `${prefix.toUpperCase()} Anthropic Claude Sonnet 4.6`,
       input: ["text", "image"],
     });

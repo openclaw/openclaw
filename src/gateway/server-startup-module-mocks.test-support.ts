@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import * as updateStartup from "../infra/update-startup.js";
+import * as updateStartup from "../infra/update-startup-scheduler.js";
 import * as startupLog from "./server-startup-log.js";
 import * as updateSentinel from "./server-update-sentinel.js";
 import * as systemCa from "./system-ca-warmup.js";

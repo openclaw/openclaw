@@ -123,12 +123,12 @@ suite.define(() => {
         );
         await polledText(auth).toContain("long-account-name+siwc@example.test");
         await auth.waitFor({ state: "visible" });
+        await openai.click({ trial: true });
         const toggleContentsRight = await openai.evaluate((button) =>
           Math.max(...Array.from(button.children, (child) => child.getBoundingClientRect().right)),
         );
         const authBox = await auth.boundingBox();
         expect(toggleContentsRight).toBeLessThanOrEqual(authBox!.x);
-        await openai.click({ trial: true });
         await polledVisible(alpha).toBe(true);
         expect(await beta.isVisible()).toBe(false);
         expect(await openai.getAttribute("aria-expanded")).toBe("true");

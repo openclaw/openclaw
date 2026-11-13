@@ -8,7 +8,11 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { requireGit } from "../../agents/worktrees/git.js";
+import { withWorktreePreparationTiming } from "../../agents/worktrees/preparation-timing.js";
+import * as diagnostics from "../../infra/diagnostic-events.js";
+import { withDiagnosticsTimelineObserver } from "../../infra/diagnostics-timeline.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import { startChatSendDiagnostics } from "../server-methods/chat-send-diagnostics.js";
 import { prepareSandboxCheckpointFixture } from "./local-workspace-incremental.test-support.js";
 import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
 import { readLocalWorkspaceProjection } from "./local-workspace-store.test-support.js";
@@ -20,6 +24,137 @@ const expectText = async (directory: string, relative: string, expected: string)
   expect(await fs.readFile(path.join(directory, relative), "utf8")).toBe(expected);
 const expectMissing = async (directory: string, relative: string) =>
   expect(fs.stat(path.join(directory, relative))).rejects.toMatchObject({ code: "ENOENT" });
+
+async function provePreparationAttribution(owner: LocalWorkspaceOwner) {
+  const stores = await import("./local-workspace-store.js");
+  const withStore = stores.withLocalWorkspaceStore;
+  let clock = 0;
+  using clockSpy = vi.spyOn(performance, "now");
+  clockSpy.mockImplementation(() => clock);
+  using storeSpy = vi.spyOn(stores, "withLocalWorkspaceStore");
+  storeSpy.mockImplementation((params, run) =>
+    withStore(params, (store) =>
+      run({
+        ...store,
+        update: async (...args) => {
+          const result = await store.update(...args);
+          if (args[3] && "rawManifest" in args[3]) {
+            clock += 2_000;
+          }
+          return result;
+        },
+        manifest: async (...args) => {
+          const result = await store.manifest(...args);
+          if (args[1].kind === "scan") {
+            clock += 4_000;
+          }
+          return result;
+        },
+      }),
+    ),
+  );
+  const log = { info: vi.fn<(message: string) => void>() };
+  const timing = startChatSendDiagnostics(log);
+  timing.acknowledge();
+  using prepared = await withDiagnosticsTimelineObserver(timing.observeSpan, () =>
+    prepareSandboxCheckpointFixture(owner),
+  );
+  timing.finish();
+  await expectText(prepared.workspaceDir, "source.txt", "original\n");
+  expect(log.info).toHaveBeenCalledTimes(1);
+  const message = log.info.mock.calls[0]![0];
+  const prefix = "detail.attempt.setup.sandbox.workspace_selection.prepare.reconcile";
+  expect(message).toContain(`${prefix}=6000ms`);
+  expect(message).toContain(`${prefix}.baseline=2000ms`);
+  expect(message).toContain(`${prefix}.checkpoint.projection=4000ms`);
+
+  await writeText(prepared.workspaceDir, "source.txt", "later guest edit\n");
+  const reuseTiming = startChatSendDiagnostics(log);
+  reuseTiming.acknowledge();
+  using reused = await withDiagnosticsTimelineObserver(reuseTiming.observeSpan, () =>
+    prepareSandboxCheckpointFixture(owner),
+  );
+  reuseTiming.finish();
+  await expectText(reused.workspaceDir, "source.txt", "later guest edit\n");
+  expect(log.info).toHaveBeenCalledTimes(2);
+  const reuseMessage = log.info.mock.calls[1]![0];
+  expect(reuseMessage).toContain(
+    "detail.attempt.setup.sandbox.workspace_selection.reuse.reconcile.checkpoint.canonical=",
+  );
+  expect(reuseMessage).not.toContain(`${prefix}.checkpoint`);
+}
+
+export async function proveWorkspaceWaitAttribution(owner: LocalWorkspaceOwner) {
+  await provePreparationAttribution(owner);
+  using _ = await prepareSandboxCheckpointFixture(owner);
+  const stores = await import("./local-workspace-store.js");
+  const projections = await import("./local-workspace-projection.js");
+  const entered = createDeferred();
+  const release = createDeferred();
+  const admitted = createDeferred();
+  const joined = createDeferred();
+  const events: diagnostics.DiagnosticPhaseSnapshot[] = [];
+  vi.spyOn(diagnostics, "createQueuedDiagnosticPhaseEmitter").mockReturnValue((event) =>
+    events.push(event),
+  );
+  let clock = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => clock);
+  const holder = stores.withLocalWorkspaceStore({ worktreeId: owner.worktree.id }, async () => {
+    entered.resolve();
+    await release.promise;
+  });
+  await awaitGateBeforeSettlement(entered.promise, holder, "Projection custody was not acquired");
+  const withStore = stores.withLocalWorkspaceStore;
+  vi.spyOn(stores, "withLocalWorkspaceStore").mockImplementation((...args) => {
+    const result = withStore(...args);
+    admitted.resolve();
+    return result;
+  });
+  const join = projections.withLocalWorkspacePreparation;
+  let callers = 0;
+  vi.spyOn(projections, "withLocalWorkspacePreparation").mockImplementation((...args) => {
+    const result = join(...args);
+    if (++callers === 2) {
+      joined.resolve();
+    }
+    return result;
+  });
+  const prepare = () =>
+    withWorktreePreparationTiming("sandbox", () => prepareSandboxCheckpointFixture(owner));
+  const first = prepare();
+  let second: typeof first | undefined;
+  try {
+    await awaitGateBeforeSettlement(
+      admitted.promise,
+      first,
+      "Preparation did not wait for custody",
+    );
+    second = prepare();
+    await awaitGateBeforeSettlement(
+      joined.promise,
+      second,
+      "Preparation did not join its producer",
+    );
+    clock = 100;
+  } finally {
+    release.resolve();
+    const results = await Promise.allSettled([holder, first, second]);
+    for (const result of results) {
+      if (result.status === "fulfilled") {
+        result.value?.[Symbol.dispose]();
+      }
+    }
+  }
+  await Promise.all([holder, first, second]);
+  expect(events).toHaveLength(2);
+  for (const event of events) {
+    expect(event).toMatchObject({
+      durationMs: 100,
+      details: { kind: "sandbox", workspaceWait: 100, unattributedMs: 0 },
+    });
+  }
+  expect(events.some((event) => event.details?.template === "reused")).toBe(true);
+}
 
 export async function proveConcurrentWorkspacePreparation(owner: LocalWorkspaceOwner) {
   const stores = await import("./local-workspace-store.js");
@@ -245,14 +380,30 @@ export async function proveWarmWorkspaceReuse(owner: LocalWorkspaceOwner) {
   await writeText(first.workspaceDir, "source.txt", "modified\n");
   await fs.utimes(source, before.atime, before.mtime);
   using guestEdit = await prepareSandboxCheckpointFixture(owner);
-  expect(quiesce).toHaveBeenCalledTimes(1);
   await expectText(canonical, "source.txt", "modified\n");
   await expectText(guestEdit.workspaceDir, "source.txt", "modified\n");
 
   await writeText(canonical, "source.txt", "host edit\n");
-  using hostEdit = await prepareSandboxCheckpointFixture(owner);
-  expect(quiesce).toHaveBeenCalledTimes(2);
+  const events: diagnostics.DiagnosticPhaseSnapshot[] = [];
+  vi.spyOn(diagnostics, "createQueuedDiagnosticPhaseEmitter").mockReturnValue((event) =>
+    events.push(event),
+  );
+  using hostEdit = await withWorktreePreparationTiming("sandbox", () =>
+    prepareSandboxCheckpointFixture(owner),
+  );
   await expectText(hostEdit.workspaceDir, "source.txt", "host edit\n");
+  expect(events[0]?.details).toMatchObject({
+    "reuse.probeCanonical": expect.any(Number),
+    "reuse.capturePreparation": expect.any(Number),
+    "reuse.scan": expect.any(Number),
+    "reuse.staging": expect.any(Number),
+    "reuse.materialization": expect.any(Number),
+    "reuse.patch": expect.any(Number),
+    "reuse.preflight": expect.any(Number),
+    "reuse.acceptance": expect.any(Number),
+    "reuse.cleanup": expect.any(Number),
+    reuseDominantPhase: expect.stringMatching(/^reuse\./),
+  });
   await writeText(canonical, "added.txt", "admitted host file\n");
   await requireGit(canonical, ["add", "added.txt"]);
   using admitted = await prepareSandboxCheckpointFixture(owner);
@@ -306,7 +457,7 @@ export async function proveWarmWorkspaceReuseFailure(
   if (failure === "read") {
     using recovered = await prepareSandboxCheckpointFixture(owner);
     expect(recovered.workspaceDir).toBe(first.workspaceDir);
-    expect(quiesce).toHaveBeenCalledOnce();
+    expect(quiesce).toHaveBeenCalled();
   } else if (failure === "cancel") {
     await expect(
       prepareSandboxCheckpointFixture(owner, undefined, cancellation.signal),

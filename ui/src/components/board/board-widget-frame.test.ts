@@ -509,6 +509,61 @@ describe("board widget frame", () => {
       channel.port2.close();
     }
   });
+  it("shows link failure in the host strip without replacing the widget, and clears it on retry", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("<p>Saved widget</p>"));
+    const open = vi.spyOn(window, "open").mockImplementation(() => {
+      throw new Error("blocked");
+    });
+    const context = gatewayContext({ request: vi.fn() });
+    const { root, owner, frame } = mountFrame(
+      sandboxWidget(),
+      {
+        context: () => context,
+      },
+      true,
+    );
+    disposers.push(() => owner.disconnect());
+    owner.update();
+    const { notify, resourceReady } = sandboxMessages(frame);
+    notify({ method: "ui/notifications/sandbox-proxy-ready", params: { sandboxUrl: frame.src } });
+    const { renderId } = await resourceReady.promise;
+    notify({ method: "ui/notifications/sandbox-resource-loaded", params: { renderId } });
+    const channel = new MessageChannel();
+    disposers.push(() => channel.port2.close());
+    const initialized = createDeferred();
+    acknowledgeWidgetHostInit(channel.port2, initialized);
+    channel.port2.start();
+    notify({ type: "openclaw:widget-bridge-port-offer" }, [channel.port1]);
+    await initialized.promise;
+    const send = async (id: string) => {
+      const response = createDeferred();
+      const receive = (event: MessageEvent) => {
+        if (event.data.type === "openclaw:widget-bridge-response" && event.data.id === id) {
+          channel.port2.removeEventListener("message", receive);
+          response.resolve();
+        }
+      };
+      channel.port2.addEventListener("message", receive);
+      channel.port2.postMessage({
+        type: "openclaw:widget-bridge-request",
+        id,
+        method: "host.open",
+        params: { url: "https://example.com" },
+        ticket: "ticket",
+      });
+      await response.promise;
+    };
+    await send("failed");
+    await waitForSolid(() => expect(root.textContent).toContain("Couldn’t open this link"));
+    expect(root.querySelector("iframe")).toBe(frame);
+    expect(owner.error).toBe("");
+    await send("repeated-failure");
+    expect(root.querySelectorAll('[role="status"]')).toHaveLength(1);
+    open.mockReturnValue({} as Window);
+    await send("retry");
+    await waitForSolid(() => expect(root.textContent).not.toContain("Couldn’t open this link"));
+    expect(root.querySelector("iframe")).toBe(frame);
+  });
   it.each([
     { state: "expired", ttl: 0, delay: 0, hidden: false, due: 1_000 },
     { state: "hidden", ttl: 30_000, delay: 0, hidden: true, due: 1_000 },

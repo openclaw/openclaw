@@ -22,9 +22,15 @@ import { toErrorObject } from "../infra/errors.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { createHostIoPressureProbe } from "../infra/host-io-pressure.js";
 import {
+  cleanScratch,
+  closeScratchCleanupCursor,
+  type ScratchCleanupCursor,
+} from "../infra/scratch-cleanup.js";
+import {
   isGatewayWorkAdmissionClosed,
   runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { prepareScratchMaintenanceTargets } from "./scratch-maintenance-custody.js";
 import { sweepLocalWorkspaceManifests } from "./worker-environments/local-workspace-gc.js";
 
 type MaintenanceRequest = { jobId?: string; retryDeferred?: boolean };
@@ -76,6 +82,7 @@ export function startWorktreeMaintenance(params: {
   let receipt: ManagedWorktreeGcReceipt | undefined;
   let archivePending = false;
   let nextRemovalAt = 0;
+  const scratchCursor: ScratchCleanupCursor = {};
   const hasIoPressure = createHostIoPressureProbe();
   const isActive = () =>
     !scheduler.signal.aborted &&
@@ -94,7 +101,7 @@ export function startWorktreeMaintenance(params: {
         reject(toErrorObject(scheduler.signal.reason, "Worktree cleanup canceled"));
       scheduler.signal.addEventListener("abort", abort, { once: true });
       scheduler.schedule({
-        id: "maintenance:worktrees:resume",
+        id: `maintenance:worktrees:resume:${randomUUID()}`,
         delayMs,
         run: () => {
           scheduler.signal.removeEventListener("abort", abort);
@@ -229,31 +236,76 @@ export function startWorktreeMaintenance(params: {
             current.startedAt = scheduler.now();
             let batchStartedAt = scheduler.now();
             let batchItems = 0;
+            const beforeRemoval = async () => {
+              assertCurrent();
+              if (scheduler.now() < nextRemovalAt) {
+                await pause(nextRemovalAt - scheduler.now());
+              }
+              while (await hasIoPressure()) {
+                assertCurrent();
+                await pause(PRESSURE_BACKOFF_MS);
+              }
+              assertCurrent();
+              nextRemovalAt = scheduler.now() + REMOVAL_INTERVAL_MS;
+              batchStartedAt = scheduler.now();
+              batchItems = 0;
+            };
             // The scheduler already detaches this job and joins its tracked cleanup.
             // Preserve that work scope when admitting the maintenance root.
             return runWithGatewayIndependentRootWorkAdmission(
               async () => {
                 await previousDrain;
                 assertCurrent();
+                let scratchPressure = false;
+                try {
+                  scratchPressure = await hasIoPressure();
+                  const assertScratchCurrent = () => {
+                    assertCurrent();
+                    if (scratchPressure) {
+                      throw new Error("Scratch cleanup deferred: host IO pressure");
+                    }
+                  };
+                  assertScratchCurrent();
+                  const scratch = await prepareScratchMaintenanceTargets(config);
+                  try {
+                    current.scratch = await cleanScratch({
+                      targets: scratch.targets,
+                      now: scheduler.now(),
+                      assertCurrent: assertScratchCurrent,
+                      pause: async (milliseconds) => {
+                        await pause(milliseconds);
+                        scratchPressure = await hasIoPressure();
+                      },
+                      cursor: scratchCursor,
+                      signal: scheduler.signal,
+                      onProgress: (progress) => {
+                        current.scratch = progress;
+                      },
+                    });
+                  } finally {
+                    scratch.release();
+                  }
+                } catch (error) {
+                  assertCurrent();
+                  params.onError(`Scratch cleanup failed: ${String(error)}`);
+                }
+                for (const error of current.scratch?.errors ?? []) {
+                  params.onError(`Scratch cleanup deferred: ${error}`);
+                }
+                // Scratch consumes fresh commit counters; preserve their backoff for GC admission.
+                if (scratchPressure) {
+                  nextRemovalAt = Math.max(nextRemovalAt, scheduler.now() + PRESSURE_BACKOFF_MS);
+                }
                 const result = await managedWorktrees.gc({
                   ...createManagedWorktreeOwnerPolicy(config),
                   retryDeferred,
                   signal: scheduler.signal,
                   commitGuard: assertCurrent,
-                  beforeRemoval: async () => {
-                    assertCurrent();
-                    if (scheduler.now() < nextRemovalAt) {
-                      await pause(nextRemovalAt - scheduler.now());
-                    }
-                    while (await hasIoPressure()) {
-                      assertCurrent();
-                      await pause(PRESSURE_BACKOFF_MS);
-                    }
-                    assertCurrent();
-                    nextRemovalAt = scheduler.now() + REMOVAL_INTERVAL_MS;
-                    batchStartedAt = scheduler.now();
-                    batchItems = 0;
+                  beforeRemoval: async (record) => {
+                    await closeScratchCleanupCursor(scratchCursor, record.path);
+                    await beforeRemoval();
                   },
+                  beforeTemplateRemoval: beforeRemoval,
                   checkpoint: async (progress) => {
                     Object.assign(current, progress);
                     assertCurrent();
@@ -269,6 +321,7 @@ export function startWorktreeMaintenance(params: {
                 assertCurrent();
                 await sweepLocalWorkspaceManifests({ signal: scheduler.signal, assertCurrent });
                 assertCurrent();
+                result.scratch = current.scratch;
                 Object.assign(current, result);
                 params.onComplete(result);
                 current.state = "completed";
@@ -309,6 +362,7 @@ export function startWorktreeMaintenance(params: {
       warmPending.clear();
       // Aborting also wakes a paused batch before joining worker settlement.
       await scheduler.stop();
+      await closeScratchCleanupCursor(scratchCursor);
       await previousDrain;
       if (owners.get(params.getRuntimeConfig) === owner) {
         owners.delete(params.getRuntimeConfig);
@@ -316,9 +370,35 @@ export function startWorktreeMaintenance(params: {
     },
   };
   owners.set(params.getRuntimeConfig, owner);
+  // Cleanup can wait hours for paced removals or host pressure. Git owns its own
+  // lease, hourly deadline, and bounded backlog policy independently of that sweep.
+  scheduler.schedule({
+    id: "maintenance:worktrees:git",
+    delayMs: PRESSURE_BACKOFF_MS,
+    everyMs: PRESSURE_BACKOFF_MS,
+    phase: "maintenance",
+    run: () =>
+      runWithGatewayIndependentRootWorkAdmission(
+        async () => {
+          await previousDrain;
+          assertActive();
+          await managedWorktrees.maintainGit({
+            signal: scheduler.signal,
+            commitGuard: assertActive,
+            checkBacklog: true,
+          });
+        },
+        "runtime:worktree-git-maintenance",
+        scheduler.signal,
+      ).catch((error: unknown) =>
+        params.onError(`Worktree Git maintenance failed: ${String(error)}`),
+      ),
+  });
   scheduler.schedule({
     id: "maintenance:worktrees",
-    delayMs: WORKTREE_GC_INTERVAL_MS,
+    // The startup owner already waits for post-ready admission; do not lose an
+    // entire interval after each restart before reclaiming expired scratch.
+    delayMs: 0,
     everyMs: WORKTREE_GC_INTERVAL_MS,
     phase: "maintenance",
     run: () => {

@@ -536,19 +536,25 @@ it("refuses a retained beta validation before observing or completing it", () =>
 
 it.each([
   ["openclaw.full-release-dispatch/v2", "prepared", "intended", true],
+  ["openclaw.full-release-dispatch/v2", "prepared", "uncertain", true],
   ["openclaw.full-release-dispatch/v2", "prepared", "uncertain", false],
   ["openclaw.full-release-dispatch/v2", "attempted", "created", false],
   ["openclaw.full-release-dispatch/v1", "prepared", "intended", false],
 ] as const)(
-  "offers canonical resume only before Q mutation (%s/%s/%s)",
+  "relays only helper-verified recovery advice (%s/%s/%s)",
   (kind, phase, workflow, resume) => {
     const release = fixture(phaseState("validate"));
     const pending = request();
     pending.request = { ...pending.request!, kind, phase, refs: { workflow }, run: undefined };
-    pending.exit = 1;
+    pending.exit = resume ? 0 : 1;
+    const advice = resume
+      ? 'Qualification has not dispatched. Continue the same retained request with --resume-request "/private/frv-request.json"'
+      : "Prepared qualification transport already has workflow runs; do not dispatch";
+    pending.stdout = advice;
     const result = release.run([...validateSetup(), pending]);
     expect(result.status).toBe(2);
     expect(result.stderr).toContain("has no observed run");
+    expect(result.stderr).toContain(advice);
     expect(result.stderr).toContain("--reconcile-request");
     expect(result.stderr.includes("--resume-request")).toBe(resume);
     expect(pnpmCalls(result)).toHaveLength(1);

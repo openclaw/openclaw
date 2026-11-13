@@ -1,7 +1,10 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
+import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { expect, it, vi } from "vitest";
 import { buildCodexSelectedHistoryItems } from "./context-engine-history-items.js";
 import { isJsonObject, type JsonValue } from "./protocol.js";
@@ -101,10 +104,15 @@ async function runTurn(
   const offset = harness.requests.length;
   const run = runCodexAppServerAttempt({ ...params, runId });
   await run.waitForTurnAccepted();
-  await harness.completeTurn("completed", threadId);
-  await run;
   const requests = harness.requests.slice(offset);
   const turn = requests.find(({ method }) => method === "turn/start");
+  // Settle the actual thread before asserting identity, so wrong reuse fails without a timeout.
+  const acceptedThreadId = isJsonObject(turn?.params) ? turn.params.threadId : undefined;
+  await harness.completeTurn(
+    "completed",
+    typeof acceptedThreadId === "string" ? acceptedThreadId : threadId,
+  );
+  await run;
   expect(turn?.params).toMatchObject({ threadId });
   expect(JSON.stringify(turn?.params)).not.toContain("SELECTED_HISTORY");
   return requests;
@@ -113,10 +121,16 @@ async function runTurn(
 it.each([false, true])("prepares only fresh native history (engine: %s)", async (engine) => {
   const { params, assemble } = seedParams();
   delete params.authoredContextTokenCap;
+  params.agentDir = path.join(tempDir, "agent");
+  params.config = {
+    ...params.config,
+    agents: { defaults: { compaction: { maxActiveTranscriptBytes: "2mb" } } },
+  };
   if (!engine) {
     delete params.contextEngine;
   }
   const harness = selectedHarness();
+  const prepareContextMedia = vi.fn(async () => ({ images: [] }));
   const prepareBoundedSeed = vi.fn<
     NonNullable<EmbeddedRunAttemptParams["hostCapabilities"]["prepareBoundedSeed"]>
   >(async ({ assertCurrent, tokenBudget }) => {
@@ -139,21 +153,78 @@ it.each([false, true])("prepares only fresh native history (engine: %s)", async 
       },
     ];
   });
-  params.hostCapabilities = { ...params.hostCapabilities, prepareBoundedSeed };
+  params.hostCapabilities = { ...params.hostCapabilities, prepareBoundedSeed, prepareContextMedia };
   const first = await runTurn(params, harness, "lazy-seed");
   expect(prepareBoundedSeed).toHaveBeenCalledOnce();
   expect(JSON.stringify(selectedItems(first))).toContain("BOUNDED_SELECTED_HISTORY");
   expect(JSON.stringify(selectedItems(first)).split("Scheduled report ready.")).toHaveLength(2);
   expect(JSON.stringify(first)).not.toContain("Local delivery bookkeeping.");
+  // Image bytes remain in both mirrors after native compaction; they are not active tokens.
+  const image = { type: "image" as const, mimeType: "image/png", data: "A".repeat(2_100_000) };
+  const rolloutPath = path.join(
+    params.agentDir,
+    "codex-home",
+    "sessions",
+    "rollout-thread-selected-1.jsonl",
+  );
+  await fs.mkdir(path.dirname(rolloutPath), { recursive: true });
+  await fs.writeFile(
+    rolloutPath,
+    [
+      JSON.stringify({
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [
+            { type: "input_image", image_url: `data:${image.mimeType};base64,${image.data}` },
+          ],
+        },
+      }),
+      JSON.stringify({
+        type: "compacted",
+        payload: { message: "summary", replacement_history: [] },
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        payload: {
+          type: "token_count",
+          info: {
+            last_token_usage: { total_tokens: 12_000 },
+            total_token_usage: { total_tokens: 500_000 },
+            model_context_window: 500_000,
+          },
+        },
+      }),
+    ].join("\n"),
+  );
   assemble.mockResolvedValue({
-    messages: [userMessage(original.repeat(1_000), 1)],
+    messages: [{ ...userMessage(original, 1), content: [{ type: "text", text: original }, image] }],
     estimatedTokens: 20_000,
   });
-  const next = await runTurn(params, harness, "lazy-seed-next");
+  prepareContextMedia.mockClear();
+  for (const runId of ["image-follow-up", "image-follow-up-again"]) {
+    const next = await runTurn(params, harness, runId);
+    expect(selectedItems(next)).toEqual([]);
+    expect(next.some(({ method }) => method === "thread/start")).toBe(false);
+    expect(next.some(({ method }) => method === "thread/compact/start")).toBe(false);
+  }
+  await harness.client.closeAndWait();
+  const resumed = createStartedThreadHarness(
+    async (method) =>
+      method === "thread/resume" ? threadStartResult("thread-selected-1") : undefined,
+    { persistedThreads: [threadStartResult("thread-selected-1", { cwd: params.workspaceDir })] },
+  );
+  const cold = await runTurn(params, resumed, "image-after-restart");
+  expect(cold.some(({ method }) => method === "thread/resume")).toBe(true);
+  expect(cold.some(({ method }) => method === "thread/start")).toBe(false);
+  expect(cold.some(({ method }) => method === "thread/compact/start")).toBe(false);
+  expect(selectedItems(cold)).toEqual([]);
   expect(prepareBoundedSeed).toHaveBeenCalledOnce();
-  expect(selectedItems(next)).toEqual([]);
-  expect(next.some(({ method }) => method === "thread/start")).toBe(false);
-  expect(next.some(({ method }) => method === "thread/compact/start")).toBe(false);
+  expect(prepareContextMedia).not.toHaveBeenCalled();
+  await expect(readCodexAppServerBinding(params.sessionFile)).resolves.toMatchObject({
+    threadId: "thread-selected-1",
+  });
 });
 
 it("installs >1,048,576 characters in UTF-8-bounded quotes with ordered media before readiness", async () => {
@@ -413,5 +484,35 @@ it.each([undefined, 0, -1, Number.NaN, Infinity])(
       }),
     ).rejects.toThrow(/budget|allowance/i);
     expect(prepareFileContext).not.toHaveBeenCalled();
+  },
+);
+
+it.each([
+  ["keeps it when before_prompt_build replaces systemPrompt", true],
+  ["rejects it when the OpenClaw base stays", false],
+] as const)(
+  "budgets history just over the base-inclusive allowance: %s",
+  async (_case, replaced) => {
+    const { params, assemble } = seedParams();
+    // About 2.5k tokens of OpenClaw base and policy separate these two allowances.
+    params.authoredContextTokenCap = 40_000;
+    params.contextTokenBudget = 40_000;
+    assemble.mockResolvedValue({
+      messages: [userMessage(`REPLACED_BASE_HISTORY${"h".repeat(54_000)}`, 1)],
+      estimatedTokens: 13_500,
+    });
+    if (replaced) {
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          { hookName: "before_prompt_build", handler: () => ({ systemPrompt: "" }) },
+        ]),
+      );
+    }
+    const turn = runTurn(params, selectedHarness(), "replaced-base");
+    if (!replaced) {
+      await expect(turn).rejects.toThrow("exceed their rendered allowance");
+      return;
+    }
+    expect(JSON.stringify(selectedItems(await turn))).toContain("REPLACED_BASE_HISTORY");
   },
 );

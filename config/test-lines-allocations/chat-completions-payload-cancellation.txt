@@ -1,2 +1,0 @@
-# Direct/managed Chat Completions payload-hook cancellation and retained-work proof.
-71

@@ -814,7 +814,11 @@ export function createTsdownOutputScanner(params: { maxCaptureBytes?: number } =
 export function resolveTsdownBuildInvocation(
   params: TsdownBuildParams = {},
 ): TsdownBuildInvocation {
-  const env = resolveTsdownEnv(params.env ?? process.env, params);
+  const budget = resolveTsdownMemoryBudget(params);
+  const env = resolveTsdownEnv(params.env ?? process.env, {
+    ...params,
+    resolvedMemoryBudget: budget,
+  });
   const args = params.args ?? [];
   const forwardedArgs = wrapperOwnsTsdownCleanup(args)
     ? args.filter((arg) => arg !== "--clean" && !arg.startsWith("--clean="))
@@ -823,21 +827,30 @@ export function resolveTsdownBuildInvocation(
     (arg) => arg === "--concurrency" || arg.startsWith("--concurrency="),
   );
   const filters = readForwardedOptions(args, ["--filter", "-F"]);
+  const mainConfig = !args.some(isConfigArg) || selectsMainConfig(args);
   const runtimeOnly =
     !args.includes("--dts") &&
-    (!args.some(isConfigArg) || selectsMainConfig(args)) &&
+    mainConfig &&
     filters.length > 0 &&
     filters.every((filter) => filter === TSDOWN_UNIFIED_CONFIG_GROUP);
+  // Native allocations are outside the JS heap. Keep small runtime builds serial
+  // and declaration graphs serialized, regardless of which build entry point is used.
+  const defaultConcurrency =
+    !runtimeOnly && tsdownDeclarationsEnabled(args, env)
+      ? 1
+      : mainConfig
+        ? budget.maxOldSpaceMb >= DEFAULT_TSDOWN_MAX_OLD_SPACE_MB
+          ? 2
+          : 1
+        : null;
   const tsdownArgs = [
     "--config-loader",
     "unrun",
     "--logLevel",
     logLevel,
     "--no-clean",
-    // Native declaration children retain entire compiler graphs. Let tsdown own
-    // config admission so preparation and trace drainage cannot overlap unboundedly.
-    ...(!explicitConcurrency && !runtimeOnly && tsdownDeclarationsEnabled(args, env)
-      ? ["--concurrency", "1"]
+    ...(!explicitConcurrency && defaultConcurrency !== null
+      ? ["--concurrency", String(defaultConcurrency)]
       : []),
     ...forwardedArgs,
   ];

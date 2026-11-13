@@ -75,6 +75,7 @@ export function isStrippedRequestHeader(
     listed(HOP_BY_HOP_HEADERS) ||
     listed(CLIENT_IDENTITY_HEADERS) ||
     connectionTokens.has(lower) ||
+    lower === "content-length" ||
     lower === "forwarded" ||
     STRIPPED_HEADER_PREFIXES.some((prefix) => lower.startsWith(prefix)) ||
     (kind === "ws" && listed(WS_HANDSHAKE_HEADERS))

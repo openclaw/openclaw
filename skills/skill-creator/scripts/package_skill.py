@@ -10,7 +10,10 @@ Example:
     python utils/package_skill.py skills/public/my-skill ./dist
 """
 
+import os
+import shutil
 import sys
+import tempfile
 import zipfile
 from pathlib import Path
 
@@ -23,6 +26,10 @@ def _is_within(path: Path, root: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _raise_walk_error(error):
+    raise error
 
 
 def package_skill(skill_path, output_dir=None):
@@ -52,6 +59,9 @@ def package_skill(skill_path, output_dir=None):
     if not skill_md.exists():
         print(f"[ERROR] SKILL.md not found in {skill_path}")
         return None
+    if skill_md.is_symlink():
+        print("[ERROR] SKILL.md is a symlink; replace it with a regular file before packaging.")
+        return None
 
     # Run validation before packaging
     print("Validating skill...")
@@ -62,51 +72,71 @@ def package_skill(skill_path, output_dir=None):
         return None
     print(f"[OK] {message}\n")
 
-    # Determine output location
     skill_name = skill_path.name
-    if output_dir:
-        output_path = Path(output_dir).resolve()
-        output_path.mkdir(parents=True, exist_ok=True)
-    else:
-        output_path = Path.cwd()
-
-    skill_filename = output_path / f"{skill_name}.skill"
-
     EXCLUDED_DIRS = {".git", ".svn", ".hg", "__pycache__", "node_modules"}
 
     # Create the .skill file (zip format)
     try:
-        with zipfile.ZipFile(skill_filename, "w", zipfile.ZIP_DEFLATED) as zipf:
-            # Walk in a deterministic order. Sort by the archive-relative POSIX
-            # entry name (not Path object order, which is filesystem/OS-flavour
-            # dependent) so written .skill entries are byte-stable everywhere.
-            for file_path in sorted(
-                skill_path.rglob("*"),
-                key=lambda path: path.relative_to(skill_path).as_posix(),
-            ):
-                # Security: never follow or package symlinks.
-                if file_path.is_symlink():
-                    print(f"[WARN] Skipping symlink: {file_path}")
-                    continue
+        if output_dir:
+            output_path = Path(output_dir).resolve()
+            output_path.mkdir(parents=True, exist_ok=True)
+        else:
+            output_path = Path.cwd()
+        skill_filename = output_path / f"{skill_name}.skill"
 
-                rel_parts = file_path.relative_to(skill_path).parts
-                if any(part in EXCLUDED_DIRS for part in rel_parts):
-                    continue
-
-                if file_path.is_file():
-                    resolved_file = file_path.resolve()
-                    if not _is_within(resolved_file, skill_path):
-                        print(f"[ERROR] File escapes skill root: {file_path}")
-                        return None
-                    # If output lives under skill_path, avoid writing archive into itself.
-                    if resolved_file == skill_filename.resolve():
-                        print(f"[WARN] Skipping output archive: {file_path}")
+        archive_target = skill_filename.resolve()
+        # Keep the previous artifact intact until the new ZIP is complete.
+        with tempfile.TemporaryDirectory(dir=archive_target.parent) as staging_dir:
+            staging_root = Path(staging_dir)
+            staged_archive = staging_root / skill_filename.name
+            with zipfile.ZipFile(
+                staged_archive, "w", zipfile.ZIP_DEFLATED, strict_timestamps=False
+            ) as zipf:
+                # Fail on unreadable directories instead of silently omitting their contents.
+                paths = []
+                for directory, directories, filenames in os.walk(
+                    skill_path, onerror=_raise_walk_error, followlinks=False
+                ):
+                    directories[:] = [
+                        name
+                        for name in directories
+                        if name not in EXCLUDED_DIRS and Path(directory, name) != staging_root
+                    ]
+                    paths.extend(Path(directory, name) for name in directories + filenames)
+                # Walk in a deterministic order. Sort by the archive-relative POSIX
+                # entry name (not Path object order, which is filesystem/OS-flavour
+                # dependent) so written .skill entries are byte-stable everywhere.
+                for file_path in sorted(
+                    paths,
+                    key=lambda path: path.relative_to(skill_path).as_posix(),
+                ):
+                    # Security: never follow or package symlinks.
+                    if file_path.is_symlink():
+                        print(f"[WARN] Skipping symlink: {file_path}")
                         continue
 
-                    # Calculate the relative path within the zip.
-                    arcname = Path(skill_name) / file_path.relative_to(skill_path)
-                    zipf.write(file_path, arcname)
-                    print(f"  Added: {arcname}")
+                    rel_parts = file_path.relative_to(skill_path).parts
+                    if any(part in EXCLUDED_DIRS for part in rel_parts):
+                        continue
+
+                    if file_path.is_file():
+                        resolved_file = file_path.resolve()
+                        if not _is_within(resolved_file, skill_path):
+                            print(f"[ERROR] File escapes skill root: {file_path}")
+                            return None
+                        # If output lives under skill_path, avoid writing archive into itself.
+                        if resolved_file == archive_target:
+                            print(f"[WARN] Skipping output archive: {file_path}")
+                            continue
+
+                        # Calculate the relative path within the zip.
+                        arcname = Path(skill_name) / file_path.relative_to(skill_path)
+                        zipf.write(file_path, arcname)
+                        print(f"  Added: {arcname}")
+
+            if archive_target.exists():
+                shutil.copymode(archive_target, staged_archive)
+            staged_archive.replace(archive_target)
 
         print(f"\n[OK] Successfully packaged skill to: {skill_filename}")
         return skill_filename

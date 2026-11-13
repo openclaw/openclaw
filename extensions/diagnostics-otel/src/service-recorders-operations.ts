@@ -87,6 +87,14 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
         runtime.sessionsListRetainedBytesGauge.record(evt.estimatedBytes);
       }
     },
+    "sessions.projection.retention"(evt, metadata) {
+      if (metadata.trusted) {
+        runtime.sessionProjectionOwnersGauge.record(evt.projections);
+        runtime.sessionProjectionRowsRetainedEntriesGauge.record(evt.entries);
+        runtime.sessionProjectionRowsRetainedBytesGauge.record(evt.estimatedBytes);
+        runtime.sessionProjectionRowsEstimateTruncatedGauge.record(evt.truncatedProjections);
+      }
+    },
     "sessions.event.retention"(evt, metadata) {
       if (metadata.trusted) {
         runtime.sessionEventRowsRetainedEntriesGauge.record(evt.entries);

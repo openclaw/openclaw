@@ -69,7 +69,7 @@ async function fixture() {
     api["actions/runs/" + id + "/jobs"] = { total_count: parentJobs.length, jobs: parentJobs };
     const jobs = await f.client.getRunAttemptJobs(id);
     api["actions/runs/" + id + "/attempts/1/jobs"] = { total_count: jobs.length, jobs };
-    api["view/" + id] = f.client.getRunView(id);
+    api["view/" + id] = await f.client.getRunView(id);
     if (id === f.runId) {
       for (const job of parentJobs) {
         respondBytes("actions/jobs/" + job.id + "/logs", await f.client.getJobLog(job.id));

@@ -103,9 +103,7 @@ suite.define(() => {
           page,
           page.locator(".shell"),
           [identity, triggers, surface],
-          {
-            animations: "disabled",
-          },
+          { animations: "disabled" },
         );
         if (dir) {
           await writeFile(path.join(dir, state.name + ".png"), frame.png);
@@ -122,8 +120,9 @@ suite.define(() => {
           Math.abs((await bottomGap(".new-session-page__composer")) - chatGap),
           state.name,
         ).toBeLessThanOrEqual(1);
-        const local = page.locator("#new-session-where-trigger");
-        expect((await local.boundingBox())!.width).toBeLessThanOrEqual(100);
+        // #192044 renamed Local to This computer; keep the picker within half a row.
+        const device = page.locator("#new-session-where-trigger");
+        expect((await device.boundingBox())!.width).toBeLessThanOrEqual(targetBox!.width / 2);
         expect(
           await page.locator(".new-session-page__select--agent .agent-select__label").isVisible(),
         ).toBe(true);
@@ -153,6 +152,9 @@ suite.define(() => {
       await page.locator("#new-session-where-trigger").tap();
       const destination = page.locator("#new-session-where-popover");
       await destination.waitFor();
+      // Near the bottom of a phone the list must take the roomier side, not scroll.
+      const list = destination.locator(".new-session-page__environment-list");
+      await expect.poll(() => list.evaluate((el) => el.scrollHeight - el.clientHeight)).toBe(0);
       await capture("menu", [destination]);
       const destinationBox = await destination.boundingBox();
       expect(destinationBox!.x).toBeGreaterThanOrEqual(0);

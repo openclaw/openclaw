@@ -8,6 +8,7 @@ import type { captureTemplateInstallSchemaVersionFacts } from "../templates/prov
 import type { AuthProfileStore, SharedAuthStoreOwnership } from "./auth-profiles/types.js";
 import type { ModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
+import type { PersistedPluginModelCatalog } from "./plugin-model-catalog.kernel.js";
 import type { PreparedModelRuntimeAuth } from "./prepared-model-runtime-auth.js";
 import type {
   PreparedModelRuntimeAgentFacts,
@@ -35,7 +36,11 @@ export type PreparedModelCatalogWorkerInput = Readonly<{
 }>;
 
 export type PreparedModelCatalogWorkerTask = {
-  context: { workspaceDir: string | undefined; fingerprint: string };
+  context: {
+    workspaceDir: string | undefined;
+    fingerprint: string;
+    registrationFingerprint: string;
+  };
   value:
     | PreparedModelCatalogWorkerInput
     | Omit<PreparedModelCatalogWorkerInput, "remoteCatalog" | "pluginMetadataSnapshot">;
@@ -72,6 +77,8 @@ export type PreparedModelWorkerOutcome =
               snapshot: ModelCatalogSnapshot;
               runtimeModels: Map<string, Model[]>;
               providerExpiries: Map<string, number>;
+              /** Planned generated catalogs; only the main thread persists them. */
+              pluginCatalogs: readonly PersistedPluginModelCatalog[];
               configuredRuntimeModels: PreparedModelRuntimeCatalogFacts["configuredRuntimeModels"];
               providerAuthLabels: ModelCatalogAuthLabels;
             }

@@ -332,7 +332,7 @@ export const zh_CN = {
       quickstartKeepRunningQuestion: "让 OpenClaw 在后台持续运行？",
       quickstartDashboard: "仪表板：{url}",
       quickstartForeground: "网关正在前台运行。按 Ctrl+C 停止。",
-      quickstartBackground: "如需以后让网关在后台持续运行，请运行：openclaw gateway install",
+      quickstartBackground: "如需以后让网关在后台持续运行，请运行：{command}",
       quickstartReopen: "运行 openclaw 打开 TUI，或运行 openclaw dashboard 重新打开网页仪表板。",
       quickstartBrowserUnavailable: "浏览器交接未完成。网关仍在运行；准备好后请打开仪表板。",
       quickstartGatewayPending:
@@ -476,6 +476,8 @@ export const zh_CN = {
       testAiProgress: "正在用真实 completion 测试 AI 访问…",
       testAiSuccess: "AI 访问正常，在 {seconds} 秒内回复。",
       testAiTitle: "AI 访问测试",
+      utilityOnlyNote: "请为 agent 对话选择提供商，或选择暂时跳过。",
+      utilityOnlyTitle: "选择 agent 的模型",
       whatSetup: "你想设置什么？",
       workspaceConflictConfirm: "将现有 agent fleet 迁移到请求的工作区吗？",
       workspaceConflictNotice:

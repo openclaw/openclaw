@@ -6,7 +6,10 @@ import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
-import { resolveHomeSession } from "../lib/sessions/home-session.ts";
+import {
+  homeSessionRequiresConfirmation,
+  resolveHomeSession,
+} from "../lib/sessions/home-session.ts";
 import { resolveUiConfiguredMainKey } from "../lib/sessions/session-key.ts";
 import type { ChatWorkContext } from "../pages/chat/chat-work-context.ts";
 import { HomeSessionUnavailable } from "./home-session-unavailable.tsx";
@@ -39,7 +42,7 @@ export function HomeSession(input: Partial<Props>) {
   );
   const available = createMemo(() => {
     const snapshot = connection();
-    return snapshot.hello?.auth?.sessionCap === "none"
+    return homeSessionRequiresConfirmation(snapshot)
       ? resolveHomeSession(snapshot, {
           sessionKey: sessionKey(),
           agentId: agentId(),
@@ -112,7 +115,7 @@ export function HomeSession(input: Partial<Props>) {
           </details>
           <button
             type="button"
-            class="rail-header__action"
+            class="oc-icon-button oc-icon-button--28 rail-header__action"
             aria-label={t("assistantPanel.removeContext")}
             onClick={() => setIncludeContext(false)}
           >
@@ -121,7 +124,7 @@ export function HomeSession(input: Partial<Props>) {
         </Show>
         <button
           type="button"
-          class="rail-header__action"
+          class="oc-icon-button oc-icon-button--28 rail-header__action"
           aria-label={t("assistantPanel.attachSelection")}
           disabled={!selectionAvailable()}
           title={t("assistantPanel.attachSelection")}

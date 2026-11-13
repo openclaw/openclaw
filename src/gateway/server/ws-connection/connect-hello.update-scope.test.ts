@@ -326,6 +326,38 @@ describe("sendGatewayHello update detail scope", () => {
     },
   );
 
+  it.each([undefined, false, true])(
+    "advertises ID methods/events only while enabled: %s",
+    async (enabled) => {
+      const context = makeContext("operator", ["operator.read"]);
+      const gatewayMethods = [
+        "health",
+        "openclawId.status",
+        "openclawId.people",
+        "openclawId.authority",
+      ];
+      await sendGatewayHello(
+        {
+          ...context,
+          configSnapshot: { gateway: { openclawId: { enabled } } },
+          handler: {
+            ...context.handler,
+            gatewayMethods,
+            events: ["tick", "openclawId.people.changed"],
+          },
+        } as never,
+        makeState("operator", ["operator.read"]) as never,
+        {},
+      );
+      expect(helloPayload(context)?.features.methods).toEqual(
+        enabled ? gatewayMethods : ["health"],
+      );
+      expect(helloPayload(context)?.features.events).toEqual(
+        enabled ? ["tick", "openclawId.people.changed"] : ["tick"],
+      );
+    },
+  );
+
   it.each([
     { caps: [], mode: "full" },
     { caps: [GATEWAY_CLIENT_CAPS.HEALTH_SUMMARY], mode: "summary" },

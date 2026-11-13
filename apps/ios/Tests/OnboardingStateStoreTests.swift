@@ -9,7 +9,6 @@ import Testing
         defer { self.reset(testDefaults) }
 
         let appModel = NodeAppModel()
-        appModel.gatewayServerName = nil
         #expect(OnboardingStateStore.shouldPresentOnLaunch(
             appModel: appModel,
             defaults: defaults,
@@ -22,7 +21,7 @@ import Testing
         defer { self.reset(testDefaults) }
 
         let appModel = NodeAppModel()
-        appModel.gatewayServerName = "gateway"
+        appModel.apply(.connected(GatewaySessionInfo(serverName: "gateway")), to: .node, route: nil)
         #expect(!OnboardingStateStore.shouldPresentOnLaunch(
             appModel: appModel,
             defaults: defaults,
@@ -35,7 +34,6 @@ import Testing
         defer { self.reset(testDefaults) }
 
         let appModel = NodeAppModel()
-        appModel.gatewayServerName = nil
         #expect(!OnboardingStateStore.shouldPresentOnLaunch(
             appModel: appModel,
             defaults: defaults,
@@ -48,7 +46,6 @@ import Testing
         defer { self.reset(testDefaults) }
 
         let appModel = NodeAppModel()
-        appModel.gatewayServerName = nil
 
         OnboardingStateStore.markCompleted(mode: .remoteDomain, defaults: defaults)
         #expect(OnboardingStateStore.lastMode(defaults: defaults) == .remoteDomain)
@@ -80,7 +77,6 @@ import Testing
         OnboardingStateStore.reset(defaults: defaults)
 
         let appModel = NodeAppModel()
-        appModel.gatewayServerName = nil
 
         #expect(OnboardingStateStore.shouldPresentOnLaunch(
             appModel: appModel,

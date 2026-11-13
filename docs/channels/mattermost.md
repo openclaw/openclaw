@@ -78,6 +78,10 @@ commands flush buffered text before their own dispatch. Channel batches preserve
 arrival order through turn admission. Stopping the monitor cancels buffered work
 and leaves unadopted durable posts available for recovery.
 
+Human posts carrying message attachment cards, such as `slack_attachment` link
+previews, follow normal sender and bot admission checks and stay separate from
+batched text. Actual `system_*` posts are ignored.
+
 ## Native slash commands
 
 Native slash commands are opt-in. When enabled, OpenClaw registers `oc_*` slash commands on every team the bot is a member of and receives callback POSTs on the gateway HTTP server.

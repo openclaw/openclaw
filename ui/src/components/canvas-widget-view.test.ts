@@ -5,7 +5,7 @@ import {
 } from "@openclaw/gateway-client/browser";
 import type { CanvasDocumentViewResult } from "@openclaw/gateway-protocol";
 import { createComponent, createSignal } from "solid-js";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import type { GatewayEventListener } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
@@ -48,6 +48,40 @@ import { WIDGET_PROMPT_EVENT } from "./mcp-app-security.ts";
 setupCanvasWidgetTests();
 
 describe("Canvas widget view", () => {
+  it("waits for scrolling to settle but admits frames even with a short idle deadline", async () => {
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
+    vi.useFakeTimers();
+    const callbacks: IdleRequestCallback[] = [];
+    vi.stubGlobal("requestIdleCallback", (cb: IdleRequestCallback) => callbacks.push(cb));
+    vi.stubGlobal("cancelIdleCallback", () => callbacks.splice(0));
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = host.attachShadow({ mode: "open" });
+    const view = mount(client, "cv_inline", root);
+    await settle(view);
+    expect(view.querySelector<HTMLElement>('[role="status"]')?.style.minHeight).toBe("420px");
+    await vi.advanceTimersByTimeAsync(100);
+    root.dispatchEvent(new Event("scroll"));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(callbacks).toHaveLength(0);
+    vi.spyOn(HTMLIFrameElement.prototype, "contentWindow", "get").mockReturnValue(window);
+    await vi.advanceTimersByTimeAsync(20);
+    callbacks.shift()!({ didTimeout: true, timeRemaining: () => 0 });
+    await settle(view);
+    const frame = await frameFor(view);
+    const post = vi.spyOn(frame.contentWindow!, "postMessage");
+    message(frame, {
+      method: "ui/notifications/sandbox-proxy-ready",
+      params: { sandboxUrl: frame.src },
+    });
+    await settle(view);
+    expect(
+      post.mock.calls.some(([data]) => data.method === "ui/notifications/sandbox-resource-ready"),
+    ).toBe(true);
+  });
+
   it("loads authenticated HTML once for concurrent views and waits for the exact isolated proxy", async () => {
     const add = vi.spyOn(window, "addEventListener");
     const pending = createDeferred<CanvasDocumentViewResult>();

@@ -23,6 +23,7 @@ import {
 import {
   buildTelegramNativeCommandCallbackData,
   buildTelegramOpaqueCallbackData,
+  type TelegramTypedCallbackOwner,
 } from "./native-command-callback-data.js";
 import {
   buildTelegramQuestionCallbackData,
@@ -68,6 +69,8 @@ export type TelegramButtonBuildOptions = {
   supportsDisabled?: boolean;
   onDroppedControl?: (control: TelegramDroppedControl) => void;
   questionOptionIndices?: AskUserQuestionOptionIndices;
+  /** Defaults to plugin ownership: unclaimed taps expire. */
+  typedCallbackOwner?: TelegramTypedCallbackOwner;
 };
 
 export function appendTelegramDroppedControlFallback(
@@ -187,7 +190,7 @@ function toTelegramInlineButton(
     hasTelegramApprovalCallbackPrefix(normalizedCallbackValue) ||
     hasTelegramQuestionCallbackPrefix(normalizedCallbackValue);
   const callbackDataCandidate = needsOpaqueEnvelope
-    ? buildTelegramOpaqueCallbackData(action.value)
+    ? buildTelegramOpaqueCallbackData(action.value, options?.typedCallbackOwner)
     : action.value;
   return callbackButton(
     sanitizeTelegramCallbackData(callbackDataCandidate),
@@ -263,6 +266,7 @@ export function resolveTelegramInlineButtons(
     buildTelegramPresentationButtons(normalizeMessagePresentation(params.presentation), options)
   );
 }
+/** Message-action params: their typed callbacks belong to the agent. */
 export function resolveTelegramButtonsFromParams(
   params: Record<string, unknown>,
   presentation = normalizeMessagePresentation(params.presentation),
@@ -273,7 +277,7 @@ export function resolveTelegramButtonsFromParams(
       presentation,
       interactive: params.interactive,
     },
-    options,
+    { ...options, typedCallbackOwner: "agent" },
   );
 }
 export function buildTelegramControlDegradation(
