@@ -140,7 +140,7 @@ export async function repair(ui: Page, snapshot: ScribeSnapshot, job: ScribeJob,
  * Show `job` as updating until its revision changes and `applied` holds for the new read, and
  * watch for that.
  */
-export function markUpdating(
+function markUpdating(
   ui: Page,
   job: ScribeJob,
   agentId: string,
