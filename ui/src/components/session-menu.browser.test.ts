@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
+import { i18n } from "../i18n/index.ts";
 import {
   mountMenu,
   openSubmenu,
@@ -10,7 +11,6 @@ import {
   createSessionOwnerMenuHarness,
   sessionOwnerProfiles,
 } from "../test-helpers/session-owner-menu.ts";
-import { i18n } from "../i18n/index.ts";
 import "../test-helpers/load-styles.ts";
 
 it("dispatches compact archive with the existing A shortcut", async () => {
@@ -121,9 +121,7 @@ it.each(["NFC", "NFD"] as const)(
     const { context } = createSessionOwnerMenuHarness(() => sessionOwnerProfiles(stored, "Bob"));
     const menu = await mountMenu({ context });
     await settleSessionMenu(menu);
-    await expect
-      .poll(() => menu.querySelector('[data-value^="assign-owner:"]'))
-      .not.toBeNull();
+    await expect.poll(() => menu.querySelector('[data-value^="assign-owner:"]')).not.toBeNull();
     await openSubmenu(menu, "Assign to…");
     const toggle = menu.querySelector<HTMLButtonElement>("[data-search-toggle]")!;
     await userEvent.click(toggle);
@@ -132,8 +130,8 @@ it.each(["NFC", "NFD"] as const)(
     await input.fill(equivalent(stored));
     await expect
       .poll(() =>
-        [...menu.querySelectorAll('[data-value^="assign-owner:"]')].map(
-          (n) => n.getAttribute("aria-label"),
+        [...menu.querySelectorAll('[data-value^="assign-owner:"]')].map((n) =>
+          n.getAttribute("aria-label"),
         ),
       )
       .toEqual([stored]);
