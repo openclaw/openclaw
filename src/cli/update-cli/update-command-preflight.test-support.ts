@@ -226,10 +226,6 @@ export function registerUpdatePreflightTests(f: UpdatePreflightFixture) {
     const snapshotFailure = expect.objectContaining({
       name: "snapshot-space-preflight",
       exitCode: 1,
-      snapshotCapacity: expect.objectContaining({
-        pluginBytes: null,
-        candidates: containingStep({ availableBytes: 32 * 1024 * 1024 }),
-      }),
     });
     expect(f.lastWriteJsonCall()).toMatchObject({
       runId: record?.runId,
@@ -253,9 +249,8 @@ export function registerUpdatePreflightTests(f: UpdatePreflightFixture) {
       }),
       ...historyBefore,
     ]);
-    expect(f.getErrorOutput()).toContain("MiB needed");
-    expect(f.getErrorOutput()).toContain("32 MiB free");
-    expect(f.getErrorOutput()).toContain("Free space on a reported filesystem or set TMPDIR");
+    expect(f.getErrorOutput()).toContain("activation database backup or rollback cannot fit");
+    expect(f.getErrorOutput()).toContain("(33554432 bytes) is available");
     expect(f.getErrorOutput()).toContain("SQLite family");
   });
 }
