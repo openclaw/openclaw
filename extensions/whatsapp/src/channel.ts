@@ -38,6 +38,7 @@ import {
   normalizeWhatsAppMessagingTarget,
   normalizeWhatsAppTarget,
 } from "./normalize-target.js";
+import { resolveWhatsAppDeliverablePayload } from "./outbound-media-contract.js";
 import { resolveWhatsAppReactionLevel } from "./reaction-level.js";
 import { getWhatsAppRuntime } from "./runtime.js";
 import { sendTypingWhatsApp } from "./send.js";
@@ -137,6 +138,8 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
       messaging: {
         targetPrefixes: ["whatsapp"],
         normalizeTarget: normalizeWhatsAppMessagingTarget,
+        prepareDeliverableReplyPayload: ({ payload, kind }) =>
+          resolveWhatsAppDeliverablePayload(payload, { kind }),
         resolveOutboundSessionRoute: (params) => {
           const normalized = normalizeWhatsAppTarget(params.target);
           if (!normalized) {

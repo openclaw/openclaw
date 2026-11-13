@@ -25,6 +25,7 @@ import {
   type DeliverableWhatsAppOutboundPayload,
   normalizeWhatsAppOutboundPayload,
   normalizeWhatsAppPayloadTextPreservingIndentation,
+  resolveWhatsAppDeliverablePayload,
 } from "../../outbound-media-contract.js";
 import { newConnectionId } from "../../reconnect.js";
 import type {
@@ -107,28 +108,6 @@ function isWhatsAppVisibleDeliveryError(error: unknown): boolean {
     (isRecord(error) && error.visibleReplySent === true) ||
     (isChannelPartialDeliveryError(error) && error.deliveryResult.visibleReplySent)
   );
-}
-
-function resolveWhatsAppDeliverablePayload(
-  payload: ReplyPayload,
-  info: { kind: ReplyDispatchKind },
-): ReplyPayload | null {
-  if (payload.isReasoning === true || payload.isCompactionNotice === true) {
-    return null;
-  }
-  // Only mid-turn error noise (streamed blocks, tool progress) is suppressed. A final error
-  // payload is the host-owned terminal outcome of the turn; dropping it leaves the chat silent
-  // or replaced by the generic no-visible-reply fallback after a refused or failed run.
-  if (payload.isError === true && info.kind !== "final") {
-    return null;
-  }
-  if (info.kind === "tool") {
-    if (!resolveSendableOutboundReplyParts(payload).hasMedia) {
-      return null;
-    }
-    return { ...payload, text: undefined };
-  }
-  return payload;
 }
 
 function hasWhatsAppMediaUrlOverlap(left: Set<string>, right: Set<string>): boolean {

@@ -574,6 +574,12 @@ export type ChannelMessagingAdapter = {
     cfg: OpenClawConfig;
     accountId?: string | null;
   }) => ReplyPayload | null;
+  prepareDeliverableReplyPayload?: (params: {
+    payload: ReplyPayload;
+    kind: "tool" | "block" | "final";
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+  }) => ReplyPayload | null;
   hasStructuredReplyPayload?: (params: { payload: ReplyPayload }) => boolean;
   targetResolver?: {
     looksLikeId?: (raw: string, normalized?: string) => boolean;

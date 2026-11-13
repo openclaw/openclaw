@@ -81,8 +81,8 @@ function buildFollowupTemplateContext(turn: AdmittedFollowupTurn): TemplateConte
 export async function executeFollowupTurn(params: {
   turn: AdmittedFollowupTurn;
   defaults: FollowupRunnerParams;
-  onToolResult: (payload: ReplyPayload) => Promise<void>;
-  onCompactionNoticePayload: (payload: ReplyPayload) => Promise<void>;
+  onToolResult: (payload: ReplyPayload) => Promise<boolean | void>;
+  onCompactionNoticePayload: (payload: ReplyPayload) => Promise<boolean | void>;
 }): Promise<FollowupExecutionResult> {
   const { turn, defaults } = params;
   const sourceOpts = defaults.opts;
@@ -296,8 +296,7 @@ export async function executeFollowupTurn(params: {
         if (fastModeAutoProgress && !forceToolResultProgress && !verboseToolResult) {
           return false;
         }
-        await params.onToolResult(payload);
-        return true;
+        return (await params.onToolResult(payload)) !== false;
       });
     },
   };
@@ -416,8 +415,7 @@ export async function executeFollowupTurn(params: {
               if (!progressAllowed()) {
                 return false;
               }
-              await params.onCompactionNoticePayload(payload);
-              return true;
+              return (await params.onCompactionNoticePayload(payload)) !== false;
             });
           },
         });
