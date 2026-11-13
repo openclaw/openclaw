@@ -11,7 +11,9 @@ import {
 import * as runs from "../agents/embedded-agent-runner/runs.js";
 import type { runEmbeddedAgent as executeEmbeddedAgent } from "../agents/embedded-agent.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
+import { createUpdateGoalTool } from "../agents/tools/goal-tools.js";
 import { CommandOwnerRevokedError } from "../auto-reply/command-owner-authority.js";
+import { isGoalContinuationCurrent } from "../auto-reply/reply/goal-continuation.js";
 import { enqueueSessionEventForHost } from "../auto-reply/reply/session-event-handoff.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -47,6 +49,64 @@ export function registerGoalAutomaticContinuationCases(
     }));
   const start = async (message: string) =>
     expect((await rpc("chat.send", goalStart(message))).mock.calls[0]?.[0]).toBe(true);
+  it("stops on an immediate human wait and resumes the same unfinished Goal only on request", async () => {
+    let original = loadSessionEntry(scope())?.goal;
+    runEmbeddedAgent.mockImplementation(async (params) => {
+      original = loadSessionEntry(scope())?.goal;
+      const tool = createUpdateGoalTool({
+        runSessionKey: scope().sessionKey,
+        config: { session: { store: scope().storePath } },
+      });
+      const waiting = await tool.execute("wait-for-decision", {
+        status: "waiting_on_human",
+        note: "Approve the configuration change",
+      });
+      expect(waiting.details).toMatchObject({ status: "updated", goal: { status: "blocked" } });
+      return result(params.sessionId);
+    });
+    await start("Finish the configuration change after human approval");
+    await expectDrained();
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+    const entry = expectDefined(loadSessionEntry(scope()), "session must remain after waiting");
+    const goal = expectDefined(entry.goal, "unfinished Goal must remain after waiting");
+    expect(goal).toMatchObject({
+      id: original?.id,
+      objective: original?.objective,
+      createdAt: original?.createdAt,
+      status: "blocked",
+      continuationTurns: 0,
+      lastStatusNote: "Waiting on human: Approve the configuration change",
+    });
+    expect(goal.completedAt).toBeUndefined();
+    // A nudge captured while the Goal was active must fail fresh admission too.
+    expect(
+      isGoalContinuationCurrent(
+        {
+          sessionId: entry.sessionId,
+          lifecycleRevision: entry.lifecycleRevision,
+          goalId: goal.id,
+        },
+        entry,
+      ),
+    ).toBe(false);
+    runEmbeddedAgent.mockImplementation(async (params) => {
+      await setGoalStatus("complete");
+      return result(params.sessionId);
+    });
+    const resumed = await rpc("sessions.goal.update", {
+      sessionKey: scope().sessionKey,
+      sessionId: scope().sessionId,
+      goalId: goal.id,
+      action: "resume",
+      operationId: "resume-human-wait",
+      issuedAtMs: Date.now(),
+    });
+    expect(resumed.mock.calls[0]?.[0]).toBe(true);
+    await expectDrained();
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
+    expect(loadSessionEntry(scope())?.goal).toMatchObject({ id: goal.id, status: "complete" });
+  });
+
   it("nudges consecutive normal final turns until the same Goal is complete", async () => {
     const completed = createDeferred();
     runEmbeddedAgent.mockImplementation(async (params) => {

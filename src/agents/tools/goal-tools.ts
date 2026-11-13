@@ -42,9 +42,15 @@ const CreateGoalToolSchema = Type.Object({
 
 const UpdateGoalToolSchema = Type.Object({
   status: stringEnum(MODEL_UPDATABLE_SESSION_GOAL_STATUSES, {
-    description: "complete | blocked.",
+    description:
+      "complete | blocked | waiting_on_human. Human waits are stored as blocked with a decision note.",
   }),
-  note: Type.Optional(Type.String({ description: "Short status note." })),
+  note: Type.Optional(
+    Type.String({
+      description:
+        "Short status note. Required for waiting_on_human; describe the pending decision.",
+    }),
+  ),
 });
 
 function resolveGoalSessionScope(options: GoalToolOptions) {
@@ -118,7 +124,7 @@ export function createUpdateGoalTool(options: GoalToolOptions): AnyAgentTool {
     name: "update_goal",
     displaySummary: "Complete or block a thread goal",
     description:
-      "Mark the session goal complete only when the full objective is verified and no required work remains. Mark it blocked only when the same blocker has recurred for at least three consecutive goal turns and no meaningful progress is possible without user input or an external change. After the user resumes a blocked goal, count those turns from the resume. Difficulty, incomplete work, or a nearly exhausted budget do not justify completion or blocking. Updating a goal does not reply to the user; provide the requested final response afterward.",
+      "Mark the session goal complete only when the full objective is verified and no required work remains. Set waiting_on_human immediately when explicit human authorization or a required decision prevents further progress; include a note describing that decision. This preserves the unfinished goal as blocked and stops automatic continuation until the user resumes it. Automatic inputs and resume do not authorize the pending action. Otherwise mark it blocked only when the same blocker has recurred for at least three consecutive goal turns and no meaningful progress is possible without user input or an external change. After the user resumes a blocked goal, count those turns from the resume. Difficulty, incomplete work, or a nearly exhausted budget do not justify completion or blocking. Updating a goal does not reply to the user; provide the requested final response afterward.",
     parameters: UpdateGoalToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -131,7 +137,9 @@ export function createUpdateGoalTool(options: GoalToolOptions): AnyAgentTool {
           `status must be one of ${MODEL_UPDATABLE_SESSION_GOAL_STATUSES.join(", ")}`,
         );
       }
-      const note = readToolStringParam(params, "note");
+      const note = readToolStringParam(params, "note", {
+        required: status === "waiting_on_human",
+      });
       const scope = resolveGoalSessionScope(options);
       try {
         const goal = await updateSessionGoalStatus({
