@@ -53,6 +53,10 @@ import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
 import { buildSessionTranscriptTurnExpectedState } from "./session-transcript-turn-state.js";
 import { restoreSessionTurnColdTranscript } from "./session-turn-cold.js";
 import {
+  acceptSessionTurnFreshAuthority,
+  prepareSessionTurnMention,
+} from "./session-turn-fresh-authority.js";
+import {
   completeSessionTurnPublication,
   publishCommittedSessionTurn,
 } from "./session-turn-publication.js";
@@ -87,6 +91,7 @@ export async function appendSessionTurnInWorker(
   const cliWriter = getCliHistoryWriter({ ...scope, storePath: scope.path });
   let custodyRequired = false;
   const freshCommitGuards = new Set<() => void>();
+  const mentionCommitGuards: Array<(() => void) | undefined> = [];
   const sources: (PreparedSessionSourceAuthority | undefined)[] = [];
   const committedCompletions: Promise<void>[] = [];
   const assertOwnerCurrent = () =>
@@ -254,17 +259,7 @@ export async function appendSessionTurnInWorker(
           return true;
         }
         if (isRecord(facts) && facts.kind === "session-turn-fresh") {
-          const source = typeof facts.index === "number" ? sources[facts.index] : undefined;
-          if (!source) {
-            throw new Error("Session turn omitted its fresh-message authority");
-          }
-          acceptSessionSourceValidation(
-            source,
-            // SAFETY: The paired worker read these facts in the current transaction.
-            facts.sourceValidation as SessionSourceValidation,
-          );
-          source.assertCurrent();
-          freshCommitGuards.add(source.assertCurrent);
+          acceptSessionTurnFreshAuthority(facts, sources, mentionCommitGuards, freshCommitGuards);
           return true;
         }
         if (
@@ -450,6 +445,10 @@ export async function appendSessionTurnInWorker(
           }
           if (!facts?.pending && message !== undefined && options.atomicGroup !== true) {
             message = sanitizeTranscriptMessageForStorage(message);
+          }
+          const mentionGuard = prepareSessionTurnMention(append, hooks, facts, message);
+          if (mentionGuard) {
+            mentionCommitGuards[index] = mentionGuard;
           }
           plan.options.messages[index] = {
             ...append,

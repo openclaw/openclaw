@@ -52,6 +52,16 @@ Recording a steering receipt while another input is being persisted keeps the ac
 
 If the built-in runtime reaches its 120-second transcript-delivery deadline and proves that it removed the exact queued message before submission, that input returns to followup custody in its original queue position. Younger steers already accepted by the active run stay there and are not replayed. A timeout without proven withdrawal remains non-replayable because the runtime may still consume the input; this also applies to the native Codex confirmation timeout.
 
+Rejection logs preserve the owner’s `reason` and, when known, a closed
+`runtimeReason`. `tool_boundary_timeout` means a tool was still active at the
+transcript deadline; `transcript_commit_timeout` means the receipt was missing
+without an active tool. Other codes distinguish turn end, handoff, closed
+steering, source cancellation, unavailable compaction state, unsupported
+compaction steering, a non-steerable turn, and a missing injection capability.
+A non-interruptible tool still has a steering boundary after completion, so it
+does not trigger immediate followup fallback. Provider token-stream state alone
+does not determine whether the local steering queue can accept input.
+
 After that fallback, **Send now** stays below the waiting message while the
 original run still has supported, interruptible tools running. Clicking it stops
 those tool calls through the same cleanup path. The queued message keeps its

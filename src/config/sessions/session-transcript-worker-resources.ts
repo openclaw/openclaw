@@ -339,7 +339,7 @@ export function acquireHistoryDatabaseResource(
   };
   const key = JSON.stringify(database);
   let resource = historyDatabases.get(key);
-  let created = false;
+  const created = !resource;
   if (resource?.revoked) {
     // Failed retirement keeps cleanup custody until the existing close/prune owner settles it.
     assertAgentDatabaseResourceAdmission(resource.database);
@@ -457,7 +457,6 @@ export function acquireHistoryDatabaseResource(
       aliases.clear();
     };
     resource = owned;
-    created = true;
   }
   try {
     resource.observeMaintenance();

@@ -27,6 +27,7 @@ import { cleanOldMedia, pruneOutboundMedia, prunePlaybackTranscodeCache } from "
 import {
   getGatewayRestartDrainSignal,
   isGatewayWorkAdmissionClosed,
+  runWithGatewayDetachedWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
 import { listRpcSourceEntries } from "../sessions/session-controller.rpc-sources.js";
@@ -437,6 +438,28 @@ export function startGatewayMaintenanceTimers(params: {
   });
 
   const skillUsageCleanup = registerSkillUsageTracking();
+
+  scheduleMedia("tool-usage-retention", async () => {
+    try {
+      const { pruneRegisteredAgentToolUsage } = await import("../config/sessions/tool-usage.js");
+      if (mediaScheduler.signal.aborted || isGatewayWorkAdmissionClosed()) {
+        return;
+      }
+      await runWithGatewayDetachedWorkAdmission(
+        () =>
+          pruneRegisteredAgentToolUsage({
+            now: mediaScheduler.now(),
+            assertCurrent: () => mediaScheduler.signal.throwIfAborted(),
+          }),
+        "runtime:tool-usage-retention",
+        mediaScheduler.signal,
+      );
+    } catch (error) {
+      if (!mediaScheduler.signal.aborted) {
+        params.logHealth.error(`tool usage retention failed: ${formatError(error)}`);
+      }
+    }
+  });
 
   scheduleMedia("sqlite-snapshots", async () => {
     try {

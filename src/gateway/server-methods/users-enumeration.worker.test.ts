@@ -5,9 +5,11 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { tableHasColumn } from "../../state/openclaw-state-db-schema-helpers.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as profileAuthority from "../../state/user-channel-identity-operations.js";
+import { setCanonicalUserPreferences } from "../../state/user-preferences.js";
 import { getUserProfileListItem } from "../../state/user-profile-list-item.test-support.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import {
+  ensureCanonicalEnterpriseGitHubProfile,
   mergeCanonicalUserProfiles,
   setCanonicalUserProfileRole,
 } from "../../state/user-profile-writes.js";
@@ -78,13 +80,81 @@ it("returns only the authenticated person's private emails from the shared users
   catalog = await prepareUserProfileCatalog();
   for (const { email, profile } of people) {
     const expected = {
-      profile: { ...profile, emails: [email], githubIdentity: null, hasAvatar: false },
+      profile: {
+        ...profile,
+        emails: [email],
+        githubIdentity: null,
+        hasAvatar: false,
+        gitCoauthorAvailable: false,
+      },
     };
     for (const scopes of [["operator.read"], []]) {
       const respond = await rpc("users.self", profile.id, scopes);
       expect(respond.mock.calls).toEqual([scopes.length ? [true, expected] : forbidden]);
     }
   }
+});
+
+it("reports verified GitHub fallback availability independently of supplied credit and consent", async () => {
+  const person = ensureProfileForEmail("keycloak:credit-availability");
+  catalog = await prepareUserProfileCatalog();
+  await setCanonicalUserPreferences(
+    person.id,
+    {
+      "git.coauthor.organization": {
+        name: "Organization Alice",
+        email: "work@example.test",
+        policy: "test-policy",
+      },
+      "git.coauthor.enabled": false,
+    },
+    { trustedProxyGitCoauthor: true },
+  );
+  expect(await rpc("users.self", person.id)).toHaveBeenCalledWith(true, {
+    profile: expect.objectContaining({ id: person.id, gitCoauthorAvailable: false }),
+  });
+  syncGitHubIdentity({
+    identity: { accountId: 817, login: "verified-alice" },
+    authenticationAlias: { kind: "email", email: "keycloak:credit-availability" },
+  });
+  expect(await rpc("users.self", person.id)).toHaveBeenCalledWith(true, {
+    profile: expect.objectContaining({ id: person.id, gitCoauthorAvailable: true }),
+  });
+});
+
+it("reports host-specific Enterprise credit availability when its display identity is ambiguous", async () => {
+  const primary = await ensureCanonicalEnterpriseGitHubProfile(
+    "github:first.ghe.example.test:101",
+    "Enterprise Alice",
+    {},
+    { login: "enterprise-alice", email: "private-first@example.test" },
+  );
+  const secondary = await ensureCanonicalEnterpriseGitHubProfile(
+    "github:second.ghe.example.test:102",
+    "Enterprise Alice",
+    {},
+    { login: "enterprise-alice", email: "private-second@example.test" },
+  );
+  await mergeCanonicalUserProfiles(secondary.id, primary.id);
+  // Refresh the moved account's authenticated binding after the explicit merge.
+  await ensureCanonicalEnterpriseGitHubProfile(
+    "github:second.ghe.example.test:102",
+    "Enterprise Alice",
+    {},
+    { login: "enterprise-alice", email: "private-second@example.test" },
+  );
+  await setCanonicalUserPreferences(primary.id, { "git.coauthor.enabled": false });
+  catalog = await prepareUserProfileCatalog();
+  context.getRuntimeConfig = () => ({ gateway: { github: { host: "second.ghe.example.test" } } });
+  const present = await rpc("users.self", primary.id);
+  expect(present).toHaveBeenCalledWith(true, {
+    profile: expect.objectContaining({ githubIdentity: null, gitCoauthorAvailable: true }),
+  });
+  expect(JSON.stringify(present.mock.calls)).not.toContain("private-second@example.test");
+  context.getRuntimeConfig = () => ({ gateway: { github: { host: "absent.ghe.example.test" } } });
+  expect(await rpc("users.self", primary.id)).toHaveBeenCalledWith(true, {
+    profile: expect.objectContaining({ githubIdentity: null, gitCoauthorAvailable: false }),
+  });
 });
 
 it.each(["role", "identity"] as const)(

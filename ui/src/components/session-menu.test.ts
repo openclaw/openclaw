@@ -337,6 +337,21 @@ describe("session menu", () => {
     },
   );
 
+  it("clears the group search after compact Back and reentry", async () => {
+    const groups = Array.from({ length: 9 }, (_, i) => `Group ${i + 1}`);
+    const menu = await mountMenu({ compact: true, groups });
+    await selectMenuValue(menu, "compact:open-group");
+    const search = menu.querySelector<HTMLInputElement>("input[data-search]")!;
+    search.value = "zzz";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    await settleSessionMenu(menu);
+    expect(menu.textContent).toContain("No groups match your search.");
+    await selectMenuValue(menu, "compact:back");
+    await selectMenuValue(menu, "compact:open-group");
+    expect(menu.querySelector<HTMLInputElement>("input[data-search]")!.value).toBe("");
+    expect(menuItemLabels(menu)).toContain("Group 9");
+  });
+
   it("navigates compact groups without side flyouts", async () => {
     const menu = await mountMenu({ compact: true, groups: ["Research"] });
     for (const view of ["copy", "open-in", "icon", "group"] as const) {
@@ -479,11 +494,10 @@ describe("session menu", () => {
     ).toBeDefined();
     const research = menuItem(submenu, "Research");
     expect(research.getAttribute("aria-checked")).toBe("true");
-    research.focus();
-    expect(press(research, "٢", { code: "Digit2" }).defaultPrevented).toBe(true);
-    await settleSessionMenu(menu);
-    expect(onAction).toHaveBeenCalledWith({ kind: "move-to-group", category: "Projects" });
+    expect(research.hasAttribute("aria-keyshortcuts")).toBe(false);
+    expect(submenu.querySelector("input[data-search]")).toBeNull();
     for (const [value, action] of [
+      ["move-to-group:Projects", { kind: "move-to-group", category: "Projects" }],
       ["move-to-group:", { kind: "move-to-group", category: null }],
       ["new-group", { kind: "new-group" }],
     ] as const) {
@@ -492,6 +506,42 @@ describe("session menu", () => {
       await selectMenuValue(menu, value);
       expect(onAction).toHaveBeenCalledWith(action);
     }
+  });
+
+  it("searches long group lists and starts each opening unfiltered", async () => {
+    const groups = [
+      "Research",
+      "Releases",
+      "Issues",
+      "Pull requests",
+      "PR reviews",
+      "Automation",
+      "Design",
+      "Docs",
+      "Mu\u0308nchen",
+    ];
+    const { menu, onAction } = await actionMenu({ session: { category: "Issues" }, groups });
+    const submenu = await openSubmenu(menu, "Move to group");
+    const search = submenu.querySelector<HTMLInputElement>("input[data-search]")!;
+    expect(search.getAttribute("aria-label")).toBe("Search groups");
+    const type = async (value: string) => {
+      search.value = value;
+      search.dispatchEvent(new Event("input", { bubbles: true }));
+      await settleSessionMenu(menu);
+      return menuItemLabels(submenu);
+    };
+    expect(await type("pr re")).toEqual(["PR reviews", "Remove from group", "New group"]);
+    expect(await type("zzz")).toEqual(["Remove from group", "New group"]);
+    expect(submenu.textContent).toContain("No groups match your search.");
+    expect(await type("mu\u0308nchen")).toContain("Mu\u0308nchen");
+    await type("m\u00fcnchen");
+    await selectMenuValue(menu, `move-to-group:${encodeURIComponent("Mu\u0308nchen")}`);
+    expect(onAction).toHaveBeenCalledWith({ kind: "move-to-group", category: "Mu\u0308nchen" });
+
+    await reopen(menu);
+    const reopened = await openSubmenu(menu, "Move to group");
+    expect(reopened.querySelector<HTMLInputElement>("input[data-search]")!.value).toBe("");
+    expect(menuItemLabels(reopened)).toEqual([...groups, "Remove from group", "New group"]);
   });
 
   it.each([

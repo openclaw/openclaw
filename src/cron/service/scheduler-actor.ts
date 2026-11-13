@@ -25,6 +25,7 @@ import { locked } from "./locked.js";
 import { registerCronSchedulerRefresh } from "./run-queue-wake.js";
 import {
   adoptCronRunRequests,
+  drainCronRunQueue,
   getCronRunQueueRequests,
   launchCronRunQueueResult,
 } from "./run-queue.js";
@@ -161,8 +162,10 @@ export async function startCronScheduler(
     pending: Promise.resolve(),
   };
   connections.set(state, connection);
-  connection.releaseRefresh = registerCronSchedulerRefresh(state, () =>
-    refreshCronScheduler(state),
+  connection.releaseRefresh = registerCronSchedulerRefresh(
+    state,
+    () => refreshCronScheduler(state),
+    () => drainCronRunQueue(state),
   );
   connection.unregister = registerOpenClawStateDatabaseAsyncResource({
     async close(identity) {

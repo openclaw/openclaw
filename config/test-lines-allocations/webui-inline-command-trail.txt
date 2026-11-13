@@ -1,0 +1,4 @@
+# Inline command streaming, disclosure and chronological presentation regressions,
+# including browser transport/recovery/reload/scroll, live bubble ownership,
+# rolling output bounds, terminal lifecycle, and Codex output fidelity.
+1372

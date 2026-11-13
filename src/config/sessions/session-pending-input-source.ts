@@ -1,14 +1,17 @@
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { prepareSqliteScope, resolveSqliteScope } from "./session-accessor.sqlite-scope.js";
 import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import type { PendingInputSourceRead } from "./session-pending-input-operations.types.js";
 import type { PendingInputScope } from "./session-pending-input-store.js";
+import { parseSessionPendingInputMessage } from "./session-pending-input-value.js";
 import { captureSessionStoreReadTarget } from "./session-store-read-target.js";
 import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
+import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
-export async function readPendingInputSource(
+async function readPendingInputSource(
   scope: PendingInputScope,
   idempotencyKey: string,
   pendingOnly: boolean,
@@ -93,4 +96,41 @@ export async function readPendingInputSource(
   );
   assertCurrent();
   return { path: identity.canonicalPath, snapshot, assertCurrent };
+}
+
+/** Read one admitted source for explicit retry comparison; this never authorizes replay. */
+export function readSessionSubmittedInput(
+  scope: PendingInputScope,
+  idempotencyKey: string,
+  options: { includeSource: true },
+): Promise<
+  | { message: PersistedUserTurnMessage; source: "pending" | "transcript"; messageSeq?: number }
+  | undefined
+>;
+export function readSessionSubmittedInput(
+  scope: PendingInputScope,
+  idempotencyKey: string,
+): Promise<PersistedUserTurnMessage | undefined>;
+export async function readSessionSubmittedInput(
+  scope: PendingInputScope,
+  idempotencyKey: string,
+  options?: { includeSource: true },
+) {
+  const source = await readPendingInputSource(scope, idempotencyKey, false);
+  if (!source?.snapshot.current) {
+    return undefined;
+  }
+  source.assertCurrent();
+  const { pending, committed, committedMessageSeq } = source.snapshot;
+  const message = pending ? parseSessionPendingInputMessage(pending.message_json) : committed;
+  if (!message || readMessageIdempotencyKey(message) !== idempotencyKey) {
+    return undefined;
+  }
+  return options?.includeSource
+    ? {
+        message,
+        source: pending ? ("pending" as const) : ("transcript" as const),
+        ...(committedMessageSeq !== undefined ? { messageSeq: committedMessageSeq } : {}),
+      }
+    : message;
 }

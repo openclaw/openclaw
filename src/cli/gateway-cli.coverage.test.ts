@@ -137,8 +137,10 @@ async function expectJsonValidationFailure(args: string[], message: unknown) {
 
 describe("gateway-cli coverage", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  afterEach(resetLogger);
 
   beforeEach(() => {
+    resetLogger();
     gatewayProgram = createGatewayProgram();
     work.signal = undefined;
     callGateway.mockReset();

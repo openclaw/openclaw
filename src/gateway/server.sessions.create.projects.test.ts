@@ -42,9 +42,12 @@ import { createChatRunState } from "./server-chat-state.js";
 import type { GatewayClient } from "./server-methods/client-types.js";
 import {
   controlUiClient,
+  expectChatEvent,
+  expectPreparedProject,
   initializeRepository,
   publishRepositoryFixtureCheckpoint,
   removeOwnedSessionWorktree,
+  retryRemoteProjectSession,
   settleWorkspaceRuns,
   successfulSessionRequest as request,
 } from "./server.sessions.create.projects.test-support.js";
@@ -109,26 +112,6 @@ function mockDispatch() {
     queuedFinal: false,
     counts: { block: 0, final: 0, tool: 0 },
   });
-}
-function expectChatEvent(broadcast: ReturnType<typeof vi.fn>, fields: Record<string, unknown>) {
-  expect(broadcast).toHaveBeenCalledWith(
-    "chat",
-    expect.objectContaining(fields),
-    expect.anything(),
-  );
-}
-function expectPreparedProject(
-  entry: SessionEntry | null | undefined,
-  sessionId: string,
-  project: Awaited<ReturnType<typeof registerProjectRegistry>>,
-  projectRoot: string,
-) {
-  expect(entry).toMatchObject({
-    sessionId,
-    projectId: project.id,
-    worktree: { canonicalWorkspaceDir: projectRoot },
-  });
-  expect(entry?.spawnedCwd).not.toBe(projectRoot);
 }
 async function remoteProjectFixture<T = Awaited<ReturnType<typeof registerProjectRegistry>>>(
   prefix: string,
@@ -445,26 +428,43 @@ test.for([
             { ...entryAfterFailure!, pendingWorktree: undefined },
           );
         }
+        if (worktree) {
+          const retryFailure =
+            "Synthetic retry clone failure; check the Gateway Git configuration.";
+          projectCloneMocks.materialize.mockRejectedValueOnce(
+            new ProjectCloneError("clone_failed", retryFailure),
+          );
+          await retryRemoteProjectSession(key, "remote-project-failed-retry", context);
+          await settleWorkspaceRuns(context, storePath, key);
+          const history = await request("chat.history", { sessionKey: key }, controlUiClient);
+          expect(history).toMatchObject({
+            sessionInfo: {
+              sessionId,
+              status: "failed",
+              hasActiveRun: false,
+              lastRunId: "remote-project-failed-retry",
+              lastRunError: expect.stringContaining(retryFailure),
+            },
+          });
+          expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+        }
         const retriedMaterialization = createDeferredCore<typeof project>();
         projectCloneMocks.materialize.mockReturnValueOnce(retriedMaterialization.promise);
         const restartedContext = { broadcast, dedupe: new Map() };
 
         try {
-          const retried = await request<{ runId: string; status: string }>(
-            "chat.send",
-            {
-              sessionKey: key,
-              agentId: "main",
-              message: "Retry the remote project",
-              idempotencyKey: "remote-project-retry",
-            },
-            { ...controlUiClient, context: restartedContext },
+          const retried = await retryRemoteProjectSession(
+            key,
+            "remote-project-retry",
+            restartedContext,
           );
           expect(retried).toMatchObject({
             runId: "remote-project-retry",
             status: "started",
           });
-          await vi.waitFor(() => expect(projectCloneMocks.materialize).toHaveBeenCalledTimes(2));
+          await vi.waitFor(() =>
+            expect(projectCloneMocks.materialize).toHaveBeenCalledTimes(worktree ? 3 : 2),
+          );
           expect(readEntry(storePath, key)?.lastRunError).toBe(undefined);
           expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
           for (const entry of [entryAfterCreation, entryAfterFailure, readEntry(storePath, key)]) {
