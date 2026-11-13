@@ -705,7 +705,8 @@ struct RootSidebar: View {
 
     private func sessionButton(
         _ node: ChatSessionSidebarModel.Node,
-        rowPass: SessionRowPass, isChild: Bool) -> some View
+        rowPass: SessionRowPass,
+        isChild: Bool) -> some View
     {
         let session = node.session
         let isSelected = session.key == rowPass.selectedSessionKey
