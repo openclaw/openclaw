@@ -302,6 +302,7 @@ export function validateExplicitPluginConfig(params: {
         kind: record.kind,
         slot: memorySlot,
         selectedId: selectedMemoryPluginId,
+        sidecar: normalizedPlugins.entries[pluginId]?.memorySidecar === true,
       });
       if (!memoryDecision.enabled) {
         enabled = false;

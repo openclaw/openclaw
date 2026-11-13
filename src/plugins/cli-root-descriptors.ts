@@ -65,6 +65,7 @@ export async function getPluginCliCommandDescriptors(
         kind: plugin.kind,
         slot: memorySlot,
         selectedId: selectedMemoryPluginId,
+        sidecar: normalizedConfig.entries[plugin.id]?.memorySidecar === true,
       });
       if (!memoryDecision.enabled) {
         continue;

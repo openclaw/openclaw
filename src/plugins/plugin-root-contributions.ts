@@ -47,6 +47,7 @@ export function* iteratePluginRootContributions(params: {
       kind: record.kind,
       slot: memorySlot,
       selectedId: selectedMemoryPluginId,
+      sidecar: normalizedPlugins.entries[record.id]?.memorySidecar === true,
     });
     if (!memoryDecision.enabled) {
       continue;

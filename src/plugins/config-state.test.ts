@@ -420,6 +420,34 @@ describe("resolveMemorySlotDecision", () => {
     });
     expect({ enabled: result.enabled, selected: result.selected }).toMatchObject(expected);
   });
+
+  it.each([
+    ["memory-core", null, { enabled: true, selected: undefined }],
+    [undefined, "memory-core", { enabled: true, selected: undefined }],
+    [undefined, null, { enabled: true, selected: undefined }],
+    ["memory-plugin", null, { enabled: true, selected: true }],
+    [null, null, { enabled: false, selected: undefined }],
+  ] as const)("loads an approved sidecar beside slot=%s selected=%s", (slot, selectedId, expected) => {
+    const result = resolveMemorySlotDecision({
+      id: "memory-plugin",
+      kind: "memory",
+      slot,
+      selectedId,
+      sidecar: true,
+    });
+    expect({ enabled: result.enabled, selected: result.selected }).toMatchObject(expected);
+  });
+
+  it("normalizes plugins.entries.<id>.memory.sidecar", () => {
+    const normalized = normalizePluginsConfig({
+      entries: {
+        "memory-plugin": { memory: { sidecar: true } },
+        other: { memory: {} },
+      },
+    });
+    expect(normalized.entries["memory-plugin"]?.memorySidecar).toBe(true);
+    expect(normalized.entries.other?.memorySidecar).toBeUndefined();
+  });
 });
 
 describe("context engine ownership", () => {

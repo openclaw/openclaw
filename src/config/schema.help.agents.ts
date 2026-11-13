@@ -41,6 +41,10 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Default timeout in milliseconds for this plugin's typed hooks, capped at 600000. When unset, each hook uses the plugin's declared timeout or the Gateway's per-hook policy; there is no single fixed default. Per-hook values in hooks.timeouts take precedence.",
   "plugins.entries.*.hooks.timeouts":
     "Per-hook timeout overrides in milliseconds keyed by typed hook name, capped at 600000. Use narrow overrides for known slow hooks such as before_prompt_build or agent_end instead of raising every hook timeout.",
+  "plugins.entries.*.memory":
+    "Per-plugin memory role controls. Use this only for plugins whose manifest kind is memory.",
+  "plugins.entries.*.memory.sidecar":
+    "Loads this memory plugin beside the plugin selected by plugins.slots.memory instead of disabling it. The plugin keeps its hooks, tools and corpus supplements; its memory runtime, provider runtime and recall tool grant are dropped, as for the dreaming sidecar. It never takes the slot. Ignored when plugins.slots.memory is none.",
   "plugins.entries.*.subagent":
     "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
   "plugins.entries.*.subagent.allowModelOverride":

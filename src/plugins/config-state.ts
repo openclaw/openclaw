@@ -389,6 +389,7 @@ export function resolveMemorySlotDecision(params: {
   kind?: string | string[];
   slot: string | null | undefined;
   selectedId: string | null;
+  sidecar?: boolean;
 }): { enabled: boolean; reason?: string; selected?: boolean } {
   return resolveMemorySlotDecisionShared(params);
 }

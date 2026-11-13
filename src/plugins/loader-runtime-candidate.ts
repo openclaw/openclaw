@@ -283,6 +283,7 @@ export function* loadRuntimePluginCandidate(params: {
       kind,
       slot: memorySlot,
       selectedId: state.selectedMemoryPluginId,
+      sidecar: context.normalized.entries[record.id]?.memorySidecar === true,
     });
   if (
     registrationPlan.runRuntimeCapabilityPolicy &&

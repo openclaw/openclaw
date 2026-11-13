@@ -36,6 +36,8 @@ export type NormalizedPluginsConfig = {
         hasAllowedModelsConfig?: boolean;
         hasAllowedCompletionModelsConfig?: boolean;
       };
+      /** plugins.entries.<id>.memory.sidecar === true. */
+      memorySidecar?: boolean;
       config?: unknown;
     }
   >;
@@ -160,6 +162,10 @@ function normalizePluginEntries(
         normalizePluginModelConfig(entry.subagent, "subagent") ??
         normalized[normalizedKey]?.subagent,
       llm: normalizePluginModelConfig(entry.llm, "llm") ?? normalized[normalizedKey]?.llm,
+      memorySidecar:
+        isRecord(entry.memory) && typeof entry.memory.sidecar === "boolean"
+          ? entry.memory.sidecar
+          : normalized[normalizedKey]?.memorySidecar,
       config: "config" in entry ? entry.config : normalized[normalizedKey]?.config,
     };
   }
