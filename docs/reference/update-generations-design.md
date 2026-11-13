@@ -1,7 +1,7 @@
 ---
 doc-schema-version: 1
 title: "Update generations design"
-summary: "Design proposal: package generations on OpenClaw-owned prefixes inside the package update path, and staged transfer of update work to the candidate"
+summary: "Design proposal: release directories behind a linked package root on OpenClaw-owned prefixes, and staged transfer of update work to the candidate"
 read_when:
   - Designing how OpenClaw-owned install prefixes replace their code during an update
   - Deciding whether a user-scope installation should reuse the immutable installation owner
@@ -11,22 +11,22 @@ read_when:
 # Update generations design
 
 **Design proposal. One slice is implemented and in review; nothing else here is built. No implementation authorization.**
-Two changes to `openclaw update`: install each release into its own directory
-on prefixes that OpenClaw owns, and move update work out of the installed
-updater into the candidate in stages.
+Two changes to `openclaw update`: keep each release in its own directory on
+prefixes that OpenClaw owns and switch between them by repointing one link, and
+move update work out of the installed updater into the candidate in stages.
 
-This is the third version. Source reviews at
-`0001c18108e9f13426bbc9eaedd656e4bd86cef6` and
-`96a52f29220a8` on November 12, 2026 changed the plan twice. See
+This is the fourth version. Source reviews at
+`0001c18108e9f13426bbc9eaedd656e4bd86cef6`, `96a52f29220a8`, and
+`a83f74375ccaa` on November 12 and 13, 2026 changed the plan three times. See
 [Rejected approaches](#rejected-approaches). Counts under "Why change it" are
 from `6acf398088c430ba93944a5bc07eec1b2299ac00`.
 
-| Slice                                        | Status                                                                             |
-| -------------------------------------------- | ---------------------------------------------------------------------------------- |
-| Candidate-owned rehearsal                    | Implemented in [#197922](https://github.com/openclaw/openclaw/pull/197922), draft. |
-| Package generations on owned prefixes        | Proposed below. Needs decisions 1 to 4.                                            |
-| Owed steps after the commit point            | Proposed.                                                                          |
-| Stop, publish, and rollback in the candidate | Not designed.                                                                      |
+| Slice                                        | Status                                                                                 |
+| -------------------------------------------- | -------------------------------------------------------------------------------------- |
+| Candidate-owned rehearsal                    | Implemented in [#197922](https://github.com/openclaw/openclaw/pull/197922), in review. |
+| Release directories behind a linked root     | Proposed below. Needs decisions 1 to 4.                                                |
+| Owed steps after the commit point            | Proposed.                                                                              |
+| Stop, publish, and rollback in the candidate | Not designed.                                                                          |
 
 ## Why change it
 
@@ -41,9 +41,14 @@ migration. The cost comes from two structural choices.
 | Doc caveats of the form "requires the fix in the installed updater" | 278                           |
 | Entry and byte limits on package fingerprint scans                  | 500,000 / 8 GiB               |
 
-**Package updates replace files in place.** The old bytes are gone after the
-swap, so the updater backs them up, fingerprints both trees, saves and restores
-launchers, and keeps a private copy of its own runtime so it can finish.
+**The old release leaves its path during a package update.** The swap itself is
+two directory renames: the installed package moves to a backup and the staged
+one moves in (`createPublicationOwner` in
+`src/infra/package-update-publication-owner.ts`). Everything around those
+renames exists because the old tree is displaced from a shared location. The
+updater hashes whole trees before and after, saves and restores launchers,
+deletes the old tree once the new one verifies, and keeps a private copy of its
+own runtime because its files are about to move.
 
 **The installed updater drives the whole run.** A fix in the new release cannot
 help the release that is failing, which is why `2026.9.3` through `2026.9.5`
@@ -51,19 +56,33 @@ each carry a manual procedure.
 
 ### Measured
 
-Two runs of the published-driver Docker cell on November 12, 2026, with a small
-fixture state. Treat the proportions as indicative.
+One run of the published-driver Docker cell on November 12, 2026: published
+updater `2026.11.3`, candidate #197922 at `758582e`, linux/arm64, a small
+fixture state. The installed package tree was 46,250 entries and 591 MB.
 
-| Step                            | Published updater | Updater with #197922 |
-| ------------------------------- | ----------------- | -------------------- |
-| Package swap                    | 41.4 s            | not extracted        |
-| Updater copying its own runtime | 15.8 s            | not extracted        |
-| Package install into staging    | 19.6 s            | not extracted        |
-| Rehearsal, all checks           | 24.3 s            | 25.5 s               |
-| All recorded steps              | 154 s             | 177 s                |
+| Step                                   | Time    |
+| -------------------------------------- | ------- |
+| Updater copying its own runtime        | 14.0 s  |
+| Package install into staging           | 18.6 s  |
+| Rehearsal, all checks                  | 21.0 s  |
+| Package swap step                      | 37.6 s  |
+| Post-swap Doctor, inside the swap step | 19.4 s  |
+| Post-plugin Doctor                     | 9.9 s   |
+| All recorded steps                     | 139.1 s |
 
-In the first run the package swap and the updater's self-copy were 37% of
-recorded step time. Generations remove both on the prefixes they cover.
+The swap step's clock runs from the baseline scan through stopping the Gateway,
+the two renames, the post-swap Doctor, and deleting the old tree. That the
+Doctor run is inside it is an inference: the whole activating phase lasted
+45.8 s, which cannot hold a 37.6 s swap and a separate 19.4 s Doctor. The
+artifacts do not split the remaining 18 s between stopping the Gateway and file
+work. The third version of this document counted the post-swap Doctor twice.
+
+The swap step is slower with older updaters against the same candidate: 37 to
+38 s with `2026.11.x`, 69 to 70 s with `2026.10.x`, and 109 s with `2026.9.9`.
+
+What a link flip can remove on the prefixes it covers is the updater's copy of
+its own runtime and the file work inside the swap step: at most about 32 s of
+139 s in this run. Doctor, rehearsal, and the staging install are untouched.
 
 ## Prior art
 
@@ -85,32 +104,51 @@ None of the four runs code from its own release directory while a
 package-manager-owned copy of an older version stays installed as a launcher.
 Release directories appear only where the tool's own installer owns the layout.
 
+OpenClaw already ships the same pattern in four places:
+
+| Where                     | Pointer                                                               | Source                                        |
+| ------------------------- | --------------------------------------------------------------------- | --------------------------------------------- |
+| Immutable installation    | `current` symlink, published by a journaled temporary link and rename | `publishImmutablePointer`                     |
+| Node host runtime         | `current` symlink, or a junction on Windows                           | `activateRuntime` in `node-host-launcher.mjs` |
+| Packaged macOS app        | `current` and `previous` links to build directories                   | `BundledRuntime+Seeding.swift`                |
+| pnpm global installations | The package root is a link that pnpm repoints                         | `resolveCliEntrypointPathForService`          |
+
 ## Installation layouts today
 
-| Layout                        | Who owns it                                                                                                                                                              | Source                                           |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------ |
-| `install.sh`, the default     | npm. It runs `npm install -g` into the user's npm prefix.                                                                                                                | `scripts/install.sh`                             |
-| `install-cli.sh`              | OpenClaw. Default prefix `~/.openclaw`. `tools/node-v<version>/` is both the private Node and the npm prefix. `bin/openclaw` is a wrapper that names one physical entry. | `scripts/install-cli.sh`                         |
-| macOS app managed CLI         | OpenClaw. The app runs the bundled `install-cli.sh` with the profile state directory as the prefix.                                                                      | `apps/macos/Sources/OpenClaw/CLIInstaller.swift` |
-| Durable service copy          | OpenClaw. An npm prefix at `<stateDir>/npm` that `openclaw update` updates in place.                                                                                     | `src/daemon/durable-service-entrypoint.ts`       |
-| Node host runtime generations | OpenClaw. `<stateDir>/node-runtime/releases/<version>-<digest>`, each a private npm prefix.                                                                              | `node-host-launcher.mjs`, `src/node-host/`       |
-| Immutable installation        | OpenClaw, root-owned, after explicit adoption.                                                                                                                           | `src/infra/update-immutable-*.ts`                |
+| Layout                        | Who owns it                                                                                                                                                             | Source                                     |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
+| `install.sh`, the default     | npm. It runs `npm install -g` into the user's npm prefix.                                                                                                               | `scripts/install.sh`                       |
+| `install-cli.sh`              | OpenClaw. Default prefix `~/.openclaw`. `tools/node-v<version>/` is both the private Node and the npm prefix. `bin/openclaw` is a wrapper that names one package entry. | `scripts/install-cli.sh`                   |
+| Durable service copy          | OpenClaw. An npm prefix at `<stateDir>/npm` that `openclaw update` updates in place.                                                                                    | `src/daemon/durable-service-entrypoint.ts` |
+| Node host runtime generations | OpenClaw. `<stateDir>/node-runtime/releases/<version>-<digest>`, each a private npm prefix.                                                                             | `node-host-launcher.mjs`, `src/node-host/` |
+| Packaged macOS app            | The app. Host-owned build directories under `<stateDir>/runtime`; `openclaw update` refuses it (`refuseHostOwnedUpdate`). `install-cli.sh` is its legacy path.          | `apps/macos/Sources/OpenClaw/NodeMode/`    |
+| Immutable installation        | OpenClaw, root-owned, after explicit adoption.                                                                                                                          | `src/infra/update-immutable-*.ts`          |
 
-Two facts constrain any release-directory design:
+Facts from the source that decide between the routes below:
 
-- The Gateway service definition runs the package's `dist/index.js` by absolute
-  path (`resolveGatewayProgramArguments` in `src/daemon/program-args.ts`).
-- A managed plugin that declares `openclaw` as a peer dependency gets
-  `node_modules/openclaw` linked to the real path of the host package
-  (`src/plugins/plugin-peer-link.ts`). Doctor and plugin install or update
-  create those links.
-
-Switching releases therefore means rewriting the service definition and
-relinking plugins, not only moving a pointer.
+- **The service definition stores the path it was given, not the resolved
+  one.** `resolveCliEntrypointPathForService` in `src/daemon/program-args.ts`
+  prefers the original, possibly symlinked path so that the definition survives
+  version changes.
+- **No launch path passes `--preserve-symlinks` to Node.** Node resolves the
+  entry file's real path at start, so a process started through a link stays
+  inside the directory the link named at that moment.
+- **Plugin links hold the resolved host path, but only as a by-product.**
+  `src/plugins/plugin-peer-link.ts` links `node_modules/openclaw` to the running
+  process's host root. No comment or test requires the resolved form. The
+  post-update plugin step relinks from the new release, and
+  `refreshStartupPluginQuarantine` repairs a stale link at Gateway start.
+- **The swap code already accepts a linked package root.**
+  `createNpmPackageRootLinkLifecycle` in `src/infra/package-update-npm-root.ts`
+  backs up by renaming the link and retires by unlinking it, with no tree
+  hashing. Journaled activation is skipped for a linked root today.
+- **The handoff root check compares resolved roots.**
+  `assertManagedServiceUpdateHandoffRoot` rejects a post-core child that runs
+  from a different resolved root, with an exception only for a pnpm owner.
 
 ## Part A: release directories
 
-Three routes were evaluated.
+Four routes were evaluated.
 
 ### Route 1: extend the immutable installation owner
 
@@ -130,87 +168,136 @@ over to a user-owned installation.
 | Gateway `update.run` is refused                                       | `src/gateway/server-methods/update-admission.ts`                  | New design. App and Control UI updates arrive that way.                            |
 | Nothing is collected                                                  | `update-immutable-install-schema.ts`                              | New design. Each generation is a full checkout plus a full recovery copy.          |
 
-The owner's safety rests on privilege separation. With one account, what
-transfers is the pattern, not the owner: journaled pointer publication
-(`package-update-activation-immutable-pointer.ts`), the activation journal, and
-the rule that Node starts from a physical path so lazy imports stay in one
-generation.
+**Verdict: do not extend the immutable owner to user installations.** Its safety
+rests on privilege separation. Reuse its pointer publication pattern.
 
-**Verdict: do not extend the immutable owner to user installations.** Reuse
-those three pieces.
+### Route 2: rebind the installation to a new package root
 
-### Route 2, recommended: package generations inside the package update path
+The third version of this document recommended this. Each release gets its own
+directory, and activation rewrites the three things that name the package root:
+the service definition, the `bin/openclaw` wrapper, and plugin links.
 
-The package update path already runs on every platform, crosses migrations
-through Doctor, refreshes service definitions, and tracks an active package
-root separately from the original one (`activePackageRoot` in
-`src/infra/package-update-steps.ts`). The change is to its publication step:
-bind the installation to a new package root instead of swapping bytes under the
-old one.
+The source trace found the bindings feasible but the route more expensive than
+the link flip for no added benefit:
+
+- Every update changes three paths, so a kill between effects leaves a mixed
+  installation that a journal must reconcile.
+- The activation journal is located and keyed by the package path
+  (`resolvePackageActivationAnchor`) and assumes one path whose contents change.
+  A moving root needs a different journal shape.
+- `activePackageRoot` in `src/infra/package-update-steps.ts` is not a rebinding
+  hook. It changes only for pnpm and Bun stages.
+- The installer layout changes in shell, TypeScript, and Swift at once.
+
+**Verdict: superseded by route 3.**
+
+### Route 3, recommended: a linked package root
+
+The installed package directory keeps the path it has today and becomes a link
+to a release directory. An update installs the new release beside the old one
+and repoints that one link.
 
 ```text
 <owned prefix>/
-  bin/openclaw            wrapper written by OpenClaw; names one physical entry
-  tools/node/             private Node
+  bin/openclaw                          unchanged; names the package path below
+  tools/node-v<version>/lib/node_modules/
+    openclaw -> <owned prefix>/releases/2026.12.1-a01b.../lib/node_modules/openclaw
   releases/
-    2026.11.4-3f9c.../    private npm prefix, sealed after install
+    2026.11.4-3f9c.../                  private npm prefix, sealed after install
     2026.12.1-a01b.../
 ```
 
-**A generation is a private npm prefix.** `prepareNodeRuntimeUpdate` in
+**A release is a private npm prefix.** `prepareNodeRuntimeUpdate` in
 `src/node-host/auto-update-install.ts` already builds one: it reads the registry
 manifest, checks the tarball's sha512 integrity, and installs through the
 shared `runGlobalPackageUpdateSteps`. Lift its generic part into one shared
-owner and make the node host a caller that supplies its schema checks.
+owner and make the node host a caller that supplies its schema checks. The
+staging install the package path does today becomes the release, so nothing is
+moved after it.
 
-**There is no pointer file.** The wrapper and the service definition each name a
-physical entry, and both are rewritten at activation. Node therefore always
-starts from a physical path, and no launcher logic is added to the package.
+**Activation is one rename.** With the Gateway drained and stopped as today:
 
-**Activation is a rebinding, journaled as one operation:**
+1. Create a temporary link to the new release and record the intent with the
+   link's identity, as `publishImmutablePointer` does.
+2. Rename the temporary link over the package root. On POSIX this replaces the
+   old link atomically. On Windows a junction cannot be replaced that way, so
+   the flip is two renames with a `.previous` name, as `activateRuntime` does
+   for the node host.
+3. Continue as today: Doctor, post-core plugin convergence,
+   `gateway install --force`, start, and verification all run from the new
+   release.
 
-1. Rewrite the service definition to the new package root. The update path
-   already rewrites definitions during finalization.
-2. Rewrite the wrapper by writing a temporary file and renaming it.
-3. Relink managed plugins to the new host package, through the existing plugin
-   link owner.
+**The first update adopts the layout.** When the package root is still a plain
+directory, the updater moves it into `releases/` as the previous release and
+puts the link in its place. This reuses the displacement rename the swap already
+does; the difference is that the old tree is kept, not deleted.
 
-The journal records intent before the first effect and the observed result
-after each. Rollback reverses the same three effects. Migration, backups, drain,
-stop, start, and verification stay exactly as the package path does them today,
-which is why this route can cross schemas and the immutable one cannot.
+**Rollback points the link back.** The previous release was never touched, so
+there is no backup to verify byte for byte. Config and service definition
+restore stay as they are, and so does the rule that code does not roll back
+across a migration.
 
-**Layout conflicts to resolve first:**
+**What stays valid without rewriting:** the service definition, the wrapper,
+npm's `bin` launcher, and shell completion, because each names the stable path
+or no package path at all.
 
-- `install-cli.sh` nests the package under a versioned Node directory, so the
-  Node version and the release are one directory. They must separate.
-- The macOS app uses the profile state directory as the prefix, so `releases/`
-  would sit inside state. It needs a data location outside state, or an
-  explicit carve-out from state backups and Doctor's replacement set.
-- The durable service copy enters through `openclaw.mjs`, not a wrapper. Its
-  selector is the service definition alone.
-- Shell, TypeScript, and Swift each hard-code these paths. One owner must
-  publish the layout, and the others must read it.
-- `install-cli.sh` has no Windows path.
+**What needs new work:**
 
-**Retention.** Each process holds a lease on the release it runs. Collection
-removes a release only when no wrapper or service definition names it, no lease
-holds it, the journal does not reference it, and it is past a minimum age. A
-release that sits behind a completed migration is collected once the migrated
-Gateway verifies.
+- A rule in `assertManagedServiceUpdateHandoffRoot` for a linked release, on the
+  model of its pnpm exception. Without it, the post-core child of a
+  Gateway-initiated update runs from a different resolved root and is refused.
+- Journaled activation for a linked root, with the pointer intent recorded
+  before the rename. The journal's path key stays valid because the package
+  path does not change.
+- Plugin links. The existing relink and startup repair cover a flip. Linking to
+  the stable path instead would remove the stale state altogether; decide
+  during implementation.
+- Leases and collection, below.
+- `openclaw update status` reporting the active and retained releases.
 
-**What it retires, on owned prefixes only:** the live-tree backup, baseline
-fingerprinting, rollback byte verification, and the updater's private copy of
-its own runtime. The swap code stays, because it builds each generation and
-serves package-manager-owned installations.
+**Retention.** Each process holds a lease on the release it runs, because it
+keeps loading files from that directory after a flip. Collection removes a
+release only when the link does not name it, no lease holds it, the journal
+does not reference it, and it is past a minimum age. A release behind a
+completed migration is collected once the migrated Gateway verifies.
 
-### Route 3: move package-manager-owned installations to an owned prefix
+**What it retires, on linked roots only:** the live-tree backup, baseline
+fingerprinting of the old tree, rollback byte verification, deleting the old
+tree inside the activation window, and the updater's private copy of its own
+runtime. The updater keeps that copy today because activation replaces the
+files it is running from (`src/infra/update-retained-runtime.ts`). Whether it
+has other uses that survive a flip is not traced. The swap code stays for
+package-manager-owned installations and for adoption.
 
-Installations owned by npm, pnpm, Bun, Homebrew, or a system package manager
-gain nothing from route 2 unless they move. If offered, the move follows Pi's
-order: prepare and verify the owned release, switch the service and PATH entry,
-and only then remove the package-manager copy. This is a separate proposal,
-after route 2 has run on owned prefixes.
+**Scope.** The `install-cli.sh` prefix and the durable service copy. The
+packaged macOS app already has its own build links and is not updated by
+`openclaw update`. The node host keeps its launcher and gains the shared
+release installer and collection.
+
+### Route 4: package-manager-owned installations
+
+Installations owned by pnpm, Bun, Homebrew, or a system package manager keep
+their current update path.
+
+An npm-owned global prefix could take a linked root without moving. In a test
+with a toy package on npm 11.20.0, `npm install -g` over a linked root replaced
+the link with a normal directory and left the release untouched, and
+`npm uninstall -g` removed only the link. That means a manual npm install would
+return the installation to today's layout, and the next update would adopt it
+again. This is a separate proposal, after route 3 has run on owned prefixes.
+
+### What was tested
+
+Both tests used toy packages, not an OpenClaw installation.
+
+- **Node 26.12.1.** A process started through the linked root kept loading its
+  own release after the link was flipped under it. A process started afterwards
+  loaded the new release. A plugin whose `node_modules/openclaw` named the
+  stable path shared the host's module instance in both.
+- **A plugin loaded by the old process after the flip** still resolved to the
+  old release. Node's internal path cache explains that, and it is not a
+  contract to rely on.
+- **npm 11.20.0.** The behavior described under route 4.
 
 ## Part B: move update work to the candidate in stages
 
@@ -254,120 +341,142 @@ Not designed here. Three things block it:
 - The managed-service handoff lease transfers to a helper running the installed
   entry point, not the candidate, and it is not available on Windows.
 
-Route 2 makes rollback a serializable record, which removes the second blocker.
+A linked root makes rollback a serializable record, the identity of the
+previous release, which removes the second blocker.
 
 ## Update behavior and first hop
 
-| Hop or case                             | What happens                                                                                                               | Proof                                                            |
-| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| Any published driver to a B1 release    | Unchanged. The old driver runs its own rehearsal.                                                                          | Ran: published `2026.11.3` to #197922, passed.                   |
-| B1 driver to a B1 candidate             | The candidate rehearses itself.                                                                                            | Ran: a local build seeded as the driver, passed.                 |
-| B1 driver to a candidate without marker | The updater runs its own rehearsal.                                                                                        | Unit tests only.                                                 |
-| Owned prefix, first generation update   | The driver prepares the first release directory. Activation rebinds the service definition, the wrapper, and plugin links. | New: `install-cli.sh` prefix, two consecutive updates, rollback. |
-| Killed at any rebinding effect          | Journal intent is reconciled against all three effects before retry.                                                       | New: fault injection before and after each effect.               |
+| Hop or case                                    | What happens                                                                                             | Proof                                                                              |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| Any published driver to a B1 release           | Unchanged. The old driver runs its own rehearsal.                                                        | Ran on #197922 at `758582e`: `2026.10.1`, `2026.10.9`, `2026.11.2`, `2026.11.3`.   |
+| B1 driver to a B1 candidate                    | The candidate rehearses itself.                                                                          | Ran: a local build seeded as the driver, passed.                                   |
+| B1 driver to a candidate without marker        | The updater runs its own rehearsal.                                                                      | Unit tests only.                                                                   |
+| Published driver to the first route 3 release  | Today's swap. The package root stays a plain directory.                                                  | New: a published-driver cell.                                                      |
+| Route 3 driver, package root still a directory | Adoption: the old tree becomes the previous release and the link takes its place.                        | New: `install-cli.sh` prefix and durable service copy, then rollback.              |
+| Route 3 driver, linked package root            | The flip.                                                                                                | New: two consecutive updates, rollback, and a Gateway-initiated update.            |
+| Published driver meets a linked package root   | Expected: its existing linked-root path replaces the link with a directory. Not tested.                  | New: a published-driver cell with a linked root, before any release ships route 3. |
+| Killed around the flip                         | The link names the old or the new release. The journal intent is reconciled against it before any retry. | New: fault injection before and after the rename, and between the Windows renames. |
 
 This design does not repair an updater that is already installed. An
-installation on an older release reaches a B1 release with the updater it has.
+installation on an older release reaches a B1 or route 3 release with the
+updater it has, and adopts the linked layout on the update after that.
 Installations already blocked on a published driver still need their documented
 manual procedure once.
+
+A published driver can meet a linked root after a downgrade to a release from
+before route 3. That row is the one that can strand an installation, so its
+cell gates the first release that ships adoption.
 
 ## Channels and downgrades
 
 Stable, beta, and extended-stable differ only in how the target is selected,
 and target selection stays in the installed updater. All three get B1 and B2,
-and route 2 only on an owned prefix.
+and route 3 only on an owned prefix.
 
 Dev is a Git installation. The installed updater must fetch, replay local
 commits, install dependencies, and build before any candidate code exists. B1
-applies after that build. Route 2 does not apply.
+applies after that build. Route 3 does not apply.
 
 `openclaw update --tag <older-version>` keeps its contract: it checks that the
 target can read current state, asks for confirmation, and refuses a target
-behind a migration. On an owned prefix an allowed downgrade rebinds to an older
-release, with no download when that release is still retained. See
+behind a migration. On a linked root an allowed downgrade points the link at an
+older release, with no download when that release is still retained. See
 [Downgrade](/install/updating/rollback-and-recovery#downgrade).
 
 ## Risks
 
-| Risk                                             | Severity | Mitigation                                                                                                              |
-| ------------------------------------------------ | -------- | ----------------------------------------------------------------------------------------------------------------------- |
-| Rebinding leaves a mixed state                   | High     | Journal intent before the first effect and reconcile all three before any retry or start.                               |
-| Collection deletes a release in use              | High     | Leases, not a newest-N rule. An unknown reference keeps the files.                                                      |
-| Three owners hard-code the prefix layout         | High     | One owner publishes the layout. Converge the installer and the macOS app before any activation change.                  |
-| `releases/` inside the state directory           | Medium   | Decide the macOS app's data location first. Do not let state backups or Doctor copy release directories.                |
-| Several Gateways share one owned prefix          | Medium   | One activation rebinds all of them. Each is drained and stopped, and each state directory gets its own Doctor run.      |
-| Disk use                                         | Medium   | Bounded by leases and minimum age. Admission checks free space for the candidate. Installed release size is unmeasured. |
-| A new journal descriptor outlives its first form | Medium   | Version it. Retained recovery runtimes must be able to read it.                                                         |
+| Risk                                                 | Severity | Mitigation                                                                                                                   |
+| ---------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Something stores a resolved release path             | High     | Known holders are plugin links, the agent CLI shim, and executor and journal identity. Test that none survives a flip stale. |
+| Collection deletes a release in use                  | High     | Leases, not a newest-N rule. An unknown reference keeps the files.                                                           |
+| A published driver mishandles a linked root          | High     | Run that cell before shipping adoption. If it fails, adoption needs a marker that old drivers already respect.               |
+| The Windows flip is two renames                      | Medium   | The Gateway is stopped, the exposure equals today's swap, and the node host's `.previous` recovery applies.                  |
+| A process keeps running across a flip                | Medium   | It stays in its own release, which is safer than today. Its lease keeps that release from collection.                        |
+| npm reports the package as a link on an owned prefix | Medium   | Document it. A manual `npm install -g` restores a plain directory, and the next update adopts it again.                      |
+| Several Gateways share one owned prefix              | Medium   | One flip moves all of them. Each is drained and stopped, and each state directory gets its own Doctor run.                   |
+| Disk use                                             | Medium   | A release measured 591 MB. Bounded by leases and minimum age. Admission checks free space for the candidate.                 |
+| A new journal record outlives its first form         | Medium   | Version it. Retained recovery runtimes must be able to read it.                                                              |
 
 ## Review slices
 
 These are proposals, not permission to open them.
 
 1. **B1, candidate-owned rehearsal.** In review as #197922.
-2. **One layout owner and a shared generation installer, no activation.**
-   Separate the Node directory from the release directory in `install-cli.sh`,
-   publish the layout from one owner, and make the node host a caller of the
-   shared installer. `openclaw update status` reports prepared generations.
-3. **Rebinding activation on the `install-cli.sh` prefix.** Journal descriptor,
-   the three effects, rollback, and leases with collection. This slice also
-   gives the node host its missing collection and a liveness rule for
-   `activation.lock`.
-4. **The macOS app and the durable service copy.**
-5. **B2, owed steps.**
-6. **Measure, then prepare on discovery and skip rehearsal on equal schemas.**
+2. **Linked-root readiness, no layout change.** The handoff root rule,
+   journaled activation for a linked root, and the published-driver cell with a
+   linked root. Nothing an existing installation can observe.
+3. **A shared release installer.** Make the node host a caller of it.
+   `openclaw update status` reports prepared and retained releases.
+4. **Adoption and the flip on the `install-cli.sh` prefix and the durable
+   service copy.** Rollback, leases, and collection. This slice also gives the
+   node host its missing collection and a liveness rule for `activation.lock`.
+5. **Retire what a linked root makes unnecessary,** after measuring: the
+   baseline fingerprint, the backup, and the updater's runtime copy.
+6. **B2, owed steps.**
+7. **Measure, then prepare on discovery and skip rehearsal on equal schemas.**
 
-B3, route 3, and Windows support for owned prefixes each need their own
-proposal.
+B3, route 4, and Windows each need their own proposal.
 
 ## Decisions needed
 
-| #   | Decision                                                                              | Suggested answer                                                                                                                                     |
-| --- | ------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | Whether package generations live in the package update path, not the immutable owner. | Yes, for the reasons under route 1.                                                                                                                  |
-| 2   | Whether the activation journal takes a typed descriptor for rebinding.                | Yes, through the [storage design checkpoint](/reference/database-schemas/storage-changes#review-checkpoint-for-material-changes). No second journal. |
-| 3   | The retention rule for release directories.                                           | Leases plus a minimum age. A retention change is an approval this repository reserves.                                                               |
-| 4   | Where the macOS app keeps release directories.                                        | Outside the profile state directory.                                                                                                                 |
-| 5   | Whether to accept the B1 package marker.                                              | Yes. It is a protocol addition and an approval this repository reserves. Pending on #197922.                                                         |
-| 6   | Whether to offer package-manager-owned installations a move to an owned prefix.       | Later, as its own proposal.                                                                                                                          |
-| 7   | Whether equal schema versions are enough to skip the state rehearsal.                 | Yes for the snapshot and migration rehearsal; no for config validation and plugin planning.                                                          |
+| #   | Decision                                                                   | Suggested answer                                                                                                                                  |
+| --- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Whether owned prefixes switch releases through a linked package root.      | Yes, over rebinding and over the immutable owner, for the reasons under routes 1 and 2.                                                           |
+| 2   | Whether the activation journal records a pointer intent for a linked root. | Yes, through the [storage design checkpoint](/reference/database-schemas/storage-changes#review-checkpoint-for-material-changes). No new journal. |
+| 3   | The retention rule for release directories.                                | Leases plus a minimum age. A retention change is an approval this repository reserves.                                                            |
+| 4   | Where release directories live for the durable service copy.               | Beside `<stateDir>/npm`. Confirm first how state backups and Doctor treat that directory today.                                                   |
+| 5   | Whether to accept the B1 package marker.                                   | Yes. It is a protocol addition and an approval this repository reserves. Pending on #197922.                                                      |
+| 6   | Whether npm-owned global prefixes take a linked root.                      | Later, as its own proposal.                                                                                                                       |
+| 7   | Whether equal schema versions are enough to skip the state rehearsal.      | Yes for the snapshot and migration rehearsal; no for config validation and plugin planning.                                                       |
 
 ## Not doing
 
 - No launcher or selector logic in the npm package.
+- No rewriting of the service definition, wrapper, or installer layout to
+  switch releases.
 - No extension of the immutable installation owner to user installations.
-- No change to how npm, pnpm, Bun, Homebrew, system package manager, container,
-  or Windows Bun installations are updated or refused.
+- No change to how the packaged macOS app, pnpm, Bun, Homebrew, system package
+  manager, container, or Windows Bun installations are updated or refused.
 - No two-Gateway blue-green cutover.
 - No new `openclaw.json` options.
 - No change to schema policy, Doctor migrations, or the rule that code does not
   roll back across a migration.
-- No attempt to shorten Gateway startup or drain.
+- No attempt to shorten Gateway startup, drain, or Doctor.
 
 ## Rejected approaches
 
 **A launcher in the npm package (first version).** It kept the npm-installed
 package as a launcher that read a `current` selector. The Gateway service and
-both installer wrappers bypass `openclaw.mjs`, service definitions and plugin
-links hold physical paths, and two copies of the code would report different
-versions.
+both installer wrappers bypass `openclaw.mjs`, and two copies of the code would
+report different versions.
 
-**Extending the immutable owner to user installations (considered for this
-version).** See route 1. Its guarantees come from separate accounts, source
-builds, and system-scope systemd, and it cannot cross a migration.
+**Extending the immutable owner to user installations (second version).** See
+route 1. Its guarantees come from separate accounts, source builds, and
+system-scope systemd, and it cannot cross a migration.
+
+**Rebinding the installation to a new package root (third version).** See
+route 2. It rested on a wrong premise: that a pointer needs launcher code to
+keep a process inside one release. Node does that itself by resolving the entry
+file's real path, and the service definition already stores the stable path.
 
 **Describing Part B as relocating an existing handoff (first version).** No
 existing handoff carries stop, publish, or rollback authority.
 
 ## Evidence limits
 
-- Route 2 is designed from reading source. Not traced: how the update path
-  rebinds a service to a different package root end to end, whether Gateway
-  startup repairs stale plugin links, shell completion's use of the package
-  root, and the Windows wrapper.
-- The timings come from two Docker runs on a small fixture state.
+- Route 3 has not run on an OpenClaw installation. The two tests used toy
+  packages on macOS.
+- The source trace read code and ran nothing. Not read: the launchd, systemd,
+  and Task Scheduler writers, how the plugin loader enforces quarantine, the
+  restart sentinel, and every use of the updater's retained runtime.
+- What a published driver does with a linked root is inferred from current
+  source, not from the published packages.
+- The timings come from one Docker run on a small fixture state, and the split
+  of the swap step is partly inferred.
 - How many installations use each layout is unknown.
-- B1 has not run on Windows or under launchd, and against only one published
-  driver.
+- B1 has not run on Windows or under launchd, and against no extended-stable
+  driver. Published `2026.9.9` fails to finish an update to `a83f74375ccaa`
+  with or without #197922, for a reason not yet established.
 - Pi and Hermes were read from their main branches on November 12, 2026, Codex
   from a checkout dated August 30, 2026, and Claude Code from its documentation.
 
