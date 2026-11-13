@@ -400,7 +400,12 @@ function readArgs(argv) {
 
 function main() {
   const args = readArgs(process.argv.slice(2));
-  const manifest = JSON.parse(fs.readFileSync(args.get("--manifest"), "utf8"));
+  let manifest;
+  try {
+    manifest = JSON.parse(fs.readFileSync(args.get("--manifest"), "utf8"));
+  } catch (error) {
+    throw new Error(`--manifest is not valid JSON (${error.message})`, { cause: error });
+  }
   const result = validatePluginSdkApiReleaseEvidence({
     acknowledgement: args.get("--acknowledge") ?? "",
     currentSelectorRef: args.get("--current-selector-ref"),
