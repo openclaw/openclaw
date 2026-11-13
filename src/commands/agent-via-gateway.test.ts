@@ -252,12 +252,11 @@ vi.mock("../config/io.js", () => ({
   captureRuntimeConfigAsyncReader: () => async () => loadRuntimeConfig(),
   loadConfig: loadRuntimeConfig,
 }));
-// mock-isolation: exercise dispatch without opening a live Gateway connection.
-// mock-isolation: State-owner selection has its own suite; these tests drive the run it admits.
-vi.mock("../cli/local-state-owner.js", () => ({
-  runWithLocalStateOwner: async (params: { runLocal: () => Promise<unknown> }) =>
-    await params.runLocal(),
+vi.mock("../cli/local-state-owner.js", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  runWithLocalStateOwner: async (params: { runLocal: () => unknown }) => params.runLocal(),
 }));
+// mock-isolation: exercise dispatch without opening a live Gateway connection.
 vi.mock("../gateway/call.js", () => ({
   callGateway,
   isGatewayCredentialsRequiredError: (value: unknown) =>
