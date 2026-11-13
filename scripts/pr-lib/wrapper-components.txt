@@ -1388,6 +1388,8 @@ src/infra/thread-disk-io.ts
 src/infra/test-runtime-env.ts
 src/infra/tls-certificate-errors.ts
 src/infra/tmp-openclaw-dir.ts
+src/infra/update-capture-paths.ts
+src/infra/update-capture-privacy-marker.ts
 src/infra/update-candidate-io.ts
 src/infra/update-candidate-state.diagnostics.ts
 src/infra/update-candidate-state.inspection.ts
@@ -1475,6 +1477,7 @@ src/infra/update-state-inspection-protocol.ts
 src/infra/update-step-identity.ts
 src/infra/utf8-input.ts
 src/infra/warning-filter.ts
+src/infra/windows-appcontainer-spawn-log.runtime.ts
 src/infra/windows-appcontainer-spawn.ts
 src/infra/windows-encoding.ts
 src/infra/windows-install-roots.ts
@@ -1493,6 +1496,7 @@ src/infra/worker-mutation-authority.ts
 src/infra/worker-native-error.ts
 src/infra/worker-native-handle.ts
 src/infra/worker-native-lifecycle.ts
+src/infra/worker-native-lifecycle.types.ts
 src/infra/worker-native-lifecycle.worker.ts
 src/infra/worker-native-port.ts
 src/infra/worker-native-task-port.ts

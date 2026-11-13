@@ -8,6 +8,9 @@ import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { callGateway as gatewayCall } from "../../gateway/call.js";
 import { waitForGatewayDispatch } from "../../gateway/server-in-process-dispatch.js";
+import { shareSidebarSessionRows } from "../../gateway/session-row-presentation.js";
+import { applyGatewaySessionRowMode } from "../../gateway/session-utils-display.js";
+import type { GatewaySessionRow } from "../../gateway/session-utils.types.js";
 import { GatewayTransportError } from "../../gateway/transport-error.js";
 import { createSessionVisibilityChecker } from "../../plugin-sdk/session-visibility.js";
 import { finalizeAgentTools } from "../agent-tools.finalize.js";
@@ -48,6 +51,19 @@ function hit(overrides: Record<string, unknown> = {}) {
     snippet: "matching text",
     score: 1,
     ...overrides,
+  };
+}
+
+function channelRow(key: string, to = "channel:c111") {
+  return {
+    key,
+    agentId: "main",
+    kind: "group" as const,
+    updatedAt: 1,
+    chatType: "channel" as const,
+    space: "t111",
+    origin: { provider: "slack", chatType: "channel" as const },
+    deliveryContext: { channel: "slack", accountId: "default", to },
   };
 }
 
@@ -173,22 +189,8 @@ describe("sessions_search tool", () => {
     const requester = "agent:main:slack:channel:c111:thread:1.001";
     const sibling = "agent:main:slack:channel:c111:thread:1.002";
     const other = "agent:main:slack:channel:c222:thread:1.003";
-    const row = (key: string, to: string) => ({
-      key,
-      agentId: "main",
-      chatType: "channel",
-      space: "t111",
-      origin: { provider: "slack", chatType: "channel" },
-      deliveryContext: { channel: "slack", accountId: "default", to },
-    });
-    const rows = [
-      row(requester, "channel:c111"),
-      row(sibling, "channel:c111"),
-      row(other, "channel:c222"),
-    ];
-    const owner = createSessionChannelReadFixture(
-      rows.map((entry) => ({ ...entry, chatType: "channel" as const })),
-    );
+    const rows = [channelRow(requester), channelRow(sibling), channelRow(other, "channel:c222")];
+    const owner = createSessionChannelReadFixture(rows);
     const requests: CallGatewayRequest[] = [];
     const tool = createSessionsSearchTool({
       config: { tools: { sessions: { visibility: "channel" } } },
@@ -200,7 +202,15 @@ describe("sessions_search tool", () => {
           return { session: rows.find((entry) => entry.key === key) } as T;
         }
         if (request.method === "sessions.list") {
-          return { sessions: rows, hasMore: false } as T;
+          const { rowMode } = request.params as { rowMode: GatewaySessionRow["rowMode"] };
+          const sessions = structuredClone(rows);
+          for (const projected of sessions) {
+            applyGatewaySessionRowMode(projected, rowMode);
+          }
+          return {
+            ...(rowMode === "sidebar" ? shareSidebarSessionRows(sessions) : { sessions }),
+            hasMore: false,
+          } as T;
         }
         const keys = (request.params as { sessionKeys?: string[] }).sessionKeys ?? [];
         return {
@@ -231,17 +241,9 @@ describe("sessions_search tool", () => {
   it("rechecks same-channel authority after inventory before transcript search", async () => {
     const requester = "agent:main:slack:channel:c111:thread:2.001";
     const sibling = "agent:main:slack:channel:c111:thread:2.002";
-    const makeRow = (key: string, to: string) => ({
-      key,
-      agentId: "main",
-      chatType: "channel" as const,
-      space: "t111",
-      origin: { provider: "slack", chatType: "channel" as const },
-      deliveryContext: { channel: "slack", accountId: "default", to },
-    });
-    const requesterRow = makeRow(requester, "channel:c111");
-    const admittedSibling = makeRow(sibling, "channel:c111");
-    const reassignedSibling = makeRow(sibling, "channel:c222");
+    const requesterRow = channelRow(requester, "channel:c111");
+    const admittedSibling = channelRow(sibling, "channel:c111");
+    const reassignedSibling = channelRow(sibling, "channel:c222");
     const requests: CallGatewayRequest[] = [];
     let inventoryReturned = false;
     const tool = createSessionsSearchTool({
@@ -285,18 +287,10 @@ describe("sessions_search tool", () => {
     const requester = "agent:main:slack:channel:c111:thread:2.101";
     const firstSibling = "agent:main:slack:channel:c111:thread:2.102";
     const secondSibling = "agent:main:slack:channel:c111:thread:2.103";
-    const makeRow = (key: string, to: string) => ({
-      key,
-      agentId: "main",
-      chatType: "channel" as const,
-      space: "t111",
-      origin: { provider: "slack", chatType: "channel" as const },
-      deliveryContext: { channel: "slack", accountId: "default", to },
-    });
-    const requesterRow = makeRow(requester, "channel:c111");
-    const admittedFirst = makeRow(firstSibling, "channel:c111");
-    const reassignedFirst = makeRow(firstSibling, "channel:c222");
-    const secondRow = makeRow(secondSibling, "channel:c111");
+    const requesterRow = channelRow(requester, "channel:c111");
+    const admittedFirst = channelRow(firstSibling, "channel:c111");
+    const reassignedFirst = channelRow(firstSibling, "channel:c222");
+    const secondRow = channelRow(secondSibling, "channel:c111");
     const owner = createSessionChannelReadFixture([requesterRow, admittedFirst, secondRow]);
     let currentFirst = admittedFirst;
     const searched: string[] = [];
@@ -356,70 +350,69 @@ describe("sessions_search tool", () => {
     });
   });
 
-  it("drops earlier hits revoked while another final description is pending", async () => {
-    const requester = "agent:main:slack:channel:c111:thread:2.201";
-    const firstSibling = "agent:main:slack:channel:c111:thread:2.202";
-    const secondSibling = "agent:main:slack:channel:c111:thread:2.203";
-    const makeRow = (key: string, to = "channel:c111") => ({
-      key,
-      agentId: "main",
-      chatType: "channel" as const,
-      space: "t111",
-      origin: { provider: "slack", chatType: "channel" as const },
-      deliveryContext: { channel: "slack", accountId: "default", to },
-    });
-    const requesterRow = makeRow(requester);
-    const firstRow = makeRow(firstSibling);
-    const secondRow = makeRow(secondSibling);
-    const owner = createSessionChannelReadFixture([requesterRow, firstRow, secondRow]);
-    let currentFirst = firstRow;
-    const searched: string[] = [];
-    const tool = createSessionsSearchTool({
-      config: { tools: { sessions: { visibility: "channel" } } },
-      agentSessionKey: requester,
-      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
-        if (request.method === "sessions.list") {
-          return { sessions: [requesterRow, firstRow, secondRow], hasMore: false } as T;
-        }
-        if (request.method === "sessions.describe") {
-          const key = (request.params as { key?: string }).key;
-          if (key === secondSibling && searched.length === 3) {
-            // The first final check already succeeded; a later awaited check revokes it.
-            await Promise.resolve();
-            currentFirst = makeRow(firstSibling, "channel:c222");
-            owner.setRow(currentFirst);
+  it.each([false, true])(
+    "keeps final disclosure with late describe failure (%s)",
+    async (revoked) => {
+      const requester = "agent:main:slack:channel:c111:thread:2.201";
+      const firstSibling = "agent:main:slack:channel:c111:thread:2.202";
+      const secondSibling = "agent:main:slack:channel:c111:thread:2.203";
+      const requesterRow = channelRow(requester);
+      const firstRow = channelRow(firstSibling);
+      const secondRow = channelRow(secondSibling);
+      const owner = createSessionChannelReadFixture([requesterRow, firstRow, secondRow]);
+      const searched: string[] = [];
+      const tool = createSessionsSearchTool({
+        config: { tools: { sessions: { visibility: "channel" } } },
+        agentSessionKey: requester,
+        callGateway: async <T = Record<string, unknown>>(
+          request: CallGatewayRequest,
+        ): Promise<T> => {
+          if (request.method === "sessions.list") {
+            return { sessions: [requesterRow, firstRow, secondRow], hasMore: false } as T;
+          }
+          if (request.method === "sessions.describe") {
+            const key = (request.params as { key?: string }).key;
+            if (searched.length === 3) {
+              throw new Error("Transient late description failure");
+            }
+            return {
+              session:
+                key === firstSibling ? firstRow : key === secondSibling ? secondRow : requesterRow,
+            } as T;
+          }
+          const keys = (request.params as { sessionKeys?: string[] }).sessionKeys ?? [];
+          searched.push(...keys);
+          if (revoked && keys.includes(secondSibling)) {
+            owner.setRow(channelRow(firstSibling, "channel:c222"));
           }
           return {
-            session:
-              key === firstSibling
-                ? currentFirst
-                : key === secondSibling
-                  ? secondRow
-                  : requesterRow,
+            results: keys.map((key) =>
+              hit({
+                sessionKey: key,
+                snippet: key === firstSibling ? "FINAL CHECK REVOKED SECRET" : "channel context",
+              }),
+            ),
           } as T;
-        }
-        const keys = (request.params as { sessionKeys?: string[] }).sessionKeys ?? [];
-        searched.push(...keys);
-        return {
-          results: keys.map((key) =>
-            hit({
-              sessionKey: key,
-              snippet: key === firstSibling ? "FINAL CHECK REVOKED SECRET" : "channel context",
-            }),
-          ),
-        } as T;
-      },
-    });
+        },
+      });
 
-    const result = await owner.run(() =>
-      tool.execute("channel-search-final-description-revocation", {
-        query: "context",
-      }),
-    );
+      const result = await owner.run(() =>
+        tool.execute("channel-search-final-description-revocation", {
+          query: "context",
+        }),
+      );
 
-    expect(searched).toEqual([requester, firstSibling, secondSibling]);
-    expect(JSON.stringify(result.details)).not.toContain("FINAL CHECK REVOKED SECRET");
-  });
+      expect(searched).toEqual([requester, firstSibling, secondSibling]);
+      expect(result.details).toMatchObject({
+        results: [requester, ...(revoked ? [] : [firstSibling]), secondSibling].map((sessionKey) =>
+          expect.objectContaining({ sessionKey }),
+        ),
+      });
+      if (revoked) {
+        expect(JSON.stringify(result.details)).not.toContain("FINAL CHECK REVOKED SECRET");
+      }
+    },
+  );
 
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   it.each([false, true])(
@@ -427,14 +420,7 @@ describe("sessions_search tool", () => {
     async (includeSibling) => {
       const requester = "agent:main:slack:channel:c111:thread:2.301";
       const sibling = "agent:main:slack:channel:c111:thread:2.302";
-      const rows = [requester, ...(includeSibling ? [sibling] : [])].map((key) => ({
-        key,
-        agentId: "main",
-        chatType: "channel",
-        space: "t111",
-        origin: { provider: "slack", chatType: "channel" },
-        deliveryContext: { channel: "slack", accountId: "default", to: "channel:c111" },
-      }));
+      const rows = [requester, ...(includeSibling ? [sibling] : [])].map((key) => channelRow(key));
       const tool = createSessionsSearchTool({
         config: { tools: { sessions: { visibility: "channel" } } },
         agentSessionKey: requester,

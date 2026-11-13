@@ -1,41 +1,23 @@
 import type { Locator } from "playwright";
 import { expect } from "vitest";
 
-export async function expectPaletteSettingsAlignment(popup: Locator) {
-  const box = async (selector: string) => {
-    const bounds = await popup.locator(selector).boundingBox();
-    if (!bounds) {
-      throw new Error("Missing settings control: " + selector);
-    }
-    return bounds;
-  };
-  const avatar = await box(".agent-select__trigger .agent-select__avatar");
-  const folder = await box(
-    ".palette-session-settings__workspace .palette-session-settings__icon svg",
-  );
-  const agentChevron = await box(".agent-select__chevron svg");
-  const workspaceChevron = await box(".palette-session-settings__chevron svg");
-  const agentLabel = await box(".agent-select__label");
-  const workspaceLabel = await box(
-    ".palette-session-settings__workspace .palette-session-settings__label",
-  );
-  const typography = (selector: string) =>
-    popup.locator(selector).evaluate((element) => {
-      const style = getComputedStyle(element);
-      return [style.fontSize, style.fontWeight, style.lineHeight, style.fontFamily];
-    });
-  expect
-    .soft(await typography(".agent-select__label"))
-    .toEqual(
-      await typography(".palette-session-settings__workspace .palette-session-settings__label"),
+/** Agent, folder, and worktree are one chip family on one centerline. */
+export async function expectPaletteChipsAligned(palette: Locator) {
+  const chips = await palette
+    .locator(
+      ".agent-chat__composer-controls :is(.agent-select__trigger, .palette-session-settings__chip)",
+    )
+    .evaluateAll((elements) =>
+      elements.map((element) => {
+        const bounds = element.getBoundingClientRect();
+        return { center: bounds.top + bounds.height / 2, height: bounds.height };
+      }),
     );
-  expect.soft(avatar.width).toBe(folder.width + 2);
-  expect.soft(avatar.x + avatar.width / 2).toBeCloseTo(folder.x + folder.width / 2, 0);
-  expect.soft(agentChevron.x).toBeCloseTo(workspaceChevron.x, 0);
-  expect.soft(agentLabel.x).toBeCloseTo(workspaceLabel.x, 0);
-  expect
-    .soft(avatar.y + avatar.height / 2)
-    .toBeCloseTo(agentChevron.y + agentChevron.height / 2, 0);
+  expect(chips.length).toBeGreaterThanOrEqual(2);
+  for (const chip of chips) {
+    expect.soft(chip.center).toBeCloseTo(chips[0]!.center, 0);
+    expect.soft(chip.height).toBe(chips[0]!.height);
+  }
 }
 
 export async function expectPaletteProjectGrouping(popup: Locator) {

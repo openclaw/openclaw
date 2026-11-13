@@ -1,5 +1,7 @@
 import { Type, type Static } from "typebox";
 import { GatewayProtocolRequestTimeoutError } from "../../../packages/gateway-client/src/protocol-request.js";
+import type { SessionRow } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
+import { expandSessionRowFacts } from "../../../packages/gateway-protocol/src/session-row-fields.js";
 import { resolveSessionStorePathCore } from "../../config/sessions.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -112,7 +114,6 @@ type GatewaySearchHit = Partial<Record<keyof SanitizedSearchHit, unknown>>;
 type BufferedSearchHit = {
   hit: SanitizedSearchHit;
   target: SessionChannelReadTarget;
-  revalidateCurrent?: () => Promise<void>;
 };
 
 type SearchSessionCandidate = {
@@ -180,6 +181,7 @@ async function listVisibleSearchSessions(params: {
   effectiveRequesterKey: string;
   gatewayCall: GatewayCaller;
   rowGuard: Pick<ReturnType<typeof createSessionVisibilityRowChecker>, "check">;
+  rowMode: "sidebar" | "dashboard";
   restrictToSpawned: boolean;
 }): Promise<SearchSessionCandidate[]> {
   const candidates = new Map<string, SearchSessionCandidate>();
@@ -208,14 +210,15 @@ async function listVisibleSearchSessions(params: {
   let offset = 0;
   while (true) {
     const page = await params.gatewayCall<{
-      sessions: VisibilityRow[];
+      sessions: SessionRow[];
+      sharedFacts?: Partial<SessionRow>[];
       hasMore?: boolean;
       nextOffset?: number;
     }>({
       method: "sessions.list",
       params: {
         source: "sessions-search",
-        rowMode: "dashboard",
+        rowMode: params.rowMode,
         limit: 200,
         offset,
         archived: "all",
@@ -224,7 +227,7 @@ async function listVisibleSearchSessions(params: {
         ...(params.restrictToSpawned ? { spawnedBy: params.effectiveRequesterKey } : {}),
       },
     });
-    for (const row of page.sessions) {
+    for (const row of expandSessionRowFacts(page.sessions, page.sharedFacts)) {
       if (parseAgentSessionKey(row.key) || row.agentId === params.unscopedAgentId) {
         add(row);
       }
@@ -486,6 +489,7 @@ export function createSessionsSearchTool(opts?: {
               effectiveRequesterKey,
               gatewayCall,
               rowGuard,
+              rowMode: visibility === "channel" ? "sidebar" : "dashboard",
               restrictToSpawned,
             })
       )
@@ -617,32 +621,13 @@ export function createSessionsSearchTool(opts?: {
                     : {}),
                   ...(expectedSessionId ? { expectedSessionId } : {}),
                 },
-                ...(revalidateCurrent ? { revalidateCurrent } : {}),
               });
             }
           }
         }
       }
-      const finalAuthorizations = new Map<() => Promise<void>, boolean>();
-      const authorizedHits: BufferedSearchHit[] = [];
-      for (const buffered of bufferedHits) {
-        const revalidateCurrent = buffered.revalidateCurrent;
-        if (revalidateCurrent && !finalAuthorizations.has(revalidateCurrent)) {
-          try {
-            await revalidateCurrent();
-            finalAuthorizations.set(revalidateCurrent, true);
-          } catch {
-            finalAuthorizations.set(revalidateCurrent, false);
-          }
-        }
-        if (!revalidateCurrent || finalAuthorizations.get(revalidateCurrent) === true) {
-          authorizedHits.push(buffered);
-        }
-      }
       const finalize = (visible: readonly boolean[]) => {
-        const visibleHits = authorizedHits
-          .filter((_, index) => visible[index])
-          .map(({ hit }) => hit);
+        const visibleHits = bufferedHits.filter((_, index) => visible[index]).map(({ hit }) => hit);
         visibleHits.sort(compareSearchHits);
         const limited = visibleHits.slice(0, limit);
         const capped = capSearchHits(limited);
@@ -672,11 +657,11 @@ export function createSessionsSearchTool(opts?: {
               requesterSessionKey: effectiveRequesterKey,
               sandboxed: opts?.sandboxed === true,
               a2aPolicy,
-              targets: authorizedHits.map(({ target }) => target),
+              targets: bufferedHits.map(({ target }) => target),
             },
             finalize,
           )
-        : finalize(authorizedHits.map(() => true));
+        : finalize(bufferedHits.map(() => true));
     }),
   };
 }
