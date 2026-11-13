@@ -78,7 +78,15 @@ struct OpenClawIDSignInRenderTests {
             ("mac-f03-expired", .problem(.expired(claw: claw))),
             ("mac-f04-kit-invalid", .problem(.kitInvalid(claw: claw))),
             ("mac-f05-no-claws", .problem(.notInvited(account: "sam@example.test"))),
-            ("mac-f06-member-needs-invite", .problem(.memberNeedsInvite(claw: "team-k7x2q.crabd.me"))),
+            ("mac-g01-invite-entry", .inviteEntry(claw: nil)),
+            ("mac-g02-invite-entry-member-claw", .inviteEntry(claw: "team-k7x2q.crabd.me")),
+            ("mac-g03-member-request", .memberRequest(
+                claw: "team-k7x2q.crabd.me", device: Self.mac, account: "sam@example.test")),
+            ("mac-g04-member-pending", .memberPending(claw: "team-k7x2q.crabd.me", device: Self.mac)),
+            ("mac-g05-member-connected", .memberConnected(
+                claw: "team-k7x2q.crabd.me", device: Self.mac, role: "Operator")),
+            ("mac-g06-invite-invalid", .problem(.inviteInvalid)),
+            ("mac-g07-invite-expired", .problem(.inviteExpired(claw: "team-k7x2q.crabd.me"))),
             ("mac-f07-sign-in-failed", .problem(.signInFailed)),
         ]
         // The recovery-kit entry step is not rendered here: NSSecureTextField layout blocks on the
@@ -126,6 +134,9 @@ struct OpenClawIDSignInRenderTests {
             ("mac-e04-settings-owner-tools-off", .owner(
                 claw: claw, device: Self.mac, runsTools: false, approvedWith: "Approved with your recovery kit",
                 needsSignIn: true)),
+            ("mac-g08-settings-member", .member(
+                claw: "team-k7x2q.crabd.me", device: Self.mac, role: "Operator", needsSignIn: false)),
+            ("mac-g09-settings-member-pending", .pendingJoin(claw: "team-k7x2q.crabd.me")),
         ] {
             try OnboardingRenderTests.capture(
                 Form { OpenClawIDSettingsSection(presentation: presentation, model: model) }.formStyle(.grouped),
