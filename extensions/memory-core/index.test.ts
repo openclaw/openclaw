@@ -365,6 +365,48 @@ describe("memory-core plugin runtime registration", () => {
     ]);
   });
 
+  it("opens every configured agent's index at boot when coldStart is eager", async () => {
+    // No prior demand: the eager opt-in alone opens untouched agents' indexes.
+    const config: OpenClawConfig = {
+      agents: { entries: { main: {}, research: {} } },
+      plugins: { slots: { memory: "memory-core" } },
+      memory: { search: { coldStart: "eager" } },
+    };
+    const {
+      services: [service],
+      backgroundTasks,
+      context,
+    } = captureCapability({ config });
+    assert(service, "Expected the memory index service");
+    await service.start(context);
+    await Promise.all(backgroundTasks);
+    expect(getMemorySearchManagerMock.mock.calls).toEqual([
+      [{ cfg: config, agentId: "main" }],
+      [{ cfg: config, agentId: "research" }],
+    ]);
+
+    // The real manager constructor marks each agent live (manager.ts); the
+    // mock boundary here marks them explicitly to model that side effect, so a
+    // later demand-driven start (e.g. after the operator removes the opt-in)
+    // retains them.
+    markMemoryIndexingLive("main");
+    markMemoryIndexingLive("research");
+    await service.stop?.(context);
+    const demandConfig = indexConfig("memory-core");
+    const {
+      services: [demandService],
+      backgroundTasks: demandTasks,
+      context: demandContext,
+    } = captureCapability({ config: demandConfig });
+    assert(demandService, "Expected the memory index service");
+    await demandService.start(demandContext);
+    await Promise.all(demandTasks);
+    expect(getMemorySearchManagerMock.mock.calls.slice(2)).toEqual([
+      [{ cfg: demandConfig, agentId: "main" }],
+      [{ cfg: demandConfig, agentId: "research" }],
+    ]);
+  });
+
   it.each(["honcho", "none"])(
     "starts configured indexes only for the selected memory slot: %s",
     async (owner) => {

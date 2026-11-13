@@ -219,6 +219,8 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
   "memory.search": "Vector search over MEMORY.md and memory/*.md (per-agent overrides supported).",
   "memory.search.enabled":
     "Master toggle for memory search indexing and retrieval behavior on this agent profile. Keep enabled for semantic recall, and disable when you want fully stateless responses.",
+  "memory.search.coldStart":
+    'Controls whether this agent\'s memory index opens at Gateway boot without waiting for the first search or turn: "demand" (default) keeps cold starts light and opens the index on first use, while "eager" indexes memory files and session transcripts right after startup so recall is fresh immediately, at the cost of extra workers and higher startup memory. First use still opens the index under "demand", and any service or config reload resumes indexing for agents already in use.',
   "memory.search.rememberAcrossConversations":
     'Use relevant context from this agent\'s other private conversations through protected transcript recall. Defaults on only when global session.dmScope is unset or "main" and no binding overrides DM scope; any configured DM isolation defaults it off. An explicit true or false always wins.',
   "memory.search.sources":

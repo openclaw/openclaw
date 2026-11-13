@@ -265,9 +265,17 @@ export default definePluginEntry({
         id: "memory-core-index",
         reload: { configPrefixes: ["memory.search", "agents", "models.providers"] },
         start({ config, logger }) {
-          // Restore watched indexes without opening untouched agents' databases
-          // and workers just because another agent used memory before this reload.
-          const agentIds = retainMemoryIndexingAgents(listAgentIds(config));
+          const configured = listAgentIds(config);
+          // Cold start stays demand-driven by default: the first search, flush,
+          // or turn opens an agent's index, keeping idle-startup workers and
+          // peak RSS down (#174718). memory.search.coldStart "eager" opts an
+          // operator into opening every configured agent's index at boot and on
+          // later service starts; manager construction marks each one live, so
+          // subsequent reloads retain them like any watched index.
+          const agentIds =
+            config.memory?.search?.coldStart === "eager"
+              ? configured
+              : retainMemoryIndexingAgents(configured);
           if (agentIds.length === 0) {
             return;
           }
