@@ -44,6 +44,30 @@ describe("splitShellArgs", () => {
     expect(splitShellArgs(String.raw`echo "\$HOME"`)).toEqual(["echo", "$HOME"]);
   });
 
+  it("preserves empty quoted shell words and their comment boundaries", () => {
+    expect(splitShellArgs(`program '' "" next`)).toEqual(["program", "", "", "next"]);
+    expect(splitShellArgs(`program ""#literal ''suffix prefix''`)).toEqual([
+      "program",
+      "#literal",
+      "suffix",
+      "prefix",
+    ]);
+    expect(splitShellArgs(`program "" # comment`)).toEqual(["program", ""]);
+  });
+
+  it("removes POSIX line continuations outside single quotes without starting a word", () => {
+    const continuation = "\\\n";
+    expect(splitShellArgs(`ba${continuation}sh`)).toEqual(["bash"]);
+    expect(splitShellArgs(`echo "a${continuation}b"`)).toEqual(["echo", "ab"]);
+    expect(splitShellArgs(`echo a ${continuation} b`)).toEqual(["echo", "a", "b"]);
+    expect(splitShellArgs(continuation)).toEqual([]);
+    expect(splitShellArgs(`echo "${continuation}" ${continuation}# comment`)).toEqual(["echo", ""]);
+    expect(splitShellArgs(`echo ''${continuation}#literal`)).toEqual(["echo", "#literal"]);
+    expect(splitShellArgs(`echo '${continuation}'`)).toEqual(["echo", continuation]);
+    expect(splitShellArgs(`ba${continuation}sh`, { rejectShellSyntax: true })).toBeNull();
+    expect(splitShellArgs(`echo "a${continuation}b"`, { rejectShellSyntax: true })).toBeNull();
+  });
+
   it("returns null for unterminated quotes", () => {
     expect(splitShellArgs(`echo "oops`)).toBeNull();
     expect(splitShellArgs(`echo 'oops`)).toBeNull();
@@ -57,6 +81,10 @@ describe("splitShellArgs", () => {
 });
 
 describe("splitCommandArgs", () => {
+  it("retains process-argument empty-word and backslash behavior", () => {
+    expect(splitCommandArgs(`program '' "" next`)).toEqual(["program", "next"]);
+    expect(splitCommandArgs("ba\\\nsh")).toEqual(["ba\\", "sh"]);
+  });
   it.each(['program "unfinished'])("allows unfinished quotes when requested: %s", (raw) => {
     expect(splitCommandArgs(raw, { allowUnclosedQuotes: true })).toEqual(["program", "unfinished"]);
   });

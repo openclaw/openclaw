@@ -90,7 +90,7 @@ function splitQuotedArgs(
   let wordStarted = false;
 
   const pushToken = () => {
-    if (buf.length > 0 || (rejectShellSyntax && wordStarted)) {
+    if (buf.length > 0 || (syntax === "shell" && wordStarted)) {
       tokens.push(buf);
       buf = "";
     }
@@ -107,6 +107,17 @@ function splitQuotedArgs(
     // Continuations can hide an interpreter name from approval operand binding.
     if (rejectShellSyntax && quote !== "'" && ch === "\\" && /[\r\n]/u.test(raw[i + 1] ?? "")) {
       return null;
+    }
+    // A POSIX escaped newline contributes no bytes and does not start a word.
+    if (
+      backslashEscapes &&
+      !rejectShellSyntax &&
+      quote !== "'" &&
+      ch === "\\" &&
+      raw[i + 1] === "\n"
+    ) {
+      i += 1;
+      continue;
     }
     if (backslashEscapes && !quote && ch === "\\") {
       escaped = true;
@@ -138,7 +149,7 @@ function splitQuotedArgs(
     }
     // In POSIX shells, "#" starts a comment only when it begins a word; keep
     // inline hashes inside tokens so URLs/fragments are not truncated.
-    if (syntax === "shell" && ch === "#" && (rejectShellSyntax ? !wordStarted : buf.length === 0)) {
+    if (syntax === "shell" && ch === "#" && !wordStarted) {
       if (rejectShellSyntax) {
         return null;
       }
