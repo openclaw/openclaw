@@ -122,6 +122,7 @@ export async function startGatewaySidecars(
     pluginMetadataSnapshot?: PluginMetadataSnapshot;
     deps: CliDeps;
     startChannels: () => Promise<void>;
+    prepareMainSessionOrphans?: () => Promise<void>;
     shouldStartChannels?: () => boolean;
     refreshChatMetadata?: () => Promise<void>;
     onChannelsStarted?: () => Awaitable<void>;
@@ -251,6 +252,10 @@ export async function startGatewaySidecars(
   await measureStartup(params.startupTrace, "sidecars.chat-metadata", async () => {
     await params.refreshChatMetadata?.();
   });
+  // Services can supply startup dependencies. Keep the recovery scan out of their
+  // startup path, while channels and the existing RPC readiness gate still wait.
+  await startGatewayPluginServices(params);
+  await params.prepareMainSessionOrphans?.();
   const shouldStartChannels = params.shouldStartChannels?.() !== false;
   await measureStartup(params.startupTrace, "sidecars.channels", async () => {
     const channelStart = skipChannels
@@ -270,7 +275,6 @@ export async function startGatewaySidecars(
     await Promise.all([accountStartGateRelease, channelStart]);
   });
 
-  await startGatewayPluginServices(params);
   const shouldDispatchGatewayStartupInternalHook =
     internalHooksConfigured || (await hasGatewayStartupInternalHookListeners());
   if (params.shouldCreatePostReadySidecars?.() === false) {
@@ -730,19 +734,7 @@ export async function startGatewayPostAttachRuntime(
             skipStartupLog();
             return pluginRegistry;
           }
-          const prepared = await Promise.allSettled([
-            candidateCanary
-              ? Promise.resolve()
-              : markGatewayStartupMainSessionOrphans(
-                  params,
-                  mainSessionRecoveryStartupCheckedStorePaths,
-                ),
-            loadStartupPluginsIfNeeded(),
-          ]);
-          const failed = prepared.find((outcome) => outcome.status === "rejected");
-          if (failed?.status === "rejected") {
-            throw failed.reason;
-          }
+          await loadStartupPluginsIfNeeded();
           if (params.isClosing?.()) {
             skipStartupLog();
             return pluginRegistry;
@@ -803,6 +795,11 @@ export async function startGatewayPostAttachRuntime(
                   deps: params.deps,
                   getCronService: params.getCronService,
                   startChannels: params.startChannels,
+                  prepareMainSessionOrphans: () =>
+                    markGatewayStartupMainSessionOrphans(
+                      params,
+                      mainSessionRecoveryStartupCheckedStorePaths,
+                    ),
                   shouldStartChannels: () => params.isClosing?.() !== true,
                   refreshChatMetadata: params.refreshChatMetadata,
                   log: params.log,

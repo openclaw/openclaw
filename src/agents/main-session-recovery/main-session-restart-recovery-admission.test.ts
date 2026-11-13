@@ -209,7 +209,7 @@ describe("startup recovery admission", () => {
         await withEnvAsync({ OPENCLAW_STATE_DIR: tmpDir }, () =>
           markGatewayStartupMainSessionOrphans(
             {
-              gatewayPluginConfigAtStart: {},
+              getConfig: () => cfg,
               isRestartRecoverySuppressed: () => suppression !== null,
               scheduler: lifetime,
               log: { warn: vi.fn() },

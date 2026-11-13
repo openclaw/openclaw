@@ -366,22 +366,22 @@ export async function finishGatewayStartup(params: {
           onGatewayLifetimeSidecars: registerGatewayLifetimeSidecars,
           trackStartupWork,
           unregisterConnectionDependentSidecar,
-          ...(workerPlacementRuntime
-            ? {
-                startWorkerEnvironmentRuntime: async () => {
-                  if (lifecycle.closePreludeStarted) {
-                    return null;
-                  }
-                  databasePreparationReady.resolve(); // Plugins are attached; worker recovery awaits admission.
-                  return await workerPlacementRuntime.startRuntime({
-                    isClosePreludeStarted: () => lifecycle.closePreludeStarted,
-                    // Close must see the drain handle before reconciliation can yield.
-                    registerSidecar: registerConnectionDependentSidecars,
-                    unregisterSidecar: unregisterConnectionDependentSidecar,
-                  });
-                },
-              }
-            : {}),
+          startWorkerEnvironmentRuntime: async () => {
+            if (lifecycle.closePreludeStarted) {
+              return null;
+            }
+            // Release the existing database owner after plugins attach, including
+            // Gateways without worker placement. Orphan reads may await this admission.
+            databasePreparationReady.resolve();
+            return workerPlacementRuntime
+              ? await workerPlacementRuntime.startRuntime({
+                  isClosePreludeStarted: () => lifecycle.closePreludeStarted,
+                  // Close must see the drain handle before reconciliation can yield.
+                  registerSidecar: registerConnectionDependentSidecars,
+                  unregisterSidecar: unregisterConnectionDependentSidecar,
+                })
+              : null;
+          },
           onSidecarsReady: () => {
             postAttachSidecarsReady = true;
             if (sidecarStartup === "defer" || postAttachSpanSettled) {

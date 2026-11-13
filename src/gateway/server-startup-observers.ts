@@ -20,7 +20,7 @@ const loadMainSessionRestartRecoveryMarkingModule = createLazyRuntimeModule(
 /** Mark predecessors before channels admit work, independently of plugin registration. */
 export async function markGatewayStartupMainSessionOrphans(
   params: {
-    gatewayPluginConfigAtStart: OpenClawConfig;
+    getConfig: () => OpenClawConfig;
     isRestartRecoverySuppressed: () => boolean;
     scheduler: { signal: AbortSignal };
     startupTrace?: GatewayStartupTrace;
@@ -38,15 +38,32 @@ export async function markGatewayStartupMainSessionOrphans(
         "sidecars.main-session-recovery-load",
         loadMainSessionRestartRecoveryMarkingModule,
       );
-      if (params.scheduler.signal.aborted || params.isRestartRecoverySuppressed()) {
-        return;
+      while (!params.scheduler.signal.aborted && !params.isRestartRecoverySuppressed()) {
+        const cfg = params.getConfig();
+        try {
+          await measureStartup(params.startupTrace, "sidecars.main-session-recovery-scan", () =>
+            markStartupOrphanedMainSessionsForRecovery({
+              cfg,
+              startupCheckedStorePaths,
+              assertCommitAllowed: () => {
+                params.scheduler.signal.throwIfAborted();
+                if (params.isRestartRecoverySuppressed() || params.getConfig() !== cfg) {
+                  throw new Error("Gateway restart recovery state changed before orphan marking");
+                }
+              },
+            }),
+          );
+        } catch (err) {
+          if (params.getConfig() === cfg) {
+            throw err;
+          }
+        }
+        // Config replacement can invalidate a store after earlier stores committed.
+        // Keep admission held and retry only stores not already in the checked set.
+        if (params.getConfig() === cfg) {
+          return;
+        }
       }
-      await measureStartup(params.startupTrace, "sidecars.main-session-recovery-scan", () =>
-        markStartupOrphanedMainSessionsForRecovery({
-          cfg: params.gatewayPluginConfigAtStart,
-          startupCheckedStorePaths,
-        }),
-      );
     } catch (err) {
       params.log.warn(
         `main-session startup orphan marking failed before channel startup: ${String(err)}`,

@@ -16,8 +16,8 @@ import type { GatewayServer } from "./server-public.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { startClaimedGateway } from "./test-helpers.listener.js";
 
-describe("Gateway startup node capabilities", () => {
-  it("reconnects affected nodes when plugins attach after their handshake", async () => {
+describe.each([true, false])("startup node capabilities (placement=%s)", (placement) => {
+  it("reconnects affected nodes and admits databases after plugins attach", async () => {
     const state = await createOpenClawTestState({
       label: "gateway-startup-node-capabilities",
       layout: "home",
@@ -108,11 +108,15 @@ describe("Gateway startup node capabilities", () => {
       .mockImplementation(async (...args) => {
         kernel = await createKernel(...args);
         expect(kernel.workerPlacementRuntime).toBeDefined();
-        vi.spyOn(kernel.workerPlacementRuntime!, "startRuntime").mockImplementation(async () => {
-          await Promise.resolve();
-          expect(databaseReady).toBe(true);
-          return null;
-        });
+        if (placement) {
+          vi.spyOn(kernel.workerPlacementRuntime!, "startRuntime").mockImplementation(async () => {
+            await Promise.resolve();
+            expect(databaseReady).toBe(true);
+            return null;
+          });
+        } else {
+          kernel = { ...kernel, workerPlacementRuntime: undefined };
+        }
         for (const { client } of peers) {
           kernel.clients.add(client);
         }
@@ -124,6 +128,7 @@ describe("Gateway startup node capabilities", () => {
         expect(databaseReady).toBe(false);
         await params.onStartupPluginsLoaded?.({ pluginRegistry: registry, gatewayMethods: [] });
         await params.startWorkerEnvironmentRuntime?.();
+        expect(databaseReady).toBe(true);
         return { stopGatewayUpdateCheck: async () => {}, startupSettled: Promise.resolve() };
       });
     try {

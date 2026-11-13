@@ -758,6 +758,14 @@ Three complementary mechanisms mark sessions whose turn did not finish:
   clears the prior interruption and is not replayed. Stale transcript lock files
   are cleaned up at the same time.
 
+Startup selects orphan candidates from the existing active-session index in the
+session database worker, without transferring unrelated retained summaries to
+the Gateway. Pending canonical validation still runs for an empty selection.
+Marking rechecks the current row, live ownership, and current startup configuration
+before committing. Plugin loading and plugin services start before this scan;
+channels, startup hooks, and the existing startup-gated RPCs still wait for it.
+The scan remains tracked startup work and does not change saved-input replay rules.
+
 Agents still undergoing database startup inspection retain their recovery work.
 When admission finishes, the same startup recovery owner scans their stores with
 the original cutoff, so newly admitted turns are not mistaken for crash orphans.
