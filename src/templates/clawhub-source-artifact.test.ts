@@ -1,5 +1,5 @@
-import { mkdir, readFile, realpath, rename, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readFile, realpath, rename, symlink, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readVerifiedArtifactSource } from "./clawhub-source-artifact.js";
@@ -61,6 +61,55 @@ it("rejects JSON Template manifests through package and direct-file admission", 
     ok: false,
     diagnostics: [expect.objectContaining({ code: "unsupported_manifest_format" })],
   });
+});
+
+it("names the manifest diagnostics when a published release is invalid", async () => {
+  const f = await fixture({ template: "CLAW.md" });
+  await writeFile(
+    join(f.root, "CLAW.md"),
+    "---\nschemaVersion: 1\nagent: { id: published-template }\npackages: []\n---\nPublished instructions.\n",
+  );
+  await expect(f.read()).rejects.toMatchObject({
+    code: "clawhub_manifest_invalid",
+    message: expect.stringContaining("retired_template_configuration at $.packages"),
+  });
+});
+
+it("names an unparsable manifest without the Gateway cache path", async () => {
+  const f = await fixture({ template: "CLAW.md" });
+  await writeFile(
+    join(f.root, "CLAW.md"),
+    "---\nschemaVersion: [1\n---\nPublished instructions.\n",
+  );
+  const error = (await f.read().catch((caught: unknown) => caught)) as Error;
+  expect(error).toMatchObject({ code: "clawhub_manifest_invalid" });
+  expect(error.message).toContain("CLAW.md");
+  expect(error.message).not.toContain(f.root);
+  expect(error.message).not.toContain(await realpath(f.root));
+});
+
+it("names an unparsable manifest relative to a symlinked cache root", async () => {
+  const f = await fixture({ template: "CLAW.md" });
+  await writeFile(
+    join(f.root, "CLAW.md"),
+    "---\nschemaVersion: [1\n---\nPublished instructions.\n",
+  );
+  // The realpath ends with the link path, as /private/tmp/x does with /tmp/x on macOS.
+  const base = dirs.make("published-template-link-");
+  const link = join(base, "pkg");
+  const real = join(base, "r", link);
+  await mkdir(dirname(real), { recursive: true });
+  await rename(f.root, real);
+  await symlink(real, link);
+  const error = (await readVerifiedArtifactSource({
+    sourceRoot: link,
+    packageName,
+    version,
+    artifactSha256,
+    artifactByteLength: 321,
+  }).catch((caught: unknown) => caught)) as Error;
+  expect(error.message).toContain("Could not parse CLAW.md");
+  expect(error.message).not.toContain(base);
 });
 
 it("consumes a published canonical CLAW.md at a nested package-relative path", async () => {
