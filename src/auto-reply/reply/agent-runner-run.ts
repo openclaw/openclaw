@@ -323,10 +323,16 @@ export async function runReplyAgent(
         diagnosticLogger.warn("steering rejected; applying follow-up policy", {
           reason:
             messageInjectionDisposition === "rejected"
-              ? "runtime_rejected"
+              ? (opts?.messageInjectionRejection?.reason ?? "runtime_rejected")
               : providedReplyOperation
                 ? "source-operation-pending"
                 : "reply-owner-ended",
+          ...(opts?.messageInjectionRejection?.runtimeReason
+            ? { runtimeReason: opts.messageInjectionRejection.runtimeReason }
+            : {}),
+          ...(opts?.messageInjectionRejection?.errorMessage
+            ? { error: opts.messageInjectionRejection.errorMessage.slice(0, 512) }
+            : {}),
           disposition: enqueued
             ? "followup-queued"
             : replyOperationRunState?.admission?.status === "skipped" &&
@@ -337,7 +343,7 @@ export async function runReplyAgent(
             followupRun.originatingChannel ??
             followupRun.run.messageProvider ??
             sessionCtx.Provider,
-          sessionId: activeReplyOperation?.sessionId ?? followupRun.run.sessionId,
+          sessionKey: sessionKey ?? followupRun.run.sessionKey,
           runId: opts?.runId,
         });
       }

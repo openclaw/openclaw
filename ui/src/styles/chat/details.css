@@ -324,8 +324,8 @@ openclaw-chat-details[mobile] {
   height: 22px;
   border-radius: var(--radius-sm);
   flex: none;
-  color: hsl(var(--chat-details-avatar-hue) 32% 65%);
-  background: hsl(var(--chat-details-avatar-hue) 22% 30% / 0.35);
+  color: hsl(var(--chat-details-avatar-hue) var(--subagent-avatar-ink, 32% 65%));
+  background: hsl(var(--chat-details-avatar-hue) var(--subagent-avatar-tint, 22% 30% / 0.35));
 }
 .chat-details__agent-avatar > svg {
   width: 15px;

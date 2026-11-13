@@ -135,6 +135,9 @@ export function resolveReplyMessageInjectionFailure(
       status: "rejected",
       reason: "injection_unavailable",
       errorMessage: targetUnavailable.message,
+      ...(targetUnavailable.runtimeReason
+        ? { runtimeReason: targetUnavailable.runtimeReason }
+        : {}),
     };
   }
   const policyMismatch = candidates.findLast(

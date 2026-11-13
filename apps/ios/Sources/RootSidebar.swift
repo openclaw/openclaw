@@ -9,7 +9,6 @@ struct RootSidebar: View {
     @Bindable var model: RootSidebarModel
     @State private var scrollAnchor = RootSidebarScrollAnchor()
     @State private var searchText = ""
-    @State private var collapsedGroups = SessionGroupStore.loadCollapsed()
     @State private var collapsedParents: Set<String> = []
     @State private var isSearchActive = false
     @State private var showsPagesEditor = false
@@ -39,7 +38,9 @@ struct RootSidebar: View {
             ScrollView {
                 // One 10pt unit everywhere: side insets, section gaps, and
                 // the picker card's clearance all match.
-                LazyVStack(alignment: .leading, spacing: 10) {
+                // Not lazy: with three sections it saves nothing, and a lazy stack drops a section the
+                // keyboard pushes out of view, which closes an alert or sheet opened from one of its rows.
+                VStack(alignment: .leading, spacing: 10) {
                     self.agentsSection
                     self.pagesSection(pinnedSessionNodes: sessionLayout.pinnedNodes, rowPass: rowPass)
                     self.sessionsSection(
@@ -47,11 +48,15 @@ struct RootSidebar: View {
                         hasPinnedSessions: !sessionLayout.pinnedNodes.isEmpty,
                         rowPass: rowPass)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 10)
                 .modifier(RootSidebarAnchoredContent(anchor: self.scrollAnchor))
             }
             self.footer
+        }
+        .task(id: self.appModel.chatViewModelIdentityID) {
+            await self.appModel.sessionGroups.refresh(appModel: self.appModel)
         }
         .foregroundStyle(OpenClawSidebarPalette.text)
         .background(OpenClawSidebarPalette.background)
@@ -380,6 +385,9 @@ struct RootSidebar: View {
         rowPass: SessionRowPass) -> some View
     {
         VStack(alignment: .leading, spacing: 6) {
+            if let failure = self.appModel.sessionGroups.failure {
+                Text(verbatim: failure).font(OpenClawType.captionMedium).foregroundStyle(OpenClawBrand.warn)
+            }
             if let sessionErrorText = self.model.sessionErrorText {
                 Text(verbatim: sessionErrorText)
                     .font(OpenClawType.captionMedium)
@@ -409,32 +417,35 @@ struct RootSidebar: View {
                     let title = section.id == "recent"
                         ? String(localized: "Sessions")
                         : (section.title ?? String(localized: "Sessions"))
-                    HStack(spacing: 0) {
-                        if section.id.hasPrefix("group:") {
-                            Button {
-                                if !self.collapsedGroups.insert(section.id).inserted {
-                                    self.collapsedGroups.remove(section.id)
-                                }
-                                SessionGroupStore.saveCollapsed(self.collapsedGroups)
-                            } label: {
-                                HStack(spacing: 0) {
-                                    self.sectionTitle(title)
-                                    Spacer(minLength: 0)
-                                    Image(systemName: self.collapsedGroups.contains(section.id)
-                                        ? "chevron.right" : "chevron.down")
-                                        .font(OpenClawType.captionSemiBold)
-                                }
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                        } else {
+                    if section.id.hasPrefix("group:"), let name = section.title {
+                        CommandSessionGroupHeader(
+                            name: name,
+                            sessions: self.model.sessions,
+                            trailingCount: section.nodes.count,
+                            refresh: { await self.model.refreshSessions(appModel: self.appModel) },
+                            openSession: { key in
+                                self.appModel.openChat(sessionKey: key)
+                                self.selectSidebarDestination(.chat)
+                            },
+                            accessory: {
+                                self.attentionBadges(
+                                    for: Self.flattened(section.nodes).map(\.session),
+                                    targetID: "section:\(section.id)")
+                            })
+                            .foregroundStyle(OpenClawSidebarPalette.muted)
+                            // Leading inset only: the caret and count sit at the trailing edge.
+                            .padding(.leading, 10)
+                    } else {
+                        HStack(spacing: 0) {
                             self.sectionTitle(title)
                             Spacer(minLength: 0)
+                            self.attentionBadges(
+                                for: Self.flattened(section.nodes).map(\.session), targetID: "section:\(section.id)")
                         }
-                        self.attentionBadges(
-                            for: Self.flattened(section.nodes).map(\.session), targetID: "section:\(section.id)")
                     }
-                    if !self.searchText.isEmpty || !self.collapsedGroups.contains(section.id) {
+                    if !section.id.hasPrefix("group:") ||
+                        !self.appModel.sessionGroups.collapsed.contains(section.title ?? "") || !self.searchText.isEmpty
+                    {
                         ForEach(self.sessionNodes(for: section)) { row in
                             self.sessionTreeRow(row, rowPass: rowPass)
                         }
@@ -635,7 +646,7 @@ struct RootSidebar: View {
     }
 
     private var sessionCategories: [String] {
-        CommandSessionGrouping.categories(from: self.model.sessions, knownGroups: SessionGroupStore.load())
+        self.appModel.sessionGroups.names(for: self.model.sessions)
     }
 
     private static func flattened(_ nodes: [ChatSessionSidebarModel.Node]) -> [ChatSessionSidebarModel.Node] {

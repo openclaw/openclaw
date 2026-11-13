@@ -102,6 +102,15 @@ async function inspectCandidateState(input: UpdateStateInspectionInput): Promise
     // Metadata discovery must use the same installation as the inspected databases.
     input.env = { ...input.env, OPENCLAW_STATE_DIR: input.stateDir };
   }
+  if ("config" in input && "stateDir" in input) {
+    // Released drivers serialize config read without this candidate's normalization.
+    const { normalizeLegacyWorkboardDatabaseConfig } =
+      await import("../config/legacy-workboard-database.js");
+    input.config = normalizeLegacyWorkboardDatabaseConfig(input.config, {
+      ...process.env,
+      OPENCLAW_STATE_DIR: input.stateDir,
+    });
+  }
   // Runtime retention needs no database/config inspection graph.
   const { createUpdateStateInspectionReporter } =
     await import("./update-candidate-state.diagnostics.js");

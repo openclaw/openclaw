@@ -506,7 +506,7 @@ describe("sessions view", () => {
 
     const details = expectDefined(query(".session-details-panel"), "session details");
     expect(text(".session-details-panel__eyebrow", details)).toBe("Session details");
-    expect(text(".session-details-panel__title", details)).toBe("agent:main:main");
+    expect(text(".session-details-panel__title", details)).toBe("Main session");
     expect(
       texts(".session-details-panel__badges > *", details).map((s) => s?.replace(/\s+/g, " ")),
     ).toEqual(["Live", "Goal blocked (24k used)", "direct"]);

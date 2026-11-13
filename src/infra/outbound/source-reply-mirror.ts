@@ -21,6 +21,7 @@ import { getOwnedSessionTranscriptWriterFence } from "../../config/sessions/tran
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { readTrimmedStringAlias } from "../../utils/string-readers.js";
+import { runInAgentRunWriteContext } from "../agent-run-terminal-writes.js";
 import { resolveImplicitMessageActionTarget } from "./message-action-normalization.js";
 import { createOutboundPayloadPlan, projectOutboundPayloadPlanForMirror } from "./payloads.js";
 import { normalizeTargetForProvider } from "./target-normalization.js";
@@ -43,6 +44,8 @@ type SourceReplyTranscriptMirrorParams = {
   /** Actual local delivery content; absent for legacy Gateway request projections. */
   deliveredPayloads?: readonly ReplyPayload[];
   replyToIsExplicit?: boolean;
+  /** The agent run whose message tool made this delivery. */
+  runId?: string;
 };
 
 type MirrorableSourceReplyTranscriptParams = SourceReplyTranscriptMirrorParams & {
@@ -426,6 +429,12 @@ function isDeliveredCurrentSourceReplyAction(params: SourceReplyTranscriptMirror
 export async function mirrorDeliveredSourceReplyToTranscript(
   params: SourceReplyTranscriptMirrorParams,
 ): Promise<boolean> {
+  // The run's own reply: its CLI history writer must cover the row, or the gap refuses saved
+  // history to the next fresh CLI session.
+  return await runInAgentRunWriteContext(params.runId, () => mirrorSourceReply(params));
+}
+
+async function mirrorSourceReply(params: SourceReplyTranscriptMirrorParams): Promise<boolean> {
   const deliveryFact = projectPluginMessageDeliveryFact(params.deliveredPayload);
   if (
     (deliveryFact && (deliveryFact.status !== "settled" || deliveryFact.partialDelivery)) ||

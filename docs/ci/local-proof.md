@@ -147,6 +147,22 @@ Missing active translations or resources, active placeholder drift, invalid
 artifact syntax, and other generated-output differences remain blocking. Generator sync
 and the standalone Android and Apple checks retain their strict behavior.
 
+### Delegating changed compilers in CI
+
+`check:changed --delegate-compilers` retains the selected formatting, lint, guards,
+owner tests, and graph-boundary check. The changed-check planner exposes the removed
+compiler work as `delegatedTypeGraphs`; it does not infer compiler commands from
+printed output. Narrow core-test checks keep their shared boundary inventory inline.
+The aggregate `tsgo:all` project-reference build also stays inline.
+
+A CI caller must give `ci-check-plan` the same exact changed paths and base commit,
+with `typeGraphBoundaryOwner: "changed-check"`, then execute every returned type row
+through the native compiler runner. Pass those paths explicitly to `check:changed`
+so both planners use the same scope rather than a separate trivia-filtered diff.
+Keep noncompiler checks in the changed-check lane; do not also select a native lint
+lane. Compiler jobs and the changed-check job are all required for success. Omitting
+compiler jobs is not successful changed-file proof. The default CLI is unchanged.
+
 ### Opt-in compiler evidence
 
 Keep `pnpm check:timed` (or `check:changed --timed`) for stage timings and
@@ -317,37 +333,23 @@ Frozen targets without the aggregate command retain their original commands.
 
 <a id="test-line-budget" />
 
-`pnpm check:test-lines-ratchet` compares total tracked test lines with the
-fixed integer in `config/test-lines-baseline.txt` plus the sum of tracked
-`config/test-lines-allocations/*.txt` records. Each record contains one
-non-negative integer, with optional `#` comments. For justified net regression
-growth, use a unique record and explain its necessity in the PR. Independent
-changes use separate records instead of editing the shared scalar.
+`pnpm check:test-lines-ratchet` measures this change's net test-line delta
+between its comparison base and head. Other changes' growth never counts. A
+change may add up to 400 net test lines without a record. Above that, add a
+`config/test-lines-allocations/<change>.txt` record that covers the excess and
+explain its necessity in the PR. Each record contains one non-negative integer,
+with optional `#` comments. Only records that this change adds or raises give
+credit; merged records have no further effect and can be deleted at any time.
+On failure, the checker prints the net count, the allowance, the credit and the
+lines to remove or allocate.
 
 The checker counts literal newline bytes, like `wc -l`, in
 `*.test.{ts,tsx,mts,mjs,js,cjs}`, `*.test-support.ts`,
-`*test-helpers*`, and `**/test-support/**`. In `checks-fast-baseline-ratchets`, an
-over-ceiling tree fails only when this change's net test-line delta against the
-comparison base is positive; non-growing changes pass with an over-ceiling notice,
-while runs without a base retain the absolute ceiling check.
-
-When allocation keys or values change, positive effective-ceiling growth must
-not exceed net test-line growth plus the comparison base's existing overage,
-floored at zero. An explicitly approved exact grant can reconcile that debt
-without creating extra headroom. This includes scalar changes in the same diff
-and prevents overlapping grants from counting the same growth twice. Debt still
-fails the ceiling check unless a grant covers it.
-Comments do not change credit. Untracked records are ignored; `--staged` reads
-the index exactly. Scalar-only raises retain the explicit review-owned warning
-route. Raises beyond this change's net regression growth need approval under the
-[testing policy](https://github.com/openclaw/openclaw/blob/main/.agents/skills/openclaw-testing/SKILL.md#baseline-and-expected-failure-exceptions).
-
-`pnpm check:test-lines-ratchet --prune` folds the measured total into the scalar
-and removes tracked allocation records, even at zero slack. The effective ceiling
-never increases; the scalar can rise when it absorbs existing allocations.
-Commit the scalar and record deletions together. Pruning refuses an over-budget
-tree or `--staged`, and preserves untracked files. A branch based before pruning
-can add credit only for its new test growth, not reuse the folded allocations.
+`*test-helpers*`, and `**/test-support/**`. Locally it compares against the
+merge base with `origin/main`; `--staged` compares the index with `HEAD`. Pull
+request CI compares the merge tree with its first parent; a `main` push compares
+with the previous tip, so one push of several squash commits counts their sum.
+Release branches skip the check.
 
 The max-lines suppression inventory and the environment-variable count budget
 must describe the tree, and that check blocks in GitHub Actions as well as

@@ -1,3 +1,4 @@
+import type { IncomingHttpHeaders } from "node:http";
 import { resolveHostAccountName } from "../../../infra/host-account-name.js";
 import { prepareUserProfileRoleAuthority } from "../../../state/user-channel-identity-operations.js";
 import {
@@ -16,6 +17,7 @@ import {
 } from "../../local-user-ingress.js";
 import { hasGatewayOperatorAccessPolicies } from "../../operator-access-policy.js";
 import { WEBSOCKET_OPEN_READY_STATE } from "../../server-constants.js";
+import { syncTrustedProxyGitCoauthor } from "../../trusted-proxy-git-coauthor.js";
 import { formatForLog } from "../../ws-log.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import {
@@ -195,18 +197,47 @@ export async function resolveGatewayConnectProfileAdmission(params: {
     };
   state: Pick<DeviceAuthorizedGatewayConnect, "authResult" | "role" | "authMethod">;
   ownerProfileExpected: boolean;
+  /** The profile an OpenClaw ID owner device's linked account names (OCF-510). */
+  linkedOwnerProfile?: { profileId: string; updatedAt: number } | null;
   authenticatedUserId: string | undefined;
+  requestHeaders?: IncomingHttpHeaders;
   resolveAuthenticatedGitHubIdentity: ReturnType<typeof createAuthenticatedGitHubIdentitySync>;
   assertCurrent?: () => void;
 }): Promise<{ ok: true; prepared?: PreparedConnectProfile } | { ok: false }> {
   const { context, state, ownerProfileExpected, authenticatedUserId } = params;
+  if (params.linkedOwnerProfile) {
+    // Attribution only: a profile that vanished since the lookup returns the owner device
+    // to the shared owner rather than refusing its certificate.
+    try {
+      const prepared = await resolveAuthenticatedProfile(
+        params.linkedOwnerProfile.profileId,
+        params.linkedOwnerProfile.updatedAt,
+        params.assertCurrent,
+        context.recordAttachTiming,
+      );
+      params.assertCurrent?.();
+      return { ok: true, prepared };
+    } catch (error) {
+      context.handler.logWsControl.warn(
+        `linked owner profile resolution failed conn=${context.handler.connId}: ${formatForLog(error)}`,
+      );
+      return await resolveGatewayConnectProfileAdmission({
+        ...params,
+        linkedOwnerProfile: null,
+        ownerProfileExpected: true,
+      });
+    }
+  }
   const profileRequired =
     Boolean(state.authResult.delegation) ||
     Boolean(context.configSnapshot.gateway?.roles) ||
     hasGatewayOperatorAccessPolicies(context.configSnapshot);
   if (
     !ownerProfileExpected &&
-    (!authenticatedUserId || (params.resolveAuthenticatedGitHubIdentity && !profileRequired))
+    (!authenticatedUserId ||
+      (params.resolveAuthenticatedGitHubIdentity &&
+        !profileRequired &&
+        !context.configSnapshot.gateway?.auth?.trustedProxy?.gitCoauthor))
   ) {
     return { ok: true };
   }
@@ -238,6 +269,15 @@ export async function resolveGatewayConnectProfileAdmission(params: {
               : await ensureCanonicalUserProfileForEmail(authenticatedUserId!, options);
     params.assertCurrent?.();
     params.context.recordAttachTiming?.("profileEnsureMs", ensureStartedAt);
+    if (!ownerProfileExpected && context.configSnapshot.gateway?.auth?.trustedProxy?.gitCoauthor) {
+      await syncTrustedProxyGitCoauthor({
+        authConfig: context.configSnapshot.gateway?.auth,
+        authResult: state.authResult,
+        headers: params.requestHeaders ?? {},
+        profileId: "profileId" in profile ? profile.profileId : profile.id,
+        assertCurrent: params.assertCurrent,
+      });
+    }
     context.setConnectPhase?.("profile-authority");
     const prepared = await resolveAuthenticatedProfile(
       "profileId" in profile ? profile.profileId : profile.id,

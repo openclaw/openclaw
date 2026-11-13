@@ -85,6 +85,7 @@ const reply = (runId: string, timestamp: number, content = "Finished " + runId) 
   content,
   timestamp,
   runId,
+  __openclaw: { recordTimestampMs: timestamp },
 });
 
 it("shows no duration when zero runtime cannot label completed work", async () => {
@@ -146,14 +147,14 @@ it("keeps consecutive plain replies tied to their own timing facts", async () =>
   await flushDeferredRowPrune();
   const durations = () =>
     [...container.querySelectorAll(".msg-meta__duration")].map((node) => node.textContent);
-  expect(durations()).toEqual(["Worked for 8s", "Worked for 20s"]);
+  expect(durations()).toEqual(["Worked for 8s", "Worked for 5s"]);
   props.selectedSession = session("unrelated", 99_000, { key: props.sessionKey });
   rerender();
   expect(durations()).toEqual(["Worked for 8s", "Worked for 5s"]);
   for (const runtimeMs of [undefined, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
     props.selectedSession = { ...session("second", 0), runtimeMs };
     rerender();
-    expect(durations()).toEqual(["Worked for 8s"]);
+    expect(durations()).toEqual(["Worked for 8s", "Worked for 5s"]);
   }
   props.selectedSession = session("second", 20_000, { status: "running" });
   rerender();
@@ -162,7 +163,7 @@ it("keeps consecutive plain replies tied to their own timing facts", async () =>
   rerender();
   expect(durations()).toEqual([]);
   props.selectedSession = session("unrelated", 99_000, { key: props.sessionKey });
-  props.messages = [prompt("first", 1_000), reply("first", 2_000)];
+  props.messages = [prompt("first", 1_000), { ...reply("first", 2_000), __openclaw: {} }];
   rerender();
   expect(durations()).toEqual([]);
   props.selectedSession = session("first", 20_000, { key: props.sessionKey });
@@ -180,10 +181,14 @@ it("keeps consecutive plain replies tied to their own timing facts", async () =>
   expect(durations()).toEqual([]);
 });
 
-it("uses matching lifecycle duration, not final-message creation time", async () => {
+it("keeps persisted elapsed time across lifecycle changes and history reconstruction", async () => {
   const status = "done";
   const runId = "duration-run";
-  const messages = [prompt(runId, 1_000), work(runId, 2_000), reply(runId, 508_000)];
+  const messages = [
+    prompt(runId, 1_000),
+    work(runId, 2_000),
+    { ...reply(runId, 508_000), __openclaw: { recordTimestampMs: 1_656_000 } },
+  ];
   const props = propsFor(runId, messages);
   props.selectedSession = session(runId, 1_655_000, {
     status,
@@ -195,7 +200,7 @@ it("uses matching lifecycle duration, not final-message creation time", async ()
   props.transcriptMetadata = projectChatTranscriptMetadata(liveSession);
   props.selectedSession = { key: props.sessionKey, kind: "direct", updatedAt: 1 };
   const { container, text, rerender } = mount(props);
-  // A fresh pane has never watched this run: restored lifecycle facts suffice.
+  // A fresh pane reconstructs elapsed time from the persisted endpoints.
   await flushDeferredRowPrune();
   const duration = () => text(".chat-activity-group__label");
   const expectDuration = (expected: string) => {
@@ -207,13 +212,13 @@ it("uses matching lifecycle duration, not final-message creation time", async ()
   props.transcriptMetadata = undefined;
   props.selectedSession = liveSession;
   props.selectedSession.runtimeMs = 1_660_000;
-  expectDuration("Worked for 27m 40s");
+  expectDuration("Worked for 27m 35s");
   props.messages = messages.slice(1);
-  expectDuration("Worked for 27m 40s");
+  expectDuration("Worked");
   props.messages = messages;
   props.selectedSession.lastRunId = "unrelated-run";
   // An advancing session row cannot erase timing already recorded for this answer.
-  expectDuration("Worked for 27m 40s");
+  expectDuration("Worked for 27m 35s");
   expect(container.querySelector(".chat-work-group")).not.toBeNull();
   props.selectedSession.lastRunId = runId;
   props.selectedSession.status = "running";
@@ -221,7 +226,7 @@ it("uses matching lifecycle duration, not final-message creation time", async ()
   props.selectedSession.status = status;
   for (const runtimeMs of [undefined, -1, Number.NaN]) {
     props.selectedSession.runtimeMs = runtimeMs;
-    expectDuration("Worked");
+    expectDuration("Worked for 27m 35s");
   }
   props.selectedSession.runtimeMs = 1_655_000;
   props.selectedSession.key = "agent:main:dashboard:other";
@@ -252,7 +257,7 @@ it.each([false, true])(
       summaries.map(
         (summary) => summary.querySelector(".chat-activity-group__label")?.textContent ?? null,
       ),
-    ).toEqual(steer ? ["Worked for 20s"] : ["Worked for 8s", "Worked for 20s"]);
+    ).toEqual(steer ? ["Worked for 5s"] : ["Worked for 8s", "Worked for 2s"]);
   },
 );
 it("keeps progress after accepted steers and before queued input", async () => {

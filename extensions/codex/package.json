@@ -17,6 +17,9 @@
     "ws": "8.22.0",
     "zod": "4.6.7"
   },
+  "bundleDependencies": [
+    "acorn"
+  ],
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },

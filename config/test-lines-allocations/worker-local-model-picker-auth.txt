@@ -1,3 +1,0 @@
-# Required-worker draft model-list, configured/personal account pins and session admission guards.
-# Exact net test growth; shared ceiling remains unchanged.
-168
