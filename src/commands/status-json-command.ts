@@ -50,7 +50,9 @@ export async function runStatusJsonCommand(params: {
         params.runtime,
       ),
     )
-    .catch((error: unknown) => reportStatusScanFailureUnlessInterrupted(error, params.runtime, opts.timeoutMs));
+    .catch((error: unknown) =>
+      reportStatusScanFailureUnlessInterrupted(error, params.runtime, opts.timeoutMs),
+    );
   if (!scan) {
     return;
   }
