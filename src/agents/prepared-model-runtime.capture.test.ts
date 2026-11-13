@@ -75,6 +75,25 @@ function fixture(inference?: ModelCatalogEntry["inference"]) {
 }
 
 describe("captured model catalog generations", () => {
+  it("retains withdrawn chat support when a run adds prompt-project facts", async () => {
+    const f = fixture();
+    f.replaceCatalog({
+      entries: [{ ...f.model, inference: { chat: false } }],
+      routeVariants: [],
+    });
+    const snapshot = { ...f.capture(), activeProjectKeys: ["synthetic-project"] };
+    await expect(
+      resolveModelAsync("synthetic", "first", snapshot.agentDir, snapshot.config, {
+        ...snapshot.createStores(),
+        preparedModelRuntime: snapshot,
+        skipAgentDiscovery: true,
+      }),
+    ).rejects.toMatchObject({
+      code: "model_chat_unsupported",
+      message: "This model doesn't support chat; pick another model.",
+    });
+  });
+
   it("resolves newly granted API chat from the admitted catalog without changing older admissions", async () => {
     const f = fixture({ chat: false });
     const denied = f.capture();

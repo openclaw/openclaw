@@ -90,6 +90,19 @@ export class FailoverError extends Error {
   }
 }
 
+export function assertModelSupportsChat(
+  chat: boolean | undefined,
+  ref: { provider: string; model: string },
+): void {
+  if (chat === false) {
+    throw new FailoverError(MODEL_CHAT_UNSUPPORTED_TEXT, {
+      reason: "format",
+      code: "model_chat_unsupported",
+      ...ref,
+    });
+  }
+}
+
 /** Return true for native or serialized failover errors. */
 export function isFailoverError(err: unknown): err is FailoverError {
   if (err instanceof FailoverError) {

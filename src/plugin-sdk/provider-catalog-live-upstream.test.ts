@@ -9,7 +9,10 @@ import {
   type UpstreamProviderCatalog,
   type UpstreamProviderCatalogModel,
 } from "./provider-catalog-live-runtime.js";
-import { listProviderCatalogSnapshotEntries } from "./provider-catalog-snapshot.internal.js";
+import {
+  listProviderCatalogSnapshotEntries,
+  projectProviderCatalogSnapshotRows,
+} from "./provider-catalog-snapshot.internal.js";
 
 const endpoint = "https://models.opencode.ai/api.json";
 async function loadProvider(fetchGuard: LiveModelCatalogFetchGuard, providerId = "opencode") {
@@ -58,13 +61,30 @@ async function fetchedModel(
 beforeEach(() => clearLiveCatalogCacheForTests());
 
 it("retains a negative chat capability for models.dev-shaped audio output metadata", async () => {
+  const model = await fetchedModel({
+    id: "voice-v2",
+    modalities: { input: ["text"], output: ["audio"] },
+    limit: { context: 8192, output: 4096 },
+  });
+  expect(model).toMatchObject({ inference: { chat: false } });
+  assert(model);
+  const snapshot = new Map([[model.id, { model }]]);
+  expect(listProviderCatalogSnapshotEntries(snapshot)[0]?.inference?.chat).toBe(false);
+  expect(projectProviderCatalogSnapshotRows([{ id: model.id }], snapshot)[0]?.inference?.chat).toBe(
+    false,
+  );
+  const chat = project({
+    id: "chat",
+    modalities: { output: ["text"] },
+    limit: { context: 8192, output: 4096 },
+  });
+  assert(chat);
   expect(
-    await fetchedModel({
-      id: "voice-v2",
-      modalities: { input: ["text"], output: ["audio"] },
-      limit: { context: 8192, output: 4096 },
-    }),
-  ).toMatchObject({ inference: { chat: false } });
+    projectProviderCatalogSnapshotRows(
+      [{ id: chat.id, modalities: { output: ["audio"] } }],
+      new Map([[chat.id, { model: chat }]]),
+    )[0]?.inference?.chat,
+  ).toBe(false);
 });
 
 it("lazily shares one anonymous upstream metadata download across provider ids", async () => {

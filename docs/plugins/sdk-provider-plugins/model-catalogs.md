@@ -97,6 +97,13 @@ response-cache entries only for the keys acquired by that request. Repeated
 reads within the same acquisition share the refreshed value; concurrent callers
 share pending work. Ordinary acquisition keeps its existing cache lifetime.
 
+Setup menus also use the projected chat capability. For example, oMLX's declared
+`llm`/`vlm` types and Bifrost's architecture output modalities qualify chat rows.
+An older server that lists only unfamiliar IDs must supply capability metadata
+or use an explicitly configured chat model; an ID alone does not establish support.
+Provider-specific capability trees, such as Anthropic's Messages thinking and
+effort metadata, are translated by the provider projection before shared admission.
+
 Passive model-list reads that wait for a configuration replacement resume against
 the newly committed catalog and configuration. They do not retry with the retired
 configuration. Exact runtime acquisitions remain bound to their requested configuration.

@@ -126,10 +126,17 @@ function isSafeLiveModelId(value: string): boolean {
 const NON_TEXT_MODEL_ID_PATTERN =
   /(?:^|[/_:.-])(?:embed(?:ding)?|rerank(?:er)?|whisper|transcri(?:be|ption)|tts|speech|realtime|moderation|guard|(?:audio|image|video)(?!-text-to-text)|dall-e|flux|sdxl|stable-diffusion|imagen|veo|sora|babbage|davinci|gpt-3[.]5-turbo-instruct)(?:$|[/_:.-])/i;
 
-function readLiveModelChatCapability(
-  record: Record<string, unknown>,
-  nestedRecords: readonly (Record<string, unknown> | undefined)[],
-): boolean | undefined {
+export function readLiveModelChatCapability(row: unknown): boolean | undefined {
+  const record = asOptionalRecord(row);
+  if (!record) {
+    return undefined;
+  }
+  const nestedRecords = [
+    asOptionalRecord(record.capabilities),
+    asOptionalRecord(record.architecture),
+    asOptionalRecord(record.top_provider),
+    asOptionalRecord(record.model_info),
+  ];
   const outputModalities = readLiveModelStringArray(
     [record, asOptionalRecord(record.modalities), ...nestedRecords],
     ["output_modalities", "outputModalities", "output"],
@@ -159,7 +166,7 @@ function readLiveModelChatCapability(
   }
   if (
     outputModalities.includes("text") ||
-    (kind && /^(?:text-generation|(?:image|audio|video)-text-to-text)$/i.test(kind))
+    (kind && /^(?:llm|vlm|text-generation|(?:image|audio|video)-text-to-text)$/i.test(kind))
   ) {
     return true;
   }
@@ -249,7 +256,7 @@ function buildOpenAICompatibleLiveModel(
   const modelInfo = asOptionalRecord(record.model_info);
   const nestedRecords = [capabilities, architecture, topProvider, modelInfo];
   const parameterCount = readLiveModelCatalogPositiveSafeIntegerField(record, "parameterCount");
-  const advertisedChatCapability = readLiveModelChatCapability(record, nestedRecords);
+  const advertisedChatCapability = readLiveModelChatCapability(record);
   const exact = fallback.models.find((model) => model.id === id);
   const chat = advertisedChatCapability ?? (exact ? (exact.inference?.chat ?? true) : false);
 
@@ -271,7 +278,11 @@ function buildOpenAICompatibleLiveModel(
       : exact;
   }
   // Only unknown ids need the provider's request-shaping gate.
-  if (chat && acceptUnknownModel && !acceptUnknownModel({ id, record })) {
+  if (
+    advertisedChatCapability !== false &&
+    acceptUnknownModel &&
+    !acceptUnknownModel({ id, record })
+  ) {
     return undefined;
   }
   const template = findLiveModelTemplate(id, fallback.models);
@@ -375,8 +386,7 @@ export function projectUpstreamProviderCatalogModel(params: {
   if (!model || !id || !contextWindow || !maxTokens) {
     return undefined;
   }
-  const capabilities = [asOptionalRecord(model.capabilities)];
-  const chat = readLiveModelChatCapability(model, capabilities) === true;
+  const chat = readLiveModelChatCapability(model) === true;
 
   const modelProvider = asOptionalRecord(model.provider);
   const npm =
