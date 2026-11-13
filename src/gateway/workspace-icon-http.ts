@@ -1,126 +1,83 @@
 // Serves a workspace directory's own project icon so the Control UI can render
 // real project identity instead of a generic folder glyph.
-import { close } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
-import { promisify } from "node:util";
 import {
   getAgentWorkspaceAccess,
   isWorkspaceAccessUnavailableError,
 } from "../agents/workspace-access.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { openRootFile, readFileDescriptorBounded } from "../infra/boundary-file-read.js";
 import { LruCache } from "../infra/lru-cache.js";
+import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
+import { WorkerTaskError, WorkerTaskPool } from "../infra/worker-task-pool.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { parseControlUiResourcePath } from "./control-ui-contract.js";
 import { respondNotFound } from "./control-ui-http-utils.js";
 import { sendMethodNotAllowed, sendSessionReadForbidden } from "./http-common.js";
-import {
-  HTTP_IMAGE_MAX_BYTES,
-  HTTP_SVG_MAX_BYTES,
-  resolveHttpImageRepresentation,
-  sendHttpImageResponse,
-  type HttpImageRepresentation,
-} from "./http-image-response.js";
+import { sendHttpImageResponse, type HttpImageRepresentation } from "./http-image-response.js";
 import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 import { authorizeControlUiSessionOwnerReadRequestOrReply } from "./http-utils.js";
 import { withReadySessionRows, type SessionRowReadView } from "./session-row-prepared-read.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
 import { resolveSessionWorkspaceRoots } from "./session-workspace-roots.js";
+import type { WorkspaceIconSnapshot } from "./workspace-icon-scan.js";
+export { SVG_ICON_MAX_BYTES, WORKSPACE_ICON_MAX_BYTES } from "./workspace-icon-scan.js";
 
-/**
- * Conventional project icon locations in deterministic product precedence.
- * Resolution stops at the first valid hit, so this fixed list is the whole
- * filesystem cost of opening a workspace and never becomes a recursive scan.
- */
-const WORKSPACE_ICON_RELATIVE_PATHS = [
-  "favicon.svg",
-  "favicon.ico",
-  "favicon.png",
-  "public/favicon.svg",
-  "public/favicon.ico",
-  "public/favicon.png",
-  "public/favicon-32.png",
-  "public/apple-touch-icon.png",
-  "static/favicon.svg",
-  "static/favicon.ico",
-  "static/favicon.png",
-  "ui/public/favicon-32.png",
-  "ui/public/favicon.svg",
-  "ui/public/favicon.ico",
-  "ui/public/favicon.png",
-  "app/favicon.ico",
-  "app/favicon.png",
-  "app/icon.svg",
-  "app/icon.png",
-  "app/icon.ico",
-  "src/favicon.ico",
-  "src/favicon.svg",
-  "src/app/favicon.ico",
-  "src/app/icon.svg",
-  "src/app/icon.png",
-  "assets/icon.svg",
-  "assets/icon.png",
-  "assets/logo.svg",
-  "assets/logo.png",
-] as const;
+type WorkspaceIconResolution = HttpImageRepresentation | null;
+type WorkspaceIconRuntime = {
+  cache: LruCache<Promise<WorkspaceIconResolution>>;
+  pool?: WorkerTaskPool<string, WorkspaceIconSnapshot | null>;
+  closing?: Promise<void>;
+};
 
-/** Icons are small by construction; anything larger is not a favicon. */
-export const WORKSPACE_ICON_MAX_BYTES = HTTP_IMAGE_MAX_BYTES;
-/** Vector icons are markup the renderer must parse, so they get a tighter cap. */
-export const SVG_ICON_MAX_BYTES = HTTP_SVG_MAX_BYTES;
-const WORKSPACE_ICON_CACHE_MAX_ENTRIES = 32;
-const closeFileDescriptor = promisify(close);
-type WorkspaceIcon = HttpImageRepresentation;
-
-/** `null` records a resolved absence so a workspace without an icon never re-scans. */
-type WorkspaceIconResolution = WorkspaceIcon | null;
-
-const workspaceIconCache = new LruCache<Promise<WorkspaceIconResolution>>(
-  WORKSPACE_ICON_CACHE_MAX_ENTRIES,
-);
-
-async function scanWorkspaceIcon(workspaceRoot: string): Promise<WorkspaceIconResolution> {
-  for (const relativePath of WORKSPACE_ICON_RELATIVE_PATHS) {
-    const opened = await openRootFile({
-      absolutePath: path.join(workspaceRoot, relativePath),
-      rootPath: workspaceRoot,
-      boundaryLabel: "workspace root",
-      symlinks: "follow-parents-within-root",
-      maxBytes: WORKSPACE_ICON_MAX_BYTES,
-    });
-    if (!opened.ok) {
-      continue;
-    }
-    let body: Buffer;
-    try {
-      body = await readFileDescriptorBounded(opened.fd, WORKSPACE_ICON_MAX_BYTES);
-    } catch {
-      continue;
-    } finally {
-      await closeFileDescriptor(opened.fd);
-    }
-    const icon = await resolveHttpImageRepresentation(relativePath, body);
-    if (icon) {
-      return icon;
-    }
-  }
-  return null;
-}
-
-/**
- * Reuses immutable icon bytes while the workspace remains in the bounded cache.
- * Only cold/evicted roots scan the fixed candidate list; ordinary requests never
- * freshness-poll project files.
- */
+/** Cold roots share bounded worker work; HTTP callers retain only publication authority. */
 export function resolveWorkspaceIcon(workspaceRoot: string): Promise<WorkspaceIconResolution> {
+  const runtime = resolveGlobalSingleton<WorkspaceIconRuntime>(
+    Symbol.for("openclaw.workspaceIcons"),
+    () => ({ cache: new LruCache(32) }),
+    (state) => {
+      state.closing ??= (async () => {
+        await state.pool?.close();
+        state.pool = undefined;
+        state.cache.clear();
+      })().finally(() => {
+        state.closing = undefined;
+      });
+      return state.closing;
+    },
+  );
+  if (runtime.closing) {
+    return Promise.reject(new WorkerTaskError("Workspace icon reader is closing", "unavailable"));
+  }
   const cacheKey = path.resolve(workspaceRoot);
-  const cached = workspaceIconCache.get(cacheKey);
+  const cached = runtime.cache.get(cacheKey);
   if (cached) {
     return cached;
   }
-  const pending = scanWorkspaceIcon(cacheKey);
-  workspaceIconCache.set(cacheKey, pending);
+  // A disconnected first requester must not retire another requester's shared scan.
+  const pending = runInDetachedAsyncContext(async () => {
+    const pool = (runtime.pool ??= new WorkerTaskPool<string, WorkspaceIconSnapshot | null>({
+      workerUrl: resolveRuntimeProcessEntrypointUrl("workspaceIcon"),
+      workerClass: "file-reader",
+      idleTimeoutMs: 10 * 60_000,
+      maxPendingTasks: 32,
+      maxPendingBytes: 256 * 1024,
+    }));
+    const icon = await pool.run(cacheKey, { inputBytes: 2 * cacheKey.length });
+    return (
+      icon && {
+        ...icon,
+        body: Buffer.from(icon.body.buffer, icon.body.byteOffset, icon.body.byteLength),
+      }
+    );
+  }).catch((error: unknown) => {
+    // Admission and worker failures are retryable, never a cached absence.
+    runtime.cache.deleteValue(pending);
+    throw error;
+  });
+  runtime.cache.set(cacheKey, pending);
   return pending;
 }
 
@@ -133,7 +90,7 @@ function respondWorkspaceIconUnavailable(res: ServerResponse) {
 
 /**
  * Resolve cold and evicted icons through the existing prepared session-row owner.
- * Store reads stay in its worker; bounded filesystem reads are asynchronous and
+ * Store reads and icon filesystem traversal stay in workers;
  * the current session/root and request authority fence publication of the bytes.
  */
 export async function handleWorkspaceIconHttpRequest(

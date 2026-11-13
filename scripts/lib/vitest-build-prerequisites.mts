@@ -186,6 +186,15 @@ const runtimeConsumers = [
     dir: "src/plugins",
   },
   {
+    file: "src/gateway/workspace-icon-http.test.ts",
+    configs: [
+      "test/vitest/vitest.gateway-database-workers.config.ts",
+      "test/vitest/vitest.gateway.config.ts",
+    ],
+    mode: "runtime",
+    dir: "",
+  },
+  {
     file: "test/plugins/codex-model-catalog.gateway.test.ts",
     configs: [
       "test/vitest/vitest.gateway-database-workers.config.ts",
