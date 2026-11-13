@@ -143,10 +143,10 @@ describe("planner measurement dispatch", () => {
     });
     expect(workloadCheckouts).toHaveLength(2);
     for (const [index, pin] of workloadPins.entries()) {
-      expect(workloadCheckouts[index].if).toBe(
+      expect(workloadCheckouts[index]?.if).toBe(
         `\${{ steps.selection.outputs.workload == '${pin.selection}' }}`,
       );
-      expect(workloadCheckouts[index].with).toEqual({
+      expect(workloadCheckouts[index]?.with).toEqual({
         repository: "openclaw/openclaw",
         ref: pin.sha,
         path: "workload",
@@ -205,7 +205,7 @@ describe("planner measurement dispatch", () => {
               `\${{ steps.selection.outputs.workload == '${result.outputs.workload}' }}`,
           );
           expect(selected).toHaveLength(1);
-          expect(selected[0].with?.ref).toBe(result.outputs.workload_sha);
+          expect(selected[0]?.with?.ref).toBe(result.outputs.workload_sha);
         }
       }
     },
