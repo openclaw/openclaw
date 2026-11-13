@@ -57,9 +57,10 @@ work and the available image tool for raster generation or editing. Looking at a
 reference does not automatically pass it to the generator: the generation request
 must include the selected inputs.
 
-The skill does not add providers, bypass file access, or change automatic media
-delivery. Background results still follow the delivery contract below; inspection
-after completion does not retract an attachment already sent.
+The skill does not add providers or bypass file access. It can select a supported
+review-before-delivery mode for the current chat; otherwise background results
+follow the tool’s automatic delivery contract. Inspection after completion does
+not retract an attachment already sent.
 
 ## Quick start
 
