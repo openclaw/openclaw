@@ -20,6 +20,7 @@ import { applyExtraParamsToAgent } from "./embedded-agent-runner/extra-params.js
 import { wrapStreamFnSanitizeMalformedToolCalls } from "./embedded-agent-runner/run/attempt-tool-call-replay-sanitization.js";
 import { materializeProviderContext } from "./embedded-agent-runner/run/images.js";
 import { wrapStreamFnWithMessageTransform } from "./embedded-agent-runner/run/message-transform-stream-wrapper.js";
+import { promptImageSessionKey } from "./embedded-agent-runner/run/prompt-image-decisions.js";
 import { prepareEmbeddedSessionForkContext } from "./embedded-agent-runner/session-fork-context.js";
 import { runEmbeddedSessionFork } from "./embedded-agent-runner/session-fork.js";
 import { resolveEmbeddedAgentStream } from "./embedded-agent-runner/stream-resolution.js";
@@ -169,6 +170,14 @@ async function resolveSideQuestionStream(input: SideQuestionStreamInput) {
         materializeProviderContext({
           context,
           signal,
+          // The session's own image decisions, so a fork keeps each earlier image as the session
+          // sent it instead of deciding it again.
+          imageSessionKey: promptImageSessionKey({
+            sessionId,
+            agentId: params.agentId,
+            sessionTarget: { storePath: params.storePath, agentId: params.agentId },
+            workspaceDir,
+          }),
           workspaceDir,
           agentWorkspaceDir: workspaceDir,
           workspaceOnly,
