@@ -17,6 +17,7 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -114,6 +115,113 @@ class MicCaptureManagerTest {
       val conversation = manager.conversation.value.first()
       assertEquals(VoiceConversationRole.User, conversation.role)
       assertEquals("hello world", conversation.text)
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun finalTranscriptRetiresIdleFlushSuppressionBeforeNextUtterance() =
+    runTest {
+      // Matching finals still deduplicate; revised or empty finals must also end that ownership.
+      for (finalText in listOf("hello", "hello again", "")) {
+        val sentMessages = mutableListOf<String>()
+        val manager =
+          createManager(
+            scope = this,
+            sendToGateway = { message, onRunIdKnown ->
+              sentMessages += message
+              val runId = "run-${sentMessages.size}"
+              onRunIdKnown(runId)
+              ChatSendAck(runId = runId, status = "ok")
+            },
+          )
+        try {
+          // Admit microphone intent offline, then supply the external provider session without audio I/O.
+          manager.setMicEnabled(true)
+          setTranscriptionSession(manager, "transcription-1")
+          manager.onGatewayConnectionChanged(true)
+          manager.handleGatewayEvent(
+            "talk.event",
+            """{"transcriptionSessionId":"transcription-1","type":"partial","text":"hello"}""",
+          )
+          advanceTimeBy(1_600)
+          runCurrent()
+          assertEquals(listOf("hello"), sentMessages)
+
+          manager.handleGatewayEvent(
+            "talk.event",
+            """{"transcriptionSessionId":"transcription-1","type":"transcript","text":${JsonPrimitive(finalText)},"final":true}""",
+          )
+          runCurrent()
+          val expected = if (finalText == "hello again") listOf("hello", "hello again") else listOf("hello")
+          assertEquals(expected, sentMessages)
+
+          manager.handleGatewayEvent(
+            "talk.event",
+            """{"transcriptionSessionId":"transcription-1","type":"transcript","text":"hello","final":true}""",
+          )
+          runCurrent()
+          assertEquals("A later utterance must not be mistaken for the old partial's final", expected + "hello", sentMessages)
+          assertFalse(manager.isSending.value)
+        } finally {
+          manager.cancelMicCapture()
+          runCurrent()
+        }
+      }
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun reconnectDoesNotSuppressTextFlushedByRetiredTranscriptionSession() =
+    runTest {
+      val sentMessages = mutableListOf<String>()
+      val closedSessions = mutableListOf<String>()
+      val manager =
+        createManager(
+          scope = this,
+          closeTranscriptionSession = { closedSessions += it },
+          sendToGateway = { message, onRunIdKnown ->
+            sentMessages += message
+            val runId = "run-${sentMessages.size}"
+            onRunIdKnown(runId)
+            ChatSendAck(runId = runId, status = "ok")
+          },
+        )
+      try {
+        manager.setMicEnabled(true)
+        setTranscriptionSession(manager, "transcription-1")
+        manager.onGatewayConnectionChanged(true)
+        manager.handleGatewayEvent(
+          "talk.event",
+          """{"transcriptionSessionId":"transcription-1","type":"partial","text":"hello"}""",
+        )
+        advanceTimeBy(1_600)
+        runCurrent()
+        assertEquals(listOf("hello"), sentMessages)
+
+        manager.onGatewayConnectionChanged(false)
+        runCurrent()
+        assertEquals(listOf("transcription-1"), closedSessions)
+        setTranscriptionSession(manager, "transcription-2")
+        manager.onGatewayConnectionChanged(true)
+        manager.handleGatewayEvent(
+          "talk.event",
+          """{"transcriptionSessionId":"transcription-1","type":"transcript","text":"stale","final":true}""",
+        )
+        runCurrent()
+        assertEquals("Retired provider events remain ignored", listOf("hello"), sentMessages)
+
+        manager.handleGatewayEvent(
+          "talk.event",
+          """{"transcriptionSessionId":"transcription-2","type":"transcript","text":"hello","final":true}""",
+        )
+        runCurrent()
+        assertEquals(listOf("hello", "hello"), sentMessages)
+        assertEquals(listOf("hello", "hello"), manager.conversation.value.map { it.text })
+        assertFalse(manager.isSending.value)
+      } finally {
+        manager.cancelMicCapture()
+        runCurrent()
+      }
     }
 
   @Test
