@@ -1,0 +1,4 @@
+# Real runner-profile shell reproduction plus downstream placement and timeout
+# regression for the frozen release when shared CI selects the Boat backend.
+# Includes fixture wiring for the effective backend owner.
+30

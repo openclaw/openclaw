@@ -3763,9 +3763,9 @@ server.listen(0, "127.0.0.1", () => {
     // budget 429-failed every mount fleet-wide.
     expect(mountWith.key).toBe("${{ github.repository }}-gradle-v2-${{ matrix.task }}");
     expect(androidSteps.find((step) => step.name === "Mount Gradle sticky disk")?.if).toContain(
-      "vars.OPENCLAW_CI_RUNNER_BACKEND != 'github'",
+      "needs.preflight.outputs.effective_runner_backend != 'github'",
     );
-    expect(pointStep.if).toContain("vars.OPENCLAW_CI_RUNNER_BACKEND != 'github'");
+    expect(pointStep.if).toContain("needs.preflight.outputs.effective_runner_backend != 'github'");
     // Single semantic writer: protected pushes commit explicitly (on-change's
     // allocated-byte heuristic can miss a same-size refresh); PR clones stay read-only.
     expect(mountWith.commit).toBe(

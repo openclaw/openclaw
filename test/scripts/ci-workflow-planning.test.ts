@@ -5144,6 +5144,29 @@ describe("ci workflow guards", () => {
     },
   );
 
+  it("keeps the frozen release hosted when the repository selects Boat", () => {
+    const job = readCiWorkflow().jobs["build-artifacts"];
+    for (const eventName of ["push", "workflow_dispatch"] as const) {
+      const result = runRunnerProfileFixture({
+        configuredProfile: "boat",
+        eventName,
+        targetSupportsContract: true,
+      });
+      expect(result.status, result.output).toBe(0);
+      expect(result.outputs.runner_profile).toBe("github");
+      expect(result.outputs.node_runner_backend).toBe("github");
+      const context = {
+        eventName,
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        runnerBackend: "boat" as const,
+        preflightOutputs: result.outputs,
+      };
+      expect(evaluateWorkflowExpression(job["runs-on"], context)).toBe("ubuntu-24.04");
+      expect(evaluateWorkflowExpression(job["timeout-minutes"], context)).toBe(35);
+    }
+  });
+
   it("resolves event-aware check and Node profiles independently of the author", () => {
     const scenarios: {
       expected: string;
@@ -5609,6 +5632,7 @@ describe("ci workflow guards", () => {
                   ...qualified.preflightOutputs,
                   ci_qualification: "false",
                   qualification_runner_backend: "",
+                  effective_runner_backend: "github",
                 },
               }),
             );
@@ -6063,7 +6087,7 @@ describe("ci workflow guards", () => {
       }
     }
     expect(workflow.jobs["build-artifacts"]["timeout-minutes"]).toBe(
-      "${{ ((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' || (contains(fromJSON('[\"hybrid\",\"runson\"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) || (github.event_name == 'workflow_dispatch' && needs.preflight.outputs.ci_shape != 'main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)) && 35 || 20 }}",
+      "${{ ((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || needs.preflight.outputs.effective_runner_backend) == 'github' || (contains(fromJSON('[\"hybrid\",\"runson\"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || needs.preflight.outputs.effective_runner_backend)) && github.run_attempt > 1) || (github.event_name == 'workflow_dispatch' && needs.preflight.outputs.ci_shape != 'main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)) && 35 || 20 }}",
     );
     // PR events validate the artifact build on hosted runners (landing gate
     // stays satisfiable during Blacksmith outages); Testbox leases are
@@ -6310,7 +6334,7 @@ describe("ci workflow guards", () => {
     expect(boundaryMount.with.key).toBe("${{ github.repository }}-ext-boundary-v2");
     expect(lintMount.with.key).toBe(boundaryMount.with.key);
     for (const gate of [boundaryMount, lintMount]) {
-      expect(gate.if).toContain("vars.OPENCLAW_CI_RUNNER_BACKEND != 'github'");
+      expect(gate.if).toContain("needs.preflight.outputs.effective_runner_backend != 'github'");
     }
     expect(hostedLintCache.if).toBe(
       "needs.preflight.outputs.cache_mode != 'off' && matrix.task == 'lint' && steps.extension-boundary-inputs.outputs.enabled == 'true' && (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid')",
@@ -6547,7 +6571,7 @@ describe("ci workflow guards", () => {
       expect(gate.run).toContain(".source-fingerprint");
       expect(gate.run).not.toContain("git rev-parse HEAD:");
       expect(gate.run).not.toContain("BOUNDARY_CONFIG_HASH");
-      expect(gate.if).toContain("vars.OPENCLAW_CI_RUNNER_BACKEND != 'github'");
+      expect(gate.if).toContain("needs.preflight.outputs.effective_runner_backend != 'github'");
     }
     // Seeding is writer-only work: PR mounts never commit, so seeding there
     // would burn wall clock on a discarded clone.

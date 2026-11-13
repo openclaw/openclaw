@@ -125,7 +125,7 @@ type WorkflowContext = Strings<"action" | "actor" | "authorAssociation" | "maint
     resolveTargetOutputs?: Record<string, string>;
     validationTier?: "full" | "main";
     repository: string;
-    runnerBackend?: "" | "blacksmith" | "github" | "hybrid" | "runson";
+    runnerBackend?: "" | "blacksmith" | "github" | "hybrid" | "runson" | "boat";
     requestedRunnerBackend?: "default" | "hybrid" | "runson";
     ciShape?: "default" | "main";
     inputs?: Record<string, unknown>;
@@ -237,7 +237,12 @@ export function evaluateWorkflowExpression(expression: unknown, context: Workflo
     matrix: context.matrix ?? {},
     runner: { environment: context.runnerEnvironment ?? "", temp: context.runnerTemp ?? "" },
     steps: {
-      runner_profile: { outputs: { node_runner_backend: "" } },
+      runner_profile: {
+        outputs: {
+          node_runner_backend: "",
+          effective_runner_backend: context.runnerBackend || "blacksmith",
+        },
+      },
       qualification_dispatch: { outputs: { eligible: "false" } },
       ...context.steps,
     },
@@ -265,6 +270,7 @@ export function evaluateWorkflowExpression(expression: unknown, context: Workflo
       preflight: {
         result: context.preflightResult ?? context.jobResults?.preflight ?? "success",
         outputs: {
+          effective_runner_backend: context.runnerBackend || "blacksmith",
           frozen_target: String(context.frozenTarget ?? false),
           hosted_runner_profile_contract: String(context.hostedRunnerProfileContract ?? true),
           run_check: String(context.runCheck ?? true),
