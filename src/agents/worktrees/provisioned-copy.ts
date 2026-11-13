@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
+import type { ProvisionCopyDetails } from "../../infra/fs-safe-copy-worker-contract.js";
 import { root as fsRoot, FsSafeError, type Root } from "../../infra/fs-safe.js";
 import { lstatIfExists } from "../../infra/path-existence.js";
+import { copyProvisionedPathsLinux } from "./provisioned-copy-linux.js";
 import {
   hasSafeParentDirectories,
   normalizeProvisionedRelativePath,
@@ -13,6 +15,7 @@ async function copyProvisionedFile(params: {
   relativePath: string;
   assertCurrent?: () => void;
   signal?: AbortSignal;
+  copyDetails?: ProvisionCopyDetails;
 }): Promise<boolean> {
   const relativePath = params.relativePath;
   // Eligibility checks preserve skip behavior; copyIn guards the later mutation.
@@ -57,6 +60,9 @@ async function copyProvisionedFile(params: {
     throw error;
   }
   params.assertCurrent?.();
+  if (params.copyDetails) {
+    params.copyDetails.sourceBytes += sourceStat.size;
+  }
   return true;
 }
 
@@ -65,9 +71,18 @@ export async function copyProvisionedPaths(
   repoRoot: string,
   worktreePath: string,
   paths: readonly string[],
-  options: { signal?: AbortSignal; assertCurrent?: () => void },
+  options: {
+    signal?: AbortSignal;
+    assertCurrent?: () => void;
+    copyDetails?: ProvisionCopyDetails;
+  },
 ): Promise<string[]> {
   const [sourceRoot, destinationRoot] = await Promise.all([fsRoot(repoRoot), fsRoot(worktreePath)]);
+  options.signal?.throwIfAborted();
+  const linuxCopy = await copyProvisionedPathsLinux(sourceRoot, destinationRoot, paths, options);
+  if (linuxCopy) {
+    return linuxCopy;
+  }
   const provisioned: string[] = [];
   for (const relativePath of paths) {
     const normalized = normalizeProvisionedRelativePath(relativePath);
@@ -79,6 +94,7 @@ export async function copyProvisionedPaths(
         relativePath: normalized,
         assertCurrent: options.assertCurrent,
         signal: options.signal,
+        copyDetails: options.copyDetails,
       }))
     ) {
       provisioned.push(normalized);

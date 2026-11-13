@@ -26,6 +26,7 @@ import {
   type ExecTarget,
 } from "../infra/exec-approvals.js";
 import { defaultRuntime } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
   buildExecPolicyToolAccess,
@@ -116,12 +117,18 @@ function sanitizeExecPolicyTableCell(value: string): string {
   return sanitizeExecApprovalDisplayText(sanitizeTerminalText(value));
 }
 
+/** Sanitize each cell line on its own so the table, not a value, supplies the line breaks. */
+function formatExecPolicyTableLines(...lines: string[]): string {
+  return lines.map(sanitizeExecPolicyTableCell).join("\n");
+}
+
 function sanitizeExecPolicyMessage(value: unknown): string {
   return sanitizeTerminalText(String(value));
 }
 
 async function buildLocalExecPolicyShowPayload(
   options?: ExecPolicyShowOptions,
+  signal?: AbortSignal,
 ): Promise<ExecPolicyShowPayload> {
   const configSnapshot = await readConfigFileSnapshot();
   const approvalsSnapshot = await readExecApprovalsSnapshotAsync();
@@ -158,7 +165,7 @@ async function buildLocalExecPolicyShowPayload(
     return payload;
   }
   try {
-    payload.toolAccess = await buildExecPolicyToolAccess(config, options);
+    payload.toolAccess = await buildExecPolicyToolAccess(config, options, signal);
   } catch (error) {
     if (hasExplicitTarget || !(error instanceof AgentSelectionRequiredError)) {
       throw error;
@@ -230,18 +237,19 @@ function renderExecPolicyShow(payload: ExecPolicyShowPayload): void {
       ],
       rows: payload.effectivePolicy.scopes.map((scope) => ({
         Scope: sanitizeExecPolicyTableCell(scope.scopeLabel),
-        Requested: sanitizeExecPolicyTableCell(
-          `host=${scope.host.requested} (${scope.host.requestedSource})\n` +
-            `security=${scope.security.requested} (${scope.security.requestedSource})\n` +
-            `ask=${scope.ask.requested} (${scope.ask.requestedSource})`,
+        Requested: formatExecPolicyTableLines(
+          `host=${scope.host.requested} (${scope.host.requestedSource})`,
+          `security=${scope.security.requested} (${scope.security.requestedSource})`,
+          `ask=${scope.ask.requested} (${scope.ask.requestedSource})`,
         ),
-        Host: sanitizeExecPolicyTableCell(
-          `security=${scope.security.host} (${scope.security.hostSource})\n` +
-            `ask=${scope.ask.host} (${scope.ask.hostSource})\n` +
-            `askFallback=${scope.askFallback.effective} (${scope.askFallback.source})`,
+        Host: formatExecPolicyTableLines(
+          `security=${scope.security.host} (${scope.security.hostSource})`,
+          `ask=${scope.ask.host} (${scope.ask.hostSource})`,
+          `askFallback=${scope.askFallback.effective} (${scope.askFallback.source})`,
         ),
-        Effective: sanitizeExecPolicyTableCell(
-          `security=${scope.security.effective}\nask=${scope.ask.effective}`,
+        Effective: formatExecPolicyTableLines(
+          `security=${scope.security.effective}`,
+          `ask=${scope.ask.effective}`,
         ),
       })),
     }).trimEnd(),
@@ -377,9 +385,14 @@ export function registerExecPolicyCli(program: Command) {
       .option("--json", "Output as JSON", false),
   ).action(async (opts: ExecPolicyShowOptions, command: Command) => {
     await runExecPolicyAction(opts, async () => {
+      const signal = getAsyncWorkSignal();
       const payload = await buildLocalExecPolicyShowPayload(
         resolveGatewayRpcOptionsWithLocalPort(opts, command),
+        signal,
       );
+      if (signal?.aborted) {
+        return;
+      }
       if (opts.json) {
         defaultRuntime.writeJson(payload, 0);
         return;

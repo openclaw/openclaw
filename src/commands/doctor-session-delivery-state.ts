@@ -1,4 +1,5 @@
 import { note } from "../../packages/terminal-core/src/note.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { scanDoctorSessionEntriesTolerant } from "../config/sessions/session-accessor.js";
 import { SESSION_ENTRY_NUMERIC_FIELDS } from "../config/sessions/session-entry-numeric-snapshot.js";
 import {
@@ -9,6 +10,7 @@ import { stripRuntimeOnlySessionSkillsFields } from "../config/sessions/store-en
 import { resolveAllAgentSessionStoreCandidateTargetsSync } from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   projectExistingAgentDatabaseTargets,
@@ -16,6 +18,7 @@ import {
 } from "../infra/session-sqlite-migration-readers.js";
 import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
+import { isSqliteSnapshotCapacityError } from "../infra/sqlite-snapshot-capacity-error.js";
 import { prepareArtifactPreservingSqliteRead } from "../infra/sqlite-snapshot-source.js";
 import {
   assertExistingDatabaseIdentity,
@@ -118,6 +121,7 @@ async function prepareSessionEntryRepairs(params: PreparedSessionEntryRepairPara
     sessionKeys: string[];
     identity: ReturnType<typeof readDatabasePathIdentitySync>;
   }> = [];
+  const deferredWarnings: string[] = [];
   for (const target of targets) {
     signal?.throwIfAborted();
     const sessionKeys: string[] = [];
@@ -192,6 +196,17 @@ async function prepareSessionEntryRepairs(params: PreparedSessionEntryRepairPara
         );
         continue;
       }
+      if (
+        params.source === "raw" &&
+        isTruthyEnvValue(process.env.OPENCLAW_UPDATE_IN_PROGRESS) &&
+        isSqliteSnapshotCapacityError(error)
+      ) {
+        // Missing disposable snapshot space says nothing about the source, which stays unchanged.
+        const warning = `Session entry state inspection deferred for agent ${target.agentId}: ${formatErrorMessage(error)}. Free temporary snapshot space, then run ${formatCliCommand("openclaw doctor --fix")} after the update.`;
+        note(warning, "Doctor warning");
+        deferredWarnings.push(warning);
+        continue;
+      }
       throw error;
     }
   }
@@ -199,6 +214,7 @@ async function prepareSessionEntryRepairs(params: PreparedSessionEntryRepairPara
     targets,
     inspectedTargets,
     pending,
+    deferredWarnings,
     found: pending.reduce((count, item) => count + item.sessionKeys.length, 0),
     scannedStores: targets.length,
     apply(assertCurrent?: (target: ExistingAgentDatabaseTarget) => void): number {
@@ -265,7 +281,7 @@ export async function repairLegacySessionEntryStates(params: {
   onInspectedTargets?: (
     targets: readonly (ExistingAgentDatabaseTarget & { canonicalPath: string })[],
   ) => void;
-}): Promise<SessionDeliveryStateRepairReport> {
+}): Promise<SessionDeliveryStateRepairReport & { warnings?: string[] }> {
   try {
     let repairedIsoEndedAt = 0;
     const recoveredTombstones = new Map<string, string>();
@@ -314,7 +330,12 @@ export async function repairLegacySessionEntryStates(params: {
       },
       updateDeliveryProjection: true,
     });
-    const report = { found: plan.found, repaired: 0, scannedStores: plan.scannedStores };
+    const report = {
+      found: plan.found,
+      repaired: 0,
+      scannedStores: plan.scannedStores,
+      ...(plan.deferredWarnings.length > 0 ? { warnings: plan.deferredWarnings } : {}),
+    };
     if (!params.apply || plan.found === 0) {
       reportRetained();
       params.onInspectedTargets?.(plan.inspectedTargets);

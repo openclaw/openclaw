@@ -5,9 +5,9 @@ import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import * as toast from "../../lib/toast.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
+import type { NewSessionComposerOptions } from "./composer-options.ts";
 import { createNewSessionComposerTextarea } from "./composer-textarea.ts";
 import { mountNewSessionComposer } from "./composer.test-support.ts";
-import type { NewSessionComposerOptions } from "./composer.tsx";
 import { NewSessionModelControl } from "./model-control.ts";
 
 afterEach(() => {

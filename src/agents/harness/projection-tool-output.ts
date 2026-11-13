@@ -1,11 +1,12 @@
 import { formatToolAggregate } from "../../auto-reply/tool-meta.js";
 import { formatFencedCodeBlock } from "../../shared/markdown-code.js";
-import { truncateUtf16Safe } from "../../utils.js";
+import { sliceUtf16Safe, truncateUtf16Safe } from "../../utils.js";
 
 export const TOOL_PROGRESS_OUTPUT_MAX_CHARS = 8_000;
 
 export const MAX_TOOL_OUTPUT_DELTA_MESSAGES_PER_ITEM = 20;
 export const TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS = 10_000;
+const TOOL_LIVE_OUTPUT_MAX_CHARS = 600;
 
 export class NativeToolOutputAccumulator {
   constructor(private readonly nativeToolLabel: string) {}
@@ -20,16 +21,25 @@ export class NativeToolOutputAccumulator {
   append(
     itemId: string,
     delta: string,
-  ): { text: string; originalLength: number; normalizedLength: number; rawPrefix: string } {
+  ): {
+    text: string;
+    originalLength: number;
+    normalizedLength: number;
+    rawPrefix: string;
+    liveOutput?: { text: string; omittedChars: number };
+  } {
     const state = this.items.get(itemId) ?? {
       rawPrefix: this.textByItem.get(itemId) ?? "",
       originalLength: this.textByItem.get(itemId)?.length ?? 0,
       normalizedLength: 0,
       trailingWhitespaceLength: 0,
+      liveTail: "",
     };
     const truncated = this.isTruncated(itemId);
     const originalLength = (state.originalLength += delta.length);
     const normalizedLength = updateToolOutputTrimState(state, delta);
+    const tail = state.liveTail + delta;
+    state.liveTail = sliceUtf16Safe(tail, Math.max(0, tail.length - TOOL_LIVE_OUTPUT_MAX_CHARS));
     // Lengths keep growing after truncation for echo matching + the notice total;
     // the stored raw prefix freezes so later deltas cannot fill UTF-16 capacity
     // recovered by backing up over a split surrogate pair.
@@ -42,7 +52,22 @@ export class NativeToolOutputAccumulator {
     state.rawPrefix = next.rawPrefix;
     this.items.set(itemId, state);
     this.textByItem.set(itemId, next.text);
-    return { text: next.text, originalLength, normalizedLength, rawPrefix: next.rawPrefix };
+    return {
+      text: next.text,
+      originalLength,
+      normalizedLength,
+      rawPrefix: next.rawPrefix,
+      // The transcript keeps its prefix. Only saturated live previews need a
+      // separate rolling window; final receipts never consume this tail.
+      ...(originalLength > TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS
+        ? {
+            liveOutput: {
+              text: state.liveTail,
+              omittedChars: originalLength - state.liveTail.length,
+            },
+          }
+        : {}),
+    };
   }
 }
 
@@ -104,6 +129,7 @@ type ToolOutputState = {
   originalLength: number;
   normalizedLength: number;
   trailingWhitespaceLength: number;
+  liveTail: string;
 };
 
 function updateToolOutputTrimState(state: ToolOutputState, delta: string): number {

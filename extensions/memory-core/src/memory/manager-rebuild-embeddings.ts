@@ -28,6 +28,48 @@ export type MemoryRebuildEmbeddingQuery = {
   dimensions?: number;
 };
 
+type MemoryPublishedVectorMeta = {
+  meta: { model: string; vectorDims: number };
+  serialized: string;
+};
+
+/** Bind published chunk vectors to one of the requested identities, or to none. */
+export function readMemoryPublishedVectorMeta(
+  database: EngineConnection,
+  identities: MemoryIndexProviderIdentity[],
+  dimensions?: number,
+): MemoryPublishedVectorMeta | undefined {
+  const db = getNodeSqliteKysely<{ memory_index_meta: { key: string; value: string } }>(database);
+  const row = executeSqliteQueryTakeFirstSync(
+    database,
+    db.selectFrom("memory_index_meta").select("value").where("key", "=", MEMORY_INDEX_META_KEY),
+  );
+  if (!row) {
+    return undefined;
+  }
+  let meta: unknown;
+  try {
+    meta = JSON.parse(row.value);
+  } catch {
+    return undefined;
+  }
+  if (
+    !Value.Check(rebuildIdentitySchema, meta) ||
+    meta.model === "fts-only" ||
+    !identities.some(
+      (identity) =>
+        meta.provider === identity.provider &&
+        meta.model === identity.model &&
+        meta.providerKey === identity.providerKey,
+    ) ||
+    (meta.embeddingInputFormatVersion ?? 0) !== resolveEmbeddingInputFormatVersion(meta.model) ||
+    (dimensions !== undefined && dimensions !== meta.vectorDims)
+  ) {
+    return undefined;
+  }
+  return { meta, serialized: row.value };
+}
+
 /** Read only the requested batch, using the published source/path index on either engine. */
 export function loadMemoryRebuildEmbeddings(params: {
   db: EngineConnection;
@@ -61,34 +103,12 @@ export function loadMemoryRebuildEmbeddings(params: {
       embedding: Uint8Array;
     };
   }>(params.db);
-  const row = executeSqliteQueryTakeFirstSync(
-    params.db,
-    db.selectFrom("memory_index_meta").select("value").where("key", "=", MEMORY_INDEX_META_KEY),
-  );
-  if (!row) {
-    return;
-  }
-  let meta: unknown;
-  try {
-    meta = JSON.parse(row.value);
-  } catch {
-    return;
-  }
   const { query } = params;
-  if (
-    !Value.Check(rebuildIdentitySchema, meta) ||
-    meta.model === "fts-only" ||
-    !params.identities.some(
-      (identity) =>
-        meta.provider === identity.provider &&
-        meta.model === identity.model &&
-        meta.providerKey === identity.providerKey,
-    ) ||
-    (meta.embeddingInputFormatVersion ?? 0) !== resolveEmbeddingInputFormatVersion(meta.model) ||
-    (query.dimensions !== undefined && query.dimensions !== meta.vectorDims)
-  ) {
+  const published = readMemoryPublishedVectorMeta(params.db, params.identities, query.dimensions);
+  if (!published) {
     return;
   }
+  const { meta, serialized } = published;
   // Do not choose a vector until all published rows in the requested scope agree.
   const vectors = new Map<string, Uint8Array>();
   const ambiguous = new Set<string>();
@@ -109,7 +129,7 @@ export function loadMemoryRebuildEmbeddings(params: {
               .selectFrom("memory_index_meta")
               .select("key")
               .where("key", "=", MEMORY_INDEX_META_KEY)
-              .where("value", "=", row.value),
+              .where("value", "=", serialized),
           ),
         );
       for (const chunk of iterateSqliteQuerySync(params.db, rows)) {

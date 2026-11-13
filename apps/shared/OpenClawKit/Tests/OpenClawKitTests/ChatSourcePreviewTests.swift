@@ -250,6 +250,65 @@ struct ChatSourcePreviewTests {
         #expect((projector.project([answer])[answer.id] ?? []).isEmpty)
     }
 
+    @Test func `incremental projection matches a fresh projection and reuses unchanged replies`() throws {
+        let session = "https://gateway.example.com/chat/main/session"
+        let searchID = UUID()
+        let search = { (title: String) in
+            self.tool(
+                self.searchPayload([self.row(self.first, title: title), self.row(self.second), self.row(session)]),
+                name: "web_search",
+                id: searchID)
+        }
+        let fetch = self.fetch(self.second, final: self.second, title: "Fetched")
+        let answer = self.answer("[a](\(self.first)) [b](\(self.second)) [c](\(session))")
+        let otherSearch = self.search([self.row(self.first, title: "Other run")], run: "other-run")
+        let otherAnswer = OpenClawChatMessage(
+            role: "assistant",
+            content: [.init(type: "text", text: "[a](\(self.first))", mimeType: nil, fileName: nil, content: nil)],
+            timestamp: 3, transcriptRunID: "other-run", stopReason: "stop", phase: "final_answer")
+        let thirdSearch = self.search([self.row(self.second, title: "Third run")], run: "third-run")
+        let thirdAnswer = OpenClawChatMessage(
+            role: "assistant",
+            content: [.init(type: "text", text: "[b](\(self.second))", mimeType: nil, fileName: nil, content: nil)],
+            timestamp: 4, transcriptRunID: "third-run", stopReason: "stop", phase: "final_answer")
+        let context = try OpenClawChatSourceContext(
+            gatewayURL: #require(URL(string: "https://gateway.example.com/")), basePath: "", publicOrigin: nil)
+        let original = [search("Original"), fetch, answer, otherSearch, otherAnswer]
+        let steps: [(messages: [OpenClawChatMessage], context: OpenClawChatSourceContext?)] = [
+            (original, nil),
+            (original + [self.call("read")], nil),
+            ([search("Edited"), fetch, answer, otherSearch, otherAnswer], nil),
+            ([search("Edited"), answer, otherSearch, otherAnswer], nil),
+            ([search("Edited"), answer, otherAnswer, otherSearch], nil),
+            ([search("Edited"), answer, otherAnswer, otherSearch], context),
+            ([search("Edited"), fetch, answer, otherSearch, otherAnswer], context),
+            ([search("Edited"), fetch, otherSearch, otherAnswer], context),
+            (original, nil),
+            (original, context),
+            (original + [thirdSearch, thirdAnswer], context),
+        ]
+        // Replies whose cards must be reused (true) or rebuilt (false) at a step.
+        let reuse: [Int: [UUID: Bool]] = [
+            1: [answer.id: true, otherAnswer.id: true],
+            2: [answer.id: false, otherAnswer.id: true],
+            9: [answer.id: false, otherAnswer.id: false],
+            10: [answer.id: true, otherAnswer.id: true],
+        ]
+        var projector = ChatSourcePreviewProjector()
+        var previous: [UUID: [ChatSourcePreview]] = [:]
+        for (index, step) in steps.enumerated() {
+            let incremental = projector.project(step.messages, context: step.context)
+            var fresh = ChatSourcePreviewProjector()
+            #expect(incremental == fresh.project(step.messages, context: step.context), "step \(index)")
+            for (id, reused) in reuse[index] ?? [:] {
+                let before = previous[id]?.withUnsafeBufferPointer(\.baseAddress)
+                let after = incremental[id]?.withUnsafeBufferPointer(\.baseAddress)
+                #expect(before != nil && after != nil && (before == after) == reused, "step \(index)")
+            }
+            previous = incremental
+        }
+    }
+
     @Test func `inline results and JSON result text retain invocation and canonical run ownership`() throws {
         let payload = self.searchPayload([self.row(self.first, snippet: "The <think> tag is literal source content.")])
         let answer = self.answer("[source](\(self.first))")

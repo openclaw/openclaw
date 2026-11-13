@@ -45,7 +45,7 @@ sqlite.DatabaseSync = new Proxy(original, {
       const relative = relativePath(root, absolute);
       const physicalRelative = relativePath(root, physical);
       const within = (value) => !path.isAbsolute(value) && value !== ".." && !value.startsWith(".." + path.sep);
-      assert(relative !== "" && within(relative), "SQLite must stay in its owned fixture");
+      assert(relative !== "" && within(relative), "SQLite must stay in its owned fixture: " + JSON.stringify({ database: relative, temporaryRoot: relativePath(root, process.env.TMPDIR || process.env.TMP || process.env.TEMP || process.cwd()), stateRoot: process.env.OPENCLAW_STATE_DIR ? relativePath(root, process.env.OPENCLAW_STATE_DIR) : null }));
       assert(within(physicalRelative), "SQLite alias escaped its owned fixture");
     }
     if (path.basename(location) === "managed-update-handoffs.sqlite") {

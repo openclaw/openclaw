@@ -630,7 +630,7 @@ it("propagates an original host pricing error through exact report replay", asyn
     const original = new Error("Host pricing is unavailable");
     const pricing = await import("./session-cost-usage-pricing-context.js");
     {
-      using _ = vi.spyOn(pricing, "createUsageCostResolver").mockReturnValue(() => {
+      using _ = vi.spyOn(pricing, "createUsageCostResolver").mockResolvedValue(() => {
         throw original;
       });
       await expect(runUsageCostWorker(prepared, exactRequest)).rejects.toBe(original);

@@ -3,7 +3,11 @@ import path from "node:path";
 import { afterEach, aroundEach, beforeAll, beforeEach, vi } from "vitest";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
-import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabaseByPathAsync,
+  openOpenClawAgentDatabase,
+  resolveOpenClawAgentSqlitePath,
+} from "../state/openclaw-agent-db.js";
 import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
 import { seedOpenClawAgentSchemaV21 } from "../state/openclaw-agent-schema-v21.test-support.js";
 import {
@@ -14,8 +18,17 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { mocks } from "./doctor-health.test-support.js";
 
-export function useDoctorHealthFixture() {
+export function useDoctorHealthFixture(currentAgentIds: readonly string[] = []) {
   let sharedStateTemplate: Buffer;
+  const currentAgentTemplates = new Map<string, Buffer>();
+
+  function materializeCurrentAgentDatabases(env: NodeJS.ProcessEnv) {
+    for (const [agentId, bytes] of currentAgentTemplates) {
+      const databasePath = resolveOpenClawAgentSqlitePath({ agentId, env });
+      fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+      fs.writeFileSync(databasePath, bytes, { flag: "wx" });
+    }
+  }
 
   function materializeSharedStateDatabase(env: NodeJS.ProcessEnv) {
     const databasePath = resolveOpenClawStateSqlitePath(env);
@@ -52,6 +65,11 @@ export function useDoctorHealthFixture() {
       const database = openOpenClawStateDatabase({ env: state.env });
       await closeOpenClawStateDatabaseByPathAsync(database.path);
       sharedStateTemplate = fs.readFileSync(database.path);
+      for (const agentId of currentAgentIds) {
+        const agent = openOpenClawAgentDatabase({ agentId, env: state.env });
+        await closeOpenClawAgentDatabaseByPathAsync(agent.path, agentId);
+        currentAgentTemplates.set(agentId, fs.readFileSync(agent.path));
+      }
     });
   });
 
@@ -72,5 +90,9 @@ export function useDoctorHealthFixture() {
     mocks.writeUpdatePostInstallDoctorResult.mockClear();
   });
 
-  return { materializeSharedStateDatabase, openHistoricalAgentDatabase };
+  return {
+    materializeSharedStateDatabase,
+    materializeCurrentAgentDatabases,
+    openHistoricalAgentDatabase,
+  };
 }

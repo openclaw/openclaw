@@ -379,12 +379,14 @@ process.exit(0);
     expect(result.stderr).toContain("requires a supervisor connection");
   });
 
-  it("restarts with paired arguments and revokes managed state when the healthy candidate disconnects", async () => {
-    const f = await fixture(`
+  it.each([[["connect"]], [["node", "join"]]])(
+    "%j restarts with paired arguments and revokes managed state when the healthy candidate disconnects",
+    async (command) => {
+      const f = await fixture(`
 await setNodeHostLauncherRestartArguments(['node', 'run', '--display-name', 'paired']);
 ${requestUpdate}
 `);
-    const candidate = await f.release(`
+      const candidate = await f.release(`
 if (!process.env.TEST_CANDIDATE_BOOTSTRAPPED) {
   await requestNodeHostLauncherBootstrap({ execArgv: [...process.execArgv, '--disable-warning=ExperimentalWarning'], env: {...process.env, TEST_CANDIDATE_BOOTSTRAPPED:'1'} });
   process.exit(0);
@@ -401,22 +403,23 @@ setTimeout(async () => {
   }, 30);
 }, 30);
 `);
-    const result = await completed(
-      f.update(candidate, {}, ["connect", "one-use-code", "--profile", "work", "--no-color"]),
-    );
-    const lines = jsonLines(result.stdout);
-    expect(lines[0]).toMatchObject({ ok: true });
-    expect(lines[1]).toMatchObject({
-      argv: ["--profile", "work", "--no-color", "node", "run", "--display-name", "paired"],
-      cwd: f.base,
-      state: f.state,
-      disconnectedState: null,
-      execArgv: ["--disable-warning=ExperimentalWarning"],
-    });
-    expect(lines[1].first).toBe(lines[1].second);
-    await expectSelection(f.current, candidate.prefix);
-    await expectMissing(f.lock);
-  });
+      const result = await completed(
+        f.update(candidate, {}, [...command, "one-use-code", "--profile", "work", "--no-color"]),
+      );
+      const lines = jsonLines(result.stdout);
+      expect(lines[0]).toMatchObject({ ok: true });
+      expect(lines[1]).toMatchObject({
+        argv: ["--profile", "work", "--no-color", "node", "run", "--display-name", "paired"],
+        cwd: f.base,
+        state: f.state,
+        disconnectedState: null,
+        execArgv: ["--disable-warning=ExperimentalWarning"],
+      });
+      expect(lines[1].first).toBe(lines[1].second);
+      await expectSelection(f.current, candidate.prefix);
+      await expectMissing(f.lock);
+    },
+  );
 
   it("keeps an authenticated candidate serving when its selector cannot be persisted", async () => {
     const f = await fixture();

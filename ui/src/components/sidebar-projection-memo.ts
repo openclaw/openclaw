@@ -80,6 +80,7 @@ export type SidebarProjectionHost = {
   knownSessionGroups(): string[];
   knownSectionOrder(): string[];
   visibleSessionCatalogs(): SessionDataOwner["sessionCatalogs"];
+  catalogSessionRows(): ReadonlyMap<string, SidebarRecentSession>;
 };
 
 export function sidebarNavigationInputs(
@@ -134,6 +135,7 @@ export function memoizedSidebarSections(
   const roster = host.sidebarAgentsMode === "roster" ? host.rosterSessionSource : null;
   const groups = context?.navigation.snapshot.personalSessionGroups;
   const references = groups?.length ? host.personalGroupSessionReferences() : [];
+  const catalogRows = host.catalogSessionRows();
   return memo.read(
     () => [
       rows,
@@ -141,6 +143,7 @@ export function memoizedSidebarSections(
       groups?.length ? groups : undefined,
       ...references,
       catalogs,
+      catalogRows,
       roster,
       host.collapsedSessionSections,
       host.effectiveSessionsGrouping(),
@@ -175,7 +178,10 @@ export function memoizedSidebarSections(
       return host.sessionProjection.project({
         rows,
         selectedSessionKey: isSessionRouteId(host.activeRouteId) ? host.getRouteSessionKey() : null,
-        referencedRows: groups?.flatMap((group) => host.personalGroupSessionRows(group, zone)),
+        referencedRows: [
+          ...catalogRows.values(),
+          ...(groups?.flatMap((group) => host.personalGroupSessionRows(group, zone)) ?? []),
+        ],
         sections,
         pinnedKeys,
         grouping,

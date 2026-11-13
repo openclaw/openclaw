@@ -112,9 +112,9 @@ describe("grouped chat rendering", () => {
         ".chat-group-footer .chat-steer-now [role=status]",
         HTMLSpanElement,
       );
-      expect(label.textContent).toBe(queued ? "Queued behind the current turn" : "Steering…");
+      expect(label.textContent).toBe(queued ? "Queued" : "Steering…");
       expect(label.getAttribute("aria-label")).toBe(
-        queued ? "Queued behind the current turn" : `Steering — sends ${reason}.`,
+        queued ? "Queued" : `Steering — sends ${reason}.`,
       );
       expect(label.title).toBe(label.getAttribute("aria-label"));
       expectAbsent(".chat-steer-now button");

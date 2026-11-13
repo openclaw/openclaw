@@ -195,6 +195,7 @@ struct OpenClawChatComposer: View {
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("chat-composer-model-sign-in-notice")
             }
+            self.viewModel.composerNotice.map(ChatComposerRestoredNotice.init)
             self.lifecycleComposer
             if self.viewModel.modelCatalogMessage != nil || self.showsModelSignInRow {
                 HStack {
@@ -310,6 +311,7 @@ struct OpenClawChatComposer: View {
     #else
     private var platformComposer: some View {
         self.styledComposer
+            .onChange(of: self.focusRequest) { _, _ in self.isFocused = true }
             .onChange(of: self.isComposerEnabled) { _, isEnabled in
                 if !isEnabled {
                     self.isFocused = false
@@ -1323,7 +1325,17 @@ extension OpenClawChatComposer {
     }
 
     private var composerPadding: CGFloat {
-        self.style == .onboarding ? 5 : (self.composerChrome == .clean ? 4 : 6)
+        Self.padding(style: self.style, chrome: self.composerChrome)
+    }
+
+    private static func padding(style: OpenClawChatView.Style, chrome: OpenClawChatView.ComposerChrome) -> CGFloat {
+        style == .onboarding ? 5 : (chrome == .clean ? 4 : 6)
+    }
+
+    /// How far the visible composer sits inside its frame, so a card stacked on it can share its edges.
+    /// The clean surface is drawn inside the padding; the full background is drawn around it.
+    static func surfaceInset(style: OpenClawChatView.Style, chrome: OpenClawChatView.ComposerChrome) -> CGFloat {
+        chrome == .clean ? self.padding(style: style, chrome: chrome) : 0
     }
 
     #if os(iOS)

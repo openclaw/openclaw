@@ -3,8 +3,8 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { For, Show, createMemo, createSignal } from "solid-js";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
-import "../../../components/tooltip.ts";
 import { TabPanel, Tabs } from "../../../components/solid/tabs.tsx";
+import "../../../components/tooltip.ts";
 import { registerChatToolContentEnglish } from "../../../i18n/locales/en-chat-tool-content.ts";
 import type { ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
 import type { DiffFilePaths } from "../../../lib/chat/tool-call-diff.ts";
@@ -13,21 +13,30 @@ import {
   isToolCardError,
   resolveToolCardDisplay,
   resolveToolCardOutcome,
+  type ToolCardOutput,
 } from "../../../lib/chat/tool-cards.ts";
 import { formatToolDetail, resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
-import {
-  isLegacyToolOutputUnavailable,
-  TOOL_OUTPUT_PREVIEW_CHARS,
-  formatToolOutput,
-} from "../../../lib/chat/tool-output.ts";
+import { isLegacyToolOutputUnavailable } from "../../../lib/chat/tool-output-text.ts";
+import { TOOL_OUTPUT_PREVIEW_CHARS, formatToolOutput } from "../../../lib/chat/tool-output.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { HighlightedCommand } from "./chat-command-highlight.solid.tsx";
 import { DiffBlock } from "./chat-diff-render.solid.tsx";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
-import { RawOutputToggle, ToolDataBlock, ToolOutcome } from "./chat-tool-content.solid.tsx";
+import type { ToolCardContentProps } from "./chat-tool-card-types.ts";
+import { RawOutputToggle, ToolDataBlock } from "./chat-tool-content.solid.tsx";
 import { toolWorkspacePath, type ToolRenderOptions } from "./chat-tool-render-model.ts";
 
 registerEnglishCatalog(registerChatToolContentEnglish);
+
+function ToolOutcome(props: { outcome: ToolCardOutcome; exitCode?: number }) {
+  const label = () =>
+    props.outcome === "failed" && props.exitCode !== undefined && props.exitCode !== 0
+      ? t("chat.toolCards.exitCode", { code: String(props.exitCode) })
+      : t(
+          `chat.toolCards.${props.outcome === "succeeded" ? "completed" : props.outcome === "unknown" ? "outcomeUnknown" : props.outcome === "unrecorded" ? "noResult" : props.outcome}`,
+        );
+  return <div class="chat-tool-card__outcome">{label()}</div>;
+}
 
 const KV_MAX_KEYS = 12;
 const KV_MAX_VALUE_CHARS = 400;
@@ -113,6 +122,7 @@ function TerminalBlock(props: { command: string; output?: string }) {
 
 function ToolCardModes(props: {
   card: ToolCard;
+  outputText: string;
   messageKey: string;
   diff: NonNullable<ToolCallView["diff"]>;
   outcome: ToolCardOutcome;
@@ -158,7 +168,7 @@ function ToolCardModes(props: {
               ) : (
                 <ToolDataBlock
                   label={props.isError ? t("chat.toolCards.toolError") : undefined}
-                  text={props.card.outputText!}
+                  text={props.outputText}
                 />
               )}
             </Show>
@@ -175,43 +185,11 @@ function serializeDiff(lines: readonly { kind: string; text: string }[]): string
     .join("\n");
 }
 
-function prepareContent(originalCard: ToolCard, options: ToolRenderOptions) {
-  const outputDetails: SidebarContent = {
-    kind: "tool-output",
-    card: originalCard,
-    sessionKey: options.sessionKey,
-    agentId: options.agentId,
-  };
-  const displayCard = resolveToolCardDisplay(originalCard);
-  const unavailable = isLegacyToolOutputUnavailable(originalCard);
-  const outputText = formatToolOutput(displayCard);
-  const outputIsLong =
-    Math.max(outputText?.length ?? 0, originalCard.outputText?.length ?? 0) >
-    TOOL_OUTPUT_PREVIEW_CHARS;
-  const card = {
-    ...displayCard,
-    outputText:
-      outputIsLong && options.onOpenSidebar && !unavailable
-        ? truncateUtf16Safe(outputText ?? "", TOOL_OUTPUT_PREVIEW_CHARS)
-        : outputText,
-  };
+function prepareContent(originalCard: ToolCard) {
+  const card = resolveToolCardDisplay(originalCard);
   const view = resolveToolCallView({ name: card.name, args: card.args, details: card.details });
   const display = resolveToolDisplay({ name: card.name, args: card.args });
   const summarizedKind = view.kind === "read" || view.kind === "search" || view.kind === "fetch";
-  const detail = summarizedKind ? display.detail : formatToolDetail(display);
-  const preview = card.preview;
-  const sidebarActionContent: SidebarContent =
-    preview?.kind === "canvas" && preview.render === "url" && preview.viewId && preview.url
-      ? {
-          kind: "canvas",
-          docId: preview.viewId,
-          entryUrl: preview.url,
-          ...(preview.title ? { title: preview.title } : {}),
-          ...(preview.preferredHeight ? { preferredHeight: preview.preferredHeight } : {}),
-          ...(preview.sandbox ? { sandbox: preview.sandbox } : {}),
-          ...(card.outputText ? { rawText: card.outputText } : {}),
-        }
-      : outputDetails;
   const variant =
     view.kind === "command" && (view.command || view.code) && !card.preview
       ? "command"
@@ -221,22 +199,68 @@ function prepareContent(originalCard: ToolCard, options: ToolRenderOptions) {
   return {
     card,
     view,
+    detail: summarizedKind ? display.detail : formatToolDetail(display),
+    summarizedKind,
+    variant,
+    workspaceFilePath: toolWorkspacePath(card, view),
+  };
+}
+
+function prepareOutput(
+  originalCard: ToolCard,
+  displayCard: ToolCard,
+  output: ToolCardOutput | undefined,
+  options: ToolRenderOptions,
+) {
+  // Only output consumers adopt the live text; structural display stays independent.
+  const current = output
+    ? { ...originalCard, outputText: output.outputText, liveOutput: output.liveOutput }
+    : originalCard;
+  const outputDetails: SidebarContent = {
+    kind: "tool-output",
+    card: current,
+    sessionKey: options.sessionKey,
+    agentId: options.agentId,
+  };
+  const unavailable = isLegacyToolOutputUnavailable(current);
+  const outputText = formatToolOutput(
+    output ? { ...displayCard, outputText: output.outputText } : displayCard,
+  );
+  const outputIsLong =
+    Math.max(outputText?.length ?? 0, current.outputText?.length ?? 0) > TOOL_OUTPUT_PREVIEW_CHARS;
+  const text =
+    outputIsLong && options.onOpenSidebar && !unavailable
+      ? truncateUtf16Safe(outputText ?? "", TOOL_OUTPUT_PREVIEW_CHARS)
+      : outputText;
+  const displayed = { ...displayCard, outputText: text };
+  const preview = displayCard.preview;
+  const sidebarActionContent: SidebarContent =
+    preview?.kind === "canvas" && preview.render === "url" && preview.viewId && preview.url
+      ? {
+          kind: "canvas",
+          docId: preview.viewId,
+          entryUrl: preview.url,
+          ...(preview.title ? { title: preview.title } : {}),
+          ...(preview.preferredHeight ? { preferredHeight: preview.preferredHeight } : {}),
+          ...(preview.sandbox ? { sandbox: preview.sandbox } : {}),
+          ...(text ? { rawText: text } : {}),
+        }
+      : outputDetails;
+  return {
+    text,
+    rawText: current.outputText,
     outputText,
     outputIsLong,
     unavailable,
-    detail,
-    summarizedKind,
     sidebarActionContent,
     outputDetails,
-    variant,
-    isError: isToolCardError(card),
-    outcome: resolveToolCardOutcome(card, options.runActive),
-    workspaceFilePath: toolWorkspacePath(card, view),
+    isError: isToolCardError(displayed),
+    outcome: resolveToolCardOutcome(displayed, options.runActive),
   };
 }
 type ContentState = ReturnType<typeof prepareContent>;
 
-function CommandBody(props: { state: ContentState }) {
+function CommandBody(props: { state: ContentState; output?: string }) {
   const sourceKey = () =>
     props.state.view.code
       ? asNullableRecord(props.state.card.args)?.code === props.state.view.code
@@ -252,15 +276,13 @@ function CommandBody(props: { state: ContentState }) {
     <>
       <Show
         when={props.state.view.code}
-        fallback={
-          <TerminalBlock command={props.state.view.command!} output={props.state.card.outputText} />
-        }
+        fallback={<TerminalBlock command={props.state.view.command!} output={props.output} />}
       >
         <Show when={sourceKey() !== "input"}>
           <ToolDataBlock label={t("chat.toolCards.toolInput")} text={props.state.view.code!} />
         </Show>
-        <Show when={props.state.card.outputText !== undefined}>
-          <ToolDataBlock text={props.state.card.outputText!} />
+        <Show when={props.output !== undefined}>
+          <ToolDataBlock text={props.output!} />
         </Show>
         <Show when={sourceKey() === "input"}>
           <details class="chat-tool-card__input">
@@ -276,7 +298,7 @@ function CommandBody(props: { state: ContentState }) {
   );
 }
 
-function GenericBody(props: { state: ContentState }) {
+function GenericBody(props: { state: ContentState; output?: string; isError: boolean }) {
   const inputArgs = createMemo(() =>
     isRecord(props.state.card.args)
       ? Object.entries(props.state.card.args).filter(
@@ -305,33 +327,36 @@ function GenericBody(props: { state: ContentState }) {
         </Show>
       </Show>
       <Show
-        when={
-          props.state.card.outputText !== undefined && props.state.card.preview?.kind === "canvas"
-        }
+        when={props.output !== undefined && props.state.card.preview?.kind === "canvas"}
         fallback={
-          <Show when={props.state.card.outputText !== undefined || props.state.isError}>
+          <Show when={props.output !== undefined || props.isError}>
             <ToolDataBlock
-              label={props.state.isError ? t("chat.toolCards.toolError") : undefined}
-              text={props.state.card.outputText ?? t("chat.toolCards.noOutputFailed")}
+              label={props.isError ? t("chat.toolCards.toolError") : undefined}
+              text={props.output ?? t("chat.toolCards.noOutputFailed")}
             />
           </Show>
         }
       >
-        <RawOutputToggle text={props.state.card.outputText!} />
+        <RawOutputToggle text={props.output!} />
       </Show>
     </>
   );
 }
 
-export function ExpandedToolCardContent(props: { card: ToolCard; options: ToolRenderOptions }) {
-  const state = createMemo(() => prepareContent(props.card, props.options));
+export function ExpandedToolCardContent(props: ToolCardContentProps) {
+  const state = createMemo(() => prepareContent(props.card));
+  const output = createMemo(() =>
+    prepareOutput(props.card, state().card, props.output, props.options),
+  );
+  const isError = () => output().isError;
+  const outcome = () => output().outcome;
   const sidebarAction = () => (
     <Show when={props.options.onOpenSidebar}>
       <openclaw-tooltip prop:content={t("chat.toolCards.openDetails")}>
         <button
           class="chat-tool-card__action-btn"
           type="button"
-          onClick={() => props.options.onOpenSidebar?.(state().sidebarActionContent)}
+          onClick={() => props.options.onOpenSidebar?.(output().sidebarActionContent)}
           aria-label={t("chat.toolCards.openDetails")}
         >
           <span class="chat-tool-card__action-icon">
@@ -349,7 +374,7 @@ export function ExpandedToolCardContent(props: { card: ToolCard; options: ToolRe
             "chat-tool-card",
             {
               "chat-tool-card--flush": variant === "command",
-              "chat-tool-card--error": state().isError,
+              "chat-tool-card--error": isError(),
             },
           ]}
         >
@@ -392,52 +417,53 @@ export function ExpandedToolCardContent(props: { card: ToolCard; options: ToolRe
             <div class="chat-tool-card__actions">{sidebarAction()}</div>
           </Show>
           {variant === "command" ? (
-            <CommandBody state={state()} />
+            <CommandBody state={state()} output={output().text} />
           ) : variant === "diff" ? (
             <Show
-              when={state().card.outputText !== undefined}
+              when={output().text !== undefined}
               fallback={
                 <DiffBlock
                   lines={state().view.diff!}
-                  outcome={state().outcome}
+                  outcome={outcome()}
                   file={state().view.fileOperations?.[0] ?? { path: state().view.target ?? "" }}
                 />
               }
             >
               <ToolCardModes
                 card={state().card}
+                outputText={output().text!}
                 messageKey={props.options.messageKey}
                 diff={state().view.diff!}
-                outcome={state().outcome}
-                isError={state().isError}
+                outcome={outcome()}
+                isError={isError()}
                 file={state().view.fileOperations?.[0] ?? { path: state().view.target ?? "" }}
               />
             </Show>
           ) : (
-            <GenericBody state={state()} />
+            <GenericBody state={state()} output={output().text} isError={isError()} />
           )}
           <Show
             when={
-              state().outputText !== props.card.outputText &&
-              props.card.outputText !== undefined &&
-              !(state().outputIsLong && props.options.onOpenSidebar)
+              output().outputText !== output().rawText &&
+              output().rawText !== undefined &&
+              !(output().outputIsLong && props.options.onOpenSidebar)
             }
           >
-            <RawOutputToggle text={props.card.outputText!} />
+            <RawOutputToggle text={output().rawText!} />
           </Show>
           <Show
-            when={state().unavailable}
+            when={output().unavailable}
             fallback={
               <Show
                 when={
-                  (state().outputIsLong || state().card.outputTruncated) &&
+                  (output().outputIsLong || state().card.outputTruncated) &&
                   props.options.onOpenSidebar
                 }
               >
                 <button
                   class="btn btn--sm"
                   type="button"
-                  onClick={() => props.options.onOpenSidebar?.(state().outputDetails)}
+                  onClick={() => props.options.onOpenSidebar?.(output().outputDetails)}
                 >
                   {t("chat.toolCards.showFullOutput")}
                 </button>
@@ -449,7 +475,7 @@ export function ExpandedToolCardContent(props: { card: ToolCard; options: ToolRe
           <Show when={state().card.catalogTruncated}>
             <p role="status">{t("chat.catalogOutputTruncated")}</p>
           </Show>
-          <ToolOutcome outcome={state().outcome} exitCode={state().card.exitCode} />
+          <ToolOutcome outcome={outcome()} exitCode={state().card.exitCode} />
         </div>
       )}
     </Show>

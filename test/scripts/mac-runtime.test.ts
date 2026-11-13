@@ -1399,6 +1399,108 @@ esac
 describe.runIf(process.platform === "darwin")("Mac runtime portability inventory", () => {
   const it = createMacScriptTest();
   const cases = createMacCases(it, (mac) => mac);
+  it("rejects missing app dependencies without borrowing a sibling executable's runpaths", async ({
+    mac,
+  }) => {
+    const root = mac.createTempDir("openclaw-app-dependencies-");
+    const app = path.join(root, "OpenClaw.app");
+    const frameworks = path.join(app, "Contents/Frameworks");
+    const binaries = path.join(app, "Contents/MacOS");
+    const sparkle = path.join(frameworks, "Sparkle.framework/Sparkle");
+    const span = path.join(frameworks, "libswiftCompatibilitySpan.dylib");
+    const helper = path.join(binaries, "openclaw-mlx-tts");
+    mkdirSync(path.dirname(sparkle), { recursive: true });
+    mkdirSync(binaries);
+    const compile = async (name: string, source: string, args: string[]) => {
+      const input = path.join(root, `${name}.c`);
+      writeFileSync(input, source);
+      await runMacFixtureTool(
+        "/usr/bin/xcrun",
+        ["clang", input, "-Wl,-headerpad_max_install_names", ...args],
+        root,
+        mac,
+      );
+    };
+    await compile("span", "int span(void) { return 0; }", [
+      "-dynamiclib",
+      "-Wl,-install_name,@rpath/libswiftCompatibilitySpan.dylib",
+      "-o",
+      span,
+    ]);
+    await compile("sparkle", "int span(void); int sparkle(void) { return span(); }", [
+      "-dynamiclib",
+      "-Wl,-install_name,@rpath/Sparkle.framework/Sparkle",
+      span,
+      "-o",
+      sparkle,
+    ]);
+    await compile("main", "int sparkle(void); int main(void) { return sparkle(); }", [
+      sparkle,
+      "-Wl,-rpath,@loader_path/../Frameworks",
+      "-o",
+      path.join(binaries, "OpenClaw"),
+    ]);
+    // A toolchain copy exists, but neither it nor the main app's runpath can
+    // satisfy this separate process's dependency in the distributed app.
+    await cp(span, path.join(root, "libswiftCompatibilitySpan.dylib"));
+    await compile("helper", "int span(void); int main(void) { return span(); }", [
+      span,
+      "-Wl,-rpath,@loader_path",
+      `-Wl,-rpath,${root}`,
+      "-o",
+      helper,
+    ]);
+    const packager = readFileSync("scripts/package-mac-app.sh", "utf8");
+    const guard = packager.slice(
+      packager.indexOf("running_packaged_app_pids()"),
+      packager.indexOf('if [[ -n "${SIGN_IDENTITY:-}" ]]'),
+    );
+    expect(guard).not.toBe("");
+    const audit = () =>
+      mac.run("/bin/bash", ["-c", `set -euo pipefail\n${guard}\necho ready-to-sign`], {
+        encoding: "utf8",
+        env: {
+          HOME: root,
+          PATH: `${path.dirname(testNodeExecPath)}:${systemPath}`,
+          ROOT_DIR: process.cwd(),
+          APP_ROOT: app,
+        },
+      });
+    await rename(sparkle, path.join(root, "Sparkle"));
+    const missingSparkle = await audit();
+    expect(missingSparkle.status).not.toBe(0);
+    expect(missingSparkle.stderr).toContain("@rpath/Sparkle.framework/Sparkle");
+    expect(missingSparkle.stdout).not.toContain("ready-to-sign");
+    await rename(path.join(root, "Sparkle"), sparkle);
+    const missingHelperPath = await audit();
+    expect(missingHelperPath.status).not.toBe(0);
+    expect(missingHelperPath.stderr).toContain("openclaw-mlx-tts");
+    expect(missingHelperPath.stderr).toContain("@rpath/libswiftCompatibilitySpan.dylib");
+    // Exercise the packager's actual pre-signing install-name repair.
+    const repair = packager.slice(
+      packager.indexOf("  /usr/bin/install_name_tool -change"),
+      packager.indexOf("\nfi\n\nSPARKLE_FRAMEWORK_PRIMARY="),
+    );
+    const repairResult = await mac.run("/bin/bash", ["-c", repair], {
+      encoding: "utf8",
+      env: {
+        HOME: root,
+        PATH: systemPath,
+        APP_ROOT: app,
+        MLX_TTS_HELPER_PRODUCT: "openclaw-mlx-tts",
+      },
+    });
+    expect(repairResult.status, repairResult.stderr).toBe(0);
+    const repaired = await audit();
+    expect(repaired.status, repaired.stderr).toBe(0);
+    expect(repaired.stdout).toContain("ready-to-sign");
+    await unlink(span);
+    const missingTransitive = await audit();
+    expect(missingTransitive.status).not.toBe(0);
+    expect(missingTransitive.stderr).toContain("libswiftCompatibilitySpan.dylib");
+    expect(missingTransitive.stdout).not.toContain("ready-to-sign");
+  });
+
   it("audits supported thin and fat formats through real otool", async () => {
     const root = temps.make("openclaw-portability-native-");
     const { audit, machoFixture } = await portabilityFixture(root);

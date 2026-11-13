@@ -367,7 +367,7 @@ import Testing
         #expect(controller.pendingTrustPrompt?.fingerprintSha256 == "abc123")
         #expect(controller.pendingTrustPrompt?.host == host)
         #expect(controller.pendingTrustPrompt?.port == port)
-        #expect(appModel.gatewayStatusText == "Verify gateway TLS fingerprint")
+        #expect(appModel.gatewayConnectionProgress == .awaitingTrust)
         // Every status surface reads this: connecting while probing, attention while the user decides.
         #expect(probeState.states == [.connecting])
         #expect(GatewayStatusBuilder.build(appModel: appModel) == .error)
@@ -1159,7 +1159,7 @@ import Testing
             requestId: "stale-request",
             retryable: true,
             pauseReconnect: true)
-        appModel.applyOperatorGatewayConnectionProblem(staleProblem)
+        appModel.applyOperatorGatewayConnectionProblem(staleProblem, route: nil)
         let controller = GatewayConnectionController(
             appModel: appModel,
             startDiscovery: false,
@@ -1171,8 +1171,6 @@ import Testing
         #expect(controller.pendingTrustPrompt == nil)
         #expect(appModel.lastGatewayProblem?.kind == .timeout)
         #expect(appModel.lastGatewayProblem?.requestId == nil)
-        #expect(!appModel.gatewayPairingPaused)
-        #expect(appModel.gatewayPairingRequestId == nil)
         #expect(appModel.gatewayDisplayStatusText == "TLS verification timed out")
         #expect(appModel.lastGatewayProblem?.message.contains("TLS fingerprint verification timed out") == true)
         #expect(appModel.lastGatewayProblem?.message.contains("\(host):\(port)") == true)
@@ -1351,9 +1349,7 @@ import Testing
                 attempt.cancel()
             } else {
                 _ = appModel.beginGatewayConnectAttempt()
-                appModel.beginGatewayPreconnectVerification(
-                    stableID: "manual|replacement.example.com|443",
-                    statusText: "Connecting replacement")
+                appModel.beginGatewayPreconnectVerification(stableID: "manual|replacement.example.com|443")
             }
             let continuation = try #require(resultContinuation.withLock { $0 })
             continuation.resume(returning: probe.result)
@@ -1362,8 +1358,9 @@ import Testing
             #expect(appModel.lastGatewayProblem == nil)
             #expect(persistenceCalls.withLock { $0 } == 0)
             #expect(appModel.activeGatewayConnectConfig == nil)
-            #expect(appModel.gatewayStatusText == (cancelTask
-                    ? "Verifying gateway TLS fingerprint…" : "Connecting replacement"))
+            // A stale probe result neither ends the current verification nor writes a notice.
+            #expect(appModel.gatewayConnectionProgress == .verifyingTLS)
+            #expect(appModel.gatewayStatusText == nil)
             #expect(controller.pendingTrustPrompt == nil)
         }
     }

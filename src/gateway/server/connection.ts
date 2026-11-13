@@ -53,7 +53,7 @@ import {
 import { resolveSharedGatewaySessionGeneration } from "./ws-shared-generation.js";
 import { WS_HANDSHAKE_PHASES, type GatewayWsClient, type WsHandshakePhase } from "./ws-types.js";
 
-const unauthorizedCloseBeforeConnectLogLimiter = new HandshakeAuthLogLimiter();
+const preconnectAuthLogLimiter = new HandshakeAuthLogLimiter();
 export type GatewayConnectionOptions = Pick<
   GatewayWsMessageHandlerParams,
   | "bootId"
@@ -357,7 +357,8 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
     const logOrigin = sanitizeWsLogValue(requestOrigin);
     const logHost = sanitizeWsLogValue(requestHost);
     const logUserAgent = sanitizeWsLogValue(requestUserAgent);
-    const logReason = sanitizeWsLogValue(reason?.toString());
+    const rawReason = reason?.toString() ?? "";
+    const logReason = sanitizeWsLogValue(rawReason);
     const handshakeIncomplete = lastHandshakePhase !== "ready";
     const closeContext = {
       ...disconnectContext,
@@ -386,7 +387,7 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
           : logWsControl.warn;
       const suppressedText =
         closeCause === "unauthorized"
-          ? unauthorizedCloseBeforeConnectLogLimiter.missingCredentialLogSuffix({
+          ? preconnectAuthLogLimiter.missingCredentialLogSuffix({
               reason: stringMetaValue(closeMeta, "authReason"),
               remoteAddr,
               client:
@@ -395,7 +396,16 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
               mode: stringMetaValue(closeMeta, "mode"),
               authProvided: "none",
             })
-          : "";
+          : preconnectAuthLogLimiter.nativeAuthUnavailableLogSuffix({
+              code,
+              reason: rawReason,
+              remoteAddr:
+                ingressAttribution && ingressAttribution.kind !== "unattributable-proxy"
+                  ? ingressAttribution.clientIp
+                  : remoteAddr,
+              origin: requestOrigin,
+              userAgent: requestUserAgent,
+            });
       if (suppressedText !== undefined) {
         logFn(
           `closed before connect conn=${connId} peer=${endpoint ?? "n/a"} remote=${remoteAddr ?? "?"} fwd=${logForwardedFor || "n/a"} origin=${logOrigin || "n/a"} host=${logHost || "n/a"} ua=${logUserAgent || "n/a"} code=${code ?? "n/a"} reason=${logReason || "n/a"} phase=${lastHandshakePhase}${suppressedText}`,

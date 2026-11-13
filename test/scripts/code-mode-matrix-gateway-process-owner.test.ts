@@ -92,7 +92,7 @@ describe.skipIf(process.platform !== "linux")("matrix prepared process owner", (
     expect(receipt.result).toBeUndefined();
     expect(receipt.cleanup).toEqual([
       expect.objectContaining({ status: "rejected" }),
-      expect.objectContaining({ status: "rejected" }),
+      expect.objectContaining({ status: "fulfilled" }),
     ]);
   });
 
