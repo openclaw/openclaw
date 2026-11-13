@@ -23,8 +23,6 @@ jobs:
     timeout-minutes: 35
     env:
       SAFE_PROOF: .artifacts/modal-click-public
-      PRIVATE_PROOF: ${{ runner.temp }}/modal-click-private
-      PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/modal-click-browsers
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
@@ -35,6 +33,14 @@ jobs:
     - name: Initialize private capsule
       shell: bash
       run: 'set -euo pipefail
+
+        PRIVATE_PROOF="$RUNNER_TEMP/modal-click-private"
+
+        PLAYWRIGHT_BROWSERS_PATH="$RUNNER_TEMP/modal-click-browsers"
+
+        export PRIVATE_PROOF PLAYWRIGHT_BROWSERS_PATH
+
+        printf ''%s\n'' "PRIVATE_PROOF=$PRIVATE_PROOF" "PLAYWRIGHT_BROWSERS_PATH=$PLAYWRIGHT_BROWSERS_PATH" >> "$GITHUB_ENV"
 
         mkdir -m 700 "$PRIVATE_PROOF"
 
