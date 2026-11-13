@@ -1,16 +1,23 @@
 import "./port-command-worker.test-support.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { doctorDatabasePort } from "../../commands/doctor-database-port.js";
 import * as configIo from "../../config/io.js";
 import { readBackupEngine } from "../../snapshot/database-backup.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import * as recovery from "../database-port-recovery.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import * as sourceSnapshots from "../sqlite-snapshot-source.js";
 import * as snapshots from "../sqlite-snapshot.js";
 import * as fixtures from "./port-command.integration.test-support.js";
 import * as tasks from "./port-command.worker.js";
+import { statePortProvider } from "./state-port.js";
 
 describe.skipIf(!fixtures.connection)("database port command PostgreSQL conformance", () => {
   it("round-trips canonical cells, IDs, cursors and allocation facts through the command", async () => {
@@ -80,6 +87,48 @@ describe.skipIf(!fixtures.connection)("database port command PostgreSQL conforma
       },
       true,
       { rows: 1001 },
+    );
+  }, 120_000);
+
+  it("keeps a resumed port refused when its verified copy fails owner admission", async () => {
+    await fixtures.fixture(
+      async ({ state, source }) => {
+        openOpenClawStateDatabase({ env: state.env });
+        await closeOpenClawStateDatabaseAsync();
+        {
+          using db = openNodeSqliteDatabase(source);
+          // SQLite admits an older content marker beneath the current header; PostgreSQL does not.
+          db.prepare(
+            "INSERT OR REPLACE INTO config_machine_state VALUES ('state.schema.contentVersion', ?, 1)",
+          ).run(String(OPENCLAW_STATE_SCHEMA_VERSION - 1));
+        }
+        const before = fs.readFileSync(source);
+        const originalConfig = fs.readFileSync(state.configPath, "utf8");
+        const refused = async (options: Parameters<typeof doctorDatabasePort>[0]) => {
+          await expect(doctorDatabasePort(options)).rejects.toThrow(
+            /^stage: .*observed database validation/,
+          );
+          expect(fixtures.manifest(state).targets[0]?.verification).toBeNull();
+          expect(fs.readFileSync(state.configPath, "utf8")).toBe(originalConfig);
+        };
+        await refused({ to: "postgres", family: "state" });
+        const anchorPath = (
+          await fixtures.files(state.statePath("recovery", "database-port"))
+        ).find((file) => path.basename(file) === "target.sqlite");
+        assert(anchorPath, "Owner admission runs after the verified anchor is written");
+        const { admit } = await statePortProvider.loadDescriptor();
+        assert(admit);
+        const admitAnchor = () =>
+          admit(anchorPath, { connection: fixtures.connection!, schemaPrefix: "openclaw" });
+        await expect(admitAnchor()).rejects.toThrow("PostgreSQL state metadata mismatch");
+        const anchor = fs.readFileSync(anchorPath);
+        await refused({ resume: recovery.databasePortManifestPath(state.stateDir) });
+        expect(fs.readFileSync(anchorPath)).toEqual(anchor);
+        await expect(admitAnchor()).rejects.toThrow("PostgreSQL state metadata mismatch");
+        expect(fs.readFileSync(source)).toEqual(before);
+      },
+      true,
+      { store: "state" },
     );
   }, 120_000);
 

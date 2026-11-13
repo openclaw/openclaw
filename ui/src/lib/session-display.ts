@@ -40,9 +40,11 @@ const WORKTREE_BRANCH_PREFIX = "openclaw/";
 // canonical parser still accepts both (src/sessions/session-key-utils.ts).
 // Only direct chats take an account segment (src/routing/session-key.ts), so an
 // account-qualified group or channel key is not a shape any producer emits and
-// must not name a channel here either.
+// must not name a channel here either. `:thread:` is a suffix on a complete base
+// key (resolveThreadSessionKeys), so the segment before it is never a channel:
+// a Telegram DM topic under dmScope=main is `agent:<id>:main:thread:<chat>:<topic>`.
 const CHANNEL_SESSION_KEY_RE =
-  /^agent:[^:]+:([^:]+)(?:(?::[^:]+)?:(?:direct|dm)|:(?:group|channel|thread)):/;
+  /^agent:[^:]+:([^:]+)(?:(?::[^:]+)?:(?:direct|dm)|:(?:group|channel)):/;
 const PEER_SESSION_KEY_RE = /:(?:direct|dm|group|channel|thread):/;
 
 /**

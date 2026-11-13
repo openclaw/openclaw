@@ -39,7 +39,7 @@ describe("transcript expansion", () => {
     const fullPane = document.body.appendChild(document.createElement("div"));
     const partialPane = document.body.appendChild(document.createElement("div"));
     const disclosures = (pane: HTMLElement) =>
-      Array.from(pane.querySelectorAll<HTMLButtonElement>(".chat-tool-msg-summary")).filter(
+      Array.from(pane.querySelectorAll<HTMLButtonElement>(".chat-tool-msg-summary:enabled")).filter(
         (button) => !button.closest(".chat-tool-msg-body"),
       );
     onTestFinished(() => {
@@ -50,14 +50,18 @@ describe("transcript expansion", () => {
     });
     render(renderChatThread(full, fullTranscript), fullPane);
     await settleToolBridges(fullPane);
-    expectDefined(disclosures(fullPane)[0], "shared tool disclosure").click();
+    (
+      await waitForSolid(() => expectDefined(disclosures(fullPane)[0], "shared tool disclosure"))
+    ).click();
     await waitForSolid(() =>
       expect(disclosures(fullPane)[0]?.getAttribute("aria-expanded")).toBe("true"),
     );
 
     render(renderChatThread(partial, partialTranscript), partialPane);
     await settleToolBridges(partialPane);
-    expect(disclosures(partialPane)[0]?.getAttribute("aria-expanded")).toBe("true");
+    await waitForSolid(() =>
+      expect(disclosures(partialPane)[0]?.getAttribute("aria-expanded")).toBe("true"),
+    );
     expectDefined(disclosures(partialPane)[0], "shared tool disclosure in sibling pane").click();
     await waitForSolid(() =>
       expect(disclosures(fullPane)[0]?.getAttribute("aria-expanded")).toBe("false"),

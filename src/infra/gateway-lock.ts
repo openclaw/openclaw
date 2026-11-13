@@ -608,7 +608,12 @@ export async function acquireGatewayLock(
       parentMaintenance?.assertOwnerCurrent(access);
     }
     stateOwner.assertCurrent();
-    if (projection && !projection.verifyStillHeld()) {
+    if (
+      role !== "gateway" &&
+      role !== "agent-embedded" &&
+      projection &&
+      !projection.verifyStillHeld()
+    ) {
       throw new Error("OpenClaw Gateway ownership projection is no longer current");
     }
     if (assertPolicy) {

@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { XAI_BASE_URL } from "./model-definitions.js";
 import { resolveFastModeSupport } from "./provider-policy-api.js";
 import { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
-import { wrapXaiProviderStream } from "./stream.js";
+import { wrapXaiProviderStream, wrapXaiSimpleCompletionStream } from "./stream.js";
 import { captureXaiRequest, xaiModel } from "./test-helpers.js";
 
 function patchPayload<T extends Record<string, unknown>>(
@@ -66,12 +66,72 @@ it.each([
 });
 
 describe("xai stream wrappers", () => {
+  it("adds the Grok OAuth proxy request contract", () => {
+    const id = "grok-4.7";
+    const captured = captureXaiRequest(
+      xaiModel({
+        id,
+        name: "Subscription default",
+        input: ["text"],
+        params: { canonicalModelId: "grok-fixture-unselected" },
+        baseUrl: "https://cli-chat-proxy.grok.com/v1",
+      }),
+      {
+        extraParams: { tool_stream: false },
+        headers: { "X-XAI-Token-Auth": "operator-value", "X-Existing": "kept", "x-delete": null },
+      },
+    );
+
+    expect(captured.modelId).toBe(id);
+    expect(captured.headers).toEqual({
+      "X-Existing": "kept",
+      "x-delete": null,
+      "x-grok-client-version": "1.0.13",
+      "x-grok-model-override": id,
+      "X-XAI-Token-Auth": "xai-grok-cli",
+    });
+  });
+
   it("does not add Grok OAuth headers for a lookalike host", () => {
     const { headers } = captureXaiRequest(
       xaiModel({ id: "grok-4.5", baseUrl: "https://cli-chat-proxy.grok.com.example/v1" }),
       { extraParams: { tool_stream: false }, headers: { "X-Existing": "kept" } },
     );
     expect(headers).toEqual({ "X-Existing": "kept" });
+  });
+
+  it("applies the Grok OAuth proxy contract to simple completions", () => {
+    const captured = captureXaiRequest(
+      xaiModel({
+        id: "grok-4.7",
+        reasoning: false,
+        baseUrl: "https://cli-chat-proxy.grok.com/v1",
+      }),
+      {
+        extraParams: { tool_stream: false },
+        headers: { "X-Existing": "kept" },
+        payload: { reasoning: { effort: "high" }, include: [] },
+        wrap: (ctx) => wrapXaiSimpleCompletionStream(ctx),
+      },
+    );
+
+    expect(captured.headers).toEqual({
+      "X-Existing": "kept",
+      "x-grok-client-version": "1.0.13",
+      "x-grok-model-override": "grok-4.7",
+      "X-XAI-Token-Auth": "xai-grok-cli",
+    });
+    expect(captured.payload).not.toHaveProperty("reasoning");
+  });
+
+  it("leaves simple completions to the public xAI endpoint unchanged", () => {
+    const captured = captureXaiRequest(xaiModel({ id: "grok-4.5", baseUrl: XAI_BASE_URL }), {
+      extraParams: { tool_stream: false },
+      headers: { "X-Existing": "kept" },
+      wrap: (ctx) => wrapXaiSimpleCompletionStream(ctx),
+    });
+
+    expect(captured.headers).toEqual({ "X-Existing": "kept" });
   });
 
   it("strips unsupported reasoning controls from non-reasoning xai payloads", () => {

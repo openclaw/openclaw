@@ -124,7 +124,7 @@ describe("control UI session PR subscriptions", () => {
     expect(readCurrent).not.toHaveBeenCalled();
   });
 
-  it("validates an unchanged passive audience in one synchronous pass", async () => {
+  it("does no currency work for idle passive audiences or metadata notifications", async () => {
     const readSource = createTestSessionPrReadSource();
     const assertCurrent = vi.fn();
     const target: ControlUiSessionPrTarget = {
@@ -133,6 +133,7 @@ describe("control UI session PR subscriptions", () => {
       readSource,
       source: null,
       taskReceiptsOnly: true,
+      taskReceipts: { sessions: [] },
       assertCurrent,
     };
     const active = start({ prepareRead: async () => async () => target });
@@ -140,16 +141,15 @@ describe("control UI session PR subscriptions", () => {
       await active.replace(`reader-${index}`, [], new Set(), new Set(["session"]));
     }
     assertCurrent.mockClear();
-    const pending = active.pollNow();
-    try {
-      // Live guards still run for every viewer, without a promise/yield for each one.
-      expect(assertCurrent).toHaveBeenCalledTimes(64);
-    } finally {
-      await pending;
-    }
+    await active.pollNow();
+    await clock.advanceBy(60_000);
+    sessionChanges.emit({ sessionKey: "session", scope: "transcript" });
+    await nextEventLoopTurn();
+    expect(assertCurrent).not.toHaveBeenCalled();
   });
 
   it.each([
+    { facts: undefined, invalidated: undefined, refresh: false },
     { facts: "category", invalidated: undefined, refresh: false },
     { facts: "participants", invalidated: undefined, refresh: false },
     { facts: undefined, invalidated: "category", refresh: false },

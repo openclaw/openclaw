@@ -66,6 +66,71 @@ async function openAgentPicker(page: Page) {
 }
 
 suite.define(() => {
+  it("keeps blocked composer clicks and typing from focusing the footer", async () => {
+    await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
+      const gateway = await installMockGateway(page, { operatorScopes: ["operator.read"] });
+      await page.goto(suite.server.baseUrl + "chat");
+      const textarea = page.locator(".agent-chat__composer-combobox > textarea");
+      await expect.poll(() => textarea.isDisabled()).toBe(true);
+      const footer = page.locator(".chat-footer");
+      const input = page.locator(".agent-chat__input");
+      for (const [target, inset] of [
+        [textarea, 8],
+        [input, 3],
+        [footer, 3],
+      ] as const) {
+        const bounds = await target.boundingBox();
+        expect(bounds).not.toBeNull();
+        await page.mouse.click(bounds!.x + inset, bounds!.y + inset);
+        await page.keyboard.type("Do not change this draft");
+        await expectFocus(footer, false);
+        expect(await textarea.inputValue()).toBe("");
+      }
+      await page.keyboard.press("Tab");
+      await expectFocus(footer, false);
+      await page.keyboard.press("Shift+Tab");
+      await expectFocus(footer, false);
+      await gateway.setOperatorScopes(["operator.admin", "operator.read", "operator.write"]);
+      await gateway.closeLatest();
+      await expect.poll(() => textarea.isDisabled()).toBe(false);
+      await textarea.fill("Keep my unsent draft");
+      await gateway.setOperatorScopes(["operator.read"]);
+      await gateway.closeLatest();
+      await expect.poll(() => textarea.isDisabled()).toBe(true);
+      await textarea.click({ force: true });
+      await page.keyboard.type("Blocked edit");
+      await expectFocus(footer, false);
+      expect(await textarea.inputValue()).toBe("Keep my unsent draft");
+      await gateway.setOperatorScopes(["operator.admin", "operator.read", "operator.write"]);
+      await gateway.closeLatest();
+      await expect.poll(() => textarea.isDisabled()).toBe(false);
+      expect(await textarea.inputValue()).toBe("Keep my unsent draft");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+    });
+  });
+
+  it("keeps the archived composer keyboard handoff before Unarchive", async () => {
+    await suite.withPage({}, async ({ page }) => {
+      await installMockGateway(page, {
+        sessions: [{ key: "agent:main:main", kind: "direct", archived: true, updatedAt: 1 }],
+      });
+      await page.goto(suite.server.baseUrl + "chat");
+      const unarchive = page.getByRole("button", { name: "Unarchive", exact: true });
+      await unarchive.waitFor();
+      const skip = page.locator(".chat-composer-skip-link");
+      await skip.focus();
+      await page.keyboard.press("Enter");
+      const footer = page.locator(".chat-footer");
+      await expectFocus(footer);
+      await page.keyboard.press("Tab");
+      await expectFocus(unarchive);
+      const bounds = await footer.boundingBox();
+      expect(bounds).not.toBeNull();
+      await page.mouse.click(bounds!.x + 3, bounds!.y + 3);
+      await expectFocus(footer, false);
+    });
+  });
+
   it.each(["chat", "new"])(
     "centers %s composer keyboard focus on its action glyphs",
     async (route) => {

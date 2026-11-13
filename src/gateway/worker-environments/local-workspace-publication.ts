@@ -1,9 +1,60 @@
+import { serialize } from "node:v8";
+import { deflateRawSync } from "node:zlib";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { localWorkspaceDigestBytes } from "./local-workspace-cas.js";
 import type {
+  LocalWorkspaceManifestMutation,
   LocalWorkspaceMutation,
   LocalWorkspaceProjection,
+  LocalWorkspacePreparedUpdate,
 } from "./local-workspace-store.types.js";
+
+/** Publish source observations and retained target slots with the same accepted tree. */
+export function localWorkspaceFingerprintPatch(
+  fingerprints: LocalWorkspaceManifestMutation["fingerprints"],
+) {
+  const patch: Partial<
+    Pick<LocalWorkspaceProjection, "canonical_fingerprints" | "projection_fingerprints">
+  > = {};
+  if (fingerprints) {
+    const { target, blob, oppositeBlob } = fingerprints;
+    for (const [side, value] of [
+      [target, blob],
+      [target === "canonical" ? "projection" : "canonical", oppositeBlob],
+    ] as const) {
+      if (value) {
+        const bytes = Buffer.from(value, "base64");
+        patch[`${side}_fingerprints`] = new Uint8Array(
+          bytes.buffer,
+          bytes.byteOffset,
+          bytes.byteLength,
+        );
+      }
+    }
+  }
+  return patch;
+}
+
+export function prepareLocalWorkspaceUpdate(
+  mutation: Extract<LocalWorkspaceMutation, { kind: "update" }>,
+  preparations: Uint8Array[] = [],
+): LocalWorkspacePreparedUpdate {
+  const manifest = mutation.manifest;
+  const patch = {
+    ...mutation.patch,
+    ...(manifest ? { baseline_ref: manifest.resultingRoot, baseline_json: null } : {}),
+    ...(manifest?.treeRoot
+      ? { tree_root_digest: localWorkspaceDigestBytes(manifest.treeRoot) }
+      : {}),
+    ...localWorkspaceFingerprintPatch(manifest?.fingerprints),
+  };
+  return {
+    revision: mutation.revision,
+    patch,
+    mutation: deflateRawSync(serialize({ ...mutation, patch })),
+    preparations,
+  };
+}
 
 function freezeProjection(row: LocalWorkspaceProjection): LocalWorkspaceProjection {
   const pack = row.journal_pack;
@@ -54,13 +105,7 @@ export function readLocalWorkspaceCommit(
               ...(mutation.manifest.treeRoot
                 ? { tree_root_digest: localWorkspaceDigestBytes(mutation.manifest.treeRoot) }
                 : {}),
-              ...(mutation.manifest.fingerprints
-                ? {
-                    [`${mutation.manifest.fingerprints.target}_fingerprints`]: Uint8Array.from(
-                      Buffer.from(mutation.manifest.fingerprints.blob, "base64"),
-                    ),
-                  }
-                : {}),
+              ...localWorkspaceFingerprintPatch(mutation.manifest.fingerprints),
             }
           : {}),
         worktree_id: id,

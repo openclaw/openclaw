@@ -389,6 +389,37 @@ describe("adaptive CI prior restore", () => {
     });
     expect(failed.candidates).toEqual([]);
     expect(failed.fallbackReasons).toEqual(["restore-unavailable"]);
+    expect(failed.restoreFailure).toEqual({
+      stage: "consumer-run",
+      reason: "metadata-unavailable",
+      status: 503,
+    });
     expect(calls).toBe(1);
+  });
+
+  it("distinguishes invalid consumer metadata from transport failure without retaining error text", async () => {
+    const invalid = fixture({ wrongConsumer: true });
+    const rejected = await restoreCiAdaptivePriors({ env, fetchImpl: invalid.fetchImpl });
+    expect(rejected.restoreFailure).toEqual({
+      stage: "consumer-run",
+      reason: "consumer-run-unavailable",
+      status: null,
+    });
+    const failed = await restoreCiAdaptivePriors({
+      env,
+      fetchImpl: async () => {
+        throw new Error(`transport error with ${env.GITHUB_TOKEN}`);
+      },
+    });
+    expect(failed.restoreFailure).toEqual({
+      stage: "consumer-run",
+      reason: "request-failed",
+      status: null,
+    });
+    for (const bundle of [rejected, failed]) {
+      expect(bundle.cutoffAt).toBeNull();
+      expect(bundle.candidates).toEqual([]);
+      expect(JSON.stringify(bundle)).not.toContain(env.GITHUB_TOKEN);
+    }
   });
 });

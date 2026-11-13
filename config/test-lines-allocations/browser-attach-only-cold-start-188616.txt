@@ -1,2 +1,0 @@
-# Attach-only CDP cold-start, refusal, deadline, and cancellation regressions in PR #188616.
-146

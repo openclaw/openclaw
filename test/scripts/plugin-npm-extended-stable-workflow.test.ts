@@ -306,6 +306,7 @@ it("records the resolved candidate and already-published dispositions without pr
         all.map((entry) => ({ ...entry, localPath: "/producer/private" })),
       ),
       CANDIDATES: JSON.stringify([all[0]]),
+      CORE_DEFERRALS: "[]",
     },
   });
   expect(result.status, result.stderr).toBe(0);
@@ -313,6 +314,7 @@ it("records the resolved candidate and already-published dispositions without pr
     sourceSha: "a".repeat(40),
     all,
     candidates: [all[0]],
+    coreDeferrals: [],
     skippedPublished: [all[1]],
   });
 });
@@ -497,6 +499,7 @@ it.each([
     for (const script of [
       "release-tooling-identity.mjs",
       "lib/record-shared.mjs",
+      "lib/plain-gh.mjs",
       "openclaw-npm-extended-stable-release.mjs",
       "plugin-sdk-api-release-evidence.mjs",
       "lib/release-version.mjs",

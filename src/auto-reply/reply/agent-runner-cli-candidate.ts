@@ -20,7 +20,7 @@ import {
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../../agents/media-generation-activity.js";
 import { resolveCyberAccessProgramForProvider } from "../../agents/model-catalog-access-programs.js";
-import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
+import { findModelByNativeAlias, findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import { createUnrecordedScheduledAccountRefusal } from "../../agents/scheduled-unrecorded-account.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
@@ -93,11 +93,14 @@ export async function runCliFallbackCandidate(
     );
   };
   const expectedLifecycleRevision = turn.getActiveSessionEntry()?.lifecycleRevision;
-  const selectedModelEntry = findModelInCatalog(
+  const nativeAliasEntry = findModelByNativeAlias(
     params.candidateRun.thinkingCatalog ?? [],
-    params.provider,
+    params.cliExecutionProvider,
     params.model,
   );
+  const selectedModelEntry =
+    findModelInCatalog(params.candidateRun.thinkingCatalog ?? [], params.provider, params.model) ??
+    nativeAliasEntry;
   const modelHasVision = await resolveRunModelHasVision({
     run: params.candidateRun,
     provider: params.provider,
@@ -234,22 +237,8 @@ export async function runCliFallbackCandidate(
             activeSessionEntry: sessionEntry,
           });
         const scheduledInference = params.scheduledInference;
-        // The CLI owner must see explicit pins before provider scoping can discard them.
-        // A recorded account runs only when this backend forwards exactly that account.
-        const authProfileId = scheduledInference
-          ? await scheduledInference.resolveCliAuthProfile(async (selected) =>
-              allowCliAuthProfileForwarding
-                ? await resolveCliExecutionAuthProfileId({
-                    cliExecutionProvider: params.cliExecutionProvider,
-                    authProfileProvider: params.provider,
-                    config: params.runtimeConfig,
-                    agentDir: params.candidateRun.agentDir,
-                    selected,
-                    sessionBinding: cliSessionBinding,
-                  })
-                : undefined,
-            )
-          : allowCliAuthProfileForwarding
+        const resolveLiveProfile = async () =>
+          allowCliAuthProfileForwarding
             ? await resolveCliExecutionAuthProfileId({
                 cliExecutionProvider: params.cliExecutionProvider,
                 authProfileProvider: params.provider,
@@ -261,6 +250,38 @@ export async function runCliFallbackCandidate(
             : resolveRunAuthProfile(params.candidateRun, params.cliExecutionProvider, {
                 config: params.runtimeConfig,
               }).authProfileId;
+        // The CLI owner must see explicit pins before provider scoping can discard them.
+        // The recorded provider runs only when this backend forwards exactly its account;
+        // other providers select their account live.
+        const authProfileId = scheduledInference
+          ? await scheduledInference.resolveCliAuthProfile(
+              params.provider,
+              async (selected) =>
+                allowCliAuthProfileForwarding
+                  ? await resolveCliExecutionAuthProfileId({
+                      cliExecutionProvider: params.cliExecutionProvider,
+                      authProfileProvider: params.provider,
+                      config: params.runtimeConfig,
+                      agentDir: params.candidateRun.agentDir,
+                      selected,
+                      sessionBinding: cliSessionBinding,
+                    })
+                  : undefined,
+              // The run's selected profile is the recorded account on its own provider; another
+              // provider's CLI backend selects its account without it.
+              async () =>
+                allowCliAuthProfileForwarding
+                  ? await resolveCliExecutionAuthProfileId({
+                      cliExecutionProvider: params.cliExecutionProvider,
+                      authProfileProvider: params.provider,
+                      config: params.runtimeConfig,
+                      agentDir: params.candidateRun.agentDir,
+                      selected: undefined,
+                      sessionBinding: cliSessionBinding,
+                    })
+                  : undefined,
+            )
+          : await resolveLiveProfile();
         if (turn.followupRun.run.scheduledAutomation && !scheduledInference && authProfileId) {
           throw createUnrecordedScheduledAccountRefusal({
             runtime: params.cliExecutionProvider,
@@ -455,6 +476,7 @@ export async function runCliFallbackCandidate(
             requesterModel: { provider: params.provider, model: params.model },
             modelHasVision,
             modelContextWindow: selectedModelEntry?.contextWindow,
+            ...(nativeAliasEntry ? { nativeModelId: nativeAliasEntry.id } : {}),
             modelContextTokens: selectedModelEntry?.contextTokens,
             contextWindow: sessionEntry?.contextWindow,
             provider: params.cliExecutionProvider,
@@ -492,7 +514,7 @@ export async function runCliFallbackCandidate(
             assertCurrent: scheduledInference
               ? () => {
                   assertSettlementCurrent();
-                  scheduledInference.runParams.authProfileBinding?.assertCurrent();
+                  scheduledInference.assertCurrent(params.provider);
                 }
               : undefined,
             nativeAuthOnly:

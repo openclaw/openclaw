@@ -204,7 +204,7 @@ jobs:
     steps:
       - name: Report release runner routing
         if: vars.OPENCLAW_CI_RUNNER_BACKEND == 'github'
-        run: echo "::notice title=Release runner routing::OPENCLAW_CI_RUNNER_BACKEND=github moves hosted-proven release lanes to ubuntu-24.04; QA Lab runtime-pair stays pinned to Blacksmith and queues during an outage."
+        run: echo "::notice title=Release runner routing::OPENCLAW_CI_RUNNER_BACKEND=github moves hosted-proven release lanes to ubuntu-24.04; QA Lab runtime-pair stays on its dedicated runtime backend and queues during an outage."
       - name: Require trusted workflow ref for release checks
         env:
           RELEASE_REF: ${{ inputs.ref }}
@@ -1637,7 +1637,7 @@ jobs:
       actions: read
       contents: read
       id-token: write
-    uses: openclaw/openclaw-windows-node/.github/workflows/release-candidate-e2e.yml@fb45902950fd4f62d20a37dbbafac27e916917f2
+    uses: openclaw/openclaw-windows-node/.github/workflows/release-candidate-e2e.yml@f0592215f27100d9ecece33d3069daac76a4125c
     with:
       candidate_artifact_name: ${{ needs.prepare_release_package.outputs.windows_node_artifact_name }}
       candidate_artifact_run_id: ${{ github.run_id }}
@@ -1645,7 +1645,7 @@ jobs:
       candidate_version: ${{ needs.prepare_release_package.outputs.package_version }}
       windows_node_source: release
       windows_node_source_sha: ${{ needs.resolve_windows_node_release_artifacts.outputs.prerelease_release_sha }}
-      windows_node_workflow_sha: fb45902950fd4f62d20a37dbbafac27e916917f2
+      windows_node_workflow_sha: f0592215f27100d9ecece33d3069daac76a4125c
       windows_node_release_tag: ${{ needs.resolve_windows_node_release_artifacts.outputs.prerelease_tag }}
       windows_node_release_asset_name: ${{ needs.resolve_windows_node_release_artifacts.outputs.prerelease_asset_name }}
       windows_node_release_asset_sha256: ${{ needs.resolve_windows_node_release_artifacts.outputs.prerelease_asset_sha256 }}
@@ -1659,7 +1659,7 @@ jobs:
       actions: read
       contents: read
       id-token: write
-    uses: openclaw/openclaw-windows-node/.github/workflows/release-candidate-e2e.yml@fb45902950fd4f62d20a37dbbafac27e916917f2
+    uses: openclaw/openclaw-windows-node/.github/workflows/release-candidate-e2e.yml@f0592215f27100d9ecece33d3069daac76a4125c
     with:
       candidate_artifact_name: ${{ needs.prepare_release_package.outputs.windows_node_artifact_name }}
       candidate_artifact_run_id: ${{ github.run_id }}
@@ -1667,7 +1667,7 @@ jobs:
       candidate_version: ${{ needs.prepare_release_package.outputs.package_version }}
       windows_node_source: release
       windows_node_source_sha: ${{ needs.resolve_windows_node_release_artifacts.outputs.stable_release_sha }}
-      windows_node_workflow_sha: fb45902950fd4f62d20a37dbbafac27e916917f2
+      windows_node_workflow_sha: f0592215f27100d9ecece33d3069daac76a4125c
       windows_node_release_tag: ${{ needs.resolve_windows_node_release_artifacts.outputs.stable_tag }}
       windows_node_release_asset_name: ${{ needs.resolve_windows_node_release_artifacts.outputs.stable_asset_name }}
       windows_node_release_asset_sha256: ${{ needs.resolve_windows_node_release_artifacts.outputs.stable_asset_sha256 }}
@@ -1681,7 +1681,7 @@ jobs:
       actions: read
       contents: read
       id-token: write
-    uses: openclaw/openclaw-windows-node/.github/workflows/release-candidate-e2e.yml@fb45902950fd4f62d20a37dbbafac27e916917f2
+    uses: openclaw/openclaw-windows-node/.github/workflows/release-candidate-e2e.yml@f0592215f27100d9ecece33d3069daac76a4125c
     with:
       candidate_artifact_name: ${{ needs.prepare_release_package.outputs.windows_node_artifact_name }}
       candidate_artifact_run_id: ${{ github.run_id }}
@@ -1689,7 +1689,7 @@ jobs:
       candidate_version: ${{ needs.prepare_release_package.outputs.package_version }}
       windows_node_source: main
       windows_node_source_sha: ${{ needs.resolve_windows_node_main_source.outputs.main_source_sha }}
-      windows_node_workflow_sha: fb45902950fd4f62d20a37dbbafac27e916917f2
+      windows_node_workflow_sha: f0592215f27100d9ecece33d3069daac76a4125c
       allow_protocol_mismatch: false
 
   live_repo_e2e_release_checks:
@@ -2241,7 +2241,7 @@ jobs:
     if: needs.resolve_target.outputs.qa_parity_scheduled == 'true'
     # Pinned: hosted ubuntu-24.04 failed the core lane in both runs after a backend flip
     # (36639549086, 36639978260). An outage queues this lane instead of failing it.
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('blacksmith-2vcpu-ubuntu-2404'))) || 'blacksmith-2vcpu-ubuntu-2404' }}
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' && 'boat' || 'blacksmith-2vcpu-ubuntu-2404'))) || vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' && 'boat' || 'blacksmith-2vcpu-ubuntu-2404' }}
     timeout-minutes: 45
     strategy:
       fail-fast: false

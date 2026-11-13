@@ -14,12 +14,12 @@ import {
   MAX_NODE_PLATFORM,
   MAX_NODE_SURFACE_ITEMS,
   MAX_NODE_SURFACE_NAME,
-  MEMBER_ROLES,
   MEMBERSHIP_OPS,
   OWNER_CAPABILITIES,
   REVOCATION_KINDS,
   ROOT_EPOCH,
   STATEMENT_TYPES,
+  type MemberRole,
   type SignedStatement,
   type StatementType,
 } from "./types.js";
@@ -180,7 +180,15 @@ const nodeDescription = object({
   commands: list(nodeText(MAX_NODE_SURFACE_NAME), 0, MAX_NODE_SURFACE_ITEMS),
   caps: list(nodeText(MAX_NODE_SURFACE_NAME), 0, MAX_NODE_SURFACE_ITEMS),
 });
-const role = oneOf(MEMBER_ROLES);
+/** Validates an opaque, signed member role name without assigning it authority or rank. */
+export function isMemberRole(value: unknown): value is MemberRole {
+  return typeof value === "string" && /^[a-z][a-z0-9_-]{0,63}$/.test(value);
+}
+
+const role = predicate(
+  isMemberRole,
+  "expected role name: 1-64 lowercase ASCII letters, digits, - or _, starting with a letter",
+);
 const ownerDeviceCertBody = object({
   device_pub: ed25519Key,
   peer_keys: list(irohKey),

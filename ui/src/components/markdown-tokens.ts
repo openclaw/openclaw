@@ -102,29 +102,42 @@ export function renderMarkdownTokens(
       code.textContent = token.content;
     }
     const pre = element("pre", {}, [code]);
-    if (env.codeBlockChrome === "none" && env.codeBlockInteraction === "static") {
+    // Aligned block art never wraps, so it keeps the passive block.
+    const wrapOnly = env.codeBlockInteraction === "wrap" && !isMarkdownBlockArtText(token.content);
+    if (env.codeBlockChrome === "none" && !interactive && !wrapOnly) {
       return pre;
+    }
+    const wrapButton = (wrapped: boolean) => {
+      const label = t(wrapped ? "chat.codeBlock.disableWrap" : "chat.codeBlock.enableWrap");
+      return element(
+        "button",
+        {
+          type: "button",
+          class: "code-block-wrap",
+          "data-markdown-key": "wrap",
+          "aria-label": label,
+          title: label,
+          "aria-pressed": String(wrapped),
+        },
+        [element("span", { class: "code-block-wrap__icon", "aria-hidden": "true" })],
+      );
+    };
+    if (wrapOnly) {
+      return element(
+        "div",
+        { class: "code-block-wrapper code-block-wrapper--wrap-only is-wrapped" },
+        [
+          wrapButton(true),
+          element("div", { class: "code-block-viewport", "data-markdown-key": "viewport" }, [pre]),
+        ],
+      );
     }
     const wrapper = element("div", {
       class: `${wrapperClass}${interactive && hidden ? " is-collapsible" : ""}`,
     });
     const actions = element("div", { class: "code-block-actions" });
     if (interactive) {
-      const label = t("chat.codeBlock.enableWrap");
-      actions.append(
-        element(
-          "button",
-          {
-            type: "button",
-            class: "code-block-wrap",
-            "data-markdown-key": "wrap",
-            "aria-label": label,
-            title: label,
-            "aria-pressed": "false",
-          },
-          [element("span", { class: "code-block-wrap__icon", "aria-hidden": "true" })],
-        ),
-      );
+      actions.append(wrapButton(false));
     }
     if (env.codeBlockChrome !== "none") {
       actions.append(

@@ -17,6 +17,7 @@ async function main() {
       sourceSha: args.releaseSha,
       workflowSha: process.env.GITHUB_WORKFLOW_SHA,
       workflowRef: args.workflowRef,
+      npmDistTag: args.distTag,
       sourceRoot: process.cwd(),
       plugins: args.pluginSelection,
       token: process.env.GH_TOKEN,

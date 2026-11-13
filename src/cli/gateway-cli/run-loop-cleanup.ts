@@ -17,7 +17,7 @@ import { flushGatewayLogsBeforeExit } from "./run-loop-exit.js";
 import type { GatewayShutdownFailure } from "./run-loop-terminal.js";
 import type { ShutdownHardExitWatchdog } from "./shutdown-hard-exit.js";
 
-const SETTLED_EXIT_WATCHDOG_MS = 10_000;
+const SETTLED_EXIT_WATCHDOG_MS = 1_000;
 
 /** Retains accepted cleanup, including native watchdog cancellation, until its real settlement. */
 export function createGatewayRunCleanup(

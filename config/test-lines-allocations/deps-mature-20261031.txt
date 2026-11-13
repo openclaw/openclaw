@@ -1,4 +1,0 @@
-# Exact net regression growth for #189746: TypeBox counting-validator cases,
-# ACP SDK app-builder coverage/setup, and trusted packaging fixture imports.
-# No extra test processes or timeouts; existing focused files execute these cases.
-84

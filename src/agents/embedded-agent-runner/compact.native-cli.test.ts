@@ -5,9 +5,23 @@ import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 type CliRunParams = Parameters<typeof import("../cli-runner.js").runCliAgent>[0];
+type CliRunResult = Awaited<ReturnType<typeof import("../cli-runner.js").runCliAgent>>;
 
 const { runCliAgentMock, storedProfiles } = vi.hoisted(() => ({
-  runCliAgentMock: vi.fn(async (_params: CliRunParams) => undefined),
+  // The runner reports the sizes from the backend's own compaction record.
+  runCliAgentMock: vi.fn(async (_params: CliRunParams): Promise<CliRunResult> => ({
+    meta: {
+      durationMs: 1,
+      agentMeta: {
+        sessionId: "",
+        provider: "anthropic",
+        model: "opus",
+        compactionCount: 1,
+        compactionTokensBefore: 33_905,
+        compactionTokensAfter: 6_173,
+      },
+    },
+  })),
   storedProfiles: {} as Record<string, unknown>,
 }));
 
@@ -78,6 +92,7 @@ it("resumes the bound backend session with the backend-owned command", async () 
     ok: true,
     compacted: true,
     reason: 'CLI backend "claude-cli" compacted its native session.',
+    result: { tokensBefore: 33_905, tokensAfter: 6_173 },
   });
   expect(runCliAgentMock).toHaveBeenCalledOnce();
   const call = runCliAgentMock.mock.calls[0]?.[0];

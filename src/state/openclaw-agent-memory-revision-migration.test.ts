@@ -13,6 +13,7 @@ import {
 const predecessor = 30;
 const target = OPENCLAW_AGENT_SCHEMA_VERSION;
 const scope = [
+  "agent_tool_usage",
   "memory_index_chunks",
   "memory_index_sources",
   "schema_meta",

@@ -19,22 +19,24 @@ async function runProbe(root: string, probe: string, env: NodeJS.ProcessEnv) {
     DEFAULT_VITEST_TEST_TIMEOUT_MS,
     { cwd: root, requireProcessTreeExit: process.platform !== "win32" },
   );
-  expect(result.error).toBeUndefined();
+  expect(result.error, result.stderr).toBeUndefined();
   expect(result.status, result.stderr + result.stdout).toBe(0);
 }
 
-it("retains verified artifacts after the runner's module loader stops", async () => {
-  const root = tempDirs.make("vitest-worker-loader-shutdown-");
-  const ownerUrl = copyWorkerRunFixture(root);
-  const artifactsUrl = fixtureUrl(root, "vitest-worker-artifacts");
-  const cacheUrl = fixtureUrl(root, "vitest-worker-cache");
-  const input = writeFixture(root, "fixture-input.ts", "export {};\n");
-  const output = 'export const value = "compiled fixture";\n';
-  // The real owner still launches and joins a native compiler child and verifies its files.
-  writeFixture(
-    root,
-    "scripts/lib/vitest-worker-compiler.mts",
-    `import { writeWorkerFixtureManifest } from ${JSON.stringify(manifestFixture)};
+it.for([false, true])(
+  "verifies delegated borrowers before retaining artifacts after loader shutdown (tamper: %s)",
+  async (tamper) => {
+    const root = tempDirs.make("vitest-worker-loader-shutdown-");
+    const ownerUrl = copyWorkerRunFixture(root);
+    const artifactsUrl = fixtureUrl(root, "vitest-worker-artifacts");
+    const cacheUrl = fixtureUrl(root, "vitest-worker-cache");
+    const input = writeFixture(root, "fixture-input.ts", "export {};\n");
+    const output = 'export const value = "compiled fixture";\n';
+    // The real owner still launches and joins a native compiler child and verifies its files.
+    writeFixture(
+      root,
+      "scripts/lib/vitest-worker-compiler.mts",
+      `import { writeWorkerFixtureManifest } from ${JSON.stringify(manifestFixture)};
 import { hashVitestWorkerArtifact as hash } from ${JSON.stringify(artifactsUrl)};
 import fs from 'node:fs';
 import path from 'node:path';
@@ -44,11 +46,11 @@ const manifest = writeWorkerFixtureManifest(directory, { [${JSON.stringify(input
 manifest.cacheSignature = hash('fixture compiler generation');
 fs.writeFileSync(path.join(directory, 'manifest.json'), JSON.stringify(manifest));
 `,
-  );
-  const borrower = writeFixture(
-    root,
-    "borrower.mjs",
-    `import assert from 'node:assert/strict';
+    );
+    const leaf = writeFixture(
+      root,
+      "leaf.mjs",
+      `import assert from 'node:assert/strict';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { requestVitestWorkerArtifacts } from ${JSON.stringify(artifactsUrl)};
@@ -60,11 +62,36 @@ try {
   process.disconnect();
 }
 `,
-  );
-  const probe = writeFixture(
-    root,
-    "probe.mjs",
-    `import assert from 'node:assert/strict';
+    );
+    const borrower = writeFixture(
+      root,
+      "borrower.mjs",
+      `import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import fs from 'node:fs';
+import path from 'node:path';
+import { createVitestWorkerRun } from ${JSON.stringify(ownerUrl)};
+const directory = process.argv[2];
+const owner = createVitestWorkerRun(process.env, { directory });
+try {
+  const child = spawn(process.execPath, [${JSON.stringify(leaf)}, directory], {
+    cwd: ${JSON.stringify(root)}, stdio: ['ignore', 'ignore', 'inherit', 'ipc'],
+  });
+  await owner.borrow(child, once(child, 'close').then(result => assert.deepEqual(result, [0, null])));
+  if (${tamper}) fs.appendFileSync(path.join(directory, 'dist/probe.js'), '// changed\\n');
+  await owner.dispose();
+  assert.equal(fs.existsSync(directory), true);
+} finally {
+  try { await owner.dispose(); }
+  finally { process.disconnect(); }
+}
+`,
+    );
+    const probe = writeFixture(
+      root,
+      "probe.mjs",
+      `import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import fs from 'node:fs';
@@ -88,23 +115,29 @@ try {
   const completion = once(child, 'close').then(result => assert.deepEqual(result, [0, null]));
   await owner.borrow(child, completion);
   stopped = true;
-  await owner.dispose();
+  const disposal = owner.dispose();
+  if (${tamper}) await assert.rejects(disposal, /Compiled subprocess artifact changed/);
+  else await disposal;
   const cached = path.join(${JSON.stringify(root)}, '.artifacts/vitest-worker-cache', path.basename(owner.descriptor.directory));
   assert.equal(fs.existsSync(owner.descriptor.directory), false);
-  assert.equal(fs.readFileSync(path.join(cached, 'outputs/dist/probe.js'), 'utf8'), ${JSON.stringify(output)});
-  assert.equal(fs.existsSync(path.join(cached, 'stamp.json')), true);
+  if (${tamper}) assert.equal(fs.existsSync(cached), false);
+  else {
+    assert.equal(fs.readFileSync(path.join(cached, 'outputs/dist/probe.js'), 'utf8'), ${JSON.stringify(output)});
+    assert.equal(fs.existsSync(path.join(cached, 'stamp.json')), true);
+  }
 } finally {
-  try { await owner.dispose(); }
+  try { await owner.dispose().catch(() => {}); }
   finally { hooks.deregister(); }
 }
 `,
-  );
-  await runProbe(root, probe, {
-    NAPI_RS_NATIVE_LIBRARY_PATH: "",
-    NAPI_RS_WASI_FLAVOR: "",
-    NAPI_RS_FORCE_WASI: "",
-  });
-});
+    );
+    await runProbe(root, probe, {
+      NAPI_RS_NATIVE_LIBRARY_PATH: "",
+      NAPI_RS_WASI_FLAVOR: "",
+      NAPI_RS_FORCE_WASI: "",
+    });
+  },
+);
 
 it("defaults to full and rejects borrowers broader than their connected parent", async () => {
   const root = tempDirs.make("vitest-worker-presets-");

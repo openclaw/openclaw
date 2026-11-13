@@ -14,6 +14,7 @@ import { callGateway } from "../../gateway/call.js";
 import { isGatewaySecretRefUnavailableError } from "../../gateway/credentials.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime, ExitError, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { waitForGatewayDiagnostic } from "../gateway-diagnostic-readiness.js";
 
 export type ChannelsStatusOptions = {
@@ -21,7 +22,9 @@ export type ChannelsStatusOptions = {
   json?: boolean;
   probe?: boolean;
   timeout?: string;
+  /** Exit non-zero when a selected account is unhealthy (see status-unhealthy.ts). */
   failOnUnhealthy?: boolean;
+  /** Alias for failOnUnhealthy. */
   exitCode?: boolean;
 };
 
@@ -36,6 +39,8 @@ export async function channelsStatusCommand(
   opts: ChannelsStatusOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
+  const signal = getAsyncWorkSignal();
+  signal?.throwIfAborted();
   const args =
     normalizeOptionalLowercaseString(opts.channel) === "all"
       ? { ...opts, channel: undefined }
@@ -49,7 +54,10 @@ export async function channelsStatusCommand(
     runtime.log(statusLabel);
   }
   try {
-    const remainingMs = await waitForGatewayDiagnostic({ timeoutMs, json: opts.json }, runtime);
+    const remainingMs = await waitForGatewayDiagnostic(
+      { timeoutMs, json: opts.json, signal },
+      runtime,
+    );
     if (remainingMs === undefined) {
       return;
     }
@@ -71,11 +79,13 @@ export async function channelsStatusCommand(
           method: "channels.status",
           params,
           timeoutMs: remainingMs,
+          signal,
           sharedStateMode: "read-only",
           beforeDeviceIdentityLoad: prepareCliGatewayStateAccess,
         });
       },
     );
+    signal?.throwIfAborted();
     const failOnUnhealthy = opts.failOnUnhealthy === true || opts.exitCode === true;
     // Load the health evaluator only when the opt-in flag is set, keeping the
     // plain status path cold (see channels-status-cold-imports).
@@ -91,10 +101,14 @@ export async function channelsStatusCommand(
       } else {
         writeRuntimeJson(runtime, payload);
       }
-    } else {
-      const { formatGatewayChannelsStatusLines } = await import("./status.runtime.js");
-      runtime.log(formatGatewayChannelsStatusLines(payload).join("\n"));
+      if (unhealthyAccounts.length > 0) {
+        runtime.exit(1);
+      }
+      return;
     }
+    const { formatGatewayChannelsStatusLines } = await import("./status.runtime.js");
+    signal?.throwIfAborted();
+    runtime.log(formatGatewayChannelsStatusLines(payload).join("\n"));
     if (unhealthyAccounts.length > 0) {
       for (const account of unhealthyAccounts) {
         runtime.error(unhealthyHelpers!.formatUnhealthyChannelAccount(account));
@@ -102,6 +116,9 @@ export async function channelsStatusCommand(
       runtime.exit(1);
     }
   } catch (err) {
+    signal?.throwIfAborted();
+    // The unhealthy exit is a result, not a failure of the command: it must
+    // not be rewritten as a diagnostic.
     if (err instanceof ExitError) {
       throw err;
     }
@@ -122,6 +139,7 @@ export async function channelsStatusCommand(
       safeError,
       gatewayAuthUnavailable,
       expectedErrorOutput,
+      signal,
     });
   }
 }

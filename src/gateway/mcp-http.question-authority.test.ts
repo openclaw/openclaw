@@ -292,7 +292,7 @@ function createQuestionFixture(
 function expectAnswered({ result }: McpResponse) {
   expect(result).toMatchObject({
     isError: false,
-    content: [{ type: "text", text: expect.stringContaining('"status": "answered"') }],
+    content: [{ type: "text", text: expect.stringContaining('"status":"answered"') }],
   });
 }
 

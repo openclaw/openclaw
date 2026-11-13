@@ -1,3 +1,4 @@
+import { mergeCatalog } from "../lib/merge-catalog.ts";
 import type { TranslationMap } from "../lib/types.ts";
 import { en } from "./en.ts";
 
@@ -385,34 +386,6 @@ const catalog = {
   },
 } satisfies TranslationMap;
 
-export const registerChatComposerEnglish = Object.assign(
-  () => {
-    const {
-      view,
-      composer,
-      queue,
-      mentions,
-      permissions,
-      voice,
-      sendErrors,
-      attachments,
-      privateDraftReload,
-      progressLabels,
-      ...outboxRecovery
-    } = catalog.chat;
-    Object.assign(en.chat, outboxRecovery);
-    Object.assign(en.chat.view, view);
-    const { menu, ...composerLabels } = composer;
-    Object.assign(en.chat.composer, composerLabels);
-    en.chat.composer.menu ??= menu;
-    Object.assign(en.chat.queue, queue);
-    Object.assign(en.chat.mentions, mentions);
-    Object.assign(en.chat.permissions, permissions);
-    Object.assign(en.chat.voice, voice);
-    Object.assign(en.chat.sendErrors, sendErrors);
-    Object.assign(en.chat.attachments, attachments);
-    Object.assign(en.chat.privateDraftReload, privateDraftReload);
-    Object.assign(en.chat.progressLabels, progressLabels);
-  },
-  { catalog },
-);
+export const registerChatComposerEnglish = Object.assign(() => mergeCatalog(en, catalog), {
+  catalog,
+});

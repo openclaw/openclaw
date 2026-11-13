@@ -5,6 +5,7 @@ import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import type { Browser, BrowserContext, Page } from "playwright-core";
+import { cdpNetworkLogs } from "./cdp-network-log.js";
 import { withManagedProxyForCdpUrl, withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
 import {
   assertCdpEndpointAllowed,
@@ -522,6 +523,7 @@ export async function getAllPages(browser: Browser): Promise<Page[]> {
 }
 
 async function getAccessiblePages(opts: {
+  browser: Browser;
   cdpUrl: string;
   pages: Page[];
 }): Promise<Array<{ page: Page; targetId: string | null }>> {
@@ -546,6 +548,10 @@ async function getAccessiblePages(opts: {
       continue;
     }
     bindRoleRefsTarget(page, opts.cdpUrl, targetId);
+    const log = cdpNetworkLogs.get(opts.browser);
+    if (log && targetId) {
+      ensurePageState(page).readNetworkRequests = (clear) => log.read(targetId, clear);
+    }
     accessible.push({ page, targetId });
   }
   return accessible;
@@ -571,6 +577,7 @@ async function getPageForTargetIdOnce(opts: {
   }
 
   const accessible = await getAccessiblePages({
+    browser,
     cdpUrl: opts.cdpUrl,
     pages,
   });
