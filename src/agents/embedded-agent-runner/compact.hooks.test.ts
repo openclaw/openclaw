@@ -475,6 +475,8 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     expect(result).toMatchObject({ compacted: true, compactionKind: "server-endpoint" });
     expect(result.result).not.toHaveProperty("summary");
     expect(mockCallArg(applyExtraParamsToAgentMock, 0, 11)).toMatchObject({
+      sessionId: TEST_SESSION_ID,
+      sessionKey: TEST_SESSION_KEY,
       modelCallUrgency: "foreground",
       nativeWebSearchPolicyContext: { webSearchEnabled: false, runtimeToolAllowlist: [] },
     });

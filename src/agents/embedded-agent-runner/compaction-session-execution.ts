@@ -292,6 +292,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           llmRuntime: getModelRegistryRuntime(modelRegistry).llmRuntime,
           providerStreamFn,
           sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
           resolvedApiKey: hasRuntimeAuthExchange ? undefined : apiKeyInfo?.apiKey,
           config: params.config,
           thinkLevel,

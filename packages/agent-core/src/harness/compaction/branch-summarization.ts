@@ -142,7 +142,7 @@ export async function generateBranchSummary(
   entries: SessionTreeEntry[],
   options: Pick<
     SummarizationCompletionParams,
-    "model" | "headers" | "runtime" | "streamFn" | "customInstructions"
+    "model" | "headers" | "runtime" | "streamFn" | "customInstructions" | "sessionId"
   > & {
     apiKey: string;
     signal: AbortSignal;
@@ -216,7 +216,13 @@ export async function generateBranchSummary(
   const promptText = `${promptPrefix}${conversationText}${promptSuffix}`;
 
   const context = createSummarizationContext(promptText);
-  const streamOptions = { apiKey, headers, signal, maxTokens: maxSummaryOutputTokens };
+  const streamOptions = {
+    apiKey,
+    headers,
+    signal,
+    maxTokens: maxSummaryOutputTokens,
+    sessionId: options.sessionId,
+  };
   const response = options.streamFn
     ? await consumeAgentCoreStream(options.streamFn(model, context, streamOptions), options.runtime)
     : await resolveAgentCoreCompleteFn(options.runtime)(model, context, streamOptions);

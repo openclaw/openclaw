@@ -473,6 +473,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
           compactionThinkingLevel,
           this.agent.streamFn,
           createCompactionRuntime((usage) => recordSessionModelUsage(this.sessionManager, usage)),
+          this.sessionId,
         );
       let result = await runCoreCompaction();
       // Automatic core compaction owns one retry for invalid summary output.

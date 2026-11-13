@@ -166,6 +166,33 @@ it("uses each prepared owner for params and stream wrapping with shared config",
   ]);
 });
 
+it("passes each owning session identity to provider wrappers without requiring an owner", async () => {
+  const model = makeProviderModelFixture({ ...modelDefaults, id: "fixture-model" });
+  const base = vi.fn<StreamFn>(() => createAssistantMessageEventStream());
+  const wrapStreamFn = vi.fn<NonNullable<ProviderPlugin["wrapStreamFn"]>>(() => undefined);
+  const handle: ProviderRuntimePluginHandle = {
+    provider: model.provider,
+    modelId: model.id,
+    plugin: { ...pluginDefaults, wrapStreamFn },
+  };
+  const identities = [
+    { sessionId: "session-a", sessionKey: "agent:worker:a" },
+    { sessionId: "session-b", sessionKey: "agent:worker:b" },
+    {},
+  ];
+  const prepared = identities.map((identity) =>
+    prepareAgent(base, handle, model, undefined, "worker", identity),
+  );
+  await Promise.all(prepared.map(async ({ agent }) => agent.streamFn(model, { messages: [] })));
+  expect(
+    wrapStreamFn.mock.calls.map(([ctx]) => ({
+      sessionId: ctx.sessionId,
+      sessionKey: ctx.sessionKey,
+    })),
+  ).toEqual([identities[0], identities[1], { sessionId: undefined, sessionKey: undefined }]);
+  expect(base).toHaveBeenCalledTimes(3);
+});
+
 type StreamPayload = { messages: Array<{ role: string; content: unknown }> };
 
 const thinking = { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" };

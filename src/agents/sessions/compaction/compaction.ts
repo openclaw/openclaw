@@ -30,6 +30,7 @@ export async function generateSummary(
   streamFn?: StreamFn,
   usageSink?: SessionModelUsageSink,
   summaryPrompt?: CompactionSummaryPrompt,
+  sessionId?: string,
 ): Promise<string> {
   return unwrapCoreResult(
     await generateSummaryCore(
@@ -45,6 +46,7 @@ export async function generateSummary(
       streamFn,
       createCompactionRuntime(usageSink),
       summaryPrompt,
+      sessionId,
     ),
   );
 }

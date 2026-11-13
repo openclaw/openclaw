@@ -46,6 +46,7 @@ type CompactionSummaryParams = {
   thinkingLevel?: ThinkingLevel;
   streamFn?: StreamFn;
   usageSink?: SessionModelUsageSink;
+  sessionId?: string;
 };
 
 function buildCompactionSummarizationInstructions(
@@ -97,6 +98,7 @@ export async function summarizeCompactionHistory(params: CompactionSummaryParams
           params.streamFn,
           params.usageSink,
           params.summaryPrompt,
+          params.sessionId,
         ),
       {
         attempts: 3,
