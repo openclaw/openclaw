@@ -310,7 +310,10 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     },
     {
       configs: ["test/vitest/vitest.unit-fast-isolated.config.ts"],
-      files: ["test/scripts/type-suppression-inventory.test.ts"],
+      files: [
+        "test/scripts/ci-workflow-ui-full.test.ts",
+        "test/scripts/type-suppression-inventory.test.ts",
+      ],
       preset: "runtime",
     },
     {
@@ -324,6 +327,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         "test/canonical-descendant.integration.test.ts",
         "test/codex-web-search-native.integration.test.ts",
         "test/cron-conversation-delivery.codex.integration.test.ts",
+        "test/scripts/pr-worktree-provision.test.ts",
         "test/runtime-agent.codex-initialization.integration.test.ts",
         "test/skill-usage.codex.integration.test.ts",
         "test/slack-outbound-permanent-rejection-loopback.test.ts",
@@ -656,6 +660,8 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         "src/plugins/loader.runtime-registry.test.ts",
         "src/plugins/plugin-generation-worker.test.ts",
         "test/scripts/ci-test-timings-tooling.test.ts",
+        "test/scripts/ci-workflow-ui-full.test.ts",
+        "test/scripts/pr-worktree-provision.test.ts",
         "test/scripts/type-suppression-inventory.test.ts",
       ],
       preset: "runtime",
