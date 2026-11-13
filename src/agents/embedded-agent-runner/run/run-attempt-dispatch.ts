@@ -397,6 +397,10 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     operation: "attempt",
     sessionId,
     sessionKey: resolvedSessionKey,
+    toolUsageRankingSeed:
+      runInput.sessionAdmission?.entry.sessionId === sessionId
+        ? runInput.sessionAdmission.entry.toolUsageRankingSeed
+        : undefined,
     memoryAudience,
     conversationRecall: params.conversationRecall,
     promptCacheKey: params.promptCacheKey,

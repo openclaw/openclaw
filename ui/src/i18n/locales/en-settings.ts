@@ -434,6 +434,27 @@ const enSettings = {
       hint: "Released browser/Gateway-owned WebRTC tries OAuth first and falls back to a Platform API key. Direct backend sockets and unlisted or private routes require Platform API-key access. Delegated work can be steered while running and requires exact spoken confirmation for high-impact actions.",
       ready: "Ready",
     },
+    transcription: {
+      title: "Speech to text",
+      description:
+        "Speech to text for Talk dictation and inbound voice notes (tools.media). Status shows the provider Talk uses.",
+      unavailableHint: "Connect to the Gateway to check speech-to-text readiness.",
+      failedHint: "Couldn’t check speech-to-text readiness.",
+      noProvider: "No speech-to-text model is configured yet.",
+      readyWithoutProvider: "A configured local transcription model is ready.",
+      modelTitle: "Speech-to-text model",
+      modelDescription:
+        "Used for voice notes, and for Talk dictation when no streaming transcription provider or speech-to-text voice-model default is configured; those take precedence for Talk. Automatic tries configured audio models in order.",
+      invalidModel:
+        "“{value}” isn’t a provider/model reference, so it wasn’t saved. Use provider/model, for example openrouter/openai/whisper-large-v3-turbo.",
+      automatic: "Automatic",
+      custom: "Other model (provider/model)",
+      preferredNotReadyTitle: "Preferred model",
+      providerNotReady: "Not ready",
+      providerNotReadyDescription:
+        "{provider} can’t transcribe yet. It may need a key, which is added on Settings → Models, or it may not support speech to text.",
+      openModels: "Open Models",
+    },
   },
   configForm: {
     redactedPlaceholder: "[redacted - click reveal to view]",
@@ -1264,7 +1285,8 @@ const enSettings = {
       moreFallbackOne: "1 more fallback after this one",
       moreFallbacks: "{count} more fallbacks after this one",
       selectModel: "Select a model",
-      discoveringMore: "Discovering more models…",
+      discoveringMore: "Looking for more models in the background…",
+      savedDiscoveringMore: "Saved. Looking for more models in the background…",
       discoverFailed: "Couldn’t load more models. Try again.",
       discoverFailedFor: "Couldn’t load models from {providers}. Try again.",
       retryDiscover: "Retry",

@@ -5,9 +5,6 @@ import "../../components/tooltip.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { KeyboardShortcut, ShortcutText } from "../../components/solid/kbd.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
-import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
-import { SwitchIndicator } from "../../components/solid/switch.tsx";
-import { keyboardHints } from "../../lib/keyboard-hints.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../../lib/keyboard-shortcut-contract.ts";
 import { elementRef } from "../../lib/reactive/element-ref.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -18,17 +15,6 @@ import { repositoryIssueText } from "./submit-gates.ts";
 import { AgentSelect, RequiredSessionPlacement } from "./target-controls-view.tsx";
 
 type SettingsProjection = ReturnType<typeof resolvePaletteSessionSettings>;
-type FocusTarget = "back" | "search" | "workspace";
-
-function SettingsIcon() {
-  return (
-    <StrokeIcon width="24" height="24">
-      <path d="M4 7h8m4 0h4M4 17h2m4 0h10" />
-      <circle cx="14" cy="7" r="2" />
-      <circle cx="8" cy="17" r="2" />
-    </StrokeIcon>
-  );
-}
 
 export function PaletteSessionSettingsView(properties: {
   id: string;
@@ -36,33 +22,18 @@ export function PaletteSessionSettingsView(properties: {
   registerClose: (close: () => void) => () => void;
 }) {
   const [open, setOpen] = createSignal(false);
-  // Locking placement retires the places panel; unlocking does not reopen it.
-  const [places, setPlaces] = createSignal(
-    (previous = false) => !properties.options.draft.place.requiredPlacement && previous,
-  );
   const [query, setQuery] = createSignal("");
-  let focusTarget: FocusTarget | undefined;
-  const focusTargets: Partial<Record<FocusTarget, HTMLElement>> = {};
   const focusControls = new Set<HTMLElement>();
   const controlRef = () =>
     elementRef((element: HTMLElement) => {
       focusControls.add(element);
       return () => focusControls.delete(element);
     });
-  let readAgentControls: (() => readonly HTMLElement[]) | undefined;
   let popover!: PopoverHandle;
   const close = (preferences: SettingsOptions["preferences"]) => {
     preferences.retirePresentation();
     setOpen(false);
-    setPlaces(false);
     setQuery("");
-    focusTarget = undefined;
-  };
-  const showPlaces = (value: boolean, pointer = false) => {
-    setPlaces(value);
-    setQuery("");
-    // Search takes focus; a touch tap focuses Back so no on-screen keyboard covers the list.
-    focusTarget = value ? (pointer && !keyboardHints.visible() ? "back" : "search") : "workspace";
   };
   const view = createMemo(() => resolvePaletteSessionSettings(properties.options, query()));
   const selectMachine = (
@@ -84,7 +55,8 @@ export function PaletteSessionSettingsView(properties: {
       }
     }
     properties.options.onChange();
-    showPlaces(false);
+    popover.hide();
+    popover.overlay.trigger?.focus({ preventScroll: true });
   };
   onSettled(() => {
     const preferences = properties.options.preferences;
@@ -98,29 +70,11 @@ export function PaletteSessionSettingsView(properties: {
     if (event.defaultPrevented || event.isComposing || event.keyCode === 229) {
       return;
     }
-    // Nested menus own Escape and roving focus, including their triggers.
-    if (
-      event
-        .composedPath()
-        .some(
-          (node) =>
-            node instanceof Element &&
-            node.matches(
-              '[role="menu"], [role="listbox"], [aria-haspopup="menu"], [aria-haspopup="listbox"]',
-            ),
-        )
-    ) {
-      return;
-    }
     if (event.key === "Escape") {
       event.preventDefault();
       event.stopPropagation();
-      if (places()) {
-        showPlaces(false);
-      } else {
-        close(properties.options.preferences);
-        popover.overlay.trigger?.focus({ preventScroll: true });
-      }
+      close(properties.options.preferences);
+      popover.overlay.trigger?.focus({ preventScroll: true });
       return;
     }
     if (
@@ -130,7 +84,7 @@ export function PaletteSessionSettingsView(properties: {
       return;
     }
     const panel = event.currentTarget;
-    const controls = [...focusControls, ...(readAgentControls?.() ?? [])]
+    const controls = [...focusControls]
       // Arrows walk the field and the choices; Tab still reaches the field's clear button.
       .filter(
         (control) =>
@@ -170,12 +124,6 @@ export function PaletteSessionSettingsView(properties: {
       { equals: (previous, next) => previous.promise === next.promise },
     );
     const cloudProfilesRead = createMemo(() => completion().promise?.then(() => null));
-    onSettled(() => {
-      if (focusTarget) {
-        focusTargets[focusTarget]?.focus({ preventScroll: true });
-      }
-    });
-    const back = nativeListener("click", () => showPlaces(false));
     const connect = nativeListener("click", () => properties.options.onConnectMachine());
     return (
       <>
@@ -185,27 +133,10 @@ export function PaletteSessionSettingsView(properties: {
           label={t("common.search")}
           placeholder={t("newSession.searchProjects")}
           query={query()}
+          autofocus="popover"
+          disabled={view().locked}
           controlRef={controlRef}
-          inputRef={(node) => {
-            focusTargets.search = node;
-          }}
           onQueryChange={setQuery}
-          leading={
-            <button
-              type="button"
-              class="palette-session-settings__back"
-              aria-label={t("common.back")}
-              ref={[
-                controlRef(),
-                (node) => {
-                  back(node);
-                  focusTargets.back = node;
-                },
-              ]}
-            >
-              <Icon name="arrowLeft" />
-            </button>
-          }
         />
         <div class="palette-session-settings__choices">
           <For each={view().groups} keyed={(group) => group.machine.id}>
@@ -313,164 +244,99 @@ export function PaletteSessionSettingsView(properties: {
     );
   }
 
-  function SettingsSummary() {
-    onSettled(() => {
-      if (focusTarget === "workspace") {
-        focusTargets.workspace?.focus({ preventScroll: true });
-      }
-      return () => {
-        readAgentControls = undefined;
-      };
-    });
-    const place = () => properties.options.draft.place;
-    const workspace = nativeListener("click", (event) => showPlaces(true, event.detail > 0));
-    const worktree = nativeListener("click", () => {
-      place().selectWorktree(!place().worktree);
-      properties.options.onChange();
-    });
-    return (
-      <>
-        <div class="palette-session-settings__title">{t("commandPalette.newSessionSettings")}</div>
-        <div class="palette-session-settings__agent">
-          <AgentSelect
-            focusTargetsRef={(readTargets) => {
-              readAgentControls = readTargets;
-            }}
-            params={{
-              agents: place().agents(),
-              variant: "default",
-              agentId: place().agentId,
-              agentIdentity: properties.options.context?.agentIdentity,
-              disabled: view().locked,
-              onSelect: (id) => {
-                place().selectAgentId(id);
-                properties.options.onChange();
-              },
-              identityTargetsRef: properties.options.identityTargetsRef,
-              onIdentityTargetsChange: properties.options.onIdentityTargetsChange,
-            }}
-          />
-        </div>
-        {view().placementLocked ? (
-          <RequiredSessionPlacement
-            gateway={properties.options.draft.gateway}
-            retryRef={controlRef()}
-          />
-        ) : (
-          <>
-            <button
-              class="palette-session-settings__row palette-session-settings__workspace"
-              type="button"
-              disabled={view().locked}
-              ref={[
-                controlRef(),
-                (node) => {
-                  workspace(node);
-                  focusTargets.workspace = node;
-                },
-              ]}
-            >
-              <span class="palette-session-settings__icon">
-                <Icon name="folder" />
-              </span>
-              <span class="palette-session-settings__copy">
-                <span class="palette-session-settings__label">
-                  {place().hostedEnvironment
-                    ? t("newSession.hostedWorkspace")
-                    : view().projectState.label}
-                </span>
-                <span class="palette-session-settings__secondary">
-                  {view().machineLabel}
-                  {view().cloudSummary ? " · " + view().cloudSummary : ""}
-                </span>
-              </span>
-              <span class="palette-session-settings__chevron">
-                <Icon name="chevronRight" />
-              </span>
-            </button>
-            {place().checkoutVisible && !place().remoteRepository ? (
-              <button
-                class="palette-session-settings__row palette-session-settings__worktree"
-                type="button"
-                role="switch"
-                aria-checked={place().worktree ? "true" : "false"}
-                aria-label={t("newSession.checkoutWorktree")}
-                title={
-                  place().remotePlacement
-                    ? t("newSession.checkoutRemoteLocked")
-                    : !place().worktreeAvailable()
-                      ? (repositoryIssueText(place().repository) ??
-                        t("newSession.gitCheckUnavailable"))
-                      : undefined
-                }
-                disabled={view().locked || place().remotePlacement}
-                ref={[controlRef(), worktree]}
-              >
-                <span class="palette-session-settings__icon">
-                  <Icon name="gitBranch" />
-                </span>
-                <span>{t("newSession.checkoutWorktree")}</span>
-                <span class="palette-session-settings__switch">
-                  <SwitchIndicator checked={place().worktree} size="sm" />
-                </span>
-              </button>
-            ) : undefined}
-          </>
-        )}
-      </>
-    );
-  }
-
+  const place = () => properties.options.draft.place;
+  const folderLabel = () =>
+    view().placementLocked
+      ? view().machineLabel
+      : place().hostedEnvironment
+        ? t("newSession.hostedWorkspace")
+        : view().projectState.label;
+  const worktree = nativeListener("click", () => {
+    place().selectWorktree(!place().worktree);
+    properties.options.onChange();
+  });
   return (
-    <Popover
-      triggerId={properties.id + "-settings-trigger"}
-      triggerClass="palette-session-settings__trigger"
-      triggerTitle={t("commandPalette.newSessionSettings")}
-      trigger={<SettingsIcon />}
-      ref={(handle) => {
-        popover = handle;
-      }}
-      id={properties.id + "-settings-popover"}
-      label={t("commandPalette.newSessionSettings")}
-      class="palette-session-settings"
-      placement="bottom-end"
-      open={open()}
-      onOpenChange={(value) => (value ? setOpen(true) : close(properties.options.preferences))}
-    >
-      <div class="palette-session-settings__content" ref={keydown}>
-        {places() ? <SettingsPlaces /> : <SettingsSummary />}
-        {!places() || latest(failed) ? (
+    <>
+      <div class="palette-session-settings__agent">
+        <AgentSelect
+          params={{
+            agents: place().agents(),
+            variant: "compact",
+            agentId: place().agentId,
+            agentIdentity: properties.options.context?.agentIdentity,
+            disabled: view().locked,
+            onSelect: (id) => {
+              place().selectAgentId(id);
+              properties.options.onChange();
+            },
+            identityTargetsRef: properties.options.identityTargetsRef,
+            onIdentityTargetsChange: properties.options.onIdentityTargetsChange,
+          }}
+        />
+      </div>
+      <Popover
+        triggerId={properties.id + "-settings-trigger"}
+        triggerClass="palette-session-settings__trigger palette-session-settings__chip"
+        triggerTitle={`${view().machineLabel} · ${folderLabel()}`}
+        triggerAriaLabel={`${t("commandPalette.newSessionSettings")}: ${view().machineLabel}, ${folderLabel()}`}
+        trigger={
+          <>
+            <Icon name="folder" />
+            <span class="palette-session-settings__chip-label">{folderLabel()}</span>
+            <span class="palette-session-settings__chip-chevron" aria-hidden="true">
+              <Icon name="chevronDown" />
+            </span>
+          </>
+        }
+        ref={(handle) => {
+          popover = handle;
+        }}
+        id={properties.id + "-settings-popover"}
+        label={t("commandPalette.newSessionSettings")}
+        class="palette-session-settings"
+        placement="bottom-end"
+        disabled={view().locked}
+        open={open()}
+        onOpenChange={(value) => (value ? setOpen(true) : close(properties.options.preferences))}
+      >
+        <div class="palette-session-settings__content" ref={keydown}>
+          {view().placementLocked ? (
+            <RequiredSessionPlacement
+              gateway={properties.options.draft.gateway}
+              retryRef={controlRef()}
+            />
+          ) : (
+            <SettingsPlaces />
+          )}
           <div class="palette-session-settings__footer" aria-busy={saving() ? "true" : "false"}>
-            {!places() ? (
-              <label
-                class="palette-session-settings__remember"
-                title={
-                  !properties.options.preferences.available
-                    ? t("commandPalette.rememberUnavailable")
-                    : undefined
+            <label
+              class="palette-session-settings__remember"
+              title={
+                !properties.options.preferences.available
+                  ? t("commandPalette.rememberUnavailable")
+                  : undefined
+              }
+            >
+              <Checkbox
+                ref={[controlRef()]}
+                checked={properties.options.preferences.remember}
+                disabled={view().locked || !properties.options.preferences.available}
+                onChange={(event) =>
+                  void save(() =>
+                    properties.options.preferences.setRemember(event.currentTarget.checked),
+                  )
                 }
-              >
-                <Checkbox
-                  ref={[controlRef()]}
-                  checked={properties.options.preferences.remember}
-                  disabled={view().locked || !properties.options.preferences.available}
-                  onChange={(event) =>
-                    void save(() =>
-                      properties.options.preferences.setRemember(event.currentTarget.checked),
-                    )
-                  }
+              />
+              <span>
+                <ShortcutText
+                  fallback={t("commandPalette.rememberSettingsNoShortcut")}
+                  text={t("commandPalette.rememberSettings", { shortcut: "{shortcut}" })}
+                  shortcut={() => (
+                    <KeyboardShortcut combo={KEYBOARD_SHORTCUT_COMBOS.commandPalette} inline />
+                  )}
                 />
-                <span>
-                  <ShortcutText
-                    fallback={t("commandPalette.rememberSettingsNoShortcut")}
-                    text={t("commandPalette.rememberSettings", { shortcut: "{shortcut}" })}
-                    shortcut={() => (
-                      <KeyboardShortcut combo={KEYBOARD_SHORTCUT_COMBOS.commandPalette} inline />
-                    )}
-                  />
-                </span>
-              </label>
-            ) : undefined}
+              </span>
+            </label>
             {latest(failed) ? (
               <div class="palette-session-settings__error" role="alert">
                 {t("commandPalette.settingsSaveFailed")}{" "}
@@ -480,8 +346,31 @@ export function PaletteSessionSettingsView(properties: {
               </div>
             ) : undefined}
           </div>
-        ) : undefined}
-      </div>
-    </Popover>
+        </div>
+      </Popover>
+      {!view().placementLocked && place().checkoutVisible && !place().remoteRepository ? (
+        <button
+          class="palette-session-settings__chip palette-session-settings__worktree"
+          type="button"
+          role="switch"
+          aria-checked={place().worktree ? "true" : "false"}
+          aria-label={t("newSession.checkoutWorktree")}
+          title={
+            place().remotePlacement
+              ? t("newSession.checkoutRemoteLocked")
+              : !place().worktreeAvailable()
+                ? (repositoryIssueText(place().repository) ?? t("newSession.gitCheckUnavailable"))
+                : undefined
+          }
+          disabled={view().locked || place().remotePlacement}
+          ref={worktree}
+        >
+          <Icon name="gitBranch" />
+          <span class="palette-session-settings__chip-label">
+            {t("newSession.checkoutWorktree")}
+          </span>
+        </button>
+      ) : undefined}
+    </>
   );
 }

@@ -16,8 +16,8 @@
       "team-reports"
     ],
     "schemaVersions": {
-      "state": 39,
-      "agent": 41
+      "state": 40,
+      "agent": 42
     }
   },
   "description": "Multi-channel AI gateway with extensible messaging integrations",
@@ -1984,6 +1984,7 @@
     "ios:release:upload": "node scripts/mobile-release.mjs run --platform ios",
     "ios:run": "/bin/bash scripts/ios-run.sh",
     "ios:screenshots": "/bin/bash scripts/ios-screenshots.sh",
+    "ios:sim:pair": "node --import ./scripts/tsx.mjs scripts/ios-sim-pair.mts",
     "ios:test": "pnpm --silent ios:gen && node --import ./scripts/tsx.mjs scripts/ios-test.mts",
     "ios:version": "node --import ./scripts/tsx.mjs scripts/ios-version.ts --json",
     "ios:version:check": "node --import ./scripts/tsx.mjs scripts/ios-sync-versioning.ts --check",
@@ -2115,6 +2116,7 @@
     "release:backport-probe": "node scripts/release-backport-probe.mjs",
     "release:candidate": "node --import ./scripts/tsx.mjs scripts/release-candidate-checklist.mts",
     "release:clawhub-recovery": "node scripts/plugin-clawhub-recovery.mjs",
+    "release:clawhub-status": "node --import ./scripts/tsx.mjs scripts/clawhub-publication-status.mts",
     "release:check": "pnpm build:package && pnpm release:generated:check && node --import ./scripts/tsx.mjs scripts/release-check.ts",
     "release:fast-pretag-check": "bash scripts/release-fast-pretag-check.sh",
     "release:generated:check": "node scripts/release-preflight.mjs --check",
@@ -2258,7 +2260,7 @@
     "test:e2e": "pnpm test:e2e:gateway && pnpm test:e2e:agent-plugin-gateway && pnpm test:ui:e2e",
     "test:e2e:agent-plugin-gateway": "node --import ./scripts/tsx.mjs scripts/agent-plugin-gateway-e2e.ts",
     "test:e2e:browser-extension": "node --import ./scripts/tsx.mjs scripts/build-all.mts qaRuntime && node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts --require-playwright-chromium && node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_BROWSER_EXTENSION_E2E=1 OPENCLAW_E2E_WORKERS=1 -- node scripts/run-vitest.mjs extensions/browser/chrome-extension/bootstrap.chromium.test.ts",
-    "test:e2e:browser-mcp": "node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts --require-playwright-chromium && node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_BROWSER_MCP_E2E=1 OPENCLAW_BROWSER_WAIT_E2E=1 OPENCLAW_VITEST_MAX_WORKERS=1 -- node scripts/run-vitest.mjs extensions/browser/src/browser/chrome-mcp.chromium.test.ts extensions/browser/src/browser/chrome-mcp-labels.chromium.test.ts extensions/browser/src/browser/routes/agent.act.wait-visibility.chromium.test.ts test/scripts/check-openclaw-package-tarball.bundled-mcp.test.ts",
+    "test:e2e:browser-mcp": "node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts --require-playwright-chromium && node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_BROWSER_MCP_E2E=1 OPENCLAW_BROWSER_WAIT_E2E=1 OPENCLAW_BROWSER_OPERATOR_PAGES_E2E=1 OPENCLAW_VITEST_MAX_WORKERS=1 -- node scripts/run-vitest.mjs extensions/browser/src/browser/chrome-mcp.chromium.test.ts extensions/browser/src/browser/chrome-mcp-labels.chromium.test.ts extensions/browser/src/browser/routes/agent.act.wait-visibility.chromium.test.ts extensions/browser/src/browser/routes/operator-pages.chromium.test.ts test/scripts/check-openclaw-package-tarball.bundled-mcp.test.ts",
     "test:e2e:gateway": "node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts",
     "test:e2e:node-auto-update": "node scripts/e2e/lib/node-auto-update/scenario.mjs",
     "test:e2e:openshell": "node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_E2E_OPENSHELL=1 -- node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts extensions/openshell/src/backend.e2e.test.ts",

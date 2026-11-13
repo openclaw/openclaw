@@ -665,6 +665,73 @@ describe("Telegram registered adapter conformance over HTTP", () => {
       });
     });
 
+    it.each([false, true])(
+      "never makes disabled presentation buttons clickable on action send, edit, and payload send (rich=%s)",
+      async (richMessages) => {
+        actionCfg.channels!.telegram!.richMessages = richMessages;
+        const staging = { label: "✓ Staging", value: "env|staging", disabled: true };
+        const presentation = buttonPresentation(
+          { label: "Deploy", value: "env|prod", disabled: false },
+          staging,
+        );
+        await send({ message: "Choose", presentation });
+        await action("edit", { chatId: "123", messageId: 1, presentation });
+        const inertEdit = await action("edit", {
+          chatId: "123",
+          messageId: 1,
+          presentation: buttonPresentation(staging),
+        });
+        await sendPayload({ text: "Choose", presentation }, { cfg: actionCfg });
+        // An all-disabled keyboard still retires the previous buttons on plain accounts.
+        expect(inertEdit.details).toMatchObject({ ok: true });
+        expect(asNullableRecord(inertEdit.details)?.degradedDelivery).toEqual(
+          richMessages
+            ? undefined
+            : expect.objectContaining({
+                fallback: "not_delivered",
+                reasons: ["disabled_unsupported"],
+              }),
+        );
+        const deploy = { text: "Deploy", callback_data: "env|prod" };
+        // Native disabled buttons follow the rich-message opt-in; plain accounts keep the label as text.
+        const inert: Array<Record<string, unknown>> = richMessages
+          ? [{ text: "✓ Staging", disabled: {} }]
+          : [];
+        const sendMethod = richMessages ? "sendRichMessage" : "sendMessage";
+        expect(
+          requests.map(({ method, fields }) => ({
+            method,
+            reply_markup: fields.reply_markup,
+            labelInText: JSON.stringify(fields.text ?? fields.rich_message ?? null).includes(
+              "Staging",
+            ),
+          })),
+        ).toEqual([
+          {
+            method: sendMethod,
+            reply_markup: replyMarkup(deploy, ...inert),
+            labelInText: !richMessages,
+          },
+          {
+            method: "editMessageReplyMarkup",
+            reply_markup: replyMarkup(deploy, ...inert),
+            labelInText: false,
+          },
+          {
+            method: "editMessageReplyMarkup",
+            reply_markup: { inline_keyboard: richMessages ? [inert] : [] },
+            labelInText: false,
+          },
+          {
+            method: sendMethod,
+            reply_markup: replyMarkup(deploy, ...inert),
+            labelInText: !richMessages,
+          },
+        ]);
+        expect(JSON.stringify(requests)).not.toContain("env|staging");
+      },
+    );
+
     it("uploads all action attachment aliases instead of echoing their paths", async () => {
       const firstBytes = await fs.readFile(photoPath);
       const secondBytes = Buffer.concat([firstBytes, Buffer.from("second-attachment")]);

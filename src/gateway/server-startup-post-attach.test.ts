@@ -62,6 +62,7 @@ import {
 } from "./server-startup-readiness.test-support.js";
 import { createStartupTraceRecorder } from "./server-startup-trace.test-support.js";
 import { transcriptSidecarMocks } from "./server-startup-transcripts.test-support.js";
+import { createPreparedReadinessFixture } from "./server/readiness.test-support.js";
 
 const { postAttachMocks: hoisted } = await vi.hoisted(
   () => import("./server-startup-post-attach.mocks.test-support.js"),
@@ -79,7 +80,6 @@ const { startGatewaySidecars: startGatewaySidecarsImpl } =
 const { STARTUP_UNAVAILABLE_GATEWAY_METHODS } = await import("./methods/core-method-policy.js");
 
 type PostAttachParams = Parameters<typeof startGatewayPostAttachRuntimeImpl>[0];
-type PostAttachRuntimeDeps = GatewayStartupModuleMocks;
 type SidecarPublisher = NonNullable<PostAttachParams["onGatewayLifetimeSidecars"]>;
 type SidecarHandle = Parameters<SidecarPublisher>[number];
 type GatewaySidecarsParams = Parameters<typeof startGatewaySidecarsImpl>[0];
@@ -209,7 +209,7 @@ async function cleanupGatewayTestState(): Promise<void> {
 
 function startGatewayPostAttachRuntime(
   params: PostAttachParams,
-  runtimeDeps?: PostAttachRuntimeDeps,
+  runtimeDeps?: GatewayStartupModuleMocks,
 ) {
   if (runtimeDeps) {
     const refresh = runtimeDeps.refreshLatestUpdateRestartSentinel;
@@ -298,20 +298,16 @@ describe("startGatewayPostAttachRuntime", () => {
     hoisted.resolveHooksGmailModel.mockReset();
     hoisted.resolveHooksGmailModel.mockReturnValue(null);
     hoisted.loadFullModelCatalog.mockClear();
-    hoisted.loadModelCatalog.mockReset();
-    hoisted.loadModelCatalog.mockResolvedValue({});
-    hoisted.getModelRefStatus.mockReset();
-    hoisted.getModelRefStatus.mockReturnValue({
+    hoisted.loadModelCatalog.mockReset().mockResolvedValue({});
+    hoisted.getModelRefStatus.mockReset().mockReturnValue({
       key: "openai/gpt-5.4",
       allowed: true,
       inCatalog: true,
     });
-    hoisted.prepareModelRuntimeSnapshot.mockReset();
-    hoisted.prepareModelRuntimeSnapshot.mockResolvedValue({});
-    hoisted.refreshPreparedModelRuntimeSnapshots.mockReset();
-    hoisted.refreshPreparedModelRuntimeSnapshots.mockResolvedValue(undefined);
-    hoisted.prewarmConfigDrivenReplyRuntime.mockReset();
-    hoisted.prewarmConfigDrivenReplyRuntime.mockResolvedValue(undefined);
+    hoisted.prepareModelRuntimeSnapshot.mockReset().mockResolvedValue({});
+    hoisted.refreshPreparedModelRuntimeSnapshots.mockReset().mockResolvedValue(undefined);
+    hoisted.loadEmbeddedAgentRuntime.mockReset().mockResolvedValue(undefined);
+    hoisted.loadSessionUpdatesRuntime.mockReset().mockResolvedValue(undefined);
     hoisted.scheduleGatewayHandlerPrewarm.mockClear();
   });
 
@@ -411,7 +407,7 @@ describe("startGatewayPostAttachRuntime", () => {
     let closing = false;
     const hooksStarted = createDeferred();
     const requestsPrepared = createDeferred();
-    hoisted.prewarmConfigDrivenReplyRuntime.mockImplementationOnce(async () => {
+    hoisted.refreshPreparedModelRuntimeSnapshots.mockImplementationOnce(async () => {
       requestsPrepared.resolve();
     });
     hoisted.prepareInternalHooks.mockImplementationOnce(() => {
@@ -1486,6 +1482,15 @@ describe("startGatewayPostAttachRuntime", () => {
     });
   });
 
+  it("reaches readiness without loading request-owned agent runtimes", async () => {
+    const onSidecarsReady = vi.fn();
+    await startGatewayPostAttachRuntime({ ...createPostAttachParams(), onSidecarsReady });
+
+    expect(onSidecarsReady).toHaveBeenCalledOnce();
+    expect(hoisted.loadEmbeddedAgentRuntime).not.toHaveBeenCalled();
+    expect(hoisted.loadSessionUpdatesRuntime).not.toHaveBeenCalled();
+  });
+
   it("prepares the model runtime with the active Gateway plugin registry", async () => {
     const pluginRegistry = createPostAttachParams().pluginRegistry;
     hoisted.refreshPreparedModelRuntimeSnapshots.mockImplementationOnce(async () => {
@@ -1500,22 +1505,19 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(getPluginRuntimeGatewayRequestScope()).toBeUndefined();
   });
 
-  it.each(["model", "reply", "connection"] as const)(
+  it.each(["model", "connection"] as const)(
     "prepares request runtimes concurrently and keeps readiness blocked on %s",
     async (lastRuntime) => {
       const gates = {
         model: createDeferred(),
-        reply: createDeferred(),
         connection: createDeferred(),
       };
       const started = {
         model: createDeferred(),
-        reply: createDeferred(),
         connection: createDeferred(),
       };
       const completed = {
         model: createDeferred(),
-        reply: createDeferred(),
         connection: createDeferred(),
       };
       const prepare = async (name: keyof typeof gates) => {
@@ -1524,7 +1526,6 @@ describe("startGatewayPostAttachRuntime", () => {
         completed[name].resolve();
       };
       hoisted.refreshPreparedModelRuntimeSnapshots.mockImplementationOnce(() => prepare("model"));
-      hoisted.prewarmConfigDrivenReplyRuntime.mockImplementationOnce(() => prepare("reply"));
       const trace = createStartupTraceRecorder();
       const startChannels = vi.fn(async () => {});
       const onSidecarsReady = vi.fn();
@@ -1551,7 +1552,7 @@ describe("startGatewayPostAttachRuntime", () => {
         );
         expect(startChannels).not.toHaveBeenCalled();
         expect(onSidecarsReady).not.toHaveBeenCalled();
-        for (const name of ["model", "reply", "connection"] as const) {
+        for (const name of ["model", "connection"] as const) {
           if (name !== lastRuntime) {
             gates[name].resolve();
             await completed[name].promise;
@@ -1578,19 +1579,13 @@ describe("startGatewayPostAttachRuntime", () => {
 
   it("joins pending request imports after preparation fails and preserves the model failure", async () => {
     const model = createDeferred();
-    const reply = createDeferred();
     const connection = createDeferred();
     const modelStarted = createDeferred();
-    const replyStarted = createDeferred();
     const connectionStarted = createDeferred();
     const modelFailure = new Error("model preparation failed");
     hoisted.refreshPreparedModelRuntimeSnapshots.mockImplementationOnce(() => {
       modelStarted.resolve();
       return model.promise;
-    });
-    hoisted.prewarmConfigDrivenReplyRuntime.mockImplementationOnce(() => {
-      replyStarted.resolve();
-      return reply.promise;
     });
     const trace = createStartupTraceRecorder();
     const startChannels = vi.fn(async () => {});
@@ -1624,11 +1619,10 @@ describe("startGatewayPostAttachRuntime", () => {
 
     try {
       await awaitGateBeforeSettlement(
-        Promise.all([modelStarted.promise, replyStarted.promise, connectionStarted.promise]),
+        Promise.all([modelStarted.promise, connectionStarted.promise]),
         startup,
         "startup settled before all request runtimes started",
       );
-      reply.reject(new Error("reply import failed"));
       model.reject(modelFailure);
       await vi.dynamicImportSettled();
       expect(settled).toBe(false);
@@ -1638,31 +1632,30 @@ describe("startGatewayPostAttachRuntime", () => {
       expect(onSidecarsReady).not.toHaveBeenCalled();
     } finally {
       model.resolve();
-      reply.resolve();
       connection.resolve();
       await outcome;
     }
   });
 
   it("does not start channels when close begins during deferred sidecar preparation", async () => {
-    const replyRuntime = createDeferred();
+    const modelRuntime = createDeferred();
     let closing = false;
-    hoisted.prewarmConfigDrivenReplyRuntime.mockReturnValueOnce(replyRuntime.promise);
+    hoisted.refreshPreparedModelRuntimeSnapshots.mockReturnValueOnce(modelRuntime.promise);
     const params = createPostAttachParams({ sidecarStartup: "defer", isClosing: () => closing });
     const onChannelsStarted = vi.fn();
     const runtime = await startGatewayPostAttachRuntime({ ...params, onChannelsStarted });
     try {
       await waitForGatewayTestState(() =>
-        expect(hoisted.prewarmConfigDrivenReplyRuntime).toHaveBeenCalledOnce(),
+        expect(hoisted.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledOnce(),
       );
       closing = true;
-      replyRuntime.resolve();
+      modelRuntime.resolve();
       await expect(runtime.startupSettled).resolves.toBeUndefined();
       expect(params.startChannels).not.toHaveBeenCalled();
       expect(onChannelsStarted).not.toHaveBeenCalled();
       expect(params.unlockStartupMethods).not.toHaveBeenCalled();
     } finally {
-      replyRuntime.resolve();
+      modelRuntime.resolve();
       await runtime.startupSettled;
     }
   });
@@ -2660,8 +2653,8 @@ describe("startGatewayPostAttachRuntime", () => {
 });
 
 function createPostAttachRuntimeDeps(
-  overrides: Partial<PostAttachRuntimeDeps> = {},
-): PostAttachRuntimeDeps {
+  overrides: Partial<GatewayStartupModuleMocks> = {},
+): GatewayStartupModuleMocks {
   return {
     logGatewayStartup: hoisted.logGatewayStartup,
     refreshLatestUpdateRestartSentinel: restartSentinelMocks.prepareLatestUpdateRestartSentinel,
@@ -2679,7 +2672,7 @@ function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): Post
     minimalTestGateway: false,
     cfgAtStart: cfg,
     getConfig: () => cfg,
-    getReadiness: () => ({ ready: true, coreReady: true, failing: [], uptimeMs: 0 }),
+    getReadiness: createPreparedReadinessFixture(),
     port: 18789,
     log: { info: vi.fn(), warn: vi.fn() },
     isNixMode: false,

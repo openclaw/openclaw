@@ -35,6 +35,7 @@ export type FallbackAttemptRecord = {
   code?: string;
   error?: string;
   rateLimitRetriesExhausted?: number;
+  rateLimitResetAt?: number;
 };
 
 /** Structured error used to carry model fallback/failover metadata across layers. */
@@ -61,6 +62,8 @@ export class FailoverError extends Error {
   readonly timeout?: Pick<AgentRunTerminalOutcome, "timeoutPhase" | "providerStarted">;
   readonly attempts?: readonly FallbackAttemptRecord[];
   readonly soonestCooldownExpiry?: number | null;
+  /** Absolute provider reset, preserved when diagnostics become user-facing text. */
+  readonly rateLimitResetAt?: number;
 
   constructor(
     message: string,
@@ -86,6 +89,7 @@ export class FailoverError extends Error {
     this.timeout = params.timeout;
     this.attempts = params.attempts;
     this.soonestCooldownExpiry = params.soonestCooldownExpiry;
+    this.rateLimitResetAt = params.rateLimitResetAt;
   }
 }
 

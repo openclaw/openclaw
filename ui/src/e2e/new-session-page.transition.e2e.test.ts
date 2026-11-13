@@ -74,7 +74,8 @@ async function expectPlainJson(prompt: Locator, message: string) {
   const text = prompt.locator(".chat-text");
   await text.locator("pre code").waitFor({ state: "visible" });
   await pollLocatorText(text.locator("pre code")).toBe(message);
-  expect(await text.locator("button, details, .code-block-wrapper").count()).toBe(0);
+  // Human JSON stays literal: its only control is the wrap toggle, shown while a row soft-wraps.
+  expect(await text.locator("button:not(.code-block-wrap), details").count()).toBe(0);
 }
 
 async function expectListedKeys(page: Page, keys: string[]) {

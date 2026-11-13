@@ -39,8 +39,7 @@ type EnglishCatalog = TranslationMap & {
   openclawId: TranslationMap;
   agentTools: TranslationMap;
   githubPublication: TranslationMap & Record<"newAction" | "capacity", string>;
-  githubConnections: TranslationMap &
-    Record<"title" | "mine" | "system" | "forMe" | "forSystem", string>;
+  githubConnections: TranslationMap & Record<"title" | "mine" | "system", string>;
   board: TranslationMap & { announcement: TranslationMap; widget: TranslationMap };
   browser: TranslationMap & { errors: TranslationMap; annotatePrompt: TranslationMap };
   pluginUi: TranslationMap & { surface: TranslationMap };
@@ -99,8 +98,7 @@ type EnglishCatalog = TranslationMap & {
           | "automationRecovery"
           | "gatewayRestarted"
           | "cliHarnessContext"
-          | "claudeCliTaskNotification"
-          | "pluginSteering",
+          | "claudeCliTaskNotification",
           TranslationMap
         >;
       mermaid: TranslationMap;
@@ -254,6 +252,11 @@ type EnglishCatalog = TranslationMap & {
   palette: TranslationMap & {
     placeholder: string;
     attachmentPrompt: string;
+    searchPlaceholder: string;
+    composePlaceholder: string;
+    modeLabel: string;
+    modes: { search: string; compose: string };
+    modeSwitch: { search: string; compose: string };
     categories: TranslationMap & { navigation: string };
   };
   sessionsView: TranslationMap &
@@ -953,20 +956,14 @@ const startupEnglish = {
     stop: {},
     profile: {},
     title: "Browser",
-    open: "Open",
-    openPanel: "Open browser panel",
     moreActions: "More actions",
     copyUrl: "Copy URL",
-    openNewTab: "Open in new tab",
-    openWithinOpenClaw: "Open in OpenClaw",
     toggle: "Toggle browser panel",
     close: {},
     resize: {},
     newTab: "New tab",
     closeTab: "Close tab",
     untitledTab: {},
-    tweetPost: "Post on X",
-    openPost: "Open post",
     back: {},
     forward: {},
     reload: {},
@@ -1165,6 +1162,7 @@ const startupEnglish = {
     saveErrorTitle: "Couldn’t save this setting. Try again.",
     saveFailed: "The feature setting could not be saved.",
     decisionAssistance: {},
+    usageRankedToolIndex: {},
     codeMode: {},
 
     swarm: {},
@@ -1227,15 +1225,11 @@ const startupEnglish = {
       loadFailed: "Could not open details. Try again, or open this person’s Activity page.",
       ariaLabel: "Activity for {name}",
       person: "Person",
-      onlineFor: "Online for",
-      where: "Where",
-      reportedTimeZone: "Reported time zone: {zone}",
-      lastActivity: "Last interaction",
-      notObserved: "Activity unavailable",
+      idleFor: "Idle for",
+      localTime: "{time} local time",
       viewingNow: "Viewing now",
       recentSessions: "Recent sessions",
       noRecentSessions: "No recent visible sessions.",
-      ago: "ago",
       viewActivity: "View activity",
       web: "Web app",
       cli: "Command line",
@@ -1255,9 +1249,7 @@ const startupEnglish = {
   githubConnections: {
     title: "GitHub accounts",
     mine: "My GitHub",
-    system: "System GitHub",
-    forMe: "For me",
-    forSystem: "For the system",
+    system: "Shared agent account",
   },
   profilePage: {
     personalInstructions: {
@@ -1410,6 +1402,12 @@ const startupEnglish = {
   commandPalette: {},
   palette: {
     placeholder: "Search or start a task…",
+    modeLabel: "Command palette mode",
+    modes: { search: "Search", compose: "Compose" },
+    // Footer key hint: "Tab compose" switches to the other mode.
+    modeSwitch: { search: "search", compose: "compose" },
+    searchPlaceholder: "Search…",
+    composePlaceholder: "Write a message…",
     attachmentPrompt: "What would you like to do with these files?",
     categories: { navigation: "Navigation" },
   },
@@ -1734,7 +1732,6 @@ const startupEnglish = {
       gatewayRestarted: {},
       cliHarnessContext: {},
       claudeCliTaskNotification: {},
-      pluginSteering: {},
     },
     skillLearned: {},
     progressLabels: {},
@@ -1929,6 +1926,7 @@ const startupEnglish = {
     },
     permissions: {},
     toolCards: {
+      tool: "Tool",
       activity: {},
       review: {},
       verbs: {},

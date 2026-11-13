@@ -241,7 +241,7 @@ type ObservedDelayedNavigations = {
   subframes: string[];
 };
 
-function createInteractionFrameListener(
+export function createInteractionFrameListener(
   page: NavigationObservablePage,
   previousUrl: string,
   subframes: string[],

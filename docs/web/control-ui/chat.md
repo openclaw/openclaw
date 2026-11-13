@@ -99,6 +99,14 @@ keep their monochrome activity icons. Missing or unreadable logos fall back to
 the plugin activity icon, then the normal tool glyph; unknown tools use a puzzle
 icon. Unknown publisher metadata does not enable branding.
 
+Choose **View → Inline command trail (this browser)** in the session menu to show
+compact command, read, and search rows in conversation order while work is running.
+Command output advances in place; expand a row for captured output and details.
+Grouped tool activity remains the default, and completed dashboard turns keep their
+**Worked for…** folding. This preference stays in this browser for this Gateway.
+If the trail cannot load, grouped commands remain available. Turn the option off
+and on to retry; the error’s details retain the technical failure.
+
 A tool stops showing **Running** when its completion arrives, even while the
 parent turn continues. If that completion does not establish success or failure,
 the row keeps the tool's known purpose and shows **Outcome unknown** separately.
@@ -247,6 +255,41 @@ When the macOS app embeds a single conversation beside its native sidebar, the c
 In the macOS Web experience and Tauri desktop app on macOS, Linux, and Windows, the navigation panel header and content header share the 52px titlebar row, with back/forward before the conversation title and search in the persistent rail.
 Collapsing the panel leaves only expand-sidebar beside the rail, which keeps New session and search; the content header still starts with back/forward.
 Drag an empty area of the titlebar row to move the window; its buttons keep their normal actions.
+
+## Inline command trail
+
+In the conversation menu, choose **View → Inline command trail (this browser)**
+to show commands, file reads, and searches in the conversation as they run.
+Each row keeps its status and a preview of its latest output; expand it
+for tool details and more captured output. The preview shows at most three visual
+rows, keeping the newest text visible when lines wrap. Truncated capture has its
+own notice. Inline commands start compact even with Full
+verbosity, and your manual expand or collapse choices take precedence. Finished
+commands stay visible while the turn continues.
+Turning the trail off restores ordinary disclosure defaults and keeps your manual choices.
+Edits and other tools keep their existing views.
+Compact previews keep the captured text's line structure, including JSON.
+Expanded output retains its usual formatting.
+
+For running Codex commands, the preview continues following recent stdout after
+the 10,000-character capture limit. This live tail is bounded to 600 characters
+and three visible rows. **View captured beginning** opens the retained prefix,
+which can differ from the recent output shown in the live tail.
+Completion and Stop retire the live tail. Completed output and saved history
+keep their existing capture limits. If an interrupted command has no saved tool
+result, its partial output may be unavailable after terminal reconciliation or
+reload.
+
+Completed dashboard turns still fold their intermediate work into **Worked for…**.
+Open that disclosure to inspect the chronological trail again. Channel sessions
+and speech bubbles keep their existing completion behavior. The preference
+persists in this browser for this Gateway; grouped activity remains the default.
+Live Codex stdout is delivered to panes that enable the inline trail. Switching
+it on during a running command recovers the latest bounded output, including
+when the command has stopped producing new text. The default grouped view does
+not subscribe to this live stdout stream. Channel verbosity stays independent.
+If the inline trail cannot load, the conversation stays available in grouped
+view and reports an error. Turn the option off and back on to retry.
 
 ## Slash-command feedback
 
@@ -525,7 +568,10 @@ while you use its controls.
 Enable **Settings → Labs → Composer predictions** to try optional next-message
 suggestions. The experiment is off by default. After a reply finishes in the
 active conversation, OpenClaw can make one additional model request and show a
-possible follow-up as muted text in an empty composer. It may show no suggestion.
+possible follow-up as muted text in an empty composer. The suggestion is written
+as your reply: when the assistant asks a question or offers options, it answers
+with the recommended choice. It may show no suggestion, for example while the
+assistant is still working or after an error.
 It does not predict on every keystroke. Each active browser tab can make its own
 prediction request. Read-only, imported, and incognito conversations do not show
 predictions.
@@ -545,7 +591,8 @@ The Labs model selector offers:
   conversation's model override.
 
 Predictions use bounded recent text from the current conversation in an isolated,
-tool-free request. They cannot run tools, retrieve memory, or send messages. An
+tool-free request. Tool calls and results are skipped, and long messages keep
+their endings. They cannot run tools, retrieve memory, or send messages. An
 unavailable selected model skips the suggestion rather than silently switching
 to another model. Enabling the experiment can add model usage and cost; existing
 model configuration, provider credentials, and session access rules still apply.
@@ -792,8 +839,9 @@ large numbers, and escape sequences. Raw keeps the usual long-code preview,
 reveal control, and word wrapping.
 
 Unfinished streaming fences, invalid JSON, and JSON beyond the tree rendering
-budget stay readable as source. User-message fences and passive previews remain
-plain code without interactive controls.
+budget stay readable as source. User-message fences remain plain code that wraps
+long lines; when a line wraps, a toggle in the block's corner switches to
+horizontal scrolling and back. Passive previews have no interactive controls.
 
 ## Chat behavior
 
@@ -1239,14 +1287,7 @@ view. References that change earlier Markdown can also reset the view.
 Completed lists also stay cached as later blocks arrive; loose or nested list
 continuations remain together until the list ends.
 
-Browser results for X and Twitter posts use a wider card with the author, handle,
-available post text, and preview image. **Open post** and **More actions** stay
-visible on touch screens. Text and social images reuse the anonymous page preview;
-when metadata is unavailable, the card keeps the post link and handle. It does
-not load an X embed script or require an X account.
-
-**Copy URL** in browser tab cards also works on plain HTTP connections where the
-browser does not provide its Clipboard API.
+Browser tool calls keep their normal expandable results without automatic page-preview cards. Visiting a page, including an X or Twitter post, does not add a card to the conversation. Links, media, and widgets deliberately included in the assistant’s reply remain visible.
 
 If the browser rejects a text clipboard write, starting another text or image
 copy cancels its delayed fallback. Code blocks replaced during streaming and

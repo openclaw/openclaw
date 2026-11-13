@@ -190,7 +190,7 @@ suite.define(() => {
     { scenario: "browser first", browserFirst: true, framed: false },
     { scenario: "widget first in a run frame", browserFirst: false, framed: true },
   ])(
-    "keeps widgets and browser previews in execution order ($scenario)",
+    "keeps delivered widgets visible without automatic browser previews ($scenario)",
     async ({ browserFirst, framed }) => {
       await suite.withPage(
         { viewport: { width: 1200, height: 900 }, deviceScaleFactor: 2, colorScheme: "dark" },
@@ -326,19 +326,9 @@ suite.define(() => {
           const widget = page.locator('.chat-tool-card__preview[data-kind="canvas"]');
           const browser = page.locator("openclaw-browser-tab-card");
           await widget.waitFor();
-          await browser.waitFor();
           await waitForChatScrollIdle(page);
           expect(await widget.count()).toBe(1);
-          expect(await browser.count()).toBe(1);
-          expect(
-            await page
-              .locator('.chat-tool-card__preview[data-kind="canvas"], openclaw-browser-tab-card')
-              .evaluateAll((elements) =>
-                elements.map((element) =>
-                  element.tagName === "OPENCLAW-BROWSER-TAB-CARD" ? "browser" : "widget",
-                ),
-              ),
-          ).toEqual(browserFirst ? ["browser", "widget"] : ["widget", "browser"]);
+          expect(await browser.count()).toBe(0);
           const workedFor = page.locator(".chat-work-group > .chat-activity-group__summary");
           expect(await workedFor.getAttribute("aria-expanded")).toBe("false");
           for (const expanded of [true, false]) {
@@ -346,7 +336,7 @@ suite.define(() => {
             await waitForChatScrollIdle(page);
             expect(await workedFor.getAttribute("aria-expanded")).toBe(String(expanded));
             expect(await widget.count()).toBe(1);
-            expect(await browser.count()).toBe(1);
+            expect(await browser.count()).toBe(0);
             const overlaps = await page
               .locator(".chat-virtual-row:not([data-prepared-row])")
               .evaluateAll((elements) => {
