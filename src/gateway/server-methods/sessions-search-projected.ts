@@ -12,6 +12,7 @@ import {
   requireSessionRowProjection,
 } from "../session-row-projection-access.js";
 import type { SelectionRow } from "../session-row-projection-record.js";
+import { registerSerializedSessionRowArray } from "../session-row-serialization.js";
 import {
   prepareProjectedSessionList,
   prepareSessionSearchIdentityNames,
@@ -22,6 +23,7 @@ import type { GatewayClient, GatewayRequestContext } from "./types.js";
 export async function searchProjectedSessionTranscripts(params: {
   query: string;
   limit?: number;
+  acceptsSerializedJson?: boolean;
   scope: NonNullable<SessionsSearchParams["scope"]>;
   context: GatewayRequestContext;
   client: GatewayClient | null;
@@ -208,6 +210,9 @@ export async function searchProjectedSessionTranscripts(params: {
           (count, { page }) => count + (page.archivedTranscriptsExcluded ?? 0),
           0,
         );
+        if (params.acceptsSerializedJson) {
+          registerSerializedSessionRowArray(sessions);
+        }
         params.onResult({
           results: matches.map((match) => match.hit),
           sessions,

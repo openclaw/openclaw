@@ -149,6 +149,14 @@ const staticSearchFields = new WeakMap<
   { key: string; literal: string[]; titles: string[] }
 >();
 
+export function sessionListSearchMatchesRunState(search: string): boolean {
+  return [
+    ...SessionRunStatusSchema.anyOf.map((status) => status.const),
+    "live running",
+    "idle",
+  ].some((status) => status.includes(search));
+}
+
 function createActivityPulse(opts: SessionsListParams): SessionActivityPulse | undefined {
   const boundaries = opts.activityPulseBoundaries;
   if (!boundaries) {
@@ -271,11 +279,7 @@ export function filterSessionEntries(
   const titleSearch = search && normalizeSessionSearchText(search);
   const matchesLiteralField = (field: string) => field.includes(search);
   const matchesTitleField = (field: string) => field.includes(titleSearch);
-  const searchRunState =
-    search &&
-    [...SessionRunStatusSchema.anyOf.map((status) => status.const), "live running", "idle"].some(
-      (status) => status.includes(search),
-    );
+  const searchRunState = search && sessionListSearchMatchesRunState(search);
   let identityMatches: Map<string, boolean> | undefined;
   let modelMatches: Map<string, boolean> | undefined;
   let runtimeMatches: Map<string, boolean> | undefined;

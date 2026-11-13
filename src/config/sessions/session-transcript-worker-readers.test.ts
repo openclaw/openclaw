@@ -139,6 +139,20 @@ it("retains one physical string for each equal summary identity after worker dec
 const storageRequests: Array<[string, (readers: Readers) => Promise<unknown>]> = [
   ["cold metadata", (readers) => readers.readColdMetadata(session)],
   [
+    "transcript search",
+    (readers) =>
+      readers.searchTranscripts(
+        {
+          agentId: "main",
+          query: "needle",
+          storePath: storagePath,
+          env: storageEnv,
+          sessionKeys: ["agent:main:one"],
+        },
+        async () => false,
+      ),
+  ],
+  [
     "activity summary",
     (readers) =>
       readers.readActivitySummarySource({
@@ -152,11 +166,17 @@ it.each(storageRequests)("serializes Proxy environments for %s requests", async 
   const readers = createSessionHistoryWorkerReaders(async (prepare) => {
     // Exercise the actual producer without starting a Worker or opening a database.
     const request = structuredClone(prepare());
-    expect(request).toMatchObject(
-      _name === "activity summary"
-        ? { scope: { env: { ...storageEnv } } }
-        : { env: { ...storageEnv } },
-    );
+    if (request.kind === "transcript-search") {
+      expect(request.params.env).toEqual({ OPENCLAW_STATE_DIR: storageStateDir });
+      expect(request.params).not.toHaveProperty("sessionKeys");
+      expect(request.encodedSessionKeys).toEqual({ encoded: '["agent:main:one"]', count: 1 });
+    } else {
+      expect(request).toMatchObject(
+        _name === "activity summary"
+          ? { scope: { env: { ...storageEnv } } }
+          : { env: { ...storageEnv } },
+      );
+    }
     throw serialized;
   });
   await expect(read(readers)).rejects.toBe(serialized);

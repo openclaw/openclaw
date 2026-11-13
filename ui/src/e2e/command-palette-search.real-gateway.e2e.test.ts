@@ -97,32 +97,19 @@ async function seedSessions(owner: OpenClawTestInstance, config: OpenClawConfig)
         ? `The ${commonQuery} sample is recorded for this conversation.`
         : null,
   }));
-  const fixtures: Array<{
-    agentId: string;
-    key: string;
-    label: string;
-    updatedAt: number;
-    text: string | null;
-    extra?: Partial<SessionEntry>;
-  }> = [
+  const fixtures: Array<(typeof recent)[number] & { extra?: Partial<SessionEntry> }> = [
     ...recent,
-    ...[
-      {
-        key: "private",
-        extra: {
-          visibility: "draft" as const,
-          createdActor: { type: "human" as const, id: "foreign" },
-        },
+    ...Object.entries({
+      private: {
+        visibility: "draft",
+        createdActor: { type: "human", source: "unknown", id: "foreign" },
       },
-      { key: "incognito", extra: { incognito: true } },
-      { key: "cron:archive", extra: {} },
-      { key: "subagent:archive", extra: {} },
-      {
-        key: "system-archive",
-        extra: { createdActor: { type: "system" as const, id: "fixture" } },
-      },
-      { key: "ungrouped-archive", extra: { spawnedBy: "agent:main:search-roster-0" } },
-    ].map(({ key, extra }) => ({
+      incognito: { incognito: true },
+      "cron:archive": {},
+      "subagent:archive": {},
+      "system-archive": { createdActor: { type: "system", id: "fixture" } },
+      "ungrouped-archive": { spawnedBy: "agent:main:search-roster-0" },
+    } satisfies Record<string, Partial<SessionEntry>>).map(([key, extra]) => ({
       agentId: "main",
       key: `agent:main:${key}`,
       label: key === "private" ? "privatedormouse" : excludedQuery,
@@ -130,28 +117,17 @@ async function seedSessions(owner: OpenClawTestInstance, config: OpenClawConfig)
       text: key === "private" ? "privatedormouse" : excludedQuery,
       extra: { archivedAt: now, ...extra },
     })),
-    {
-      agentId: "main",
-      key: coldKey,
-      label: coldLabel,
-      updatedAt: now - 90 * 86_400_000,
-      text: "frozenwagtail message payload",
-      extra: { archivedAt: now - 90 * 86_400_000 },
-    },
-    {
-      agentId: "main",
-      key: archivedKey,
-      label: archivedLabel,
-      updatedAt: now - 30 * 86_400_000,
-      text: archivedMessage,
-    },
-    {
-      agentId: "fifth",
-      key: targetKey,
-      label: targetLabel,
-      updatedAt: now - 7 * 86_400_000,
-      text: targetMessage,
-    },
+    ...(
+      [
+        ["main", coldKey, coldLabel, "frozenwagtail message payload", 90, true],
+        ["main", archivedKey, archivedLabel, archivedMessage, 30, true],
+        ["fifth", targetKey, targetLabel, targetMessage, 7, false],
+      ] as const
+    ).map(([agentId, key, label, text, ageDays, archived]) => {
+      const updatedAt = now - ageDays * 86_400_000;
+      const extra = archived ? { archivedAt: updatedAt } : undefined;
+      return { agentId, key, label, text, updatedAt, extra };
+    }),
   ];
   // Prepare canonical SQLite entries and synchronously indexed message appends
   // before the child starts, so its resident projection sees the complete corpus.
@@ -170,7 +146,6 @@ async function seedSessions(owner: OpenClawTestInstance, config: OpenClawConfig)
           sessionId,
           updatedAt: fixture.updatedAt,
           label: fixture.label,
-          ...(fixture.key === archivedKey ? { archivedAt: fixture.updatedAt } : {}),
           visibility: "shared",
           ...(fixture.key === targetKey
             ? {
@@ -696,17 +671,16 @@ suite.define(() => {
           // The owner/admin fixture retains its existing permission to discover drafts.
           await search("privatedormouse", 1, "admin-authorized-draft.png", ["agent:main:private"]);
           const storageAfter = await client.request("sessions.storage.status", {});
-          for (const storage of [storageBefore, storageAfter]) {
+          const coldCounts = [storageBefore, storageAfter].map((storage) => {
             const agents = requireRecord(storage).agents;
             expect.assert(Array.isArray(agents));
-            expect(
-              agents.reduce(
-                (count: number, agent: unknown) =>
-                  count + Number(requireRecord(agent).coldTranscripts),
-                0,
-              ),
-            ).toBe(1);
-          }
+            return agents.reduce(
+              (count: number, agent: unknown) =>
+                count + Number(requireRecord(agent).coldTranscripts),
+              0,
+            );
+          });
+          expect(coldCounts).toEqual([1, 1]);
           await page.keyboard.press("Escape");
           await input.waitFor({ state: "hidden" });
           const sidebar = page.locator("openclaw-app-sidebar");

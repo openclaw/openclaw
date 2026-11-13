@@ -19,6 +19,9 @@ export type SessionTranscriptSearchReadResult = Omit<SessionTranscriptSearchResu
   found: boolean;
 };
 
+/** Worker transport carries one normalized string instead of cloning every selected key. */
+export type SessionTranscriptSearchKeySet = { encoded: string; count: number };
+
 export type SessionTranscriptSearchParams = {
   agentId: string;
   env?: NodeJS.ProcessEnv;

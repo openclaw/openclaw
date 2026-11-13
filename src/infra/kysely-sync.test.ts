@@ -10,6 +10,8 @@ import {
   clearNodeSqliteKyselyCacheForDatabase,
   compileSqliteQueryBindings,
   enableNodeSqliteKyselyStatementCache,
+  encodeSqliteStringSet,
+  sqliteEncodedStringSet,
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
@@ -255,10 +257,12 @@ describe("kysely sync helpers", () => {
         ["absent"],
       ]) {
         const query = selectItems().orderBy("name");
-        expectRows(
-          query.where("name", "in", sqliteStringSet(names)),
-          run(query.where("name", "in", names)).rows,
-        );
+        for (const set of [
+          sqliteStringSet(names),
+          sqliteEncodedStringSet(encodeSqliteStringSet(names)),
+        ]) {
+          expectRows(query.where("name", "in", set), run(query.where("name", "in", names)).rows);
+        }
       }
     },
   );

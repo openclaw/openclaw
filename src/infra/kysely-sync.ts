@@ -96,8 +96,13 @@ export function encodeSqliteStringSet(values: readonly (string | null)[]): strin
 }
 
 export function sqliteStringSet(values: readonly string[]): RawBuilder<string> {
-  /* kysely-allow-raw: JSON table-valued selection keeps one read snapshot and outer query ordering. */
-  return kyselySql<string>(sqliteStringSetFragments, encodeSqliteStringSet(values));
+  return sqliteEncodedStringSet(encodeSqliteStringSet(values));
+}
+
+/** Consume a set already normalized by encodeSqliteStringSet at its producer. */
+export function sqliteEncodedStringSet(encoded: string): RawBuilder<string> {
+  /* kysely-allow-raw: Retain the shared fragment identity, including PostgreSQL ANY lowering. */
+  return kyselySql<string>(sqliteStringSetFragments, encoded);
 }
 
 /** Expands encoded string tuples without adding one SQLite parameter per field. */

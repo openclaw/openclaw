@@ -37,7 +37,10 @@ import type {
 import type { SessionTranscriptAnchorSelection } from "./session-transcript-anchor-read.kernel.js";
 import type { SessionTranscriptAnchorEntry } from "./session-transcript-anchor-read.types.js";
 import type { SessionTranscriptReplaySelection } from "./session-transcript-replay.types.js";
-import type { SessionTranscriptSearchParams } from "./session-transcript-search.types.js";
+import type {
+  SessionTranscriptSearchParams,
+  SessionTranscriptSearchKeySet,
+} from "./session-transcript-search.types.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 
 export type SessionEntryCurrentWorkerInput = Omit<SessionEntryReadWorkerInput, "kind"> & {
@@ -95,7 +98,10 @@ export type SessionTranscriptMatchWorkerInput = {
 export type SessionTranscriptSearchWorkerInput = {
   kind: "transcript-search";
   database: { agentId: string; path: string };
-  params: SessionTranscriptSearchParams;
+  params: Omit<SessionTranscriptSearchParams, "sessionKeys">;
+  encodedSessionKeys?: SessionTranscriptSearchKeySet;
+  /** Existing writer-published readiness, checked against the physical write token after reading. */
+  indexReadiness?: string;
 };
 
 export type SessionProjectionStatusWorkerInput = {

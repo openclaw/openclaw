@@ -143,7 +143,10 @@ import type {
 } from "./session-transcript-inventory.types.js";
 import type { SessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts.types.js";
 import type { SessionTranscriptReplayGroup } from "./session-transcript-replay.types.js";
-import type { SessionTranscriptSearchResult } from "./session-transcript-search.types.js";
+import type {
+  SessionTranscriptSearchResult,
+  SessionTranscriptSearchParams,
+} from "./session-transcript-search.types.js";
 import type { SessionTranscriptWorkerReadError } from "./session-transcript-worker-error.types.js";
 import type {
   SessionSqliteTargetWorkerInput,
@@ -579,7 +582,7 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
     readRuntimeTarget: SessionHistoryReader<"session-runtime-target", "target">;
     readColdStorageInventory: SessionHistoryReader<"cold-storage-inventory">;
     searchTranscripts: (
-      params: SessionTranscriptSearchWorkerInput["params"],
+      params: SessionTranscriptSearchParams,
       readIndexStatus: (signal: AbortSignal) => Promise<boolean>,
     ) => Promise<SessionTranscriptSearchResult>;
     assertCurrent: () => void;

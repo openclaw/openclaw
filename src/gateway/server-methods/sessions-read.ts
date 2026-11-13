@@ -64,7 +64,14 @@ import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
 
 export const sessionReadHandlers: GatewayRequestHandlers = {
-  "sessions.search": async ({ params, respond, context, client, sessionMutationAuthorization }) => {
+  "sessions.search": async ({
+    params,
+    respond,
+    context,
+    client,
+    sessionMutationAuthorization,
+    acceptsSerializedJson,
+  }) => {
     if (!assertValidParams(params, validateSessionsSearchParams, "sessions.search", respond)) {
       return;
     }
@@ -79,6 +86,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           query,
           limit: params.limit,
           scope: params.scope,
+          acceptsSerializedJson,
           context,
           client: client ?? null,
           onResult: (result) => {

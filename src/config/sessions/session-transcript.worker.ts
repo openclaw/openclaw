@@ -134,10 +134,19 @@ serveOwnedWorkerTasks(
           ...request.database,
           env: cloneEnvWithPlatformSemantics(request.params.env ?? process.env),
         };
-        const { found, ...result } = searchSessionTranscriptsReadOnlySync(request.params, options);
+        const admission = await import("../../infra/sqlite-database-admission.js");
+        const { found, ...result } = searchSessionTranscriptsReadOnlySync(
+          request.params,
+          options,
+          request.encodedSessionKeys,
+        );
         let indexing = false;
-        if (found) {
-          // Search hits describe their read snapshot; readiness comes from the projection owner.
+        if (
+          found &&
+          (request.indexReadiness === undefined ||
+            request.indexReadiness !== admission.readSqliteDatabaseWriteTokenForPath(options.path))
+        ) {
+          // Changed or missing writer readiness still uses the bounded host callback.
           const status = await channel.request("transcript-index-status");
           try {
             if (typeof status.input !== "boolean") {

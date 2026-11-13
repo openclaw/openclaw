@@ -22,6 +22,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { serializeGatewayFrame } from "../serialized-json.js";
 import * as sessionListFilters from "../session-list-filters.js";
 import { retainSessionListForegroundWork } from "../session-projection-work.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
@@ -51,6 +52,7 @@ async function search(
   context: GatewayRequestContext,
   client: GatewayClient,
   params: Record<string, unknown>,
+  acceptsSerializedJson = false,
 ) {
   const releaseForeground = retainSessionListForegroundWork();
   try {
@@ -67,6 +69,7 @@ async function search(
     )({
       req: { type: "req", id: "search-scope-test", method: "sessions.search" },
       params,
+      acceptsSerializedJson,
       context,
       client,
       respond,
@@ -505,10 +508,27 @@ test("search prepares the full scope and rechecks visibility while materializing
     const sibling = await seed("main", "non-hit", viewer, "different text", { archivedAt: 1 });
     const client = identifiedClient(viewer);
     const params = { query: "needle", scope: { archived: "all" } };
+    const metadataRequest = { archived: "all" as const, search: "non-hit", limit: 1 };
+    const metadata = () =>
+      listSessions({ context, client, request: metadataRequest, acceptsSerializedJson: true });
+    expect((await metadata()).sessions.map((row) => row.key)).toEqual([sibling]);
+    const projection = expectDefined(getSessionRowProjection(context), "search projection");
+    const selectionRevision = projection.state.revision;
+    const facts = vi.fn();
+    projection.onFactsChange(facts);
     expect(await search(context, client, params)).toMatchObject({
       ok: true,
       payload: { results: [{ sessionKey: key }], sessions: [{ key }] },
     });
+    expect(facts).toHaveBeenCalled();
+    expect(projection.state.revision).toBe(selectionRevision);
+    {
+      using metadataScans = vi.spyOn(sessionListFilters, "filterSessionEntries");
+      const repeated = await metadata();
+      expect(repeated.sessions.map((row) => row.key)).toEqual([sibling]);
+      expect(repeated.totalCount).toBe(1);
+      expect(metadataScans).not.toHaveBeenCalled();
+    }
     // A stable archived scope should not enumerate every row after both read awaits.
     const selections = vi.spyOn(sessionListFilters, "filterSessionEntries");
     expect(await search(context, client, params)).toMatchObject({
@@ -517,7 +537,19 @@ test("search prepares the full scope and rechecks visibility while materializing
     });
     expect(selections).toHaveBeenCalledTimes(1);
     selections.mockRestore();
-    const projection = expectDefined(getSessionRowProjection(context), "search projection");
+    await search(context, client, params, true);
+    {
+      using encode = vi.spyOn(JSON, "stringify");
+      const encoded = await search(context, client, params, true);
+      const frame = { type: "res", payload: encoded.payload };
+      const wire = serializeGatewayFrame(frame).toString();
+      expect(
+        encode.mock.calls.some(
+          ([value]) => value === frame || value === encoded.payload?.sessions?.[0],
+        ),
+      ).toBe(false);
+      expect(wire).toBe(JSON.stringify(frame));
+    }
     const prepare = projection.withPreparedExactRows.bind(projection);
     vi.spyOn(projection, "withPreparedExactRows").mockImplementationOnce(
       (queries, consume, options) =>

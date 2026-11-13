@@ -17,7 +17,7 @@ import {
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
-import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
+import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../config/sessions/types.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
@@ -28,6 +28,7 @@ import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import * as assistantIdentity from "./assistant-identity.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { serializeGatewayFrame } from "./serialized-json.js";
 import { registerRpcSourceForTest } from "./server-methods/rpc-source-fixtures.test-support.js";
@@ -635,6 +636,33 @@ it("shares encoded socket lists by identity and refreshes compact, published, an
     expect(first.sessions).toBe(second.sessions);
     expect(first.owners).toBe(second.owners);
     const projection = getSessionRowProjection(context)!;
+    const titleSearch = {
+      rowMode: "compact" as const,
+      search: "Original label",
+      archived: "all" as const,
+    };
+    expect((await readList(context, clients[0]!, titleSearch)).totalCount).toBe(1);
+    {
+      using selections = vi.spyOn(listFilters, "filterSessionEntries");
+      for (const [index, reselect] of [
+        [1, false],
+        [2, true],
+        [0, false],
+      ] as const) {
+        selections.mockClear();
+        expect((await readList(context, clients[index]!, titleSearch)).totalCount).toBe(1);
+        expect(selections.mock.calls.length > 0).toBe(reselect);
+      }
+    }
+    {
+      using identityName = vi
+        .spyOn(assistantIdentity, "resolveAssistantIdentityName")
+        .mockResolvedValue({ agentId: "main", name: "copperfinch" });
+      const search = { ...titleSearch, search: "copperfinch" };
+      expect((await readList(context, clients[0]!, search)).totalCount).toBe(1);
+      identityName.mockResolvedValue({ agentId: "main", name: "amberquill" });
+      expect((await readList(context, clients[0]!, search)).totalCount).toBe(0);
+    }
     const present = vi.spyOn(projection, "present");
     const filter = vi.spyOn(listFilters, "filterSessionEntries");
     const clone = vi.spyOn(globalThis, "structuredClone");
@@ -683,6 +711,7 @@ it("shares encoded socket lists by identity and refreshes compact, published, an
     clock.mockReturnValue(start + 101);
     expect((await read(0)).sessions[0]?.agentStatus).toBeUndefined();
     replaceSessionEntrySync(scope, { ...entry, label: "Published label" });
+    expect((await readList(context, clients[0]!, titleSearch)).totalCount).toBe(0);
     const changed = await read(1);
     expect(JSON.parse(wire(changed)).payload.sessions[0]).toMatchObject({
       label: "Published label",
@@ -698,6 +727,8 @@ it("shares encoded socket lists by identity and refreshes compact, published, an
     }
     await expectAt(103, { permissionModePending: false }, 1, true);
     clock.mockReturnValue(start + 104);
+    const readRunning = () => readList(context, clients[0]!, { search: "running" });
+    expect((await readRunning()).sessions).toHaveLength(0);
     const readActive = () => readList(context, clients[0]!, { activeOnly: true });
     expect((await readActive()).sessions).toHaveLength(0);
     const run = registerRpcSourceForTest({
@@ -713,6 +744,7 @@ it("shares encoded socket lists by identity and refreshes compact, published, an
     const releaseRun = await claimRpcSourceForTest(run.entry);
     try {
       expect((await readActive()).sessions).toHaveLength(1);
+      expect((await readRunning()).sessions).toHaveLength(1);
       await expectAt(104, { hasActiveRun: true, activeRunIds: ["serialization-run"] });
     } finally {
       releaseRun();
@@ -720,8 +752,9 @@ it("shares encoded socket lists by identity and refreshes compact, published, an
     }
     clock.mockReturnValue(start + 105);
     expect((await readActive()).sessions).toHaveLength(0);
+    expect((await readRunning()).sessions).toHaveLength(0);
     await expectAt(105, { hasActiveRun: false, activeRunIds: [] }, 1, true);
-    replaceSessionEntrySync(scope, {
+    const goalEntry: SessionEntry = {
       ...entry,
       totalTokens: 20,
       totalTokensFresh: true,
@@ -738,7 +771,8 @@ it("shares encoded socket lists by identity and refreshes compact, published, an
         tokenBudget: 10,
         continuationTurns: 0,
       },
-    });
+    };
+    replaceSessionEntrySync(scope, goalEntry);
     for (const [index, elapsed] of [105, 106].entries()) {
       clock.mockReturnValue(start + elapsed);
       expect((await read(index)).sessions[0]?.goal).toMatchObject({
@@ -746,6 +780,10 @@ it("shares encoded socket lists by identity and refreshes compact, published, an
         budgetLimitedAt: start + elapsed,
       });
     }
+    const goalSearch = { rowMode: "compact" as const, search: "Goal unmet" };
+    expect((await readList(context, clients[0]!, goalSearch)).totalCount).toBe(1);
+    replaceSessionEntrySync(scope, { ...goalEntry, totalTokens: 2 });
+    expect((await readList(context, clients[0]!, goalSearch)).totalCount).toBe(0);
     const childKey = "agent:main:subagent:serialization-runtime";
     replaceSessionEntrySync(
       { agentId: scope.agentId, sessionKey: childKey },
@@ -810,7 +848,7 @@ it("refreshes shared socket selection when the same viewer changes roles", () =>
         createdActor: profileActor(creator),
       });
     }
-    const read = () => readList(context, client, { rowMode: "compact" });
+    const read = () => readList(context, client, { rowMode: "compact", search: "selection" });
     expect((await read()).totalCount).toBe(2);
     setUserProfileRole(profileId, "none");
     expect((await read()).sessions.map((row) => row.key)).toEqual(["agent:main:selection-owned"]);

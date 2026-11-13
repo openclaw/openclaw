@@ -278,6 +278,17 @@ describe("searchSessionTranscripts", () => {
       truncated: false,
       archivedTranscriptsExcluded: 1,
     });
+    expect(
+      search("needle", { sessionKeys: [sessionKey, sessionKey, "agent:main:other"] }),
+    ).toMatchObject({ archivedTranscriptsExcluded: 1 });
+    expect(
+      searchSessionTranscripts({
+        ...options,
+        query: "needle",
+        sessionKeys: [sessionKey],
+        sessionId: "current",
+      }),
+    ).not.toHaveProperty("archivedTranscriptsExcluded");
     expect(search("needle", { sessionKeys: ["agent:main:other"] })).not.toHaveProperty(
       "archivedTranscriptsExcluded",
     );
@@ -392,7 +403,10 @@ describe("searchSessionTranscripts", () => {
       query,
     ) {
       const statement = prepare.call(this, query);
-      if (query.includes("snippet(")) {
+      if (
+        query.includes("snippet(") ||
+        (query.includes("session_transcript_fts") && query.includes("mapped"))
+      ) {
         // Older Node bindings execute Kysely reads through iterate() instead of all().
         for (const method of ["all", "iterate"] as const) {
           const execute = statement[method].bind(statement);
@@ -413,11 +427,14 @@ describe("searchSessionTranscripts", () => {
         { limit: 3 },
         { limit: 25 },
         { limit: 25, order: "recent" },
+        { limit: 25, sessionId: "permitted", order: "recent" },
         { limit: 3, sessionId: "permitted", role: "assistant" },
         { limit: 3, sessionId: "permitted", role: "assistant", order: "recent" },
         { limit: 3, query: "need", match: "prefix" },
-        { limit: 25, query: "sparse" },
+        { limit: 25, query: "sparse", sessionKeys: ["agent:main:excluded"] },
         { limit: 25, sessionId: "dirty" },
+        { limit: 1, query: "common", sessionKeys: [sessionKeys[1]] },
+        { limit: 3 },
       ] satisfies Partial<SessionTranscriptSearchParams>[]) {
         statements.length = 0;
         const result = searchSessionTranscripts({
@@ -427,9 +444,10 @@ describe("searchSessionTranscripts", () => {
           sessionKeys,
           ...options,
         });
-        expect(statements).toHaveLength(1);
-        const captured = statements[0]!;
-        const { db, query, bindings } = captured;
+        const selected = statements.find((statement) => !statement.query.includes("snippet("));
+        const captured = statements.find((statement) => statement.query.includes("snippet("));
+        expect(selected).toBeDefined();
+        const { db, query, bindings } = selected!;
         const literal = options.match === "prefix" ? '"need"*' : `"${options.query ?? "needle"}"`;
         // The previous query is the equivalence oracle; it still pays the unbounded snippet cost.
         const baseline = prepare
@@ -450,7 +468,7 @@ describe("searchSessionTranscripts", () => {
           )
           .all(
             literal,
-            JSON.stringify(sessionKeys),
+            JSON.stringify(options.sessionKeys ?? sessionKeys),
             ...(options.sessionId ? [options.sessionId] : []),
             ...(options.role ? [options.role] : []),
             options.limit + 1,
@@ -467,28 +485,44 @@ describe("searchSessionTranscripts", () => {
           })),
         );
         expect(result.truncated).toBe(baseline.length > options.limit);
-        expect(
-          result.hits.every((hit) => hit.sessionId !== "dirty" && hit.sessionId !== "excluded"),
-        ).toBe(true);
-        let snippets = 0;
-        db.function("count_search_snippet", (value) => {
-          snippets++;
-          return value;
-        });
-        const counted = query.replace(/(snippet\([^)]*\))/u, "count_search_snippet($1)");
-        expect(prepare.call(db, counted).all(...bindings)).toHaveLength(baseline.length);
-        expect(snippets).toBe(baseline.length);
-        expect(snippets).toBeLessThanOrEqual(options.limit + 1);
+        expect(result.hits.some((hit) => hit.sessionId === "dirty")).toBe(false);
+        expect(statements).toHaveLength(baseline.length ? 2 : 1);
+        if (captured) {
+          let snippets = 0;
+          db.function("count_search_snippet", (value) => {
+            snippets++;
+            return value;
+          });
+          const counted = captured.query.replace(/(snippet\([^)]*\))/u, "count_search_snippet($1)");
+          expect(prepare.call(db, counted).all(...captured.bindings)).toHaveLength(baseline.length);
+          expect(snippets).toBe(baseline.length);
+          expect(snippets).toBeLessThanOrEqual(options.limit + 1);
+          const contentPlan = prepare
+            .call(db, "EXPLAIN QUERY PLAN " + captured.query)
+            .all(...captured.bindings)
+            .map((row) => String(row.detail));
+          expect(contentPlan).toEqual(
+            expect.arrayContaining([
+              expect.stringMatching(/VIRTUAL TABLE INDEX .*:(?:=M5|M5[<>]{2})/),
+            ]),
+          );
+          if (options.order === "recent" && options.sessionId === "permitted" && !options.role) {
+            // Contiguous top hits use one bounded MATCH cursor rather than a cursor per hit.
+            expect(contentPlan).toEqual(
+              expect.arrayContaining([expect.stringMatching(/VIRTUAL TABLE INDEX .*:M5[<>]{2}/)]),
+            );
+          }
+        } else {
+          expect(baseline).toHaveLength(0);
+        }
         const plan = prepare
           .call(db, `EXPLAIN QUERY PLAN ${query}`)
           .all(...bindings)
           .map((row) => String(row.detail));
         expect(plan).toEqual(
           expect.arrayContaining([
-            expect.stringContaining("MATERIALIZE hits"),
             expect.stringMatching(/SEARCH mapped USING INTEGER PRIMARY KEY/),
             expect.stringMatching(/session_windows.*\(session_id=\?\)/),
-            expect.stringMatching(/VIRTUAL TABLE INDEX .*:=M5/),
           ]),
         );
         expect(plan.filter((line) => /VIRTUAL TABLE INDEX .*:M5$/.test(line))).toHaveLength(1);

@@ -53,6 +53,11 @@ export type SessionListTargetLookup = (key: string) =>
     }
   | undefined;
 
+export type SessionListSearchFacts = {
+  names: ReadonlyMap<string, string>;
+  modelSearchMayMatch: (search: string) => boolean;
+};
+
 /** Cold rows prepare only the model facts needed by search. */
 export type SessionListModelFactsLookup = (
   key: string,

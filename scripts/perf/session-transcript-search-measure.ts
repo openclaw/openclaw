@@ -4,7 +4,10 @@
 //   --state-dir /tmp/search-measure-1 --sessions 3500 --pairs 20 --first-variant A
 // A = default active scope; B = archived:all, NOT different server revisions.
 // Compare revisions in separate serial runs with fresh directories and reversed first order.
-// --source-ref <commit> pins ONLY the two server owners below; never switches the checkout.
+// --source-ref <commit> pins the owners below; never switches the checkout.
+// The native query owner also runs in workers: its on-disk bytes must match the ref.
+// Prepare that source in a task-owned baseline checkout or a serialized overlay first;
+// never change it while a Gateway, benchmark or test in this checkout is running.
 // First-use is per shape in one process, not OS-cold cache/startup or browser/rendering proof.
 // Retain plan.json, samples.json, result.json, and synthetic state.
 import assert from "node:assert/strict";
@@ -83,11 +86,8 @@ const sourceRef = values["source-ref"]
   ? git("rev-parse", "--verify", "--end-of-options", values["source-ref"] + "^{commit}")
   : undefined;
 // Same loader route as session-prepared-list-measure.ts, before runtime imports.
-// Capture both buffers once: the report hashes exactly what the hook serves.
-const sources = [
-  "src/gateway/session-list-filters.ts",
-  "src/gateway/server-methods/sessions-search-projected.ts",
-].map((file) => {
+// Capture owner bytes once: the report hashes exactly what the host hook serves.
+const captureSource = (file: string) => {
   const source = sourceRef
     ? execFileSync("git", ["show", sourceRef + ":" + file], { cwd: repo, encoding: "utf8" })
     : readFileSync(path.join(repo, file), "utf8");
@@ -98,7 +98,34 @@ const sources = [
     sha256: createHash("sha256").update(source).digest("hex"),
     loads: 0,
   };
-});
+};
+const sources = [
+  "src/gateway/session-list-filters.ts",
+  "src/gateway/session-row-presentation.ts",
+  "src/gateway/session-utils-list.ts",
+  "src/gateway/server-methods/sessions-search-projected.ts",
+  "src/gateway/server-methods/sessions-read.ts",
+  "src/config/sessions/session-transcript-search.ts",
+  "src/config/sessions/session-transcript-index-readiness.ts",
+  "src/config/sessions/session-transcript-worker-readers.ts",
+].map(captureSource);
+const workerSources = [
+  ...sources.filter((source) => source.file.startsWith("src/config/sessions/")),
+  ...[
+    "src/infra/kysely-sync.ts",
+    "src/config/sessions/session-transcript-search.types.ts",
+    "src/config/sessions/session-transcript.worker.ts",
+    "src/config/sessions/session-transcript-worker-read.types.ts",
+    "src/config/sessions/session-transcript-worker.types.ts",
+  ].map(captureSource),
+];
+for (const source of workerSources) {
+  assert.equal(
+    readFileSync(path.join(repo, source.file), "utf8"),
+    source.source,
+    "Worker source must match --source-ref before starting: " + source.file,
+  );
+}
 const hook = registerHooks({
   load(url, context, nextLoad) {
     const selected = sources.find((source) => source.url === url);
@@ -176,13 +203,14 @@ const queries = [
 ] as const;
 const plan = {
   acceptanceRule:
-    "Serial >=10 counterbalanced AB pairs and AA controls, first-use apart from warm. Result caps, exact hit/exclusion counts and zero cold restoration must hold. >=20% median/p95 regression requires owner acceptance; this script does not declare a performance win.",
+    "Serial >=10 counterbalanced AB pairs and AA controls, first-use apart from warm. Result caps, exact hit/exclusion counts and zero cold restoration must hold. >=20% median/p95 regression remains a failed gate, not accepted; this script does not declare a performance win.",
   proofBoundary:
     "Real source Gateway and authenticated WebSocket sessions.list/sessions.search; no UI debounce, rendering, tie-break, inference, external service, built artifact or OS-cold-cache claim.",
   variants: { A: "default active scope", B: "archived:all", "A-control": "identical to A" },
   sourceRef: sourceRef ?? "working-tree",
   head,
   sourceHashes: sources.map(({ file, sha256 }) => ({ file, sha256 })),
+  workerSources: workerSources.map(({ file, sha256 }) => ({ file, sha256 })),
   sessions,
   active,
   archived: sessions - active,
@@ -203,6 +231,16 @@ writeFileSync(path.join(root, "plan.json"), JSON.stringify(plan, null, 2));
 const samples: Sample[] = [];
 const failures: unknown[] = [];
 let fixtureMs: number | undefined;
+let workerEntry: string | undefined;
+let searchPool:
+  | {
+      maxWorkers: number;
+      workers: number;
+      workersCreated: number;
+      activeTasks: number;
+      pendingTasks: number;
+    }
+  | undefined;
 let startupMs: number | undefined;
 let storageBefore: ReturnType<typeof snapshot> | undefined;
 let storageAfter: ReturnType<typeof snapshot> | undefined;
@@ -453,6 +491,15 @@ try {
         assert.equal(stored.coldFts?.n, 0);
       }
       fixtureMs = performance.now() - fixtureStarted;
+      const { resolveRuntimeWorkerUrl } = await import("../../src/infra/runtime-worker-url.js");
+      const { runtimeProcessEntrypoints } =
+        await import("../../src/infra/runtime-process-entrypoints.js");
+      const entry = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscript);
+      assert.equal(
+        fileURLToPath(entry),
+        path.join(repo, "src/config/sessions/session-transcript.worker.ts"),
+      );
+      workerEntry = entry.href;
       const { startGatewayServer } = await import("../../src/gateway/server.js");
       const { acquireGatewayTestClient } = await import("../../test/helpers/gateway-client.js");
       await reservation.releaseListener();
@@ -589,6 +636,9 @@ try {
           }
         }
       }
+      const { transcriptSearchLane } =
+        await import("../../src/config/sessions/session-transcript-worker-resources.js");
+      searchPool = transcriptSearchLane.pool.getSnapshot();
     },
     () => client?.stopAndWait(),
     () => server?.close({ reason: "Synthetic transcript-search benchmark complete" }),
@@ -607,6 +657,13 @@ try {
 // No storage verdict if any body/cleanup phase failed: retain partial evidence instead.
 if (shutdownComplete && storageBefore) {
   try {
+    for (const source of workerSources) {
+      assert.equal(
+        readFileSync(path.join(repo, source.file), "utf8"),
+        source.source,
+        "Worker source changed during benchmark: " + source.file,
+      );
+    }
     storageAfter = snapshot();
     assert.deepEqual(
       storageAfter,
@@ -656,6 +713,8 @@ const summaries = [...new Set(samples.map(key))].map((name) => {
 const report = {
   ...plan,
   fixtureMs,
+  workerEntry,
+  searchPool,
   startupMs,
   totalElapsedMs: performance.now() - started,
   sampleCount: samples.length,

@@ -2,18 +2,24 @@
 // inside the accessor's write transactions (session-transcript-index.ts);
 // this module owns the query path and schedules the shared reconcile owner
 // when doctor imports or out-of-band writes leave derived rows behind.
-import { expressionBuilder, sql } from "kysely";
+import { expressionBuilder, sql, type RawBuilder, type QueryResult } from "kysely";
 import { admitStoreSearch } from "../../infra/database-engine/adapters.js";
 import { DatabaseSearchCapabilityUnavailableError } from "../../infra/database-engine/capability-unavailable.js";
 import { engineStringPosition } from "../../infra/database-engine/scalar.js";
 import { hasFullTextWordTokens } from "../../infra/database-engine/text-tokens.worker.js";
 import {
+  createSqliteQueryCache,
+  prepareSqliteQuerySync,
+  prepareSqliteQueryTakeFirstSync,
+  encodeSqliteStringSet,
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
-  sqliteStringSet,
+  sqliteEncodedStringSet,
+  sqliteStringSetEntries,
 } from "../../infra/kysely-sync.js";
 import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
+import { sqliteStringSetFragments } from "../../infra/sql-query-compiler.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { toAgentStoreSessionKey } from "../../routing/session-key.js";
@@ -47,6 +53,7 @@ import {
 } from "./session-transcript-search-policy.js";
 import type {
   SessionTranscriptSearchParams,
+  SessionTranscriptSearchKeySet,
   SessionTranscriptSearchReadResult,
   SessionTranscriptSearchResult,
 } from "./session-transcript-search.types.js";
@@ -104,8 +111,9 @@ export async function searchSessionTranscripts(
   const request = {
     ...params,
     agentId: scope.agentId,
+    storePath: options.path,
     env: scope.env,
-    sessionKeys: params.sessionKeys?.slice(),
+    sessionKeys: params.sessionKeys,
   };
   let statusOwnerFailure: { error: unknown } | undefined;
   const readIndexStatus = async (
@@ -171,12 +179,28 @@ export async function searchSessionTranscripts(
   }
 }
 
+type PaletteSearchBindings = { keys: string; match: string; limit: number };
+const paletteSearchQueries = createSqliteQueryCache<{
+  cold?: (keys: string) => { count: number } | undefined;
+  hits?: (params: PaletteSearchBindings) => QueryResult<{
+    session_key: string;
+    fts_rowid: number;
+    rank: number;
+  }>;
+}>(() => ({}));
+
 /** Native query kernel; projection readiness belongs to the maintenance owner. */
 export function searchSessionTranscriptsReadOnlySync(
   params: SessionTranscriptSearchParams,
   preparedDatabase?: OpenClawAgentDatabaseOptions,
+  preparedKeys?: SessionTranscriptSearchKeySet,
 ): SessionTranscriptSearchReadResult {
   const query = validateSessionTranscriptSearchQuery(params.query);
+  const keys =
+    preparedKeys ??
+    (params.sessionKeys === undefined
+      ? undefined
+      : { encoded: encodeSqliteStringSet(params.sessionKeys), count: params.sessionKeys.length });
   const scope = preparedDatabase ? { agentId: params.agentId } : resolveSqliteReadScope(params);
   const databaseOptions = preparedDatabase ?? toDatabaseOptions(scope);
   const result = withOpenClawAgentDatabaseReadOnly(
@@ -202,31 +226,64 @@ export function searchSessionTranscriptsReadOnlySync(
             agentId: scope.agentId,
             requestKey: "*",
           }).slice(0, -1);
-          const selectedWindows = db
-            .selectFrom("session_windows")
-            .select(["session_id", "session_key"])
-            .where((eb) =>
-              params.sessionKeys === undefined
-                ? eb.or([
-                    isPostgresSqlConnection(database.db)
-                      ? /* kysely-allow-raw: starts_with keeps underscores literal and, unlike left(), has planner selectivity, so the GIN match can drive the join. The prefix is a literal so reused prepared statements keep that estimate in their generic plan. */ sql<boolean>`${eb.ref("session_key")} ^@ ${sql.lit(agentPrefix)}`
-                      : /* kysely-allow-raw: GLOB preserves literal underscores in SQLite agent namespaces. */ sql<boolean>`${eb.ref("session_key")} GLOB ${toAgentStoreSessionKey({ agentId: scope.agentId, requestKey: "*" })}`,
-                    eb("session_key", "in", ["global", "unknown"]),
-                  ])
-                : params.sessionKeys.length > 0
-                  ? eb("session_key", "in", sqliteStringSet(params.sessionKeys))
-                  : eb.and([]),
-            )
-            .$if(params.sessionId !== undefined, (builder) =>
-              builder.where("session_id", "=", params.sessionId!),
-            );
+          // Only the palette's fixed native shape is prepared. All other callers,
+          // including empty-key store-wide scope and CJK retries, retain their SQL.
+          const prepared =
+            !isPostgresSqlConnection(database.db) &&
+            keys?.count &&
+            params.sessionId === undefined &&
+            !params.role &&
+            params.order !== "recent"
+              ? paletteSearchQueries(database.db)
+              : undefined;
+          const selectedWindows = (keySet?: RawBuilder<string>) =>
+            db
+              .selectFrom("session_windows")
+              .select(["session_id", "session_key"])
+              .where((eb) =>
+                keys === undefined
+                  ? eb.or([
+                      isPostgresSqlConnection(database.db)
+                        ? /* kysely-allow-raw: starts_with keeps underscores literal and, unlike left(), has planner selectivity, so the GIN match can drive the join. The prefix is a literal so reused prepared statements keep that estimate in their generic plan. */ sql<boolean>`${eb.ref("session_key")} ^@ ${sql.lit(agentPrefix)}`
+                        : /* kysely-allow-raw: GLOB preserves literal underscores in SQLite agent namespaces. */ sql<boolean>`${eb.ref("session_key")} GLOB ${toAgentStoreSessionKey({ agentId: scope.agentId, requestKey: "*" })}`,
+                      eb("session_key", "in", ["global", "unknown"]),
+                    ])
+                  : keys.count > 0
+                    ? eb("session_key", "in", keySet ?? sqliteEncodedStringSet(keys.encoded))
+                    : eb.and([]),
+              )
+              .$if(params.sessionId !== undefined, (builder) =>
+                builder.where("session_id", "=", params.sessionId!),
+              );
+          const unpreparedWindows = prepared ? undefined : selectedWindows();
+          const coldQuery = (encodedKeys?: RawBuilder<string>) =>
+            keys?.count && !isPostgresSqlConnection(database.db)
+              ? db
+                  .selectFrom(sqliteStringSetEntries(encodedKeys ?? keys.encoded).as("selected"))
+                  .crossJoin("session_windows as window")
+                  .crossJoin("session_transcript_cold_archives as cold")
+                  .whereRef("window.session_key", "=", "selected.value")
+                  .whereRef("cold.session_id", "=", "window.session_id")
+                  .$if(params.sessionId !== undefined, (builder) =>
+                    builder.where("window.session_id", "=", params.sessionId!),
+                  )
+                  // De-duplicate matching archives, not the much larger input key set.
+                  .select((eb) => eb.fn.count<number>("cold.session_id").distinct().as("count"))
+              : db
+                  .selectFrom("session_transcript_cold_archives as cold")
+                  .innerJoin(
+                    (unpreparedWindows ?? selectedWindows()).as("window"),
+                    "window.session_id",
+                    "cold.session_id",
+                  )
+                  .select((eb) => eb.fn.countAll<number>().as("count"));
           const archivedTranscriptsExcluded =
-            executeSqliteQueryTakeFirstSync(
-              database.db,
-              db
-                .selectFrom("session_transcript_cold_archives as cold")
-                .innerJoin(selectedWindows.as("window"), "window.session_id", "cold.session_id")
-                .select((eb) => eb.fn.countAll<number>().as("count")),
+            (prepared
+              ? (prepared.cold ??= prepareSqliteQueryTakeFirstSync<string, { count: number }>(
+                  database.db,
+                  (parameter) => coldQuery(parameter((value) => value)),
+                ))(keys!.encoded)
+              : executeSqliteQueryTakeFirstSync(database.db, coldQuery())
             )?.count ?? 0;
           let substringTerms: string[] = [];
           let hits: SessionTranscriptSearchResult["hits"];
@@ -244,8 +301,9 @@ export function searchSessionTranscriptsReadOnlySync(
                 ));
             const ranking = fullText.rank(textIndex, literalQuery);
             const expression = expressionBuilder<DB, "session_transcript_fts">();
+            const ftsMatch = useFts ? fullText.match(textIndex, literalQuery) : undefined;
             const match = expression.and([
-              ...(useFts ? [fullText.match(textIndex, literalQuery)] : []),
+              ...(ftsMatch ? [ftsMatch] : []),
               ...substringTerms.map((term) =>
                 expression(
                   engineStringPosition(
@@ -262,102 +320,193 @@ export function searchSessionTranscriptsReadOnlySync(
               params.order === "recent"
                 ? sql`session_transcript_fts.timestamp desc, fts_rowid desc`
                 : sql`rank ${/* kysely-allow-raw: Capability order is the closed asc/desc union. */ sql.raw(ranking.order)}, session_transcript_fts.timestamp desc, session_transcript_fts.message_id asc`;
-            // session_key lives on the window row so key renames
-            // never leave stale keys inside the index. Sessions flagged needs_rebuild
-            // are excluded: their rows may still hold rewound-away branch text that
-            // sessions_history no longer exposes, so they stay hidden until reconcile
-            // rebuilds them (indexing=true tells the caller to retry).
-            // MATCH drives indexed reads; substring scans scope map rows before reading text.
-            const candidates = (
-              useFts
+            const selectedHits = (
+              selectedMatch: typeof match | RawBuilder<boolean> = match,
+              selectedLimit: number | RawBuilder<number> = limit + 1,
+              keySet?: RawBuilder<string>,
+            ) => {
+              // session_key lives on the window row so key renames
+              // never leave stale keys inside the index. Sessions flagged needs_rebuild
+              // are excluded: their rows may still hold rewound-away branch text that
+              // sessions_history no longer exposes, so they stay hidden until reconcile
+              // rebuilds them (indexing=true tells the caller to retry).
+              // MATCH drives indexed reads; substring scans scope map rows before reading text.
+              const candidates = (
+                useFts
+                  ? db
+                      .selectFrom("session_transcript_fts")
+                      .crossJoin("session_transcript_fts_rows as mapped")
+                      .crossJoin((unpreparedWindows ?? selectedWindows(keySet)).as("window"))
+                  : db
+                      .selectFrom("session_transcript_fts_rows as mapped")
+                      .crossJoin((unpreparedWindows ?? selectedWindows(keySet)).as("window"))
+                      .crossJoin("session_transcript_fts")
+              )
+                .where("mapped.id", "=", fullText.identity(textIndex))
+                .whereRef("window.session_id", "=", "mapped.session_id")
+                .where(selectedMatch)
+                // Depend on the scoped window so SQLite cannot read role before excluding sessions.
+                .$if(Boolean(params.role), (builder) =>
+                  isPostgresSqlConnection(database.db)
+                    ? builder.where("role", "=", params.role!)
+                    : builder.where((eb) =>
+                        eb
+                          .case()
+                          .when("window.session_key", "is not", null)
+                          .then(eb("role", "=", params.role!))
+                          .else(false)
+                          .end(),
+                      ),
+                )
+                .where(
+                  "mapped.session_id",
+                  "not in",
+                  db
+                    .selectFrom("session_transcript_index_state")
+                    .select("session_id")
+                    .where("needs_rebuild", "!=", 0),
+                )
+                .select([
+                  "window.session_key",
+                  fullText.identity(textIndex).as("fts_rowid"),
+                  useFts ? ranking.value.as("rank") : expression.val(0).as("rank"),
+                ]);
+              const postgres = isPostgresSqlConnection(database.db);
+              // FTS5 owns these shadow columns in transcript field order. Read only
+              // tie-break metadata after the rank cutoff, without reopening FTS cursors.
+              const orderingDb = db.withTables<{
+                session_transcript_fts_content: {
+                  id: number;
+                  c2: DB["session_transcript_fts"]["message_id"];
+                  c4: DB["session_transcript_fts"]["timestamp"];
+                };
+              }>();
+              const ordering = postgres
                 ? db
                     .selectFrom("session_transcript_fts")
-                    .crossJoin("session_transcript_fts_rows as mapped")
-                    .crossJoin(selectedWindows.as("window"))
-                : db
-                    .selectFrom("session_transcript_fts_rows as mapped")
-                    .crossJoin(selectedWindows.as("window"))
-                    .crossJoin("session_transcript_fts")
-            )
-              .where("mapped.id", "=", fullText.identity(textIndex))
-              .whereRef("window.session_id", "=", "mapped.session_id")
-              .where(match)
-              // Depend on the scoped window so SQLite cannot read role before excluding sessions.
-              .$if(Boolean(params.role), (builder) =>
-                isPostgresSqlConnection(database.db)
-                  ? builder.where("role", "=", params.role!)
-                  : builder.where((eb) =>
-                      eb
-                        .case()
-                        .when("window.session_key", "is not", null)
-                        .then(eb("role", "=", params.role!))
-                        .else(false)
-                        .end(),
-                    ),
-              )
-              .where(
-                "mapped.session_id",
-                "not in",
-                db
-                  .selectFrom("session_transcript_index_state")
-                  .select("session_id")
-                  .where("needs_rebuild", "!=", 0),
-              )
-              .select([
-                "window.session_key",
-                fullText.identity(textIndex).as("fts_rowid"),
-                useFts ? ranking.value.as("rank") : expression.val(0).as("rank"),
-              ]);
-            const selectedHits =
-              params.order === "recent" || !useFts
-                ? candidates.orderBy(order).limit(limit + 1)
-                : db
+                    .select([fullText.identity(textIndex).as("id"), "timestamp", "message_id"])
+                : orderingDb
+                    .selectFrom("session_transcript_fts_content")
+                    .select(["id", "c4 as timestamp", "c2 as message_id"]);
+              return params.order === "recent" || !useFts
+                ? candidates.orderBy(order).limit(selectedLimit)
+                : orderingDb
                     .with(
                       (cte) => cte("scores").materialized(),
                       () => candidates,
                     )
                     .selectFrom("scores")
-                    .crossJoin("session_transcript_fts")
-                    .where((eb) =>
-                      eb(fullText.identity(textIndex), "=", eb.ref("scores.fts_rowid")),
-                    )
+                    .crossJoin(ordering.as("ordering"))
+                    .whereRef("ordering.id", "=", "scores.fts_rowid")
                     // Keep every tie at the cutoff before reading metadata for the final ordering.
                     .where("scores.rank", "in", (eb) =>
                       eb
                         .selectFrom("scores")
                         .select("rank")
                         .orderBy("rank", ranking.order)
-                        .limit(limit + 1),
+                        .limit(selectedLimit),
                     )
                     .select(["scores.session_key", "scores.fts_rowid", "scores.rank"])
                     .orderBy("scores.rank", ranking.order)
-                    .orderBy("session_transcript_fts.timestamp", "desc")
-                    .orderBy("session_transcript_fts.message_id", "asc")
-                    .limit(limit + 1);
-            const rows = executeSqliteQuerySync(
-              database.db,
-              db
-                .with(
-                  (cte) => cte("hits").materialized(),
-                  () => selectedHits,
-                )
-                .selectFrom("hits")
-                .crossJoin("session_transcript_fts")
-                .where((eb) => eb(fullText.identity(textIndex), "=", eb.ref("hits.fts_rowid")))
-                .where(match)
-                .select([
-                  "hits.session_key",
-                  "session_transcript_fts.session_id",
-                  "message_id",
-                  "role",
-                  "timestamp",
-                  "hits.rank as rank",
-                  substringTerms.length
-                    ? expression.ref("text").as("snippet")
-                    : fullText.snippet(textIndex, "text", 48, literalQuery).as("snippet"),
-                ])
-                .orderBy(order),
-            ).rows;
+                    .orderBy("ordering.timestamp", "desc")
+                    .orderBy("ordering.message_id", "asc")
+                    .limit(selectedLimit);
+            };
+            const rows = (() => {
+              // PostgreSQL keeps its single-query path; native FTS can reuse a cursor
+              // for an exact contiguous selection without scanning any extra row IDs.
+              if (isPostgresSqlConnection(database.db)) {
+                return executeSqliteQuerySync(
+                  database.db,
+                  db
+                    .with(
+                      (cte) => cte("hits").materialized(),
+                      () => selectedHits(),
+                    )
+                    .selectFrom("hits")
+                    .crossJoin("session_transcript_fts")
+                    .where((eb) => eb(fullText.identity(textIndex), "=", eb.ref("hits.fts_rowid")))
+                    .where(match)
+                    .select([
+                      "hits.session_key",
+                      "session_transcript_fts.session_id",
+                      "message_id",
+                      "role",
+                      "timestamp",
+                      "hits.rank as rank",
+                      substringTerms.length
+                        ? expression.ref("text").as("snippet")
+                        : fullText.snippet(textIndex, "text", 48, literalQuery).as("snippet"),
+                    ])
+                    .orderBy(order),
+                ).rows;
+              }
+              const selected =
+                prepared && ftsMatch && substringTerms.length === 0
+                  ? (prepared.hits ??= prepareSqliteQuerySync<
+                      PaletteSearchBindings,
+                      {
+                        session_key: string;
+                        fts_rowid: number;
+                        rank: number;
+                      }
+                    >(database.db, (parameter) =>
+                      selectedHits(
+                        // The native capability owns literal escaping. Only its fixed
+                        // MATCH binding changes; table policy stays admitted here.
+                        /* kysely-allow-raw: native MATCH uses this admitted fixed index, with a fresh bound literal query. */
+                        sql<boolean>`${sql.raw(textIndex.table)} MATCH ${parameter((value) => value.match)}`,
+                        parameter((value) => value.limit),
+                        /* kysely-allow-raw: reuse the canonical encoded-set fragment with a bound value. */
+                        sql<string>(
+                          sqliteStringSetFragments,
+                          parameter((value) => value.keys),
+                        ),
+                      ),
+                    ))({
+                      keys: keys!.encoded,
+                      // SAFETY: the SQLite MATCH capability emits one string binding.
+                      // Compile only that small fragment; never duplicate its literal policy.
+                      match: ftsMatch.compile(db).parameters[0] as string,
+                      limit: limit + 1,
+                    }).rows
+                  : executeSqliteQuerySync(database.db, selectedHits()).rows;
+              if (selected.length === 0) {
+                return [];
+              }
+              const ids = selected.map((row) => row.fts_rowid);
+              const first = Math.min(...ids);
+              const last = Math.max(...ids);
+              // Both reads remain inside the same synchronous snapshot. Sparse IDs
+              // keep bounded individual seeks; a dense range needs one MATCH cursor.
+              const content = executeSqliteQuerySync(
+                database.db,
+                db
+                  .selectFrom("session_transcript_fts")
+                  .where(match)
+                  .where((eb) =>
+                    last - first + 1 === ids.length
+                      ? eb.between(fullText.identity(textIndex), first, last)
+                      : eb(fullText.identity(textIndex), "in", ids),
+                  )
+                  .select([
+                    fullText.identity(textIndex).as("fts_rowid"),
+                    "session_id",
+                    "message_id",
+                    "role",
+                    "timestamp",
+                    substringTerms.length
+                      ? expression.ref("text").as("snippet")
+                      : fullText.snippet(textIndex, "text", 48, literalQuery).as("snippet"),
+                  ]),
+              ).rows;
+              const byId = new Map(content.map((row) => [row.fts_rowid, row]));
+              // Keep the score/timestamp/message ordering selected by the query owner.
+              return selected.flatMap((hit) => {
+                const row = byId.get(hit.fts_rowid);
+                return row ? [{ ...hit, ...row }] : [];
+              });
+            })();
             hits = rows.flatMap((row): SessionTranscriptSearchResult["hits"] => {
               if (
                 typeof row.session_key !== "string" ||

@@ -13,12 +13,16 @@ const readiness: SqliteDatabaseAdmissionKey<string> = {
 };
 
 /** The physical owner retains readiness across idle writer retirement while readers remain. */
-export function isSessionTranscriptIndexReady(databasePath: string): boolean {
+export function readSessionTranscriptIndexReadiness(databasePath: string): string | undefined {
   const token = readSqliteDatabaseWriteTokenForPath(databasePath);
-  return (
-    token !== undefined &&
+  return token !== undefined &&
     getOrLoadSqliteDatabaseAdmissionForPath(databasePath, readiness, () => undefined) === token
-  );
+    ? token
+    : undefined;
+}
+
+export function isSessionTranscriptIndexReady(databasePath: string): boolean {
+  return readSessionTranscriptIndexReadiness(databasePath) !== undefined;
 }
 
 /** Publish only after the bounded traversal and its cleanup transaction have committed. */

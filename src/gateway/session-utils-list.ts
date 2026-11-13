@@ -580,7 +580,14 @@ export async function listProjectedSessions(params: {
           );
         const selection =
           params.acceptsSerializedJson && exactKey === undefined
-            ? presentation.select(opts, select)
+            ? presentation.select(
+                opts,
+                select,
+                searchIdentities && {
+                  names: searchIdentities.names,
+                  modelSearchMayMatch: prepared.modelSearchMayMatch,
+                },
+              )
             : select();
         return {
           now,

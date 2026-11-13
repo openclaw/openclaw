@@ -6,6 +6,7 @@ import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
 import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
+import { normalizeSessionSearchLiteral } from "../shared/session-search-text.js";
 import { prepareOperatorModelPresentation } from "./operator-model-presentation.js";
 import { serializedJsonArrayBytes } from "./serialized-json.js";
 import { gatewayClientSessionCreator } from "./server-methods/gateway-client-identity.js";
@@ -17,7 +18,12 @@ import {
   projectSessionProfileInvolvements,
 } from "./session-identity-projection.js";
 import { retainSessionListBaseMiss } from "./session-list-diagnostics.js";
-import type { SessionEntrySelection, SessionListFilteredEntries } from "./session-list-filters.js";
+import {
+  sessionListSearchMatchesRunState,
+  type SessionEntrySelection,
+  type SessionListFilteredEntries,
+} from "./session-list-filters.js";
+import type { SessionListSearchFacts } from "./session-list-target.js";
 import {
   shareSessionRowFacts,
   sessionRowFactEncodingBytes,
@@ -273,7 +279,11 @@ export function prepareProjectedSessionPresentation(
     sharing.entryFilter,
     sharing.sessionCap === "invited" ? sharing.identity?.id : undefined,
   );
-  const listView = (opts: SessionsListParams, selection = false): SessionListView => {
+  const listView = (
+    opts: SessionsListParams,
+    selection = false,
+    searchFacts?: string,
+  ): SessionListView => {
     const { source: _source, ifRowsRevision: _ifRowsRevision, ...query } = opts;
     if (selection) {
       delete query.rowMode;
@@ -287,6 +297,7 @@ export function prepareProjectedSessionPresentation(
       presentFastMode("ultrafast"),
       // oxlint-disable-next-line unicorn/no-array-sort -- Object.entries creates a private array.
       Object.entries(query).sort(([left], [right]) => left.localeCompare(right)),
+      ...(searchFacts === undefined ? [] : [searchFacts]),
     ]);
     return publicationState?.lists.get(key) ?? { key, refs: 0, bytes: 0, historyRefs: 0 };
   };
@@ -623,13 +634,26 @@ export function prepareProjectedSessionPresentation(
     select(
       opts: SessionsListParams,
       select: (retained?: Map<object, SessionListFilteredEntries>) => SessionEntrySelection,
+      preparedSearch?: SessionListSearchFacts,
     ) {
       // Membership, clocks, and transient runs are not owned by metadata partitions.
-      const live = opts.activeOnly || opts.activityPulseBoundaries;
-      if (sharing.sessionCap === "invited" || opts.search || opts.spawnedBy || live) {
+      const live = opts.activeOnly || opts.activityPulseBoundaries || opts.spawnedBy;
+      const search = normalizeSessionSearchLiteral(opts.search);
+      if (
+        sharing.sessionCap === "invited" ||
+        live ||
+        (search &&
+          (!preparedSearch ||
+            search.startsWith("agent:") ||
+            sessionListSearchMatchesRunState(search) ||
+            preparedSearch.modelSearchMayMatch(search)))
+      ) {
         return select();
       }
-      const view = listView(opts, true);
+      // Entry replacements already retire whole selections, including goal usage.
+      // Workspace names are separate facts; display materialization is not a selection change.
+      const searchFacts = preparedSearch && JSON.stringify([...preparedSearch.names]);
+      const view = listView(opts, true, searchFacts);
       if (
         view.selectedAt !== undefined &&
         opts.activeMinutes !== undefined &&
@@ -640,7 +664,8 @@ export function prepareProjectedSessionPresentation(
       }
       if (!view.selection) {
         const { entries, ownerSessionProfiles, ...facets } = select(
-          publicationState?.lists.partitions(view),
+          // Usage changes retire whole selections, not their metadata partitions.
+          search ? undefined : publicationState?.lists.partitions(view),
         );
         Object.freeze(entries);
         view.selection = Object.freeze({

@@ -1,4 +1,5 @@
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import { encodeSqliteStringSet } from "../../infra/kysely-sync.js";
 import type { WorkerTaskResponse } from "../../infra/worker-task-pool.types.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type { CombinedSessionStoreTopologyRequest } from "./combined-store.types.js";
@@ -16,6 +17,7 @@ import type {
 } from "./session-store-target-inventory.js";
 import { getSessionTranscriptHydrationCaller } from "./session-transcript-hydration-caller.js";
 import type { SessionTranscriptHydrationChunk } from "./session-transcript-hydration.types.js";
+import { readSessionTranscriptIndexReadiness } from "./session-transcript-index-readiness.js";
 import {
   MAX_SESSION_ROW_FACTS_KEYS,
   type SessionHistoryWorkerInput,
@@ -282,9 +284,24 @@ const readers: Readers & ThisType<ReaderContext> = {
     (value) => value,
   ),
   searchTranscripts(params, readIndexStatus) {
+    const { sessionKeys, ...query } = params;
+    const input = {
+      kind: "transcript-search" as const,
+      params: {
+        ...query,
+        env: captureSessionTranscriptStorageEnvironment(params.env ?? process.env),
+      },
+      encodedSessionKeys:
+        sessionKeys === undefined
+          ? undefined
+          : { encoded: encodeSqliteStringSet(sessionKeys), count: sessionKeys.length },
+      indexReadiness: params.storePath
+        ? readSessionTranscriptIndexReadiness(params.storePath)
+        : undefined,
+    };
     return this.runRequest(
-      () => ({ kind: "transcript-search", params }),
-      JSON.stringify(params).length * 2,
+      () => input,
+      JSON.stringify(input).length * 2,
       (value) => value.result,
       undefined,
       async (request, signal) => {

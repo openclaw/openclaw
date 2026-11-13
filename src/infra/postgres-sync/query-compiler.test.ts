@@ -6,6 +6,7 @@ import {
   encodeSqliteStringSet,
   getNodeSqliteKysely,
   sqliteStringSet,
+  sqliteEncodedStringSet,
   sqliteStringSetEntries,
 } from "../kysely-sync.js";
 import { OpenClawPostgresDialect, sqliteStringSetFragments } from "../sql-query-compiler.js";
@@ -53,13 +54,14 @@ describe("PostgreSQL string-set compilation", () => {
     [["λ🦞", "\ud800", "\udfff"], '{"λ🦞","�","�"}'],
     [["a", "a", "line\nnext"], '{"a","a","line\nnext"}'],
   ])("encodes PostgreSQL array elements exactly: %j", (values, encoded) => {
-    const compiled = postgres
-      .selectFrom("items")
-      .selectAll()
-      .where("id", "in", sqliteStringSet(values))
-      .compile();
-    expect(compiled.sql).toBe('select * from "items" where "id" = ANY($1::text[])');
-    expect(compiled.parameters).toEqual([encoded]);
+    for (const set of [
+      sqliteStringSet(values),
+      sqliteEncodedStringSet(encodeSqliteStringSet(values)),
+    ]) {
+      const compiled = postgres.selectFrom("items").selectAll().where("id", "in", set).compile();
+      expect(compiled.sql).toBe('select * from "items" where "id" = ANY($1::text[])');
+      expect(compiled.parameters).toEqual([encoded]);
+    }
   });
 
   it.each(["null", '["a",null]', "[1]", "{}", "[invalid", '["a\\x00b"]'])(

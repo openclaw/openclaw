@@ -210,10 +210,12 @@ it("reuses completed readiness after idle writer eviction and observes a later t
         await closeWriter.mock.results[0]!.value;
         expect(sqliteWorkerStore.isSqliteWorkerStoreAvailable(nativeWriter!)).toBe(false);
         openWriter.mockClear();
+        using statusReads = vi.spyOn(projectionWriter, "readSessionTranscriptIndexStatus");
         expect(
           JSON.stringify(await searchSessionTranscripts(primary.request, primary.database)),
         ).toBe(JSON.stringify(original));
         expect(openWriter).not.toHaveBeenCalled();
+        expect(statusReads).not.toHaveBeenCalled();
       } finally {
         closeWriter.mockRestore();
       }
@@ -309,6 +311,16 @@ it("keeps scoped search bytes while disk SQL executes outside the caller thread"
       indexing: false,
     });
 
+    // These failure probes need unknown readiness, not the writer's already-complete fact.
+    runOpenClawAgentWriteTransaction(({ db }) => {
+      executeSqliteQuerySync(
+        db,
+        getNodeSqliteKysely<DB>(db)
+          .updateTable("session_windows")
+          .set({ updated_at: 3 })
+          .where("session_id", "=", "agent:main:selected"),
+      );
+    }, database);
     for (const makeUnavailable of [
       () =>
         vi
