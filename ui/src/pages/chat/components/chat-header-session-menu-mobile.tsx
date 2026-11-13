@@ -17,7 +17,12 @@ import type { SessionCreatedActor } from "../../../lib/session-owner.ts";
 registerSessionMenuEnglish();
 
 export type HeaderSessionMenuPage = {
-  key: "session-assign" | "session-group" | "session-advanced" | "session-appearance";
+  key:
+    | "session-assign"
+    | "session-group"
+    | "session-collections"
+    | "session-advanced"
+    | "session-appearance";
   title: string;
   content: JSX.Element;
   backTo?: HeaderSessionMenuPage;
@@ -121,7 +126,7 @@ export function createMobileHeaderSessionMenu(options: {
   closeMenu: () => void;
   select: (item: MenuItem) => void;
 }) {
-  type PageKind = "assign-owner" | "group" | "advanced" | "icon";
+  type PageKind = "assign-owner" | "group" | "collections" | "advanced" | "icon";
   type PageRequest = {
     kind: PageKind;
     page: HeaderSessionMenuPage;
@@ -130,7 +135,7 @@ export function createMobileHeaderSessionMenu(options: {
     keyboardSource?: HTMLElement;
   };
   const [pageRequests, setPageRequests] = createSignal<PageRequest[]>([]);
-  const body = (name: "assign-owner" | "group" | "advanced" | "icon") =>
+  const body = (name: PageKind) =>
     options.view
       .compact(name)
       // This sheet owns its search field; the shared row belongs to regular menus.
@@ -164,6 +169,10 @@ export function createMobileHeaderSessionMenu(options: {
     let focusCancelled = false;
     const [query, setQuery] = createSignal("");
     const [searchOpen, setSearchOpen] = createSignal(false);
+    const picker = kind === "group" || kind === "collections";
+    const searchLabel = () =>
+      t(kind === "collections" ? "common.search" : "sessionsView.searchGroups");
+    const searchable = () => kind === "group" || (kind === "collections" && body(kind).length > 9);
     const entries = () => {
       const rows = body(kind);
       if (kind === "assign-owner") {
@@ -178,6 +187,31 @@ export function createMobileHeaderSessionMenu(options: {
             attributes: { title: t("sessionsView.actionUnavailable") },
           },
           ...rows.filter((entry) => entry.id !== "owners-search"),
+        ];
+      }
+      if (kind === "collections") {
+        const choices = rows.filter(
+          (entry) =>
+            entry.id !== "personal-collection:new" &&
+            isItem(entry) &&
+            normalizeSearch(entry.label).includes(normalizeSearch(query().trim())),
+        );
+        return [
+          ...choices,
+          ...(choices.length || !query().trim()
+            ? []
+            : [
+                {
+                  kind: "content" as const,
+                  id: "collections-empty",
+                  content: (
+                    <div class="people-menu__status" role="status">
+                      {t("common.pickerNoMatches")}
+                    </div>
+                  ),
+                },
+              ]),
+          ...rows.filter((entry) => entry.id === "personal-collection:new"),
         ];
       }
       if (kind !== "group") {
@@ -197,12 +231,12 @@ export function createMobileHeaderSessionMenu(options: {
     };
     const view = {
       page,
-      headerActions:
-        kind === "group" ? (
+      headerActions: (
+        <Show when={searchable()}>
           <button
             type="button"
             class="chat-mobile-host__circle"
-            aria-label={t("sessionsView.searchGroups")}
+            aria-label={searchLabel()}
             aria-expanded={searchOpen() ? "true" : "false"}
             onClick={() => {
               setSearchOpen((value) => !value);
@@ -211,27 +245,34 @@ export function createMobileHeaderSessionMenu(options: {
           >
             <Icon name="search" />
           </button>
-        ) : undefined,
+        </Show>
+      ),
       content: (
         <div
-          ref={(element) => (contentRoot = element)}
+          ref={(element) => {
+            contentRoot = element;
+            if (kind === "collections") {
+              setFocusReady(true);
+            }
+          }}
+          tabindex={kind === "collections" ? -1 : undefined}
           class={[
             "session-actions-page",
             {
               "session-actions-page--appearance": kind === "icon",
-              "session-actions-page--group-picker": kind === "group",
+              "session-actions-page--group-picker": picker,
               "session-actions-page--advanced": kind === "advanced",
             },
           ]}
         >
-          {kind === "group" && searchOpen() ? (
+          {picker && searchOpen() ? (
             <label class="session-actions-page__search">
               <Icon name="search" />
               <input
                 type="search"
                 autocomplete="off"
-                aria-label={t("sessionsView.searchGroups")}
-                placeholder={t("sessionsView.searchGroups")}
+                aria-label={searchLabel()}
+                placeholder={searchLabel()}
                 value={query()}
                 onInput={(event) => setQuery(event.currentTarget.value)}
               />
@@ -313,7 +354,7 @@ export function createMobileHeaderSessionMenu(options: {
         </div>
       ),
     };
-    if (keyboardSource) {
+    if (keyboardSource || kind === "collections") {
       const canFocus = () => {
         const active = source.ownerDocument.activeElement;
         return (
@@ -342,7 +383,15 @@ export function createMobileHeaderSessionMenu(options: {
             return previous?.armed ? undefined : true;
           },
           ready: (next) => next.ready && contentRoot?.isConnected === true,
-          focus: () => options.view.appearance.focusFirst(canFocus),
+          focus: () => {
+            if (kind === "collections") {
+              if (canFocus()) {
+                contentRoot?.focus({ preventScroll: true });
+              }
+            } else {
+              options.view.appearance.focusFirst(canFocus);
+            }
+          },
         },
       );
       // Navigation and the picker ref settle before this one entry request is armed.
@@ -372,23 +421,27 @@ export function createMobileHeaderSessionMenu(options: {
           ? "session-assign"
           : kind === "group"
             ? "session-group"
-            : kind === "icon"
-              ? "session-appearance"
-              : "session-advanced",
+            : kind === "collections"
+              ? "session-collections"
+              : kind === "icon"
+                ? "session-appearance"
+                : "session-advanced",
       title: plainLabel(
         t(
           kind === "assign-owner"
             ? "sessionsView.assignTo"
             : kind === "group"
               ? "sessionsView.moveToGroupMenu"
-              : kind === "icon"
-                ? "sessionsView.setIconColorMenu"
-                : "sessionsView.advanced",
+              : kind === "collections"
+                ? "sessionsView.personalGroupAdd"
+                : kind === "icon"
+                  ? "sessionsView.setIconColorMenu"
+                  : "sessionsView.advanced",
         ),
       ),
       expandable: kind === "advanced" || kind === "icon",
-      presentation: kind === "group" ? "sheet" : undefined,
-      resizable: kind === "group",
+      presentation: kind === "group" || kind === "collections" ? "sheet" : undefined,
+      resizable: kind === "group" || kind === "collections",
       backTo,
       get headerActions() {
         return (
@@ -520,7 +573,9 @@ export function createMobileHeaderSessionMenu(options: {
             ? "assign-owner"
             : value === "compact:open-group"
               ? "group"
-              : null;
+              : value === "compact:open-collections"
+                ? "collections"
+                : null;
       if (!kind) {
         return false;
       }
