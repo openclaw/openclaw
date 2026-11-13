@@ -183,11 +183,10 @@ async function handleLinkCode(
 }
 
 // After a personal admin's commit: links the OpenClaw ID this browser signed in with (a
-// sign-in this Gateway redeemed for the same profile: verifyHeldOpenClawIdSignIn, OCF-530) to
-// the admin's profile, so
-// their owner devices arrive as them, and keeps its display claims for the claw. Both sides
-// are proven on this one connection, so there is no picker. The claw stays linked whatever
-// this returns: "linked", or why the profile was not linked.
+// sign-in this Gateway redeemed for the same profile, verifyHeldOpenClawIdSignIn from OCF-530)
+// to the admin's profile, so their owner devices arrive as them, and keeps its display claims
+// for the claw. Both sides are proven on this one connection, so there is no picker. The claw
+// stays linked whatever this returns: "linked", or why the profile was not linked.
 async function linkRunnerProfile(
   opts: GatewayRequestHandlerOptions,
   service: OpenClawIdService,
