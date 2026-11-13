@@ -81,7 +81,10 @@ suite.define(() => {
         await panel.locator(".bp-input").click({ position: { x: 20, y: 20 } });
         await panel.locator(".bp-input").press("Enter");
         await gateway.waitForRequest("browser.request", {
-          match: { path: "/act", body: { kind: "press", targetId: "existing", key: "Enter" } },
+          match: {
+            path: "/operator/input",
+            body: { targetId: "existing", inputs: [{ kind: "press", key: "Enter" }] },
+          },
         });
         const requests = await gateway.getRequests("browser.request");
         for (const request of requests) {
