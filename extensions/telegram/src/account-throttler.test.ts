@@ -440,6 +440,27 @@ it("pauses a fixed second for a 429 without retry_after and yields previews to t
   }
 });
 
+it("stops retrying a final reply five minutes after it started, counting slow 429 responses", async () => {
+  vi.useFakeTimers();
+  const { api, sent } = floodApi(
+    "flood-slow",
+    () =>
+      new Promise<Response>((resolve) => {
+        setTimeout(() => resolve(flood(8)), 28_000);
+      }),
+  );
+  let failure: unknown;
+  const final = api.sendMessage(-100444, "final answer").catch((error: unknown) => {
+    failure = error;
+  });
+  finishClock(30 * 60_000, () => final);
+  await tick(10 * 60_000);
+  // Each attempt spends 28s waiting on Telegram plus an 8s flood pause.
+  expect(failure).toMatchObject({ error_code: 429 });
+  expect(sent).toHaveLength(9);
+  expect(sent.at(-1)!.at).toBeLessThan(5 * 60_000);
+});
+
 it("keeps the later deadline when overlapping 429s carry different retry_after", async () => {
   vi.useFakeTimers();
   const longFlood = deferred<Response>();

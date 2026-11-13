@@ -1,21 +1,18 @@
-import type {
-  createEmbeddedStateSignalBridge,
-  EmbeddedStateSignal,
-} from "./embedded-state-lock.js";
+import type { createProcessSignalBridge, ProcessSignal } from "./process-signal-bridge.js";
 
 export function captureNativeSignalBridge(
-  createBridge: () => ReturnType<typeof createEmbeddedStateSignalBridge>,
+  createBridge: () => ReturnType<typeof createProcessSignalBridge>,
 ) {
   type SignalHandler = ReturnType<typeof process.listeners>[number];
   const signalNames = ["SIGINT", "SIGTERM"] as const;
-  const handlers = new Map<EmbeddedStateSignal, SignalHandler>();
-  let bridge: ReturnType<typeof createEmbeddedStateSignalBridge> | undefined;
+  const handlers = new Map<ProcessSignal, SignalHandler>();
+  let bridge: ReturnType<typeof createProcessSignalBridge> | undefined;
   return {
     create: () => {
       if (bridge) {
         throw new Error("Signal capture fixture already owns a bridge");
       }
-      const before = new Map<EmbeddedStateSignal, Set<SignalHandler>>();
+      const before = new Map<ProcessSignal, Set<SignalHandler>>();
       for (const signal of signalNames) {
         before.set(signal, new Set(process.listeners(signal)));
       }
@@ -36,13 +33,13 @@ export function captureNativeSignalBridge(
       }
       return nativeBridge;
     },
-    emit(signal: EmbeddedStateSignal) {
+    emit(signal: ProcessSignal) {
       const handler = handlers.get(signal);
       if (handler && process.listeners(signal).includes(handler)) {
         handler.call(process);
       }
     },
-    listenerCount(signal: EmbeddedStateSignal) {
+    listenerCount(signal: ProcessSignal) {
       const handler = handlers.get(signal);
       return handler && process.listeners(signal).includes(handler) ? 1 : 0;
     },

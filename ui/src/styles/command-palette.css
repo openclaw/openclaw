@@ -1,5 +1,5 @@
 .cmd-palette[data-attachment-drop-active] {
-  background: color-mix(in srgb, var(--accent) 10%, var(--card));
+  background: color-mix(in srgb, var(--accent) 10%, var(--chat-composer-surface));
 }
 
 .cmd-palette[data-attachment-drop-active] > * {
@@ -13,7 +13,7 @@
   --chat-box-inset: 8px;
   flex: 0 0 auto;
   min-width: 0;
-  margin: 0 12px 6px 4px;
+  margin: 8px 8px 0;
 }
 
 .cmd-palette__search {
@@ -21,9 +21,6 @@
   grid-template-rows: 1fr;
   min-height: 0;
   opacity: 1;
-  transition:
-    grid-template-rows var(--duration-normal) var(--ease-out),
-    opacity var(--duration-normal) ease;
 }
 
 .cmd-palette__search-content {
@@ -33,6 +30,7 @@
   overflow: hidden;
 }
 
+/* The hairline under the search field; it collapses with the results in Compose. */
 .cmd-palette__search-content::before {
   content: "";
   flex: 0 0 1px;
@@ -44,38 +42,44 @@
   opacity: 0;
 }
 
+/* The filter tabs sit clear of the hairline, as far below it as the dock's tabs sit inside it. */
 .cmd-palette__filters {
   display: flex;
   flex: 0 0 auto;
-  gap: 6px;
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--border);
+  gap: 2px;
+  padding: 10px 12px 0;
 }
 
 .cmd-palette__filter {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  min-height: 32px;
-  padding: 6px 10px;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: calc(14px * var(--openclaw-corner-radius-scale));
   color: var(--muted);
   background: transparent;
   font: inherit;
   font-size: 12px;
 }
 
-.cmd-palette__filter[aria-pressed="true"] {
-  background: var(--bg-hover);
-  color: var(--text);
-  font-weight: 600;
+.cmd-palette__filter:hover {
+  color: var(--text-strong);
 }
 
-.cmd-palette__filter span,
+.cmd-palette__filter[aria-pressed="true"] {
+  background: var(--surface-hover);
+  color: var(--text-strong);
+}
+
+.cmd-palette__filter span {
+  font-weight: var(--control-ui-font-weight-semibold);
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+
 .cmd-palette__group-count {
-  color: var(--muted);
-  font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -85,53 +89,52 @@
   max-height: min(440px, 50dvh);
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 6px 8px;
+  padding: 2px 8px 14px;
+  /* Rows fade out under the panel's rounded bottom; at the end only the padding fades. */
+  mask-image: linear-gradient(to bottom, black calc(100% - 14px), transparent);
 }
 
 .cmd-palette__group-label {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 12px 6px;
+  padding: 12px 10px 6px;
   color: var(--muted);
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 600;
   line-height: 1.2;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.05em;
 }
 
 .cmd-palette__item {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin: 2px 0;
-  padding: 10px 12px;
-  border-radius: var(--menu-item-radius);
+  min-height: 40px;
+  padding: 6px 10px;
+  border-radius: calc(12px * var(--openclaw-corner-radius-scale));
   font-size: 14px;
   transition: background var(--duration-fast) ease;
 }
 
 .cmd-palette__item:hover,
 .cmd-palette__item--active {
-  background: var(--bg-hover);
-}
-
-.cmd-palette__item--session {
-  align-items: flex-start;
-  padding-block: 12px;
+  background: var(--surface-hover);
 }
 
 .cmd-palette__item .nav-item__icon {
+  display: grid;
+  place-items: center;
   width: 20px;
   height: 20px;
   flex-shrink: 0;
-  color: var(--muted);
+  color: var(--chat-composer-control-icon);
 }
 
 .cmd-palette__item .nav-item__icon svg {
-  width: 100%;
-  height: 100%;
+  width: 16px;
+  height: 16px;
 }
 
 .cmd-palette__plugin-icon {
@@ -155,15 +158,14 @@
 
 .cmd-palette__avatar {
   position: relative;
-  flex: 0 0 38px;
-  width: 38px;
-  height: 38px;
-  margin: 2px 3px 3px 0;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
   border-radius: var(--radius-full);
 }
 
 .cmd-palette__avatar .identity-avatar__text {
-  font-size: 28px;
+  font-size: 24px;
   line-height: 1;
 }
 
@@ -177,14 +179,14 @@
   bottom: -4px;
   width: 21px;
   height: 21px;
-  border: 2px solid var(--card);
+  border: 2px solid var(--chat-composer-surface);
   border-radius: var(--radius-full);
-  background: var(--card);
+  background: var(--chat-composer-surface);
   overflow: hidden;
 }
 
 .cmd-palette__item--active .cmd-palette__owner {
-  border-color: var(--bg-hover);
+  border-color: var(--chat-composer-surface);
 }
 
 .cmd-palette__owner .viewer-avatar {
@@ -195,83 +197,61 @@
 }
 
 .cmd-palette__item-copy {
+  display: grid;
   flex: 1;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 12px;
   min-width: 0;
 }
 
 .cmd-palette__item-heading {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
+  display: contents;
 }
 
 .cmd-palette__item-title {
-  flex: 1;
   min-width: 0;
-  font-weight: 500;
+  color: var(--text-strong);
+  font-weight: var(--control-ui-font-weight-normal);
+  line-height: 20px;
   overflow-wrap: anywhere;
 }
 
+/* The time centers on the row, across the title and its metadata. */
 .cmd-palette__item-time {
-  flex-shrink: 0;
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: center;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
   white-space: nowrap;
 }
 
 .cmd-palette__item-meta,
 .cmd-palette__item-desc {
   display: block;
-  margin-top: 3px;
+  grid-column: 1;
   color: var(--muted);
   font-size: 12px;
-  line-height: 1.5;
+  line-height: 16px;
   overflow-wrap: anywhere;
 }
 
 .cmd-palette__item-desc {
   display: -webkit-box;
+  grid-column: 1 / -1;
   overflow: hidden;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }
 
 .cmd-palette__item--session .cmd-palette__item-desc {
-  margin-top: 6px;
+  margin-top: 4px;
 }
 
 .cmd-palette mark {
   border-radius: 3px;
   background: var(--accent-subtle);
   color: inherit;
-}
-
-.cmd-palette__create {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 30px;
-  margin: 0;
-  padding: 5px 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-  color: var(--muted);
-  font-family: inherit;
-  font-size: 12px;
-  font-weight: 400;
-  line-height: 20px;
-  white-space: nowrap;
-}
-
-.cmd-palette__create:hover:not(:disabled) {
-  color: var(--text);
-}
-
-.cmd-palette__create:disabled {
-  color: var(--muted);
-  opacity: 0.55;
 }
 
 .cmd-palette__no-results {
@@ -321,17 +301,16 @@
   flex: 0 1 auto;
   min-height: 0;
   overflow-y: auto;
-  border-top: 1px solid var(--border);
-  padding: 10px 20px;
+  padding: 8px 18px;
   color: var(--muted);
   font-size: 12px;
 }
 
-.cmd-palette__creation-error {
+/* On the dock below the panel, as the composer's status band sits below its surface. */
+.cmd-palette-stack .cmd-palette__creation-error {
   flex: 0 0 auto;
-  padding: 8px 18px;
-  color: var(--danger);
-  font-size: 12px;
+  border: 0;
+  border-radius: 0;
 }
 
 .cmd-palette__footer {
@@ -340,23 +319,20 @@
   flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
-  gap: 12px;
-  padding: 8px 18px;
-  border-top: 1px solid var(--border);
+  gap: 14px;
+  padding: 6px 16px 12px;
   font-size: 12px;
   color: var(--muted);
+}
+
+.cmd-palette__footer:empty {
+  display: none;
 }
 
 .cmd-palette__archive-note {
   margin-inline-end: auto;
   font-size: 11px;
   line-height: 16px;
-}
-
-.cmd-palette__hint {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
 }
 
 @media (max-width: 560px) {
@@ -367,14 +343,5 @@
   .cmd-palette__item {
     gap: 10px;
     padding-inline: 8px;
-  }
-
-  .cmd-palette__item-heading {
-    flex-wrap: wrap;
-    gap: 2px 8px;
-  }
-
-  .cmd-palette__item-title {
-    flex-basis: 100%;
   }
 }

@@ -1,6 +1,6 @@
+import { createProviderUsageFetch, makeResponse } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
-import { fetchClaudeUsage } from "./provider-usage.fetch.claude.js";
+import { fetchClaudeUsage } from "./claude-usage.js";
 
 const scopeMessage = "missing scope requirement user:profile";
 const scopeError = `HTTP 403: ${scopeMessage}`;
