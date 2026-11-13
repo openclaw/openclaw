@@ -389,7 +389,7 @@ function streamCase(keyboardUp: boolean): Case {
         sendToBubbleMs: userMount && userMount.t - sentAt,
         sendToFirstTextMs: firstText && firstText - sentAt,
         teleports: moved.teleports,
-        remounts: remounts(view.events),
+        remounts: remounts(log.events, sentAt, end),
         liveBodies: bodies.live ?? 0,
         bubbleBodies: bodies.bubble ?? 0,
       };
@@ -477,17 +477,18 @@ const cases: Record<string, Case> = {
       const view = window(log, holdFrom, holdTo);
       const moved = motion(view.frames);
       const away = hiddenBelowComposer(lastFrameBefore(log.frames, holdFrom));
+      const rebuilt = remounts(log.events, holdFrom, holdTo);
       return {
         metrics: {
           scrolledAwayPt: away,
           readingDriftPt: moved.maxDriftPt,
           teleports: moved.teleports,
-          remounts: remounts(view.events),
+          remounts: rebuilt,
         },
         gates: {
           "scrolled away from the end (setup)": (away ?? 0) > 100,
           "reading position holds (≤1 pt)": moved.maxDriftPt <= 1,
-          "no remounts": remounts(view.events) === 0,
+          "no remounts": rebuilt === 0,
         },
       };
     },

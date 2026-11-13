@@ -48,11 +48,20 @@ function userScrollWindows(events: ProbeEvent[]): Array<[number, number]> {
   return windows;
 }
 
+/**
+ * Frames and events between `from` and `to`, minus the reader's own scrolling. The probe writes a
+ * frame only when something moved, so the last frame before `from` is the layout at `from`; it
+ * leads the window so a jump in the first frame inside it is measured.
+ */
 export function window(log: ProbeLog, from: number, to: number): ProbeLog {
   const scrolling = userScrollWindows(log.events);
   const userMoved = (t: number) => scrolling.some(([start, end]) => t >= start && t <= end);
+  const inside = log.frames.filter(
+    (frame) => frame.t >= from && frame.t <= to && !userMoved(frame.t),
+  );
+  const atStart = userMoved(from) ? undefined : log.frames.findLast((frame) => frame.t < from);
   return {
-    frames: log.frames.filter((frame) => frame.t >= from && frame.t <= to && !userMoved(frame.t)),
+    frames: atStart ? [atStart, ...inside] : inside,
     events: log.events.filter((event) => event.t >= from && event.t <= to),
   };
 }
@@ -123,15 +132,22 @@ export function motion(
   };
 }
 
-/** Mounts of a row that already mounted in this window: SwiftUI rebuilt it from scratch. */
-export function remounts(events: ProbeEvent[], keyFilter: (key: string) => boolean = isRow) {
+/**
+ * Mounts between `from` and `to` of a row that had already mounted earlier in the log: SwiftUI
+ * rebuilt it from scratch. Takes the whole log's events, so rows mounted before the window count.
+ */
+export function remounts(
+  events: ProbeEvent[],
+  from = Number.NEGATIVE_INFINITY,
+  to = Number.POSITIVE_INFINITY,
+) {
   const mounted = new Set<string>();
   let count = 0;
   for (const event of events) {
-    if (event.e !== "mount" || !event.k || !keyFilter(event.k)) {
+    if (event.e !== "mount" || !event.k || !isRow(event.k) || event.t > to) {
       continue;
     }
-    if (mounted.has(event.k)) {
+    if (event.t >= from && mounted.has(event.k)) {
       count += 1;
     }
     mounted.add(event.k);

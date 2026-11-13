@@ -58,18 +58,29 @@ describe("window", () => {
     };
     expect(window(log, 0, 100).frames.map((f) => f.t)).toEqual([10, 40]);
   });
+
+  it("measures a jump in the first frame of a window against the layout at its start", () => {
+    // Frames are written only on change: the 500 pt layout holds until the jump at t=60.
+    const log: ProbeLog = {
+      frames: [frame(10, { "user/a": 500 }), frame(60, { "user/a": 30 })],
+      events: [],
+    };
+    expect(motion(window(log, 50, 100).frames)).toMatchObject({ teleports: 1, maxDriftPt: 470 });
+  });
 });
 
 describe("remounts", () => {
-  it("counts only repeat mounts of the same row", () => {
+  it("counts repeat mounts in the window, including rows first mounted before it", () => {
     const mount = (t: number, k: string) => ({ t, e: "mount", k });
-    expect(
-      remounts([
-        mount(1, "user/a"),
-        mount(2, "assistant/b"),
-        mount(3, "user/a"),
-        mount(4, "composer"),
-      ]),
-    ).toBe(1);
+    const events = [
+      mount(1, "user/a"),
+      mount(2, "assistant/b"),
+      mount(3, "composer"),
+      mount(12, "user/a"),
+      mount(13, "composer"),
+      mount(14, "assistant/c"),
+    ];
+    expect(remounts(events, 10, 20)).toBe(1);
+    expect(remounts(events, 0, 5)).toBe(0);
   });
 });
