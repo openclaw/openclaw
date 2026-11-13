@@ -66,6 +66,12 @@ describe("database config", () => {
     },
     { engine: "sqlite", postgres: { ownership: "state-directory" } },
     { engine: "postgres", postgres: { ownership: "installation" } },
+    { engine: "postgres", postgres: { ownership: "installation", recoveryCaptures: "server" } },
+    {
+      engine: "postgres",
+      postgres: { ownership: "state-directory", recoveryCaptures: "server" },
+      families: familyEngines(["postgres", "sqlite", "postgres", "postgres", "postgres"]),
+    },
     {
       engine: "postgres",
       postgres: { ownership: "installation" },
@@ -96,6 +102,11 @@ describe("database config", () => {
       engine: "postgres",
       postgres: { ownership: "installation" },
       families: familyEngines(["postgres", "postgres", "postgres", "postgres", "sqlite"]),
+    },
+    {
+      engine: "postgres",
+      postgres: { ownership: "installation", recoveryCaptures: "server" },
+      families: familyEngines(["postgres", "sqlite", "postgres", "postgres", "postgres"]),
     },
   ])("rejects invalid database config %j", (database) => {
     expect(OpenClawSchema.safeParse({ database }).success).toBe(false);
