@@ -1,0 +1,6 @@
+# Regression tests for the terminal EXIT marker on gate tools: marker on pass, failure and SIGTERM
+# through a named shim wrapper, silence for wrappers that name no gate tool, one marker when the
+# real check-changed entrypoint runs through its wrapper or directly, exit-code normalization, and
+# the settled run code after clean or failing worker disposal of a passing test child.
+# Exact net growth for this change.
+185

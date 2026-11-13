@@ -363,13 +363,19 @@ if (require.main === module) {
 afterEach(cleanupCorepackPnpmShimDir);
 
 describe("scripts/changed-lanes", () => {
-  it.each(["changed-lanes", "check-changed"])("prints %s help before running checks", (script) => {
+  it.each([
+    // changed-lanes only plans; check-changed is the gate, so it alone ends in a marker.
+    ["changed-lanes", ""],
+    ["check-changed", "[check:changed] EXIT 0"],
+  ])("prints %s help before running checks", (script, marker) => {
     const result = runRepoScript(`scripts/${script}.mjs`, ["--help"], {
       ...createNestedGitEnv(),
       OPENCLAW_TESTBOX: "1",
     });
     expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
+    // Even a gate run that only prints help ends in its terminal marker, so a
+    // truncated detached log never reads as a clean run.
+    expect(result.stderr.trim()).toBe(marker);
     expect(result.stdout).toContain(`Usage: node scripts/${script}.mjs`);
     expect(result.stdout).not.toContain("--help: unknown surface");
     expect(result.stdout).not.toContain("[check:changed]");
@@ -383,7 +389,10 @@ describe("scripts/changed-lanes", () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout).toBe("");
-    expect(result.stderr.trim()).toBe("[check:changed] no changed paths; nothing to run");
+    expect(result.stderr.trim().split("\n")).toEqual([
+      "[check:changed] no changed paths; nothing to run",
+      "[check:changed] EXIT 0",
+    ]);
   });
 
   it.each([false, true])("delegates unresolved refs (explicit metadata: %s)", (metadata) => {
@@ -414,10 +423,16 @@ describe("scripts/changed-lanes", () => {
   });
 
   it.each([
-    ["changed-lanes", "--jsno", "Unknown option: --jsno"],
-    ["check-changed", "--dr-run", "Unknown option: --dr-run\n[check:changed] FAILED (exit 1)"],
+    ["changed-lanes.mjs", "--jsno", "Unknown option: --jsno"],
+    // The detached gate lanes run the implementation directly, bypassing the
+    // wrapper entirely; the marker has to read the same in both invocation styles.
+    ...["check-changed.mjs", "check-changed.mts"].map((script) => [
+      script,
+      "--dr-run",
+      "Unknown option: --dr-run\n[check:changed] EXIT 1\n[check:changed] FAILED (exit 1)",
+    ]),
   ])("rejects unknown %s options", (script, option, error) => {
-    const result = runRepoScript(`scripts/${script}.mjs`, [option], {
+    const result = runRepoScript(`scripts/${script}`, [option], {
       ...createNestedGitEnv(),
       OPENCLAW_TESTBOX: "1",
     });
@@ -770,7 +785,10 @@ describe("scripts/changed-lanes", () => {
         diagnostics,
       ).toHaveLength(4);
       expect(diagnostics).toContain(broken);
-      expect(failed.stderr.trim().split("\n").at(-1)).toBe("[check:changed] FAILED (exit 1)");
+      expect(failed.stderr.trim().split("\n").slice(-2)).toEqual([
+        "[check:changed] EXIT 1",
+        "[check:changed] FAILED (exit 1)",
+      ]);
 
       writeRepoFile(
         dir,
