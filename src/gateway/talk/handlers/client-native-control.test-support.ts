@@ -1,4 +1,5 @@
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
+import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawPluginDefinition } from "openclaw/plugin-sdk/plugin-entry";
@@ -177,6 +178,10 @@ export async function withNativePlugin(
   await withOpenClawTestState(
     { layout: "state-only", prefix: "talk-native-control-", env: { OPENAI_API_KEY: undefined } },
     async (state) => {
+      // The next fixture reuses this ID with a fresh transcript and workspace.
+      using _sessionResources = {
+        [Symbol.dispose]: () => cleanupSessionResources(SESSION_ID),
+      };
       const realtimeConfig: TalkRealtimeConfig = {
         provider: "openai",
         providers: { openai: { apiKey: "test-key" } },
