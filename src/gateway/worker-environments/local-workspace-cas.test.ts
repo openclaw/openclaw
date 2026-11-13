@@ -22,7 +22,6 @@ import {
   deleteLocalWorkspaceSweepBatchInDatabase,
   prepareLocalWorkspaceContentInDatabase,
   readLocalWorkspaceSourcePaths,
-  readLocalWorkspaceSweepCandidates,
   readLocalWorkspaceTree,
 } from "./local-workspace-cas.kernel.js";
 import { prepareLocalWorkspaceFingerprints } from "./local-workspace-fingerprints.js";
@@ -36,6 +35,7 @@ import {
   localWorkspaceManifestRootReference,
 } from "./local-workspace-manifest-tree.js";
 import {
+  localWorkspaceReadOperations,
   mutateLocalWorkspaceProjection,
   readLocalWorkspaceProjectionInDatabase,
 } from "./local-workspace-store.kernel.js";
@@ -566,10 +566,12 @@ it("accepts a prepared tree with only the projection root flip inside the writer
   ).toEqual(records);
 });
 
-it("sweeps unreachable content while retaining baseline, previous and pending roots and newly reused content", () => {
-  using db = new DatabaseSync(":memory:");
+it("releases sweep read pages for checkpoints while retaining live and concurrently reused content", () => {
+  const databasePath = path.join(dirs.make("workspace-sweep-pages-"), "state.sqlite");
+  using db = new DatabaseSync(databasePath);
+  db.exec("PRAGMA journal_mode=WAL");
   db.exec(extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "config_machine_state"));
-  const id = randomUUID();
+  const id = "m-existing-projection";
   const baseline = createLocalWorkspaceManifestTree(
     Array.from({ length: 300 }, (_, index) => [
       { path: `dir-${index}`, type: "directory" as const },
@@ -586,11 +588,12 @@ it("sweeps unreachable content while retaining baseline, previous and pending ro
   const pending = tree("c");
   const abandoned = tree("d");
   const reused = tree("e");
+  const published = tree("f");
   mutateLocalWorkspaceProjection(db, id, {
     kind: "create",
     row: localWorkspaceProjectionFixture(id, "/synthetic"),
   });
-  for (const records of [baseline, previous, pending, abandoned, reused]) {
+  for (const records of [baseline, previous, pending, abandoned, reused, published]) {
     prepareTreePacks(db, records);
   }
   const livePaths = prepareLocalWorkspaceSourcePathSet('["entry.txt"]');
@@ -636,19 +639,41 @@ it("sweeps unreachable content while retaining baseline, previous and pending ro
   const packCount = Number(
     db.prepare("SELECT count(*) AS n FROM local_workspace_tree_packs").get()!.n,
   );
-  const reads = trackSqliteStatementExecutions(db, ["packs"], (sql) =>
-    /^select\b/i.test(sql) && sql.includes('from "local_workspace_tree_packs"') ? "packs" : null,
+  using reader = new DatabaseSync(databasePath, { readOnly: true });
+  const checkpointBusy: number[] = [];
+  const reads = trackSqliteStatementExecutions(reader, ["packs"], (sql) => {
+    if (!/^select\b/i.test(sql) || !sql.includes('from "local_workspace_tree_packs"')) {
+      return null;
+    }
+    if (!checkpointBusy.length) {
+      // Publish behind the projection cursor, after its first page but before graph reads.
+      prepareTreePacks(db, published);
+      mutateLocalWorkspaceProjection(db, "a-new-projection", {
+        kind: "create",
+        row: {
+          ...localWorkspaceProjectionFixture("a-new-projection", "/synthetic/new"),
+          baseline_ref: reference(published),
+          tree_root_digest: localWorkspaceDigestBytes(root(published)),
+        },
+      });
+      checkpointBusy.push(Number(db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()!.busy));
+    }
+    return "packs";
+  });
+  const { candidates } = localWorkspaceReadOperations["localWorkspace.sweepCandidates"](
+    { epoch },
+    reader,
   );
-  const candidates = readLocalWorkspaceSweepCandidates(db, epoch);
   reads.restore();
-  // Every old digest is returned by candidate discovery; traversal already knows its lookup keys.
+  expect(checkpointBusy).toEqual([0]);
+  // Candidate paging reads each digest once; graph traversal already knows its lookup keys.
   expect(reads.blobBytes.packs).toBe(packCount * 32);
   expect(candidates.packs).toHaveLength(4);
   expect(candidates.paths).toHaveLength(2);
-  // A writer reusing content after the snapshot protects it with the current epoch.
+  // A writer reusing content after discovery protects it with the current epoch.
   prepareTreePacks(db, reused, reusedPaths);
   deleteLocalWorkspaceSweepBatchInDatabase(db, epoch, candidates);
-  for (const records of [baseline, previous, pending, reused]) {
+  for (const records of [baseline, previous, pending, reused, published]) {
     expect(
       decodeLocalWorkspaceTree(
         readLocalWorkspaceTree(db, localWorkspaceDigestBytes(root(records))),

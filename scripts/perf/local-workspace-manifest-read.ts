@@ -17,7 +17,10 @@
  * in one process, not worker scheduling or whole-Gateway latency. It creates 10k
  * projection rows and one large manifest, or enough distinct manifests for the
  * requested disk size. Only the fixed first manifest is measured in either case.
- * --sweep measures the existing GC reader across every saved tree instead.
+ * --sweep measures the production GC handler across every saved tree instead.
+ * Sweep acceptance: identical candidates, checkpoint read holds reduced by >=90%,
+ * and no >20% regression in paired wall/CPU/allocation medians. Run two parent A/A
+ * controls and five interleaved pairs. This does not claim lower total disk IO.
  * --sweep-epoch=4 selects its epoch (default 3). Nonempty candidate sets are
  * reported as sorted digests; compare these between source revisions too.
  * For historical fixtures, use stored epochs >=2: SQLite encodes 0 and 1 without
@@ -79,16 +82,15 @@ const { createLocalWorkspaceManifestTree, localWorkspaceManifestRootReference } 
   await import("../../src/gateway/worker-environments/local-workspace-manifest-tree.js");
 const { localWorkspaceDigestBytes, prepareLocalWorkspaceTreePacks } =
   await import("../../src/gateway/worker-environments/local-workspace-cas.js");
-const { prepareLocalWorkspaceContentInDatabase, readLocalWorkspaceSweepCandidates } =
+const { beginLocalWorkspaceSweepInDatabase, prepareLocalWorkspaceContentInDatabase } =
   await import("../../src/gateway/worker-environments/local-workspace-cas.kernel.js");
-const { mutateLocalWorkspaceProjection } =
+const { localWorkspaceReadOperations, mutateLocalWorkspaceProjection } =
   await import("../../src/gateway/worker-environments/local-workspace-store.kernel.js");
 const { readLocalWorkspaceManifestRows, executeLocalWorkspaceManifestRead } =
   await import("../../src/gateway/worker-environments/local-workspace-manifest-scan.js");
 const { parseWorkerWorkspaceManifest } =
   await import("../../src/gateway/worker-environments/workspace-manifest.js");
-const { runSqliteImmediateTransactionSync, runSqliteReadSnapshotSync } =
-  await import("../../src/infra/sqlite-transaction.js");
+const { runSqliteImmediateTransactionSync } = await import("../../src/infra/sqlite-transaction.js");
 const { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } =
   await import("../../src/infra/kysely-sync.js");
 
@@ -173,6 +175,13 @@ function prepare(treeIndex: number) {
 }
 const databaseBytes = () => (databasePath === ":memory:" ? null : statSync(databasePath).size);
 if (!reuse) {
+  if (options.includes("--sweep")) {
+    const { extractSqliteTableSchema } = await import("../../src/infra/sqlite-schema-sql.js");
+    const { OPENCLAW_STATE_SCHEMA_SQL } = await import("../../src/state/openclaw-state-schema.js");
+    db.exec(extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "config_machine_state"));
+    beginLocalWorkspaceSweepInDatabase(db);
+    beginLocalWorkspaceSweepInDatabase(db);
+  }
   const prepareStart = performance.now();
   let preparedTrees = 0;
   do {
@@ -213,20 +222,56 @@ if (options.includes("--sweep")) {
   const inspector = new Session();
   const samples = [];
   let expectedCandidates: string | undefined;
+  let maxReadHoldMs = 0;
+  let maxRows = 0;
+  let readStatements = 0;
+  let transactionStarted = 0;
+  const originalExec = db.exec.bind(db);
+  db.exec = (sql) => {
+    const wasInTransaction = db.isTransaction;
+    const started = performance.now();
+    originalExec(sql);
+    if (!wasInTransaction && db.isTransaction) {
+      transactionStarted = started;
+    } else if (wasInTransaction && !db.isTransaction) {
+      maxReadHoldMs = Math.max(maxReadHoldMs, performance.now() - transactionStarted);
+    }
+  };
+  const originalPrepare = db.prepare.bind(db);
+  db.prepare = (sql) => {
+    const statement = originalPrepare(sql);
+    if (/^select\b/i.test(sql)) {
+      statement.all = new Proxy(statement.all.bind(statement), {
+        apply(all, _receiver, args) {
+          const started = performance.now();
+          const rows = all(...args);
+          maxReadHoldMs = Math.max(maxReadHoldMs, performance.now() - started);
+          maxRows = Math.max(maxRows, rows.length);
+          readStatements++;
+          return rows;
+        },
+      });
+    }
+    return statement;
+  };
+  const sweep = () =>
+    localWorkspaceReadOperations["localWorkspace.sweepCandidates"]({ epoch: sweepEpoch }, db)
+      .candidates;
   const warmupStarted = performance.now();
-  runSqliteReadSnapshotSync(db, () => readLocalWorkspaceSweepCandidates(db, sweepEpoch));
+  sweep();
   const warmupMs = performance.now() - warmupStarted;
   for (let sample = 0; sample < iterations; sample++) {
     global.gc();
     if (mode === "allocation") {
       await startCollectedHeapSampling(inspector, 32_768);
     }
+    maxReadHoldMs = 0;
+    maxRows = 0;
+    readStatements = 0;
     const readBefore = Number(pager?.get()?.misses ?? 0);
     const cpu = process.cpuUsage();
     const started = performance.now();
-    const candidates = runSqliteReadSnapshotSync(db, () =>
-      readLocalWorkspaceSweepCandidates(db, sweepEpoch),
-    );
+    const candidates = sweep();
     const elapsedMs = performance.now() - started;
     const used = process.cpuUsage(cpu);
     const allocation =
@@ -246,6 +291,9 @@ if (options.includes("--sweep")) {
     assert.equal(candidateDigest, expectedCandidates);
     samples.push({
       elapsedMs,
+      maxReadHoldMs,
+      maxRows,
+      readStatements,
       cpuMs: (used.user + used.system) / 1000,
       logicalReadBytes: pager ? (Number(pager.get()!.misses) - readBefore) * pageSize : undefined,
       allocatedBytes: allocation?.samples.reduce((sum, entry) => sum + entry.size, 0),
