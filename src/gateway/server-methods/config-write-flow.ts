@@ -228,7 +228,7 @@ export function respondConfigWriteApplicationOutcome(params: {
     errorShape(ErrorCodes.UNAVAILABLE, message, {
       details: {
         persistedConfig: params.persistedConfig,
-        ...(deferred ? { application: deferred } : {}),
+        application: deferred ?? { status },
       },
     }),
   );

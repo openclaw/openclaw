@@ -292,7 +292,11 @@ it.each([
     expect(harness.respond).toHaveBeenCalledWith(
       false,
       undefined,
-      expect.objectContaining({ code: "UNAVAILABLE", message }),
+      expect.objectContaining({
+        code: "UNAVAILABLE",
+        message,
+        details: expect.objectContaining({ application: { status: outcome } }),
+      }),
     );
     const excludedMessages =
       outcome === "restart-pending"

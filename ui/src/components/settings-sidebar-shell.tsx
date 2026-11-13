@@ -6,6 +6,7 @@ import {
   currentConfigConnectionEpoch,
   currentConfigObject,
 } from "../lib/config/config-state-model.ts";
+import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import {
   SettingsSaveIndicator,
@@ -60,6 +61,7 @@ function useSaveIndicatorProps(host: () => ShellViewHost) {
     const overlaySnapshot = context.overlays.snapshot;
     // The install outlives update.run; reconciliation owns the busy state.
     const updateBusy = overlaySnapshot.updateRunning || overlaySnapshot.updateReconciliationPending;
+    const gatewayClient = context.gateway.snapshot.client;
     return {
       status: runtimeConfig.configRecoveryError
         ? "recovery"
@@ -91,6 +93,14 @@ function useSaveIndicatorProps(host: () => ShellViewHost) {
       onSave: () => context.runtimeConfig.save(),
       onReload: () => context.runtimeConfig.discardDraft(),
       onApply: () => context.runtimeConfig.apply(),
+      onRestart:
+        gatewayClient &&
+        canCallGatewayMethod(context.gateway.snapshot, "gateway.restart.request", "operator.admin")
+          ? () =>
+              gatewayClient.request("gateway.restart.request", {
+                reason: "Control UI: finish applying saved settings",
+              })
+          : null,
     };
   });
 }
