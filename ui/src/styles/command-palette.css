@@ -42,11 +42,12 @@
   opacity: 0;
 }
 
+/* The filter tabs sit clear of the hairline, as far below it as the dock's tabs sit inside it. */
 .cmd-palette__filters {
   display: flex;
   flex: 0 0 auto;
   gap: 2px;
-  padding: 0 12px 2px;
+  padding: 10px 12px 0;
 }
 
 .cmd-palette__filter {
