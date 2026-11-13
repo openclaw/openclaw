@@ -148,7 +148,7 @@ installation, and hold identities before releasing that anchor's holds in SQLite
 The installation becomes settled only when no holds remain. Failed settlement
 retains the recorded holds even if the anchor is already absent.
 
-Each ordinary invocation collects before acquiring dependencies, including when
+By default, each ordinary invocation collects before acquiring dependencies, including when
 an installed checkout can supply them. Discovery and explicit recovery commands
 retain their independent bootstrap behavior. Collection keeps the four most recently used
 settled installations with no holds. Reuse order comes from the ledger's
@@ -172,6 +172,24 @@ The canonical and explicit tooling roots are never fetched, fast-forwarded, or
 reinstalled by this path. Explicit-root identity checks remain unchanged, and
 matching installed packages still take the direct path. Keep any externally
 managed installation intact until its consumers finish.
+
+### Defer shared cache collection
+
+For one command, `OPENCLAW_PR_DEFER_CACHE_COLLECTION=1` skips opportunistic shared
+cache discovery, candidate enumeration, process inspection, and collection. It
+also covers retained workflows that call the exported collector directly. Unset
+the variable to keep normal collection; any other value, including an empty
+string, is rejected.
+
+```bash
+OPENCLAW_PR_DEFER_CACHE_COLLECTION=1 scripts/pr review-guard <PR>
+```
+
+Deferral changes no authentication, workflow binding, dependency qualification,
+lock validation, anchor claims, lifetime registration, or task-owned retirement.
+Active FD7 lifetimes still retain their anchors. It grants no installation,
+refresh, recovery, or cleanup authority. Scope the variable to the command;
+later invocations without it collect normally. No persistent setting is written.
 
 ## Qualify the workspace before review
 
