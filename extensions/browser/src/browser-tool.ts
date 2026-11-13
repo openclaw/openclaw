@@ -30,7 +30,7 @@ import { applyBrowserTabToolBinding } from "./browser-tool-binding.js";
 import { createBrowserToolDefinition } from "./browser-tool-description.js";
 import { executeBrowserTabAction } from "./browser-tool-dispatch.js";
 import { createBrowserToolSessionTabs } from "./browser-tool-session-tabs.js";
-import { userHasControlResult, withOperatorActivityNote } from "./browser-tool.operator-control.js";
+import { userHasControlResult, withOperatorControlNote } from "./browser-tool.operator-control.js";
 import { resolveBrowserBaseUrl, resolveBrowserToolNodeTarget } from "./browser-tool.routing.js";
 import { BROWSER_ACT_REQUEST_KEYS, type BrowserToolCapabilities } from "./browser-tool.schema.js";
 import type { BrowserScreenshotOptions } from "./browser-tool.screenshot.js";
@@ -693,7 +693,7 @@ export function createBrowserTool(
       }
       if (!baseUrl && !proxyRequest) {
         // Host-local routes share operator-control state with the Browser panel.
-        result = await withOperatorActivityNote(result, profile ?? resolvedBrowser.defaultProfile);
+        result = await withOperatorControlNote(result, profile ?? resolvedBrowser.defaultProfile);
       }
       if (browserDashboard) {
         // Dashboard presentation owns this tab; ordinary preview metadata would steal its panel.
