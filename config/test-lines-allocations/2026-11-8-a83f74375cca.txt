@@ -1,0 +1,5 @@
+15
+# LOCAL 2026.11.8 row 66; source a83f74375ccaa48c3742d8dda216d603fc59cc49.
+# Propagates current command cancellation into stop RPC and rethrows before config write; ordinary stop failure remains best effort. Scope limits: Mocked Gateway stop; no actual SIGINT/SIGTERM CLI run.
+# Keeps distinct regression invariants; exact net LF measured at integration.
+# Scalar baseline unchanged; focused private proof retained.

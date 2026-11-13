@@ -11,6 +11,7 @@ import { createScopedChannelConfigAdapter } from "../plugin-sdk/channel-config-h
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   ensureChannelSetupPluginInstalled,
@@ -417,11 +418,11 @@ describe("channelsRemoveCommand", () => {
       callOrder.push("output");
     });
 
-    await channelsRemoveCommand(
-      { channel: "external-chat", account: "Work", delete: true },
-      runtime,
-      { hasFlags: true },
-    );
+    const removeWork = () =>
+      channelsRemoveCommand({ channel: "external-chat", account: "Work", delete: true }, runtime, {
+        hasFlags: true,
+      });
+    await removeWork();
 
     expect(plugin.config.deleteAccount).toHaveBeenCalledExactlyOnceWith({ cfg, accountId: "work" });
     expect(gatewayMocks.callGateway).toHaveBeenCalledWith({
@@ -442,6 +443,20 @@ describe("channelsRemoveCommand", () => {
     });
     expect(callOrder).toEqual(["delete", "stop", "lifecycle", "persist", "output"]);
     expect(runtime.log).toHaveBeenCalledWith('Deleted external-chat account "work".');
+
+    configMocks.writeConfigFile.mockClear();
+    const scope = new AsyncWorkScope();
+    const reason = new Error("channels remove interrupted");
+    gatewayMocks.callGateway.mockImplementation(async () => {
+      scope.beginClose(reason);
+      throw new Error("gateway unavailable");
+    });
+    await expect(scope.run(removeWork)).rejects.toBe(reason);
+    expect(gatewayMocks.callGateway).toHaveBeenLastCalledWith(
+      expect.objectContaining({ signal: scope.signal }),
+    );
+    expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
+    await scope.drain();
   });
 
   it.each([
