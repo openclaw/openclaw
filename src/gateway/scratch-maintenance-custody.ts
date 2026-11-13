@@ -109,7 +109,9 @@ export async function prepareScratchMaintenanceTargets(
     ]);
     assertInventory();
     const roots = new Map<string, string[]>();
-    for (const record of state.records) {
+    // Registry rows are newest-first; a fresh prefix can consume every restarted pass.
+    for (let index = state.records.length - 1; index >= 0; index--) {
+      const record = state.records[index]!;
       if (record.removedAt === undefined) {
         const root = path.resolve(record.path);
         const ids = roots.get(root) ?? [];

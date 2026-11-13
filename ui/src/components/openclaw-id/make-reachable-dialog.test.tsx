@@ -143,13 +143,14 @@ describe("Make reachable publication outcome", () => {
       if (!online) {
         expect(document.body.textContent).toContain("Remote access is not connected yet");
       }
-      const details = [...document.querySelectorAll("details")].find((item) =>
-        item.textContent?.includes("HTTP 503"),
+      const warning = document.querySelector<HTMLButtonElement>(
+        '.openclaw-id-steps__item[data-state="warning"] button',
       );
-      expect(details?.open).toBe(false);
-      expect(details?.querySelector("summary")?.textContent).toBe("Technical details");
+      expect(warning?.getAttribute("aria-label")).toContain(expected);
+      const tooltip = document.getElementById(warning!.getAttribute("aria-describedby")!);
+      expect(tooltip?.textContent).toContain("HTTP 503");
       expect(document.body.textContent).not.toMatch(/add an enrollment code/i);
-      await click("Done");
+      await click("Close");
       expect(await done).toBe(true);
     },
   );

@@ -33,6 +33,15 @@ import {
 import { replayToolResultPromptProjections } from "./tool-result-projection-replay.js";
 import { restoreCacheTtlToolResultProjections } from "./tool-result-truncation.js";
 
+function sameModelRoute(left: Model, right: Model): boolean {
+  return (
+    left.provider === right.provider &&
+    left.id === right.id &&
+    left.api === right.api &&
+    left.baseUrl === right.baseUrl
+  );
+}
+
 function matchesModelRoute(routeKey: unknown, model: Model): boolean {
   const route = parseSystemPromptRouteKey(routeKey);
   return (
@@ -63,7 +72,11 @@ export async function prepareEmbeddedSessionForkContext(params: {
   directApiKey?: boolean;
   signal?: AbortSignal;
   assertCurrent: () => void;
-}): Promise<{ context: Context; promptCacheKey?: string }> {
+}): Promise<{
+  context: Context;
+  promptCacheKey?: string;
+  preparedRequest?: Record<string, unknown>;
+}> {
   const assertCurrent = () => {
     params.signal?.throwIfAborted();
     params.assertCurrent();
@@ -80,13 +93,7 @@ export async function prepareEmbeddedSessionForkContext(params: {
     isCurrentEmbeddedRunAttachment(attachment)
       ? attachment.handle.readSessionForkContext?.()
       : undefined;
-  if (
-    live &&
-    live.model.provider === params.model.provider &&
-    live.model.id === params.model.id &&
-    live.model.api === params.model.api &&
-    live.model.baseUrl === params.model.baseUrl
-  ) {
+  if (live && sameModelRoute(live.model, params.model)) {
     const messages = normalizeMessagesForLlmBoundary(
       live.projectMessages?.(live.messages) ?? live.messages,
       {
@@ -120,7 +127,14 @@ export async function prepareEmbeddedSessionForkContext(params: {
       context.messages = convertToLlm(live.projectMessages(context.messages));
     }
     applyRuntimeContextCarrierRetention(context.messages, live.boundary?.appendOnlyRuntimeContext);
-    return { context, promptCacheKey: live.promptCacheKey };
+    const prepared = live.preparedRequest;
+    return {
+      context,
+      promptCacheKey: live.promptCacheKey,
+      ...(prepared && sameModelRoute(prepared.model, params.model)
+        ? { preparedRequest: prepared.body }
+        : {}),
+    };
   }
 
   const marker = parseSqliteSessionFileMarker(params.sessionFile);

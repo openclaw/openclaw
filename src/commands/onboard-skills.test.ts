@@ -1,10 +1,12 @@
+import { PassThrough } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import type { RuntimeEnv } from "../runtime.js";
 import type { SkillInstallOption } from "../skills/discovery/status.types.js";
+import { createClackPrompter } from "../wizard/clack-prompter.js";
+import { runWizardWithPromptNavigation } from "../wizard/navigation-prompter.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { withPlatform } from "../wizard/setup.finalize.test-support.js";
-import { makePrompter } from "./setup/__tests__/test-utils.js";
+import { makePrompter, makeRuntime } from "./setup/__tests__/test-utils.js";
 
 const mocks = vi.hoisted(() => ({
   buildWorkspaceSkillStatus: vi.fn(),
@@ -117,13 +119,7 @@ function createPrompter(params: { multiselect?: string[] }) {
   };
 }
 
-const runtime: RuntimeEnv = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: ((code: number) => {
-    throw new Error(`unexpected exit ${code}`);
-  }) as RuntimeEnv["exit"],
-};
+const runtime = makeRuntime();
 
 const supportsHomebrewPrompt = process.platform === "darwin" || process.platform === "linux";
 
@@ -158,7 +154,6 @@ describe("setupSkills", () => {
     const stop = vi.fn();
     const { prompter, run, choices } = createPrompter({ multiselect: ["node-helper"] });
     vi.mocked(prompter.progress).mockReturnValue({ update: vi.fn(), stop });
-
     await run();
     expect(choices().find((option) => option.value === "node-helper")?.hint).toBe(`${hintPrefix}…`);
     expect(stop).toHaveBeenCalledWith(expect.stringContaining(`${failurePrefix}…`));
@@ -171,10 +166,8 @@ describe("setupSkills", () => {
         mockMissingBrewStatus([createBrewSkill()]);
         mocks.isContainerEnvironment.mockReturnValue(true);
         mocks.resolveBrewExecutable.mockReturnValue(brew);
-
         const { prompter, notes, run } = createPrompter({ multiselect: ["video-frames"] });
         await run();
-
         if (brew) {
           expect(prompter.multiselect).toHaveBeenCalled();
           expect(mocks.installSkill).toHaveBeenCalledWith(
@@ -199,20 +192,13 @@ describe("setupSkills", () => {
     async (selected) => {
       await withPlatform("linux", async () => {
         mockMissingBrewStatus([
-          createWorkspaceSkill({
-            name: "repo-helper",
-            installKind: "node",
-          }),
+          createWorkspaceSkill({ name: "repo-helper", installKind: "node" }),
           createNodeSkill(),
-          createBundledSkill({
-            name: "nano-pdf",
-            installKind: "uv",
-          }),
+          createBundledSkill({ name: "nano-pdf", installKind: "uv" }),
         ]);
         mocks.resolveInstallerKindReadiness.mockImplementation(async (kind: string) =>
           kind === "uv" ? { ready: false, reason: "uv" } : { ready: true },
         );
-
         const { prompter, notes, run, choices } = createPrompter({ multiselect: [selected] });
         await run();
         expect(choices().map(({ value }) => value)).toEqual(
@@ -243,44 +229,57 @@ describe("setupSkills", () => {
     },
   );
 
-  it("installs only the bundled dependencies selected by the user", async () => {
-    mockMissingBrewStatus([
-      createNodeSkill(),
-      createBundledSkill({
-        name: "other-helper",
-        installKind: "node",
-      }),
-    ]);
-
-    const beforePersistentEffect = vi.fn(async () => {});
-    const { run } = createPrompter({ multiselect: ["__skip__", "node-helper"] });
-    await run({}, { beforePersistentEffect });
-
-    expect(beforePersistentEffect).toHaveBeenCalledOnce();
-    expect(beforePersistentEffect.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.installSkill.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+  it.each([
+    ["Enter skips", [{ name: "return" }], []],
+    [
+      "picking a dependency installs it",
+      [{ name: "down" }, { name: "space" }, { name: "return" }],
+      ["node-helper"],
+    ],
+  ] as const)("onboarding's real prompt: %s", async (_case, keys, installed) => {
+    mockMissingBrewStatus([createNodeSkill()]);
+    const output = new PassThrough();
+    let sent = false;
+    output.on("data", (chunk: Buffer) => {
+      if (sent || !chunk.toString().includes("Skip for now")) {
+        return;
+      }
+      sent = true;
+      // Ctrl-C last: a prompt still open after Enter cancels instead of hanging.
+      setImmediate(() => {
+        for (const key of [...keys, { name: "c", ctrl: true, sequence: "\x03" }]) {
+          process.stdin.emit("keypress", key.name === "space" ? " " : undefined, key);
+        }
+      });
+    });
+    await runWizardWithPromptNavigation(
+      createClackPrompter(output as unknown as NodeJS.WriteStream),
+      async (prompter) => void (await setupSkills({}, "/tmp/ws", runtime, prompter)),
     );
-
-    expect(mocks.installSkill).toHaveBeenCalledTimes(1);
-    expect(mocks.installSkill).toHaveBeenCalledWith(
-      expect.objectContaining({ skillName: "node-helper", installId: "node" }),
-    );
+    expect(mocks.installSkill.mock.calls.map(([call]) => call.skillName)).toEqual(installed);
   });
 
   it.each([
     [undefined, undefined, "npm"],
     ["yarn", undefined, "yarn"],
   ] as const)(
-    "installs with saved %s and requested %s using %s",
+    "installs only selected dependencies using %s/%s => %s",
     async (saved, requested, expected) => {
-      mockMissingBrewStatus([createNodeSkill()]);
-
-      const { run } = createPrompter({ multiselect: ["node-helper"] });
+      mockMissingBrewStatus([
+        createNodeSkill(),
+        createBundledSkill({ name: "other-helper", installKind: "node" }),
+      ]);
+      const beforePersistentEffect = vi.fn(async () => {});
+      const { run } = createPrompter({ multiselect: ["__skip__", "node-helper"] });
       const next = await run(
         { skills: { install: { nodeManager: saved } } },
-        { nodeManager: requested },
+        { nodeManager: requested, beforePersistentEffect },
       );
-
+      expect(beforePersistentEffect).toHaveBeenCalledOnce();
+      expect(beforePersistentEffect.mock.invocationCallOrder[0]).toBeLessThan(
+        mocks.installSkill.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+      expect(mocks.installSkill).toHaveBeenCalledTimes(1);
       expect(next.skills?.install?.nodeManager).toBe(expected);
       expect(mocks.installSkill.mock.calls[0]?.[0]).toMatchObject({
         skillName: "node-helper",
@@ -294,13 +293,10 @@ describe("setupSkills", () => {
     if (!supportsHomebrewPrompt) {
       return;
     }
-
     mockMissingBrewStatus([createBrewSkill()]);
     mocks.resolveInstallerKindReadiness.mockResolvedValue({ ready: false, reason: "brew" });
-
     const { notes, run } = createPrompter({ multiselect: ["video-frames"] });
     await run();
-
     const brewNote = notes.find((n) => n.title === "Homebrew recommended");
     expect(brewNote?.title).toBe("Homebrew recommended");
     expect(mocks.installSkill).not.toHaveBeenCalled();
@@ -325,7 +321,6 @@ describe("setupSkills", () => {
         code: null,
         skipReason: "go",
       });
-
       const { notes, run } = createPrompter({ multiselect: ["blogwatcher"] });
       await run();
 

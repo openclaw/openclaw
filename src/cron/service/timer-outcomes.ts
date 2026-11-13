@@ -644,8 +644,10 @@ export function applyTriggerNoFireResult(
   job.state.runningAtMs = undefined;
   job.state.runningReceiptId = undefined;
   delete job.state.runningScheduleChangeId;
+  // A completed quiet check ends any waiting episode, like a payload run's completion.
+  delete job.state.admissionDeferred;
   job.updatedAtMs = result.endedAt;
-  if (!result.triggerEval.busy && opts.triggerOwnership !== "stale") {
+  if (opts.triggerOwnership !== "stale") {
     // A non-firing evaluation is successful scheduler work, not a payload run;
     // reset error streaks, but preserve delivery history and its alert cooldown.
     job.state.consecutiveErrors = 0;
