@@ -22,8 +22,8 @@ function formatGitHubPublicationResult(result: SessionGitHubPublicationResult): 
     publisher?.source === "personal"
       ? "My GitHub"
       : publisher?.source === "agent-override"
-        ? "Agent override"
-        : "System";
+        ? "Own account"
+        : "Shared agent account";
   const acting = publisher ? ` Using @${publisher.login} (${source}).` : "";
   switch (result.status) {
     case "published":
