@@ -9,6 +9,10 @@ import type {
   SimpleStreamOptions,
 } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  commitCompactionSummary,
+  stripSummaryFloor,
+} from "../../../packages/agent-core/src/harness/compaction/compaction-floor.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
@@ -421,7 +425,7 @@ describe("AgentSession compaction", () => {
     },
   );
 
-  it("caps extension summaries before persistence and manual return", async () => {
+  it("caps extension summaries and appends the floor outside the cap", async () => {
     const sessionManager = oldHistory();
     const oversizedSummary = "summary detail ".repeat(2_000);
     let manualRequestState: string | undefined;
@@ -435,10 +439,48 @@ describe("AgentSession compaction", () => {
     const result = await session.compact();
     const persisted = compactions(sessionManager).at(-1);
 
-    expect(result.summary.length).toBeLessThanOrEqual(16_000);
-    expect(result.summary).toContain("[Compaction summary truncated to fit budget]");
+    const capped = stripSummaryFloor(result.summary);
+    expect(capped.length).toBeLessThanOrEqual(16_000);
+    expect(capped.endsWith("[Compaction summary truncated to fit budget]")).toBe(true);
+    expect(result.summary.slice(capped.length)).toContain("[User]: old prompt");
     expect(persisted).toMatchObject({ type: "compaction", summary: result.summary });
     expect(manualRequestState).toBeUndefined();
+  });
+
+  it("drops the floor when fixed context leaves no window room without a foreground budget", async () => {
+    const { session } = await createTestSession({
+      model: { ...testModel, contextWindow: 2_000 },
+      systemPrompt: "Keep the project requirements. ".repeat(250),
+      sessionManager: oldHistory(),
+      settingsManager: compactionSettings(),
+      extension: createResultHandlers("short summary"),
+    });
+    await expect(session.compact()).resolves.toMatchObject({ summary: "short summary" });
+  });
+
+  it("replaces the core summary floor at each compaction instead of carrying it forward", async () => {
+    const sessionManager = oldHistory();
+    const prompts: string[] = [];
+    streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
+      prompts.push(JSON.stringify(context.messages));
+      return textStream(activeModel, `core summary ${prompts.length}`);
+    });
+    const { session } = await createTestSession({ sessionManager });
+    await session.compact();
+    sessionManager.appendMessage(makeUserMessage("second prompt", 3));
+    appendAnswer(sessionManager, "second answer", 4);
+    sessionManager.appendMessage(makeUserMessage("latest prompt", 5));
+    await session.compact();
+
+    const [first, second] = compactions(sessionManager).map((entry) => entry.summary);
+    expect(first).toMatch(
+      /core summary 1[\s\S]*## Deterministic record[\s\S]*\[User\]: old prompt/,
+    );
+    expect(second).toContain("[User]: second prompt");
+    expect(second?.split("## Deterministic record")).toHaveLength(2);
+    expect(second).not.toContain("[User]: old prompt");
+    expect(prompts.at(-1)).toContain("core summary 1");
+    expect(prompts.at(-1)).not.toContain("## Deterministic record");
   });
 
   it("recovers through the overflow limit with context invalidated before every retry", async () => {
@@ -509,11 +551,24 @@ describe("AgentSession compaction", () => {
 
   it("reports replacement tokens and the exact equal-summary entry before a post-commit hook finishes", async () => {
     const sessionManager = SessionManager.inMemory();
-    const summary = "The same bounded summary";
-    const oldUserId = sessionManager.appendMessage(makeUserMessage("old prompt", 1));
-    appendAnswer(sessionManager);
+    const hookSummary = "The same bounded summary";
+    const oldUser = makeUserMessage("old prompt", 1);
+    const oldUserId = sessionManager.appendMessage(oldUser);
+    const oldAnswer = { ...createAssistant(testModel, "old answer"), timestamp: 2 };
+    sessionManager.appendMessage(oldAnswer);
+    // The committed artifact carries the floor for the same region, so both summaries match.
+    const recentUser = makeUserMessage("recent prompt", 3);
+    const summary = commitCompactionSummary(
+      { summary: hookSummary },
+      {
+        messagesToSummarize: [oldUser, oldAnswer, recentUser],
+        turnPrefixMessages: [],
+        settings: {},
+      },
+      false,
+    );
     const oldCompactionId = sessionManager.appendCompaction(summary, oldUserId, 100);
-    const recentUserId = sessionManager.appendMessage(makeUserMessage("recent prompt", 3));
+    const recentUserId = sessionManager.appendMessage(recentUser);
     appendAnswer(sessionManager, "recent answer", 4);
     const hookEntered = createDeferred();
     const releaseHook = createDeferred();
@@ -525,7 +580,7 @@ describe("AgentSession compaction", () => {
       extension: (api) => {
         api.on("session_before_compact", ({ preparation }) => ({
           compaction: {
-            summary,
+            summary: hookSummary,
             firstKeptEntryId: recentUserId,
             tokensBefore: preparation.tokensBefore,
           },
@@ -869,6 +924,7 @@ describe("degraded compaction reload", () => {
       expect(boundary.summary).toContain(LATEST_ASK);
       expect(boundary.summary).not.toContain(OVERSIZED_IDENTIFIER);
       expect(boundary.summary).toContain("Summary without headings");
+      expect(boundary.summary).toContain("## Deterministic record of the compacted region");
       const replay = JSON.stringify(reopened.buildSessionContext().messages);
       expect(replay).toContain(LATEST_ASK);
       expect(replay).not.toContain(OVERSIZED_IDENTIFIER);
@@ -908,5 +964,70 @@ describe("degraded compaction reload", () => {
     } finally {
       fixture.dispose();
     }
+  });
+
+  it("records failed attempts and commits the floor only when the pending request requires it", async () => {
+    const dir = tempDirs.make("openclaw-compaction-attempts-");
+    const target = sessionTarget(path.join(dir, "sessions.json"), "compaction-attempts");
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    let sessionManager = SessionManager.open(target, dir);
+    for (const at of [1, 3]) {
+      await sessionManager.appendMessageAsync(makeUserMessage(`prompt ${at}`, at));
+      await sessionManager.appendMessageAsync({
+        ...createAssistant(model, `answer ${at}`),
+        timestamp: at + 1,
+      });
+    }
+    streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
+      createAssistantResultStream({
+        ...createAssistant(activeModel, [], "error"),
+        errorMessage: "Request timed out",
+      }),
+    );
+    const attempts = () =>
+      sessionManager
+        .getBranch()
+        .flatMap((entry) =>
+          entry.type === "custom" && entry.customType === "openclaw.compaction-attempt"
+            ? [entry.data]
+            : [],
+        );
+    let decline = false;
+    let fixture = await safeguardFixture(model, sessionManager, undefined, (api) => {
+      api.on("session_before_compact", async () => (decline ? { cancel: true } : undefined));
+    });
+    const compactOnce = async (requestRequiresCompaction?: true) => {
+      const events = collectCompactionEnds(fixture.session);
+      await fixture.session[agentSessionAutomaticCompaction](undefined, undefined, undefined, {
+        requestRequiresCompaction,
+      }).catch((error: unknown) => {
+        expect(String(error)).toContain("Compaction cancelled");
+      });
+      return events.at(-1)?.outcome;
+    };
+
+    const context = JSON.stringify(sessionManager.buildSessionContext());
+    expect(await compactOnce()).toEqual({ status: "aborted" });
+    expect(await compactOnce()).toEqual({ status: "aborted" });
+    // An earlier hook's decline does not reuse the last safeguard failure.
+    decline = true;
+    expect(await compactOnce(true)).toEqual({ status: "aborted" });
+    // Attempt rows survive a reopen and never reach model context.
+    fixture.session.dispose();
+    fixture.dispose();
+    sessionManager.flushPendingPersistence();
+    sessionManager = await reopen(target, dir);
+    fixture = await safeguardFixture(model, sessionManager);
+    expect(JSON.stringify(sessionManager.buildSessionContext())).toBe(context);
+    const cancelled = { failure: "timeout", required: false, outcome: "cancelled" };
+    const cancelledRow = { ...cancelled, tokensBefore: expect.any(Number) };
+    expect(attempts()).toEqual([cancelledRow, cancelledRow]);
+
+    // A required compaction commits the floor and takes the degraded notice path.
+    expect(await compactOnce(true)).toMatchObject({ status: "completed", qualityDegraded: true });
+    expect(lastCompaction(sessionManager).details).toMatchObject({ qualityDegraded: true });
+    expect(lastCompaction(sessionManager).details).not.toHaveProperty("summaryRefused");
+    expect(attempts().at(-1)).toMatchObject({ required: true, outcome: "floor" });
+    fixture.dispose();
   });
 });

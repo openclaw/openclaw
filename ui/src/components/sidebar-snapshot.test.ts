@@ -42,8 +42,13 @@ const model: SidebarSnapshotModel = {
   footer: { id: "profile-a", name: "Juniper" },
 };
 
-function fixture(initialAgentId = "main", initialPageScopeId: string | null = null) {
+function fixture(
+  initialAgentId = "main",
+  initialPageScopeId: string | null = null,
+  mode: "chip" | "roster" = "roster",
+) {
   let selectedAgentId = initialAgentId;
+  let sidebarMode = mode;
   let pageScopeId = initialPageScopeId;
   const publication = createApplicationGateway(
     createApplicationGatewaySnapshot({ phase: "connecting" }),
@@ -69,6 +74,9 @@ function fixture(initialAgentId = "main", initialPageScopeId: string | null = nu
   const capture = vi.fn(() => captured);
   const foreground = { foregroundReady: true };
   const host: Parameters<typeof createSidebarSnapshot>[0] = {
+    get sidebarAgentsMode() {
+      return sidebarMode;
+    },
     sidebarSnapshot: null,
     sessionDataContext: {
       gateway,
@@ -110,6 +118,10 @@ function fixture(initialAgentId = "main", initialPageScopeId: string | null = nu
       pageScopeId = scopeId;
       snapshotOwner.synchronize();
     },
+    selectMode(nextMode: "chip" | "roster") {
+      sidebarMode = nextMode;
+      snapshotOwner.synchronize();
+    },
     selectAgent(agentId: string) {
       selectedAgentId = agentId;
       snapshotOwner.synchronize();
@@ -143,6 +155,7 @@ describe("sidebar snapshot lifecycle", () => {
     vi.stubGlobal("localStorage", createStorageMock());
   });
   afterEach(async () => {
+    document.documentElement.removeAttribute("data-openclaw-warm-frame");
     for (const dispose of disposers.splice(0)) {
       dispose();
     }
@@ -296,11 +309,12 @@ describe("sidebar snapshot lifecycle", () => {
         }),
       };
       await store.writeSidebar(sidebarSnapshotScopeKey(scope), chip, parseSidebarSnapshot);
-      const test = fixture(timing === "before" ? "other" : "main");
+      const test = fixture(timing === "before" ? "other" : "main", null, "chip");
       disposers.push(
         admitSidebarBootScope(test.gateway, { ...scope, scope: scope.gatewayScope }),
         () => test.snapshotOwner.disconnect(),
       );
+      document.documentElement.setAttribute("data-openclaw-warm-frame", "holding");
       test.snapshotOwner.connect();
       if (timing === "before") {
         await new Promise<void>((resolve) => {
@@ -314,10 +328,35 @@ describe("sidebar snapshot lifecycle", () => {
       } else {
         await test.restored;
         expect(test.host.sidebarSnapshot).toEqual(chip);
+        expect(document.documentElement.getAttribute("data-openclaw-warm-frame")).toBe("holding");
         test.selectAgent("other");
       }
       expect(test.host.sidebarSnapshot).toBeNull();
       expect(test.snapshotOwner.read().saved).toBe(false);
+      expect(document.documentElement.hasAttribute("data-openclaw-warm-frame")).toBe(false);
+    },
+  );
+
+  it.each(["before", "after"] as const)(
+    "rejects a cached roster when chip mode is selected %s restoration",
+    async (timing) => {
+      const store = new SessionSnapshotStore();
+      store.connect();
+      disposers.push(() => store.disconnect());
+      await store.writeSidebar(sidebarSnapshotScopeKey(scope), model, parseSidebarSnapshot);
+      const test = fixture("main", null, timing === "before" ? "chip" : "roster");
+      disposers.push(
+        admitSidebarBootScope(test.gateway, { ...scope, scope: scope.gatewayScope }),
+        () => test.snapshotOwner.disconnect(),
+      );
+      test.snapshotOwner.connect();
+      if (timing === "after") {
+        await test.restored;
+        test.selectMode("chip");
+      } else {
+        await vi.waitFor(() => expect(test.snapshotOwner.read().pending).toBe(false));
+      }
+      expect(test.host.sidebarSnapshot).toBeNull();
     },
   );
 
@@ -335,11 +374,14 @@ describe("sidebar snapshot lifecycle", () => {
       admitSidebarBootScope(test.gateway, { ...scope, scope: scope.gatewayScope }),
       () => test.snapshotOwner.disconnect(),
     );
+    document.documentElement.setAttribute("data-openclaw-warm-frame", "holding");
     test.snapshotOwner.connect();
     expect(test.snapshotOwner.read().pending).toBe(true);
+    expect(document.documentElement.getAttribute("data-openclaw-warm-frame")).toBe("holding");
     void test.settle();
     test.publish();
     expect(test.snapshotOwner.read().pending).toBe(false);
+    expect(document.documentElement.hasAttribute("data-openclaw-warm-frame")).toBe(false);
     stalled.resolve(model);
     await vi.dynamicImportSettled();
     expect(test.host.sidebarSnapshot).toBeNull();
@@ -358,6 +400,7 @@ describe("sidebar snapshot lifecycle", () => {
         admitSidebarBootScope(test.gateway, { ...scope, scope: scope.gatewayScope }),
         () => test.snapshotOwner.disconnect(),
       );
+      document.documentElement.setAttribute("data-openclaw-warm-frame", "holding");
       test.snapshotOwner.connect();
       if (timing === "before") {
         await new Promise<void>((resolve) => {
@@ -370,10 +413,12 @@ describe("sidebar snapshot lifecycle", () => {
         });
       } else {
         await test.restored;
+        expect(document.documentElement.getAttribute("data-openclaw-warm-frame")).toBe("holding");
         test.selectPageScope("other");
       }
       expect(test.host.sidebarSnapshot).toBeNull();
       expect(test.snapshotOwner.read().saved).toBe(false);
+      expect(document.documentElement.hasAttribute("data-openclaw-warm-frame")).toBe(false);
     },
   );
 

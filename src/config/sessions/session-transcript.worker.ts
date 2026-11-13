@@ -26,6 +26,8 @@ import type {
   SessionTranscriptWorkerValues,
 } from "./session-transcript-worker.types.js";
 
+type TranscriptReply = SessionTranscriptWorkerReply<keyof SessionTranscriptWorkerValues>;
+
 const startup:
   | { databaseEngineSelection?: DatabaseEngineSelection; prewarmHistory?: true }
   | undefined = workerData;
@@ -49,13 +51,7 @@ let releaseReadValidation:
 const memoryPressure = diagnosticsChannel("openclaw.memory.critical");
 
 serveOwnedWorkerTasks(
-  async (
-    input,
-    channel,
-    control,
-  ): Promise<
-    SessionTranscriptWorkerReply<keyof SessionTranscriptWorkerValues> | UsageCostWorkerReply
-  > => {
+  async (input, channel, control): Promise<TranscriptReply | UsageCostWorkerReply> => {
     // Pressure stays inside this isolate and drops decoded caches before the next snapshot.
     // Bun's compatibility probe walks the heap instead of describing a V8 allocation limit.
     const heap = process.versions.bun ? undefined : getHeapStatistics();
@@ -390,9 +386,14 @@ serveOwnedWorkerTasks(
             );
         return { kind: "session-identity-evidence" as const, evidence };
       }
-      if (request.kind === "session-entry-read" || request.kind === "session-runtime-target") {
-        const { readSessionEntryWorkerRequest } = await import("./session-entry-read.worker.js");
-        return readSessionEntryWorkerRequest(request);
+      if (request.kind === "session-entry-read") {
+        const { readSessionEntryResult } = await import("./session-entry-read-result.worker.js");
+        return readSessionEntryResult(request);
+      }
+      if (request.kind === "session-runtime-target") {
+        const { readSessionRuntimeTargetWorkerRequest } =
+          await import("./session-runtime-target-read.worker.js");
+        return readSessionRuntimeTargetWorkerRequest(request);
       }
       if (request.kind === "session-entry-list") {
         const { readSessionEntryList } = await import("./session-entry-list.worker.js");
@@ -635,18 +636,9 @@ serveOwnedWorkerTasks(
               database: request.database,
             });
           }
-          if (request.kind === "session-reset-recall") {
-            const { readSessionResetRecallCutoffInProcess } =
-              await import("../../../packages/memory-host-sdk/src/host/session-reset-recall-read.worker.js");
-            return { cutoff: readSessionResetRecallCutoffInProcess(request.scope) };
-          }
-          if (request.mode === "snapshot") {
-            const { readSessionEntrySnapshotRequest } =
-              await import("./session-transcript-hydration-read.worker.js");
-            return readSessionEntrySnapshotRequest(request);
-          }
-          const { prepareSessionMemoryEntry } = await import("./session-memory-entry.worker.js");
-          return prepareSessionMemoryEntry(request);
+          const { readSessionResetRecallCutoffInProcess } =
+            await import("../../../packages/memory-host-sdk/src/host/session-reset-recall-read.worker.js");
+          return { cutoff: readSessionResetRecallCutoffInProcess(request.scope) };
         },
       );
     };

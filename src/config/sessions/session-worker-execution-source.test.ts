@@ -11,7 +11,7 @@ it("refuses commit when session source authority expires after transaction admis
     }
   }, "Session operation expired");
   const { admission } = source.createAdmission({
-    attachment: { kind: "agent-execution", startupJournal: false },
+    attachment: { kind: "agent-execution", startupJournal: false, startupIntegrityRequired: false },
     nativeLocations: [],
     authorize() {},
     assertCurrent() {},

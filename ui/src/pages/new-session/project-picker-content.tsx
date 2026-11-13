@@ -4,7 +4,6 @@ import {
   affects,
   createMemo,
   createOptimistic,
-  createSignal,
   Errored,
   For,
   Loading,
@@ -31,7 +30,6 @@ import { projectCloneInput } from "./project-chip.ts";
 import type { ProjectChipProps } from "./project-chip.tsx";
 
 export function ProjectPickerContent(props: ProjectChipProps) {
-  const [projectSearching, setProjectSearching] = createSignal<boolean | undefined>(undefined);
   const applyFolder = (folder: string) => {
     if (!props.params.place.browser.browserNodeId) {
       props.params.place.applyFolder(folder);
@@ -210,6 +208,14 @@ export function ProjectPickerContent(props: ProjectChipProps) {
         })
       : null;
   });
+  const remoteProjects = createMemo(() => {
+    const localIdentities = new Set(
+      localProjects().map((project) => project.repositoryIdentity?.toLowerCase()),
+    );
+    return (projectSearchResult()?.projects ?? []).filter(
+      (project) => !localIdentities.has(project.fullName.toLowerCase()),
+    );
+  });
   const browseButton = () => (
     <button
       type="button"
@@ -265,23 +271,13 @@ export function ProjectPickerContent(props: ProjectChipProps) {
       ) : (
         <div class="new-session-page__environment-layout" data-chat-autotype-exempt>
           <HeaderSearch
-            typeToSearchWhenOpen
-            title={t("newSession.projects")}
+            class="new-session-page__project-search"
             label={t("newSession.projectSearchPlaceholder")}
             query={props.params.place.browser.projectQuery}
-            open={
-              (projectSearching() ??
-                props.params.place.browser.projects.length + props.state.recents.length >= 6) ||
-              Boolean(props.params.place.browser.projectQuery)
-            }
+            autofocus="popover"
             disabled={props.params.submitting || props.params.pendingPlacement}
             inputProps={{ onCompositionEnd: recordCompositionEnd }}
-            onOpenChange={(open) => {
-              // Passive dismissal restores automatic search; an explicit collapse remains a choice.
-              setProjectSearching(
-                !open && !props.params.place.browser.popoverOpen("project") ? undefined : open,
-              );
-            }}
+            inputRef={(node) => props.focus && (props.focus.search = node)}
             onQueryChange={(query) => props.params.place.browser.changeProjectQuery(query)}
             onInputKeyDown={(event) => {
               if (
@@ -369,27 +365,50 @@ export function ProjectPickerContent(props: ProjectChipProps) {
                 </button>
               </div>
             </Show>
-            <Loading on={projectsReady()}>
-              <For each={localProjects()} keyed={(project) => project.id}>
-                {(project) => {
-                  const icon = <Icon name="book" />;
-                  return (
-                    <SessionMenuItem
-                      item={{
-                        value: `project:${project().id}`,
-                        label: project().displayName,
-                        icon,
-                        sub: project().repositoryIdentity,
-                        checked: props.params.place.browser.projectId === project().id,
-                        title: project().repositoryIdentity ?? project().repoRoot,
-                        onSelect: () => props.params.place.selectProjectId(project().id),
-                      }}
-                      submitting={props.params.submitting}
-                    />
-                  );
-                }}
-              </For>
-            </Loading>
+            <Show when={!props.nativeTerminal}>
+              <MenuHeading
+                class="new-session-page__menu-title"
+                label={t("newSession.localProjects")}
+              />
+              <Show when={!projectsReady() && !projectCatalogError()}>
+                <div class="new-session-page__project-status" role="status">
+                  {t("common.loading")}
+                </div>
+              </Show>
+              <Loading on={projectsReady()}>
+                <For
+                  each={localProjects()}
+                  keyed={(project) => project.id}
+                  fallback={
+                    <Show when={projectsReady() && !projectCatalogError()}>
+                      <div class="new-session-page__menu-note">
+                        {view().query
+                          ? t("newSession.noLocalProjectMatches")
+                          : t("newSession.noLocalProjects")}
+                      </div>
+                    </Show>
+                  }
+                >
+                  {(project) => {
+                    const icon = <Icon name="book" />;
+                    return (
+                      <SessionMenuItem
+                        item={{
+                          value: `project:${project().id}`,
+                          label: project().displayName,
+                          icon,
+                          sub: project().repositoryIdentity,
+                          checked: props.params.place.browser.projectId === project().id,
+                          title: project().repositoryIdentity ?? project().repoRoot,
+                          onSelect: () => props.params.place.selectProjectId(project().id),
+                        }}
+                        submitting={props.params.submitting}
+                      />
+                    );
+                  }}
+                </For>
+              </Loading>
+            </Show>
             {view().cloneInput && view().projectAddAvailable ? (
               <SessionMenuItem
                 item={{
@@ -431,8 +450,15 @@ export function ProjectPickerContent(props: ProjectChipProps) {
                     ) : undefined}
                     {
                       <For
-                        each={projectSearchResult()?.projects ?? []}
+                        each={remoteProjects()}
                         keyed={(project) => project.cloneUrl}
+                        fallback={
+                          <Show when={projectSearchResult()}>
+                            <div class="new-session-page__menu-note">
+                              {t("newSession.noAdditionalGithubProjects")}
+                            </div>
+                          </Show>
+                        }
                       >
                         {(project) => {
                           const icon = <Icon name="book" />;

@@ -365,6 +365,51 @@ it("uses the current PR renderer and preserves CI session identity and branch di
   });
   expect(element.querySelector(".chat-pr")).toBeNull();
 });
+it.each([false, true])(
+  "omits subsessions from Details, including retained snapshots (desktop=%s)",
+  async (desktop) => {
+    const parent = "agent:main:details";
+    const child = (key: string, label: string): GatewaySessionRow => ({
+      key,
+      label,
+      kind: "direct",
+      parentSessionKey: parent,
+      status: "done",
+    });
+    const ordinary = child("agent:main:acp:coder", "Ordinary child");
+    const native = child("agent:main:subagent:review", "Native review");
+    const element = await mount({
+      subagentSessions: [ordinary, native],
+      subagentSessionsHydrated: true,
+      onOpenSubagent: vi.fn(),
+      onOpenSubagents: vi.fn(),
+      desktopPresentation: {
+        peopleLabel: "People",
+        outputsLabel: "Outputs",
+        subagentsWorkingLabel: "Working",
+      },
+    });
+    element.desktop = desktop;
+    await element.updateComplete;
+    await waitForSolid(() => expect(element.textContent).toContain("Native review"));
+    expect(element.textContent).not.toContain("Ordinary child");
+    await updateDetails(element, { subagentSessions: [ordinary] });
+    expect(element.querySelector('[data-details-group="subagents"]')).toBeNull();
+    await updateDetails(element, {
+      subagentSessionsHydrated: false,
+      cachedDetails: {
+        locale: "en",
+        subagents: {
+          total: 1,
+          rows: [{ key: ordinary.key, label: ordinary.label!, status: "done", listed: false }],
+          counts: [{ status: "done", count: 1, listed: false }],
+        },
+      },
+    });
+    expect(element.querySelector('[data-details-group="subagents"]')).toBeNull();
+  },
+);
+
 it("groups every direct subagent with counts, live activity first, and a bounded preview", async () => {
   const parent = "agent:main:details";
   const child = (slug: string, state: Partial<GatewaySessionRow>): GatewaySessionRow => ({

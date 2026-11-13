@@ -19,12 +19,8 @@ const SESSIONS_TOOL_RESULT_MAX_BYTES = 3_840;
 const RESOLVED_OMITTED_REASON = "response_budget_exceeded";
 
 function sessionsToolResultFitsBudget(payload: Record<string, unknown>): boolean {
-  const compactSize = boundedJsonUtf8Bytes(payload, SESSIONS_TOOL_RESULT_MAX_BYTES);
-  return (
-    compactSize.complete &&
-    compactSize.bytes <= SESSIONS_TOOL_RESULT_MAX_BYTES &&
-    Buffer.byteLength(JSON.stringify(payload, null, 2), "utf8") <= SESSIONS_TOOL_RESULT_MAX_BYTES
-  );
+  const size = boundedJsonUtf8Bytes(payload, SESSIONS_TOOL_RESULT_MAX_BYTES);
+  return size.complete && size.bytes <= SESSIONS_TOOL_RESULT_MAX_BYTES;
 }
 
 export function withBoundedSessionsResolved(

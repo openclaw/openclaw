@@ -229,7 +229,17 @@ describe("session message cache", () => {
       transcript: "not display data",
       session: { startedAt: index + 1000, endedAt: index === 5 ? undefined : index + 2000 },
     }));
-    expect(projectDetailsSubagents(rows)).toEqual({
+    expect(
+      projectDetailsSubagents([
+        ...rows,
+        {
+          key: "agent:main:acp:coder",
+          label: "Coding subsession",
+          status: "running",
+          listed: false,
+        },
+      ]),
+    ).toEqual({
       total: 6,
       rows: [5, 0, 1, 2].map((index) => ({
         key: String(index),

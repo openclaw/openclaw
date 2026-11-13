@@ -44,6 +44,123 @@ final class OpenClawSnapshotUITests: XCTestCase {
         try super.tearDownWithError()
     }
 
+    func testDrawerGroupHeaderControls() throws {
+        self.launchApp(for: Self.chatScreenshotTarget, additionalArguments: ["--openclaw-group-controls-fixture"])
+        let app = try XCTUnwrap(self.app)
+        self.tapSidebarReveal(in: app)
+        let header = app.descendants(matching: .any)["SessionGroup.Header.Projects"].firstMatch
+        self.attachScreenshot(named: "drawer-groups-landing")
+        XCTAssertTrue(header.waitForExistence(timeout: 8))
+        self.attachScreenshot(named: "drawer-groups-expanded")
+        header.press(forDuration: 0.8)
+        for item in [
+            "New Session in This Group",
+            "New Session Defaults…",
+            "Rename Group…",
+            "New Group…",
+            "Move Up",
+            "Move Down",
+            "Delete Group…",
+        ] {
+            XCTAssertTrue(app.buttons[item].waitForExistence(timeout: 4), "Missing group menu item: \(item)")
+        }
+        XCTAssertFalse(app.buttons["Move Up"].isEnabled)
+        XCTAssertTrue(app.buttons["Move Down"].isEnabled)
+        self.attachScreenshot(named: "drawer-groups-menu")
+        app.buttons["New Session Defaults…"].tap()
+        XCTAssertTrue(app.staticTexts["Group defaults"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["/work/repo"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.switches["Separate working copy"].exists)
+        self.attachScreenshot(named: "drawer-groups-defaults")
+        app.buttons["Cancel"].tap()
+        let caret = app.buttons["SessionGroup.Caret.Projects"]
+        XCTAssertTrue(caret.waitForExistence(timeout: 5))
+        self.assertMinimumTouchTarget(caret)
+        XCTAssertGreaterThan(caret.frame.minX, header.frame.maxX - 1, "Drawer caret must trail the group name")
+        XCTAssertNotEqual(caret.value as? String, "1", "Expanded group must hide its count")
+        let expandedCaretFrame = caret.frame
+        caret.tap()
+        XCTAssertEqual(caret.label, "Expand Group")
+        XCTAssertEqual(caret.value as? String, "1", "Collapsed group must show its session count")
+        XCTAssertEqual(caret.frame.minX, expandedCaretFrame.minX, accuracy: 1, "Count must keep its layout space")
+        XCTAssertFalse(app.staticTexts["Project notes"].exists)
+        XCTAssertFalse(app.buttons["New Session Defaults…"].exists, "Caret must not open the context menu")
+        self.attachScreenshot(named: "drawer-groups-collapsed")
+        caret.tap()
+        XCTAssertTrue(app.staticTexts["Project notes"].waitForExistence(timeout: 5))
+        XCTAssertNotEqual(caret.value as? String, "1")
+        self.attachScreenshot(named: "drawer-groups-reexpanded")
+        header.tap()
+        XCTAssertEqual(caret.value as? String, "1", "A tap on the header must fold the group")
+        XCTAssertFalse(app.staticTexts["Project notes"].exists, "A folded group must hide its sessions")
+        XCTAssertFalse(app.buttons["New Session Defaults…"].exists, "A header tap must not open the context menu")
+        header.tap()
+        XCTAssertTrue(app.staticTexts["Project notes"].waitForExistence(timeout: 5))
+        header.press(forDuration: 0.8)
+        app.buttons["Move Down"].tap()
+        let pending = app.descendants(matching: .any)["SessionGroup.Pending.Projects"].firstMatch
+        XCTAssertTrue(pending.waitForExistence(timeout: 4), "Group mutation must show a pending spinner")
+        self.attachScreenshot(named: "drawer-groups-pending")
+        XCTAssertTrue(pending.waitForNonExistence(timeout: 10))
+        let research = app.descendants(matching: .any)["SessionGroup.Header.Research"].firstMatch
+        XCTAssertTrue(research.waitForExistence(timeout: 5))
+        XCTAssertLessThan(research.frame.minY, header.frame.minY)
+        self.attachScreenshot(named: "drawer-groups-reordered")
+        header.press(forDuration: 0.8)
+        app.buttons["New Session in This Group"].tap()
+        if app.buttons["RootTabs.Sidebar.Show"].waitForExistence(timeout: 2) {
+            self.tapSidebarReveal(in: app)
+        }
+        XCTAssertTrue(app.staticTexts["New grouped session"].waitForExistence(timeout: 5))
+        self.attachScreenshot(named: "drawer-groups-new-session")
+        let allSessions = app.buttons["All Sessions…"]
+        XCTAssertTrue(allSessions.waitForExistence(timeout: 5))
+        if !allSessions.isHittable { app.swipeUp() }
+        allSessions.tap()
+        XCTAssertTrue(app.segmentedControls["Sessions.StatusScope"].waitForExistence(timeout: 8))
+        let sessionsHeader = try XCTUnwrap(app.descendants(matching: .any)
+            .matching(identifier: "SessionGroup.Header.Projects").allElementsBoundByIndex
+            .filter(\.isHittable).max { $0.frame.minX < $1.frame.minX })
+        sessionsHeader.press(forDuration: 0.8)
+        XCTAssertTrue(app.buttons["New Session Defaults…"].waitForExistence(timeout: 4))
+        self.attachScreenshot(named: "sessions-groups-menu")
+        app.buttons["New Session Defaults…"].tap()
+        XCTAssertTrue(app.staticTexts["Group defaults"].waitForExistence(timeout: 5))
+        self.attachScreenshot(named: "sessions-groups-defaults")
+        app.buttons["Cancel"].tap()
+        let sessionsCaret = try XCTUnwrap(app.buttons.matching(identifier: "SessionGroup.Caret.Projects")
+            .allElementsBoundByIndex.filter(\.isHittable)
+            // The drawer can remain hittable behind this tab on iPhone; select this header's leading control.
+            .filter { $0.frame.maxX <= sessionsHeader.frame.minX + 1 }
+            .max { $0.frame.minX < $1.frame.minX })
+        XCTAssertLessThan(
+            sessionsCaret.frame.maxX,
+            sessionsHeader.frame.minX + 1,
+            "Sessions tab must keep its leading caret")
+        let projectRows = app.staticTexts.matching(identifier: "Project notes").count
+        sessionsCaret.tap()
+        XCTAssertLessThan(app.staticTexts.matching(identifier: "Project notes").count, projectRows)
+        self.attachScreenshot(named: "sessions-groups-collapsed")
+    }
+
+    func testDrawerGroupHeaderFailedMutationKeepsError() throws {
+        self.launchApp(for: Self.chatScreenshotTarget, additionalArguments: [
+            "--openclaw-group-controls-fixture", "--openclaw-failed-group-change-fixture",
+        ])
+        let app = try XCTUnwrap(self.app)
+        self.tapSidebarReveal(in: app)
+        let header = app.descendants(matching: .any)["SessionGroup.Header.Projects"].firstMatch
+        XCTAssertTrue(header.waitForExistence(timeout: 8))
+        header.press(forDuration: 0.8)
+        app.buttons["Move Down"].tap()
+        XCTAssertTrue(app.staticTexts["Fixture group mutation rejected"].waitForExistence(timeout: 5))
+        XCTAssertLessThan(
+            header.frame.minY,
+            app.descendants(matching: .any)["SessionGroup.Header.Research"].firstMatch.frame.minY)
+        XCTAssertFalse(app.descendants(matching: .any)["SessionGroup.Pending.Projects"].exists)
+        self.attachScreenshot(named: "drawer-groups-failed-mutation")
+    }
+
     func testReleaseControlScreenshot() {
         self.captureReleaseScreenshot(Self.controlScreenshotTarget)
     }
@@ -279,6 +396,145 @@ final class OpenClawSnapshotUITests: XCTestCase {
             format: "label == %@ OR label == %@", "No saved Watch messages", "Discard…")).firstMatch
         XCTAssertTrue(loaded.waitForExistence(timeout: 8))
         self.attachScreenshot(named: "watch-message-delivery")
+    }
+
+    func testCustomHeaderInvalidNameStaysAndValidNameSurvivesReopen() {
+        XCUIDevice.shared.orientation = .portrait
+        self.addUIInterruptionMonitor(withDescription: "Local network access") { alert in
+            guard alert.buttons["Allow"].exists else { return false }
+            alert.buttons["Allow"].tap()
+            return true
+        }
+        let app = XCUIApplication()
+        // Argument-domain flags outrank the reset's application-domain writes, so
+        // onboarding stays dismissed while the manual host field starts empty.
+        app.launchArguments += [
+            "--openclaw-reset-onboarding",
+            "--openclaw-initial-tab", "settings",
+            "--openclaw-initial-destination", "gateway",
+            "--openclaw-ui-test-readiness",
+            "-gateway.onboardingComplete", "YES",
+            "-gateway.hasConnectedOnce", "YES",
+            "-onboarding.completed", "YES",
+            "-onboarding.quickSetupDismissed", "YES",
+            "-AppleLanguages", "(en)",
+            "-AppleLocale", "en_US",
+        ]
+        app.launch()
+        self.app = app
+        let gatewayBar = app.navigationBars["Gateway"]
+        guard gatewayBar.waitForExistence(timeout: 8) else {
+            self.recordHeaderHierarchy(app)
+            XCTFail("Gateway settings did not open")
+            return
+        }
+        let statusBarHeight = gatewayBar.frame.minY - app.frame.minY
+        if statusBarHeight > 0 {
+            app.coordinate(withNormalizedOffset: .zero)
+                .withOffset(CGVector(dx: 20, dy: statusBarHeight / 2)).tap()
+        }
+        let host = app.textFields["Host"]
+        self.reveal(host, in: app)
+        guard host.isHittable else {
+            self.recordHeaderHierarchy(app)
+            XCTFail("Manual host field did not appear")
+            return
+        }
+        host.tap()
+        host.typeText("headers.example.com")
+        self.dismissKeyboard(in: app)
+        self.tapLabeled("Custom Headers", in: app)
+        let name = app.textFields["Header name"]
+        guard name.waitForExistence(timeout: 6) else {
+            self.recordHeaderHierarchy(app)
+            XCTFail("Custom header editor did not open")
+            return
+        }
+        name.tap()
+        name.typeText("X Client ID")
+        let value = app.secureTextFields["Header value"]
+        XCTAssertTrue(value.waitForExistence(timeout: 4))
+        value.tap()
+        value.typeText("synthetic-value")
+        self.dismissKeyboard(in: app)
+        let add = app.buttons["Add Header"].firstMatch
+        XCTAssertTrue(add.waitForExistence(timeout: 4))
+        XCTAssertFalse(add.isEnabled)
+        XCTAssertTrue(app.staticTexts[
+            "Header names cannot include spaces or other characters outside a single HTTP token.",
+        ].waitForExistence(timeout: 4))
+        XCTAssertEqual(name.value as? String, "X Client ID")
+        self.saveScreen(named: "invalid-name-kept")
+
+        name.tap()
+        self.clearTextField(name)
+        name.typeText("X-Client-ID")
+        self.dismissKeyboard(in: app)
+        XCTAssertTrue(add.isEnabled)
+        add.tap()
+        XCTAssertTrue(app.staticTexts["X-Client-ID"].waitForExistence(timeout: 6))
+        let back = app.navigationBars["Custom Headers"].buttons["Gateway"]
+        if back.waitForExistence(timeout: 2) {
+            back.tap()
+        } else {
+            app.navigationBars["Custom Headers"].buttons.element(boundBy: 0).tap()
+        }
+        self.tapLabeled("Custom Headers", in: app)
+        XCTAssertTrue(app.staticTexts["X-Client-ID"].waitForExistence(timeout: 6))
+        let draft = app.textFields["Header name"].value as? String ?? ""
+        // An empty SwiftUI field reports its prompt as the accessibility value.
+        XCTAssertTrue(draft.isEmpty || draft == "Header name")
+        self.saveScreen(named: "valid-name-reopened")
+    }
+
+    private func reveal(_ element: XCUIElement, in app: XCUIApplication) {
+        for _ in 0..<14 where !element.isHittable {
+            app.swipeUp()
+        }
+    }
+
+    private func tapLabeled(_ label: String, in app: XCUIApplication) {
+        let button = app.buttons[label]
+        let text = app.staticTexts[label]
+        for _ in 0..<14 {
+            if button.isHittable {
+                button.tap()
+                return
+            }
+            if text.isHittable {
+                text.tap()
+                return
+            }
+            app.swipeUp()
+        }
+        self.recordHeaderHierarchy(app)
+        XCTFail("Could not tap \(label)")
+    }
+
+    private func dismissKeyboard(in app: XCUIApplication) {
+        guard app.keyboards.firstMatch.waitForExistence(timeout: 2) else { return }
+        let bar = app.navigationBars.firstMatch
+        if bar.exists {
+            bar.tap()
+        }
+        if app.keyboards.firstMatch.exists {
+            app.swipeDown()
+        }
+    }
+
+    private func recordHeaderHierarchy(_ app: XCUIApplication) {
+        try? app.debugDescription.write(
+            to: URL(fileURLWithPath: "/tmp/oc-header-ui.txt"),
+            atomically: true,
+            encoding: .utf8)
+    }
+
+    private func saveScreen(named name: String) {
+        self.attachScreenshot(named: name)
+        let directory = URL(fileURLWithPath: "/tmp/oc-193595-ui-shots", isDirectory: true)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let screenshot = self.app?.screenshot() ?? XCUIScreen.main.screenshot()
+        try? screenshot.pngRepresentation.write(to: directory.appendingPathComponent("\(name).png"))
     }
 
     func testAgentsNavigateToSettingsThroughSidebar() throws {

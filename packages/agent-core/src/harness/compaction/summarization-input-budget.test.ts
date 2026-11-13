@@ -437,6 +437,18 @@ describe("summary request input budget", () => {
     }
   });
 
+  it("shortens older tool results so every assistant reply reaches a sampled input", () => {
+    const { text } = bounded(createLongSession(40));
+    const replies = Array.from({ length: 40 }, (_, turn) => `[Assistant]: reply-${turn} `);
+    expect(replies.filter((reply) => !text.includes(reply))).toEqual([]);
+    // Characters each projection left out: older results keep about 500, the newest 2,000.
+    const truncated = [
+      ...text.matchAll(/\]: result-\d+ [^[]*\[\.\.\. (\d+) more characters truncated\]/gu),
+    ].map((match) => Number(match[1]));
+    expect(truncated[0]).toBeGreaterThan(10_000);
+    expect(truncated.at(-1)).toBeLessThan(9_000);
+  });
+
   it("spreads user messages across the history when they do not all fit", () => {
     const { text } = bounded(
       Array.from({ length: 2_000 }, (_, i) => user(`USER-${i} ${"note ".repeat(80)}`, i)),

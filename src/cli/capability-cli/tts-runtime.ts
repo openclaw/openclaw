@@ -246,6 +246,7 @@ export async function runTtsProviders(transport: CapabilityTransport, rawAgentId
     } = await callGateway({
       method: "tts.providers",
       timeoutMs: 30_000,
+      signal: getAsyncWorkSignal(),
     });
     return {
       ...payload,
@@ -290,6 +291,7 @@ export async function runTtsPersonas(transport: CapabilityTransport) {
     return await callGateway({
       method: "tts.personas",
       timeoutMs: 30_000,
+      signal: getAsyncWorkSignal(),
     });
   }
   const cfg = await captureRuntimeConfigAsyncReader()();
@@ -336,6 +338,7 @@ export async function runTtsStateMutation(params: {
             ? { persona: params.persona ?? "off" }
             : undefined,
       timeoutMs: 30_000,
+      signal: getAsyncWorkSignal(),
     });
   }
 

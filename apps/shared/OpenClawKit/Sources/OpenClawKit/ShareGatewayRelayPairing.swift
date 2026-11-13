@@ -25,7 +25,8 @@ extension ShareGatewayRelaySettings {
         operatorGateway: GatewayNodeSession,
         url: URL,
         gatewayStableID: String,
-        sessionBox: WebSocketSessionBox?) async throws
+        sessionBox: WebSocketSessionBox?,
+        extraHeadersProvider: (@Sendable () async throws -> [String: String])? = nil) async throws
     {
         guard let route = await operatorGateway.currentRoute(ifGatewayID: gatewayStableID),
               await operatorGateway.currentOperatorScopes(ifCurrentRoute: route)?.contains("operator.admin") == true
@@ -76,6 +77,7 @@ extension ShareGatewayRelaySettings {
                     gatewayStableID: gatewayStableID,
                     allowStoredDeviceAuth: false),
                 sessionBox: sessionBox,
+                extraHeadersProvider: extraHeadersProvider,
                 onConnected: {},
                 onDisconnected: { _ in },
                 onInvoke: { req in BridgeInvokeResponse(id: req.id, ok: false) })

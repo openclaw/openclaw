@@ -24,11 +24,11 @@ mockNativeModuleExports(new URL("../../infra/sqlite-snapshot-source.ts", import.
     return copySqlite(...args);
   },
 });
-const models = await import("../models-config.js");
-const planModels = models.planOpenClawModelsJsonSource;
-mockNativeModuleExports(new URL("../models-config.ts", import.meta.url), {
+const models = await import("../models-config.core.js");
+const planModels = models.planOpenClawModelsJsonSourceWithInput;
+mockNativeModuleExports(new URL("../models-config.core.ts", import.meta.url), {
   ...models,
-  planOpenClawModelsJsonSource: async (...args: Parameters<typeof planModels>) => {
+  planOpenClawModelsJsonSourceWithInput: async (...args: Parameters<typeof planModels>) => {
     const plan = await planModels(...args);
     plans.push(plan);
     return plan;

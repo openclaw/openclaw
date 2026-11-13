@@ -10,6 +10,7 @@ import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
@@ -113,7 +114,9 @@ async function setup(
     canDismissPendingInputs: options.canDismissPendingInputs ?? true,
   };
   const container = renderChatView(overrides);
-  const viewport = transcript.scrollElement!;
+  const viewport = await waitForSolid(() =>
+    expectDefined(transcript.scrollElement, "transcript viewport"),
+  );
   Object.defineProperty(viewport, "clientHeight", { configurable: true, value: 600 });
   for (const observer of resizeObservers) {
     observer.emitTarget(viewport, 800, 600);

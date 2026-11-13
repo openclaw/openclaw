@@ -1,19 +1,23 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
-import { SessionMoveProfileTargetSchema } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
+import {
+  SessionMoveDeviceTargetSchema,
+  SessionMoveProfileTargetSchema,
+} from "../../../packages/gateway-protocol/src/schema/session-placement.js";
 import { WORKTREE_NAME_PATTERN } from "../worktrees/name.js";
 import { readToolStringParam, ToolInputError } from "./common.js";
 
 export const SessionsSpawnPlacementSchema = Type.Union([
   Type.Object({ kind: Type.Literal("local") }, { additionalProperties: false }),
   SessionMoveProfileTargetSchema,
+  SessionMoveDeviceTargetSchema,
 ]);
 
 export const SESSIONS_SPAWN_SESSION_SCHEMA = {
   placement: Type.Optional({
     ...SessionsSpawnPlacementSchema,
     description:
-      'Execution placement: omitted or {kind: "local"} uses local execution for native and ACP runs. {kind: "profile", profileId, os?, machineClass?} selects a configured cloud profile and requires visible=true and worktree=true. Never supply placeholder selectors. Omitted cloud selectors use profile defaults; the first task starts only after cloud dispatch.',
+      'Execution placement: omitted or {kind: "local"} uses local execution for native and ACP runs. {kind: "profile", profileId, os?, machineClass?} selects a configured cloud profile; {kind: "device", deviceId} selects one paired device by its node ID. Both require visible=true and worktree=true. Never supply placeholder selectors. Omitted cloud selectors use profile defaults; the first task starts only after dispatch, and an unavailable or incompatible device fails without running elsewhere.',
   }),
   visible: Type.Optional(
     Type.Boolean({
@@ -132,7 +136,8 @@ export function correctedVisibleSpawnCall(raw: Record<string, unknown>): string 
   if (
     readToolStringParam(raw, "worktreeName") ||
     readToolStringParam(raw, "worktreeBaseRef") ||
-    (isRecord(raw.placement) && raw.placement.kind === "profile")
+    (isRecord(raw.placement) &&
+      (raw.placement.kind === "profile" || raw.placement.kind === "device"))
   ) {
     corrected.worktree = true;
   }

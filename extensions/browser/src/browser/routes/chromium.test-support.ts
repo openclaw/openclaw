@@ -22,6 +22,7 @@ export async function withChromiumPage(
   run: (fixture: {
     page: Page;
     call: RouteCall;
+    request: ReturnType<typeof createRouteFixture>["request"];
     targetId: string;
     cdpUrl: string;
   }) => Promise<void>,
@@ -29,9 +30,11 @@ export async function withChromiumPage(
     app: ReturnType<typeof createRouteFixture>["app"],
     ctx: ReturnType<typeof createBrowserRouteContext>,
   ) => void,
+  launchOptions?: Parameters<typeof launchChromium>[1],
 ) {
   const { context, cdpUrl } = await launchChromium(
     chromiumTempDirs.make("openclaw-browser-routes-"),
+    launchOptions,
   );
   try {
     const page = context.pages()[0] ?? (await context.newPage());
@@ -58,6 +61,7 @@ export async function withChromiumPage(
       page,
       cdpUrl,
       targetId,
+      request: routes.request,
       call: async (method, route, values, params, signal) => {
         const input = { targetId, ...values };
         return routes.request(method, route, {

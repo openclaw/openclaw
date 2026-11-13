@@ -218,8 +218,15 @@ describe("ClawHub detail content", () => {
     )!;
     expect(footer.parentElement?.lastElementChild).toBe(footer);
     expect(body.contains(footer)).toBe(false);
+    await Promise.all(
+      footer
+        .closest("dialog")!
+        .getAnimations()
+        .map((animation) => animation.finished),
+    );
     const footerTop = footer.getBoundingClientRect().top;
     body.scrollTop = body.scrollHeight;
+    await nextFrame();
     expect(footer.getBoundingClientRect().top).toBe(footerTop);
     expect(body.clientWidth).toBeGreaterThan(0);
     expect(body.scrollWidth).toBeLessThanOrEqual(body.clientWidth);

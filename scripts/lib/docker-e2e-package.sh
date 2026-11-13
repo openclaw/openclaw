@@ -353,6 +353,7 @@ docker_e2e_harness_mount_args() {
   local windows_helpers="${DOCKER_E2E_WINDOWS_HELPERS_PATH:-$harness_root/scripts/windows-cmd-helpers.mjs}"
   DOCKER_E2E_HARNESS_ARGS=(
     -v "$harness_root/scripts/e2e:/app/scripts/e2e:ro"
+    -v "$harness_root/scripts/check-openclaw-installed-package-budget.mts:/app/scripts/check-openclaw-installed-package-budget.mts:ro"
     -v "$harness_root/scripts/docker/verify-fs-safe-native.mjs:/app/scripts/docker/verify-fs-safe-native.mjs:ro"
     -v "$harness_root/scripts/lib:/app/scripts/lib:ro"
     -v "$harness_root/packages/gateway-client/src:/app/packages/gateway-client/src:ro"

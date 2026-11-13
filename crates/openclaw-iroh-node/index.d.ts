@@ -104,6 +104,8 @@ export interface BindOptions {
   bindAddr?: string
   /** When false, no IP transports are bound: relay-only (like the browser). Default true. */
   ipTransports?: boolean
+  /** QUIC connection keep-alive interval in milliseconds (nonzero). */
+  keepAliveMs?: number
 }
 
 /** How a connection ended, as returned by `Connection.closed()`. */

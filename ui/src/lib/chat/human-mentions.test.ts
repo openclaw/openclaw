@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { readHumanMentions, trimHumanMentions, updateHumanMentions } from "./human-mentions.ts";
+import {
+  readHumanMentions,
+  trimHumanMentions,
+  updateHumanMentions,
+  withHumanMentionEdit,
+} from "./human-mentions.ts";
 
 describe("human mention text ownership", () => {
   const alex = { profileId: "profile-alex", start: 0, end: 5 };
@@ -32,6 +37,30 @@ describe("human mention text ownership", () => {
         inputType: "insertFromPaste",
       }),
     ).toEqual([]);
+  });
+
+  it("keeps mapped identities for an ordinary edit but applies a supplied replacement", () => {
+    const previous = "@Alex x @Alex";
+    const next = "@Alex y @Alex";
+    const later = { profileId: "another-alex", start: 8, end: 13 };
+    const input = { value: previous, start: 6, end: 7, inputType: "insertText" };
+    const merged = withHumanMentionEdit(next, undefined, input, () =>
+      updateHumanMentions(previous, next, [alex, later]),
+    );
+    expect(merged).toEqual([alex, later]);
+    expect(merged[0]).toBe(alex);
+    // A later span still gets its mapped copy when the edit has zero length delta.
+    expect(merged[1]).not.toBe(later);
+    expect(
+      withHumanMentionEdit(next, [], input, () =>
+        updateHumanMentions(previous, next, [alex, later]),
+      ),
+    ).toEqual([]);
+    expect(
+      withHumanMentionEdit("other text", [], input, () =>
+        updateHumanMentions(previous, next, [alex, later], input),
+      ),
+    ).toEqual([alex, later]);
   });
 
   it("normalizes submission whitespace without changing UTF-16 recipient positions", () => {

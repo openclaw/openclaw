@@ -28,6 +28,7 @@ description: "Review, triage, repair, or land OpenClaw issues and pull requests 
 ## Inspect the actual item
 
 - Start `git status -sb`; preserve unrelated work. Local `gitcrawl` → PATH `ghx`, narrow live JSON. Stale/missing archive → `ghx`, no broad sync. PR source: `ghx pr view/diff` + checkout, not web search.
+- Reuse the existing base/task worktree. Missing history does not require another clone: use the [filtered history and workspace route](references/landing.md#checkout-and-source).
 
 ```bash
 ghx pr view <pr> --repo openclaw/openclaw \

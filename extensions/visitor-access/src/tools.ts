@@ -57,7 +57,24 @@ const VisitorRevokeParameters = Type.Object(
   { additionalProperties: false },
 );
 const VisitorRevokeOutputSchema = Type.Union([visitorRevokeDetailsSchema, visitorToolErrorSchema]);
-const VisitorListParameters = Type.Object({}, { additionalProperties: false });
+const VisitorListParameters = Type.Object(
+  {
+    cursor: Type.Optional(
+      Type.String({
+        maxLength: 76,
+        description: "Copy nextCursor from the previous page; omit to start an inventory.",
+      }),
+    ),
+    limit: Type.Optional(
+      Type.Integer({
+        minimum: 1,
+        maximum: 500,
+        description: "Maximum rows for this page, also bounded by maxVisitors and output limits.",
+      }),
+    ),
+  },
+  { additionalProperties: false },
+);
 const VisitorListOutputSchema = Type.Union([visitorListDetailsSchema, visitorToolErrorSchema]);
 
 export function createVisitorTools(context: OpenClawPluginToolContext<2>): AnyAgentTool[] {
@@ -99,10 +116,10 @@ export function createVisitorTools(context: OpenClawPluginToolContext<2>): AnyAg
       name: "visitor_list",
       label: "List visitors",
       description:
-        "List recorded visitor grants, current verified GitHub identities, current Gateway access, invitation and expiry dates, and drift from the Access policy. Includes fresh account-wide Cloudflare seat occupancy/allocation separately from these app-policy counts; full accounts warn about new logins, and unavailable reads stay explicitly unknown. Grant expiry does not describe independent staff access or reclaim account seats. Unmanaged policy targets are reported and retained; missing policy targets are never automatically restored.",
+        "List recorded visitor grants, current verified GitHub identities, current Gateway access, invitation and expiry dates, and drift from the Access policy. Includes fresh account-wide Cloudflare seat occupancy/allocation separately from these app-policy counts; full accounts warn about new logins, and unavailable reads stay explicitly unknown. Grant expiry does not describe independent staff access or reclaim account seats. Unmanaged policy targets are reported and retained; missing policy targets are never automatically restored. Start with {}; pass nextCursor as cursor until nextCursor is null to inspect every row. Counts cover the whole inventory; omitted counts rows remaining after this page. If the inventory changes, restart without a cursor. Pages read current access and metadata, not a frozen snapshot.",
       parameters: VisitorListParameters,
       outputSchema: VisitorListOutputSchema,
-      run: ({ service }: VisitorRuntime) => service.list(assertCurrent),
+      run: ({ service }: VisitorRuntime, raw: unknown) => service.list(assertCurrent, raw),
     },
   ];
   return definitions.map(({ name, label, description, parameters, outputSchema, run }) => ({

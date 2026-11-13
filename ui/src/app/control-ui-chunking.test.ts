@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { build } from "vite";
+import { build, type Rolldown } from "vite";
 import { describe, expect, it } from "vitest";
 import {
   controlUiBootManifestKey,
@@ -26,7 +26,7 @@ function importClosure(importsFor: (file: string) => readonly string[]) {
 function buildFixture(
   entry: string,
   sources: Map<string, string>,
-  codeSplitting = controlUiCodeSplitting,
+  codeSplitting: Rolldown.CodeSplittingOptions = controlUiCodeSplitting,
 ) {
   return build({
     configFile: false,
@@ -534,7 +534,7 @@ describe("Control UI build chunking", () => {
       ],
       [
         chat,
-        `import ${JSON.stringify(sharedStyle)}; import ${JSON.stringify(transcriptStyle)}; import { label } from ${JSON.stringify(sharedUi)}; import { action } from ${JSON.stringify(pluginActions)}; import { people } from ${JSON.stringify(peopleCopy)}; import { patch } from ${JSON.stringify(mutations)}; export { version } from ${JSON.stringify(inlineView)}; export { owner } from ${JSON.stringify(creatorPublication)}; export { facts } from ${JSON.stringify(coreToolFacts)}; export { parked } from ${JSON.stringify(markdownBlockPresentation)}; export { skeleton } from ${JSON.stringify(skeleton)}; export { poll } from ${JSON.stringify(visiblePoll)}; export { card } from ${JSON.stringify(permissionCard)}; export { row as process } from ${JSON.stringify(processRow)}; export { renderRun, renderPreview } from ${JSON.stringify(runFrame)}; export { format } from ${JSON.stringify(reactiveFormat)}; export { denied } from ${JSON.stringify(permissionError)}; export class Chat { label = patch(action(label + people)); } export const openPanel = () => import(${JSON.stringify(optional)});`,
+        `import ${JSON.stringify(sharedStyle)}; import ${JSON.stringify(transcriptStyle)}; import { label } from ${JSON.stringify(sharedUi)}; import { action } from ${JSON.stringify(pluginActions)}; import { people } from ${JSON.stringify(peopleCopy)}; import { patch } from ${JSON.stringify(mutations)}; export { version } from ${JSON.stringify(inlineView)}; export { owner } from ${JSON.stringify(creatorPublication)}; export { facts } from ${JSON.stringify(coreToolFacts)}; export { parked } from ${JSON.stringify(markdownBlockPresentation)}; export { skeleton } from ${JSON.stringify(skeleton)}; export { poll } from ${JSON.stringify(visiblePoll)}; export const card = () => import(${JSON.stringify(permissionCard)}); export { row as process } from ${JSON.stringify(processRow)}; export { renderRun, renderPreview } from ${JSON.stringify(runFrame)}; export { format } from ${JSON.stringify(reactiveFormat)}; export { denied } from ${JSON.stringify(permissionError)}; export class Chat { label = patch(action(label + people)); } export const openPanel = () => import(${JSON.stringify(optional)});`,
       ],
       [
         newSession,
@@ -649,9 +649,15 @@ describe("Control UI build chunking", () => {
       [optionalStyle, ".optional-fixture { color: orange; }"],
       [inlineStyle, ".optional-fixture { color: orange; }"],
     ]);
-    const sharedHelpers = ["../components/solid/markdown-html.tsx", "../lib/text-diff.ts"].map(
-      modulePath,
-    );
+    const sharedHelpers = [
+      "../components/solid/markdown-html.tsx",
+      "../lib/text-diff.ts",
+      "../pages/chat/components/chat-message-media.ts",
+      "../pages/chat/components/chat-message-deferred.tsx",
+      "../pages/chat/components/widget-preview-layout.ts",
+      "../lib/chat/youtube-video.ts",
+      "../lib/gateway-client-kind.ts",
+    ].map(modulePath);
     const helperPage = "\0helper-only-route";
     for (const [page, helpers, prefix, name, value] of [
       [helperPage, sharedHelpers, "helper", "helpers", "shared"],
@@ -674,6 +680,29 @@ describe("Control UI build chunking", () => {
     sources.set(terminalRailStyle, ".terminal-rail-fixture { color: cyan; }");
     sources.set(terminal, `import ${JSON.stringify(terminalRailStyle)}; ${sources.get(terminal)}`);
     sources.set(chat, sources.get(chat)! + `import ${JSON.stringify(terminalRailStyle)};`);
+    const custodian = modulePath("../pages/custodian/custodian-surface.tsx");
+    const transcriptHelpers = [
+      "../pages/chat/components/chat-message-group-view.tsx",
+      "../pages/chat/components/chat-divider.tsx",
+      "../pages/chat/components/chat-composer-dom.ts",
+      "../components/markdown-blocks-owner.ts",
+      "../lib/chat/message-visibility.ts",
+    ].map(modulePath);
+    const transcriptImports = transcriptHelpers
+      .map((id, index) => `export { render as transcript${index} } from ${JSON.stringify(id)};`)
+      .join("\n");
+    for (const id of transcriptHelpers) {
+      sources.set(
+        id,
+        `import { table } from ${JSON.stringify(markdownTables)}; export function render() { return table(); }`,
+      );
+    }
+    sources.set(custodian, transcriptImports);
+    sources.set(chat, sources.get(chat)! + transcriptImports);
+    sources.set(
+      entry,
+      sources.get(entry)! + `export const custodian = () => import(${JSON.stringify(custodian)});`,
+    );
     const result = await buildFixture(entry, sources, {
       ...controlUiCodeSplitting,
       // A stale capture must not pull a lazy page into the shared boot chunk.
@@ -737,6 +766,16 @@ describe("Control UI build chunking", () => {
     );
     expect(staticImports(chatChunk.fileName)).not.toContain(newSessionChunk.fileName);
     expect(staticImports(newSessionChunk.fileName)).not.toContain(chatChunk.fileName);
+    const custodianImports = staticImports(chunkFor(custodian).fileName);
+    expect(custodianImports).not.toContain(chatChunk.fileName);
+    expect(custodianImports).not.toContain(newSessionChunk.fileName);
+    for (const helper of transcriptHelpers) {
+      expect(custodianImports).toContain(chunkFor(helper).fileName);
+      expect(staticImports(chatChunk.fileName)).toContain(chunkFor(helper).fileName);
+    }
+    expect(staticImports(newSessionChunk.fileName)).not.toContain(
+      chunkFor(transcriptHelpers[0]!).fileName,
+    );
     const markdownChunk = chunkFor(markdownTables);
     const meetingsChunk = chunkFor(meetings);
     expect(staticImports(markdownChunk.fileName)).not.toContain(chatChunk.fileName);
@@ -775,8 +814,11 @@ describe("Control UI build chunking", () => {
     const previewChunk = chunkFor(sourcePreviewView);
     expect(staticImports(chatChunk.fileName)).not.toContain(previewChunk.fileName);
     expect(runChunk.dynamicImports).toContain(previewChunk.fileName);
-    const visibleChunk = chunkFor(permissionCard);
-    expect([permissionLabels, processRow].every((id) => id in visibleChunk.modules)).toBe(true);
+    const permissionChunk = chunkFor(permissionCard);
+    expect(permissionLabels in permissionChunk.modules).toBe(true);
+    expect(staticImports(chatChunk.fileName)).not.toContain(permissionChunk.fileName);
+    expect(chatChunk.dynamicImports).toContain(permissionChunk.fileName);
+    const visibleChunk = chunkFor(processRow);
     expect(staticImports(chatChunk.fileName)).toContain(visibleChunk.fileName);
     expect(staticImports(visibleChunk.fileName)).not.toContain(runChunk.fileName);
     const pluginChunk = chunkFor(pluginLoader);
@@ -887,6 +929,7 @@ describe("Control UI build chunking", () => {
       [modulePath("../pages/cron/cron-page.tsx"), "cron-page"],
       [modulePath("../pages/plugins/plugins-page.tsx"), "plugins-page"],
       [modulePath("../components/markdown-parser.ts"), "markdown-runtime"],
+      [modulePath("../components/markdown-windows-paths.ts"), "markdown-runtime"],
       [modulePath("../components/config-form.shared.ts"), "config-form-analysis-runtime"],
       [modulePath("../components/cloud-profile-icon-data.ts"), "route-controls-runtime"],
       [modulePath("../components/solid/cloud-profile-icon.tsx"), "route-controls-runtime"],

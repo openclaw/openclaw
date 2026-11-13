@@ -111,7 +111,7 @@ export function restartResumeSkipReason(sessionKey: string, entry?: SessionEntry
   if (isAcpSessionKey(sessionKey) || entry?.acp || entry?.modelSelectionLocked) {
     return "external-owner";
   }
-  if (isSubagentSessionKey(sessionKey)) {
+  if (isSubagentSessionKey(sessionKey) || entry?.createdVia === "spawn") {
     return "subagent";
   }
   if (entry?.archivedAt !== undefined) {

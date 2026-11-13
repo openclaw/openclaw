@@ -17,11 +17,12 @@ import {
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
-import { getAcceptedChatHistorySession } from "./chat-history-state.ts";
+import { getAcceptedChatHistorySession, isChatSessionProvenAbsent } from "./chat-history-state.ts";
 import { ChatPaneModelControl } from "./chat-pane-model-control.tsx";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { switchChatModel, switchChatSetting } from "./chat-session.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
+import type { ChatState } from "./chat-state-contract.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import {
   readChatModelCatalogState,
@@ -78,6 +79,7 @@ export function readChatPaneMutationAccess(
   snapshot: ApplicationGatewaySnapshot,
   sessionKey: string,
   session?: GatewaySessionRow,
+  sessionAbsent = false,
 ) {
   const scopedPatchAccess = (patch: SessionPatch) =>
     readSessionMethodAccess(snapshot, {
@@ -92,6 +94,7 @@ export function readChatPaneMutationAccess(
       requiredScope: "operator.write",
       sessionScope: true,
       session,
+      sessionAbsent,
     }),
     model: scopedPatchAccess({ model: null }),
     effort: scopedPatchAccess({ thinkingLevel: null }),
@@ -113,6 +116,20 @@ export function readChatPaneMutationAccess(
       session,
     }),
   };
+}
+
+/** Without a row, only a read that proved the routed session absent admits its first turn. */
+export function readChatPaneRouteMutationAccess(
+  snapshot: ApplicationGatewaySnapshot,
+  state: ChatState,
+  session?: GatewaySessionRow,
+) {
+  return readChatPaneMutationAccess(
+    snapshot,
+    state.sessionKey,
+    session,
+    !session && isChatSessionProvenAbsent(state),
+  );
 }
 
 export function createChatPanePendingInputControls(

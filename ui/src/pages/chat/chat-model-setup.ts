@@ -34,6 +34,7 @@ export function resolveChatModelSetup(
       : (state.activeSession?.model ?? state.agentModel);
   const modelSetupRequired = requiresChatModelSetup(state);
   const provider = policy?.restricted ? undefined : state.activeSession?.modelProvider;
+  const agentRuntime = policy?.restricted ? undefined : state.activeSession?.agentRuntime?.id;
   const catalog = state.chatModelCatalog;
   const onSetup = state.onSetup;
   const retired = state.catalogRetired === true;
@@ -63,7 +64,7 @@ export function resolveChatModelSetup(
     };
   } else {
     const message = chatModelUnavailableMessage(
-      resolveChatModelUnavailableReason(model, provider, catalog),
+      resolveChatModelUnavailableReason(model, provider, catalog, agentRuntime),
       inference,
     );
     modelUnavailableBanner = message ? createChatModelSetupBanner(onSetup, message) : undefined;

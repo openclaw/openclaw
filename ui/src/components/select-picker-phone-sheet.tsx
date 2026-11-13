@@ -12,7 +12,8 @@ export function createPickerPhoneSheet(options: {
 }) {
   const layout = createPhoneSheetLayout();
   let grabber!: HTMLDivElement;
-  const active = () => options.open() && layout() && options.wanted();
+  const applies = () => layout() && options.wanted();
+  const active = () => options.open() && applies();
   let releaseGesture: (() => void) | undefined;
   let gestureRequested = false;
   onSettled(() => () => releaseGesture?.());
@@ -28,11 +29,13 @@ export function createPickerPhoneSheet(options: {
   };
   return {
     active,
+    /** Readable while an opening is still being admitted. */
+    applies,
     onOpenChange(next: boolean) {
       if (!next) {
         return;
       }
-      if (!gestureRequested && layout() && options.wanted()) {
+      if (!gestureRequested && applies()) {
         void bindGesture();
       }
       // A swipe's exit leaves the surface off screen; the next opening starts clean.
@@ -45,7 +48,7 @@ export function createPickerPhoneSheet(options: {
       surface.style.removeProperty("transform");
       surface.style.removeProperty("pointer-events");
     },
-    Chrome: (props: { searching: boolean }) => (
+    Chrome: () => (
       <>
         <div
           ref={(element) => (grabber = element)}
@@ -53,7 +56,7 @@ export function createPickerPhoneSheet(options: {
           hidden={!active()}
           aria-hidden="true"
         />
-        <Show when={active() && !props.searching}>
+        <Show when={active()}>
           <button
             type="button"
             class="picker-select__sheet-close"

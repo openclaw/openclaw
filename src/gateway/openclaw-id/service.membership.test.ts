@@ -268,6 +268,7 @@ describe("Gateway membership authority and enforcement", () => {
       {
         submit: (statement) => claw.authority.submit(statement, "mailbox"),
         redeem: (redemption, identity) => claw.authority.redeem(redemption, identity),
+        redeemNode: (redemption) => claw.authority.redeemNode(redemption),
       },
     );
     expect(result).toMatchObject({ ok: false, code: "not_direct" });
