@@ -2,6 +2,7 @@
 // direct imports need the same wiring as the process-default stream facade.
 import { configureAiTransportHost } from "@openclaw/ai";
 import { configureProviderErrorRedactor } from "@openclaw/ai/diagnostics";
+import { isAnthropicWorkloadIdentityToken } from "../agents/anthropic-workload-identity.js";
 import { resolveOpenAIStrictToolSetting } from "../agents/openai-strict-tool-setting.js";
 import { getModelProviderLocalService } from "../agents/provider-local-service.js";
 import { getModelProviderRequestTransport } from "../agents/provider-request-config.js";
@@ -67,6 +68,7 @@ configureAiTransportHost({
     }
     return swapped.text;
   },
+  isAnthropicWorkloadIdentityToken,
   redactToolPayloadText,
   normalizeAnthropicInlineContentBlocks,
   resolveOpenAIStrictToolSetting,
