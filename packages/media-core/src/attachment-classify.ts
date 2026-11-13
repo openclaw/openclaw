@@ -177,6 +177,14 @@ export async function classifyAttachmentBytes(params: {
     // detected charset here would decode it downstream as UTF-8 mojibake.
     return charset ? { mime, class: detectedClass, charset } : { mime, class: detectedClass };
   }
+  // A MIME that already resolves to a concrete binary type (SQLite, ELF, PE, Java class,
+  // OTF, WASM, …) is a magic-byte verdict about the payload, not an extension guess. Guessing
+  // a UTF-16 charset from the NUL ratio below would decode those bytes into garbage and inline
+  // them into the model prompt as text (#198289). A BOM is the one signal that outranks it, so
+  // genuine BOM-prefixed UTF-16 text still reaches the decoder branch.
+  if (mime && detectedClass === "binary" && !hasUtf16Bom) {
+    return { mime, class: "binary" };
+  }
   const signature = params.buffer.length >= 4 ? params.buffer.readUInt32BE(0) : 0;
   if (signature === 0x504b0304 || signature === 0x504b0102 || signature === 0x504b0506) {
     return { mime, class: "archive" };
