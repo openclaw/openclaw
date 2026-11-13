@@ -3,27 +3,17 @@
 import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect } from "vitest";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../src/config/types.models.js";
 import { startGatewayWithClient } from "../src/gateway/test-helpers.e2e.js";
 import { waitForGatewayActiveWork } from "../src/infra/gateway-active-work.js";
 import { listenProofProvider, useRuntimeProofFixture } from "./runtime-proof.test-support.js";
 
-const createFixture = useRuntimeProofFixture(afterEach);
-// The wire check below reports every break; the in-process assertion would stop at the first.
-let assertSetting: string | undefined;
-beforeEach(() => {
-  assertSetting = process.env.OPENCLAW_PROMPT_CACHE_ASSERT;
-  process.env.OPENCLAW_PROMPT_CACHE_ASSERT = "0";
-});
-afterEach(() => {
-  process.env.OPENCLAW_PROMPT_CACHE_ASSERT = assertSetting;
-});
 const TOKEN = "prefix-stability-token";
 const TARGET = "agent:main:prefix-stability-target";
 const SENDER = "agent:main:prefix-stability-sender";
 
-type Api = "anthropic-messages" | "openai-completions";
+export type Api = "anthropic-messages" | "openai-completions";
 type Reply = { text: string } | { tool: string; args: Record<string, unknown> };
 type WireRequest = { system: string; tools: string; messages: string[]; text: string };
 
@@ -192,10 +182,19 @@ function prefixBreaks(requests: readonly WireRequest[]): Array<{ at: number; cha
   return breaks;
 }
 
-it.each(["anthropic-messages", "openai-completions"] as const)(
-  "keeps one session prefix append-only through every trigger until compaction (%s)",
-  { timeout: 400_000 },
-  async (api) => {
+/** One Gateway process per route: gateway state is process-wide, so each route has its own file. */
+export function usePrefixStabilityJourney() {
+  const createFixture = useRuntimeProofFixture(afterEach);
+  // The wire check below reports every break; the in-process assertion would stop at the first.
+  let assertSetting: string | undefined;
+  beforeEach(() => {
+    assertSetting = process.env.OPENCLAW_PROMPT_CACHE_ASSERT;
+    process.env.OPENCLAW_PROMPT_CACHE_ASSERT = "0";
+  });
+  afterEach(() => {
+    process.env.OPENCLAW_PROMPT_CACHE_ASSERT = assertSetting;
+  });
+  return async (api: Api) => {
     const fixture = await createFixture(`openclaw-prefix-stability-${api}-`, TOKEN, "1");
     const targetRequests: WireRequest[] = [];
     const seen: string[] = [];
@@ -370,5 +369,5 @@ it.each(["anthropic-messages", "openai-completions"] as const)(
     } finally {
       await fixture.close(gateway, server, true);
     }
-  },
-);
+  };
+}
