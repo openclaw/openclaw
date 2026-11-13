@@ -104,6 +104,44 @@ function writeExitTrailer(tool, exitCode) {
   }
 }
 
+/**
+ * Hold the terminal marker until the invocation owner's cleanup has settled.
+ * `scripts/run-vitest.mjs` still awaits worker disposal after this shim returns,
+ * and that disposal can fail the run, so writing `EXIT 0` at child close would
+ * mark a run that ends non-zero as clean. Deferring owners get the marker from
+ * `reportExit()` once their cleanup settles, and a process-exit fallback covers
+ * an owner that never reports. A re-raised signal still writes immediately:
+ * the process dies before control returns to any owner.
+ */
+function createExitTrailer(options) {
+  const write = (exitCode) => writeExitTrailer(options.failureTool, exitCode);
+  if (!options.deferExitTrailer) {
+    return { record: write, write, reportExit: () => {} };
+  }
+  let recorded;
+  let reported = false;
+  const reportExit = () => {
+    if (reported) {
+      return;
+    }
+    reported = true;
+    // process.exitCode is the settled outcome once the owner's cleanup ran; the
+    // recorded child code only covers an owner that set nothing at all.
+    write(process.exitCode ?? recorded ?? 0);
+  };
+  process.once("exit", reportExit);
+  return {
+    record: (exitCode) => {
+      recorded = exitCode;
+    },
+    write: (exitCode) => {
+      reported = true;
+      write(exitCode);
+    },
+    reportExit,
+  };
+}
+
 function signalChild(child, signal, detached) {
   if (!child?.pid) {
     return;
@@ -121,7 +159,7 @@ function signalChild(child, signal, detached) {
   }
 }
 
-async function runCliShimProcess(moduleUrl, options, nodeArgs, onReady) {
+async function runCliShimProcess(moduleUrl, options, nodeArgs, trailer, onReady) {
   // Native entrypoints need the explicit dependency link without loading TSX.
   if (nodeArgs.length === 0) {
     const modulesDir = resolveConfiguredModulesDir(SHIM_CHECKOUT_ROOT);
@@ -177,11 +215,12 @@ async function runCliShimProcess(moduleUrl, options, nodeArgs, onReady) {
         });
       },
     });
-    writeExitTrailer(options.failureTool, exitCode);
     if (childSignal && !interrupted) {
+      trailer.write(exitCode);
       process.kill(process.pid, childSignal);
       return { interrupted };
     }
+    trailer.record(exitCode);
     process.exitCode = exitCode;
     return { interrupted };
   }
@@ -239,12 +278,12 @@ async function runCliShimProcess(moduleUrl, options, nodeArgs, onReady) {
     cleanup();
 
     if (result.signal) {
-      writeExitTrailer(options.failureTool, signalExitCode(result.signal));
+      trailer.write(signalExitCode(result.signal));
       process.kill(process.pid, result.signal);
       return { interrupted };
     }
     const exitCode = result.code ?? options.failureExitCode ?? 1;
-    writeExitTrailer(options.failureTool, exitCode);
+    trailer.record(exitCode);
     process.exitCode = exitCode;
     return { interrupted };
   } catch (error) {
@@ -254,30 +293,32 @@ async function runCliShimProcess(moduleUrl, options, nodeArgs, onReady) {
     }
     console.error(error);
     const exitCode = options.failureExitCode ?? 1;
-    writeExitTrailer(options.failureTool, exitCode);
+    trailer.record(exitCode);
     process.exitCode = exitCode;
     return { interrupted };
   }
 }
 
-async function runCliShimInner(moduleUrl, options, nodeArgs) {
+async function runCliShimInner(moduleUrl, options, nodeArgs, trailer) {
   if (!options.workerRun) {
-    return runCliShimProcess(moduleUrl, options, nodeArgs);
+    return runCliShimProcess(moduleUrl, options, nodeArgs, trailer);
   }
   return options.workerRun.withBorrower((onReady) =>
-    runCliShimProcess(moduleUrl, options, nodeArgs, onReady),
+    runCliShimProcess(moduleUrl, options, nodeArgs, trailer, onReady),
   );
 }
 
 async function runCliShim(moduleUrl, options, nodeArgs) {
+  const trailer = createExitTrailer(options);
+  const reportExit = trailer.reportExit;
   try {
-    return await runCliShimInner(moduleUrl, options, nodeArgs);
+    return { ...(await runCliShimInner(moduleUrl, options, nodeArgs, trailer)), reportExit };
   } catch (error) {
     console.error(error);
     const exitCode = options.failureExitCode ?? 1;
-    writeExitTrailer(options.failureTool, exitCode);
+    trailer.record(exitCode);
     process.exitCode = exitCode;
-    return { interrupted: false };
+    return { interrupted: false, reportExit };
   }
 }
 

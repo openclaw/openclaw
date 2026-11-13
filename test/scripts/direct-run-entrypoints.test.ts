@@ -118,6 +118,52 @@ function runExitTrailerFixture(
   });
 }
 
+// The real wrapper's cleanup object is a compiled worker run no unit test can
+// instantiate, so the fixture owns the descriptor, the worker bootstrap and the
+// disposal outcome at the edge; the wrapper, the shim and the child are production.
+function runVitestDisposalFixture(disposeBody: string) {
+  return withShimFixture(
+    VITEST_SHIM_WRAPPER,
+    async ({ checkoutRoot, implementationPath, wrapperPath, runNode }) => {
+      writeFileSync(implementationPath, "process.exitCode = 0;\n");
+      const workerDirectory = path.join(checkoutRoot, "worker");
+      mkdirSync(workerDirectory, { recursive: true });
+      writeFileSync(
+        path.join(checkoutRoot, "scripts/lib/vitest-worker-bootstrap.mts"),
+        `import { pathToFileURL } from "node:url";\nawait import(pathToFileURL(process.argv[3]).href);\n`,
+      );
+      writeFileSync(
+        path.join(checkoutRoot, "scripts/lib/vitest-worker-run.mts"),
+        `export function createVitestWorkerRun() {
+  return {
+    descriptor: { directory: ${JSON.stringify(workerDirectory)} },
+    withBorrower: (run) => run(() => {}),
+    async dispose() {
+      ${disposeBody}
+    },
+  };
+}
+`,
+      );
+      const installer = path.join(checkoutRoot, "scripts/install-worker-descriptor.mjs");
+      writeFileSync(
+        installer,
+        `import { installVitestWorkerDescriptor } from "./lib/vitest-worker-descriptor.mts";
+installVitestWorkerDescriptor({ directory: ${JSON.stringify(workerDirectory)} });
+`,
+      );
+      const env: NodeJS.ProcessEnv = {
+        ...process.env,
+        PNPM_CONFIG_MODULES_DIR: path.dirname(
+          path.dirname(createRequire(import.meta.url).resolve("tsx/package.json")),
+        ),
+      };
+      delete env.NODE_OPTIONS;
+      return runNode(["--import", pathToFileURL(installer).href, wrapperPath], env, process.cwd());
+    },
+  );
+}
+
 function exitTrailerLines(stderr: string) {
   return stderr
     .trim()
@@ -516,6 +562,29 @@ await runWithFailedTrailer("trailer-probe", () => {
         "[trailer-probe] EXIT 5",
         "[trailer-probe] FAILED (exit 5)",
       ]);
+    },
+  );
+
+  it.each([
+    { cleanup: "clean", disposeBody: "", status: 0, lines: ["[test] EXIT 0"] },
+    {
+      cleanup: "failing",
+      disposeBody: 'throw new Error("cleanup release failed");',
+      status: 2,
+      lines: ["[test] EXIT 2", "[test] FAILED (exit 2)"],
+    },
+  ])(
+    "reports the settled run code after $cleanup worker disposal of a passing child",
+    async ({ disposeBody, status, lines }) => {
+      // The marker used to land at child close, so a disposal failure after a
+      // green child left `[test] EXIT 0` in a run that ends non-zero.
+      const result = await runVitestDisposalFixture(disposeBody);
+
+      expect(result.status, formatShimResult(result)).toBe(status);
+      expect(
+        exitTrailerLines(result.stderr).filter((line) => line.startsWith("[test] ")),
+        formatShimResult(result),
+      ).toEqual(lines);
     },
   );
 

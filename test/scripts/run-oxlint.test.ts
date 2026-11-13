@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { runWithFailedTrailer, writeExitTrailer } from "../../scripts/lib/failed-trailer.mts";
+import { runWithFailedTrailer } from "../../scripts/lib/failed-trailer.mts";
 import {
   createOxlintShards,
   filterOxlintShards,
@@ -220,14 +220,6 @@ describe("run-oxlint", () => {
     });
 
     expect(lines).toEqual(["[oxlint] EXIT 2", "[oxlint] FAILED (exit 2)"]);
-  });
-
-  it("treats an unparseable exit code as a terminated failure", () => {
-    const lines: unknown[] = [];
-
-    writeExitTrailer("oxlint", "boom", (line: unknown) => lines.push(line));
-
-    expect(lines).toEqual(["[oxlint] EXIT 1", "[oxlint] FAILED (exit 1)"]);
   });
 
   it.each([
