@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import plistlib
 import shutil
 import sqlite3
 import subprocess
@@ -19,10 +20,17 @@ import time
 parser = argparse.ArgumentParser(description=__doc__)
 for name in ("baseline", "candidate", "seed", "staging", "output", "node"):
     parser.add_argument("--" + name, type=Path, required=True)
+parser.add_argument("--compact-image", type=Path, help="Task-owned sparse image mounted at --staging")
 args = parser.parse_args()
 assert sys.platform == "darwin", "This runner uses macOS /usr/bin/time -l"
 for name in vars(args):
-    setattr(args, name, getattr(args, name).resolve())
+    if getattr(args, name) is not None:
+        setattr(args, name, getattr(args, name).resolve())
+if args.compact_image:
+    images = plistlib.loads(subprocess.check_output(["hdiutil", "info", "-plist"]))["images"]
+    assert any(Path(image["image-path"]).resolve() == args.compact_image and
+               any(entity.get("mount-point") == str(args.staging) for entity in image["system-entities"])
+               for image in images), "Compaction image must own the staging mount"
 assert args.seed.is_relative_to(args.candidate / ".local")
 fixture = json.loads((args.seed / "fixture.json").read_text())
 assert fixture["walBytes"] > 0 and fixture["sourceAgentSchema"] == 41
@@ -32,6 +40,7 @@ identity = {
     "candidate": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=args.candidate, text=True).strip(),
     "node": subprocess.check_output([str(args.node), "--version"], text=True).strip(),
     "fixture": fixture,
+    "compactImage": str(args.compact_image) if args.compact_image else None,
     "benchmarkSha256": hashlib.sha256((args.candidate / "scripts/perf/schema-crossing-measure.ts").read_bytes()).hexdigest(),
 }
 manifest = args.output / "series.json"
@@ -110,5 +119,12 @@ for label in sequence:
         assert (run / "fixture.json").is_file()
         shutil.rmtree(run)
         shutil.rmtree(staging)
+        if args.compact_image:
+            # Deleted HFS+ files leave sparse backing bands allocated. Reclaim them
+            # outside timing so later arms have the same real capacity admission.
+            subprocess.run(["hdiutil", "detach", str(args.staging)], check=True)
+            subprocess.run(["hdiutil", "compact", str(args.compact_image)], check=True)
+            subprocess.run(["hdiutil", "attach", str(args.compact_image),
+                            "-mountpoint", str(args.staging), "-nobrowse"], check=True)
         print("CLEANED", label, flush=True)
 print("COMPLETE", flush=True)
