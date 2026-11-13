@@ -1,6 +1,7 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
+import { openClawIdEmailDisplayName } from "../shared/openclaw-id-email-display-name.js";
 import {
   publishUserProfileAuthorityChange,
   publishUserProfileIdentityChange,
@@ -10,6 +11,7 @@ import {
   runUserProfileWriteTransaction,
   type UserProfileMutationOptions,
 } from "./user-profile-mutation.js";
+import { readOpenClawIdDisplayEmail } from "./user-profile-openclaw-id.read.js";
 import {
   openClawIdProfileProvider,
   type OpenClawIdProfileDisplayMetadata,
@@ -36,7 +38,7 @@ export function ensureOpenClawIdUserProfile(
   input: OpenClawIdUserProfileInput,
   options: UserProfileMutationOptions,
 ): UserProfile {
-  const name = normalizeInitialDisplayName(input.name);
+  const reportedName = normalizeInitialDisplayName(input.name);
   const email = input.email?.trim();
   const metadata =
     input.email === undefined
@@ -57,6 +59,16 @@ export function ensureOpenClawIdUserProfile(
           .where("provider", "=", openClawIdProfileProvider)
           .where("subject", "=", input.accountId),
       );
+      // A member with no reported name is named like an email sign-in: by the email's local part.
+      const name =
+        reportedName ??
+        normalizeInitialDisplayName(
+          openClawIdEmailDisplayName(
+            input.email === undefined
+              ? readOpenClawIdDisplayEmail(identity?.verified_email_json ?? null)
+              : email,
+          ),
+        );
       const now = Date.now();
       const profile = identity
         ? requireResolvedUserProfileMetadataById(db, identity.profile_id)

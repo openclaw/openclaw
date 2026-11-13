@@ -169,3 +169,27 @@ it("links one OCID account to one personal profile, carried by merge and removed
   expect(await readOpenClawIdLinkedProfile("acct-josh", options)).toBeNull();
   expect(await unlink({ profileId: other.id }, options)).toEqual({ unlinked: false });
 });
+
+it("names a nameless member from the local part of its reported email", async () => {
+  const invited = await ensureIdentity(
+    { accountId: "invited", email: " Sam.Rivera@Example.test " },
+    options,
+  );
+  expect(invited.displayName).toBe("Sam.Rivera");
+  expect(
+    (await ensureIdentity({ accountId: "named", name: "Sam", email: "s@example.test" }, options))
+      .displayName,
+  ).toBe("Sam");
+  expect((await ensureIdentity({ accountId: "bare" }, options)).displayName).toBeNull();
+  // A profile left nameless is named from its stored email on the member's next sign-in.
+  await setCanonicalUserProfileDisplayName(invited.id, null, options);
+  expect(await ensureIdentity({ accountId: "invited" }, options)).toMatchObject({
+    id: invited.id,
+    displayName: "Sam.Rivera",
+  });
+  await setCanonicalUserProfileDisplayName(invited.id, "Chosen", options);
+  expect(
+    (await ensureIdentity({ accountId: "invited", email: "other@example.test" }, options))
+      .displayName,
+  ).toBe("Chosen");
+});
