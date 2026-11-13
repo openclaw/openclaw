@@ -24,9 +24,9 @@ import { resolvePromptBuildHookResult } from "../src/agents/embedded-agent-runne
  *
  * WHAT IS REAL (no vitest, no mocks of the seam under test):
  *   - `createHookRunner` (src/plugins/hooks.ts) — the real dispatcher, including
- *     the real `beforePromptBuildDispatch` AsyncLocalStorage re-entrancy guard,
- *     the real per-hook modifying-hook timeout, and the real `handleHookError`
- *     fail-open path.
+ *     the real per-hook modifying-hook timeout and the real `handleHookError`
+ *     fail-open path. (Upstream retired the prompt-build re-entrancy guard in
+ *     0301614ddd9, so there is no recursion suppression left to exercise.)
  *   - `initializeGlobalHookRunner` / `getGlobalHookRunner`
  *     (src/plugins/hook-runner-global.ts) — the real process singleton, with the
  *     real production options (catchErrors: true, before_prompt_build fail-open).
@@ -98,9 +98,10 @@ import { resolvePromptBuildHookResult } from "../src/agents/embedded-agent-runne
  *  11. CLI boundary asymmetry — the CLI's preparation catch spans pre-dispatch
  *      setup as well as the dispatcher, so it must not attribute a pre-dispatch
  *      failure to a lost plugin contribution. Both directions run back to back
- *      through the same real consumer: a failure BEFORE dispatch leaves the
- *      prompt byte-identical to the base ask with no marker, while a real drop
- *      one step later still produces exactly one marker.
+ *      through the same real consumer: a failure BEFORE dispatch leaves the ask
+ *      intact and marker-free (CLI preparation still appends its own delivery
+ *      guidance and runtime context, which is not a plugin contribution), while
+ *      a real drop one step later still produces exactly one marker.
  *
  * Every drop scenario also asserts the dropped plugin's own block is genuinely
  * absent, so the marker is never mistaken for the contribution surviving.
@@ -579,9 +580,12 @@ async function main(): Promise<void> {
     [{ pluginId: "proof-beads", handler: () => ({ prependContext: PLANS_BLOCK }) }],
     { failBeforeDispatch: true },
   );
+  // CLI preparation appends visible-reply guidance and the turn's runtime
+  // context after the ask, so the invariant is "the ask survives and no plugin
+  // contribution was claimed lost" -- not whole-prompt equality.
   assert(
-    preDispatchPrompt === "latest ask",
-    "pre-dispatch: the CLI prompt is exactly the base ask, untouched",
+    preDispatchPrompt.startsWith("latest ask"),
+    "pre-dispatch: the CLI prompt still opens with the untouched base ask",
   );
   assert(
     !preDispatchPrompt.includes(MARKER_OPEN),

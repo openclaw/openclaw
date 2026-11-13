@@ -72,7 +72,7 @@
  *      notice: five plugins named, "+2 more", under the byte cap, healthy
  *      content still retained, no exception text.
  *
- * RUN: pnpm tsx scripts/proof-118555-installed-plugin-provider-request.ts
+ * RUN: node --import ./scripts/tsx.mjs scripts/proof-118555-installed-plugin-provider-request.ts
  */
 import fs from "node:fs";
 import os from "node:os";
