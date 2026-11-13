@@ -145,7 +145,6 @@ export async function runStatusJsonCommand(params: {
     nodeService: surface.nodeService,
     agents: scan.agentStatus,
     ...(scan.configDiagnostics ? { configDiagnostics: scan.configDiagnostics } : {}),
-    ...(scan.configMigration ? { configMigration: scan.configMigration } : {}),
     secretDiagnostics: scan.secretDiagnostics,
     ...(projectedSecurityAudit ? { securityAudit: projectedSecurityAudit } : {}),
     ...(pluginCompatibility

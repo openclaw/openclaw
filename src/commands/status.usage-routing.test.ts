@@ -483,15 +483,12 @@ describe("status commands", () => {
     },
   );
 
-  it("shows a pending older-release config migration in text and JSON", async () => {
+  it("shows a pending older-release config migration in text status", async () => {
     const configMigration = {
       version: "2026.11.2",
       changes: ["Moved skills.workshop to plugins.entries.skill-workshop.config."],
     };
     setScan({ configMigration });
-    expect(JSON.parse(await runStatusOutput({ json: true })).configMigration).toEqual(
-      configMigration,
-    );
     mocks.callGateway.mockResolvedValueOnce(healthyGateway());
     const text = stripAnsi(await runStatusOutput());
     expect(text).toContain("Config migration pending:");
