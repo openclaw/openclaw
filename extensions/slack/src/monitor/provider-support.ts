@@ -66,8 +66,8 @@ function installSlackNativeReconnectFailureObserver(
   receiver: InstanceType<SlackSocketModeReceiverConstructor>,
 ) {
   const client = receiver.client;
-  const start = client.start;
-  const receiverStart = receiver.start;
+  const start: typeof client.start = Reflect.get(client, "start");
+  const receiverStart: typeof receiver.start = Reflect.get(receiver, "start");
   let receiverStarting = false;
   // Bolt's start still rejects to its caller. The SDK's own reconnect and refresh
   // starts would rethrow into its event listeners, so report those to the waiter.
