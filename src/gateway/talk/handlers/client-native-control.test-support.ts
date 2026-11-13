@@ -179,7 +179,7 @@ export async function withNativePlugin(
     { layout: "state-only", prefix: "talk-native-control-", env: { OPENAI_API_KEY: undefined } },
     async (state) => {
       // The next fixture reuses this ID with a fresh transcript and workspace.
-      using _sessionResources = {
+      using _ = {
         [Symbol.dispose]: () => cleanupSessionResources(SESSION_ID),
       };
       const realtimeConfig: TalkRealtimeConfig = {

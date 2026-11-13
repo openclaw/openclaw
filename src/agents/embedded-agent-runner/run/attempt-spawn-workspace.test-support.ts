@@ -986,7 +986,7 @@ export async function createContextEngineAttemptRunner(params: {
         ...params.attemptOverrides,
       };
       // This runner owns a fresh store per call, even when its fixture session ID is reused.
-      using _sessionResources = {
+      using _ = {
         [Symbol.dispose]: () => cleanupSessionResources(attempt.sessionId),
       };
       const admittedRunContext = params.attemptOverrides?.admittedRunContext;

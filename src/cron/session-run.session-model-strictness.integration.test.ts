@@ -519,9 +519,10 @@ describe("stored session model selections in scheduled session turns", () => {
           : {}),
       };
       // All turns in this fixture share the baseline; the next store starts fresh.
-      using _sessionResources = {
+      using sessionResources = {
         [Symbol.dispose]: () => cleanupSessionResources(conversation.sessionId),
       };
+      void sessionResources;
       const entryFor = (
         pin: { provider: string; model: string } | null,
         selection: Pick<SessionEntry, "modelOverrideSource"> = userSelection,
