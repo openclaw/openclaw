@@ -6,7 +6,7 @@
 
 1. Build the Debug app (`mobilebuildmcp simulator build`). The probe exists only in DEBUG builds.
 2. One-time profile, Gateway stopped: `pnpm ios:behavior --setup` writes the `ios-ux` profile (loopback port 19061, token auth, model `mock-openai/gpt-5.6-luna`). It never touches `ios-sim` or `~/.openclaw`.
-3. Start two long-running services:
+3. Start two long-running services, the mock first. Wait for it to print its URL before starting the Gateway: `run-node` rebuilds `dist` when it is stale (any new commit), and a Gateway started during that rebuild exits with "Installation replaced".
 
    ```sh
    OPENCLAW_BUILD_PRIVATE_QA=1 OPENCLAW_ENABLE_PRIVATE_QA_CLI=1 node scripts/run-node.mjs qa mock-openai --port 44180
@@ -42,7 +42,7 @@ Each case is a `guard` (every gate passes in every sample) or `bad` (reproduces 
 - `ChatBehaviorProbe.swift` (OpenClawChatUI) runs only with `--openclaw-behavior-probe` in a DEBUG build. It writes `Library/Caches/behavior-probe.jsonl` in the app container: each frame where something moved (window-space top and bottom of every tagged row, the live bubble and the composer), mounts, scroll phases, bubble body evaluations, and `send` / `keyboard-show` / `keyboard-hide` marks. "End in view" compares row bottoms with the composer top, not scroll metrics: `LazyVStack` content height is an estimate.
 - When a reply finishes, its final row replaces the live bubble; for one frame both exist and the outgoing bubble sits far below. The grader reads the final row as the bubble's continuation and ignores the outgoing one.
 - `scripts/lib/ios-behavior-grade.mts` reads the log. Frames inside a user drag or its deceleration are the reader's own motion and are skipped.
-- The mock streams `UXSTREAM chunks=<n> interval=<ms>` as `n` markdown deltas `ms` apart, ending in `UX-STREAM-END` (`extensions/qa-lab/src/providers/mock-openai/mock-openai-ux-stream.ts`). The trigger is one all-caps word because the simulator keyboard autocorrects lowercase phrases.
+- The mock streams `UXSTREAM chunks=<n> interval=<ms>` as `n` markdown deltas `ms` apart, ending in `UX-STREAM-END` (`extensions/qa-lab/src/providers/mock-openai/mock-openai-ux-stream.ts`). Pacing applies to the SSE route the `ios-ux` profile uses; the mock's websocket route sends the deltas at once. The trigger is one all-caps word because the simulator keyboard autocorrects lowercase phrases.
 
 ## Add a case
 
