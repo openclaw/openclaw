@@ -167,6 +167,7 @@ function createActivityPulse(opts: SessionsListParams): SessionActivityPulse | u
 export function filterSessionEntries(
   params: SessionListFilterParams,
   window?: { offset: number; limit?: number; ownerLimit: number },
+  includeOwnerFacet = true,
 ): SessionListFilteredEntries {
   const { cfg, opts, now, configuredAgentIds } = params;
   let rowContext: SessionListRowContext | undefined;
@@ -180,6 +181,14 @@ export function filterSessionEntries(
   const ownerId = normalizeOptionalString(opts.ownerId);
   const ownerFirstActorId = normalizeOptionalString(params.ownerFirstActorId);
   const activeCutoff = activeMinutes === undefined ? undefined : now - activeMinutes * 60_000;
+  const needsOwner =
+    includeOwnerFacet ||
+    ownerId ||
+    ownerFirstActorId ||
+    opts.profileRelation?.relationship === "owned" ||
+    opts.includePeople ||
+    opts.involvingProfileId ||
+    opts.includeOwnerSessionCounts;
   let activityExpiresAt = Infinity;
   const entries: SessionEntryPair[] = [];
   let totalCount = 0;
@@ -513,7 +522,9 @@ export function filterSessionEntries(
       // Facets include candidates absent from the selected person or returned page.
       activityExpiresAt = Math.min(activityExpiresAt, expiresAt);
     }
-    const effectiveOwner = projectOwner(entry, identities, cfg, configuredAgentIds)?.actor;
+    const effectiveOwner = needsOwner
+      ? projectOwner(entry, identities, cfg, configuredAgentIds)?.actor
+      : undefined;
     if (
       profileRelation?.relationship === "owned" &&
       (effectiveOwner?.identity?.type !== "profile" ||
@@ -534,7 +545,7 @@ export function filterSessionEntries(
       continue;
     }
     // Facets and selectors describe readable sessions, not private profile activity.
-    if (effectiveOwner) {
+    if (includeOwnerFacet && effectiveOwner) {
       addSessionOwnerFacetIdentity(ownerFacet, effectiveOwner);
     }
     if (creatorId && resolveSessionCreatorActor(entry.createdActor)?.id !== creatorId) {

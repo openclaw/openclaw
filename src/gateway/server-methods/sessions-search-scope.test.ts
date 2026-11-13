@@ -271,6 +271,22 @@ test("scope authorizes and applies membership before the hit limit, and empty sc
         await listSessions({ context, client: other, request: { ...allScope, search: "needle" } })
       ).sessions.map((row) => row.key),
     ).toEqual([archived]);
+    // Omitting presentation facets must not omit ownership-based membership.
+    for (const profileId of [owner, "foreign"]) {
+      for (const ownership of [
+        { ownerId: profileId },
+        { profileRelation: { relationship: "owned" as const, profileId } },
+      ]) {
+        const owned = await search(context, other, {
+          query: "needle",
+          scope: { ...allScope, ...ownership },
+        });
+        expect(owned.ok, owned.error?.message).toBe(true);
+        expect(owned.payload?.results.map((hit) => hit.sessionKey)).toEqual(
+          profileId === owner ? [archived] : [],
+        );
+      }
+    }
   });
 });
 

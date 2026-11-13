@@ -11,6 +11,7 @@ import {
   getSessionRowProjection,
   requireSessionRowProjection,
 } from "../session-row-projection-access.js";
+import type { SelectionRow } from "../session-row-projection-record.js";
 import {
   prepareProjectedSessionList,
   prepareSessionSearchIdentityNames,
@@ -28,7 +29,11 @@ export async function searchProjectedSessionTranscripts(params: {
 }) {
   const projection = requireSessionRowProjection(params.context);
   let searchIdentities: Awaited<ReturnType<typeof prepareSessionSearchIdentityNames>> | undefined;
-  const select = () => {
+  type SelectedScope = {
+    stores: Map<string, { target: SessionStoreTarget; rows: Map<string, SelectionRow> }>;
+    count: number;
+  };
+  const select = (previous?: SelectedScope) => {
     const { prepared, presentation, filters } = prepareProjectedSessionList({
       projection,
       opts: params.scope,
@@ -38,39 +43,42 @@ export async function searchProjectedSessionTranscripts(params: {
       searchIdentities,
     });
     const { entries } = withAgentRosterFactsBatch(prepared.cfg, () =>
-      filterSessionEntries(filters),
+      // Transcript search consumes membership, not the list's owner-facet presentation.
+      filterSessionEntries(filters, undefined, false),
     );
-    type SelectedRow = NonNullable<ReturnType<typeof prepared.getTarget>>;
-    const stores = new Map<
-      string,
-      { target: SessionStoreTarget; rows: Map<string, SelectedRow> }
-    >();
+    const stores: SelectedScope["stores"] = previous?.stores ?? new Map();
+    let count = 0;
+    let unchanged = true;
     for (const [key] of entries) {
       const row = prepared.getTarget(key);
       if (!row) {
         continue;
       }
+      count++;
+      if (previous) {
+        // The selection owner yields unique physical rows. Recheck every current
+        // member and generation without allocating another copy of the same maps.
+        const store = stores.get(row.storeTarget.storePath);
+        unchanged &&=
+          store?.target.agentId === row.storeTarget.agentId &&
+          store.rows.get(row.key)?.generation === row.generation;
+        continue;
+      }
       const store = stores.get(row.storeTarget.storePath) ?? {
         target: row.storeTarget,
-        rows: new Map<string, SelectedRow>(),
+        rows: new Map<string, SelectionRow>(),
       };
       store.rows.set(row.key, row);
       stores.set(row.storeTarget.storePath, store);
     }
-    return { stores, presentation };
+    return {
+      stores,
+      count,
+      presentation,
+      unchanged: unchanged && (!previous || count === previous.count),
+    };
   };
   const limit = params.limit ?? 10;
-  const sameSelection = (previous: ReturnType<typeof select>, current: ReturnType<typeof select>) =>
-    previous.stores.size === current.stores.size &&
-    [...previous.stores].every(([path, store]) => {
-      const next = current.stores.get(path);
-      return (
-        next !== undefined &&
-        store.target.agentId === next.target.agentId &&
-        store.rows.size === next.rows.size &&
-        [...store.rows].every(([key, row]) => next.rows.get(key)?.generation === row.generation)
-      );
-    });
   const matchingHits = (
     selected: ReturnType<typeof select>,
     pages: Array<{ path: string; page: Awaited<ReturnType<typeof searchSessionTranscripts>> }>,
@@ -127,8 +135,8 @@ export async function searchProjectedSessionTranscripts(params: {
     }
     // Reacquire viewer identity, roles, sharing, and presentation after the await.
     // A changed scope invalidates the entire page, including counts and truncation.
-    const current = select();
-    if (!sameSelection(selected, current)) {
+    const current = select(selected);
+    if (!current.unchanged) {
       continue;
     }
     const hits = matchingHits(current, pages);
@@ -151,8 +159,8 @@ export async function searchProjectedSessionTranscripts(params: {
         if (searchIdentities && searchIdentities.cfg !== projection.state.cfg) {
           return false;
         }
-        const refreshed = select();
-        if (!sameSelection(selected, refreshed)) {
+        const refreshed = select(selected);
+        if (!refreshed.unchanged) {
           return false;
         }
         const sessions = [...matchedRows].flatMap((target) => {

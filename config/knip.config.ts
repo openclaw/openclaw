@@ -208,6 +208,7 @@ const repositoryScriptEntries = [
   "scripts/perf/transcript-append-normalization-measure.ts!",
   "scripts/perf/session-actor-retention-seed.ts!",
   "scripts/perf/session-cold-selection.ts!",
+  "scripts/perf/session-transcript-search-measure.ts!",
   "scripts/perf/session-delete-diagnostics-measure.ts!",
   "scripts/perf/slow-wait-holder-measure.ts!",
   "scripts/perf/session-entry-projection-measure.ts!",
