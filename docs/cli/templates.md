@@ -372,6 +372,9 @@ and responds in this order:
 Neither creation nor this turn installs or enables a plugin referenced on
 ClawHub, or enables an automation. A missing or disabled referenced plugin never
 stops agent creation. You choose installation or enabling afterwards.
+This path creates declared `automations` (`cronJobs` in older manifests); it
+does not convert legacy `agent.heartbeat` settings into a heartbeat automation.
+
 Intermediate text and card sends are non-final; the final reply closes setup.
 Sending becomes available when setup finishes; a message typed earlier stays in
 the composer.
