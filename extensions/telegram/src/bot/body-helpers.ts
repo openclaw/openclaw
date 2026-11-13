@@ -179,17 +179,6 @@ export function resolveTelegramRichMessagePlaceholder(
   return msg.rich_message ? TELEGRAM_RICH_MESSAGE_PLACEHOLDER : undefined;
 }
 
-export function resolveTelegramRichMessageText(msg: TelegramTextMessage): string | undefined {
-  if (!msg.rich_message) {
-    return undefined;
-  }
-  return renderRichBlocks(msg.rich_message.blocks) || undefined;
-}
-
-export function resolveTelegramRichMessageBody(msg: TelegramTextMessage): string | undefined {
-  return resolveTelegramRichMessageText(msg) ?? resolveTelegramRichMessagePlaceholder(msg);
-}
-
 export function isBinaryContent(text: string): boolean {
   for (let i = 0; i < text.length; i++) {
     const code = text.charCodeAt(i);
@@ -253,12 +242,10 @@ export function getTelegramTextParts(msg: TelegramTextMessage): {
   if (msg.poll) {
     return { text: formatTelegramPollText(msg.poll), entities: [] };
   }
-  // Forwarded rich messages carry no text/caption, but the agent prompt renders them;
-  // returning an empty part made the inbound debounce treat them as non-text.
-  // Rendered text only: a non-text rich message stays empty so media/caption
-  // callers keep treating it as non-text, exactly like the prompt placeholder.
-  const richText = msg.rich_message ? (resolveTelegramRichMessageText(msg) ?? "") : "";
-  return { text: richText, entities: [] };
+  // A rich message has no text/caption; its rendered blocks are its text for the
+  // prompt, debounce, history and reply context alike. A rich message without
+  // text blocks stays empty, and callers fall back to the rich placeholder.
+  return { text: msg.rich_message ? renderRichBlocks(msg.rich_message.blocks) : "", entities: [] };
 }
 
 export function joinTelegramTextParts(
@@ -364,13 +351,6 @@ export function hasLeadingBotCommandAddressedToOtherBot(
   const command = text.slice(0, leadingCommand.length);
   const target = command.match(/^\/[^@\s]+@([a-z0-9_]+)$/iu)?.[1];
   return Boolean(target && target.toLowerCase() !== normalizedBotUsername);
-}
-
-export function hasBotMentionInText(text: string, botUsername: string): boolean {
-  return hasStandaloneTelegramMention(
-    normalizeLowercaseStringOrEmpty(text),
-    normalizeLowercaseStringOrEmpty(`@${botUsername}`),
-  );
 }
 
 export type TelegramForwardedContext = {
